@@ -104,6 +104,18 @@ pub struct Config {
     #[builder(default = Duration::from_secs(30))]
     backoff_duration: Duration,
 
+    /// When to start sending TCP keep alive probes on an idle connection.
+    #[builder(default = Duration::from_secs(30))]
+    keep_alive_after: Duration,
+
+    /// Time between sending TCP keep alive probes.
+    #[builder(default = Duration::from_secs(5))]
+    keep_alive_interval: Duration,
+
+    /// Number of times to send TCP keep alive probes before dropping the connection.
+    #[builder(default = 6)]
+    keep_alive_retries: u8,
+
     /// Optional metrics implementation.
     metrics: Option<Arc<dyn Metrics>>,
 }
@@ -139,6 +151,9 @@ impl fmt::Debug for Config {
             .field("handshake_timeout", &self.handshake_timeout)
             .field("receive_timeout", &self.receive_timeout)
             .field("backoff_duration", &self.backoff_duration)
+            .field("keepalive_after", &self.keep_alive_after)
+            .field("keepalive_interval", &self.keep_alive_interval)
+            .field("keepalive_retries", &self.keep_alive_retries)
             .finish()
     }
 }

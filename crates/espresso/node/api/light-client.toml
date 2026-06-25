@@ -129,5 +129,17 @@ PATH = ["/namespace/:start/:end/:namespace"]
 ":end" = "Integer"
 ":namespace" = "Integer"
 DOC = """
-Fetch a list of namespace proofs for each block in the rang `[:start, end)`.
+Fetch a list of namespace proofs for each block in the range `[:start, end)`.
+"""
+
+[route.namespaces_range]
+PATH = ["/namespaces/:start/:end/:namespaces"]
+":start" = "Integer"
+":end" = "Integer"
+":namespaces" = "TaggedBase64"
+DOC = """
+Fetch namespace proofs for each block in the range `[:start, :end)`, restricted to a caller-specified
+set of namespaces.
+
+`:namespaces` is a `TaggedBase64`-encoded JSON array of namespace IDs (tag `NS`).
 """

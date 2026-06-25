@@ -711,8 +711,14 @@ impl<TYPES: NodeType> Display for HotShotEvent<TYPES> {
             HotShotEvent::SetFirstEpoch(view, epoch) => {
                 write!(f, "SetFirstEpoch(view_number={view:?}, epoch={epoch:?})")
             },
-            HotShotEvent::LeavesDecided(leaf) => {
-                write!(f, "LeavesDecided(leaf={leaf:?})")
+            HotShotEvent::LeavesDecided(leaves) => {
+                write!(
+                    f,
+                    "LeavesDecided(count={}, views={:?}..={:?})",
+                    leaves.len(),
+                    leaves.first().map(|l| l.view_number()),
+                    leaves.last().map(|l| l.view_number()),
+                )
             },
         }
     }

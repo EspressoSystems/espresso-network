@@ -899,6 +899,66 @@ async fn test_decide_not_repeated_for_same_view() {
     assert_eq!(1, count_matching(harness.outputs(), is_leaf_decided));
 }
 
+/// Regression: after restarting from a persisted decided anchor, the first
+/// decide must not re-decide the anchor leaf. The `maybe_decide` chain-walk
+/// follows `justify_qc` back while `parent_view > last_decided_view`; if a
+/// restart leaves `last_decided_view` at genesis instead of the anchor view,
+/// the walk re-includes the anchor — which production logs as a spurious
+/// "duplicate decided leaf" warning the first decide after every restart.
+#[tokio::test]
+async fn test_restart_does_not_redecide_anchor() {
+    let test_data = TestData::new(4).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    // Treat view index 1 as the persisted decided anchor; index 2 is the first
+    // view decided after the restart and its `justify_qc` certifies the anchor.
+    let anchor = &test_data.views[1];
+    let decider = &test_data.views[2];
+    let anchor_view = anchor.view_number;
+    assert_ne!(
+        anchor_view,
+        ViewNumber::genesis(),
+        "anchor must be a non-genesis view to exercise the chain-walk bound"
+    );
+
+    let mut harness =
+        ConsensusHarness::restarted_from(0, anchor.proposal.data.clone(), anchor.cert1.clone(), [])
+            .await;
+    assert_eq!(
+        harness.consensus.last_decided_view(),
+        anchor_view,
+        "restart must seed last_decided_view from the anchor, not genesis"
+    );
+
+    // Drive the first decide after the restart at the next view.
+    harness
+        .apply(decider.proposal_input_consensus(&node_key))
+        .await;
+    harness.apply(decider.block_reconstructed_input()).await;
+    harness.apply(decider.cert1_input()).await;
+    harness.apply(decider.cert2_input()).await;
+
+    let decided_views: Vec<ViewNumber> = harness
+        .outputs()
+        .iter()
+        .filter_map(|o| match o {
+            ConsensusOutput::LeafDecided { leaves, .. } => Some(leaves),
+            _ => None,
+        })
+        .flatten()
+        .map(|leaf| leaf.view_number())
+        .collect();
+
+    assert!(
+        !decided_views.is_empty(),
+        "the view after the anchor should decide"
+    );
+    assert!(
+        decided_views.iter().all(|view| *view > anchor_view),
+        "the decide re-included the anchor view {anchor_view:?}; decided {decided_views:?}"
+    );
+}
+
 /// A timeout for a view below `current_view` is ignored entirely: no
 /// timeout vote is signed or broadcast. Regression test for restarted
 /// nodes being dragged back to long-past views (e.g. the protocol-upgrade
