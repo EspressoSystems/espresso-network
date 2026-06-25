@@ -1,4 +1,4 @@
-use std::{fmt::Debug, future::Future, pin::pin, time::Duration};
+use std::{collections::HashMap, fmt::Debug, future::Future, pin::pin, time::Duration};
 
 use anyhow::{Context, Result};
 use derive_builder::Builder;
@@ -13,6 +13,7 @@ use hotshot_query_service_types::{
 };
 use hotshot_types::data::EpochNumber;
 use surf_disco::Url;
+use tagged_base64::TaggedBase64;
 use tokio::time::sleep;
 use vbs::version::StaticVersion;
 
@@ -22,6 +23,11 @@ use crate::{
     },
     storage::LeafRequest,
 };
+
+/// `TaggedBase64` tag for the namespace set encoded into the `namespaces` range endpoint URL.
+///
+/// Shared between the client (which encodes the parameter) and the server (which validates the tag).
+pub const NAMESPACES_PARAM_TAG: &str = "NS";
 
 /// Interface to a query server providing the light client API.
 pub trait Client: Send + Sync + 'static {
@@ -87,6 +93,14 @@ pub trait Client: Send + Sync + 'static {
         end: u64,
         namespace: NamespaceId,
     ) -> impl Send + Future<Output = Result<Vec<NamespaceProof>>>;
+
+    /// Get proofs for the requested namespaces for each block in `[start, end)`.
+    fn namespaces_proofs_in_range(
+        &self,
+        start: u64,
+        end: u64,
+        namespaces: &[NamespaceId],
+    ) -> impl Send + Future<Output = Result<Vec<HashMap<NamespaceId, NamespaceProof>>>>;
 
     /// Get stake table events for the given epoch.
     ///
@@ -203,6 +217,20 @@ impl Client for QueryServiceClient {
             .await?)
     }
 
+    async fn namespaces_proofs_in_range(
+        &self,
+        start: u64,
+        end: u64,
+        namespaces: &[NamespaceId],
+    ) -> Result<Vec<HashMap<NamespaceId, NamespaceProof>>> {
+        let encoded = TaggedBase64::new(NAMESPACES_PARAM_TAG, &serde_json::to_vec(namespaces)?)?;
+        Ok(self
+            .client
+            .get(&format!("/light-client/namespaces/{start}/{end}/{encoded}"))
+            .send()
+            .await?)
+    }
+
     async fn stake_table_events(&self, epoch: EpochNumber) -> Result<Vec<StakeTableEvent>> {
         Ok(self
             .client
@@ -307,6 +335,18 @@ where
     ) -> Result<Vec<NamespaceProof>> {
         self.get_any(&self.clients, |client| {
             client.namespace_proofs_in_range(start, end, namespace)
+        })
+        .await
+    }
+
+    async fn namespaces_proofs_in_range(
+        &self,
+        start: u64,
+        end: u64,
+        namespaces: &[NamespaceId],
+    ) -> Result<Vec<HashMap<NamespaceId, NamespaceProof>>> {
+        self.get_any(&self.clients, |client| {
+            client.namespaces_proofs_in_range(start, end, namespaces)
         })
         .await
     }
@@ -775,5 +815,50 @@ mod test {
                 .unwrap();
             assert_eq!(proof.verify(&header, ns).unwrap(), vec![]);
         }
+
+        let absent = NamespaceId::from(u64::from(ns) + 1);
+        let start = headers[0].height();
+        let end = headers[1].height() + 1;
+        let blocks = client
+            .namespaces_proofs_in_range(start, end, &[ns, absent])
+            .await
+            .unwrap();
+        assert_eq!(blocks.len() as u64, end - start);
+
+        for (i, block) in blocks.iter().enumerate() {
+            let header: Header = http
+                .get(&format!("availability/header/{}", start + i as u64))
+                .send()
+                .await
+                .unwrap();
+            for queried in [ns, absent] {
+                match (header.ns_table().find_ns_id(&queried), block.get(&queried)) {
+                    (Some(_), Some(proof)) => {
+                        proof.verify(&header, queried).unwrap();
+                    },
+                    (None, None) => {},
+                    (present, returned) => panic!(
+                        "block {} namespace {queried}: header present={}, returned={}",
+                        start + i as u64,
+                        present.is_some(),
+                        returned.is_some()
+                    ),
+                }
+            }
+        }
+
+        // The first and last blocks are the ones we submitted `ns` transactions to.
+        assert_eq!(
+            blocks[0].get(&ns).unwrap().verify(&headers[0], ns).unwrap(),
+            std::slice::from_ref(&txs[0])
+        );
+        assert_eq!(
+            blocks[blocks.len() - 1]
+                .get(&ns)
+                .unwrap()
+                .verify(&headers[1], ns)
+                .unwrap(),
+            std::slice::from_ref(&txs[1])
+        );
     }
 }

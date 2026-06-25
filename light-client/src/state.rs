@@ -1,6 +1,10 @@
 //! Client-side state used to implement light client fetching and verification.
 
-use std::{collections::BTreeMap, future::Future, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    future::Future,
+    sync::Arc,
+};
 
 use anyhow::{Context, Result, bail, ensure};
 use async_lock::RwLock;
@@ -551,6 +555,42 @@ where
             .into_iter()
             .zip(&headers)
             .map(|(proof, header)| proof.verify(header, namespace))
+            .collect()
+    }
+
+    /// Fetch and verify the transactions in the given namespaces of blocks in the range
+    /// `[start_height, end_height)`.
+    ///
+    /// For each block, the result maps a namespace ID to its verified transactions, including only
+    /// those requested namespaces that are actually present in that block.
+    pub async fn fetch_all_namespaces_in_range(
+        &self,
+        start_height: usize,
+        end_height: usize,
+        namespaces: &[NamespaceId],
+    ) -> Result<Vec<HashMap<NamespaceId, Vec<Transaction>>>> {
+        let headers = self
+            .fetch_headers_in_range(start_height, end_height)
+            .await?;
+        let proofs = self
+            .server
+            .namespaces_proofs_in_range(start_height as u64, end_height as u64, namespaces)
+            .await?;
+        ensure!(
+            proofs.len() == headers.len(),
+            "server returned wrong number of namespace proofs (expected {}, got {})",
+            headers.len(),
+            proofs.len()
+        );
+        proofs
+            .into_iter()
+            .zip(&headers)
+            .map(|(proofs, header)| {
+                proofs
+                    .into_iter()
+                    .map(|(namespace, proof)| Ok((namespace, proof.verify(header, namespace)?)))
+                    .collect()
+            })
             .collect()
     }
 
@@ -1645,6 +1685,64 @@ mod test {
             .namespace();
         let namespaces = lc.fetch_namespaces_in_range(1, 10, ns).await.unwrap();
         assert_eq!(namespaces.len(), 9);
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_all_namespaces_in_range() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+
+        // Request the namespaces from the first few blocks (which may differ per block), plus one
+        // that is absent everywhere.
+        let mut requested = vec![];
+        for height in 1..4 {
+            requested.push(
+                client
+                    .payload(height)
+                    .await
+                    .transaction(&TransactionIndex {
+                        ns_index: 0.into(),
+                        position: 0,
+                    })
+                    .unwrap()
+                    .namespace(),
+            );
+        }
+        let absent =
+            NamespaceId::from(requested.iter().map(|ns| u64::from(*ns)).max().unwrap() + 1);
+        requested.push(absent);
+
+        let (start, end) = (1, 10);
+        let blocks = lc
+            .fetch_all_namespaces_in_range(start, end, &requested)
+            .await
+            .unwrap();
+        assert_eq!(blocks.len(), end - start);
+
+        for (i, block) in blocks.iter().enumerate() {
+            let height = i + 1;
+            let header = client.leaf(height).await.header().clone();
+
+            // The map contains exactly the requested namespaces present in this block, and the
+            // absent namespace is never included.
+            assert!(!block.contains_key(&absent), "block {height}");
+            for &ns in &requested {
+                let expected = lc
+                    .fetch_namespace(BlockId::Number(height), ns)
+                    .await
+                    .unwrap();
+                if header.ns_table().find_ns_id(&ns).is_some() {
+                    assert_eq!(block.get(&ns), Some(&expected), "block {height}, ns {ns}");
+                } else {
+                    assert!(!block.contains_key(&ns), "block {height}, ns {ns}");
+                }
+            }
+        }
     }
 
     #[tokio::test]
