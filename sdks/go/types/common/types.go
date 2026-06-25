@@ -28,6 +28,19 @@ type ExplorerTransactionQueryData struct {
 	TransactionsDetails ExplorerTransactionsDetails `json:"transaction_detail"`
 }
 
+type BlockSummary struct {
+	Hash            TaggedBase64     `json:"hash"`
+	Height          uint64           `json:"height"`
+	ProposerId      []common.Address `json:"proposer_id"`
+	NumTransactions uint64           `json:"num_transactions"`
+	Size            uint64           `json:"size"`
+	Time            string           `json:"time"`
+}
+
+type BlockSummaryResponse struct {
+	BlockSummaries []BlockSummary `json:"block_summaries"`
+}
+
 type ExplorerTransactionsDetails struct {
 	ExplorerDetails ExplorerDetails `json:"details"`
 }

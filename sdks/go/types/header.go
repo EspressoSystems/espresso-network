@@ -45,6 +45,8 @@ type VidCommon = common_types.VidCommon
 
 type TransactionQueryData = common_types.TransactionQueryData
 type ExplorerTransactionQueryData = common_types.ExplorerTransactionQueryData
+type BlockSummary = common_types.BlockSummary
+type BlockSummaryResponse = common_types.BlockSummaryResponse
 type VidCommonQueryData = common_types.VidCommonQueryData
 
 type U256 = common_types.U256
