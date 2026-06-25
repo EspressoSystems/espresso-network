@@ -99,8 +99,8 @@ impl NsAvidmGf2Scheme {
         let ns_table = ns_table.into_iter().collect::<Vec<_>>();
         let ns_lens = ns_table.iter().map(|r| r.len()).collect::<Vec<_>>();
         let ns_commits = ns_table
-            .into_iter()
-            .map(|ns_range| AvidmGf2Scheme::commit(param, &payload[ns_range]))
+            .par_iter()
+            .map(|ns_range| AvidmGf2Scheme::commit(param, &payload[ns_range.clone()]))
             .collect::<Result<Vec<_>, _>>()?;
         let common = NsAvidmGf2Common {
             param: param.clone(),
