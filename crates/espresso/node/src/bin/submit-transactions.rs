@@ -201,7 +201,11 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) {
 
     // Subscribe to block stream so we can check that our transactions are getting sequenced.
     let client = Client::<Error, SequencerApiVersion>::new(opt.urls[0].clone());
-    let block_height: usize = client.get("status/block-height").send().await.unwrap();
+    let block_height: usize = client
+        .get(&espresso_api::routes::v1::status_block_height())
+        .send()
+        .await
+        .unwrap();
 
     // Create a new [`WebSocketConfig`]. We trust the events service on our nodes to not
     // send us malicious messages.
@@ -213,10 +217,7 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) {
 
     let mut blocks = client
         .socket_with_config(
-            &format!(
-                "availability/stream/blocks/{}",
-                block_height.saturating_sub(1)
-            ),
+            &espresso_api::routes::v1::stream_blocks(block_height.saturating_sub(1)),
             websocket_config,
         )
         .subscribe()
