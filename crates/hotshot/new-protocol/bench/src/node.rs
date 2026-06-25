@@ -305,6 +305,21 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
     let drain_budget = std::time::Duration::from_millis(cfg.timeout_ms.saturating_mul(2));
     let mut drain_deadline: Option<std::time::Instant> = None;
 
+    // Block construction runs OFF the consensus loop, mirroring production's
+    // `BlockBuilder` which spawns the build as a task (see
+    // `new-protocol/src/block.rs`) rather than computing it inline.  Building
+    // the test block synchronously in this loop ran `vid_commitment` over the
+    // whole 50 MB payload (~234 ms) on the loop thread, so the leader went deaf
+    // to the network for the duration and already-arrived vote1s sat undrained
+    // — a pure harness artifact production does not have.  Here each
+    // `RequestBlockAndHeader` spawns the (CPU-heavy) build on the blocking
+    // pool; its result is applied via the `build_tasks` arm of the select!
+    // below, so the loop keeps draining the network while a block builds.
+    let mut build_tasks: tokio::task::JoinSet<(
+        hotshot_new_protocol::block::BlockAndHeaderRequest<TestTypes>,
+        TestBlock,
+    )> = tokio::task::JoinSet::new();
+
     info!(
         node_id = cfg.node_id,
         target_views = cfg.target_views,
@@ -313,32 +328,21 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
     );
 
     loop {
-        match coordinator.next_consensus_input().await {
-            Ok(input) => {
-                metrics.on_input(&input);
-                coordinator.apply_consensus(input);
-            },
-            Err(err)
-                if err.severity == hotshot_new_protocol::coordinator::error::Severity::Critical =>
-            {
-                error!(%err, "critical error in consensus input");
-                metrics.write_csv(&output_path)?;
-                return Err(anyhow::anyhow!("{err}"));
-            },
-            Err(err) => {
-                warn!(%err, "recoverable error in consensus input");
-                continue;
-            },
-        }
-
-        while let Some(output) = coordinator.outbox_mut().pop_front() {
-            metrics.on_output(&output);
-
-            // Intercept block requests and inject test block (bypassing BlockBuilder).
-            if let ConsensusOutput::RequestBlockAndHeader(ref req) = output
-                && cfg.block_size > 0
-            {
-                let block = build_test_block(cfg.block_size, cfg.total_nodes, cfg.namespaces);
+        // Drive consensus input and completed block builds concurrently.
+        // `biased` applies a finished build before pulling the next input so a
+        // ready proposal isn't held behind a backlog of network messages.
+        tokio::select! {
+            biased;
+            Some(joined) = build_tasks.join_next(), if !build_tasks.is_empty() => {
+                let (req, block) = match joined {
+                    Ok(pair) => pair,
+                    Err(err) => {
+                        if err.is_panic() {
+                            error!(%err, "block build task panicked");
+                        }
+                        continue;
+                    },
+                };
                 let parent_leaf = req.parent_proposal.clone().into();
                 let version = bench_upgrade_lock().version_infallible(req.view);
                 let header = TestBlockHeader::new::<TestTypes>(
@@ -364,6 +368,42 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
                 };
                 metrics.on_input(&block_input);
                 coordinator.apply_consensus(block_input);
+            }
+            input = coordinator.next_consensus_input() => match input {
+                Ok(input) => {
+                    metrics.on_input(&input);
+                    coordinator.apply_consensus(input);
+                },
+                Err(err)
+                    if err.severity
+                        == hotshot_new_protocol::coordinator::error::Severity::Critical =>
+                {
+                    error!(%err, "critical error in consensus input");
+                    metrics.write_csv(&output_path)?;
+                    return Err(anyhow::anyhow!("{err}"));
+                },
+                Err(err) => {
+                    warn!(%err, "recoverable error in consensus input");
+                    continue;
+                },
+            },
+        }
+
+        while let Some(output) = coordinator.outbox_mut().pop_front() {
+            metrics.on_output(&output);
+
+            // Intercept block requests: spawn the test-block build off-loop
+            // (bypassing BlockBuilder). The result is applied via the
+            // `build_tasks` select! arm above.
+            if let ConsensusOutput::RequestBlockAndHeader(ref req) = output
+                && cfg.block_size > 0
+            {
+                let req = req.clone();
+                let (size, num_nodes, namespaces) =
+                    (cfg.block_size, cfg.total_nodes, cfg.namespaces);
+                build_tasks.spawn_blocking(move || {
+                    (req, build_test_block(size, num_nodes, namespaces))
+                });
                 continue; // skip process_consensus_output for this one
             }
 
