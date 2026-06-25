@@ -161,6 +161,9 @@ pub enum ConsensusOutput<T: NodeType> {
         header: T::BlockHeader,
         payload: T::BlockPayload,
     },
+    /// Broadcast our own VID share so peers can reconstruct the block. Emitted
+    /// right after `SendVote1` so it never delays the cert-forming vote.
+    BroadcastVidShare(VidDisperseShare2<T>),
 }
 
 pub struct Consensus<T: NodeType> {
@@ -1812,7 +1815,11 @@ impl<T: NodeType> Consensus<T> {
             debug!(%view, "dropping pending vote1 for timed-out view");
             return;
         }
+        let vid_share = self.vid_shares.get(&view).cloned();
         outbox.push_back(ConsensusOutput::SendVote1(vote1));
+        if let Some(vid_share) = vid_share {
+            outbox.push_back(ConsensusOutput::BroadcastVidShare(vid_share));
+        }
     }
 
     fn release_vote2(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
@@ -2012,23 +2019,15 @@ impl<T: NodeType> Consensus<T> {
 
         let vote = Vote1 {
             vote: inner_vote,
-            // Skip carrying our own share when we're the leader of view+1:
-            // we're about to fan out view+1's shares, so omitting this share
-            // halves our outbound bandwidth during the leader-duty window.
-            // The cert1 threshold counts the signature, and the other N-1
-            // replicas still cross-broadcast their shares for reconstruction.
-            vid_share: if self.is_leader(view + 1, epoch) {
-                None
-            } else {
-                Some(vid_share.clone())
-            },
             state_vote,
         };
+        let vid_share = vid_share.clone();
         self.voted_1_views.insert(view);
         if self.stored_actions.contains(&(view, ActionKind::Vote))
             && self.is_proposal_stored(view, &proposal_commit)
         {
             outbox.push_back(ConsensusOutput::SendVote1(vote));
+            outbox.push_back(ConsensusOutput::BroadcastVidShare(vid_share));
         } else {
             self.request_action(view, Some(epoch), ActionKind::Vote, outbox);
             self.pending_vote1.insert(view, vote);

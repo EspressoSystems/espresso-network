@@ -70,13 +70,6 @@ pub type VidShareMessage<T> = SignedProposal<T, VidDisperseShare2<T>>;
 #[serde(bound(deserialize = ""))]
 pub struct Vote1<T: NodeType> {
     pub vote: QuorumVote2<T>,
-    /// Per-recipient VID share. `None` is the next-leader bandwidth
-    /// optimization: when the sender is the leader of `view + 1`, it omits its
-    /// own share to avoid contending with its share fan-out during its
-    /// leader-duty window. Cert1 threshold counts the `vote` signature, not the
-    /// share, so this is safety-neutral; reconstruction still has the other
-    /// N-1 shares (N-1 >= recovery_threshold).
-    pub vid_share: Option<VidDisperseShare2<T>>,
     /// Populated only when voting on an epoch-root leaf. Required there; absent otherwise.
     pub state_vote: Option<LightClientStateUpdateVote2<T>>,
 }
@@ -163,7 +156,10 @@ pub enum ConsensusMessage<T: NodeType, S> {
     TimeoutVote(TimeoutVoteMessage<T>),
     TimeoutCertificate(TimeoutCertificate2<T>),
     EpochChange(EpochChangeMessage<T>),
+    /// The leader's unicast of each node's own VID share.
     VidShare(VidShareMessage<T>),
+    /// This VID Share is broadcasted along with Vote1.
+    VidShareBroadcast(VidDisperseShare2<T>),
 }
 
 impl<T: NodeType, S> ConsensusMessage<T, S> {
@@ -179,6 +175,7 @@ impl<T: NodeType, S> ConsensusMessage<T, S> {
             Self::TimeoutCertificate(c) => ConsensusMessage::TimeoutCertificate(c),
             Self::EpochChange(c) => ConsensusMessage::EpochChange(c),
             Self::VidShare(v) => ConsensusMessage::VidShare(v),
+            Self::VidShareBroadcast(v) => ConsensusMessage::VidShareBroadcast(v),
         }
     }
 }
@@ -195,6 +192,7 @@ impl<T: NodeType, S> HasViewNumber for ConsensusMessage<T, S> {
             Self::TimeoutCertificate(certificate) => certificate.view_number(),
             Self::EpochChange(epoch_change) => epoch_change.cert1.view_number(),
             Self::VidShare(vid_share) => vid_share.data.view_number(),
+            Self::VidShareBroadcast(vid_share) => vid_share.view_number(),
         }
     }
 }
