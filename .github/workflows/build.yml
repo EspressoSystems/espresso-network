@@ -715,7 +715,7 @@ jobs:
   memory-soak-pr:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 300
     needs: [build-dockers-amd]
     strategy:
       fail-fast: false
@@ -724,7 +724,9 @@ jobs:
     env:
       DOCKER_TAG: pr-${{ github.event.pull_request.number }}
       ESPRESSO_NODE_GENESIS_FILE: genesis/${{ matrix.genesis }}.toml
-      DURATION_SECONDS: 3600
+      DURATION_SECONDS: 14400
+      RUST_LOG: error
+      ESPRESSO_NODE_TELEMETRY_LOG: error
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.1.0
@@ -745,8 +747,44 @@ jobs:
       - name: Start demo + smoke test
         run: just soak::up
 
-      - name: Sample
-        run: just soak::sample
+      # Sample in 1h chunks, re-uploading (overwrite) after each so partial data
+      # survives a host-level OOM/kill: when the runner host dies, `if: always()`
+      # steps do not run, so only artifacts already uploaded persist.
+      - name: Sample chunk 1/4 (1h)
+        run: DURATION_SECONDS=3600 just soak::sample
+      - name: Upload partial soak samples (1h)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: memory-soak-${{ matrix.genesis }}
+          path: ./soak-samples
+          retention-days: 90
+          overwrite: true
+
+      - name: Sample chunk 2/4 (1h)
+        run: DURATION_SECONDS=3600 just soak::sample --append
+      - name: Upload partial soak samples (2h)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: memory-soak-${{ matrix.genesis }}
+          path: ./soak-samples
+          retention-days: 90
+          overwrite: true
+
+      - name: Sample chunk 3/4 (1h)
+        run: DURATION_SECONDS=3600 just soak::sample --append
+      - name: Upload partial soak samples (3h)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: memory-soak-${{ matrix.genesis }}
+          path: ./soak-samples
+          retention-days: 90
+          overwrite: true
+
+      - name: Sample chunk 4/4 (1h)
+        run: DURATION_SECONDS=3600 just soak::sample --append
 
       - name: Render summary + chart
         if: always()
@@ -763,6 +801,7 @@ jobs:
           name: memory-soak-${{ matrix.genesis }}
           path: ./soak-samples
           retention-days: 90
+          overwrite: true
 
       - name: Upload soak logs
         if: always()
@@ -775,7 +814,7 @@ jobs:
   memory-soak-non-pr:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 300
     needs: [build-dockers-amd, create-multiplatform-docker-image]
     strategy:
       fail-fast: false
@@ -783,7 +822,8 @@ jobs:
         genesis: [demo-drb-header, demo-epoch-reward]
     env:
       ESPRESSO_NODE_GENESIS_FILE: genesis/${{ matrix.genesis }}.toml
-      DURATION_SECONDS: 3600
+      DURATION_SECONDS: 14400
+      RUST_LOG: error
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.1.0
