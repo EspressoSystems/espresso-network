@@ -34,7 +34,7 @@ pub struct SetHotshotUpReqBody {
     pub chain_id: u64,
 }
 
-#[derive(Debug, Clone, ValueEnum)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 pub enum DevNodeVersion {
     #[value(name = "0.3")]
     V0_3,
