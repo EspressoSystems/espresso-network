@@ -1816,8 +1816,23 @@ impl<T: NodeType> Consensus<T> {
             return;
         }
         let vid_share = self.vid_shares.get(&view).cloned();
+        // See `cast_vote_1` for the same guard's rationale: skip our own share
+        // broadcast when we're the leader of view+1, since we're about to fan
+        // out view+1's shares to every peer and the rest of the committee
+        // still cross-broadcasts theirs.  `vote1.vote.data.epoch` is the
+        // canonical epoch for this view here; if it's `None` (pre-epoch
+        // compat) we can't resolve leadership, so fall through to the
+        // broadcast — that's the safe direction.
+        let skip_own_share = vote1
+            .vote
+            .data
+            .epoch
+            .map(|epoch| self.is_leader(view + 1, epoch))
+            .unwrap_or(false);
         outbox.push_back(ConsensusOutput::SendVote1(vote1));
-        if let Some(vid_share) = vid_share {
+        if let Some(vid_share) = vid_share
+            && !skip_own_share
+        {
             outbox.push_back(ConsensusOutput::BroadcastVidShare(vid_share));
         }
     }
@@ -2027,7 +2042,17 @@ impl<T: NodeType> Consensus<T> {
             && self.is_proposal_stored(view, &proposal_commit)
         {
             outbox.push_back(ConsensusOutput::SendVote1(vote));
-            outbox.push_back(ConsensusOutput::BroadcastVidShare(vid_share));
+            // Skip our own share broadcast when we're the leader of view+1:
+            // we're about to fan out view+1's shares to every recipient, so
+            // adding a cluster-wide broadcast of *our* share on top of that
+            // doubles outbound traffic during the leader-duty window for no
+            // benefit — the other N-1 replicas already cross-broadcast their
+            // shares, and reconstruction needs only `recovery_threshold` of
+            // them (`N - 1 >= recovery_threshold` by quorum sizing).  Cert1
+            // counts the `SendVote1` signature, so safety is unchanged.
+            if !self.is_leader(view + 1, epoch) {
+                outbox.push_back(ConsensusOutput::BroadcastVidShare(vid_share));
+            }
         } else {
             self.request_action(view, Some(epoch), ActionKind::Vote, outbox);
             self.pending_vote1.insert(view, vote);
