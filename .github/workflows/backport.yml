@@ -1,7 +1,7 @@
 name: Backport merged pull request
 on:
   pull_request_target:
-    types: [closed]
+    types: [closed, labeled]
   workflow_dispatch:
     inputs:
       pr_number:
