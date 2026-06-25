@@ -37,6 +37,10 @@ async fn send_proposal_and_vote1s(
 
     for i in 0..THRESHOLD {
         harness.message(test_view.vote1_input(i)).await;
+        // VID shares travel separately from Vote1
+        harness
+            .message(test_view.vid_share_broadcast_input(i))
+            .await;
     }
 
     harness
@@ -208,6 +212,9 @@ async fn test_leader_proposal() {
 
     for i in 0..THRESHOLD {
         harness.message(test_view.vote1_input(i)).await;
+        harness
+            .message(test_view.vid_share_broadcast_input(i))
+            .await;
     }
 
     harness

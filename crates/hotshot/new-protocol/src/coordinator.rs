@@ -804,6 +804,20 @@ where
                     .broadcast(self.consensus.current_view(), &message)
                     .map_err(|e| CoordinatorError::from(e).context("broadcast vote1"))?
             },
+            ConsensusOutput::BroadcastVidShare(share) => {
+                let view = share.view_number();
+                debug!(%node, %view, "send vid share");
+                let message = Message {
+                    sender: self.public_key.clone(),
+                    message_type: MessageType::Consensus(ConsensusMessage::VidShareBroadcast(
+                        share,
+                    )),
+                };
+                self.network
+                    .sender()
+                    .broadcast(self.consensus.current_view(), &message)
+                    .map_err(|e| CoordinatorError::from(e).context("broadcast vid share"))?
+            },
             ConsensusOutput::SendVote2(vote2) => {
                 debug!(%node, view = %vote2.view_number(), "send vote2");
                 let message = Message {
@@ -999,12 +1013,24 @@ where
                         // An epoch-root Vote1 MUST carry a state_vote.
                         // Reject otherwise.
                         vote1.state_vote.as_ref()?;
-                        self.epoch_root_collector.accumulate(vote1.clone()).await;
+                        self.epoch_root_collector.accumulate(vote1).await;
                     } else {
-                        self.vote1_collector.accumulate_vote(vote1.vote.clone());
+                        self.vote1_collector.accumulate_vote(vote1.vote);
                     }
+                    None
+                },
+                ConsensusMessage::VidShareBroadcast(share) => {
+                    let view = share.view_number();
+                    if self.is_too_far_ahead(view) {
+                        warn!(%node, %sender, %view, "vid share broadcast is too far ahead");
+                        return None;
+                    }
+                    debug!(%node, %sender, %view, "recv vid share broadcast");
+                    // The share belongs to the sender (`recipient_key == sender`,
+                    // enforced by `handle_vid_share`); it is verified lazily
+                    // against the pinned commitment at reconstruction time.
                     self.vid_reconstructor
-                        .handle_vid_share(message.sender.clone(), vote1.vid_share);
+                        .handle_vid_share(message.sender.clone(), share);
                     None
                 },
                 ConsensusMessage::Vote2(vote2) => {
