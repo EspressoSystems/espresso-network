@@ -288,6 +288,7 @@ impl<T: NodeType> Consensus<T> {
     where
         B: Into<BlockNumber>,
     {
+        let last_decided_view = genesis_leaf.view_number();
         Self {
             proposals: BTreeMap::new(),
             signed_proposals: BTreeMap::new(),
@@ -300,7 +301,7 @@ impl<T: NodeType> Consensus<T> {
             timeout_certs: BTreeMap::new(),
             locked_cert: None,
             leaves: BTreeMap::new(),
-            last_decided_view: ViewNumber::genesis(),
+            last_decided_view,
             last_decided_leaf: genesis_leaf,
             headers: BTreeMap::new(),
             drb_results: BTreeMap::new(),

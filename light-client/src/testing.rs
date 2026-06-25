@@ -1037,6 +1037,33 @@ impl Client for TestClient {
         Ok(proofs)
     }
 
+    async fn namespaces_proofs_in_range(
+        &self,
+        start: u64,
+        end: u64,
+        namespaces: &[NamespaceId],
+    ) -> Result<Vec<HashMap<NamespaceId, NamespaceProof>>> {
+        let mut proofs = vec![];
+        for i in start..end {
+            // Mirror the server: only include namespaces actually present in the block.
+            let present: Vec<_> = {
+                let inner = self.inner.lock().await;
+                let ns_table = inner.leaves[i as usize].header().ns_table().clone();
+                namespaces
+                    .iter()
+                    .copied()
+                    .filter(|ns| ns_table.find_ns_id(ns).is_some())
+                    .collect()
+            };
+            let mut block_proofs = HashMap::new();
+            for ns in present {
+                block_proofs.insert(ns, self.namespace_proof(i, ns).await?);
+            }
+            proofs.push(block_proofs);
+        }
+        Ok(proofs)
+    }
+
     async fn cert2(&self, _height: u64) -> Result<Option<Certificate2<SeqTypes>>> {
         Ok(None)
     }

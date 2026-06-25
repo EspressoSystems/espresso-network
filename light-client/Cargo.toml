@@ -31,6 +31,7 @@ serde_json = { workspace = true }
 sqlx = { workspace = true }
 static_assertions = { workspace = true }
 surf-disco = { workspace = true }
+tagged-base64 = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

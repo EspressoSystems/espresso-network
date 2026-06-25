@@ -111,14 +111,14 @@ pub struct PostgresOptions {
 
     /// Disable `DEFERRABLE` on read transactions for the query service.
     ///
-    /// When true, read transactions on Postgres start with `SERIALIZABLE READ ONLY` (no
-    /// `DEFERRABLE`), so they begin immediately rather than waiting for a safe serializable
-    /// snapshot. This trades start-up latency for the chance of a serialization-error retry,
-    /// and is opt-in.
+    /// When true (the default), read transactions on Postgres start with `SERIALIZABLE READ ONLY`
+    /// (no `DEFERRABLE`), so they begin immediately rather than waiting for a safe serializable
+    /// snapshot. This trades start-up latency for the chance of a serialization-error retry.
+    /// Set to false to restore `DEFERRABLE`.
     #[clap(
         long,
         env = "ESPRESSO_NODE_POSTGRES_NO_DEFERRABLE",
-        default_value_t = false
+        default_value_t = true
     )]
     pub(crate) no_deferrable: bool,
 }
@@ -1424,6 +1424,8 @@ const PRUNE_TABLES: &[&str] = &[
     "da_proposal2",
     "quorum_proposals2",
     "quorum_certificate2",
+    "state_cert",
+    "decided_cert2",
 ];
 
 async fn prune_to_view(tx: &mut Transaction<Write>, view: u64) -> anyhow::Result<()> {
@@ -4275,6 +4277,29 @@ mod test {
             .await
             .unwrap();
 
+        // Populate the view-indexed cert tables. Contents are opaque to the pruner (it deletes by
+        // `view`), so raw bytes suffice.
+        {
+            let mut tx = storage.db.write().await.unwrap();
+            tx.upsert(
+                "state_cert",
+                ["view", "state_cert"],
+                ["view"],
+                [(data_view.u64() as i64, b"state_cert".to_vec())],
+            )
+            .await
+            .unwrap();
+            tx.upsert(
+                "decided_cert2",
+                ["view", "data"],
+                ["view"],
+                [(data_view.u64() as i64, b"cert2".to_vec())],
+            )
+            .await
+            .unwrap();
+            tx.commit().await.unwrap();
+        }
+
         // The first decide doesn't trigger any garbage collection, even though our usage exceeds
         // the target, because of the minimum retention.
         tracing::info!("decide view 1");
@@ -4294,6 +4319,8 @@ mod test {
             storage.load_quorum_proposal(data_view).await.unwrap(),
             quorum_proposal
         );
+        assert!(view_row_exists(&storage, "state_cert", data_view).await);
+        assert!(view_row_exists(&storage, "decided_cert2", data_view).await);
 
         // After another view, our data is beyond the minimum retention (though not the target
         // retention) so it gets pruned.
@@ -4305,6 +4332,23 @@ mod test {
         assert!(storage.load_vid_share(data_view).await.unwrap().is_none(),);
         assert!(storage.load_da_proposal(data_view).await.unwrap().is_none());
         storage.load_quorum_proposal(data_view).await.unwrap_err();
+        assert!(!view_row_exists(&storage, "state_cert", data_view).await);
+        assert!(!view_row_exists(&storage, "decided_cert2", data_view).await);
+    }
+
+    /// Whether a view-indexed consensus table has a row at `view`.
+    async fn view_row_exists(storage: &Persistence, table: &str, view: ViewNumber) -> bool {
+        storage
+            .db
+            .read()
+            .await
+            .unwrap()
+            .fetch_optional(
+                query(&format!("SELECT view FROM {table} WHERE view = $1")).bind(view.u64() as i64),
+            )
+            .await
+            .unwrap()
+            .is_some()
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

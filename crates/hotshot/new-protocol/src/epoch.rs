@@ -16,7 +16,6 @@ use tracing::error;
 
 pub enum EpochRootResult {
     DrbResult(EpochNumber, DrbResult),
-    EpochRootAdded(EpochNumber),
 }
 
 /// Epoch + error for the Err path so retries can re-kick the task.
@@ -71,9 +70,6 @@ impl<T: NodeType> EpochManager<T> {
                         Ok(root @ EpochRootResult::DrbResult(..)) => {
                             self.pending_drb_requests.remove(&epoch);
                             self.completed_drb_requests.insert(epoch);
-                            return Some(Ok(root));
-                        },
-                        Ok(root @ EpochRootResult::EpochRootAdded(_)) => {
                             return Some(Ok(root));
                         },
                         Err(error) => {
