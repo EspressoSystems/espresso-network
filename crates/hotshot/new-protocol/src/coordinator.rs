@@ -294,11 +294,7 @@ where
             ))
             .storage(Storage::new(storage, private_key))
             .membership_coordinator(membership_coordinator)
-            .timer(Timer::new(
-                timeout_duration,
-                ViewNumber::genesis(),
-                EpochNumber::genesis(),
-            ))
+            .timer(Timer::new(timeout_duration, anchor_view, anchor_epoch))
             .public_key(public_key)
             .maybe_metrics(
                 metrics
