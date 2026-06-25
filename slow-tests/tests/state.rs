@@ -44,7 +44,7 @@ async fn slow_test_merklized_state_api() {
     // Wait until some blocks have been decided.
     tracing::info!("waiting for blocks");
     let blocks = client
-        .socket("availability/stream/blocks/0")
+        .socket(&espresso_api::routes::v1::stream_blocks(0))
         .subscribe::<BlockQueryData<SeqTypes>>()
         .await
         .unwrap()
@@ -62,10 +62,9 @@ async fn slow_test_merklized_state_api() {
         let i = block.height();
         tracing::info!(i, "get block state");
         let path = client
-            .get::<MerkleProof<Commitment<Header>, u64, Sha3Node, 3>>(&format!(
-                "block-state/{}/{i}",
-                i + 1
-            ))
+            .get::<MerkleProof<Commitment<Header>, u64, Sha3Node, 3>>(
+                &espresso_api::routes::v1::block_state_path_by_height(i + 1, i),
+            )
             .send()
             .await
             .unwrap();
@@ -74,11 +73,9 @@ async fn slow_test_merklized_state_api() {
         tracing::info!(i, "get fee state");
         let account = TestConfig::<5>::builder_key().fee_account();
         let path = client
-            .get::<MerkleProof<FeeAmount, FeeAccount, Sha3Node, 256>>(&format!(
-                "fee-state/{}/{}",
-                i + 1,
-                account
-            ))
+            .get::<MerkleProof<FeeAmount, FeeAccount, Sha3Node, 256>>(
+                &espresso_api::routes::v1::fee_state_path_by_height(i + 1, account),
+            )
             .send()
             .await
             .unwrap();
@@ -89,7 +86,7 @@ async fn slow_test_merklized_state_api() {
     // testing fee_balance api
     let account = TestConfig::<5>::builder_key().fee_account();
     let amount = client
-        .get::<Option<FeeAmount>>(&format!("fee-state/fee-balance/latest/{account}"))
+        .get::<Option<FeeAmount>>(&espresso_api::routes::v1::fee_state_balance_latest(account))
         .send()
         .await
         .unwrap()

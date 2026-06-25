@@ -395,7 +395,10 @@ pub mod v1 {
     // Status
     path_fn!(status_block_height, STATUS_BLOCK_HEIGHT_ROUTE);
     path_fn!(status_success_rate, STATUS_SUCCESS_RATE_ROUTE);
-    path_fn!(status_time_since_last_decide, STATUS_TIME_SINCE_LAST_DECIDE_ROUTE);
+    path_fn!(
+        status_time_since_last_decide,
+        STATUS_TIME_SINCE_LAST_DECIDE_ROUTE
+    );
     path_fn!(status_metrics, STATUS_METRICS_ROUTE);
 
     // Config
@@ -435,13 +438,22 @@ pub mod v1 {
     // Node — stake table / validators / participation
     path_fn!(node_stake_table_current, NODE_STAKE_TABLE_CURRENT_ROUTE);
     path_fn!(node_stake_table, NODE_STAKE_TABLE_ROUTE, "epoch_number" => epoch_number);
-    path_fn!(node_da_stake_table_current, NODE_DA_STAKE_TABLE_CURRENT_ROUTE);
+    path_fn!(
+        node_da_stake_table_current,
+        NODE_DA_STAKE_TABLE_CURRENT_ROUTE
+    );
     path_fn!(node_da_stake_table, NODE_DA_STAKE_TABLE_ROUTE, "epoch_number" => epoch_number);
     path_fn!(node_validators, NODE_VALIDATORS_ROUTE, "epoch_number" => epoch_number);
     path_fn!(node_all_validators, NODE_ALL_VALIDATORS_ROUTE, "epoch_number" => epoch_number, "offset" => offset, "limit" => limit);
-    path_fn!(node_proposal_participation_current, NODE_PROPOSAL_PARTICIPATION_CURRENT_ROUTE);
+    path_fn!(
+        node_proposal_participation_current,
+        NODE_PROPOSAL_PARTICIPATION_CURRENT_ROUTE
+    );
     path_fn!(node_proposal_participation, NODE_PROPOSAL_PARTICIPATION_ROUTE, "epoch" => epoch);
-    path_fn!(node_vote_participation_current, NODE_VOTE_PARTICIPATION_CURRENT_ROUTE);
+    path_fn!(
+        node_vote_participation_current,
+        NODE_VOTE_PARTICIPATION_CURRENT_ROUTE
+    );
     path_fn!(node_vote_participation, NODE_VOTE_PARTICIPATION_ROUTE, "epoch" => epoch);
 
     // Node — block reward / oldest
@@ -517,9 +529,15 @@ pub mod v1 {
     // Token
     path_fn!(token_total_minted_supply, TOKEN_TOTAL_MINTED_SUPPLY_ROUTE);
     path_fn!(token_circulating_supply, TOKEN_CIRCULATING_SUPPLY_ROUTE);
-    path_fn!(token_circulating_supply_ethereum, TOKEN_CIRCULATING_SUPPLY_ETHEREUM_ROUTE);
+    path_fn!(
+        token_circulating_supply_ethereum,
+        TOKEN_CIRCULATING_SUPPLY_ETHEREUM_ROUTE
+    );
     path_fn!(token_total_issued_supply, TOKEN_TOTAL_ISSUED_SUPPLY_ROUTE);
-    path_fn!(token_total_reward_distributed, TOKEN_TOTAL_REWARD_DISTRIBUTED_ROUTE);
+    path_fn!(
+        token_total_reward_distributed,
+        TOKEN_TOTAL_REWARD_DISTRIBUTED_ROUTE
+    );
 
     // Database (diagnostic)
     path_fn!(database_table_sizes, DATABASE_TABLE_SIZES_ROUTE);

@@ -4688,6 +4688,7 @@ dependencies = [
  "tower 0.4.13",
  "tracing",
  "tracing-subscriber 0.3.23",
+ "url",
  "vbs",
 ]
 
@@ -12281,6 +12282,7 @@ dependencies = [
  "clap 4.6.1",
  "committable",
  "derivative",
+ "espresso-api",
  "espresso-contract-deployer",
  "espresso-node",
  "espresso-types",
@@ -13196,6 +13198,7 @@ dependencies = [
  "anyhow",
  "client",
  "dotenvy",
+ "espresso-api",
  "espresso-contract-deployer",
  "espresso-node",
  "espresso-types",

@@ -16,6 +16,7 @@ cdn-marshal = { workspace = true }
 clap = { workspace = true }
 committable = { workspace = true }
 derivative = { workspace = true }
+espresso-api = { workspace = true }
 espresso-contract-deployer = { workspace = true }
 espresso-node = { workspace = true, default-features = false, features = ["testing"] }
 espresso-types = { workspace = true }
