@@ -809,6 +809,7 @@ impl<T: NodeType> Consensus<T> {
         self.current_epoch
     }
 
+    #[cfg(test)]
     pub fn set_view(&mut self, view: ViewNumber, epoch: EpochNumber) {
         self.current_view = view;
         self.current_epoch = Some(epoch);
@@ -1302,6 +1303,7 @@ impl<T: NodeType> Consensus<T> {
             },
         }
         self.timeout_certs.insert(view, certificate.clone());
+        self.current_view = self.current_view.max(view);
         self.current_epoch = Some(epoch);
         outbox.push_back(ConsensusOutput::ViewChanged(view, epoch));
         outbox.push_back(ConsensusOutput::ViewTimedOut(certificate.view_number()));
@@ -1409,6 +1411,7 @@ impl<T: NodeType> Consensus<T> {
         let next_view = cert2.view_number() + 1;
         let next_epoch = cert2.data.epoch + 1;
         // Change view to the first view of the next epoch
+        self.current_view = self.current_view.max(next_view);
         self.current_epoch = Some(next_epoch);
         outbox.push_back(ConsensusOutput::ViewChanged(next_view, next_epoch));
 
@@ -2123,6 +2126,7 @@ impl<T: NodeType> Consensus<T> {
             .is_none_or(|locked_cert| locked_cert.view_number() < cert1.view_number())
         {
             self.locked_cert = Some(cert1.clone());
+            self.current_view = self.current_view.max(view + 1);
             self.current_epoch = Some(proposal_epoch);
             outbox.push_back(ConsensusOutput::ViewChanged(view + 1, proposal_epoch));
             outbox.push_back(ConsensusOutput::SendCertificate1(cert1.clone()));
