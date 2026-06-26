@@ -151,5 +151,5 @@ GitHub CLI:
 ```bash
 just tag release-0.4.0                                # same as /tag
 gh workflow run promote-docker-tag.yml \              # same as /promote decaf.canary
-  -f stage=decaf.canary -f tag=0.4.0.5
+  -f floating-tag=decaf.canary -f release-tag=0.4.0.5
 ```

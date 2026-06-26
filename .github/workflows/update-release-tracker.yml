@@ -198,10 +198,13 @@ jobs:
         run: |
           set -euo pipefail
           stage=$(awk '{print $2; exit}' <<<"$BODY")
-          if [ -z "$stage" ]; then
-            gh issue comment "$ISSUE" --body "@$ACTOR \`/promote\` needs a stage (decaf.canary, decaf, mainnet.canary, mainnet)"
-            exit 1
-          fi
+          case "$stage" in
+            decaf.canary|decaf|mainnet.canary|mainnet) ;;
+            *)
+              gh issue comment "$ISSUE" --body "@$ACTOR \`/promote\` needs a valid stage (decaf.canary, decaf, mainnet.canary, mainnet); got \`${stage:-(empty)}\`."
+              exit 1
+              ;;
+          esac
           body=$(gh issue view "$ISSUE" --json body -q .body)
           version=$(grep -oP '(?<=release-branch: release-)[0-9]+\.[0-9]+\.[0-9]+' <<<"$body" | head -1)
           tag=$(git tag --list "${version}.*" --sort=-creatordate | head -1)
