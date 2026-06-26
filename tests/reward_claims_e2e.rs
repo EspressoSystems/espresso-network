@@ -182,9 +182,9 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
         lc_block_height, lc_view_number
     );
 
-    let reward_claim_url = espresso_api::url(
-        &sequencer_url,
-        espresso_api::routes::v1::reward_claim_input(lc_block_height, claimer_address),
+    let reward_claim_url = format!(
+        "{}reward-state-v2/reward-claim-input/{}/{}",
+        sequencer_url, lc_block_height, claimer_address
     );
     println!("Fetching reward claim input from: {}", reward_claim_url);
 
@@ -194,7 +194,7 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     let claim_input = loop {
         attempt += 1;
         match http_client
-            .get(reward_claim_url.clone())
+            .get(&reward_claim_url)
             .header("Accept", "application/json")
             .send()
             .await
@@ -298,10 +298,7 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     let initial_supply = parse_ether("100000").unwrap();
 
     let minted: String = http_client
-        .get(espresso_api::url(
-            &sequencer_url,
-            espresso_api::routes::v1::token_total_minted_supply(),
-        ))
+        .get(format!("{sequencer_url}token/total-minted-supply"))
         .send()
         .await?
         .error_for_status()?
@@ -312,10 +309,7 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
 
     // Non-mainnet: locked=0, so circulating-supply-ethereum = total-minted-supply.
     let circulating_ethereum: String = http_client
-        .get(espresso_api::url(
-            &sequencer_url,
-            espresso_api::routes::v1::token_circulating_supply_ethereum(),
-        ))
+        .get(format!("{sequencer_url}token/circulating-supply-ethereum"))
         .send()
         .await?
         .error_for_status()?
@@ -328,10 +322,7 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     );
 
     let circulating: String = http_client
-        .get(espresso_api::url(
-            &sequencer_url,
-            espresso_api::routes::v1::token_circulating_supply(),
-        ))
+        .get(format!("{sequencer_url}token/circulating-supply"))
         .send()
         .await?
         .error_for_status()?

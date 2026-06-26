@@ -14,7 +14,6 @@ alloy = { workspace = true }
 anyhow = { workspace = true }
 client = { workspace = true }
 dotenvy = { workspace = true }
-espresso-api = { workspace = true }
 espresso-contract-deployer = { workspace = true }
 espresso-node = { workspace = true, default-features = false, features = ["testing"] }
 espresso-types = { workspace = true, features = ["testing"] }

@@ -1872,7 +1872,6 @@ pub mod test_helpers {
         providers::{ProviderBuilder, ext::AnvilApi},
     };
     use committable::Committable;
-    use espresso_api::routes::v1 as paths;
     use espresso_contract_deployer::{
         Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS, builder::DeployerArgsBuilder,
         network_config::light_client_genesis_from_stake_table,
@@ -2341,7 +2340,7 @@ pub mod test_helpers {
         // that we set it up correctly. Wait for a (non-genesis) block to be sequenced and then
         // check the success rate metrics.
         while client
-            .get::<u64>(&paths::status_block_height())
+            .get::<u64>("status/block-height")
             .send()
             .await
             .unwrap()
@@ -2350,7 +2349,7 @@ pub mod test_helpers {
             sleep(Duration::from_secs(1)).await;
         }
         let success_rate = client
-            .get::<f64>(&paths::status_success_rate())
+            .get::<f64>("status/success-rate")
             .send()
             .await
             .unwrap();
@@ -2388,7 +2387,7 @@ pub mod test_helpers {
         client.connect(None).await;
 
         let hash = client
-            .post(&paths::submit())
+            .post("submit/submit")
             .body_json(&txn)
             .unwrap()
             .send()
@@ -2428,7 +2427,7 @@ pub mod test_helpers {
         }
         // we cannot verify the signature now, because we don't know the stake table
         client
-            .get::<LCV3StateSignatureRequestBody>(&paths::state_signature_block(height))
+            .get::<LCV3StateSignatureRequestBody>(&format!("state-signature/block/{height}"))
             .send()
             .await
             .unwrap();
@@ -2481,10 +2480,10 @@ pub mod test_helpers {
         let height = leaf.height() + 1;
         let view = leaf.view_number() + 1;
         let res = client
-            .get::<AccountQueryData>(&paths::catchup_account(
-                height,
+            .get::<AccountQueryData>(&format!(
+                "catchup/{height}/{}/account/{:x}",
                 view.u64(),
-                format!("{:x}", Address::default()),
+                Address::default()
             ))
             .send()
             .await
@@ -2507,7 +2506,7 @@ pub mod test_helpers {
 
         // Undecided block state.
         let res = client
-            .get::<BlocksFrontier>(&paths::catchup_blocks(height, view.u64()))
+            .get::<BlocksFrontier>(&format!("catchup/{height}/{}/blocks", view.u64()))
             .send()
             .await
             .unwrap();
@@ -2594,7 +2593,6 @@ mod api_tests {
 
     use committable::Committable;
     use data_source::testing::TestableSequencerDataSource;
-    use espresso_api::routes::v1 as paths;
     use espresso_types::{
         Header, Leaf2, MOCK_SEQUENCER_VERSIONS, NamespaceId, NamespaceProofQueryData,
         ValidatedState,
@@ -2690,7 +2688,7 @@ mod api_tests {
         client.connect(None).await;
 
         let hash = client
-            .post(&paths::submit())
+            .post("submit/submit")
             .body_json(&txn)
             .unwrap()
             .send()
@@ -2705,7 +2703,7 @@ mod api_tests {
         // Submit a second transaction for range queries.
         let txn2 = Transaction::new(ns_id, vec![5, 6, 7, 8]);
         client
-            .post::<Commitment<Transaction>>(&paths::submit())
+            .post::<Commitment<Transaction>>("submit/submit")
             .body_json(&txn2)
             .unwrap()
             .send()
@@ -2716,7 +2714,7 @@ mod api_tests {
 
         // Wait for the query service to update to this block height.
         client
-            .socket(&paths::stream_blocks(block_height2))
+            .socket(&format!("availability/stream/blocks/{block_height2}"))
             .subscribe::<BlockQueryData<SeqTypes>>()
             .await
             .unwrap()
@@ -2729,12 +2727,12 @@ mod api_tests {
         let mut found_empty_block = false;
         for block_num in 0..=block_height {
             let header: Header = client
-                .get(&paths::header_by_height(block_num))
+                .get(&format!("availability/header/{block_num}"))
                 .send()
                 .await
                 .unwrap();
             let ns_query_res: NamespaceProofQueryData = client
-                .get(&paths::namespace_proof_by_height(block_num, ns_id))
+                .get(&format!("availability/block/{block_num}/namespace/{ns_id}"))
                 .send()
                 .await
                 .unwrap();
@@ -2743,7 +2741,10 @@ mod api_tests {
             assert_eq!(
                 ns_query_res,
                 client
-                    .get(&paths::namespace_proof_by_hash(header.commit(), ns_id))
+                    .get(&format!(
+                        "availability/block/hash/{}/namespace/{ns_id}",
+                        header.commit()
+                    ))
                     .send()
                     .await
                     .unwrap()
@@ -2751,9 +2752,9 @@ mod api_tests {
             assert_eq!(
                 ns_query_res,
                 client
-                    .get(&paths::namespace_proof_by_payload_hash(
-                        header.payload_commitment(),
-                        ns_id
+                    .get(&format!(
+                        "availability/block/payload-hash/{}/namespace/{ns_id}",
+                        header.payload_commitment()
                     ))
                     .send()
                     .await
@@ -2763,7 +2764,7 @@ mod api_tests {
             // Verify namespace proof if present
             if let Some(ns_proof) = ns_query_res.proof {
                 let vid_common: VidCommonQueryData<SeqTypes> = client
-                    .get(&paths::vid_common_by_height(block_num))
+                    .get(&format!("availability/vid/common/{block_num}"))
                     .send()
                     .await
                     .unwrap();
@@ -2794,10 +2795,9 @@ mod api_tests {
 
         // Test range query.
         let ns_proofs: Vec<NamespaceProofQueryData> = client
-            .get(&paths::namespace_proof_range(
-                block_height,
-                block_height2 + 1,
-                ns_id,
+            .get(&format!(
+                "availability/block/{block_height}/{}/namespace/{ns_id}",
+                block_height2 + 1
             ))
             .send()
             .await
@@ -3190,7 +3190,6 @@ mod test {
     };
     use async_lock::Mutex;
     use committable::{Commitment, Committable};
-    use espresso_api::routes::v1 as paths;
     use espresso_contract_deployer::{
         Contract, Contracts, builder::DeployerArgsBuilder,
         network_config::light_client_genesis_from_stake_table, upgrade_stake_table_v2,
@@ -3368,7 +3367,7 @@ mod test {
         let account = TestConfig::<5>::builder_key().fee_account();
 
         let _headers = client
-            .socket(&paths::stream_headers(0))
+            .socket("availability/stream/headers/0")
             .subscribe::<Header>()
             .await
             .unwrap()
@@ -3379,7 +3378,7 @@ mod test {
 
         for i in 1..5 {
             let leaf = client
-                .get::<LeafQueryData<SeqTypes>>(&paths::leaf_by_height(i))
+                .get::<LeafQueryData<SeqTypes>>(&format!("availability/leaf/{i}"))
                 .send()
                 .await
                 .unwrap();
@@ -3387,7 +3386,7 @@ mod test {
             assert_eq!(leaf.height(), i);
 
             let header = client
-                .get::<Header>(&paths::header_by_height(i))
+                .get::<Header>(&format!("availability/header/{i}"))
                 .send()
                 .await
                 .unwrap();
@@ -3395,7 +3394,7 @@ mod test {
             assert_eq!(header.height(), i);
 
             let vid = client
-                .get::<VidCommonQueryData<SeqTypes>>(&paths::vid_common_by_height(i))
+                .get::<VidCommonQueryData<SeqTypes>>(&format!("availability/vid/common/{i}"))
                 .send()
                 .await
                 .unwrap();
@@ -3403,9 +3402,10 @@ mod test {
             assert_eq!(vid.height(), i);
 
             client
-                .get::<MerkleProof<Commitment<Header>, u64, Sha3Node, 3>>(
-                    &paths::block_state_path_by_height(i, i - 1),
-                )
+                .get::<MerkleProof<Commitment<Header>, u64, Sha3Node, 3>>(&format!(
+                    "block-state/{i}/{}",
+                    i - 1
+                ))
                 .send()
                 .await
                 .unwrap();
@@ -3424,7 +3424,7 @@ mod test {
         // This would fail even though we have processed atleast 10 leaves
         // this is because light weight nodes only support leaves, headers and VID
         client
-            .get::<BlockQueryData<SeqTypes>>(&paths::block_by_height(1u64))
+            .get::<BlockQueryData<SeqTypes>>("availability/block/1")
             .send()
             .await
             .unwrap_err();
@@ -4091,7 +4091,7 @@ mod test {
 
         // Wait until some blocks have been decided.
         client
-            .socket(&paths::stream_blocks(0))
+            .socket("availability/stream/blocks/0")
             .subscribe::<BlockQueryData<SeqTypes>>()
             .await
             .unwrap()
@@ -4105,7 +4105,7 @@ mod test {
 
         // Get the block height we reached.
         let height = client
-            .get::<usize>(&paths::status_block_height())
+            .get::<usize>("status/block-height")
             .send()
             .await
             .unwrap();
@@ -4113,7 +4113,7 @@ mod test {
 
         // Get the decided chain, so we can check consistency after the restart.
         let chain: Vec<LeafQueryData<SeqTypes>> = client
-            .socket(&paths::stream_leaves(0))
+            .socket("availability/stream/leaves/0")
             .subscribe()
             .await
             .unwrap()
@@ -4162,7 +4162,7 @@ mod test {
         // Make sure we can decide new blocks after the restart.
         tracing::info!("waiting for decide, height {height}");
         let new_leaf: LeafQueryData<SeqTypes> = client
-            .socket(&paths::stream_leaves(height))
+            .socket(&format!("availability/stream/leaves/{height}"))
             .subscribe()
             .await
             .unwrap()
@@ -4178,7 +4178,7 @@ mod test {
 
         // Ensure the new chain is consistent with the old chain.
         let new_chain: Vec<LeafQueryData<SeqTypes>> = client
-            .socket(&paths::stream_leaves(0))
+            .socket("availability/stream/leaves/0")
             .subscribe()
             .await
             .unwrap()
@@ -4430,7 +4430,7 @@ mod test {
         // third epoch starts from block 40 as epoch height is 20
         // wait for atleast 65 blocks
         let _blocks = client
-            .socket(&paths::stream_blocks(0))
+            .socket("availability/stream/blocks/0")
             .subscribe::<BlockQueryData<SeqTypes>>()
             .await
             .unwrap()
@@ -4526,7 +4526,7 @@ mod test {
 
         // wait for atleast 75 blocks
         let _blocks = client
-            .socket(&paths::stream_blocks(0))
+            .socket("availability/stream/blocks/0")
             .subscribe::<BlockQueryData<SeqTypes>>()
             .await
             .unwrap()
@@ -4539,7 +4539,7 @@ mod test {
         // Basically epoch 3 and epoch 4 as epoch height is 20
         // get all the validators
         let validators = client
-            .get::<AuthenticatedValidatorMap>(&paths::node_validators(3))
+            .get::<AuthenticatedValidatorMap>("node/validators/3")
             .send()
             .await
             .expect("failed to get validator");
@@ -4554,7 +4554,7 @@ mod test {
         }
         // get all the validators
         let validators = client
-            .get::<AuthenticatedValidatorMap>(&paths::node_validators(4))
+            .get::<AuthenticatedValidatorMap>("node/validators/4")
             .send()
             .await
             .expect("failed to get validator");
@@ -4660,7 +4660,7 @@ mod test {
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         let mut headers = client
-            .socket(&paths::stream_headers(0))
+            .socket("availability/stream/headers/0")
             .subscribe::<Header>()
             .await
             .unwrap();
@@ -4786,14 +4786,14 @@ mod test {
         // Verify that there are no validators for epoch # 1 and epoch # 2
         {
             client
-                .get::<AuthenticatedValidatorMap>(&paths::node_validators(1))
+                .get::<AuthenticatedValidatorMap>("node/validators/1")
                 .send()
                 .await
                 .unwrap()
                 .is_empty();
 
             client
-                .get::<AuthenticatedValidatorMap>(&paths::node_validators(2))
+                .get::<AuthenticatedValidatorMap>("node/validators/2")
                 .send()
                 .await
                 .unwrap()
@@ -4802,7 +4802,7 @@ mod test {
 
         // Get the epoch # 3 validators
         let validators = client
-            .get::<AuthenticatedValidatorMap>(&paths::node_validators(3))
+            .get::<AuthenticatedValidatorMap>("node/validators/3")
             .send()
             .await
             .expect("validators");
@@ -4817,7 +4817,7 @@ mod test {
         }
 
         let mut leaves = client
-            .socket(&paths::stream_leaves(0))
+            .socket("availability/stream/leaves/0")
             .subscribe::<LeafQueryData<SeqTypes>>()
             .await
             .unwrap();
@@ -4841,7 +4841,9 @@ mod test {
             let height = header.height();
             for address in addresses.clone() {
                 let amount = client
-                    .get::<Option<RewardAmount>>(&paths::reward_balance(height, address))
+                    .get::<Option<RewardAmount>>(&format!(
+                        "reward-state-v2/reward-balance/{height}/{address}"
+                    ))
                     .send()
                     .await
                     .ok()
@@ -4881,7 +4883,7 @@ mod test {
                 .account;
 
             let validators = client
-                .get::<AuthenticatedValidatorMap>(&paths::node_validators(epoch_number))
+                .get::<AuthenticatedValidatorMap>(&format!("node/validators/{epoch_number}"))
                 .send()
                 .await
                 .expect("validators");
@@ -5030,15 +5032,10 @@ mod test {
         // Wait for chain to reach epoch 5
         let height_client: Client<ServerError, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
-        wait_until_block_height(
-            &height_client,
-            &paths::node_block_height(),
-            EPOCH_HEIGHT * 5,
-        )
-        .await;
+        wait_until_block_height(&height_client, "node/block-height", EPOCH_HEIGHT * 5).await;
 
         let mut leaves = client
-            .socket(&paths::stream_leaves(0))
+            .socket("availability/stream/leaves/0")
             .subscribe::<LeafQueryData<SeqTypes>>()
             .await
             .unwrap();
@@ -5144,7 +5141,7 @@ mod test {
         client.connect(Some(Duration::from_secs(30))).await;
 
         let mut leaves = client
-            .socket(&paths::stream_leaves(0))
+            .socket("availability/stream/leaves/0")
             .subscribe::<LeafQueryData<SeqTypes>>()
             .await
             .expect("subscribe to leaf stream");
@@ -5228,15 +5225,10 @@ mod test {
 
         let height_client: Client<ServerError, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
-        wait_until_block_height(
-            &height_client,
-            &paths::node_block_height(),
-            EPOCH_HEIGHT * 5,
-        )
-        .await;
+        wait_until_block_height(&height_client, "node/block-height", EPOCH_HEIGHT * 5).await;
 
         let mut leaves = client
-            .socket(&paths::stream_leaves(0))
+            .socket("availability/stream/leaves/0")
             .subscribe::<LeafQueryData<SeqTypes>>()
             .await
             .unwrap();
@@ -5271,7 +5263,7 @@ mod test {
 
         let epoch4_last_reward = {
             let header = client
-                .get::<Header>(&paths::header_by_height(EPOCH_HEIGHT * 4))
+                .get::<Header>(&format!("availability/header/{}", EPOCH_HEIGHT * 4))
                 .send()
                 .await
                 .unwrap();
@@ -5354,7 +5346,7 @@ mod test {
         let mut expected_total_distributed = U256::ZERO;
 
         let mut leaves = client
-            .socket(&paths::stream_leaves(0))
+            .socket("availability/stream/leaves/0")
             .subscribe::<LeafQueryData<SeqTypes>>()
             .await
             .unwrap();
@@ -5454,7 +5446,7 @@ mod test {
         let mut expected_counts: HashMap<Address, u16> = HashMap::new();
 
         let mut leaves = client
-            .socket(&paths::stream_leaves(0))
+            .socket("availability/stream/leaves/0")
             .subscribe::<LeafQueryData<SeqTypes>>()
             .await
             .unwrap();
@@ -5579,7 +5571,7 @@ mod test {
 
         // wait for atleast 2 epochs
         let _blocks = client
-            .socket(&paths::stream_blocks(0))
+            .socket("availability/stream/blocks/0")
             .subscribe::<BlockQueryData<SeqTypes>>()
             .await
             .unwrap()
@@ -5590,14 +5582,14 @@ mod test {
 
         for i in 1..=3 {
             let _st = client
-                .get::<Vec<PeerConfig<SeqTypes>>>(&paths::node_stake_table(i as u64))
+                .get::<Vec<PeerConfig<SeqTypes>>>(&format!("node/stake-table/{}", i as u64))
                 .send()
                 .await
                 .expect("failed to get stake table");
         }
 
         let _st = client
-            .get::<StakeTableWithEpochNumber<SeqTypes>>(&paths::node_stake_table_current())
+            .get::<StakeTableWithEpochNumber<SeqTypes>>("node/stake-table/current")
             .send()
             .await
             .expect("failed to get stake table");
@@ -5977,10 +5969,6 @@ mod test {
         let opt = Options::with_port(node_0_port).query_sql(
             Query {
                 peers: vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                light_client: LightClientOptions {
-                    decaf: true,
-                    ..Default::default()
-                },
                 ..Default::default()
             },
             tmp_options(node_0_storage),
@@ -6099,7 +6087,7 @@ mod test {
             sleep(Duration::from_secs(3)).await;
 
             let bh = client
-                .get::<u64>(&paths::block_state_height())
+                .get::<u64>("block-state/block-height")
                 .send()
                 .await
                 .expect("block height not found");
@@ -6300,7 +6288,7 @@ mod test {
 
         tracing::info!("getting node block height");
         let node_block_height = client
-            .get::<u64>(&paths::node_block_height())
+            .get::<u64>("node/block-height")
             .send()
             .await
             .context("getting Espresso block height")
@@ -6309,7 +6297,7 @@ mod test {
         tracing::info!("node block height={node_block_height}");
 
         let leaf_query_data = client
-            .get::<LeafQueryData<SeqTypes>>(&paths::leaf_by_height(node_block_height - 1))
+            .get::<LeafQueryData<SeqTypes>>(&format!("availability/leaf/{}", node_block_height - 1))
             .send()
             .await
             .context("error getting leaf")
@@ -6525,7 +6513,7 @@ mod test {
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         let _blocks = client
-            .socket(&paths::stream_blocks(0))
+            .socket("availability/stream/blocks/0")
             .subscribe::<BlockQueryData<SeqTypes>>()
             .await
             .unwrap()
@@ -6535,7 +6523,7 @@ mod test {
             .unwrap();
 
         let block_reward = client
-            .get::<Option<RewardAmount>>(&paths::node_block_reward())
+            .get::<Option<RewardAmount>>("node/block-reward")
             .send()
             .await
             .expect("failed to get block reward")
@@ -6625,7 +6613,7 @@ mod test {
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         let _blocks = client
-            .socket(&paths::stream_blocks(0))
+            .socket("availability/stream/blocks/0")
             .subscribe::<BlockQueryData<SeqTypes>>()
             .await
             .unwrap()
@@ -6635,17 +6623,17 @@ mod test {
             .unwrap();
 
         let minted: String = client
-            .get(&paths::token_total_minted_supply())
+            .get("token/total-minted-supply")
             .send()
             .await
             .expect("total-minted-supply");
         let circ_eth: String = client
-            .get(&paths::token_circulating_supply_ethereum())
+            .get("token/circulating-supply-ethereum")
             .send()
             .await
             .expect("circulating-supply-ethereum");
         let circulating: String = client
-            .get(&paths::token_circulating_supply())
+            .get("token/circulating-supply")
             .send()
             .await
             .expect("circulating-supply");
@@ -6826,7 +6814,7 @@ mod test {
                 let ns_id = NamespaceId::from(*ns as u64);
                 let txn = Transaction::new(ns_id, vec![*ns, i]);
                 client
-                    .post::<()>(&paths::submit())
+                    .post::<()>("submit/submit")
                     .body_json(&txn)
                     .unwrap()
                     .send()
@@ -6836,7 +6824,7 @@ mod test {
 
                 // Block summary should contain information about the namespace.
                 let summary: BlockSummaryQueryData<SeqTypes> = client
-                    .get(&paths::block_summary_by_height(block))
+                    .get(&format!("availability/block/summary/{block}"))
                     .send()
                     .await
                     .unwrap();
@@ -6854,7 +6842,9 @@ mod test {
 
             let ns_id = NamespaceId::from(*ns as u64);
             let summaries: TransactionSummariesResponse<SeqTypes> = client
-                .get(&paths::explorer_tx_summaries_latest_ns(count, ns_id))
+                .get(&format!(
+                    "explorer/transactions/latest/{count}/namespace/{ns_id}"
+                ))
                 .send()
                 .await
                 .unwrap();
@@ -6923,7 +6913,7 @@ mod test {
                 client.connect(None).await;
 
                 let hash = client
-                    .post(&paths::submit())
+                    .post("submit/submit")
                     .body_json(&txn)
                     .unwrap()
                     .send()
@@ -6952,7 +6942,7 @@ mod test {
         let aggregator_deadline = Instant::now() + Duration::from_secs(30);
         loop {
             let count = client
-                .get::<u64>(&paths::node_transactions_count_to(last_tx_height))
+                .get::<u64>(&format!("node/transactions/count/{last_tx_height}"))
                 .send()
                 .await
                 .ok();
@@ -6969,7 +6959,7 @@ mod test {
 
         for namespace in 1..=4 {
             let count = client
-                .get::<u64>(&paths::node_transactions_count_ns(namespace))
+                .get::<u64>(&format!("node/transactions/count/namespace/{namespace}"))
                 .send()
                 .await
                 .unwrap();
@@ -6981,9 +6971,8 @@ mod test {
 
             // check the range endpoint
             let to_endpoint_count = client
-                .get::<u64>(&paths::node_transactions_count_ns_to(
-                    namespace,
-                    last_tx_height,
+                .get::<u64>(&format!(
+                    "node/transactions/count/namespace/{namespace}/{last_tx_height}"
                 ))
                 .send()
                 .await
@@ -6996,10 +6985,8 @@ mod test {
 
             // check the range endpoint
             let from_to_endpoint_count = client
-                .get::<u64>(&paths::node_transactions_count_ns_from_to(
-                    namespace,
-                    0,
-                    last_tx_height,
+                .get::<u64>(&format!(
+                    "node/transactions/count/namespace/{namespace}/0/{last_tx_height}"
                 ))
                 .send()
                 .await
@@ -7011,7 +6998,7 @@ mod test {
             );
 
             let ns_size = client
-                .get::<usize>(&paths::node_payloads_size_ns(namespace))
+                .get::<usize>(&format!("node/payloads/size/namespace/{namespace}"))
                 .send()
                 .await
                 .unwrap();
@@ -7024,7 +7011,9 @@ mod test {
             );
 
             let ns_size_to = client
-                .get::<usize>(&paths::node_payloads_size_ns_to(namespace, last_tx_height))
+                .get::<usize>(&format!(
+                    "node/payloads/size/namespace/{namespace}/{last_tx_height}"
+                ))
                 .send()
                 .await
                 .unwrap();
@@ -7035,10 +7024,8 @@ mod test {
             );
 
             let ns_size_from_to = client
-                .get::<usize>(&paths::node_payloads_size_ns_from_to(
-                    namespace,
-                    0,
-                    last_tx_height,
+                .get::<usize>(&format!(
+                    "node/payloads/size/namespace/{namespace}/0/{last_tx_height}"
                 ))
                 .send()
                 .await
@@ -7051,7 +7038,7 @@ mod test {
         }
 
         let total_tx_count = client
-            .get::<u64>(&paths::node_transactions_count())
+            .get::<u64>("node/transactions/count")
             .send()
             .await
             .unwrap();
@@ -7062,7 +7049,7 @@ mod test {
         );
 
         let total_payload_size = client
-            .get::<usize>(&paths::node_payloads_size())
+            .get::<usize>("node/payloads/size")
             .send()
             .await
             .unwrap();
@@ -7126,7 +7113,7 @@ mod test {
                 client.connect(None).await;
 
                 let hash = client
-                    .post(&paths::submit())
+                    .post("submit/submit")
                     .body_json(&txn)
                     .unwrap()
                     .send()
@@ -7144,7 +7131,7 @@ mod test {
         }
 
         let mut transactions = client
-            .socket(&paths::stream_transactions(0))
+            .socket("availability/stream/transactions/0")
             .subscribe::<TransactionQueryData<SeqTypes>>()
             .await
             .expect("failed to subscribe to transactions endpoint");
@@ -7167,7 +7154,9 @@ mod test {
 
         for (namespace, expected_ns_txns) in &namespace_tx {
             let mut api_namespace_txns = client
-                .socket(&paths::stream_transactions_ns(0, namespace))
+                .socket(&format!(
+                    "availability/stream/transactions/0/namespace/{namespace}",
+                ))
                 .subscribe::<TransactionQueryData<SeqTypes>>()
                 .await
                 .unwrap_or_else(|_| {
@@ -7364,7 +7353,7 @@ mod test {
             // v2
 
             let state_query_data_v2 = client
-                .get::<StateCertQueryDataV2<SeqTypes>>(&paths::state_cert_v2(i))
+                .get::<StateCertQueryDataV2<SeqTypes>>(&format!("availability/state-cert-v2/{i}"))
                 .send()
                 .await
                 .unwrap();
@@ -7378,7 +7367,7 @@ mod test {
             let block_height = state_cert_v2.light_client_state.block_height;
 
             let header: Header = client
-                .get(&paths::header_by_height(block_height))
+                .get(&format!("availability/header/{block_height}"))
                 .send()
                 .await
                 .unwrap();
@@ -7396,7 +7385,7 @@ mod test {
 
             // v1
             let state_query_data_v1 = client
-                .get::<StateCertQueryDataV1<SeqTypes>>(&paths::state_cert_v1(i))
+                .get::<StateCertQueryDataV1<SeqTypes>>(&format!("availability/state-cert/{i}"))
                 .send()
                 .await
                 .unwrap();
@@ -7528,7 +7517,9 @@ mod test {
 
         for epoch in 3..=5 {
             let state_cert = client
-                .get::<StateCertQueryDataV2<SeqTypes>>(&paths::state_cert_v2(epoch))
+                .get::<StateCertQueryDataV2<SeqTypes>>(&format!(
+                    "availability/state-cert-v2/{epoch}"
+                ))
                 .send()
                 .await
                 .unwrap();
@@ -7635,7 +7626,7 @@ mod test {
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         let validators = client
-            .get::<AuthenticatedValidatorMap>(&paths::node_validators(target_epoch - 1))
+            .get::<AuthenticatedValidatorMap>(&format!("node/validators/{}", target_epoch - 1))
             .send()
             .await
             .expect("validators");
@@ -7648,7 +7639,7 @@ mod test {
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         let validators = client
-            .get::<AuthenticatedValidatorMap>(&paths::node_validators(target_epoch))
+            .get::<AuthenticatedValidatorMap>(&format!("node/validators/{target_epoch}"))
             .send()
             .await
             .expect("validators");
@@ -7662,17 +7653,15 @@ mod test {
         let mut new_amounts = vec![];
         for (val, ..) in commissions {
             let before = client
-                .get::<Option<RewardAmount>>(&paths::reward_balance(
-                    last_block_with_old_commissions,
-                    val,
+                .get::<Option<RewardAmount>>(&format!(
+                    "reward-state-v2/reward-balance/{last_block_with_old_commissions}/{val}"
                 ))
                 .send()
                 .await?
                 .unwrap();
             let after = client
-                .get::<Option<RewardAmount>>(&paths::reward_balance(
-                    block_with_new_commissions,
-                    val,
+                .get::<Option<RewardAmount>>(&format!(
+                    "reward-state-v2/reward-balance/{block_with_new_commissions}/{val}"
                 ))
                 .send()
                 .await?
@@ -7768,7 +7757,7 @@ mod test {
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         let validators = client
-            .get::<AuthenticatedValidatorMap>(&paths::node_validators(target_epoch))
+            .get::<AuthenticatedValidatorMap>(&format!("node/validators/{target_epoch}"))
             .send()
             .await
             .expect("validators");
@@ -7832,109 +7821,6 @@ mod test {
         Ok(())
     }
 
-    /// Assert both tide-disco and axum return a 2xx for the path. Used for endpoints whose
-    /// content varies between calls (e.g. wall-clock-dependent fields, live metrics).
-    async fn compare_endpoints_ok(
-        http: &reqwest::Client,
-        api_port: u16,
-        axum_port: u16,
-        path: &str,
-    ) -> anyhow::Result<()> {
-        let tide = http
-            .get(format!("http://localhost:{api_port}/v1/{path}"))
-            .send()
-            .await?
-            .status();
-        let axum = http
-            .get(format!("http://localhost:{axum_port}/v1/{path}"))
-            .send()
-            .await?
-            .status();
-        assert!(
-            tide.is_success(),
-            "v1/{path}: tide returned {tide}, expected 2xx"
-        );
-        assert!(
-            axum.is_success(),
-            "v1/{path}: axum returned {axum}, expected 2xx"
-        );
-        Ok(())
-    }
-
-    /// Byte-compare error response bodies between tide and axum for an endpoint that uses
-    /// `Error::catch_all` (which emits `{"Custom":{"message","status"}}` on tide). Axum's
-    /// `ErrorResponse` is shaped to match that envelope, so the JSON bytes are equal modulo
-    /// minor whitespace differences — comparing parsed JSON values neutralizes those.
-    async fn compare_error_body(
-        http: &reqwest::Client,
-        api_port: u16,
-        axum_port: u16,
-        path: &str,
-        expected_status: u16,
-    ) -> anyhow::Result<()> {
-        let fetch = |port: u16| async move {
-            let resp = http
-                .get(format!("http://localhost:{port}/v1/{path}"))
-                .send()
-                .await?;
-            let status = resp.status().as_u16();
-            let body: serde_json::Value = resp.json().await?;
-            anyhow::Ok((status, body))
-        };
-        let (tide_status, tide_body) = fetch(api_port).await?;
-        let (axum_status, axum_body) = fetch(axum_port).await?;
-        assert_eq!(tide_status, expected_status, "v1/{path}: tide status");
-        assert_eq!(axum_status, expected_status, "v1/{path}: axum status");
-        assert_eq!(
-            tide_body, axum_body,
-            "v1/{path}: tide and axum error bodies differ\n  tide: {tide_body}\n  axum: \
-             {axum_body}"
-        );
-        Ok(())
-    }
-
-    /// POST a VBS-binary body to both servers and assert their responses are byte-equal.
-    ///
-    /// VBS (Versioned Binary Serialization) is what production peer-catchup and
-    /// `submit-transactions` clients use via `surf-disco::Request::body_binary`. This helper
-    /// catches regressions where the axum handler accepts only JSON.
-    async fn compare_post_binary<B: serde::Serialize>(
-        http: &reqwest::Client,
-        api_port: u16,
-        axum_port: u16,
-        path: &str,
-        body: &B,
-    ) -> anyhow::Result<()> {
-        use vbs::{BinarySerializer, Serializer, version::StaticVersion};
-        let payload = Serializer::<StaticVersion<0, 1>>::serialize(body)?;
-        let send = |port: u16| {
-            let payload = payload.clone();
-            http.post(format!("http://localhost:{port}/v1/{path}"))
-                .header("Content-Type", "application/octet-stream")
-                .header("Accept", "application/octet-stream")
-                .body(payload)
-                .send()
-        };
-        let (tide_resp, axum_resp) = tokio::join!(send(api_port), send(axum_port));
-        let tide_resp = tide_resp?;
-        let axum_resp = axum_resp?;
-        assert_eq!(
-            tide_resp.status(),
-            axum_resp.status(),
-            "v1/{path}: tide status {} != axum status {}",
-            tide_resp.status(),
-            axum_resp.status(),
-        );
-        // Compare raw bytes — VBS responses aren't JSON.
-        let tide_body = tide_resp.bytes().await?;
-        let axum_body = axum_resp.bytes().await?;
-        assert_eq!(
-            tide_body, axum_body,
-            "v1/{path}: tide and axum binary POST responses differ"
-        );
-        Ok(())
-    }
-
     /// Connect to both tide-disco and axum WebSocket endpoints, collect up to 10 messages each,
     /// and assert that at least 2 messages appear in both streams.
     async fn compare_ws_endpoints(api_port: u16, axum_port: u16, path: &str) -> anyhow::Result<()> {
@@ -7984,60 +7870,6 @@ mod test {
         Ok(())
     }
 
-    /// Same as `compare_ws_endpoints` but exercises the binary (`Accept: application/octet-stream`)
-    /// path that surf-disco clients use by default. Asserts both servers send `Message::Binary`
-    /// frames carrying VBS-encoded payloads.
-    async fn compare_ws_endpoints_binary(
-        api_port: u16,
-        axum_port: u16,
-        path: &str,
-    ) -> anyhow::Result<()> {
-        use std::time::Duration;
-
-        use futures::StreamExt as _;
-        use tokio::time::timeout;
-        use tokio_tungstenite::{
-            connect_async,
-            tungstenite::{client::IntoClientRequest, http::HeaderValue, protocol::Message},
-        };
-
-        async fn collect_binary(port: u16, path: &str) -> anyhow::Result<Vec<Vec<u8>>> {
-            let url = format!("ws://localhost:{port}/v1/{path}");
-            let mut req = url.as_str().into_client_request()?;
-            req.headers_mut().insert(
-                "Accept",
-                HeaderValue::from_static("application/octet-stream"),
-            );
-            let (mut ws, _) = connect_async(req).await?;
-            let mut frames = Vec::new();
-            while frames.len() < 3 {
-                match timeout(Duration::from_millis(500), ws.next()).await {
-                    Ok(Some(Ok(Message::Binary(bytes)))) => frames.push(bytes.to_vec()),
-                    _ => break,
-                }
-            }
-            Ok(frames)
-        }
-
-        let (tide_frames, axum_frames) = tokio::join!(
-            collect_binary(api_port, path),
-            collect_binary(axum_port, path)
-        );
-        let tide_frames = tide_frames?;
-        let axum_frames = axum_frames?;
-
-        assert!(
-            !tide_frames.is_empty(),
-            "v1/{path}: tide sent no binary frames (Accept: application/octet-stream)"
-        );
-        assert!(
-            !axum_frames.is_empty(),
-            "v1/{path}: axum sent no binary frames (Accept: application/octet-stream); handler \
-             likely always sends text",
-        );
-        Ok(())
-    }
-
     #[rstest]
     #[case(POS_V4)]
     #[test_log::test]
@@ -8051,11 +7883,9 @@ mod test {
                 .build();
 
             let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
-            // After the tide-disco cutover, the single `port` field serves the Axum API.
-            // The parity test helpers (compare_endpoints, etc.) accept two ports so a single
-            // diff didn't need to rewrite every call site; we wire both arguments to the same
-            // Axum port. The comparisons are now trivially equal — what matters is that each
-            // route gets exercised against the live server.
+            // After the tide-disco cutover the single `port` field serves the Axum API.
+            // The parity-test helpers still accept two ports — wire both to the same Axum
+            // server so the existing call sites remain unchanged.
             let axum_port = api_port;
             println!("API PORT = {api_port}");
 
@@ -8067,13 +7897,7 @@ mod test {
                 .try_into()
                 .unwrap();
 
-            let api_opts = Options::with_port(api_port)
-                .catchup(Default::default())
-                .config(Default::default())
-                .submit(Default::default())
-                .explorer(Default::default())
-                .light_client(Default::default())
-                .hotshot_events(HotshotEvents);
+            let api_opts = Options::with_port(api_port).catchup(Default::default());
 
             let config = TestNetworkConfigBuilder::with_num_nodes()
                 .api_config(SqlDataSource::options(&storage[0], api_opts))
@@ -8112,10 +7936,7 @@ mod test {
             // validate proof returned from the api
             if upgrade.base == EPOCH_VERSION {
                 // V1 case — axum only implements the v2 reward tree, so no axum comparison here
-                // Axum doesn't expose `reward-state/block-height` (V1 reward state has no
-                // axum equivalent). Approximate by waiting on `node/block-height`, which is
-                // a close-enough proxy for the test's purpose.
-                wait_until_block_height(&client, &paths::node_block_height(), height).await;
+                wait_until_block_height(&client, "reward-state/block-height", height).await;
 
                 network.stop_consensus().await;
 
@@ -8175,9 +7996,9 @@ mod test {
                     .unwrap();
                 wait_for_decide_on_handle(&mut events, &avail_tx2).await;
 
-                wait_until_block_height(&client, &paths::node_block_height(), height).await;
+                wait_until_block_height(&client, "reward-state-v2/block-height", height).await;
                 // Wait for the availability query service to index avail_block.
-                wait_until_block_height(&client, &paths::node_block_height(), avail_block).await;
+                wait_until_block_height(&client, "node/block-height", avail_block).await;
 
                 network.stop_consensus().await;
 
@@ -8191,8 +8012,8 @@ mod test {
                         .unwrap();
 
                     let res = client
-                        .get::<RewardAccountQueryDataV2>(&paths::reward_account_proof(
-                            height, address,
+                        .get::<RewardAccountQueryDataV2>(&format!(
+                            "reward-state-v2/proof/{height}/{address}"
                         ))
                         .send()
                         .await
@@ -8212,7 +8033,9 @@ mod test {
                     }
 
                     let reward_claim_input = client
-                        .get::<RewardClaimInput>(&paths::reward_claim_input(height, address))
+                        .get::<RewardClaimInput>(&format!(
+                            "reward-state-v2/reward-claim-input/{height}/{address}"
+                        ))
                         .send()
                         .await
                         .unwrap();
@@ -8286,7 +8109,7 @@ mod test {
 
                 // Namespace proof by block hash and payload hash
                 let avail_header: Header = client
-                    .get(&paths::header_by_height(avail_block))
+                    .get(&format!("availability/header/{avail_block}"))
                     .send()
                     .await
                     .unwrap();
@@ -8330,7 +8153,7 @@ mod test {
 
                 // HotShot availability parity: leaf, header, block, payload, vid/common, etc.
                 let avail_leaf: LeafQueryData<SeqTypes> = client
-                    .get(&paths::leaf_by_height(avail_block))
+                    .get(&format!("availability/leaf/{avail_block}"))
                     .send()
                     .await
                     .unwrap();
@@ -8617,20 +8440,10 @@ mod test {
                 )
                 .await?;
 
-                // surf-disco clients default to `Accept: application/octet-stream`, so the
-                // server must emit `Message::Binary` (VBS-encoded) frames on that path.
-                // Verify both servers do so on a representative stream.
-                compare_ws_endpoints_binary(
-                    api_port,
-                    axum_port,
-                    &format!("availability/stream/leaves/{ws_start}"),
-                )
-                .await?;
-
                 // Merklized state parity (block-state and fee-state). Wait for
                 // both backends to have indexed the snapshot we'll query.
-                wait_until_block_height(&client, &paths::block_state_height(), avail_block).await;
-                wait_until_block_height(&client, &paths::fee_state_height(), avail_block).await;
+                wait_until_block_height(&client, "block-state/block-height", avail_block).await;
+                wait_until_block_height(&client, "fee-state/block-height", avail_block).await;
 
                 // block-state/block-height and fee-state/block-height (latest
                 // height for which merklized state is available).
@@ -8694,387 +8507,6 @@ mod test {
                     &format!("fee-state/fee-balance/latest/{fee_account}"),
                 )
                 .await?;
-
-                // Status parity. Block height and success rate are stable since consensus is
-                // stopped; time-since-last-decide and metrics vary by wall-clock so we only
-                // check that both servers return 2xx.
-                compare_endpoints(&http, api_port, axum_port, "status/block-height").await?;
-                compare_endpoints(&http, api_port, axum_port, "status/success-rate").await?;
-                compare_endpoints_ok(&http, api_port, axum_port, "status/time-since-last-decide")
-                    .await?;
-                compare_endpoints_ok(&http, api_port, axum_port, "status/metrics").await?;
-
-                // Config parity. /hotshot and /env are derived from process-level state shared
-                // by both servers; /runtime returns 404 in both because no PublicNodeConfig was
-                // configured for this test.
-                compare_endpoints(&http, api_port, axum_port, "config/hotshot").await?;
-                compare_endpoints(&http, api_port, axum_port, "config/env").await?;
-                compare_error_endpoints(&http, api_port, axum_port, "config/runtime", 404).await?;
-
-                // Node parity. All endpoints share the same data source so byte-equal responses
-                // are expected once consensus is stopped.
-                compare_endpoints(&http, api_port, axum_port, "node/block-height").await?;
-                compare_endpoints(&http, api_port, axum_port, "node/transactions/count").await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    &format!("node/transactions/count/{avail_block}"),
-                )
-                .await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    &format!("node/transactions/count/0/{avail_block}"),
-                )
-                .await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    &format!("node/transactions/count/namespace/{avail_ns}"),
-                )
-                .await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    &format!("node/transactions/count/namespace/{avail_ns}/{avail_block}"),
-                )
-                .await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    &format!("node/transactions/count/namespace/{avail_ns}/0/{avail_block}"),
-                )
-                .await?;
-
-                compare_endpoints(&http, api_port, axum_port, "node/payloads/size").await?;
-                compare_endpoints(&http, api_port, axum_port, "node/payloads/total-size").await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    &format!("node/payloads/size/{avail_block}"),
-                )
-                .await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    &format!("node/payloads/size/0/{avail_block}"),
-                )
-                .await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    &format!("node/payloads/size/namespace/{avail_ns}"),
-                )
-                .await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    &format!("node/payloads/size/namespace/{avail_ns}/{avail_block}"),
-                )
-                .await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    &format!("node/payloads/size/namespace/{avail_ns}/0/{avail_block}"),
-                )
-                .await?;
-
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    &format!("node/vid/share/{avail_block}"),
-                )
-                .await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    &format!("node/vid/share/hash/{block_hash}"),
-                )
-                .await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    &format!("node/vid/share/payload-hash/{payload_hash}"),
-                )
-                .await?;
-
-                compare_endpoints(&http, api_port, axum_port, "node/sync-status").await?;
-                compare_endpoints(&http, api_port, axum_port, "node/limits").await?;
-
-                // Header window: cover all three start variants (time, height, hash). `end` is
-                // an exclusive Unix-second cutoff; using the block's own timestamp + 1 yields
-                // a deterministic single-block window on both servers.
-                let avail_ts = avail_header.timestamp();
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    &format!("node/header/window/{avail_ts}/{}", avail_ts + 1),
-                )
-                .await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    &format!("node/header/window/from/{avail_block}/{}", avail_ts + 1),
-                )
-                .await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    &format!("node/header/window/from/hash/{block_hash}/{}", avail_ts + 1),
-                )
-                .await?;
-
-                compare_endpoints(&http, api_port, axum_port, "node/stake-table/current").await?;
-                compare_endpoints(&http, api_port, axum_port, "node/stake-table/1").await?;
-                compare_endpoints(&http, api_port, axum_port, "node/da-stake-table/current")
-                    .await?;
-                compare_endpoints(&http, api_port, axum_port, "node/da-stake-table/1").await?;
-
-                compare_endpoints(&http, api_port, axum_port, "node/validators/1").await?;
-                compare_endpoints(&http, api_port, axum_port, "node/all-validators/1/0/100")
-                    .await?;
-
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    "node/participation/proposal/current",
-                )
-                .await?;
-                compare_endpoints(&http, api_port, axum_port, "node/participation/proposal/1")
-                    .await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    "node/participation/vote/current",
-                )
-                .await?;
-                compare_endpoints(&http, api_port, axum_port, "node/participation/vote/1").await?;
-
-                compare_endpoints(&http, api_port, axum_port, "node/block-reward").await?;
-                compare_endpoints(&http, api_port, axum_port, "node/block-reward/epoch/1").await?;
-
-                compare_endpoints(&http, api_port, axum_port, "node/oldest-block").await?;
-                compare_endpoints(&http, api_port, axum_port, "node/oldest-leaf").await?;
-
-                // Catchup parity. View number and height for in-memory state aren't readily
-                // available after stopping consensus, so we compare error semantics on
-                // intentionally invalid lookups and the deprecated routes.
-                let decided_view = decided_leaf.view_number().u64();
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    &format!("catchup/{height}/{decided_view}/blocks"),
-                )
-                .await?;
-                // chain-config: a malformed TaggedBase64 commitment (bad checksum) parses-fails
-                // on the request path and yields 400 from both servers.
-                compare_error_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    "catchup/chain-config/CHAINCONFIG~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-                    400,
-                )
-                .await?;
-                // leafchain: undecided height returns 404 from both.
-                compare_error_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    "catchup/999999/leafchain",
-                    404,
-                )
-                .await?;
-                // cert2: missing cert returns 404.
-                compare_error_endpoints(&http, api_port, axum_port, "catchup/999999/cert2", 404)
-                    .await?;
-                // Deprecated catchup routes still respond 404.
-                compare_error_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    "catchup/1/reward-amounts/100/0",
-                    404,
-                )
-                .await?;
-
-                // Production peer-catchup posts VBS-binary bodies via surf-disco.
-                // Exercise the bulk-account POST endpoints in that exact wire format so any
-                // regression to "JSON-only body" is caught here.
-                let fee_account_for_post = validated_state
-                    .fee_merkle_tree
-                    .iter()
-                    .next()
-                    .map(|(addr, _)| *addr)
-                    .expect("fee tree should have at least one account");
-                compare_post_binary(
-                    &http,
-                    api_port,
-                    axum_port,
-                    &format!("catchup/{height}/{decided_view}/accounts"),
-                    &vec![fee_account_for_post],
-                )
-                .await?;
-                // reward-accounts V1 takes a Vec<RewardAccountV1>. We send empty since the V2
-                // tree may not have V1-shaped entries in this test, but the wire format is what
-                // we're validating.
-                compare_post_binary(
-                    &http,
-                    api_port,
-                    axum_port,
-                    &format!("catchup/{height}/{decided_view}/reward-accounts"),
-                    &Vec::<espresso_types::v0_3::RewardAccountV1>::new(),
-                )
-                .await?;
-
-                // State signature parity. Heights that have a signature should return matching
-                // JSON; missing heights should 404 from both servers.
-                compare_error_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    "state-signature/block/999999",
-                    404,
-                )
-                .await?;
-
-                // Error body parity for endpoints that use `Error::catch_all` — both servers
-                // must emit byte-identical `{"Custom":{"message","status"}}` JSON. Availability
-                // endpoints (`availability/leaf/...`, etc.) are excluded because tide-disco
-                // returns specific variants like `{"FetchLeaf":{...}}` there; their status-code
-                // parity is still enforced by `compare_error_endpoints` above.
-                compare_error_body(&http, api_port, axum_port, "catchup/999999/cert2", 404).await?;
-                compare_error_body(&http, api_port, axum_port, "catchup/999999/leafchain", 404)
-                    .await?;
-                compare_error_body(
-                    &http,
-                    api_port,
-                    axum_port,
-                    "state-signature/block/999999",
-                    404,
-                )
-                .await?;
-
-                // Explorer parity.
-                compare_endpoints(&http, api_port, axum_port, "explorer/explorer-summary").await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    &format!("explorer/block/{avail_block}"),
-                )
-                .await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    &format!("explorer/block/hash/{block_hash}"),
-                )
-                .await?;
-                compare_endpoints(&http, api_port, axum_port, "explorer/blocks/latest/10").await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    &format!("explorer/blocks/{avail_block}/10"),
-                )
-                .await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    "explorer/transactions/latest/10",
-                )
-                .await?;
-
-                // Light-client parity. Use the same block we used for availability tests.
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    &format!("light-client/leaf/{avail_block}"),
-                )
-                .await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    &format!("light-client/leaf/hash/{leaf_hash}"),
-                )
-                .await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    &format!("light-client/payload/{avail_block}"),
-                )
-                .await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    &format!("light-client/payload/{avail_block}/{}", avail_block + 1),
-                )
-                .await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    &format!(
-                        "light-client/namespace/{avail_block}/{}",
-                        u64::from(avail_ns)
-                    ),
-                )
-                .await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    &format!(
-                        "light-client/namespace/{avail_block}/{}/{}",
-                        avail_block + 1,
-                        u64::from(avail_ns)
-                    ),
-                )
-                .await?;
-
-                // hotshot-events startup info: both must return matching JSON.
-                compare_endpoints(&http, api_port, axum_port, "hotshot-events/startup_info")
-                    .await?;
-
-                // Token parity. Both servers share the same data source, so the cached
-                // L1 supply values must match across calls.
-                compare_endpoints(&http, api_port, axum_port, "token/total-minted-supply").await?;
-                compare_endpoints(&http, api_port, axum_port, "token/circulating-supply").await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    "token/circulating-supply-ethereum",
-                )
-                .await?;
-                compare_endpoints(&http, api_port, axum_port, "token/total-issued-supply").await?;
-                compare_endpoints(&http, api_port, axum_port, "token/total-reward-distributed")
-                    .await?;
 
                 // Error equivalence: both tide-disco and Axum must return the same
                 // HTTP status codes for common failure cases that clients encounter.
@@ -9186,9 +8618,7 @@ mod test {
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         let err = client
-            .get::<Vec<RegisteredValidator<PubKey>>>(&paths::node_all_validators(
-                1u64, 0u64, 1001u64,
-            ))
+            .get::<Vec<RegisteredValidator<PubKey>>>("node/all-validators/1/0/1001")
             .header("Accept", "application/json")
             .send()
             .await
@@ -9206,18 +8636,14 @@ mod test {
         // Verify that there are no validators for epoch # 1 and epoch # 2
         {
             client
-                .get::<Vec<RegisteredValidator<PubKey>>>(&paths::node_all_validators(
-                    1u64, 0u64, 100u64,
-                ))
+                .get::<Vec<RegisteredValidator<PubKey>>>("node/all-validators/1/0/100")
                 .send()
                 .await
                 .unwrap()
                 .is_empty();
 
             client
-                .get::<Vec<RegisteredValidator<PubKey>>>(&paths::node_all_validators(
-                    2u64, 0u64, 100u64,
-                ))
+                .get::<Vec<RegisteredValidator<PubKey>>>("node/all-validators/2/0/100")
                 .send()
                 .await
                 .unwrap()
@@ -9226,9 +8652,7 @@ mod test {
 
         // Get the epoch # 3 validators
         let validators = client
-            .get::<Vec<RegisteredValidator<PubKey>>>(&paths::node_all_validators(
-                3u64, 0u64, 100u64,
-            ))
+            .get::<Vec<RegisteredValidator<PubKey>>>("node/all-validators/3/0/100")
             .send()
             .await
             .expect("validators");
@@ -9294,11 +8718,11 @@ mod test {
 
         network.stop_consensus().await;
         let height = network.server.decided_leaf().await.height();
-        wait_until_block_height(&client, &paths::node_block_height(), height).await;
+        wait_until_block_height(&client, "reward-state-v2/block-height", height).await;
 
         let err = client
-            .get::<Vec<(RewardAccountV2, RewardAmount)>>(&paths::reward_amounts(
-                height, 0u64, 10001u64,
+            .get::<Vec<(RewardAccountV2, RewardAmount)>>(&format!(
+                "reward-state-v2/reward-amounts/{height}/0/10001"
             ))
             .send()
             .await
@@ -9327,8 +8751,8 @@ mod test {
         let expected: Vec<_> = expected.into_iter().take(limit as usize).collect();
 
         let res = client
-            .get::<Vec<(RewardAccountV2, RewardAmount)>>(&paths::reward_amounts(
-                height, offset, limit,
+            .get::<Vec<(RewardAccountV2, RewardAmount)>>(&format!(
+                "reward-state-v2/reward-amounts/{height}/{offset}/{limit}"
             ))
             .send()
             .await
@@ -9606,13 +9030,13 @@ mod test {
         let mut actual_leaves = vec![];
         let mut actual_blocks = vec![];
         let mut leaves = client
-            .socket(&paths::stream_leaves(0))
+            .socket("availability/stream/leaves/0")
             .subscribe::<LeafQueryData<SeqTypes>>()
             .await
             .unwrap()
             .zip(
                 client
-                    .socket(&paths::stream_blocks(0))
+                    .socket("availability/stream/blocks/0")
                     .subscribe::<BlockQueryData<SeqTypes>>()
                     .await
                     .unwrap(),
@@ -9698,9 +9122,9 @@ mod test {
             let client = &client;
             let proofs = try_join_all(
                 [
-                    paths::lc_leaf_by_height(i),
-                    paths::lc_leaf_by_hash(leaf.hash()),
-                    paths::lc_leaf_by_block_hash(leaf.block_hash()),
+                    format!("light-client/leaf/{i}"),
+                    format!("light-client/leaf/hash/{}", leaf.hash()),
+                    format!("light-client/leaf/block-hash/{}", leaf.block_hash()),
                 ]
                 .into_iter()
                 .map(|path| async move {
@@ -9726,8 +9150,11 @@ mod test {
             let root = actual_leaves[root_height as usize].header();
             let proofs = try_join_all(
                 [
-                    paths::lc_header_by_height(root_height, i),
-                    paths::lc_header_by_hash(root_height, leaf.block_hash()),
+                    format!("light-client/header/{root_height}/{i}"),
+                    format!(
+                        "light-client/header/{root_height}/hash/{}",
+                        leaf.block_hash()
+                    ),
                 ]
                 .into_iter()
                 .map(|path| async move {
@@ -9748,7 +9175,7 @@ mod test {
 
             // Get the corresponding payload.
             let proof = client
-                .get::<PayloadProof>(&paths::lc_payload(i))
+                .get::<PayloadProof>(&format!("light-client/payload/{i}"))
                 .send()
                 .await
                 .unwrap();
@@ -9757,7 +9184,7 @@ mod test {
 
         // Check light client stake table.
         let events: Vec<StakeTableEvent> = client
-            .get(&paths::lc_stake_table(first_epoch + 2))
+            .get(&format!("light-client/stake-table/{}", first_epoch + 2))
             .send()
             .await
             .unwrap();
@@ -9783,7 +9210,7 @@ mod test {
 
         // Querying for a stake table before the first real epoch is an error.
         let err = client
-            .get::<Vec<StakeTableEvent>>(&paths::lc_stake_table(first_epoch + 1))
+            .get::<Vec<StakeTableEvent>>(&format!("light-client/stake-table/{}", first_epoch + 1))
             .send()
             .await
             .unwrap_err();
@@ -9841,12 +9268,7 @@ mod test {
         // Wait for chain to advance past our target height
         let height_client: Client<ServerError, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{port}").parse().unwrap());
-        wait_until_block_height(
-            &height_client,
-            &paths::node_block_height(),
-            TARGET_HEIGHT + 5,
-        )
-        .await;
+        wait_until_block_height(&height_client, "node/block-height", TARGET_HEIGHT + 5).await;
 
         // Get the stake table and threshold for the epoch containing TARGET_HEIGHT
         let coordinator = network.server.node_state().coordinator;
