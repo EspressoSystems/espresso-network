@@ -89,6 +89,11 @@ pub enum ConsensusInput<T: NodeType> {
     BlockReconstructed(ViewNumber, VidCommitment2),
     Certificate1(Certificate1<T>),
     Certificate2(Certificate2<T>),
+    /// A quorum certificate that locks a newer view than ours.
+    ///
+    /// Adopting it advances the lock and the view, which is used to help
+    /// divergent nodes re-converge on restart.
+    AdoptHighQc(Certificate1<T>),
     /// Atomic pair emitted by the `EpochRootVoteCollector` for epoch-root views:
     /// a `Certificate1` and its matching `LightClientStateUpdateCertificateV2`.
     /// Consensus never sees an epoch-root Cert1 without the matching state_cert.
@@ -611,6 +616,14 @@ impl<T: NodeType> Consensus<T> {
                 );
                 self.handle_certificate2(certificate, outbox)
             },
+            ConsensusInput::AdoptHighQc(certificate) => {
+                debug!(
+                    view  = %certificate.view_number(),
+                    epoch = ?certificate.epoch().map(|e| *e),
+                    "apply: adopt high qc"
+                );
+                self.handle_adopt_high_qc(certificate, outbox)
+            },
             ConsensusInput::EpochRootCertificates { cert1, state_cert } => {
                 info!(
                     epoch = %state_cert.epoch,
@@ -1110,6 +1123,59 @@ impl<T: NodeType> Consensus<T> {
             },
         }
         self.certs2.insert(view, certificate);
+        Protocol::Continue
+    }
+
+    /// Adopt a quorum certificate that locks a newer view than our current lock.
+    ///
+    /// Adopting the highest QC any peer advertises pulls the lock and the view
+    /// forward to a common point, also resetting the timer (via `ViewChanged`)
+    /// so the node re-times-out there and `TimeoutOneHonest` fire.
+    #[instrument(level = "debug", skip_all)]
+    fn handle_adopt_high_qc(
+        &mut self,
+        cert1: Certificate1<T>,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) -> Protocol {
+        let view = cert1.view_number();
+
+        if self
+            .locked_cert
+            .as_ref()
+            .is_some_and(|locked| locked.view_number() >= view)
+        {
+            return Protocol::Continue;
+        }
+
+        let Some(epoch) = cert1.epoch() else {
+            warn!(%view, "cert1 has no epoch number");
+            return Protocol::Abort;
+        };
+
+        match self.try_verify_cert(&cert1, epoch) {
+            CertVerification::Valid => {},
+            CertVerification::Invalid => {
+                warn!(%view, "cert1 is invalid");
+                return Protocol::Abort;
+            },
+            CertVerification::EpochUnavailable => {
+                debug!(%view, %epoch, "missing epoch to verify cert1");
+                outbox.push_back(ConsensusOutput::RequestDrbResult(epoch));
+                return Protocol::Continue;
+            },
+        }
+
+        self.certs.entry(view).or_insert_with(|| cert1.clone());
+        self.locked_cert = Some(cert1.clone());
+        let next_view = view + 1;
+
+        if next_view > self.current_view {
+            self.current_view = next_view;
+            self.current_epoch = Some(epoch);
+            outbox.push_back(ConsensusOutput::ViewChanged(next_view, epoch));
+        }
+
+        outbox.push_back(ConsensusOutput::PersistHighQc(cert1));
         Protocol::Continue
     }
 
@@ -2365,6 +2431,9 @@ impl<T: NodeType> ConsensusInput<T> {
             ConsensusInput::BlockReconstructed(view, _) => *view,
             ConsensusInput::Certificate1(cert) => cert.view_number(),
             ConsensusInput::Certificate2(cert) => cert.view_number(),
+            // Adopting a QC for view v moves us into view v + 1, so the
+            // post-apply retries run for the view we land in.
+            ConsensusInput::AdoptHighQc(cert) => cert.view_number() + 1,
             ConsensusInput::EpochRootCertificates { cert1, .. } => cert1.view_number(),
             ConsensusInput::HeaderCreated(view, ..) => *view,
             ConsensusInput::ProposalWithVidShare(_, prop, _) => prop.view_number(),
