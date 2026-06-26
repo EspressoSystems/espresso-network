@@ -6,7 +6,7 @@
 
 use std::{fs, ops::Range, path::Path, time::Duration, vec};
 
-use alloy::primitives::U256;
+use alloy_primitives::U256;
 use clap::ValueEnum;
 use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;

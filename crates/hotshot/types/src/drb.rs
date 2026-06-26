@@ -286,7 +286,7 @@ impl Default for DrbResults {
 ///   is strictly smaller than the cdf entry
 /// - return the corresponding node as the leader for that view
 pub mod election {
-    use alloy::primitives::{U256, U512};
+    use alloy_primitives::{U256, U512};
     use sha2::{Digest, Sha256, Sha512};
 
     use crate::traits::signature_key::{SignatureKey, StakeTableEntryType};
@@ -399,7 +399,7 @@ pub mod election {
 mod tests {
     use std::collections::HashMap;
 
-    use alloy::primitives::U256;
+    use alloy_primitives::U256;
     use rand::RngCore;
     use sha2::{Digest, Sha256};
 

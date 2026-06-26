@@ -17,7 +17,7 @@
 
 use std::{collections::BTreeMap, fmt::Debug, hash::Hash, marker::PhantomData, time::Duration};
 
-use alloy::primitives::U256;
+use alloy_primitives::U256;
 use hotshot_utils::anytrace::*;
 use jf_advz::{VidDisperse as JfVidDisperse, VidScheme};
 use serde::{Deserialize, Serialize};
