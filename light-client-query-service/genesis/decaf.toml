@@ -1,3 +1,4 @@
+chain_id = 0xdecaf
 epoch_height = 3000
 first_epoch_with_dynamic_stake_table = 1056
 
