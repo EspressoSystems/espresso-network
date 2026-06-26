@@ -1,7 +1,7 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::Result;
-use hotshot::{traits::BlockPayload, types::BLSPubKey};
+use hotshot::types::BLSPubKey;
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
     node_types::{TEST_VERSIONS, TestTypes},
@@ -401,9 +401,8 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
                 let req = req.clone();
                 let (size, num_nodes, namespaces) =
                     (cfg.block_size, cfg.total_nodes, cfg.namespaces);
-                build_tasks.spawn_blocking(move || {
-                    (req, build_test_block(size, num_nodes, namespaces))
-                });
+                build_tasks
+                    .spawn_blocking(move || (req, build_test_block(size, num_nodes, namespaces)));
                 continue; // skip process_consensus_output for this one
             }
 
@@ -498,13 +497,11 @@ fn build_test_block(size: usize, num_nodes: usize, n_namespaces: u32) -> TestBlo
         num_nodes,
         versions::NEW_PROTOCOL_VERSION,
     );
-    let builder_commitment =
-        <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(&block, &metadata);
     TestBlock {
         block,
         metadata,
         payload_commitment,
-        builder_commitment,
+        builder_commitment: Default::default(),
     }
 }
 
