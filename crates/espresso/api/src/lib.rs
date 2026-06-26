@@ -19,6 +19,17 @@ pub use self::{
     tonic::create_reward_service,
 };
 
+/// Build a full request URL from a server base URL and a path produced by one of the
+/// `routes::v1::*` (or `routes::v2::*`) builders.
+///
+/// Use this from test/CLI sites that have a `url::Url` pointing at the API server and want
+/// the absolute URL for a single request. Internally this is just `base.join(path)`; the
+/// helper exists so the (path-const, builder, joiner) trio reads as one chain.
+pub fn url(base: &::url::Url, path: impl AsRef<str>) -> ::url::Url {
+    base.join(path.as_ref())
+        .expect("path produced by routes::*::path_fn is always a valid relative URL")
+}
+
 /// Start Axum HTTP server with combined v1 and v2 APIs
 ///
 /// This serves both APIs at /v1/* and /v2/* from a single state implementation.

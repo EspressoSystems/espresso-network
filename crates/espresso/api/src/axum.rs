@@ -182,6 +182,36 @@ async fn redirect_to_docs() -> axum::response::Redirect {
     axum::response::Redirect::permanent("/v2")
 }
 
+/// Tide-disco served every v1 module at both `/<module>/...` and `/v1/<module>/...`. The
+/// axum router only declares the `/v1/...` shape; this middleware preserves backward
+/// compatibility for unversioned clients (and for tests written against the tide-disco
+/// surface) by rewriting any incoming path that isn't already version-prefixed.
+///
+/// Excludes paths that are intentionally unversioned: `/`, `/healthcheck`, `/version`,
+/// and the `rewrite_root_to_v2`-managed v2 paths (which take priority and short-circuit
+/// before this layer if applied first via merging).
+async fn rewrite_legacy_root_to_v1(mut req: Request, next: Next) -> Response {
+    let uri = req.uri().clone();
+    let path = uri.path();
+
+    let is_unversioned = !path.starts_with("/v1") && !path.starts_with("/v2");
+    let is_reserved =
+        path == "/" || path == "/healthcheck" || path == "/version" || path.is_empty();
+    if is_unversioned && !is_reserved {
+        let new_path = format!("/v1{}", path);
+        let pq = if let Some(q) = uri.query() {
+            format!("{}?{}", new_path, q)
+        } else {
+            new_path
+        };
+        if let Ok(new_uri) = Uri::builder().path_and_query(pq).build() {
+            *req.uri_mut() = new_uri;
+        }
+    }
+
+    next.run(req).await
+}
+
 struct SendQuery<T>(T);
 
 impl<T, S> axum::extract::FromRequestParts<S> for SendQuery<T>
@@ -292,7 +322,28 @@ where
     let router_v1 = create_router_v1(state.clone());
     let router_v2 = create_router_v2(state).layer(middleware::from_fn(rewrite_root_to_v2));
 
-    router_v2.merge(router_v1).route("/", get(redirect_to_docs))
+    router_v2
+        .merge(router_v1)
+        .route("/", get(redirect_to_docs))
+        .route("/healthcheck", get(healthcheck))
+        .route("/version", get(version))
+        // Top-level layer so it runs before routing for *any* request — required to
+        // catch unversioned paths (e.g. `/availability/leaf/5`) that won't match a
+        // declared route directly.
+        .layer(middleware::from_fn(rewrite_legacy_root_to_v1))
+}
+
+/// Tide-disco-compatible healthcheck response: `{"status":"Available"}`.
+async fn healthcheck() -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "status": "Available" }))
+}
+
+/// Tide-disco-compatible version response. Tide emits the binary's clap version; we emit the
+/// crate version so `surf_disco::Client::connect` and similar polling helpers succeed.
+async fn version() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "version": env!("CARGO_PKG_VERSION"),
+    }))
 }
 
 /// Create v1 router without OpenAPI documentation (internal types)

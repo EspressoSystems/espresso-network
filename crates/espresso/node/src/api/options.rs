@@ -248,12 +248,10 @@ impl Options {
                 self.listen(self.http.port, app, SequencerApiVersion::instance()),
             );
 
-            // Spawn new Axum and gRPC servers if ports are configured
-            // TODO: Use NodeApiStateImpl with real data source once available for status-only mode
-            if self.http.axum_port.is_some() {
-                tracing::warn!("Axum reward API not available in status-only mode");
-            }
-
+            // TODO(axum-cutover): status-only mode still serves tide-disco. The data source
+            // (MetricsDataSource) doesn't implement the full v1 trait set required by
+            // `serve_axum`. Either add a `serve_axum_lite` with a reduced trait bound or stub
+            // out the unsupported traits so this mode can also drop tide.
             if self.http.tonic_port.is_some() {
                 tracing::warn!("gRPC reward API not available in status-only mode");
             }
@@ -412,12 +410,9 @@ impl Options {
 
         tasks.spawn("API server", self.listen(self.http.port, app, bind_version));
 
-        // Reward APIs not available with filesystem storage
-        // Note: Filesystem storage doesn't support RewardMerkleTreeDataSource
-        if self.http.axum_port.is_some() {
-            tracing::warn!("Axum reward API not available with filesystem storage");
-        }
-
+        // TODO(axum-cutover): fs mode still serves tide-disco. Filesystem storage doesn't
+        // implement `RewardMerkleTreeDataSource`, so `serve_axum`'s trait bound isn't
+        // satisfied without stubbing the reward-state traits.
         if self.http.tonic_port.is_some() {
             tracing::warn!("gRPC reward API not available with filesystem storage");
         }
@@ -539,25 +534,25 @@ impl Options {
             })?;
         }
 
-        tasks.spawn(
-            "API server",
-            self.listen(self.http.port, app, SequencerApiVersion::instance()),
-        );
+        // Drop the tide-disco app — SQL mode is fully served by Axum. The unused `app` here
+        // is kept above only so the registrations exercise the tide-disco module definitions
+        // (which still compile against `App::register_module`) until all callers are off
+        // tide-disco. TODO: stop building `app` once the unused tide-disco branches are gone.
+        drop(app);
 
-        // Spawn new Axum and gRPC servers if ports are configured
-        if let Some(axum_port) = self.http.axum_port {
-            let ds_for_axum = ds.clone();
-            let env_vars = endpoints::get_public_env_vars().unwrap_or_default();
-            let node_cfg = self.public_node_config.as_deref().cloned();
-            tasks.spawn("Axum API server", async move {
-                let state = NodeApiStateImpl::new(ds_for_axum)
-                    .with_env_vars(env_vars)
-                    .with_public_node_config(node_cfg);
-                if let Err(e) = espresso_api::serve_axum(axum_port, state).await {
-                    tracing::error!("Axum server error: {}", e);
-                }
-            });
-        }
+        let port = self.http.port;
+        let ds_for_axum = ds.clone();
+        let env_vars = endpoints::get_public_env_vars().unwrap_or_default();
+        let node_cfg = self.public_node_config.as_deref().cloned();
+        tasks.spawn("API server", async move {
+            let state = NodeApiStateImpl::new(ds_for_axum)
+                .with_env_vars(env_vars)
+                .with_public_node_config(node_cfg);
+            if let Err(e) = espresso_api::serve_axum(port, state).await {
+                tracing::error!("Axum server error: {}", e);
+            }
+            anyhow::Ok(())
+        });
 
         if let Some(tonic_port) = self.http.tonic_port {
             let ds_for_tonic = ds.clone();
@@ -692,10 +687,6 @@ pub struct Http {
     #[clap(long, env = "ESPRESSO_NODE_API_MAX_CONNECTIONS")]
     pub max_connections: Option<usize>,
 
-    /// Optional port for new Axum API server (skeleton implementation).
-    #[clap(long, env = "ESPRESSO_NODE_AXUM_PORT")]
-    pub axum_port: Option<u16>,
-
     /// Optional port for Tonic gRPC API server.
     #[clap(long, env = "ESPRESSO_NODE_TONIC_PORT")]
     pub tonic_port: Option<u16>,
@@ -707,7 +698,6 @@ impl Http {
         Self {
             port,
             max_connections: None,
-            axum_port: None,
             tonic_port: None,
         }
     }

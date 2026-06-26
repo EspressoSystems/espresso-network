@@ -1,3 +1,28 @@
+/// Generate a path-builder function from a route constant.
+///
+/// Substitutes each `{placeholder}` segment with the corresponding argument
+/// (formatted via `Display`). Used to keep request URLs in sync with the
+/// route definitions registered with the Axum router.
+macro_rules! path_fn {
+    ($name:ident, $route:expr $(,)?) => {
+        pub fn $name() -> String {
+            ::std::string::String::from($route)
+        }
+    };
+    ($name:ident, $route:expr, $($placeholder:literal => $param:ident),+ $(,)?) => {
+        pub fn $name($($param: impl ::std::fmt::Display),+) -> String {
+            let mut path = ::std::string::String::from($route);
+            $(
+                path = path.replace(
+                    concat!("{", $placeholder, "}"),
+                    &$param.to_string(),
+                );
+            )+
+            path
+        }
+    };
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Route {
     /// HTTP path for Axum handler (e.g., "/v2/rewards/balance/{height}/{address}")
@@ -271,6 +296,251 @@ pub mod v1 {
 
     // Database (diagnostic)
     pub const DATABASE_TABLE_SIZES_ROUTE: &str = "/v1/database/table-sizes";
+
+    // ---------------------------------------------------------------------
+    // Path builders
+    //
+    // For each constant above, generate a function that returns the path
+    // with `{placeholder}` segments substituted. Use these instead of
+    // hand-formatted URL strings so that the route definition and the
+    // request site stay in sync.
+    // ---------------------------------------------------------------------
+
+    // Reward state v2
+    path_fn!(reward_claim_input, REWARD_CLAIM_INPUT_ROUTE, "height" => height, "address" => address);
+    path_fn!(reward_balance, REWARD_BALANCE_ROUTE, "height" => height, "address" => address);
+    path_fn!(latest_reward_balance, LATEST_REWARD_BALANCE_ROUTE, "address" => address);
+    path_fn!(reward_account_proof, REWARD_ACCOUNT_PROOF_ROUTE, "height" => height, "address" => address);
+    path_fn!(latest_reward_account_proof, LATEST_REWARD_ACCOUNT_PROOF_ROUTE, "address" => address);
+    path_fn!(reward_amounts, REWARD_AMOUNTS_ROUTE, "height" => height, "offset" => offset, "limit" => limit);
+    path_fn!(reward_merkle_tree_v2, REWARD_MERKLE_TREE_V2_ROUTE, "height" => height);
+
+    // Availability — namespace proofs
+    path_fn!(namespace_proof_by_height, NAMESPACE_PROOF_BY_HEIGHT_ROUTE, "height" => height, "namespace" => namespace);
+    path_fn!(namespace_proof_by_hash, NAMESPACE_PROOF_BY_HASH_ROUTE, "hash" => hash, "namespace" => namespace);
+    path_fn!(namespace_proof_by_payload_hash, NAMESPACE_PROOF_BY_PAYLOAD_HASH_ROUTE, "payload-hash" => payload_hash, "namespace" => namespace);
+    path_fn!(namespace_proof_range, NAMESPACE_PROOF_RANGE_ROUTE, "from" => from, "until" => until, "namespace" => namespace);
+    path_fn!(incorrect_encoding_proof, INCORRECT_ENCODING_PROOF_ROUTE, "block_number" => block_number, "namespace" => namespace);
+
+    // Availability — state certificates
+    path_fn!(state_cert_v1, STATE_CERT_V1_ROUTE, "epoch" => epoch);
+    path_fn!(state_cert_v2, STATE_CERT_V2_ROUTE, "epoch" => epoch);
+
+    // Availability — leaves
+    path_fn!(leaf_by_height, LEAF_BY_HEIGHT_ROUTE, "height" => height);
+    path_fn!(leaf_by_hash, LEAF_BY_HASH_ROUTE, "hash" => hash);
+    path_fn!(leaf_range, LEAF_RANGE_ROUTE, "from" => from, "until" => until);
+
+    // Availability — headers
+    path_fn!(header_by_height, HEADER_BY_HEIGHT_ROUTE, "height" => height);
+    path_fn!(header_by_hash, HEADER_BY_HASH_ROUTE, "hash" => hash);
+    path_fn!(header_by_payload_hash, HEADER_BY_PAYLOAD_HASH_ROUTE, "payload_hash" => payload_hash);
+    path_fn!(header_range, HEADER_RANGE_ROUTE, "from" => from, "until" => until);
+
+    // Availability — blocks
+    path_fn!(block_by_height, BLOCK_BY_HEIGHT_ROUTE, "height" => height);
+    path_fn!(block_by_hash, BLOCK_BY_HASH_ROUTE, "hash" => hash);
+    path_fn!(block_by_payload_hash, BLOCK_BY_PAYLOAD_HASH_ROUTE, "payload_hash" => payload_hash);
+    path_fn!(block_range, BLOCK_RANGE_ROUTE, "from" => from, "until" => until);
+
+    // Availability — payloads
+    path_fn!(payload_by_height, PAYLOAD_BY_HEIGHT_ROUTE, "height" => height);
+    path_fn!(payload_by_hash, PAYLOAD_BY_HASH_ROUTE, "hash" => hash);
+    path_fn!(payload_by_block_hash, PAYLOAD_BY_BLOCK_HASH_ROUTE, "block_hash" => block_hash);
+    path_fn!(payload_range, PAYLOAD_RANGE_ROUTE, "from" => from, "until" => until);
+
+    // Availability — VID common
+    path_fn!(vid_common_by_height, VID_COMMON_BY_HEIGHT_ROUTE, "height" => height);
+    path_fn!(vid_common_by_hash, VID_COMMON_BY_HASH_ROUTE, "hash" => hash);
+    path_fn!(vid_common_by_payload_hash, VID_COMMON_BY_PAYLOAD_HASH_ROUTE, "payload_hash" => payload_hash);
+    path_fn!(vid_common_range, VID_COMMON_RANGE_ROUTE, "from" => from, "until" => until);
+
+    // Availability — transactions
+    path_fn!(transaction_by_position_noproof, TRANSACTION_BY_POSITION_NOPROOF_ROUTE, "height" => height, "index" => index);
+    path_fn!(transaction_by_hash_noproof, TRANSACTION_BY_HASH_NOPROOF_ROUTE, "hash" => hash);
+    path_fn!(transaction_proof_by_position, TRANSACTION_PROOF_BY_POSITION_ROUTE, "height" => height, "index" => index);
+    path_fn!(transaction_proof_by_hash, TRANSACTION_PROOF_BY_HASH_ROUTE, "hash" => hash);
+    path_fn!(transaction_by_position, TRANSACTION_BY_POSITION_ROUTE, "height" => height, "index" => index);
+    path_fn!(transaction_by_hash, TRANSACTION_BY_HASH_ROUTE, "hash" => hash);
+
+    // Availability — block summaries
+    path_fn!(block_summary_by_height, BLOCK_SUMMARY_BY_HEIGHT_ROUTE, "height" => height);
+    path_fn!(block_summary_range, BLOCK_SUMMARY_RANGE_ROUTE, "from" => from, "until" => until);
+
+    // Availability — misc
+    path_fn!(limits, LIMITS_ROUTE);
+    path_fn!(cert2_by_height, CERT2_BY_HEIGHT_ROUTE, "height" => height);
+
+    // Availability — streams
+    path_fn!(stream_leaves, STREAM_LEAVES_ROUTE, "height" => height);
+    path_fn!(stream_headers, STREAM_HEADERS_ROUTE, "height" => height);
+    path_fn!(stream_blocks, STREAM_BLOCKS_ROUTE, "height" => height);
+    path_fn!(stream_payloads, STREAM_PAYLOADS_ROUTE, "height" => height);
+    path_fn!(stream_vid_common, STREAM_VID_COMMON_ROUTE, "height" => height);
+    path_fn!(stream_transactions, STREAM_TRANSACTIONS_ROUTE, "height" => height);
+    path_fn!(stream_transactions_ns, STREAM_TRANSACTIONS_NS_ROUTE, "height" => height, "namespace" => namespace);
+    path_fn!(stream_namespace_proofs, STREAM_NAMESPACE_PROOFS_ROUTE, "height" => height, "namespace" => namespace);
+
+    // Block state
+    path_fn!(block_state_path_by_height, BLOCK_STATE_PATH_BY_HEIGHT_ROUTE, "height" => height, "key" => key);
+    path_fn!(block_state_path_by_commit, BLOCK_STATE_PATH_BY_COMMIT_ROUTE, "commit" => commit, "key" => key);
+    path_fn!(block_state_height, BLOCK_STATE_HEIGHT_ROUTE);
+
+    // Fee state
+    path_fn!(fee_state_path_by_height, FEE_STATE_PATH_BY_HEIGHT_ROUTE, "height" => height, "key" => key);
+    path_fn!(fee_state_path_by_commit, FEE_STATE_PATH_BY_COMMIT_ROUTE, "commit" => commit, "key" => key);
+    path_fn!(fee_state_height, FEE_STATE_HEIGHT_ROUTE);
+    path_fn!(fee_state_balance_latest, FEE_STATE_BALANCE_LATEST_ROUTE, "address" => address);
+
+    // Status
+    path_fn!(status_block_height, STATUS_BLOCK_HEIGHT_ROUTE);
+    path_fn!(status_success_rate, STATUS_SUCCESS_RATE_ROUTE);
+    path_fn!(
+        status_time_since_last_decide,
+        STATUS_TIME_SINCE_LAST_DECIDE_ROUTE
+    );
+    path_fn!(status_metrics, STATUS_METRICS_ROUTE);
+
+    // Config
+    path_fn!(config_hotshot, CONFIG_HOTSHOT_ROUTE);
+    path_fn!(config_env, CONFIG_ENV_ROUTE);
+    path_fn!(config_runtime, CONFIG_RUNTIME_ROUTE);
+
+    // Node — block height / counts / sizes
+    path_fn!(node_block_height, NODE_BLOCK_HEIGHT_ROUTE);
+    path_fn!(node_transactions_count, NODE_TRANSACTIONS_COUNT_ROUTE);
+    path_fn!(node_transactions_count_to, NODE_TRANSACTIONS_COUNT_TO_ROUTE, "to" => to);
+    path_fn!(node_transactions_count_from_to, NODE_TRANSACTIONS_COUNT_FROM_TO_ROUTE, "from" => from, "to" => to);
+    path_fn!(node_transactions_count_ns, NODE_TRANSACTIONS_COUNT_NS_ROUTE, "namespace" => namespace);
+    path_fn!(node_transactions_count_ns_to, NODE_TRANSACTIONS_COUNT_NS_TO_ROUTE, "namespace" => namespace, "to" => to);
+    path_fn!(node_transactions_count_ns_from_to, NODE_TRANSACTIONS_COUNT_NS_FROM_TO_ROUTE, "namespace" => namespace, "from" => from, "to" => to);
+
+    path_fn!(node_payloads_size, NODE_PAYLOADS_SIZE_ROUTE);
+    path_fn!(node_payloads_size_to, NODE_PAYLOADS_SIZE_TO_ROUTE, "to" => to);
+    path_fn!(node_payloads_size_from_to, NODE_PAYLOADS_SIZE_FROM_TO_ROUTE, "from" => from, "to" => to);
+    path_fn!(node_payloads_total_size, NODE_PAYLOADS_TOTAL_SIZE_ROUTE);
+    path_fn!(node_payloads_size_ns, NODE_PAYLOADS_SIZE_NS_ROUTE, "namespace" => namespace);
+    path_fn!(node_payloads_size_ns_to, NODE_PAYLOADS_SIZE_NS_TO_ROUTE, "namespace" => namespace, "to" => to);
+    path_fn!(node_payloads_size_ns_from_to, NODE_PAYLOADS_SIZE_NS_FROM_TO_ROUTE, "namespace" => namespace, "from" => from, "to" => to);
+
+    // Node — VID shares
+    path_fn!(node_vid_share_by_height, NODE_VID_SHARE_BY_HEIGHT_ROUTE, "height" => height);
+    path_fn!(node_vid_share_by_hash, NODE_VID_SHARE_BY_HASH_ROUTE, "hash" => hash);
+    path_fn!(node_vid_share_by_payload_hash, NODE_VID_SHARE_BY_PAYLOAD_HASH_ROUTE, "payload_hash" => payload_hash);
+
+    // Node — sync, header windows
+    path_fn!(node_sync_status, NODE_SYNC_STATUS_ROUTE);
+    path_fn!(node_header_window_time, NODE_HEADER_WINDOW_TIME_ROUTE, "start" => start, "end" => end);
+    path_fn!(node_header_window_height, NODE_HEADER_WINDOW_HEIGHT_ROUTE, "height" => height, "end" => end);
+    path_fn!(node_header_window_hash, NODE_HEADER_WINDOW_HASH_ROUTE, "hash" => hash, "end" => end);
+    path_fn!(node_limits, NODE_LIMITS_ROUTE);
+
+    // Node — stake table / validators / participation
+    path_fn!(node_stake_table_current, NODE_STAKE_TABLE_CURRENT_ROUTE);
+    path_fn!(node_stake_table, NODE_STAKE_TABLE_ROUTE, "epoch_number" => epoch_number);
+    path_fn!(
+        node_da_stake_table_current,
+        NODE_DA_STAKE_TABLE_CURRENT_ROUTE
+    );
+    path_fn!(node_da_stake_table, NODE_DA_STAKE_TABLE_ROUTE, "epoch_number" => epoch_number);
+    path_fn!(node_validators, NODE_VALIDATORS_ROUTE, "epoch_number" => epoch_number);
+    path_fn!(node_all_validators, NODE_ALL_VALIDATORS_ROUTE, "epoch_number" => epoch_number, "offset" => offset, "limit" => limit);
+    path_fn!(
+        node_proposal_participation_current,
+        NODE_PROPOSAL_PARTICIPATION_CURRENT_ROUTE
+    );
+    path_fn!(node_proposal_participation, NODE_PROPOSAL_PARTICIPATION_ROUTE, "epoch" => epoch);
+    path_fn!(
+        node_vote_participation_current,
+        NODE_VOTE_PARTICIPATION_CURRENT_ROUTE
+    );
+    path_fn!(node_vote_participation, NODE_VOTE_PARTICIPATION_ROUTE, "epoch" => epoch);
+
+    // Node — block reward / oldest
+    path_fn!(node_block_reward, NODE_BLOCK_REWARD_ROUTE);
+    path_fn!(node_block_reward_epoch, NODE_BLOCK_REWARD_EPOCH_ROUTE, "epoch_number" => epoch_number);
+    path_fn!(node_oldest_block, NODE_OLDEST_BLOCK_ROUTE);
+    path_fn!(node_oldest_leaf, NODE_OLDEST_LEAF_ROUTE);
+
+    // Catchup
+    path_fn!(catchup_account, CATCHUP_ACCOUNT_ROUTE, "height" => height, "view" => view, "address" => address);
+    path_fn!(catchup_accounts, CATCHUP_ACCOUNTS_ROUTE, "height" => height, "view" => view);
+    path_fn!(catchup_blocks, CATCHUP_BLOCKS_ROUTE, "height" => height, "view" => view);
+    path_fn!(catchup_chainconfig, CATCHUP_CHAINCONFIG_ROUTE, "commitment" => commitment);
+    path_fn!(catchup_leafchain, CATCHUP_LEAFCHAIN_ROUTE, "height" => height);
+    path_fn!(catchup_cert2, CATCHUP_CERT2_ROUTE, "height" => height);
+    path_fn!(catchup_reward_account, CATCHUP_REWARD_ACCOUNT_ROUTE, "height" => height, "view" => view, "address" => address);
+    path_fn!(catchup_reward_accounts, CATCHUP_REWARD_ACCOUNTS_ROUTE, "height" => height, "view" => view);
+    path_fn!(catchup_reward_account_v2, CATCHUP_REWARD_ACCOUNT_V2_ROUTE, "height" => height, "view" => view, "address" => address);
+    path_fn!(catchup_reward_accounts_v2, CATCHUP_REWARD_ACCOUNTS_V2_ROUTE, "height" => height, "view" => view);
+    path_fn!(catchup_reward_amounts, CATCHUP_REWARD_AMOUNTS_ROUTE, "height" => height, "limit" => limit, "offset" => offset);
+    path_fn!(catchup_reward_merkle_tree_v2, CATCHUP_REWARD_MERKLE_TREE_V2_ROUTE, "height" => height, "view" => view);
+    path_fn!(catchup_state_cert, CATCHUP_STATE_CERT_ROUTE, "epoch" => epoch);
+
+    // Submit
+    path_fn!(submit, SUBMIT_ROUTE);
+
+    // State signature
+    path_fn!(state_signature_block, STATE_SIGNATURE_BLOCK_ROUTE, "height" => height);
+
+    // HotShot events
+    path_fn!(hotshot_events_stream, HOTSHOT_EVENTS_STREAM_ROUTE);
+    path_fn!(hotshot_events_startup, HOTSHOT_EVENTS_STARTUP_ROUTE);
+
+    // Light client
+    path_fn!(lc_leaf_by_height, LC_LEAF_BY_HEIGHT_ROUTE, "height" => height);
+    path_fn!(lc_leaf_by_height_finalized, LC_LEAF_BY_HEIGHT_FINALIZED_ROUTE, "height" => height, "finalized" => finalized);
+    path_fn!(lc_leaf_by_hash, LC_LEAF_BY_HASH_ROUTE, "hash" => hash);
+    path_fn!(lc_leaf_by_hash_finalized, LC_LEAF_BY_HASH_FINALIZED_ROUTE, "hash" => hash, "finalized" => finalized);
+    path_fn!(lc_leaf_by_block_hash, LC_LEAF_BY_BLOCK_HASH_ROUTE, "block_hash" => block_hash);
+    path_fn!(lc_leaf_by_block_hash_finalized, LC_LEAF_BY_BLOCK_HASH_FINALIZED_ROUTE, "block_hash" => block_hash, "finalized" => finalized);
+    path_fn!(lc_leaf_by_payload_hash, LC_LEAF_BY_PAYLOAD_HASH_ROUTE, "payload_hash" => payload_hash);
+    path_fn!(lc_leaf_by_payload_hash_finalized, LC_LEAF_BY_PAYLOAD_HASH_FINALIZED_ROUTE, "payload_hash" => payload_hash, "finalized" => finalized);
+    path_fn!(lc_header_by_height, LC_HEADER_BY_HEIGHT_ROUTE, "root" => root, "height" => height);
+    path_fn!(lc_header_by_hash, LC_HEADER_BY_HASH_ROUTE, "root" => root, "hash" => hash);
+    path_fn!(lc_header_by_payload_hash, LC_HEADER_BY_PAYLOAD_HASH_ROUTE, "root" => root, "payload_hash" => payload_hash);
+    path_fn!(lc_stake_table, LC_STAKE_TABLE_ROUTE, "epoch" => epoch);
+    path_fn!(lc_payload, LC_PAYLOAD_ROUTE, "height" => height);
+    path_fn!(lc_payload_range, LC_PAYLOAD_RANGE_ROUTE, "start" => start, "end" => end);
+    path_fn!(lc_namespace, LC_NAMESPACE_ROUTE, "height" => height, "namespace" => namespace);
+    path_fn!(lc_namespace_range, LC_NAMESPACE_RANGE_ROUTE, "start" => start, "end" => end, "namespace" => namespace);
+
+    // Explorer — blocks
+    path_fn!(explorer_block_detail_by_height, EXPLORER_BLOCK_DETAIL_BY_HEIGHT_ROUTE, "height" => height);
+    path_fn!(explorer_block_detail_by_hash, EXPLORER_BLOCK_DETAIL_BY_HASH_ROUTE, "hash" => hash);
+    path_fn!(explorer_block_summaries_latest, EXPLORER_BLOCK_SUMMARIES_LATEST_ROUTE, "limit" => limit);
+    path_fn!(explorer_block_summaries_from, EXPLORER_BLOCK_SUMMARIES_FROM_ROUTE, "from" => from, "limit" => limit);
+
+    // Explorer — transactions
+    path_fn!(explorer_tx_detail_by_position, EXPLORER_TX_DETAIL_BY_POSITION_ROUTE, "height" => height, "offset" => offset);
+    path_fn!(explorer_tx_detail_by_hash, EXPLORER_TX_DETAIL_BY_HASH_ROUTE, "hash" => hash);
+    path_fn!(explorer_tx_summaries_latest, EXPLORER_TX_SUMMARIES_LATEST_ROUTE, "limit" => limit);
+    path_fn!(explorer_tx_summaries_from, EXPLORER_TX_SUMMARIES_FROM_ROUTE, "height" => height, "offset" => offset, "limit" => limit);
+    path_fn!(explorer_tx_summaries_by_hash, EXPLORER_TX_SUMMARIES_BY_HASH_ROUTE, "hash" => hash, "limit" => limit);
+    path_fn!(explorer_tx_summaries_latest_block, EXPLORER_TX_SUMMARIES_LATEST_BLOCK_ROUTE, "limit" => limit, "block" => block);
+    path_fn!(explorer_tx_summaries_from_block, EXPLORER_TX_SUMMARIES_FROM_BLOCK_ROUTE, "height" => height, "offset" => offset, "limit" => limit, "block" => block);
+    path_fn!(explorer_tx_summaries_by_hash_block, EXPLORER_TX_SUMMARIES_BY_HASH_BLOCK_ROUTE, "hash" => hash, "limit" => limit, "block" => block);
+    path_fn!(explorer_tx_summaries_latest_ns, EXPLORER_TX_SUMMARIES_LATEST_NS_ROUTE, "limit" => limit, "namespace" => namespace);
+    path_fn!(explorer_tx_summaries_from_ns, EXPLORER_TX_SUMMARIES_FROM_NS_ROUTE, "height" => height, "offset" => offset, "limit" => limit, "namespace" => namespace);
+    path_fn!(explorer_tx_summaries_by_hash_ns, EXPLORER_TX_SUMMARIES_BY_HASH_NS_ROUTE, "hash" => hash, "limit" => limit, "namespace" => namespace);
+    path_fn!(explorer_summary, EXPLORER_SUMMARY_ROUTE);
+    path_fn!(explorer_search, EXPLORER_SEARCH_ROUTE, "query" => query);
+
+    // Token
+    path_fn!(token_total_minted_supply, TOKEN_TOTAL_MINTED_SUPPLY_ROUTE);
+    path_fn!(token_circulating_supply, TOKEN_CIRCULATING_SUPPLY_ROUTE);
+    path_fn!(
+        token_circulating_supply_ethereum,
+        TOKEN_CIRCULATING_SUPPLY_ETHEREUM_ROUTE
+    );
+    path_fn!(token_total_issued_supply, TOKEN_TOTAL_ISSUED_SUPPLY_ROUTE);
+    path_fn!(
+        token_total_reward_distributed,
+        TOKEN_TOTAL_REWARD_DISTRIBUTED_ROUTE
+    );
+
+    // Database (diagnostic)
+    path_fn!(database_table_sizes, DATABASE_TABLE_SIZES_ROUTE);
 }
 
 pub mod v2 {
