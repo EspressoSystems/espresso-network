@@ -89,6 +89,10 @@ pub enum ConsensusInput<T: NodeType> {
     BlockReconstructed(ViewNumber, VidCommitment2),
     Certificate1(Certificate1<T>),
     Certificate2(Certificate2<T>),
+    /// A quorum certificate allows us to advance our view.
+    ///
+    /// Used to help divergent nodes re-converge on restart.
+    AdvanceView(Certificate1<T>),
     /// Atomic pair emitted by the `EpochRootVoteCollector` for epoch-root views:
     /// a `Certificate1` and its matching `LightClientStateUpdateCertificateV2`.
     /// Consensus never sees an epoch-root Cert1 without the matching state_cert.
@@ -611,6 +615,14 @@ impl<T: NodeType> Consensus<T> {
                 );
                 self.handle_certificate2(certificate, outbox)
             },
+            ConsensusInput::AdvanceView(certificate) => {
+                debug!(
+                    view  = %certificate.view_number(),
+                    epoch = ?certificate.epoch().map(|e| *e),
+                    "apply: advance view"
+                );
+                self.handle_advance_view(certificate, outbox)
+            },
             ConsensusInput::EpochRootCertificates { cert1, state_cert } => {
                 info!(
                     epoch = %state_cert.epoch,
@@ -1110,6 +1122,47 @@ impl<T: NodeType> Consensus<T> {
             },
         }
         self.certs2.insert(view, certificate);
+        Protocol::Continue
+    }
+
+    /// Advance our view based on a quorum certificate.
+    #[instrument(level = "debug", skip_all)]
+    fn handle_advance_view(
+        &mut self,
+        cert1: Certificate1<T>,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) -> Protocol {
+        let view = cert1.view_number();
+
+        if view < self.current_view {
+            return Protocol::Continue;
+        }
+
+        let Some(epoch) = cert1.epoch() else {
+            warn!(%view, "cert1 has no epoch number");
+            return Protocol::Abort;
+        };
+
+        match self.try_verify_cert(&cert1, epoch) {
+            CertVerification::Valid => {},
+            CertVerification::Invalid => {
+                warn!(%view, "cert1 is invalid");
+                return Protocol::Abort;
+            },
+            CertVerification::EpochUnavailable => {
+                debug!(%view, %epoch, "missing epoch to verify cert1");
+                outbox.push_back(ConsensusOutput::RequestDrbResult(epoch));
+                return Protocol::Continue;
+            },
+        }
+
+        self.certs.entry(view).or_insert(cert1);
+
+        let next_view = view + 1;
+        self.current_view = next_view;
+        self.current_epoch = Some(epoch);
+        outbox.push_back(ConsensusOutput::ViewChanged(next_view, epoch));
+
         Protocol::Continue
     }
 
@@ -2365,6 +2418,8 @@ impl<T: NodeType> ConsensusInput<T> {
             ConsensusInput::BlockReconstructed(view, _) => *view,
             ConsensusInput::Certificate1(cert) => cert.view_number(),
             ConsensusInput::Certificate2(cert) => cert.view_number(),
+            // We advance from the certificate's view v to v + 1:
+            ConsensusInput::AdvanceView(cert) => cert.view_number() + 1,
             ConsensusInput::EpochRootCertificates { cert1, .. } => cert1.view_number(),
             ConsensusInput::HeaderCreated(view, ..) => *view,
             ConsensusInput::ProposalWithVidShare(_, prop, _) => prop.view_number(),

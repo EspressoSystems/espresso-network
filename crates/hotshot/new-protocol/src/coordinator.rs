@@ -1053,6 +1053,20 @@ where
                         .accumulate_vote(timeout_msg.vote.clone());
                     self.timeout_one_honest_collector
                         .accumulate_vote(timeout_msg.vote);
+
+                    // If a peer times out in a view at or ahead of us we adopt the
+                    // view of an embedded cert1, so divergent nodes re-converge on
+                    // the highest justified view on restart.
+                    //
+                    // TODO: Above we reject timeout votes too far ahead. A valid cert1
+                    // has precedence over that check so we need to move this up, but
+                    // first we need to verify the cert1 itself.
+                    if let Some(cert) = timeout_msg.lock
+                        && cert.view_number() >= current_view
+                    {
+                        return Some(ConsensusInput::AdvanceView(cert));
+                    }
+
                     None
                 },
                 ConsensusMessage::TimeoutCertificate(tc) => {
