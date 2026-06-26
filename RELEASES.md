@@ -24,7 +24,7 @@ reviewed PR; nothing is pushed directly.
 When a `release-MAJOR.MINOR.PHASE` branch is created, automation does the
 following:
 
-1. Creates a label `backport-to-release-MAJOR.MINOR.PHASE`.
+1. Creates a label `backport release-MAJOR.MINOR.PHASE`.
 2. Opens a **release tracker issue** titled `Release MAJOR.MINOR.PHASE` (see
    below).
 
@@ -56,11 +56,10 @@ markers, so anything you write outside those markers is preserved.
 Sections in the body:
 
 - **Tag log** — chronological list of tags cut from this branch (sha, time, who triggered).
-- **Promotion state** — which tag is currently at `decaf.rc`, `decaf`, `mainnet.rc`, `mainnet`.
-- **Backport candidates** — commits on `main` not yet in this branch (checklist).
-- **Forward-port candidates** — commits on this branch not yet in `main`.
-- **Skip list** — shas explicitly excluded from the candidate lists, with reason and who skipped them.
-- **Experimental branches** — currently-open branches matching `release-MAJOR.MINOR.PHASE/*` with their last-commit time and link, so you can see what's being validated at a glance.
+- **Promotion state** — which tag is currently at `decaf.canary`, `decaf`, `mainnet.canary`, `mainnet`.
+- **Backport candidates** — append-only checklist of commits on `main` since the branch was cut. New commits get added as unchecked items; backports landing via `backport.yml` tick their corresponding box automatically; for everything else (manual cherry-pick, reimplementation, "not for this release") tick the box by hand.
+- **Forward-port candidates** — append-only checklist of commits on this branch. Same model.
+- **Experimental branches** — currently-open branches matching `release-MAJOR.MINOR.PHASE/*` with their last commit, so you can see what's being validated at a glance.
 
 ## Cutting a release: end-to-end
 
@@ -82,13 +81,13 @@ Sections in the body:
    and deploy that.
 
 5. **Promote.** Once a tag is validated, comment `/promote <stage>` on the
-   tracker — `<stage>` is one of `decaf.rc`, `decaf`, `mainnet.rc`, `mainnet`.
+   tracker — `<stage>` is one of `decaf.canary`, `decaf`, `mainnet.canary`, `mainnet`.
    This promotes the **most recent tag** from the branch into the floating
    docker tag for that stage. To promote an older tag, run the
    `promote-docker-tag.yml` workflow directly via `gh` or the Actions UI.
 
 6. **Repeat the promotion sequence.** The intended progression is
-   `decaf.rc → decaf → mainnet.rc → mainnet`. Each stage may be a different
+   `decaf.canary → decaf → mainnet.canary → mainnet`. Each stage may be a different
    tag if you cut additional patches between promotions.
 
 7. **Move on.** Once a release is shipped to mainnet and the chain has
@@ -100,9 +99,9 @@ Sections in the body:
 Promotion to each stage is gated by **GitHub Environment required reviewers**,
 configured in repo Settings → Environments:
 
-- `decaf.rc` — 2 reviewers
+- `decaf.canary` — 2 reviewers
 - `decaf` — 2 reviewers
-- `mainnet.rc` — 3 reviewers
+- `mainnet.canary` — 3 reviewers
 - `mainnet` — 3 reviewers
 
 All four environments have "Prevent self-review" enabled, so whoever runs
@@ -117,30 +116,30 @@ change.
 ## Backports
 
 Backports are label-driven. To request that a PR be backported to an active
-release, add the label `backport-to-release-MAJOR.MINOR.PHASE` to it. When the
+release, add the label `backport release-MAJOR.MINOR.PHASE` to it. When the
 PR merges, `backport.yml` automatically opens a draft backport PR against the
 release branch, cherry-picking the merge with `-x`. If the cherry-pick has
 conflicts, the workflow attempts to resolve them automatically (mergiraf
 first, then Claude); resulting PRs are labeled `claude-resolved` so they get
 extra scrutiny.
 
-The tracker issue's **Backport candidates** section lists commits on `main`
-that haven't been backported yet. To explicitly mark a commit as "not for
-backport", comment `/skip <sha> <reason>` on the tracker; the commit moves
-into the **Skip list** and disappears from the candidate list. Use
-`/unskip <sha>` to reverse.
+The tracker issue's **Backport candidates** section accumulates commits on
+`main` as they land. When the backport workflow merges a backport PR into the
+release branch, the corresponding entry is ticked automatically. For commits
+you've handled outside that workflow — or commits you don't intend to
+backport — tick the box by hand. There is no separate "skip" mechanism;
+ticking the box is the universal "this commit has been considered" signal.
 
-`/skip` also applies to forward-port candidates by sha — the same command
-covers both directions.
+If a release branch ever gets force-pushed (e.g. before branch protection is
+in place), the tracker detects the rewrite and resets its cursor, noting the
+event in the checklist. Earlier checkbox state is lost.
 
 ## Quick reference: tracker commands
 
 | Command | Effect |
 |---|---|
 | `/tag` | Cut the next patch tag from the tip of this release branch. |
-| `/promote <stage>` | Promote the most recent tag from this branch to `<stage>` (one of `decaf.rc`, `decaf`, `mainnet.rc`, `mainnet`). Gated by environment reviewers. |
-| `/skip <sha> [reason]` | Remove `<sha>` from the backport/forward-port candidate lists. |
-| `/unskip <sha>` | Reverse a previous `/skip`. |
+| `/promote <stage>` | Promote the most recent tag from this branch to `<stage>` (one of `decaf.canary`, `decaf`, `mainnet.canary`, `mainnet`). Gated by environment reviewers. |
 
 All commands require repo write access (`OWNER`, `MEMBER`, or `COLLABORATOR`).
 
@@ -151,6 +150,6 @@ GitHub CLI:
 
 ```bash
 just tag release-0.4.0                                # same as /tag
-gh workflow run promote-docker-tag.yml \              # same as /promote decaf.rc
-  -f stage=decaf.rc -f tag=0.4.0.5
+gh workflow run promote-docker-tag.yml \              # same as /promote decaf.canary
+  -f stage=decaf.canary -f tag=0.4.0.5
 ```

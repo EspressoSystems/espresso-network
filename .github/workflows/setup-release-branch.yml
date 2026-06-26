@@ -45,8 +45,8 @@ jobs:
           BRANCH: ${{ steps.check.outputs.branch }}
         run: |
           set -euo pipefail
-          label="backport-to-${BRANCH}"
-          gh label create "$label" \
+          # korthout/backport-action default label format is `backport <branch>`.
+          gh label create "backport ${BRANCH}" \
             --color 1D76DB \
             --description "Backport this PR to ${BRANCH} when it merges" \
             2>/dev/null || true

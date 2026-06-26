@@ -1,5 +1,5 @@
-# Keep the release tracker issue body in sync, and handle /skip /unskip
-# /promote commands posted as comments.
+# Keep the release tracker issue body in sync, and handle /promote commands
+# posted as comments.
 #
 # The actual logic lives in scripts/release-tracker.py; this workflow is the
 # event wiring.
@@ -63,15 +63,13 @@ jobs:
               echo "::warning::refresh failed for issue #$issue"
           done
 
-  # ----- Handle slash-commands on tracker issues -----------------------------
-  command:
+  # ----- Handle /promote on tracker issues -----------------------------------
+  promote:
     if: |
       github.event_name == 'issue_comment' &&
       github.event.issue.pull_request == null &&
       contains(github.event.issue.labels.*.name, 'release-tracker') &&
-      (startsWith(github.event.comment.body, '/skip') ||
-       startsWith(github.event.comment.body, '/unskip') ||
-       startsWith(github.event.comment.body, '/promote'))
+      startsWith(github.event.comment.body, '/promote')
     runs-on: ubuntu-latest
     steps:
       - name: Gate on author association
@@ -92,45 +90,34 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Dispatch command
+      - name: Dispatch /promote
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           ISSUE: ${{ github.event.issue.number }}
           BODY: ${{ github.event.comment.body }}
           ACTOR: ${{ github.event.comment.user.login }}
-          CREATED_AT: ${{ github.event.comment.created_at }}
         run: |
           set -euo pipefail
-          # First token = command; rest = args (one line only).
-          first_line=$(printf '%s' "$BODY" | head -n1)
-          cmd=$(printf '%s' "$first_line" | awk '{print $1}')
-          rest=$(printf '%s' "$first_line" | cut -s -d ' ' -f2-)
-          case "$cmd" in
-            /skip)
-              sha=$(printf '%s' "$rest" | awk '{print $1}')
-              reason=$(printf '%s' "$rest" | cut -s -d ' ' -f2-)
-              python3 scripts/release-tracker.py --issue "$ISSUE" skip \
-                --sha "$sha" --reason "${reason:-(no reason)}" \
-                --actor "$ACTOR" --timestamp "$CREATED_AT"
-              ;;
-            /unskip)
-              sha=$(printf '%s' "$rest" | awk '{print $1}')
-              python3 scripts/release-tracker.py --issue "$ISSUE" unskip --sha "$sha"
-              ;;
-            /promote)
-              stage=$(printf '%s' "$rest" | awk '{print $1}')
-              python3 scripts/release-tracker.py --issue "$ISSUE" promote \
-                --stage "$stage" --actor "$ACTOR"
-              ;;
-          esac
+          stage=$(printf '%s' "$BODY" | head -n1 | awk '{print $2}')
+          if [ -z "$stage" ]; then
+            gh issue comment "$ISSUE" --body "@$ACTOR \`/promote\` requires a stage (one of: decaf.canary, decaf, mainnet.canary, mainnet)"
+            exit 1
+          fi
+          # Read release branch from tracker body
+          body=$(gh issue view "$ISSUE" --json body -q .body)
+          branch=$(printf '%s' "$body" | grep -oE 'release-branch: release-[0-9]+\.[0-9]+\.[0-9]+' | head -n1 | sed 's|release-branch: ||')
+          version="${branch#release-}"
+          # Latest tag by creatordate
+          tag=$(git tag --list "${version}.*" --sort=-creatordate | head -n1)
+          if [ -z "$tag" ]; then
+            gh issue comment "$ISSUE" --body "@$ACTOR no tags on \`$branch\` yet — run \`/tag\` before promoting."
+            exit 0
+          fi
+          gh workflow run promote-docker-tag.yml \
+            -f floating-tag="$stage" -f release-tag="$tag"
+          gh issue comment "$ISSUE" --body \
+            "@$ACTOR dispatched promotion of \`$tag\` → \`$stage\`. Approve at https://github.com/${GH_REPO}/actions/workflows/promote-docker-tag.yml."
 
   # ----- Refresh promotion state when promote-docker-tag.yml finishes --------
   on-promotion:

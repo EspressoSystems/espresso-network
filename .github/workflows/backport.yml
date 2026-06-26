@@ -15,11 +15,15 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  issues: write
 jobs:
   backport:
     name: Backport pull request
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged &&
+       !startsWith(github.event.pull_request.head.ref, 'backport-'))
     steps:
       - uses: actions/checkout@v6
         with:
@@ -61,8 +65,6 @@ jobs:
         if: github.event_name == 'pull_request_target'
         uses: korthout/backport-action@v3
         with:
-          # Match `backport-to-<branch>` labels (e.g. backport-to-release-0.4.0).
-          label_pattern: '^backport-to-(.+)$'
           experimental: '{"conflict_resolution":"draft_commit_conflicts"}'
 
       - name: Detect remaining conflicts
@@ -134,3 +136,65 @@ jobs:
               gh pr comment "$pr" --body-file "claude-summaries/$pr.md"
             fi
           done
+
+  # Tick the corresponding backport-candidates entry on the release tracker
+  # issue when a backport PR itself lands on a release-X.Y.Z branch. Runs
+  # alongside the main `backport` job above but on a different filter.
+  tick-tracker:
+    name: Tick release tracker
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'pull_request_target' &&
+      github.event.pull_request.merged &&
+      startsWith(github.event.pull_request.head.ref, 'backport-')
+    steps:
+      - name: Resolve original PR and target tracker
+        id: meta
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          # Branch name pattern from korthout/backport-action and scripts/backport-dispatch:
+          #   backport-<PR>-to-<target-branch>
+          orig=$(printf '%s' "$HEAD_REF" | sed -nE 's|^backport-([0-9]+)-to-.*$|\1|p')
+          if [ -z "$orig" ]; then
+            echo "head ref '$HEAD_REF' does not parse; skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if ! echo "$BASE_REF" | grep -qE '^release-[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "base ref '$BASE_REF' is not a canonical release branch; skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          version="${BASE_REF#release-}"
+          merge_sha=$(gh pr view "$orig" --json mergeCommit -q .mergeCommit.oid 2>/dev/null || true)
+          if [ -z "$merge_sha" ] || [ "$merge_sha" = "null" ]; then
+            echo "original PR #$orig has no merge commit; skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          issue=$(gh issue list --label release-tracker --state open \
+            --search "Release $version in:title" --json number,title \
+            -q ".[] | select(.title == \"Release $version\") | .number" | head -n1)
+          if [ -z "$issue" ]; then
+            echo "no open tracker for Release $version; skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "skip=false"     >> "$GITHUB_OUTPUT"
+          echo "sha=$merge_sha"  >> "$GITHUB_OUTPUT"
+          echo "issue=$issue"    >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v6
+        if: steps.meta.outputs.skip == 'false'
+
+      - name: Tick the box
+        if: steps.meta.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE: ${{ steps.meta.outputs.issue }}
+          SHA: ${{ steps.meta.outputs.sha }}
+        run: |
+          python3 scripts/release-tracker.py --issue "$ISSUE" tick \
+            --section BACKPORT_CANDIDATES --sha "$SHA"

@@ -9,9 +9,9 @@ on:
         required: true
         type: choice
         options:
-          - decaf.rc
+          - decaf.canary
           - decaf
-          - mainnet.rc
+          - mainnet.canary
           - mainnet
       release-tag:
         description: Source git tag (e.g. 0.4.0.5)
@@ -97,17 +97,17 @@ jobs:
           }
 
           case "$FLOATING_DOCKER_TAG" in
-            decaf.rc)  ;;
-            decaf)     check_prerequisite "decaf.rc" ;;
-            mainnet.rc) check_prerequisite "decaf" ;;
-            mainnet)   check_prerequisite "mainnet.rc" ;;
+            decaf.canary)  ;;
+            decaf)     check_prerequisite "decaf.canary" ;;
+            mainnet.canary) check_prerequisite "decaf" ;;
+            mainnet)   check_prerequisite "mainnet.canary" ;;
           esac
 
   promote:
     needs: check-progression
     runs-on: ubuntu-latest
     # Reviewer count per stage is configured in repo Settings → Environments
-    # (decaf.rc / decaf / mainnet.rc / mainnet). "Prevent self-review" must be
+    # (decaf.canary / decaf / mainnet.canary / mainnet). "Prevent self-review" must be
     # enabled on each so the requester cannot approve their own promotion.
     environment: ${{ inputs.floating-tag }}
     strategy:
