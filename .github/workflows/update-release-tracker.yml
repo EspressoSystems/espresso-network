@@ -1,23 +1,20 @@
-# Keep the release tracker issue body in sync, and handle /promote commands
-# posted as comments.
+# Keep the release tracker issue body in sync, and handle /promote commands.
 #
-# The actual logic lives in scripts/release-tracker.py; this workflow is the
-# event wiring.
+# The body is regenerated from scratch on every refresh. The only state
+# preserved across refreshes:
+#   - cursor markers (where we left off on main and the release branch)
+#   - which checkboxes have been ticked (`- [x]`)
+#   - everything below `<!-- HUMAN NOTES BELOW -->` is copied verbatim
 
 name: Update Release Tracker
 
 on:
   push:
-    branches:
-      - main
-      - "release-*"
-    tags:
-      - "[0-9]+.[0-9]+.[0-9]+.[0-9]+"
+    branches: [main, "release-*"]
+    tags: ["[0-9]+.[0-9]+.[0-9]+.[0-9]+"]
   pull_request_target:
     types: [closed]
-    branches:
-      - main
-      - "release-*"
+    branches: [main, "release-*"]
   issue_comment:
     types: [created]
   workflow_run:
@@ -31,39 +28,146 @@ permissions:
   pull-requests: read
   packages: read
 
+env:
+  REGISTRY: ghcr.io/espressosystems/espresso-network
+  REF_SERVICE: espresso-node
+
 jobs:
-  # ----- Refresh on repo events (push, PR close, tag push) -------------------
   refresh:
-    if: |
-      github.event_name == 'push' ||
-      github.event_name == 'pull_request_target'
+    if: github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          fetch-tags: true
+        with: { fetch-depth: 0, fetch-tags: true }
 
-      - name: Login to GHCR
-        uses: docker/login-action@v3
+      - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Refresh every open tracker issue
+      - name: Refresh every open tracker
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          issues=$(gh issue list --label release-tracker --state open --json number -q '.[].number')
-          for issue in $issues; do
-            python3 scripts/release-tracker.py --issue "$issue" refresh || \
-              echo "::warning::refresh failed for issue #$issue"
+
+          digest() {
+            docker buildx imagetools inspect --raw "$REGISTRY/$REF_SERVICE:$1" 2>/dev/null \
+              | jq -r '.manifests[]? | select(.platform.architecture=="amd64" and .platform.os=="linux") | .digest' \
+              || true
+          }
+
+          refresh() {
+            local issue="$1"
+            local body; body=$(gh issue view "$issue" --json body -q .body)
+
+            local version main_cur branch_cur head_main head_branch
+            version=$(grep -oP '(?<=release-branch: release-)[0-9]+\.[0-9]+\.[0-9]+' <<<"$body" | head -1)
+            main_cur=$(grep -oP '(?<=main-cursor: )[0-9a-f]+|(?<=main-cursor: )none' <<<"$body" | head -1)
+            branch_cur=$(grep -oP '(?<=branch-cursor: )[0-9a-f]+|(?<=branch-cursor: )none' <<<"$body" | head -1)
+            git fetch origin main "release-$version" 2>/dev/null || true
+            head_main=$(git rev-parse origin/main)
+            head_branch=$(git rev-parse "origin/release-$version")
+
+            # Set of full shas the user has ticked, used to preserve ticks.
+            local ticked
+            ticked=$(grep -oP '(?<=- \[x\] `)[a-f0-9]+(?=`.* sha: )' <<<"$body" || true)
+
+            # Existing checklist entries (between sentinels) plus new entries since cursor.
+            checklist() {
+              local cursor="$1" head="$2" name="$3" out
+              out=$(awk -v n="$name" '
+                $0 == "<!-- CHECKLIST " n " -->" { p=1; next }
+                $0 == "<!-- END CHECKLIST -->" && p { exit }
+                p && /^- \[/ { print }
+              ' <<<"$body")
+              if [ "$cursor" != "none" ] && git merge-base --is-ancestor "$cursor" "$head" 2>/dev/null; then
+                while IFS=$'\t' read -r full short subj; do
+                  [ -z "$full" ] && continue
+                  local mark=" "
+                  if [ -n "$ticked" ] && grep -qx "$full" <<<"$ticked"; then mark="x"; fi
+                  out+=$'\n'"- [$mark] \`$short\` ${subj//|/\\|} <!-- sha: $full -->"
+                done < <(git log "$cursor..$head" --no-merges --reverse --pretty='%H%x09%h%x09%s')
+              elif [ "$cursor" != "none" ]; then
+                out+=$'\n'"_Branch rewrite detected; checklist resumed from \`${head:0:8}\`._"
+              fi
+              [ -z "$out" ] && out="_None yet._"
+              printf '%s\n' "$out"
+            }
+            local backport_list forward_list
+            backport_list=$(checklist "$main_cur"   "$head_main"   BACKPORT)
+            forward_list=$(checklist "$branch_cur" "$head_branch" FORWARD)
+
+            # Tag log.
+            local tag_rows tag_log
+            tag_rows=$(git tag --list "${version}.*" --sort=-creatordate \
+              --format='| `%(refname:short)` | %(creatordate:short) | `%(objectname:short)` |')
+            if [ -z "$tag_rows" ]; then
+              tag_log="_No tags yet._"
+            else
+              tag_log=$(printf '| Tag | Date | Commit |\n|---|---|---|\n%s' "$tag_rows")
+            fi
+
+            # Promotion state.
+            local promo_table d t
+            declare -A by_digest=()
+            for t in $(git tag --list "${version}.*" --sort=-creatordate); do
+              d=$(digest "$t")
+              [ -n "$d" ] && [ -z "${by_digest[$d]:-}" ] && by_digest[$d]="$t"
+            done
+            promo_table=$'| Stage | Tag |\n|---|---|'
+            for stage in decaf.canary decaf mainnet.canary mainnet; do
+              d=$(digest "$stage")
+              if   [ -z "$d" ];                  then promo_table+=$'\n'"| \`$stage\` | _none_ |"
+              elif [ -n "${by_digest[$d]:-}" ];  then promo_table+=$'\n'"| \`$stage\` | \`${by_digest[$d]}\` |"
+              else                                    promo_table+=$'\n'"| \`$stage\` | _(unrelated tag)_ |"
+              fi
+            done
+
+            # Experimental branches.
+            local exp_rows exp_table
+            exp_rows=$(gh api "repos/$GH_REPO/branches" --paginate \
+              --jq "[.[] | select(.name | startswith(\"release-$version/\"))] | sort_by(.name) | .[] | \"| [\`\(.name)\`](https://github.com/$GH_REPO/tree/\(.name)) | \`\(.commit.sha[0:8])\` |\"")
+            if [ -z "$exp_rows" ]; then exp_table="_None._"
+            else exp_table=$(printf '| Branch | Last commit |\n|---|---|\n%s' "$exp_rows")
+            fi
+
+            # Preserve human-notes region.
+            local notes; notes=$(awk '/<!-- HUMAN NOTES BELOW -->/{p=1;next} p' <<<"$body")
+
+            # Write new body.
+            local tmp; tmp=$(mktemp)
+            {
+              printf '%s\n' "<!-- release-branch: release-$version -->"
+              printf '%s\n' "<!-- main-cursor: $head_main -->"
+              printf '%s\n' "<!-- branch-cursor: $head_branch -->"
+              echo
+              printf '%s\n' "Tracker for [\`release-$version\`](https://github.com/$GH_REPO/tree/release-$version). Comment \`/tag\` to cut a tag, \`/promote <stage>\` to promote. See [RELEASES.md](https://github.com/$GH_REPO/blob/main/RELEASES.md)."
+              echo
+              echo "## Tag log"; echo; printf '%s\n' "$tag_log"; echo
+              echo "## Promotion state"; echo; printf '%s\n' "$promo_table"; echo
+              echo "## Backport candidates"; echo
+              echo "<!-- CHECKLIST BACKPORT -->"
+              printf '%s\n' "$backport_list"
+              echo "<!-- END CHECKLIST -->"; echo
+              echo "## Forward-port candidates"; echo
+              echo "<!-- CHECKLIST FORWARD -->"
+              printf '%s\n' "$forward_list"
+              echo "<!-- END CHECKLIST -->"; echo
+              echo "## Experimental branches"; echo; printf '%s\n' "$exp_table"; echo
+              echo "<!-- HUMAN NOTES BELOW -->"
+              [ -n "$notes" ] && printf '%s\n' "$notes"
+            } > "$tmp"
+            gh issue edit "$issue" --body-file "$tmp"
+            rm -f "$tmp"
+          }
+
+          for issue in $(gh issue list --label release-tracker --state open --json number -q '.[].number'); do
+            refresh "$issue" || echo "::warning::refresh failed for #$issue"
           done
 
-  # ----- Handle /promote on tracker issues -----------------------------------
   promote:
     if: |
       github.event_name == 'issue_comment' &&
@@ -76,19 +180,13 @@ jobs:
         env:
           ASSOC: ${{ github.event.comment.author_association }}
         run: |
-          set -euo pipefail
           case "$ASSOC" in
             OWNER|MEMBER|COLLABORATOR) ;;
-            *)
-              echo "::error::commenter (${ASSOC}) lacks write access"
-              exit 1
-              ;;
+            *) echo "::error::commenter ($ASSOC) lacks write access"; exit 1 ;;
           esac
 
       - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          fetch-tags: true
+        with: { fetch-depth: 0, fetch-tags: true }
 
       - name: Dispatch /promote
         env:
@@ -99,51 +197,18 @@ jobs:
           ACTOR: ${{ github.event.comment.user.login }}
         run: |
           set -euo pipefail
-          stage=$(printf '%s' "$BODY" | head -n1 | awk '{print $2}')
+          stage=$(awk '{print $2; exit}' <<<"$BODY")
           if [ -z "$stage" ]; then
-            gh issue comment "$ISSUE" --body "@$ACTOR \`/promote\` requires a stage (one of: decaf.canary, decaf, mainnet.canary, mainnet)"
+            gh issue comment "$ISSUE" --body "@$ACTOR \`/promote\` needs a stage (decaf.canary, decaf, mainnet.canary, mainnet)"
             exit 1
           fi
-          # Read release branch from tracker body
           body=$(gh issue view "$ISSUE" --json body -q .body)
-          branch=$(printf '%s' "$body" | grep -oE 'release-branch: release-[0-9]+\.[0-9]+\.[0-9]+' | head -n1 | sed 's|release-branch: ||')
-          version="${branch#release-}"
-          # Latest tag by creatordate
-          tag=$(git tag --list "${version}.*" --sort=-creatordate | head -n1)
+          version=$(grep -oP '(?<=release-branch: release-)[0-9]+\.[0-9]+\.[0-9]+' <<<"$body" | head -1)
+          tag=$(git tag --list "${version}.*" --sort=-creatordate | head -1)
           if [ -z "$tag" ]; then
-            gh issue comment "$ISSUE" --body "@$ACTOR no tags on \`$branch\` yet — run \`/tag\` before promoting."
+            gh issue comment "$ISSUE" --body "@$ACTOR no tags on \`release-$version\` yet — run \`/tag\` before promoting."
             exit 0
           fi
-          gh workflow run promote-docker-tag.yml \
-            -f floating-tag="$stage" -f release-tag="$tag"
+          gh workflow run promote-docker-tag.yml -f floating-tag="$stage" -f release-tag="$tag"
           gh issue comment "$ISSUE" --body \
-            "@$ACTOR dispatched promotion of \`$tag\` → \`$stage\`. Approve at https://github.com/${GH_REPO}/actions/workflows/promote-docker-tag.yml."
-
-  # ----- Refresh promotion state when promote-docker-tag.yml finishes --------
-  on-promotion:
-    if: github.event_name == 'workflow_run'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Refresh promotion state across all open trackers
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          issues=$(gh issue list --label release-tracker --state open --json number -q '.[].number')
-          for issue in $issues; do
-            python3 scripts/release-tracker.py --issue "$issue" refresh || \
-              echo "::warning::refresh failed for issue #$issue"
-          done
+            "@$ACTOR dispatched promotion of \`$tag\` → \`$stage\`. Approve at https://github.com/$GH_REPO/actions/workflows/promote-docker-tag.yml."

@@ -148,32 +148,32 @@ jobs:
       github.event.pull_request.merged &&
       startsWith(github.event.pull_request.head.ref, 'backport-')
     steps:
-      - name: Resolve original PR and target tracker
+      - name: Resolve original PR, release branch, and direction
         id: meta
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           set -euo pipefail
-          # Branch name pattern from korthout/backport-action and scripts/backport-dispatch:
-          #   backport-<PR>-to-<target-branch>
+          # Backport branches are named `backport-<orig PR>-to-<target>`.
           orig=$(printf '%s' "$HEAD_REF" | sed -nE 's|^backport-([0-9]+)-to-.*$|\1|p')
-          if [ -z "$orig" ]; then
-            echo "head ref '$HEAD_REF' does not parse; skipping"
+          orig_base=$(gh pr view "$orig" --json baseRefName -q .baseRefName)
+          merge_sha=$(gh pr view "$orig" --json mergeCommit -q .mergeCommit.oid)
+
+          # Exactly one of {original PR base, backport PR base} should be a
+          # canonical release branch; the other should be main.
+          re='^release-[0-9]+\.[0-9]+\.[0-9]+$'
+          if [[ "$BASE_REF" =~ $re && "$orig_base" == "main" ]]; then
+            release="$BASE_REF"; section="BACKPORT_CANDIDATES"
+          elif [[ "$BASE_REF" == "main" && "$orig_base" =~ $re ]]; then
+            release="$orig_base"; section="FORWARD_PORT_CANDIDATES"
+          else
+            echo "not a release ↔ main backport (base=$BASE_REF, orig=$orig_base); skipping"
             echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          if ! echo "$BASE_REF" | grep -qE '^release-[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "base ref '$BASE_REF' is not a canonical release branch; skipping"
-            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          version="${BASE_REF#release-}"
-          merge_sha=$(gh pr view "$orig" --json mergeCommit -q .mergeCommit.oid 2>/dev/null || true)
-          if [ -z "$merge_sha" ] || [ "$merge_sha" = "null" ]; then
-            echo "original PR #$orig has no merge commit; skipping"
-            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
-          fi
+
+          version="${release#release-}"
           issue=$(gh issue list --label release-tracker --state open \
             --search "Release $version in:title" --json number,title \
             -q ".[] | select(.title == \"Release $version\") | .number" | head -n1)
@@ -181,12 +181,11 @@ jobs:
             echo "no open tracker for Release $version; skipping"
             echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          echo "skip=false"     >> "$GITHUB_OUTPUT"
-          echo "sha=$merge_sha"  >> "$GITHUB_OUTPUT"
-          echo "issue=$issue"    >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v6
-        if: steps.meta.outputs.skip == 'false'
+          echo "skip=false"        >> "$GITHUB_OUTPUT"
+          echo "issue=$issue"      >> "$GITHUB_OUTPUT"
+          echo "section=$section"  >> "$GITHUB_OUTPUT"
+          echo "sha=$merge_sha"    >> "$GITHUB_OUTPUT"
 
       - name: Tick the box
         if: steps.meta.outputs.skip == 'false'
@@ -194,7 +193,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           ISSUE: ${{ steps.meta.outputs.issue }}
+          SECTION: ${{ steps.meta.outputs.section }}
           SHA: ${{ steps.meta.outputs.sha }}
         run: |
-          python3 scripts/release-tracker.py --issue "$ISSUE" tick \
-            --section BACKPORT_CANDIDATES --sha "$SHA"
+          set -euo pipefail
+          body=$(mktemp)
+          gh issue view "$ISSUE" --json body -q .body > "$body"
+          # Find the checklist entry with this sha and flip [ ] to [x].
+          sed -i -E "s|^- \[ \] (\`[0-9a-f]+\` .* <!-- sha: ${SHA} -->)\$|- [x] \1|" "$body"
+          gh issue edit "$ISSUE" --body-file "$body"
+          rm -f "$body"
