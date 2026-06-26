@@ -1059,7 +1059,7 @@ where
                     // justified view on restart.
                     //
                     // TODO: Above we reject timeout votes too far ahead. A valid cert1
-                    // has precendence over that check so we need to move this up, but
+                    // has precedence over that check so we need to move this up, but
                     // first we need to verify the cert1 itself.
                     if let Some(lock) = timeout_msg.lock
                         && lock.view_number() >= current_view
