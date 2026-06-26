@@ -20,7 +20,7 @@ use hotshot_query_service_types::{
     node::BlockId,
 };
 use hotshot_types::{data::EpochNumber, stake_table::StakeTableEntry, utils::root_block_in_epoch};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use vbs::version::{StaticVersionType, Version};
 
 use crate::{
@@ -819,6 +819,22 @@ where
 
     fn decaf(&self) -> bool {
         self.chain_id == DECAF_CHAIN_ID
+    }
+
+    /// Serialize a payload for submission to the Espresso API, using the current protocol version.
+    pub fn serialize<T>(&self, data: &T) -> Result<Vec<u8>>
+    where
+        T: Serialize,
+    {
+        self.server.serialize(data)
+    }
+
+    /// Parse a binary payload from the Espresso API, using the current protocol version.
+    pub fn deserialize<T>(&self, bytes: &[u8]) -> Result<T>
+    where
+        T: DeserializeOwned,
+    {
+        self.server.deserialize(bytes)
     }
 }
 
