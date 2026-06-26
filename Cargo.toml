@@ -245,7 +245,7 @@ hotshot-new-protocol = { path = "crates/hotshot/new-protocol" }
 hotshot-new-protocol-bench = { path = "crates/hotshot/new-protocol/bench" }
 hotshot-orchestrator = { path = "crates/hotshot/orchestrator" }
 hotshot-query-service = { path = "hotshot-query-service" }
-hotshot-query-service-types = { path = "hotshot-query-service-types", default-features = false }
+hotshot-query-service-types = { path = "hotshot-query-service-types" }
 hotshot-state-prover = { path = "hotshot-state-prover" }
 hotshot-task = { path = "crates/hotshot/task" }
 hotshot-task-impls = { path = "crates/hotshot/task-impls" }
