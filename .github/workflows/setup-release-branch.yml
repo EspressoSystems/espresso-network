@@ -88,7 +88,7 @@ jobs:
           fi
           cut_from=$(git rev-parse HEAD)
           cut_from_short=$(git rev-parse --short=8 HEAD)
-          cut_date=$(git log -1 --format='%cI' HEAD)
+          cut_date=$(TZ=UTC git log -1 --format='%cd' --date='format:%Y-%m-%d %H:%M UTC' HEAD)
           cut_subject=$(git log -1 --format='%s' HEAD)
           # Pipe-escape the subject so the sed substitution can't break on `|`.
           cut_subject_esc=${cut_subject//|/\\|}

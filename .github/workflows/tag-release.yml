@@ -19,6 +19,10 @@ on:
 permissions:
   contents: write
   issues: write
+  # `gh workflow run` (used to fan out to build.yml / update-release-tracker.yml
+  # after the tag push) needs this — GITHUB_TOKEN-pushed tags don't fire push
+  # events on other workflows.
+  actions: write
 
 jobs:
   tag:
@@ -114,6 +118,17 @@ jobs:
           set -euo pipefail
           git tag -a "$TAG" -m "Release $TAG"
           git push origin "refs/tags/$TAG"
+
+      - name: Fan out to downstream workflows
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.next.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # Tags pushed via GITHUB_TOKEN don't fire push events on other
+          # workflows; dispatch them explicitly.
+          gh workflow run build.yml --ref "$TAG"
+          gh workflow run update-release-tracker.yml
 
       - name: Comment on tracker issue
         if: github.event_name == 'issue_comment'
