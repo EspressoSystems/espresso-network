@@ -797,15 +797,9 @@ impl<T: NodeType> Consensus<T> {
         self.current_epoch = Some(epoch);
     }
 
-    /// Position the view state on restart at the first view this node may
-    /// act in: past the decided anchor, no earlier than the view it was in
-    /// at shutdown, and past any view it recorded an action for. Raising
-    /// `timeout_view` bars voting and proposing in everything earlier.
-    ///
-    /// `current_view` lands one view before the first allowed view because
-    /// `Coordinator::start` enters `current_view + 1` through the normal
-    /// `ViewChanged` path, which arms the timer and kicks off the leader's
-    /// block request. Forward-only: never regresses either view.
+    /// On restart, bar voting and proposing in every view this node may have
+    /// acted in by raising `timeout_view`, and place the view cursor just past
+    /// the high QC. Forward-only: never regresses either view.
     pub fn resume_from_restart(
         &mut self,
         anchor_view: ViewNumber,
@@ -817,8 +811,11 @@ impl<T: NodeType> Consensus<T> {
         if last_barred > self.timeout_view {
             self.timeout_view = last_barred;
         }
-        if last_barred > self.current_view {
-            self.current_view = last_barred;
+        // `Coordinator::start` enters `current_view + 1`, so parking the cursor
+        // at the high QC makes the node re-enter at `high_qc + 1`.
+        let resume_view = self.stored_high_qc.unwrap_or(anchor_view + 1);
+        if resume_view > self.current_view {
+            self.current_view = resume_view;
         }
     }
 
@@ -1453,6 +1450,9 @@ impl<T: NodeType> Consensus<T> {
 
     #[instrument(level = "debug", skip_all)]
     fn maybe_propose(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
+        if view <= self.timeout_view {
+            return;
+        }
         if self.proposed_views.contains(&view) {
             return;
         }
