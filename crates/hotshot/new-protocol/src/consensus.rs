@@ -1158,10 +1158,16 @@ impl<T: NodeType> Consensus<T> {
 
         self.certs.entry(view).or_insert(cert1);
 
+        // Ensure we submit a vote2 if we can:
+        self.maybe_vote_2_and_update_lock(view, outbox);
+
         let next_view = view + 1;
-        self.current_view = next_view;
-        self.current_epoch = Some(epoch);
-        outbox.push_back(ConsensusOutput::ViewChanged(next_view, epoch));
+
+        if next_view > self.current_view {
+            self.current_view = next_view;
+            self.current_epoch = Some(epoch);
+            outbox.push_back(ConsensusOutput::ViewChanged(next_view, epoch));
+        }
 
         Protocol::Continue
     }
