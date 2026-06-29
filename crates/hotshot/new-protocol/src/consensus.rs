@@ -89,6 +89,10 @@ pub enum ConsensusInput<T: NodeType> {
     BlockReconstructed(ViewNumber, VidCommitment2),
     Certificate1(Certificate1<T>),
     Certificate2(Certificate2<T>),
+    /// A quorum certificate allows us to advance our view.
+    ///
+    /// Used to help divergent nodes re-converge on restart.
+    AdvanceView(Certificate1<T>),
     /// Atomic pair emitted by the `EpochRootVoteCollector` for epoch-root views:
     /// a `Certificate1` and its matching `LightClientStateUpdateCertificateV2`.
     /// Consensus never sees an epoch-root Cert1 without the matching state_cert.
@@ -611,6 +615,14 @@ impl<T: NodeType> Consensus<T> {
                 );
                 self.handle_certificate2(certificate, outbox)
             },
+            ConsensusInput::AdvanceView(certificate) => {
+                debug!(
+                    view  = %certificate.view_number(),
+                    epoch = ?certificate.epoch().map(|e| *e),
+                    "apply: advance view"
+                );
+                self.handle_advance_view(certificate, outbox)
+            },
             ConsensusInput::EpochRootCertificates { cert1, state_cert } => {
                 info!(
                     epoch = %state_cert.epoch,
@@ -785,15 +797,9 @@ impl<T: NodeType> Consensus<T> {
         self.current_epoch = Some(epoch);
     }
 
-    /// Position the view state on restart at the first view this node may
-    /// act in: past the decided anchor, no earlier than the view it was in
-    /// at shutdown, and past any view it recorded an action for. Raising
-    /// `timeout_view` bars voting and proposing in everything earlier.
-    ///
-    /// `current_view` lands one view before the first allowed view because
-    /// `Coordinator::start` enters `current_view + 1` through the normal
-    /// `ViewChanged` path, which arms the timer and kicks off the leader's
-    /// block request. Forward-only: never regresses either view.
+    /// On restart, bar voting and proposing in every view this node may have
+    /// acted in by raising `timeout_view`, and place the view cursor just past
+    /// the high QC. Forward-only: never regresses either view.
     pub fn resume_from_restart(
         &mut self,
         anchor_view: ViewNumber,
@@ -805,8 +811,11 @@ impl<T: NodeType> Consensus<T> {
         if last_barred > self.timeout_view {
             self.timeout_view = last_barred;
         }
-        if last_barred > self.current_view {
-            self.current_view = last_barred;
+        // `Coordinator::start` enters `current_view + 1`, so parking the cursor
+        // at the high QC makes the node re-enter at `high_qc + 1`.
+        let resume_view = self.stored_high_qc.unwrap_or(anchor_view + 1);
+        if resume_view > self.current_view {
+            self.current_view = resume_view;
         }
     }
 
@@ -1113,6 +1122,53 @@ impl<T: NodeType> Consensus<T> {
         Protocol::Continue
     }
 
+    /// Advance our view based on a quorum certificate.
+    #[instrument(level = "debug", skip_all)]
+    fn handle_advance_view(
+        &mut self,
+        cert1: Certificate1<T>,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) -> Protocol {
+        let view = cert1.view_number();
+
+        if view < self.current_view {
+            return Protocol::Continue;
+        }
+
+        let Some(epoch) = cert1.epoch() else {
+            warn!(%view, "cert1 has no epoch number");
+            return Protocol::Abort;
+        };
+
+        match self.try_verify_cert(&cert1, epoch) {
+            CertVerification::Valid => {},
+            CertVerification::Invalid => {
+                warn!(%view, "cert1 is invalid");
+                return Protocol::Abort;
+            },
+            CertVerification::EpochUnavailable => {
+                debug!(%view, %epoch, "missing epoch to verify cert1");
+                outbox.push_back(ConsensusOutput::RequestDrbResult(epoch));
+                return Protocol::Continue;
+            },
+        }
+
+        self.certs.entry(view).or_insert(cert1);
+
+        // Ensure we submit a vote2 if we can:
+        self.maybe_vote_2_and_update_lock(view, outbox);
+
+        let next_view = view + 1;
+
+        if next_view > self.current_view {
+            self.current_view = next_view;
+            self.current_epoch = Some(epoch);
+            outbox.push_back(ConsensusOutput::ViewChanged(next_view, epoch));
+        }
+
+        Protocol::Continue
+    }
+
     #[instrument(level = "debug", skip_all)]
     fn handle_timeout(
         &mut self,
@@ -1394,6 +1450,9 @@ impl<T: NodeType> Consensus<T> {
 
     #[instrument(level = "debug", skip_all)]
     fn maybe_propose(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
+        if view <= self.timeout_view {
+            return;
+        }
         if self.proposed_views.contains(&view) {
             return;
         }
@@ -2365,6 +2424,8 @@ impl<T: NodeType> ConsensusInput<T> {
             ConsensusInput::BlockReconstructed(view, _) => *view,
             ConsensusInput::Certificate1(cert) => cert.view_number(),
             ConsensusInput::Certificate2(cert) => cert.view_number(),
+            // We advance from the certificate's view v to v + 1:
+            ConsensusInput::AdvanceView(cert) => cert.view_number() + 1,
             ConsensusInput::EpochRootCertificates { cert1, .. } => cert1.view_number(),
             ConsensusInput::HeaderCreated(view, ..) => *view,
             ConsensusInput::ProposalWithVidShare(_, prop, _) => prop.view_number(),
