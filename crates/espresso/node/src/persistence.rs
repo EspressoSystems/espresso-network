@@ -1112,7 +1112,7 @@ mod tests {
         );
 
         let res = storage
-            .store_next_epoch_quorum_certificate(next_epoch_qc.clone())
+            .append_next_epoch_high_qc2(next_epoch_qc.clone())
             .await;
         assert!(res.is_ok());
 
@@ -1124,14 +1124,98 @@ mod tests {
         let mut new_qc = next_epoch_qc.clone();
         new_qc.view_number = new_view_number_for_qc;
 
-        let res = storage
-            .store_next_epoch_quorum_certificate(new_qc.clone())
-            .await;
+        let res = storage.append_next_epoch_high_qc2(new_qc.clone()).await;
         assert!(res.is_ok());
 
         let res = storage.load_next_epoch_quorum_certificate().await.unwrap();
         let view_number = res.unwrap().view_number;
         assert_eq!(view_number, new_view_number_for_qc);
+    }
+
+    /// `append_next_epoch_high_qc2` must apply an atomic monotonic compare-and-set (like
+    /// `append_high_qc2`): a stale (older-view) write is a no-op and never regresses the stored view.
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_append_next_epoch_high_qc2_monotonic<P: TestablePersistence>(
+        _p: PhantomData<P>,
+    ) {
+        let tmp = P::tmp_storage().await;
+        let storage = P::connect(&tmp).await;
+
+        assert_eq!(
+            storage.load_next_epoch_quorum_certificate().await.unwrap(),
+            None
+        );
+
+        let upgrade_lock = UpgradeLock::<SeqTypes>::new(TEST_VERSIONS.test);
+        let leaf = Leaf2::genesis(
+            &ValidatedState::default(),
+            &NodeState::default(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        let data: NextEpochQuorumData2<SeqTypes> = QuorumData2 {
+            leaf_commit: leaf.commit(),
+            epoch: Some(EpochNumber::new(1)),
+            block_number: Some(leaf.height()),
+        }
+        .into();
+        let versioned_data =
+            VersionedVoteData::new_infallible(data.clone(), ViewNumber::genesis(), &upgrade_lock);
+        let bytes: [u8; 32] = versioned_data.commit().into();
+        let mut qc = NextEpochQuorumCertificate2::new(
+            data,
+            Commitment::from_raw(bytes),
+            ViewNumber::genesis(),
+            None,
+            PhantomData,
+        );
+
+        // Persist at view 5, then advance to 6.
+        qc.view_number = ViewNumber::new(5);
+        storage
+            .append_next_epoch_high_qc2(qc.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            storage
+                .load_next_epoch_quorum_certificate()
+                .await
+                .unwrap()
+                .unwrap()
+                .view_number,
+            ViewNumber::new(5)
+        );
+
+        qc.view_number = ViewNumber::new(6);
+        storage
+            .append_next_epoch_high_qc2(qc.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            storage
+                .load_next_epoch_quorum_certificate()
+                .await
+                .unwrap()
+                .unwrap()
+                .view_number,
+            ViewNumber::new(6)
+        );
+
+        // A stale (older) write is a no-op: the compare-and-set never regresses the stored view.
+        qc.view_number = ViewNumber::new(4);
+        storage
+            .append_next_epoch_high_qc2(qc.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            storage
+                .load_next_epoch_quorum_certificate()
+                .await
+                .unwrap()
+                .unwrap()
+                .view_number,
+            ViewNumber::new(6)
+        );
     }
 
     /// The `Storage<SeqTypes>` impl on `Arc<P>` (the object the consensus tasks actually hold) used
@@ -1300,7 +1384,7 @@ mod tests {
         let mut older_next_epoch_qc = next_epoch_qc.clone();
         older_next_epoch_qc.view_number = ViewNumber::new(3);
         storage
-            .store_next_epoch_quorum_certificate(older_next_epoch_qc)
+            .append_next_epoch_high_qc2(older_next_epoch_qc)
             .await
             .unwrap();
 

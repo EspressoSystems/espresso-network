@@ -1082,14 +1082,16 @@ pub trait SequencerPersistence:
         }
     }
 
-    async fn store_next_epoch_quorum_certificate(
-        &self,
-        high_qc: NextEpochQuorumCertificate2<SeqTypes>,
-    ) -> anyhow::Result<()>;
-
     async fn load_next_epoch_quorum_certificate(
         &self,
     ) -> anyhow::Result<Option<NextEpochQuorumCertificate2<SeqTypes>>>;
+
+    async fn append_next_epoch_high_qc2(
+        &self,
+        _next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
 
     async fn append_da2(
         &self,
@@ -1228,14 +1230,8 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
         &self,
         next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
     ) -> anyhow::Result<()> {
-        if let Some(existing) = (**self).load_next_epoch_quorum_certificate().await?
-            && next_epoch_high_qc.view_number() < existing.view_number()
-        {
-            return Ok(());
-        }
-
         (**self)
-            .store_next_epoch_quorum_certificate(next_epoch_high_qc)
+            .append_next_epoch_high_qc2(next_epoch_high_qc)
             .await
     }
 
