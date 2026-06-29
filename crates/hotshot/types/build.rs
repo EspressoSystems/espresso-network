@@ -1,7 +1,8 @@
+use std::{env, fs, path::Path};
+
 use ark_bn254::Bn254;
 use ark_serialize::CanonicalSerialize;
 use jf_pcs::prelude::UnivariateUniversalParams;
-use std::{env, fs, path::Path};
 
 /// For `STAKE_TABLE_CAPACITY=200`, the light client prover (a.k.a. `hotshot-state-prover`)
 /// would need to generate proof for a circuit of slightly below 2^20 gates.
