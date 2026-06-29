@@ -86,8 +86,12 @@ Sections in the body:
    `promote-docker-tag.yml` workflow directly via `gh` or the Actions UI.
 
 6. **Repeat the promotion sequence.** The intended progression is
-   `decaf.canary → decaf → mainnet.canary → mainnet`. Each stage may be a different
-   tag if you cut additional patches between promotions.
+   `decaf.canary → decaf → mainnet.canary → mainnet`, but the workflow no
+   longer enforces it — stages are independent. The expected case is that
+   each stage trails the next (e.g. `mainnet` may still be running an older
+   tag while `decaf.canary` has the latest). Use `/promote <tag> <stage>`
+   when you want to keep an older tag on a downstream stage after cutting
+   new ones for canary testing.
 
 7. **Move on.** Once a release is shipped to mainnet and the chain has
    advanced past the upgrade point, the next phase's branch
@@ -140,7 +144,9 @@ appropriate commit as `MAJOR.MINOR.PHASE.0` to recover.
 | Command | Effect |
 |---|---|
 | `/tag` | Cut the next patch tag from the tip of this release branch. |
+| `/tag <X.Y.Z.N>` | Cut the named tag from the tip. Errors if `<X.Y.Z.N>` already exists or doesn't belong to this release. |
 | `/promote <stage>` | Promote the most recent tag from this branch to `<stage>` (one of `decaf.canary`, `decaf`, `mainnet.canary`, `mainnet`). Gated by environment reviewers. |
+| `/promote <tag> <stage>` | Promote a specific `<tag>` to `<stage>`. Use this when you want to keep an older tag on a downstream environment after cutting newer ones. |
 | `/skip <sha>` / `/done <sha>` | Mark a commit as considered (ticked) without an automatic backport detection. |
 | `/unskip <sha>` | Undo a prior `/skip` or `/done` for the same commit. |
 

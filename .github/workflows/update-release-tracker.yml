@@ -365,7 +365,7 @@ jobs:
             local tmp; tmp=$(mktemp)
             {
               printf 'Tracker for [`release-%s`](https://github.com/%s/tree/release-%s). ' "$version" "$GH_REPO" "$version"
-              printf 'Comment `/tag` to cut a tag, `/promote <stage>` to promote, `/skip <sha>` or `/done <sha>` to mark a commit as handled, `/unskip <sha>` to undo. See [RELEASES.md](https://github.com/%s/blob/main/RELEASES.md).\n\n' "$GH_REPO"
+              printf 'Comment `/tag` (or `/tag <X.Y.Z.N>`) to cut a tag, `/promote <stage>` (or `/promote <tag> <stage>`) to promote, `/skip <sha>` or `/done <sha>` to mark a commit as handled, `/unskip <sha>` to undo. See [RELEASES.md](https://github.com/%s/blob/main/RELEASES.md).\n\n' "$GH_REPO"
               if [ -n "$anchor" ]; then
                 printf '**Cut from** [`%s`](%s) on %s\n\n' \
                   "$anchor_short" "$(commit_url "$anchor")" "$anchor_date"
@@ -426,25 +426,41 @@ jobs:
           ACTOR: ${{ github.event.comment.user.login }}
         run: |
           set -euo pipefail
-          stage=$(awk '{print $2; exit}' <<<"$BODY")
+
+          # Accepts `/promote <stage>` (latest tag) or `/promote <tag> <stage>`
+          # (specific tag). Tag goes first so the stage is always the last
+          # word and the language reads naturally.
+          read -r _ arg1 arg2 _rest <<<"$BODY"
+          if [ -n "${arg2:-}" ]; then
+            explicit_tag="$arg1"; stage="$arg2"
+          else
+            explicit_tag=""; stage="${arg1:-}"
+          fi
+
           case "$stage" in
             decaf.canary|decaf|mainnet.canary|mainnet) ;;
             *)
-              gh issue comment "$ISSUE" --body "@$ACTOR \`/promote\` needs a valid stage (decaf.canary, decaf, mainnet.canary, mainnet); got \`${stage:-(empty)}\`."
+              gh issue comment "$ISSUE" --body "@$ACTOR \`/promote\` syntax: \`/promote <stage>\` or \`/promote <tag> <stage>\`. Stages: decaf.canary, decaf, mainnet.canary, mainnet. Got stage \`${stage:-(empty)}\`."
               exit 1
               ;;
           esac
-          if [[ "$TITLE" =~ ^Release[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
-            version="${BASH_REMATCH[1]}"
+
+          if [ -n "$explicit_tag" ]; then
+            tag="$explicit_tag"
           else
-            gh issue comment "$ISSUE" --body "@$ACTOR tracker title '$TITLE' isn't 'Release X.Y.Z'; can't infer release branch."
-            exit 1
+            if [[ "$TITLE" =~ ^Release[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+              version="${BASH_REMATCH[1]}"
+            else
+              gh issue comment "$ISSUE" --body "@$ACTOR tracker title '$TITLE' isn't 'Release X.Y.Z'; can't pick the latest tag automatically. Try \`/promote <tag> $stage\`."
+              exit 1
+            fi
+            tag=$(git tag --list "${version}.*" --sort=-creatordate | head -1)
+            if [ -z "$tag" ]; then
+              gh issue comment "$ISSUE" --body "@$ACTOR no tags on \`release-$version\` yet — run \`/tag\` before promoting."
+              exit 0
+            fi
           fi
-          tag=$(git tag --list "${version}.*" --sort=-creatordate | head -1)
-          if [ -z "$tag" ]; then
-            gh issue comment "$ISSUE" --body "@$ACTOR no tags on \`release-$version\` yet — run \`/tag\` before promoting."
-            exit 0
-          fi
+
           # promote-docker-tag.yml posts its own run URL back to this tracker
           # via its tracker-issue input (it knows its own ${{ github.run_id }};
           # the dispatcher doesn't, since the REST dispatches endpoint returns

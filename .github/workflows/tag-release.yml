@@ -15,6 +15,12 @@ on:
   issue_comment:
     types: [created]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Explicit tag to create (e.g. 2.0.0.5). Leave empty to auto-generate the next patch.
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -84,27 +90,35 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Compute next tag
+      - name: Resolve tag
         id: next
         env:
           VERSION: ${{ steps.branch.outputs.version }}
+          EVENT_NAME: ${{ github.event_name }}
+          BODY: ${{ github.event.comment.body }}
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          highest=$(git tag --list "${VERSION}.*" \
-            | awk -F. -v v="$VERSION" '
-                {
-                  prefix = $1"."$2"."$3
-                  if (prefix == v) print $4
-                }' \
-            | grep -E '^[0-9]+$' \
-            | sort -n \
-            | tail -n1 || true)
-          if [ -z "$highest" ]; then
-            next=0
-          else
-            next=$((highest + 1))
+          # Explicit tag comes from `/tag <name>` (issue comment) or the `tag`
+          # workflow_dispatch input. We pass it through verbatim — `git tag`
+          # will reject anything malformed or already taken on its own.
+          explicit=""
+          if [ "$EVENT_NAME" = issue_comment ]; then
+            explicit=$(awk '{print $2}' <<<"$BODY")
+          elif [ "$EVENT_NAME" = workflow_dispatch ]; then
+            explicit="${INPUT_TAG:-}"
           fi
-          tag="${VERSION}.${next}"
+
+          if [ -n "$explicit" ]; then
+            tag="$explicit"
+          else
+            highest=$(git tag --list "${VERSION}.*" \
+              | awk -F. -v v="$VERSION" '
+                  { prefix = $1"."$2"."$3; if (prefix == v) print $4 }' \
+              | grep -E '^[0-9]+$' | sort -n | tail -n1 || true)
+            if [ -z "$highest" ]; then next=0; else next=$((highest + 1)); fi
+            tag="${VERSION}.${next}"
+          fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 

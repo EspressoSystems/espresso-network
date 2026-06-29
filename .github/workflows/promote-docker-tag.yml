@@ -17,11 +17,6 @@ on:
         description: Source git tag (e.g. 0.4.0.5)
         required: true
         type: string
-      skip-progression:
-        description: Skip progression check (for hotfixes)
-        required: false
-        type: boolean
-        default: false
       tracker-issue:
         description: Issue number of the tracker that dispatched this promotion (for status comments). Leave empty when running manually.
         required: false
@@ -42,7 +37,7 @@ env:
   REFERENCE_SERVICE: espresso-node
 
 jobs:
-  check-progression:
+  verify:
     runs-on: ubuntu-latest
     steps:
       - name: Link this run on the tracker
@@ -104,54 +99,9 @@ jobs:
           set -euo pipefail
           docker buildx imagetools inspect "$REGISTRY/$REFERENCE_SERVICE:$TAG"
 
-      - name: Check promotion progression
-        if: ${{ !inputs.skip-progression }}
-        env:
-          RELEASE_GIT_TAG: ${{ inputs.release-tag }}
-          FLOATING_DOCKER_TAG: ${{ inputs.floating-tag }}
-        run: |
-          set -euo pipefail
-
-          # Compare amd64 manifest digests (the index digest isn't in --raw
-          # output). Echoes empty on any failure (tag missing, single-arch
-          # image, malformed JSON) — callers check for that explicitly so
-          # pipefail can't turn a missing-tag into an opaque exit 1.
-          get_digest() {
-            local tag="$1" raw
-            raw=$(docker buildx imagetools inspect --raw "$REGISTRY/$REFERENCE_SERVICE:$tag" 2>/dev/null) || return 0
-            printf '%s' "$raw" \
-              | jq -r '.manifests[]? | select(.platform.architecture=="amd64" and .platform.os=="linux") | .digest' \
-              2>/dev/null || true
-          }
-
-          require_promoted_to() {
-            local prerequisite="$1" required release
-            required=$(get_digest "$prerequisite")
-            if [ -z "$required" ]; then
-              echo "::error::Floating tag \`$prerequisite\` doesn't exist yet — promote there first before \`$FLOATING_DOCKER_TAG\`."
-              exit 1
-            fi
-            release=$(get_digest "$RELEASE_GIT_TAG")
-            if [ -z "$release" ]; then
-              echo "::error::Could not resolve digest for release tag \`$RELEASE_GIT_TAG\`."
-              exit 1
-            fi
-            if [ "$release" != "$required" ]; then
-              echo "::error::Release \`$RELEASE_GIT_TAG\` ($release) doesn't match \`$prerequisite\` ($required); promote \`$RELEASE_GIT_TAG\` to \`$prerequisite\` first."
-              exit 1
-            fi
-            echo "ok: \`$RELEASE_GIT_TAG\` already promoted to \`$prerequisite\`"
-          }
-
-          case "$FLOATING_DOCKER_TAG" in
-            decaf.canary)    echo "no prerequisite for decaf.canary" ;;
-            decaf)           require_promoted_to "decaf.canary" ;;
-            mainnet.canary)  require_promoted_to "decaf" ;;
-            mainnet)         require_promoted_to "mainnet.canary" ;;
-          esac
 
   promote:
-    needs: check-progression
+    needs: verify
     runs-on: ubuntu-latest
     # Reviewer count per stage is configured in repo Settings → Environments
     # (decaf.canary / decaf / mainnet.canary / mainnet). "Prevent self-review" must be
