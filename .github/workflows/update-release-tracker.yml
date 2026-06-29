@@ -61,15 +61,37 @@ jobs:
 
           refresh() {
             local issue="$1"
+            echo "::group::refresh issue #$issue"
             local body; body=$(gh issue view "$issue" --json body -q .body)
 
             local version main_cur branch_cur head_main head_branch
             version=$(grep -oP '(?<=release-branch: release-)[0-9]+\.[0-9]+\.[0-9]+' <<<"$body" | head -1)
+            if [ -z "$version" ]; then
+              echo "::error::tracker #$issue body missing release-branch marker"
+              echo "::endgroup::"; return 1
+            fi
             main_cur=$(grep -oP '(?<=main-cursor: )[0-9a-f]+|(?<=main-cursor: )none' <<<"$body" | head -1)
             branch_cur=$(grep -oP '(?<=branch-cursor: )[0-9a-f]+|(?<=branch-cursor: )none' <<<"$body" | head -1)
-            git fetch origin main "release-$version" 2>/dev/null || true
+            echo "version=$version main_cur=${main_cur:-<empty>} branch_cur=${branch_cur:-<empty>}"
+            git fetch origin main "release-$version"
             head_main=$(git rev-parse origin/main)
             head_branch=$(git rev-parse "origin/release-$version")
+            echo "head_main=$head_main head_branch=$head_branch"
+
+            # If this run was triggered by a push to this tracker's release branch,
+            # post a chronological comment listing the new commits.
+            if [ "${GITHUB_EVENT_NAME:-}" = "push" ] && [ "${GITHUB_REF:-}" = "refs/heads/release-$version" ] \
+               && [ "$branch_cur" != "none" ] && [ -n "$branch_cur" ] \
+               && git merge-base --is-ancestor "$branch_cur" "$head_branch" 2>/dev/null; then
+              pushed=$(git log "$branch_cur..$head_branch" --no-merges --reverse --pretty='- `%h` %s')
+              if [ -n "$pushed" ]; then
+                count=$(printf '%s\n' "$pushed" | wc -l)
+                printf '@%s pushed %d commit(s) to `release-%s`:\n\n%s\n' \
+                  "${GITHUB_ACTOR:-someone}" "$count" "$version" "$pushed" \
+                  > "$RUNNER_TEMP/push-comment.md"
+                gh issue comment "$issue" --body-file "$RUNNER_TEMP/push-comment.md" || true
+              fi
+            fi
 
             # Set of full shas the user has ticked, used to preserve ticks.
             local ticked
@@ -102,8 +124,11 @@ jobs:
 
             # Tag log.
             local tag_rows tag_log
+            # For annotated tags, %(objectname:short) is the tag-object SHA; the
+            # dereferenced commit lives at %(*objectname:short). Lightweight tags
+            # point directly so %(*objectname) is empty and we fall back.
             tag_rows=$(git tag --list "${version}.*" --sort=-creatordate \
-              --format='| `%(refname:short)` | %(creatordate:short) | `%(objectname:short)` |')
+              --format='| `%(refname:short)` | %(creatordate:short) | `%(if)%(*objectname)%(then)%(*objectname:short)%(else)%(objectname:short)%(end)` |')
             if [ -z "$tag_rows" ]; then
               tag_log="_No tags yet._"
             else
@@ -162,11 +187,18 @@ jobs:
             } > "$tmp"
             gh issue edit "$issue" --body-file "$tmp"
             rm -f "$tmp"
+            echo "::endgroup::"
           }
 
-          for issue in $(gh issue list --label release-tracker --state open --json number -q '.[].number'); do
-            refresh "$issue" || echo "::warning::refresh failed for #$issue"
+          issues=$(gh issue list --label release-tracker --state open --json number -q '.[].number')
+          if [ -z "$issues" ]; then
+            echo "no open release-tracker issues; nothing to do"
+          fi
+          rc=0
+          for issue in $issues; do
+            refresh "$issue" || { echo "::error::refresh failed for #$issue"; rc=1; }
           done
+          exit "$rc"
 
   promote:
     if: |

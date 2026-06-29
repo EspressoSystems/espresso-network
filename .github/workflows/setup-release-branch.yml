@@ -138,15 +138,12 @@ jobs:
             tag_list=$(printf '%s\n' "$tags" | sed 's/^/- `/' | sed 's/$/`/')
           fi
           today=$(date -u +%Y-%m-%d)
-          body=$(cat <<EOF
-Branch \`release-${VERSION}\` was deleted by @${ACTOR} on ${today} — release scrapped.
-
-Final tag snapshot:
-${tag_list}
-
-Tags above remain in the registry and can still be promoted via \`promote-docker-tag.yml\` directly.
-EOF
-          )
-          gh issue comment "$issue" --body "$body"
+          {
+            printf 'Branch `release-%s` was deleted by @%s on %s — release scrapped.\n\n' "$VERSION" "$ACTOR" "$today"
+            printf 'Final tag snapshot:\n'
+            printf '%s\n' "$tag_list"
+            printf '\nTags above remain in the registry and can still be promoted via `promote-docker-tag.yml` directly.\n'
+          } > "$RUNNER_TEMP/scrapped.md"
+          gh issue comment "$issue" --body-file "$RUNNER_TEMP/scrapped.md"
           gh issue edit "$issue" --add-label release-scrapped
           gh issue close "$issue" --reason "not planned"
