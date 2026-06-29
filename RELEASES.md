@@ -51,11 +51,14 @@ when it turns out the experiment didn't pan out.
 
 The tracker issue is the durable, branch-scoped surface for everything
 release-related. It is the place where you run release commands, see status,
-and discuss the release with the team. Its body is maintained automatically;
-the bot edits sections between `<!-- BEGIN ... -->` / `<!-- END ... -->`
-markers, so anything you write outside those markers is preserved.
+and discuss the release with the team. The body is a pure projection: the
+bot regenerates it from authoritative sources (git refs, GHCR manifest
+digests, the GitHub branches/PRs API, and the tracker's own comment history)
+on every relevant event. Free-form notes go below the `<!-- HUMAN NOTES BELOW -->`
+sentinel at the bottom of the body — everything after that marker is
+preserved verbatim across refreshes.
 
-Sections in the body:
+Sections in the body, in order:
 
 - **Tag log** — chronological list of tags cut from this branch (sha, time, who triggered).
 - **Promotion state** — which tag is currently at `decaf.canary`, `decaf`, `mainnet.canary`, `mainnet`.
@@ -67,33 +70,32 @@ Sections in the body:
 
 1. **Cut the branch.** From `main` at the chosen commit, push a new branch
    `release-MAJOR.MINOR.PHASE`. Automation creates the backport label, tags
-   the cut point as `MAJOR.MINOR.PHASE.0` (which fires `build.yml`), and
-   opens the tracker issue. The tracker is where you'll do everything that
-   follows.
+   the cut point as `MAJOR.MINOR.PHASE.0` (which fires `build.yml` and
+   publishes the initial docker images), and opens the tracker issue. The
+   tracker is where you'll do everything that follows.
 
 2. **Iterate.** Land backport PRs (see the next section). After each batch
    of PRs that you judge ready to deploy, comment `/tag` on the tracker to
-   cut the next patch (`.1`, `.2`, ...).
+   cut the next patch (`.1`, `.2`, …) or `/tag X.Y.Z.N` to name an explicit
+   one.
 
-4. **Validate on devnet.** Either deploy the new tag directly, or create an
+3. **Validate on devnet.** Either deploy the new tag directly, or create an
    experimental branch off the release branch with additional ad-hoc changes
    and deploy that.
 
-5. **Promote.** Once a tag is validated, comment `/promote <stage>` on the
-   tracker — `<stage>` is one of `decaf.canary`, `decaf`, `mainnet.canary`, `mainnet`.
-   This promotes the **most recent tag** from the branch into the floating
-   docker tag for that stage. To promote an older tag, run the
-   `promote-docker-tag.yml` workflow directly via `gh` or the Actions UI.
+4. **Promote.** Once a tag is validated, comment `/promote <stage>` on the
+   tracker (`<stage>` is one of `decaf.canary`, `decaf`, `mainnet.canary`,
+   `mainnet`). That promotes the **most recent tag** from the branch into
+   the floating docker tag for that stage. To pin an older tag at a stage
+   that's lagging behind your latest tag (e.g. keep `mainnet` on `.3` while
+   you canary-test `.5` on `decaf.canary`), use `/promote <tag> <stage>`.
 
-6. **Repeat the promotion sequence.** The intended progression is
-   `decaf.canary → decaf → mainnet.canary → mainnet`, but the workflow no
-   longer enforces it — stages are independent. The expected case is that
-   each stage trails the next (e.g. `mainnet` may still be running an older
-   tag while `decaf.canary` has the latest). Use `/promote <tag> <stage>`
-   when you want to keep an older tag on a downstream stage after cutting
-   new ones for canary testing.
+5. **Across stages.** The conventional progression is
+   `decaf.canary → decaf → mainnet.canary → mainnet`, but it isn't enforced
+   — stages are independent. The reviewer gate on each environment is the
+   real control; promote ordering is a convention reviewers should check.
 
-7. **Move on.** Once a release is shipped to mainnet and the chain has
+6. **Move on.** Once a release is shipped to mainnet and the chain has
    advanced past the upgrade point, the next phase's branch
    (`release-MAJOR.MINOR.<PHASE+1>`) is cut from the current one.
 
@@ -139,17 +141,18 @@ Comment history is the authoritative log, so corruption or force-pushes to
 the tracker body don't lose state.
 
 If a release branch is force-pushed past the `.0` tag, the checklist
-section explains that the cut point is no longer reachable — re-tag the
-appropriate commit as `MAJOR.MINOR.PHASE.0` to recover.
+sections render "_Anchor `<sha>` is no longer reachable from `<head>` (branch
+rewritten?)_". Recover by moving the `MAJOR.MINOR.PHASE.0` tag to the
+appropriate new commit and pushing it.
 
 ## Quick reference: tracker commands
 
 | Command | Effect |
 |---|---|
 | `/tag` | Cut the next patch tag from the tip of this release branch. |
-| `/tag <X.Y.Z.N>` | Cut the named tag from the tip. Errors if `<X.Y.Z.N>` already exists or doesn't belong to this release. |
+| `/tag <tag>` | Cut the given tag from the tip. Passed through verbatim — `git tag` rejects malformed names or duplicates. |
 | `/promote <stage>` | Promote the most recent tag from this branch to `<stage>` (one of `decaf.canary`, `decaf`, `mainnet.canary`, `mainnet`). Gated by environment reviewers. |
-| `/promote <tag> <stage>` | Promote a specific `<tag>` to `<stage>`. Use this when you want to keep an older tag on a downstream environment after cutting newer ones. |
+| `/promote <tag> <stage>` | Promote the specified `<tag>` to `<stage>`. Use this to keep an older tag pinned at a downstream stage after cutting newer ones. |
 | `/done <sha>` | Mark a commit as ported (ticked box). Use when the auto-detector misses a manual port. |
 | `/skip <sha>` | Mark a commit as deliberately not ported (struck through, no tick). |
 | `/unmark <sha>` | Undo a prior `/done` or `/skip` for the same commit. |
@@ -162,7 +165,16 @@ If the tracker issue is unavailable, the same operations are available via the
 GitHub CLI:
 
 ```bash
-just tag release-0.4.0                                # same as /tag
-gh workflow run promote-docker-tag.yml \              # same as /promote decaf.canary
+# /tag — auto-pick next patch
+just tag release-0.4.0
+
+# /tag X.Y.Z.N — explicit tag name
+gh workflow run tag-release.yml --ref release-0.4.0 -f tag=0.4.0.5
+
+# /promote <tag> <stage>
+gh workflow run promote-docker-tag.yml \
   -f floating-tag=decaf.canary -f release-tag=0.4.0.5
 ```
+
+`/done`, `/skip`, and `/unmark` are tracker-only — there's no CLI equivalent
+because their authority is the tracker's comment history.
