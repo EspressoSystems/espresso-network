@@ -74,10 +74,22 @@ jobs:
 
           # ===== leaf helpers =====
 
-          # Parse a PR number out of a squash-merge subject ending in `(#N)`.
-          # Empty for merge-commit / direct-push subjects.
+          # Parse a PR number from a commit subject. Handles both common merge
+          # styles: squash-merge ("Title (#N)") and merge-commit ("Merge pull
+          # request #N from owner/branch"). Empty for direct-push subjects.
           pr_num_in() {
-            [[ "$1" =~ \#([0-9]+)\)$ ]] && printf '%s' "${BASH_REMATCH[1]}"
+            if   [[ "$1" =~ \#([0-9]+)\)$ ]];                          then printf '%s' "${BASH_REMATCH[1]}"
+            elif [[ "$1" =~ ^Merge\ pull\ request\ \#([0-9]+)\  ]];    then printf '%s' "${BASH_REMATCH[1]}"
+            fi
+          }
+
+          # Recognise a commit that is itself a backport: korthout's squash
+          # title `[Backport release-X.Y.Z] ...` or the corresponding
+          # merge-commit subject `Merge pull request #N from .../backport-...`.
+          is_backport_commit() {
+            [[ "$1" == "[Backport "* ]] && return 0
+            [[ "$1" =~ ^Merge\ pull\ request\ \#[0-9]+\ from\ [^[:space:]]+/backport- ]] && return 0
+            return 1
           }
 
           # Render a commit subject as fully literal text. `<code>` disables
@@ -184,18 +196,17 @@ jobs:
           }
 
           render_experimental_branches() {
-            local version="$1" rows='' name sha
+            local version="$1" rows='' sha refname name
             # Experimental branches are `release-X.Y.Z--<topic>` (double-dash
             # separator). Git refuses ref overlap so `release-X.Y.Z/<topic>`
-            # can't coexist with the canonical `release-X.Y.Z` branch. We
-            # list them from locally-fetched remote refs (faster and less
-            # surprising than gh api paginated + jq).
-            while IFS=$'\t' read -r name sha; do
-              [ -z "$name" ] && continue
+            # can't coexist with the canonical `release-X.Y.Z` branch. We use
+            # `ls-remote` with a glob — we only need the name + tip SHA,
+            # never the branch contents, so there's no need to fetch them.
+            while IFS=$'\t' read -r sha refname; do
+              [ -z "$sha" ] && continue
+              name="${refname#refs/heads/}"
               rows+="| [\`$name\`](https://github.com/$GH_REPO/tree/$name) | \`${sha:0:8}\` |"$'\n'
-            done < <(git for-each-ref --sort=refname \
-              --format='%(refname:strip=3)%09%(objectname)' \
-              "refs/remotes/origin/release-$version--*")
+            done < <(git ls-remote --heads origin "release-$version--*" 2>/dev/null | LC_ALL=C sort -k2)
             if [ -z "$rows" ]; then
               printf '_None._'
             else
@@ -280,7 +291,7 @@ jobs:
             while IFS=$'\t' read -r sha short subj; do
               [ -z "$sha" ] && continue
               rows+="- [\`$short\`]($(commit_url "$sha")) $(literal "$subj")"$'\n'
-              if [ -n "$backport_target" ] && [[ "$subj" != "[Backport "* ]]; then
+              if [ -n "$backport_target" ] && ! is_backport_commit "$subj"; then
                 pr=$(pr_num_in "$subj")
                 [ -n "$pr" ] && backport_cmds+=("gh workflow run backport.yml -f pr_number=$pr -f target_branch=$backport_target")
               fi
@@ -321,12 +332,7 @@ jobs:
               return 1
             fi
 
-            git fetch --quiet --tags origin \
-              main \
-              "release-$version" \
-              "+refs/heads/release-$version--*:refs/remotes/origin/release-$version--*" \
-              2>/dev/null \
-              || git fetch --quiet --tags origin main "release-$version"
+            git fetch --quiet --tags origin main "release-$version"
 
             local head_main head_branch anchor
             head_main=$(git rev-parse origin/main)
