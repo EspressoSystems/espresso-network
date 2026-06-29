@@ -4,7 +4,7 @@
 # body in sources that are append-only or immutable:
 #   - which release this tracker belongs to → the issue title ("Release X.Y.Z")
 #   - cut-from commit → the `X.Y.Z.0` tag (created at branch setup)
-#   - "this commit was considered" ticks → /skip /done /unskip issue comments
+#   - "this commit was considered" ticks → /skip /done /unmark issue comments
 #   - everything below `<!-- HUMAN NOTES BELOW -->` is preserved verbatim
 # Everything else (tag log, promotion state, candidate lists, experimental
 # branches) is recomputed from git / GHCR / the GitHub API each refresh.
@@ -49,7 +49,7 @@ jobs:
        contains(github.event.issue.labels.*.name, 'release-tracker') &&
        (startsWith(github.event.comment.body, '/skip ') ||
         startsWith(github.event.comment.body, '/done ') ||
-        startsWith(github.event.comment.body, '/unskip ')))
+        startsWith(github.event.comment.body, '/unmark ')))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -140,20 +140,25 @@ jobs:
             printf '%s' "$sha"
           }
 
-          # Full SHAs that the tracker's /skip /done /unskip comment history
-          # currently marks as "considered". Walks comments chronologically
-          # and lets later commands override earlier ones for the same sha.
-          ticked_from_comments() {
+          # Walk the tracker's comments and emit "<full-sha>\t<state>" lines
+          # for any commit that's been marked. State is "done" (ticked, port
+          # confirmed manually) or "skip" (struck through, not for this
+          # release). `/unmark` clears whichever state was in effect.
+          # Comments are walked oldest-first so the latest command wins.
+          sha_marks_from_comments() {
             gh issue view "$1" --json comments --jq '
               [.comments[].body
-                | capture("^/(?<cmd>skip|done|unskip)\\s+(?<sha>[0-9a-f]{4,40})") // empty]
+                | capture("^/(?<cmd>skip|done|unmark)\\s+(?<sha>[0-9a-f]{4,40})") // empty]
               | reduce .[] as $c ({};
-                  if $c.cmd == "unskip" then del(.[$c.sha]) else .[$c.sha] = true end)
-              | keys[]
+                  if $c.cmd == "unmark" then del(.[$c.sha]) else .[$c.sha] = $c.cmd end)
+              | to_entries[]
+              | "\(.key)\t\(.value)"
             ' 2>/dev/null \
-              | while IFS= read -r ref; do
+              | while IFS=$'\t' read -r ref state; do
                   [ -n "$ref" ] || continue
-                  git rev-parse --verify "$ref^{commit}" 2>/dev/null || true
+                  local full
+                  full=$(git rev-parse --verify "$ref^{commit}" 2>/dev/null) || continue
+                  printf '%s\t%s\n' "$full" "$state"
                 done
           }
 
@@ -216,7 +221,7 @@ jobs:
 
           # Render one checklist row. Stdout = the row, no trailing newline (caller adds it).
           render_row() {
-            local kind="$1" sha="$2" version="$3" ticked="$4" landed="$5"
+            local kind="$1" sha="$2" version="$3" done_set="$4" skipped_set="$5" landed="$6"
             local short subj pr_num mark='' extra=''
 
             short=$(git rev-parse --short=8 "$sha" 2>/dev/null) || return 0
@@ -234,18 +239,26 @@ jobs:
               fi
             fi
 
-            # Auto-tick if the patch is already on the other branch.
+            # Tick when ported: patch already on the other branch, or marked
+            # manually via /done.
             if [ -z "$mark" ] && grep -qxF "$sha" <<<"$landed"; then mark=x; fi
-            # Manual tick via /skip or /done comment.
-            if [ -z "$mark" ] && grep -qxF "$sha" <<<"$ticked"; then mark=x; fi
+            if [ -z "$mark" ] && grep -qxF "$sha" <<<"$done_set"; then mark=x; fi
             : "${mark:= }"
 
+            # /skip strikes the subject through (we're deliberately ignoring
+            # this commit) without ticking the box.
+            local subject_html
+            subject_html=$(literal "$subj")
+            if grep -qxF "$sha" <<<"$skipped_set"; then
+              subject_html="<del>$subject_html</del>"
+            fi
+
             printf -- '- [%s] [`%s`](%s) %s%s' \
-              "$mark" "$short" "$(commit_url "$sha")" "$(literal "$subj")" "$extra"
+              "$mark" "$short" "$(commit_url "$sha")" "$subject_html" "$extra"
           }
 
           render_checklist() {
-            local kind="$1" anchor="$2" head="$3" version="$4" ticked="$5" landed="$6"
+            local kind="$1" anchor="$2" head="$3" version="$4" done_set="$5" skipped_set="$6" landed="$7"
 
             if [ -z "$anchor" ]; then
               printf '_No anchor for `release-%s` — branch creation never tagged it._' "$version"
@@ -260,7 +273,7 @@ jobs:
             local out='' sha
             while IFS= read -r sha; do
               [ -z "$sha" ] && continue
-              out+=$(render_row "$kind" "$sha" "$version" "$ticked" "$landed")$'\n'
+              out+=$(render_row "$kind" "$sha" "$version" "$done_set" "$skipped_set" "$landed")$'\n'
             done < <(git log "$anchor..$head" --no-merges --reverse --pretty=%H)
             [ -n "$out" ] || out=$'_None yet._\n'
             printf '%s' "$out"
@@ -343,14 +356,16 @@ jobs:
             post_push_comment "$issue" refs/heads/main                main                "$head_main"   "$version"
             post_push_comment "$issue" "refs/heads/release-$version"  "release-$version"  "$head_branch" "$version"
 
-            local ticked landed_on_branch landed_on_main
-            ticked=$(ticked_from_comments "$issue")
+            local sha_marks done_shas skipped_shas landed_on_branch landed_on_main
+            sha_marks=$(sha_marks_from_comments "$issue")
+            done_shas=$(awk -F'\t' '$2 == "done" {print $1}' <<<"$sha_marks")
+            skipped_shas=$(awk -F'\t' '$2 == "skip" {print $1}' <<<"$sha_marks")
             landed_on_branch=$(patches_already_on "$head_branch" "$head_main")
             landed_on_main=$(patches_already_on "$head_main" "$head_branch")
 
             local backport_list forward_list tag_log promo_state exp_table notes
-            backport_list=$(render_checklist BACKPORT "$anchor" "$head_main"   "$version" "$ticked" "$landed_on_branch")
-            forward_list=$(render_checklist  FORWARD  "$anchor" "$head_branch" "$version" "$ticked" "$landed_on_main")
+            backport_list=$(render_checklist BACKPORT "$anchor" "$head_main"   "$version" "$done_shas" "$skipped_shas" "$landed_on_branch")
+            forward_list=$(render_checklist  FORWARD  "$anchor" "$head_branch" "$version" "$done_shas" "$skipped_shas" "$landed_on_main")
             tag_log=$(render_tag_log "$version")
             promo_state=$(render_promotion_state "$version")
             exp_table=$(render_experimental_branches "$version")
@@ -365,7 +380,7 @@ jobs:
             local tmp; tmp=$(mktemp)
             {
               printf 'Tracker for [`release-%s`](https://github.com/%s/tree/release-%s). ' "$version" "$GH_REPO" "$version"
-              printf 'Comment `/tag` (or `/tag <X.Y.Z.N>`) to cut a tag, `/promote <stage>` (or `/promote <tag> <stage>`) to promote, `/skip <sha>` or `/done <sha>` to mark a commit as handled, `/unskip <sha>` to undo. See [RELEASES.md](https://github.com/%s/blob/main/RELEASES.md).\n\n' "$GH_REPO"
+              printf 'Comment `/tag` (or `/tag <X.Y.Z.N>`) to cut a tag, `/promote <stage>` (or `/promote <tag> <stage>`) to promote, `/done <sha>` to mark a commit as ported (ticked), `/skip <sha>` to mark it as deliberately ignored (struck through), `/unmark <sha>` to undo either. See [RELEASES.md](https://github.com/%s/blob/main/RELEASES.md).\n\n' "$GH_REPO"
               if [ -n "$anchor" ]; then
                 printf '**Cut from** [`%s`](%s) on %s\n\n' \
                   "$anchor_short" "$(commit_url "$anchor")" "$anchor_date"

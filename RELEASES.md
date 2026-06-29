@@ -59,8 +59,8 @@ Sections in the body:
 
 - **Tag log** — chronological list of tags cut from this branch (sha, time, who triggered).
 - **Promotion state** — which tag is currently at `decaf.canary`, `decaf`, `mainnet.canary`, `mainnet`.
-- **Commits on `main`** — checklist of commits landed on `main` since the branch was cut, with the corresponding backport-PR status when one exists. Boxes auto-tick when the patch already exists on the release branch (clean cherry-pick or backport merge); for everything else (manual reimplementation, "not for this release") comment `/skip <sha>` (or `/done <sha>`) on the tracker.
-- **Commits on `release-X.Y.Z`** — checklist of commits landed on this branch since it was cut. Same auto-tick / `/skip` model.
+- **Commits on `main`** — checklist of commits landed on `main` since the branch was cut, with the corresponding backport-PR status when one exists. Boxes auto-tick when the patch already exists on the release branch (clean cherry-pick or backport merge). Comment `/done <sha>` to tick manually-ported commits the auto-detection misses, or `/skip <sha>` to strike through commits you're deliberately ignoring.
+- **Commits on `release-X.Y.Z`** — checklist of commits landed on this branch since it was cut. Same auto-tick / `/done` / `/skip` model.
 - **Experimental branches** — currently-open branches matching `release-MAJOR.MINOR.PHASE--*` with their last commit, so you can see what's being validated at a glance.
 
 ## Cutting a release: end-to-end
@@ -129,11 +129,14 @@ extra scrutiny.
 The tracker issue's **Commits on `main`** section accumulates commits on
 `main` as they land. Boxes auto-tick whenever the patch is already present on
 the release branch (clean cherry-pick or backport-PR merge — detected via
-`git cherry`). For commits handled outside that workflow — or commits you
-don't intend to backport — comment `/skip <sha> [reason]` (or `/done <sha>`)
-on the tracker; `/unskip <sha>` undoes it. The comment history is the
-authoritative tick log, so corruption or force-pushes to the tracker body
-don't lose state.
+`git cherry`). For commits ported outside that workflow (manual cherry-pick
+that doesn't preserve the patch-id, manual reimplementation, etc.) comment
+`/done <sha>` to tick the box. For commits you've decided *not* to backport,
+comment `/skip <sha>` to strike the row through — the visual distinction
+between "this is done" and "this is deliberately not done" tells a reviewer
+at a glance what's left to consider. `/unmark <sha>` clears either mark.
+Comment history is the authoritative log, so corruption or force-pushes to
+the tracker body don't lose state.
 
 If a release branch is force-pushed past the `.0` tag, the checklist
 section explains that the cut point is no longer reachable — re-tag the
@@ -147,8 +150,9 @@ appropriate commit as `MAJOR.MINOR.PHASE.0` to recover.
 | `/tag <X.Y.Z.N>` | Cut the named tag from the tip. Errors if `<X.Y.Z.N>` already exists or doesn't belong to this release. |
 | `/promote <stage>` | Promote the most recent tag from this branch to `<stage>` (one of `decaf.canary`, `decaf`, `mainnet.canary`, `mainnet`). Gated by environment reviewers. |
 | `/promote <tag> <stage>` | Promote a specific `<tag>` to `<stage>`. Use this when you want to keep an older tag on a downstream environment after cutting newer ones. |
-| `/skip <sha>` / `/done <sha>` | Mark a commit as considered (ticked) without an automatic backport detection. |
-| `/unskip <sha>` | Undo a prior `/skip` or `/done` for the same commit. |
+| `/done <sha>` | Mark a commit as ported (ticked box). Use when the auto-detector misses a manual port. |
+| `/skip <sha>` | Mark a commit as deliberately not ported (struck through, no tick). |
+| `/unmark <sha>` | Undo a prior `/done` or `/skip` for the same commit. |
 
 All commands require repo write access (`OWNER`, `MEMBER`, or `COLLABORATOR`).
 
