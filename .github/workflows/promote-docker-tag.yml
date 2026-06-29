@@ -22,6 +22,20 @@ on:
         required: false
         type: boolean
         default: false
+      tracker-issue:
+        description: Issue number of the tracker that dispatched this promotion (for status comments). Leave empty when running manually.
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  # Re-tagging via `docker buildx imagetools create` pushes a manifest, which
+  # requires write access to the package. `issues: write` lets the dispatched
+  # run post its own URL back to the tracker (no polling needed in the
+  # dispatcher since the REST dispatches endpoint doesn't return a run id).
+  contents: read
+  packages: write
+  issues: write
 
 env:
   REGISTRY: ghcr.io/espressosystems/espresso-network
@@ -31,6 +45,19 @@ jobs:
   check-progression:
     runs-on: ubuntu-latest
     steps:
+      - name: Link this run on the tracker
+        if: inputs.tracker-issue != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE: ${{ inputs.tracker-issue }}
+          TAG: ${{ inputs.release-tag }}
+          STAGE: ${{ inputs.floating-tag }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue comment "$ISSUE" --body \
+            "Promotion of \`$TAG\` → \`$STAGE\` started: $RUN_URL"
+
       - name: Validate inputs
         env:
           TAG: ${{ inputs.release-tag }}
@@ -85,33 +112,42 @@ jobs:
         run: |
           set -euo pipefail
 
-          # The index digest isn't in --raw output, so we compare the amd64 manifest digest instead.
+          # Compare amd64 manifest digests (the index digest isn't in --raw
+          # output). Echoes empty on any failure (tag missing, single-arch
+          # image, malformed JSON) — callers check for that explicitly so
+          # pipefail can't turn a missing-tag into an opaque exit 1.
           get_digest() {
-            docker buildx imagetools inspect --raw "$REGISTRY/$REFERENCE_SERVICE:$1" 2>/dev/null \
-              | jq -r '.manifests[] | select(.platform.architecture=="amd64" and .platform.os=="linux") | .digest'
+            local tag="$1" raw
+            raw=$(docker buildx imagetools inspect --raw "$REGISTRY/$REFERENCE_SERVICE:$tag" 2>/dev/null) || return 0
+            printf '%s' "$raw" \
+              | jq -r '.manifests[]? | select(.platform.architecture=="amd64" and .platform.os=="linux") | .digest' \
+              2>/dev/null || true
           }
 
-          check_prerequisite() {
-            local prerequisite_tag="$1"
-            local required_digest
-            required_digest=$(get_digest "$prerequisite_tag")
-            if [ -z "$required_digest" ]; then
-              echo "::error::Could not resolve digest for $prerequisite_tag -- does the tag exist?"
+          require_promoted_to() {
+            local prerequisite="$1" required release
+            required=$(get_digest "$prerequisite")
+            if [ -z "$required" ]; then
+              echo "::error::Floating tag \`$prerequisite\` doesn't exist yet — promote there first before \`$FLOATING_DOCKER_TAG\`."
               exit 1
             fi
-            local release_digest
-            release_digest=$(get_digest "$RELEASE_GIT_TAG")
-            if [ "$release_digest" != "$required_digest" ]; then
-              echo "::error::Release must be promoted to $prerequisite_tag before $FLOATING_DOCKER_TAG"
+            release=$(get_digest "$RELEASE_GIT_TAG")
+            if [ -z "$release" ]; then
+              echo "::error::Could not resolve digest for release tag \`$RELEASE_GIT_TAG\`."
               exit 1
             fi
+            if [ "$release" != "$required" ]; then
+              echo "::error::Release \`$RELEASE_GIT_TAG\` ($release) doesn't match \`$prerequisite\` ($required); promote \`$RELEASE_GIT_TAG\` to \`$prerequisite\` first."
+              exit 1
+            fi
+            echo "ok: \`$RELEASE_GIT_TAG\` already promoted to \`$prerequisite\`"
           }
 
           case "$FLOATING_DOCKER_TAG" in
-            decaf.canary)  ;;
-            decaf)     check_prerequisite "decaf.canary" ;;
-            mainnet.canary) check_prerequisite "decaf" ;;
-            mainnet)   check_prerequisite "mainnet.canary" ;;
+            decaf.canary)    echo "no prerequisite for decaf.canary" ;;
+            decaf)           require_promoted_to "decaf.canary" ;;
+            mainnet.canary)  require_promoted_to "decaf" ;;
+            mainnet)         require_promoted_to "mainnet.canary" ;;
           esac
 
   promote:

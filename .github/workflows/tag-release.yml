@@ -54,17 +54,19 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           EVENT_NAME: ${{ github.event_name }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          TITLE: ${{ github.event.issue.title }}
           REF: ${{ github.ref }}
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             branch="${REF#refs/heads/}"
           else
-            body=$(gh issue view "$ISSUE_NUMBER" --json body -q .body)
-            branch=$(printf '%s' "$body" | grep -oE 'release-branch: release-[0-9]+\.[0-9]+\.[0-9]+' | head -n1 | sed 's|release-branch: ||')
-            if [ -z "$branch" ]; then
-              echo "::error::tracker issue body missing <!-- release-branch: release-X.Y.Z --> marker"
+            # Tracker identity comes from the issue title ("Release X.Y.Z");
+            # the body carries no marker for it.
+            if [[ "$TITLE" =~ ^Release[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+              branch="release-${BASH_REMATCH[1]}"
+            else
+              echo "::error::tracker title '$TITLE' isn't 'Release X.Y.Z'"
               exit 1
             fi
           fi

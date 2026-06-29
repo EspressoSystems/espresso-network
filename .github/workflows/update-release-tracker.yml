@@ -80,10 +80,17 @@ jobs:
             [[ "$1" =~ \#([0-9]+)\)$ ]] && printf '%s' "${BASH_REMATCH[1]}"
           }
 
-          # Suppress GitHub's auto-link of `#N` → "#N PR Title", which would
-          # duplicate the visible subject text in rendered rows.
-          escape_pr_refs() {
-            printf '%s' "${1//\#/\\#}"
+          # Render a commit subject as fully literal text. `<code>` disables
+          # markdown processing of its contents (no auto-link of `#N`, no
+          # `[x](y)` link parsing, no emphasis). HTML-escape `&`, `<`, `>`
+          # so they don't get interpreted as tags.
+          # Note: bash treats `&` in patsub replacement as the matched text
+          # (same as sed), so we must write `\&` to insert a literal ampersand.
+          literal() {
+            local s="${1//&/\&amp;}"
+            s="${s//</\&lt;}"
+            s="${s//>/\&gt;}"
+            printf '<code>%s</code>' "$s"
           }
 
           commit_url() {
@@ -177,14 +184,22 @@ jobs:
           }
 
           render_experimental_branches() {
-            local version="$1" rows
-            rows=$(gh api "repos/$GH_REPO/branches" --paginate \
-              --jq "[.[] | select(.name | startswith(\"release-$version/\"))] | sort_by(.name) | .[] | \"| [\`\(.name)\`](https://github.com/$GH_REPO/tree/\(.name)) | \`\(.commit.sha[0:8])\` |\"" \
-              2>/dev/null || true)
+            local version="$1" rows='' name sha
+            # Experimental branches are `release-X.Y.Z--<topic>` (double-dash
+            # separator). Git refuses ref overlap so `release-X.Y.Z/<topic>`
+            # can't coexist with the canonical `release-X.Y.Z` branch. We
+            # list them from locally-fetched remote refs (faster and less
+            # surprising than gh api paginated + jq).
+            while IFS=$'\t' read -r name sha; do
+              [ -z "$name" ] && continue
+              rows+="| [\`$name\`](https://github.com/$GH_REPO/tree/$name) | \`${sha:0:8}\` |"$'\n'
+            done < <(git for-each-ref --sort=refname \
+              --format='%(refname:strip=3)%09%(objectname)' \
+              "refs/remotes/origin/release-$version--*")
             if [ -z "$rows" ]; then
               printf '_None._'
             else
-              printf '| Branch | Last commit |\n|---|---|\n%s' "$rows"
+              printf '| Branch | Last commit |\n|---|---|\n%s' "${rows%$'\n'}"
             fi
           }
 
@@ -215,7 +230,7 @@ jobs:
             : "${mark:= }"
 
             printf -- '- [%s] [`%s`](%s) %s%s' \
-              "$mark" "$short" "$(commit_url "$sha")" "$(escape_pr_refs "$subj")" "$extra"
+              "$mark" "$short" "$(commit_url "$sha")" "$(literal "$subj")" "$extra"
           }
 
           render_checklist() {
@@ -240,11 +255,13 @@ jobs:
             printf '%s' "$out"
           }
 
-          # Post a per-push notification comment listing the new commits.
-          # Main-branch pushes get a copy-paste backport command per commit.
-          # Baseline is `github.event.before` (exact event tip); first push of
-          # a brand-new branch sends nothing — that case is already documented
-          # by the "Cut from" line at refresh time.
+          # Post a per-push notification comment listing the new commits, with
+          # a copy-paste backport command per PR-bearing commit at the bottom
+          # (one fenced block each so GitHub gives a copy button). For main
+          # pushes the target is `release-X.Y.Z`; for release-branch pushes
+          # it's `main` (forward-port). Commits whose subject starts with
+          # `[Backport ` are the backport-PR squashes themselves, so we don't
+          # suggest backporting them again.
           post_push_comment() {
             local issue="$1" expected_ref="$2" label="$3" new="$4" version="$5"
             [ "${GITHUB_EVENT_NAME:-}" = push ] || return 0
@@ -253,24 +270,36 @@ jobs:
             [ -n "${PUSH_BEFORE:-}" ] && [ "$PUSH_BEFORE" != "$zero" ] || return 0
             git merge-base --is-ancestor "$PUSH_BEFORE" "$new" 2>/dev/null || return 0
 
-            local is_main=0
-            [ "$expected_ref" = refs/heads/main ] && is_main=1
+            local backport_target=''
+            if   [ "$expected_ref" = refs/heads/main ];               then backport_target="release-$version"
+            elif [ "$expected_ref" = "refs/heads/release-$version" ]; then backport_target=main
+            fi
 
             local rows='' count=0 sha short subj pr
+            local backport_cmds=()
             while IFS=$'\t' read -r sha short subj; do
               [ -z "$sha" ] && continue
-              rows+="- [\`$short\`]($(commit_url "$sha")) $(escape_pr_refs "$subj")"$'\n'
-              if [ "$is_main" = 1 ]; then
+              rows+="- [\`$short\`]($(commit_url "$sha")) $(literal "$subj")"$'\n'
+              if [ -n "$backport_target" ] && [[ "$subj" != "[Backport "* ]]; then
                 pr=$(pr_num_in "$subj")
-                [ -n "$pr" ] && rows+="  - To backport: \`gh workflow run backport.yml -f pr_number=$pr -f target_branch=release-$version\`"$'\n'
+                [ -n "$pr" ] && backport_cmds+=("gh workflow run backport.yml -f pr_number=$pr -f target_branch=$backport_target")
               fi
               count=$((count + 1))
             done < <(git log "$PUSH_BEFORE..$new" --no-merges --reverse --pretty='%H%x09%h%x09%s')
             [ "$count" -gt 0 ] || return 0
 
             local file="$RUNNER_TEMP/push-comment.md"
-            printf '@%s pushed %d commit(s) to `%s`:\n\n%s' \
-              "${GITHUB_ACTOR:-someone}" "$count" "$label" "$rows" > "$file"
+            {
+              printf '@%s pushed %d commit(s) to `%s`:\n\n%s' \
+                "${GITHUB_ACTOR:-someone}" "$count" "$label" "$rows"
+              if [ "${#backport_cmds[@]}" -gt 0 ]; then
+                printf '\nTo backport:\n\n'
+                local cmd
+                for cmd in "${backport_cmds[@]}"; do
+                  printf '```\n%s\n```\n\n' "$cmd"
+                done
+              fi
+            } > "$file"
             gh issue comment "$issue" --body-file "$file" || true
           }
 
@@ -292,7 +321,12 @@ jobs:
               return 1
             fi
 
-            git fetch --quiet --tags origin main "release-$version"
+            git fetch --quiet --tags origin \
+              main \
+              "release-$version" \
+              "+refs/heads/release-$version--*:refs/remotes/origin/release-$version--*" \
+              2>/dev/null \
+              || git fetch --quiet --tags origin main "release-$version"
 
             local head_main head_branch anchor
             head_main=$(git rev-parse origin/main)
@@ -316,11 +350,10 @@ jobs:
             exp_table=$(render_experimental_branches "$version")
             notes=$(awk '/<!-- HUMAN NOTES BELOW -->/{p=1;next} p' <<<"$body")
 
-            local anchor_short='' anchor_date='' anchor_subject=''
+            local anchor_short='' anchor_date=''
             if [ -n "$anchor" ]; then
               anchor_short=$(git rev-parse --short=8 "$anchor")
               anchor_date=$(TZ=UTC git log -1 --format='%cd' --date='format:%Y-%m-%d %H:%M UTC' "$anchor")
-              anchor_subject=$(git log -1 --format='%s' "$anchor")
             fi
 
             local tmp; tmp=$(mktemp)
@@ -328,8 +361,8 @@ jobs:
               printf 'Tracker for [`release-%s`](https://github.com/%s/tree/release-%s). ' "$version" "$GH_REPO" "$version"
               printf 'Comment `/tag` to cut a tag, `/promote <stage>` to promote, `/skip <sha>` or `/done <sha>` to mark a commit as handled, `/unskip <sha>` to undo. See [RELEASES.md](https://github.com/%s/blob/main/RELEASES.md).\n\n' "$GH_REPO"
               if [ -n "$anchor" ]; then
-                printf '**Cut from** [`%s`](%s) on %s — %s\n\n' \
-                  "$anchor_short" "$(commit_url "$anchor")" "$anchor_date" "$(escape_pr_refs "$anchor_subject")"
+                printf '**Cut from** [`%s`](%s) on %s\n\n' \
+                  "$anchor_short" "$(commit_url "$anchor")" "$anchor_date"
               fi
               printf '## Tag log\n\n%s\n\n' "$tag_log"
               printf '## Promotion state\n\n%s\n\n' "$promo_state"
@@ -382,6 +415,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           ISSUE: ${{ github.event.issue.number }}
+          TITLE: ${{ github.event.issue.title }}
           BODY: ${{ github.event.comment.body }}
           ACTOR: ${{ github.event.comment.user.login }}
         run: |
@@ -394,13 +428,24 @@ jobs:
               exit 1
               ;;
           esac
-          body=$(gh issue view "$ISSUE" --json body -q .body)
-          version=$(grep -oP '(?<=release-branch: release-)[0-9]+\.[0-9]+\.[0-9]+' <<<"$body" | head -1)
+          if [[ "$TITLE" =~ ^Release[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            version="${BASH_REMATCH[1]}"
+          else
+            gh issue comment "$ISSUE" --body "@$ACTOR tracker title '$TITLE' isn't 'Release X.Y.Z'; can't infer release branch."
+            exit 1
+          fi
           tag=$(git tag --list "${version}.*" --sort=-creatordate | head -1)
           if [ -z "$tag" ]; then
             gh issue comment "$ISSUE" --body "@$ACTOR no tags on \`release-$version\` yet — run \`/tag\` before promoting."
             exit 0
           fi
-          gh workflow run promote-docker-tag.yml -f floating-tag="$stage" -f release-tag="$tag"
+          # promote-docker-tag.yml posts its own run URL back to this tracker
+          # via its tracker-issue input (it knows its own ${{ github.run_id }};
+          # the dispatcher doesn't, since the REST dispatches endpoint returns
+          # 204 with no body).
+          gh workflow run promote-docker-tag.yml \
+            -f floating-tag="$stage" \
+            -f release-tag="$tag" \
+            -f tracker-issue="$ISSUE"
           gh issue comment "$ISSUE" --body \
-            "@$ACTOR dispatched promotion of \`$tag\` → \`$stage\`. Approve at https://github.com/$GH_REPO/actions/workflows/promote-docker-tag.yml."
+            "@$ACTOR dispatched promotion of \`$tag\` → \`$stage\`. Awaiting workflow start…"

@@ -37,7 +37,7 @@ final comment summarizing the tags that were produced and marks it
 ### Experimental branches off a release branch
 
 Validation and experiment work happens on branches named
-**`release-MAJOR.MINOR.PHASE/<topic>`** — e.g. `release-0.4.0/ff-base-testing`.
+**`release-MAJOR.MINOR.PHASE--<topic>`** — e.g. `release-0.4.0--ff-base-testing`. (Double-dash separator: git forbids ref overlap, so a `release-0.4.0/...` branch can't exist while `release-0.4.0` itself does.)
 These match the existing `release-*` CI trigger, so they get full docker
 builds for devnet testing, but the tag/tracker automation explicitly ignores
 them: no `/tag` command works against them, no tracker issue is created.
@@ -61,7 +61,7 @@ Sections in the body:
 - **Promotion state** — which tag is currently at `decaf.canary`, `decaf`, `mainnet.canary`, `mainnet`.
 - **Commits on `main`** — checklist of commits landed on `main` since the branch was cut, with the corresponding backport-PR status when one exists. Boxes auto-tick when the patch already exists on the release branch (clean cherry-pick or backport merge); for everything else (manual reimplementation, "not for this release") comment `/skip <sha>` (or `/done <sha>`) on the tracker.
 - **Commits on `release-X.Y.Z`** — checklist of commits landed on this branch since it was cut. Same auto-tick / `/skip` model.
-- **Experimental branches** — currently-open branches matching `release-MAJOR.MINOR.PHASE/*` with their last commit, so you can see what's being validated at a glance.
+- **Experimental branches** — currently-open branches matching `release-MAJOR.MINOR.PHASE--*` with their last commit, so you can see what's being validated at a glance.
 
 ## Cutting a release: end-to-end
 
