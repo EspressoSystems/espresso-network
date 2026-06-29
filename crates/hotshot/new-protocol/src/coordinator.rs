@@ -294,11 +294,7 @@ where
             ))
             .storage(Storage::new(storage, private_key))
             .membership_coordinator(membership_coordinator)
-            .timer(Timer::new(
-                timeout_duration,
-                ViewNumber::genesis(),
-                EpochNumber::genesis(),
-            ))
+            .timer(Timer::new(timeout_duration, anchor_view, anchor_epoch))
             .public_key(public_key)
             .maybe_metrics(
                 metrics
@@ -874,7 +870,6 @@ where
                     return Ok(());
                 }
                 info!(%node, %view, %epoch, "view changed");
-                self.consensus.set_view(view, epoch);
                 self.timer.reset_with_epoch(view, epoch);
                 self.gc(epoch, GcScope::Local(view))?;
                 let txns = self.block_builder.on_view_changed(view, epoch);
@@ -1390,20 +1385,22 @@ where
                 let current_view = self.consensus.current_view();
                 if seed.cutover_view > ViewNumber::genesis() && current_view >= seed.cutover_view {
                     info!(
+                        node = %self.node_id,
                         %current_view,
                         cutover_view = *seed.cutover_view,
-                        "coordinator: ignoring pre-cutover seed; already past the cutover",
+                        "ignoring pre-cutover seed; already past the cutover",
                     );
                     let _ = respond.send(());
                     return Ok(());
                 }
                 info!(
+                    node = %self.node_id,
                     undecided = seed.undecided.len(),
                     anchor_view = *seed.decided_anchor.view_number(),
                     high_qc_view = seed.high_qc.as_ref().map(|qc| *qc.view_number()),
                     cutover_view = *seed.cutover_view,
                     states = seed.validated_states.len(),
-                    "coordinator: applying legacy → new-protocol seed",
+                    "applying legacy -> new-protocol seed",
                 );
 
                 // State manager is owned by the coordinator, so the
