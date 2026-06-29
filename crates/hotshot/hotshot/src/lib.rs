@@ -382,12 +382,16 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
                 (HSStakeTable::default(), U256::MAX)
             };
 
+        let recovered_locked_view = initializer
+            .high_qc
+            .view_number
+            .max(anchored_leaf.view_number());
         let consensus = Consensus::new(
             validated_state_map,
             Some(initializer.saved_vid_shares),
             anchored_leaf.view_number(),
             epoch,
-            anchored_leaf.view_number(),
+            recovered_locked_view,
             anchored_leaf.view_number(),
             initializer.last_actioned_view,
             initializer.saved_proposals,

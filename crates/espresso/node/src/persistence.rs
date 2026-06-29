@@ -1134,6 +1134,115 @@ mod tests {
         assert_eq!(view_number, new_view_number_for_qc);
     }
 
+    /// The `Storage<SeqTypes>` impl on `Arc<P>` (the object the consensus tasks actually hold) used
+    /// to no-op `update_high_qc2` / `update_next_epoch_high_qc2` — the persist-before-vote hook.
+    /// They must now durably route to the `high_qc2` / `next_epoch_quorum_certificate` tables, and
+    /// `update_high_qc2` must stay monotonic.
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_storage_update_high_qc2_persists<P: TestablePersistence>(_p: PhantomData<P>) {
+        use hotshot_types::traits::storage::Storage;
+
+        let tmp = P::tmp_storage().await;
+        let storage = P::connect(&tmp).await;
+        // Production wraps the persistence as `Arc<P>`; that is the `Storage<SeqTypes>` impl we fixed.
+        let arc = Arc::new(storage.clone());
+
+        assert_eq!(storage.load_high_qc2().await.unwrap(), None);
+
+        let mut high_qc = QuorumCertificate2::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            TEST_VERSIONS.test,
+        )
+        .await;
+        high_qc.view_number = ViewNumber::new(7);
+        Storage::update_high_qc2(&arc, high_qc.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            storage.load_high_qc2().await.unwrap().unwrap().view_number,
+            ViewNumber::new(7)
+        );
+
+        // A stale write through the Storage trait must not regress the persisted view.
+        let mut stale = high_qc.clone();
+        stale.view_number = ViewNumber::new(3);
+        Storage::update_high_qc2(&arc, stale).await.unwrap();
+        assert_eq!(
+            storage.load_high_qc2().await.unwrap().unwrap().view_number,
+            ViewNumber::new(7)
+        );
+
+        // The next-epoch high QC round-trips through update_next_epoch_high_qc2 as well.
+        let upgrade_lock = UpgradeLock::<SeqTypes>::new(TEST_VERSIONS.test);
+        let leaf = Leaf2::genesis(
+            &ValidatedState::default(),
+            &NodeState::default(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        let data: NextEpochQuorumData2<SeqTypes> = QuorumData2 {
+            leaf_commit: leaf.commit(),
+            epoch: Some(EpochNumber::new(1)),
+            block_number: Some(leaf.height()),
+        }
+        .into();
+        let versioned_data =
+            VersionedVoteData::new_infallible(data.clone(), ViewNumber::new(7), &upgrade_lock);
+        let bytes: [u8; 32] = versioned_data.commit().into();
+        let next_epoch_qc = NextEpochQuorumCertificate2::new(
+            data,
+            Commitment::from_raw(bytes),
+            ViewNumber::new(7),
+            None,
+            PhantomData,
+        );
+        Storage::update_next_epoch_high_qc2(&arc, next_epoch_qc)
+            .await
+            .unwrap();
+        assert_eq!(
+            storage
+                .load_next_epoch_quorum_certificate()
+                .await
+                .unwrap()
+                .unwrap()
+                .view_number,
+            ViewNumber::new(7)
+        );
+    }
+
+    /// `load_consensus_state` must fold the running high QC persisted via `update_high_qc2` back into
+    /// the recovered `high_qc` (which `Consensus::new` then uses to restore `locked_view` past the
+    /// decided anchor). With no decided anchor, recovery starts from the genesis QC at view 0 and
+    /// must pick up a persisted high QC at a higher view.
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_load_consensus_state_recovers_high_qc<P: TestablePersistence>(
+        _p: PhantomData<P>,
+    ) {
+        let tmp = P::tmp_storage().await;
+        let storage = P::connect(&tmp).await;
+
+        let mut high_qc = QuorumCertificate2::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            TEST_VERSIONS.test,
+        )
+        .await;
+        high_qc.view_number = ViewNumber::new(9);
+        storage.append_high_qc2(high_qc).await.unwrap();
+
+        let (initializer, _anchor_view) = storage
+            .load_consensus_state(
+                NodeState::mock(),
+                Upgrade::trivial(versions::EPOCH_REWARD_VERSION),
+            )
+            .await
+            .unwrap();
+
+        // Without the recovery fold this would be the genesis view (0); with it, the persisted lock.
+        assert_eq!(initializer.high_qc.view_number, ViewNumber::new(9));
+    }
+
     #[rstest_reuse::apply(persistence_types)]
     pub async fn test_decide_with_failing_event_consumer<P: TestablePersistence>(
         _p: PhantomData<P>,

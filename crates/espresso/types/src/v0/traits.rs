@@ -728,6 +728,24 @@ pub trait SequencerPersistence:
             next_epoch_high_qc = Some(extended_next_qc);
         }
 
+        if let Some(running_high_qc) = self
+            .load_high_qc2()
+            .await
+            .context("loading persisted high qc")?
+            && running_high_qc.view_number() > high_qc.view_number()
+        {
+            high_qc = running_high_qc;
+            next_epoch_high_qc = self
+                .load_next_epoch_quorum_certificate()
+                .await
+                .context("loading persisted next epoch qc")?
+                .filter(|neqc| {
+                    CertificatePair::new(high_qc.clone(), Some(neqc.clone()))
+                        .verify_next_epoch_qc(epoch_height)
+                        .is_ok()
+                });
+        }
+
         let validated_state = if leaf.block_header().height() == 0 {
             // If we are starting from genesis, we can provide the full state.
             genesis_validated_state
@@ -1186,8 +1204,8 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
         (**self).append_quorum_proposal2(&proposal_qp_wrapper).await
     }
 
-    async fn update_high_qc2(&self, _high_qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
-        Ok(())
+    async fn update_high_qc2(&self, high_qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
+        (**self).append_high_qc2(high_qc).await
     }
 
     /// Update the current eQC in storage.
@@ -1207,9 +1225,17 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
 
     async fn update_next_epoch_high_qc2(
         &self,
-        _next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
+        next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
     ) -> anyhow::Result<()> {
-        Ok(())
+        if let Some(existing) = (**self).load_next_epoch_quorum_certificate().await?
+            && next_epoch_high_qc.view_number() < existing.view_number()
+        {
+            return Ok(());
+        }
+
+        (**self)
+            .store_next_epoch_quorum_certificate(next_epoch_high_qc)
+            .await
     }
 
     async fn update_decided_upgrade_certificate(
