@@ -72,51 +72,100 @@ jobs:
             fi
             main_cur=$(grep -oP '(?<=main-cursor: )[0-9a-f]+|(?<=main-cursor: )none' <<<"$body" | head -1)
             branch_cur=$(grep -oP '(?<=branch-cursor: )[0-9a-f]+|(?<=branch-cursor: )none' <<<"$body" | head -1)
+            # cut-from / cut-date set once at branch creation; preserved verbatim.
+            local cut_from cut_date
+            cut_from=$(grep -oP '(?<=cut-from: )[0-9a-f]+|(?<=cut-from: )unknown' <<<"$body" | head -1)
+            cut_date=$(grep -oP '(?<=cut-date: ).+' <<<"$body" | head -1)
             echo "version=$version main_cur=${main_cur:-<empty>} branch_cur=${branch_cur:-<empty>}"
             git fetch origin main "release-$version"
             head_main=$(git rev-parse origin/main)
             head_branch=$(git rev-parse "origin/release-$version")
             echo "head_main=$head_main head_branch=$head_branch"
 
-            # If this run was triggered by a push to this tracker's release branch,
-            # post a chronological comment listing the new commits.
-            if [ "${GITHUB_EVENT_NAME:-}" = "push" ] && [ "${GITHUB_REF:-}" = "refs/heads/release-$version" ] \
-               && [ "$branch_cur" != "none" ] && [ -n "$branch_cur" ] \
-               && git merge-base --is-ancestor "$branch_cur" "$head_branch" 2>/dev/null; then
-              pushed=$(git log "$branch_cur..$head_branch" --no-merges --reverse --pretty='- `%h` %s')
-              if [ -n "$pushed" ]; then
-                count=$(printf '%s\n' "$pushed" | wc -l)
-                printf '@%s pushed %d commit(s) to `release-%s`:\n\n%s\n' \
-                  "${GITHUB_ACTOR:-someone}" "$count" "$version" "$pushed" \
-                  > "$RUNNER_TEMP/push-comment.md"
-                gh issue comment "$issue" --body-file "$RUNNER_TEMP/push-comment.md" || true
-              fi
-            fi
+            # Post a per-push comment summarizing new commits, so /tag commands
+            # appear in chronological context with the work they cover.
+            post_push_comment() {
+              local ref="$1" old="$2" new="$3" label="$4"
+              [ "${GITHUB_EVENT_NAME:-}" = "push" ] || return 0
+              [ "${GITHUB_REF:-}" = "$ref" ] || return 0
+              [ "$old" != "none" ] && [ -n "$old" ] || return 0
+              git merge-base --is-ancestor "$old" "$new" 2>/dev/null || return 0
+              local pushed
+              pushed=$(git log "$old..$new" --no-merges --reverse \
+                --pretty="- [\`%h\`](https://github.com/$GH_REPO/commit/%H) %s")
+              [ -n "$pushed" ] || return 0
+              local count; count=$(printf '%s\n' "$pushed" | wc -l)
+              printf '@%s pushed %d commit(s) to `%s`:\n\n%s\n' \
+                "${GITHUB_ACTOR:-someone}" "$count" "$label" "$pushed" \
+                > "$RUNNER_TEMP/push-comment.md"
+              gh issue comment "$issue" --body-file "$RUNNER_TEMP/push-comment.md" || true
+            }
+            post_push_comment "refs/heads/release-$version" "$branch_cur" "$head_branch" "release-$version"
+            post_push_comment "refs/heads/main"             "$main_cur"   "$head_main"   "main"
 
             # Set of full shas the user has ticked, used to preserve ticks.
             local ticked
             ticked=$(grep -oP '(?<=- \[x\] `)[a-f0-9]+(?=`.* sha: )' <<<"$body" || true)
 
-            # Existing checklist entries (between sentinels) plus new entries since cursor.
+            # Look up the backport PR (if any) for a given source PR number
+            # targeting this release branch. Echoes "<num>\t<state>\t<url>" or "".
+            backport_lookup() {
+              local pr_num="$1" bp_branch="backport-${pr_num}-to-release-${version}"
+              gh pr list --head "$bp_branch" --state all --limit 1 \
+                --json number,state,url \
+                -q '.[0] | select(.) | "\(.number)\t\(.state)\t\(.url)"' 2>/dev/null
+            }
+
+            # Render a row for one sha, optionally with backport status (BACKPORT only).
+            render_row() {
+              local full="$1" name="$2" short subj pr_num mark extra=""
+              short=$(git rev-parse --short=8 "$full" 2>/dev/null) || return 0
+              subj=$(git log -1 --format='%s' "$full" 2>/dev/null) || return 0
+              pr_num=$(grep -oE '#[0-9]+\)$' <<<"$subj" | tr -d '#)')
+              if [ "$name" = "BACKPORT" ] && [ -n "$pr_num" ]; then
+                local bp; bp=$(backport_lookup "$pr_num")
+                if [ -n "$bp" ]; then
+                  local bp_num bp_state bp_url
+                  IFS=$'\t' read -r bp_num bp_state bp_url <<<"$bp"
+                  extra=" · backport: [#${bp_num}](${bp_url}) (${bp_state,,})"
+                  [ "$bp_state" = "MERGED" ] && mark="x"
+                else
+                  extra=" · backport: _none_ — \`gh workflow run backport.yml -f pr_number=${pr_num} -f target_branch=release-${version}\`"
+                fi
+              fi
+              if [ -z "${mark:-}" ]; then
+                if [ -n "$ticked" ] && grep -qx "$full" <<<"$ticked"; then mark="x"; else mark=" "; fi
+              fi
+              local subj_esc=${subj//|/\\|}
+              printf -- "- [%s] \`%s\` %s%s <!-- sha: %s -->\n" "$mark" "$short" "$subj_esc" "$extra" "$full"
+            }
+
+            # Re-render the full checklist each refresh: union of preserved shas
+            # (so tick history survives) and new shas since cursor (so the list
+            # grows append-only).
             checklist() {
-              local cursor="$1" head="$2" name="$3" out
-              out=$(awk -v n="$name" '
+              local cursor="$1" head="$2" name="$3" rewrite_notice=""
+              local preserved_shas new_shas all_shas full out=""
+              preserved_shas=$(awk -v n="$name" '
                 $0 == "<!-- CHECKLIST " n " -->" { p=1; next }
                 $0 == "<!-- END CHECKLIST -->" && p { exit }
-                p && /^- \[/ { print }
+                p && match($0, /<!-- sha: [a-f0-9]+ -->/) {
+                  s=substr($0, RSTART+10, RLENGTH-14); print s
+                }
               ' <<<"$body")
               if [ "$cursor" != "none" ] && git merge-base --is-ancestor "$cursor" "$head" 2>/dev/null; then
-                while IFS=$'\t' read -r full short subj; do
-                  [ -z "$full" ] && continue
-                  local mark=" "
-                  if [ -n "$ticked" ] && grep -qx "$full" <<<"$ticked"; then mark="x"; fi
-                  out+=$'\n'"- [$mark] \`$short\` ${subj//|/\\|} <!-- sha: $full -->"
-                done < <(git log "$cursor..$head" --no-merges --reverse --pretty='%H%x09%h%x09%s')
+                new_shas=$(git log "$cursor..$head" --no-merges --reverse --pretty=%H)
               elif [ "$cursor" != "none" ]; then
-                out+=$'\n'"_Branch rewrite detected; checklist resumed from \`${head:0:8}\`._"
+                rewrite_notice="_Branch rewrite detected; checklist resumed from \`${head:0:8}\`._"
               fi
-              [ -z "$out" ] && out="_None yet._"
-              printf '%s\n' "$out"
+              all_shas=$(printf '%s\n%s\n' "$preserved_shas" "$new_shas" | awk 'NF && !seen[$0]++')
+              while IFS= read -r full; do
+                [ -z "$full" ] && continue
+                out+=$(render_row "$full" "$name")
+              done <<<"$all_shas"
+              [ -n "$rewrite_notice" ] && out+="$rewrite_notice"$'\n'
+              [ -z "$out" ] && out=$'_None yet._\n'
+              printf '%s' "$out"
             }
             local backport_list forward_list
             backport_list=$(checklist "$main_cur"   "$head_main"   BACKPORT)
@@ -162,24 +211,38 @@ jobs:
             # Preserve human-notes region.
             local notes; notes=$(awk '/<!-- HUMAN NOTES BELOW -->/{p=1;next} p' <<<"$body")
 
+            # Resolve subject for the cut-from line so the regenerated body
+            # matches what setup-release-branch.yml produced.
+            local cut_subject="" cut_short=""
+            if [ -n "$cut_from" ] && [ "$cut_from" != "unknown" ]; then
+              cut_subject=$(git log -1 --format='%s' "$cut_from" 2>/dev/null || true)
+              cut_short=$(git rev-parse --short=8 "$cut_from" 2>/dev/null || true)
+            fi
+
             # Write new body.
             local tmp; tmp=$(mktemp)
             {
               printf '%s\n' "<!-- release-branch: release-$version -->"
+              [ -n "$cut_from" ] && printf '%s\n' "<!-- cut-from: $cut_from -->"
+              [ -n "$cut_date" ] && printf '%s\n' "<!-- cut-date: $cut_date -->"
               printf '%s\n' "<!-- main-cursor: $head_main -->"
               printf '%s\n' "<!-- branch-cursor: $head_branch -->"
               echo
               printf '%s\n' "Tracker for [\`release-$version\`](https://github.com/$GH_REPO/tree/release-$version). Comment \`/tag\` to cut a tag, \`/promote <stage>\` to promote. See [RELEASES.md](https://github.com/$GH_REPO/blob/main/RELEASES.md)."
               echo
+              if [ -n "$cut_from" ] && [ "$cut_from" != "unknown" ] && [ -n "$cut_short" ]; then
+                printf '**Cut from** [`%s`](https://github.com/%s/commit/%s) on %s — %s\n\n' \
+                  "$cut_short" "$GH_REPO" "$cut_from" "${cut_date:-?}" "${cut_subject:-?}"
+              fi
               echo "## Tag log"; echo; printf '%s\n' "$tag_log"; echo
               echo "## Promotion state"; echo; printf '%s\n' "$promo_table"; echo
-              echo "## Backport candidates"; echo
+              echo "## Commits on \`main\`"; echo
               echo "<!-- CHECKLIST BACKPORT -->"
-              printf '%s\n' "$backport_list"
+              printf '%s' "$backport_list"
               echo "<!-- END CHECKLIST -->"; echo
-              echo "## Forward-port candidates"; echo
+              echo "## Commits on \`release-$version\`"; echo
               echo "<!-- CHECKLIST FORWARD -->"
-              printf '%s\n' "$forward_list"
+              printf '%s' "$forward_list"
               echo "<!-- END CHECKLIST -->"; echo
               echo "## Experimental branches"; echo; printf '%s\n' "$exp_table"; echo
               echo "<!-- HUMAN NOTES BELOW -->"

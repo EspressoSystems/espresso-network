@@ -57,8 +57,8 @@ Sections in the body:
 
 - **Tag log** — chronological list of tags cut from this branch (sha, time, who triggered).
 - **Promotion state** — which tag is currently at `decaf.canary`, `decaf`, `mainnet.canary`, `mainnet`.
-- **Backport candidates** — append-only checklist of commits on `main` since the branch was cut. New commits get added as unchecked items; backports landing via `backport.yml` tick their corresponding box automatically; for everything else (manual cherry-pick, reimplementation, "not for this release") tick the box by hand.
-- **Forward-port candidates** — append-only checklist of commits on this branch. Same model.
+- **Commits on `main`** — append-only checklist of commits landed on `main` since the branch was cut. Each row shows the source commit, source PR, and backport-PR status (or a `gh workflow run backport.yml` snippet to dispatch one). Boxes auto-tick when the backport PR merges; for everything else (manual cherry-pick, reimplementation, "not for this release") tick by hand.
+- **Commits on `release-X.Y.Z`** — append-only checklist of commits landed on this branch since it was cut. Same model, no backport-status column.
 - **Experimental branches** — currently-open branches matching `release-MAJOR.MINOR.PHASE/*` with their last commit, so you can see what's being validated at a glance.
 
 ## Cutting a release: end-to-end
@@ -123,7 +123,7 @@ conflicts, the workflow attempts to resolve them automatically (mergiraf
 first, then Claude); resulting PRs are labeled `claude-resolved` so they get
 extra scrutiny.
 
-The tracker issue's **Backport candidates** section accumulates commits on
+The tracker issue's **Commits on `main`** section accumulates commits on
 `main` as they land. When the backport workflow merges a backport PR into the
 release branch, the corresponding entry is ticked automatically. For commits
 you've handled outside that workflow — or commits you don't intend to

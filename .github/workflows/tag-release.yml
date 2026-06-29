@@ -127,5 +127,8 @@ jobs:
           ACTOR: ${{ github.event.comment.user.login }}
         run: |
           set -euo pipefail
+          # The tag push triggers build.yml; link to runs filtered by that tag
+          # so reviewers can watch the build status from the tracker.
+          build_runs="https://github.com/${GH_REPO}/actions/workflows/build.yml?query=branch%3A${TAG}"
           gh issue comment "$ISSUE_NUMBER" --body \
-            "Tagged \`$TAG\` at [\`${SHA:0:8}\`](https://github.com/${GH_REPO}/commit/${SHA}) on \`${BRANCH}\` (requested by @${ACTOR})."
+            "Tagged \`$TAG\` at [\`${SHA:0:8}\`](https://github.com/${GH_REPO}/commit/${SHA}) on \`${BRANCH}\` (requested by @${ACTOR}). [Build runs for this tag]($build_runs)."

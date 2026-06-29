@@ -69,6 +69,8 @@ jobs:
 
       - uses: actions/checkout@v6
         if: steps.check.outputs.match == 'true'
+        with:
+          ref: ${{ steps.check.outputs.branch }}
 
       - name: Open tracker issue
         if: steps.check.outputs.match == 'true'
@@ -84,7 +86,20 @@ jobs:
             echo "tracker issue #$existing already exists; skipping"
             exit 0
           fi
-          body=$(sed "s|__VERSION__|$VERSION|g; s|__BRANCH__|$BRANCH|g" .github/ISSUE_TEMPLATE/release-tracker.md \
+          cut_from=$(git rev-parse HEAD)
+          cut_from_short=$(git rev-parse --short=8 HEAD)
+          cut_date=$(git log -1 --format='%cI' HEAD)
+          cut_subject=$(git log -1 --format='%s' HEAD)
+          # Pipe-escape the subject so the sed substitution can't break on `|`.
+          cut_subject_esc=${cut_subject//|/\\|}
+          body=$(sed \
+              -e "s|__VERSION__|$VERSION|g" \
+              -e "s|__BRANCH__|$BRANCH|g" \
+              -e "s|__CUT_FROM__|$cut_from|g" \
+              -e "s|__CUT_FROM_SHORT__|$cut_from_short|g" \
+              -e "s|__CUT_DATE__|$cut_date|g" \
+              -e "s|__CUT_SUBJECT__|$cut_subject_esc|g" \
+              .github/ISSUE_TEMPLATE/release-tracker.md \
             | awk 'BEGIN{p=0} /^---$/{p++; next} p>=2{print}')
           gh issue create \
             --title "Release $VERSION" \
