@@ -25,7 +25,9 @@ When a `release-MAJOR.MINOR.PHASE` branch is created, automation does the
 following:
 
 1. Creates a label `backport release-MAJOR.MINOR.PHASE`.
-2. Opens a **release tracker issue** titled `Release MAJOR.MINOR.PHASE` (see
+2. Tags the branch tip as `MAJOR.MINOR.PHASE.0` — the initial release tag,
+   which also serves as the cut-point reference for the tracker.
+3. Opens a **release tracker issue** titled `Release MAJOR.MINOR.PHASE` (see
    below).
 
 When such a branch is deleted, automation closes the tracker issue with a
@@ -57,24 +59,21 @@ Sections in the body:
 
 - **Tag log** — chronological list of tags cut from this branch (sha, time, who triggered).
 - **Promotion state** — which tag is currently at `decaf.canary`, `decaf`, `mainnet.canary`, `mainnet`.
-- **Commits on `main`** — append-only checklist of commits landed on `main` since the branch was cut. Each row shows the source commit, source PR, and backport-PR status (or a `gh workflow run backport.yml` snippet to dispatch one). Boxes auto-tick when the backport PR merges; for everything else (manual cherry-pick, reimplementation, "not for this release") tick by hand.
-- **Commits on `release-X.Y.Z`** — append-only checklist of commits landed on this branch since it was cut. Same model, no backport-status column.
+- **Commits on `main`** — checklist of commits landed on `main` since the branch was cut, with the corresponding backport-PR status when one exists. Boxes auto-tick when the patch already exists on the release branch (clean cherry-pick or backport merge); for everything else (manual reimplementation, "not for this release") comment `/skip <sha>` (or `/done <sha>`) on the tracker.
+- **Commits on `release-X.Y.Z`** — checklist of commits landed on this branch since it was cut. Same auto-tick / `/skip` model.
 - **Experimental branches** — currently-open branches matching `release-MAJOR.MINOR.PHASE/*` with their last commit, so you can see what's being validated at a glance.
 
 ## Cutting a release: end-to-end
 
 1. **Cut the branch.** From `main` at the chosen commit, push a new branch
-   `release-MAJOR.MINOR.PHASE`. Automation creates the backport label and
-   tracker issue. The tracker issue is where you'll do everything that
+   `release-MAJOR.MINOR.PHASE`. Automation creates the backport label, tags
+   the cut point as `MAJOR.MINOR.PHASE.0` (which fires `build.yml`), and
+   opens the tracker issue. The tracker is where you'll do everything that
    follows.
 
-2. **Run an initial tag.** Comment `/tag` on the tracker issue. This creates
-   tag `MAJOR.MINOR.PHASE.0`, which triggers `build.yml` to publish docker
-   images for every service.
-
-3. **Iterate.** Land backport PRs (see the next section). After each batch of
-   PRs that you judge ready to deploy, comment `/tag` again to cut the next
-   patch.
+2. **Iterate.** Land backport PRs (see the next section). After each batch
+   of PRs that you judge ready to deploy, comment `/tag` on the tracker to
+   cut the next patch (`.1`, `.2`, ...).
 
 4. **Validate on devnet.** Either deploy the new tag directly, or create an
    experimental branch off the release branch with additional ad-hoc changes
@@ -124,15 +123,17 @@ first, then Claude); resulting PRs are labeled `claude-resolved` so they get
 extra scrutiny.
 
 The tracker issue's **Commits on `main`** section accumulates commits on
-`main` as they land. When the backport workflow merges a backport PR into the
-release branch, the corresponding entry is ticked automatically. For commits
-you've handled outside that workflow — or commits you don't intend to
-backport — tick the box by hand. There is no separate "skip" mechanism;
-ticking the box is the universal "this commit has been considered" signal.
+`main` as they land. Boxes auto-tick whenever the patch is already present on
+the release branch (clean cherry-pick or backport-PR merge — detected via
+`git cherry`). For commits handled outside that workflow — or commits you
+don't intend to backport — comment `/skip <sha> [reason]` (or `/done <sha>`)
+on the tracker; `/unskip <sha>` undoes it. The comment history is the
+authoritative tick log, so corruption or force-pushes to the tracker body
+don't lose state.
 
-If a release branch ever gets force-pushed (e.g. before branch protection is
-in place), the tracker detects the rewrite and resets its cursor, noting the
-event in the checklist. Earlier checkbox state is lost.
+If a release branch is force-pushed past the `.0` tag, the checklist
+section explains that the cut point is no longer reachable — re-tag the
+appropriate commit as `MAJOR.MINOR.PHASE.0` to recover.
 
 ## Quick reference: tracker commands
 
@@ -140,6 +141,8 @@ event in the checklist. Earlier checkbox state is lost.
 |---|---|
 | `/tag` | Cut the next patch tag from the tip of this release branch. |
 | `/promote <stage>` | Promote the most recent tag from this branch to `<stage>` (one of `decaf.canary`, `decaf`, `mainnet.canary`, `mainnet`). Gated by environment reviewers. |
+| `/skip <sha>` / `/done <sha>` | Mark a commit as considered (ticked) without an automatic backport detection. |
+| `/unskip <sha>` | Undo a prior `/skip` or `/done` for the same commit. |
 
 All commands require repo write access (`OWNER`, `MEMBER`, or `COLLABORATOR`).
 
