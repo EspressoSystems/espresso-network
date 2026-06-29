@@ -11,8 +11,13 @@ on:
   delete:
 
 permissions:
-  contents: read
+  # `contents: write` so we can push the initial `X.Y.Z.0` tag that marks the
+  # cut point. `actions: write` so we can fan out to build.yml /
+  # update-release-tracker.yml since GITHUB_TOKEN-pushed tags don't trigger
+  # other workflows automatically.
+  contents: write
   issues: write
+  actions: write
   pull-requests: read
 
 jobs:
@@ -72,7 +77,7 @@ jobs:
         with:
           ref: ${{ steps.check.outputs.branch }}
 
-      - name: Open tracker issue
+      - name: Tag X.Y.Z.0, open tracker issue, and fan out
         if: steps.check.outputs.match == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -81,30 +86,38 @@ jobs:
           VERSION: ${{ steps.check.outputs.version }}
         run: |
           set -euo pipefail
-          existing=$(gh issue list --label release-tracker --state open --search "Release $VERSION in:title" --json number,title -q ".[] | select(.title == \"Release $VERSION\") | .number" | head -n1)
-          if [ -n "$existing" ]; then
-            echo "tracker issue #$existing already exists; skipping"
-            exit 0
+
+          # X.Y.Z.0 is the canonical initial release tag: it both publishes
+          # the first build and serves as the cut-point anchor that the
+          # tracker uses to enumerate candidate commits.
+          tag="$VERSION.0"
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if git rev-parse --verify "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "$tag already exists; leaving alone"
+          else
+            git tag -a "$tag" -m "Release $tag (initial cut)"
+            git push origin "refs/tags/$tag"
           fi
-          cut_from=$(git rev-parse HEAD)
-          cut_from_short=$(git rev-parse --short=8 HEAD)
-          cut_date=$(TZ=UTC git log -1 --format='%cd' --date='format:%Y-%m-%d %H:%M UTC' HEAD)
-          cut_subject=$(git log -1 --format='%s' HEAD)
-          # Pipe-escape the subject so the sed substitution can't break on `|`.
-          cut_subject_esc=${cut_subject//|/\\|}
-          body=$(sed \
-              -e "s|__VERSION__|$VERSION|g" \
-              -e "s|__BRANCH__|$BRANCH|g" \
-              -e "s|__CUT_FROM__|$cut_from|g" \
-              -e "s|__CUT_FROM_SHORT__|$cut_from_short|g" \
-              -e "s|__CUT_DATE__|$cut_date|g" \
-              -e "s|__CUT_SUBJECT__|$cut_subject_esc|g" \
-              .github/ISSUE_TEMPLATE/release-tracker.md \
-            | awk 'BEGIN{p=0} /^---$/{p++; next} p>=2{print}')
-          gh issue create \
-            --title "Release $VERSION" \
-            --label release-tracker \
-            --body "$body"
+
+          existing=$(gh issue list --label release-tracker --state open \
+            --search "Release $VERSION in:title" --json number,title \
+            -q ".[] | select(.title == \"Release $VERSION\") | .number" | head -n1)
+          if [ -z "$existing" ]; then
+            body=$(sed -e "s|__VERSION__|$VERSION|g" -e "s|__BRANCH__|$BRANCH|g" \
+                     .github/ISSUE_TEMPLATE/release-tracker.md \
+                   | awk 'BEGIN{p=0} /^---$/{p++; next} p>=2{print}')
+            gh issue create \
+              --title "Release $VERSION" \
+              --label release-tracker \
+              --body "$body"
+          else
+            echo "tracker issue #$existing already exists; skipping"
+          fi
+
+          # Tags pushed via GITHUB_TOKEN don't fan out to other workflows.
+          gh workflow run build.yml --ref "$tag"
+          gh workflow run update-release-tracker.yml
 
   on-delete:
     if: |
