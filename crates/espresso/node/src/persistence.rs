@@ -1243,6 +1243,83 @@ mod tests {
         assert_eq!(initializer.high_qc.view_number, ViewNumber::new(9));
     }
 
+    /// Recovery must not REGRESS `next_epoch_high_qc`: when a newer running high QC (from `high_qc2`)
+    /// is adopted, an older or absent persisted next-epoch QC must not overwrite the newer one we
+    /// already recovered (here from the eQC).
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_load_consensus_state_keeps_newer_next_epoch_qc<P: TestablePersistence>(
+        _p: PhantomData<P>,
+    ) {
+        let tmp = P::tmp_storage().await;
+        let storage = P::connect(&tmp).await;
+
+        // Build a next-epoch QC we can re-stamp at different views.
+        let upgrade_lock = UpgradeLock::<SeqTypes>::new(TEST_VERSIONS.test);
+        let leaf = Leaf2::genesis(
+            &ValidatedState::default(),
+            &NodeState::default(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        let data: NextEpochQuorumData2<SeqTypes> = QuorumData2 {
+            leaf_commit: leaf.commit(),
+            epoch: Some(EpochNumber::new(1)),
+            block_number: Some(leaf.height()),
+        }
+        .into();
+        let versioned_data =
+            VersionedVoteData::new_infallible(data.clone(), ViewNumber::new(5), &upgrade_lock);
+        let bytes: [u8; 32] = versioned_data.commit().into();
+        let next_epoch_qc = NextEpochQuorumCertificate2::new(
+            data,
+            Commitment::from_raw(bytes),
+            ViewNumber::new(5),
+            None,
+            PhantomData,
+        );
+
+        // eQC checkpoint: high QC + corresponding next-epoch QC, both at view 5.
+        let mut eqc_high_qc = QuorumCertificate2::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            TEST_VERSIONS.test,
+        )
+        .await;
+        eqc_high_qc.view_number = ViewNumber::new(5);
+        storage
+            .store_eqc(eqc_high_qc.clone(), next_epoch_qc.clone())
+            .await
+            .unwrap();
+
+        // A newer running high QC (view 9) — recovery adopts it...
+        let mut running_high_qc = eqc_high_qc.clone();
+        running_high_qc.view_number = ViewNumber::new(9);
+        storage.append_high_qc2(running_high_qc).await.unwrap();
+
+        // ...and an OLDER standalone next-epoch QC (view 3) that must NOT clobber the eQC's view-5 one.
+        let mut older_next_epoch_qc = next_epoch_qc.clone();
+        older_next_epoch_qc.view_number = ViewNumber::new(3);
+        storage
+            .store_next_epoch_quorum_certificate(older_next_epoch_qc)
+            .await
+            .unwrap();
+
+        let (initializer, _anchor_view) = storage
+            .load_consensus_state(
+                NodeState::mock(),
+                Upgrade::trivial(versions::EPOCH_REWARD_VERSION),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(initializer.high_qc.view_number, ViewNumber::new(9));
+        // Kept at the eQC's view 5 — neither regressed to the stored view 3 nor dropped to None.
+        assert_eq!(
+            initializer.next_epoch_high_qc.unwrap().view_number,
+            ViewNumber::new(5)
+        );
+    }
+
     #[rstest_reuse::apply(persistence_types)]
     pub async fn test_decide_with_failing_event_consumer<P: TestablePersistence>(
         _p: PhantomData<P>,

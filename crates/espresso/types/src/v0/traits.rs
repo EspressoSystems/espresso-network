@@ -735,15 +735,16 @@ pub trait SequencerPersistence:
             && running_high_qc.view_number() > high_qc.view_number()
         {
             high_qc = running_high_qc;
-            next_epoch_high_qc = self
+            if let Some(stored_next_epoch_qc) = self
                 .load_next_epoch_quorum_certificate()
                 .await
                 .context("loading persisted next epoch qc")?
-                .filter(|neqc| {
-                    CertificatePair::new(high_qc.clone(), Some(neqc.clone()))
-                        .verify_next_epoch_qc(epoch_height)
-                        .is_ok()
-                });
+                && next_epoch_high_qc.as_ref().is_none_or(|existing| {
+                    stored_next_epoch_qc.view_number() > existing.view_number()
+                })
+            {
+                next_epoch_high_qc = Some(stored_next_epoch_qc);
+            }
         }
 
         let validated_state = if leaf.block_header().height() == 0 {
