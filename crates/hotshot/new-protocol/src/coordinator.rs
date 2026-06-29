@@ -55,7 +55,7 @@ use crate::{
     proposal::{ProposalValidator, ValidatedProposal, VidShareValidator},
     state::{HeaderRequest, StateEntry, StateManager, StateManagerOutput},
     storage::{NewProtocolStorage, Storage},
-    vid::{VidDisperseRequest, VidDisperser, VidReconstructor},
+    vid::{VidDisperseRequest, VidDisperser, VidFragmentAccumulator, VidReconstructor},
     vote::VoteCollector,
 };
 
@@ -97,6 +97,8 @@ pub struct Coordinator<T: NodeType, S> {
     client: CoordinatorClient<T>,
     vid_disperser: VidDisperser<T>,
     vid_reconstructor: VidReconstructor<T>,
+    #[builder(default)]
+    vid_fragment_accumulator: VidFragmentAccumulator<T>,
     vote1_collector: VoteCollector<T, QuorumVote2<T>, QuorumCertificate2<T>>,
     vote2_collector: VoteCollector<T, Vote2<T>, Certificate2<T>>,
     timeout_collector: VoteCollector<T, TimeoutVote2<T>, TimeoutCertificate2<T>>,
@@ -1040,18 +1042,47 @@ where
                     }
                     None
                 },
-                ConsensusMessage::VidShare(share) => {
-                    let view = share.data.view_number();
-                    debug!(%node, %sender, %view, "recv vid share");
-                    // The leader unicasts each node only its own share. A share
-                    // addressed to anyone else is bogus and could otherwise
-                    // displace our own in the unpaired-share cache.
-                    if share.data.recipient_key != self.public_key {
-                        warn!(%node, %sender, %view, "ignoring vid share not addressed to this node");
+                ConsensusMessage::VidShareFragment(fragment) => {
+                    let view = fragment.data.view_number();
+                    debug!(%node, %sender, %view, "received vid share fragment");
+                    if fragment.data.recipient_key != self.public_key {
+                        warn!(
+                            %node,
+                            %sender,
+                            %view,
+                            "ignoring vid share fragment not addressed to this node"
+                        );
+                        return None;
+                    }
+                    let leader = fragment
+                        .data
+                        .epoch
+                        .and_then(|epoch| self.leader(view, epoch));
+                    if leader.as_ref() != Some(&message.sender) {
+                        warn!(
+                            %node,
+                            %sender,
+                            %view,
+                            "ignoring vid share fragment not from the view leader"
+                        );
                         return None;
                     }
                     if self.consensus.wants_proposal_for_view(&view) {
-                        self.share_validator.validate(share);
+                        let signature = fragment.signature.clone();
+                        match self.vid_fragment_accumulator.accept(fragment.data) {
+                            Ok(Some(share)) => self
+                                .share_validator
+                                .validate(SignedProposal::new(share, signature)),
+                            Ok(None) => {}, // Still missing some fragments.
+                            Err(err) => {
+                                warn!(
+                                    %node,
+                                    %sender,
+                                    %view,
+                                    %err, "rejecting malformed vid share fragment"
+                                );
+                            },
+                        }
                     }
                     None
                 },
@@ -1686,6 +1717,7 @@ where
                     self.cached_validated_proposals.split_off(&(view, vc));
                 self.cached_vid_shares = self.cached_vid_shares.split_off(&(view, vc));
                 self.vid_disperser.gc(view);
+                self.vid_fragment_accumulator.gc(view);
                 // When we enter a new view, we do not want to GC certain data
                 // for the previous view yet:
                 let view = view.saturating_sub(1).into();

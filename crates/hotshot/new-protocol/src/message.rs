@@ -3,7 +3,9 @@ use std::marker::PhantomData;
 use committable::{Commitment, Committable};
 pub use hotshot_types::new_protocol::Proposal;
 use hotshot_types::{
-    data::{EpochNumber, VidDisperseShare2, ViewNumber},
+    data::{
+        EpochNumber, VidDisperseShare2, ViewNumber, vid_disperse::AvidmGf2DisperseShareFragment,
+    },
     message::Proposal as SignedProposal,
     request_response::ProposalRequestPayload,
     simple_certificate::{
@@ -63,8 +65,14 @@ impl<T: NodeType, S> HasViewNumber for ProposalMessage<T, S> {
     }
 }
 
-/// A signed VidShare to be sent to the replicas.
+/// A reassembled, signed VID share.
 pub type VidShareMessage<T> = SignedProposal<T, VidDisperseShare2<T>>;
+
+/// A signed per-namespace VID share fragment.
+///
+/// Unicast by the leader to a replica. A replica collects all of a view's
+/// fragments and reassembles them into a [`VidShareMessage`].
+pub type VidShareFragmentMessage<T> = SignedProposal<T, AvidmGf2DisperseShareFragment<T>>;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
@@ -156,10 +164,12 @@ pub enum ConsensusMessage<T: NodeType, S> {
     TimeoutVote(TimeoutVoteMessage<T>),
     TimeoutCertificate(TimeoutCertificate2<T>),
     EpochChange(EpochChangeMessage<T>),
-    /// The leader's unicast of each node's own VID share.
-    VidShare(VidShareMessage<T>),
-    /// This VID Share is broadcasted along with Vote1.
+    /// A node's reassembled VID share, broadcast (decoupled from Vote1) so
+    /// every node can reconstruct the block.
     VidShareBroadcast(VidDisperseShare2<T>),
+    /// A fragment of a node's VID share, unicast by the leader; the recipient
+    /// reassembles the fragments into a complete share.
+    VidShareFragment(VidShareFragmentMessage<T>),
 }
 
 impl<T: NodeType, S> ConsensusMessage<T, S> {
@@ -174,8 +184,8 @@ impl<T: NodeType, S> ConsensusMessage<T, S> {
             Self::TimeoutVote(v) => ConsensusMessage::TimeoutVote(v),
             Self::TimeoutCertificate(c) => ConsensusMessage::TimeoutCertificate(c),
             Self::EpochChange(c) => ConsensusMessage::EpochChange(c),
-            Self::VidShare(v) => ConsensusMessage::VidShare(v),
             Self::VidShareBroadcast(v) => ConsensusMessage::VidShareBroadcast(v),
+            Self::VidShareFragment(v) => ConsensusMessage::VidShareFragment(v),
         }
     }
 }
@@ -191,8 +201,8 @@ impl<T: NodeType, S> HasViewNumber for ConsensusMessage<T, S> {
             Self::TimeoutVote(msg) => msg.view_number(),
             Self::TimeoutCertificate(certificate) => certificate.view_number(),
             Self::EpochChange(epoch_change) => epoch_change.cert1.view_number(),
-            Self::VidShare(vid_share) => vid_share.data.view_number(),
             Self::VidShareBroadcast(vid_share) => vid_share.view_number(),
+            Self::VidShareFragment(fragment) => fragment.data.view_number(),
         }
     }
 }

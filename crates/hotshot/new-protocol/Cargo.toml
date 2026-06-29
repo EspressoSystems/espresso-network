@@ -30,6 +30,7 @@ hotshot-utils = { workspace = true }
 p3-maybe-rayon = { workspace = true, features = ["parallel"] }
 parking_lot = { workspace = true }
 rand = { workspace = true }
+rayon = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 test-utils = { workspace = true }
@@ -44,6 +45,7 @@ vec1 = { workspace = true }
 versions = { workspace = true }
 
 [dev-dependencies]
+quickcheck = { workspace = true }
 # Enables `vid/testing` for tests only: constructs non-codeword dispersals to
 # exercise the unrecoverable VID reconstruction path.
 vid = { workspace = true, features = ["testing"] }
