@@ -1327,11 +1327,13 @@ mod tests {
         assert_eq!(initializer.high_qc.view_number, ViewNumber::new(9));
     }
 
-    /// Recovery must not REGRESS `next_epoch_high_qc`: when a newer running high QC (from `high_qc2`)
-    /// is adopted, an older or absent persisted next-epoch QC must not overwrite the newer one we
-    /// already recovered (here from the eQC).
+    /// Recovery must not hand `Consensus::new` a mismatched (high QC, next-epoch QC) pair: when a
+    /// newer running high QC is adopted, a persisted next-epoch QC that does not correspond to it
+    /// (`verify_next_epoch_qc`) is dropped to `None` instead of being recovered alongside it.
     #[rstest_reuse::apply(persistence_types)]
-    pub async fn test_load_consensus_state_keeps_newer_next_epoch_qc<P: TestablePersistence>(
+    pub async fn test_load_consensus_state_drops_noncorresponding_next_epoch_qc<
+        P: TestablePersistence,
+    >(
         _p: PhantomData<P>,
     ) {
         let tmp = P::tmp_storage().await;
@@ -1380,11 +1382,12 @@ mod tests {
         running_high_qc.view_number = ViewNumber::new(9);
         storage.append_high_qc2(running_high_qc).await.unwrap();
 
-        // ...and an OLDER standalone next-epoch QC (view 3) that must NOT clobber the eQC's view-5 one.
-        let mut older_next_epoch_qc = next_epoch_qc.clone();
-        older_next_epoch_qc.view_number = ViewNumber::new(3);
+        // ...and a standalone next-epoch QC (view 3) in its table. Neither it nor the eQC's view-5
+        // next-epoch QC corresponds to the recovered high QC at view 9.
+        let mut other_next_epoch_qc = next_epoch_qc.clone();
+        other_next_epoch_qc.view_number = ViewNumber::new(3);
         storage
-            .append_next_epoch_high_qc2(older_next_epoch_qc)
+            .append_next_epoch_high_qc2(other_next_epoch_qc)
             .await
             .unwrap();
 
@@ -1397,10 +1400,11 @@ mod tests {
             .unwrap();
 
         assert_eq!(initializer.high_qc.view_number, ViewNumber::new(9));
-        // Kept at the eQC's view 5 — neither regressed to the stored view 3 nor dropped to None.
-        assert_eq!(
-            initializer.next_epoch_high_qc.unwrap().view_number,
-            ViewNumber::new(5)
+        // The recovered high QC corresponds to neither persisted next-epoch QC, so the pair is left
+        // without one rather than recovering a mismatched (high QC, next-epoch QC) pair.
+        assert!(
+            initializer.next_epoch_high_qc.is_none(),
+            "a next-epoch QC that does not correspond to the recovered high QC must be dropped"
         );
     }
 
