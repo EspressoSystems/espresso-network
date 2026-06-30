@@ -3,7 +3,7 @@ use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 use bytes::{Bytes, BytesMut};
 use tokio::{
     net::TcpListener,
-    sync::{OwnedSemaphorePermit, mpsc, watch},
+    sync::{OwnedSemaphorePermit, mpsc},
     time::timeout,
 };
 
@@ -62,33 +62,27 @@ async fn connection_pair(
 }
 
 /// Build a payload with the trailer appended.
-fn payload(slot: Slot, id: MsgId, data: &[u8]) -> (RetryPolicy, Bytes) {
+fn payload(slot: Slot, id: MsgId, data: &[u8]) -> Bytes {
     let trailer = Trailer::Std { slot, id }.to_bytes();
     let mut buf = BytesMut::new();
     buf.extend_from_slice(data);
     buf.extend_from_slice(trailer.as_ref());
-    (RetryPolicy::Default, buf.freeze())
+    buf.freeze()
 }
 
 /// Create a `Peer` and its inbound message receiver + outbox + slot sender.
-fn make_peer(
-    conf: Arc<Config>,
-    conn: Connection,
-    budget: usize,
-) -> (Peer, Rx, Queue<(RetryPolicy, Bytes)>, watch::Sender<Slot>) {
+fn make_peer(conf: Arc<Config>, conn: Connection, budget: usize) -> (Peer, Rx, Queue) {
     let (tx, rx) = mpsc::unbounded_channel();
-    let (slot_tx, slot_rx) = watch::channel(Slot::MIN);
-    let outbox = Queue::new();
+    let outbox = Queue::new(conf.clone());
     let peer = Peer::builder()
         .config(conf)
         .budget(NonZeroUsize::new(budget).unwrap())
         .messages(outbox.clone())
         .inbound(tx)
-        .next_slot(slot_rx)
         .connection(conn)
         .metrics(Arc::new(NoMetrics))
         .build();
-    (peer, rx, outbox, slot_tx)
+    (peer, rx, outbox)
 }
 
 // -- Tests -------------------------------------------------------------------
@@ -106,12 +100,12 @@ async fn send_receive() {
 
     let (conn_a, conn_b) = connection_pair(conf_a.clone(), pkb, conf_b.clone()).await;
 
-    let (mut peer_a, _rx_a, outbox_a, _slot_a) = make_peer(conf_a, conn_a, 10);
-    let (mut peer_b, mut rx_b, _outbox_b, _slot_b) = make_peer(conf_b, conn_b, 10);
+    let (mut peer_a, _rx_a, outbox_a) = make_peer(conf_a, conn_a, 10);
+    let (mut peer_b, mut rx_b, _outbox_b) = make_peer(conf_b, conn_b, 10);
 
     let slot = Slot::new(1);
     let id = MsgId::new(1);
-    outbox_a.enqueue(slot, id, payload(slot, id, b"hello"));
+    outbox_a.enqueue(slot, id, payload(slot, id, b"hello"), RetryPolicy::Default);
 
     let ha = tokio::spawn(async move { peer_a.start().await });
     let hb = tokio::spawn(async move { peer_b.start().await });
@@ -140,15 +134,20 @@ async fn send_multiple() {
 
     let (conn_a, conn_b) = connection_pair(conf_a.clone(), pkb, conf_b.clone()).await;
 
-    let (mut peer_a, _rx_a, outbox_a, _slot_a) = make_peer(conf_a, conn_a, 10);
-    let (mut peer_b, mut rx_b, _outbox_b, _slot_b) = make_peer(conf_b, conn_b, 10);
+    let (mut peer_a, _rx_a, outbox_a) = make_peer(conf_a, conn_a, 10);
+    let (mut peer_b, mut rx_b, _outbox_b) = make_peer(conf_b, conn_b, 10);
 
     let n = 10u64;
     let slot = Slot::new(1);
     for i in 0..n {
         let id = MsgId::new(i);
         let msg = format!("msg-{i}");
-        outbox_a.enqueue(slot, id, payload(slot, id, msg.as_bytes()));
+        outbox_a.enqueue(
+            slot,
+            id,
+            payload(slot, id, msg.as_bytes()),
+            RetryPolicy::Default,
+        );
     }
 
     let ha = tokio::spawn(async move { peer_a.start().await });
@@ -179,14 +178,14 @@ async fn bidirectional() {
 
     let (conn_a, conn_b) = connection_pair(conf_a.clone(), pkb, conf_b.clone()).await;
 
-    let (mut peer_a, mut rx_a, outbox_a, _slot_a) = make_peer(conf_a, conn_a, 10);
-    let (mut peer_b, mut rx_b, outbox_b, _slot_b) = make_peer(conf_b, conn_b, 10);
+    let (mut peer_a, mut rx_a, outbox_a) = make_peer(conf_a, conn_a, 10);
+    let (mut peer_b, mut rx_b, outbox_b) = make_peer(conf_b, conn_b, 10);
 
     let slot = Slot::new(1);
     for i in 0..5u64 {
         let id = MsgId::new(i);
-        outbox_a.enqueue(slot, id, payload(slot, id, b"from-a"));
-        outbox_b.enqueue(slot, id, payload(slot, id, b"from-b"));
+        outbox_a.enqueue(slot, id, payload(slot, id, b"from-a"), RetryPolicy::Default);
+        outbox_b.enqueue(slot, id, payload(slot, id, b"from-b"), RetryPolicy::Default);
     }
 
     let ha = tokio::spawn(async move { peer_a.start().await });
@@ -226,13 +225,13 @@ async fn large_message() {
 
     let (conn_a, conn_b) = connection_pair(conf_a.clone(), pkb, conf_b.clone()).await;
 
-    let (mut peer_a, _rx_a, outbox_a, _slot_a) = make_peer(conf_a, conn_a, 10);
-    let (mut peer_b, mut rx_b, _outbox_b, _slot_b) = make_peer(conf_b, conn_b, 10);
+    let (mut peer_a, _rx_a, outbox_a) = make_peer(conf_a, conn_a, 10);
+    let (mut peer_b, mut rx_b, _outbox_b) = make_peer(conf_b, conn_b, 10);
 
     let big: Vec<u8> = (0..200 * 1024).map(|i| (i % 251) as u8).collect();
     let slot = Slot::new(1);
     let id = MsgId::new(0);
-    outbox_a.enqueue(slot, id, payload(slot, id, &big));
+    outbox_a.enqueue(slot, id, payload(slot, id, &big), RetryPolicy::Default);
 
     let ha = tokio::spawn(async move { peer_a.start().await });
     let hb = tokio::spawn(async move { peer_b.start().await });
@@ -260,14 +259,19 @@ async fn slow_receiver() {
 
     let (conn_a, conn_b) = connection_pair(conf_a.clone(), pkb, conf_b.clone()).await;
 
-    let (mut peer_a, _rx_a, outbox_a, _slot_a) = make_peer(conf_a, conn_a, 10);
-    let (mut peer_b, mut rx_b, _outbox_b, _slot_b) = make_peer(conf_b, conn_b, 1);
+    let (mut peer_a, _rx_a, outbox_a) = make_peer(conf_a, conn_a, 10);
+    let (mut peer_b, mut rx_b, _outbox_b) = make_peer(conf_b, conn_b, 1);
 
     let slot = Slot::new(1);
     for i in 0..3u64 {
         let id = MsgId::new(i);
         let msg = format!("m{i}");
-        outbox_a.enqueue(slot, id, payload(slot, id, msg.as_bytes()));
+        outbox_a.enqueue(
+            slot,
+            id,
+            payload(slot, id, msg.as_bytes()),
+            RetryPolicy::Default,
+        );
     }
 
     let ha = tokio::spawn(async move { peer_a.start().await });
@@ -298,22 +302,28 @@ async fn slot_gc() {
 
     let (conn_a, conn_b) = connection_pair(conf_a.clone(), pkb, conf_b.clone()).await;
 
-    let (mut peer_a, _rx_a, outbox_a, slot_a) = make_peer(conf_a, conn_a, 10);
-    let (mut peer_b, mut rx_b, _outbox_b, slot_b) = make_peer(conf_b, conn_b, 10);
+    let (mut peer_a, _rx_a, outbox_a) = make_peer(conf_a, conn_a, 10);
+    let (mut peer_b, mut rx_b, _outbox_b) = make_peer(conf_b, conn_b, 10);
 
     // Slot 3 (below threshold) — should be discarded by B.
     let old_slot = Slot::new(3);
     let old_id = MsgId::new(0);
-    outbox_a.enqueue(old_slot, old_id, payload(old_slot, old_id, b"old"));
+    outbox_a.enqueue(
+        old_slot,
+        old_id,
+        payload(old_slot, old_id, b"old"),
+        RetryPolicy::Default,
+    );
 
     // Slot 7 (above threshold) — should be delivered.
     let new_slot = Slot::new(7);
     let new_id = MsgId::new(0);
-    outbox_a.enqueue(new_slot, new_id, payload(new_slot, new_id, b"new"));
-
-    // Set threshold to 5 on both sides. GC the outbox as the Server would.
-    slot_a.send(Slot::new(5)).unwrap();
-    slot_b.send(Slot::new(5)).unwrap();
+    outbox_a.enqueue(
+        new_slot,
+        new_id,
+        payload(new_slot, new_id, b"new"),
+        RetryPolicy::Default,
+    );
     outbox_a.gc(Slot::new(5));
 
     let ha = tokio::spawn(async move { peer_a.start().await });
@@ -349,21 +359,19 @@ async fn receive_timeout() {
     let (conn_a, _conn_b) = connection_pair(conf_a.clone(), pkb, conf_b.clone()).await;
 
     let (tx, _rx) = mpsc::unbounded_channel();
-    let (_slot_tx, slot_rx) = watch::channel(Slot::new(0));
-    let outbox = Queue::new();
+    let outbox = Queue::new(conf_a.clone());
     let mut peer_a = Peer::builder()
         .config(conf_a)
         .budget(NonZeroUsize::new(10).unwrap())
         .messages(outbox.clone())
         .inbound(tx)
-        .next_slot(slot_rx)
         .connection(conn_a)
         .metrics(Arc::new(NoMetrics))
         .build();
 
     let slot = Slot::new(1);
     let id = MsgId::new(0);
-    outbox.enqueue(slot, id, payload(slot, id, b"ping"));
+    outbox.enqueue(slot, id, payload(slot, id, b"ping"), RetryPolicy::Default);
 
     let result = timeout(Duration::from_secs(5), peer_a.start())
         .await
@@ -387,13 +395,23 @@ async fn threshold_advance_mid_flight() {
 
     let (conn_a, conn_b) = connection_pair(conf_a.clone(), pkb, conf_b.clone()).await;
 
-    let (mut peer_a, _rx_a, outbox_a, slot_a) = make_peer(conf_a, conn_a, 10);
-    let (mut peer_b, mut rx_b, _outbox_b, _slot_b) = make_peer(conf_b, conn_b, 10);
+    let (mut peer_a, _rx_a, outbox_a) = make_peer(conf_a, conn_a, 10);
+    let (mut peer_b, mut rx_b, _outbox_b) = make_peer(conf_b, conn_b, 10);
 
     let s1 = Slot::new(1);
     let s3 = Slot::new(3);
-    outbox_a.enqueue(s1, MsgId::new(0), payload(s1, MsgId::new(0), b"old"));
-    outbox_a.enqueue(s3, MsgId::new(0), payload(s3, MsgId::new(0), b"new"));
+    outbox_a.enqueue(
+        s1,
+        MsgId::new(0),
+        payload(s1, MsgId::new(0), b"old"),
+        RetryPolicy::Default,
+    );
+    outbox_a.enqueue(
+        s3,
+        MsgId::new(0),
+        payload(s3, MsgId::new(0), b"new"),
+        RetryPolicy::Default,
+    );
 
     let ha = tokio::spawn(async move { peer_a.start().await });
     let hb = tokio::spawn(async move { peer_b.start().await });
@@ -403,8 +421,8 @@ async fn threshold_advance_mid_flight() {
         .expect("timed out")
         .expect("channel closed");
 
-    // Advance threshold past slot 1.
-    slot_a.send(Slot::new(2)).unwrap();
+    // GC slots below 2 mid-flight, as the Server would.
+    outbox_a.gc(Slot::new(2));
 
     let (_, data2, _) = timeout(Duration::from_secs(5), rx_b.recv())
         .await
@@ -438,16 +456,15 @@ async fn channel_closed() {
 
     let (conn_a, conn_b) = connection_pair(conf_a.clone(), pkb, conf_b.clone()).await;
 
-    let (mut peer_a, _rx_a, outbox_a, _slot_a) = make_peer(conf_a, conn_a, 10);
+    let (mut peer_a, _rx_a, outbox_a) = make_peer(conf_a, conn_a, 10);
 
     let (tx_b, rx_b) = mpsc::unbounded_channel();
-    let (_slot_tx, slot_rx) = watch::channel(Slot::MIN);
+    let outbox_b = Queue::new(conf_b.clone());
     let mut peer_b = Peer::builder()
         .config(conf_b)
         .budget(NonZeroUsize::new(10).unwrap())
-        .messages(Queue::new())
+        .messages(outbox_b)
         .inbound(tx_b)
-        .next_slot(slot_rx)
         .connection(conn_b)
         .metrics(Arc::new(NoMetrics))
         .build();
@@ -455,7 +472,7 @@ async fn channel_closed() {
 
     let slot = Slot::new(1);
     let id = MsgId::new(0);
-    outbox_a.enqueue(slot, id, payload(slot, id, b"data"));
+    outbox_a.enqueue(slot, id, payload(slot, id, b"data"), RetryPolicy::Default);
 
     let ha = tokio::spawn(async move { peer_a.start().await });
     let result = timeout(Duration::from_secs(5), peer_b.start())
@@ -483,13 +500,12 @@ async fn connection_reset() {
     let (conn_a, conn_b) = connection_pair(conf_a.clone(), pkb, conf_b.clone()).await;
 
     let (tx, _rx) = mpsc::unbounded_channel();
-    let (_slot_tx, slot_rx) = watch::channel(Slot::new(0));
+    let outbox = Queue::new(conf_a.clone());
     let mut peer_a = Peer::builder()
         .config(conf_a)
         .budget(NonZeroUsize::new(10).unwrap())
-        .messages(Queue::new())
+        .messages(outbox)
         .inbound(tx)
-        .next_slot(slot_rx)
         .connection(conn_a)
         .metrics(Arc::new(NoMetrics))
         .build();
@@ -518,12 +534,12 @@ async fn empty_payload() {
 
     let (conn_a, conn_b) = connection_pair(conf_a.clone(), pkb, conf_b.clone()).await;
 
-    let (mut peer_a, _rx_a, outbox_a, _slot_a) = make_peer(conf_a, conn_a, 10);
-    let (mut peer_b, mut rx_b, _outbox_b, _slot_b) = make_peer(conf_b, conn_b, 10);
+    let (mut peer_a, _rx_a, outbox_a) = make_peer(conf_a, conn_a, 10);
+    let (mut peer_b, mut rx_b, _outbox_b) = make_peer(conf_b, conn_b, 10);
 
     let slot = Slot::new(1);
     let id = MsgId::new(0);
-    outbox_a.enqueue(slot, id, payload(slot, id, b""));
+    outbox_a.enqueue(slot, id, payload(slot, id, b""), RetryPolicy::Default);
 
     let ha = tokio::spawn(async move { peer_a.start().await });
     let hb = tokio::spawn(async move { peer_b.start().await });
@@ -551,8 +567,8 @@ async fn interleaved_acks() {
 
     let (conn_a, conn_b) = connection_pair(conf_a.clone(), pkb, conf_b.clone()).await;
 
-    let (mut peer_a, mut rx_a, outbox_a, _slot_a) = make_peer(conf_a, conn_a, 10);
-    let (mut peer_b, mut rx_b, outbox_b, _slot_b) = make_peer(conf_b, conn_b, 10);
+    let (mut peer_a, mut rx_a, outbox_a) = make_peer(conf_a, conn_a, 10);
+    let (mut peer_b, mut rx_b, outbox_b) = make_peer(conf_b, conn_b, 10);
 
     let big_a: Vec<u8> = (0..100 * 1024).map(|i| (i % 251) as u8).collect();
     let big_b: Vec<u8> = (0..100 * 1024).map(|i| (i % 241) as u8).collect();
@@ -560,8 +576,8 @@ async fn interleaved_acks() {
     for i in 0..3u64 {
         let slot = Slot::new(1);
         let id = MsgId::new(i);
-        outbox_a.enqueue(slot, id, payload(slot, id, &big_a));
-        outbox_b.enqueue(slot, id, payload(slot, id, &big_b));
+        outbox_a.enqueue(slot, id, payload(slot, id, &big_a), RetryPolicy::Default);
+        outbox_b.enqueue(slot, id, payload(slot, id, &big_b), RetryPolicy::Default);
     }
 
     let ha = tokio::spawn(async move { peer_a.start().await });
@@ -599,14 +615,14 @@ async fn duplicate_message_id() {
 
     let (conn_a, conn_b) = connection_pair(conf_a.clone(), pkb, conf_b.clone()).await;
 
-    let (mut peer_a, _rx_a, outbox_a, _slot_a) = make_peer(conf_a, conn_a, 10);
-    let (mut peer_b, mut rx_b, _outbox_b, _slot_b) = make_peer(conf_b, conn_b, 10);
+    let (mut peer_a, _rx_a, outbox_a) = make_peer(conf_a, conn_a, 10);
+    let (mut peer_b, mut rx_b, _outbox_b) = make_peer(conf_b, conn_b, 10);
 
     let slot = Slot::new(1);
     let id = MsgId::new(0);
 
-    outbox_a.enqueue(slot, id, payload(slot, id, b"first"));
-    outbox_a.enqueue(slot, id, payload(slot, id, b"second"));
+    outbox_a.enqueue(slot, id, payload(slot, id, b"first"), RetryPolicy::Default);
+    outbox_a.enqueue(slot, id, payload(slot, id, b"second"), RetryPolicy::Default);
 
     let ha = tokio::spawn(async move { peer_a.start().await });
     let hb = tokio::spawn(async move { peer_b.start().await });
@@ -641,21 +657,34 @@ async fn threshold_exact_boundary() {
 
     let (conn_a, conn_b) = connection_pair(conf_a.clone(), pkb, conf_b.clone()).await;
 
-    let (mut peer_a, _rx_a, outbox_a, slot_a) = make_peer(conf_a, conn_a, 10);
-    let (mut peer_b, mut rx_b, _outbox_b, slot_b) = make_peer(conf_b, conn_b, 10);
+    let (mut peer_a, _rx_a, outbox_a) = make_peer(conf_a, conn_a, 10);
+    let (mut peer_b, mut rx_b, _outbox_b) = make_peer(conf_b, conn_b, 10);
 
     let s4 = Slot::new(4);
-    outbox_a.enqueue(s4, MsgId::new(0), payload(s4, MsgId::new(0), b"below"));
+    outbox_a.enqueue(
+        s4,
+        MsgId::new(0),
+        payload(s4, MsgId::new(0), b"below"),
+        RetryPolicy::Default,
+    );
 
     let s5 = Slot::new(5);
-    outbox_a.enqueue(s5, MsgId::new(0), payload(s5, MsgId::new(0), b"equal"));
+    outbox_a.enqueue(
+        s5,
+        MsgId::new(0),
+        payload(s5, MsgId::new(0), b"equal"),
+        RetryPolicy::Default,
+    );
 
     let s6 = Slot::new(6);
-    outbox_a.enqueue(s6, MsgId::new(0), payload(s6, MsgId::new(0), b"above"));
+    outbox_a.enqueue(
+        s6,
+        MsgId::new(0),
+        payload(s6, MsgId::new(0), b"above"),
+        RetryPolicy::Default,
+    );
 
-    // Set threshold to 5 on both sides. GC the outbox as the Server would.
-    slot_a.send(Slot::new(5)).unwrap();
-    slot_b.send(Slot::new(5)).unwrap();
+    // GC the outbox below slot 5, as the Server would.
     outbox_a.gc(Slot::new(5));
 
     let ha = tokio::spawn(async move { peer_a.start().await });
@@ -695,8 +724,8 @@ async fn many_small_messages() {
 
     let (conn_a, conn_b) = connection_pair(conf_a.clone(), pkb, conf_b.clone()).await;
 
-    let (mut peer_a, _rx_a, outbox_a, slot_a) = make_peer(conf_a, conn_a, 500);
-    let (mut peer_b, mut rx_b, _outbox_b, _slot_b) = make_peer(conf_b, conn_b, 500);
+    let (mut peer_a, _rx_a, outbox_a) = make_peer(conf_a, conn_a, 500);
+    let (mut peer_b, mut rx_b, _outbox_b) = make_peer(conf_b, conn_b, 500);
 
     let msgs_per_slot = 50u64;
     let num_slots = 100u64;
@@ -706,7 +735,7 @@ async fn many_small_messages() {
         let slot = Slot::new(i / msgs_per_slot);
         let id = MsgId::new(i % msgs_per_slot);
         let msg = i.to_be_bytes();
-        outbox_a.enqueue(slot, id, payload(slot, id, &msg));
+        outbox_a.enqueue(slot, id, payload(slot, id, &msg), RetryPolicy::Default);
     }
 
     let ha = tokio::spawn(async move { peer_a.start().await });
@@ -723,7 +752,7 @@ async fn many_small_messages() {
 
         if (n + 1) % 200 == 0 {
             let gc_slot = (n + 1) / msgs_per_slot;
-            let _ = slot_a.send(Slot::new(gc_slot));
+            outbox_a.gc(Slot::new(gc_slot));
         }
     }
 
@@ -762,17 +791,22 @@ async fn retry_delivers_on_late_start() {
 
     let (conn_a, conn_b) = connection_pair(conf_a.clone(), pkb, conf_b.clone()).await;
 
-    let (mut peer_a, _rx_a, outbox_a, _slot_a) = make_peer(conf_a, conn_a, 10);
+    let (mut peer_a, _rx_a, outbox_a) = make_peer(conf_a, conn_a, 10);
 
     let slot = Slot::new(1);
     let id = MsgId::new(0);
-    outbox_a.enqueue(slot, id, payload(slot, id, b"retried"));
+    outbox_a.enqueue(
+        slot,
+        id,
+        payload(slot, id, b"retried"),
+        RetryPolicy::Default,
+    );
 
     let ha = tokio::spawn(async move { peer_a.start().await });
 
     tokio::time::sleep(Duration::from_millis(1500)).await;
 
-    let (mut peer_b, mut rx_b, _outbox_b, _slot_b) = make_peer(conf_b, conn_b, 10);
+    let (mut peer_b, mut rx_b, _outbox_b) = make_peer(conf_b, conn_b, 10);
     let hb = tokio::spawn(async move { peer_b.start().await });
 
     let (_, data, _) = timeout(Duration::from_secs(5), rx_b.recv())
@@ -798,21 +832,24 @@ async fn retry_after_reconnect() {
     let (conn_a1, conn_b1) = connection_pair(conf_a.clone(), pkb, conf_b.clone()).await;
 
     let (tx_a, _rx_a) = mpsc::unbounded_channel();
-    let (_slot_tx, slot_rx) = watch::channel(Slot::new(0));
-    let outbox_a = Queue::new();
+    let outbox_a = Queue::new(conf_a.clone());
     let mut peer_a = Peer::builder()
         .config(conf_a.clone())
         .budget(NonZeroUsize::new(10).unwrap())
         .messages(outbox_a.clone())
         .inbound(tx_a)
-        .next_slot(slot_rx)
         .connection(conn_a1)
         .metrics(Arc::new(NoMetrics))
         .build();
 
     let slot = Slot::new(1);
     let id = MsgId::new(0);
-    outbox_a.enqueue(slot, id, payload(slot, id, b"survive"));
+    outbox_a.enqueue(
+        slot,
+        id,
+        payload(slot, id, b"survive"),
+        RetryPolicy::Default,
+    );
 
     drop(conn_b1);
 
@@ -825,7 +862,7 @@ async fn retry_after_reconnect() {
     let (conn_a2, conn_b2) = connection_pair(conf_a, pkb, conf_b.clone()).await;
     peer_a.set_connection(conn_a2);
 
-    let (mut peer_b, mut rx_b, _outbox_b, _slot_b) = make_peer(conf_b, conn_b2, 10);
+    let (mut peer_b, mut rx_b, _outbox_b) = make_peer(conf_b, conn_b2, 10);
 
     let ha = tokio::spawn(async move { peer_a.start().await });
     let hb = tokio::spawn(async move { peer_b.start().await });
@@ -864,14 +901,19 @@ async fn backpressure_on_unacked() {
 
     let (conn_a, conn_b) = connection_pair(conf_a.clone(), pkb, conf_b.clone()).await;
 
-    let (mut peer_a, _rx_a, outbox_a, _slot_a) = make_peer(conf_a, conn_a, 10);
-    let (mut peer_b, mut rx_b, _outbox_b, _slot_b) = make_peer(conf_b, conn_b, 1);
+    let (mut peer_a, _rx_a, outbox_a) = make_peer(conf_a, conn_a, 10);
+    let (mut peer_b, mut rx_b, _outbox_b) = make_peer(conf_b, conn_b, 1);
 
     let slot = Slot::new(1);
     for i in 0..5u64 {
         let id = MsgId::new(i);
         let msg = format!("msg-{i}");
-        outbox_a.enqueue(slot, id, payload(slot, id, msg.as_bytes()));
+        outbox_a.enqueue(
+            slot,
+            id,
+            payload(slot, id, msg.as_bytes()),
+            RetryPolicy::Default,
+        );
     }
 
     let ha = tokio::spawn(async move { peer_a.start().await });

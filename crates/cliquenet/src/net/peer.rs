@@ -1,5 +1,3 @@
-mod delay;
-
 #[cfg(test)]
 mod tests;
 
@@ -10,12 +8,11 @@ use std::{
 
 use bon::bon;
 use bytes::{Bytes, BytesMut};
-use delay::DelayQueue;
 use snow::TransportState;
 use tokio::{
     select,
-    sync::{OwnedSemaphorePermit, Semaphore, mpsc::UnboundedSender, watch},
-    time::{MissedTickBehavior, interval},
+    sync::{OwnedSemaphorePermit, Semaphore, mpsc::UnboundedSender},
+    time::{Instant, MissedTickBehavior, interval},
 };
 use tokio_util::sync::CancellationToken;
 use tracing::{info, trace, warn};
@@ -25,7 +22,7 @@ use crate::{
     connection::Connection,
     error::{Empty, NetworkError},
     msg::{
-        Ack, FrameType, Header, MAX_NOISE_MESSAGE_SIZE, MAX_PAYLOAD_SIZE, RESERVED_TAG_SIZE, Slot,
+        Ack, FrameType, Header, MAX_NOISE_MESSAGE_SIZE, MAX_PAYLOAD_SIZE, RESERVED_TAG_SIZE,
         Trailer,
     },
     net::{PeerMessage, RetryPolicy},
@@ -54,13 +51,7 @@ pub struct Peer {
     conn: Connection,
 
     /// Messages the application wants to be sent to the remote.
-    msgs: Queue<(RetryPolicy, Bytes)>,
-
-    /// Messages waiting to be retried if no ACK has been received.
-    retry: DelayQueue,
-
-    /// Receive notifications about changes to the GC threshold
-    next_slot: watch::Receiver<Slot>,
+    msgs: Queue,
 
     /// The channel over which to deliver inbound messages to the application.
     tx: UnboundedSender<PeerMessage>,
@@ -100,9 +91,8 @@ impl Peer {
     pub fn new(
         config: Arc<Config>,
         budget: NonZeroUsize,
-        messages: Queue<(RetryPolicy, Bytes)>,
+        messages: Queue,
         inbound: UnboundedSender<PeerMessage>,
-        next_slot: watch::Receiver<Slot>,
         connection: Connection,
         metrics: Arc<dyn Metrics>,
     ) -> Self {
@@ -113,10 +103,8 @@ impl Peer {
                 .saturating_add(Trailer::MAX_SIZE),
             conf: config.clone(),
             budget: Budget::new(budget),
-            next_slot,
             tx: inbound,
             conn: connection,
-            retry: DelayQueue::new(config),
             msgs: messages,
             countdown: Countdown::new(),
             cancel: CancellationToken::new(),
@@ -127,7 +115,7 @@ impl Peer {
     /// Replace the existing connection.
     pub fn set_connection(&mut self, c: Connection) {
         self.conn = c;
-        self.retry.reset();
+        self.msgs.reset_retry();
         self.cancel = CancellationToken::new()
     }
 
@@ -263,6 +251,8 @@ impl Peer {
         // Ensure any previously fired countdown is reset.
         self.countdown.stop();
 
+        let mut now = Instant::now();
+
         loop {
             trace!(
                 name     = %self.conf.name,
@@ -270,7 +260,7 @@ impl Peer {
                 addr     = %self.conn.addr,
                 writing  = %!wstate.is_idle(),
                 acks     = %obound_acks.len(),
-                retries  = %self.retry.len(),
+                retries  = %self.msgs.len_retry(),
                 can_read = %read_permit.is_some(),
                 "entering event loop"
             );
@@ -282,20 +272,16 @@ impl Peer {
                 // has not sent yet. This is to prevent an attack were a
                 // malicious peer never sends ACKs, which would cause our
                 // delay queue to grow unbounded.
-                m = self.msgs.dequeue(), if wstate.is_idle() && self.retry.len() < self.conf.peer_budget.get() => {
+                m = self.msgs.dequeue(), if wstate.is_idle() && self.msgs.len_retry() < self.conf.peer_budget.get() => {
                     trace!(name = %self.conf.name, peer = %self.conn.key, "next outbound message");
-                    let (slot, id, (policy, bytes)) = m;
-                    if policy.is_retry() {
-                        self.retry.add(slot, id, bytes.clone());
-                    }
-                    let chunk = min(bytes.len(), MAX_PAYLOAD_SIZE);
+                    let chunk = min(m.data.len(), MAX_PAYLOAD_SIZE);
                     wstate = WriteState::data_frame(
-                        &bytes[..chunk],
-                        chunk < bytes.len(),
+                        &m.data[..chunk],
+                        chunk < m.data.len(),
                         &mut self.conn.state,
                         &mut wbuf
                     )?;
-                    obound_msg = Some((policy, bytes, chunk))
+                    obound_msg = Some((m.policy, m.data, chunk))
                 }
 
                 // Pick up an ACK and send it if possible.
@@ -314,46 +300,26 @@ impl Peer {
                     return Err(NetworkError::PeerInterrupt)
                 }
 
-                // Wait for a slot change, signaling GC.
-                r = self.next_slot.changed() => {
-                    trace!(name = %self.conf.name, peer = %self.conn.key, "gc");
-                    if r.is_err() {
-                        return Err(NetworkError::ChannelClosed)
-                    }
-                    let s = *self.next_slot.borrow_and_update();
-                    self.retry.gc(s);
-                }
-
-                // Periodic maintenance:
-                //
-                // - Retry messages
-                // - Update metrics
+                // Update time and metrics.
                 t = clock.tick() => {
-                    if !self.retry.is_empty() {
-                        trace!(name = %self.conf.name, peer = %self.conn.key, "retry check");
-                        self.retry.check(t);
-                    }
-                    self.update_metrics()
+                    now = t;
+                    self.update_metrics();
                 }
 
                 // If messages should be re-sent and we can do so, send it:
-                //
-                // This is separate from the retry check above because the check
-                // scans multiple items and here we just take the next one that
-                // is ready and go with it.
-                () = ready(()), if self.retry.is_ready() && wstate.is_idle() => {
+                () = ready(()), if wstate.is_idle() && self.msgs.is_due(now) => {
                     trace!(name = %self.conf.name, peer = %self.conn.key, "resending message");
-                    let Some(bytes) = self.retry.next() else {
+                    let Some(item) = self.msgs.next_retry(now) else {
                         continue
                     };
-                    let chunk = min(bytes.len(), MAX_PAYLOAD_SIZE);
+                    let chunk = min(item.data.len(), MAX_PAYLOAD_SIZE);
                     wstate = WriteState::data_frame(
-                        &bytes[..chunk],
-                        chunk < bytes.len(),
+                        &item.data[..chunk],
+                        chunk < item.data.len(),
                         &mut self.conn.state,
                         &mut wbuf
                     )?;
-                    obound_msg = Some((RetryPolicy::Default, bytes, chunk))
+                    obound_msg = Some((item.policy, item.data, chunk))
                 }
 
                 // Continue an ongoing write operation.
@@ -586,7 +552,7 @@ impl Peer {
                                                 return Err(NetworkError::InvalidAck)
                                             };
                                             let (s, i) = a.into();
-                                            self.retry.del(s, i);
+                                            self.msgs.stop_retry(s, i);
                                             rstate = ReadState::Header { off: 0, buf: [0; _] };
                                         }
                                     }
@@ -603,10 +569,13 @@ impl Peer {
     }
 
     fn update_metrics(&self) {
+        self.metrics.set(
+            &self.conn.key,
+            "outbound_messages",
+            self.msgs.len_messages(),
+        );
         self.metrics
-            .set(&self.conn.key, "outbound_messages", self.msgs.len());
-        self.metrics
-            .set(&self.conn.key, "retrying_messages", self.retry.len());
+            .set(&self.conn.key, "retrying_messages", self.msgs.len_retry());
         self.metrics
             .set(&self.conn.key, "remaining_budget", self.budget.remaining());
     }

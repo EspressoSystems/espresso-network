@@ -44,7 +44,7 @@ pub struct Server {
 struct Party {
     role: Role,
     addr: NetAddr,
-    outbox: Queue<(RetryPolicy, Bytes)>,
+    outbox: Queue,
     peer: PeerState,
 }
 
@@ -99,7 +99,7 @@ impl Server {
             .iter()
             .filter(|&(k, _)| *k != our_key)
             .map(|(k, a)| {
-                let p = Party::new(Role::Active, a.clone());
+                let p = Party::new(conf.clone(), Role::Active, a.clone());
                 (*k, p)
             })
             .collect();
@@ -249,7 +249,6 @@ impl Server {
                                 let peer = Peer::builder()
                                     .config(self.conf.clone())
                                     .budget(self.conf.peer_budget)
-                                    .next_slot(self.next_slot.clone())
                                     .inbound(self.ibound.clone())
                                     .messages(party.outbox.clone())
                                     .connection(conn)
@@ -328,7 +327,6 @@ impl Server {
                                 let peer = Peer::builder()
                                     .config(self.conf.clone())
                                     .budget(self.conf.peer_budget)
-                                    .next_slot(self.next_slot.clone())
                                     .inbound(self.ibound.clone())
                                     .messages(party.outbox.clone())
                                     .connection(conn)
@@ -477,7 +475,7 @@ impl Server {
                                     addr = %a,
                                     "adding new peer"
                                 );
-                                self.parties.insert(k, Party::new(role, a.clone()));
+                                self.parties.insert(k, Party::new(self.conf.clone(), role, a.clone()));
                                 self.spawn_connect(k, a)
                             }
                         }
@@ -554,7 +552,7 @@ impl Server {
                                 let bytes = append_trailer(cmd.retry, cmd.slot, msgid, m);
 
                                 if let Some(party) = self.parties.get(&to) {
-                                    party.outbox.enqueue(cmd.slot, msgid, (cmd.retry, bytes));
+                                    party.outbox.enqueue(cmd.slot, msgid, bytes, cmd.retry);
                                 } else {
                                     warn!(
                                         name = %self.conf.name,
@@ -592,7 +590,7 @@ impl Server {
                                         continue
                                     }
                                     trace!(name = %self.conf.name, node = %self.key, %to, "sending message");
-                                    party.outbox.enqueue(cmd.slot, msgid, (cmd.retry, bytes.clone()));
+                                    party.outbox.enqueue(cmd.slot, msgid, bytes.clone(), cmd.retry);
                                 }
                             }
                             SendAction::Broadcast(m) => {
@@ -625,7 +623,7 @@ impl Server {
                                             to    = %key,
                                             "sending message"
                                         );
-                                        party.outbox.enqueue(cmd.slot, msgid, (cmd.retry, bytes.clone()));
+                                        party.outbox.enqueue(cmd.slot, msgid, bytes.clone(), cmd.retry);
                                     }
                                 }
                             }
@@ -731,11 +729,11 @@ impl Server {
 }
 
 impl Party {
-    fn new(r: Role, a: NetAddr) -> Self {
+    fn new(c: Arc<Config>, r: Role, a: NetAddr) -> Self {
         Self {
             addr: a,
             role: r,
-            outbox: Queue::new(),
+            outbox: Queue::new(c),
             peer: PeerState::None,
         }
     }
