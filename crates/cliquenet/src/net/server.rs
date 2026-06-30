@@ -370,7 +370,13 @@ impl Server {
                                 peer = %key,
                                 %err,
                                 "connect task panic"
-                            )
+                            );
+                            if let Some(party) = self.parties.get_mut(&key)
+                                && matches!(party.peer, PeerState::None | PeerState::Reconnect(_))
+                            {
+                                let addr = party.addr.clone();
+                                self.spawn_connect(key, addr);
+                            }
                         }
                     }
                 },
@@ -412,9 +418,6 @@ impl Server {
                                 %err,
                                 "peer task panic"
                             );
-                            if self.ibound.is_closed() {
-                                return
-                            }
                             if let Some(party) = self.parties.get_mut(&key) {
                                 let addr = party.addr.clone();
                                 party.peer = PeerState::None;
