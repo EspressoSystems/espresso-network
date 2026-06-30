@@ -21,7 +21,10 @@ use light_client::{state::LightClientOptions, storage::LightClientSqliteOptions}
 use serde::Serialize;
 use url::Url;
 
-use crate::{api, keyset::KeySetOptions, persistence, proposal_fetcher::ProposalFetcherConfig};
+use crate::{
+    api, genesis::GenesisSource, keyset::KeySetOptions, persistence,
+    proposal_fetcher::ProposalFetcherConfig,
+};
 
 // This options struct is a bit unconventional. The sequencer has multiple optional modules which
 // can be added, in any combination, to the service. These include, for example, the API server.
@@ -258,14 +261,16 @@ pub struct Options {
     #[derivative(Debug(format_with = "Display::fmt"))]
     pub state_relay_server_url: Url,
 
-    /// Path to TOML file containing genesis state.
+    /// Location of the TOML file containing genesis state.
+    ///
+    /// Accepts a plain filesystem path or an `http(s)://` URL.
     #[clap(
         long,
         name = "GENESIS_FILE",
         env = "ESPRESSO_NODE_GENESIS_FILE",
         default_value = "/genesis/demo.toml"
     )]
-    pub genesis_file: PathBuf,
+    pub genesis_file: GenesisSource,
 
     #[clap(flatten)]
     pub key_set: KeySetOptions,
@@ -681,7 +686,7 @@ pub struct PublicNodeConfig {
     pub state_peers: Vec<Url>,
     pub config_peers: Option<Vec<Url>>,
     pub is_da: bool,
-    pub genesis_file: PathBuf,
+    pub genesis_file: GenesisSource,
     pub identity: Identity,
     pub catchup_base_timeout: Duration,
     pub local_catchup_timeout: Duration,
