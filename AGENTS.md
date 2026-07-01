@@ -132,7 +132,7 @@ Useful paths (append to either base URL):
 
 ## Logs
 
-See ./nix/pup/README.md
+**Datadog logs/metrics/monitors:** Use `pup` (available in the dev shell) to query logs. See `nix/pup/README.md`
 
 ## Key files
 
