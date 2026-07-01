@@ -28,7 +28,7 @@ serde_bytes     = { workspace = true, optional = true }
 [dev-dependencies]
 criterion  = { workspace = true }
 quickcheck = { workspace = true }
-tokio      = { workspace = true }
+tokio      = { workspace = true, features = ["test-util"] }
 
 [[bench]]
 name    = "bench1"
