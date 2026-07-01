@@ -836,11 +836,10 @@ fn serialization_conflict_with_diag<E: std::fmt::Display>(
 fn spawn_pg_stat_activity_log(pool: Pool<Db>, op: &'static str) {
     use sqlx::Row as _;
     tokio::spawn(async move {
-        // Log concurrent sessions
         match sqlx::query(
             "SELECT pid, COALESCE(state, 'unknown') AS state, left(COALESCE(query, ''), 200) AS \
              query FROM pg_stat_activity WHERE pid != pg_backend_pid() AND state IS DISTINCT FROM \
-             'idle'",
+             'idle' AND usename = current_user",
         )
         .fetch_all(&pool)
         .await
@@ -1068,6 +1067,42 @@ mod serializable_retry_tests {
             crate::function_name!()
         }
         assert_eq!(télécharger(), "télécharger");
+    }
+
+    /// Verify that [`function_name!`](crate::function_name) resolves to the function name even from
+    /// `async` contexts, where the body is lowered into a generator/closure. This is the case that
+    /// every production call site hits, and a naive macro reports `{{closure}}` here.
+    #[test_log::test(tokio::test)]
+    async fn test_function_name_macro_async() {
+        // Plain `async fn`: the body becomes a generator, adding a `{{closure}}` path segment.
+        async fn plain_async_fn() -> &'static str {
+            crate::function_name!()
+        }
+        assert_eq!(plain_async_fn().await, "plain_async_fn");
+
+        // Closure returning an async block inside an `async fn`, mirroring the real
+        // `serializable_retry!(self, || async { .. })` call sites: adds multiple `{{closure}}`
+        // segments to the path.
+        async fn nested_async_blocks() -> &'static str {
+            let f = || async { crate::function_name!() };
+            f().await
+        }
+        assert_eq!(nested_async_blocks().await, "nested_async_blocks");
+
+        // `#[async_trait]` method: the body is rewritten to `Box::pin(async move { .. })`, exactly
+        // as the real `serializable_retry!` call sites are.
+        struct S;
+        #[async_trait::async_trait]
+        trait T {
+            async fn async_trait_method(&self) -> &'static str;
+        }
+        #[async_trait::async_trait]
+        impl T for S {
+            async fn async_trait_method(&self) -> &'static str {
+                crate::function_name!()
+            }
+        }
+        assert_eq!(S.async_trait_method().await, "async_trait_method");
     }
 }
 
