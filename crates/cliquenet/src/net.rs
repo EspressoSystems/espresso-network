@@ -318,7 +318,7 @@ impl NetworkSender {
     ///
     /// The returned future will resolve once the server task finished.
     pub fn shutdown(&self) -> Result<impl Future<Output = ()> + use<>, NetworkError> {
-        debug!("shutdown");
+        warn!("shutdown");
         let (tx, rx) = oneshot::channel();
         self.tx
             .send(Command::Shutdown(tx))
