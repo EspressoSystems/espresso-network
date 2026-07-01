@@ -4,7 +4,7 @@ use bytes::{Bytes, BytesMut};
 use tokio::{
     net::TcpListener,
     sync::{OwnedSemaphorePermit, mpsc},
-    time::timeout,
+    time::{Instant, timeout},
 };
 use tokio_util::sync::CancellationToken;
 
@@ -862,6 +862,70 @@ async fn retry_after_reconnect() {
     hb.abort();
 }
 
+/// Reconnect preserves retry state for *all* pending messages, not just one.
+///
+/// On reconnect `Peer::start` resets the delay queue, rescheduling every
+/// unacknowledged message to the same instant. All of them must be resent.
+#[tokio::test]
+async fn retry_after_reconnect_multiple() {
+    let ka = Keypair::generate().unwrap();
+    let kb = Keypair::generate().unwrap();
+    let pkb = kb.public_key();
+
+    let conf_a = config_with_retry(ka.clone(), Duration::from_secs(10), vec![1]);
+    let conf_b = config(kb.clone(), Duration::from_secs(10));
+
+    let (conn_a1, conn_b1) = connection_pair(conf_a.clone(), pkb, conf_b.clone()).await;
+
+    let (tx_a, _rx_a) = mpsc::unbounded_channel();
+    let outbox_a = Queue::new();
+    let mut peer_a = Peer::builder()
+        .config(conf_a.clone())
+        .budget(NonZeroUsize::new(10).unwrap())
+        .messages(outbox_a.clone())
+        .retry(DelayQueue::new(conf_a.clone()))
+        .inbound(tx_a)
+        .metrics(Arc::new(NoMetrics))
+        .build();
+
+    let slot = Slot::new(1);
+    let n = 5u64;
+    for i in 0..n {
+        let id = MsgId::new(i);
+        outbox_a.enqueue(slot, id, payload(slot, id, format!("m{i}").as_bytes()));
+    }
+
+    // First connection dies before B can acknowledge anything.
+    drop(conn_b1);
+    let result = peer_a.start(conn_a1, CancellationToken::new()).await;
+    assert!(
+        matches!(result, Err(NetworkError::Io(_))),
+        "expected Io error, got {result:?}"
+    );
+
+    // Reconnect: every message must be rescheduled and delivered.
+    let (conn_a2, conn_b2) = connection_pair(conf_a, pkb, conf_b.clone()).await;
+    let (mut peer_b, mut rx_b) = make_peer(conf_b, 10);
+
+    let ha = tokio::spawn(async move { peer_a.start(conn_a2, CancellationToken::new()).await });
+    let hb = tokio::spawn(async move { peer_b.start(conn_b2, CancellationToken::new()).await });
+
+    let mut got = Vec::new();
+    for _ in 0..n {
+        let (_, data, _) = timeout(Duration::from_secs(10), rx_b.recv())
+            .await
+            .expect("timed out")
+            .expect("channel closed");
+        got.push(data);
+    }
+    got.sort();
+    let expected: Vec<Bytes> = (0..n).map(|i| Bytes::from(format!("m{i}"))).collect();
+    assert_eq!(got, expected);
+
+    ha.abort();
+    hb.abort();
+}
+
 /// Sending pauses when unacknowledged messages reach peer_budget.
 #[tokio::test]
 async fn backpressure_on_unacked() {
@@ -934,4 +998,121 @@ async fn backpressure_on_unacked() {
 
     ha.abort();
     hb.abort();
+}
+
+// -- DelayQueue --------------------------------------------------------------
+//
+// These exercise the retry schedule directly. Because the schedule is indexed
+// by due time, messages sharing a due instant (common: many are enqueued
+// between one-second clock ticks) and stale entries left behind by GC are the
+// interesting cases, and are hard to hit reliably over a live connection.
+
+fn delay_queue(retry_delays: Vec<u8>) -> DelayQueue {
+    let conf = config_with_retry(
+        Keypair::generate().unwrap(),
+        Duration::from_secs(5),
+        retry_delays,
+    );
+    DelayQueue::new(conf)
+}
+
+/// Drain every message that is due at `now`, sorted for comparison.
+fn drain_due(q: &DelayQueue, now: Instant) -> Vec<Bytes> {
+    let mut out = Vec::new();
+    while let Some((bytes, _)) = q.due(now) {
+        out.push(bytes);
+    }
+    out.sort();
+    out
+}
+
+fn labels(n: u64) -> Vec<Bytes> {
+    (0..n).map(|i| Bytes::from(format!("m{i}"))).collect()
+}
+
+/// Messages sharing a due instant are each retried, not collapsed into one.
+#[tokio::test(start_paused = true)]
+async fn delay_queue_retries_all_sharing_a_due_instant() {
+    let q = delay_queue(vec![1]);
+
+    let now = Instant::now();
+    let slot = Slot::new(1);
+    let n = 5;
+    for i in 0..n {
+        // Same `now` for every message, so all share one due instant.
+        let msg = Bytes::from(format!("m{i}"));
+        q.add(slot, MsgId::new(i), msg, RetryPolicy::Default, now);
+    }
+    assert_eq!(q.len(), n as usize);
+
+    tokio::time::advance(Duration::from_secs(1)).await;
+    assert!(q.is_due(Instant::now()));
+
+    assert_eq!(drain_due(&q, Instant::now()), labels(n));
+}
+
+/// `reset` reschedules every message (all to the same instant), not just one.
+#[tokio::test(start_paused = true)]
+async fn delay_queue_reset_reschedules_all() {
+    let q = delay_queue(vec![1]);
+
+    let slot = Slot::new(1);
+    let n = 5;
+    for i in 0..n {
+        // Distinct due instants, so this isolates `reset` from the `add` path.
+        tokio::time::advance(Duration::from_millis(10)).await;
+        let msg = Bytes::from(format!("m{i}"));
+        q.add(
+            slot,
+            MsgId::new(i),
+            msg,
+            RetryPolicy::Default,
+            Instant::now(),
+        );
+    }
+
+    q.reset(Instant::now());
+
+    tokio::time::advance(Duration::from_secs(1)).await;
+    assert_eq!(drain_due(&q, Instant::now()), labels(n));
+}
+
+/// A stale schedule entry left by GC must not drop a later, not-yet-due message.
+#[tokio::test(start_paused = true)]
+async fn delay_queue_stale_entry_keeps_pending() {
+    let q = delay_queue(vec![1]);
+
+    // `gone` is scheduled, then GC'd from the map — its schedule entry lingers.
+    q.add(
+        Slot::new(1),
+        MsgId::new(0),
+        Bytes::from("gone"),
+        RetryPolicy::Default,
+        Instant::now(),
+    );
+    q.gc(Slot::new(2));
+    assert_eq!(q.len(), 0);
+
+    // `kept` is due strictly after the stale entry.
+    tokio::time::advance(Duration::from_millis(500)).await;
+    q.add(
+        Slot::new(5),
+        MsgId::new(0),
+        Bytes::from("kept"),
+        RetryPolicy::Default,
+        Instant::now(),
+    );
+    assert_eq!(q.len(), 1);
+
+    // At this point the stale entry is due but `kept` is not: the stale entry is
+    // skipped and `kept` must stay scheduled rather than being popped and lost.
+    tokio::time::advance(Duration::from_millis(500)).await;
+    assert!(q.due(Instant::now()).is_none());
+
+    // Once `kept` comes due it is still delivered.
+    tokio::time::advance(Duration::from_millis(500)).await;
+    assert_eq!(
+        q.due(Instant::now()).map(|(bytes, _)| bytes),
+        Some(Bytes::from("kept"))
+    );
 }
