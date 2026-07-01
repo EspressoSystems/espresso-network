@@ -3,7 +3,7 @@ use std::{
     sync::Arc,
 };
 
-use alloy::primitives::U256;
+use alloy_primitives::U256;
 use async_broadcast::{InactiveReceiver, Sender, broadcast};
 use committable::Commitment;
 use either::Either;
