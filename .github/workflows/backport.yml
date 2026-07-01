@@ -15,11 +15,15 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  issues: write
 jobs:
   backport:
     name: Backport pull request
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged &&
+       !startsWith(github.event.pull_request.head.ref, 'backport-'))
     steps:
       - uses: actions/checkout@v6
         with:
@@ -162,3 +166,4 @@ jobs:
               gh pr comment "$pr" --body "⚠️ No resolution summary was produced for this backport. Claude may not have completed the resolution as expected; please review carefully." || true
             fi
           done
+
