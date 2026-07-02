@@ -828,7 +828,7 @@ const PG_SERIALIZATION_FAILURE_CODE: &str = "40001";
 /// How far behind the newest persisted decide an out-of-order ("gap-fill") decide can still
 /// arrive. Mirrors `DECIDE_BUFFER` in `hotshot-new-protocol`; a leaf missing further behind the
 /// watermark than this will never be filled in by consensus.
-pub(crate) const DECIDE_GAP_FILL_HORIZON: u64 = 50;
+pub(crate) const DECIDE_GAP_FILL_HORIZON: u64 = 20;
 
 /// Whether the height gap directly below the leaf at `view` can still be filled by a late
 /// decide: the missing view (at most `view - 1`) must be within [`DECIDE_GAP_FILL_HORIZON`] of

@@ -172,7 +172,7 @@ pub enum ConsensusOutput<T: NodeType> {
 
 /// Views to retain decide inputs (`proposals`, `certs`, `certs2`) behind the
 /// decided view, letting a late-broadcast Cert2 decide an older gap view.
-pub(crate) const DECIDE_BUFFER: u64 = 50;
+pub(crate) const DECIDE_BUFFER: u64 = 20;
 
 // The decide buffer retains the proposals the VID reconstructor reads.
 const _: () = assert!(DECIDE_BUFFER >= VID_RECONSTRUCT_GC_MARGIN);
