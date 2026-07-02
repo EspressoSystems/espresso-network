@@ -21,7 +21,7 @@ use crate::{
     storage::{ActionKind, StorageOutput},
     tests::common::{
         assertions::{
-            any, count_matching, is_leaf_decided, is_persist_proposal, is_proposal,
+            any, count_matching, decides_view, is_leaf_decided, is_persist_proposal, is_proposal,
             is_record_action, is_request_block_and_header, is_request_state, is_send_timeout_cert,
             is_send_timeout_vote, is_view_changed, is_vote1, is_vote2, node_index_for_key,
         },
@@ -956,6 +956,86 @@ async fn test_restart_does_not_redecide_anchor() {
     assert!(
         decided_views.iter().all(|view| *view > anchor_view),
         "the decide re-included the anchor view {anchor_view:?}; decided {decided_views:?}"
+    );
+}
+
+/// Certificates re-delivered after a restart for views this node already
+/// acted in must not re-record the view's Vote action or re-cast its phase-2
+/// vote once the Cert2 is known; a late Cert2 must still *decide* the view.
+#[tokio::test]
+async fn test_no_revote2_for_restart_barred_views() {
+    let test_data = TestData::new(4).await;
+    // Decided up to view 2 (the anchor) and voted in view 3 before going down.
+    let anchor = &test_data.views[1];
+    let voted = &test_data.views[2];
+    let anchor_view = anchor.view_number;
+
+    let mut harness = ConsensusHarness::restarted_from(
+        0,
+        anchor.proposal.data.clone(),
+        anchor.cert1.clone(),
+        [voted.proposal.data.clone()],
+    )
+    .await;
+    // Raise the action bar to the voted view, as `Coordinator::maker` does.
+    harness
+        .consensus
+        .resume_from_restart(anchor_view, anchor_view + 1, voted.view_number);
+
+    // A peer relays the missed Cert2s before re-broadcasting the Cert1s.
+    harness.apply(anchor.cert2_input()).await;
+    harness.apply(anchor.cert1_input()).await;
+    harness.apply(voted.cert2_input()).await;
+    harness.apply(voted.cert1_input()).await;
+
+    assert!(
+        any(harness.outputs(), |o| decides_view(o, *voted.view_number)),
+        "a late cert2 must still decide the undecided barred view"
+    );
+    assert!(
+        !any(harness.outputs(), is_vote2),
+        "must not re-cast a phase-2 vote in a view acted in before the restart"
+    );
+    assert_eq!(
+        count_matching(harness.outputs(), is_record_action),
+        0,
+        "no action may be re-recorded for views acted in before the restart"
+    );
+}
+
+/// If Cert1 formed before a crash but no Cert2 did, the restarted node must
+/// re-cast its (identical) phase-2 vote — without the barred quorum's re-votes
+/// the Cert2 can never form — while not re-recording the Vote action.
+#[tokio::test]
+async fn test_revote2_after_restart_without_cert2() {
+    let test_data = TestData::new(4).await;
+    let anchor = &test_data.views[1];
+    let voted = &test_data.views[2];
+    let anchor_view = anchor.view_number;
+
+    let mut harness = ConsensusHarness::restarted_from(
+        0,
+        anchor.proposal.data.clone(),
+        anchor.cert1.clone(),
+        [voted.proposal.data.clone()],
+    )
+    .await;
+    harness
+        .consensus
+        .resume_from_restart(anchor_view, anchor_view + 1, voted.view_number);
+
+    // A peer re-broadcasts Cert1 for the voted view; no Cert2 exists anywhere.
+    harness.apply(voted.cert1_input()).await;
+
+    assert_eq!(
+        count_matching(harness.outputs(), is_vote2),
+        1,
+        "the phase-2 vote must be re-cast after restart when no cert2 exists"
+    );
+    assert_eq!(
+        count_matching(harness.outputs(), is_record_action),
+        0,
+        "re-casting the vote must not re-record the view's Vote action"
     );
 }
 
