@@ -1645,10 +1645,15 @@ impl<T: NodeType> Consensus<T> {
             );
             return;
         }
+        // A Cert2 can arrive before its Cert1; require both before mutating any
+        // decided state.
+        let Some(cert1) = self.certs.get(&view).cloned() else {
+            debug!(%view, "cert1 missing");
+            return;
+        };
         // Handle Epoch Change by broadcasting the epoch change message if we have
         // all the data we need.
         if is_last_block(proposal.block_header.block_number(), *self.epoch_height)
-            && let Some(cert1) = self.certs.get(&view)
             && cert1.data.leaf_commit == proposal_commit
         {
             let epoch_change = EpochChangeMessage {
@@ -1693,10 +1698,6 @@ impl<T: NodeType> Consensus<T> {
         }
         self.last_decided_view = new_decided_view;
         self.last_decided_leaf = last_decided_leaf;
-        let Some(cert1) = self.certs.get(&view).cloned() else {
-            debug!(%view, "cert1 missing");
-            return;
-        };
         outbox.push_back(ConsensusOutput::LeafDecided {
             leaves: decided,
             cert1,
