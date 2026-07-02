@@ -132,6 +132,9 @@ pub enum ConsensusOutput<T: NodeType> {
     PersistHighQc(Certificate1<T>),
     SendTimeoutCertificate(TimeoutCertificate2<T>, ViewNumber, EpochNumber),
     SendCertificate1(Certificate1<T>),
+    /// Broadcast a first-obtained Cert2 so peers that could not assemble it
+    /// from votes can still decide. Mirrors `SendCertificate1`.
+    SendCertificate2(Certificate2<T>),
     SendEpochChange(EpochChangeMessage<T>),
     RequestVidDisperse {
         view: ViewNumber,
@@ -1126,6 +1129,12 @@ impl<T: NodeType> Consensus<T> {
                 outbox.push_back(ConsensusOutput::RequestDrbResult(certificate_epoch));
                 return Protocol::Continue;
             },
+        }
+        // Relay a first-obtained Cert2 so peers that missed the vote2s can
+        // still decide. Skip decided views so a GC'd-then-re-received Cert2
+        // cannot ping-pong between nodes forever.
+        if view > self.last_decided_view {
+            outbox.push_back(ConsensusOutput::SendCertificate2(certificate.clone()));
         }
         self.certs2.insert(view, certificate);
         Protocol::Continue

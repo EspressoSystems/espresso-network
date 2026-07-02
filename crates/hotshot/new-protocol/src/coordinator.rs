@@ -819,6 +819,18 @@ where
                     "broadcast certificate1",
                 )?
             },
+            ConsensusOutput::SendCertificate2(cert2) => {
+                debug!(
+                    %node,
+                    view = %cert2.view_number(),
+                    epoch = ?cert2.epoch().map(|e| *e),
+                    "send certificate2"
+                );
+                self.broadcast(
+                    ConsensusMessage::Certificate2(cert2, self.public_key.clone()),
+                    "broadcast certificate2",
+                )?
+            },
             ConsensusOutput::ProposalValidated { proposal, sender } => {
                 debug!(
                     %node,
