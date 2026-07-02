@@ -47,10 +47,10 @@ pub const EXTERNAL_EVENT_CHANNEL_SIZE: usize = 10_000;
 
 /// Default values for the upgrade constants
 pub const DEFAULT_UPGRADE_CONSTANTS: UpgradeConstants = UpgradeConstants {
-    propose_offset: 5,
-    decide_by_offset: 105,
-    begin_offset: 110,
-    finish_offset: 115,
+    propose_offset: 20,
+    decide_by_offset: 120,
+    begin_offset: 125,
+    finish_offset: 130,
 };
 
 /// Default values for the upgrade constants to be used in testing
