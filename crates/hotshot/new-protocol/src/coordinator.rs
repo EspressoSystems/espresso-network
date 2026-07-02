@@ -48,7 +48,7 @@ use crate::{
     message::{
         self, BlockMessage, Certificate1, Certificate2, ConsensusMessage, Message, MessageType,
         Proposal, ProposalFetchMessage, ProposalMessage, TimeoutOneHonest, TransactionMessage,
-        Unchecked, Vote2,
+        Unchecked, Validated, Vote2,
     },
     network::Cliquenet,
     outbox::Outbox,
@@ -754,16 +754,10 @@ where
             ConsensusOutput::SendTimeoutVote(vote, lock) => {
                 let view = vote.view_number();
                 debug!(%node, %view, has_lock = lock.is_some(), "send timeout vote");
-                let message = Message {
-                    sender: self.public_key.clone(),
-                    message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote(
-                        message::TimeoutVoteMessage { vote, lock },
-                    )),
-                };
-                self.network
-                    .sender()
-                    .broadcast(self.consensus.current_view(), &message)
-                    .map_err(|e| CoordinatorError::from(e).context("broadcast timeout vote"))?
+                self.broadcast(
+                    ConsensusMessage::TimeoutVote(message::TimeoutVoteMessage { vote, lock }),
+                    "broadcast timeout vote",
+                )?
             },
             ConsensusOutput::SendTimeoutCertificate(tc, view, epoch) => {
                 debug!(
@@ -791,25 +785,11 @@ where
                     epoch_root = vote1.state_vote.is_some(),
                     "send vote1"
                 );
-                let message = Message {
-                    sender: self.public_key.clone(),
-                    message_type: MessageType::Consensus(ConsensusMessage::Vote1(vote1)),
-                };
-                self.network
-                    .sender()
-                    .broadcast(self.consensus.current_view(), &message)
-                    .map_err(|e| CoordinatorError::from(e).context("broadcast vote1"))?
+                self.broadcast(ConsensusMessage::Vote1(vote1), "broadcast vote1")?
             },
             ConsensusOutput::SendVote2(vote2) => {
                 debug!(%node, view = %vote2.view_number(), "send vote2");
-                let message = Message {
-                    sender: self.public_key.clone(),
-                    message_type: MessageType::Consensus(ConsensusMessage::Vote2(vote2)),
-                };
-                self.network
-                    .sender()
-                    .broadcast(self.consensus.current_view(), &message)
-                    .map_err(|e| CoordinatorError::from(e).context("broadcast vote2"))?
+                self.broadcast(ConsensusMessage::Vote2(vote2), "broadcast vote2")?
             },
             ConsensusOutput::PersistHighQc(high_qc) => {
                 debug!(%node, view = %high_qc.view_number(), "persist high qc");
@@ -822,16 +802,10 @@ where
                     epoch = ?epoch_change.cert1.epoch().map(|e| *e),
                     "send epoch change"
                 );
-                let message = Message {
-                    sender: self.public_key.clone(),
-                    message_type: MessageType::Consensus(ConsensusMessage::EpochChange(
-                        epoch_change,
-                    )),
-                };
-                self.network
-                    .sender()
-                    .broadcast(self.consensus.current_view(), &message)
-                    .map_err(|e| CoordinatorError::from(e).context("broadcast epoch change"))?
+                self.broadcast(
+                    ConsensusMessage::EpochChange(epoch_change),
+                    "broadcast epoch change",
+                )?
             },
             ConsensusOutput::SendCertificate1(cert1) => {
                 debug!(
@@ -840,17 +814,22 @@ where
                     epoch = ?cert1.epoch().map(|e| *e),
                     "send certificate1"
                 );
-                let message = Message {
-                    sender: self.public_key.clone(),
-                    message_type: MessageType::Consensus(ConsensusMessage::Certificate1(
-                        cert1,
-                        self.public_key.clone(),
-                    )),
-                };
-                self.network
-                    .sender()
-                    .broadcast(self.consensus.current_view(), &message)
-                    .map_err(|e| CoordinatorError::from(e).context("broadcast certificate1"))?
+                self.broadcast(
+                    ConsensusMessage::Certificate1(cert1, self.public_key.clone()),
+                    "broadcast certificate1",
+                )?
+            },
+            ConsensusOutput::SendCertificate2(cert2) => {
+                debug!(
+                    %node,
+                    view = %cert2.view_number(),
+                    epoch = ?cert2.epoch().map(|e| *e),
+                    "send certificate2"
+                );
+                self.broadcast(
+                    ConsensusMessage::Certificate2(cert2, self.public_key.clone()),
+                    "broadcast certificate2",
+                )?
             },
             ConsensusOutput::ProposalValidated { proposal, sender } => {
                 debug!(
@@ -1263,6 +1242,21 @@ where
             validated.message,
             vid_share,
         ))
+    }
+
+    fn broadcast(
+        &self,
+        message_type: ConsensusMessage<T, Validated>,
+        ctx: &'static str,
+    ) -> Result<(), CoordinatorError> {
+        let message = Message {
+            sender: self.public_key.clone(),
+            message_type: MessageType::Consensus(message_type),
+        };
+        self.network
+            .sender()
+            .broadcast(self.consensus.current_view(), &message)
+            .map_err(|e| CoordinatorError::from(e).context(ctx))
     }
 
     fn unicast_to_leader(

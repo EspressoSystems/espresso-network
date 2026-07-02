@@ -22,8 +22,9 @@ use crate::{
     tests::common::{
         assertions::{
             any, count_matching, decides_view, is_leaf_decided, is_persist_proposal, is_proposal,
-            is_record_action, is_request_block_and_header, is_request_state, is_send_timeout_cert,
-            is_send_timeout_vote, is_view_changed, is_vote1, is_vote2, node_index_for_key,
+            is_record_action, is_request_block_and_header, is_request_state, is_send_cert2,
+            is_send_timeout_cert, is_send_timeout_vote, is_view_changed, is_vote1, is_vote2,
+            node_index_for_key,
         },
         utils::{ConsensusHarness, MockBlock, state_verified_input},
     },
@@ -286,6 +287,52 @@ async fn test_single_view_decide() {
     assert!(
         any(harness.outputs(), is_leaf_decided),
         "Leaf should be decided after cert2"
+    );
+}
+
+/// Obtaining a Cert2 broadcasts it once so peers that missed the vote2s can
+/// still decide, and a re-delivered Cert2 for the same view is not re-broadcast.
+#[tokio::test]
+async fn test_cert2_broadcast_once() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(3).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    harness
+        .apply(test_data.views[0].proposal_input_consensus(&node_key))
+        .await;
+    harness
+        .apply(test_data.views[0].block_reconstructed_input())
+        .await;
+    harness
+        .apply(test_data.views[1].proposal_input_consensus(&node_key))
+        .await;
+    harness
+        .apply(test_data.views[1].block_reconstructed_input())
+        .await;
+    harness.apply(test_data.views[1].cert1_input()).await;
+    harness.apply(test_data.views[1].cert2_input()).await;
+
+    assert_eq!(
+        count_matching(harness.outputs(), is_send_cert2),
+        1,
+        "obtaining a cert2 should broadcast it exactly once"
+    );
+
+    harness.apply(test_data.views[1].cert2_input()).await;
+    assert_eq!(
+        count_matching(harness.outputs(), is_send_cert2),
+        1,
+        "a re-delivered cert2 must not be re-broadcast"
+    );
+
+    // View 1 decided as an ancestor of view 2, so its cert2 was never
+    // assembled locally.
+    harness.apply(test_data.views[0].cert2_input()).await;
+    assert_eq!(
+        count_matching(harness.outputs(), is_send_cert2),
+        1,
+        "a cert2 for an already-decided view must not be relayed"
     );
 }
 
