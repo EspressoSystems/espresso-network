@@ -774,13 +774,8 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     tokio::select! {
         Some(item) = handles.next() => {
             tracing::error!("exiting dev node: {item:?}");
-            drop(network);
-            drop(consensus_dbs);
         },
-        _ = espresso_utils::shutdown::wait_for_shutdown_signal() => {
-            drop(network);
-            drop(consensus_dbs);
-        },
+        _ = espresso_utils::shutdown::wait_for_shutdown_signal() => {},
     }
 
     Ok(())
