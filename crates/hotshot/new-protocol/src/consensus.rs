@@ -193,7 +193,7 @@ pub struct Consensus<T: NodeType> {
     stored_vids: BTreeSet<ViewNumber>,
     stored_actions: BTreeSet<(ViewNumber, ActionKind)>,
     requested_actions: BTreeSet<(ViewNumber, ActionKind)>,
-    /// Highest locked-QC view confirmed durable; gates release of phase-2 votes.
+    /// Highest locked-QC view confirmed persisted; gates release of phase-2 votes.
     stored_high_qc: Option<ViewNumber>,
 
     /// Messages constructed and accounted for in `voted_*_views` /
@@ -215,6 +215,10 @@ pub struct Consensus<T: NodeType> {
     pending_timeout_certs: BTreeMap<ViewNumber, TimeoutCertificate2<T>>,
 
     timeout_view: ViewNumber,
+    /// Highest view this node may have acted in before a restart (from the
+    /// persisted action log). Bars re-*recording* a view's Vote action, not
+    /// re-casting the phase-2 vote itself (see [`Self::vote2_persisted`]).
+    restart_barred_view: ViewNumber,
     current_view: ViewNumber,
     current_epoch: Option<EpochNumber>,
 
@@ -312,6 +316,7 @@ impl<T: NodeType> Consensus<T> {
             node_id: KeyPrefix::from(&public_key),
             public_key,
             timeout_view: ViewNumber::genesis(),
+            restart_barred_view: ViewNumber::genesis(),
             current_view: ViewNumber::genesis(),
             current_epoch: None,
             stake_table_coordinator: membership_coordinator,
@@ -359,7 +364,7 @@ impl<T: NodeType> Consensus<T> {
         reconstructed: impl IntoIterator<Item = (ViewNumber, VidCommitment2)>,
     ) {
         self.current_epoch = Some(proposal.epoch);
-        // The seed cert comes from durable storage, so its lock is already persisted.
+        // The seed cert comes from persistent storage, so its lock is already persisted.
         self.bump_stored_high_qc(cert1.view_number());
         self.certs.insert(cert1.view_number(), cert1.clone());
         self.locked_cert = Some(cert1);
@@ -384,8 +389,8 @@ impl<T: NodeType> Consensus<T> {
     /// Restore the locked QC persisted on a prior run. Called after
     /// `seed_parent`: the persisted lock can be newer than the decided-anchor
     /// QC, and restoring it keeps the node from voting against a block it had
-    /// already locked. The loaded value is durable, so it also advances the
-    /// durability watermark.
+    /// already locked. The loaded value is persisted, so it also advances the
+    /// persistence watermark.
     pub fn seed_locked_cert(&mut self, cert1: Certificate1<T>) {
         let view = cert1.view_number();
         self.bump_stored_high_qc(view);
@@ -399,15 +404,15 @@ impl<T: NodeType> Consensus<T> {
         }
     }
 
-    /// Advance the locked-QC durability watermark to `view` if it is newer.
+    /// Advance the locked-QC persistence watermark to `view` if it is newer.
     fn bump_stored_high_qc(&mut self, view: ViewNumber) {
         if self.stored_high_qc.is_none_or(|cur| cur < view) {
             self.stored_high_qc = Some(view);
         }
     }
 
-    /// Whether the locked QC at `required` view is durably persisted.
-    fn high_qc_durable(&self, required: ViewNumber) -> bool {
+    /// Whether the locked QC at `required` view is persisted.
+    fn high_qc_persisted(&self, required: ViewNumber) -> bool {
         self.stored_high_qc.is_some_and(|stored| stored >= required)
     }
 
@@ -798,8 +803,9 @@ impl<T: NodeType> Consensus<T> {
     }
 
     /// On restart, bar voting and proposing in every view this node may have
-    /// acted in by raising `timeout_view`, and place the view cursor just past
-    /// the high QC. Forward-only: never regresses either view.
+    /// acted in by raising `timeout_view` (vote1, propose) and
+    /// `restart_barred_view` (vote-action re-recording), and place the view
+    /// cursor just past the high QC. Forward-only: never regresses any view.
     pub fn resume_from_restart(
         &mut self,
         anchor_view: ViewNumber,
@@ -810,6 +816,9 @@ impl<T: NodeType> Consensus<T> {
         let last_barred = first_allowed - 1;
         if last_barred > self.timeout_view {
             self.timeout_view = last_barred;
+        }
+        if last_barred > self.restart_barred_view {
+            self.restart_barred_view = last_barred;
         }
         // `Coordinator::start` enters `current_view + 1`, so parking the cursor
         // at the high QC makes the node re-enter at `high_qc + 1`.
@@ -1776,7 +1785,7 @@ impl<T: NodeType> Consensus<T> {
             },
             StorageOutput::HighQc(view) => {
                 self.bump_stored_high_qc(view);
-                // A higher durable lock can unblock vote2 across many views; re-check all.
+                // A newly persisted lock can unblock vote2 across many views; re-check all.
                 let pending: Vec<ViewNumber> = self.pending_vote2.keys().copied().collect();
                 for view in pending {
                     self.release_vote2(view, outbox);
@@ -1810,15 +1819,25 @@ impl<T: NodeType> Consensus<T> {
         let Some((_, required)) = self.pending_vote2.get(&view) else {
             return;
         };
+        if self.certs2.contains_key(&view) {
+            self.pending_vote2.remove(&view);
+            return;
+        }
         let required = *required;
-        if !self.stored_actions.contains(&(view, ActionKind::Vote))
-            || !self.stored_vids.contains(&view)
-            || !self.high_qc_durable(required)
-        {
+        if !self.vote2_persisted(view) || !self.high_qc_persisted(required) {
             return;
         }
         let (vote2, _) = self.pending_vote2.remove(&view).expect("checked above");
         outbox.push_back(ConsensusOutput::SendVote2(vote2));
+    }
+
+    /// Whether the view's Vote action and VID share are persisted, gating the
+    /// phase-2 vote. A restart-barred view persisted both before the crash:
+    /// its vote is re-cast, but its Vote action is never re-recorded.
+    fn vote2_persisted(&self, view: ViewNumber) -> bool {
+        view <= self.restart_barred_view
+            || (self.stored_actions.contains(&(view, ActionKind::Vote))
+                && self.stored_vids.contains(&view))
     }
 
     fn release_proposal(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
@@ -2089,6 +2108,10 @@ impl<T: NodeType> Consensus<T> {
             outbox.push_back(ConsensusOutput::PersistHighQc(cert1.clone()));
         }
 
+        if self.certs2.contains_key(&view) {
+            return;
+        }
+
         if !self.staked_in_epoch(proposal_epoch) {
             return;
         }
@@ -2111,17 +2134,16 @@ impl<T: NodeType> Consensus<T> {
             },
         };
         self.voted_2_views.insert(view);
-        // Lock is set above and >= view; the vote waits until it is durable.
+        // Lock is set above and >= view; the vote waits until it is persisted.
         let required = self
             .locked_view()
             .expect("locked_cert is set before voting in phase 2");
-        if self.stored_actions.contains(&(view, ActionKind::Vote))
-            && self.stored_vids.contains(&view)
-            && self.high_qc_durable(required)
-        {
+        if self.vote2_persisted(view) && self.high_qc_persisted(required) {
             outbox.push_back(ConsensusOutput::SendVote2(vote));
         } else {
-            self.request_action(view, Some(proposal_epoch), ActionKind::Vote, outbox);
+            if view > self.restart_barred_view {
+                self.request_action(view, Some(proposal_epoch), ActionKind::Vote, outbox);
+            }
             self.pending_vote2.insert(view, (vote, required));
         }
     }

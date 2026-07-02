@@ -16,6 +16,15 @@ pub(crate) fn is_leaf_decided(output: &ConsensusOutput<TestTypes>) -> bool {
     matches!(output, ConsensusOutput::LeafDecided { .. })
 }
 
+/// True if `output` is a `LeafDecided` whose decided leaves include `view`.
+pub(crate) fn decides_view(output: &ConsensusOutput<TestTypes>, view: u64) -> bool {
+    matches!(
+        output,
+        ConsensusOutput::LeafDecided { leaves, .. }
+            if leaves.iter().any(|l| *l.view_number() == view)
+    )
+}
+
 pub(crate) fn is_request_state(output: &ConsensusOutput<TestTypes>) -> bool {
     matches!(output, ConsensusOutput::RequestState(_))
 }
