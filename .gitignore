@@ -81,3 +81,6 @@ leader_stats.html
 
 # dregs mutation testing output
 mutants/
+
+# Personal project-specific preferences
+CLAUDE.local.md
