@@ -25,8 +25,8 @@ use hotshot_testing::{
 };
 use hotshot_types::{
     data::{
-        EpochNumber, Leaf2, VidCommitment, VidDisperse, VidDisperse2, VidDisperseShare2,
-        ViewNumber, vid_commitment,
+        EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperse, VidDisperse2,
+        VidDisperseShare2, ViewNumber, vid_commitment,
     },
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StakeTableState, StateKeyPair},
@@ -845,6 +845,22 @@ fn extract_vid_disperse(
     (vid_disperse, vid_shares)
 }
 
+/// The `(view, VID commitment)` pairs a restarted node seeds as
+/// already-reconstructed blocks, mirroring `Coordinator::maker`.
+pub fn reconstructed_blocks(
+    headers: impl IntoIterator<Item = (ViewNumber, TestBlockHeader)>,
+) -> Vec<(ViewNumber, VidCommitment2)> {
+    headers
+        .into_iter()
+        .filter_map(
+            |(view, header)| match BlockHeader::<TestTypes>::payload_commitment(&header) {
+                VidCommitment::V2(commitment) => Some((view, commitment)),
+                _ => None,
+            },
+        )
+        .collect()
+}
+
 /// Lightweight consensus-only test harness. Wraps a single [`Consensus`]
 /// instance and auto-responds to outputs that consensus expects feedback for
 /// (`RequestState`, `RequestBlockAndHeader`, `RequestVidDisperse`,
@@ -893,8 +909,9 @@ impl ConsensusHarness {
 
     /// Build a harness whose consensus has been restarted from a persisted
     /// decided anchor, mirroring `Coordinator::maker`: `Consensus::new` is
-    /// given the anchor leaf, the undecided proposals above it are re-seeded,
-    /// and the anchor is installed as the parent via `seed_parent`.
+    /// given the anchor leaf, the undecided proposals above it are re-seeded
+    /// and marked reconstructed, and the anchor is installed as the parent via
+    /// `seed_parent`.
     pub async fn restarted_from(
         node_index: u64,
         anchor_proposal: Proposal<TestTypes>,
@@ -922,8 +939,14 @@ impl ConsensusHarness {
             epoch_height,
         );
 
+        let undecided_proposals: Vec<_> = undecided_proposals.into_iter().collect();
+        let reconstructed = reconstructed_blocks(
+            std::iter::once(&anchor_proposal)
+                .chain(&undecided_proposals)
+                .map(|p| (p.view_number, p.block_header.clone())),
+        );
         consensus.seed_proposals(undecided_proposals);
-        consensus.seed_parent(anchor_cert1, anchor_proposal, std::iter::empty());
+        consensus.seed_parent(anchor_cert1, anchor_proposal, reconstructed);
         consensus.resume_from_restart(anchor_view, anchor_view + 1, anchor_view);
 
         Self {

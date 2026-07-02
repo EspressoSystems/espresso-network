@@ -73,7 +73,6 @@ use hotshot_types::{
     data::ViewNumber,
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StateKeyPair, StateSignKey},
-    message::UpgradeLock,
     signature_key::{BLSPrivKey, BLSPubKey},
     traits::{
         metrics::{Metrics, NoMetrics},
@@ -821,19 +820,13 @@ where
         CombinedNetworks::new(cdn_network, p2p_network, Some(Duration::from_secs(1)))
     };
 
-    // TODO: This creates a separate UpgradeLock from the one HotShot will
-    // use. They should share a single lock so upgrade certificate updates
-    // are visible to both.
-    let cliquenet = Cliquenet::create(
-        &format!("espresso-{}", genesis.chain_config.chain_id),
-        pub_key,
-        network_params.x25519_secret_key.into(),
-        network_params.cliquenet_bind_addr.clone(),
-        [],
-        UpgradeLock::new(version_upgrade),
-        clone_box(&*metrics),
-    )
-    .await?;
+    let cliquenet = {
+        let metrics = clone_box(&*metrics);
+        let secret_key = network_params.x25519_secret_key.into();
+        let bind_addr = network_params.cliquenet_bind_addr.clone();
+        let name = format!("espresso-{}", genesis.chain_config.chain_id);
+        move |upgrade| Cliquenet::create(name, pub_key, secret_key, bind_addr, [], upgrade, metrics)
+    };
 
     let network = Arc::new(combined_network);
 
@@ -990,7 +983,6 @@ pub mod testing {
         data::EpochNumber,
         event::LeafInfo,
         light_client::StateKeyPair,
-        message::UpgradeLock,
         new_protocol::CoordinatorEvent,
         traits::{
             EncodeBytes, block_contents::BlockHeader, metrics::NoMetrics, network::Topic,
@@ -1717,18 +1709,18 @@ pub mod testing {
             );
 
             let coordinator_network = {
-                let lock = UpgradeLock::<SeqTypes>::new(upgrade);
-                Cliquenet::create(
-                    "test-coordinator",
-                    my_peer_config.stake_table_entry.stake_key,
-                    x25519_keypair,
-                    coordinator_addr,
-                    [],
-                    lock,
-                    Box::new(NoMetrics),
-                )
-                .await
-                .expect("cliquenet creation should succeed")
+                let pub_key = my_peer_config.stake_table_entry.stake_key;
+                move |upgrade| {
+                    Cliquenet::create(
+                        "test-coordinator",
+                        pub_key,
+                        x25519_keypair,
+                        coordinator_addr,
+                        [],
+                        upgrade,
+                        Box::new(NoMetrics),
+                    )
+                }
             };
 
             SequencerContext::init(
