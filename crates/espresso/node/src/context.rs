@@ -19,7 +19,10 @@ use futures::{
 };
 use hotshot::SystemContext;
 use hotshot_events_service::events_source::{EventConsumer, EventsStreamer};
-use hotshot_new_protocol::{coordinator::Coordinator, network::Cliquenet};
+use hotshot_new_protocol::{
+    coordinator::Coordinator,
+    network::{Cliquenet, NetworkError},
+};
 use hotshot_orchestrator::client::OrchestratorClient;
 use hotshot_types::{
     PeerConfig, ValidatorConfig,
@@ -109,7 +112,7 @@ where
 {
     #[tracing::instrument(skip_all, fields(node_id = instance_state.node_id))]
     #[allow(clippy::too_many_arguments)]
-    pub async fn init(
+    pub async fn init<F>(
         network_config: NetworkConfig<SeqTypes>,
         upgrade: versions::Upgrade,
         validator_config: ValidatorConfig<SeqTypes>,
@@ -119,14 +122,17 @@ where
         state_catchup: ParallelStateCatchup,
         persistence: Arc<P>,
         network: Arc<N>,
-        mut coordinator_network: Cliquenet<SeqTypes>,
+        coordinator_network: F,
         state_relay_server: Option<Url>,
         metrics: &dyn Metrics,
         stake_table_capacity: usize,
         event_consumer: impl PersistenceEventConsumer + 'static,
         proposal_fetcher_cfg: ProposalFetcherConfig,
         bootstrap_epoch_catchup_timeout: Duration,
-    ) -> anyhow::Result<Self> {
+    ) -> anyhow::Result<Self>
+    where
+        F: AsyncFnOnce(UpgradeLock<SeqTypes>) -> Result<Cliquenet<SeqTypes>, NetworkError>,
+    {
         let config = &network_config.config;
         let pub_key = validator_config.public_key;
         tracing::info!(%pub_key, "initializing consensus");
@@ -179,6 +185,9 @@ where
         )
         .await?
         .0;
+
+        let mut coordinator_network =
+            coordinator_network(handle.hotshot.upgrade_lock.clone()).await?;
 
         // `load_start_epoch_info` ran inside `SystemContext::init`, so
         // `first_epoch` is now seeded on the shared membership. Walk the

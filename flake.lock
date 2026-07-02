@@ -459,11 +459,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1763556226,
-        "narHash": "sha256-AFrrtSaVNraRIgJUAMfvIvX5dH1drETw7zzOVwlwxQo=",
+        "lastModified": 1782997719,
+        "narHash": "sha256-1h8uoRgFU6qOZokmag2gUnqvKlMf8sH06LIuWImAmiE=",
         "owner": "EspressoSystems",
         "repo": "nix-solc-bin",
-        "rev": "e3265d0908439bfa7385256d3e16d7ce77a22d35",
+        "rev": "b4e99241393dc27e56d75543190a22b898e0db6a",
         "type": "github"
       },
       "original": {

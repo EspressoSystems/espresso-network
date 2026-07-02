@@ -43,8 +43,8 @@ struct Shared<K> {
 }
 
 impl<T: NodeType> Cliquenet<T> {
-    pub async fn create<A, P>(
-        name: &str,
+    pub async fn create<A, P, S>(
+        name: S,
         signing_key: T::SignatureKey,
         keypair: Keypair,
         addr: A,
@@ -55,6 +55,7 @@ impl<T: NodeType> Cliquenet<T> {
     where
         A: Into<cliquenet::NetAddr>,
         P: IntoIterator<Item = (T::SignatureKey, PeerConnectInfo)>,
+        S: Into<String>,
     {
         let parties: HashMap<T::SignatureKey, PeerConnectInfo> = parties.into_iter().collect();
 
