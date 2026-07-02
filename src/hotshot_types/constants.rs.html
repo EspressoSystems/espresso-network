@@ -61,23 +61,16 @@
 <a href=#61 id=61 data-nosnippet>61</a>    finish_offset: <span class="number">20</span>,
 <a href=#62 id=62 data-nosnippet>62</a>};
 <a href=#63 id=63 data-nosnippet>63</a>
-<a href=#64 id=64 data-nosnippet>64</a><span class="doccomment">/// For `STAKE_TABLE_CAPACITY=200`, the light client prover (a.k.a. `hotshot-state-prover`)
-<a href=#65 id=65 data-nosnippet>65</a>/// would need to generate proof for a circuit of slightly below 2^20 gates.
-<a href=#66 id=66 data-nosnippet>66</a>/// Thus we need to support this upperbounded degree in our Structured Reference String (SRS),
-<a href=#67 id=67 data-nosnippet>67</a>/// the `+2` is just an artifact from the jellyfish's Plonk proof system.
-<a href=#68 id=68 data-nosnippet>68</a></span><span class="attr">#[allow(clippy::cast_possible_truncation)]
-<a href=#69 id=69 data-nosnippet>69</a></span><span class="kw">pub const </span>SRS_DEGREE: usize = <span class="number">2u64</span>.pow(<span class="number">20</span>) <span class="kw">as </span>usize + <span class="number">2</span>;
-<a href=#70 id=70 data-nosnippet>70</a>
-<a href=#71 id=71 data-nosnippet>71</a><span class="doccomment">/// The `tide` module name for the legacy builder
-<a href=#72 id=72 data-nosnippet>72</a></span><span class="kw">pub const </span>LEGACY_BUILDER_MODULE: <span class="kw-2">&amp;</span>str = <span class="string">"block_info"</span>;
-<a href=#73 id=73 data-nosnippet>73</a>
-<a href=#74 id=74 data-nosnippet>74</a><span class="doccomment">/// The `tide` module name for the marketplace builder
-<a href=#75 id=75 data-nosnippet>75</a></span><span class="kw">pub const </span>MARKETPLACE_BUILDER_MODULE: <span class="kw-2">&amp;</span>str = <span class="string">"bundle_info"</span>;
-<a href=#76 id=76 data-nosnippet>76</a>
-<a href=#77 id=77 data-nosnippet>77</a><span class="doccomment">/// default number of rounds to run
-<a href=#78 id=78 data-nosnippet>78</a></span><span class="kw">pub const </span>ORCHESTRATOR_DEFAULT_NUM_ROUNDS: usize = <span class="number">100</span>;
-<a href=#79 id=79 data-nosnippet>79</a><span class="doccomment">/// default number of transactions per round
-<a href=#80 id=80 data-nosnippet>80</a></span><span class="kw">pub const </span>ORCHESTRATOR_DEFAULT_TRANSACTIONS_PER_ROUND: usize = <span class="number">10</span>;
-<a href=#81 id=81 data-nosnippet>81</a><span class="doccomment">/// default size of transactions
-<a href=#82 id=82 data-nosnippet>82</a></span><span class="kw">pub const </span>ORCHESTRATOR_DEFAULT_TRANSACTION_SIZE: usize = <span class="number">100</span>;
+<a href=#64 id=64 data-nosnippet>64</a><span class="doccomment">/// The `tide` module name for the legacy builder
+<a href=#65 id=65 data-nosnippet>65</a></span><span class="kw">pub const </span>LEGACY_BUILDER_MODULE: <span class="kw-2">&amp;</span>str = <span class="string">"block_info"</span>;
+<a href=#66 id=66 data-nosnippet>66</a>
+<a href=#67 id=67 data-nosnippet>67</a><span class="doccomment">/// The `tide` module name for the marketplace builder
+<a href=#68 id=68 data-nosnippet>68</a></span><span class="kw">pub const </span>MARKETPLACE_BUILDER_MODULE: <span class="kw-2">&amp;</span>str = <span class="string">"bundle_info"</span>;
+<a href=#69 id=69 data-nosnippet>69</a>
+<a href=#70 id=70 data-nosnippet>70</a><span class="doccomment">/// default number of rounds to run
+<a href=#71 id=71 data-nosnippet>71</a></span><span class="kw">pub const </span>ORCHESTRATOR_DEFAULT_NUM_ROUNDS: usize = <span class="number">100</span>;
+<a href=#72 id=72 data-nosnippet>72</a><span class="doccomment">/// default number of transactions per round
+<a href=#73 id=73 data-nosnippet>73</a></span><span class="kw">pub const </span>ORCHESTRATOR_DEFAULT_TRANSACTIONS_PER_ROUND: usize = <span class="number">10</span>;
+<a href=#74 id=74 data-nosnippet>74</a><span class="doccomment">/// default size of transactions
+<a href=#75 id=75 data-nosnippet>75</a></span><span class="kw">pub const </span>ORCHESTRATOR_DEFAULT_TRANSACTION_SIZE: usize = <span class="number">100</span>;
 </code></pre></div></section></main></body></html>
