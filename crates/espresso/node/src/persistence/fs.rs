@@ -49,6 +49,7 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 use itertools::Itertools;
+use serde::{Deserialize, Serialize};
 
 use super::{
     RegisteredValidatorNoX25519, RegisteredValidatorPreOption, RegisteredValidatorPreSchnorrOption,
@@ -220,6 +221,15 @@ struct Inner {
     path: PathBuf,
     view_retention: u64,
     migrated: HashSet<String>,
+}
+
+/// Decide-event cursor: the last leaf delivered to the event consumer.
+/// The bincode encoding must stay byte-compatible with the original raw
+/// `view || height` little-endian file layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct EventCursor {
+    view: ViewNumber,
+    height: u64,
 }
 
 impl Inner {
@@ -495,27 +505,24 @@ impl Inner {
         }
     }
 
-    fn load_event_cursor(&self) -> anyhow::Result<Option<(ViewNumber, u64)>> {
+    fn load_event_cursor(&self) -> anyhow::Result<Option<EventCursor>> {
         let path = self.event_cursor_path();
         if !path.is_file() {
             return Ok(None);
         }
-        let bytes: [u8; 16] = fs::read(&path)?
-            .try_into()
-            .map_err(|bytes| anyhow!("malformed event cursor file: {bytes:?}"))?;
-        let view = u64::from_le_bytes(bytes[..8].try_into().unwrap());
-        let height = u64::from_le_bytes(bytes[8..].try_into().unwrap());
-        Ok(Some((ViewNumber::new(view), height)))
+        let bytes = fs::read(&path)?;
+        let cursor = bincode::deserialize(&bytes).context("malformed event cursor file")?;
+        Ok(Some(cursor))
     }
 
-    fn save_event_cursor(&mut self, view: ViewNumber, height: u64) -> anyhow::Result<()> {
+    fn save_event_cursor(&mut self, cursor: EventCursor) -> anyhow::Result<()> {
         let path = self.event_cursor_path();
+        let bytes = bincode::serialize(&cursor)?;
         self.replace(
             &path,
             |_| Ok(true),
             |mut file| {
-                file.write_all(&view.u64().to_le_bytes())?;
-                file.write_all(&height.to_le_bytes())?;
+                file.write_all(&bytes)?;
                 Ok(())
             },
         )
@@ -586,14 +593,17 @@ impl Inner {
         // identify the anchor.
         let stored_cursor = self.load_event_cursor()?;
         let mut cursor = stored_cursor;
-        if let Some((cursor_view, _)) = cursor {
-            leaves.retain(|v, _| *v > cursor_view);
+        if let Some(EventCursor { view, .. }) = cursor {
+            leaves.retain(|v, _| *v > view);
         } else if let Some((oldest_view, _)) = leaves.first_key_value() {
             // Storage written before the cursor file existed is monotone; the oldest leaf --
             // unless it is genesis -- was already included in the previous decide event.
             if *oldest_view > ViewNumber::genesis() {
                 let (v, (info, _)) = leaves.pop_first().unwrap();
-                cursor = Some((v, info.leaf.block_header().block_number()));
+                cursor = Some(EventCursor {
+                    view: v,
+                    height: info.leaf.block_header().block_number(),
+                });
             }
         }
 
@@ -606,7 +616,10 @@ impl Inner {
             // gap-filled: hold the cursor until that decide writes the missing file. Legacy or
             // beyond-horizon gaps are permanent; skip as before, leaving the missing block to
             // the consumer's own fetching.
-            if let Some((_, cursor_height)) = cursor
+            if let Some(EventCursor {
+                height: cursor_height,
+                ..
+            }) = cursor
                 && height > cursor_height + 1
                 && leaf.leaf.block_header().version() >= versions::NEW_PROTOCOL_VERSION
                 && within_gap_fill_horizon(view.u64(), watermark.u64())
@@ -648,7 +661,7 @@ impl Inner {
                 })
             };
             consumer.handle_event(&event).await?;
-            cursor = Some((view, height));
+            cursor = Some(EventCursor { view, height });
 
             if let Some((start, end, current_height)) = current_interval.as_mut() {
                 if height == *current_height + 1 {
@@ -671,11 +684,11 @@ impl Inner {
         }
 
         if cursor != stored_cursor
-            && let Some((cursor_view, cursor_height)) = cursor
+            && let Some(cursor) = cursor
         {
             // Advance the persisted cursor only after the consumer has handled the events; on a
             // failure the next pass re-emits from the old cursor (consumers are idempotent).
-            self.save_event_cursor(cursor_view, cursor_height)?;
+            self.save_event_cursor(cursor)?;
         }
 
         Ok(intervals)
@@ -2574,6 +2587,20 @@ mod test {
         fn options(storage: &Self::Storage) -> impl PersistenceOptions<Persistence = Self> {
             Options::new(storage.path().into())
         }
+    }
+
+    /// Cursor files written before [`EventCursor`] existed must keep parsing.
+    #[test]
+    fn test_event_cursor_format_is_stable() {
+        let cursor = EventCursor {
+            view: ViewNumber::new(7),
+            height: 42,
+        };
+        let bytes = bincode::serialize(&cursor).unwrap();
+        let mut raw = 7u64.to_le_bytes().to_vec();
+        raw.extend(42u64.to_le_bytes());
+        assert_eq!(bytes, raw);
+        assert_eq!(bincode::deserialize::<EventCursor>(&raw).unwrap(), cursor);
     }
 
     #[test]
