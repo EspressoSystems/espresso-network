@@ -13,7 +13,10 @@ use espresso_contract_deployer::{
     Contract, Contracts, DeployedContracts, OwnableContract, build_provider, build_provider_ledger,
     builder::DeployerArgsBuilder,
     network_config::{light_client_genesis, light_client_genesis_from_stake_table},
-    proposals::timelock::TimelockOperationType,
+    proposals::{
+        timelock::TimelockOperationType,
+        verify::{VerifyProposalArgs, run_verify},
+    },
     provider::connect_ledger,
 };
 use espresso_types::{config::PublicNetworkConfig, parse_duration};
@@ -256,6 +259,21 @@ struct Options {
     #[clap(long, name = "CALLDATA_OUT_DIR")]
     pub calldata_out_dir: Option<PathBuf>,
 
+    /// Network name for the proposal directory (e.g. "mainnet", "decaf").
+    /// Defaults to a built-in map: chainId 1 => "mainnet", 11155111 => "decaf".
+    /// Required when the chain is not in the built-in map.
+    #[clap(long, name = "NETWORK")]
+    pub network: Option<String>,
+
+    /// Override the slug component of the proposal directory name.
+    /// Defaults to the contract kind in kebab-case (e.g. "stake-table-v3").
+    #[clap(long, name = "PROPOSAL_SLUG")]
+    pub proposal_slug: Option<String>,
+
+    /// Root directory for written proposals (default: "contracts/deployments/proposals" relative to CWD).
+    #[clap(long, name = "PROPOSALS_ROOT")]
+    pub proposals_root: Option<PathBuf>,
+
     /// Stake table capacity for the prover circuit
     #[clap(short, long, env = "ESPRESSO_STAKE_TABLE_CAPACITY", default_value_t = DEFAULT_STAKE_TABLE_CAPACITY)]
     pub stake_table_capacity: usize,
@@ -472,6 +490,8 @@ struct Options {
 enum Command {
     Account,
     Balance,
+    /// Verify a Safe-tx-builder upgrade proposal without trusting Etherscan.
+    VerifyProposal(VerifyProposalArgs),
 }
 
 fn main() -> anyhow::Result<()> {
@@ -525,6 +545,11 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
                 println!("{account}: {} Eth", format_ether(balance));
                 return Ok(());
             },
+            Command::VerifyProposal(args) => {
+                let report = run_verify(args, &provider, &contracts, chain_id).await?;
+                report.print();
+                std::process::exit(report.exit_code());
+            },
         };
     };
 
@@ -555,6 +580,15 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     }
     if let Some(dir) = opt.calldata_out_dir {
         args_builder.output_dir(dir);
+    }
+    if let Some(network) = opt.network {
+        args_builder.network(network);
+    }
+    if let Some(slug) = opt.proposal_slug {
+        args_builder.proposal_slug(slug);
+    }
+    if let Some(root) = opt.proposals_root {
+        args_builder.proposals_root(root);
     }
     if let Some(multisig) = opt.multisig_address {
         args_builder.multisig(multisig);

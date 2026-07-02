@@ -1,0 +1,75 @@
+name: Verify upgrade proposals
+
+on:
+  pull_request:
+    paths:
+      - "contracts/deployments/proposals/**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  verify-proposals:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - uses: cachix/install-nix-action@v31
+
+      - uses: cachix/cachix-action@v16
+        continue-on-error: true
+        with:
+          name: espresso-systems-private
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
+          extraPullNames: nix-community
+          skipPush: true
+
+      - name: Build deploy binary
+        run: nix develop --accept-flake-config -c cargo build --locked --bin deploy --profile test
+
+      - name: Find and verify changed proposals
+        run: |
+          set -euo pipefail
+          # Find all proposal directories that were added or modified in this PR.
+          changed_dirs=$(git diff --name-only origin/${{ github.base_ref }}...HEAD -- 'contracts/deployments/proposals/**' \
+            | grep -E '\.(json)$' \
+            | xargs -I{} dirname {} \
+            | sort -u)
+          if [ -z "$changed_dirs" ]; then
+            echo "No proposal JSON files changed."
+            exit 0
+          fi
+          exit_code=0
+          for dir in $changed_dirs; do
+            # Each proposal dir must contain a one-line `contract` file with
+            # the --contract kind (e.g. stake-table-v3).
+            if [ ! -f "$dir/contract" ]; then
+              echo "ERROR: $dir/contract missing" >&2
+              exit_code=1
+              continue
+            fi
+            contract=$(cat "$dir/contract")
+            # Public RPC per network (network is the path segment after proposals/).
+            network=${dir#contracts/deployments/proposals/}
+            network=${network%%/*}
+            case "$network" in
+              decaf) rpc="https://ethereum-sepolia-rpc.publicnode.com" ;;
+              mainnet) rpc="https://ethereum-rpc.publicnode.com" ;;
+              *) echo "ERROR: unsupported network '$network' in $dir" >&2; exit_code=1; continue ;;
+            esac
+            echo "Verifying $dir (contract=$contract, network=$network) ..."
+            # Build --input flags for each JSON file in the dir.
+            input_flags=$(ls "$dir"/*.json | sort | sed 's/^/--input /' | tr '\n' ' ')
+            # shellcheck disable=SC2086
+            nix develop --accept-flake-config -c \
+              ./target/test/deploy --rpc-url "$rpc" verify-proposal --contract "$contract" $input_flags \
+              || exit_code=$?
+          done
+          exit $exit_code

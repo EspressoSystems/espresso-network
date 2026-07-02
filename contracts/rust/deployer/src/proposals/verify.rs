@@ -1,0 +1,1427 @@
+//! Trust-minimizing verifier for Safe-tx-builder upgrade proposals.
+//!
+//! Checks that the impl address in a proposal holds exactly the bytecode the
+//! deployer ships for the supplied contract kind, and that governance wiring
+//! (owner, timelock, delay, init call) is correct. No trust in Etherscan or
+//! the JSON description.
+
+use std::{collections::BTreeMap, fmt, path::PathBuf};
+
+use alloy::{
+    primitives::{Address, B256, Bytes, U256},
+    providers::Provider,
+    sol_types::SolCall,
+};
+use anyhow::{Result, anyhow, bail};
+use hotshot_contract_adapter::sol_types::{
+    EspTokenV2, FeeContract, OpsTimelock, RewardClaim, StakeTableV2, StakeTableV3,
+};
+use serde::Deserialize;
+
+use crate::{
+    Contract, Contracts,
+    proposals::safe_hash::{SafeTxHashes, safe_tx_hashes},
+};
+
+// ── JSON deserialization ─────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct SafeBatch {
+    pub meta: SafeMeta,
+    pub transactions: Vec<SafeTx>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SafeMeta {
+    pub description: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SafeTx {
+    pub to: Address,
+    pub value: String,
+    pub data: Option<String>,
+    #[serde(rename = "contractMethod")]
+    pub contract_method: Option<SafeContractMethod>,
+    #[serde(rename = "contractInputsValues")]
+    pub contract_inputs_values: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SafeContractMethod {
+    pub name: String,
+}
+
+// ── Proposal batch classification ────────────────────────────────────────────
+
+/// Phase of a single-transaction batch, identified from `contractMethod.name`
+/// or the 4-byte ABI selector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Phase {
+    Schedule,
+    Execute,
+}
+
+/// A classified timelock proposal pair.
+/// Produced by `classify_batches`; input to `decode_proposal`.
+#[derive(Debug)]
+pub struct TimelockBatches {
+    pub schedule: SafeBatch,
+    pub execute: SafeBatch,
+}
+
+// ── Decoded upgrade ──────────────────────────────────────────────────────────
+
+/// Reconstructed outer calldata for schedule and execute phases.
+#[derive(Debug, Clone)]
+pub struct OuterCalldatas {
+    pub schedule: Bytes,
+    pub execute: Bytes,
+}
+
+#[derive(Debug, Clone)]
+pub struct DecodedUpgrade {
+    /// Timelock address.
+    pub outer_to: Address,
+    pub proxy: Address,
+    pub new_impl: Address,
+    pub init_data: Bytes,
+    pub value: U256,
+    pub predecessor: B256,
+    pub salt: B256,
+    pub delay: U256,
+    pub description: String,
+    pub outer_calldatas: OuterCalldatas,
+}
+
+// ── Normalization ────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SolcVersion(pub [u8; 3]);
+
+impl fmt::Display for SolcVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}.{}.{}", self.0[0], self.0[1], self.0[2])
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MatchClass {
+    /// Cores and solc version are byte-equal.
+    FullMatch,
+    /// Cores match but solc versions differ — PASS with warning.
+    CodeMatchMetaDiffers,
+    /// Core bytecodes differ — FAIL.
+    Mismatch,
+}
+
+#[derive(Debug, Clone)]
+pub struct BytecodeCheck {
+    pub class: MatchClass,
+    pub onchain_solc: Option<SolcVersion>,
+    pub reference_solc: Option<SolcVersion>,
+}
+
+/// Strip trailing solc CBOR metadata.
+///
+/// Solidity CBOR tail format:
+///   `a1 64 "solc" 43 <3-byte ver> 00 <u16-BE length>`
+/// where the u16 at the very end is the byte length of the CBOR body.
+/// Total drop = CBOR-length + 2.
+///
+/// Returns `(stripped_code, solc_version)`.
+pub fn strip_cbor_metadata(code: &[u8]) -> (Vec<u8>, Option<SolcVersion>) {
+    if code.len() < 2 {
+        return (code.to_vec(), None);
+    }
+    let tail_len = u16::from_be_bytes([code[code.len() - 2], code[code.len() - 1]]) as usize;
+    let total_drop = tail_len + 2;
+    if total_drop > code.len() {
+        return (code.to_vec(), None);
+    }
+    let cbor_start = code.len() - total_drop;
+    let cbor = &code[cbor_start..code.len() - 2];
+    let solc_prefix: &[u8] = &[0xa1, 0x64, 0x73, 0x6f, 0x6c, 0x63, 0x43];
+    let stripped = code[..cbor_start].to_vec();
+    if cbor.len() >= 11 {
+        for i in 0..=(cbor.len() - 11) {
+            if cbor[i..i + 7] == *solc_prefix && cbor[i + 10] == 0x00 {
+                let ver = SolcVersion([cbor[i + 7], cbor[i + 8], cbor[i + 9]]);
+                return (stripped, Some(ver));
+            }
+        }
+    }
+    (stripped, None)
+}
+
+/// Mask all occurrences of `impl_addr` (20 bytes) in `code` via substring scan.
+///
+/// The UUPS `__self` immutable sits at compiler-chosen non-aligned byte offsets.
+/// Each non-overlapping 20-byte occurrence is zeroed in-place.
+///
+/// Returns the number of occurrences zeroed.
+pub fn mask_immutables(code: &mut [u8], impl_addr: Address) -> usize {
+    let addr_bytes = impl_addr.as_slice();
+    let mut count = 0usize;
+    if code.len() < 20 {
+        return 0;
+    }
+    let mut i = 0usize;
+    while i <= code.len() - 20 {
+        if &code[i..i + 20] == addr_bytes {
+            code[i..i + 20].fill(0);
+            count += 1;
+            i += 20;
+        } else {
+            i += 1;
+        }
+    }
+    count
+}
+
+/// Compare normalized on-chain bytecode against the binding reference.
+///
+/// Normalization: strip CBOR (both) → substring-mask `impl_addr` on ON-CHAIN
+/// only → assert equal core length → classify.
+///
+/// The binding already has zeros at `__self` windows (compiled with
+/// address(this)=0 placeholder), so the reference is left untouched.
+///
+/// LightClient verification is deferred; bails if the reference contains
+/// `0xff*20` library placeholders.
+pub fn compare_normalized(
+    onchain: &[u8],
+    reference: &[u8],
+    impl_addr: Address,
+) -> Result<BytecodeCheck> {
+    let placeholder = [0xffu8; 20];
+    if reference.windows(20).any(|w| w == placeholder.as_slice()) {
+        bail!(
+            "reference bytecode contains library placeholder (0xff*20); LightClient verification \
+             is deferred"
+        );
+    }
+
+    let (mut onchain_core, onchain_solc) = strip_cbor_metadata(onchain);
+    let (ref_core, ref_solc) = strip_cbor_metadata(reference);
+
+    let count = mask_immutables(&mut onchain_core, impl_addr);
+    if onchain_core.len() >= 20 && count == 0 {
+        bail!(
+            "mask_immutables found 0 occurrences of impl_addr {impl_addr}; expected at least 1 \
+             for a UUPS contract — bytecode may be wrong"
+        );
+    }
+    if count > 8 {
+        bail!("unexpected immutable count: {count}; expected 1..=8");
+    }
+
+    if onchain_core.len() != ref_core.len() {
+        return Ok(BytecodeCheck {
+            class: MatchClass::Mismatch,
+            onchain_solc,
+            reference_solc: ref_solc,
+        });
+    }
+
+    let class = match (onchain_core == ref_core, onchain_solc == ref_solc) {
+        (true, true) => MatchClass::FullMatch,
+        (true, false) => MatchClass::CodeMatchMetaDiffers,
+        (false, _) => MatchClass::Mismatch,
+    };
+    Ok(BytecodeCheck {
+        class,
+        onchain_solc,
+        reference_solc: ref_solc,
+    })
+}
+
+// ── Contract kind ────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum ContractKindArg {
+    #[clap(name = "stake-table-v2")]
+    StakeTableV2,
+    #[clap(name = "stake-table-v3")]
+    StakeTableV3,
+    #[clap(name = "esp-token-v2")]
+    EspTokenV2,
+    #[clap(name = "fee-contract")]
+    FeeContract,
+    #[clap(name = "reward-claim")]
+    RewardClaim,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OwnerAccessor {
+    Owner,
+    CurrentAdmin,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimelockKind {
+    Ops,
+    SafeExit,
+}
+
+#[derive(Debug, Clone)]
+pub struct ContractKind {
+    pub contract: Contract,
+    pub name: &'static str,
+    pub deployed_bytecode: &'static [u8],
+    pub expected_init_selector: Option<[u8; 4]>,
+    pub owner_accessor: OwnerAccessor,
+    pub timelock_kind: TimelockKind,
+    pub expected_prev_major: Option<u8>,
+}
+
+pub fn contract_kind(arg: ContractKindArg) -> ContractKind {
+    match arg {
+        ContractKindArg::StakeTableV2 => ContractKind {
+            contract: Contract::StakeTableV2,
+            name: "StakeTableV2",
+            deployed_bytecode: &StakeTableV2::DEPLOYED_BYTECODE,
+            expected_init_selector: Some(StakeTableV2::initializeV2Call::SELECTOR),
+            owner_accessor: OwnerAccessor::Owner,
+            timelock_kind: TimelockKind::Ops,
+            expected_prev_major: Some(1),
+        },
+        ContractKindArg::StakeTableV3 => ContractKind {
+            contract: Contract::StakeTableV3,
+            name: "StakeTableV3",
+            deployed_bytecode: &StakeTableV3::DEPLOYED_BYTECODE,
+            expected_init_selector: Some(StakeTableV3::initializeV3Call::SELECTOR),
+            owner_accessor: OwnerAccessor::Owner,
+            timelock_kind: TimelockKind::Ops,
+            expected_prev_major: Some(2),
+        },
+        ContractKindArg::EspTokenV2 => ContractKind {
+            contract: Contract::EspTokenV2,
+            name: "EspTokenV2",
+            deployed_bytecode: &EspTokenV2::DEPLOYED_BYTECODE,
+            expected_init_selector: Some(EspTokenV2::initializeV2Call::SELECTOR),
+            owner_accessor: OwnerAccessor::Owner,
+            timelock_kind: TimelockKind::SafeExit,
+            expected_prev_major: Some(1),
+        },
+        ContractKindArg::FeeContract => ContractKind {
+            contract: Contract::FeeContract,
+            name: "FeeContract",
+            deployed_bytecode: &FeeContract::DEPLOYED_BYTECODE,
+            expected_init_selector: None,
+            owner_accessor: OwnerAccessor::Owner,
+            timelock_kind: TimelockKind::Ops,
+            expected_prev_major: Some(1),
+        },
+        ContractKindArg::RewardClaim => ContractKind {
+            contract: Contract::RewardClaim,
+            name: "RewardClaim",
+            deployed_bytecode: &RewardClaim::DEPLOYED_BYTECODE,
+            expected_init_selector: None,
+            owner_accessor: OwnerAccessor::CurrentAdmin,
+            timelock_kind: TimelockKind::SafeExit,
+            expected_prev_major: None,
+        },
+    }
+}
+
+// ── calldata reconstruction ──────────────────────────────────────────────────
+
+pub fn tx_calldata(tx: &SafeTx) -> Result<(Address, Bytes)> {
+    if let (Some(method), Some(inputs)) = (&tx.contract_method, &tx.contract_inputs_values) {
+        let calldata = reconstruct_timelock_calldata(&method.name, inputs)?;
+        Ok((tx.to, calldata))
+    } else if let Some(hex_data) = &tx.data {
+        Ok((tx.to, parse_hex_bytes(hex_data)?))
+    } else {
+        bail!("SafeTx has neither contractMethod nor data")
+    }
+}
+
+fn parse_hex_bytes(s: &str) -> Result<Bytes> {
+    let s = s.strip_prefix("0x").unwrap_or(s);
+    Ok(Bytes::from(alloy::hex::decode(s)?))
+}
+
+fn reconstruct_timelock_calldata(name: &str, inputs: &BTreeMap<String, String>) -> Result<Bytes> {
+    match name {
+        "schedule" => {
+            let target: Address = inputs
+                .get("target")
+                .ok_or_else(|| anyhow!("missing 'target' in schedule inputs"))?
+                .parse()?;
+            let value = U256::from_str_radix(
+                inputs
+                    .get("value")
+                    .ok_or_else(|| anyhow!("missing 'value' in schedule inputs"))?,
+                10,
+            )?;
+            let data = parse_hex_bytes(
+                inputs
+                    .get("data")
+                    .ok_or_else(|| anyhow!("missing 'data' in schedule inputs"))?,
+            )?;
+            let predecessor: B256 = inputs
+                .get("predecessor")
+                .ok_or_else(|| anyhow!("missing 'predecessor' in schedule inputs"))?
+                .parse()?;
+            let salt: B256 = inputs
+                .get("salt")
+                .ok_or_else(|| anyhow!("missing 'salt' in schedule inputs"))?
+                .parse()?;
+            let delay = U256::from_str_radix(
+                inputs
+                    .get("delay")
+                    .ok_or_else(|| anyhow!("missing 'delay' in schedule inputs"))?,
+                10,
+            )?;
+            Ok(Bytes::from(
+                OpsTimelock::scheduleCall {
+                    target,
+                    value,
+                    data,
+                    predecessor,
+                    salt,
+                    delay,
+                }
+                .abi_encode(),
+            ))
+        },
+        "execute" => {
+            let target: Address = inputs
+                .get("target")
+                .ok_or_else(|| anyhow!("missing 'target' in execute inputs"))?
+                .parse()?;
+            let value = U256::from_str_radix(
+                inputs
+                    .get("value")
+                    .ok_or_else(|| anyhow!("missing 'value' in execute inputs"))?,
+                10,
+            )?;
+            let payload = parse_hex_bytes(
+                inputs
+                    .get("payload")
+                    .or_else(|| inputs.get("data"))
+                    .ok_or_else(|| anyhow!("missing 'payload'/'data' in execute inputs"))?,
+            )?;
+            let predecessor: B256 = inputs
+                .get("predecessor")
+                .ok_or_else(|| anyhow!("missing 'predecessor' in execute inputs"))?
+                .parse()?;
+            let salt: B256 = inputs
+                .get("salt")
+                .ok_or_else(|| anyhow!("missing 'salt' in execute inputs"))?
+                .parse()?;
+            Ok(Bytes::from(
+                OpsTimelock::executeCall {
+                    target,
+                    value,
+                    payload,
+                    predecessor,
+                    salt,
+                }
+                .abi_encode(),
+            ))
+        },
+        other => bail!("unsupported contractMethod name: {other}"),
+    }
+}
+
+pub fn decode_inner_upgrade(inner: &Bytes) -> Result<(Address, Bytes)> {
+    if inner.len() < 4 {
+        bail!("inner calldata too short");
+    }
+    let call = StakeTableV3::upgradeToAndCallCall::abi_decode(inner)
+        .map_err(|e| anyhow!("failed to decode upgradeToAndCall: {e}"))?;
+    Ok((call.newImplementation, call.data))
+}
+
+/// Identify the phase of a single-transaction batch.
+fn batch_phase(batch: &SafeBatch) -> Result<Phase> {
+    let tx = batch
+        .transactions
+        .first()
+        .ok_or_else(|| anyhow!("batch has no transactions"))?;
+
+    if let Some(method) = &tx.contract_method {
+        return match method.name.as_str() {
+            "schedule" => Ok(Phase::Schedule),
+            "execute" => Ok(Phase::Execute),
+            other => bail!("unrecognised contractMethod name: {other}"),
+        };
+    }
+
+    if let Some(hex) = &tx.data {
+        let bytes = parse_hex_bytes(hex)?;
+        if bytes.len() < 4 {
+            bail!("raw data too short to contain a selector");
+        }
+        let sel: [u8; 4] = bytes[..4].try_into().expect("len checked");
+        return match sel {
+            s if s == OpsTimelock::scheduleCall::SELECTOR => Ok(Phase::Schedule),
+            s if s == OpsTimelock::executeCall::SELECTOR => Ok(Phase::Execute),
+            _ => bail!("unrecognised 4-byte selector 0x{}", alloy::hex::encode(sel)),
+        };
+    }
+
+    bail!("batch has neither contractMethod nor data");
+}
+
+/// Load and classify JSON input files into a `TimelockBatches`.
+///
+/// Requires exactly two files: one `schedule` and one `execute`, order-independent.
+/// Errors on any other combination, including a single file.
+pub fn classify_batches(inputs: &[PathBuf]) -> Result<TimelockBatches> {
+    let raw: Vec<SafeBatch> = inputs
+        .iter()
+        .map(|p| {
+            let text = std::fs::read_to_string(p)
+                .map_err(|e| anyhow!("cannot read {}: {e}", p.display()))?;
+            serde_json::from_str::<SafeBatch>(&text)
+                .map_err(|e| anyhow!("failed to parse {}: {e}", p.display()))
+        })
+        .collect::<Result<_>>()?;
+
+    match raw.as_slice() {
+        [_, _] => {
+            let mut it = raw.into_iter();
+            let a = it.next().expect("len=2");
+            let b = it.next().expect("len=2");
+            let phase_a = batch_phase(&a)?;
+            let phase_b = batch_phase(&b)?;
+            let (schedule, execute) = match (phase_a, phase_b) {
+                (Phase::Schedule, Phase::Execute) => (a, b),
+                (Phase::Execute, Phase::Schedule) => (b, a),
+                (p, q) => bail!("expected one schedule + one execute, got {p:?} + {q:?}"),
+            };
+            Ok(TimelockBatches { schedule, execute })
+        },
+        [_] => bail!(
+            "expected a schedule and an execute proposal (timelock two-phase); multisig-direct \
+             upgrades are not supported"
+        ),
+        _ => bail!("expected 2 input files, got {}", inputs.len()),
+    }
+}
+
+/// Decode a `TimelockBatches` into a `DecodedUpgrade`.
+pub fn decode_proposal(batches: TimelockBatches) -> Result<DecodedUpgrade> {
+    let sched_tx = batches
+        .schedule
+        .transactions
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow!("schedule batch has no transactions"))?;
+    let exec_tx = batches
+        .execute
+        .transactions
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow!("execute batch has no transactions"))?;
+
+    let (sched_to, sched_calldata) = tx_calldata(&sched_tx)?;
+    let (exec_to, exec_calldata) = tx_calldata(&exec_tx)?;
+
+    let sched = OpsTimelock::scheduleCall::abi_decode(&sched_calldata)
+        .map_err(|e| anyhow!("failed to decode schedule calldata: {e}"))?;
+    let exec = OpsTimelock::executeCall::abi_decode(&exec_calldata)
+        .map_err(|e| anyhow!("failed to decode execute calldata: {e}"))?;
+
+    if sched_to != exec_to {
+        bail!(
+            "schedule and execute target different addresses: {} vs {}",
+            sched_to,
+            exec_to
+        );
+    }
+    if sched.data != exec.payload {
+        bail!("schedule.data != execute.payload: inner payloads are not identical");
+    }
+    if sched.salt != exec.salt {
+        bail!("schedule.salt != execute.salt");
+    }
+    if sched.predecessor != exec.predecessor {
+        bail!("schedule.predecessor != execute.predecessor");
+    }
+    if sched.target != exec.target {
+        bail!("schedule.target != exec.target");
+    }
+    if sched.value != exec.value {
+        bail!(
+            "schedule.value != execute.value: {} vs {}",
+            sched.value,
+            exec.value
+        );
+    }
+
+    let (new_impl, init_data) = decode_inner_upgrade(&sched.data)?;
+
+    Ok(DecodedUpgrade {
+        outer_to: sched_to,
+        proxy: sched.target,
+        new_impl,
+        init_data,
+        value: sched.value,
+        predecessor: sched.predecessor,
+        salt: sched.salt,
+        delay: sched.delay,
+        description: batches.schedule.meta.description,
+        outer_calldatas: OuterCalldatas {
+            schedule: sched_calldata,
+            execute: exec_calldata,
+        },
+    })
+}
+
+// ── Report ───────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct CheckRow {
+    pub name: String,
+    pub pass: bool,
+    pub detail: String,
+}
+
+/// Safe-tx hashes for schedule and execute phases.
+#[derive(Debug, Clone)]
+pub struct PhaseHashes {
+    pub schedule_nonce: u64,
+    pub schedule: SafeTxHashes,
+    pub execute_nonce: u64,
+    pub execute: SafeTxHashes,
+}
+
+#[derive(Debug)]
+pub struct VerifyReport {
+    pub rows: Vec<CheckRow>,
+    pub header: ReportHeader,
+    pub phase_hashes: Option<PhaseHashes>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReportHeader {
+    pub proxy: Address,
+    pub new_impl: Address,
+    pub contract_name: &'static str,
+    pub description: String,
+    pub onchain_solc: Option<SolcVersion>,
+    pub reference_solc: Option<SolcVersion>,
+}
+
+impl VerifyReport {
+    pub fn print(&self) {
+        println!("=== Upgrade Proposal Verification ===");
+        println!("  contract:    {}", self.header.contract_name);
+        println!("  proxy:       {}", self.header.proxy);
+        println!("  new_impl:    {}", self.header.new_impl);
+        println!("  route:       timelock two-phase");
+        println!("  description: {}", self.header.description);
+        if let Some(ref s) = self.header.onchain_solc {
+            println!("  onchain_solc: {s}");
+        }
+        if let Some(ref s) = self.header.reference_solc {
+            println!("  ref_solc:     {s}");
+        }
+        println!();
+        println!("{:<40} {:<6} DETAIL", "CHECK", "RESULT");
+        println!("{}", "-".repeat(80));
+        for row in &self.rows {
+            let status = if row.pass { "PASS" } else { "FAIL" };
+            println!("{:<40} {:<6} {}", row.name, status, row.detail);
+        }
+        if let Some(ref ph) = self.phase_hashes {
+            println!();
+            println!("--- Safe tx hashes (operation=0, single-tx; confirm against Safe UI) ---");
+            println!("  schedule (nonce={}):", ph.schedule_nonce);
+            print_hashes(&ph.schedule);
+            println!("  execute (nonce={}):", ph.execute_nonce);
+            print_hashes(&ph.execute);
+        }
+        println!();
+        let all_pass = self.rows.iter().all(|r| r.pass);
+        println!("Result: {}", if all_pass { "ALL PASS" } else { "FAIL" });
+    }
+
+    pub fn exit_code(&self) -> i32 {
+        if self.rows.iter().all(|r| r.pass) {
+            0
+        } else {
+            1
+        }
+    }
+}
+
+fn print_hashes(h: &SafeTxHashes) {
+    println!("    domain:   {}", h.domain);
+    println!("    message:  {}", h.message);
+    println!("    safe_tx:  {}", h.safe_tx);
+}
+
+fn pass(name: impl Into<String>, detail: impl Into<String>) -> CheckRow {
+    CheckRow {
+        name: name.into(),
+        pass: true,
+        detail: detail.into(),
+    }
+}
+
+fn fail(name: impl Into<String>, detail: impl Into<String>) -> CheckRow {
+    CheckRow {
+        name: name.into(),
+        pass: false,
+        detail: detail.into(),
+    }
+}
+
+fn solc_str(v: Option<&SolcVersion>) -> String {
+    v.map(|s| s.to_string()).unwrap_or_else(|| "?".to_owned())
+}
+
+// ── Pure row classifiers ─────────────────────────────────────────────────────
+
+pub fn value_zero_row(value: U256) -> CheckRow {
+    if value == U256::ZERO {
+        pass("value==0", "ok")
+    } else {
+        fail("value==0", format!("value={value}"))
+    }
+}
+
+pub fn predecessor_zero_row(predecessor: B256) -> CheckRow {
+    if predecessor == B256::ZERO {
+        pass("predecessor==0", "ok")
+    } else {
+        fail("predecessor==0", format!("{predecessor}"))
+    }
+}
+
+pub fn owner_timelock_row(owner: Address, outer_to: Address) -> CheckRow {
+    if owner == outer_to {
+        pass("owner==timelock", format!("owner={owner}"))
+    } else {
+        fail(
+            "owner==timelock",
+            format!("proxy owner={owner} != outer_to={outer_to}"),
+        )
+    }
+}
+
+pub fn delay_row(delay: U256, min_delay: U256) -> CheckRow {
+    if delay >= min_delay {
+        pass(
+            "delay>=minDelay",
+            format!("delay={delay} minDelay={min_delay}"),
+        )
+    } else {
+        fail(
+            "delay>=minDelay",
+            format!("delay={delay} < minDelay={min_delay}"),
+        )
+    }
+}
+
+// ── CLI args ─────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, clap::Args)]
+pub struct VerifyProposalArgs {
+    /// Contract kind being upgraded. Determines which binding bytecode is
+    /// compared against the on-chain impl.
+    #[clap(long)]
+    pub contract: ContractKindArg,
+
+    /// Safe-tx JSON files: one `schedule` and one `execute` (timelock two-phase), order-independent.
+    #[clap(long = "input", required = true, num_args = 2)]
+    pub inputs: Vec<PathBuf>,
+
+    /// Safe (multisig) address that will sign; enables Safe-tx-hash output.
+    #[clap(long)]
+    pub safe: Option<Address>,
+
+    /// Safe nonce for the schedule transaction.
+    #[clap(long, requires = "safe")]
+    pub nonce: Option<u64>,
+}
+
+// ── Orchestrator ─────────────────────────────────────────────────────────────
+
+pub async fn run_verify(
+    args: &VerifyProposalArgs,
+    provider: &impl Provider,
+    contracts: &Contracts,
+    chain_id: u64,
+) -> Result<VerifyReport> {
+    let kind = contract_kind(args.contract);
+    let mut rows: Vec<CheckRow> = vec![];
+
+    let batches = classify_batches(&args.inputs)?;
+    let upgrade = match decode_proposal(batches) {
+        Ok(u) => {
+            rows.push(pass("decode", format!("outer_to={}", u.outer_to)));
+            u
+        },
+        Err(e) => {
+            rows.push(fail("decode", e.to_string()));
+            return Ok(VerifyReport {
+                rows,
+                header: ReportHeader {
+                    proxy: Address::ZERO,
+                    new_impl: Address::ZERO,
+                    contract_name: kind.name,
+                    description: String::new(),
+                    onchain_solc: None,
+                    reference_solc: None,
+                },
+                phase_hashes: None,
+            });
+        },
+    };
+
+    rows.push(value_zero_row(upgrade.value));
+    rows.push(predecessor_zero_row(upgrade.predecessor));
+
+    let onchain_code = provider.get_code_at(upgrade.new_impl).await?;
+
+    let bytecode_check =
+        match compare_normalized(&onchain_code, kind.deployed_bytecode, upgrade.new_impl) {
+            Ok(check) => check,
+            Err(e) => {
+                rows.push(fail("bytecode-match", e.to_string()));
+                return Ok(VerifyReport {
+                    rows,
+                    header: ReportHeader {
+                        proxy: upgrade.proxy,
+                        new_impl: upgrade.new_impl,
+                        contract_name: kind.name,
+                        description: upgrade.description,
+                        onchain_solc: None,
+                        reference_solc: None,
+                    },
+                    phase_hashes: None,
+                });
+            },
+        };
+
+    rows.push(match bytecode_check.class {
+        MatchClass::FullMatch => pass(
+            "bytecode-match",
+            format!(
+                "FullMatch solc={}",
+                solc_str(bytecode_check.onchain_solc.as_ref())
+            ),
+        ),
+        MatchClass::CodeMatchMetaDiffers => pass(
+            "bytecode-match",
+            format!(
+                "WARN CodeMatchMetaDiffers: onchain_solc={} ref_solc={}",
+                solc_str(bytecode_check.onchain_solc.as_ref()),
+                solc_str(bytecode_check.reference_solc.as_ref())
+            ),
+        ),
+        MatchClass::Mismatch => fail(
+            "bytecode-match",
+            format!(
+                "on-chain impl at {} does not match {} binding",
+                upgrade.new_impl, kind.name
+            ),
+        ),
+    });
+
+    rows.push(check_init_selector(&kind, &upgrade.init_data));
+
+    let gov_rows = governance_checks(provider, contracts, &upgrade, &kind).await;
+    rows.extend(gov_rows);
+
+    let phase_hashes = if let (Some(safe), Some(nonce)) = (args.safe, args.nonce) {
+        Some(PhaseHashes {
+            schedule_nonce: nonce,
+            schedule: safe_tx_hashes(
+                safe,
+                chain_id,
+                upgrade.outer_to,
+                U256::ZERO,
+                &upgrade.outer_calldatas.schedule,
+                0,
+                nonce,
+            ),
+            execute_nonce: nonce + 1,
+            execute: safe_tx_hashes(
+                safe,
+                chain_id,
+                upgrade.outer_to,
+                U256::ZERO,
+                &upgrade.outer_calldatas.execute,
+                0,
+                nonce + 1,
+            ),
+        })
+    } else {
+        None
+    };
+
+    Ok(VerifyReport {
+        rows,
+        header: ReportHeader {
+            proxy: upgrade.proxy,
+            new_impl: upgrade.new_impl,
+            contract_name: kind.name,
+            description: upgrade.description,
+            onchain_solc: bytecode_check.onchain_solc,
+            reference_solc: bytecode_check.reference_solc,
+        },
+        phase_hashes,
+    })
+}
+
+fn check_init_selector(kind: &ContractKind, init_data: &Bytes) -> CheckRow {
+    match kind.expected_init_selector {
+        None => pass(
+            "init-selector",
+            if init_data.is_empty() {
+                "empty (expected for patch/no-reinitializer)".to_owned()
+            } else {
+                format!(
+                    "non-empty init data but no selector expected; selector=0x{}",
+                    alloy::hex::encode(&init_data[..4.min(init_data.len())])
+                )
+            },
+        ),
+        Some(expected) => {
+            if init_data.is_empty() {
+                pass("init-selector", "empty (proxy already at target version)")
+            } else if init_data.len() >= 4 && init_data[..4] == expected {
+                pass(
+                    "init-selector",
+                    format!("ok selector=0x{}", alloy::hex::encode(expected)),
+                )
+            } else {
+                fail(
+                    "init-selector",
+                    format!(
+                        "expected 0x{} got 0x{}",
+                        alloy::hex::encode(expected),
+                        alloy::hex::encode(&init_data[..4.min(init_data.len())])
+                    ),
+                )
+            }
+        },
+    }
+}
+
+async fn governance_checks(
+    provider: &impl Provider,
+    contracts: &Contracts,
+    upgrade: &DecodedUpgrade,
+    kind: &ContractKind,
+) -> Vec<CheckRow> {
+    let mut rows = vec![];
+
+    match fetch_proxy_owner(provider, upgrade.proxy, kind.owner_accessor).await {
+        Err(e) => rows.push(fail("owner-query", e.to_string())),
+        Ok(owner) => {
+            rows.push(owner_timelock_row(owner, upgrade.outer_to));
+            let expected_timelock_contract = match kind.timelock_kind {
+                TimelockKind::Ops => Contract::OpsTimelock,
+                TimelockKind::SafeExit => Contract::SafeExitTimelock,
+            };
+            if let Some(expected_addr) = contracts.address(expected_timelock_contract) {
+                rows.push(if upgrade.outer_to == expected_addr {
+                    pass(
+                        "timelock-addr-match",
+                        format!("{:?}={}", expected_timelock_contract, expected_addr),
+                    )
+                } else {
+                    fail(
+                        "timelock-addr-match",
+                        format!(
+                            "outer_to={} expected {:?}={}",
+                            upgrade.outer_to, expected_timelock_contract, expected_addr
+                        ),
+                    )
+                });
+            }
+        },
+    }
+
+    match fetch_min_delay(provider, upgrade.outer_to).await {
+        Err(e) => rows.push(fail("delay>=minDelay", e.to_string())),
+        Ok(min_delay) => rows.push(delay_row(upgrade.delay, min_delay)),
+    }
+
+    match (
+        fetch_proxy_major_version(provider, upgrade.proxy).await,
+        kind.expected_prev_major,
+    ) {
+        (Err(e), _) => rows.push(fail("version-prereq", e.to_string())),
+        (Ok(_), None) => rows.push(pass("version-prereq", "no prereq (RewardClaim)")),
+        (Ok(major), Some(expected_prev)) => rows.push(if major >= expected_prev {
+            pass(
+                "version-prereq",
+                format!("proxy_major={major} >= required={expected_prev}"),
+            )
+        } else {
+            fail(
+                "version-prereq",
+                format!("proxy_major={major} < required={expected_prev}; upgrade path invalid"),
+            )
+        }),
+    }
+
+    rows
+}
+
+async fn fetch_proxy_owner(
+    provider: &impl Provider,
+    proxy: Address,
+    accessor: OwnerAccessor,
+) -> Result<Address> {
+    match accessor {
+        OwnerAccessor::Owner => Ok(StakeTableV3::new(proxy, provider).owner().call().await?),
+        OwnerAccessor::CurrentAdmin => Ok(RewardClaim::new(proxy, provider)
+            .currentAdmin()
+            .call()
+            .await?),
+    }
+}
+
+async fn fetch_min_delay(provider: &impl Provider, timelock: Address) -> Result<U256> {
+    Ok(OpsTimelock::new(timelock, provider)
+        .getMinDelay()
+        .call()
+        .await?)
+}
+
+async fn fetch_proxy_major_version(provider: &impl Provider, proxy: Address) -> Result<u8> {
+    Ok(StakeTableV3::new(proxy, provider)
+        .getVersion()
+        .call()
+        .await?
+        .majorVersion)
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use alloy::{
+        primitives::{Address, B256, Bytes, U256},
+        sol_types::SolCall,
+    };
+    use hotshot_contract_adapter::sol_types::{OpsTimelock, StakeTableV3};
+
+    use super::*;
+
+    const SCHEDULE_JSON: &str = include_str!("fixtures/decaf_stake_table_v3_schedule.json");
+    const EXECUTE_JSON: &str = include_str!("fixtures/decaf_stake_table_v3_execute.json");
+
+    fn load_fixture_proposal() -> TimelockBatches {
+        let s: SafeBatch = serde_json::from_str(SCHEDULE_JSON).unwrap();
+        let e: SafeBatch = serde_json::from_str(EXECUTE_JSON).unwrap();
+        TimelockBatches {
+            schedule: s,
+            execute: e,
+        }
+    }
+
+    // ── TEST:verify-decode-timelock-ok ─────────────────────────────────────
+
+    #[test]
+    fn test_verify_decode_timelock_ok() {
+        let upgrade = decode_proposal(load_fixture_proposal()).expect("decode");
+
+        assert_eq!(
+            upgrade.proxy,
+            "0x40304FbE94D5E7D1492Dd90c53a2D63E8506a037"
+                .parse::<Address>()
+                .unwrap()
+        );
+        assert_eq!(
+            upgrade.new_impl,
+            "0x5a6250dd35d875c0529573d9d934629a1b2778db"
+                .parse::<Address>()
+                .unwrap()
+        );
+        assert_eq!(
+            upgrade.outer_to,
+            "0x8e3b6563D683b87964104A2c3A4bf542bb70767F"
+                .parse::<Address>()
+                .unwrap()
+        );
+        assert_eq!(upgrade.value, U256::ZERO);
+        assert_eq!(upgrade.predecessor, B256::ZERO);
+        assert_eq!(upgrade.delay, U256::from(300));
+        assert_eq!(
+            &upgrade.init_data[..4],
+            &StakeTableV3::initializeV3Call::SELECTOR
+        );
+    }
+
+    // ── TEST:verify-inner-identical-ok ────────────────────────────────────
+
+    #[test]
+    fn test_verify_inner_identical_ok() {
+        decode_proposal(load_fixture_proposal()).expect("inner payloads must be identical");
+    }
+
+    // ── TEST:verify-inner-mismatch-fails ──────────────────────────────────
+
+    #[test]
+    fn test_verify_inner_mismatch_fails() {
+        let s: SafeBatch = serde_json::from_str(SCHEDULE_JSON).unwrap();
+        let e_json = EXECUTE_JSON.replace("0x4f1ef286", "0xdeadbeef");
+        let e: SafeBatch = serde_json::from_str(&e_json).unwrap();
+        let err = decode_proposal(TimelockBatches {
+            schedule: s,
+            execute: e,
+        })
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("not identical") || err.to_string().contains("payload"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // ── TEST:verify-single-file-rejected ──────────────────────────────────
+
+    #[test]
+    fn test_verify_single_file_rejected() {
+        // classify_batches with one file must error with a clear message
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), SCHEDULE_JSON).unwrap();
+        let err = classify_batches(&[tmp.path().to_path_buf()]).unwrap_err();
+        assert!(
+            err.to_string().contains("multisig-direct") || err.to_string().contains("timelock"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // ── TEST:verify-classify-batches-reversed ─────────────────────────────
+
+    #[test]
+    fn test_verify_classify_batches_reversed() {
+        // execute file first, schedule file second — classify_batches must still yield
+        // schedule+execute pairing regardless of input order.
+        let sched_tmp = tempfile::NamedTempFile::new().unwrap();
+        let exec_tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(sched_tmp.path(), SCHEDULE_JSON).unwrap();
+        std::fs::write(exec_tmp.path(), EXECUTE_JSON).unwrap();
+        let batches = classify_batches(&[
+            exec_tmp.path().to_path_buf(),
+            sched_tmp.path().to_path_buf(),
+        ])
+        .expect("classify_batches with reversed input order");
+        assert_eq!(
+            batches.schedule.transactions[0]
+                .contract_method
+                .as_ref()
+                .unwrap()
+                .name,
+            "schedule"
+        );
+        assert_eq!(
+            batches.execute.transactions[0]
+                .contract_method
+                .as_ref()
+                .unwrap()
+                .name,
+            "execute"
+        );
+    }
+
+    // ── TEST:verify-strip-cbor-828-ok ─────────────────────────────────────
+
+    #[test]
+    fn test_verify_strip_cbor_828_ok() {
+        let cbor: Vec<u8> = vec![
+            0xa1, 0x64, 0x73, 0x6f, 0x6c, 0x63, 0x43, 0x00, 0x08, 0x1c, 0x00,
+        ];
+        let cbor_len = cbor.len() as u16;
+        let mut code: Vec<u8> = vec![0xde, 0xad, 0xbe, 0xef];
+        code.extend_from_slice(&cbor);
+        code.extend_from_slice(&cbor_len.to_be_bytes());
+        let (stripped, ver) = strip_cbor_metadata(&code);
+        assert_eq!(stripped, vec![0xde, 0xad, 0xbe, 0xef]);
+        assert_eq!(ver, Some(SolcVersion([0x00, 0x08, 0x1c])));
+    }
+
+    // ── TEST:verify-strip-cbor-835-ok ─────────────────────────────────────
+
+    #[test]
+    fn test_verify_strip_cbor_835_ok() {
+        let cbor: Vec<u8> = vec![
+            0xa1, 0x64, 0x73, 0x6f, 0x6c, 0x63, 0x43, 0x00, 0x08, 0x23, 0x00,
+        ];
+        let cbor_len = cbor.len() as u16;
+        let mut code: Vec<u8> = vec![0xca, 0xfe];
+        code.extend_from_slice(&cbor);
+        code.extend_from_slice(&cbor_len.to_be_bytes());
+        let (stripped, ver) = strip_cbor_metadata(&code);
+        assert_eq!(stripped, vec![0xca, 0xfe]);
+        assert_eq!(ver, Some(SolcVersion([0x00, 0x08, 0x23])));
+    }
+
+    // ── TEST:verify-no-metadata-tail-ok ───────────────────────────────────
+
+    #[test]
+    fn test_verify_no_metadata_tail_ok() {
+        let code: Vec<u8> = vec![0xde, 0xad, 0xbe, 0xef, 0x00, 0x04];
+        let (_, ver) = strip_cbor_metadata(&code);
+        assert!(ver.is_none());
+    }
+
+    // ── TEST:verify-mask-immutables-ok ────────────────────────────────────
+
+    #[test]
+    fn test_verify_mask_immutables_ok() {
+        let addr = Address::repeat_byte(0xab);
+        let mut code = vec![0xffu8; 300];
+        code[45..65].copy_from_slice(addr.as_slice());
+        code[200..220].copy_from_slice(addr.as_slice());
+
+        let n = mask_immutables(&mut code, addr);
+        assert_eq!(n, 2);
+        assert_eq!(&code[45..65], &[0u8; 20]);
+        assert_eq!(&code[200..220], &[0u8; 20]);
+        assert_eq!(code[44], 0xff);
+        assert_eq!(code[65], 0xff);
+        assert_eq!(code[199], 0xff);
+        assert_eq!(code[220], 0xff);
+    }
+
+    // ── TEST:verify-bytecode-fullmatch-ok ─────────────────────────────────
+
+    #[test]
+    fn test_verify_bytecode_fullmatch_ok() {
+        let impl_addr = Address::repeat_byte(0x01);
+        let cbor = make_cbor_tail([0x00, 0x08, 0x23]);
+
+        // impl_addr at non-aligned offset 5; reference has zeros there.
+        let mut onchain = vec![0xaa, 0xbb, 0xcc, 0xdd, 0xee];
+        onchain.extend_from_slice(impl_addr.as_slice());
+        onchain.extend_from_slice(&[0x11, 0x22, 0x33]);
+        onchain.extend_from_slice(&cbor);
+
+        let mut reference = vec![0xaa, 0xbb, 0xcc, 0xdd, 0xee];
+        reference.extend_from_slice(&[0u8; 20]);
+        reference.extend_from_slice(&[0x11, 0x22, 0x33]);
+        reference.extend_from_slice(&cbor);
+
+        let check = compare_normalized(&onchain, &reference, impl_addr).unwrap();
+        assert_eq!(check.class, MatchClass::FullMatch);
+    }
+
+    // ── TEST:verify-bytecode-metadiff-ok ──────────────────────────────────
+
+    #[test]
+    fn test_verify_bytecode_metadiff_ok() {
+        let impl_addr = Address::repeat_byte(0x01);
+        let cbor_828 = make_cbor_tail([0x00, 0x08, 0x1c]);
+        let cbor_835 = make_cbor_tail([0x00, 0x08, 0x23]);
+
+        let mut onchain = vec![0xaa, 0xbb, 0xcc, 0xdd, 0xee];
+        onchain.extend_from_slice(impl_addr.as_slice());
+        onchain.extend_from_slice(&cbor_828);
+
+        let mut reference = vec![0xaa, 0xbb, 0xcc, 0xdd, 0xee];
+        reference.extend_from_slice(&[0u8; 20]);
+        reference.extend_from_slice(&cbor_835);
+
+        let check = compare_normalized(&onchain, &reference, impl_addr).unwrap();
+        assert_eq!(check.class, MatchClass::CodeMatchMetaDiffers);
+        assert_eq!(check.onchain_solc, Some(SolcVersion([0x00, 0x08, 0x1c])));
+        assert_eq!(check.reference_solc, Some(SolcVersion([0x00, 0x08, 0x23])));
+    }
+
+    // ── TEST:verify-bytecode-core-flip-fails ──────────────────────────────
+
+    #[test]
+    fn test_verify_bytecode_core_flip_fails() {
+        let impl_addr = Address::repeat_byte(0x01);
+        let cbor = make_cbor_tail([0x00, 0x08, 0x23]);
+
+        let mut onchain = vec![0xaa, 0xbb, 0xcc, 0xdd, 0xee];
+        onchain.extend_from_slice(impl_addr.as_slice());
+        onchain.extend_from_slice(&cbor);
+
+        let mut reference = vec![0xaa, 0xbb, 0xcc, 0xdd, 0xff]; // flipped byte
+        reference.extend_from_slice(&[0u8; 20]);
+        reference.extend_from_slice(&cbor);
+
+        let check = compare_normalized(&onchain, &reference, impl_addr).unwrap();
+        assert_eq!(check.class, MatchClass::Mismatch);
+    }
+
+    // ── TEST:verify-kind-by-bytecode-ok ───────────────────────────────────
+
+    #[test]
+    fn test_verify_kind_by_bytecode_ok() {
+        // Real round-trip: inject fake impl address into StakeTableV3::DEPLOYED_BYTECODE
+        // at artifact-reported immutable window positions (start=10580,10621,11787 length=32),
+        // addr at offset+12..offset+32. Substring scan must recover the binding.
+        let binding = StakeTableV3::DEPLOYED_BYTECODE.as_ref();
+        let fake_impl = Address::repeat_byte(0x42);
+
+        let windows: &[(usize, usize)] = &[(10580, 32), (10621, 32), (11787, 32)];
+        let mut onchain = binding.to_vec();
+        for &(start, length) in windows {
+            let addr_start = start + (length - 20);
+            onchain[addr_start..start + length].copy_from_slice(fake_impl.as_slice());
+        }
+
+        let check = compare_normalized(&onchain, binding, fake_impl)
+            .expect("compare_normalized must succeed on real bytecode");
+        assert!(
+            check.class == MatchClass::FullMatch || check.class == MatchClass::CodeMatchMetaDiffers,
+            "expected PASS class, got {:?}",
+            check.class
+        );
+    }
+
+    // ── TEST:verify-contract-kind-args ────────────────────────────────────
+
+    #[test]
+    fn test_verify_contract_kind_args() {
+        let k = contract_kind(ContractKindArg::StakeTableV3);
+        assert_eq!(k.name, "StakeTableV3");
+        assert_eq!(k.owner_accessor, OwnerAccessor::Owner);
+        assert_eq!(k.timelock_kind, TimelockKind::Ops);
+
+        let k = contract_kind(ContractKindArg::RewardClaim);
+        assert_eq!(k.owner_accessor, OwnerAccessor::CurrentAdmin);
+        assert_eq!(k.timelock_kind, TimelockKind::SafeExit);
+    }
+
+    // ── TEST:verify-governance-owner-ok ───────────────────────────────────
+
+    #[test]
+    fn test_verify_governance_owner_ok() {
+        let timelock = Address::repeat_byte(0x11);
+        assert!(owner_timelock_row(timelock, timelock).pass);
+        assert!(!owner_timelock_row(Address::repeat_byte(0x22), timelock).pass);
+    }
+
+    // ── TEST:verify-governance-delay-short-fails ──────────────────────────
+
+    #[test]
+    fn test_verify_governance_delay_short_fails() {
+        assert!(!delay_row(U256::from(60u64), U256::from(300u64)).pass);
+        assert!(delay_row(U256::from(300u64), U256::from(300u64)).pass);
+        assert!(delay_row(U256::from(400u64), U256::from(300u64)).pass);
+    }
+
+    // ── TEST:verify-safe-tx-hash-ok ────────────────────────────────────────
+
+    #[test]
+    fn test_verify_safe_tx_hash_ok() {
+        let safe: Address = "0xb76834e371b666feee48e5d7d9a97ca08b5a0620"
+            .parse()
+            .unwrap();
+        let chain_id: u64 = 11155111;
+        let timelock: Address = "0x8e3b6563d683b87964104a2c3a4bf542bb70767f"
+            .parse()
+            .unwrap();
+
+        let s: SafeBatch = serde_json::from_str(SCHEDULE_JSON).unwrap();
+        let e: SafeBatch = serde_json::from_str(EXECUTE_JSON).unwrap();
+        let (_, sched_calldata) = tx_calldata(&s.transactions[0]).unwrap();
+        let (_, exec_calldata) = tx_calldata(&e.transactions[0]).unwrap();
+
+        let sched_hashes =
+            safe_tx_hashes(safe, chain_id, timelock, U256::ZERO, &sched_calldata, 0, 24);
+        let expected_domain: B256 =
+            "0x8f560c9d209e6d9320305560aee98fa1dea01510aa5451a9c0911401893835c6"
+                .parse()
+                .unwrap();
+        assert_eq!(sched_hashes.domain, expected_domain);
+        assert_eq!(
+            sched_hashes.message,
+            "0x9c5a62271d73b6accf3c8957a1e80b6434618d3bd4b8bd23e30817479c60d35b"
+                .parse::<B256>()
+                .unwrap()
+        );
+        assert_eq!(
+            sched_hashes.safe_tx,
+            "0xa3d4b5bfa93b559f34478b3988f1132c35ba67f953a87326c8a1c8250709c6b8"
+                .parse::<B256>()
+                .unwrap()
+        );
+
+        let exec_hashes =
+            safe_tx_hashes(safe, chain_id, timelock, U256::ZERO, &exec_calldata, 0, 25);
+        assert_eq!(exec_hashes.domain, expected_domain);
+        assert_eq!(
+            exec_hashes.message,
+            "0xf7edebe09a94e770ddbccf107a5685d50d902adb08db5e2043c7b1f9c4ef648b"
+                .parse::<B256>()
+                .unwrap()
+        );
+        assert_eq!(
+            exec_hashes.safe_tx,
+            "0xbb7fd662e5b724a50e33f18ef737d6df9c1d92b8810def16fb190b7c27c16f45"
+                .parse::<B256>()
+                .unwrap()
+        );
+    }
+
+    // ── TEST:verify-exit-code-fail-nonzero ────────────────────────────────
+
+    #[test]
+    fn test_verify_exit_code_fail_nonzero() {
+        let report = VerifyReport {
+            rows: vec![pass("check-a", "ok"), fail("check-b", "something wrong")],
+            header: ReportHeader {
+                proxy: Address::ZERO,
+                new_impl: Address::ZERO,
+                contract_name: "StakeTableV3",
+                description: String::new(),
+                onchain_solc: None,
+                reference_solc: None,
+            },
+            phase_hashes: None,
+        };
+        assert_eq!(report.exit_code(), 1);
+    }
+
+    // ── TEST:verify-empty-init-accepted-ok ────────────────────────────────
+
+    #[test]
+    fn test_verify_empty_init_accepted_ok() {
+        let kind = contract_kind(ContractKindArg::StakeTableV3);
+        let row = check_init_selector(&kind, &Bytes::new());
+        assert!(row.pass, "empty init should be accepted: {}", row.detail);
+    }
+
+    // ── TEST:verify-feecontract-no-init-ok ────────────────────────────────
+
+    #[test]
+    fn test_verify_feecontract_no_init_ok() {
+        let kind = contract_kind(ContractKindArg::FeeContract);
+        let row = check_init_selector(&kind, &Bytes::new());
+        assert!(row.pass, "FeeContract patch should accept empty init");
+    }
+
+    // ── TEST:verify-value-nonzero-fails ───────────────────────────────────
+
+    #[test]
+    fn test_verify_value_nonzero_fails() {
+        assert!(!value_zero_row(U256::from(1u64)).pass);
+        assert!(value_zero_row(U256::ZERO).pass);
+    }
+
+    // ── TEST:verify-predecessor-nonzero-fails ─────────────────────────────
+
+    #[test]
+    fn test_verify_predecessor_nonzero_fails() {
+        assert!(!predecessor_zero_row(B256::repeat_byte(0x01)).pass);
+        assert!(predecessor_zero_row(B256::ZERO).pass);
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────
+
+    fn make_cbor_tail(ver: [u8; 3]) -> Vec<u8> {
+        let mut cbor = vec![
+            0xa1, 0x64, 0x73, 0x6f, 0x6c, 0x63, 0x43, ver[0], ver[1], ver[2], 0x00,
+        ];
+        cbor.extend_from_slice(&(cbor.len() as u16).to_be_bytes());
+        cbor
+    }
+}

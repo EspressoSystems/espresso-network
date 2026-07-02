@@ -1,6 +1,6 @@
 //! builder pattern for
 
-use std::{fs, path::PathBuf};
+use std::path::PathBuf;
 
 use alloy::{
     hex::FromHex,
@@ -17,6 +17,7 @@ use crate::{
     Contract, Contracts, OwnableContract, encode_function_call,
     output::output_safe_tx_builder,
     proposals::{
+        deployment_info::default_deployment_info_dir,
         multisig::{
             LightClientV2UpgradeParams, MultisigOwnerCheck, StakeTableV2UpgradeParams,
             StakeTableV3UpgradeParams, TransferOwnershipParams, encode_generic_calldata,
@@ -30,6 +31,7 @@ use crate::{
             TimelockOperationType, derive_timelock_address_from_contract_type,
             perform_timelock_operation, upgrade_stake_table_v3_timelock_proposal,
         },
+        write::{WriteProposalParams, resolve_network, write_stake_table_v3_proposal_dir},
     },
 };
 
@@ -152,6 +154,15 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     output_dir: Option<PathBuf>,
     #[builder(default)]
     chain_id: u64,
+    /// Override network name (otherwise derived from chain_id).
+    #[builder(default)]
+    network: Option<String>,
+    /// Override the proposal directory slug (otherwise the contract kind in kebab-case).
+    #[builder(default)]
+    proposal_slug: Option<String>,
+    /// Root for `contracts/deployments/proposals/` tree.
+    #[builder(default)]
+    proposals_root: Option<PathBuf>,
 }
 
 impl<P: Provider + WalletProvider> DeployerArgs<P> {
@@ -535,23 +546,51 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     )
                     .await?;
 
-                    let output_dir = self
-                        .output_dir
-                        .as_deref()
-                        .context("--calldata-out-dir required for StakeTableV3 timelock upgrade")?;
-                    fs::create_dir_all(output_dir).with_context(|| {
-                        format!("failed to create output dir {}", output_dir.display())
-                    })?;
+                    let network = resolve_network(self.chain_id, self.network.clone())?;
+                    let slug = self
+                        .proposal_slug
+                        .clone()
+                        .unwrap_or_else(|| "stake-table-v3".to_owned());
+                    // --proposals-root > --calldata-out-dir > default
+                    let proposals_root = self
+                        .proposals_root
+                        .clone()
+                        .or_else(|| self.output_dir.clone())
+                        .unwrap_or_else(|| PathBuf::from("contracts/deployments/proposals"));
+                    let proposal_dir = write_stake_table_v3_proposal_dir(
+                        WriteProposalParams {
+                            proposals_root,
+                            network,
+                            slug,
+                            chain_id: self.chain_id,
+                            proxy: proposal.proxy_addr,
+                            new_impl: proposal.v3_impl_addr,
+                            timelock: proposal.timelock_addr,
+                            salt,
+                            delay,
+                            repo_dir: std::env::current_dir()
+                                .unwrap_or_else(|_| PathBuf::from(".")),
+                            deployment_info_dir: default_deployment_info_dir(),
+                            schedule_calldata: proposal.schedule.data.clone(),
+                            execute_calldata: proposal.execute.data.clone(),
+                        },
+                        provider,
+                    )
+                    .await?;
                     output_safe_tx_builder(
                         &proposal.schedule,
-                        Some(&output_dir.join("schedule.json")),
+                        Some(&proposal_dir.join("schedule.json")),
                         self.chain_id,
                     )?;
                     output_safe_tx_builder(
                         &proposal.execute,
-                        Some(&output_dir.join("execute.json")),
+                        Some(&proposal_dir.join("execute.json")),
                         self.chain_id,
                     )?;
+                    tracing::info!(
+                        path = %proposal_dir.display(),
+                        "wrote StakeTableV3 timelock proposal"
+                    );
                 } else if use_multisig {
                     let calldata = upgrade_stake_table_v3_multisig_owner(
                         provider,
