@@ -252,12 +252,13 @@ impl Peer {
                 // has not sent yet. This is to prevent an attack were a
                 // malicious peer never sends ACKs, which would cause our
                 // delay queue to grow unbounded.
-                m = self.msgs.dequeue(), if wstate.is_idle() && self.retry.len() < self.conf.peer_budget.get() => {
+                m = self.msgs.next(), if wstate.is_idle() && self.retry.len() < self.conf.peer_budget.get() => {
                     trace!(name = %self.conf.name, peer = %conn.key, "next outbound message");
                     let (slot, id, (policy, bytes)) = m;
                     if policy.is_retry() {
                         self.retry.add(slot, id, bytes.clone(), policy, Instant::now());
                     }
+                    self.msgs.remove(slot, id);
                     let chunk = min(bytes.len(), MAX_PAYLOAD_SIZE);
                     wstate = WriteState::data_frame(
                         &bytes[..chunk],
