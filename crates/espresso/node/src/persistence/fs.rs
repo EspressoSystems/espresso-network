@@ -55,7 +55,10 @@ use super::{
 };
 use crate::{
     RECENT_STAKE_TABLES_LIMIT, ViewNumber,
-    persistence::{migrate_network_config, persistence_metrics::PersistenceMetricsValue},
+    persistence::{
+        migrate_network_config, persistence_metrics::PersistenceMetricsValue,
+        sql::DECIDE_GAP_FILL_HORIZON,
+    },
 };
 
 /// Deserialize a stake table from bytes, trying current and legacy formats.
@@ -243,6 +246,11 @@ impl Inner {
 
     fn decided_leaf2_path(&self) -> PathBuf {
         self.path.join("decided_leaves2")
+    }
+
+    /// Decide-event cursor: view and height of the last leaf delivered to the event consumer.
+    fn event_cursor_path(&self) -> PathBuf {
+        self.path.join("event_cursor")
     }
 
     /// The path from previous versions where there was only a single file for anchor leaves.
@@ -487,6 +495,32 @@ impl Inner {
         }
     }
 
+    fn load_event_cursor(&self) -> anyhow::Result<Option<(ViewNumber, u64)>> {
+        let path = self.event_cursor_path();
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let bytes: [u8; 16] = fs::read(&path)?
+            .try_into()
+            .map_err(|bytes| anyhow!("malformed event cursor file: {bytes:?}"))?;
+        let view = u64::from_le_bytes(bytes[..8].try_into().unwrap());
+        let height = u64::from_le_bytes(bytes[8..].try_into().unwrap());
+        Ok(Some((ViewNumber::new(view), height)))
+    }
+
+    fn save_event_cursor(&mut self, view: ViewNumber, height: u64) -> anyhow::Result<()> {
+        let path = self.event_cursor_path();
+        self.replace(
+            &path,
+            |_| Ok(true),
+            |mut file| {
+                file.write_all(&view.u64().to_le_bytes())?;
+                file.write_all(&height.to_le_bytes())?;
+                Ok(())
+            },
+        )
+    }
+
     /// Generate events based on persisted decided leaves.
     ///
     /// Returns a list of closed intervals of views which can be safely deleted, as all leaves
@@ -501,7 +535,10 @@ impl Inner {
         // separate event for each leaf because it is possible we have non-consecutive leaves in our
         // storage, which would not be valid as a single decide with a single leaf chain.
         let mut leaves = BTreeMap::new();
+        // The newest persisted decide; bounds how far back a gap-fill can arrive.
+        let mut watermark = view;
         for (v, path) in view_files(self.decided_leaf2_path())? {
+            watermark = watermark.max(v);
             if v > view {
                 continue;
             }
@@ -544,14 +581,19 @@ impl Inner {
             leaves.insert(v, (info, cert));
         }
 
-        // The invariant is that the oldest existing leaf in the `anchor_leaf` table -- if there is
-        // one -- was always included in the _previous_ decide event...but not removed from the
-        // database, because we always persist the most recent anchor leaf.
-        if let Some((oldest_view, _)) = leaves.first_key_value() {
-            // The only exception is when the oldest leaf is the genesis leaf; then there was no
-            // previous decide event.
+        // Leaves at or below the cursor have been delivered. A gap-fill decide can write a leaf
+        // file at a view *older* than the retained anchor, so "oldest file on disk" does not
+        // identify the anchor.
+        let stored_cursor = self.load_event_cursor()?;
+        let mut cursor = stored_cursor;
+        if let Some((cursor_view, _)) = cursor {
+            leaves.retain(|v, _| *v > cursor_view);
+        } else if let Some((oldest_view, _)) = leaves.first_key_value() {
+            // Storage written before the cursor file existed is monotone; the oldest leaf --
+            // unless it is genesis -- was already included in the previous decide event.
             if *oldest_view > ViewNumber::genesis() {
-                leaves.pop_first();
+                let (v, (info, _)) = leaves.pop_first().unwrap();
+                cursor = Some((v, info.leaf.block_header().block_number()));
             }
         }
 
@@ -559,6 +601,25 @@ impl Inner {
         let mut current_interval = None;
         for (view, (leaf, cert)) in leaves {
             let height = leaf.leaf.block_header().block_number();
+
+            // A height jump within `DECIDE_GAP_FILL_HORIZON` of the watermark can still be
+            // gap-filled: hold the cursor until that decide writes the missing file. Legacy or
+            // beyond-horizon gaps are permanent; skip as before, leaving the missing block to
+            // the consumer's own fetching.
+            if let Some((_, cursor_height)) = cursor
+                && height > cursor_height + 1
+                && leaf.leaf.block_header().version() >= versions::NEW_PROTOCOL_VERSION
+                && view.u64().saturating_sub(1) + DECIDE_GAP_FILL_HORIZON > watermark.u64()
+            {
+                tracing::info!(
+                    %view,
+                    height,
+                    cursor_height,
+                    %watermark,
+                    "waiting for gap-fill decide before emitting more decide events"
+                );
+                break;
+            }
 
             let event = if leaf.leaf.block_header().version() >= versions::NEW_PROTOCOL_VERSION {
                 let cert2 = self.load_cert2(view)?;
@@ -587,6 +648,7 @@ impl Inner {
                 })
             };
             consumer.handle_event(&event).await?;
+            cursor = Some((view, height));
 
             if let Some((start, end, current_height)) = current_interval.as_mut() {
                 if height == *current_height + 1 {
@@ -606,6 +668,14 @@ impl Inner {
         }
         if let Some((start, end, _)) = current_interval {
             intervals.push(start..=end);
+        }
+
+        if cursor != stored_cursor
+            && let Some((cursor_view, cursor_height)) = cursor
+        {
+            // Advance the persisted cursor only after the consumer has handled the events; on a
+            // failure the next pass re-emits from the old cursor (consumers are idempotent).
+            self.save_event_cursor(cursor_view, cursor_height)?;
         }
 
         Ok(intervals)
