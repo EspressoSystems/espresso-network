@@ -1685,7 +1685,7 @@ impl<T: NodeType> Consensus<T> {
         if view <= floor || self.decided_views.contains(&view) {
             return;
         }
-        let Some(cert2) = self.certs2.get(&view).cloned() else {
+        let Some(cert2) = self.certs2.get(&view) else {
             debug!(%view, "cert2 not available");
             return;
         };
@@ -1766,7 +1766,7 @@ impl<T: NodeType> Consensus<T> {
         outbox.push_back(ConsensusOutput::LeafDecided {
             leaves: decided,
             cert1,
-            cert2: Some(cert2),
+            cert2: Some(cert2.clone()),
             vid_shares,
         });
     }
