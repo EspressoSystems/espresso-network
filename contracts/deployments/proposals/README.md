@@ -22,19 +22,16 @@ The `contract` file contains the `--contract` value accepted by `deploy verify-p
 Each proposal is verified by the CI job on PRs touching `contracts/deployments/proposals/**`:
 
 ```
-deploy verify-proposal \
-  --contract stake-table-v3 \
-  --input contracts/deployments/proposals/<network>/<date>-<slug>/schedule.json \
-  --input contracts/deployments/proposals/<network>/<date>-<slug>/execute.json
+deploy verify-proposal contracts/deployments/proposals/<network>/<date>-<slug>
 ```
 
-The CI job reads `--contract` from the `contract` file in each proposal directory. The job forks the network RPC
+The CI job reads the contract kind and both JSON files from the proposal directory. The job forks the network RPC
 (Sepolia for decaf/mainnet). A proposal that fails bytecode or governance checks cannot merge.
 
 ## Signer flow
 
 1. Check out the commit recorded in the proposal README.
-2. Run `deploy verify-proposal --contract <kind> --input ... --safe <safe> --nonce <nonce>`.
+2. Run `deploy verify-proposal <dir> --safe <safe> --nonce <nonce>`.
 3. Confirm all rows PASS and Safe hashes match the README values.
 4. Import the JSON file(s) into the Safe app.
 5. Confirm the Ledger displays the same domain+message+safe_tx hashes.

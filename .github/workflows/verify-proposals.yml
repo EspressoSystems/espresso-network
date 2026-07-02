@@ -48,14 +48,6 @@ jobs:
           fi
           exit_code=0
           for dir in $changed_dirs; do
-            # Each proposal dir must contain a one-line `contract` file with
-            # the --contract kind (e.g. stake-table-v3).
-            if [ ! -f "$dir/contract" ]; then
-              echo "ERROR: $dir/contract missing" >&2
-              exit_code=1
-              continue
-            fi
-            contract=$(cat "$dir/contract")
             # Public RPC per network (network is the path segment after proposals/).
             network=${dir#contracts/deployments/proposals/}
             network=${network%%/*}
@@ -64,12 +56,9 @@ jobs:
               mainnet) rpc="https://ethereum-rpc.publicnode.com" ;;
               *) echo "ERROR: unsupported network '$network' in $dir" >&2; exit_code=1; continue ;;
             esac
-            echo "Verifying $dir (contract=$contract, network=$network) ..."
-            # Build --input flags for each JSON file in the dir.
-            input_flags=$(ls "$dir"/*.json | sort | sed 's/^/--input /' | tr '\n' ' ')
-            # shellcheck disable=SC2086
+            echo "Verifying $dir (network=$network) ..."
             nix develop --accept-flake-config -c \
-              ./target/test/deploy --rpc-url "$rpc" verify-proposal --contract "$contract" $input_flags \
+              ./target/test/deploy --rpc-url "$rpc" verify-proposal "$dir" \
               || exit_code=$?
           done
           exit $exit_code

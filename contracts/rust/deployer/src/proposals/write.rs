@@ -120,7 +120,7 @@ pub struct ResolvedSafeHashes {
 /// Fill the README template with proposal-specific values.
 ///
 /// `params` supplies all chain/contract data; `dir` is the final output directory
-/// (used to build the `--input` paths in the verify command).
+/// (recorded as `{{PROPOSAL_DIR}}` in the verify command).
 /// `source_commit` is the short git hash recorded at generation time.
 /// `safe_hashes` is `Some` when auto-fill succeeded, `None` when skipped.
 fn render_stake_table_v3_readme(
@@ -129,8 +129,7 @@ fn render_stake_table_v3_readme(
     source_commit: &str,
     safe_hashes: Option<&ResolvedSafeHashes>,
 ) -> String {
-    let schedule_path = dir.join("schedule.json").display().to_string();
-    let execute_path = dir.join("execute.json").display().to_string();
+    let proposal_dir = dir.display().to_string();
 
     let schedule_safe = safe_hashes
         .map(|h| format!("{:#x}", h.schedule_safe))
@@ -149,8 +148,7 @@ fn render_stake_table_v3_readme(
         .replace("{{TIMELOCK}}", &format!("{:#x}", params.timelock))
         .replace("{{SALT}}", &params.salt.to_string())
         .replace("{{DELAY}}", &params.delay.to_string())
-        .replace("{{SCHEDULE_PATH}}", &schedule_path)
-        .replace("{{EXECUTE_PATH}}", &execute_path)
+        .replace("{{PROPOSAL_DIR}}", &proposal_dir)
         .replace("{{SCHEDULE_SAFE}}", &schedule_safe)
         .replace("{{SCHEDULE_NONCE}}", &schedule_nonce)
         .replace(
@@ -373,10 +371,7 @@ pub async fn write_stake_table_v3_proposal_dir(
 mod tests {
     use std::str::FromStr;
 
-    use alloy::{
-        node_bindings::Anvil,
-        providers::{ProviderBuilder, ext::AnvilApi},
-    };
+    use alloy::{node_bindings::Anvil, providers::ProviderBuilder};
 
     use super::*;
 

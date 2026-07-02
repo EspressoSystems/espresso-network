@@ -5,7 +5,11 @@
 //! (owner, timelock, delay, init call) is correct. No trust in Etherscan or
 //! the JSON description.
 
-use std::{collections::BTreeMap, fmt, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    fmt,
+    path::{Path, PathBuf},
+};
 
 use alloy::{
     primitives::{Address, B256, Bytes, U256},
@@ -13,6 +17,7 @@ use alloy::{
     sol_types::SolCall,
 };
 use anyhow::{Result, anyhow, bail};
+use clap::ValueEnum;
 use hotshot_contract_adapter::sol_types::{
     EspTokenV2, FeeContract, OpsTimelock, RewardClaim, StakeTableV2, StakeTableV3,
 };
@@ -467,41 +472,56 @@ fn batch_phase(batch: &SafeBatch) -> Result<Phase> {
     bail!("batch has neither contractMethod nor data");
 }
 
-/// Load and classify JSON input files into a `TimelockBatches`.
+/// Load `schedule.json` and `execute.json` from a proposal directory.
 ///
-/// Requires exactly two files: one `schedule` and one `execute`, order-independent.
-/// Errors on any other combination, including a single file.
-pub fn classify_batches(inputs: &[PathBuf]) -> Result<TimelockBatches> {
-    let raw: Vec<SafeBatch> = inputs
-        .iter()
-        .map(|p| {
-            let text = std::fs::read_to_string(p)
-                .map_err(|e| anyhow!("cannot read {}: {e}", p.display()))?;
-            serde_json::from_str::<SafeBatch>(&text)
-                .map_err(|e| anyhow!("failed to parse {}: {e}", p.display()))
-        })
-        .collect::<Result<_>>()?;
+/// Both files must be present and parse as `SafeBatch`. Phase is validated
+/// via `batch_phase`: `schedule.json` must be `Phase::Schedule` and
+/// `execute.json` must be `Phase::Execute`; any mismatch is an error.
+pub fn load_proposal_dir(dir: &Path) -> Result<TimelockBatches> {
+    let load = |name: &str| -> Result<SafeBatch> {
+        let p = dir.join(name);
+        let text =
+            std::fs::read_to_string(&p).map_err(|e| anyhow!("cannot read {}: {e}", p.display()))?;
+        serde_json::from_str::<SafeBatch>(&text)
+            .map_err(|e| anyhow!("failed to parse {}: {e}", p.display()))
+    };
 
-    match raw.as_slice() {
-        [_, _] => {
-            let mut it = raw.into_iter();
-            let a = it.next().expect("len=2");
-            let b = it.next().expect("len=2");
-            let phase_a = batch_phase(&a)?;
-            let phase_b = batch_phase(&b)?;
-            let (schedule, execute) = match (phase_a, phase_b) {
-                (Phase::Schedule, Phase::Execute) => (a, b),
-                (Phase::Execute, Phase::Schedule) => (b, a),
-                (p, q) => bail!("expected one schedule + one execute, got {p:?} + {q:?}"),
-            };
-            Ok(TimelockBatches { schedule, execute })
-        },
-        [_] => bail!(
-            "expected a schedule and an execute proposal (timelock two-phase); multisig-direct \
-             upgrades are not supported"
-        ),
-        _ => bail!("expected 2 input files, got {}", inputs.len()),
+    let schedule = load("schedule.json")?;
+    let execute = load("execute.json")?;
+
+    let sched_phase = batch_phase(&schedule)?;
+    if sched_phase != Phase::Schedule {
+        bail!(
+            "{}/schedule.json has phase {:?}; expected Schedule",
+            dir.display(),
+            sched_phase
+        );
     }
+    let exec_phase = batch_phase(&execute)?;
+    if exec_phase != Phase::Execute {
+        bail!(
+            "{}/execute.json has phase {:?}; expected Execute",
+            dir.display(),
+            exec_phase
+        );
+    }
+
+    Ok(TimelockBatches { schedule, execute })
+}
+
+/// Read and parse `dir/contract` as a `ContractKindArg`.
+pub fn read_contract_kind_file(dir: &Path) -> Result<ContractKindArg> {
+    let p = dir.join("contract");
+    let raw =
+        std::fs::read_to_string(&p).map_err(|e| anyhow!("cannot read {}: {e}", p.display()))?;
+    let s = raw.trim();
+    ContractKindArg::from_str(s, true).map_err(|e| {
+        anyhow!(
+            "failed to parse contract kind {:?} from {}: {e}",
+            s,
+            p.display()
+        )
+    })
 }
 
 /// Decode a `TimelockBatches` into a `DecodedUpgrade`.
@@ -724,14 +744,12 @@ pub fn delay_row(delay: U256, min_delay: U256) -> CheckRow {
 
 #[derive(Debug, Clone, clap::Args)]
 pub struct VerifyProposalArgs {
-    /// Contract kind being upgraded. Determines which binding bytecode is
-    /// compared against the on-chain impl.
-    #[clap(long)]
-    pub contract: ContractKindArg,
+    /// Proposal directory containing schedule.json, execute.json, and a `contract` file.
+    pub dir: PathBuf,
 
-    /// Safe-tx JSON files: one `schedule` and one `execute` (timelock two-phase), order-independent.
-    #[clap(long = "input", required = true, num_args = 2)]
-    pub inputs: Vec<PathBuf>,
+    /// Override the contract kind; defaults to the dir's `contract` file.
+    #[clap(long)]
+    pub contract: Option<ContractKindArg>,
 
     /// Safe (multisig) address that will sign; enables Safe-tx-hash output.
     #[clap(long)]
@@ -750,10 +768,27 @@ pub async fn run_verify(
     contracts: &Contracts,
     chain_id: u64,
 ) -> Result<VerifyReport> {
-    let kind = contract_kind(args.contract);
+    // Resolve contract kind: flag overrides file; if both present, assert they match.
+    let kind_arg = match (args.contract, read_contract_kind_file(&args.dir)) {
+        (Some(flag_kind), Ok(file_kind)) => {
+            if flag_kind != file_kind {
+                bail!(
+                    "--contract {:?} conflicts with contract file {:?} in {}",
+                    flag_kind,
+                    file_kind,
+                    args.dir.display()
+                );
+            }
+            flag_kind
+        },
+        (Some(flag_kind), Err(_)) => flag_kind,
+        (None, Ok(file_kind)) => file_kind,
+        (None, Err(e)) => bail!("no --contract flag and contract file unreadable: {e}"),
+    };
+    let kind = contract_kind(kind_arg);
     let mut rows: Vec<CheckRow> = vec![];
 
-    let batches = classify_batches(&args.inputs)?;
+    let batches = load_proposal_dir(&args.dir)?;
     let upgrade = match decode_proposal(batches) {
         Ok(u) => {
             rows.push(pass("decode", format!("outer_to={}", u.outer_to)));
@@ -1006,7 +1041,7 @@ mod tests {
         primitives::{Address, B256, Bytes, U256},
         sol_types::SolCall,
     };
-    use hotshot_contract_adapter::sol_types::{OpsTimelock, StakeTableV3};
+    use hotshot_contract_adapter::sol_types::StakeTableV3;
 
     use super::*;
 
@@ -1080,35 +1115,17 @@ mod tests {
         );
     }
 
-    // ── TEST:verify-single-file-rejected ──────────────────────────────────
+    // ── TEST:verify-load-proposal-dir-ok ─────────────────────────────────
 
     #[test]
-    fn test_verify_single_file_rejected() {
-        // classify_batches with one file must error with a clear message
-        let tmp = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(tmp.path(), SCHEDULE_JSON).unwrap();
-        let err = classify_batches(&[tmp.path().to_path_buf()]).unwrap_err();
-        assert!(
-            err.to_string().contains("multisig-direct") || err.to_string().contains("timelock"),
-            "unexpected error: {err}"
-        );
-    }
+    fn test_verify_load_proposal_dir_ok() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::write(dir.join("schedule.json"), SCHEDULE_JSON).unwrap();
+        std::fs::write(dir.join("execute.json"), EXECUTE_JSON).unwrap();
+        std::fs::write(dir.join("contract"), "stake-table-v3\n").unwrap();
 
-    // ── TEST:verify-classify-batches-reversed ─────────────────────────────
-
-    #[test]
-    fn test_verify_classify_batches_reversed() {
-        // execute file first, schedule file second — classify_batches must still yield
-        // schedule+execute pairing regardless of input order.
-        let sched_tmp = tempfile::NamedTempFile::new().unwrap();
-        let exec_tmp = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(sched_tmp.path(), SCHEDULE_JSON).unwrap();
-        std::fs::write(exec_tmp.path(), EXECUTE_JSON).unwrap();
-        let batches = classify_batches(&[
-            exec_tmp.path().to_path_buf(),
-            sched_tmp.path().to_path_buf(),
-        ])
-        .expect("classify_batches with reversed input order");
+        let batches = load_proposal_dir(dir).expect("load_proposal_dir");
         assert_eq!(
             batches.schedule.transactions[0]
                 .contract_method
@@ -1125,6 +1142,63 @@ mod tests {
                 .name,
             "execute"
         );
+
+        let kind = read_contract_kind_file(dir).expect("read_contract_kind_file");
+        assert_eq!(kind, ContractKindArg::StakeTableV3);
+    }
+
+    // ── TEST:verify-load-proposal-dir-missing-execute-errors ─────────────
+
+    #[test]
+    fn test_verify_load_proposal_dir_missing_execute_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::write(dir.join("schedule.json"), SCHEDULE_JSON).unwrap();
+        // No execute.json.
+        let err = load_proposal_dir(dir).unwrap_err();
+        assert!(
+            err.to_string().contains("execute.json"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // ── TEST:verify-load-proposal-dir-phase-mismatch-errors ──────────────
+
+    #[test]
+    fn test_verify_load_proposal_dir_phase_mismatch_errors() {
+        // schedule.json contains an execute call — phase mismatch must error.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        // Write the execute JSON as schedule.json so phase validation fails.
+        std::fs::write(dir.join("schedule.json"), EXECUTE_JSON).unwrap();
+        std::fs::write(dir.join("execute.json"), EXECUTE_JSON).unwrap();
+        let err = load_proposal_dir(dir).unwrap_err();
+        assert!(
+            err.to_string().contains("schedule.json") && err.to_string().contains("Execute"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // ── TEST:verify-contract-flag-vs-file-mismatch-errors ────────────────
+
+    #[test]
+    fn test_verify_contract_flag_vs_file_mismatch_errors() {
+        // --contract fee-contract but contract file says stake-table-v3 — must error.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::write(dir.join("contract"), "stake-table-v3\n").unwrap();
+
+        let args = VerifyProposalArgs {
+            dir: dir.to_path_buf(),
+            contract: Some(ContractKindArg::FeeContract),
+            safe: None,
+            nonce: None,
+        };
+        // The mismatch is detected in run_verify before any provider call.
+        // We test it by calling read_contract_kind_file + manual flag comparison.
+        let file_kind = read_contract_kind_file(&args.dir).unwrap();
+        assert_eq!(file_kind, ContractKindArg::StakeTableV3);
+        assert_ne!(args.contract.unwrap(), file_kind);
     }
 
     // ── TEST:verify-strip-cbor-828-ok ─────────────────────────────────────

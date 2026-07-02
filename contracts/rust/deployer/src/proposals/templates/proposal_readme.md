@@ -36,10 +36,7 @@ recompute with `verify-proposal` if additional transactions have been queued sin
 Run this command to verify the proposal and recompute hashes (e.g. if the nonce has advanced):
 
 ```
-deploy verify-proposal \
-  --contract stake-table-v3 \
-  --input {{SCHEDULE_PATH}} \
-  --input {{EXECUTE_PATH}} \
+deploy verify-proposal {{PROPOSAL_DIR}} \
   --safe {{VERIFY_SAFE}} \
   --nonce {{VERIFY_NONCE}}
 ```
