@@ -1,0 +1,17 @@
+[package]
+name = "cliquenet-x25519"
+version = "0.1.0"
+edition = "2024"
+description = "x25519 keypair support for cliquenet"
+
+[features]
+serde = ["dep:serde", "dep:serde_bytes"]
+
+[dependencies]
+bs58 = { workspace = true }
+ed25519-compact = { workspace = true }
+thiserror = { workspace = true }
+
+# optional:
+serde = { workspace = true, features = ["derive"], optional = true }
+serde_bytes = { workspace = true, optional = true }

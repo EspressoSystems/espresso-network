@@ -12,7 +12,7 @@ use std::{
     marker::PhantomData,
 };
 
-use alloy::primitives::{FixedBytes, U256};
+use alloy_primitives::{FixedBytes, U256};
 use committable::{Commitment, Committable};
 use hotshot_utils::anytrace::*;
 use serde::{Deserialize, Serialize};

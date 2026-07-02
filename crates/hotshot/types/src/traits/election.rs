@@ -15,7 +15,7 @@
 
 use std::fmt::Debug;
 
-use alloy::primitives::U256;
+use alloy_primitives::U256;
 use committable::{Commitment, Committable};
 use hotshot_utils::anytrace;
 
