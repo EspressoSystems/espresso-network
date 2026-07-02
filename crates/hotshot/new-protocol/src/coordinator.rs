@@ -670,7 +670,9 @@ where
                     "leaves decided"
                 );
                 if let Some(m) = &self.metrics {
-                    m.leaf_decided_view.set(*cert1.view_number() as usize);
+                    // A gap-fill decide of an older view must not regress the gauge.
+                    m.leaf_decided_view
+                        .set(*self.consensus.last_decided_view() as usize);
                 }
                 if let Some(cert2) = cert2 {
                     self.storage.append_cert2(cert2.view_number, cert2.clone());
