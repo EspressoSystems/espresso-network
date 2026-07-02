@@ -830,6 +830,13 @@ const PG_SERIALIZATION_FAILURE_CODE: &str = "40001";
 /// watermark than this will never be filled in by consensus.
 pub(crate) const DECIDE_GAP_FILL_HORIZON: u64 = 50;
 
+/// Whether the height gap directly below the leaf at `view` can still be filled by a late
+/// decide: the missing view (at most `view - 1`) must be within [`DECIDE_GAP_FILL_HORIZON`] of
+/// `watermark`, the newest persisted decide.
+pub(crate) fn within_gap_fill_horizon(view: u64, watermark: u64) -> bool {
+    view.saturating_sub(1) + DECIDE_GAP_FILL_HORIZON > watermark
+}
+
 #[derive(Debug)]
 struct DecidedLeaf {
     info: LeafInfo<SeqTypes>,
@@ -1129,16 +1136,16 @@ impl Persistence {
                         // permanent; skip as before, leaving the missing block to the
                         // consumer's own fetching.
                         let row_view = leaf.view_number().u64();
-                        let watermark = watermark.unwrap_or_default() as u64;
                         if height > parent + 1
                             && leaf.block_header().version() >= versions::NEW_PROTOCOL_VERSION
-                            && row_view.saturating_sub(1) + DECIDE_GAP_FILL_HORIZON > watermark
+                            && watermark
+                                .is_some_and(|w| within_gap_fill_horizon(row_view, w as u64))
                         {
                             tracing::info!(
                                 height,
                                 parent,
                                 row_view,
-                                watermark,
+                                ?watermark,
                                 "waiting for gap-fill decide before advancing the decide cursor"
                             );
                             break;

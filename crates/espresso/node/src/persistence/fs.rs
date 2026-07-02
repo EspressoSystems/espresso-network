@@ -57,7 +57,7 @@ use crate::{
     RECENT_STAKE_TABLES_LIMIT, ViewNumber,
     persistence::{
         migrate_network_config, persistence_metrics::PersistenceMetricsValue,
-        sql::DECIDE_GAP_FILL_HORIZON,
+        sql::within_gap_fill_horizon,
     },
 };
 
@@ -609,7 +609,7 @@ impl Inner {
             if let Some((_, cursor_height)) = cursor
                 && height > cursor_height + 1
                 && leaf.leaf.block_header().version() >= versions::NEW_PROTOCOL_VERSION
-                && view.u64().saturating_sub(1) + DECIDE_GAP_FILL_HORIZON > watermark.u64()
+                && within_gap_fill_horizon(view.u64(), watermark.u64())
             {
                 tracing::info!(
                     %view,
