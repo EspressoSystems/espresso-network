@@ -84,6 +84,16 @@ jobs:
           printf '[Workflow run](%s)\n' "${run_url}" >> "${comment}"
           exit "${exit_code}"
 
+      - name: Note incomplete verification
+        if: ${{ always() && job.status != 'success' && hashFiles('pr-comment.md') == '' }}
+        run: |
+          {
+            printf '## Upgrade proposal verification\n\n'
+            printf 'FAIL ❌: workflow failed before any proposal was verified.\n\n'
+            printf '[Workflow run](%s)\n' \
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } > pr-comment.md
+
       - name: Post/update PR comment
         if: ${{ always() }}
         continue-on-error: true
