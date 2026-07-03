@@ -658,8 +658,12 @@ async fn handle_events<N, P, C>(
                 .persist_event(&event, event_consumer.as_ref())
                 .await
             {
-                // A closed receiver only happens during shutdown.
-                let _ = decide_tx.send(Some(signal));
+                // Keep the max view: a gap-fill decide signals an *older* view
+                // and must not hide a newer, unconsumed tip signal.
+                decide_tx.send_modify(|current| match current {
+                    Some((view, _)) if *view > signal.0 => {},
+                    _ => *current = Some(signal),
+                });
             }
         };
 

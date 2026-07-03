@@ -49,13 +49,17 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 use itertools::Itertools;
+use serde::{Deserialize, Serialize};
 
 use super::{
     RegisteredValidatorNoX25519, RegisteredValidatorPreOption, RegisteredValidatorPreSchnorrOption,
 };
 use crate::{
     RECENT_STAKE_TABLES_LIMIT, ViewNumber,
-    persistence::{migrate_network_config, persistence_metrics::PersistenceMetricsValue},
+    persistence::{
+        migrate_network_config, persistence_metrics::PersistenceMetricsValue,
+        sql::within_gap_fill_horizon,
+    },
 };
 
 /// Deserialize a stake table from bytes, trying current and legacy formats.
@@ -219,6 +223,15 @@ struct Inner {
     migrated: HashSet<String>,
 }
 
+/// Decide-event cursor: the last leaf delivered to the event consumer.
+/// The bincode encoding must stay byte-compatible with the original raw
+/// `view || height` little-endian file layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct EventCursor {
+    view: ViewNumber,
+    height: u64,
+}
+
 impl Inner {
     fn config_path(&self) -> PathBuf {
         self.path.join("hotshot.cfg")
@@ -243,6 +256,11 @@ impl Inner {
 
     fn decided_leaf2_path(&self) -> PathBuf {
         self.path.join("decided_leaves2")
+    }
+
+    /// Decide-event cursor: view and height of the last leaf delivered to the event consumer.
+    fn event_cursor_path(&self) -> PathBuf {
+        self.path.join("event_cursor")
     }
 
     /// The path from previous versions where there was only a single file for anchor leaves.
@@ -487,6 +505,29 @@ impl Inner {
         }
     }
 
+    fn load_event_cursor(&self) -> anyhow::Result<Option<EventCursor>> {
+        let path = self.event_cursor_path();
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let bytes = fs::read(&path)?;
+        let cursor = bincode::deserialize(&bytes).context("malformed event cursor file")?;
+        Ok(Some(cursor))
+    }
+
+    fn save_event_cursor(&mut self, cursor: EventCursor) -> anyhow::Result<()> {
+        let path = self.event_cursor_path();
+        let bytes = bincode::serialize(&cursor)?;
+        self.replace(
+            &path,
+            |_| Ok(true),
+            |mut file| {
+                file.write_all(&bytes)?;
+                Ok(())
+            },
+        )
+    }
+
     /// Generate events based on persisted decided leaves.
     ///
     /// Returns a list of closed intervals of views which can be safely deleted, as all leaves
@@ -501,7 +542,10 @@ impl Inner {
         // separate event for each leaf because it is possible we have non-consecutive leaves in our
         // storage, which would not be valid as a single decide with a single leaf chain.
         let mut leaves = BTreeMap::new();
+        // The newest persisted decide; bounds how far back a gap-fill can arrive.
+        let mut watermark = view;
         for (v, path) in view_files(self.decided_leaf2_path())? {
+            watermark = watermark.max(v);
             if v > view {
                 continue;
             }
@@ -544,14 +588,22 @@ impl Inner {
             leaves.insert(v, (info, cert));
         }
 
-        // The invariant is that the oldest existing leaf in the `anchor_leaf` table -- if there is
-        // one -- was always included in the _previous_ decide event...but not removed from the
-        // database, because we always persist the most recent anchor leaf.
-        if let Some((oldest_view, _)) = leaves.first_key_value() {
-            // The only exception is when the oldest leaf is the genesis leaf; then there was no
-            // previous decide event.
+        // Leaves at or below the cursor have been delivered. A gap-fill decide can write a leaf
+        // file at a view *older* than the retained anchor, so "oldest file on disk" does not
+        // identify the anchor.
+        let stored_cursor = self.load_event_cursor()?;
+        let mut cursor = stored_cursor;
+        if let Some(EventCursor { view, .. }) = cursor {
+            leaves.retain(|v, _| *v > view);
+        } else if let Some((oldest_view, _)) = leaves.first_key_value() {
+            // Storage written before the cursor file existed is monotone; the oldest leaf --
+            // unless it is genesis -- was already included in the previous decide event.
             if *oldest_view > ViewNumber::genesis() {
-                leaves.pop_first();
+                let (v, (info, _)) = leaves.pop_first().unwrap();
+                cursor = Some(EventCursor {
+                    view: v,
+                    height: info.leaf.block_header().block_number(),
+                });
             }
         }
 
@@ -559,6 +611,28 @@ impl Inner {
         let mut current_interval = None;
         for (view, (leaf, cert)) in leaves {
             let height = leaf.leaf.block_header().block_number();
+
+            // A height jump within `DECIDE_GAP_FILL_HORIZON` of the watermark can still be
+            // gap-filled: hold the cursor until that decide writes the missing file. Legacy or
+            // beyond-horizon gaps are permanent; skip as before, leaving the missing block to
+            // the consumer's own fetching.
+            if let Some(EventCursor {
+                height: cursor_height,
+                ..
+            }) = cursor
+                && height > cursor_height + 1
+                && leaf.leaf.block_header().version() >= versions::NEW_PROTOCOL_VERSION
+                && within_gap_fill_horizon(view.u64(), watermark.u64())
+            {
+                tracing::info!(
+                    %view,
+                    height,
+                    cursor_height,
+                    %watermark,
+                    "waiting for gap-fill decide before emitting more decide events"
+                );
+                break;
+            }
 
             let event = if leaf.leaf.block_header().version() >= versions::NEW_PROTOCOL_VERSION {
                 let cert2 = self.load_cert2(view)?;
@@ -587,6 +661,7 @@ impl Inner {
                 })
             };
             consumer.handle_event(&event).await?;
+            cursor = Some(EventCursor { view, height });
 
             if let Some((start, end, current_height)) = current_interval.as_mut() {
                 if height == *current_height + 1 {
@@ -606,6 +681,14 @@ impl Inner {
         }
         if let Some((start, end, _)) = current_interval {
             intervals.push(start..=end);
+        }
+
+        if cursor != stored_cursor
+            && let Some(cursor) = cursor
+        {
+            // Advance the persisted cursor only after the consumer has handled the events; on a
+            // failure the next pass re-emits from the old cursor (consumers are idempotent).
+            self.save_event_cursor(cursor)?;
         }
 
         Ok(intervals)
@@ -2504,6 +2587,20 @@ mod test {
         fn options(storage: &Self::Storage) -> impl PersistenceOptions<Persistence = Self> {
             Options::new(storage.path().into())
         }
+    }
+
+    /// Cursor files written before [`EventCursor`] existed must keep parsing.
+    #[test]
+    fn test_event_cursor_format_is_stable() {
+        let cursor = EventCursor {
+            view: ViewNumber::new(7),
+            height: 42,
+        };
+        let bytes = bincode::serialize(&cursor).unwrap();
+        let mut raw = 7u64.to_le_bytes().to_vec();
+        raw.extend(42u64.to_le_bytes());
+        assert_eq!(bytes, raw);
+        assert_eq!(bincode::deserialize::<EventCursor>(&raw).unwrap(), cursor);
     }
 
     #[test]
