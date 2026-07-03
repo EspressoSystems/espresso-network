@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["READY_BATCH"],"fn":["timeout"],"struct":["DelayQueue","RetryItem"]};
