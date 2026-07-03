@@ -1,5 +1,6 @@
 mod addr;
 mod connection;
+mod delay;
 mod metrics;
 mod msg;
 mod net;
