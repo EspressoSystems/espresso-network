@@ -22,7 +22,10 @@ use serde::Serialize;
 use url::Url;
 
 use crate::{
-    api, genesis::GenesisSource, keyset::KeySetOptions, persistence,
+    api,
+    genesis::{Genesis, GenesisSource},
+    keyset::KeySetOptions,
+    persistence,
     proposal_fetcher::ProposalFetcherConfig,
 };
 
@@ -687,6 +690,7 @@ pub struct PublicNodeConfig {
     pub config_peers: Option<Vec<Url>>,
     pub is_da: bool,
     pub genesis_file: GenesisSource,
+    pub genesis: Genesis,
     pub identity: Identity,
     pub catchup_base_timeout: Duration,
     pub local_catchup_timeout: Duration,
@@ -989,7 +993,7 @@ impl From<&L1ClientOptions> for L1Tuning {
 }
 
 impl PublicNodeConfig {
-    pub fn new(opt: &Options, modules: &Modules) -> Self {
+    pub fn new(opt: &Options, modules: &Modules, genesis: &Genesis) -> Self {
         let storage = if let Some(sql) = modules.storage_sql.as_ref() {
             StorageConfig {
                 backend: StorageBackend::Sql,
@@ -1026,6 +1030,7 @@ impl PublicNodeConfig {
             config_peers: opt.config_peers.clone(),
             is_da: opt.is_da,
             genesis_file: opt.genesis_file.clone(),
+            genesis: genesis.clone(),
             identity: opt.identity.clone(),
             catchup_base_timeout: opt.catchup_base_timeout,
             local_catchup_timeout: opt.local_catchup_timeout,
@@ -1052,8 +1057,10 @@ mod tests {
     use espresso_types::PubKey;
     use hotshot_types::{light_client::StateKeyPair, traits::signature_key::SignatureKey, x25519};
     use tagged_base64::TaggedBase64;
+    use vbs::version::Version;
 
     use super::*;
+    use crate::genesis::{L1Finalized, StakeTableConfig};
 
     #[test]
     fn test_build_version() {
@@ -1111,6 +1118,26 @@ mod tests {
         Options::parse_from(args)
     }
 
+    fn test_genesis() -> Genesis {
+        Genesis {
+            chain_config: Default::default(),
+            stake_table: StakeTableConfig { capacity: 10 },
+            accounts: Default::default(),
+            l1_finalized: L1Finalized::Number { number: 0 },
+            header: Default::default(),
+            upgrades: Default::default(),
+            base_version: Version { major: 0, minor: 1 },
+            upgrade_version: Version { major: 0, minor: 2 },
+            genesis_version: Version { major: 0, minor: 1 },
+            epoch_height: None,
+            drb_difficulty: None,
+            drb_upgrade_difficulty: None,
+            epoch_start_block: None,
+            stake_table_capacity: None,
+            da_committees: None,
+        }
+    }
+
     #[test]
     fn public_node_config_no_secrets() {
         let opt = parse_options_with(&[
@@ -1123,7 +1150,7 @@ mod tests {
         ]);
         let modules = opt.modules();
 
-        let cfg = PublicNodeConfig::new(&opt, &modules);
+        let cfg = PublicNodeConfig::new(&opt, &modules, &test_genesis());
         let json = serde_json::to_string(&cfg).unwrap();
         let json_lc = json.to_lowercase();
 
@@ -1181,7 +1208,7 @@ mod tests {
         let opt = parse_options_with(&[]);
         let modules = opt.modules();
 
-        let cfg = PublicNodeConfig::new(&opt, &modules);
+        let cfg = PublicNodeConfig::new(&opt, &modules, &test_genesis());
 
         assert!(
             cfg.cliquenet_advertise_address.is_none(),
@@ -1277,7 +1304,7 @@ mod tests {
         ]);
         let modules = opt.modules();
 
-        let cfg = PublicNodeConfig::new(&opt, &modules);
+        let cfg = PublicNodeConfig::new(&opt, &modules, &test_genesis());
 
         insta::assert_yaml_snapshot!("config_node_response_postgres", cfg);
     }
@@ -1298,7 +1325,7 @@ mod tests {
         ]);
         let modules = opt.modules();
 
-        let cfg = PublicNodeConfig::new(&opt, &modules);
+        let cfg = PublicNodeConfig::new(&opt, &modules, &test_genesis());
         let json = serde_json::to_string(&cfg).unwrap();
 
         assert_eq!(cfg.storage.backend, StorageBackend::Sql);
