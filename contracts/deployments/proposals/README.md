@@ -34,10 +34,10 @@ touched in a PR, using a public RPC for the target network. A proposal that fail
 ## Flow
 
 1. Deployer runs `deploy --upgrade-<contract> --use-timelock-owner ...`; opens a PR adding the proposal dir.
-2. Signers verify: `deploy verify-proposal <dir>` (also run by CI). All rows PASS. Note the `safe_tx` hashes.
+2. Signers verify: `deploy verify-proposal <dir>` (also run by CI). All rows PASS. Note the printed hashes.
 3. Signers approve and merge the PR.
 4. One signer imports `schedule.json` into the Safe and submits.
-5. Other signers reconfirm the step-2 `safe_tx` hash on their Ledger, then sign.
+5. Other signers reconfirm the step-2 `domain`/`message`/`safe_tx` hashes on their Ledger, then sign.
 6. After the timelock delay, repeat steps 4-5 with `execute.json` (nonce + 1).
 
 Nonce drift: `proposal.toml` hashes use the Safe nonce at generation time; verify prints a WARN (not FAIL) if the
