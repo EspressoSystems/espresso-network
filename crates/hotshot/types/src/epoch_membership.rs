@@ -645,23 +645,21 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         let store_drb_progress_fn = self.store_drb_progress_fn.clone();
         let load_drb_progress_fn = self.load_drb_progress_fn.clone();
 
-        // Race the local computation against the cancellation token. If the
-        // token fires, an external source has already added the DRB to
-        // membership, so read it back rather than waiting for the local hash
-        // loop to finish.
-        let drb = tokio::select! {
-            drb = compute_drb_result(drb_input, store_drb_progress_fn, load_drb_progress_fn) => {
-                drb
-            },
-            () = cancel_token.cancelled() => {
-                tracing::info!(
-                    "DRB calculation for epoch {epoch} cancelled by external supplier"
-                );
+        let drb = match compute_drb_result(
+            drb_input,
+            store_drb_progress_fn,
+            load_drb_progress_fn,
+            cancel_token,
+        )
+        .await
+        {
+            Some(drb) => drb,
+            None => {
                 self.clear_drb_state(epoch);
                 return self.membership.get_epoch_drb(epoch).await.map_err(|e| {
                     anytrace::error!(
-                        "DRB calculation for epoch {epoch} was cancelled but the externally \
-                         supplied result is no longer available: {e}"
+                        "DRB calculation for epoch {epoch} was cancelled but no externally \
+                         supplied result is available: {e}"
                     )
                 });
             },
@@ -716,6 +714,14 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     fn clear_drb_state(&self, epoch: EpochNumber) {
         self.drb_calculation_map.lock().remove(&epoch);
         self.drb_cancel_map.lock().remove(&epoch);
+    }
+
+    /// Cancel all in-flight DRB calculations (e.g. on shutdown).
+    pub fn cancel_all_drb(&self) {
+        let tokens: Vec<_> = self.drb_cancel_map.lock().drain().map(|(_, t)| t).collect();
+        for token in tokens {
+            token.cancel();
+        }
     }
 }
 
