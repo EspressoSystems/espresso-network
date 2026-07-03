@@ -33,23 +33,15 @@ touched in a PR, using a public RPC for the target network. A proposal that fail
 
 ## Flow
 
-1. **Deploy and create the proposal.** The deployer runs `deploy --upgrade-<contract> --use-timelock-owner ...`, which
-   deploys the new implementation and writes the proposal directory (`schedule.json`, `execute.json`, `proposal.toml`).
-   They open a PR that adds only that directory.
-2. **Signers verify** (same as the existing flow). Each signer checks out the PR and runs
-   `deploy verify-proposal contracts/deployments/proposals/<network>/<date>-<slug>`; CI runs it too. All rows must print
-   PASS. This confirms the on-chain implementation matches the shipped contract bytecode, the governance wiring is
-   correct, and every value in `proposal.toml` (including the per-phase domain/message/safe_tx hashes) is correct. Note
-   the `safe_tx` hashes.
-3. **Signers agree** the proposal in the PR is okay and merge it.
-4. **One signer submits** the proposal in the Safe: import `schedule.json` into the Safe app and create the transaction.
-5. **Other signers verify the hashes from step 2** before signing: confirm the Ledger's domain/message/safe_tx hash
-   equals the value verify printed (which equals `proposal.toml`), then sign. After the timelock delay elapses, repeat
-   steps 4-5 with `execute.json` (nonce + 1).
+1. Deployer runs `deploy --upgrade-<contract> --use-timelock-owner ...`; opens a PR adding the proposal dir.
+2. Signers verify: `deploy verify-proposal <dir>` (also run by CI). All rows PASS. Note the `safe_tx` hashes.
+3. Signers approve and merge the PR.
+4. One signer imports `schedule.json` into the Safe and submits.
+5. Other signers reconfirm the step-2 `safe_tx` hash on their Ledger, then sign.
+6. After the timelock delay, repeat steps 4-5 with `execute.json` (nonce + 1).
 
-Note: hashes in `proposal.toml` use the Safe nonce recorded at generation time. If other transactions were queued on the
-same Safe since then, verify prints a WARN row (not a FAIL) indicating nonce drift. The signer must reconfirm the
-correct nonce in the Safe app before signing.
+Nonce drift: `proposal.toml` hashes use the Safe nonce at generation time; verify prints a WARN (not FAIL) if the
+on-chain nonce moved. Reconfirm the nonce in the Safe app before signing.
 
 ## Networks
 
