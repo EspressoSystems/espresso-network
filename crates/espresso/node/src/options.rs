@@ -1054,8 +1054,16 @@ impl PublicNodeConfig {
 
 #[cfg(test)]
 mod tests {
-    use espresso_types::PubKey;
-    use hotshot_types::{light_client::StateKeyPair, traits::signature_key::SignatureKey, x25519};
+    use alloy::primitives::{Address, B256, U256};
+    use espresso_types::{
+        FeeAccount, GenesisHeader, L1BlockInfo, PubKey, SeqTypes, Timestamp, Upgrade, UpgradeMode,
+        UpgradeType, ViewBasedUpgrade, v0_3::ChainConfig,
+    };
+    use espresso_utils::ser::FromStringOrInteger;
+    use hotshot_types::{
+        PeerConfig, VersionedDaCommittee, light_client::StateKeyPair, stake_table::StakeTableEntry,
+        traits::signature_key::SignatureKey, x25519,
+    };
     use tagged_base64::TaggedBase64;
     use vbs::version::Version;
 
@@ -1118,23 +1126,65 @@ mod tests {
         Options::parse_from(args)
     }
 
+    /// A `Genesis` with every field populated (both upgrade modes, DA committee) so the
+    /// `/config/runtime` snapshot documents the full response shape.
     fn test_genesis() -> Genesis {
+        let chain_config = ChainConfig {
+            chain_id: 999999999.into(),
+            max_block_size: 3000.into(),
+            base_fee: 1.into(),
+            fee_recipient: FeeAccount::default(),
+            fee_contract: Some(Address::from([0x11; 20])),
+            stake_table_contract: Some(Address::from([0x22; 20])),
+        };
+        let peer = PeerConfig::<SeqTypes> {
+            stake_table_entry: StakeTableEntry {
+                stake_key: PubKey::generated_from_seed_indexed([0; 32], 0).0,
+                stake_amount: U256::from(1),
+            },
+            state_ver_key: StateKeyPair::generate_from_seed_indexed([0; 32], 0).ver_key(),
+            connect_info: None,
+        };
         Genesis {
-            chain_config: Default::default(),
-            stake_table: StakeTableConfig { capacity: 10 },
+            base_version: Version { major: 0, minor: 4 },
+            upgrade_version: Version { major: 0, minor: 5 },
+            genesis_version: Version { major: 0, minor: 2 },
+            epoch_height: Some(40000),
+            drb_difficulty: Some(25000000000),
+            drb_upgrade_difficulty: Some(25000000000),
+            epoch_start_block: Some(10960201),
+            stake_table_capacity: Some(200),
+            chain_config,
+            stake_table: StakeTableConfig { capacity: 200 },
             accounts: Default::default(),
-            l1_finalized: L1Finalized::Number { number: 0 },
-            header: Default::default(),
-            upgrades: Default::default(),
-            base_version: Version { major: 0, minor: 1 },
-            upgrade_version: Version { major: 0, minor: 2 },
-            genesis_version: Version { major: 0, minor: 1 },
-            epoch_height: None,
-            drb_difficulty: None,
-            drb_upgrade_difficulty: None,
-            epoch_start_block: None,
-            stake_table_capacity: None,
-            da_committees: None,
+            l1_finalized: L1Finalized::Block(L1BlockInfo {
+                number: 21116303,
+                timestamp: U256::from(1700000000),
+                hash: B256::from([0x44; 32]),
+            }),
+            header: GenesisHeader {
+                timestamp: Timestamp::from_integer(123456).unwrap(),
+                chain_config,
+            },
+            upgrades: [(
+                Version { major: 0, minor: 5 },
+                Upgrade {
+                    mode: UpgradeMode::View(ViewBasedUpgrade {
+                        start_proposing_view: 100,
+                        stop_proposing_view: 200,
+                        start_voting_view: Some(1),
+                        stop_voting_view: Some(300),
+                    }),
+                    upgrade_type: UpgradeType::EpochReward { chain_config },
+                },
+            )]
+            .into_iter()
+            .collect(),
+            da_committees: Some(vec![VersionedDaCommittee {
+                start_version: Version { major: 0, minor: 6 },
+                start_epoch: 10,
+                committee: vec![peer],
+            }]),
         }
     }
 
