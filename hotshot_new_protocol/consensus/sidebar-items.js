@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["CertVerification","ConsensusInput","ConsensusOutput","Protocol","SafetyError"],"struct":["Consensus","PreCutoverSeed"]};
+window.SIDEBAR_ITEMS = {"constant":["DECIDE_BUFFER"],"enum":["CertVerification","ConsensusInput","ConsensusOutput","Protocol","SafetyError"],"struct":["Consensus","PreCutoverSeed"]};
