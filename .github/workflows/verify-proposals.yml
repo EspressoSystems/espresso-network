@@ -16,6 +16,9 @@ jobs:
   verify-proposals:
     timeout-minutes: 30
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v6
         with:
@@ -54,14 +57,39 @@ jobs:
             echo "No proposal directories changed."
             exit 0
           fi
+          comment=pr-comment.md
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          printf '## Upgrade proposal verification\n\n' > "${comment}"
           exit_code=0
           for dir in "${proposal_dirs[@]}"; do
             if [[ ! -d "${dir}" ]]; then
               echo "Skipping deleted directory ${dir}"
+              printf '### %s\n\nDirectory deleted; skipped.\n\n' "${dir}" >> "${comment}"
               continue
             fi
             echo "Verifying ${dir} ..."
-            ./target/debug/deploy verify-proposal "${dir}" \
-              || exit_code=$?
+            rc=0
+            output=$(./target/debug/deploy verify-proposal "${dir}" 2>&1) || rc=$?
+            printf '%s\n' "${output}"
+            if [[ "${rc}" -eq 0 ]]; then
+              status="PASS ✅"
+            else
+              status="FAIL ❌"
+              exit_code="${rc}"
+            fi
+            # Four-backtick fence: proposal descriptions are untrusted and may
+            # contain three-backtick sequences.
+            printf '### %s: %s\n\n````\n%s\n````\n\n' "${dir}" "${status}" "${output}" >> "${comment}"
           done
+          printf '[Workflow run](%s)\n' "${run_url}" >> "${comment}"
           exit "${exit_code}"
+
+      - name: Post/update PR comment
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: verify-proposals
+          path: pr-comment.md
+          # No comment file (nothing verified or build failed): remove any stale comment.
+          delete: ${{ hashFiles('pr-comment.md') == '' }}
