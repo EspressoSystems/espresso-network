@@ -46,9 +46,9 @@ use crate::{
     helpers::proposal_commitment,
     logging::KeyPrefix,
     message::{
-        self, BlockMessage, Certificate2, ConsensusMessage, Message, MessageType, Proposal,
-        ProposalFetchMessage, ProposalMessage, TimeoutOneHonest, TransactionMessage, Unchecked,
-        Vote2,
+        self, BlockMessage, Certificate1, Certificate2, ConsensusMessage, Message, MessageType,
+        Proposal, ProposalFetchMessage, ProposalMessage, TimeoutOneHonest, TransactionMessage,
+        Unchecked, Validated, Vote2,
     },
     network::Cliquenet,
     outbox::Outbox,
@@ -148,6 +148,8 @@ where
         timeout_duration: Duration,
         storage: S,
         metrics: &dyn Metrics,
+        /// Locked QC persisted on a prior run; restored so the lock survives restart.
+        locked_qc: Option<Certificate1<T>>,
     ) -> Self {
         let mut consensus = Consensus::new(
             membership_coordinator.clone(),
@@ -188,6 +190,11 @@ where
             Arc::new(initializer.instance_state.clone()),
             upgrade_lock.clone(),
         );
+        // Seed `from_header` stubs for restored undecided proposals so a child
+        // proposal can be validated; anchor seeded last so its state wins.
+        for p in initializer.saved_proposals.values() {
+            state_manager.seed_from_header(message::Proposal::from(p.data.clone()));
+        }
         state_manager.seed_state(
             anchor_view,
             initializer.anchor_state.clone(),
@@ -219,6 +226,11 @@ where
         // re-enters a view it may have voted or proposed in before it went
         // down.
         consensus.seed_parent(cert1, parent_proposal, reconstructed_blocks);
+        // Restore the persisted lock; it can be newer than the anchor QC, so
+        // this must run after `seed_parent`.
+        if let Some(locked_qc) = locked_qc {
+            consensus.seed_locked_cert(locked_qc);
+        }
         consensus.resume_from_restart(
             anchor_view,
             initializer.start_view,
@@ -284,11 +296,7 @@ where
             ))
             .storage(Storage::new(storage, private_key))
             .membership_coordinator(membership_coordinator)
-            .timer(Timer::new(
-                timeout_duration,
-                ViewNumber::genesis(),
-                EpochNumber::genesis(),
-            ))
+            .timer(Timer::new(timeout_duration, anchor_view, anchor_epoch))
             .public_key(public_key)
             .maybe_metrics(
                 metrics
@@ -584,11 +592,6 @@ where
                         self.timeout_one_honest_collector.retry_pending_votes();
                         return Ok(ConsensusInput::DrbResult(epoch, drb_result))
                     }
-                    Ok(EpochRootResult::EpochRootAdded(epoch)) => {
-                        finish_measurement(next_input);
-                        debug!(%epoch, "epoch root added to membership");
-                        continue;
-                    }
                     Err(failure) => {
                         finish_measurement(next_input);
                         // Catchup/compute failed. The epoch manager clears
@@ -668,6 +671,11 @@ where
                     leaves = leaves.len(),
                     "leaves decided"
                 );
+                if let Some(m) = &self.metrics {
+                    // A gap-fill decide of an older view must not regress the gauge.
+                    m.leaf_decided_view
+                        .set(*self.consensus.last_decided_view() as usize);
+                }
                 if let Some(cert2) = cert2 {
                     self.storage.append_cert2(cert2.view_number, cert2.clone());
                 }
@@ -750,16 +758,10 @@ where
             ConsensusOutput::SendTimeoutVote(vote, lock) => {
                 let view = vote.view_number();
                 debug!(%node, %view, has_lock = lock.is_some(), "send timeout vote");
-                let message = Message {
-                    sender: self.public_key.clone(),
-                    message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote(
-                        message::TimeoutVoteMessage { vote, lock },
-                    )),
-                };
-                self.network
-                    .sender()
-                    .broadcast(self.consensus.current_view(), &message)
-                    .map_err(|e| CoordinatorError::from(e).context("broadcast timeout vote"))?
+                self.broadcast(
+                    ConsensusMessage::TimeoutVote(message::TimeoutVoteMessage { vote, lock }),
+                    "broadcast timeout vote",
+                )?
             },
             ConsensusOutput::SendTimeoutCertificate(tc, view, epoch) => {
                 debug!(
@@ -787,25 +789,15 @@ where
                     epoch_root = vote1.state_vote.is_some(),
                     "send vote1"
                 );
-                let message = Message {
-                    sender: self.public_key.clone(),
-                    message_type: MessageType::Consensus(ConsensusMessage::Vote1(vote1)),
-                };
-                self.network
-                    .sender()
-                    .broadcast(self.consensus.current_view(), &message)
-                    .map_err(|e| CoordinatorError::from(e).context("broadcast vote1"))?
+                self.broadcast(ConsensusMessage::Vote1(vote1), "broadcast vote1")?
             },
             ConsensusOutput::SendVote2(vote2) => {
                 debug!(%node, view = %vote2.view_number(), "send vote2");
-                let message = Message {
-                    sender: self.public_key.clone(),
-                    message_type: MessageType::Consensus(ConsensusMessage::Vote2(vote2)),
-                };
-                self.network
-                    .sender()
-                    .broadcast(self.consensus.current_view(), &message)
-                    .map_err(|e| CoordinatorError::from(e).context("broadcast vote2"))?
+                self.broadcast(ConsensusMessage::Vote2(vote2), "broadcast vote2")?
+            },
+            ConsensusOutput::PersistHighQc(high_qc) => {
+                debug!(%node, view = %high_qc.view_number(), "persist high qc");
+                self.storage.append_high_qc2(high_qc);
             },
             ConsensusOutput::SendEpochChange(epoch_change) => {
                 info!(
@@ -814,16 +806,10 @@ where
                     epoch = ?epoch_change.cert1.epoch().map(|e| *e),
                     "send epoch change"
                 );
-                let message = Message {
-                    sender: self.public_key.clone(),
-                    message_type: MessageType::Consensus(ConsensusMessage::EpochChange(
-                        epoch_change,
-                    )),
-                };
-                self.network
-                    .sender()
-                    .broadcast(self.consensus.current_view(), &message)
-                    .map_err(|e| CoordinatorError::from(e).context("broadcast epoch change"))?
+                self.broadcast(
+                    ConsensusMessage::EpochChange(epoch_change),
+                    "broadcast epoch change",
+                )?
             },
             ConsensusOutput::SendCertificate1(cert1) => {
                 debug!(
@@ -832,17 +818,22 @@ where
                     epoch = ?cert1.epoch().map(|e| *e),
                     "send certificate1"
                 );
-                let message = Message {
-                    sender: self.public_key.clone(),
-                    message_type: MessageType::Consensus(ConsensusMessage::Certificate1(
-                        cert1,
-                        self.public_key.clone(),
-                    )),
-                };
-                self.network
-                    .sender()
-                    .broadcast(self.consensus.current_view(), &message)
-                    .map_err(|e| CoordinatorError::from(e).context("broadcast certificate1"))?
+                self.broadcast(
+                    ConsensusMessage::Certificate1(cert1, self.public_key.clone()),
+                    "broadcast certificate1",
+                )?
+            },
+            ConsensusOutput::SendCertificate2(cert2) => {
+                debug!(
+                    %node,
+                    view = %cert2.view_number(),
+                    epoch = ?cert2.epoch().map(|e| *e),
+                    "send certificate2"
+                );
+                self.broadcast(
+                    ConsensusMessage::Certificate2(cert2, self.public_key.clone()),
+                    "broadcast certificate2",
+                )?
             },
             ConsensusOutput::ProposalValidated { proposal, sender } => {
                 debug!(
@@ -862,7 +853,6 @@ where
                     return Ok(());
                 }
                 info!(%node, %view, %epoch, "view changed");
-                self.consensus.set_view(view, epoch);
                 self.timer.reset_with_epoch(view, epoch);
                 self.gc(epoch, GcScope::Local(view))?;
                 let txns = self.block_builder.on_view_changed(view, epoch);
@@ -1075,6 +1065,20 @@ where
                         .accumulate_vote(timeout_msg.vote.clone());
                     self.timeout_one_honest_collector
                         .accumulate_vote(timeout_msg.vote);
+
+                    // If a peer times out in a view at or ahead of us we adopt the
+                    // view of an embedded cert1, so divergent nodes re-converge on
+                    // the highest justified view on restart.
+                    //
+                    // TODO: Above we reject timeout votes too far ahead. A valid cert1
+                    // has precedence over that check so we need to move this up, but
+                    // first we need to verify the cert1 itself.
+                    if let Some(cert) = timeout_msg.lock
+                        && cert.view_number() >= current_view
+                    {
+                        return Some(ConsensusInput::AdvanceView(cert));
+                    }
+
                     None
                 },
                 ConsensusMessage::TimeoutCertificate(tc) => {
@@ -1273,6 +1277,21 @@ where
         ))
     }
 
+    fn broadcast(
+        &self,
+        message_type: ConsensusMessage<T, Validated>,
+        ctx: &'static str,
+    ) -> Result<(), CoordinatorError> {
+        let message = Message {
+            sender: self.public_key.clone(),
+            message_type: MessageType::Consensus(message_type),
+        };
+        self.network
+            .sender()
+            .broadcast(self.consensus.current_view(), &message)
+            .map_err(|e| CoordinatorError::from(e).context(ctx))
+    }
+
     fn unicast_to_leader(
         &mut self,
         view: ViewNumber,
@@ -1407,20 +1426,22 @@ where
                 let current_view = self.consensus.current_view();
                 if seed.cutover_view > ViewNumber::genesis() && current_view >= seed.cutover_view {
                     info!(
+                        node = %self.node_id,
                         %current_view,
                         cutover_view = *seed.cutover_view,
-                        "coordinator: ignoring pre-cutover seed; already past the cutover",
+                        "ignoring pre-cutover seed; already past the cutover",
                     );
                     let _ = respond.send(());
                     return Ok(());
                 }
                 info!(
+                    node = %self.node_id,
                     undecided = seed.undecided.len(),
                     anchor_view = *seed.decided_anchor.view_number(),
                     high_qc_view = seed.high_qc.as_ref().map(|qc| *qc.view_number()),
                     cutover_view = *seed.cutover_view,
                     states = seed.validated_states.len(),
-                    "coordinator: applying legacy → new-protocol seed",
+                    "applying legacy -> new-protocol seed",
                 );
 
                 // State manager is owned by the coordinator, so the

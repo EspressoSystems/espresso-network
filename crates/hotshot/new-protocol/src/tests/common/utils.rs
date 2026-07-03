@@ -25,8 +25,8 @@ use hotshot_testing::{
 };
 use hotshot_types::{
     data::{
-        EpochNumber, Leaf2, VidCommitment, VidDisperse, VidDisperse2, VidDisperseShare2,
-        ViewNumber, vid_commitment,
+        EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperse, VidDisperse2,
+        VidDisperseShare2, ViewNumber, vid_commitment,
         vid_disperse::{AvidmGf2DisperseShareFragment, AvidmGf2NamespacePiece},
     },
     epoch_membership::EpochMembershipCoordinator,
@@ -48,6 +48,7 @@ use hotshot_types::{
         BuilderCommitment, epoch_from_block_number, is_epoch_root, is_epoch_transition,
         is_last_block,
     },
+    vote::HasViewNumber,
 };
 
 use crate::{
@@ -865,6 +866,22 @@ pub(crate) fn vid_fragments(
     })
 }
 
+/// The `(view, VID commitment)` pairs a restarted node seeds as
+/// already-reconstructed blocks, mirroring `Coordinator::maker`.
+pub fn reconstructed_blocks(
+    headers: impl IntoIterator<Item = (ViewNumber, TestBlockHeader)>,
+) -> Vec<(ViewNumber, VidCommitment2)> {
+    headers
+        .into_iter()
+        .filter_map(
+            |(view, header)| match BlockHeader::<TestTypes>::payload_commitment(&header) {
+                VidCommitment::V2(commitment) => Some((view, commitment)),
+                _ => None,
+            },
+        )
+        .collect()
+}
+
 /// Lightweight consensus-only test harness. Wraps a single [`Consensus`]
 /// instance and auto-responds to outputs that consensus expects feedback for
 /// (`RequestState`, `RequestBlockAndHeader`, `RequestVidDisperse`,
@@ -904,6 +921,55 @@ impl ConsensusHarness {
             genesis_leaf,
             epoch_height,
         );
+        Self {
+            consensus,
+            membership_coordinator: membership,
+            collected: Outbox::new(),
+        }
+    }
+
+    /// Build a harness whose consensus has been restarted from a persisted
+    /// decided anchor, mirroring `Coordinator::maker`: `Consensus::new` is
+    /// given the anchor leaf, the undecided proposals above it are re-seeded
+    /// and marked reconstructed, and the anchor is installed as the parent via
+    /// `seed_parent`.
+    pub async fn restarted_from(
+        node_index: u64,
+        anchor_proposal: Proposal<TestTypes>,
+        anchor_cert1: Certificate1<TestTypes>,
+        undecided_proposals: impl IntoIterator<Item = Proposal<TestTypes>>,
+    ) -> Self {
+        let epoch_height = 10;
+        let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
+        let state_private_key = StateKeyPair::generate_from_seed_indexed([0u8; 32], node_index)
+            .sign_key_ref()
+            .clone();
+        let membership = mock_membership();
+
+        let anchor_leaf: Leaf2<TestTypes> = anchor_proposal.clone().into();
+        let anchor_view = anchor_leaf.view_number();
+
+        let mut consensus = Consensus::new(
+            membership.clone(),
+            public_key,
+            private_key,
+            state_private_key,
+            10,
+            test_upgrade_lock(),
+            anchor_leaf,
+            epoch_height,
+        );
+
+        let undecided_proposals: Vec<_> = undecided_proposals.into_iter().collect();
+        let reconstructed = reconstructed_blocks(
+            std::iter::once(&anchor_proposal)
+                .chain(&undecided_proposals)
+                .map(|p| (p.view_number, p.block_header.clone())),
+        );
+        consensus.seed_proposals(undecided_proposals);
+        consensus.seed_parent(anchor_cert1, anchor_proposal, reconstructed);
+        consensus.resume_from_restart(anchor_view, anchor_view + 1, anchor_view);
+
         Self {
             consensus,
             membership_coordinator: membership,
@@ -953,6 +1019,12 @@ impl ConsensusHarness {
             ConsensusOutput::RecordAction(view, _, kind) => {
                 self.consensus.apply(
                     ConsensusInput::Stored(StorageOutput::Action(*view, *kind)),
+                    outbox,
+                );
+            },
+            ConsensusOutput::PersistHighQc(high_qc) => {
+                self.consensus.apply(
+                    ConsensusInput::Stored(StorageOutput::HighQc(high_qc.view_number())),
                     outbox,
                 );
             },

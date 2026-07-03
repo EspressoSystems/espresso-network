@@ -9,16 +9,16 @@ use hotshot_example_types::{
 };
 use hotshot_types::{
     data::{
-        EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, VidCommitment,
-        ViewChangeEvidence2, ViewNumber,
+        EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, ViewChangeEvidence2, ViewNumber,
     },
     epoch_membership::EpochMembershipCoordinator,
     light_client::StateKeyPair,
     message::Proposal as SignedProposal,
     simple_vote::QuorumData2,
-    traits::{block_contents::BlockHeader, signature_key::SignatureKey, storage::Storage as _},
+    traits::{signature_key::SignatureKey, storage::Storage as _},
 };
 
+use super::utils::reconstructed_blocks;
 use crate::{
     block::{BlockBuilder, BlockBuilderConfig},
     client::CoordinatorClient,
@@ -158,22 +158,24 @@ pub async fn build_test_coordinator(
             TestTypes,
         >>::from_header(anchor_leaf.block_header());
         state_manager.seed_state(anchor_view, Arc::new(anchor_state), anchor_leaf.clone());
-        let reconstructed: Vec<_> =
-            std::iter::once((anchor_view, anchor_leaf.block_header().clone()))
-                .chain(
-                    storage
-                        .proposals_cloned()
-                        .await
-                        .into_iter()
-                        .map(|(view, p)| (view, p.data.block_header().clone())),
-                )
-                .filter_map(|(view, header)| {
-                    match BlockHeader::<TestTypes>::payload_commitment(&header) {
-                        VidCommitment::V2(commitment) => Some((view, commitment)),
-                        _ => None,
-                    }
-                })
-                .collect();
+        let reconstructed = reconstructed_blocks(
+            std::iter::once((anchor_view, anchor_leaf.block_header().clone())).chain(
+                storage
+                    .proposals_cloned()
+                    .await
+                    .into_iter()
+                    .map(|(view, p)| (view, p.data.block_header().clone())),
+            ),
+        );
+        // Seed persisted proposals before `seed_parent` so its authoritative
+        // anchor wins (mirrors `Coordinator::maker`).
+        consensus.seed_proposals(
+            storage
+                .proposals_cloned()
+                .await
+                .into_values()
+                .map(|p| Proposal::from(p.data.clone())),
+        );
         consensus.seed_parent(anchor_cert, anchor_proposal, reconstructed);
         anchor_view
     } else {

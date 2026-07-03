@@ -1825,6 +1825,7 @@ impl LightClientProvider {
         let client = FallbackClient::new(peers.into_iter().map(QueryServiceClient::new).collect())?;
         let init_light_client = async move {
             let config = state.network_config().await;
+            let chain_id = state.node_state().await.genesis_chain_config.chain_id;
             let epoch_height = config.config.epoch_height;
             let first_epoch =
                 epoch_from_block_number(config.config.epoch_start_block, epoch_height);
@@ -1842,6 +1843,8 @@ impl LightClientProvider {
                     .into_iter()
                     .map(|peer| peer.stake_table_entry)
                     .collect(),
+
+                chain_id,
             };
             LightClient::from_genesis_with_options(db, client, genesis, opt)
         };
@@ -3921,18 +3924,24 @@ mod test {
     async fn test_epoch_reward_upgrade() {
         // Use fewer nodes: epoch mode from view 0 is resource-heavy on CI with
         // postgres Docker containers, causing view timeouts and consensus stall.
-        test_upgrade_helper_with_nodes::<3>(Upgrade::new(
-            versions::DRB_AND_HEADER_UPGRADE_VERSION,
-            versions::EPOCH_REWARD_VERSION,
-        ))
+        test_upgrade_helper_with_nodes::<3>(
+            Upgrade::new(
+                versions::DRB_AND_HEADER_UPGRADE_VERSION,
+                versions::EPOCH_REWARD_VERSION,
+            ),
+            100,
+        )
         .await;
     }
 
     async fn test_upgrade_helper(upgrade: Upgrade) {
-        test_upgrade_helper_with_nodes::<5>(upgrade).await;
+        test_upgrade_helper_with_nodes::<5>(upgrade, 200).await;
     }
 
-    async fn test_upgrade_helper_with_nodes<const NUM_NODES: usize>(upgrade: Upgrade) {
+    async fn test_upgrade_helper_with_nodes<const NUM_NODES: usize>(
+        upgrade: Upgrade,
+        start_proposing_view: u64,
+    ) {
         // wait this number of views beyond the configured first view
         // before asserting anything.
         let wait_extra_views = 10;
@@ -3948,6 +3957,7 @@ mod test {
             .epoch_start_block(epoch_start_block)
             .set_upgrades(upgrade.target)
             .await
+            .upgrade_proposing_views(start_proposing_view, 1000)
             .build();
 
         let chain_config_genesis = ValidatedState::default().chain_config.resolve().unwrap();
@@ -5909,6 +5919,8 @@ mod test {
         // 4. Allow the network to progress 3 more epochs (query node remains offline).
         // 5. Restart the query node.
         //    - The node is expected to reconstruct or catch up on its own
+        use espresso_types::{DECAF_CHAIN_ID, v0_3::ChainConfig};
+
         const EPOCH_HEIGHT: u64 = 10;
 
         let network_config = TestConfigBuilder::default()
@@ -5928,6 +5940,18 @@ mod test {
             .try_into()
             .unwrap();
 
+        // The light client skips epoch-root stake-table-hash verification for pre-DRB headers only
+        // on the Decaf chain id, so use it to keep the V3->V4 catchup path covered. Must be set
+        // before `pos_hook`, which preserves the chain id from `state[0]`.
+        let decaf_state = ValidatedState {
+            chain_config: ChainConfig {
+                chain_id: DECAF_CHAIN_ID,
+                ..Default::default()
+            }
+            .into(),
+            ..Default::default()
+        };
+
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
                 &storage[0],
@@ -5937,6 +5961,7 @@ mod test {
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
+            .states(std::array::from_fn(|_| decaf_state.clone()))
             .catchups(std::array::from_fn(|_| {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![format!("http://localhost:{api_port}").parse().unwrap()],
@@ -5970,10 +5995,6 @@ mod test {
         let opt = Options::with_port(node_0_port).query_sql(
             Query {
                 peers: vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                light_client: LightClientOptions {
-                    decaf: true,
-                    ..Default::default()
-                },
                 ..Default::default()
             },
             tmp_options(node_0_storage),

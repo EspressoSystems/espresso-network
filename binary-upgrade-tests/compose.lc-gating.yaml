@@ -5,17 +5,16 @@
 # causing the initial smoke test to fail with light_client_updated stuck at 0.
 #
 # Applied only when the extracted BASE_TAG compose does not already define
-# wait-for-lc-epoch. Variable names match BASE_TAG=20260505's old
-# ESPRESSO_SEQUENCER_* schema; once we move to a BASE_TAG that ships the
-# gating natively, this overlay is dropped automatically.
+# wait-for-lc-epoch; once we move to a BASE_TAG that ships the gating natively,
+# this overlay is dropped automatically.
 
 services:
   wait-for-lc-epoch-2:
     image: badouralix/curl-jq
     command: /scripts/wait-for-light-client-epoch 2
     environment:
-      - L1_PROVIDER=http://demo-l1-network:${ESPRESSO_SEQUENCER_L1_PORT}
-      - ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS=${ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS}
+      - L1_PROVIDER=http://demo-l1-network:${ESPRESSO_L1_PORT}
+      - ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS=${ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS}
     volumes:
       - ./scripts:/scripts:ro
     depends_on:

@@ -230,6 +230,7 @@ mod tests {
         sol_types::StakeTableV3::Delegated, stake_table::StakeTableContractVersion,
     };
     use hotshot_example_types::node_types::TEST_VERSIONS;
+    use hotshot_new_protocol::message::Certificate2;
     use hotshot_query_service::{availability::BlockQueryData, testing::mocks::MOCK_UPGRADE};
     use hotshot_types::{
         data::{
@@ -244,7 +245,9 @@ mod tests {
             CertificatePair, NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2,
             UpgradeCertificate,
         },
-        simple_vote::{NextEpochQuorumData2, QuorumData2, UpgradeProposalData, VersionedVoteData},
+        simple_vote::{
+            NextEpochQuorumData2, QuorumData2, UpgradeProposalData, VersionedVoteData, Vote2Data,
+        },
         traits::{EncodeBytes, block_contents::BlockHeader},
         utils::EpochTransitionIndicator,
         vid::avidm::{AvidMScheme, init_avidm_param},
@@ -367,6 +370,47 @@ mod tests {
         assert_eq!(
             storage.load_latest_acted_view().await.unwrap().unwrap(),
             view2
+        );
+    }
+
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_high_qc2_monotonic<P: TestablePersistence>(_p: PhantomData<P>) {
+        let tmp = P::tmp_storage().await;
+        let storage = P::connect(&tmp).await;
+
+        // Initially there is no persisted lock.
+        assert_eq!(storage.load_high_qc2().await.unwrap(), None);
+
+        let mut qc = QuorumCertificate2::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            TEST_VERSIONS.test,
+        )
+        .await;
+
+        // Persist a lock at view 5.
+        qc.view_number = ViewNumber::new(5);
+        storage.append_high_qc2(qc.clone()).await.unwrap();
+        assert_eq!(
+            storage.load_high_qc2().await.unwrap().unwrap().view_number,
+            ViewNumber::new(5)
+        );
+
+        // A newer lock advances the stored view.
+        qc.view_number = ViewNumber::new(6);
+        storage.append_high_qc2(qc.clone()).await.unwrap();
+        assert_eq!(
+            storage.load_high_qc2().await.unwrap().unwrap().view_number,
+            ViewNumber::new(6)
+        );
+
+        // A stale (older) lock is a no-op: the compare-and-set never regresses
+        // the persisted view, even though the file/row write is unconditional.
+        qc.view_number = ViewNumber::new(4);
+        storage.append_high_qc2(qc.clone()).await.unwrap();
+        assert_eq!(
+            storage.load_high_qc2().await.unwrap().unwrap().view_number,
+            ViewNumber::new(6)
         );
     }
 
@@ -1553,6 +1597,184 @@ mod tests {
         );
     }
 
+    /// A chain of `n` V6 mock leaves at views `0..n` with real, consecutive block heights (the
+    /// other mock chains in this module reuse the genesis header, so every leaf has height 0).
+    async fn consecutive_height_chain(n: u64) -> Vec<(Leaf2, QuorumCertificate2<SeqTypes>)> {
+        let node_state = NodeState::mock().with_genesis_version(versions::NEW_PROTOCOL_VERSION);
+        let genesis_leaf = Leaf2::genesis(
+            &ValidatedState::default(),
+            &node_state,
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        let mut quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
+            proposal: QuorumProposal2::<SeqTypes> {
+                block_header: genesis_leaf.block_header().clone(),
+                view_number: ViewNumber::genesis(),
+                justify_qc: QuorumCertificate2::genesis(
+                    &ValidatedState::default(),
+                    &node_state,
+                    TEST_VERSIONS.test,
+                )
+                .await,
+                upgrade_certificate: None,
+                view_change_evidence: None,
+                next_drb_result: None,
+                next_epoch_justify_qc: None,
+                epoch: None,
+                state_cert: None,
+            },
+        };
+        let mut qc = QuorumCertificate2::genesis(
+            &ValidatedState::default(),
+            &node_state,
+            TEST_VERSIONS.test,
+        )
+        .await;
+
+        let mut chain = vec![];
+        for i in 0..n {
+            quorum_proposal.proposal.view_number = ViewNumber::new(i);
+            *quorum_proposal.proposal.block_header.height_mut() = i;
+            let leaf = Leaf2::from_quorum_proposal(&quorum_proposal);
+            qc.view_number = leaf.view_number();
+            qc.data.leaf_commit = Committable::commit(&leaf);
+            chain.push((leaf, qc.clone()));
+        }
+        chain
+    }
+
+    /// Decide the leaves of `chain` at indices (== views) `range`.
+    async fn decide_range<P: TestablePersistence>(
+        storage: &P,
+        chain: &[(Leaf2, QuorumCertificate2<SeqTypes>)],
+        range: std::ops::Range<usize>,
+        consumer: &(impl EventConsumer + 'static),
+    ) {
+        let decided_view = ViewNumber::new(range.end as u64 - 1);
+        let leaf_chain = chain[range]
+            .iter()
+            .map(|(leaf, qc)| (leaf_info(leaf.clone()), qc.clone()))
+            .collect::<Vec<_>>();
+        storage
+            .append_decided_leaves(
+                decided_view,
+                leaf_chain
+                    .iter()
+                    .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change(qc.clone()))),
+                None,
+                consumer,
+            )
+            .await
+            .unwrap();
+    }
+
+    /// Records the views delivered in decide events, in delivery order.
+    #[derive(Clone, Debug, Default)]
+    struct DecideViewCollector {
+        views: Arc<RwLock<Vec<u64>>>,
+    }
+
+    #[async_trait]
+    impl EventConsumer for DecideViewCollector {
+        async fn handle_event(&self, event: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()> {
+            let mut views = self.views.write().await;
+            match event {
+                // Decide events carry their leaves newest first.
+                CoordinatorEvent::NewDecide { leaf_infos, .. } => views.extend(
+                    leaf_infos
+                        .iter()
+                        .rev()
+                        .map(|info| info.leaf.view_number().u64()),
+                ),
+                CoordinatorEvent::LegacyEvent(Event {
+                    event: EventType::Decide { leaf_chain, .. },
+                    ..
+                }) => views.extend(
+                    leaf_chain
+                        .iter()
+                        .rev()
+                        .map(|info| info.leaf.view_number().u64()),
+                ),
+                _ => {},
+            }
+            Ok(())
+        }
+    }
+
+    async fn received_views(consumer: &DecideViewCollector) -> Vec<u64> {
+        consumer.views.read().await.clone()
+    }
+
+    /// Until a gap-fill decide arrives, event processing holds its cursor at the gap: nothing
+    /// past it is delivered, and the pending leaves are neither skipped nor dropped.
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_decide_gap_holds_events<P: TestablePersistence>(_p: PhantomData<P>) {
+        let tmp = P::tmp_storage().await;
+        let storage = P::connect(&tmp).await;
+        let consumer = DecideViewCollector::default();
+        let chain = consecutive_height_chain(5).await;
+
+        decide_range(&storage, &chain, 0..2, &consumer).await;
+        assert_eq!(received_views(&consumer).await, vec![0, 1]);
+
+        // Views 3..=4 decide while view 2 is still pending.
+        decide_range(&storage, &chain, 3..5, &consumer).await;
+        assert_eq!(
+            received_views(&consumer).await,
+            vec![0, 1],
+            "leaves past a height gap must not be delivered before the gap is filled"
+        );
+
+        // Nothing was lost: the pending leaves are still in storage...
+        assert_eq!(
+            storage
+                .load_anchor_leaf()
+                .await
+                .unwrap()
+                .unwrap()
+                .0
+                .view_number(),
+            ViewNumber::new(4)
+        );
+
+        // ...and re-processing neither skips the gap nor emits duplicates.
+        storage
+            .process_decided_events(ViewNumber::new(4), None, &consumer)
+            .await
+            .unwrap();
+        assert_eq!(received_views(&consumer).await, vec![0, 1]);
+    }
+
+    /// Once the gap-fill decide arrives, the consumer receives the gap leaf and everything held
+    /// up behind it, in order, exactly once each.
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_decide_gap_fill_delivers_all<P: TestablePersistence>(_p: PhantomData<P>) {
+        let tmp = P::tmp_storage().await;
+        let storage = P::connect(&tmp).await;
+        let consumer = DecideViewCollector::default();
+        let chain = consecutive_height_chain(5).await;
+
+        decide_range(&storage, &chain, 0..2, &consumer).await;
+        decide_range(&storage, &chain, 3..5, &consumer).await;
+        assert_eq!(received_views(&consumer).await, vec![0, 1]);
+
+        // The gap-fill decide of view 2 arrives.
+        decide_range(&storage, &chain, 2..3, &consumer).await;
+        // The fs backend only emits up to the triggering event's decided view; a process pass at
+        // the watermark (the next decide, in production) drains the rest.
+        storage
+            .process_decided_events(ViewNumber::new(4), None, &consumer)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            received_views(&consumer).await,
+            vec![0, 1, 2, 3, 4],
+            "after the gap fills, every leaf is delivered in order, exactly once"
+        );
+    }
+
     #[rstest_reuse::apply(persistence_types)]
     pub async fn test_pruning<P: TestablePersistence>(_p: PhantomData<P>) {
         let tmp = P::tmp_storage().await;
@@ -1639,6 +1861,20 @@ mod tests {
             _pd: Default::default(),
         };
 
+        let leaf2: Leaf2 = leaf.clone().into();
+        let vote_data = Vote2Data {
+            leaf_commit: leaf2.commit(),
+            epoch: EpochNumber::new(0),
+            block_number: leaf2.height(),
+        };
+        let cert2 = Certificate2::new(
+            vote_data.clone(),
+            vote_data.commit(),
+            ViewNumber::new(0),
+            None,
+            PhantomData,
+        );
+
         storage
             .append_da2(&da_proposal, VidCommitment::V1(payload_commitment))
             .await
@@ -1646,6 +1882,10 @@ mod tests {
         storage.append_vid(&vid_share).await.unwrap();
         storage
             .append_quorum_proposal2(&quorum_proposal)
+            .await
+            .unwrap();
+        storage
+            .append_cert2(ViewNumber::new(0), cert2)
             .await
             .unwrap();
 
@@ -1680,6 +1920,13 @@ mod tests {
                 .unwrap(),
             quorum_proposal
         );
+        assert!(
+            storage
+                .load_cert2(ViewNumber::new(0))
+                .await
+                .unwrap()
+                .is_some()
+        );
 
         // Decide an even newer view, triggering GC of the old data.
         storage
@@ -1705,6 +1952,13 @@ mod tests {
                 .load_quorum_proposal(ViewNumber::new(0))
                 .await
                 .is_err()
+        );
+        assert!(
+            storage
+                .load_cert2(ViewNumber::new(0))
+                .await
+                .unwrap()
+                .is_none()
         );
     }
 
