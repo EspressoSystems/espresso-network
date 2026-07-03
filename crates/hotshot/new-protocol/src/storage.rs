@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, marker::PhantomData, time::Duration};
+use std::{
+    collections::BTreeMap,
+    marker::PhantomData,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use async_trait::async_trait;
 use committable::Commitment;
@@ -12,7 +17,12 @@ use hotshot_types::{
     event::HotShotAction,
     message::Proposal as SignedProposal,
     simple_certificate::LightClientStateUpdateCertificateV2,
-    traits::{EncodeBytes, node_implementation::NodeType, storage::Storage as StorageTrait},
+    traits::{
+        EncodeBytes,
+        metrics::{Histogram, Metrics},
+        node_implementation::NodeType,
+        storage::Storage as StorageTrait,
+    },
     utils::EpochTransitionIndicator,
     vote::HasViewNumber,
 };
@@ -77,11 +87,70 @@ impl<T: NodeType> StorageOutput<T> {
     }
 }
 
+/// Request-to-completion latency of each storage operation, including task
+/// queueing, backend lock waits, and error-retry loops. These latencies gate
+/// consensus progress: proposal release waits on `append_proposal` and
+/// `record_action(Propose)`, and phase-2 votes wait on `append_vid`,
+/// `record_action(Vote)`, and `append_high_qc2`.
+pub struct StorageMetrics {
+    append_vid: Arc<dyn Histogram>,
+    append_da: Arc<dyn Histogram>,
+    append_cert2: Arc<dyn Histogram>,
+    append_high_qc: Arc<dyn Histogram>,
+    append_state_cert: Arc<dyn Histogram>,
+    append_proposal: Arc<dyn Histogram>,
+    record_action: Arc<dyn Histogram>,
+}
+
+impl StorageMetrics {
+    pub fn new(m: &dyn Metrics) -> Self {
+        let histogram = |name: &str| -> Arc<dyn Histogram> {
+            m.create_histogram(format!("storage_{name}"), Some("s".into()))
+                .into()
+        };
+        Self {
+            append_vid: histogram("append_vid"),
+            append_da: histogram("append_da"),
+            append_cert2: histogram("append_cert2"),
+            append_high_qc: histogram("append_high_qc"),
+            append_state_cert: histogram("append_state_cert"),
+            append_proposal: histogram("append_proposal"),
+            record_action: histogram("record_action"),
+        }
+    }
+}
+
+/// Records only on [`Self::finish`], so a task aborted by GC leaves no point.
+struct OpTimer {
+    hist: Arc<dyn Histogram>,
+    start: Instant,
+}
+
+impl OpTimer {
+    fn start(hist: &Arc<dyn Histogram>) -> Self {
+        Self {
+            hist: hist.clone(),
+            start: Instant::now(),
+        }
+    }
+
+    fn finish(self) {
+        self.hist.add_point(self.start.elapsed().as_secs_f64());
+    }
+}
+
+fn finish_op(timer: Option<OpTimer>) {
+    if let Some(timer) = timer {
+        timer.finish();
+    }
+}
+
 pub struct Storage<T: NodeType, S> {
     storage: S,
     private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
     tasks: JoinSet<Option<StorageOutput<T>>>,
     handles: BTreeMap<ViewNumber, Vec<AbortHandle>>,
+    metrics: Option<StorageMetrics>,
 }
 
 impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
@@ -91,13 +160,20 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
             private_key,
             tasks: JoinSet::new(),
             handles: BTreeMap::new(),
+            metrics: None,
         }
+    }
+
+    pub fn with_metrics(mut self, m: &dyn Metrics) -> Self {
+        self.metrics = Some(StorageMetrics::new(m));
+        self
     }
 
     pub fn append_vid(&mut self, vid_share: VidDisperseShare2<T>) {
         let view = vid_share.view_number;
         let storage = self.storage.clone();
         let private_key = self.private_key.clone();
+        let timer = self.metrics.as_ref().map(|m| OpTimer::start(&m.append_vid));
         let handle = self.tasks.spawn(async move {
             let share: VidDisperseShare<T> = VidDisperseShare::V2(vid_share);
             let Some(proposal) = share.to_proposal(&private_key) else {
@@ -106,7 +182,10 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
             };
             loop {
                 match storage.append_vid(&proposal).await {
-                    Ok(()) => return Some(StorageOutput::Vid(view)),
+                    Ok(()) => {
+                        finish_op(timer);
+                        return Some(StorageOutput::Vid(view));
+                    },
                     Err(err) => {
                         warn!(%err, "failed to append VID share, retrying");
                         sleep(RETRY_DELAY).await;
@@ -127,6 +206,7 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
     ) {
         let storage = self.storage.clone();
         let private_key = self.private_key.clone();
+        let timer = self.metrics.as_ref().map(|m| OpTimer::start(&m.append_da));
         let handle = self.tasks.spawn(async move {
             let data = DaProposal2 {
                 encoded_transactions: block_payload.encode(),
@@ -146,7 +226,10 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
             };
             loop {
                 match storage.append_da2(&proposal, vid_commit).await {
-                    Ok(()) => return None,
+                    Ok(()) => {
+                        finish_op(timer);
+                        return None;
+                    },
                     Err(err) => {
                         warn!(%err, "failed to append DA proposal, retrying");
                         sleep(RETRY_DELAY).await;
@@ -159,10 +242,17 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
 
     pub fn append_cert2(&mut self, view: ViewNumber, cert2: Certificate2<T>) {
         let storage = self.storage.clone();
+        let timer = self
+            .metrics
+            .as_ref()
+            .map(|m| OpTimer::start(&m.append_cert2));
         let handle = self.tasks.spawn(async move {
             loop {
                 match storage.append_cert2(view, cert2.clone()).await {
-                    Ok(()) => return None,
+                    Ok(()) => {
+                        finish_op(timer);
+                        return None;
+                    },
                     Err(err) => {
                         warn!(%err, %view, "failed to append cert2, retrying");
                         sleep(RETRY_DELAY).await;
@@ -178,10 +268,17 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
     pub fn append_high_qc2(&mut self, high_qc: Certificate1<T>) {
         let view = high_qc.view_number();
         let storage = self.storage.clone();
+        let timer = self
+            .metrics
+            .as_ref()
+            .map(|m| OpTimer::start(&m.append_high_qc));
         let handle = self.tasks.spawn(async move {
             loop {
                 match storage.append_high_qc2(high_qc.clone()).await {
-                    Ok(()) => return Some(StorageOutput::HighQc(view)),
+                    Ok(()) => {
+                        finish_op(timer);
+                        return Some(StorageOutput::HighQc(view));
+                    },
                     Err(err) => {
                         warn!(%err, %view, "failed to append high qc, retrying");
                         sleep(RETRY_DELAY).await;
@@ -198,10 +295,17 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
         state_cert: LightClientStateUpdateCertificateV2<T>,
     ) {
         let storage = self.storage.clone();
+        let timer = self
+            .metrics
+            .as_ref()
+            .map(|m| OpTimer::start(&m.append_state_cert));
         let handle = self.tasks.spawn(async move {
             loop {
                 match storage.update_state_cert(state_cert.clone()).await {
-                    Ok(()) => return None,
+                    Ok(()) => {
+                        finish_op(timer);
+                        return None;
+                    },
                     Err(err) => {
                         warn!(%err, epoch = %state_cert.epoch, "failed to append state cert, retrying");
                         sleep(RETRY_DELAY).await;
@@ -217,6 +321,10 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
         let commitment = proposal_commitment(&proposal);
         let storage = self.storage.clone();
         let private_key = self.private_key.clone();
+        let timer = self
+            .metrics
+            .as_ref()
+            .map(|m| OpTimer::start(&m.append_proposal));
         let handle = self.tasks.spawn(async move {
             let data = QuorumProposalWrapper {
                 proposal: QuorumProposal2 {
@@ -244,7 +352,10 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
             };
             loop {
                 match storage.append_proposal_wrapper(&signed).await {
-                    Ok(()) => return Some(StorageOutput::Proposal(view, commitment)),
+                    Ok(()) => {
+                        finish_op(timer);
+                        return Some(StorageOutput::Proposal(view, commitment));
+                    },
                     Err(err) => {
                         warn!(%err, "failed to append proposal, retrying");
                         sleep(RETRY_DELAY).await;
@@ -262,10 +373,17 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
         kind: ActionKind,
     ) {
         let storage = self.storage.clone();
+        let timer = self
+            .metrics
+            .as_ref()
+            .map(|m| OpTimer::start(&m.record_action));
         let handle = self.tasks.spawn(async move {
             loop {
                 match storage.record_action(view, epoch, kind.into()).await {
-                    Ok(()) => return Some(StorageOutput::Action(view, kind)),
+                    Ok(()) => {
+                        finish_op(timer);
+                        return Some(StorageOutput::Action(view, kind));
+                    },
                     Err(err) => {
                         warn!(%err, %view, ?kind, "failed to record action, retrying");
                         sleep(RETRY_DELAY).await;
