@@ -38,7 +38,8 @@ async fn test_native_demo_pos_base() -> Result<()> {
     let pos_progress_requirements = TestRequirements {
         block_height_increment: expected_block_height,
         txn_count_increment: 2 * expected_block_height,
-        global_timeout: Duration::from_secs(expected_block_height as u64 * 3),
+        // One extra minute of slack over 3s/block, matching the drb-header base test.
+        global_timeout: Duration::from_secs(expected_block_height as u64 * 3 + 60),
         ..Default::default()
     };
     assert_native_demo_works(pos_progress_requirements).await?;
@@ -75,7 +76,10 @@ async fn test_native_demo_drb_header_base() -> Result<()> {
     let progress_requirements = TestRequirements {
         block_height_increment: expected_block_height,
         txn_count_increment: 2 * expected_block_height,
-        global_timeout: Duration::from_secs(expected_block_height as u64 * 3),
+        // One extra minute of slack: the reward claim can only land after the light
+        // client passes the first reward block, and the prover only updates it every
+        // ~90s, so 3s/block alone leaves less than one prover cycle of margin.
+        global_timeout: Duration::from_secs(expected_block_height as u64 * 3 + 60),
         first_reward_block: Some(first_reward_block),
         ..Default::default()
     };
