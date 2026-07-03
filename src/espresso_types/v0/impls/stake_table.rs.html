@@ -835,11 +835,11 @@
 <a href=#835 id=835 data-nosnippet>835</a>                </span>},
 <a href=#836 id=836 data-nosnippet>836</a>                <span class="prelude-val">Ok</span>(cv) =&gt; {
 <a href=#837 id=837 data-nosnippet>837</a>                    <span class="kw">if </span>cv.delegators.is_empty() {
-<a href=#838 id=838 data-nosnippet>838</a>                        <span class="macro">tracing::info!</span>(<span class="string">"Validator {address:?} does not have any delegator"</span>);
+<a href=#838 id=838 data-nosnippet>838</a>                        <span class="macro">tracing::debug!</span>(<span class="string">"Validator {address:?} does not have any delegator"</span>);
 <a href=#839 id=839 data-nosnippet>839</a>                        <span class="kw">return </span><span class="prelude-val">None</span>;
 <a href=#840 id=840 data-nosnippet>840</a>                    }
 <a href=#841 id=841 data-nosnippet>841</a>                    <span class="kw">if </span>cv.stake.is_zero() {
-<a href=#842 id=842 data-nosnippet>842</a>                        <span class="macro">tracing::info!</span>(<span class="string">"Validator {address:?} does not have any stake"</span>);
+<a href=#842 id=842 data-nosnippet>842</a>                        <span class="macro">tracing::debug!</span>(<span class="string">"Validator {address:?} does not have any stake"</span>);
 <a href=#843 id=843 data-nosnippet>843</a>                        <span class="kw">return </span><span class="prelude-val">None</span>;
 <a href=#844 id=844 data-nosnippet>844</a>                    }
 <a href=#845 id=845 data-nosnippet>845</a>                    <span class="kw">if </span>!cv.is_eligible(protocol_version) {
