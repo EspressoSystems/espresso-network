@@ -31,15 +31,21 @@ incorrect TOML fails verification.
 The workflow `.github/workflows/verify-proposals.yml` runs `deploy verify-proposal <dir>` for every proposal directory
 touched in a PR, using a public RPC for the target network. A proposal that fails any check cannot merge.
 
-## Signer flow
+## Flow
 
-1. Check out the PR branch.
-2. Run `deploy verify-proposal contracts/deployments/proposals/<network>/<date>-<slug>`. All rows must print PASS.
-3. The output prints domain/message/safe_tx hashes for each phase. Confirm these match the values shown on the Ledger
-   and in the Safe UI before signing.
-4. Import `schedule.json` into the Safe app. Confirm the Ledger displays the same domain+message+safe_tx hashes printed
-   by verify. Sign and submit.
-5. After the timelock delay elapses, repeat with `execute.json` (nonce + 1).
+1. **Deploy and create the proposal.** The deployer runs `deploy --upgrade-<contract> --use-timelock-owner ...`, which
+   deploys the new implementation and writes the proposal directory (`schedule.json`, `execute.json`, `proposal.toml`).
+   They open a PR that adds only that directory.
+2. **Signers verify** (same as the existing flow). Each signer checks out the PR and runs
+   `deploy verify-proposal contracts/deployments/proposals/<network>/<date>-<slug>`; CI runs it too. All rows must print
+   PASS. This confirms the on-chain implementation matches the shipped contract bytecode, the governance wiring is
+   correct, and every value in `proposal.toml` (including the per-phase domain/message/safe_tx hashes) is correct. Note
+   the `safe_tx` hashes.
+3. **Signers agree** the proposal in the PR is okay and merge it.
+4. **One signer submits** the proposal in the Safe: import `schedule.json` into the Safe app and create the transaction.
+5. **Other signers verify the hashes from step 2** before signing: confirm the Ledger's domain/message/safe_tx hash
+   equals the value verify printed (which equals `proposal.toml`), then sign. After the timelock delay elapses, repeat
+   steps 4-5 with `execute.json` (nonce + 1).
 
 Note: hashes in `proposal.toml` use the Safe nonce recorded at generation time. If other transactions were queued on the
 same Safe since then, verify prints a WARN row (not a FAIL) indicating nonce drift. The signer must reconfirm the
