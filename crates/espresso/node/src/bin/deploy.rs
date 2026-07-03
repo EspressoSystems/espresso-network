@@ -546,7 +546,10 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
                 return Ok(());
             },
             Command::VerifyProposal(args) => {
-                let report = run_verify(args, &provider, &contracts, chain_id).await?;
+                let deployment_info_dir =
+                    espresso_contract_deployer::proposals::deployment_info::default_deployment_info_dir();
+                let report =
+                    run_verify(args, &provider, &contracts, chain_id, &deployment_info_dir).await?;
                 report.print();
                 std::process::exit(report.exit_code());
             },

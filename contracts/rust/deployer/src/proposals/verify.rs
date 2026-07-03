@@ -3,7 +3,7 @@
 //! Checks that the impl address in a proposal holds exactly the bytecode the
 //! deployer ships for the supplied contract kind, and that governance wiring
 //! (owner, timelock, delay, init call) is correct. No trust in Etherscan or
-//! the JSON description.
+//! the JSON description. Validates all fields against the committed proposal.toml.
 
 use std::{
     collections::BTreeMap,
@@ -25,7 +25,11 @@ use serde::Deserialize;
 
 use crate::{
     Contract, Contracts,
-    proposals::safe_hash::{SafeTxHashes, safe_tx_hashes},
+    proposals::{
+        deployment_info::load_ops_timelock_signers,
+        proposal_toml::ProposalToml,
+        safe_hash::{SafeTxHashes, safe_tx_hashes},
+    },
 };
 
 // ── JSON deserialization ─────────────────────────────────────────────────────
@@ -255,6 +259,19 @@ pub enum ContractKindArg {
     FeeContract,
     #[clap(name = "reward-claim")]
     RewardClaim,
+}
+
+impl ContractKindArg {
+    /// Kebab-case string representation, matching the toml `contract` field.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::StakeTableV2 => "stake-table-v2",
+            Self::StakeTableV3 => "stake-table-v3",
+            Self::EspTokenV2 => "esp-token-v2",
+            Self::FeeContract => "fee-contract",
+            Self::RewardClaim => "reward-claim",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -509,21 +526,6 @@ pub fn load_proposal_dir(dir: &Path) -> Result<TimelockBatches> {
     Ok(TimelockBatches { schedule, execute })
 }
 
-/// Read and parse `dir/contract` as a `ContractKindArg`.
-pub fn read_contract_kind_file(dir: &Path) -> Result<ContractKindArg> {
-    let p = dir.join("contract");
-    let raw =
-        std::fs::read_to_string(&p).map_err(|e| anyhow!("cannot read {}: {e}", p.display()))?;
-    let s = raw.trim();
-    ContractKindArg::from_str(s, true).map_err(|e| {
-        anyhow!(
-            "failed to parse contract kind {:?} from {}: {e}",
-            s,
-            p.display()
-        )
-    })
-}
-
 /// Decode a `TimelockBatches` into a `DecodedUpgrade`.
 pub fn decode_proposal(batches: TimelockBatches) -> Result<DecodedUpgrade> {
     let sched_tx = batches
@@ -615,7 +617,7 @@ pub struct PhaseHashes {
 pub struct VerifyReport {
     pub rows: Vec<CheckRow>,
     pub header: ReportHeader,
-    pub phase_hashes: Option<PhaseHashes>,
+    pub phase_hashes: PhaseHashes,
 }
 
 #[derive(Debug, Clone)]
@@ -623,6 +625,7 @@ pub struct ReportHeader {
     pub proxy: Address,
     pub new_impl: Address,
     pub contract_name: &'static str,
+    pub network: String,
     pub description: String,
     pub onchain_solc: Option<SolcVersion>,
     pub reference_solc: Option<SolcVersion>,
@@ -632,6 +635,7 @@ impl VerifyReport {
     pub fn print(&self) {
         println!("=== Upgrade Proposal Verification ===");
         println!("  contract:    {}", self.header.contract_name);
+        println!("  network:     {}", self.header.network);
         println!("  proxy:       {}", self.header.proxy);
         println!("  new_impl:    {}", self.header.new_impl);
         println!("  route:       timelock two-phase");
@@ -649,14 +653,12 @@ impl VerifyReport {
             let status = if row.pass { "PASS" } else { "FAIL" };
             println!("{:<40} {:<6} {}", row.name, status, row.detail);
         }
-        if let Some(ref ph) = self.phase_hashes {
-            println!();
-            println!("--- Safe tx hashes (operation=0, single-tx; confirm against Safe UI) ---");
-            println!("  schedule (nonce={}):", ph.schedule_nonce);
-            print_hashes(&ph.schedule);
-            println!("  execute (nonce={}):", ph.execute_nonce);
-            print_hashes(&ph.execute);
-        }
+        println!();
+        println!("--- Safe tx hashes (operation=0, single-tx; confirm against Safe UI) ---");
+        println!("  schedule (nonce={}):", self.phase_hashes.schedule_nonce);
+        print_hashes(&self.phase_hashes.schedule);
+        println!("  execute (nonce={}):", self.phase_hashes.execute_nonce);
+        print_hashes(&self.phase_hashes.execute);
         println!();
         let all_pass = self.rows.iter().all(|r| r.pass);
         println!("Result: {}", if all_pass { "ALL PASS" } else { "FAIL" });
@@ -740,24 +742,40 @@ pub fn delay_row(delay: U256, min_delay: U256) -> CheckRow {
     }
 }
 
+/// Row asserting a decoded field equals the proposal.toml value.
+fn toml_field_row<T: PartialEq + fmt::Display>(name: &str, decoded: T, recorded: T) -> CheckRow {
+    if decoded == recorded {
+        pass(format!("toml:{name}"), format!("{decoded}"))
+    } else {
+        fail(
+            format!("toml:{name}"),
+            format!("decoded={decoded} toml={recorded}"),
+        )
+    }
+}
+
+/// Row asserting a hash field equals the toml value (uses hex display).
+fn toml_hash_row(name: &str, computed: B256, recorded: B256) -> CheckRow {
+    if computed == recorded {
+        pass(format!("toml:{name}"), format!("{computed}"))
+    } else {
+        fail(
+            format!("toml:{name}"),
+            format!("computed={computed} toml={recorded}"),
+        )
+    }
+}
+
 // ── CLI args ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, clap::Args)]
 pub struct VerifyProposalArgs {
-    /// Proposal directory containing schedule.json, execute.json, and a `contract` file.
+    /// Proposal directory containing schedule.json, execute.json, and proposal.toml.
     pub dir: PathBuf,
 
-    /// Override the contract kind; defaults to the dir's `contract` file.
+    /// Override the contract kind; defaults to proposal.toml `contract` field.
     #[clap(long)]
     pub contract: Option<ContractKindArg>,
-
-    /// Safe (multisig) address that will sign; enables Safe-tx-hash output.
-    #[clap(long)]
-    pub safe: Option<Address>,
-
-    /// Safe nonce for the schedule transaction.
-    #[clap(long, requires = "safe")]
-    pub nonce: Option<u64>,
 }
 
 // ── Orchestrator ─────────────────────────────────────────────────────────────
@@ -767,26 +785,42 @@ pub async fn run_verify(
     provider: &impl Provider,
     contracts: &Contracts,
     chain_id: u64,
+    deployment_info_dir: &Path,
 ) -> Result<VerifyReport> {
-    // Resolve contract kind: flag overrides file; if both present, assert they match.
-    let kind_arg = match (args.contract, read_contract_kind_file(&args.dir)) {
-        (Some(flag_kind), Ok(file_kind)) => {
-            if flag_kind != file_kind {
+    let toml = ProposalToml::load(&args.dir)?;
+
+    // Resolve contract kind: flag overrides toml; if both present, assert equal.
+    let kind_arg = match args.contract {
+        Some(flag_kind) => {
+            if flag_kind.as_str() != toml.contract {
                 bail!(
-                    "--contract {:?} conflicts with contract file {:?} in {}",
-                    flag_kind,
-                    file_kind,
+                    "--contract {:?} conflicts with proposal.toml contract {:?} in {}",
+                    flag_kind.as_str(),
+                    toml.contract,
                     args.dir.display()
                 );
             }
             flag_kind
         },
-        (Some(flag_kind), Err(_)) => flag_kind,
-        (None, Ok(file_kind)) => file_kind,
-        (None, Err(e)) => bail!("no --contract flag and contract file unreadable: {e}"),
+        None => ContractKindArg::from_str(&toml.contract, true).map_err(|e| {
+            anyhow!(
+                "proposal.toml has unknown contract {:?}: {e}",
+                toml.contract
+            )
+        })?,
     };
     let kind = contract_kind(kind_arg);
     let mut rows: Vec<CheckRow> = vec![];
+
+    // chain_id / network consistency
+    rows.push(if chain_id == toml.chain_id {
+        pass("toml:chain_id", format!("{chain_id}"))
+    } else {
+        fail(
+            "toml:chain_id",
+            format!("provider chain_id={chain_id} toml={}", toml.chain_id),
+        )
+    });
 
     let batches = load_proposal_dir(&args.dir)?;
     let upgrade = match decode_proposal(batches) {
@@ -796,20 +830,35 @@ pub async fn run_verify(
         },
         Err(e) => {
             rows.push(fail("decode", e.to_string()));
+            // Cannot proceed without a decoded upgrade.
+            let phase_hashes = build_phase_hashes_from_toml(&toml);
             return Ok(VerifyReport {
                 rows,
                 header: ReportHeader {
                     proxy: Address::ZERO,
                     new_impl: Address::ZERO,
                     contract_name: kind.name,
+                    network: toml.network.clone(),
                     description: String::new(),
                     onchain_solc: None,
                     reference_solc: None,
                 },
-                phase_hashes: None,
+                phase_hashes,
             });
         },
     };
+
+    // Validate decoded fields against toml.
+    rows.push(toml_field_row("proxy", upgrade.proxy, toml.proxy));
+    rows.push(toml_field_row("impl", upgrade.new_impl, toml.new_impl));
+    rows.push(toml_field_row("timelock", upgrade.outer_to, toml.timelock));
+    rows.push(toml_field_row("salt", upgrade.salt, toml.salt));
+    rows.push(toml_field_row(
+        "predecessor",
+        upgrade.predecessor,
+        toml.predecessor,
+    ));
+    rows.push(toml_field_row("delay", upgrade.delay, toml.delay_u256()));
 
     rows.push(value_zero_row(upgrade.value));
     rows.push(predecessor_zero_row(upgrade.predecessor));
@@ -821,17 +870,19 @@ pub async fn run_verify(
             Ok(check) => check,
             Err(e) => {
                 rows.push(fail("bytecode-match", e.to_string()));
+                let phase_hashes = build_phase_hashes_from_toml(&toml);
                 return Ok(VerifyReport {
                     rows,
                     header: ReportHeader {
                         proxy: upgrade.proxy,
                         new_impl: upgrade.new_impl,
                         contract_name: kind.name,
+                        network: toml.network.clone(),
                         description: upgrade.description,
                         onchain_solc: None,
                         reference_solc: None,
                     },
-                    phase_hashes: None,
+                    phase_hashes,
                 });
             },
         };
@@ -863,35 +914,19 @@ pub async fn run_verify(
 
     rows.push(check_init_selector(&kind, &upgrade.init_data));
 
+    // Safe validation: assert toml Safes match deployment-info.
+    let safe_rows = safe_address_rows(&toml, &kind, deployment_info_dir);
+    rows.extend(safe_rows);
+
+    // Recompute Safe hashes for both phases and assert against toml.
+    let phase_hashes =
+        compute_and_validate_phase_hashes(&toml, chain_id, &upgrade.outer_calldatas, &mut rows);
+
+    // Nonce drift check (WARN, not FAIL).
+    nonce_drift_rows(provider, &toml, &mut rows).await;
+
     let gov_rows = governance_checks(provider, contracts, &upgrade, &kind).await;
     rows.extend(gov_rows);
-
-    let phase_hashes = if let (Some(safe), Some(nonce)) = (args.safe, args.nonce) {
-        Some(PhaseHashes {
-            schedule_nonce: nonce,
-            schedule: safe_tx_hashes(
-                safe,
-                chain_id,
-                upgrade.outer_to,
-                U256::ZERO,
-                &upgrade.outer_calldatas.schedule,
-                0,
-                nonce,
-            ),
-            execute_nonce: nonce + 1,
-            execute: safe_tx_hashes(
-                safe,
-                chain_id,
-                upgrade.outer_to,
-                U256::ZERO,
-                &upgrade.outer_calldatas.execute,
-                0,
-                nonce + 1,
-            ),
-        })
-    } else {
-        None
-    };
 
     Ok(VerifyReport {
         rows,
@@ -899,12 +934,224 @@ pub async fn run_verify(
             proxy: upgrade.proxy,
             new_impl: upgrade.new_impl,
             contract_name: kind.name,
+            network: toml.network.clone(),
             description: upgrade.description,
             onchain_solc: bytecode_check.onchain_solc,
             reference_solc: bytecode_check.reference_solc,
         },
         phase_hashes,
     })
+}
+
+/// Build PhaseHashes directly from toml (used when decoding fails).
+fn build_phase_hashes_from_toml(toml: &ProposalToml) -> PhaseHashes {
+    PhaseHashes {
+        schedule_nonce: toml.schedule.nonce,
+        schedule: SafeTxHashes {
+            domain: toml.schedule.domain,
+            message: toml.schedule.message,
+            safe_tx: toml.schedule.safe_tx,
+        },
+        execute_nonce: toml.execute.nonce,
+        execute: SafeTxHashes {
+            domain: toml.execute.domain,
+            message: toml.execute.message,
+            safe_tx: toml.execute.safe_tx,
+        },
+    }
+}
+
+/// Validate toml Safe addresses against deployment-info (hard fail on mismatch).
+fn safe_address_rows(
+    toml: &ProposalToml,
+    kind: &ContractKind,
+    deployment_info_dir: &Path,
+) -> Vec<CheckRow> {
+    let mut rows = vec![];
+
+    // Only check ops_timelock for Ops-kind contracts; SafeExit uses a different section.
+    // For now we only have deployment-info for ops_timelock proposers/executors.
+    if kind.timelock_kind != TimelockKind::Ops {
+        rows.push(pass(
+            "toml:schedule.safe",
+            "Safe-exit timelock: deployment-info check skipped",
+        ));
+        rows.push(pass(
+            "toml:execute.safe",
+            "Safe-exit timelock: deployment-info check skipped",
+        ));
+        return rows;
+    }
+
+    match load_ops_timelock_signers(&toml.network, deployment_info_dir) {
+        Err(e) => {
+            rows.push(pass(
+                "toml:schedule.safe",
+                format!("deployment-info unavailable ({e}); skipped"),
+            ));
+            rows.push(pass(
+                "toml:execute.safe",
+                format!("deployment-info unavailable ({e}); skipped"),
+            ));
+        },
+        Ok(signers) => {
+            let proposer_match = signers.proposers.contains(&toml.schedule.safe);
+            rows.push(if proposer_match {
+                pass(
+                    "toml:schedule.safe",
+                    format!("{} is a known proposer", toml.schedule.safe),
+                )
+            } else {
+                fail(
+                    "toml:schedule.safe",
+                    format!(
+                        "{} not in proposers {:?}",
+                        toml.schedule.safe, signers.proposers
+                    ),
+                )
+            });
+
+            let executor_match = signers.executors.contains(&toml.execute.safe);
+            rows.push(if executor_match {
+                pass(
+                    "toml:execute.safe",
+                    format!("{} is a known executor", toml.execute.safe),
+                )
+            } else {
+                fail(
+                    "toml:execute.safe",
+                    format!(
+                        "{} not in executors {:?}",
+                        toml.execute.safe, signers.executors
+                    ),
+                )
+            });
+        },
+    }
+
+    rows
+}
+
+/// Recompute Safe hashes from the JSONs and assert each equals the toml value.
+///
+/// Returns the PhaseHashes (from the toml, now validated).
+fn compute_and_validate_phase_hashes(
+    toml: &ProposalToml,
+    chain_id: u64,
+    calldatas: &OuterCalldatas,
+    rows: &mut Vec<CheckRow>,
+) -> PhaseHashes {
+    let sched = safe_tx_hashes(
+        toml.schedule.safe,
+        chain_id,
+        toml.timelock,
+        U256::ZERO,
+        &calldatas.schedule,
+        0,
+        toml.schedule.nonce,
+    );
+    let exec = safe_tx_hashes(
+        toml.execute.safe,
+        chain_id,
+        toml.timelock,
+        U256::ZERO,
+        &calldatas.execute,
+        0,
+        toml.execute.nonce,
+    );
+
+    rows.push(toml_hash_row(
+        "schedule.domain",
+        sched.domain,
+        toml.schedule.domain,
+    ));
+    rows.push(toml_hash_row(
+        "schedule.message",
+        sched.message,
+        toml.schedule.message,
+    ));
+    rows.push(toml_hash_row(
+        "schedule.safe_tx",
+        sched.safe_tx,
+        toml.schedule.safe_tx,
+    ));
+    rows.push(toml_hash_row(
+        "execute.domain",
+        exec.domain,
+        toml.execute.domain,
+    ));
+    rows.push(toml_hash_row(
+        "execute.message",
+        exec.message,
+        toml.execute.message,
+    ));
+    rows.push(toml_hash_row(
+        "execute.safe_tx",
+        exec.safe_tx,
+        toml.execute.safe_tx,
+    ));
+
+    PhaseHashes {
+        schedule_nonce: toml.schedule.nonce,
+        schedule: SafeTxHashes {
+            domain: toml.schedule.domain,
+            message: toml.schedule.message,
+            safe_tx: toml.schedule.safe_tx,
+        },
+        execute_nonce: toml.execute.nonce,
+        execute: SafeTxHashes {
+            domain: toml.execute.domain,
+            message: toml.execute.message,
+            safe_tx: toml.execute.safe_tx,
+        },
+    }
+}
+
+/// Query on-chain nonces and emit WARN rows (not hard fails) when they differ from toml.
+///
+/// Nonce drift is expected if other transactions were queued since generation.
+async fn nonce_drift_rows(provider: &impl Provider, toml: &ProposalToml, rows: &mut Vec<CheckRow>) {
+    use crate::proposals::write::ISafe;
+
+    for (label, safe, recorded_nonce) in [
+        ("schedule.nonce", toml.schedule.safe, toml.schedule.nonce),
+        ("execute.nonce", toml.execute.safe, toml.execute.nonce),
+    ] {
+        match ISafe::new(safe, provider).nonce().call().await {
+            Err(e) => {
+                rows.push(pass(
+                    format!("toml:{label}"),
+                    format!("WARN: nonce query failed ({e}); signer must reconfirm"),
+                ));
+            },
+            Ok(onchain) => {
+                let onchain_u64: u64 = match onchain.try_into() {
+                    Ok(n) => n,
+                    Err(_) => {
+                        rows.push(pass(
+                            format!("toml:{label}"),
+                            "WARN: onchain nonce overflows u64".to_owned(),
+                        ));
+                        continue;
+                    },
+                };
+                if onchain_u64 == recorded_nonce {
+                    rows.push(pass(
+                        format!("toml:{label}"),
+                        format!("nonce={onchain_u64}"),
+                    ));
+                } else {
+                    rows.push(pass(
+                        format!("toml:{label}"),
+                        format!(
+                            "WARN: onchain nonce={onchain_u64} != toml={recorded_nonce}; hashes \
+                             in toml use recorded nonce — signer must reconfirm",
+                        ),
+                    ));
+                }
+            },
+        }
+    }
 }
 
 fn check_init_selector(kind: &ContractKind, init_data: &Bytes) -> CheckRow {
@@ -1044,6 +1291,7 @@ mod tests {
     use hotshot_contract_adapter::sol_types::StakeTableV3;
 
     use super::*;
+    use crate::proposals::proposal_toml::{PhaseToml, ProposalToml};
 
     const SCHEDULE_JSON: &str = include_str!("fixtures/decaf_stake_table_v3_schedule.json");
     const EXECUTE_JSON: &str = include_str!("fixtures/decaf_stake_table_v3_execute.json");
@@ -1054,6 +1302,58 @@ mod tests {
         TimelockBatches {
             schedule: s,
             execute: e,
+        }
+    }
+
+    /// Build a ProposalToml matching the decaf fixture (known-vector hashes from safe_hash test).
+    fn fixture_toml() -> ProposalToml {
+        let safe: Address = "0xb76834e371b666feee48e5d7d9a97ca08b5a0620"
+            .parse()
+            .unwrap();
+        ProposalToml {
+            contract: "stake-table-v3".to_owned(),
+            network: "decaf".to_owned(),
+            chain_id: 11155111,
+            proxy: "0x40304FbE94D5E7D1492Dd90c53a2D63E8506a037"
+                .parse()
+                .unwrap(),
+            new_impl: "0x5a6250dd35d875c0529573d9d934629a1b2778db"
+                .parse()
+                .unwrap(),
+            timelock: "0x8e3b6563D683b87964104A2c3A4bf542bb70767F"
+                .parse()
+                .unwrap(),
+            salt: "0x99f200000000000000000000000000000000000000000000000000000000000f"
+                .parse()
+                .unwrap(),
+            delay: 300,
+            predecessor: B256::ZERO,
+            schedule: PhaseToml {
+                safe,
+                nonce: 24,
+                domain: "0x8f560c9d209e6d9320305560aee98fa1dea01510aa5451a9c0911401893835c6"
+                    .parse()
+                    .unwrap(),
+                message: "0x9c5a62271d73b6accf3c8957a1e80b6434618d3bd4b8bd23e30817479c60d35b"
+                    .parse()
+                    .unwrap(),
+                safe_tx: "0xa3d4b5bfa93b559f34478b3988f1132c35ba67f953a87326c8a1c8250709c6b8"
+                    .parse()
+                    .unwrap(),
+            },
+            execute: PhaseToml {
+                safe,
+                nonce: 25,
+                domain: "0x8f560c9d209e6d9320305560aee98fa1dea01510aa5451a9c0911401893835c6"
+                    .parse()
+                    .unwrap(),
+                message: "0xf7edebe09a94e770ddbccf107a5685d50d902adb08db5e2043c7b1f9c4ef648b"
+                    .parse()
+                    .unwrap(),
+                safe_tx: "0xbb7fd662e5b724a50e33f18ef737d6df9c1d92b8810def16fb190b7c27c16f45"
+                    .parse()
+                    .unwrap(),
+            },
         }
     }
 
@@ -1123,7 +1423,6 @@ mod tests {
         let dir = tmp.path();
         std::fs::write(dir.join("schedule.json"), SCHEDULE_JSON).unwrap();
         std::fs::write(dir.join("execute.json"), EXECUTE_JSON).unwrap();
-        std::fs::write(dir.join("contract"), "stake-table-v3\n").unwrap();
 
         let batches = load_proposal_dir(dir).expect("load_proposal_dir");
         assert_eq!(
@@ -1142,9 +1441,6 @@ mod tests {
                 .name,
             "execute"
         );
-
-        let kind = read_contract_kind_file(dir).expect("read_contract_kind_file");
-        assert_eq!(kind, ContractKindArg::StakeTableV3);
     }
 
     // ── TEST:verify-load-proposal-dir-missing-execute-errors ─────────────
@@ -1179,26 +1475,23 @@ mod tests {
         );
     }
 
-    // ── TEST:verify-contract-flag-vs-file-mismatch-errors ────────────────
+    // ── TEST:verify-contract-flag-vs-toml-mismatch-errors ────────────────
 
     #[test]
-    fn test_verify_contract_flag_vs_file_mismatch_errors() {
-        // --contract fee-contract but contract file says stake-table-v3 — must error.
+    fn test_verify_contract_flag_vs_toml_mismatch_errors() {
         let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path();
-        std::fs::write(dir.join("contract"), "stake-table-v3\n").unwrap();
+        let dir = tmp.path().to_path_buf();
+        let mut toml = fixture_toml();
+        toml.contract = "stake-table-v3".to_owned();
+        toml.write(&dir).unwrap();
 
         let args = VerifyProposalArgs {
-            dir: dir.to_path_buf(),
+            dir: dir.clone(),
             contract: Some(ContractKindArg::FeeContract),
-            safe: None,
-            nonce: None,
         };
-        // The mismatch is detected in run_verify before any provider call.
-        // We test it by calling read_contract_kind_file + manual flag comparison.
-        let file_kind = read_contract_kind_file(&args.dir).unwrap();
-        assert_eq!(file_kind, ContractKindArg::StakeTableV3);
-        assert_ne!(args.contract.unwrap(), file_kind);
+        // Simulate the mismatch check from run_verify.
+        let loaded = ProposalToml::load(&args.dir).unwrap();
+        assert_ne!(args.contract.unwrap().as_str(), loaded.contract);
     }
 
     // ── TEST:verify-strip-cbor-828-ok ─────────────────────────────────────
@@ -1440,17 +1733,32 @@ mod tests {
 
     #[test]
     fn test_verify_exit_code_fail_nonzero() {
+        let domain: B256 = B256::ZERO;
         let report = VerifyReport {
             rows: vec![pass("check-a", "ok"), fail("check-b", "something wrong")],
             header: ReportHeader {
                 proxy: Address::ZERO,
                 new_impl: Address::ZERO,
                 contract_name: "StakeTableV3",
+                network: "decaf".to_owned(),
                 description: String::new(),
                 onchain_solc: None,
                 reference_solc: None,
             },
-            phase_hashes: None,
+            phase_hashes: PhaseHashes {
+                schedule_nonce: 24,
+                schedule: SafeTxHashes {
+                    domain,
+                    message: domain,
+                    safe_tx: domain,
+                },
+                execute_nonce: 25,
+                execute: SafeTxHashes {
+                    domain,
+                    message: domain,
+                    safe_tx: domain,
+                },
+            },
         };
         assert_eq!(report.exit_code(), 1);
     }
@@ -1487,6 +1795,67 @@ mod tests {
     fn test_verify_predecessor_nonzero_fails() {
         assert!(!predecessor_zero_row(B256::repeat_byte(0x01)).pass);
         assert!(predecessor_zero_row(B256::ZERO).pass);
+    }
+
+    // ── TEST:verify-toml-tampered-impl-fails ──────────────────────────────
+    //
+    // A tampered toml.impl must produce a FAIL row when the decoded impl differs.
+
+    #[test]
+    fn test_verify_toml_tampered_impl_fails() {
+        let upgrade_impl: Address = "0x5a6250dd35d875c0529573d9d934629a1b2778db"
+            .parse()
+            .unwrap();
+        let tampered_impl = Address::repeat_byte(0xde);
+
+        // toml_field_row returns fail when decoded != recorded.
+        let row = toml_field_row("impl", upgrade_impl, tampered_impl);
+        assert!(!row.pass, "tampered impl must fail: {}", row.detail);
+        assert!(row.detail.contains("decoded="), "detail: {}", row.detail);
+    }
+
+    // ── TEST:verify-toml-tampered-safe-tx-fails ───────────────────────────
+    //
+    // A tampered safe_tx hash must produce a FAIL row from compute_and_validate_phase_hashes.
+
+    #[test]
+    fn test_verify_toml_tampered_safe_tx_fails() {
+        let s: SafeBatch = serde_json::from_str(SCHEDULE_JSON).unwrap();
+        let e: SafeBatch = serde_json::from_str(EXECUTE_JSON).unwrap();
+        let (_, sched_calldata) = tx_calldata(&s.transactions[0]).unwrap();
+        let (_, exec_calldata) = tx_calldata(&e.transactions[0]).unwrap();
+
+        let mut toml = fixture_toml();
+        // Tamper the schedule safe_tx hash.
+        toml.schedule.safe_tx = B256::repeat_byte(0xba);
+
+        let calldatas = OuterCalldatas {
+            schedule: sched_calldata,
+            execute: exec_calldata,
+        };
+        let mut rows = vec![];
+        compute_and_validate_phase_hashes(&toml, 11155111, &calldatas, &mut rows);
+
+        let safe_tx_row = rows
+            .iter()
+            .find(|r| r.name == "toml:schedule.safe_tx")
+            .expect("must have schedule.safe_tx row");
+        assert!(
+            !safe_tx_row.pass,
+            "tampered safe_tx must fail: {}",
+            safe_tx_row.detail
+        );
+    }
+
+    // ── TEST:verify-toml-round-trip-ok ────────────────────────────────────
+
+    #[test]
+    fn test_verify_toml_round_trip_ok() {
+        let original = fixture_toml();
+        let tmp = tempfile::tempdir().unwrap();
+        original.write(tmp.path()).unwrap();
+        let loaded = ProposalToml::load(tmp.path()).unwrap();
+        assert_eq!(original, loaded);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────

@@ -568,11 +568,10 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                             timelock: proposal.timelock_addr,
                             salt,
                             delay,
-                            repo_dir: std::env::current_dir()
-                                .unwrap_or_else(|_| PathBuf::from(".")),
                             deployment_info_dir: default_deployment_info_dir(),
                             schedule_calldata: proposal.schedule.data.clone(),
                             execute_calldata: proposal.execute.data.clone(),
+                            safe_override: None,
                         },
                         provider,
                     )
