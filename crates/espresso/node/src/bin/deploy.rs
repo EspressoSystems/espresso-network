@@ -15,7 +15,7 @@ use espresso_contract_deployer::{
     network_config::{light_client_genesis, light_client_genesis_from_stake_table},
     proposals::{
         timelock::TimelockOperationType,
-        verify::{VerifyProposalArgs, run_verify},
+        verify::{VerifyProposalArgs, run_verify_standalone},
     },
     provider::connect_ledger,
 };
@@ -510,6 +510,12 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     let mut contracts = Contracts::from(opt.contracts);
     contracts.set_cooldown(opt.post_deployment_cooldown);
 
+    if let Some(Command::VerifyProposal(args)) = &opt.command {
+        let report = run_verify_standalone(args, &contracts).await?;
+        report.print();
+        std::process::exit(report.exit_code());
+    }
+
     let provider = if opt.ledger {
         let signer = connect_ledger(opt.account_index as usize).await?;
         tracing::info!("Using ledger for signing, watch ledger device for prompts.");
@@ -545,13 +551,8 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
                 println!("{account}: {} Eth", format_ether(balance));
                 return Ok(());
             },
-            Command::VerifyProposal(args) => {
-                let deployment_info_dir =
-                    espresso_contract_deployer::proposals::deployment_info::default_deployment_info_dir();
-                let report =
-                    run_verify(args, &provider, &contracts, chain_id, &deployment_info_dir).await?;
-                report.print();
-                std::process::exit(report.exit_code());
+            Command::VerifyProposal(_) => {
+                unreachable!("VerifyProposal handled before wallet provider construction")
             },
         };
     };

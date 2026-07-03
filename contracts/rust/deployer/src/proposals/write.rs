@@ -9,6 +9,7 @@ use alloy::{
 };
 use anyhow::{Context, Result};
 use chrono::Local;
+use url::Url;
 
 use crate::proposals::{
     deployment_info::load_ops_timelock_signers,
@@ -20,6 +21,25 @@ sol! {
     #[sol(rpc)]
     interface ISafe {
         function nonce() external view returns (uint256);
+    }
+}
+
+/// Map well-known chain IDs to their public RPC endpoints.
+///
+/// Returns `None` for unknown chain IDs; callers must require `--rpc-url` in that case.
+pub fn default_rpc_url(chain_id: u64) -> Option<Url> {
+    match chain_id {
+        1 => Some(
+            "https://ethereum-rpc.publicnode.com"
+                .parse()
+                .expect("static URL"),
+        ),
+        11155111 => Some(
+            "https://ethereum-sepolia-rpc.publicnode.com"
+                .parse()
+                .expect("static URL"),
+        ),
+        _ => None,
     }
 }
 

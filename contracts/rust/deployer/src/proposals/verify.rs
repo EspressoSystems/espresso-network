@@ -13,7 +13,7 @@ use std::{
 
 use alloy::{
     primitives::{Address, B256, Bytes, U256},
-    providers::Provider,
+    providers::{Provider, ProviderBuilder},
     sol_types::SolCall,
 };
 use anyhow::{Result, anyhow, bail};
@@ -22,13 +22,15 @@ use hotshot_contract_adapter::sol_types::{
     EspTokenV2, FeeContract, OpsTimelock, RewardClaim, StakeTableV2, StakeTableV3,
 };
 use serde::Deserialize;
+use url::Url;
 
 use crate::{
     Contract, Contracts,
     proposals::{
-        deployment_info::load_ops_timelock_signers,
+        deployment_info::{default_deployment_info_dir, load_ops_timelock_signers},
         proposal_toml::ProposalToml,
         safe_hash::{SafeTxHashes, safe_tx_hashes},
+        write::default_rpc_url,
     },
 };
 
@@ -776,9 +778,43 @@ pub struct VerifyProposalArgs {
     /// Override the contract kind; defaults to proposal.toml `contract` field.
     #[clap(long)]
     pub contract: Option<ContractKindArg>,
+
+    /// RPC URL; defaults to the network's public node from proposal.toml.
+    #[clap(long)]
+    pub rpc_url: Option<Url>,
 }
 
 // ── Orchestrator ─────────────────────────────────────────────────────────────
+
+/// Run verification without a wallet provider.
+///
+/// Reads `chain_id` from `<args.dir>/proposal.toml`, resolves the RPC from
+/// `args.rpc_url` or the built-in public-node map, then delegates to `run_verify`.
+pub async fn run_verify_standalone(
+    args: &VerifyProposalArgs,
+    contracts: &Contracts,
+) -> Result<VerifyReport> {
+    let toml = ProposalToml::load(&args.dir)?;
+    let chain_id = toml.chain_id;
+
+    let rpc = args
+        .rpc_url
+        .clone()
+        .or_else(|| default_rpc_url(chain_id))
+        .ok_or_else(|| anyhow!("unknown chain id {chain_id}; pass --rpc-url"))?;
+
+    let provider = ProviderBuilder::new().connect_http(rpc);
+
+    let provider_chain_id = provider.get_chain_id().await?;
+    run_verify(
+        args,
+        &provider,
+        contracts,
+        provider_chain_id,
+        &default_deployment_info_dir(),
+    )
+    .await
+}
 
 pub async fn run_verify(
     args: &VerifyProposalArgs,
@@ -1488,6 +1524,7 @@ mod tests {
         let args = VerifyProposalArgs {
             dir: dir.clone(),
             contract: Some(ContractKindArg::FeeContract),
+            rpc_url: None,
         };
         // Simulate the mismatch check from run_verify.
         let loaded = ProposalToml::load(&args.dir).unwrap();
