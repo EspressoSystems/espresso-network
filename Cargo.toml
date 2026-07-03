@@ -12,8 +12,7 @@ members = [
     "contracts/rust/safe-tx-builder",
     "crates/builder",
     "crates/cliquenet",
-    "crates/cliquenet-addr",
-    "crates/cliquenet-x25519",
+    "crates/cliquenet-types",
     "crates/espresso/api",
     "crates/espresso/dev-node",
     "crates/espresso/keyset",
@@ -73,8 +72,7 @@ default-members = [
     "contracts/rust/gen-vk-contract",
     "crates/builder",
     "crates/cliquenet",
-    "crates/cliquenet-addr",
-    "crates/cliquenet-x25519",
+    "crates/cliquenet-types",
     "crates/hotshot/builder-api",
     "crates/hotshot/example-types",
     "crates/hotshot/hotshot",
@@ -190,8 +188,7 @@ clap-serde-derive = "0.2.1"
 cld = "0.5"
 client = { path = "client" }
 cliquenet = { path = "crates/cliquenet", features = ["serde"] }
-cliquenet-addr = { path = "crates/cliquenet-addr", features = ["serde"] }
-cliquenet-x25519 = { path = "crates/cliquenet-x25519", features = ["serde"] }
+cliquenet-types = { path = "crates/cliquenet-types", features = ["serde"] }
 coarsetime = "0.1.34"
 committable = { git = "https://github.com/EspressoSystems/commit.git", features = [
     "ark-serialize",
@@ -491,9 +488,7 @@ opt-level = 1
 opt-level = 1
 [profile.test.package.cliquenet]
 opt-level = 1
-[profile.test.package.cliquenet-addr]
-opt-level = 1
-[profile.test.package.cliquenet-x25519]
+[profile.test.package.cliquenet-types]
 opt-level = 1
 [profile.test.package.hotshot-macros]
 opt-level = 1

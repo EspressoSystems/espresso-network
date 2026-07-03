@@ -14,8 +14,7 @@ use tokio_util::{sync::CancellationToken, task::JoinMap};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{
-    Config, Metrics, PublicKey, Role,
-    addr::NetAddr,
+    Config, Metrics, NetAddr, PublicKey, Role,
     connection::Connection,
     delay::DelayQueue,
     error::NetworkError,

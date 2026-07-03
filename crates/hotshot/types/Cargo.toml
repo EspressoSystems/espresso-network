@@ -32,8 +32,7 @@ bitvec = { workspace = true }
 blake3 = { workspace = true }
 bs58 = { workspace = true }
 clap = { workspace = true }
-cliquenet-addr = { workspace = true }
-cliquenet-x25519 = { workspace = true }
+cliquenet-types = { workspace = true }
 committable = { workspace = true }
 derive_more = { workspace = true }
 digest = { workspace = true }

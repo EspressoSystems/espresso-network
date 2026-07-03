@@ -3170,17 +3170,12 @@ name = "cliquenet"
 version = "0.1.0"
 dependencies = [
  "bon",
- "bs58",
  "bytes 1.12.0",
- "cliquenet-addr",
- "cliquenet-x25519",
+ "cliquenet-types",
  "criterion 0.8.2",
- "ed25519-compact",
  "parking_lot",
  "quickcheck",
  "rand 0.10.1",
- "serde",
- "serde_bytes",
  "snow",
  "socket2 0.6.4",
  "thiserror 2.0.18",
@@ -3190,20 +3185,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "cliquenet-addr"
-version = "0.1.0"
-dependencies = [
- "quickcheck",
- "serde",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "cliquenet-x25519"
+name = "cliquenet-types"
 version = "0.1.0"
 dependencies = [
  "bs58",
  "ed25519-compact",
+ "quickcheck",
  "serde",
  "serde_bytes",
  "thiserror 2.0.18",
@@ -6822,8 +6809,7 @@ dependencies = [
  "blake3",
  "bs58",
  "clap 4.6.1",
- "cliquenet-addr",
- "cliquenet-x25519",
+ "cliquenet-types",
  "committable",
  "derive_more 2.1.1",
  "digest 0.10.7",
