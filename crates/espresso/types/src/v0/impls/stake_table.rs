@@ -853,11 +853,11 @@ pub(crate) fn select_active_validator_set(
                 },
                 Ok(cv) => {
                     if cv.delegators.is_empty() {
-                        tracing::info!("Validator {address:?} does not have any delegator");
+                        tracing::debug!("Validator {address:?} does not have any delegator");
                         return None;
                     }
                     if cv.stake.is_zero() {
-                        tracing::info!("Validator {address:?} does not have any stake");
+                        tracing::debug!("Validator {address:?} does not have any stake");
                         return None;
                     }
                     if !cv.is_eligible(protocol_version) {
