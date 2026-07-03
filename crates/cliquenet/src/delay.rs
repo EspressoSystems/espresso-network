@@ -84,11 +84,10 @@ impl DelayQueue {
         let mut inner = self.inner.lock();
         inner.due.clear();
         let mut due = mem::take(&mut inner.due);
-        let t = timeout(&self.conf, now, 0);
         for (&(slot, id), entry) in &mut inner.map {
             entry.num = 0;
-            entry.due = t;
-            due.insert((t, slot, id));
+            entry.due = now;
+            due.insert((now, slot, id));
         }
         inner.due = due
     }

@@ -13,7 +13,7 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use alloy::primitives::FixedBytes;
+use alloy_primitives::FixedBytes;
 use committable::{Commitment, Committable};
 use hotshot_utils::anytrace::*;
 use jf_utils::canonical;

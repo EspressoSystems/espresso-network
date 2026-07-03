@@ -1,35 +1,48 @@
 [package]
-name        = "cliquenet"
-version     = "0.1.0"
-edition     = "2024"
+name = "cliquenet"
+version = "0.1.0"
+edition = "2024"
 description = "A fully connected mesh network"
 
 [features]
-serde = ["dep:serde", "dep:serde_bytes"]
+serde = [
+    "dep:serde",
+    "dep:serde_bytes",
+    "cliquenet-addr/serde",
+    "cliquenet-x25519/serde",
+]
 
 [dependencies]
-bon             = { workspace = true }
-bs58            = { workspace = true }
-bytes           = { workspace = true }
+bon = { workspace = true }
+bs58 = { workspace = true }
+bytes = { workspace = true }
+cliquenet-addr = { workspace = true }
+cliquenet-x25519 = { workspace = true }
 ed25519-compact = { workspace = true }
-parking_lot     = { workspace = true }
-rand            = "0.10.0"
-snow            = { workspace = true }
-socket2         = { workspace = true }
-thiserror       = { workspace = true }
-tokio           = { workspace = true, features = ["macros", "net", "rt", "time"] }
-tokio-util      = { workspace = true, features = ["join-map"] }
-tracing         = { workspace = true }
+parking_lot = { workspace = true }
+rand = "0.10.0"
+snow = { workspace = true }
+socket2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = [
+    "io-util",
+    "macros",
+    "net",
+    "rt",
+    "time",
+] }
+tokio-util = { workspace = true, features = ["join-map"] }
+tracing = { workspace = true }
 
 # optional:
-serde           = { workspace = true, features = ["derive"], optional = true }
-serde_bytes     = { workspace = true, optional = true }
+serde = { workspace = true, features = ["derive"], optional = true }
+serde_bytes = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion  = { workspace = true }
 quickcheck = { workspace = true }
-tokio      = { workspace = true, features = ["test-util"] }
+tokio = { workspace = true, features = ["test-util"] }
 
 [[bench]]
-name    = "bench1"
+name = "bench1"
 harness = false
