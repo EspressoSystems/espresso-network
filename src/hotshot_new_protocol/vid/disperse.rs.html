@@ -1,0 +1,336 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/hotshot/new-protocol/src/vid/disperse.rs`."><title>disperse.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-17e0aaed.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="hotshot_new_protocol" data-themes="" data-resource-suffix="" data-rustdoc-version="1.96.1 (31fca3adb 2026-06-26)" data-channel="1.96.1" data-search-js="search-b5634cc7.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../static.files/storage-41dd4d93.js"></script><script defer src="../../../static.files/src-script-813739b1.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">hotshot_new_protocol/vid/</div>disperse.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="kw">use </span>std::{collections::BTreeMap, mem, ops::Range, sync::LazyLock};
+<a href=#2 id=2 data-nosnippet>2</a>
+<a href=#3 id=3 data-nosnippet>3</a><span class="kw">use </span>hotshot::traits::BlockPayload;
+<a href=#4 id=4 data-nosnippet>4</a><span class="kw">use </span>hotshot_types::{
+<a href=#5 id=5 data-nosnippet>5</a>    data::{
+<a href=#6 id=6 data-nosnippet>6</a>        EpochNumber, VidCommitment2, VidDisperse2, ViewNumber,
+<a href=#7 id=7 data-nosnippet>7</a>        vid_disperse::{AvidmGf2DisperseShareFragment, AvidmGf2NamespacePiece},
+<a href=#8 id=8 data-nosnippet>8</a>    },
+<a href=#9 id=9 data-nosnippet>9</a>    epoch_membership::EpochMembershipCoordinator,
+<a href=#10 id=10 data-nosnippet>10</a>    message::Proposal <span class="kw">as </span>SignedProposal,
+<a href=#11 id=11 data-nosnippet>11</a>    traits::{node_implementation::NodeType, signature_key::SignatureKey},
+<a href=#12 id=12 data-nosnippet>12</a>    vid::avidm_gf2::AvidmGf2Scheme,
+<a href=#13 id=13 data-nosnippet>13</a>};
+<a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span>hotshot_utils::anytrace::{<span class="self">self</span>, Wrap};
+<a href=#15 id=15 data-nosnippet>15</a><span class="kw">use </span>rayon::prelude::<span class="kw-2">*</span>;
+<a href=#16 id=16 data-nosnippet>16</a><span class="kw">use </span>tokio::task::{AbortHandle, JoinSet};
+<a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>tracing::{error, warn};
+<a href=#18 id=18 data-nosnippet>18</a>
+<a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span>crate::{
+<a href=#20 id=20 data-nosnippet>20</a>    message::{ConsensusMessage, Message, MessageType},
+<a href=#21 id=21 data-nosnippet>21</a>    network::{NetworkError, Sender},
+<a href=#22 id=22 data-nosnippet>22</a>};
+<a href=#23 id=23 data-nosnippet>23</a>
+<a href=#24 id=24 data-nosnippet>24</a><span class="kw">static </span>NUM_THREADS: LazyLock&lt;usize&gt; = LazyLock::new(|| rayon::current_num_threads().max(<span class="number">1</span>));
+<a href=#25 id=25 data-nosnippet>25</a>
+<a href=#26 id=26 data-nosnippet>26</a><span class="attr">#[derive(Clone, Eq, PartialEq, Debug)]
+<a href=#27 id=27 data-nosnippet>27</a></span><span class="kw">pub struct </span>VidDisperseRequest&lt;T: NodeType&gt; {
+<a href=#28 id=28 data-nosnippet>28</a>    <span class="kw">pub </span>view: ViewNumber,
+<a href=#29 id=29 data-nosnippet>29</a>    <span class="kw">pub </span>epoch: EpochNumber,
+<a href=#30 id=30 data-nosnippet>30</a>    <span class="kw">pub </span>block: T::BlockPayload,
+<a href=#31 id=31 data-nosnippet>31</a>    <span class="kw">pub </span>metadata: &lt;T::BlockPayload <span class="kw">as </span>BlockPayload&lt;T&gt;&gt;::Metadata,
+<a href=#32 id=32 data-nosnippet>32</a>    <span class="kw">pub </span>payload_commitment: VidCommitment2,
+<a href=#33 id=33 data-nosnippet>33</a>}
+<a href=#34 id=34 data-nosnippet>34</a>
+<a href=#35 id=35 data-nosnippet>35</a><span class="kw">pub struct </span>VidDisperseOutput {
+<a href=#36 id=36 data-nosnippet>36</a>    <span class="kw">pub </span>view: ViewNumber,
+<a href=#37 id=37 data-nosnippet>37</a>    <span class="kw">pub </span>payload_commitment: VidCommitment2,
+<a href=#38 id=38 data-nosnippet>38</a>}
+<a href=#39 id=39 data-nosnippet>39</a>
+<a href=#40 id=40 data-nosnippet>40</a><span class="kw">pub struct </span>VidDisperser&lt;T: NodeType&gt; {
+<a href=#41 id=41 data-nosnippet>41</a>    calculations: BTreeMap&lt;(ViewNumber, VidCommitment2), AbortHandle&gt;,
+<a href=#42 id=42 data-nosnippet>42</a>    epoch_membership_coordinator: EpochMembershipCoordinator&lt;T&gt;,
+<a href=#43 id=43 data-nosnippet>43</a>    network: Sender&lt;T&gt;,
+<a href=#44 id=44 data-nosnippet>44</a>    public_key: T::SignatureKey,
+<a href=#45 id=45 data-nosnippet>45</a>    private_key: &lt;T::SignatureKey <span class="kw">as </span>SignatureKey&gt;::PrivateKey,
+<a href=#46 id=46 data-nosnippet>46</a>    tasks: JoinSet&lt;<span class="prelude-ty">Result</span>&lt;VidDisperseOutput, VidDisperseError&gt;&gt;,
+<a href=#47 id=47 data-nosnippet>47</a>}
+<a href=#48 id=48 data-nosnippet>48</a>
+<a href=#49 id=49 data-nosnippet>49</a><span class="kw">impl</span>&lt;T: NodeType&gt; VidDisperser&lt;T&gt; {
+<a href=#50 id=50 data-nosnippet>50</a>    <span class="kw">pub fn </span>new(
+<a href=#51 id=51 data-nosnippet>51</a>        epoch_membership_coordinator: EpochMembershipCoordinator&lt;T&gt;,
+<a href=#52 id=52 data-nosnippet>52</a>        network: Sender&lt;T&gt;,
+<a href=#53 id=53 data-nosnippet>53</a>        public_key: T::SignatureKey,
+<a href=#54 id=54 data-nosnippet>54</a>        private_key: &lt;T::SignatureKey <span class="kw">as </span>SignatureKey&gt;::PrivateKey,
+<a href=#55 id=55 data-nosnippet>55</a>    ) -&gt; <span class="self">Self </span>{
+<a href=#56 id=56 data-nosnippet>56</a>        <span class="self">Self </span>{
+<a href=#57 id=57 data-nosnippet>57</a>            calculations: BTreeMap::new(),
+<a href=#58 id=58 data-nosnippet>58</a>            epoch_membership_coordinator,
+<a href=#59 id=59 data-nosnippet>59</a>            network,
+<a href=#60 id=60 data-nosnippet>60</a>            public_key,
+<a href=#61 id=61 data-nosnippet>61</a>            private_key,
+<a href=#62 id=62 data-nosnippet>62</a>            tasks: JoinSet::new(),
+<a href=#63 id=63 data-nosnippet>63</a>        }
+<a href=#64 id=64 data-nosnippet>64</a>    }
+<a href=#65 id=65 data-nosnippet>65</a>
+<a href=#66 id=66 data-nosnippet>66</a>    <span class="kw">pub fn </span>request_vid_disperse(<span class="kw-2">&amp;mut </span><span class="self">self</span>, vid_disperse_request: VidDisperseRequest&lt;T&gt;) {
+<a href=#67 id=67 data-nosnippet>67</a>        <span class="kw">let </span>key = (
+<a href=#68 id=68 data-nosnippet>68</a>            vid_disperse_request.view,
+<a href=#69 id=69 data-nosnippet>69</a>            vid_disperse_request.payload_commitment,
+<a href=#70 id=70 data-nosnippet>70</a>        );
+<a href=#71 id=71 data-nosnippet>71</a>        <span class="kw">if </span><span class="self">self</span>.calculations.contains_key(<span class="kw-2">&amp;</span>key) {
+<a href=#72 id=72 data-nosnippet>72</a>            <span class="kw">return</span>;
+<a href=#73 id=73 data-nosnippet>73</a>        }
+<a href=#74 id=74 data-nosnippet>74</a>        <span class="kw">let </span>membership = <span class="self">self</span>.epoch_membership_coordinator.clone();
+<a href=#75 id=75 data-nosnippet>75</a>        <span class="kw">let </span>network = <span class="self">self</span>.network.clone();
+<a href=#76 id=76 data-nosnippet>76</a>        <span class="kw">let </span>public_key = <span class="self">self</span>.public_key.clone();
+<a href=#77 id=77 data-nosnippet>77</a>        <span class="kw">let </span>private_key = <span class="self">self</span>.private_key.clone();
+<a href=#78 id=78 data-nosnippet>78</a>        <span class="kw">let </span>handle = <span class="self">self</span>.tasks.spawn_blocking(<span class="kw">move </span>|| {
+<a href=#79 id=79 data-nosnippet>79</a>            handle_vid_disperse_request(
+<a href=#80 id=80 data-nosnippet>80</a>                membership,
+<a href=#81 id=81 data-nosnippet>81</a>                network,
+<a href=#82 id=82 data-nosnippet>82</a>                public_key,
+<a href=#83 id=83 data-nosnippet>83</a>                private_key,
+<a href=#84 id=84 data-nosnippet>84</a>                vid_disperse_request,
+<a href=#85 id=85 data-nosnippet>85</a>            )
+<a href=#86 id=86 data-nosnippet>86</a>        });
+<a href=#87 id=87 data-nosnippet>87</a>        <span class="self">self</span>.calculations.insert(key, handle);
+<a href=#88 id=88 data-nosnippet>88</a>    }
+<a href=#89 id=89 data-nosnippet>89</a>
+<a href=#90 id=90 data-nosnippet>90</a>    <span class="kw">pub async fn </span>next(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="prelude-ty">Result</span>&lt;VidDisperseOutput, VidDisperseError&gt;&gt; {
+<a href=#91 id=91 data-nosnippet>91</a>        <span class="kw">loop </span>{
+<a href=#92 id=92 data-nosnippet>92</a>            <span class="kw">match </span><span class="self">self</span>.tasks.join_next().<span class="kw">await </span>{
+<a href=#93 id=93 data-nosnippet>93</a>                <span class="prelude-val">Some</span>(<span class="prelude-val">Ok</span>(result)) =&gt; <span class="kw">return </span><span class="prelude-val">Some</span>(result),
+<a href=#94 id=94 data-nosnippet>94</a>                <span class="prelude-val">Some</span>(<span class="prelude-val">Err</span>(err)) =&gt; {
+<a href=#95 id=95 data-nosnippet>95</a>                    <span class="kw">if </span>err.is_panic() {
+<a href=#96 id=96 data-nosnippet>96</a>                        <span class="macro">error!</span>(%err, <span class="string">"vid disperse task panic"</span>);
+<a href=#97 id=97 data-nosnippet>97</a>                    }
+<a href=#98 id=98 data-nosnippet>98</a>                    <span class="kw">continue</span>;
+<a href=#99 id=99 data-nosnippet>99</a>                },
+<a href=#100 id=100 data-nosnippet>100</a>                <span class="prelude-val">None </span>=&gt; <span class="kw">return </span><span class="prelude-val">None</span>,
+<a href=#101 id=101 data-nosnippet>101</a>            }
+<a href=#102 id=102 data-nosnippet>102</a>        }
+<a href=#103 id=103 data-nosnippet>103</a>    }
+<a href=#104 id=104 data-nosnippet>104</a>
+<a href=#105 id=105 data-nosnippet>105</a>    <span class="kw">pub fn </span>gc(<span class="kw-2">&amp;mut </span><span class="self">self</span>, view_number: ViewNumber) {
+<a href=#106 id=106 data-nosnippet>106</a>        <span class="kw">let </span>keep = <span class="self">self
+<a href=#107 id=107 data-nosnippet>107</a>            </span>.calculations
+<a href=#108 id=108 data-nosnippet>108</a>            .split_off(<span class="kw-2">&amp;</span>(view_number, VidCommitment2::default()));
+<a href=#109 id=109 data-nosnippet>109</a>        <span class="kw">for </span>handle <span class="kw">in </span><span class="self">self</span>.calculations.values_mut() {
+<a href=#110 id=110 data-nosnippet>110</a>            handle.abort();
+<a href=#111 id=111 data-nosnippet>111</a>        }
+<a href=#112 id=112 data-nosnippet>112</a>        <span class="self">self</span>.calculations = keep;
+<a href=#113 id=113 data-nosnippet>113</a>    }
+<a href=#114 id=114 data-nosnippet>114</a>}
+<a href=#115 id=115 data-nosnippet>115</a>
+<a href=#116 id=116 data-nosnippet>116</a><span class="kw">fn </span>handle_vid_disperse_request&lt;T: NodeType&gt;(
+<a href=#117 id=117 data-nosnippet>117</a>    epoch_membership_coordinator: EpochMembershipCoordinator&lt;T&gt;,
+<a href=#118 id=118 data-nosnippet>118</a>    network: Sender&lt;T&gt;,
+<a href=#119 id=119 data-nosnippet>119</a>    public_key: T::SignatureKey,
+<a href=#120 id=120 data-nosnippet>120</a>    private_key: &lt;T::SignatureKey <span class="kw">as </span>SignatureKey&gt;::PrivateKey,
+<a href=#121 id=121 data-nosnippet>121</a>    vid_disperse_request: VidDisperseRequest&lt;T&gt;,
+<a href=#122 id=122 data-nosnippet>122</a>) -&gt; <span class="prelude-ty">Result</span>&lt;VidDisperseOutput, VidDisperseError&gt; {
+<a href=#123 id=123 data-nosnippet>123</a>    <span class="kw">let </span>view = vid_disperse_request.view;
+<a href=#124 id=124 data-nosnippet>124</a>    <span class="kw">let </span>epoch = vid_disperse_request.epoch;
+<a href=#125 id=125 data-nosnippet>125</a>    <span class="kw">let </span>payload_commitment = vid_disperse_request.payload_commitment;
+<a href=#126 id=126 data-nosnippet>126</a>
+<a href=#127 id=127 data-nosnippet>127</a>    <span class="kw">let </span>params = VidDisperse2::&lt;T&gt;::disperse_params(
+<a href=#128 id=128 data-nosnippet>128</a>        <span class="kw-2">&amp;</span>vid_disperse_request.block,
+<a href=#129 id=129 data-nosnippet>129</a>        <span class="kw-2">&amp;</span>epoch_membership_coordinator,
+<a href=#130 id=130 data-nosnippet>130</a>        <span class="prelude-val">Some</span>(epoch),
+<a href=#131 id=131 data-nosnippet>131</a>        <span class="kw-2">&amp;</span>vid_disperse_request.metadata,
+<a href=#132 id=132 data-nosnippet>132</a>    )
+<a href=#133 id=133 data-nosnippet>133</a>    .map_err(VidDisperseError::Vid)<span class="question-mark">?</span>;
+<a href=#134 id=134 data-nosnippet>134</a>
+<a href=#135 id=135 data-nosnippet>135</a>    <span class="kw">let </span>signature = T::SignatureKey::sign(<span class="kw-2">&amp;</span>private_key, payload_commitment.as_ref())
+<a href=#136 id=136 data-nosnippet>136</a>        .map_err(|err| VidDisperseError::Sign(err.into()))<span class="question-mark">?</span>;
+<a href=#137 id=137 data-nosnippet>137</a>
+<a href=#138 id=138 data-nosnippet>138</a>    <span class="kw">let </span>num_namespaces = params.ns_table.len();
+<a href=#139 id=139 data-nosnippet>139</a>
+<a href=#140 id=140 data-nosnippet>140</a>    <span class="comment">// Coalesce namespaces into size-balanced buckets, roughly one per core,
+<a href=#141 id=141 data-nosnippet>141</a>    // but never below the minimum size, so a block of many tiny namespaces
+<a href=#142 id=142 data-nosnippet>142</a>    // goes out as a few balanced messages per recipient instead of one tiny
+<a href=#143 id=143 data-nosnippet>143</a>    // message each. Each bucket is one parallel unit and one message per
+<a href=#144 id=144 data-nosnippet>144</a>    // recipient.
+<a href=#145 id=145 data-nosnippet>145</a>    </span><span class="kw">let </span>buckets: Vec&lt;Vec&lt;usize&gt;&gt; = {
+<a href=#146 id=146 data-nosnippet>146</a>        <span class="comment">// We want buckets to be at least 256 KiB, otherwise the per-message
+<a href=#147 id=147 data-nosnippet>147</a>        // overhead is too large. Larger payloads are divided by the number
+<a href=#148 id=148 data-nosnippet>148</a>        // of available threads to fully utilise rayon.
+<a href=#149 id=149 data-nosnippet>149</a>        </span><span class="kw">let </span>threshold = params.payload.len().div_ceil(<span class="kw-2">*</span>NUM_THREADS).max(<span class="number">256 </span>* <span class="number">1024</span>);
+<a href=#150 id=150 data-nosnippet>150</a>        bucketize(<span class="kw-2">&amp;</span>params.ns_table, threshold)
+<a href=#151 id=151 data-nosnippet>151</a>    };
+<a href=#152 id=152 data-nosnippet>152</a>
+<a href=#153 id=153 data-nosnippet>153</a>    buckets.par_iter().try_for_each_with(
+<a href=#154 id=154 data-nosnippet>154</a>        network,
+<a href=#155 id=155 data-nosnippet>155</a>        |network, bucket| -&gt; <span class="prelude-ty">Result</span>&lt;(), VidDisperseError&gt; {
+<a href=#156 id=156 data-nosnippet>156</a>            <span class="kw">let </span><span class="kw-2">mut </span>pieces = <span class="macro">vec!</span>[Vec::new(); params.recipients.len()];
+<a href=#157 id=157 data-nosnippet>157</a>
+<a href=#158 id=158 data-nosnippet>158</a>            <span class="kw">for </span><span class="kw-2">&amp;</span>ns_index <span class="kw">in </span>bucket {
+<a href=#159 id=159 data-nosnippet>159</a>                <span class="kw">let </span>dispersal = AvidmGf2Scheme::ns_disperse_one(
+<a href=#160 id=160 data-nosnippet>160</a>                    <span class="kw-2">&amp;</span>params.param,
+<a href=#161 id=161 data-nosnippet>161</a>                    <span class="kw-2">&amp;</span>params.weights,
+<a href=#162 id=162 data-nosnippet>162</a>                    <span class="kw-2">&amp;</span>params.payload[params.ns_table[ns_index].clone()],
+<a href=#163 id=163 data-nosnippet>163</a>                    ns_index,
+<a href=#164 id=164 data-nosnippet>164</a>                )
+<a href=#165 id=165 data-nosnippet>165</a>                .wrap()
+<a href=#166 id=166 data-nosnippet>166</a>                .map_err(VidDisperseError::Vid)<span class="question-mark">?</span>;
+<a href=#167 id=167 data-nosnippet>167</a>
+<a href=#168 id=168 data-nosnippet>168</a>                <span class="kw">let </span>ns_payload_byte_len = dispersal.payload_byte_len;
+<a href=#169 id=169 data-nosnippet>169</a>                <span class="kw">let </span>ns_commit = dispersal.commit;
+<a href=#170 id=170 data-nosnippet>170</a>                <span class="kw">for </span>(pieces, ns_share) <span class="kw">in </span>pieces.iter_mut().zip(dispersal.shares) {
+<a href=#171 id=171 data-nosnippet>171</a>                    pieces.push(AvidmGf2NamespacePiece {
+<a href=#172 id=172 data-nosnippet>172</a>                        ns_index: dispersal.ns_index,
+<a href=#173 id=173 data-nosnippet>173</a>                        ns_payload_byte_len,
+<a href=#174 id=174 data-nosnippet>174</a>                        ns_commit,
+<a href=#175 id=175 data-nosnippet>175</a>                        ns_share,
+<a href=#176 id=176 data-nosnippet>176</a>                    });
+<a href=#177 id=177 data-nosnippet>177</a>                }
+<a href=#178 id=178 data-nosnippet>178</a>            }
+<a href=#179 id=179 data-nosnippet>179</a>
+<a href=#180 id=180 data-nosnippet>180</a>            <span class="kw">for </span>(recipient, pieces) <span class="kw">in </span>params.recipients.iter().zip(pieces) {
+<a href=#181 id=181 data-nosnippet>181</a>                <span class="kw">let </span>fragment = AvidmGf2DisperseShareFragment {
+<a href=#182 id=182 data-nosnippet>182</a>                    view_number: view,
+<a href=#183 id=183 data-nosnippet>183</a>                    epoch: <span class="prelude-val">Some</span>(epoch),
+<a href=#184 id=184 data-nosnippet>184</a>                    target_epoch: <span class="prelude-val">Some</span>(epoch),
+<a href=#185 id=185 data-nosnippet>185</a>                    payload_commitment,
+<a href=#186 id=186 data-nosnippet>186</a>                    recipient_key: recipient.clone(),
+<a href=#187 id=187 data-nosnippet>187</a>                    param: params.param.clone(),
+<a href=#188 id=188 data-nosnippet>188</a>                    num_namespaces,
+<a href=#189 id=189 data-nosnippet>189</a>                    namespaces: pieces,
+<a href=#190 id=190 data-nosnippet>190</a>                };
+<a href=#191 id=191 data-nosnippet>191</a>                <span class="kw">let </span>message = Message {
+<a href=#192 id=192 data-nosnippet>192</a>                    sender: public_key.clone(),
+<a href=#193 id=193 data-nosnippet>193</a>                    message_type: MessageType::Consensus(ConsensusMessage::VidShareFragment(
+<a href=#194 id=194 data-nosnippet>194</a>                        SignedProposal::new(fragment, signature.clone()),
+<a href=#195 id=195 data-nosnippet>195</a>                    )),
+<a href=#196 id=196 data-nosnippet>196</a>                };
+<a href=#197 id=197 data-nosnippet>197</a>                <span class="kw">if let </span><span class="prelude-val">Err</span>(err) = network.unicast(view, recipient, <span class="kw-2">&amp;</span>message) {
+<a href=#198 id=198 data-nosnippet>198</a>                    <span class="kw">if </span>err.is_critical() {
+<a href=#199 id=199 data-nosnippet>199</a>                        <span class="kw">return </span><span class="prelude-val">Err</span>(err.into());
+<a href=#200 id=200 data-nosnippet>200</a>                    }
+<a href=#201 id=201 data-nosnippet>201</a>                    <span class="macro">warn!</span>(%err, <span class="string">"network error while sending vid share fragment"</span>);
+<a href=#202 id=202 data-nosnippet>202</a>                }
+<a href=#203 id=203 data-nosnippet>203</a>            }
+<a href=#204 id=204 data-nosnippet>204</a>            <span class="prelude-val">Ok</span>(())
+<a href=#205 id=205 data-nosnippet>205</a>        },
+<a href=#206 id=206 data-nosnippet>206</a>    )<span class="question-mark">?</span>;
+<a href=#207 id=207 data-nosnippet>207</a>
+<a href=#208 id=208 data-nosnippet>208</a>    <span class="prelude-val">Ok</span>(VidDisperseOutput {
+<a href=#209 id=209 data-nosnippet>209</a>        view,
+<a href=#210 id=210 data-nosnippet>210</a>        payload_commitment,
+<a href=#211 id=211 data-nosnippet>211</a>    })
+<a href=#212 id=212 data-nosnippet>212</a>}
+<a href=#213 id=213 data-nosnippet>213</a>
+<a href=#214 id=214 data-nosnippet>214</a><span class="doccomment">/// Group namespace indices into buckets whose payload sizes are each at least
+<a href=#215 id=215 data-nosnippet>215</a>/// `threshold` bytes (except possibly the last), coalescing small namespaces so
+<a href=#216 id=216 data-nosnippet>216</a>/// the disperser sends one message per bucket rather than one per namespace.
+<a href=#217 id=217 data-nosnippet>217</a>///
+<a href=#218 id=218 data-nosnippet>218</a>/// A `threshold` of 0 puts every namespace in its own bucket (no coalescing); a
+<a href=#219 id=219 data-nosnippet>219</a>/// threshold larger than the whole payload yields a single bucket. A namespace
+<a href=#220 id=220 data-nosnippet>220</a>/// at least `threshold` bytes on its own seals its bucket immediately, so large
+<a href=#221 id=221 data-nosnippet>221</a>/// namespaces stay separate while small ones accumulate.
+<a href=#222 id=222 data-nosnippet>222</a></span><span class="kw">fn </span>bucketize(ns_table: <span class="kw-2">&amp;</span>[Range&lt;usize&gt;], threshold: usize) -&gt; Vec&lt;Vec&lt;usize&gt;&gt; {
+<a href=#223 id=223 data-nosnippet>223</a>    <span class="kw">let </span><span class="kw-2">mut </span>buckets = Vec::new();
+<a href=#224 id=224 data-nosnippet>224</a>    <span class="kw">let </span><span class="kw-2">mut </span>current = Vec::new();
+<a href=#225 id=225 data-nosnippet>225</a>    <span class="kw">let </span><span class="kw-2">mut </span>current_bytes = <span class="number">0usize</span>;
+<a href=#226 id=226 data-nosnippet>226</a>    <span class="kw">for </span>(ns_index, range) <span class="kw">in </span>ns_table.iter().enumerate() {
+<a href=#227 id=227 data-nosnippet>227</a>        current.push(ns_index);
+<a href=#228 id=228 data-nosnippet>228</a>        current_bytes += range.len();
+<a href=#229 id=229 data-nosnippet>229</a>        <span class="kw">if </span>current_bytes &gt;= threshold {
+<a href=#230 id=230 data-nosnippet>230</a>            buckets.push(mem::take(<span class="kw-2">&amp;mut </span>current));
+<a href=#231 id=231 data-nosnippet>231</a>            current_bytes = <span class="number">0</span>;
+<a href=#232 id=232 data-nosnippet>232</a>        }
+<a href=#233 id=233 data-nosnippet>233</a>    }
+<a href=#234 id=234 data-nosnippet>234</a>    <span class="kw">if </span>!current.is_empty() {
+<a href=#235 id=235 data-nosnippet>235</a>        buckets.push(current);
+<a href=#236 id=236 data-nosnippet>236</a>    }
+<a href=#237 id=237 data-nosnippet>237</a>    buckets
+<a href=#238 id=238 data-nosnippet>238</a>}
+<a href=#239 id=239 data-nosnippet>239</a>
+<a href=#240 id=240 data-nosnippet>240</a><span class="attr">#[derive(Debug, thiserror::Error)]
+<a href=#241 id=241 data-nosnippet>241</a></span><span class="kw">pub enum </span>VidDisperseError {
+<a href=#242 id=242 data-nosnippet>242</a>    <span class="attr">#[error(<span class="string">"network error: {0}"</span>)]
+<a href=#243 id=243 data-nosnippet>243</a>    </span>Net(<span class="attr">#[from] </span>NetworkError),
+<a href=#244 id=244 data-nosnippet>244</a>
+<a href=#245 id=245 data-nosnippet>245</a>    <span class="attr">#[error(<span class="string">"vid error: {0}"</span>)]
+<a href=#246 id=246 data-nosnippet>246</a>    </span>Vid(<span class="attr">#[source] </span>anytrace::Error),
+<a href=#247 id=247 data-nosnippet>247</a>
+<a href=#248 id=248 data-nosnippet>248</a>    <span class="attr">#[error(<span class="string">"sign error: {0}"</span>)]
+<a href=#249 id=249 data-nosnippet>249</a>    </span>Sign(<span class="attr">#[source] </span>Box&lt;<span class="kw">dyn </span>std::error::Error + Send + Sync&gt;),
+<a href=#250 id=250 data-nosnippet>250</a>}
+<a href=#251 id=251 data-nosnippet>251</a>
+<a href=#252 id=252 data-nosnippet>252</a><span class="kw">impl </span>VidDisperseError {
+<a href=#253 id=253 data-nosnippet>253</a>    <span class="kw">pub fn </span>is_critical(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+<a href=#254 id=254 data-nosnippet>254</a>        <span class="kw">match </span><span class="self">self </span>{
+<a href=#255 id=255 data-nosnippet>255</a>            <span class="self">Self</span>::Net(e) =&gt; e.is_critical(),
+<a href=#256 id=256 data-nosnippet>256</a>            <span class="self">Self</span>::Vid(<span class="kw">_</span>) | <span class="self">Self</span>::Sign(<span class="kw">_</span>) =&gt; <span class="bool-val">false</span>,
+<a href=#257 id=257 data-nosnippet>257</a>        }
+<a href=#258 id=258 data-nosnippet>258</a>    }
+<a href=#259 id=259 data-nosnippet>259</a>}
+<a href=#260 id=260 data-nosnippet>260</a>
+<a href=#261 id=261 data-nosnippet>261</a><span class="attr">#[cfg(test)]
+<a href=#262 id=262 data-nosnippet>262</a></span><span class="kw">mod </span>tests {
+<a href=#263 id=263 data-nosnippet>263</a>    <span class="kw">use </span>std::ops::Range;
+<a href=#264 id=264 data-nosnippet>264</a>
+<a href=#265 id=265 data-nosnippet>265</a>    <span class="kw">use </span>quickcheck::{TestResult, quickcheck};
+<a href=#266 id=266 data-nosnippet>266</a>
+<a href=#267 id=267 data-nosnippet>267</a>    <span class="kw">use </span><span class="kw">super</span>::bucketize;
+<a href=#268 id=268 data-nosnippet>268</a>
+<a href=#269 id=269 data-nosnippet>269</a>    <span class="doccomment">/// Build a contiguous namespace table from per-namespace byte lengths.
+<a href=#270 id=270 data-nosnippet>270</a>    /// Only the lengths matter to `bucketize`; the offsets are incidental.
+<a href=#271 id=271 data-nosnippet>271</a>    </span><span class="kw">fn </span>ns_ranges(lens: <span class="kw-2">&amp;</span>[u8]) -&gt; Vec&lt;Range&lt;usize&gt;&gt; {
+<a href=#272 id=272 data-nosnippet>272</a>        <span class="kw">let </span><span class="kw-2">mut </span>start = <span class="number">0</span>;
+<a href=#273 id=273 data-nosnippet>273</a>        lens.iter()
+<a href=#274 id=274 data-nosnippet>274</a>            .map(|<span class="kw-2">&amp;</span>len| {
+<a href=#275 id=275 data-nosnippet>275</a>                <span class="kw">let </span>range = start..start + usize::from(len);
+<a href=#276 id=276 data-nosnippet>276</a>                start += usize::from(len);
+<a href=#277 id=277 data-nosnippet>277</a>                range
+<a href=#278 id=278 data-nosnippet>278</a>            })
+<a href=#279 id=279 data-nosnippet>279</a>            .collect()
+<a href=#280 id=280 data-nosnippet>280</a>    }
+<a href=#281 id=281 data-nosnippet>281</a>
+<a href=#282 id=282 data-nosnippet>282</a>    <span class="doccomment">/// Total payload bytes of the namespaces at `indices`.
+<a href=#283 id=283 data-nosnippet>283</a>    </span><span class="kw">fn </span>bytes(indices: <span class="kw-2">&amp;</span>[usize], ns_table: <span class="kw-2">&amp;</span>[Range&lt;usize&gt;]) -&gt; usize {
+<a href=#284 id=284 data-nosnippet>284</a>        indices.iter().map(|<span class="kw-2">&amp;</span>i| ns_table[i].len()).sum()
+<a href=#285 id=285 data-nosnippet>285</a>    }
+<a href=#286 id=286 data-nosnippet>286</a>
+<a href=#287 id=287 data-nosnippet>287</a>    <span class="macro">quickcheck!</span> {
+<a href=#288 id=288 data-nosnippet>288</a>        <span class="doccomment">/// The buckets partition the namespace indices: every index appears
+<a href=#289 id=289 data-nosnippet>289</a>        /// exactly once, contiguously, and in namespace-table order. This pins
+<a href=#290 id=290 data-nosnippet>290</a>        /// completeness, disjointness, and ordering in a single property.
+<a href=#291 id=291 data-nosnippet>291</a>        </span><span class="kw">fn </span>prop_buckets_partition(lens: Vec&lt;u8&gt;, threshold: u16) -&gt; bool {
+<a href=#292 id=292 data-nosnippet>292</a>            <span class="kw">let </span>ns_table = ns_ranges(<span class="kw-2">&amp;</span>lens);
+<a href=#293 id=293 data-nosnippet>293</a>            bucketize(<span class="kw-2">&amp;</span>ns_table, threshold.into())
+<a href=#294 id=294 data-nosnippet>294</a>                .into_iter()
+<a href=#295 id=295 data-nosnippet>295</a>                .flatten()
+<a href=#296 id=296 data-nosnippet>296</a>                .eq(<span class="number">0</span>..ns_table.len())
+<a href=#297 id=297 data-nosnippet>297</a>        }
+<a href=#298 id=298 data-nosnippet>298</a>
+<a href=#299 id=299 data-nosnippet>299</a>        <span class="doccomment">/// No bucket is ever empty.
+<a href=#300 id=300 data-nosnippet>300</a>        </span><span class="kw">fn </span>prop_buckets_non_empty(lens: Vec&lt;u8&gt;, threshold: u16) -&gt; bool {
+<a href=#301 id=301 data-nosnippet>301</a>            <span class="kw">let </span>ns_table = ns_ranges(<span class="kw-2">&amp;</span>lens);
+<a href=#302 id=302 data-nosnippet>302</a>            bucketize(<span class="kw-2">&amp;</span>ns_table, threshold.into())
+<a href=#303 id=303 data-nosnippet>303</a>                .iter()
+<a href=#304 id=304 data-nosnippet>304</a>                .all(|bucket| !bucket.is_empty())
+<a href=#305 id=305 data-nosnippet>305</a>        }
+<a href=#306 id=306 data-nosnippet>306</a>
+<a href=#307 id=307 data-nosnippet>307</a>        <span class="doccomment">/// Every bucket except the last reaches the threshold: small namespaces
+<a href=#308 id=308 data-nosnippet>308</a>        /// are coalesced until the bucket is large enough.
+<a href=#309 id=309 data-nosnippet>309</a>        </span><span class="kw">fn </span>prop_non_last_buckets_meet_threshold(lens: Vec&lt;u8&gt;, threshold: u16) -&gt; bool {
+<a href=#310 id=310 data-nosnippet>310</a>            <span class="kw">let </span>ns_table = ns_ranges(<span class="kw-2">&amp;</span>lens);
+<a href=#311 id=311 data-nosnippet>311</a>            <span class="kw">let </span>buckets = bucketize(<span class="kw-2">&amp;</span>ns_table, threshold.into());
+<a href=#312 id=312 data-nosnippet>312</a>            <span class="kw">let </span>non_last = buckets.len().saturating_sub(<span class="number">1</span>);
+<a href=#313 id=313 data-nosnippet>313</a>            buckets
+<a href=#314 id=314 data-nosnippet>314</a>                .iter()
+<a href=#315 id=315 data-nosnippet>315</a>                .take(non_last)
+<a href=#316 id=316 data-nosnippet>316</a>                .all(|bucket| bytes(bucket, <span class="kw-2">&amp;</span>ns_table) &gt;= usize::from(threshold))
+<a href=#317 id=317 data-nosnippet>317</a>        }
+<a href=#318 id=318 data-nosnippet>318</a>
+<a href=#319 id=319 data-nosnippet>319</a>        <span class="doccomment">/// Buckets are minimal: dropping a non-last bucket's final namespace
+<a href=#320 id=320 data-nosnippet>320</a>        /// leaves it below the threshold, so the disperser seals as soon as it
+<a href=#321 id=321 data-nosnippet>321</a>        /// reaches the cutoff rather than over-coalescing. (Vacuous at
+<a href=#322 id=322 data-nosnippet>322</a>        /// `threshold == 0`, where every namespace is its own bucket.)
+<a href=#323 id=323 data-nosnippet>323</a>        </span><span class="kw">fn </span>prop_non_last_buckets_are_minimal(lens: Vec&lt;u8&gt;, threshold: u16) -&gt; TestResult {
+<a href=#324 id=324 data-nosnippet>324</a>            <span class="kw">if </span>threshold == <span class="number">0 </span>{
+<a href=#325 id=325 data-nosnippet>325</a>                <span class="kw">return </span>TestResult::discard();
+<a href=#326 id=326 data-nosnippet>326</a>            }
+<a href=#327 id=327 data-nosnippet>327</a>            <span class="kw">let </span>ns_table = ns_ranges(<span class="kw-2">&amp;</span>lens);
+<a href=#328 id=328 data-nosnippet>328</a>            <span class="kw">let </span>buckets = bucketize(<span class="kw-2">&amp;</span>ns_table, threshold.into());
+<a href=#329 id=329 data-nosnippet>329</a>            <span class="kw">let </span>non_last = buckets.len().saturating_sub(<span class="number">1</span>);
+<a href=#330 id=330 data-nosnippet>330</a>            TestResult::from_bool(buckets.iter().take(non_last).all(|bucket| {
+<a href=#331 id=331 data-nosnippet>331</a>                bytes(<span class="kw-2">&amp;</span>bucket[..bucket.len() - <span class="number">1</span>], <span class="kw-2">&amp;</span>ns_table) &lt; usize::from(threshold)
+<a href=#332 id=332 data-nosnippet>332</a>            }))
+<a href=#333 id=333 data-nosnippet>333</a>        }
+<a href=#334 id=334 data-nosnippet>334</a>    }
+<a href=#335 id=335 data-nosnippet>335</a>}
+</code></pre></div></section></main></body></html>

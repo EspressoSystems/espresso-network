@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["VID_TARGET_TOTAL_STAKE"],"fn":["approximate_weights","vid_total_weight"],"struct":["ADVZDisperse","ADVZDisperseShare","AvidMDisperse","AvidMDisperseShare","AvidmGf2Disperse","AvidmGf2DisperseShare","Weights"]};
+window.SIDEBAR_ITEMS = {"constant":["VID_TARGET_TOTAL_STAKE"],"fn":["approximate_weights","vid_total_weight"],"struct":["ADVZDisperse","ADVZDisperseShare","AvidMDisperse","AvidMDisperseShare","AvidmGf2Disperse","AvidmGf2DisperseParams","AvidmGf2DisperseShare","AvidmGf2DisperseShareFragment","AvidmGf2NamespacePiece","Weights"]};
