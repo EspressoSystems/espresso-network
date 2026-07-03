@@ -511,7 +511,7 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     contracts.set_cooldown(opt.post_deployment_cooldown);
 
     if let Some(Command::VerifyProposal(args)) = &opt.command {
-        let report = run_verify_standalone(args, &contracts).await?;
+        let report = run_verify_standalone(args).await?;
         report.print();
         std::process::exit(report.exit_code());
     }

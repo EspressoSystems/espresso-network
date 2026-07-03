@@ -24,14 +24,11 @@ use hotshot_contract_adapter::sol_types::{
 use serde::Deserialize;
 use url::Url;
 
-use crate::{
-    Contract, Contracts,
-    proposals::{
-        deployment_info::{default_deployment_info_dir, load_ops_timelock_signers},
-        proposal_toml::ProposalToml,
-        safe_hash::{SafeTxHashes, safe_tx_hashes},
-        write::default_rpc_url,
-    },
+use crate::proposals::{
+    deployment_info::deployment_info,
+    proposal_toml::ProposalToml,
+    safe_hash::{SafeTxHashes, safe_tx_hashes},
+    write::{ISafe, default_rpc_url},
 };
 
 // ── JSON deserialization ─────────────────────────────────────────────────────
@@ -47,7 +44,7 @@ pub struct SafeMeta {
     pub description: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct SafeTx {
     pub to: Address,
     pub value: String,
@@ -58,7 +55,7 @@ pub struct SafeTx {
     pub contract_inputs_values: Option<BTreeMap<String, String>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct SafeContractMethod {
     pub name: String,
 }
@@ -120,9 +117,9 @@ impl fmt::Display for SolcVersion {
 pub enum MatchClass {
     /// Cores and solc version are byte-equal.
     FullMatch,
-    /// Cores match but solc versions differ — PASS with warning.
+    /// Cores match but solc versions differ; PASS with warning.
     CodeMatchMetaDiffers,
-    /// Core bytecodes differ — FAIL.
+    /// Core bytecodes differ; FAIL.
     Mismatch,
 }
 
@@ -133,70 +130,44 @@ pub struct BytecodeCheck {
     pub reference_solc: Option<SolcVersion>,
 }
 
-/// Strip trailing solc CBOR metadata.
+/// Strip the trailing solc CBOR metadata tail.
 ///
-/// Solidity CBOR tail format:
-///   `a1 64 "solc" 43 <3-byte ver> 00 <u16-BE length>`
-/// where the u16 at the very end is the byte length of the CBOR body.
-/// Total drop = CBOR-length + 2.
+/// The tail is `<cbor body> <u16-BE body length>`. Solc emits the
+/// `"solc": <3-byte version>` map entry last, so a genuine body ends with
+/// `64 "solc" 43 <ver>`. The body length is bounded (51 bytes with the default
+/// ipfs entry); a larger claimed length is treated as code, not metadata, so an
+/// attacker cannot hide appended bytes under an oversized tail.
 ///
-/// Returns `(stripped_code, solc_version)`.
+/// Without a valid tail the input is returned unchanged with `None`.
 pub fn strip_cbor_metadata(code: &[u8]) -> (Vec<u8>, Option<SolcVersion>) {
+    // `64 "solc" 43`: CBOR key "solc" followed by the bytes3 version prefix.
+    const SOLC_ENTRY: &[u8] = &[0x64, 0x73, 0x6f, 0x6c, 0x63, 0x43];
+    const MAX_CBOR_LEN: usize = 64;
+
     if code.len() < 2 {
         return (code.to_vec(), None);
     }
     let tail_len = u16::from_be_bytes([code[code.len() - 2], code[code.len() - 1]]) as usize;
     let total_drop = tail_len + 2;
-    if total_drop > code.len() {
+    if tail_len > MAX_CBOR_LEN || total_drop > code.len() {
         return (code.to_vec(), None);
     }
-    let cbor_start = code.len() - total_drop;
-    let cbor = &code[cbor_start..code.len() - 2];
-    let solc_prefix: &[u8] = &[0xa1, 0x64, 0x73, 0x6f, 0x6c, 0x63, 0x43];
-    let stripped = code[..cbor_start].to_vec();
-    if cbor.len() >= 11 {
-        for i in 0..=(cbor.len() - 11) {
-            if cbor[i..i + 7] == *solc_prefix && cbor[i + 10] == 0x00 {
-                let ver = SolcVersion([cbor[i + 7], cbor[i + 8], cbor[i + 9]]);
-                return (stripped, Some(ver));
-            }
-        }
+    let cbor = &code[code.len() - total_drop..code.len() - 2];
+    if cbor.len() < 9 || cbor[cbor.len() - 9..cbor.len() - 3] != *SOLC_ENTRY {
+        return (code.to_vec(), None);
     }
-    (stripped, None)
-}
-
-/// Mask all occurrences of `impl_addr` (20 bytes) in `code` via substring scan.
-///
-/// The UUPS `__self` immutable sits at compiler-chosen non-aligned byte offsets.
-/// Each non-overlapping 20-byte occurrence is zeroed in-place.
-///
-/// Returns the number of occurrences zeroed.
-pub fn mask_immutables(code: &mut [u8], impl_addr: Address) -> usize {
-    let addr_bytes = impl_addr.as_slice();
-    let mut count = 0usize;
-    if code.len() < 20 {
-        return 0;
-    }
-    let mut i = 0usize;
-    while i <= code.len() - 20 {
-        if &code[i..i + 20] == addr_bytes {
-            code[i..i + 20].fill(0);
-            count += 1;
-            i += 20;
-        } else {
-            i += 1;
-        }
-    }
-    count
+    let ver = SolcVersion(cbor[cbor.len() - 3..].try_into().expect("3 bytes"));
+    (code[..code.len() - total_drop].to_vec(), Some(ver))
 }
 
 /// Compare normalized on-chain bytecode against the binding reference.
 ///
-/// Normalization: strip CBOR (both) → substring-mask `impl_addr` on ON-CHAIN
-/// only → assert equal core length → classify.
+/// Normalization: strip CBOR (both) → zero known immutable windows in on-chain copy
+/// → assert reference windows are zero (stale-offsets guard) → zero on-chain windows
+/// → byte-compare cores → classify.
 ///
-/// The binding already has zeros at `__self` windows (compiled with
-/// address(this)=0 placeholder), so the reference is left untouched.
+/// Each offset in `immutable_offsets` is the byte position of the 20-byte address
+/// within the deployed bytecode core (start+12 from the forge artifact window).
 ///
 /// LightClient verification is deferred; bails if the reference contains
 /// `0xff*20` library placeholders.
@@ -204,6 +175,7 @@ pub fn compare_normalized(
     onchain: &[u8],
     reference: &[u8],
     impl_addr: Address,
+    immutable_offsets: &[usize],
 ) -> Result<BytecodeCheck> {
     let placeholder = [0xffu8; 20];
     if reference.windows(20).any(|w| w == placeholder.as_slice()) {
@@ -216,23 +188,39 @@ pub fn compare_normalized(
     let (mut onchain_core, onchain_solc) = strip_cbor_metadata(onchain);
     let (ref_core, ref_solc) = strip_cbor_metadata(reference);
 
-    let count = mask_immutables(&mut onchain_core, impl_addr);
-    if onchain_core.len() >= 20 && count == 0 {
-        bail!(
-            "mask_immutables found 0 occurrences of impl_addr {impl_addr}; expected at least 1 \
-             for a UUPS contract — bytecode may be wrong"
-        );
-    }
-    if count > 8 {
-        bail!("unexpected immutable count: {count}; expected 1..=8");
-    }
-
     if onchain_core.len() != ref_core.len() {
         return Ok(BytecodeCheck {
             class: MatchClass::Mismatch,
             onchain_solc,
             reference_solc: ref_solc,
         });
+    }
+
+    let core_len = onchain_core.len();
+    for &offset in immutable_offsets {
+        if offset + 20 > core_len {
+            bail!(
+                "immutable offset {offset} + 20 exceeds core length {core_len}; offsets stale vs \
+                 bindings"
+            );
+        }
+        // Reference must have zeros at every immutable window (compiled with address(this)=0).
+        if ref_core[offset..offset + 20] != [0u8; 20] {
+            bail!(
+                "reference bytecode non-zero at immutable offset {offset}; offsets stale vs \
+                 bindings"
+            );
+        }
+        // On-chain must have impl_addr at the window.
+        if onchain_core[offset..offset + 20] != *impl_addr.as_slice() {
+            return Ok(BytecodeCheck {
+                class: MatchClass::Mismatch,
+                onchain_solc,
+                reference_solc: ref_solc,
+            });
+        }
+        // Zero the on-chain window so core comparison works.
+        onchain_core[offset..offset + 20].fill(0);
     }
 
     let class = match (onchain_core == ref_core, onchain_solc == ref_solc) {
@@ -290,61 +278,70 @@ pub enum TimelockKind {
 
 #[derive(Debug, Clone)]
 pub struct ContractKind {
-    pub contract: Contract,
     pub name: &'static str,
     pub deployed_bytecode: &'static [u8],
     pub expected_init_selector: Option<[u8; 4]>,
     pub owner_accessor: OwnerAccessor,
     pub timelock_kind: TimelockKind,
     pub expected_prev_major: Option<u8>,
+    /// Byte offsets of the 20-byte impl address within the deployed bytecode core
+    /// (start+12 from the forge artifact immutableReferences window).
+    pub immutable_addr_offsets: &'static [usize],
 }
+
+// Immutable address offsets per contract kind (start+12 from forge artifact windows).
+static STAKE_TABLE_V2_OFFSETS: &[usize] = &[9442, 9483, 10699];
+static STAKE_TABLE_V3_OFFSETS: &[usize] = &[10592, 10633, 11799];
+static ESP_TOKEN_V2_OFFSETS: &[usize] = &[2634, 2675, 2994];
+static FEE_CONTRACT_OFFSETS: &[usize] = &[1340, 1381, 1770];
+static REWARD_CLAIM_OFFSETS: &[usize] = &[3614, 3655, 3983];
 
 pub fn contract_kind(arg: ContractKindArg) -> ContractKind {
     match arg {
         ContractKindArg::StakeTableV2 => ContractKind {
-            contract: Contract::StakeTableV2,
             name: "StakeTableV2",
             deployed_bytecode: &StakeTableV2::DEPLOYED_BYTECODE,
             expected_init_selector: Some(StakeTableV2::initializeV2Call::SELECTOR),
             owner_accessor: OwnerAccessor::Owner,
             timelock_kind: TimelockKind::Ops,
             expected_prev_major: Some(1),
+            immutable_addr_offsets: STAKE_TABLE_V2_OFFSETS,
         },
         ContractKindArg::StakeTableV3 => ContractKind {
-            contract: Contract::StakeTableV3,
             name: "StakeTableV3",
             deployed_bytecode: &StakeTableV3::DEPLOYED_BYTECODE,
             expected_init_selector: Some(StakeTableV3::initializeV3Call::SELECTOR),
             owner_accessor: OwnerAccessor::Owner,
             timelock_kind: TimelockKind::Ops,
             expected_prev_major: Some(2),
+            immutable_addr_offsets: STAKE_TABLE_V3_OFFSETS,
         },
         ContractKindArg::EspTokenV2 => ContractKind {
-            contract: Contract::EspTokenV2,
             name: "EspTokenV2",
             deployed_bytecode: &EspTokenV2::DEPLOYED_BYTECODE,
             expected_init_selector: Some(EspTokenV2::initializeV2Call::SELECTOR),
             owner_accessor: OwnerAccessor::Owner,
             timelock_kind: TimelockKind::SafeExit,
             expected_prev_major: Some(1),
+            immutable_addr_offsets: ESP_TOKEN_V2_OFFSETS,
         },
         ContractKindArg::FeeContract => ContractKind {
-            contract: Contract::FeeContract,
             name: "FeeContract",
             deployed_bytecode: &FeeContract::DEPLOYED_BYTECODE,
             expected_init_selector: None,
             owner_accessor: OwnerAccessor::Owner,
             timelock_kind: TimelockKind::Ops,
             expected_prev_major: Some(1),
+            immutable_addr_offsets: FEE_CONTRACT_OFFSETS,
         },
         ContractKindArg::RewardClaim => ContractKind {
-            contract: Contract::RewardClaim,
             name: "RewardClaim",
             deployed_bytecode: &RewardClaim::DEPLOYED_BYTECODE,
             expected_init_selector: None,
             owner_accessor: OwnerAccessor::CurrentAdmin,
             timelock_kind: TimelockKind::SafeExit,
             expected_prev_major: None,
+            immutable_addr_offsets: REWARD_CLAIM_OFFSETS,
         },
     }
 }
@@ -461,11 +458,16 @@ pub fn decode_inner_upgrade(inner: &Bytes) -> Result<(Address, Bytes)> {
 }
 
 /// Identify the phase of a single-transaction batch.
+///
+/// Fails unless `batch.transactions.len() == 1`.
 fn batch_phase(batch: &SafeBatch) -> Result<Phase> {
-    let tx = batch
-        .transactions
-        .first()
-        .ok_or_else(|| anyhow!("batch has no transactions"))?;
+    if batch.transactions.len() != 1 {
+        bail!(
+            "batch must contain exactly 1 transaction; got {}",
+            batch.transactions.len()
+        );
+    }
+    let tx = &batch.transactions[0];
 
     if let Some(method) = &tx.contract_method {
         return match method.name.as_str() {
@@ -493,9 +495,8 @@ fn batch_phase(batch: &SafeBatch) -> Result<Phase> {
 
 /// Load `schedule.json` and `execute.json` from a proposal directory.
 ///
-/// Both files must be present and parse as `SafeBatch`. Phase is validated
-/// via `batch_phase`: `schedule.json` must be `Phase::Schedule` and
-/// `execute.json` must be `Phase::Execute`; any mismatch is an error.
+/// Both files must be present and parse as `SafeBatch`. Each batch must contain
+/// exactly one transaction. Phase is validated via `batch_phase`.
 pub fn load_proposal_dir(dir: &Path) -> Result<TimelockBatches> {
     let load = |name: &str| -> Result<SafeBatch> {
         let p = dir.join(name);
@@ -529,19 +530,35 @@ pub fn load_proposal_dir(dir: &Path) -> Result<TimelockBatches> {
 }
 
 /// Decode a `TimelockBatches` into a `DecodedUpgrade`.
+///
+/// Each batch must have exactly one transaction; extra transactions would
+/// escape verification.
 pub fn decode_proposal(batches: TimelockBatches) -> Result<DecodedUpgrade> {
+    if batches.schedule.transactions.len() != 1 {
+        bail!(
+            "schedule batch must contain exactly 1 transaction; got {}",
+            batches.schedule.transactions.len()
+        );
+    }
+    if batches.execute.transactions.len() != 1 {
+        bail!(
+            "execute batch must contain exactly 1 transaction; got {}",
+            batches.execute.transactions.len()
+        );
+    }
+
     let sched_tx = batches
         .schedule
         .transactions
         .into_iter()
         .next()
-        .ok_or_else(|| anyhow!("schedule batch has no transactions"))?;
+        .expect("len checked");
     let exec_tx = batches
         .execute
         .transactions
         .into_iter()
         .next()
-        .ok_or_else(|| anyhow!("execute batch has no transactions"))?;
+        .expect("len checked");
 
     let (sched_to, sched_calldata) = tx_calldata(&sched_tx)?;
     let (exec_to, exec_calldata) = tx_calldata(&exec_tx)?;
@@ -768,6 +785,18 @@ fn toml_hash_row(name: &str, computed: B256, recorded: B256) -> CheckRow {
     }
 }
 
+// ── Static network/chain-id mapping ──────────────────────────────────────────
+
+/// Map a network name to its canonical chain id.
+fn network_chain_id(network: &str) -> Option<u64> {
+    match network {
+        "mainnet" => Some(1),
+        "decaf" => Some(11155111),
+        "hoodi" => Some(560048),
+        _ => None,
+    }
+}
+
 // ── CLI args ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, clap::Args)]
@@ -780,7 +809,10 @@ pub struct VerifyProposalArgs {
     pub contract: Option<ContractKindArg>,
 
     /// RPC URL; defaults to the network's public node from proposal.toml.
-    #[clap(long)]
+    ///
+    /// Note: this flag must follow the `verify-proposal` subcommand; the top-level
+    /// `deploy --rpc-url` does not apply here.
+    #[clap(long, env = "ESPRESSO_L1_PROVIDER")]
     pub rpc_url: Option<Url>,
 }
 
@@ -789,11 +821,9 @@ pub struct VerifyProposalArgs {
 /// Run verification without a wallet provider.
 ///
 /// Reads `chain_id` from `<args.dir>/proposal.toml`, resolves the RPC from
-/// `args.rpc_url` or the built-in public-node map, then delegates to `run_verify`.
-pub async fn run_verify_standalone(
-    args: &VerifyProposalArgs,
-    contracts: &Contracts,
-) -> Result<VerifyReport> {
+/// `args.rpc_url` (or `ESPRESSO_L1_PROVIDER`) or the built-in public-node map,
+/// then delegates to `run_verify`.
+pub async fn run_verify_standalone(args: &VerifyProposalArgs) -> Result<VerifyReport> {
     let toml = ProposalToml::load(&args.dir)?;
     let chain_id = toml.chain_id;
 
@@ -806,22 +836,13 @@ pub async fn run_verify_standalone(
     let provider = ProviderBuilder::new().connect_http(rpc);
 
     let provider_chain_id = provider.get_chain_id().await?;
-    run_verify(
-        args,
-        &provider,
-        contracts,
-        provider_chain_id,
-        &default_deployment_info_dir(),
-    )
-    .await
+    run_verify(args, &provider, provider_chain_id).await
 }
 
 pub async fn run_verify(
     args: &VerifyProposalArgs,
     provider: &impl Provider,
-    contracts: &Contracts,
     chain_id: u64,
-    deployment_info_dir: &Path,
 ) -> Result<VerifyReport> {
     let toml = ProposalToml::load(&args.dir)?;
 
@@ -848,7 +869,10 @@ pub async fn run_verify(
     let kind = contract_kind(kind_arg);
     let mut rows: Vec<CheckRow> = vec![];
 
-    // chain_id / network consistency
+    // Network/chain_id consistency: static mapping, never circular (item F).
+    rows.push(network_chain_id_row(&toml.network, toml.chain_id));
+
+    // Provider chain_id vs toml.chain_id.
     rows.push(if chain_id == toml.chain_id {
         pass("toml:chain_id", format!("{chain_id}"))
     } else {
@@ -866,7 +890,6 @@ pub async fn run_verify(
         },
         Err(e) => {
             rows.push(fail("decode", e.to_string()));
-            // Cannot proceed without a decoded upgrade.
             let phase_hashes = build_phase_hashes_from_toml(&toml);
             return Ok(VerifyReport {
                 rows,
@@ -899,29 +922,37 @@ pub async fn run_verify(
     rows.push(value_zero_row(upgrade.value));
     rows.push(predecessor_zero_row(upgrade.predecessor));
 
+    // Deployment-info address checks (no provider needed).
+    let info_rows = deployment_info_rows(&toml, &upgrade, &kind);
+    rows.extend(info_rows);
+
     let onchain_code = provider.get_code_at(upgrade.new_impl).await?;
 
-    let bytecode_check =
-        match compare_normalized(&onchain_code, kind.deployed_bytecode, upgrade.new_impl) {
-            Ok(check) => check,
-            Err(e) => {
-                rows.push(fail("bytecode-match", e.to_string()));
-                let phase_hashes = build_phase_hashes_from_toml(&toml);
-                return Ok(VerifyReport {
-                    rows,
-                    header: ReportHeader {
-                        proxy: upgrade.proxy,
-                        new_impl: upgrade.new_impl,
-                        contract_name: kind.name,
-                        network: toml.network.clone(),
-                        description: upgrade.description,
-                        onchain_solc: None,
-                        reference_solc: None,
-                    },
-                    phase_hashes,
-                });
-            },
-        };
+    let bytecode_check = match compare_normalized(
+        &onchain_code,
+        kind.deployed_bytecode,
+        upgrade.new_impl,
+        kind.immutable_addr_offsets,
+    ) {
+        Ok(check) => check,
+        Err(e) => {
+            rows.push(fail("bytecode-match", e.to_string()));
+            let phase_hashes = build_phase_hashes_from_toml(&toml);
+            return Ok(VerifyReport {
+                rows,
+                header: ReportHeader {
+                    proxy: upgrade.proxy,
+                    new_impl: upgrade.new_impl,
+                    contract_name: kind.name,
+                    network: toml.network.clone(),
+                    description: upgrade.description,
+                    onchain_solc: None,
+                    reference_solc: None,
+                },
+                phase_hashes,
+            });
+        },
+    };
 
     rows.push(match bytecode_check.class {
         MatchClass::FullMatch => pass(
@@ -951,7 +982,7 @@ pub async fn run_verify(
     rows.push(check_init_selector(&kind, &upgrade.init_data));
 
     // Safe validation: assert toml Safes match deployment-info.
-    let safe_rows = safe_address_rows(&toml, &kind, deployment_info_dir);
+    let safe_rows = safe_address_rows(&toml, &kind);
     rows.extend(safe_rows);
 
     // Recompute Safe hashes for both phases and assert against toml.
@@ -961,7 +992,7 @@ pub async fn run_verify(
     // Nonce drift check (WARN, not FAIL).
     nonce_drift_rows(provider, &toml, &mut rows).await;
 
-    let gov_rows = governance_checks(provider, contracts, &upgrade, &kind).await;
+    let gov_rows = governance_checks(provider, &upgrade, &kind).await;
     rows.extend(gov_rows);
 
     Ok(VerifyReport {
@@ -997,73 +1028,160 @@ fn build_phase_hashes_from_toml(toml: &ProposalToml) -> PhaseHashes {
     }
 }
 
-/// Validate toml Safe addresses against deployment-info (hard fail on mismatch).
-fn safe_address_rows(
+/// Emit `toml:network` row (static chain-id mapping, breaks circular check).
+fn network_chain_id_row(network: &str, chain_id: u64) -> CheckRow {
+    match network_chain_id(network) {
+        None => fail(
+            "toml:network",
+            format!(
+                "unknown network {:?}; known: mainnet, decaf, hoodi",
+                network
+            ),
+        ),
+        Some(expected) if expected != chain_id => fail(
+            "toml:network",
+            format!("network={network:?} maps to chain_id={expected} but toml.chain_id={chain_id}"),
+        ),
+        Some(_) => pass("toml:network", format!("{network} chain_id={chain_id}")),
+    }
+}
+
+/// Timelock and proxy address checks against embedded deployment-info.
+///
+/// These rows are always emitted; FAIL when deployment-info is unavailable.
+fn deployment_info_rows(
     toml: &ProposalToml,
+    upgrade: &DecodedUpgrade,
     kind: &ContractKind,
-    deployment_info_dir: &Path,
 ) -> Vec<CheckRow> {
+    let info = match deployment_info(&toml.network) {
+        Ok(i) => i,
+        Err(e) => {
+            return vec![
+                fail(
+                    "timelock-addr-match",
+                    format!("deployment-info unavailable: {e}"),
+                ),
+                fail(
+                    "proxy-addr-match",
+                    format!("deployment-info unavailable: {e}"),
+                ),
+            ];
+        },
+    };
+
+    let expected_timelock = match kind.timelock_kind {
+        TimelockKind::Ops => info.ops_timelock.address,
+        TimelockKind::SafeExit => info.safe_exit_timelock.address,
+    };
+
+    let expected_proxy = match kind.name {
+        "StakeTableV2" | "StakeTableV3" => info.stake_table,
+        "EspTokenV2" => info.esp_token,
+        "FeeContract" => info.fee_contract,
+        "RewardClaim" => info.reward_claim,
+        other => {
+            return vec![
+                fail(
+                    "timelock-addr-match",
+                    format!("no proxy mapping for contract kind {other:?}"),
+                ),
+                fail(
+                    "proxy-addr-match",
+                    format!("no proxy mapping for contract kind {other:?}"),
+                ),
+            ];
+        },
+    };
+
+    let timelock_row = if upgrade.outer_to == expected_timelock {
+        pass(
+            "timelock-addr-match",
+            format!("outer_to={} matches deployment-info", upgrade.outer_to),
+        )
+    } else {
+        fail(
+            "timelock-addr-match",
+            format!(
+                "outer_to={} != deployment-info timelock={}",
+                upgrade.outer_to, expected_timelock
+            ),
+        )
+    };
+
+    let proxy_row = if upgrade.proxy == expected_proxy {
+        pass(
+            "proxy-addr-match",
+            format!("proxy={} matches deployment-info", upgrade.proxy),
+        )
+    } else {
+        fail(
+            "proxy-addr-match",
+            format!(
+                "proxy={} != deployment-info proxy={}",
+                upgrade.proxy, expected_proxy
+            ),
+        )
+    };
+
+    vec![timelock_row, proxy_row]
+}
+
+/// Validate toml Safe addresses against embedded deployment-info (hard fail on unavailable).
+fn safe_address_rows(toml: &ProposalToml, kind: &ContractKind) -> Vec<CheckRow> {
     let mut rows = vec![];
 
-    // Only check ops_timelock for Ops-kind contracts; SafeExit uses a different section.
-    // For now we only have deployment-info for ops_timelock proposers/executors.
-    if kind.timelock_kind != TimelockKind::Ops {
-        rows.push(pass(
-            "toml:schedule.safe",
-            "Safe-exit timelock: deployment-info check skipped",
-        ));
-        rows.push(pass(
-            "toml:execute.safe",
-            "Safe-exit timelock: deployment-info check skipped",
-        ));
-        return rows;
-    }
-
-    match load_ops_timelock_signers(&toml.network, deployment_info_dir) {
+    let info = match deployment_info(&toml.network) {
+        Ok(i) => i,
         Err(e) => {
-            rows.push(pass(
+            rows.push(fail(
                 "toml:schedule.safe",
-                format!("deployment-info unavailable ({e}); skipped"),
+                format!("deployment-info unavailable: {e}"),
             ));
-            rows.push(pass(
+            rows.push(fail(
                 "toml:execute.safe",
-                format!("deployment-info unavailable ({e}); skipped"),
+                format!("deployment-info unavailable: {e}"),
             ));
+            return rows;
         },
-        Ok(signers) => {
-            let proposer_match = signers.proposers.contains(&toml.schedule.safe);
-            rows.push(if proposer_match {
-                pass(
-                    "toml:schedule.safe",
-                    format!("{} is a known proposer", toml.schedule.safe),
-                )
-            } else {
-                fail(
-                    "toml:schedule.safe",
-                    format!(
-                        "{} not in proposers {:?}",
-                        toml.schedule.safe, signers.proposers
-                    ),
-                )
-            });
+    };
 
-            let executor_match = signers.executors.contains(&toml.execute.safe);
-            rows.push(if executor_match {
-                pass(
-                    "toml:execute.safe",
-                    format!("{} is a known executor", toml.execute.safe),
-                )
-            } else {
-                fail(
-                    "toml:execute.safe",
-                    format!(
-                        "{} not in executors {:?}",
-                        toml.execute.safe, signers.executors
-                    ),
-                )
-            });
-        },
-    }
+    let signers = match kind.timelock_kind {
+        TimelockKind::Ops => &info.ops_timelock,
+        TimelockKind::SafeExit => &info.safe_exit_timelock,
+    };
+
+    let proposer_match = signers.proposers.contains(&toml.schedule.safe);
+    rows.push(if proposer_match {
+        pass(
+            "toml:schedule.safe",
+            format!("{} is a known proposer", toml.schedule.safe),
+        )
+    } else {
+        fail(
+            "toml:schedule.safe",
+            format!(
+                "{} not in proposers {:?}",
+                toml.schedule.safe, signers.proposers
+            ),
+        )
+    });
+
+    let executor_match = signers.executors.contains(&toml.execute.safe);
+    rows.push(if executor_match {
+        pass(
+            "toml:execute.safe",
+            format!("{} is a known executor", toml.execute.safe),
+        )
+    } else {
+        fail(
+            "toml:execute.safe",
+            format!(
+                "{} not in executors {:?}",
+                toml.execute.safe, signers.executors
+            ),
+        )
+    });
 
     rows
 }
@@ -1147,8 +1265,6 @@ fn compute_and_validate_phase_hashes(
 ///
 /// Nonce drift is expected if other transactions were queued since generation.
 async fn nonce_drift_rows(provider: &impl Provider, toml: &ProposalToml, rows: &mut Vec<CheckRow>) {
-    use crate::proposals::write::ISafe;
-
     for (label, safe, recorded_nonce) in [
         ("schedule.nonce", toml.schedule.safe, toml.schedule.nonce),
         ("execute.nonce", toml.execute.safe, toml.execute.nonce),
@@ -1181,7 +1297,7 @@ async fn nonce_drift_rows(provider: &impl Provider, toml: &ProposalToml, rows: &
                         format!("toml:{label}"),
                         format!(
                             "WARN: onchain nonce={onchain_u64} != toml={recorded_nonce}; hashes \
-                             in toml use recorded nonce — signer must reconfirm",
+                             in toml use recorded nonce; signer must reconfirm",
                         ),
                     ));
                 }
@@ -1192,17 +1308,23 @@ async fn nonce_drift_rows(provider: &impl Provider, toml: &ProposalToml, rows: &
 
 fn check_init_selector(kind: &ContractKind, init_data: &Bytes) -> CheckRow {
     match kind.expected_init_selector {
-        None => pass(
-            "init-selector",
+        None => {
             if init_data.is_empty() {
-                "empty (expected for patch/no-reinitializer)".to_owned()
-            } else {
-                format!(
-                    "non-empty init data but no selector expected; selector=0x{}",
-                    alloy::hex::encode(&init_data[..4.min(init_data.len())])
+                pass(
+                    "init-selector",
+                    "empty (expected for patch/no-reinitializer)",
                 )
-            },
-        ),
+            } else {
+                fail(
+                    "init-selector",
+                    format!(
+                        "non-empty init data with no expected selector; selector=0x{} (arbitrary \
+                         delegated call through proxy)",
+                        alloy::hex::encode(&init_data[..4.min(init_data.len())])
+                    ),
+                )
+            }
+        },
         Some(expected) => {
             if init_data.is_empty() {
                 pass("init-selector", "empty (proxy already at target version)")
@@ -1227,7 +1349,6 @@ fn check_init_selector(kind: &ContractKind, init_data: &Bytes) -> CheckRow {
 
 async fn governance_checks(
     provider: &impl Provider,
-    contracts: &Contracts,
     upgrade: &DecodedUpgrade,
     kind: &ContractKind,
 ) -> Vec<CheckRow> {
@@ -1237,26 +1358,6 @@ async fn governance_checks(
         Err(e) => rows.push(fail("owner-query", e.to_string())),
         Ok(owner) => {
             rows.push(owner_timelock_row(owner, upgrade.outer_to));
-            let expected_timelock_contract = match kind.timelock_kind {
-                TimelockKind::Ops => Contract::OpsTimelock,
-                TimelockKind::SafeExit => Contract::SafeExitTimelock,
-            };
-            if let Some(expected_addr) = contracts.address(expected_timelock_contract) {
-                rows.push(if upgrade.outer_to == expected_addr {
-                    pass(
-                        "timelock-addr-match",
-                        format!("{:?}={}", expected_timelock_contract, expected_addr),
-                    )
-                } else {
-                    fail(
-                        "timelock-addr-match",
-                        format!(
-                            "outer_to={} expected {:?}={}",
-                            upgrade.outer_to, expected_timelock_contract, expected_addr
-                        ),
-                    )
-                });
-            }
         },
     }
 
@@ -1324,7 +1425,9 @@ mod tests {
         primitives::{Address, B256, Bytes, U256},
         sol_types::SolCall,
     };
-    use hotshot_contract_adapter::sol_types::StakeTableV3;
+    use hotshot_contract_adapter::sol_types::{
+        EspTokenV2, FeeContract, RewardClaim, StakeTableV2, StakeTableV3,
+    };
 
     use super::*;
     use crate::proposals::proposal_toml::{PhaseToml, ProposalToml};
@@ -1451,6 +1554,43 @@ mod tests {
         );
     }
 
+    // ── TEST:verify-batch-extra-tx-errors ────────────────────────────────
+
+    #[test]
+    fn test_verify_batch_extra_tx_errors() {
+        let mut s: SafeBatch = serde_json::from_str(SCHEDULE_JSON).unwrap();
+        // Duplicate the transaction to simulate a multi-tx batch.
+        let dup = s.transactions[0].clone();
+        s.transactions.push(dup);
+        assert_eq!(s.transactions.len(), 2);
+
+        let err = batch_phase(&s).unwrap_err();
+        assert!(
+            err.to_string().contains("exactly 1"),
+            "expected single-tx error, got: {err}"
+        );
+    }
+
+    // ── TEST:verify-decode-extra-tx-errors ───────────────────────────────
+
+    #[test]
+    fn test_verify_decode_extra_tx_errors() {
+        let mut s: SafeBatch = serde_json::from_str(SCHEDULE_JSON).unwrap();
+        let dup_tx = s.transactions[0].clone();
+        s.transactions.push(dup_tx);
+        let e: SafeBatch = serde_json::from_str(EXECUTE_JSON).unwrap();
+
+        let err = decode_proposal(TimelockBatches {
+            schedule: s,
+            execute: e,
+        })
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("exactly 1"),
+            "expected single-tx error, got: {err}"
+        );
+    }
+
     // ── TEST:verify-load-proposal-dir-ok ─────────────────────────────────
 
     #[test]
@@ -1498,7 +1638,7 @@ mod tests {
 
     #[test]
     fn test_verify_load_proposal_dir_phase_mismatch_errors() {
-        // schedule.json contains an execute call — phase mismatch must error.
+        // schedule.json contains an execute call; phase mismatch must error.
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         // Write the execute JSON as schedule.json so phase validation fails.
@@ -1535,13 +1675,8 @@ mod tests {
 
     #[test]
     fn test_verify_strip_cbor_828_ok() {
-        let cbor: Vec<u8> = vec![
-            0xa1, 0x64, 0x73, 0x6f, 0x6c, 0x63, 0x43, 0x00, 0x08, 0x1c, 0x00,
-        ];
-        let cbor_len = cbor.len() as u16;
         let mut code: Vec<u8> = vec![0xde, 0xad, 0xbe, 0xef];
-        code.extend_from_slice(&cbor);
-        code.extend_from_slice(&cbor_len.to_be_bytes());
+        code.extend_from_slice(&make_cbor_tail([0x00, 0x08, 0x1c]));
         let (stripped, ver) = strip_cbor_metadata(&code);
         assert_eq!(stripped, vec![0xde, 0xad, 0xbe, 0xef]);
         assert_eq!(ver, Some(SolcVersion([0x00, 0x08, 0x1c])));
@@ -1551,44 +1686,111 @@ mod tests {
 
     #[test]
     fn test_verify_strip_cbor_835_ok() {
-        let cbor: Vec<u8> = vec![
-            0xa1, 0x64, 0x73, 0x6f, 0x6c, 0x63, 0x43, 0x00, 0x08, 0x23, 0x00,
-        ];
-        let cbor_len = cbor.len() as u16;
         let mut code: Vec<u8> = vec![0xca, 0xfe];
-        code.extend_from_slice(&cbor);
-        code.extend_from_slice(&cbor_len.to_be_bytes());
+        code.extend_from_slice(&make_cbor_tail([0x00, 0x08, 0x23]));
         let (stripped, ver) = strip_cbor_metadata(&code);
         assert_eq!(stripped, vec![0xca, 0xfe]);
         assert_eq!(ver, Some(SolcVersion([0x00, 0x08, 0x23])));
     }
 
+    // ── TEST:verify-strip-cbor-ipfs-ok ────────────────────────────────────
+    //
+    // Default solc metadata: a2 map with an ipfs hash entry before the solc entry.
+
+    #[test]
+    fn test_verify_strip_cbor_ipfs_ok() {
+        let mut cbor: Vec<u8> = vec![0xa2, 0x64, 0x69, 0x70, 0x66, 0x73, 0x58, 0x22];
+        cbor.extend_from_slice(&[0x12; 34]);
+        cbor.extend_from_slice(&[0x64, 0x73, 0x6f, 0x6c, 0x63, 0x43, 0x00, 0x08, 0x23]);
+        let mut code: Vec<u8> = vec![0xde, 0xad];
+        code.extend_from_slice(&cbor);
+        code.extend_from_slice(&(cbor.len() as u16).to_be_bytes());
+        let (stripped, ver) = strip_cbor_metadata(&code);
+        assert_eq!(stripped, vec![0xde, 0xad]);
+        assert_eq!(ver, Some(SolcVersion([0x00, 0x08, 0x23])));
+    }
+
+    // ── TEST:verify-strip-cbor-oversized-tail-rejected ────────────────────
+    //
+    // A claimed CBOR length above the metadata bound must not strip, even if
+    // the body ends with a valid solc entry (hides appended code otherwise).
+
+    #[test]
+    fn test_verify_strip_cbor_oversized_tail_rejected() {
+        let mut code: Vec<u8> = vec![0xde, 0xad];
+        code.extend_from_slice(&[0x66; 60]); // attacker-appended bytes
+        code.extend_from_slice(&[0x64, 0x73, 0x6f, 0x6c, 0x63, 0x43, 0x00, 0x08, 0x23]);
+        code.extend_from_slice(&69u16.to_be_bytes()); // claims 60 + 9 bytes of "metadata"
+        let (stripped, ver) = strip_cbor_metadata(&code);
+        assert_eq!(stripped, code);
+        assert!(ver.is_none());
+    }
+
+    // ── TEST:verify-strip-cbor-marker-not-at-end-rejected ─────────────────
+
+    #[test]
+    fn test_verify_strip_cbor_marker_not_at_end_rejected() {
+        let mut cbor = make_cbor_tail([0x00, 0x08, 0x23]);
+        cbor.truncate(cbor.len() - 2); // drop the length, keep the body
+        cbor.extend_from_slice(&[0xba, 0xad]); // bytes after the solc entry
+        let mut code: Vec<u8> = vec![0xde, 0xad];
+        code.extend_from_slice(&cbor);
+        code.extend_from_slice(&(cbor.len() as u16).to_be_bytes());
+        let (stripped, ver) = strip_cbor_metadata(&code);
+        assert_eq!(stripped, code);
+        assert!(ver.is_none());
+    }
+
     // ── TEST:verify-no-metadata-tail-ok ───────────────────────────────────
+    //
+    // Code without a valid solc CBOR marker must be returned unchanged.
 
     #[test]
     fn test_verify_no_metadata_tail_ok() {
         let code: Vec<u8> = vec![0xde, 0xad, 0xbe, 0xef, 0x00, 0x04];
-        let (_, ver) = strip_cbor_metadata(&code);
+        let (stripped, ver) = strip_cbor_metadata(&code);
         assert!(ver.is_none());
+        // Code must not be truncated when no solc marker found.
+        assert_eq!(
+            stripped, code,
+            "code without solc marker must be returned unchanged"
+        );
     }
 
-    // ── TEST:verify-mask-immutables-ok ────────────────────────────────────
+    // ── TEST:verify-appended-garbage-mismatch ────────────────────────────
+    //
+    // Garbage appended to on-chain bytecode (no solc marker) must not be stripped,
+    // causing a core-length mismatch and Mismatch classification.
 
     #[test]
-    fn test_verify_mask_immutables_ok() {
-        let addr = Address::repeat_byte(0xab);
-        let mut code = vec![0xffu8; 300];
-        code[45..65].copy_from_slice(addr.as_slice());
-        code[200..220].copy_from_slice(addr.as_slice());
+    fn test_verify_appended_garbage_mismatch() {
+        let impl_addr = Address::repeat_byte(0x01);
+        let cbor = make_cbor_tail([0x00, 0x08, 0x23]);
 
-        let n = mask_immutables(&mut code, addr);
-        assert_eq!(n, 2);
-        assert_eq!(&code[45..65], &[0u8; 20]);
-        assert_eq!(&code[200..220], &[0u8; 20]);
-        assert_eq!(code[44], 0xff);
-        assert_eq!(code[65], 0xff);
-        assert_eq!(code[199], 0xff);
-        assert_eq!(code[220], 0xff);
+        // Build reference: core bytes + impl zeros + cbor.
+        let mut reference = vec![0xaa, 0xbb, 0xcc, 0xdd, 0xee];
+        reference.extend_from_slice(&[0u8; 20]); // immutable window
+        reference.extend_from_slice(&cbor);
+
+        // Build on-chain: same but impl address injected, then garbage bytes appended
+        // with no valid solc CBOR marker at the new tail.
+        let mut onchain = vec![0xaa, 0xbb, 0xcc, 0xdd, 0xee];
+        onchain.extend_from_slice(impl_addr.as_slice());
+        onchain.extend_from_slice(&cbor);
+        // Append garbage that happens to look like a length field pointing into cbor,
+        // but whose cbor body has no solc marker.
+        onchain.extend_from_slice(&[0xba, 0xad, 0xf0, 0x0d]);
+        // The last 2 bytes encode a plausible length but the body won't have the solc prefix.
+        let garbage_len: u16 = 6;
+        onchain.extend_from_slice(&garbage_len.to_be_bytes());
+
+        let offsets: &[usize] = &[5];
+        let check = compare_normalized(&onchain, &reference, impl_addr, offsets).unwrap();
+        assert_eq!(
+            check.class,
+            MatchClass::Mismatch,
+            "appended garbage must not be silently stripped"
+        );
     }
 
     // ── TEST:verify-bytecode-fullmatch-ok ─────────────────────────────────
@@ -1598,7 +1800,7 @@ mod tests {
         let impl_addr = Address::repeat_byte(0x01);
         let cbor = make_cbor_tail([0x00, 0x08, 0x23]);
 
-        // impl_addr at non-aligned offset 5; reference has zeros there.
+        // impl_addr at offset 5; reference has zeros there.
         let mut onchain = vec![0xaa, 0xbb, 0xcc, 0xdd, 0xee];
         onchain.extend_from_slice(impl_addr.as_slice());
         onchain.extend_from_slice(&[0x11, 0x22, 0x33]);
@@ -1609,7 +1811,7 @@ mod tests {
         reference.extend_from_slice(&[0x11, 0x22, 0x33]);
         reference.extend_from_slice(&cbor);
 
-        let check = compare_normalized(&onchain, &reference, impl_addr).unwrap();
+        let check = compare_normalized(&onchain, &reference, impl_addr, &[5]).unwrap();
         assert_eq!(check.class, MatchClass::FullMatch);
     }
 
@@ -1629,7 +1831,7 @@ mod tests {
         reference.extend_from_slice(&[0u8; 20]);
         reference.extend_from_slice(&cbor_835);
 
-        let check = compare_normalized(&onchain, &reference, impl_addr).unwrap();
+        let check = compare_normalized(&onchain, &reference, impl_addr, &[5]).unwrap();
         assert_eq!(check.class, MatchClass::CodeMatchMetaDiffers);
         assert_eq!(check.onchain_solc, Some(SolcVersion([0x00, 0x08, 0x1c])));
         assert_eq!(check.reference_solc, Some(SolcVersion([0x00, 0x08, 0x23])));
@@ -1650,33 +1852,130 @@ mod tests {
         reference.extend_from_slice(&[0u8; 20]);
         reference.extend_from_slice(&cbor);
 
-        let check = compare_normalized(&onchain, &reference, impl_addr).unwrap();
+        let check = compare_normalized(&onchain, &reference, impl_addr, &[5]).unwrap();
         assert_eq!(check.class, MatchClass::Mismatch);
     }
 
     // ── TEST:verify-kind-by-bytecode-ok ───────────────────────────────────
+    //
+    // For every contract kind: verify that the hardcoded offsets are zero in the
+    // DEPLOYED_BYTECODE core (stale-offsets sync guard), inject a fake impl at those
+    // offsets, and assert compare_normalized returns FullMatch or CodeMatchMetaDiffers.
 
     #[test]
     fn test_verify_kind_by_bytecode_ok() {
-        // Real round-trip: inject fake impl address into StakeTableV3::DEPLOYED_BYTECODE
-        // at artifact-reported immutable window positions (start=10580,10621,11787 length=32),
-        // addr at offset+12..offset+32. Substring scan must recover the binding.
-        let binding = StakeTableV3::DEPLOYED_BYTECODE.as_ref();
-        let fake_impl = Address::repeat_byte(0x42);
-
-        let windows: &[(usize, usize)] = &[(10580, 32), (10621, 32), (11787, 32)];
-        let mut onchain = binding.to_vec();
-        for &(start, length) in windows {
-            let addr_start = start + (length - 20);
-            onchain[addr_start..start + length].copy_from_slice(fake_impl.as_slice());
+        struct Case {
+            name: &'static str,
+            bytecode: &'static [u8],
+            offsets: &'static [usize],
         }
 
-        let check = compare_normalized(&onchain, binding, fake_impl)
-            .expect("compare_normalized must succeed on real bytecode");
-        assert!(
-            check.class == MatchClass::FullMatch || check.class == MatchClass::CodeMatchMetaDiffers,
-            "expected PASS class, got {:?}",
-            check.class
+        let cases = [
+            Case {
+                name: "StakeTableV2",
+                bytecode: StakeTableV2::DEPLOYED_BYTECODE.as_ref(),
+                offsets: STAKE_TABLE_V2_OFFSETS,
+            },
+            Case {
+                name: "StakeTableV3",
+                bytecode: StakeTableV3::DEPLOYED_BYTECODE.as_ref(),
+                offsets: STAKE_TABLE_V3_OFFSETS,
+            },
+            Case {
+                name: "EspTokenV2",
+                bytecode: EspTokenV2::DEPLOYED_BYTECODE.as_ref(),
+                offsets: ESP_TOKEN_V2_OFFSETS,
+            },
+            Case {
+                name: "FeeContract",
+                bytecode: FeeContract::DEPLOYED_BYTECODE.as_ref(),
+                offsets: FEE_CONTRACT_OFFSETS,
+            },
+            Case {
+                name: "RewardClaim",
+                bytecode: RewardClaim::DEPLOYED_BYTECODE.as_ref(),
+                offsets: REWARD_CLAIM_OFFSETS,
+            },
+        ];
+
+        for case in &cases {
+            let (ref_core, _) = strip_cbor_metadata(case.bytecode);
+            let fake_impl = Address::repeat_byte(0x42);
+
+            // Each offset window must be zero in the reference (invariant: compiled with address(this)=0).
+            for &offset in case.offsets {
+                assert!(
+                    offset + 20 <= ref_core.len(),
+                    "{}: offset {offset} + 20 exceeds core length {}",
+                    case.name,
+                    ref_core.len()
+                );
+                assert_eq!(
+                    &ref_core[offset..offset + 20],
+                    &[0u8; 20],
+                    "{}: reference core non-zero at offset {offset}; offsets stale",
+                    case.name
+                );
+            }
+
+            // Inject fake impl at the offsets.
+            let mut onchain = ref_core.clone();
+            for &offset in case.offsets {
+                onchain[offset..offset + 20].copy_from_slice(fake_impl.as_slice());
+            }
+
+            // compare_normalized on raw bytes (no CBOR tail on the core slices, so we
+            // re-attach a consistent cbor tail to both so strip works symmetrically).
+            let cbor = make_cbor_tail([0x00, 0x08, 0x23]);
+            let mut onchain_full = onchain;
+            onchain_full.extend_from_slice(&cbor);
+            let mut ref_full = ref_core;
+            ref_full.extend_from_slice(&cbor);
+
+            let check = compare_normalized(&onchain_full, &ref_full, fake_impl, case.offsets)
+                .unwrap_or_else(|e| panic!("{}: compare_normalized failed: {e}", case.name));
+
+            assert!(
+                check.class == MatchClass::FullMatch
+                    || check.class == MatchClass::CodeMatchMetaDiffers,
+                "{}: expected PASS class, got {:?}",
+                case.name,
+                check.class
+            );
+        }
+    }
+
+    // ── TEST:verify-impl-at-wrong-offset-mismatch ─────────────────────────
+    //
+    // Impl address placed at a zero window that is NOT in the offsets list
+    // must produce Mismatch (the listed offset still has zeros, not impl_addr).
+
+    #[test]
+    fn test_verify_impl_at_wrong_offset_mismatch() {
+        let impl_addr = Address::repeat_byte(0x42);
+        let cbor = make_cbor_tail([0x00, 0x08, 0x23]);
+
+        // Build 60-byte core with zeros everywhere.
+        let core = vec![0u8; 60];
+        let listed_offset = 5usize;
+        let wrong_offset = 30usize;
+
+        // Reference has zeros at both positions.
+        let mut ref_full = core.clone();
+        ref_full.extend_from_slice(&cbor);
+
+        // On-chain has impl_addr at the unlisted offset (wrong_offset), not listed_offset.
+        let mut onchain_core = core;
+        onchain_core[wrong_offset..wrong_offset + 20].copy_from_slice(impl_addr.as_slice());
+        let mut onchain_full = onchain_core;
+        onchain_full.extend_from_slice(&cbor);
+
+        let check =
+            compare_normalized(&onchain_full, &ref_full, impl_addr, &[listed_offset]).unwrap();
+        assert_eq!(
+            check.class,
+            MatchClass::Mismatch,
+            "impl at wrong offset must be Mismatch"
         );
     }
 
@@ -1818,6 +2117,41 @@ mod tests {
         assert!(row.pass, "FeeContract patch should accept empty init");
     }
 
+    // ── TEST:verify-feecontract-nonempty-init-fails ───────────────────────
+    //
+    // Non-empty init data with expected_init_selector=None must FAIL.
+
+    #[test]
+    fn test_verify_feecontract_nonempty_init_fails() {
+        let kind = contract_kind(ContractKindArg::FeeContract);
+        let data = Bytes::from(vec![0xde, 0xad, 0xbe, 0xef, 0x00]);
+        let row = check_init_selector(&kind, &data);
+        assert!(
+            !row.pass,
+            "non-empty init with no expected selector must FAIL: {}",
+            row.detail
+        );
+        assert!(
+            row.detail.contains("arbitrary delegated call"),
+            "detail should explain risk: {}",
+            row.detail
+        );
+    }
+
+    // ── TEST:verify-rewardclaim-nonempty-init-fails ───────────────────────
+
+    #[test]
+    fn test_verify_rewardclaim_nonempty_init_fails() {
+        let kind = contract_kind(ContractKindArg::RewardClaim);
+        let data = Bytes::from(vec![0xca, 0xfe, 0xba, 0xbe]);
+        let row = check_init_selector(&kind, &data);
+        assert!(
+            !row.pass,
+            "non-empty init on RewardClaim with no expected selector must FAIL: {}",
+            row.detail
+        );
+    }
+
     // ── TEST:verify-value-nonzero-fails ───────────────────────────────────
 
     #[test]
@@ -1835,8 +2169,6 @@ mod tests {
     }
 
     // ── TEST:verify-toml-tampered-impl-fails ──────────────────────────────
-    //
-    // A tampered toml.impl must produce a FAIL row when the decoded impl differs.
 
     #[test]
     fn test_verify_toml_tampered_impl_fails() {
@@ -1852,8 +2184,6 @@ mod tests {
     }
 
     // ── TEST:verify-toml-tampered-safe-tx-fails ───────────────────────────
-    //
-    // A tampered safe_tx hash must produce a FAIL row from compute_and_validate_phase_hashes.
 
     #[test]
     fn test_verify_toml_tampered_safe_tx_fails() {
@@ -1895,11 +2225,86 @@ mod tests {
         assert_eq!(original, loaded);
     }
 
+    // ── TEST:verify-network-chain-id-match-ok ─────────────────────────────
+
+    #[test]
+    fn test_verify_network_chain_id_match_ok() {
+        assert!(network_chain_id_row("mainnet", 1).pass);
+        assert!(network_chain_id_row("decaf", 11155111).pass);
+        assert!(network_chain_id_row("hoodi", 560048).pass);
+    }
+
+    // ── TEST:verify-network-chain-id-mismatch-fails ───────────────────────
+
+    #[test]
+    fn test_verify_network_chain_id_mismatch_fails() {
+        let row = network_chain_id_row("mainnet", 11155111);
+        assert!(!row.pass, "mainnet with sepolia chain_id must fail");
+        assert!(
+            row.detail.contains("chain_id=1"),
+            "detail must show expected: {}",
+            row.detail
+        );
+    }
+
+    // ── TEST:verify-network-unknown-fails ─────────────────────────────────
+
+    #[test]
+    fn test_verify_network_unknown_fails() {
+        let row = network_chain_id_row("bogusnet", 999);
+        assert!(!row.pass, "unknown network must fail");
+        assert!(
+            row.detail.contains("unknown network"),
+            "detail: {}",
+            row.detail
+        );
+    }
+
+    // ── TEST:verify-safe-address-unknown-network-fail ─────────────────────
+
+    #[test]
+    fn test_verify_safe_address_unknown_network_fail() {
+        let mut toml = fixture_toml();
+        toml.network = "bogusnet".to_owned();
+        let kind = contract_kind(ContractKindArg::StakeTableV3);
+        let rows = safe_address_rows(&toml, &kind);
+        assert_eq!(rows.len(), 2);
+        assert!(!rows[0].pass, "unknown network must FAIL schedule.safe");
+        assert!(!rows[1].pass, "unknown network must FAIL execute.safe");
+    }
+
+    // ── TEST:verify-safe-address-safe-exit-kind ───────────────────────────
+
+    #[test]
+    fn test_verify_safe_address_safe_exit_kind() {
+        // RewardClaim is SafeExit; decaf safe_exit_timelock has espresso_labs as proposer/executor.
+        let espresso_labs: Address = "0xb76834e371b666feee48e5d7d9a97ca08b5a0620"
+            .parse()
+            .unwrap();
+        let mut toml = fixture_toml();
+        toml.schedule.safe = espresso_labs;
+        toml.execute.safe = espresso_labs;
+        let kind = contract_kind(ContractKindArg::RewardClaim);
+        let rows = safe_address_rows(&toml, &kind);
+        assert_eq!(rows.len(), 2);
+        assert!(
+            rows[0].pass,
+            "espresso_labs is safe_exit proposer: {}",
+            rows[0].detail
+        );
+        assert!(
+            rows[1].pass,
+            "espresso_labs is safe_exit executor: {}",
+            rows[1].detail
+        );
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────
 
+    /// Real solc tail with `bytecode_hash = "none"`: `a1 64 "solc" 43 <ver>` + u16 length.
     fn make_cbor_tail(ver: [u8; 3]) -> Vec<u8> {
         let mut cbor = vec![
-            0xa1, 0x64, 0x73, 0x6f, 0x6c, 0x63, 0x43, ver[0], ver[1], ver[2], 0x00,
+            0xa1, 0x64, 0x73, 0x6f, 0x6c, 0x63, 0x43, ver[0], ver[1], ver[2],
         ];
         cbor.extend_from_slice(&(cbor.len() as u16).to_be_bytes());
         cbor

@@ -1,5 +1,12 @@
 # Upgrade proposals
 
+## Why
+
+- Contract upgrades go through a timelock owned by a multisig; each signer must know exactly what they are approving.
+- The impl address and Safe transaction are opaque; a signer cannot eyeball whether they are correct.
+- The proposal author (and the PR text) is untrusted, so verification must be reproducible, not based on trust.
+- Every signer can independently confirm the proposal matches the shipped contract before signing.
+
 ## Trust model
 
 The proposal PR author is untrusted. Correctness is established entirely by `deploy verify-proposal <dir>`, which runs
@@ -29,12 +36,17 @@ incorrect TOML fails verification.
 ## CI
 
 The workflow `.github/workflows/verify-proposals.yml` runs `deploy verify-proposal <dir>` for every proposal directory
-touched in a PR, using a public RPC for the target network. A proposal that fails any check cannot merge.
+touched in a PR, using a public RPC for the target network.
 
 ## Flow
 
 1. Deployer runs `deploy --upgrade-<contract> --use-timelock-owner ...`; opens a PR adding the proposal dir.
-2. Signers verify: `deploy verify-proposal <dir>` (also run by CI). All rows PASS. Note the printed hashes.
+2. Signers verify: `deploy verify-proposal contracts/deployments/proposals/<network>/<proposal-dir>` (also run by CI).
+   All rows PASS. Note the printed hashes.
+   - No mnemonic required; RPC defaults to the public node for the chain in `proposal.toml`.
+   - Override with `deploy verify-proposal --rpc-url <url> <dir>` or set `ESPRESSO_L1_PROVIDER`.
+   - Note: `--rpc-url` must follow the `verify-proposal` subcommand; the top-level `deploy --rpc-url` does not apply
+     here. CI no longer passes an explicit RPC.
 3. Signers approve and merge the PR.
 4. One signer imports `schedule.json` into the Safe and submits.
 5. Other signers reconfirm the step-2 `domain`/`message`/`safe_tx` hashes on their Ledger, then sign.
@@ -45,5 +57,6 @@ on-chain nonce moved. Reconfirm the nonce in the Safe app before signing.
 
 ## Networks
 
-- `decaf/` — Decaf testnet (Sepolia, chainId=11155111)
-- `mainnet/` — Espresso mainnet (Ethereum mainnet, chainId=1)
+- `decaf/`: Decaf testnet (Sepolia, chainId=11155111)
+- `hoodi/`: Hoodi testnet (chainId=560048)
+- `mainnet/`: Espresso mainnet (Ethereum mainnet, chainId=1)

@@ -17,7 +17,6 @@ use crate::{
     Contract, Contracts, OwnableContract, encode_function_call,
     output::output_safe_tx_builder,
     proposals::{
-        deployment_info::default_deployment_info_dir,
         multisig::{
             LightClientV2UpgradeParams, MultisigOwnerCheck, StakeTableV2UpgradeParams,
             StakeTableV3UpgradeParams, TransferOwnershipParams, encode_generic_calldata,
@@ -568,7 +567,6 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                             timelock: proposal.timelock_addr,
                             salt,
                             delay,
-                            deployment_info_dir: default_deployment_info_dir(),
                             schedule_calldata: proposal.schedule.data.clone(),
                             execute_calldata: proposal.execute.data.clone(),
                             safe_override: None,

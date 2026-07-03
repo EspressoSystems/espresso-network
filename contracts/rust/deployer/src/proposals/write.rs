@@ -12,7 +12,7 @@ use chrono::Local;
 use url::Url;
 
 use crate::proposals::{
-    deployment_info::load_ops_timelock_signers,
+    deployment_info::deployment_info,
     proposal_toml::{PhaseToml, ProposalToml},
     safe_hash::safe_tx_hashes,
 };
@@ -36,6 +36,11 @@ pub fn default_rpc_url(chain_id: u64) -> Option<Url> {
         ),
         11155111 => Some(
             "https://ethereum-sepolia-rpc.publicnode.com"
+                .parse()
+                .expect("static URL"),
+        ),
+        560048 => Some(
+            "https://ethereum-hoodi-rpc.publicnode.com"
                 .parse()
                 .expect("static URL"),
         ),
@@ -64,6 +69,7 @@ pub fn network_name(chain_id: u64) -> Option<String> {
     match chain_id {
         1 => Some("mainnet".to_owned()),
         11155111 => Some("decaf".to_owned()),
+        560048 => Some("hoodi".to_owned()),
         _ => None,
     }
 }
@@ -99,9 +105,6 @@ pub struct WriteProposalParams {
     pub timelock: Address,
     pub salt: B256,
     pub delay: U256,
-    /// Directory containing `<network>.toml` deployment-info files.
-    /// Defaults to `contracts/rust/deployment-info/deployments`.
-    pub deployment_info_dir: PathBuf,
     /// Outer schedule calldata (timelock.schedule(...)) for hash computation.
     pub schedule_calldata: Bytes,
     /// Outer execute calldata (timelock.execute(...)) for hash computation.
@@ -122,7 +125,7 @@ async fn safe_nonce(provider: &impl Provider, safe: Address) -> Result<u64> {
 
 /// Resolve schedule/execute Safe addresses and nonces, then compute all hashes.
 ///
-/// Fails loudly if the signer set is ambiguous or the nonce query fails — a
+/// Fails loudly if the signer set is ambiguous or the nonce query fails; a
 /// partial proposal.toml would be unverifiable and must not be written.
 async fn resolve_toml_phases(
     provider: &impl Provider,
@@ -131,13 +134,13 @@ async fn resolve_toml_phases(
     let (schedule_safe, execute_safe) = if let Some(safe) = params.safe_override {
         (safe, safe)
     } else {
-        let signers = load_ops_timelock_signers(&params.network, &params.deployment_info_dir)
-            .with_context(|| {
-                format!(
-                    "deployment-info unavailable for network {:?}",
-                    params.network
-                )
-            })?;
+        let info = deployment_info(&params.network).with_context(|| {
+            format!(
+                "deployment-info unavailable for network {:?}",
+                params.network
+            )
+        })?;
+        let signers = &info.ops_timelock;
         if signers.proposers.len() != 1 || signers.executors.len() != 1 {
             anyhow::bail!(
                 "ambiguous signer set for network {:?}: {} proposer(s), {} executor(s); pass \
@@ -195,7 +198,7 @@ async fn resolve_toml_phases(
 
 /// Create the proposal directory, write `schedule.json`, `execute.json`, and `proposal.toml`.
 ///
-/// Fails if the Safe set is ambiguous or any nonce query fails — no partial output.
+/// Fails if the Safe set is ambiguous or any nonce query fails; no partial output.
 pub async fn write_stake_table_v3_proposal_dir(
     params: WriteProposalParams,
     provider: &impl Provider,
@@ -250,6 +253,7 @@ mod tests {
     fn test_network_name_known() {
         assert_eq!(network_name(1), Some("mainnet".to_owned()));
         assert_eq!(network_name(11155111), Some("decaf".to_owned()));
+        assert_eq!(network_name(560048), Some("hoodi".to_owned()));
     }
 
     #[test]
@@ -391,7 +395,6 @@ mod tests {
             timelock: Address::from_str("0x8e3b6563D683b87964104A2c3A4bf542bb70767F").unwrap(),
             salt: B256::repeat_byte(0x11),
             delay: U256::from(300u64),
-            deployment_info_dir: PathBuf::from("/nonexistent"),
             schedule_calldata: Bytes::new(),
             execute_calldata: Bytes::new(),
             safe_override: Some(safe),
