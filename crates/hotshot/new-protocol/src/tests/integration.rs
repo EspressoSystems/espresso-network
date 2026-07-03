@@ -8,11 +8,11 @@ use crate::{
     message::{Certificate1, EpochChangeMessage, Proposal},
     tests::common::assertions::{
         any, count_matching, is_block_built, is_block_reconstructed, is_cert1, is_cert2,
-        is_drb_result, is_header_created, is_leaf_decided, is_proposal,
-        is_request_block_and_header, is_request_vid_disperse, is_send_cert1, is_send_epoch_change,
-        is_send_timeout_vote, is_state_validated, is_timeout, is_timeout_cert,
-        is_timeout_one_honest, is_vid_disperse, is_view_changed, is_vote1, is_vote2,
-        node_index_for_key,
+        is_drb_result, is_header_created, is_header_created_for_view, is_leaf_decided, is_proposal,
+        is_proposal_for_view, is_request_block_and_header, is_request_vid_disperse, is_send_cert1,
+        is_send_epoch_change, is_send_timeout_vote, is_state_validated, is_timeout,
+        is_timeout_cert, is_timeout_one_honest, is_vid_disperse, is_view_changed, is_vote1,
+        is_vote2, node_index_for_key,
     },
 };
 
@@ -119,6 +119,9 @@ async fn test_sequential_vote1() {
             count_matching(inputs, is_state_validated) >= 2
         })
         .await;
+    harness
+        .process_until_output(|outputs| count_matching(outputs, is_vote1) >= 2)
+        .await;
 
     assert_eq!(
         count_matching(harness.outputs(), is_vote1),
@@ -138,14 +141,9 @@ async fn test_cert1_formed_and_vote2_sent() {
     // View 1: proposal + Vote1 messages → CPU forms cert1 + reconstructs block
     send_proposal_and_vote1s(&mut harness, &test_data, 0, &node_key).await;
 
-    assert!(
-        any(harness.outputs(), is_vote1),
-        "Vote1 should be sent for proposal"
-    );
-    assert!(
-        any(harness.outputs(), is_vote2),
-        "Vote2 should be sent for proposal"
-    );
+    harness
+        .process_until_output(|outputs| any(outputs, is_vote1) && any(outputs, is_vote2))
+        .await;
 }
 
 /// Full decide path: Certificate1, Certificate2, and block reconstruction
@@ -168,8 +166,9 @@ async fn test_full_decide() {
     send_proposal_and_vote1s(&mut harness, &test_data, 1, &node_key).await;
     send_vote2s(&mut harness, &test_data, 1).await;
 
-    assert!(any(harness.outputs(), is_vote1), "Vote1 should be sent");
-    assert!(any(harness.outputs(), is_vote2), "Vote2 should be sent");
+    harness
+        .process_until_output(|outputs| any(outputs, is_vote1) && any(outputs, is_vote2))
+        .await;
 
     assert!(
         any(harness.outputs(), is_send_cert1),
@@ -225,10 +224,9 @@ async fn test_leader_proposal() {
 
     // SendProposal proves the CPU VidDisperseTask computed the VID
     // disperse — consensus cannot send a proposal without it.
-    assert!(
-        any(harness.outputs(), is_proposal),
-        "Leader should send proposal (requires CPU VID disperse)"
-    );
+    harness
+        .process_until_output(|outputs| any(outputs, is_proposal))
+        .await;
 }
 
 /// Multi-view chain: certificates are formed for each view, leading to
@@ -279,11 +277,13 @@ async fn test_leader_proposes_after_timeout() {
     // Timeout cert for view 2 advances to view 3; we need to be leader of view 3
     let leader_for_view_3 = test_data.views[2].leader_public_key;
     let leader_index = node_index_for_key(&leader_for_view_3);
-    // Timer must be long enough for VID to complete (so the view 3 timeout
-    // doesn't kill the in-progress proposal), but short enough to actually
-    // fire for view 2 during the test.
+    // Timer must be long enough for the empty-block throttle sleep
+    // (BlockBuilder sleeps 500ms when its buffer is empty), VID disperse,
+    // and header creation to all complete before the view 3 timer fires.
+    // It must also be short enough to actually fire for view 2 during
+    // the test in a reasonable amount of time.
     let mut harness =
-        TestHarness::new_with_timer(leader_index, std::time::Duration::from_millis(500)).await;
+        TestHarness::new_with_timer(leader_index, std::time::Duration::from_millis(1500)).await;
 
     // View 1: process fully to establish locked_qc
     send_proposal_and_vote1s(&mut harness, &test_data, 0, &leader_for_view_3).await;
@@ -319,10 +319,10 @@ async fn test_leader_proposes_after_timeout() {
         any(harness.outputs(), is_request_vid_disperse),
         "Leader should request VID disperse after TC"
     );
-    assert!(
-        any(harness.outputs(), is_proposal),
-        "Leader should send proposal with timeout view change evidence"
-    );
+    // Proposal with timeout view change evidence, released once stored.
+    harness
+        .process_until_output(|outputs| any(outputs, is_proposal))
+        .await;
 }
 
 // ---------------------------------------------------------------------------
@@ -499,10 +499,17 @@ async fn test_leader_proposes_with_computed_drb_in_epoch3() {
 
     // After processing view 27 the leader for view 28 should propose
     // with the DRB result that was computed back in epoch 1.
-    assert!(
-        any(harness.outputs(), is_proposal),
-        "Leader should propose in epoch 3 transition window using the computed DRB result"
-    );
+    // The proposal is emitted only once the block builder finishes (it sleeps
+    // before producing an empty block) and the resulting header for view 28 is
+    // applied
+    harness
+        .process_until(|inputs| any(inputs, |i| is_header_created_for_view(i, 28)))
+        .await;
+    // Leader proposes view 28 in epoch 3's transition window using the DRB
+    // result computed in epoch 1.
+    harness
+        .process_until_output(|outputs| any(outputs, |o| is_proposal_for_view(o, 28)))
+        .await;
 }
 
 /// Same three-epoch setup but from a non-leader node's perspective:
@@ -549,10 +556,11 @@ async fn test_node_votes_with_computed_drb_in_epoch3() {
     // this proposal using the DRB result computed by the EpochManager.
     run_views_integration(&mut harness, &test_data, &node_key, 26..27).await;
 
-    assert!(
-        count_matching(harness.outputs(), is_vote1) > vote_count_before,
-        "Node should vote on epoch 3 transition-window proposal with the computed DRB result"
-    );
+    // The node votes on the epoch 3 transition-window proposal with the
+    // computed DRB result.
+    harness
+        .process_until_output(|outputs| count_matching(outputs, is_vote1) > vote_count_before)
+        .await;
 }
 
 /// f+1 timeout votes (OneHonestThreshold) trigger a TimeoutOneHonest input,
@@ -587,5 +595,49 @@ async fn test_f_plus_1_timeout_votes_trigger_timeout_one_honest() {
     assert!(
         any(harness.outputs(), is_send_timeout_vote),
         "f+1 timeout votes should trigger TimeoutOneHonest"
+    );
+}
+
+/// A peer's timeout vote carries its locked QC.
+///
+/// A node that is behind adopts that QC's view (+ 1).
+#[tokio::test]
+async fn test_timeout_vote_lock_advances_view() {
+    use crate::consensus::ConsensusOutput;
+
+    let view_changed_to = |outputs, v| {
+        count_matching(
+            outputs,
+            |o| matches!(o, ConsensusOutput::ViewChanged(view, _) if **view == v),
+        )
+    };
+
+    let test_data = TestData::new(3).await;
+    let mut harness = TestHarness::new(0).await;
+
+    // The node starts at genesis. A peer times out view 2 while carrying a
+    // locked QC for view 1 (`views[0].cert1`). Adopting that QC moves us into
+    // view 2.
+    let high_qc = test_data.views[0].cert1.clone();
+    harness
+        .message(test_data.views[1].timeout_vote_input(1, Some(high_qc.clone())))
+        .await;
+
+    assert_eq!(
+        view_changed_to(harness.outputs(), 2),
+        1,
+        "adopting the locked QC from a timeout vote should advance us to view 2"
+    );
+
+    // A later timeout vote for view 3 carrying the same (now stale) view-1 lock
+    // would not advance us, so no further view change is emitted.
+    let view_changes_before = count_matching(harness.outputs(), is_view_changed);
+    harness
+        .message(test_data.views[2].timeout_vote_input(2, Some(high_qc)))
+        .await;
+    assert_eq!(
+        count_matching(harness.outputs(), is_view_changed),
+        view_changes_before,
+        "a lock below our current view must not advance us"
     );
 }

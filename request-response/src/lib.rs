@@ -592,7 +592,6 @@ impl<
                 // - Calling the request's application-specific validation function
                 request_message
                     .validate(self_clone.config.incoming_request_ttl)
-                    .await
                     .with_context(|| "failed to validate request")?;
 
                 // Try to fetch the response data from the data source
@@ -825,10 +824,9 @@ mod tests {
     }
 
     // Implement the [`Request`] trait for the [`TestRequest`] type
-    #[async_trait]
     impl Request for TestRequest {
         type Response = Vec<u8>;
-        async fn validate(&self) -> Result<()> {
+        fn validate(&self) -> Result<()> {
             Ok(())
         }
     }

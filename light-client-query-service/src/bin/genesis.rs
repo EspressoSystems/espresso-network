@@ -87,6 +87,19 @@ impl Options {
         // header with the stake table hash.
         let start_epoch = start_epoch + 2;
 
+        // Fetch the genesis header to get the chain id. Block 0 always contains the full
+        // ChainConfig (not just a commitment).
+        let genesis_header: Header = client
+            .get("availability/header/0")
+            .send()
+            .await
+            .context("fetching genesis header")?;
+        let chain_id = genesis_header
+            .chain_config()
+            .resolve()
+            .context("genesis header has no full chain config")?
+            .chain_id;
+
         Ok(Genesis {
             epoch_height,
             first_epoch_with_dynamic_stake_table: EpochNumber::new(start_epoch),
@@ -96,6 +109,7 @@ impl Options {
                 .iter()
                 .map(|node| node.stake_table_entry.clone())
                 .collect(),
+            chain_id,
         })
     }
 }

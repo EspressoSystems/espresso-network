@@ -14,10 +14,7 @@ use hotshot_types::{
     traits::{BlockPayload, block_contents::BlockHeader, node_implementation::NodeType},
     vote::HasViewNumber,
 };
-use hotshot_utils::{
-    anytrace::{Error, Level, Result},
-    line_info, warn,
-};
+use hotshot_utils::{anytrace::Result, warn};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -352,10 +349,8 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
 
                 let leader = self
                     .membership_coordinator
-                    .membership_for_epoch(*epoch)
-                    .await?
-                    .leader(*view)
-                    .await?;
+                    .membership_for_epoch(*epoch)?
+                    .leader(*view)?;
                 if leader == self.public_key {
                     self.leader_entry(*view).builder_start = Some(now);
                 }

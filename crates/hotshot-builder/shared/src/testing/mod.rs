@@ -25,6 +25,7 @@ pub struct TransactionPayload {
     /// Time of transaction creation
     created: DateTime<Local>,
     /// Arbitrary data to pad transaction length with
+    #[serde(with = "serde_bytes")]
     data: Vec<u8>,
 }
 

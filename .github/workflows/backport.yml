@@ -1,18 +1,164 @@
-# Create a backport PR to branch "foo" from a merged PR by adding a PR label "backport foo"
 name: Backport merged pull request
 on:
   pull_request_target:
     types: [closed]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to backport"
+        required: true
+        type: string
+      target_branch:
+        description: "Target branch"
+        required: true
+        type: string
 permissions:
-  contents: write # so it can comment
-  pull-requests: write # so it can create pull requests
+  contents: write
+  pull-requests: write
 jobs:
   backport:
     name: Backport pull request
     runs-on: ubuntu-latest
-    # Don't run on closed unmerged pull requests
-    if: github.event.pull_request.merged
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          components: rustfmt
+
+      - uses: taiki-e/install-action@just
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: mergiraf
+
+      - name: Configure git identity and mergiraf merge driver
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git config --global merge.mergiraf.name mergiraf
+          git config --global merge.mergiraf.driver 'mergiraf merge --git %O %A %B -s %S -x %X -y %Y -p %P'
+          mkdir -p ~/.config/git
+          echo '* merge=mergiraf' > ~/.config/git/attributes
+
+      - name: Cherry-pick via workflow_dispatch
+        id: dispatch_backport
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          TARGET_BRANCH: ${{ inputs.target_branch }}
+        run: |
+          scripts/backport-dispatch "$PR_NUMBER" "$TARGET_BRANCH"
+
       - name: Create backport pull requests
+        id: backport
+        if: github.event_name == 'pull_request_target'
         uses: korthout/backport-action@v3
+        with:
+          experimental: '{"conflict_resolution":"draft_commit_conflicts"}'
+
+      - name: Detect remaining conflicts
+        id: resolve
+        if: |
+          steps.backport.outputs.created_pull_numbers != '' ||
+          steps.dispatch_backport.outputs.created_pull_numbers != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          pr_numbers="${{ steps.backport.outputs.created_pull_numbers }} ${{ steps.dispatch_backport.outputs.created_pull_numbers }}"
+          needs_claude=""
+          for pr in $pr_numbers; do
+            branch=$(gh pr view "$pr" --json headRefName -q .headRefName)
+            git fetch origin "$branch"
+            if git grep -lE '^<<<<<<< ' "origin/$branch" -- >/dev/null; then
+              needs_claude="$needs_claude $pr"
+            else
+              gh pr ready "$pr" || true
+            fi
+          done
+          echo "needs_claude=$needs_claude" >> "$GITHUB_OUTPUT"
+
+      - name: Claude conflict resolution
+        if: steps.resolve.outputs.needs_claude != ''
+        timeout-minutes: 30
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          NEEDS_CLAUDE: ${{ steps.resolve.outputs.needs_claude }}
+        run: |
+          set -euo pipefail
+          curl -fsSL https://claude.ai/install.sh | bash
+          export PATH="$HOME/.local/bin:$PATH"
+          # Read the prompt from the triggering commit: the working tree is now on
+          # the backport branch, which may predate this file.
+          prompt_body=$(git show "$GITHUB_SHA:.github/claude/backport-resolve.md")
+          prompt=$(printf 'Mergiraf left conflict markers in these backport PRs:\n%s\n\n%s' \
+            "$NEEDS_CLAUDE" "$prompt_body")
+          claude -p "$prompt" --model claude-opus-4-8 --dangerously-skip-permissions
+
+      - name: Install protoc
+        if: steps.resolve.outputs.needs_claude != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.resolve.outputs.needs_claude != ''
+        with:
+          prefix-key: v3-rust
+          shared-key: backport-claude
+
+      - name: Verify Claude-resolved backports compile, label, mark ready
+        if: steps.resolve.outputs.needs_claude != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          # Comment the failure on the PR, then exit non-zero.
+          fail() {
+            local pr="$1" msg="$2" body
+            echo "::error::PR #$pr: $msg" >&2
+            body=$(printf '⚠️ Automated backport conflict resolution failed: %s\n\nSee the [workflow run](%s) for details. This PR needs to be resolved manually.' "$msg" "$run_url")
+            gh pr comment "$pr" --body "$body" || true
+            exit 1
+          }
+
+          gh label create claude-resolved --color FF6B35 --description "Backport conflicts resolved by Claude" 2>/dev/null || true
+          for pr in ${{ steps.resolve.outputs.needs_claude }}; do
+            branch=$(gh pr view "$pr" --json headRefName -q .headRefName)
+            git checkout "$branch"
+
+            if ! git diff --quiet || ! git diff --cached --quiet; then
+              fail "$pr" "Claude left uncommitted changes after resolution."
+            fi
+            if git grep -lnE '^(<<<<<<< |>>>>>>> )' HEAD -- >/dev/null 2>&1; then
+              fail "$pr" "conflict markers are still present after resolution."
+            fi
+            git fetch origin "$branch"
+            if [ "$(git rev-parse HEAD)" = "$(git rev-parse "origin/$branch")" ]; then
+              fail "$pr" "Claude produced no new commits over origin/$branch."
+            fi
+            if ! cargo check --tests --examples; then
+              fail "$pr" "\`cargo check --tests --examples\` failed after resolution."
+            fi
+
+            # Label before pushing so the PR is tagged even if a later step fails.
+            gh pr edit "$pr" --add-label claude-resolved
+            git push origin "$branch"
+            gh pr ready "$pr"
+            if [ -f "claude-summaries/$pr.md" ]; then
+              gh pr comment "$pr" --body-file "claude-summaries/$pr.md"
+            else
+              gh pr comment "$pr" --body "⚠️ No resolution summary was produced for this backport. Claude may not have completed the resolution as expected; please review carefully." || true
+            fi
+          done

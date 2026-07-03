@@ -3,7 +3,6 @@ use std::{
     sync::Arc,
 };
 
-use async_lock::RwLock;
 use committable::{Commitment, Committable};
 use futures::StreamExt;
 use hotshot::{
@@ -13,7 +12,9 @@ use hotshot::{
 use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata},
-    membership::{static_committee::StaticStakeTable, strict_membership::StrictMembership},
+    membership::{
+        TestableMembership, static_committee::StaticStakeTable, strict_membership::StrictMembership,
+    },
     node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
     storage_types::TestStorage,
@@ -24,16 +25,18 @@ use hotshot_testing::{
 };
 use hotshot_types::{
     data::{
-        EpochNumber, Leaf2, VidCommitment, VidDisperse, VidDisperse2, VidDisperseShare2,
-        ViewNumber, vid_commitment,
+        EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperse, VidDisperse2,
+        VidDisperseShare2, ViewNumber, vid_commitment,
     },
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StakeTableState, StateKeyPair},
     message::Proposal as SignedProposal,
-    simple_certificate::TimeoutCertificate2,
+    simple_certificate::{TimeoutCertificate2, UpgradeCertificate},
     simple_vote::{
-        LightClientStateUpdateVote2, QuorumVote2, TimeoutData2, TimeoutVote2, Vote2Data,
+        LightClientStateUpdateVote2, QuorumVote2, TimeoutData2, TimeoutVote2, UpgradeProposalData,
+        UpgradeVote, Vote2Data,
     },
+    stake_table::HSStakeTable,
     traits::{
         EncodeBytes,
         block_contents::{BlockHeader, BuilderFee},
@@ -44,6 +47,7 @@ use hotshot_types::{
         BuilderCommitment, epoch_from_block_number, is_epoch_root, is_epoch_transition,
         is_last_block,
     },
+    vote::HasViewNumber,
 };
 
 use crate::{
@@ -56,6 +60,7 @@ use crate::{
     },
     outbox::Outbox,
     state::StateResponse,
+    storage::StorageOutput,
 };
 
 /// DRB result used by `TestData` for epoch transition proposals.
@@ -99,8 +104,8 @@ impl TestView {
     }
 
     /// Build a leader-signed VID share envelope (the wire form). The leader's
-    /// signature is over the share's `payload_commitment`, matching what
-    /// `Coordinator::SendVidShares` produces in production.
+    /// signature is over the share's `payload_commitment`, matching what the
+    /// `VidDisperser` produces in production.
     pub fn vid_share_message(
         &self,
         recipient_key: &BLSPubKey,
@@ -209,7 +214,9 @@ impl TestView {
         };
 
         Message {
-            sender: self.leader_public_key,
+            // A Vote1 is broadcast by the voting validator itself, and carries
+            // that validator's own VID share (recipient_key == pub_key).
+            sender: pub_key,
             message_type: MessageType::Consensus(ConsensusMessage::Vote1(Vote1 {
                 vote,
                 vid_share,
@@ -296,16 +303,54 @@ impl TestData {
         epoch_height: u64,
         num_nodes: usize,
     ) -> Self {
+        Self::new_with_upgrade(num_views, epoch_height, num_nodes, None).await
+    }
+
+    /// Chain of `num_views` views, optionally with a real
+    /// `UpgradeCertificate` attached at `upgrade_at_view`.
+    pub async fn new_with_upgrade(
+        num_views: usize,
+        epoch_height: u64,
+        num_nodes: usize,
+        upgrade_at_view: Option<(ViewNumber, UpgradeProposalData)>,
+    ) -> Self {
         crate::logging::init_test_logging();
         let (public_key, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
         let (membership, _storage, _client) =
-            mock_membership_with_num_nodes(num_nodes, epoch_height, public_key).await;
+            mock_membership_with_num_nodes(num_nodes, epoch_height, public_key);
         let keys = key_map_with_num_nodes(num_nodes as u64);
         let node_key_map = Arc::new(keys.clone());
-        let upgrade = TEST_VERSIONS.vid2;
+        // Must match `test_upgrade_lock()` so signature commitments are
+        // byte-identical across harnesses.
+        let upgrade = versions::Upgrade::trivial(versions::NEW_PROTOCOL_VERSION);
 
         let mut generator =
             TestViewGenerator::generate(membership.clone(), node_key_map.clone(), upgrade);
+
+        let upgrade_cert: Option<(ViewNumber, UpgradeCertificate<TestTypes>)> =
+            if let Some((target_view, ref data)) = upgrade_at_view {
+                let epoch_membership = membership
+                    .membership_for_epoch(Some(EpochNumber::genesis()))
+                    .unwrap();
+                let (leader_pk, leader_priv_key) =
+                    BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
+                let cert = build_cert::<
+                    TestTypes,
+                    UpgradeProposalData,
+                    UpgradeVote<TestTypes>,
+                    UpgradeCertificate<TestTypes>,
+                >(
+                    data.clone(),
+                    &epoch_membership,
+                    target_view,
+                    &leader_pk,
+                    &leader_priv_key,
+                    &test_upgrade_lock::<TestTypes>(),
+                );
+                Some((target_view, cert))
+            } else {
+                None
+            };
 
         let gen_views: Vec<_> = (&mut generator).take(num_views).collect::<Vec<_>>().await;
 
@@ -346,7 +391,6 @@ impl TestData {
             // Use genesis membership for signing — same committee in tests.
             let epoch_membership = membership
                 .membership_for_epoch(Some(EpochNumber::genesis()))
-                .await
                 .unwrap();
 
             // ---- epoch-aware patching ----
@@ -379,24 +423,28 @@ impl TestData {
                 proposal.next_epoch_justify_qc = prev_new_cert2.clone();
             }
 
+            let upgrade_attached = upgrade_cert.as_ref().is_some_and(|(target_view, cert)| {
+                if *target_view == view_number {
+                    proposal.upgrade_certificate = Some(cert.clone());
+                    true
+                } else {
+                    false
+                }
+            });
+
             // Recompute leaf and commitment (may differ from generator output
             // when we touched justify_qc or next_drb_result).
             let leaf = Leaf2::from(proposal.clone());
             let leaf_commit = leaf.commit();
 
-            // Compute DRB for epoch root blocks so transition-window
-            // proposals carry the correct next_drb_result.  We call
-            // add_epoch_root + compute_drb_result on the *generator's own*
-            // membership (not the harness's), mirroring what the
-            // EpochManager does in production.
+            // Compute DRB for epoch roots so transition-window proposals
+            // carry next_drb_result, mirroring `EpochManager`.
             if epoch_height > 0 && is_epoch_root(block_number, epoch_height) {
                 let target_epoch =
                     EpochNumber::new(epoch_from_block_number(block_number, epoch_height) + 2);
-                let _ = <TestTypes as hotshot_types::traits::node_implementation::NodeType>
-                    ::Membership::add_epoch_root(
-                        membership.membership().clone(),
-                        proposal.block_header.clone(),
-                    )
+                let _ = membership
+                    .membership()
+                    .add_epoch_root(proposal.block_header.clone())
                     .await;
                 if let Ok(drb) = membership
                     .compute_drb_result(target_epoch, leaf.clone())
@@ -425,8 +473,7 @@ impl TestData {
                 view_number,
                 &leader_public_key,
                 leader_private_key,
-            )
-            .await;
+            );
             let cert2 = build_cert2(
                 leaf_commit,
                 epoch,
@@ -435,12 +482,16 @@ impl TestData {
                 view_number,
                 &leader_public_key,
                 leader_private_key,
-            )
-            .await;
+            );
 
             // Propagate the rebuilt cert1 so the next view's justify_qc is
             // consistent with our updated commitment.
-            if needs_drb || needs_justify_update || needs_new_epoch || epoch_patched {
+            if needs_drb
+                || needs_justify_update
+                || needs_new_epoch
+                || epoch_patched
+                || upgrade_attached
+            {
                 prev_new_cert1 = Some(cert1.clone());
             }
             // Set prev_new_cert2 on the last block of each epoch so the
@@ -456,14 +507,13 @@ impl TestData {
             // match cert1.view, and the current cert1 already reflects that).
             if epoch_height > 0 && is_epoch_root(block_number, epoch_height) {
                 // Compute next-epoch stake commitment (same committee in tests).
-                let next_stake_table_state = epoch_membership
+                let next_epoch_membership = epoch_membership
                     .next_epoch_stake_table()
-                    .await
-                    .expect("next epoch stake table")
-                    .stake_table()
-                    .await
-                    .commitment(num_nodes)
-                    .expect("stake table commitment");
+                    .expect("next epoch stake table");
+                let next_stake_table_state =
+                    HSStakeTable::from_iter(next_epoch_membership.stake_table())
+                        .commitment(num_nodes)
+                        .expect("stake table commitment");
                 let state_cert = build_state_cert_for_test(
                     &proposal.block_header,
                     view_number,
@@ -483,15 +533,12 @@ impl TestData {
                 &epoch_membership,
                 &leader_public_key,
                 leader_private_key,
-            )
-            .await;
+            );
 
-            let stake_table_state = epoch_membership
+            let next_epoch_membership = epoch_membership
                 .next_epoch_stake_table()
-                .await
-                .expect("next epoch stake table")
-                .stake_table()
-                .await
+                .expect("next epoch stake table");
+            let stake_table_state = HSStakeTable::from_iter(next_epoch_membership.stake_table())
                 .commitment(num_nodes)
                 .expect("stake table commitment");
 
@@ -515,13 +562,13 @@ impl TestData {
     }
 }
 
-pub async fn mock_membership() -> EpochMembershipCoordinator<TestTypes> {
+pub fn mock_membership() -> EpochMembershipCoordinator<TestTypes> {
     let (public_key, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
-    let (coordinator, ..) = mock_membership_with_num_nodes(10, 10, public_key).await;
+    let (coordinator, ..) = mock_membership_with_num_nodes(10, 10, public_key);
     coordinator
 }
 
-pub async fn mock_membership_with_num_nodes(
+pub fn mock_membership_with_num_nodes(
     num_nodes: usize,
     epoch_height: u64,
     public_key: BLSPubKey,
@@ -531,29 +578,15 @@ pub async fn mock_membership_with_num_nodes(
     CoordinatorClient<TestTypes>,
 ) {
     let (coord, storage, client, _external_events_tx) =
-        mock_membership_with_client(num_nodes, epoch_height, public_key).await;
+        mock_membership_with_client(num_nodes, epoch_height, public_key, TestStorage::default());
     (coord, storage, client)
 }
 
-/// Create a mock membership coordinator for `num_nodes` validators.
-///
-/// The membership's `Leaf2Fetcher` is wired to a fresh
-/// [`CoordinatorClient`] via [`ClientLeafFetcherNetwork`] — catchup
-/// direct-messages are routed through the `Coordinator` (which owns the
-/// only `Network` handle).  The returned `CoordinatorClient` must be
-/// installed on the node's `Coordinator` (via `.client(...)`) so the
-/// routed messages are actually drained and dispatched.
-///
-/// The returned [`TestStorage`] is the storage the membership's
-/// `Leaf2Fetcher` reads from; share it with the `Coordinator` so
-/// self-produced proposals land in the same store.  The returned
-/// [`Sender`] is the tx half of the external-events channel feeding the
-/// membership's `Leaf2Fetcher`; pass it into `build_test_coordinator` so
-/// the coordinator forwards `ExternalMessageReceived` events to it.
-pub async fn mock_membership_with_client(
+pub fn mock_membership_with_client(
     num_nodes: usize,
     epoch_height: u64,
     public_key: BLSPubKey,
+    storage: TestStorage<TestTypes>,
 ) -> (
     EpochMembershipCoordinator<TestTypes>,
     TestStorage<TestTypes>,
@@ -567,26 +600,19 @@ pub async fn mock_membership_with_client(
         epoch_height,
         leaf_fetcher_network,
         public_key,
-    )
-    .await;
+        storage,
+    );
     (coord, storage, client, external_events_tx)
 }
 
-/// Build a mock membership coordinator wired to an arbitrary
-/// `LeafFetcherNetwork`.  `public_key` is the node's identity — peers
-/// will send leaf-fetcher responses back to this key, so passing the
-/// wrong one means responses don't return to this node's fetcher.
-///
-/// Creates and installs the external-events channel internally; the
-/// returned [`Sender`] is the tx half — hand it to the coordinator so it
-/// forwards `ExternalMessageReceived` events to the fetcher.
-pub async fn mock_membership_with_leaf_fetcher_network(
+pub fn mock_membership_with_leaf_fetcher_network(
     num_nodes: usize,
     epoch_height: u64,
     leaf_fetcher_network: Arc<
         dyn hotshot_types::traits::leaf_fetcher_network::LeafFetcherNetwork<TestTypes>,
     >,
     public_key: BLSPubKey,
+    storage: TestStorage<TestTypes>,
 ) -> (
     EpochMembershipCoordinator<TestTypes>,
     TestStorage<TestTypes>,
@@ -598,12 +624,11 @@ pub async fn mock_membership_with_leaf_fetcher_network(
         &TestNodeStakes::default(),
     )
     .0;
-    let storage = TestStorage::<TestTypes>::default();
-    let mut strict_membership = StrictMembership::<
-        TestTypes,
-        StaticStakeTable<BLSPubKey, SchnorrPubKey>,
-    >::new(
-        members.clone(), members.clone(), public_key, epoch_height
+    let membership = StrictMembership::<TestTypes, StaticStakeTable<BLSPubKey, SchnorrPubKey>>::new(
+        members.clone(),
+        members.clone(),
+        public_key,
+        epoch_height,
     );
     // Channel used by the Coordinator to forward ExternalMessageReceived
     // events to the membership's Leaf2Fetcher (drives epoch catchup).
@@ -612,27 +637,21 @@ pub async fn mock_membership_with_leaf_fetcher_network(
         async_broadcast::broadcast::<hotshot_types::event::Event<TestTypes>>(1024);
     external_events_tx.set_overflow(true);
     external_events_rx.set_overflow(true);
-    hotshot_example_types::membership::TestableMembership::set_leaf_fetcher(
-        &mut strict_membership,
+    membership.set_leaf_fetcher(
         leaf_fetcher_network,
         storage.clone(),
         public_key,
         external_events_rx,
     );
-    let membership = Arc::new(RwLock::new(strict_membership));
     // Initialize epoch data so membership works with epoch-aware versions (VID2 etc.)
-    membership
-        .write()
-        .await
-        .set_first_epoch(EpochNumber::genesis(), [0u8; 32]);
+    membership.set_first_epoch(EpochNumber::genesis(), [0u8; 32]);
 
     let coordinator =
         EpochMembershipCoordinator::new(membership, num_nodes as u64, &TestStorage::default());
     // Set the DRB difficulty selector so compute_drb_result can run.
     // Difficulty 0 makes the computation instant for tests.
     coordinator
-        .set_drb_difficulty_selector(std::sync::Arc::new(|_version| Box::pin(async { 0u64 })))
-        .await;
+        .set_drb_difficulty_selector(std::sync::Arc::new(|_version| Box::pin(async { 0u64 })));
     (coordinator, storage, external_events_tx)
 }
 
@@ -753,7 +772,7 @@ impl MockBlock {
             &block.encode(),
             &metadata.encode(),
             10,
-            TEST_VERSIONS.test.base,
+            versions::NEW_PROTOCOL_VERSION,
         );
         let builder_commitment =
             <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(&block, &metadata);
@@ -826,6 +845,22 @@ fn extract_vid_disperse(
     (vid_disperse, vid_shares)
 }
 
+/// The `(view, VID commitment)` pairs a restarted node seeds as
+/// already-reconstructed blocks, mirroring `Coordinator::maker`.
+pub fn reconstructed_blocks(
+    headers: impl IntoIterator<Item = (ViewNumber, TestBlockHeader)>,
+) -> Vec<(ViewNumber, VidCommitment2)> {
+    headers
+        .into_iter()
+        .filter_map(
+            |(view, header)| match BlockHeader::<TestTypes>::payload_commitment(&header) {
+                VidCommitment::V2(commitment) => Some((view, commitment)),
+                _ => None,
+            },
+        )
+        .collect()
+}
+
 /// Lightweight consensus-only test harness. Wraps a single [`Consensus`]
 /// instance and auto-responds to outputs that consensus expects feedback for
 /// (`RequestState`, `RequestBlockAndHeader`, `RequestVidDisperse`,
@@ -847,7 +882,7 @@ impl ConsensusHarness {
             [0u8; 32], node_index,
         );
         let state_private_key = state_key_pair.sign_key_ref().clone();
-        let membership = mock_membership().await;
+        let membership = mock_membership();
         let instance = Arc::new(TestInstanceState::default());
         let genesis_leaf = Leaf2::<TestTypes>::genesis(
             &TestValidatedState::default(),
@@ -872,11 +907,74 @@ impl ConsensusHarness {
         }
     }
 
+    /// Build a harness whose consensus has been restarted from a persisted
+    /// decided anchor, mirroring `Coordinator::maker`: `Consensus::new` is
+    /// given the anchor leaf, the undecided proposals above it are re-seeded
+    /// and marked reconstructed, and the anchor is installed as the parent via
+    /// `seed_parent`.
+    pub async fn restarted_from(
+        node_index: u64,
+        anchor_proposal: Proposal<TestTypes>,
+        anchor_cert1: Certificate1<TestTypes>,
+        undecided_proposals: impl IntoIterator<Item = Proposal<TestTypes>>,
+    ) -> Self {
+        let epoch_height = 10;
+        let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
+        let state_private_key = StateKeyPair::generate_from_seed_indexed([0u8; 32], node_index)
+            .sign_key_ref()
+            .clone();
+        let membership = mock_membership();
+
+        let anchor_leaf: Leaf2<TestTypes> = anchor_proposal.clone().into();
+        let anchor_view = anchor_leaf.view_number();
+
+        let mut consensus = Consensus::new(
+            membership.clone(),
+            public_key,
+            private_key,
+            state_private_key,
+            10,
+            test_upgrade_lock(),
+            anchor_leaf,
+            epoch_height,
+        );
+
+        let undecided_proposals: Vec<_> = undecided_proposals.into_iter().collect();
+        let reconstructed = reconstructed_blocks(
+            std::iter::once(&anchor_proposal)
+                .chain(&undecided_proposals)
+                .map(|p| (p.view_number, p.block_header.clone())),
+        );
+        consensus.seed_proposals(undecided_proposals);
+        consensus.seed_parent(anchor_cert1, anchor_proposal, reconstructed);
+        consensus.resume_from_restart(anchor_view, anchor_view + 1, anchor_view);
+
+        Self {
+            consensus,
+            membership_coordinator: membership,
+            collected: Outbox::new(),
+        }
+    }
+
     /// Apply a [`ConsensusInput`] and drain outputs, auto-responding to
     /// actions that consensus expects feedback for.
     pub async fn apply(&mut self, input: ConsensusInput<TestTypes>) {
         let mut outbox = Outbox::new();
-        self.consensus.apply(input, &mut outbox).await;
+        // The coordinator persists incoming proposals and VID shares before
+        // consensus sees them; simulate those storage confirmations.
+        if let ConsensusInput::ProposalWithVidShare(_, msg, vid_share) = &input {
+            let view = msg.proposal.data.view_number;
+            let commitment = proposal_commitment(&msg.proposal.data);
+            self.consensus.apply(
+                ConsensusInput::Stored(StorageOutput::Proposal(view, commitment)),
+                &mut outbox,
+            );
+            self.consensus.apply(
+                ConsensusInput::Stored(StorageOutput::Vid(vid_share.view_number)),
+                &mut outbox,
+            );
+        }
+        self.consensus.apply(input, &mut outbox);
         self.drain_outbox(&mut outbox).await;
     }
 
@@ -895,7 +993,27 @@ impl ConsensusHarness {
         match output {
             ConsensusOutput::RequestState(req) => {
                 let input = state_verified_input(&req.proposal, req.view);
-                self.consensus.apply(input, outbox).await;
+                self.consensus.apply(input, outbox);
+            },
+            ConsensusOutput::RecordAction(view, _, kind) => {
+                self.consensus.apply(
+                    ConsensusInput::Stored(StorageOutput::Action(*view, *kind)),
+                    outbox,
+                );
+            },
+            ConsensusOutput::PersistHighQc(high_qc) => {
+                self.consensus.apply(
+                    ConsensusInput::Stored(StorageOutput::HighQc(high_qc.view_number())),
+                    outbox,
+                );
+            },
+            ConsensusOutput::PersistProposal(proposal) => {
+                let view = proposal.data.view_number;
+                let commitment = proposal_commitment(&proposal.data);
+                self.consensus.apply(
+                    ConsensusInput::Stored(StorageOutput::Proposal(view, commitment)),
+                    outbox,
+                );
             },
             ConsensusOutput::RequestBlockAndHeader(req) => {
                 let mock_block = MockBlock::new();
@@ -907,26 +1025,27 @@ impl ConsensusHarness {
                     mock_block.metadata,
                     TEST_VERSIONS.test.base,
                 );
-                self.consensus
-                    .apply(ConsensusInput::HeaderCreated(req.view, header), outbox)
-                    .await;
-                self.consensus
-                    .apply(
-                        ConsensusInput::BlockBuilt {
-                            view: req.view,
-                            epoch: req.epoch,
-                            payload: mock_block.block,
-                            metadata: mock_block.metadata,
-                        },
-                        outbox,
-                    )
-                    .await;
+                self.consensus.apply(
+                    ConsensusInput::HeaderCreated(req.view, parent_leaf.commit(), header),
+                    outbox,
+                );
+                self.consensus.apply(
+                    ConsensusInput::BlockBuilt {
+                        view: req.view,
+                        epoch: req.epoch,
+                        payload: mock_block.block,
+                        metadata: mock_block.metadata,
+                        payload_commitment: mock_block.payload_commitment,
+                    },
+                    outbox,
+                );
             },
             ConsensusOutput::RequestVidDisperse {
                 view,
                 epoch,
                 payload,
                 metadata,
+                payload_commitment: _,
             } => {
                 let vid_disperse = VidDisperse::calculate_vid_disperse(
                     payload,
@@ -942,14 +1061,12 @@ impl ConsensusHarness {
                 let VidDisperse::V2(vid) = vid_disperse.disperse else {
                     panic!("VidDisperse is not a V2");
                 };
-                self.consensus
-                    .apply(ConsensusInput::VidDisperseCreated(*view, vid), outbox)
-                    .await;
+                let input = ConsensusInput::VidDisperseCreated(*view, vid.payload_commitment);
+                self.consensus.apply(input, outbox);
             },
             ConsensusOutput::RequestDrbResult(epoch) => {
                 self.consensus
-                    .apply(ConsensusInput::DrbResult(*epoch, TEST_DRB_RESULT), outbox)
-                    .await;
+                    .apply(ConsensusInput::DrbResult(*epoch, TEST_DRB_RESULT), outbox);
             },
             ConsensusOutput::LeafDecided { leaves, .. } => {
                 // Mirror the EpochManager: when an epoch-root block is decided,
@@ -964,20 +1081,17 @@ impl ConsensusHarness {
                         continue;
                     }
                     let header = leaf.block_header().clone();
-                    <TestTypes as hotshot_types::traits::node_implementation::NodeType>::Membership::add_epoch_root(
-                        self.membership_coordinator.membership().clone(),
-                        header,
-                    )
-                    .await
-                    .expect("add_epoch_root should succeed in test harness");
+                    self.membership_coordinator
+                        .membership()
+                        .add_epoch_root(header)
+                        .await
+                        .expect("add_epoch_root should succeed in test harness");
 
                     let epoch =
                         hotshot_types::utils::epoch_from_block_number(block_number, *epoch_height);
                     let target_epoch = EpochNumber::new(epoch + 2);
                     self.membership_coordinator
                         .membership()
-                        .write()
-                        .await
                         .add_drb_result(target_epoch, TEST_DRB_RESULT);
                 }
             },
@@ -990,7 +1104,7 @@ impl ConsensusHarness {
     }
 }
 
-pub(crate) async fn build_cert1(
+pub(crate) fn build_cert1(
     leaf_commit: Commitment<Leaf2<TestTypes>>,
     epoch: EpochNumber,
     block_number: u64,
@@ -1017,10 +1131,9 @@ pub(crate) async fn build_cert1(
         private_key,
         &test_upgrade_lock::<TestTypes>(),
     )
-    .await
 }
 
-pub(crate) async fn build_cert2(
+pub(crate) fn build_cert2(
     leaf_commit: Commitment<Leaf2<TestTypes>>,
     epoch: EpochNumber,
     block_number: u64,
@@ -1042,10 +1155,9 @@ pub(crate) async fn build_cert2(
         private_key,
         &test_upgrade_lock::<TestTypes>(),
     )
-    .await
 }
 
-async fn build_timeout_cert(
+fn build_timeout_cert(
     view_number: ViewNumber,
     epoch: EpochNumber,
     epoch_membership: &hotshot_types::epoch_membership::EpochMembership<TestTypes>,
@@ -1064,5 +1176,4 @@ async fn build_timeout_cert(
         private_key,
         &test_upgrade_lock::<TestTypes>(),
     )
-    .await
 }

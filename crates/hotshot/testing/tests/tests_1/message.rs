@@ -102,9 +102,9 @@ async fn test_certificate2_validity() {
     let qc2 = proposal.data.justify_qc().clone();
     let qc = qc2.clone().to_qc();
 
-    let epoch_mem = membership.membership_for_epoch(None).await.unwrap();
-    let membership_stake_table = StakeTableEntries::from(epoch_mem.stake_table().await).0;
-    let membership_success_threshold = epoch_mem.success_threshold().await;
+    let epoch_mem = membership.membership_for_epoch(None).unwrap();
+    let membership_stake_table = StakeTableEntries::from_iter(epoch_mem.stake_table()).0;
+    let membership_success_threshold = epoch_mem.success_threshold();
 
     assert!(
         qc.is_valid_cert(
@@ -131,7 +131,7 @@ async fn test_certificate2_validity() {
     let leaf = Leaf::from_quorum_proposal(&proposal.data.into());
     let parent_leaf = Leaf::from_quorum_proposal(&parent_proposal.data.into());
 
-    assert!(leaf.parent_commitment() == parent_leaf.commit(&handle.hotshot.upgrade_lock).await);
+    assert!(leaf.parent_commitment() == parent_leaf.commit(&handle.hotshot.upgrade_lock));
 
     assert!(leaf2.parent_commitment() == parent_leaf2.commit());
 }

@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use async_trait::async_trait;
 use committable::Commitment;
 use espresso_types::{
     Certificate2, FeeAccount, FeeMerkleTree, Leaf2,
@@ -64,18 +63,17 @@ pub enum Response {
     /// A response for a state certificate at a given epoch
     StateCert(LightClientStateUpdateCertificateV2<SeqTypes>),
     /// A response with data to reconstruct the reward merkle tree at a given height
-    RewardMerkleTreeV2(Vec<u8>),
+    RewardMerkleTreeV2(#[serde(with = "serde_bytes")] Vec<u8>),
     /// A response with the earliest cert2 (fast finality protocol)
     Cert2(Certificate2<SeqTypes>),
 }
 
 /// Implement the `RequestTrait` trait for the `Request` type. This tells the request response
 /// protocol how to validate the request and what the response type is.
-#[async_trait]
 impl RequestTrait for Request {
     type Response = Response;
 
-    async fn validate(&self) -> Result<()> {
+    fn validate(&self) -> Result<()> {
         // Right now, all requests are valid
         Ok(())
     }

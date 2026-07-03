@@ -106,13 +106,24 @@ async fn slow_dev_node_test(
 
     let tx = Transaction::new(100_u32.into(), vec![1, 2, 3]);
 
-    let hash: Commitment<Transaction> = builder_api_client
-        .post("txn_submit/submit")
-        .body_json(&tx)
-        .unwrap()
-        .send()
-        .await
-        .unwrap();
+    // New protocol has no external builder; submit to the query node instead.
+    let hash: Commitment<Transaction> = if version >= DevNodeVersion::V0_6 {
+        api_client
+            .post("submit/submit")
+            .body_json(&tx)
+            .unwrap()
+            .send()
+            .await
+            .unwrap()
+    } else {
+        builder_api_client
+            .post("txn_submit/submit")
+            .body_json(&tx)
+            .unwrap()
+            .send()
+            .await
+            .unwrap()
+    };
 
     let tx_hash = tx.commit();
     assert_eq!(hash, tx_hash);

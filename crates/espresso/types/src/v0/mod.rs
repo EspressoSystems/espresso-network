@@ -27,8 +27,8 @@ pub use impls::reward::{
 #[cfg(any(test, feature = "testing"))]
 pub use impls::testing;
 pub use impls::{
-    BuilderValidationError, EpochCommittees, FeeError, ProposalValidationError,
-    StateValidationError, ValidatorSet, get_l1_deposits, retain_accounts,
+    BuilderValidationError, EpochCommittees, EpochCommitteesError, EpochSnapshot, FeeError,
+    ProposalValidationError, StateValidationError, ValidatorSet, get_l1_deposits, retain_accounts,
     validators_from_l1_events,
 };
 pub use nsproof::*;
@@ -46,7 +46,7 @@ use vbs::version::StaticVersion;
 // instead we write `with_minor_versions!(some_macro!(args))`.
 macro_rules! with_minor_versions {
     ($m:ident!($($arg:tt),*)) => {
-        $m!($($arg,)* v0_1, v0_2, v0_3, v0_4, v0_5, v0_6, v0_7, v0_8);
+        $m!($($arg,)* v0_1, v0_2, v0_3, v0_4, v0_5, v0_6);
     };
 }
 
@@ -160,8 +160,6 @@ pub type FeeVersion = StaticVersion<0, 2>;
 pub type EpochVersion = StaticVersion<0, 3>;
 pub type DrbAndHeaderUpgradeVersion = StaticVersion<0, 4>;
 pub type EpochRewardVersion = StaticVersion<0, 5>;
-pub type DaUpgradeVersion = StaticVersion<0, 6>;
-pub type Vid2UpgradeVersion = StaticVersion<0, 7>;
 
 pub type Leaf = hotshot_types::data::Leaf<SeqTypes>;
 pub type Leaf2 = hotshot_types::data::Leaf2<SeqTypes>;
@@ -182,8 +180,8 @@ pub use crate::{
         to_registered_validator_map,
     },
     v0_1::{
-        BLOCK_MERKLE_TREE_HEIGHT, FEE_MERKLE_TREE_HEIGHT, NS_ID_BYTE_LEN, NS_OFFSET_BYTE_LEN,
-        NUM_NSS_BYTE_LEN, NUM_TXS_BYTE_LEN, TX_OFFSET_BYTE_LEN,
+        BLOCK_MERKLE_TREE_HEIGHT, DECAF_CHAIN_ID, FEE_MERKLE_TREE_HEIGHT, NS_ID_BYTE_LEN,
+        NS_OFFSET_BYTE_LEN, NUM_NSS_BYTE_LEN, NUM_TXS_BYTE_LEN, TX_OFFSET_BYTE_LEN,
     },
     v0_3::ChainConfig,
 };

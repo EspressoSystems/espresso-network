@@ -154,8 +154,6 @@ pub(crate) async fn handle_quorum_proposal_validated<
             task_state
                 .membership
                 .membership()
-                .write()
-                .await
                 .set_first_epoch(first_epoch_number, INITIAL_DRB_RESULT);
 
             broadcast_event(
@@ -170,12 +168,10 @@ pub(crate) async fn handle_quorum_proposal_validated<
 
         for da_committee in &task_state.da_committees {
             if cert.data.new_version >= da_committee.start_version {
-                task_state
-                    .membership
-                    .membership()
-                    .write()
-                    .await
-                    .add_da_committee(da_committee.start_epoch, da_committee.committee.clone());
+                task_state.membership.membership().add_da_committee(
+                    da_committee.start_epoch.into(),
+                    da_committee.committee.clone(),
+                );
             }
         }
 
@@ -228,11 +224,11 @@ pub(crate) async fn handle_quorum_proposal_validated<
             }
             if qc_epoch > consensus_writer.current_vote_participation_epoch() {
                 let (stake_table, success_threshold) = if let Ok(epoch_membership) =
-                    task_state.membership.stake_table_for_epoch(qc_epoch).await
+                    task_state.membership.stake_table_for_epoch(qc_epoch)
                 {
                     (
-                        epoch_membership.stake_table().await,
-                        epoch_membership.success_threshold().await,
+                        HSStakeTable::from_iter(epoch_membership.stake_table()),
+                        epoch_membership.success_threshold(),
                     )
                 } else {
                     tracing::warn!(
@@ -450,16 +446,12 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     state_private_key: &<TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
     stake_table_capacity: usize,
 ) -> Result<()> {
-    let committee_member_in_current_epoch = membership.has_stake(&public_key).await;
+    let committee_member_in_current_epoch = membership.has_stake(&public_key);
     // If the proposed leaf is for the last block in the epoch and the node is part of the quorum committee
     // in the next epoch, the node should vote to achieve the double quorum.
     let committee_member_in_next_epoch = leaf.with_epoch
         && is_epoch_transition(leaf.height(), epoch_height)
-        && membership
-            .next_epoch_stake_table()
-            .await?
-            .has_stake(&public_key)
-            .await;
+        && membership.next_epoch_stake_table()?.has_stake(&public_key);
 
     ensure!(
         committee_member_in_current_epoch || committee_member_in_next_epoch,
@@ -519,11 +511,8 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>>(
             .get_light_client_state(view_number)
             .wrap()
             .context(error!("Failed to generate light client state"))?;
-        let next_stake_table = membership
-            .next_epoch_stake_table()
-            .await?
-            .stake_table()
-            .await;
+        let next_stake_table =
+            HSStakeTable::from_iter(membership.next_epoch_stake_table()?.stake_table());
         let next_stake_table_state = next_stake_table
             .commitment(stake_table_capacity)
             .wrap()

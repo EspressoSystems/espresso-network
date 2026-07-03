@@ -1,38 +1,120 @@
 use anyhow::Context;
 use clap::Parser;
+use espresso_telemetry as telemetry;
 use espresso_types::traits::{NullEventConsumer, SequencerPersistence};
 use futures::future::FutureExt;
 use hotshot_types::traits::metrics::NoMetrics;
+use url::Url;
 
 use super::{
     Genesis, L1Params, NetworkParams,
     api::{self, data_source::DataSourceOptions},
     context::SequencerContext,
     init_node, network,
-    options::{Modules, Options},
+    options::{Modules, Options, PublicNodeConfig},
     persistence,
 };
-use crate::keyset::KeySet;
+use crate::{default_telemetry_endpoint, keyset::KeySet};
 
 pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     let opt = Options::parse();
-    opt.logging.init();
+
+    // Genesis carries the chain ID, which selects the default telemetry
+    // endpoint. Load it before telemetry init; the genesis log line is emitted
+    // later, once the subscriber is installed.
+    let genesis = Genesis::load(&opt.genesis_file).await?;
+    let telemetry_endpoint: Option<Url> = opt.telemetry.endpoint.clone().or_else(|| {
+        default_telemetry_endpoint(genesis.chain_config.chain_id).map(|s| {
+            s.parse()
+                .expect("default telemetry endpoint is a valid URL")
+        })
+    });
+    let telemetry_enabled = opt.telemetry.logs_enable || opt.telemetry.metrics_enable;
+
+    // Build telemetry before logging so its layer attaches to the global
+    // subscriber. The registry is still `None` here (the API setup runs later);
+    // the metrics push is attached then via `attach_metrics_push`.
+    let (mut telemetry_handle, deferred_warnings, telemetry_init_error) =
+        match (opt.key_set.clone().try_into(), telemetry_endpoint.as_ref()) {
+            (Ok(KeySet { staking, .. }), Some(endpoint)) => match telemetry::init(
+                &opt.telemetry,
+                &staking,
+                opt.identity.node_name.as_deref(),
+                opt.identity.company_name.as_deref(),
+                endpoint,
+                telemetry::registry(),
+            ) {
+                Ok((h, warns)) => (h, warns, None),
+                Err(e) => (None, Vec::new(), Some(e.context("telemetry init failed"))),
+            },
+            // Telemetry requested but no endpoint resolved (unknown chain, no
+            // override). Stay off and warn so the misconfig is visible.
+            (Ok(_), None) if telemetry_enabled => (
+                None,
+                vec![format!(
+                    "telemetry enabled but no endpoint resolved for chain {}; set \
+                     ESPRESSO_NODE_TELEMETRY_ENDPOINT",
+                    genesis.chain_config.chain_id
+                )],
+                None,
+            ),
+            // Keyset error (surfaced later) or telemetry not requested.
+            _ => (None, Vec::new(), None),
+        };
+    let otel_layer = telemetry_handle.as_ref().and_then(|h| h.tracing_layer());
+    opt.logging.init_with_otel(otel_layer);
+    for w in deferred_warnings {
+        tracing::warn!("{w}");
+    }
+    if let Some(e) = telemetry_init_error {
+        tracing::error!("{e:#}; continuing without telemetry");
+    }
     espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
 
     let mut modules = opt.modules();
     tracing::warn!(?modules, "sequencer starting up");
 
-    let genesis = Genesis::from_file(&opt.genesis_file)?;
+    let public_node_config = PublicNodeConfig::new(&opt, &modules);
+
     tracing::warn!(?genesis, "genesis");
 
-    if let Some(storage) = modules.storage_fs.take() {
-        run_with_storage(genesis, modules, opt, storage).await
+    let result = if let Some(storage) = modules.storage_fs.take() {
+        run_with_storage(
+            genesis,
+            modules,
+            opt,
+            storage,
+            public_node_config,
+            telemetry_handle.as_mut(),
+        )
+        .await
     } else if let Some(storage) = modules.storage_sql.take() {
-        run_with_storage(genesis, modules, opt, storage).await
+        run_with_storage(
+            genesis,
+            modules,
+            opt,
+            storage,
+            public_node_config,
+            telemetry_handle.as_mut(),
+        )
+        .await
     } else {
         // Persistence is required. If none is provided, just use the local file system.
-        run_with_storage(genesis, modules, opt, persistence::fs::Options::default()).await
+        run_with_storage(
+            genesis,
+            modules,
+            opt,
+            persistence::fs::Options::default(),
+            public_node_config,
+            telemetry_handle.as_mut(),
+        )
+        .await
+    };
+
+    if let Some(h) = telemetry_handle {
+        h.shutdown();
     }
+    result
 }
 
 async fn run_with_storage<S>(
@@ -40,15 +122,28 @@ async fn run_with_storage<S>(
     modules: Modules,
     opt: Options,
     storage_opt: S,
+    public_node_config: PublicNodeConfig,
+    telemetry_handle: Option<&mut telemetry::TelemetryHandle>,
 ) -> anyhow::Result<()>
 where
     S: DataSourceOptions,
 {
-    let ctx = init_with_storage(genesis, modules, opt, storage_opt).await?;
+    let mut ctx = init_with_storage(genesis, modules, opt, storage_opt, public_node_config).await?;
+
+    // The API setup deposited the prometheus Registry into `telemetry::REGISTRY`
+    // (if the HTTP module was configured). Attach the metrics push task now,
+    // before consensus starts churning.
+    if let (Some(handle), Some(registry)) = (telemetry_handle, telemetry::registry()) {
+        handle.attach_metrics_push(registry);
+    }
 
     // Start doing consensus.
     ctx.start_consensus().await;
-    ctx.join().await;
+
+    tokio::select! {
+        () = ctx.join() => tracing::warn!("consensus stopped; exiting"),
+        _ = espresso_utils::shutdown::wait_for_shutdown_signal() => ctx.shut_down().await,
+    }
 
     Ok(())
 }
@@ -58,6 +153,7 @@ pub async fn init_with_storage<S>(
     modules: Modules,
     opt: Options,
     mut storage_opt: S,
+    public_node_config: PublicNodeConfig,
 ) -> anyhow::Result<SequencerContext<network::Production, S::Persistence>>
 where
     S: DataSourceOptions,
@@ -113,6 +209,7 @@ where
         libp2p_heartbeat_initial_delay: opt.libp2p_heartbeat_initial_delay,
         libp2p_gossip_factor: opt.libp2p_gossip_factor,
         libp2p_gossip_lazy: opt.libp2p_gossip_lazy,
+        libp2p_dht_put_quorum: opt.libp2p_dht_put_quorum,
     };
 
     let proposal_fetcher_config = opt.proposal_fetcher_config;
@@ -153,7 +250,9 @@ where
                 http_opt = http_opt.light_client(light_client);
             }
             if let Some(config) = modules.config {
-                http_opt = http_opt.config(config);
+                http_opt = http_opt
+                    .config(config)
+                    .public_node_config(public_node_config);
             }
 
             http_opt
@@ -252,6 +351,7 @@ mod test {
             http: Some(Http::with_port(port1)),
             query: Some(Default::default()),
             storage_fs: Some(fs::Options::new(tmp.path().into())),
+            config: Some(Default::default()),
             ..Default::default()
         };
         let opt = Options::parse_from([
@@ -283,9 +383,16 @@ mod test {
         // be waiting for the orchestrator, but it should at least start up the API server and
         // populate some metrics.
         tracing::info!(port = %port1, "starting sequencer");
+        let public_node_config = PublicNodeConfig::new(&opt, &modules);
         let task = spawn(async move {
-            if let Err(err) =
-                init_with_storage(genesis, modules, opt, fs::Options::new(tmp.path().into())).await
+            if let Err(err) = init_with_storage(
+                genesis,
+                modules,
+                opt,
+                fs::Options::new(tmp.path().into()),
+                public_node_config,
+            )
+            .await
             {
                 tracing::error!("failed to start sequencer: {err:#}");
             }
@@ -343,6 +450,41 @@ mod test {
             build_info_line.contains("testing"),
             "expected testing in features: {lines:#?}"
         );
+
+        // The /config/runtime endpoint should be available and reflect CLI overrides. Use a raw
+        // reqwest client to fetch JSON, since surf-disco defaults to bincode encoding which can't
+        // round-trip arbitrary JSON via `serde_json::Value`.
+        let res = reqwest::Client::new()
+            .get(url.join("/config/runtime").unwrap())
+            .header(reqwest::header::ACCEPT, "application/json")
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            res.status().is_success(),
+            "config/runtime status: {}",
+            res.status()
+        );
+        let node_cfg: serde_json::Value = res.json().await.expect("config/runtime returns JSON");
+        assert_eq!(
+            node_cfg["cliquenet_bind_address"],
+            serde_json::Value::String(format!("127.0.0.1:{port2}")),
+            "cliquenet_bind_address mismatch: {node_cfg}"
+        );
+        assert_eq!(
+            node_cfg["is_da"],
+            serde_json::Value::Bool(false),
+            "is_da mismatch: {node_cfg}"
+        );
+        let top_level = node_cfg
+            .as_object()
+            .expect("config/runtime returns a JSON object");
+        for key in top_level.keys() {
+            assert!(
+                !key.to_lowercase().contains("private"),
+                "top-level key '{key}' contains 'private': {node_cfg}"
+            );
+        }
 
         task.abort();
     }

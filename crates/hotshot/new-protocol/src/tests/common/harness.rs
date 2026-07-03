@@ -7,7 +7,7 @@ use hotshot_example_types::{
 };
 use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
-    traits::signature_key::SignatureKey,
+    traits::{metrics::NoMetrics, signature_key::SignatureKey},
 };
 
 use super::utils::mock_membership_with_num_nodes;
@@ -20,7 +20,7 @@ use crate::{
     helpers::test_upgrade_lock,
     logging::KeyPrefix,
     message::Message,
-    network::cliquenet::Cliquenet,
+    network::Cliquenet,
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
@@ -58,8 +58,7 @@ impl TestHarness {
         let state_private_key = state_key_pair.sign_key_ref().clone();
         let instance = Arc::new(TestInstanceState::default());
         let (membership, storage, client) =
-            mock_membership_with_num_nodes(HARNESS_NUM_NODES, HARNESS_EPOCH_HEIGHT, public_key)
-                .await;
+            mock_membership_with_num_nodes(HARNESS_NUM_NODES, HARNESS_EPOCH_HEIGHT, public_key);
         let upgrade_lock = test_upgrade_lock();
 
         let epoch_manager = EpochManager::new(10, membership.clone());
@@ -69,13 +68,15 @@ impl TestHarness {
         let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
         let timeout_one_honest_collector =
             VoteCollector::new(membership.clone(), upgrade_lock.clone());
-        let checkpoint_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
         let epoch_root_collector =
             EpochRootVoteCollector::new(membership.clone(), upgrade_lock.clone());
 
         let genesis_state = TestValidatedState::default();
+        // Use the same version as `TestViewGenerator` (vid2) so the genesis
+        // leaf commitment matches the `parent_commitment` carried by the
+        // first proposal from `TestData`.
         let genesis_leaf =
-            Leaf2::<TestTypes>::genesis(&genesis_state, &instance, TEST_VERSIONS.test.base).await;
+            Leaf2::<TestTypes>::genesis(&genesis_state, &instance, TEST_VERSIONS.vid2.base).await;
 
         let consensus = Consensus::new(
             membership.clone(),
@@ -88,7 +89,6 @@ impl TestHarness {
             epoch_height,
         );
 
-        let vid_disperse_task = VidDisperser::new(membership.clone());
         let vid_reconstruction_task = VidReconstructor::new();
 
         let block_config = BlockBuilderConfig::default();
@@ -119,9 +119,17 @@ impl TestHarness {
             addr,
             vec![],
             upgrade_lock.clone(),
+            Box::new(NoMetrics),
         )
         .await
         .expect("cliquenet creation should succeed");
+
+        let vid_disperse_task = VidDisperser::new(
+            membership.clone(),
+            network.sender().clone(),
+            public_key,
+            private_key.clone(),
+        );
 
         let coordinator = MockCoordinator::builder()
             .consensus(consensus)
@@ -131,7 +139,6 @@ impl TestHarness {
             .vote2_collector(vote2_collector)
             .timeout_collector(timeout_collector)
             .timeout_one_honest_collector(timeout_one_honest_collector)
-            .checkpoint_collector(checkpoint_collector)
             .epoch_root_collector(epoch_root_collector)
             .vid_disperser(vid_disperse_task)
             .vid_reconstructor(vid_reconstruction_task)
@@ -168,11 +175,11 @@ impl TestHarness {
     }
 
     pub async fn apply_and_process(&mut self, input: ConsensusInput<TestTypes>) {
-        self.coordinator.apply_consensus(input).await;
+        self.coordinator.apply_consensus(input);
         self.outputs
             .extend(self.coordinator.outbox().iter().cloned());
         for out in self.coordinator.outbox_mut().take() {
-            if let Err(err) = self.coordinator.process_consensus_output(out).await {
+            if let Err(err) = self.coordinator.process_consensus_output(out) {
                 panic!("unexpected error: {err}")
             }
         }
@@ -208,6 +215,25 @@ impl TestHarness {
             }
         }
         inputs
+    }
+
+    /// Process events from the coordinator until the collected outputs
+    /// satisfy `predicate`. Use for outputs that are gated on storage
+    /// confirmations (votes, proposals) and thus need extra loop turns
+    /// after their triggering input has been observed.
+    pub async fn process_until_output<P>(&mut self, pred: P)
+    where
+        P: Fn(&Outbox<ConsensusOutput<TestTypes>>) -> bool,
+    {
+        while !pred(&self.outputs) {
+            match self.coordinator.next_consensus_input().await {
+                Ok(input) => self.apply_and_process(input).await,
+                Err(err) if err.severity == Severity::Critical => {
+                    panic!("Critical coordinator error: {err}")
+                },
+                Err(_err) => {},
+            }
+        }
     }
 
     pub fn outputs(&self) -> &Outbox<ConsensusOutput<TestTypes>> {

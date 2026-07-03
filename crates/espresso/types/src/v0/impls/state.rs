@@ -71,6 +71,14 @@ pub enum BuilderValidationError {
     FeeAmountOutOfRange(FeeAmount),
     #[error("Invalid Builder Signature")]
     InvalidBuilderSignature,
+    #[error(
+        "Fee info / builder signature count mismatch: fee_count={fee_count}, \
+         signature_count={signature_count}"
+    )]
+    FeeAndSignatureCountMismatch {
+        fee_count: usize,
+        signature_count: usize,
+    },
 }
 
 /// Possible proposal validation failures
@@ -681,7 +689,7 @@ impl<'a> ValidatedTransition<'a> {
     /// verifying signatures. Signatures are identified by index of fee `Vec`.
     fn validate_builder_fee(&self) -> Result<(), ProposalValidationError> {
         // TODO move logic from stand alone fn to here.
-        if let Err(err) = validate_builder_fee(self.proposal.header) {
+        if let Err(err) = validate_builder_fee(self.proposal.header, self.version) {
             return Err(ProposalValidationError::BuilderValidationError(err));
         }
         Ok(())
@@ -926,13 +934,22 @@ impl From<MerkleTreeError> for FeeError {
 
 /// Validate builder accounts by verifying signatures. All fees are
 /// verified against signature by index.
-fn validate_builder_fee(proposed_header: &Header) -> Result<(), BuilderValidationError> {
+fn validate_builder_fee(
+    proposed_header: &Header,
+    version: Version,
+) -> Result<(), BuilderValidationError> {
+    let fee_info = proposed_header.fee_info();
+    let builder_signature = proposed_header.builder_signature();
+
+    if version >= EPOCH_REWARD_VERSION && fee_info.len() != builder_signature.len() {
+        return Err(BuilderValidationError::FeeAndSignatureCountMismatch {
+            fee_count: fee_info.len(),
+            signature_count: builder_signature.len(),
+        });
+    }
+
     // TODO since we are iterating, should we include account/amount in errors?
-    for (fee_info, signature) in proposed_header
-        .fee_info()
-        .iter()
-        .zip(proposed_header.builder_signature())
-    {
+    for (fee_info, signature) in fee_info.iter().zip(builder_signature) {
         // check that `amount` fits in a u64
         fee_info
             .amount()
@@ -1143,7 +1160,7 @@ impl ValidatedState {
             UpgradeType::Fee { chain_config } => chain_config,
             UpgradeType::Epoch { chain_config } => chain_config,
             UpgradeType::DrbAndHeader { chain_config } => chain_config,
-            UpgradeType::Da { chain_config } => chain_config,
+            UpgradeType::NewProtocol { chain_config } => chain_config,
             UpgradeType::EpochReward { chain_config } => chain_config,
         };
 
@@ -1217,7 +1234,7 @@ async fn validate_next_stake_table_hash(
         epoch_height,
     ));
     let coordinator = instance.coordinator.clone();
-    let Some(first_epoch) = coordinator.membership().read().await.first_epoch() else {
+    let Some(first_epoch) = coordinator.membership().first_epoch() else {
         return Err(ProposalValidationError::NoFirstEpoch);
     };
 
@@ -1233,11 +1250,9 @@ async fn validate_next_stake_table_hash(
     let epoch_membership = instance
         .coordinator
         .stake_table_for_epoch(Some(epoch + 1))
-        .await
         .map_err(|_| ProposalValidationError::NextStakeTableNotFound)?;
     let next_stake_table_hash = epoch_membership
         .stake_table_hash()
-        .await
         .ok_or(ProposalValidationError::NextStakeTableHashNotFound)?;
     if next_stake_table_hash != proposed_next_stake_table_hash {
         return Err(ProposalValidationError::NextStakeTableHashMismatch {
@@ -1407,7 +1422,7 @@ impl MerklizedState<SeqTypes, { Self::ARITY }> for BlockMerkleTree {
     type Digest = Sha3Digest;
 
     fn state_type() -> &'static str {
-        "block_merkle_tree"
+        "block_merkle_tree_bigint"
     }
 
     fn header_state_commitment_field() -> &'static str {
@@ -1439,7 +1454,7 @@ impl MerklizedState<SeqTypes, { Self::ARITY }> for FeeMerkleTree {
     type Digest = Sha3Digest;
 
     fn state_type() -> &'static str {
-        "fee_merkle_tree"
+        "fee_merkle_tree_bigint"
     }
 
     fn header_state_commitment_field() -> &'static str {
@@ -1591,14 +1606,12 @@ mod test {
                     timestamp_millis,
                     ..parent.clone()
                 }),
-                Header::V6(parent) | Header::V7(parent) | Header::V8(parent) => {
-                    Header::V6(v0_6::Header {
-                        height: parent.height + 1,
-                        timestamp,
-                        timestamp_millis,
-                        ..parent.clone()
-                    })
-                },
+                Header::V6(parent) => Header::V6(v0_6::Header {
+                    height: parent.height + 1,
+                    timestamp,
+                    timestamp_millis,
+                    ..parent.clone()
+                }),
             }
         }
         /// Replaces builder signature w/ invalid one.
@@ -1635,13 +1648,11 @@ mod test {
                     builder_signature: Some(sig),
                     ..header.clone()
                 }),
-                Header::V6(header) | Header::V7(header) | Header::V8(header) => {
-                    Header::V6(v0_6::Header {
-                        fee_info,
-                        builder_signature: Some(sig),
-                        ..header.clone()
-                    })
-                },
+                Header::V6(header) => Header::V6(v0_6::Header {
+                    fee_info,
+                    builder_signature: Some(sig),
+                    ..header.clone()
+                }),
             }
         }
 
@@ -1682,13 +1693,11 @@ mod test {
                     builder_signature: Some(sig),
                     ..parent.clone()
                 }),
-                Header::V6(parent) | Header::V7(parent) | Header::V8(parent) => {
-                    Header::V6(v0_6::Header {
-                        fee_info,
-                        builder_signature: Some(sig),
-                        ..parent.clone()
-                    })
-                },
+                Header::V6(parent) => Header::V6(v0_6::Header {
+                    fee_info,
+                    builder_signature: Some(sig),
+                    ..parent.clone()
+                }),
             }
         }
     }
@@ -2274,16 +2283,15 @@ mod test {
                 fee_info: FeeInfo::new(account, data),
                 ..header
             }),
-            Header::V6(header) | Header::V7(header) | Header::V8(header) => {
-                Header::V6(v0_6::Header {
-                    builder_signature: Some(sig),
-                    fee_info: FeeInfo::new(account, data),
-                    ..header
-                })
-            },
+            Header::V6(header) => Header::V6(v0_6::Header {
+                builder_signature: Some(sig),
+                fee_info: FeeInfo::new(account, data),
+                ..header
+            }),
         };
 
-        validate_builder_fee(&header).unwrap();
+        let version = header.version();
+        validate_builder_fee(&header, version).unwrap();
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

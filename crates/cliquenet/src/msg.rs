@@ -12,7 +12,10 @@ pub use trailer::Trailer;
 pub const MAX_NOISE_MESSAGE_SIZE: usize = 64 * 1024;
 
 /// Max. number of bytes for payload data.
-pub const MAX_PAYLOAD_SIZE: usize = MAX_NOISE_MESSAGE_SIZE - 32;
+pub const MAX_PAYLOAD_SIZE: usize = MAX_NOISE_MESSAGE_SIZE - RESERVED_TAG_SIZE;
+
+/// Space reserved for the AEAD tag (16 are required, we add some extra margin).
+pub(crate) const RESERVED_TAG_SIZE: usize = 32;
 
 /// Slots contain messages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

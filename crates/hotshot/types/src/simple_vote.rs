@@ -34,15 +34,16 @@ use crate::{
 /// Marker that data should use the quorum cert type
 pub trait QuorumMarker {}
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 /// Data used for a yes vote.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
 pub struct QuorumData<TYPES: NodeType> {
     /// Commitment to the leaf
     pub leaf_commit: Commitment<Leaf<TYPES>>,
 }
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Hash, Eq)]
+
 /// Data used for a yes vote.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
 pub struct QuorumData2<TYPES: NodeType> {
     /// Commitment to the leaf
@@ -52,18 +53,21 @@ pub struct QuorumData2<TYPES: NodeType> {
     /// Block number of the leaf. It's optional to be compatible with pre-epoch version.
     pub block_number: Option<u64>,
 }
+
 /// Data used for a yes vote. Used to distinguish votes sent by the next epoch nodes.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
 pub struct NextEpochQuorumData2<TYPES: NodeType>(QuorumData2<TYPES>);
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+
 /// Data used for a DA vote.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 pub struct DaData {
     /// Commitment to a block payload
     pub payload_commit: VidCommitment,
 }
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+
 /// Data used for a DA vote.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 pub struct DaData2 {
     /// Commitment to a block payload
     pub payload_commit: VidCommitment,
@@ -72,30 +76,34 @@ pub struct DaData2 {
     /// Epoch number
     pub epoch: Option<EpochNumber>,
 }
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+
 /// Data used for a timeout vote.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 pub struct TimeoutData {
     /// View the timeout is for
     pub view: ViewNumber,
 }
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+
 /// Data used for a timeout vote.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 pub struct TimeoutData2 {
     /// View the timeout is for
     pub view: ViewNumber,
     /// Epoch number
     pub epoch: Option<EpochNumber>,
 }
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+
 /// Data used for a Pre Commit vote.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 pub struct ViewSyncPreCommitData {
     /// The relay this vote is intended for
     pub relay: u64,
     /// The view number we are trying to sync on
     pub round: ViewNumber,
 }
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+
 /// Data used for a Pre Commit vote.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 pub struct ViewSyncPreCommitData2 {
     /// The relay this vote is intended for
     pub relay: u64,
@@ -104,16 +112,18 @@ pub struct ViewSyncPreCommitData2 {
     /// Epoch number
     pub epoch: Option<EpochNumber>,
 }
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+
 /// Data used for a Commit vote.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 pub struct ViewSyncCommitData {
     /// The relay this vote is intended for
     pub relay: u64,
     /// The view number we are trying to sync on
     pub round: ViewNumber,
 }
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+
 /// Data used for a Commit vote.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 pub struct ViewSyncCommitData2 {
     /// The relay this vote is intended for
     pub relay: u64,
@@ -122,16 +132,18 @@ pub struct ViewSyncCommitData2 {
     /// Epoch number
     pub epoch: Option<EpochNumber>,
 }
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+
 /// Data used for a Finalize vote.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 pub struct ViewSyncFinalizeData {
     /// The relay this vote is intended for
     pub relay: u64,
     /// The view number we are trying to sync on
     pub round: ViewNumber,
 }
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+
 /// Data used for a Finalize vote.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 pub struct ViewSyncFinalizeData2 {
     /// The relay this vote is intended for
     pub relay: u64,
@@ -140,8 +152,9 @@ pub struct ViewSyncFinalizeData2 {
     /// Epoch number
     pub epoch: Option<EpochNumber>,
 }
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+
 /// Data used for a Upgrade vote.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 pub struct UpgradeProposalData {
     /// The old version that we are upgrading from.
     pub old_version: Version,
@@ -151,6 +164,7 @@ pub struct UpgradeProposalData {
     /// If it is not decided by that view, we discard it.
     pub decide_by: ViewNumber,
     /// A unique identifier for the specific protocol being voted on.
+    #[serde(with = "serde_bytes")]
     pub new_version_hash: Vec<u8>,
     /// The last block for which the old version will be in effect.
     pub old_version_last_view: ViewNumber,
@@ -179,36 +193,6 @@ pub struct Vote2Data<T: NodeType> {
     pub block_number: u64,
 }
 
-/// Data used .
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
-#[serde(bound(deserialize = ""))]
-pub struct CheckpointData {
-    pub view: ViewNumber,
-    pub epoch: EpochNumber,
-}
-
-impl Committable for CheckpointData {
-    fn commit(&self) -> Commitment<Self> {
-        committable::RawCommitmentBuilder::new("CheckpointData")
-            .u64(*self.view)
-            .u64(*self.epoch)
-            .finalize()
-    }
-}
-
-impl HasViewNumber for CheckpointData {
-    fn view_number(&self) -> ViewNumber {
-        self.view
-    }
-}
-
-impl HasEpoch for CheckpointData {
-    fn epoch(&self) -> Option<EpochNumber> {
-        Some(self.epoch)
-    }
-}
-
-impl QuorumMarker for CheckpointData {}
 impl<T: NodeType> QuorumMarker for Vote2Data<T> {}
 
 impl<T: NodeType> HasEpoch for Vote2Data<T> {

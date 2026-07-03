@@ -19,6 +19,7 @@ use espresso_types::{
 };
 
 pub mod fs;
+pub mod migrations;
 pub mod no_storage;
 mod persistence_metrics;
 pub mod sql;
@@ -40,14 +41,78 @@ impl RegisteredValidatorNoX25519 {
     pub fn migrate(self) -> RegisteredValidator<PubKey> {
         RegisteredValidator {
             account: self.account,
-            stake_table_key: self.stake_table_key,
-            state_ver_key: self.state_ver_key,
+            stake_table_key: Some(self.stake_table_key),
+            state_ver_key: Some(self.state_ver_key),
             stake: self.stake,
             commission: self.commission,
             delegators: self.delegators,
             authenticated: self.authenticated,
             x25519_key: None,
             p2p_addr: None,
+        }
+    }
+}
+
+// TODO: replace with a proper data migration if it is ever deemed worthwhile.
+// Field order must match `RegisteredValidator<KEY>` in v0_3::stake_table exactly (bincode is order-sensitive).
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct RegisteredValidatorPreOption {
+    pub account: Address,
+    pub stake_table_key: PubKey,
+    pub state_ver_key: hotshot_types::light_client::StateVerKey,
+    pub stake: U256,
+    pub commission: u16,
+    pub delegators: HashMap<Address, U256>,
+    pub authenticated: bool,
+    pub x25519_key: Option<hotshot_types::x25519::PublicKey>,
+    pub p2p_addr: Option<hotshot_types::addr::NetAddr>,
+}
+
+impl RegisteredValidatorPreOption {
+    pub fn migrate(self) -> RegisteredValidator<PubKey> {
+        RegisteredValidator {
+            account: self.account,
+            stake_table_key: Some(self.stake_table_key),
+            state_ver_key: Some(self.state_ver_key),
+            stake: self.stake,
+            commission: self.commission,
+            delegators: self.delegators,
+            authenticated: self.authenticated,
+            x25519_key: self.x25519_key,
+            p2p_addr: self.p2p_addr,
+        }
+    }
+}
+
+// TODO: replace with a proper data migration if it is ever deemed worthwhile.
+// Layout written after BLS fix (381b0f9207) but before Schnorr Option fix.
+// stake_table_key is Option<KEY>, state_ver_key is raw StateVerKey.
+// Field order must match exactly (bincode is order-sensitive).
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct RegisteredValidatorPreSchnorrOption {
+    pub account: Address,
+    pub stake_table_key: Option<PubKey>,
+    pub state_ver_key: hotshot_types::light_client::StateVerKey,
+    pub stake: U256,
+    pub commission: u16,
+    pub delegators: HashMap<Address, U256>,
+    pub authenticated: bool,
+    pub x25519_key: Option<hotshot_types::x25519::PublicKey>,
+    pub p2p_addr: Option<hotshot_types::addr::NetAddr>,
+}
+
+impl RegisteredValidatorPreSchnorrOption {
+    pub fn migrate(self) -> RegisteredValidator<PubKey> {
+        RegisteredValidator {
+            account: self.account,
+            stake_table_key: self.stake_table_key,
+            state_ver_key: Some(self.state_ver_key),
+            stake: self.stake,
+            commission: self.commission,
+            delegators: self.delegators,
+            authenticated: self.authenticated,
+            x25519_key: self.x25519_key,
+            p2p_addr: self.p2p_addr,
         }
     }
 }
@@ -165,6 +230,7 @@ mod tests {
         sol_types::StakeTableV3::Delegated, stake_table::StakeTableContractVersion,
     };
     use hotshot_example_types::node_types::TEST_VERSIONS;
+    use hotshot_new_protocol::message::Certificate2;
     use hotshot_query_service::{availability::BlockQueryData, testing::mocks::MOCK_UPGRADE};
     use hotshot_types::{
         data::{
@@ -179,7 +245,9 @@ mod tests {
             CertificatePair, NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2,
             UpgradeCertificate,
         },
-        simple_vote::{NextEpochQuorumData2, QuorumData2, UpgradeProposalData, VersionedVoteData},
+        simple_vote::{
+            NextEpochQuorumData2, QuorumData2, UpgradeProposalData, VersionedVoteData, Vote2Data,
+        },
         traits::{EncodeBytes, block_contents::BlockHeader},
         utils::EpochTransitionIndicator,
         vid::avidm::{AvidMScheme, init_avidm_param},
@@ -302,6 +370,47 @@ mod tests {
         assert_eq!(
             storage.load_latest_acted_view().await.unwrap().unwrap(),
             view2
+        );
+    }
+
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_high_qc2_monotonic<P: TestablePersistence>(_p: PhantomData<P>) {
+        let tmp = P::tmp_storage().await;
+        let storage = P::connect(&tmp).await;
+
+        // Initially there is no persisted lock.
+        assert_eq!(storage.load_high_qc2().await.unwrap(), None);
+
+        let mut qc = QuorumCertificate2::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            TEST_VERSIONS.test,
+        )
+        .await;
+
+        // Persist a lock at view 5.
+        qc.view_number = ViewNumber::new(5);
+        storage.append_high_qc2(qc.clone()).await.unwrap();
+        assert_eq!(
+            storage.load_high_qc2().await.unwrap().unwrap().view_number,
+            ViewNumber::new(5)
+        );
+
+        // A newer lock advances the stored view.
+        qc.view_number = ViewNumber::new(6);
+        storage.append_high_qc2(qc.clone()).await.unwrap();
+        assert_eq!(
+            storage.load_high_qc2().await.unwrap().unwrap().view_number,
+            ViewNumber::new(6)
+        );
+
+        // A stale (older) lock is a no-op: the compare-and-set never regresses
+        // the persisted view, even though the file/row write is unconditional.
+        qc.view_number = ViewNumber::new(4);
+        storage.append_high_qc2(qc.clone()).await.unwrap();
+        assert_eq!(
+            storage.load_high_qc2().await.unwrap().unwrap().view_number,
+            ViewNumber::new(6)
         );
     }
 
@@ -786,10 +895,10 @@ mod tests {
         final_qc.view_number += 1;
         final_qc.data.leaf_commit = Committable::commit(&leaf);
         let qcs = [
-            leaves[1].justify_qc(),
-            leaves[2].justify_qc(),
-            leaves[3].justify_qc(),
-            final_qc,
+            CertificatePair::non_epoch_change(leaves[1].justify_qc()),
+            CertificatePair::non_epoch_change(leaves[2].justify_qc()),
+            CertificatePair::non_epoch_change(leaves[3].justify_qc()),
+            CertificatePair::non_epoch_change(final_qc),
         ];
 
         assert_eq!(
@@ -808,9 +917,7 @@ mod tests {
         storage
             .append_decided_leaves(
                 ViewNumber::new(2),
-                leaf_chain
-                    .iter()
-                    .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change((*qc).clone()))),
+                leaf_chain.iter().map(|(leaf, qc)| (leaf, (*qc).clone())),
                 None,
                 &consumer,
             )
@@ -872,10 +979,7 @@ mod tests {
         storage
             .append_decided_leaves(
                 ViewNumber::new(3),
-                vec![(
-                    &leaf_info(leaves[3].clone()),
-                    CertificatePair::non_epoch_change(qcs[3].clone()),
-                )],
+                vec![(&leaf_info(leaves[3].clone()), qcs[3].clone())],
                 None,
                 &consumer,
             )
@@ -898,7 +1002,7 @@ mod tests {
         else {
             panic!("expected decide event, got {:?}", events[0]);
         };
-        assert_eq!(*committing_qc.qc(), qcs[3]);
+        assert_eq!(**committing_qc, qcs[3]);
         assert_eq!(leaf_chain.len(), 1);
         let info = &leaf_chain[0];
         assert_eq!(info.leaf, leaves[3]);
@@ -1257,6 +1361,242 @@ mod tests {
         }
     }
 
+    /// Splitting a decide into `persist_decided_leaves` (persist only, no events/GC) and a later
+    /// `process_decided_events` loses no data: multiple persists can accumulate, and one process
+    /// pass at the latest view drains the whole backlog and runs GC.
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_deferred_decide_processing<P: TestablePersistence>(_p: PhantomData<P>) {
+        let tmp = P::tmp_storage().await;
+        let storage = P::connect(&tmp).await;
+
+        // Create a short blockchain (same setup as `test_decide_with_failing_event_consumer`).
+        let mut chain = vec![];
+
+        let leaf: Leaf2 = Leaf::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            MOCK_UPGRADE.base,
+        )
+        .await
+        .into();
+        let leaf_payload = leaf.block_payload().unwrap();
+        let leaf_payload_bytes_arc = leaf_payload.encode();
+        let avidm_param = init_avidm_param(2).unwrap();
+        let weights = vec![1u32; 2];
+        let ns_table = parse_ns_table(
+            leaf_payload.byte_len().as_usize(),
+            &leaf_payload.ns_table().encode(),
+        );
+        let (payload_commitment, shares) =
+            AvidMScheme::ns_disperse(&avidm_param, &weights, &leaf_payload_bytes_arc, ns_table)
+                .unwrap();
+
+        let (pubkey, privkey) = BLSPubKey::generated_from_seed_indexed([0; 32], 1);
+        let mut vid = AvidMDisperseShare::<SeqTypes> {
+            view_number: ViewNumber::new(0),
+            payload_commitment,
+            share: shares[0].clone(),
+            recipient_key: pubkey,
+            epoch: Some(EpochNumber::new(0)),
+            target_epoch: Some(EpochNumber::new(0)),
+            common: avidm_param,
+        }
+        .to_proposal(&privkey)
+        .unwrap()
+        .clone();
+        let mut quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
+            proposal: QuorumProposal2::<SeqTypes> {
+                block_header: leaf.block_header().clone(),
+                view_number: ViewNumber::genesis(),
+                justify_qc: QuorumCertificate::genesis(
+                    &ValidatedState::default(),
+                    &NodeState::mock(),
+                    TEST_VERSIONS.test,
+                )
+                .await
+                .to_qc2(),
+                upgrade_certificate: None,
+                view_change_evidence: None,
+                next_drb_result: None,
+                next_epoch_justify_qc: None,
+                epoch: None,
+                state_cert: None,
+            },
+        };
+        let mut qc = QuorumCertificate2::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            TEST_VERSIONS.test,
+        )
+        .await;
+
+        let block_payload_signature = BLSPubKey::sign(&privkey, &leaf_payload_bytes_arc)
+            .expect("Failed to sign block payload");
+        let mut da_proposal = Proposal {
+            data: DaProposal2::<SeqTypes> {
+                encoded_transactions: leaf_payload_bytes_arc.clone(),
+                metadata: leaf_payload.ns_table().clone(),
+                view_number: ViewNumber::new(0),
+                epoch: Some(EpochNumber::new(0)),
+                epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
+            },
+            signature: block_payload_signature,
+            _pd: Default::default(),
+        };
+
+        let vid_commitment = vid_commitment(
+            &leaf_payload_bytes_arc,
+            &leaf.block_header().metadata().encode(),
+            2,
+            TEST_VERSIONS.test.base,
+        );
+
+        for i in 0..4 {
+            quorum_proposal.proposal.view_number = ViewNumber::new(i);
+            let leaf = Leaf2::from_quorum_proposal(&quorum_proposal);
+            qc.view_number = leaf.view_number();
+            qc.data.leaf_commit = Committable::commit(&leaf);
+            vid.data.view_number = leaf.view_number();
+            da_proposal.data.view_number = leaf.view_number();
+            chain.push((leaf.clone(), qc.clone(), vid.clone(), da_proposal.clone()));
+        }
+
+        // Per-view artifacts, as persisted at receive time (before any decide).
+        for (_, _, vid, da) in &chain {
+            storage.append_da2(da, vid_commitment).await.unwrap();
+            storage
+                .append_vid(&convert_proposal(vid.clone()))
+                .await
+                .unwrap();
+        }
+
+        let consumer = EventCollector::default();
+
+        // Two decides with no processing in between (a lagging/coalescing processor): {0,1}, {2,3}.
+        for (from, to, view) in [(0usize, 2usize, 1u64), (2, 4, 3)] {
+            let leaf_chain = chain
+                .iter()
+                .take(to)
+                .skip(from)
+                .map(|(leaf, qc, ..)| (leaf_info(leaf.clone()), qc.clone()))
+                .collect::<Vec<_>>();
+            storage
+                .persist_decided_leaves(
+                    ViewNumber::new(view),
+                    leaf_chain
+                        .iter()
+                        .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change(qc.clone()))),
+                    None,
+                    &consumer,
+                )
+                .await
+                .unwrap();
+        }
+
+        // Persist-only: leaves saved (anchor advanced), but no events emitted and no GC.
+        assert_eq!(
+            storage.load_anchor_view().await.unwrap(),
+            ViewNumber::new(3),
+            "anchor view should reflect the latest persisted leaf"
+        );
+        assert!(
+            consumer.leaf_chain().await.is_empty(),
+            "persist_decided_leaves must not emit decide events"
+        );
+        for i in 0..4 {
+            assert!(
+                storage
+                    .load_vid_share(ViewNumber::new(i))
+                    .await
+                    .unwrap()
+                    .is_some(),
+                "persist_decided_leaves must not garbage collect VID shares"
+            );
+            assert!(
+                storage
+                    .load_da_proposal(ViewNumber::new(i))
+                    .await
+                    .unwrap()
+                    .is_some(),
+                "persist_decided_leaves must not garbage collect DA proposals"
+            );
+        }
+
+        // A failing consumer propagates the error and leaves the cursor un-advanced: nothing is
+        // GC'd and the range is retried below.
+        storage
+            .process_decided_events(ViewNumber::new(3), None, &FailConsumer)
+            .await
+            .unwrap_err();
+        for i in 0..4 {
+            assert!(
+                storage
+                    .load_da_proposal(ViewNumber::new(i))
+                    .await
+                    .unwrap()
+                    .is_some(),
+                "a failed process pass must not garbage collect anything"
+            );
+        }
+
+        // One process pass at the latest view drains the whole backlog, runs GC, and reports the
+        // cursor it advanced to.
+        let processed = storage
+            .process_decided_events(ViewNumber::new(3), None, &consumer)
+            .await
+            .unwrap();
+        assert_eq!(
+            processed,
+            Some(ViewNumber::new(3)),
+            "process_decided_events should report the highest processed view"
+        );
+
+        // All four leaves delivered, with payloads and VID shares reconstructed from storage.
+        let leaf_chain = consumer.leaf_chain().await;
+        assert_eq!(leaf_chain.len(), 4, "{leaf_chain:#?}");
+        for ((leaf, ..), info) in chain.iter().zip(leaf_chain.iter()) {
+            assert_eq!(info.leaf, *leaf);
+            let decided_vid_share = info.vid_share.as_ref().unwrap();
+            assert_eq!(decided_vid_share.view_number(), leaf.view_number());
+            assert!(info.leaf.block_payload().is_some());
+        }
+
+        // GC ran for the processed range.
+        for i in 0..4 {
+            assert!(
+                storage
+                    .load_vid_share(ViewNumber::new(i))
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "process_decided_events should have garbage collected VID shares"
+            );
+            assert!(
+                storage
+                    .load_da_proposal(ViewNumber::new(i))
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "process_decided_events should have garbage collected DA proposals"
+            );
+        }
+
+        // Re-processing with nothing new is a no-op.
+        let consumer2 = EventCollector::default();
+        storage
+            .process_decided_events(ViewNumber::new(3), None, &consumer2)
+            .await
+            .unwrap();
+        assert!(
+            consumer2.leaf_chain().await.is_empty(),
+            "re-processing an already-drained backlog must emit no events"
+        );
+        assert_eq!(
+            storage.load_anchor_view().await.unwrap(),
+            ViewNumber::new(3)
+        );
+    }
+
     #[rstest_reuse::apply(persistence_types)]
     pub async fn test_pruning<P: TestablePersistence>(_p: PhantomData<P>) {
         let tmp = P::tmp_storage().await;
@@ -1343,6 +1683,20 @@ mod tests {
             _pd: Default::default(),
         };
 
+        let leaf2: Leaf2 = leaf.clone().into();
+        let vote_data = Vote2Data {
+            leaf_commit: leaf2.commit(),
+            epoch: EpochNumber::new(0),
+            block_number: leaf2.height(),
+        };
+        let cert2 = Certificate2::new(
+            vote_data.clone(),
+            vote_data.commit(),
+            ViewNumber::new(0),
+            None,
+            PhantomData,
+        );
+
         storage
             .append_da2(&da_proposal, VidCommitment::V1(payload_commitment))
             .await
@@ -1350,6 +1704,10 @@ mod tests {
         storage.append_vid(&vid_share).await.unwrap();
         storage
             .append_quorum_proposal2(&quorum_proposal)
+            .await
+            .unwrap();
+        storage
+            .append_cert2(ViewNumber::new(0), cert2)
             .await
             .unwrap();
 
@@ -1384,6 +1742,13 @@ mod tests {
                 .unwrap(),
             quorum_proposal
         );
+        assert!(
+            storage
+                .load_cert2(ViewNumber::new(0))
+                .await
+                .unwrap()
+                .is_some()
+        );
 
         // Decide an even newer view, triggering GC of the old data.
         storage
@@ -1409,6 +1774,13 @@ mod tests {
                 .load_quorum_proposal(ViewNumber::new(0))
                 .await
                 .is_err()
+        );
+        assert!(
+            storage
+                .load_cert2(ViewNumber::new(0))
+                .await
+                .unwrap()
+                .is_none()
         );
     }
 
@@ -1535,7 +1907,7 @@ mod tests {
 
         let current_membership = membership_coordinator.membership();
         {
-            let membership_state = current_membership.read().await;
+            let membership_state = current_membership;
             let stake_table_fetcher = membership_state.fetcher();
 
             let block1 = anvil_provider
@@ -1567,7 +1939,7 @@ mod tests {
             .expect("latest l1 block");
 
         {
-            let membership_state = current_membership.read().await;
+            let membership_state = current_membership;
             let stake_table_fetcher = membership_state.fetcher();
 
             assert_events_eq(
@@ -1616,7 +1988,7 @@ mod tests {
             .map(|i| StateKeyPair::generate_from_seed_indexed([2; 32], i as u64))
             .collect::<Vec<_>>();
 
-        let validators = staking_priv_keys(&priv_keys, &state_key_pairs, 20);
+        let validators = staking_priv_keys(&priv_keys, &state_key_pairs, &[], 20);
 
         let deployer = ProviderBuilder::new()
             .wallet(EthereumWallet::from(network_config.signer().clone()))

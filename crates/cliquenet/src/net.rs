@@ -1,11 +1,7 @@
 pub mod peer;
 pub mod server;
 
-use std::{
-    collections::HashMap,
-    ops::{Deref, DerefMut},
-    sync::Arc,
-};
+use std::{fmt, ops::Deref, sync::Arc};
 
 use bon::Builder;
 use bytes::Bytes;
@@ -16,13 +12,12 @@ use tokio::{
         mpsc::{self, UnboundedReceiver, UnboundedSender},
         oneshot, watch,
     },
-    task::JoinHandle,
 };
 use tracing::{debug, info, warn};
 
 use crate::{
-    Config, Role, addr::NetAddr, error::NetworkError, msg::Slot, net::server::Server,
-    x25519::PublicKey,
+    Config, Metrics, Role, addr::NetAddr, error::NetworkError, metrics::NoMetrics, msg::Slot,
+    net::server::Server, x25519::PublicKey,
 };
 
 type PeerMessage = (PublicKey, Bytes, Option<OwnedSemaphorePermit>);
@@ -30,7 +25,7 @@ type PeerMessage = (PublicKey, Bytes, Option<OwnedSemaphorePermit>);
 #[derive(Debug)]
 pub struct Network {
     recv: NetworkReceiver,
-    ctrl: NetworkController,
+    send: NetworkSender,
 }
 
 #[derive(Debug)]
@@ -38,15 +33,23 @@ pub struct NetworkReceiver {
     rx: UnboundedReceiver<PeerMessage>,
 }
 
-#[derive(Debug)]
-pub struct NetworkController {
+#[derive(Clone)]
+pub struct NetworkSender {
     conf: Arc<Config>,
     node: PublicKey,
-    parties: HashMap<PublicKey, Role>,
     tx: UnboundedSender<Command>,
     next_slot: watch::Sender<Slot>,
-    lower_bound: Slot,
-    task: JoinHandle<()>,
+    metrics: Arc<dyn Metrics>,
+}
+
+impl fmt::Debug for NetworkSender {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NetworkSender")
+            .field("node", &self.node)
+            .field("lower_bound", &*self.next_slot.borrow())
+            .field("conf", &self.conf)
+            .finish()
+    }
 }
 
 /// Server task instructions.
@@ -107,9 +110,8 @@ impl Network {
             .await
             .map_err(|e| NetworkError::Bind(conf.bind.clone(), e))?;
 
-        let _addr = listener.local_addr()?;
+        let addr = listener.local_addr()?;
         let node = conf.keypair.public_key();
-        let parties = HashMap::from_iter(conf.parties.iter().map(|(k, _)| (*k, Role::Active)));
 
         // Command channel from application to network.
         let (otx, orx) = mpsc::unbounded_channel();
@@ -119,34 +121,48 @@ impl Network {
 
         let (etx, erx) = watch::channel(Slot::MIN);
 
+        let metr = conf.metrics.clone().unwrap_or_else(|| Arc::new(NoMetrics));
         let conf = Arc::new(conf);
-        let serv = Server::spawn(conf.clone(), listener, Role::Active, itx, orx, erx);
+
+        // The server ends when all `NetworkSender`s are dropped.
+        Server::spawn(
+            conf.clone(),
+            listener,
+            Role::Active,
+            itx,
+            orx,
+            erx,
+            metr.clone(),
+        );
+
         let recv = NetworkReceiver { rx: irx };
-        let ctrl = NetworkController {
+        let send = NetworkSender {
             conf: conf.clone(),
             node,
-            parties,
             tx: otx,
-            task: serv,
             next_slot: etx,
-            lower_bound: Slot::MIN,
+            metrics: metr,
         };
 
-        info!(name = %conf.name, %node, addr = %_addr, "listening");
+        info!(name = %conf.name, %node, %addr, "listening");
 
-        Ok(Self { recv, ctrl })
+        Ok(Self { recv, send })
     }
 
-    pub fn controller(&mut self) -> &mut NetworkController {
-        &mut self.ctrl
+    pub fn sender(&self) -> &NetworkSender {
+        &self.send
     }
 
-    pub fn receiver(&mut self) -> &mut NetworkReceiver {
+    pub fn receiver(&self) -> &NetworkReceiver {
+        &self.recv
+    }
+
+    pub fn receiver_mut(&mut self) -> &mut NetworkReceiver {
         &mut self.recv
     }
 
-    pub fn split_into(self) -> (NetworkController, NetworkReceiver) {
-        (self.ctrl, self.recv)
+    pub fn split_into(self) -> (NetworkSender, NetworkReceiver) {
+        (self.send, self.recv)
     }
 
     pub async fn receive(&mut self) -> Option<(PublicKey, Bytes)> {
@@ -155,16 +171,10 @@ impl Network {
 }
 
 impl Deref for Network {
-    type Target = NetworkController;
+    type Target = NetworkSender;
 
     fn deref(&self) -> &Self::Target {
-        &self.ctrl
-    }
-}
-
-impl DerefMut for Network {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.ctrl
+        &self.send
     }
 }
 
@@ -174,20 +184,23 @@ impl NetworkReceiver {
     /// The returned public key denotes the source where the message came from.
     pub async fn receive(&mut self) -> Option<(PublicKey, Bytes)> {
         let (k, b, _) = self.rx.recv().await?;
+        debug!(peer = %k, len = b.len(), "message received");
         Some((k, b))
     }
 }
 
-impl NetworkController {
-    /// Iterate over all parties.
-    pub fn parties(&self) -> impl Iterator<Item = (&PublicKey, &Role)> {
-        self.parties.iter()
+impl NetworkSender {
+    pub fn config(&self) -> &Config {
+        &self.conf
     }
 
     /// Send a message to a party, identified by the given public key.
-    pub fn unicast(&mut self, s: Slot, to: PublicKey, msg: Vec<u8>) -> Result<(), NetworkError> {
-        debug!(slot = %s, %to, "unicast");
+    pub fn unicast(&self, s: Slot, to: PublicKey, msg: Vec<u8>) -> Result<(), NetworkError> {
+        debug!(slot = %s, %to, len = msg.len(), "unicast");
         self.length_check(&msg)?;
+        if self.lt_lower_bound(s) {
+            return Ok(());
+        }
         let cmd = SendCommand::builder()
             .slot(s)
             .action(SendAction::Unicast(to, msg))
@@ -198,9 +211,12 @@ impl NetworkController {
     }
 
     /// Send a message to all parties.
-    pub fn broadcast(&mut self, s: Slot, msg: Vec<u8>) -> Result<(), NetworkError> {
-        debug!(slot = %s, "broadcast");
+    pub fn broadcast(&self, s: Slot, msg: Vec<u8>) -> Result<(), NetworkError> {
+        debug!(slot = %s, len = msg.len(), "broadcast");
         self.length_check(&msg)?;
+        if self.lt_lower_bound(s) {
+            return Ok(());
+        }
         let cmd = SendCommand::builder()
             .slot(s)
             .action(SendAction::Broadcast(msg))
@@ -211,12 +227,15 @@ impl NetworkController {
     }
 
     /// Send a message to several parties, identified by their public keys.
-    pub fn multicast<P>(&mut self, s: Slot, to: P, msg: Vec<u8>) -> Result<(), NetworkError>
+    pub fn multicast<P>(&self, s: Slot, to: P, msg: Vec<u8>) -> Result<(), NetworkError>
     where
         P: IntoIterator<Item = PublicKey>,
     {
-        debug!(slot = %s, "multicast");
+        debug!(slot = %s, len = msg.len(), "multicast");
         self.length_check(&msg)?;
+        if self.lt_lower_bound(s) {
+            return Ok(());
+        }
         let cmd = SendCommand::builder()
             .slot(s)
             .action(SendAction::Multicast(to.into_iter().collect(), msg))
@@ -227,36 +246,39 @@ impl NetworkController {
     }
 
     /// General send operation, supporting custom retry policies.
-    pub fn send(&mut self, cmd: SendCommand) -> Result<(), NetworkError> {
-        debug!(slot = %cmd.slot, "send");
-        self.length_check(msg_bytes(&cmd))?;
+    pub fn send(&self, cmd: SendCommand) -> Result<(), NetworkError> {
+        let bytes = msg_bytes(&cmd);
+        debug!(slot = %cmd.slot, len = %bytes.len(), "send");
+        self.length_check(bytes)?;
+        if self.lt_lower_bound(cmd.slot) {
+            return Ok(());
+        }
         self.tx
             .send(Command::Send(cmd))
             .map_err(|_| NetworkError::ChannelClosed)
     }
 
     /// Add the given peers to the network.
-    pub fn add_peers<P>(&mut self, r: Role, peers: P) -> Result<(), NetworkError>
+    pub fn add_peers<P>(&self, r: Role, peers: P) -> Result<(), NetworkError>
     where
         P: IntoIterator<Item = (PublicKey, NetAddr)>,
     {
         debug!(role = %r, "add_peers");
         let peers = peers.into_iter().collect::<Vec<_>>();
-        self.parties.extend(peers.iter().map(|(p, ..)| (*p, r)));
         self.tx
             .send(Command::Peer(PeerCommand::Add(r, peers)))
             .map_err(|_| NetworkError::ChannelClosed)
     }
 
     /// Remove the given peers from the network.
-    pub fn remove_peers<P>(&mut self, peers: P) -> Result<(), NetworkError>
+    pub fn remove_peers<P>(&self, peers: P) -> Result<(), NetworkError>
     where
         P: IntoIterator<Item = PublicKey>,
     {
         debug!("remove_peers");
         let peers = peers.into_iter().collect::<Vec<_>>();
         for p in &peers {
-            self.parties.remove(p);
+            self.metrics.del(p);
         }
         self.tx
             .send(Command::Peer(PeerCommand::Remove(peers)))
@@ -264,39 +286,39 @@ impl NetworkController {
     }
 
     /// Assign the given role to the given peers.
-    pub fn assign_peers<P>(&mut self, r: Role, peers: P) -> Result<(), NetworkError>
+    pub fn assign_peers<P>(&self, r: Role, peers: P) -> Result<(), NetworkError>
     where
         P: IntoIterator<Item = PublicKey>,
     {
         debug!(role = %r, "assign_peers");
         let peers = peers.into_iter().collect::<Vec<_>>();
-        for p in &peers {
-            if let Some(role) = self.parties.get_mut(p) {
-                *role = r
-            }
-        }
         self.tx
             .send(Command::Peer(PeerCommand::Assign(r, peers)))
             .map_err(|_| NetworkError::ChannelClosed)
     }
 
-    pub fn gc(&mut self, s: Slot) -> Result<(), NetworkError> {
+    /// Trigger garbage collection of messages below the given slot.
+    pub fn gc(&self, s: Slot) -> Result<(), NetworkError> {
         debug!(slot = %s, "gc");
-        if s <= self.lower_bound {
-            return Ok(());
+        if self.next_slot.is_closed() {
+            return Err(NetworkError::ChannelClosed);
         }
-        self.next_slot
-            .send(s)
-            .map_err(|_| NetworkError::ChannelClosed)?;
-        self.lower_bound = s;
+        self.next_slot.send_if_modified(|lower_bound| {
+            if s > *lower_bound {
+                *lower_bound = s;
+                true
+            } else {
+                false
+            }
+        });
         Ok(())
     }
 
     /// Trigger network shutdown.
     ///
     /// The returned future will resolve once the server task finished.
-    pub fn shutdown(&mut self) -> Result<impl Future<Output = ()> + use<>, NetworkError> {
-        debug!("shutdown");
+    pub fn shutdown(&self) -> Result<impl Future<Output = ()> + use<>, NetworkError> {
+        warn!("shutdown");
         let (tx, rx) = oneshot::channel();
         self.tx
             .send(Command::Shutdown(tx))
@@ -320,6 +342,22 @@ impl NetworkController {
         }
         Ok(())
     }
+
+    /// Check if the given slot is less than our lower bound.
+    fn lt_lower_bound(&self, s: Slot) -> bool {
+        let lower_bound = *self.next_slot.borrow();
+        if s < lower_bound {
+            warn!(
+                name = %self.conf.name,
+                node = %self.node,
+                slot = %s,
+                %lower_bound,
+                "slot below lower bound"
+            );
+            return true;
+        }
+        false
+    }
 }
 
 fn msg_bytes(cmd: &SendCommand) -> &[u8] {
@@ -327,11 +365,5 @@ fn msg_bytes(cmd: &SendCommand) -> &[u8] {
         SendAction::Unicast(_, b) => b,
         SendAction::Multicast(_, b) => b,
         SendAction::Broadcast(b) => b,
-    }
-}
-
-impl Drop for NetworkController {
-    fn drop(&mut self) {
-        self.task.abort();
     }
 }

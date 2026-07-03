@@ -63,12 +63,12 @@ where
     async fn block_height(&self) -> QueryResult<usize>;
     async fn count_transactions_in_range(
         &self,
-        range: impl RangeBounds<usize> + Send,
+        range: impl RangeBounds<usize> + Send + Sync + Clone,
         namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize>;
     async fn payload_size_in_range(
         &self,
-        range: impl RangeBounds<usize> + Send,
+        range: impl RangeBounds<usize> + Send + Sync + Clone,
         namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize>;
     async fn vid_share<ID>(&self, id: ID) -> QueryResult<VidShare>

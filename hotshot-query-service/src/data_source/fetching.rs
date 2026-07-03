@@ -82,7 +82,11 @@ use hotshot_types::{
 };
 use jf_merkle_tree_compat::{MerkleTreeScheme, prelude::MerkleProof};
 use tagged_base64::TaggedBase64;
-use tokio::{spawn, sync::Mutex, time::sleep};
+use tokio::{
+    spawn,
+    sync::Mutex,
+    time::{sleep, timeout},
+};
 use tracing::Instrument;
 
 use super::{
@@ -90,8 +94,8 @@ use super::{
     notifier::Notifier,
     storage::{
         Aggregate, AggregatesStorage, AvailabilityStorage, ExplorerStorage,
-        MerklizedStateHeightStorage, MerklizedStateStorage, NodeStorage, UpdateAggregatesStorage,
-        UpdateAvailabilityStorage,
+        MerklizedStateHeightStorage, MerklizedStateStorage, NodeStorage, SerializableRetry,
+        UpdateAggregatesStorage, UpdateAvailabilityStorage,
         pruning::{PruneStorage, PrunedHeightDataSource, PrunedHeightStorage},
     },
 };
@@ -114,6 +118,7 @@ use crate::{
         NodeDataSource, SyncStatus, SyncStatusQueryData, SyncStatusRange, TimeWindowQueryData,
         WindowStart,
     },
+    serializable_retry,
     status::{HasMetrics, StatusDataSource},
     task::BackgroundTask,
     types::HeightIndexed,
@@ -563,15 +568,18 @@ impl<Types, S, P> StatusDataSource for FetchingDataSource<Types, S, P>
 where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
-    S: VersionedDataSource + HasMetrics + Send + Sync + 'static,
+    S: VersionedDataSource + HasMetrics + SerializableRetry + Send + Sync + 'static,
     for<'a> S::ReadOnly<'a>: NodeStorage<Types>,
     P: Send + Sync,
 {
     async fn block_height(&self) -> QueryResult<usize> {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.block_height().await
+        serializable_retry!(self.fetcher.storage, || async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.block_height().await
+        })
+        .await
     }
 }
 
@@ -579,13 +587,16 @@ where
 impl<Types, S, P> PrunedHeightDataSource for FetchingDataSource<Types, S, P>
 where
     Types: NodeType,
-    S: VersionedDataSource + HasMetrics + Send + Sync + 'static,
+    S: VersionedDataSource + HasMetrics + SerializableRetry + Send + Sync + 'static,
     for<'a> S::ReadOnly<'a>: PrunedHeightStorage,
     P: Send + Sync,
 {
     async fn load_pruned_height(&self) -> anyhow::Result<Option<u64>> {
-        let mut tx = self.read().await?;
-        tx.load_pruned_height().await
+        serializable_retry!(self.fetcher.storage, || async {
+            let mut tx = self.read().await?;
+            tx.load_pruned_height().await
+        })
+        .await
     }
 
     async fn load_state_pruned_height(&self) -> anyhow::Result<Option<u64>> {
@@ -861,6 +872,51 @@ where
             vid.notify(&self.fetcher.notifiers).await;
         }
 
+        Ok(())
+    }
+
+    /// Append a payload for a block whose leaf was already decided without one.
+    ///
+    /// In the new protocol, decide events can arrive before VID reconstruction
+    /// has produced the block payload, so [`append`](Self::append) may persist
+    /// a leaf with no payload attached. The payload is then back-filled here
+    /// once it becomes available, leaving the rest of the block info untouched.
+    ///
+    /// Reconstruction runs on views that are not yet (and may never be)
+    /// decided, so the block is only stored if it matches the decided leaf at
+    /// the same height. If that leaf hasn't been ingested yet the payload is
+    /// dropped: when the decide arrives, [`append`](Self::append) spawns a
+    /// fetch that back-fills the payload from a peer.
+    async fn append_payload(&self, block: BlockQueryData<Types>) -> anyhow::Result<()> {
+        let height = block.height();
+        let leaf = {
+            let mut tx = self.read().await.context("opening read transaction")?;
+            match tx.get_leaf(LeafId::Number(height as usize)).await {
+                Ok(leaf) => leaf,
+                Err(QueryError::Missing | QueryError::NotFound) => {
+                    tracing::info!(
+                        height,
+                        "dropping reconstructed payload; leaf not yet available"
+                    );
+                    return Ok(());
+                },
+                Err(err) => {
+                    return Err(err).context(format!(
+                        "loading leaf {height} to verify reconstructed payload"
+                    ));
+                },
+            }
+        };
+        if leaf.block_hash() != block.hash() {
+            tracing::warn!(
+                height,
+                decided = %leaf.block_hash(),
+                reconstructed = %block.hash(),
+                "reconstructed payload does not match decided block; discarding"
+            );
+            return Ok(());
+        }
+        self.fetcher.store_and_notify(&block).await;
         Ok(())
     }
 }
@@ -1641,6 +1697,15 @@ where
     }
 }
 
+/// How long the aggregator waits for the next block before rebuilding the stream.
+///
+/// The aggregator drives an in-order stream of passive fetches. A single missed availability
+/// notification would otherwise park the stream until the 8h proactive scan. On this interval
+/// the aggregator breaks the inner loop and rebuilds the stream from the committed aggregate
+/// height, which re-evaluates `might_exist` against current storage and loads now-present
+/// heights as `Ready`.
+pub(crate) const AGGREGATOR_RETRY_INTERVAL: Duration = Duration::from_secs(30);
+
 impl<Types, S, P> Fetcher<Types, S, P>
 where
     Types: NodeType,
@@ -1681,7 +1746,7 @@ where
                 None => (0, Aggregate::default()),
             };
 
-            tracing::info!(start, "starting aggregator");
+            tracing::debug!(start, "starting aggregator");
             metrics.height.set(start);
 
             let mut blocks = self
@@ -1690,46 +1755,56 @@ where
                 .then(Fetch::resolve)
                 .ready_chunks(chunk_size)
                 .boxed();
-            while let Some(chunk) = blocks.next().await {
-                let Some(last) = chunk.last() else {
-                    // This is not supposed to happen, but if the chunk is empty, just skip it.
-                    tracing::warn!("ready_chunks returned an empty chunk");
-                    continue;
-                };
-                let height = last.height();
-                let num_blocks = chunk.len();
-                tracing::debug!(
-                    num_blocks,
-                    height,
-                    "updating aggregate statistics for chunk"
-                );
-                loop {
-                    let res = async {
-                        let mut tx = self.write().await.context("opening transaction")?;
-                        let aggregate =
-                            tx.update_aggregates(prev_aggregate.clone(), &chunk).await?;
-                        tx.commit().await.context("committing transaction")?;
-                        prev_aggregate = aggregate;
-                        anyhow::Result::<_>::Ok(())
-                    }
-                    .await;
-                    match res {
-                        Ok(()) => {
-                            break;
-                        },
-                        Err(err) => {
-                            tracing::warn!(
-                                num_blocks,
-                                height,
-                                "failed to update aggregates for chunk: {err:#}"
-                            );
-                            sleep(Duration::from_secs(1)).await;
-                        },
-                    }
+            loop {
+                match timeout(AGGREGATOR_RETRY_INTERVAL, blocks.next()).await {
+                    Ok(Some(chunk)) => {
+                        let Some(last) = chunk.last() else {
+                            // This is not supposed to happen, but if the chunk is empty, skip it.
+                            tracing::warn!("ready_chunks returned an empty chunk");
+                            continue;
+                        };
+                        let height = last.height();
+                        let num_blocks = chunk.len();
+                        tracing::debug!(
+                            num_blocks,
+                            height,
+                            "updating aggregate statistics for chunk"
+                        );
+                        loop {
+                            let res = async {
+                                let mut tx = self.write().await.context("opening transaction")?;
+                                let aggregate =
+                                    tx.update_aggregates(prev_aggregate.clone(), &chunk).await?;
+                                tx.commit().await.context("committing transaction")?;
+                                prev_aggregate = aggregate;
+                                anyhow::Result::<_>::Ok(())
+                            }
+                            .await;
+                            match res {
+                                Ok(()) => {
+                                    break;
+                                },
+                                Err(err) => {
+                                    tracing::warn!(
+                                        num_blocks,
+                                        height,
+                                        "failed to update aggregates for chunk: {err:#}"
+                                    );
+                                    sleep(Duration::from_secs(1)).await;
+                                },
+                            }
+                        }
+                        metrics.height.set(height as usize);
+                    },
+                    Ok(None) => break, // stream ended (unbounded range: should not happen)
+                    // A legitimately slow in-progress fetch is intentionally abandoned here:
+                    // we cannot distinguish "slow fetch" from "missed-notification stall", so
+                    // we rebuild the stream, which re-loads now-present heights as Ready and
+                    // re-issues any genuinely-missing fetch from the committed aggregate height.
+                    Err(_elapsed) => break,
                 }
-                metrics.height.set(height as usize);
             }
-            tracing::warn!("aggregator block stream ended unexpectedly; will restart");
+            tracing::debug!("aggregator stream restarting");
         }
     }
 }
@@ -1925,15 +2000,18 @@ where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
-    S: VersionedDataSource + 'static,
+    S: VersionedDataSource + SerializableRetry + 'static,
     for<'a> S::ReadOnly<'a>: MerklizedStateHeightStorage,
     P: Send + Sync,
 {
     async fn get_last_state_height(&self) -> QueryResult<usize> {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.get_last_state_height().await
+        serializable_retry!(self.fetcher.storage, || async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.get_last_state_height().await
+        })
+        .await
     }
 }
 
@@ -1942,47 +2020,61 @@ impl<Types, S, P> NodeDataSource<Types> for FetchingDataSource<Types, S, P>
 where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
-    S: VersionedDataSource + 'static,
+    S: VersionedDataSource + SerializableRetry + 'static,
     for<'a> S::ReadOnly<'a>: NodeStorage<Types> + PrunedHeightStorage,
     P: Send + Sync,
 {
     async fn block_height(&self) -> QueryResult<usize> {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.block_height().await
+        serializable_retry!(self.fetcher.storage, || async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.block_height().await
+        })
+        .await
     }
 
     async fn count_transactions_in_range(
         &self,
-        range: impl RangeBounds<usize> + Send,
+        range: impl RangeBounds<usize> + Send + Sync + Clone,
         namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize> {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.count_transactions_in_range(range, namespace).await
+        serializable_retry!(self.fetcher.storage, || async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.count_transactions_in_range(range.clone(), namespace)
+                .await
+        })
+        .await
     }
 
     async fn payload_size_in_range(
         &self,
-        range: impl RangeBounds<usize> + Send,
+        range: impl RangeBounds<usize> + Send + Sync + Clone,
         namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize> {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.payload_size_in_range(range, namespace).await
+        serializable_retry!(self.fetcher.storage, || async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.payload_size_in_range(range.clone(), namespace).await
+        })
+        .await
     }
 
     async fn vid_share<ID>(&self, id: ID) -> QueryResult<VidShare>
     where
         ID: Into<BlockId<Types>> + Send + Sync,
     {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.vid_share(id).await
+        let id: BlockId<Types> = id.into();
+        serializable_retry!(self.fetcher.storage, || async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.vid_share(id).await
+        })
+        .await
     }
 
     async fn sync_status(&self) -> QueryResult<SyncStatusQueryData> {
@@ -2000,10 +2092,14 @@ where
         end: u64,
         limit: usize,
     ) -> QueryResult<TimeWindowQueryData<Header<Types>>> {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.get_header_window(start, end, limit).await
+        let start: WindowStart<Types> = start.into();
+        serializable_retry!(self.fetcher.storage, || async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.get_header_window(start, end, limit).await
+        })
+        .await
     }
 }
 
@@ -2014,7 +2110,7 @@ where
     Payload<Types>: QueryablePayload<Types>,
     Header<Types>: QueryableHeader<Types> + explorer::traits::ExplorerHeader<Types>,
     crate::Transaction<Types>: explorer::traits::ExplorerTransaction<Types>,
-    S: VersionedDataSource + 'static,
+    S: VersionedDataSource + SerializableRetry + 'static,
     for<'a> S::ReadOnly<'a>: ExplorerStorage<Types>,
     P: Send + Sync,
 {
@@ -2025,10 +2121,13 @@ where
         Vec<explorer::query_data::BlockSummary<Types>>,
         explorer::query_data::GetBlockSummariesError,
     > {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.get_block_summaries(request).await
+        serializable_retry!(self.fetcher.storage, || async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.get_block_summaries(request.clone()).await
+        })
+        .await
     }
 
     async fn get_block_detail(
@@ -2036,10 +2135,13 @@ where
         request: explorer::query_data::BlockIdentifier<Types>,
     ) -> Result<explorer::query_data::BlockDetail<Types>, explorer::query_data::GetBlockDetailError>
     {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.get_block_detail(request).await
+        serializable_retry!(self.fetcher.storage, || async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.get_block_detail(request.clone()).await
+        })
+        .await
     }
 
     async fn get_transaction_summaries(
@@ -2049,10 +2151,13 @@ where
         Vec<explorer::query_data::TransactionSummary<Types>>,
         explorer::query_data::GetTransactionSummariesError,
     > {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.get_transaction_summaries(request).await
+        serializable_retry!(self.fetcher.storage, || async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.get_transaction_summaries(request.clone()).await
+        })
+        .await
     }
 
     async fn get_transaction_detail(
@@ -2062,10 +2167,13 @@ where
         explorer::query_data::TransactionDetailResponse<Types>,
         explorer::query_data::GetTransactionDetailError,
     > {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.get_transaction_detail(request).await
+        serializable_retry!(self.fetcher.storage, || async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.get_transaction_detail(request.clone()).await
+        })
+        .await
     }
 
     async fn get_explorer_summary(
@@ -2074,10 +2182,13 @@ where
         explorer::query_data::ExplorerSummary<Types>,
         explorer::query_data::GetExplorerSummaryError,
     > {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.get_explorer_summary().await
+        serializable_retry!(self.fetcher.storage, || async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.get_explorer_summary().await
+        })
+        .await
     }
 
     async fn get_search_results(
@@ -2087,10 +2198,13 @@ where
         explorer::query_data::SearchResult<Types>,
         explorer::query_data::GetSearchResultsError,
     > {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.get_search_results(query).await
+        serializable_retry!(self.fetcher.storage, || async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.get_search_results(query.clone()).await
+        })
+        .await
     }
 }
 
@@ -2593,7 +2707,15 @@ async fn select_some<T>(
 
 #[cfg(test)]
 mod test {
-    use hotshot_example_types::node_types::TEST_VERSIONS;
+    use hotshot::traits::BlockPayload;
+    use hotshot_example_types::{
+        block_types::{TestBlockHeader, TestMetadata},
+        node_types::TEST_VERSIONS,
+        state_types::{TestInstanceState, TestValidatedState},
+    };
+    use hotshot_types::{
+        data::vid_commitment, traits::block_contents::EncodeBytes, utils::BuilderCommitment,
+    };
 
     use super::*;
     use crate::{
@@ -2602,7 +2724,10 @@ mod test {
             storage::{SqlStorage, StorageConnectionType},
         },
         fetching::provider::NoFetching,
-        testing::{consensus::MockSqlDataSource, mocks::MockTypes},
+        testing::{
+            consensus::MockSqlDataSource,
+            mocks::{MockPayload, MockTypes, mock_transaction},
+        },
     };
 
     #[test]
@@ -2876,5 +3001,140 @@ mod test {
             .unwrap_err();
         tracing::info!("loading partial VID common range failed as expected: {err:#}");
         assert!(matches!(err, QueryError::Missing));
+    }
+
+    /// Repeatedly poll `f` until it returns `Some`, up to `max_wait`. Panics on timeout.
+    async fn poll_until<T, F, Fut>(max_wait: Duration, interval: Duration, f: F) -> T
+    where
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = Option<T>>,
+    {
+        let deadline = std::time::Instant::now() + max_wait;
+        loop {
+            if let Some(v) = f().await {
+                return v;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for condition"
+            );
+            sleep(interval).await;
+        }
+    }
+
+    /// Aggregator recovers after blocks land in storage without a notification, and produces the
+    /// exact expected cumulative transaction count.
+    ///
+    /// This exercises the stall scenario: the aggregator's `get_range` stream subscribes to
+    /// notifications before checking storage. If blocks are written to the underlying storage
+    /// after the subscription+check cycle (bypassing `store_and_notify`), the notification is
+    /// missed and the stream parks. The `AGGREGATOR_RETRY_INTERVAL` timeout fires, the aggregator
+    /// breaks and rebuilds the stream from the committed aggregate height, finding the now-present
+    /// blocks as `Ready`.
+    ///
+    /// Each block at height `i` carries `i + 1` transactions, so the expected total is
+    /// `n * (n + 1) / 2`. A double-count or skip would fail the final assertion.
+    ///
+    /// This test is slow because it must wait for `AGGREGATOR_RETRY_INTERVAL` (30 s) to elapse.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg(not(target_os = "windows"))]
+    async fn test_aggregator_recovery_after_missed_notification() {
+        let storage = TmpDb::init().await;
+        let db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        let ds = MockSqlDataSource::builder(db, NoFetching)
+            .build()
+            .await
+            .unwrap();
+
+        // Build N blocks: block at height i has i+1 transactions.
+        // Each block gets a distinct payload (and thus a distinct payload_commitment),
+        // so the payload table rows are not collapsed by the (hash, ns_table) dedup.
+        // Expected cumulative total = 1 + 2 + ... + n = n*(n+1)/2.
+        let n = 5usize;
+        let expected_total = n * (n + 1) / 2;
+
+        let genesis_leaf = LeafQueryData::<MockTypes>::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test,
+        )
+        .await;
+
+        let mut leaves = vec![genesis_leaf];
+        let mut blocks: Vec<BlockQueryData<MockTypes>> = Vec::new();
+
+        for i in 0..n {
+            // Height i carries i+1 distinct transactions.
+            let txs = (0..=i).map(|j| mock_transaction(vec![j as u8]));
+            let (payload, metadata) = <MockPayload as BlockPayload<MockTypes>>::from_transactions(
+                txs,
+                &TestValidatedState::default(),
+                &TestInstanceState::default(),
+            )
+            .await
+            .unwrap();
+            let encoded = payload.encode();
+            let payload_commitment =
+                vid_commitment(&encoded, &metadata.encode(), 1, TEST_VERSIONS.test.base);
+            let header = TestBlockHeader {
+                block_number: i as u64,
+                payload_commitment,
+                builder_commitment: BuilderCommitment::from_bytes([]),
+                metadata: TestMetadata {
+                    num_transactions: metadata.num_transactions,
+                },
+                timestamp: i as u64,
+                timestamp_millis: i as u64 * 1_000,
+                random: 1,
+                version: TEST_VERSIONS.test.base,
+            };
+            if i > 0 {
+                let mut leaf = leaves[i - 1].clone();
+                *leaf.leaf.block_header_mut() = header.clone();
+                leaves.push(leaf);
+            } else {
+                *leaves[0].leaf.block_header_mut() = header.clone();
+            }
+            blocks.push(BlockQueryData::new(header, payload));
+        }
+
+        // Insert leaves and blocks directly into the underlying storage, bypassing
+        // `store_and_notify`. The aggregator task has already started and is waiting on a
+        // notification for height 0 that will never arrive via this path.
+        {
+            let inner = ds.inner();
+            let mut tx = inner.write().await.unwrap();
+            for leaf in &leaves {
+                tx.insert_leaf(leaf).await.unwrap();
+            }
+            for block in &blocks {
+                tx.insert_block(block).await.unwrap();
+            }
+            tx.commit().await.unwrap();
+        }
+
+        // The aggregator rebuilds after AGGREGATOR_RETRY_INTERVAL elapses. Allow 4× for the
+        // rebuild and processing.
+        poll_until(
+            AGGREGATOR_RETRY_INTERVAL * 4,
+            Duration::from_millis(500),
+            || async {
+                ds.count_transactions_in_range(..=n - 1, None)
+                    .await
+                    .ok()
+                    .map(|_| ())
+            },
+        )
+        .await;
+
+        // Exact sum verifies no double-count and no skip.
+        let total = ds
+            .count_transactions_in_range(.., None)
+            .await
+            .expect("aggregate should be available after recovery");
+        assert_eq!(total, expected_total);
     }
 }

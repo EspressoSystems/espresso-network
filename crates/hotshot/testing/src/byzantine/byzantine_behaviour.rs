@@ -31,7 +31,6 @@ use hotshot_types::{
         ViewSyncPreCommitVote, ViewSyncPreCommitVote2,
     },
     traits::{
-        election::Membership,
         network::ConnectedNetwork,
         node_implementation::{NodeImplementation, NodeType},
     },
@@ -529,18 +528,19 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> EventTransformerState<TYPES,
                         // All other dishonest proposals are sent to f + 1 honest nodes
                         Box::new(second_f_honest_it.chain(one_honest_it))
                     };
+                // One snapshot for all leader lookups in this loop.
+                let proposal_epoch = proposal.data.epoch();
+                let em = membership_coordinator
+                    .membership_for_epoch(proposal_epoch)
+                    .unwrap_or_else(|_| {
+                        panic!("Failed to get membership for epoch {proposal_epoch:?}")
+                    });
                 for node_id in chained_it {
                     let dummy_view = ViewNumber::new(*node_id);
-                    let Ok(node) = membership_coordinator
-                        .membership()
-                        .read()
-                        .await
-                        .leader(dummy_view, proposal.data.epoch())
-                    else {
+                    let Ok(node) = em.leader(dummy_view) else {
                         panic!(
-                            "Failed to find leader for view {} and epoch {:?}",
-                            dummy_view,
-                            proposal.data.epoch()
+                            "Failed to find leader for view {dummy_view} and epoch \
+                             {proposal_epoch:?}"
                         );
                     };
                     let transmit_result = network
@@ -611,18 +611,18 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> EventTransformerState<TYPES,
                 // The pre-commit certificate is sent to f + 1 honest nodes and f dishonest nodes
                 let chained_it: Box<dyn Iterator<Item = &u64> + Send> =
                     Box::new(second_f_honest_it.chain(one_honest_it.chain(f_dishonest_it)));
+                // One snapshot for all leader lookups in this loop.
+                let cert_epoch = certificate.epoch();
+                let em = membership_coordinator
+                    .membership_for_epoch(cert_epoch)
+                    .unwrap_or_else(|_| {
+                        panic!("Failed to get membership for epoch {cert_epoch:?}")
+                    });
                 for node_id in chained_it {
                     let dummy_view = ViewNumber::new(*node_id);
-                    let Ok(node) = membership_coordinator
-                        .membership()
-                        .read()
-                        .await
-                        .leader(dummy_view, certificate.epoch())
-                    else {
+                    let Ok(node) = em.leader(dummy_view) else {
                         panic!(
-                            "Failed to find leader for view {} and epoch {:?}",
-                            dummy_view,
-                            certificate.epoch()
+                            "Failed to find leader for view {dummy_view} and epoch {cert_epoch:?}"
                         );
                     };
                     let transmit_result = network
@@ -672,18 +672,18 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> EventTransformerState<TYPES,
                 let one_honest_it = once(&self.one_honest_node);
                 // The commit certificate is sent to 1 honest node
                 let chained_it: Box<dyn Iterator<Item = &u64> + Send> = Box::new(one_honest_it);
+                // One snapshot for all leader lookups in this loop.
+                let cert_epoch = certificate.epoch();
+                let em = membership_coordinator
+                    .membership_for_epoch(cert_epoch)
+                    .unwrap_or_else(|_| {
+                        panic!("Failed to get membership for epoch {cert_epoch:?}")
+                    });
                 for node_id in chained_it {
                     let dummy_view = ViewNumber::new(*node_id);
-                    let Ok(node) = membership_coordinator
-                        .membership()
-                        .read()
-                        .await
-                        .leader(dummy_view, certificate.epoch())
-                    else {
+                    let Ok(node) = em.leader(dummy_view) else {
                         panic!(
-                            "Failed to find leader for view {} and epoch {:?}",
-                            dummy_view,
-                            certificate.epoch()
+                            "Failed to find leader for view {dummy_view} and epoch {cert_epoch:?}"
                         );
                     };
                     let transmit_result = network

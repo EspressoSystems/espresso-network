@@ -19,10 +19,7 @@ use async_trait::async_trait;
 use futures::stream::BoxStream;
 use hotshot::types::Event;
 use hotshot_events_service::events_source::{EventFilterSet, EventsSource, StartupInfo};
-use hotshot_types::{
-    data::VidShare, event::LegacyEvent, new_protocol::CoordinatorEvent,
-    traits::node_implementation::NodeType,
-};
+use hotshot_types::{data::VidShare, event::LegacyEvent, traits::node_implementation::NodeType};
 use jf_merkle_tree_compat::prelude::MerkleProof;
 use tagged_base64::TaggedBase64;
 
@@ -332,6 +329,10 @@ where
     async fn append(&self, info: BlockInfo<Types>) -> anyhow::Result<()> {
         self.data_source.append(info).await
     }
+
+    async fn append_payload(&self, block: BlockQueryData<Types>) -> anyhow::Result<()> {
+        self.data_source.append_payload(block).await
+    }
 }
 
 #[async_trait]
@@ -347,7 +348,7 @@ where
     }
     async fn count_transactions_in_range(
         &self,
-        range: impl RangeBounds<usize> + Send,
+        range: impl RangeBounds<usize> + Send + Sync + Clone,
         namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize> {
         self.data_source
@@ -356,7 +357,7 @@ where
     }
     async fn payload_size_in_range(
         &self,
-        range: impl RangeBounds<usize> + Send,
+        range: impl RangeBounds<usize> + Send + Sync + Clone,
         namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize> {
         self.data_source
@@ -568,6 +569,7 @@ where
 #[cfg(any(test, feature = "testing"))]
 mod impl_testable_data_source {
     use hotshot::types::Event;
+    use hotshot_types::new_protocol::CoordinatorEvent;
 
     use super::*;
     use crate::{

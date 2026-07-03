@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use async_broadcast::Receiver;
 use hotshot_types::{
+    PeerConfig,
     event::Event,
     traits::{
         election::Membership, leaf_fetcher_network::LeafFetcherNetwork,
@@ -47,10 +48,18 @@ pub mod strict_membership;
 /// memberships don't need this — only types that route catchup through a
 /// test fetcher (e.g. `StrictMembership`) implement it.
 pub trait TestableMembership<TYPES: NodeType>: Membership<TYPES> {
+    /// Construct a membership for tests.
+    fn new(
+        quorum_members: Vec<PeerConfig<TYPES>>,
+        da_members: Vec<PeerConfig<TYPES>>,
+        public_key: TYPES::SignatureKey,
+        epoch_height: u64,
+    ) -> Self;
+
     /// Install a fully wired leaf fetcher. Must be called before any code
     /// path that triggers catchup (`get_epoch_root` / `get_epoch_drb`).
     fn set_leaf_fetcher(
-        &mut self,
+        &self,
         network: Arc<dyn LeafFetcherNetwork<TYPES>>,
         storage: TestStorage<TYPES>,
         public_key: TYPES::SignatureKey,

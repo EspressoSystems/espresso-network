@@ -1,0 +1,12 @@
+---
+source: crates/espresso/types/src/v0/impls/stake_table.rs
+assertion_line: 3676
+expression: summary
+---
+network: decaf
+to_block: 10935000
+stake_table_contract: 0x40304fbe94d5e7d1492dd90c53a2d63e8506a037
+stake_table_hash: STAKE_TABLE~6wSXC2JhPp1TfGUpMULIV-VR1cvRVJCrWV593lA-KO59
+active_validators_commit: STAKE_TABLE~TRb6lKLOkw6vnyz9Mb_Rn5cVRKA1MmYXOjr-WCrz7fmP
+all_validators: 149
+active_validators: 44

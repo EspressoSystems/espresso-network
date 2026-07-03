@@ -165,8 +165,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> QuorumProposalRecvTaskState<
                     proposal.data.block_header().block_number(),
                     self.epoch_height,
                 );
-                let Ok(epoch_membership) =
-                    self.membership.membership_for_epoch(proposal_epoch).await
+                let Ok(epoch_membership) = self.membership.membership_for_epoch(proposal_epoch)
                 else {
                     tracing::warn!("No Stake table for epoch = {proposal_epoch:?}");
                     return;
@@ -231,6 +230,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState
         sender: &Sender<Arc<Self::Event>>,
         receiver: &Receiver<Arc<Self::Event>>,
     ) -> Result<()> {
+        if self.upgrade_lock.new_protocol_active(self.cur_view) {
+            return Ok(());
+        }
         self.handle(event, sender.clone(), receiver.clone()).await;
 
         Ok(())

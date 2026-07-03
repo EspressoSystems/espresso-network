@@ -358,10 +358,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> QuorumProposalTaskState<TYPE
     ) -> Result<()> {
         let epoch_membership = self
             .membership_coordinator
-            .membership_for_epoch(epoch_number)
-            .await?;
-        let leader_in_current_epoch =
-            epoch_membership.leader(view_number).await? == self.public_key;
+            .membership_for_epoch(epoch_number)?;
+        let leader_in_current_epoch = epoch_membership.leader(view_number)? == self.public_key;
         // If we are in the epoch transition and we are the leader in the next epoch,
         // we might want to start collecting dependencies for our next epoch proposal.
 
@@ -373,13 +371,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> QuorumProposalTaskState<TYPE
             )
             && epoch_membership
                 .next_epoch()
-                .await
                 .context(warn!(
                     "Missing the randomized stake table for epoch {}",
                     epoch_number.unwrap() + 1
                 ))?
-                .leader(view_number)
-                .await?
+                .leader(view_number)?
                 == self.public_key;
 
         // Don't even bother making the task if we are not entitled to propose anyway.
@@ -443,7 +439,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> QuorumProposalTaskState<TYPE
 
     /// Update the latest proposed view number.
     #[instrument(skip_all, fields(id = self.id, latest_proposed_view = *self.latest_proposed_view), name = "Update latest proposed view", level = "error")]
-    async fn update_latest_proposed_view(&mut self, new_view: ViewNumber) -> bool {
+    fn update_latest_proposed_view(&mut self, new_view: ViewNumber) -> bool {
         if *self.latest_proposed_view < *new_view {
             tracing::debug!(
                 "Updating latest proposed view from {} to {}",
@@ -614,15 +610,15 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> QuorumProposalTaskState<TYPE
                 let epoch_membership = self
                     .membership_coordinator
                     .stake_table_for_epoch(epoch_number)
-                    .await
                     .context(warn!("No Stake Table for Epoch = {epoch_number:?}"))?;
 
-                let membership_stake_table = epoch_membership.stake_table().await;
-                let membership_success_threshold = epoch_membership.success_threshold().await;
+                let membership_stake_table =
+                    StakeTableEntries::from_iter(epoch_membership.stake_table()).0;
+                let membership_success_threshold = epoch_membership.success_threshold();
 
                 certificate
                     .is_valid_cert(
-                        &StakeTableEntries::<TYPES>::from(membership_stake_table).0,
+                        &membership_stake_table,
                         membership_success_threshold,
                         &self.upgrade_lock,
                     )
@@ -649,7 +645,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> QuorumProposalTaskState<TYPE
             HotShotEvent::QuorumProposalPreliminarilyValidated(proposal) => {
                 let view_number = proposal.data.view_number();
                 // All nodes get the latest proposed view as a proxy of `cur_view` of old.
-                if !self.update_latest_proposed_view(view_number).await {
+                if !self.update_latest_proposed_view(view_number) {
                     tracing::trace!("Failed to update latest proposed view");
                 }
 
@@ -667,7 +663,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> QuorumProposalTaskState<TYPE
                 let view = proposal.data.view_number();
 
                 ensure!(
-                    self.update_latest_proposed_view(view).await,
+                    self.update_latest_proposed_view(view),
                     "Failed to update latest proposed view"
                 );
             },
@@ -763,6 +759,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState
         sender: &Sender<Arc<Self::Event>>,
         receiver: &Receiver<Arc<Self::Event>>,
     ) -> Result<()> {
+        if self
+            .upgrade_lock
+            .new_protocol_active(self.latest_proposed_view)
+        {
+            return Ok(());
+        }
         self.handle(event, receiver.clone(), sender.clone()).await
     }
 

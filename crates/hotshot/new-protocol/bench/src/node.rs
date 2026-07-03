@@ -15,7 +15,8 @@ use hotshot_new_protocol::{
     coordinator::{Coordinator, timer::Timer},
     epoch::EpochManager,
     epoch_root_vote_collector::EpochRootVoteCollector,
-    network::cliquenet::Cliquenet,
+    helpers::proposal_commitment,
+    network::Cliquenet,
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
@@ -28,15 +29,15 @@ use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
-    traits::{node_implementation::NodeType, signature_key::SignatureKey},
+    traits::{metrics::NoMetrics, node_implementation::NodeType, signature_key::SignatureKey},
     x25519::Keypair,
 };
 use tracing::{error, info, warn};
-use versions::{CLIQUENET_VERSION, Upgrade};
+use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
 use crate::{config::NodeConfig, membership::make_membership, metrics::MetricsCollector};
 
-type BenchCoordinator = Coordinator<TestTypes, Cliquenet<TestTypes>, TestStorage<TestTypes>>;
+type BenchCoordinator = Coordinator<TestTypes, TestStorage<TestTypes>>;
 
 /// Build and run a single benchmark node.
 pub async fn run(cfg: NodeConfig) -> Result<()> {
@@ -91,6 +92,7 @@ async fn create_network(
         bind_addr,
         parties,
         upgrade_lock(),
+        Box::new(NoMetrics),
     )
     .await
     .map_err(|e| anyhow::anyhow!("failed to create cliquenet: {e}"))?;
@@ -135,13 +137,18 @@ async fn build_coordinator(
     let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let timeout_one_honest_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
-    let checkpoint_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let epoch_root_collector =
         EpochRootVoteCollector::new(membership.clone(), upgrade_lock.clone());
 
     let epoch_manager = EpochManager::new(epoch_height, membership.clone());
 
-    let vid_disperser = VidDisperser::new(membership.clone());
+    let vid_disperser = VidDisperser::new(
+        membership.clone(),
+        network.sender().clone(),
+        public_key,
+        private_key.clone(),
+    );
+
     let vid_reconstructor = VidReconstructor::new();
 
     let block_config = BlockBuilderConfig::default();
@@ -153,9 +160,10 @@ async fn build_coordinator(
     );
 
     let mut state_manager = StateManager::new(instance.clone(), upgrade_lock.clone());
+    let genesis_state = Arc::new(genesis_state);
     state_manager.seed_state(
         ViewNumber::genesis(),
-        Arc::new(genesis_state),
+        genesis_state.clone(),
         genesis_leaf.clone(),
     );
 
@@ -163,7 +171,17 @@ async fn build_coordinator(
     // can self-start without external injection from the orchestrator.
     let genesis_cert1 = build_genesis_cert1(&genesis_leaf);
     let genesis_proposal = build_genesis_proposal(&genesis_leaf, &genesis_cert1);
-    consensus.seed_genesis(genesis_cert1, genesis_proposal);
+    // The synthetic genesis proposal has a non-null justify_qc so the leaf
+    // derived from it has a different commitment than `genesis_leaf`.
+    // `request_header` for view 1 looks up the parent state by the
+    // proposal's leaf commitment, so seed the same state under that
+    // commitment too (mirrors coordinator builder behavior).
+    state_manager.seed_state(
+        ViewNumber::genesis(),
+        genesis_state,
+        Leaf2::from(genesis_proposal.clone()),
+    );
+    consensus.seed_parent(genesis_cert1, genesis_proposal, std::iter::empty());
 
     let proposal_validator =
         ProposalValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
@@ -184,7 +202,6 @@ async fn build_coordinator(
         .vote2_collector(vote2_collector)
         .timeout_collector(timeout_collector)
         .timeout_one_honest_collector(timeout_one_honest_collector)
-        .checkpoint_collector(checkpoint_collector)
         .epoch_root_collector(epoch_root_collector)
         .vid_disperser(vid_disperser)
         .vid_reconstructor(vid_reconstructor)
@@ -204,11 +221,11 @@ async fn build_coordinator(
         .build();
 
     // Emit initial ViewChanged and (for the leader) RequestBlockAndHeader.
-    coordinator.start().await;
+    coordinator.start();
 
     // Process initial outputs so the timer resets before the event loop.
     while let Some(output) = coordinator.outbox_mut().pop_front() {
-        if let Err(e) = coordinator.process_consensus_output(output).await {
+        if let Err(e) = coordinator.process_consensus_output(output) {
             warn!(%e, "error processing initial output");
         }
     }
@@ -231,7 +248,7 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
         match coordinator.next_consensus_input().await {
             Ok(input) => {
                 metrics.on_input(&input);
-                coordinator.apply_consensus(input).await;
+                coordinator.apply_consensus(input);
             },
             Err(err)
                 if err.severity == hotshot_new_protocol::coordinator::error::Severity::Critical =>
@@ -263,21 +280,26 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
                     block.metadata,
                     version,
                 );
-                let header_input = ConsensusInput::HeaderCreated(req.view, header);
+                let header_input = ConsensusInput::HeaderCreated(
+                    req.view,
+                    proposal_commitment(&req.parent_proposal),
+                    header,
+                );
                 metrics.on_input(&header_input);
-                coordinator.apply_consensus(header_input).await;
+                coordinator.apply_consensus(header_input);
                 let block_input = ConsensusInput::BlockBuilt {
                     view: req.view,
                     epoch: req.epoch,
                     payload: block.block,
                     metadata: block.metadata,
+                    payload_commitment: block.payload_commitment,
                 };
                 metrics.on_input(&block_input);
-                coordinator.apply_consensus(block_input).await;
+                coordinator.apply_consensus(block_input);
                 continue; // skip process_consensus_output for this one
             }
 
-            if let Err(err) = coordinator.process_consensus_output(output).await {
+            if let Err(err) = coordinator.process_consensus_output(output) {
                 if err.severity == hotshot_new_protocol::coordinator::error::Severity::Critical {
                     error!(%err, "critical error processing output");
                     metrics.write_csv(&output_path)?;
@@ -325,7 +347,7 @@ fn build_test_block(size: usize, num_nodes: usize) -> TestBlock {
         &block.encode(),
         &metadata.encode(),
         num_nodes,
-        versions::VID2_UPGRADE_VERSION,
+        versions::NEW_PROTOCOL_VERSION,
     );
     let builder_commitment =
         <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(&block, &metadata);
@@ -338,7 +360,7 @@ fn build_test_block(size: usize, num_nodes: usize) -> TestBlock {
 }
 
 fn bench_upgrade_lock() -> UpgradeLock<TestTypes> {
-    UpgradeLock::new(Upgrade::trivial(CLIQUENET_VERSION))
+    UpgradeLock::new(Upgrade::trivial(NEW_PROTOCOL_VERSION))
 }
 
 /// Create a genesis `Certificate1` that references the genesis leaf.
@@ -381,5 +403,5 @@ fn build_genesis_proposal(
 }
 
 pub fn upgrade_lock<T: NodeType>() -> UpgradeLock<T> {
-    UpgradeLock::new(CLIQUENET_VERSION.into())
+    UpgradeLock::new(NEW_PROTOCOL_VERSION.into())
 }

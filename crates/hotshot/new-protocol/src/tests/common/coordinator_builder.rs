@@ -8,7 +8,9 @@ use hotshot_example_types::{
     storage_types::TestStorage,
 };
 use hotshot_types::{
-    data::{EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, ViewNumber},
+    data::{
+        EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, ViewChangeEvidence2, ViewNumber,
+    },
     epoch_membership::EpochMembershipCoordinator,
     light_client::StateKeyPair,
     message::Proposal as SignedProposal,
@@ -16,16 +18,17 @@ use hotshot_types::{
     traits::{signature_key::SignatureKey, storage::Storage as _},
 };
 
+use super::utils::reconstructed_blocks;
 use crate::{
     block::{BlockBuilder, BlockBuilderConfig},
     client::CoordinatorClient,
-    consensus::Consensus,
+    consensus::{Consensus, PreCutoverSeed},
     coordinator::{Coordinator, timer::Timer},
     epoch::EpochManager,
     epoch_root_vote_collector::EpochRootVoteCollector,
     helpers::test_upgrade_lock,
     message::{Certificate1, Proposal},
-    network::Network,
+    network::Cliquenet,
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
@@ -33,21 +36,17 @@ use crate::{
     vote::VoteCollector,
 };
 
-/// Build a [`Coordinator`] for testing with an externally provided network.
-///
-/// The coordinator is fully bootstrapped: consensus is seeded with a genesis
-/// certificate and proposal so that the view-1 leader can propose without any
-/// external injection.  The initial `ViewChanged` and (for the leader)
-/// `RequestBlockAndHeader` outputs are already queued in the outbox.
-pub async fn build_test_coordinator<N: Network<TestTypes>>(
+#[allow(clippy::too_many_arguments)]
+pub async fn build_test_coordinator(
     node_index: u64,
-    network: N,
+    network: Cliquenet<TestTypes>,
     membership: EpochMembershipCoordinator<TestTypes>,
     storage: TestStorage<TestTypes>,
     client: CoordinatorClient<TestTypes>,
     epoch_height: u64,
     view_timeout: Duration,
-) -> Coordinator<TestTypes, N, TestStorage<TestTypes>> {
+    pre_cutover_seed: Option<PreCutoverSeed<TestTypes>>,
+) -> Coordinator<TestTypes, TestStorage<TestTypes>> {
     let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
     let state_key_pair = StateKeyPair::generate_from_seed_indexed([0u8; 32], node_index);
     let state_private_key = state_key_pair.sign_key_ref().clone();
@@ -60,13 +59,22 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
     let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let timeout_one_honest_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
-    let checkpoint_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let epoch_root_collector =
         EpochRootVoteCollector::new(membership.clone(), upgrade_lock.clone());
 
     let genesis_state = TestValidatedState::default();
     let genesis_leaf =
         Leaf2::<TestTypes>::genesis(&genesis_state, &instance, TEST_VERSIONS.test.base).await;
+
+    // A node restarting with persistent storage resumes from its persisted
+    // decided anchor (mirroring production's `Coordinator::maker`, which
+    // gets the anchor from the `HotShotInitializer`); otherwise it starts
+    // from genesis.
+    let restart_anchor = storage.anchor_leaf().await;
+    let initial_leaf = restart_anchor
+        .as_ref()
+        .map(|(leaf, _)| leaf.clone())
+        .unwrap_or_else(|| genesis_leaf.clone());
 
     let mut consensus = Consensus::new(
         membership.clone(),
@@ -75,11 +83,16 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
         state_private_key,
         10,
         upgrade_lock.clone(),
-        genesis_leaf.clone(),
+        initial_leaf,
         epoch_height,
     );
 
-    let vid_disperser = VidDisperser::new(membership.clone());
+    let vid_disperser = VidDisperser::new(
+        membership.clone(),
+        network.sender().clone(),
+        public_key,
+        private_key.clone(),
+    );
     let vid_reconstructor = VidReconstructor::new();
 
     let block_builder = BlockBuilder::new(
@@ -90,20 +103,116 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
     );
 
     let mut state_manager = StateManager::new(instance.clone(), upgrade_lock.clone());
+    let genesis_state = Arc::new(genesis_state);
     state_manager.seed_state(
         ViewNumber::genesis(),
-        Arc::new(genesis_state),
+        genesis_state.clone(),
         genesis_leaf.clone(),
     );
+
+    if let Some(seed) = pre_cutover_seed.as_ref() {
+        let anchor_view = seed.decided_anchor.view_number();
+        if let Some(state) = seed.validated_states.get(&anchor_view).cloned() {
+            state_manager.seed_state(anchor_view, state, seed.decided_anchor.clone());
+        }
+        for leaf in &seed.undecided {
+            let view = leaf.view_number();
+            if let Some(state) = seed.validated_states.get(&view).cloned() {
+                state_manager.seed_state(view, state, leaf.clone());
+            }
+        }
+    }
 
     // Build a genesis cert1 and proposal so consensus can self-start.
     let genesis_cert1 = build_genesis_cert1(&genesis_leaf);
     let genesis_proposal = build_genesis_proposal(&genesis_leaf, &genesis_cert1);
-    consensus.seed_genesis(genesis_cert1.clone(), genesis_proposal.clone());
 
-    // Seed the genesis proposal into the backing TestStorage so that
-    // peers can serve the genesis block to late-joiners during
-    // `EpochMembershipCoordinator::catchup` (epoch 0 root block == 0).
+    let anchor_view = if let Some((anchor_leaf, anchor_cert)) = restart_anchor {
+        // Seed the persisted anchor as the parent, exactly as production's
+        // `Coordinator::maker` does from the initializer: rebuild the parent
+        // proposal from the anchor leaf, seed a sparse state for it, and
+        // treat the anchor plus persisted proposals as already-reconstructed
+        // blocks so the first leader after restart is not stalled by the
+        // `parent_block_reconstructed` check.
+        let anchor_view = anchor_leaf.view_number();
+        let anchor_proposal = Proposal {
+            block_header: anchor_leaf.block_header().clone(),
+            view_number: anchor_view,
+            epoch: anchor_leaf
+                .epoch(epoch_height)
+                .unwrap_or(EpochNumber::genesis()),
+            justify_qc: anchor_leaf.justify_qc(),
+            next_epoch_justify_qc: None,
+            upgrade_certificate: anchor_leaf.upgrade_certificate(),
+            view_change_evidence: anchor_leaf
+                .view_change_evidence
+                .clone()
+                .and_then(|e| match e {
+                    ViewChangeEvidence2::Timeout(tc) => Some(tc),
+                    ViewChangeEvidence2::ViewSync(_) => None,
+                }),
+            next_drb_result: anchor_leaf.next_drb_result,
+            state_cert: None,
+        };
+        let anchor_state = <TestValidatedState as hotshot_types::traits::states::ValidatedState<
+            TestTypes,
+        >>::from_header(anchor_leaf.block_header());
+        state_manager.seed_state(anchor_view, Arc::new(anchor_state), anchor_leaf.clone());
+        let reconstructed = reconstructed_blocks(
+            std::iter::once((anchor_view, anchor_leaf.block_header().clone())).chain(
+                storage
+                    .proposals_cloned()
+                    .await
+                    .into_iter()
+                    .map(|(view, p)| (view, p.data.block_header().clone())),
+            ),
+        );
+        // Seed persisted proposals before `seed_parent` so its authoritative
+        // anchor wins (mirrors `Coordinator::maker`).
+        consensus.seed_proposals(
+            storage
+                .proposals_cloned()
+                .await
+                .into_values()
+                .map(|p| Proposal::from(p.data.clone())),
+        );
+        consensus.seed_parent(anchor_cert, anchor_proposal, reconstructed);
+        anchor_view
+    } else {
+        // The synthetic genesis proposal carries the genesis cert1 as its
+        // justify_qc, so the leaf derived from it has a different commitment than
+        // `genesis_leaf` (which has a null justify_qc). `request_header` for view 1
+        // looks up the parent state by the proposal's leaf commitment, so seed the
+        // genesis state under that commitment too.
+        state_manager.seed_state(
+            ViewNumber::genesis(),
+            genesis_state,
+            Leaf2::from(genesis_proposal.clone()),
+        );
+        consensus.seed_parent(
+            genesis_cert1.clone(),
+            genesis_proposal.clone(),
+            std::iter::empty(),
+        );
+        ViewNumber::genesis()
+    };
+
+    if let Some(seed) = pre_cutover_seed {
+        consensus.apply_pre_cutover_seed(seed);
+    }
+
+    // Restarted nodes must not act again in views they acted in before.
+    let restart_view = storage.restart_view().await;
+    let last_actioned_view = storage.last_actioned_view().await;
+    consensus.resume_from_restart(anchor_view, restart_view, last_actioned_view);
+
+    // A leader proposing on an epoch-root parent QC right after restart
+    // needs the persisted light-client state cert (as in production, where
+    // it arrives via `HotShotInitializer::state_cert`).
+    if let Some(state_cert) = storage.state_cert_cloned().await {
+        consensus.seed_state_cert(state_cert);
+    }
+
     let genesis_wrapper = QuorumProposalWrapper::<TestTypes> {
         proposal: QuorumProposal2 {
             block_header: genesis_leaf.block_header().clone(),
@@ -140,7 +249,6 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
         .vote2_collector(vote2_collector)
         .timeout_collector(timeout_collector)
         .timeout_one_honest_collector(timeout_one_honest_collector)
-        .checkpoint_collector(checkpoint_collector)
         .epoch_root_collector(epoch_root_collector)
         .vid_disperser(vid_disperser)
         .vid_reconstructor(vid_reconstructor)
@@ -161,12 +269,12 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
         .build();
 
     // Emit initial ViewChanged + RequestBlockAndHeader (if leader).
-    coordinator.start().await;
+    coordinator.start();
 
     // Process the initial outputs so the timer resets and block builder
     // gets notified before the event loop starts.
     while let Some(output) = coordinator.outbox_mut().pop_front() {
-        let _ = coordinator.process_consensus_output(output).await;
+        let _ = coordinator.process_consensus_output(output);
     }
 
     coordinator
@@ -176,7 +284,7 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
 ///
 /// Uses `QuorumCertificate2::new` with `None` signatures, matching the
 /// pattern used by `Leaf2::genesis` for its justify_qc.
-fn build_genesis_cert1(genesis_leaf: &Leaf2<TestTypes>) -> Certificate1<TestTypes> {
+pub(crate) fn build_genesis_cert1(genesis_leaf: &Leaf2<TestTypes>) -> Certificate1<TestTypes> {
     let data = QuorumData2 {
         leaf_commit: genesis_leaf.commit(),
         epoch: Some(EpochNumber::genesis()),
@@ -192,7 +300,7 @@ fn build_genesis_cert1(genesis_leaf: &Leaf2<TestTypes>) -> Certificate1<TestType
 }
 
 /// Create a genesis `Proposal` from the genesis leaf and cert.
-fn build_genesis_proposal(
+pub(crate) fn build_genesis_proposal(
     genesis_leaf: &Leaf2<TestTypes>,
     genesis_cert1: &Certificate1<TestTypes>,
 ) -> Proposal<TestTypes> {

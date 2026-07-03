@@ -220,7 +220,7 @@ fn reference_stake_table_hash() -> StakeTableHash {
     let events: Vec<(EventKey, StakeTableEvent)> = serde_json::from_str(&events_json).unwrap();
 
     // Reconstruct stake table from events
-    // TODO: once V3 fixtures include x25519/p2p data, exercise CLIQUENET_VERSION here too.
+    // TODO: once V3 fixtures include x25519/p2p data, exercise NEW_PROTOCOL_VERSION here too.
     ValidatorSet::from_l1_events(events.into_iter().map(|(_, e)| e), EPOCH_VERSION)
         .unwrap()
         .stake_table_hash

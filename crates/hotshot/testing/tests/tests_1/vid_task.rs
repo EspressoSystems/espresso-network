@@ -36,12 +36,7 @@ async fn test_vid_task() {
     let pub_key = handle.public_key();
 
     let membership = handle.hotshot.membership_coordinator.clone();
-    let num_storage_nodes = membership
-        .membership_for_epoch(None)
-        .await
-        .unwrap()
-        .total_nodes()
-        .await;
+    let num_storage_nodes = membership.membership_for_epoch(None).unwrap().total_nodes();
 
     let upgrade_lock = UpgradeLock::<TestTypes>::new(TEST_VERSIONS.test);
     let transactions = vec![TestTransaction::new(vec![0])];

@@ -12,8 +12,10 @@ use crate::{
     addr::NetAddr,
     connection::Connection,
     error::NetworkError,
+    metrics::NoMetrics,
     msg::{MsgId, Slot, Trailer, hello::Hello},
     net::{RetryPolicy, peer::Peer},
+    noise::Protocol,
     queue::Queue,
 };
 
@@ -29,8 +31,9 @@ fn config(kp: Keypair, recv_timeout: Duration) -> Arc<Config> {
             .bind(NetAddr::from((std::net::Ipv4Addr::LOCALHOST, 0u16)))
             .parties(std::iter::empty::<(PublicKey, NetAddr)>())
             .receive_timeout(recv_timeout)
-            .retry_delays(vec![2, 5])
-            .max_retry_delay(Duration::from_secs(10))
+            .connect_retry_delays(vec![2, 5])
+            .send_retry_delays(vec![2, 5])
+            .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
             .build(),
     )
 }
@@ -83,6 +86,7 @@ fn make_peer(
         .inbound(tx)
         .next_slot(slot_rx)
         .connection(conn)
+        .metrics(Arc::new(NoMetrics))
         .build();
     (peer, rx, outbox, slot_tx)
 }
@@ -354,6 +358,7 @@ async fn receive_timeout() {
         .inbound(tx)
         .next_slot(slot_rx)
         .connection(conn_a)
+        .metrics(Arc::new(NoMetrics))
         .build();
 
     let slot = Slot::new(1);
@@ -444,6 +449,7 @@ async fn channel_closed() {
         .inbound(tx_b)
         .next_slot(slot_rx)
         .connection(conn_b)
+        .metrics(Arc::new(NoMetrics))
         .build();
     drop(rx_b);
 
@@ -485,6 +491,7 @@ async fn connection_reset() {
         .inbound(tx)
         .next_slot(slot_rx)
         .connection(conn_a)
+        .metrics(Arc::new(NoMetrics))
         .build();
 
     drop(conn_b);
@@ -736,8 +743,9 @@ fn config_with_retry(kp: Keypair, recv_timeout: Duration, retry_delays: Vec<u8>)
             .bind(NetAddr::from((std::net::Ipv4Addr::LOCALHOST, 0u16)))
             .parties(std::iter::empty::<(PublicKey, NetAddr)>())
             .receive_timeout(recv_timeout)
-            .retry_delays(retry_delays)
-            .max_retry_delay(Duration::from_secs(10))
+            .connect_retry_delays(retry_delays.clone())
+            .send_retry_delays(retry_delays)
+            .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
             .build(),
     )
 }
@@ -799,6 +807,7 @@ async fn retry_after_reconnect() {
         .inbound(tx_a)
         .next_slot(slot_rx)
         .connection(conn_a1)
+        .metrics(Arc::new(NoMetrics))
         .build();
 
     let slot = Slot::new(1);
@@ -846,8 +855,9 @@ async fn backpressure_on_unacked() {
             .parties(std::iter::empty::<(PublicKey, NetAddr)>())
             .peer_budget(NonZeroUsize::new(3).unwrap())
             .receive_timeout(Duration::from_secs(5))
-            .retry_delays(vec![30])
-            .max_retry_delay(Duration::from_secs(30))
+            .connect_retry_delays(vec![30])
+            .send_retry_delays(vec![30])
+            .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
             .build(),
     );
     let conf_b = config(kb.clone(), Duration::from_secs(5));
