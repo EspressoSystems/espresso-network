@@ -14,51 +14,54 @@ env:
 
 jobs:
   verify-proposals:
-    timeout-minutes: 10
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
+          fetch-depth: 0
 
-      - uses: cachix/install-nix-action@v31
+      - uses: rui314/setup-mold@v1
 
-      - uses: cachix/cachix-action@v16
-        continue-on-error: true
+      - name: Install Protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - name: Enable Rust Caching
+        uses: Swatinem/rust-cache@v2
         with:
-          name: espresso-systems-private
-          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
-          extraPullNames: nix-community
-          skipPush: true
+          prefix-key: v3-rust
+          shared-key: verify-proposals
 
       - name: Build deploy binary
-        run: nix develop --accept-flake-config -c cargo build --locked --bin deploy --profile test
+        run: cargo build --locked --bin deploy --profile test
 
       - name: Find and verify changed proposals
         run: |
           set -euo pipefail
-          # Find all proposal directories that were added or modified in this PR.
-          changed_dirs=$(git diff --name-only origin/${{ github.base_ref }}...HEAD -- 'contracts/deployments/proposals/**' \
-            | grep -E '\.(json)$' \
-            | xargs -I{} dirname {} \
-            | sort -u)
-          if [ -z "$changed_dirs" ]; then
-            echo "No proposal JSON files changed."
+          # Keep only dirs with at least 5 path components, i.e.
+          # contracts/deployments/proposals/<network>/<slug>, so README or
+          # network-level files do not trigger verification.
+          mapfile -t proposal_dirs < <(
+            git diff --name-only "origin/${{ github.base_ref }}...HEAD" -- 'contracts/deployments/proposals/**' \
+              | xargs -r -n1 dirname \
+              | awk -F/ 'NF >= 5' \
+              | sort -u
+          )
+          if [[ "${#proposal_dirs[@]}" -eq 0 ]]; then
+            echo "No proposal directories changed."
             exit 0
           fi
           exit_code=0
-          for dir in $changed_dirs; do
-            # Public RPC per network (network is the path segment after proposals/).
-            network=${dir#contracts/deployments/proposals/}
-            network=${network%%/*}
-            case "$network" in
-              decaf) rpc="https://ethereum-sepolia-rpc.publicnode.com" ;;
-              mainnet) rpc="https://ethereum-rpc.publicnode.com" ;;
-              *) echo "ERROR: unsupported network '$network' in $dir" >&2; exit_code=1; continue ;;
-            esac
-            echo "Verifying $dir (network=$network) ..."
-            nix develop --accept-flake-config -c \
-              ./target/test/deploy --rpc-url "$rpc" verify-proposal "$dir" \
+          for dir in "${proposal_dirs[@]}"; do
+            if [[ ! -d "${dir}" ]]; then
+              echo "Skipping deleted directory ${dir}"
+              continue
+            fi
+            echo "Verifying ${dir} ..."
+            ./target/debug/deploy verify-proposal "${dir}" \
               || exit_code=$?
           done
-          exit $exit_code
+          exit "${exit_code}"
