@@ -16,7 +16,7 @@ use tokio::{
 use tracing::{debug, info, warn};
 
 use crate::{
-    Config, Metrics, Role, addr::NetAddr, error::NetworkError, metrics::NoMetrics, msg::Slot,
+    Config, Metrics, NetAddr, Role, error::NetworkError, metrics::NoMetrics, msg::Slot,
     net::server::Server, x25519::PublicKey,
 };
 

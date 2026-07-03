@@ -9,8 +9,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    Config, Keypair, PublicKey,
-    addr::NetAddr,
+    Config, Keypair, NetAddr, PublicKey,
     connection::Connection,
     delay::DelayQueue,
     error::NetworkError,
