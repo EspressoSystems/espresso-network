@@ -15,7 +15,10 @@
 //! 3. `AvidmGf2*`: VID V2, almost the same as VID V1 but we have a much more efficient recovery
 //!    implementation.
 
-use std::{collections::BTreeMap, fmt::Debug, hash::Hash, marker::PhantomData, time::Duration};
+use std::{
+    collections::BTreeMap, fmt::Debug, hash::Hash, marker::PhantomData, ops::Range, sync::Arc,
+    time::Duration,
+};
 
 use alloy_primitives::U256;
 use hotshot_utils::anytrace::*;
@@ -40,7 +43,8 @@ use crate::{
         advz::{ADVZCommitment, ADVZCommon, ADVZScheme, ADVZShare, advz_scheme},
         avidm::{AvidMCommitment, AvidMCommon, AvidMScheme, AvidMShare, init_avidm_param},
         avidm_gf2::{
-            AvidmGf2Commitment, AvidmGf2Common, AvidmGf2Scheme, AvidmGf2Share, init_avidm_gf2_param,
+            AvidmGf2Commitment, AvidmGf2Common, AvidmGf2Param, AvidmGf2Scheme, AvidmGf2Share,
+            init_avidm_gf2_param,
         },
     },
     vote::HasViewNumber,
@@ -667,7 +671,7 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
     /// Create VID dispersal from a specified membership for the target epoch.
     /// Uses the specified function to calculate share dispersal
     /// Allows for more complex stake table functionality
-    async fn from_membership(
+    fn from_membership(
         view_number: ViewNumber,
         commit: AvidmGf2Commitment,
         shares: &[AvidmGf2Share],
@@ -747,8 +751,7 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
                 &target_mem,
                 target_epoch,
                 data_epoch,
-            )
-            .await?,
+            )?,
             ns_disperse_duration,
         ))
     }
@@ -826,10 +829,44 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
     pub fn payload_byte_len(&self) -> u32 {
         self.payload_byte_len as u32
     }
+
+    /// Resolve the inputs needed to disperse `payload` to `target_epoch`'s
+    /// committee one namespace at a time.
+    ///
+    /// Mirrors the setup in [`Self::calculate_vid_disperse`] but returns the
+    /// owned parameters instead of performing the dispersal, leaving the (heavy,
+    /// per-namespace) computation to the caller.
+    pub fn disperse_params(
+        payload: &TYPES::BlockPayload,
+        membership: &EpochMembershipCoordinator<TYPES>,
+        target_epoch: Option<EpochNumber>,
+        metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+    ) -> Result<AvidmGf2DisperseParams<TYPES>> {
+        let target_mem = membership.stake_table_for_epoch(target_epoch)?;
+        let stake_table: Vec<_> = target_mem.stake_table().cloned().collect();
+        let Weights {
+            weights,
+            total_weight,
+        } = approximate_weights(&stake_table);
+        let recipients = stake_table
+            .iter()
+            .map(|entry| entry.stake_table_entry.public_key())
+            .collect();
+        let payload = payload.encode();
+        let ns_table = parse_ns_table(payload.len(), &metadata.encode());
+        let param = init_avidm_gf2_param(total_weight)?;
+        Ok(AvidmGf2DisperseParams {
+            param,
+            weights,
+            recipients,
+            ns_table,
+            payload,
+        })
+    }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
 /// VID share and associated metadata for a single node
+#[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
 pub struct AvidmGf2DisperseShare<TYPES: NodeType> {
     /// The view number for which this VID data is intended
     pub view_number: ViewNumber,
@@ -896,4 +933,75 @@ impl<TYPES: NodeType> AvidmGf2DisperseShare<TYPES> {
             && self.is_consistent()
             && self.verify_with_verified_common()
     }
+}
+
+/// VID shares consist of fragments as the unit of transmission.
+#[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
+pub struct AvidmGf2DisperseShareFragment<T: NodeType> {
+    /// The view number for which this VID data is intended.
+    pub view_number: ViewNumber,
+    /// The epoch number for which this VID data belongs to.
+    pub epoch: Option<EpochNumber>,
+    /// The epoch number to which the recipient of this VID belongs to.
+    pub target_epoch: Option<EpochNumber>,
+    /// Block payload commitment (the aggregate over all namespaces).
+    pub payload_commitment: AvidmGf2Commitment,
+    /// A public key of the share recipient.
+    pub recipient_key: T::SignatureKey,
+    /// VID erasure parameters; identical across a view's fragments.
+    pub param: AvidmGf2Param,
+    /// Total number of namespaces in the block.
+    pub num_namespaces: usize,
+    /// Namespace share fragment pieces.
+    pub namespaces: Vec<AvidmGf2NamespacePiece>,
+}
+
+impl<T: NodeType> HasViewNumber for AvidmGf2DisperseShareFragment<T> {
+    fn view_number(&self) -> ViewNumber {
+        self.view_number
+    }
+}
+
+impl<T: NodeType> HasEpoch for AvidmGf2DisperseShareFragment<T> {
+    fn epoch(&self) -> Option<EpochNumber> {
+        self.epoch
+    }
+}
+
+/// VID share fragments hold pieces.
+///
+/// A piece is the smallest unit. Fragments group multiple pieces together,
+/// depending on the cumulative length of their payload lengths.
+#[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
+pub struct AvidmGf2NamespacePiece {
+    /// This namespace's index in the namespace table, in `0..num_namespaces`.
+    pub ns_index: usize,
+    /// Byte length of this namespace's slice of the payload.
+    pub ns_payload_byte_len: usize,
+    /// Commitment to this namespace's shards.
+    pub ns_commit: vid::avidm_gf2::AvidmGf2Commit,
+    /// This recipient's share of this namespace.
+    pub ns_share: vid::avidm_gf2::AvidmGf2Share,
+}
+
+/// Parameters for a per-namespace AvidmGf2 dispersal.
+///
+/// [`AvidmGf2Disperse::disperse_params`] resolves the VID parameters and
+/// recipient ordering up front so a caller can send each namespace's
+/// fragments as they are produced.
+///
+/// `recipients[i]` is the storage node whose weight is `weights[i]` and
+/// whose share is the `i`th entry of each namespace's dispersal.
+#[non_exhaustive]
+pub struct AvidmGf2DisperseParams<T: NodeType> {
+    /// VID erasure parameters.
+    pub param: AvidmGf2Param,
+    /// Per-node weights, in stake-table order.
+    pub weights: Vec<u32>,
+    /// Recipients, in the same order as `weights`.
+    pub recipients: Vec<T::SignatureKey>,
+    /// Namespace byte ranges over the encoded payload.
+    pub ns_table: Vec<Range<usize>>,
+    /// The encoded payload.
+    pub payload: Arc<[u8]>,
 }
