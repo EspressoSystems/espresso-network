@@ -47,14 +47,10 @@ pub const EXTERNAL_EVENT_CHANNEL_SIZE: usize = 10_000;
 
 /// Default values for the upgrade constants
 pub const DEFAULT_UPGRADE_CONSTANTS: UpgradeConstants = UpgradeConstants {
-    // lead time before the proposer attaches the cert; votes are collected over it
-    propose_offset: 20,
-    // deadline to decide the cert, else it's discarded
-    decide_by_offset: 120,
-    // last old-version view; only empty blocks are proposed until finish
-    begin_offset: 125,
-    // first new-version view; ends the empty-block transition
-    finish_offset: 130,
+    propose_offset: 5,
+    decide_by_offset: 105,
+    begin_offset: 110,
+    finish_offset: 115,
 };
 
 /// Default values for the upgrade constants to be used in testing
