@@ -1,5 +1,5 @@
 pub mod error;
-mod metrics;
+pub(crate) mod metrics;
 pub mod timer;
 
 use std::{

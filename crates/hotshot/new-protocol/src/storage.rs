@@ -1,9 +1,4 @@
-use std::{
-    collections::BTreeMap,
-    marker::PhantomData,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{collections::BTreeMap, marker::PhantomData, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use committable::Commitment;
@@ -33,6 +28,7 @@ use tokio::{
 use tracing::{error, info, warn};
 
 use crate::{
+    coordinator::metrics::{Measurement, finish_measurement},
     helpers::proposal_commitment,
     message::{Certificate1, Certificate2, Proposal},
 };
@@ -92,6 +88,9 @@ impl<T: NodeType> StorageOutput<T> {
 /// consensus progress: proposal release waits on `append_proposal` and
 /// `record_action(Propose)`, and phase-2 votes wait on `append_vid`,
 /// `record_action(Vote)`, and `append_high_qc2`.
+///
+/// [`Measurement`] records on drop, so an op aborted by GC or shutdown still
+/// records its elapsed time up to the abort.
 pub struct StorageMetrics {
     append_vid: Arc<dyn Histogram>,
     append_da: Arc<dyn Histogram>,
@@ -120,31 +119,6 @@ impl StorageMetrics {
     }
 }
 
-/// Records only on [`Self::finish`], so a task aborted by GC leaves no point.
-struct OpTimer {
-    hist: Arc<dyn Histogram>,
-    start: Instant,
-}
-
-impl OpTimer {
-    fn start(hist: &Arc<dyn Histogram>) -> Self {
-        Self {
-            hist: hist.clone(),
-            start: Instant::now(),
-        }
-    }
-
-    fn finish(self) {
-        self.hist.add_point(self.start.elapsed().as_secs_f64());
-    }
-}
-
-fn finish_op(timer: Option<OpTimer>) {
-    if let Some(timer) = timer {
-        timer.finish();
-    }
-}
-
 pub struct Storage<T: NodeType, S> {
     storage: S,
     private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
@@ -165,7 +139,9 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
     }
 
     pub fn with_metrics(mut self, m: &dyn Metrics) -> Self {
-        self.metrics = Some(StorageMetrics::new(m));
+        if m.is_recording() {
+            self.metrics = Some(StorageMetrics::new(m));
+        }
         self
     }
 
@@ -173,7 +149,10 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
         let view = vid_share.view_number;
         let storage = self.storage.clone();
         let private_key = self.private_key.clone();
-        let timer = self.metrics.as_ref().map(|m| OpTimer::start(&m.append_vid));
+        let timer = self
+            .metrics
+            .as_ref()
+            .map(|m| Measurement::start(m.append_vid.clone()));
         let handle = self.tasks.spawn(async move {
             let share: VidDisperseShare<T> = VidDisperseShare::V2(vid_share);
             let Some(proposal) = share.to_proposal(&private_key) else {
@@ -183,7 +162,7 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
             loop {
                 match storage.append_vid(&proposal).await {
                     Ok(()) => {
-                        finish_op(timer);
+                        finish_measurement(timer);
                         return Some(StorageOutput::Vid(view));
                     },
                     Err(err) => {
@@ -206,7 +185,10 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
     ) {
         let storage = self.storage.clone();
         let private_key = self.private_key.clone();
-        let timer = self.metrics.as_ref().map(|m| OpTimer::start(&m.append_da));
+        let timer = self
+            .metrics
+            .as_ref()
+            .map(|m| Measurement::start(m.append_da.clone()));
         let handle = self.tasks.spawn(async move {
             let data = DaProposal2 {
                 encoded_transactions: block_payload.encode(),
@@ -227,7 +209,7 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
             loop {
                 match storage.append_da2(&proposal, vid_commit).await {
                     Ok(()) => {
-                        finish_op(timer);
+                        finish_measurement(timer);
                         return None;
                     },
                     Err(err) => {
@@ -245,12 +227,12 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
         let timer = self
             .metrics
             .as_ref()
-            .map(|m| OpTimer::start(&m.append_cert2));
+            .map(|m| Measurement::start(m.append_cert2.clone()));
         let handle = self.tasks.spawn(async move {
             loop {
                 match storage.append_cert2(view, cert2.clone()).await {
                     Ok(()) => {
-                        finish_op(timer);
+                        finish_measurement(timer);
                         return None;
                     },
                     Err(err) => {
@@ -271,12 +253,12 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
         let timer = self
             .metrics
             .as_ref()
-            .map(|m| OpTimer::start(&m.append_high_qc));
+            .map(|m| Measurement::start(m.append_high_qc.clone()));
         let handle = self.tasks.spawn(async move {
             loop {
                 match storage.append_high_qc2(high_qc.clone()).await {
                     Ok(()) => {
-                        finish_op(timer);
+                        finish_measurement(timer);
                         return Some(StorageOutput::HighQc(view));
                     },
                     Err(err) => {
@@ -298,12 +280,12 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
         let timer = self
             .metrics
             .as_ref()
-            .map(|m| OpTimer::start(&m.append_state_cert));
+            .map(|m| Measurement::start(m.append_state_cert.clone()));
         let handle = self.tasks.spawn(async move {
             loop {
                 match storage.update_state_cert(state_cert.clone()).await {
                     Ok(()) => {
-                        finish_op(timer);
+                        finish_measurement(timer);
                         return None;
                     },
                     Err(err) => {
@@ -324,7 +306,7 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
         let timer = self
             .metrics
             .as_ref()
-            .map(|m| OpTimer::start(&m.append_proposal));
+            .map(|m| Measurement::start(m.append_proposal.clone()));
         let handle = self.tasks.spawn(async move {
             let data = QuorumProposalWrapper {
                 proposal: QuorumProposal2 {
@@ -353,7 +335,7 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
             loop {
                 match storage.append_proposal_wrapper(&signed).await {
                     Ok(()) => {
-                        finish_op(timer);
+                        finish_measurement(timer);
                         return Some(StorageOutput::Proposal(view, commitment));
                     },
                     Err(err) => {
@@ -376,12 +358,12 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
         let timer = self
             .metrics
             .as_ref()
-            .map(|m| OpTimer::start(&m.record_action));
+            .map(|m| Measurement::start(m.record_action.clone()));
         let handle = self.tasks.spawn(async move {
             loop {
                 match storage.record_action(view, epoch, kind.into()).await {
                     Ok(()) => {
-                        finish_op(timer);
+                        finish_measurement(timer);
                         return Some(StorageOutput::Action(view, kind));
                     },
                     Err(err) => {
