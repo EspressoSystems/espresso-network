@@ -1,5 +1,5 @@
 pub mod error;
-mod metrics;
+pub(crate) mod metrics;
 pub mod timer;
 
 use std::{
@@ -294,7 +294,7 @@ where
                 initializer.epoch_height,
                 upgrade_lock,
             ))
-            .storage(Storage::new(storage, private_key))
+            .storage(Storage::new(storage, private_key).with_metrics(metrics))
             .membership_coordinator(membership_coordinator)
             .timer(Timer::new(timeout_duration, anchor_view, anchor_epoch))
             .public_key(public_key)

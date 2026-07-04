@@ -1620,6 +1620,7 @@ impl SequencerPersistence for Persistence {
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<Option<ViewNumber>> {
+        let now = Instant::now();
         // Generate events for the new leaves, then GC. On error `last_processed_view` is not
         // advanced past the failure point, so no data is lost and the range is retried.
         self.generate_decide_events(deciding_qc, consumer).await?;
@@ -1628,6 +1629,9 @@ impl SequencerPersistence for Persistence {
         if let Err(err) = self.prune(view).await {
             tracing::warn!(?view, "pruning failed: {err:#}");
         }
+        self.internal_metrics
+            .internal_process_decided_events_duration
+            .add_point(now.elapsed().as_secs_f64());
 
         self.load_processed_view().await
     }

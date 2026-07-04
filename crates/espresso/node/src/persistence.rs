@@ -1708,8 +1708,13 @@ mod tests {
 
     /// Until a gap-fill decide arrives, event processing holds its cursor at the gap: nothing
     /// past it is delivered, and the pending leaves are neither skipped nor dropped.
-    #[rstest_reuse::apply(persistence_types)]
-    pub async fn test_decide_gap_holds_events<P: TestablePersistence>(_p: PhantomData<P>) {
+    ///
+    /// sql-only: the fs backend keeps the pop-oldest cursor and skips gaps (the consumer
+    /// re-fetches missing blocks), trading gap-fill delivery for cheap decide passes.
+    #[rstest::rstest]
+    #[case(PhantomData::<crate::persistence::sql::Persistence>)]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    pub async fn test_decide_gap_holds_events<P: TestablePersistence>(#[case] _p: PhantomData<P>) {
         let tmp = P::tmp_storage().await;
         let storage = P::connect(&tmp).await;
         let consumer = DecideViewCollector::default();
@@ -1748,8 +1753,14 @@ mod tests {
 
     /// Once the gap-fill decide arrives, the consumer receives the gap leaf and everything held
     /// up behind it, in order, exactly once each.
-    #[rstest_reuse::apply(persistence_types)]
-    pub async fn test_decide_gap_fill_delivers_all<P: TestablePersistence>(_p: PhantomData<P>) {
+    ///
+    /// sql-only: see [`test_decide_gap_holds_events`].
+    #[rstest::rstest]
+    #[case(PhantomData::<crate::persistence::sql::Persistence>)]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    pub async fn test_decide_gap_fill_delivers_all<P: TestablePersistence>(
+        #[case] _p: PhantomData<P>,
+    ) {
         let tmp = P::tmp_storage().await;
         let storage = P::connect(&tmp).await;
         let consumer = DecideViewCollector::default();
@@ -1761,8 +1772,7 @@ mod tests {
 
         // The gap-fill decide of view 2 arrives.
         decide_range(&storage, &chain, 2..3, &consumer).await;
-        // The fs backend only emits up to the triggering event's decided view; a process pass at
-        // the watermark (the next decide, in production) drains the rest.
+        // A re-process pass at the watermark must not skip or duplicate anything.
         storage
             .process_decided_events(ViewNumber::new(4), None, &consumer)
             .await
