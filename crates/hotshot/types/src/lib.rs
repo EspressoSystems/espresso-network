@@ -9,7 +9,7 @@
 #![allow(unused_assignments)]
 use std::{fmt::Debug, future::Future, num::NonZeroUsize, pin::Pin, time::Duration};
 
-use alloy::primitives::U256;
+use alloy_primitives::U256;
 use bincode::Options;
 use displaydoc::Display;
 use serde::{Deserialize, Serialize};

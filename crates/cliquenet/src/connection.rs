@@ -19,8 +19,7 @@ use tokio::{
 use tracing::{debug, warn};
 
 use crate::{
-    Config, Version,
-    addr::NetAddr,
+    Config, NetAddr, Version,
     error::NetworkError,
     msg::{Header, MAX_NOISE_MESSAGE_SIZE, hello::Hello},
     util::until,
