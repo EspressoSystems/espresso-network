@@ -159,6 +159,10 @@ where
     async fn load_pruned_height(&self) -> anyhow::Result<Option<u64>> {
         self.data_source.load_pruned_height().await
     }
+
+    async fn load_state_pruned_height(&self) -> anyhow::Result<Option<u64>> {
+        self.data_source.load_state_pruned_height().await
+    }
 }
 
 #[async_trait]
