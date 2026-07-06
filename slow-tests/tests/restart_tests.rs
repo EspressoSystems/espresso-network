@@ -383,7 +383,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                     self.modules.clone(),
                     self.opt.clone(),
                     S::persistence_options(&self.storage),
-                    PublicNodeConfig::new(&self.opt, &self.modules),
+                    PublicNodeConfig::new(&self.opt, &self.modules, &genesis),
                 )
                 .await
                 {
