@@ -686,8 +686,15 @@ impl StakeTableState {
                 if x25519Key.0 == [0u8; 32] {
                     return Err(StakeTableError::InvalidX25519Key("zero key".into()));
                 }
-                let x25519_key = x25519::PublicKey::try_from(x25519Key.0.as_slice())
-                    .map_err(|e| StakeTableError::InvalidX25519Key(format!("{e}")))?;
+                // The contract only rejects the all-zero key, so other invalid encodings
+                // (e.g. non-canonical field elements) are reachable and must not be fatal.
+                let x25519_key = match x25519::PublicKey::try_from(x25519Key.0.as_slice()) {
+                    Ok(key) => Some(key),
+                    Err(e) => {
+                        tracing::warn!(%e, account = ?account, "Invalid x25519 key");
+                        None
+                    },
+                };
 
                 // Parse p2p addr
                 let p2p_addr = match p2pAddr.parse::<NetAddr>() {
@@ -722,10 +729,10 @@ impl StakeTableState {
                     return Err(StakeTableError::SchnorrKeyAlreadyUsed(k.to_string()));
                 }
 
-                if self.used_x25519_keys.contains(&x25519_key) {
-                    return Err(StakeTableError::X25519KeyAlreadyUsed(
-                        x25519_key.to_string(),
-                    ));
+                if let Some(k) = x25519_key.as_ref()
+                    && self.used_x25519_keys.contains(k)
+                {
+                    return Err(StakeTableError::X25519KeyAlreadyUsed(k.to_string()));
                 }
 
                 // All checks ok, applying changes
@@ -735,7 +742,9 @@ impl StakeTableState {
                 if let Some(k) = state_ver_key.as_ref() {
                     self.used_schnorr_keys.insert(k.clone());
                 }
-                self.used_x25519_keys.insert(x25519_key);
+                if let Some(k) = x25519_key.as_ref() {
+                    self.used_x25519_keys.insert(*k);
+                }
 
                 entry.or_insert(RegisteredValidator {
                     account: *account,
@@ -745,7 +754,7 @@ impl StakeTableState {
                     commission: *commission,
                     delegators: HashMap::new(),
                     authenticated,
-                    x25519_key: Some(x25519_key),
+                    x25519_key,
                     p2p_addr,
                 });
             },
@@ -759,13 +768,19 @@ impl StakeTableState {
                     .get_mut(&validator)
                     .ok_or(StakeTableError::ValidatorNotFound(validator))?;
 
-                let key = x25519::PublicKey::try_from(x25519Key.0.as_slice())
-                    .map_err(|e| StakeTableError::InvalidX25519Key(format!("{e}")))?;
-                if self.used_x25519_keys.contains(&key) {
-                    return Err(StakeTableError::X25519KeyAlreadyUsed(key.to_string()));
+                match x25519::PublicKey::try_from(x25519Key.0.as_slice()) {
+                    Ok(key) => {
+                        if self.used_x25519_keys.contains(&key) {
+                            return Err(StakeTableError::X25519KeyAlreadyUsed(key.to_string()));
+                        }
+                        self.used_x25519_keys.insert(key);
+                        val.x25519_key = Some(key);
+                    },
+                    Err(e) => {
+                        tracing::warn!(%e, validator = ?validator, "Invalid x25519 key");
+                        val.x25519_key = None;
+                    },
                 }
-                self.used_x25519_keys.insert(key);
-                val.x25519_key = Some(key);
             },
 
             StakeTableEvent::P2pAddrUpdate(P2pAddrUpdated {
@@ -3670,6 +3685,62 @@ mod tests {
         Ok(())
     }
 
+    /// Little-endian encoding of the curve25519 field prime 2^255 - 19: nonzero,
+    /// so it passes the contract's `x25519Key != 0` check, but non-canonical.
+    fn noncanonical_x25519_key() -> [u8; 32] {
+        let mut key = [0xffu8; 32];
+        key[0] = 0xed;
+        key[31] = 0x7f;
+        key
+    }
+
+    /// A contract-reachable invalid x25519 key must not halt event processing;
+    /// the validator registers with `x25519_key: None`.
+    #[test]
+    fn test_register_v3_noncanonical_x25519_soft_fails() -> anyhow::Result<()> {
+        let val = TestValidator::random().with_x25519_key(noncanonical_x25519_key());
+
+        let mut state = StakeTableState::default();
+        state.apply_event(StakeTableEvent::RegisterV3((&val).into()))??;
+
+        let registered = state.validators().get(&val.account).unwrap();
+        assert!(registered.x25519_key.is_none());
+        assert!(state.used_x25519_keys().is_empty());
+
+        Ok(())
+    }
+
+    /// A contract-reachable invalid x25519 key in an update must not halt event
+    /// processing; the validator's key is cleared.
+    #[test]
+    fn test_x25519_key_update_noncanonical_soft_fails() -> anyhow::Result<()> {
+        let val = TestValidator::random();
+
+        let mut state = StakeTableState::default();
+        state.apply_event(StakeTableEvent::RegisterV3((&val).into()))??;
+        assert!(
+            state
+                .validators()
+                .get(&val.account)
+                .unwrap()
+                .x25519_key
+                .is_some()
+        );
+
+        state.apply_event(val.x25519_update(noncanonical_x25519_key()))??;
+
+        let registered = state.validators().get(&val.account).unwrap();
+        assert!(registered.x25519_key.is_none());
+        assert_eq!(state.used_x25519_keys().len(), 1);
+
+        state.apply_event(val.x25519_update([42u8; 32]))??;
+        let registered = state.validators().get(&val.account).unwrap();
+        assert!(registered.x25519_key.is_some());
+        assert_eq!(state.used_x25519_keys().len(), 2);
+
+        Ok(())
+    }
+
     /// `used_x25519_keys` must be part of the state commitment. Without this,
     /// nodes diverging on x25519 uniqueness tracking would produce identical
     /// state hashes and the divergence would go undetected.
@@ -4551,5 +4622,195 @@ mod tests {
                 .stake_table_key,
             prior_v2
         );
+    }
+}
+
+// The StakeTableV3 contract enforces canonical x25519 key encodings (nonzero, LE value below
+// 2^255-19), a superset of what Rust `x25519::PublicKey::try_from` rejects (only the LE values
+// in [2^255-19, 2^255-1]; top-bit aliases parse). Should the contract check ever regress,
+// `apply_event` must still degrade unparsable keys to `x25519_key = None` instead of failing:
+// a fatal error here halts stake table processing for the whole network. This proptest deploys
+// StakeTableV3 on anvil and fuzzes the property: Solidity accepts => `apply_event` returns the
+// outer `Ok(_)`.
+#[cfg(test)]
+mod proptest_x25519_key {
+    use alloy::{
+        primitives::FixedBytes,
+        providers::{ProviderBuilder, WalletProvider},
+    };
+    use proptest::{
+        prelude::*,
+        test_runner::{Config as ProptestConfig, TestRunner},
+    };
+
+    use super::{testing::TestValidator, *};
+
+    fn x25519_key_strategy() -> impl Strategy<Value = [u8; 32]> {
+        // LE encoding of the curve25519 field prime p = 2^255 - 19.
+        let mut p = [0xffu8; 32];
+        p[0] = 0xed;
+        p[31] = 0x7f;
+        prop_oneof![
+            // Uniform random bytes
+            any::<[u8; 32]>(),
+            // All zeros (contract rejects)
+            Just([0u8; 32]),
+            // Exactly p: nonzero but non-canonical
+            Just(p),
+            // The 19 non-canonical encodings p..2^255-1 (0xed + 18 = 0xff, so no overflow)
+            (0..19u8).prop_map(move |k| {
+                let mut key = p;
+                key[0] += k;
+                key
+            }),
+            // p - 1: largest canonical value
+            Just({
+                let mut key = p;
+                key[0] = 0xec;
+                key
+            }),
+            // 2^256 - 1: top bit set. Rust parses it (bit 255 is only masked during DH),
+            // the contract rejects it as a non-canonical alias.
+            Just([0xffu8; 32]),
+            // Top bit only: same alias class as above
+            Just({
+                let mut key = [0u8; 32];
+                key[31] = 0x80;
+                key
+            }),
+            // Small integers, including low-order point encodings
+            (0..=2u8).prop_map(|v| {
+                let mut key = [0u8; 32];
+                key[0] = v;
+                key
+            }),
+        ]
+    }
+
+    #[test]
+    fn solidity_rust_x25519_validation_equivalence() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
+        let sender = provider.default_signer_address();
+        let contract_addr = rt.block_on(async {
+            let contract = StakeTableV3::deploy(&provider).await.unwrap();
+            *contract.address()
+        });
+        let contract = StakeTableV3::new(contract_addr, &provider);
+
+        // Committed registration for the update-path oracle: gives `updateX25519Key` an
+        // active validator. Done before both passes so every case sees identical state.
+        let registered = TestValidator::random_update_keys(sender, 100).with_x25519_key([7u8; 32]);
+        rt.block_on(async {
+            let receipt = contract
+                .registerValidatorV3(
+                    registered.bls_vk.clone(),
+                    registered.schnorr_vk.clone(),
+                    registered.bls_sig.clone().into(),
+                    registered.schnorr_sig.clone(),
+                    registered.commission,
+                    String::new(),
+                    FixedBytes(registered.x25519_key),
+                    registered.p2p_addr.clone(),
+                )
+                .send()
+                .await
+                .unwrap()
+                .get_receipt()
+                .await
+                .unwrap();
+            assert!(receipt.status());
+        });
+
+        // Rust mirror of the committed registration, base state for the update pass.
+        let mut registered_state = StakeTableState::default();
+        registered_state
+            .apply_event(StakeTableEvent::RegisterV3((&registered).into()))
+            .unwrap()
+            .unwrap();
+
+        let base = TestValidator::random();
+
+        let cases = std::env::var("PROPTEST_CASES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(512);
+        let mut runner = TestRunner::new(ProptestConfig {
+            cases,
+            ..ProptestConfig::default()
+        });
+
+        // Register path: static call so no state is committed between cases.
+        runner
+            .run(&x25519_key_strategy(), |key| {
+                let sol_valid = rt.block_on(async {
+                    contract
+                        .registerValidatorV3(
+                            base.bls_vk.clone(),
+                            base.schnorr_vk.clone(),
+                            base.bls_sig.clone().into(),
+                            base.schnorr_sig.clone(),
+                            base.commission,
+                            String::new(),
+                            FixedBytes(key),
+                            base.p2p_addr.clone(),
+                        )
+                        .from(base.account)
+                        .call()
+                        .await
+                        .is_ok()
+                });
+
+                let val = base.clone().with_x25519_key(key);
+                let mut state = StakeTableState::default();
+                let result = state.apply_event(StakeTableEvent::RegisterV3((&val).into()));
+
+                if sol_valid {
+                    prop_assert!(
+                        result.is_ok(),
+                        "Solidity accepted registration with x25519 key {key:?} but apply_event \
+                         failed: {result:?}"
+                    );
+                    let stored = state.validators().get(&val.account).unwrap().x25519_key;
+                    match x25519::PublicKey::try_from(key.as_slice()) {
+                        Ok(parsed) => prop_assert_eq!(stored, Some(parsed)),
+                        Err(_) => prop_assert_eq!(stored, None),
+                    }
+                }
+                Ok(())
+            })
+            .unwrap();
+
+        // Update path: static call against the committed registration.
+        runner
+            .run(&x25519_key_strategy(), |key| {
+                let sol_valid = rt.block_on(async {
+                    contract
+                        .updateX25519Key(FixedBytes(key))
+                        .from(sender)
+                        .call()
+                        .await
+                        .is_ok()
+                });
+
+                let mut state = registered_state.clone();
+                let result = state.apply_event(registered.x25519_update(key));
+
+                if sol_valid {
+                    prop_assert!(
+                        result.is_ok(),
+                        "Solidity accepted x25519 key update {key:?} but apply_event failed: \
+                         {result:?}"
+                    );
+                    let stored = state.validators().get(&sender).unwrap().x25519_key;
+                    match x25519::PublicKey::try_from(key.as_slice()) {
+                        Ok(parsed) => prop_assert_eq!(stored, Some(parsed)),
+                        Err(_) => prop_assert_eq!(stored, None),
+                    }
+                }
+                Ok(())
+            })
+            .unwrap();
     }
 }
