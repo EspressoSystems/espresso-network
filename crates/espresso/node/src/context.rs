@@ -69,6 +69,16 @@ use crate::{
 pub(crate) type ConsensusNode<N, P> = Node<N, P>;
 pub type Consensus<N, P> = hotshot::types::SystemContextHandle<SeqTypes, ConsensusNode<N, P>>;
 
+/// Capacity of the channel feeding inbound request-response messages from the consensus event
+/// loop to the protocol. Messages are dropped (not queued) when it is full, and a single
+/// broadcast request can fan in a response from every node at once, so this must comfortably
+/// exceed the network size. Entries are `Arc<Vec<u8>>`, so slots are pointer-sized.
+const REQUEST_RESPONSE_CHANNEL_CAPACITY: usize = 256;
+
+/// Capacity of the outbound message channel drained by the external event handler. Responders
+/// block on this channel while holding request-response admission permits.
+const OUTBOUND_MESSAGE_CHANNEL_CAPACITY: usize = 128;
+
 /// The sequencer context contains a consensus handle and other sequencer specific information.
 #[derive(Derivative, Clone)]
 #[derivative(Debug(bound = ""))]
@@ -261,8 +271,10 @@ where
         }
 
         // Create the channel for sending outbound messages from the external event handler
-        let (outbound_message_sender, outbound_message_receiver) = channel(20);
-        let (request_response_sender, request_response_receiver) = channel(20);
+        let (outbound_message_sender, outbound_message_receiver) =
+            channel(OUTBOUND_MESSAGE_CHANNEL_CAPACITY);
+        let (request_response_sender, request_response_receiver) =
+            channel(REQUEST_RESPONSE_CHANNEL_CAPACITY);
 
         // Configure the request-response protocol
         let request_response_config = RequestResponseConfig {
@@ -271,8 +283,12 @@ where
             incoming_response_timeout: Duration::from_secs(5),
             request_batch_size: 5,
             request_batch_interval: Duration::from_secs(2),
-            max_incoming_requests: 10,
-            max_incoming_requests_per_key: 1,
+            // A node catching up legitimately issues several distinct requests concurrently
+            // (accounts, frontier, leaves, chain config), so the per-key limit must allow that.
+            // Permits are held for up to `incoming_request_timeout` while a response is derived
+            // (possibly from SQL), so the global limit bounds concurrent storage work.
+            max_incoming_requests: 32,
+            max_incoming_requests_per_key: 4,
             max_incoming_responses: 200,
         };
 
@@ -310,6 +326,10 @@ where
             outbound_message_receiver,
             network,
             pub_key,
+            metrics
+                .subgroup("request_response".into())
+                .create_counter("inbound_dropped".into(), None)
+                .into(),
         )
         .await
         .with_context(|| "Failed to create external event handler")?;
