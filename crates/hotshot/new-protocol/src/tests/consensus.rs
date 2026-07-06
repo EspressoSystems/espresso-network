@@ -14,6 +14,7 @@ use hotshot_types::{
 use super::common::utils::TestData;
 use crate::{
     consensus::{ConsensusInput, ConsensusOutput},
+    coordinator::GcScope,
     helpers::proposal_commitment,
     message::Proposal,
     outbox::Outbox,
@@ -21,9 +22,10 @@ use crate::{
     storage::{ActionKind, StorageOutput},
     tests::common::{
         assertions::{
-            any, count_matching, is_leaf_decided, is_persist_proposal, is_proposal,
-            is_record_action, is_request_block_and_header, is_request_state, is_send_timeout_cert,
-            is_send_timeout_vote, is_view_changed, is_vote1, is_vote2, node_index_for_key,
+            any, count_matching, decides_view, is_leaf_decided, is_persist_proposal, is_proposal,
+            is_record_action, is_request_block_and_header, is_request_state, is_send_cert2,
+            is_send_timeout_cert, is_send_timeout_vote, is_view_changed, is_vote1, is_vote2,
+            node_index_for_key,
         },
         utils::{ConsensusHarness, MockBlock, state_verified_input},
     },
@@ -286,6 +288,144 @@ async fn test_single_view_decide() {
     assert!(
         any(harness.outputs(), is_leaf_decided),
         "Leaf should be decided after cert2"
+    );
+}
+
+/// Obtaining a Cert2 broadcasts it once so peers that missed the vote2s can
+/// still decide, and a re-delivered Cert2 for the same view is not re-broadcast.
+#[tokio::test]
+async fn test_cert2_broadcast_once() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(3).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    harness
+        .apply(test_data.views[0].proposal_input_consensus(&node_key))
+        .await;
+    harness
+        .apply(test_data.views[0].block_reconstructed_input())
+        .await;
+    harness
+        .apply(test_data.views[1].proposal_input_consensus(&node_key))
+        .await;
+    harness
+        .apply(test_data.views[1].block_reconstructed_input())
+        .await;
+    harness.apply(test_data.views[1].cert1_input()).await;
+    harness.apply(test_data.views[1].cert2_input()).await;
+
+    assert_eq!(
+        count_matching(harness.outputs(), is_send_cert2),
+        1,
+        "obtaining a cert2 should broadcast it exactly once"
+    );
+
+    harness.apply(test_data.views[1].cert2_input()).await;
+    assert_eq!(
+        count_matching(harness.outputs(), is_send_cert2),
+        1,
+        "a re-delivered cert2 must not be re-broadcast"
+    );
+
+    // View 1 decided as an ancestor of view 2, so its cert2 was never
+    // assembled locally.
+    harness.apply(test_data.views[0].cert2_input()).await;
+    assert_eq!(
+        count_matching(harness.outputs(), is_send_cert2),
+        1,
+        "a cert2 for an already-decided view must not be relayed"
+    );
+}
+
+/// A Cert2 arriving long after the node advanced past its view must still
+/// decide: view-change GC must not drop the decide inputs of undecided views.
+#[tokio::test]
+async fn test_late_cert2_decides_after_view_change_gc() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(5).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    // Drive views 1..=4 forward with Cert1 only, so nothing decides.
+    for view in &test_data.views[0..4] {
+        harness
+            .apply(view.proposal_input_consensus(&node_key))
+            .await;
+        harness.apply(view.block_reconstructed_input()).await;
+        harness.apply(view.cert1_input()).await;
+    }
+    assert!(
+        !any(harness.outputs(), is_leaf_decided),
+        "no leaf should decide before any cert2 arrives"
+    );
+
+    // The view-change GC the coordinator runs as the node advances.
+    harness
+        .consensus
+        .gc(GcScope::Local(test_data.views[3].view_number));
+
+    harness.apply(test_data.views[0].cert2_input()).await;
+
+    assert!(
+        any(harness.outputs(), is_leaf_decided),
+        "a late cert2 must still decide — GC must not drop the info needed to decide"
+    );
+}
+
+/// A newer view decides *without* its full ancestor chain (a gap); a late
+/// Cert2 for the skipped view must still decide it, without moving the
+/// decided watermark backward.
+#[tokio::test]
+async fn test_gap_fill_decide_of_older_view() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(5).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    // Decide view 4 without ever delivering views 1-3, leaving a gap.
+    harness
+        .apply(test_data.views[3].proposal_input_consensus(&node_key))
+        .await;
+    harness
+        .apply(test_data.views[3].block_reconstructed_input())
+        .await;
+    harness.apply(test_data.views[3].cert1_input()).await;
+    harness.apply(test_data.views[3].cert2_input()).await;
+
+    assert_eq!(
+        count_matching(harness.outputs(), is_leaf_decided),
+        1,
+        "view 4 should decide"
+    );
+    assert!(
+        any(harness.outputs(), |o| decides_view(o, 4)),
+        "the first decide should be for view 4"
+    );
+    assert!(
+        !any(harness.outputs(), |o| decides_view(o, 3)),
+        "view 3 must not be decided yet — it is a gap"
+    );
+
+    // The gap view's proposal was received live before the node advanced past
+    // it; its Cert1 and Cert2 arrive late.
+    harness
+        .consensus
+        .seed_proposals([test_data.views[2].proposal.data.clone()]);
+    harness.apply(test_data.views[2].cert1_input()).await;
+    harness.apply(test_data.views[2].cert2_input()).await;
+
+    assert!(
+        any(harness.outputs(), |o| decides_view(o, 3)),
+        "the late cert2 for the gap view (3) must decide it"
+    );
+    assert_eq!(
+        harness.consensus.last_decided_view(),
+        test_data.views[3].view_number,
+        "a gap-fill decide of an older view must not move the watermark backward"
+    );
+    assert_eq!(
+        count_matching(harness.outputs(), is_send_cert2),
+        2,
+        "the late cert2 for the still-undecided gap view must be relayed (once for view 4, once \
+         for the gap view 3)"
     );
 }
 
@@ -897,6 +1037,176 @@ async fn test_decide_not_repeated_for_same_view() {
     harness.apply(test_data.views[1].cert2_input()).await;
 
     assert_eq!(1, count_matching(harness.outputs(), is_leaf_decided));
+}
+
+/// Regression: after restarting from a persisted decided anchor, the first
+/// decide must not re-decide the anchor leaf. The `maybe_decide` chain-walk
+/// follows `justify_qc` back while `parent_view > last_decided_view`; if a
+/// restart leaves `last_decided_view` at genesis instead of the anchor view,
+/// the walk re-includes the anchor — which production logs as a spurious
+/// "duplicate decided leaf" warning the first decide after every restart.
+#[tokio::test]
+async fn test_restart_does_not_redecide_anchor() {
+    let test_data = TestData::new(4).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    // Treat view index 1 as the persisted decided anchor; index 2 is the first
+    // view decided after the restart and its `justify_qc` certifies the anchor.
+    let anchor = &test_data.views[1];
+    let decider = &test_data.views[2];
+    let anchor_view = anchor.view_number;
+    assert_ne!(
+        anchor_view,
+        ViewNumber::genesis(),
+        "anchor must be a non-genesis view to exercise the chain-walk bound"
+    );
+
+    let mut harness =
+        ConsensusHarness::restarted_from(0, anchor.proposal.data.clone(), anchor.cert1.clone(), [])
+            .await;
+    assert_eq!(
+        harness.consensus.last_decided_view(),
+        anchor_view,
+        "restart must seed last_decided_view from the anchor, not genesis"
+    );
+
+    // Drive the first decide after the restart at the next view.
+    harness
+        .apply(decider.proposal_input_consensus(&node_key))
+        .await;
+    harness.apply(decider.block_reconstructed_input()).await;
+    harness.apply(decider.cert1_input()).await;
+    harness.apply(decider.cert2_input()).await;
+
+    let decided_views: Vec<ViewNumber> = harness
+        .outputs()
+        .iter()
+        .filter_map(|o| match o {
+            ConsensusOutput::LeafDecided { leaves, .. } => Some(leaves),
+            _ => None,
+        })
+        .flatten()
+        .map(|leaf| leaf.view_number())
+        .collect();
+
+    assert!(
+        !decided_views.is_empty(),
+        "the view after the anchor should decide"
+    );
+    assert!(
+        decided_views.iter().all(|view| *view > anchor_view),
+        "the decide re-included the anchor view {anchor_view:?}; decided {decided_views:?}"
+    );
+}
+
+/// Certificates re-delivered after a restart for views this node already
+/// acted in must not re-record the view's Vote action or re-cast its phase-2
+/// vote once the Cert2 is known; a late Cert2 must still *decide* the view.
+#[tokio::test]
+async fn test_no_revote2_for_restart_barred_views() {
+    let test_data = TestData::new(4).await;
+    // Decided up to view 2 (the anchor) and voted in view 3 before going down.
+    let anchor = &test_data.views[1];
+    let voted = &test_data.views[2];
+    let anchor_view = anchor.view_number;
+
+    let mut harness = ConsensusHarness::restarted_from(
+        0,
+        anchor.proposal.data.clone(),
+        anchor.cert1.clone(),
+        [voted.proposal.data.clone()],
+    )
+    .await;
+    // Raise the action bar to the voted view, as `Coordinator::maker` does.
+    harness
+        .consensus
+        .resume_from_restart(anchor_view, anchor_view + 1, voted.view_number);
+
+    // A peer relays the missed Cert2s before re-broadcasting the Cert1s.
+    harness.apply(anchor.cert2_input()).await;
+    harness.apply(anchor.cert1_input()).await;
+    harness.apply(voted.cert2_input()).await;
+    harness.apply(voted.cert1_input()).await;
+
+    assert!(
+        any(harness.outputs(), |o| decides_view(o, *voted.view_number)),
+        "a late cert2 must still decide the undecided barred view"
+    );
+    assert!(
+        !any(harness.outputs(), is_vote2),
+        "must not re-cast a phase-2 vote in a view acted in before the restart"
+    );
+    assert_eq!(
+        count_matching(harness.outputs(), is_record_action),
+        0,
+        "no action may be re-recorded for views acted in before the restart"
+    );
+}
+
+/// If Cert1 formed before a crash but no Cert2 did, the restarted node must
+/// re-cast its (identical) phase-2 vote — without the barred quorum's re-votes
+/// the Cert2 can never form — while not re-recording the Vote action.
+#[tokio::test]
+async fn test_revote2_after_restart_without_cert2() {
+    let test_data = TestData::new(4).await;
+    let anchor = &test_data.views[1];
+    let voted = &test_data.views[2];
+    let anchor_view = anchor.view_number;
+
+    let mut harness = ConsensusHarness::restarted_from(
+        0,
+        anchor.proposal.data.clone(),
+        anchor.cert1.clone(),
+        [voted.proposal.data.clone()],
+    )
+    .await;
+    harness
+        .consensus
+        .resume_from_restart(anchor_view, anchor_view + 1, voted.view_number);
+
+    // A peer re-broadcasts Cert1 for the voted view; no Cert2 exists anywhere.
+    harness.apply(voted.cert1_input()).await;
+
+    assert_eq!(
+        count_matching(harness.outputs(), is_vote2),
+        1,
+        "the phase-2 vote must be re-cast after restart when no cert2 exists"
+    );
+    assert_eq!(
+        count_matching(harness.outputs(), is_record_action),
+        0,
+        "re-casting the vote must not re-record the view's Vote action"
+    );
+}
+
+/// A replayed Cert1+Cert2 pair for a view below the restart anchor (decided
+/// in the previous run) must not re-decide it: the floor is pinned there.
+#[tokio::test]
+async fn test_no_redecide_below_restart_anchor() {
+    let test_data = TestData::new(4).await;
+    let decided = &test_data.views[1];
+    let anchor = &test_data.views[2];
+    let anchor_view = anchor.view_number;
+
+    let mut harness =
+        ConsensusHarness::restarted_from(0, anchor.proposal.data.clone(), anchor.cert1.clone(), [])
+            .await;
+    // Make the pre-anchor proposal available so only the floor stands between
+    // the replayed certificates and a duplicate decide.
+    harness
+        .consensus
+        .seed_proposals([decided.proposal.data.clone()]);
+    harness
+        .consensus
+        .resume_from_restart(anchor_view, anchor_view + 1, anchor_view);
+
+    harness.apply(decided.cert1_input()).await;
+    harness.apply(decided.cert2_input()).await;
+
+    assert!(
+        !any(harness.outputs(), is_leaf_decided),
+        "a replayed certificate pair below the restart anchor must not re-decide"
+    );
 }
 
 /// A timeout for a view below `current_view` is ignored entirely: no
