@@ -15,6 +15,11 @@ const MAINNET_TOML: &str = include_str!("../../../deployment-info/deployments/ma
 
 // ── Raw TOML types ────────────────────────────────────────────────────────────
 
+// LightClient is not supported yet: its runtime bytecode links the external
+// PlonkVerifier library, so the binding contains 0xff*20 address placeholders
+// and `compare_normalized` cannot byte-compare it. Supporting it requires
+// resolving the linked library address and verifying the library's bytecode
+// too; deferred until a LightClient upgrade needs this tool.
 #[derive(Debug, Deserialize)]
 struct RawDeploymentInfo {
     ops_timelock: Option<RawTimelockSection>,
