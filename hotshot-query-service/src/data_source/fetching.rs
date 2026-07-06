@@ -598,6 +598,11 @@ where
         })
         .await
     }
+
+    async fn load_state_pruned_height(&self) -> anyhow::Result<Option<u64>> {
+        let mut tx = self.read().await?;
+        tx.load_state_pruned_height().await
+    }
 }
 
 #[async_trait]
