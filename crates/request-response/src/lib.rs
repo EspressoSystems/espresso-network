@@ -116,10 +116,6 @@ pub struct RequestResponseConfig {
     /// The maximum amount of time we will spend trying to both derive a response for a request and
     /// send the response over the wire.
     pub incoming_request_timeout: Duration,
-    /// The maximum amount of time we will spend trying to validate a response. This is used to prevent
-    /// an attack where a malicious participant sends us a bunch of requests that take a long time to
-    /// validate.
-    pub incoming_response_timeout: Duration,
     /// The batch size for outgoing requests. This is the number of request messages that we will
     /// send out at a time for a single request before waiting for the [`request_batch_interval`].
     pub request_batch_size: usize,
@@ -129,10 +125,6 @@ pub struct RequestResponseConfig {
     pub max_incoming_requests: usize,
     /// The maximum number of incoming requests that can be processed for a single key at any given time.
     pub max_incoming_requests_per_key: usize,
-    /// The maximum (global) number of incoming responses that can be processed at any given time.
-    /// We need this because responses coming in need to be validated [asynchronously] that they
-    /// satisfy the request they are responding to
-    pub max_incoming_responses: usize,
 }
 
 /// A protocol that allows for request-response communication. Is cheaply cloneable, so there is no
@@ -798,8 +790,6 @@ mod tests {
             request_batch_interval: Duration::from_millis(100),
             max_incoming_requests: 10,
             max_incoming_requests_per_key: 1,
-            incoming_response_timeout: Duration::from_secs(1),
-            max_incoming_responses: 5,
         }
     }
 
