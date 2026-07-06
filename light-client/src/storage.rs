@@ -591,10 +591,14 @@ impl Storage for SqliteStorage {
 
                     // Record that the stake table for this epoch is available, along with the
                     // versions of the epoch root headers in epochs `e-2` and `e-1` (snapshot points
-                    // for `e` and `e+1`).
-                    query(
+                    // for `e` and `e+1`). The stake table for an epoch is immutable, so if the row
+                    // already exists (e.g. a concurrent or repeated catchup) the whole operation is
+                    // a no-op: skip the remaining inserts to avoid spurious UNIQUE-constraint
+                    // retries.
+                    let inserted = query(
                         "INSERT INTO stake_table_epoch (epoch, epoch_root_protocol_version, \
-                         next_epoch_root_protocol_version) VALUES ($1, $2, $3)",
+                         next_epoch_root_protocol_version) VALUES ($1, $2, $3) ON CONFLICT \
+                         (epoch) DO NOTHING",
                     )
                     .bind(epoch)
                     .bind(&epoch_root_protocol_version_str)
@@ -604,6 +608,9 @@ impl Storage for SqliteStorage {
                     .context(format!(
                         "recording stake table availability for epoch {epoch}"
                     ))?;
+                    if inserted.rows_affected() == 0 {
+                        return Ok(());
+                    }
 
                     QueryBuilder::new("INSERT INTO stake_table_validator (epoch, idx, data) ")
                         .push_values(validators.iter().enumerate(), |mut q, (i, data)| {
@@ -1196,6 +1203,26 @@ mod test {
 
         let fetched = db.get_leaves_in_range(3, 5).await.unwrap();
         assert!(fetched.is_empty());
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_insert_stake_table_idempotent() {
+        let db = SqliteStorage::default().await.unwrap();
+
+        let epoch = EpochNumber::new(1);
+        let state = random_stake_table();
+        db.insert_stake_table(epoch, &state, EPOCH_VERSION, EPOCH_VERSION)
+            .await
+            .unwrap();
+        // Re-recording the same epoch is a no-op rather than a UNIQUE-constraint failure.
+        db.insert_stake_table(epoch, &state, EPOCH_VERSION, EPOCH_VERSION)
+            .await
+            .unwrap();
+        assert_eq!(
+            db.stake_table_lower_bound(epoch).await.unwrap().unwrap(),
+            (epoch, state, EPOCH_VERSION, EPOCH_VERSION)
+        );
     }
 
     #[tokio::test]
