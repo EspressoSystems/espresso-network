@@ -8,7 +8,7 @@ use hotshot_types::{
     drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
     traits::{block_contents::BlockHeader, election::Membership, node_implementation::NodeType},
-    utils::{is_epoch_root, is_transition_block},
+    utils::{is_epoch_root, is_transition_block, root_block_in_epoch},
 };
 use hotshot_utils::anytrace;
 use tokio::task::{AbortHandle, JoinSet};
@@ -157,7 +157,7 @@ impl<T: NodeType> EpochManager<T> {
         self.completed_drb_requests = self.completed_drb_requests.split_off(&epoch);
     }
 
-    pub fn request_drb_result(&mut self, epoch: EpochNumber) {
+    pub fn request_drb_result(&mut self, epoch: EpochNumber, decided_height: u64) {
         // Already computed — caller can read the DRB from membership.
         if self.completed_drb_requests.contains(&epoch) {
             return;
@@ -165,6 +165,20 @@ impl<T: NodeType> EpochManager<T> {
         // In-flight task will deliver the result; avoid spawning a duplicate.
         if self.pending_drb_requests.contains(&epoch) {
             return;
+        }
+        // Catchup for epoch N fetches root leaf which lies in epoch N-2
+        // If that root block is not decided yet then don't spawn a catchup
+        if decided_height != 0 {
+            let required_block = root_block_in_epoch(epoch.saturating_sub(2), *self.epoch_height);
+            if required_block > decided_height {
+                tracing::debug!(
+                    %epoch,
+                    required_block,
+                    decided_height,
+                    "skipping DRB request: epoch root block is beyond decided height"
+                );
+                return;
+            }
         }
         self.pending_drb_requests.insert(epoch);
         let membership_coordinator = self.membership_coordinator.clone();

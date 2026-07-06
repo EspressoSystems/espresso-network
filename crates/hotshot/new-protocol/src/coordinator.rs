@@ -656,7 +656,8 @@ where
             },
             ConsensusOutput::RequestDrbResult(epoch) => {
                 debug!(%node, %epoch, "request drb result");
-                self.epoch_manager.request_drb_result(epoch);
+                self.epoch_manager
+                    .request_drb_result(epoch, self.consensus.last_decided_leaf().height());
             },
             ConsensusOutput::LeafDecided {
                 leaves,
@@ -873,7 +874,10 @@ where
                 // late-starting nodes have it before they need it
                 let next_epoch = epoch + 1;
                 if next_epoch > EpochNumber::genesis() + 1 {
-                    self.epoch_manager.request_drb_result(next_epoch);
+                    self.epoch_manager.request_drb_result(
+                        next_epoch,
+                        self.consensus.last_decided_leaf().height(),
+                    );
                 }
             },
             ConsensusOutput::ViewTimedOut(view) => {
