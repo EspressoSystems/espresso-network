@@ -128,6 +128,9 @@ pub struct BytecodeCheck {
     pub class: MatchClass,
     pub onchain_solc: Option<SolcVersion>,
     pub reference_solc: Option<SolcVersion>,
+    /// On `Mismatch`, describes the first unexplained difference (offset and
+    /// both values).
+    pub mismatch: Option<String>,
 }
 
 /// Strip the trailing solc CBOR metadata tail.
@@ -162,12 +165,20 @@ pub fn strip_cbor_metadata(code: &[u8]) -> (Vec<u8>, Option<SolcVersion>) {
 
 /// Compare normalized on-chain bytecode against the binding reference.
 ///
-/// Normalization: strip CBOR (both) → zero known immutable windows in on-chain copy
-/// → assert reference windows are zero (stale-offsets guard) → zero on-chain windows
-/// → byte-compare cores → classify.
+/// Strips the CBOR metadata tail from both, then requires every byte
+/// difference to be explained: a difference is only accepted inside a 20-byte
+/// window where the on-chain code holds `impl_addr` and the reference holds
+/// zeros. Those windows are the UUPS `__self` immutable slots (the impl's own
+/// address, baked in at deploy; the binding is compiled with
+/// `address(this) = 0`). Any other difference is a `Mismatch`, reported with
+/// the offset and both values.
 ///
-/// Each offset in `immutable_offsets` is the byte position of the 20-byte address
-/// within the deployed bytecode core (start+12 from the forge artifact window).
+/// Exactly `expected_self_windows` explained windows are required. This pins
+/// the impl address to the immutable slots: substituting it into any other
+/// zero region of the reference (e.g. a `PUSH32 0` constant) changes the count
+/// and fails. Residual: a window misaligned within a 32-byte slot still
+/// passes, but a wrong `__self` value only makes `upgradeToAndCall` revert
+/// (`proxiableUUID` is `notDelegated`); it cannot substitute code.
 ///
 /// LightClient verification is deferred; bails if the reference contains
 /// `0xff*20` library placeholders.
@@ -175,7 +186,7 @@ pub fn compare_normalized(
     onchain: &[u8],
     reference: &[u8],
     impl_addr: Address,
-    immutable_offsets: &[usize],
+    expected_self_windows: usize,
 ) -> Result<BytecodeCheck> {
     let placeholder = [0xffu8; 20];
     if reference.windows(20).any(|w| w == placeholder.as_slice()) {
@@ -184,8 +195,11 @@ pub fn compare_normalized(
              is deferred"
         );
     }
+    if impl_addr == Address::ZERO {
+        bail!("impl address is zero");
+    }
 
-    let (mut onchain_core, onchain_solc) = strip_cbor_metadata(onchain);
+    let (onchain_core, onchain_solc) = strip_cbor_metadata(onchain);
     let (ref_core, ref_solc) = strip_cbor_metadata(reference);
 
     if onchain_core.len() != ref_core.len() {
@@ -193,45 +207,54 @@ pub fn compare_normalized(
             class: MatchClass::Mismatch,
             onchain_solc,
             reference_solc: ref_solc,
+            mismatch: Some(format!(
+                "core length differs: onchain={} reference={}",
+                onchain_core.len(),
+                ref_core.len()
+            )),
         });
     }
 
-    let core_len = onchain_core.len();
-    for &offset in immutable_offsets {
-        if offset + 20 > core_len {
-            bail!(
-                "immutable offset {offset} + 20 exceeds core length {core_len}; offsets stale vs \
-                 bindings"
-            );
+    // Zero every __self window (impl_addr on-chain over zeros in the reference)
+    // in a copy; matching against the pristine core keeps the scan independent
+    // of window order and overlap.
+    let mut normalized = onchain_core.clone();
+    let mut self_windows = 0usize;
+    for w in 0..onchain_core.len().saturating_sub(19) {
+        if onchain_core[w..w + 20] == *impl_addr.as_slice() && ref_core[w..w + 20] == [0u8; 20] {
+            normalized[w..w + 20].fill(0);
+            self_windows += 1;
         }
-        // Reference must have zeros at every immutable window (compiled with address(this)=0).
-        if ref_core[offset..offset + 20] != [0u8; 20] {
-            bail!(
-                "reference bytecode non-zero at immutable offset {offset}; offsets stale vs \
-                 bindings"
-            );
-        }
-        // On-chain must have impl_addr at the window.
-        if onchain_core[offset..offset + 20] != *impl_addr.as_slice() {
-            return Ok(BytecodeCheck {
-                class: MatchClass::Mismatch,
-                onchain_solc,
-                reference_solc: ref_solc,
-            });
-        }
-        // Zero the on-chain window so core comparison works.
-        onchain_core[offset..offset + 20].fill(0);
     }
 
-    let class = match (onchain_core == ref_core, onchain_solc == ref_solc) {
-        (true, true) => MatchClass::FullMatch,
-        (true, false) => MatchClass::CodeMatchMetaDiffers,
-        (false, _) => MatchClass::Mismatch,
+    if let Some(first) = (0..normalized.len()).find(|&i| normalized[i] != ref_core[i]) {
+        let end = (first + 20).min(normalized.len());
+        return Ok(BytecodeCheck {
+            class: MatchClass::Mismatch,
+            onchain_solc,
+            reference_solc: ref_solc,
+            mismatch: Some(format!(
+                "unexplained difference at core offset {first}: onchain=0x{} reference=0x{}",
+                alloy::hex::encode(&onchain_core[first..end]),
+                alloy::hex::encode(&ref_core[first..end])
+            )),
+        });
+    }
+
+    if self_windows != expected_self_windows {
+        bail!("found {self_windows} __self immutable windows; expected {expected_self_windows}");
+    }
+
+    let class = if onchain_solc == ref_solc {
+        MatchClass::FullMatch
+    } else {
+        MatchClass::CodeMatchMetaDiffers
     };
     Ok(BytecodeCheck {
         class,
         onchain_solc,
         reference_solc: ref_solc,
+        mismatch: None,
     })
 }
 
@@ -276,72 +299,81 @@ pub enum TimelockKind {
     SafeExit,
 }
 
+/// Expected reinitializer call and the major version it brings the proxy to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExpectedInit {
+    pub selector: [u8; 4],
+    pub target_major: u8,
+}
+
 #[derive(Debug, Clone)]
 pub struct ContractKind {
     pub name: &'static str,
     pub deployed_bytecode: &'static [u8],
-    pub expected_init_selector: Option<[u8; 4]>,
+    pub expected_init: Option<ExpectedInit>,
     pub owner_accessor: OwnerAccessor,
     pub timelock_kind: TimelockKind,
     pub expected_prev_major: Option<u8>,
-    /// Byte offsets of the 20-byte impl address within the deployed bytecode core
-    /// (start+12 from the forge artifact immutableReferences window).
-    pub immutable_addr_offsets: &'static [usize],
+    /// Number of UUPS `__self` immutable slots in the deployed bytecode.
+    /// Pinned against the binding's zero runs in `test_verify_kind_by_bytecode_ok`.
+    pub self_windows: usize,
 }
-
-// Immutable address offsets per contract kind (start+12 from forge artifact windows).
-static STAKE_TABLE_V2_OFFSETS: &[usize] = &[9442, 9483, 10699];
-static STAKE_TABLE_V3_OFFSETS: &[usize] = &[10592, 10633, 11799];
-static ESP_TOKEN_V2_OFFSETS: &[usize] = &[2634, 2675, 2994];
-static FEE_CONTRACT_OFFSETS: &[usize] = &[1340, 1381, 1770];
-static REWARD_CLAIM_OFFSETS: &[usize] = &[3614, 3655, 3983];
 
 pub fn contract_kind(arg: ContractKindArg) -> ContractKind {
     match arg {
         ContractKindArg::StakeTableV2 => ContractKind {
             name: "StakeTableV2",
             deployed_bytecode: &StakeTableV2::DEPLOYED_BYTECODE,
-            expected_init_selector: Some(StakeTableV2::initializeV2Call::SELECTOR),
+            expected_init: Some(ExpectedInit {
+                selector: StakeTableV2::initializeV2Call::SELECTOR,
+                target_major: 2,
+            }),
             owner_accessor: OwnerAccessor::Owner,
             timelock_kind: TimelockKind::Ops,
             expected_prev_major: Some(1),
-            immutable_addr_offsets: STAKE_TABLE_V2_OFFSETS,
+            self_windows: 3,
         },
         ContractKindArg::StakeTableV3 => ContractKind {
             name: "StakeTableV3",
             deployed_bytecode: &StakeTableV3::DEPLOYED_BYTECODE,
-            expected_init_selector: Some(StakeTableV3::initializeV3Call::SELECTOR),
+            expected_init: Some(ExpectedInit {
+                selector: StakeTableV3::initializeV3Call::SELECTOR,
+                target_major: 3,
+            }),
             owner_accessor: OwnerAccessor::Owner,
             timelock_kind: TimelockKind::Ops,
             expected_prev_major: Some(2),
-            immutable_addr_offsets: STAKE_TABLE_V3_OFFSETS,
+            self_windows: 3,
         },
         ContractKindArg::EspTokenV2 => ContractKind {
             name: "EspTokenV2",
             deployed_bytecode: &EspTokenV2::DEPLOYED_BYTECODE,
-            expected_init_selector: Some(EspTokenV2::initializeV2Call::SELECTOR),
+            expected_init: Some(ExpectedInit {
+                selector: EspTokenV2::initializeV2Call::SELECTOR,
+                target_major: 2,
+            }),
             owner_accessor: OwnerAccessor::Owner,
             timelock_kind: TimelockKind::SafeExit,
             expected_prev_major: Some(1),
-            immutable_addr_offsets: ESP_TOKEN_V2_OFFSETS,
+            self_windows: 3,
         },
         ContractKindArg::FeeContract => ContractKind {
             name: "FeeContract",
             deployed_bytecode: &FeeContract::DEPLOYED_BYTECODE,
-            expected_init_selector: None,
+            expected_init: None,
             owner_accessor: OwnerAccessor::Owner,
             timelock_kind: TimelockKind::Ops,
             expected_prev_major: Some(1),
-            immutable_addr_offsets: FEE_CONTRACT_OFFSETS,
+            self_windows: 3,
         },
         ContractKindArg::RewardClaim => ContractKind {
             name: "RewardClaim",
             deployed_bytecode: &RewardClaim::DEPLOYED_BYTECODE,
-            expected_init_selector: None,
+            expected_init: None,
             owner_accessor: OwnerAccessor::CurrentAdmin,
             timelock_kind: TimelockKind::SafeExit,
             expected_prev_major: None,
-            immutable_addr_offsets: REWARD_CLAIM_OFFSETS,
+            self_windows: 3,
         },
     }
 }
@@ -932,7 +964,7 @@ pub async fn run_verify(
         &onchain_code,
         kind.deployed_bytecode,
         upgrade.new_impl,
-        kind.immutable_addr_offsets,
+        kind.self_windows,
     ) {
         Ok(check) => check,
         Err(e) => {
@@ -973,13 +1005,20 @@ pub async fn run_verify(
         MatchClass::Mismatch => fail(
             "bytecode-match",
             format!(
-                "on-chain impl at {} does not match {} binding",
-                upgrade.new_impl, kind.name
+                "on-chain impl at {} does not match {} binding: {}",
+                upgrade.new_impl,
+                kind.name,
+                bytecode_check.mismatch.as_deref().unwrap_or("")
             ),
         ),
     });
 
-    rows.push(check_init_selector(&kind, &upgrade.init_data));
+    let proxy_major = fetch_proxy_major_version(provider, upgrade.proxy).await;
+    rows.push(check_init_selector(
+        &kind,
+        &upgrade.init_data,
+        proxy_major.as_ref().ok().copied(),
+    ));
 
     // Safe validation: assert toml Safes match deployment-info.
     let safe_rows = safe_address_rows(&toml, &kind);
@@ -992,7 +1031,7 @@ pub async fn run_verify(
     // Nonce drift check (WARN, not FAIL).
     nonce_drift_rows(provider, &toml, &mut rows).await;
 
-    let gov_rows = governance_checks(provider, &upgrade, &kind).await;
+    let gov_rows = governance_checks(provider, &upgrade, &kind, proxy_major).await;
     rows.extend(gov_rows);
 
     Ok(VerifyReport {
@@ -1306,44 +1345,78 @@ async fn nonce_drift_rows(provider: &impl Provider, toml: &ProposalToml, rows: &
     }
 }
 
-fn check_init_selector(kind: &ContractKind, init_data: &Bytes) -> CheckRow {
-    match kind.expected_init_selector {
-        None => {
-            if init_data.is_empty() {
-                pass(
-                    "init-selector",
-                    "empty (expected for patch/no-reinitializer)",
-                )
-            } else {
-                fail(
-                    "init-selector",
-                    format!(
-                        "non-empty init data with no expected selector; selector=0x{} (arbitrary \
-                         delegated call through proxy)",
-                        alloy::hex::encode(&init_data[..4.min(init_data.len())])
-                    ),
-                )
-            }
-        },
-        Some(expected) => {
-            if init_data.is_empty() {
-                pass("init-selector", "empty (proxy already at target version)")
-            } else if init_data.len() >= 4 && init_data[..4] == expected {
-                pass(
-                    "init-selector",
-                    format!("ok selector=0x{}", alloy::hex::encode(expected)),
-                )
-            } else {
-                fail(
-                    "init-selector",
-                    format!(
-                        "expected 0x{} got 0x{}",
-                        alloy::hex::encode(expected),
-                        alloy::hex::encode(&init_data[..4.min(init_data.len())])
-                    ),
-                )
-            }
-        },
+/// Validate init calldata against the kind's expected reinitializer.
+///
+/// Empty init data is only accepted when the reinitializer is genuinely
+/// unnecessary: either the kind has none, or the proxy's on-chain major
+/// version (`proxy_major`, `None` if the query failed) already reached the
+/// target. Otherwise the upgrade would silently skip e.g. `initializeV3()`.
+fn check_init_selector(
+    kind: &ContractKind,
+    init_data: &Bytes,
+    proxy_major: Option<u8>,
+) -> CheckRow {
+    let Some(init) = kind.expected_init else {
+        return if init_data.is_empty() {
+            pass(
+                "init-selector",
+                "empty (expected for patch/no-reinitializer)",
+            )
+        } else {
+            fail(
+                "init-selector",
+                format!(
+                    "non-empty init data with no expected selector; selector=0x{} (arbitrary \
+                     delegated call through proxy)",
+                    alloy::hex::encode(&init_data[..4.min(init_data.len())])
+                ),
+            )
+        };
+    };
+
+    if init_data.is_empty() {
+        return match proxy_major {
+            Some(major) if major >= init.target_major => pass(
+                "init-selector",
+                format!(
+                    "empty ok: proxy_major={major} >= target={}",
+                    init.target_major
+                ),
+            ),
+            Some(major) => fail(
+                "init-selector",
+                format!(
+                    "empty init data but proxy_major={major} < target={}; reinitializer 0x{} \
+                     would never run",
+                    init.target_major,
+                    alloy::hex::encode(init.selector)
+                ),
+            ),
+            None => fail(
+                "init-selector",
+                "empty init data and proxy version query failed; cannot confirm the reinitializer \
+                 is unnecessary",
+            ),
+        };
+    }
+
+    // The correct selector passes regardless of proxy_major: re-running a
+    // reinitializer on an already-upgraded proxy reverts at execution
+    // (InvalidInitialization), so this cannot be exploited, only wasted.
+    if init_data.len() >= 4 && init_data[..4] == init.selector {
+        pass(
+            "init-selector",
+            format!("ok selector=0x{}", alloy::hex::encode(init.selector)),
+        )
+    } else {
+        fail(
+            "init-selector",
+            format!(
+                "expected 0x{} got 0x{}",
+                alloy::hex::encode(init.selector),
+                alloy::hex::encode(&init_data[..4.min(init_data.len())])
+            ),
+        )
     }
 }
 
@@ -1351,6 +1424,7 @@ async fn governance_checks(
     provider: &impl Provider,
     upgrade: &DecodedUpgrade,
     kind: &ContractKind,
+    proxy_major: Result<u8>,
 ) -> Vec<CheckRow> {
     let mut rows = vec![];
 
@@ -1366,10 +1440,7 @@ async fn governance_checks(
         Ok(min_delay) => rows.push(delay_row(upgrade.delay, min_delay)),
     }
 
-    match (
-        fetch_proxy_major_version(provider, upgrade.proxy).await,
-        kind.expected_prev_major,
-    ) {
+    match (proxy_major, kind.expected_prev_major) {
         (Err(e), _) => rows.push(fail("version-prereq", e.to_string())),
         (Ok(_), None) => rows.push(pass("version-prereq", "no prereq (RewardClaim)")),
         (Ok(major), Some(expected_prev)) => rows.push(if major >= expected_prev {
@@ -1424,9 +1495,6 @@ mod tests {
     use alloy::{
         primitives::{Address, B256, Bytes, U256},
         sol_types::SolCall,
-    };
-    use hotshot_contract_adapter::sol_types::{
-        EspTokenV2, FeeContract, RewardClaim, StakeTableV2, StakeTableV3,
     };
 
     use super::*;
@@ -1784,8 +1852,7 @@ mod tests {
         let garbage_len: u16 = 6;
         onchain.extend_from_slice(&garbage_len.to_be_bytes());
 
-        let offsets: &[usize] = &[5];
-        let check = compare_normalized(&onchain, &reference, impl_addr, offsets).unwrap();
+        let check = compare_normalized(&onchain, &reference, impl_addr, 1).unwrap();
         assert_eq!(
             check.class,
             MatchClass::Mismatch,
@@ -1811,7 +1878,7 @@ mod tests {
         reference.extend_from_slice(&[0x11, 0x22, 0x33]);
         reference.extend_from_slice(&cbor);
 
-        let check = compare_normalized(&onchain, &reference, impl_addr, &[5]).unwrap();
+        let check = compare_normalized(&onchain, &reference, impl_addr, 1).unwrap();
         assert_eq!(check.class, MatchClass::FullMatch);
     }
 
@@ -1831,7 +1898,7 @@ mod tests {
         reference.extend_from_slice(&[0u8; 20]);
         reference.extend_from_slice(&cbor_835);
 
-        let check = compare_normalized(&onchain, &reference, impl_addr, &[5]).unwrap();
+        let check = compare_normalized(&onchain, &reference, impl_addr, 1).unwrap();
         assert_eq!(check.class, MatchClass::CodeMatchMetaDiffers);
         assert_eq!(check.onchain_solc, Some(SolcVersion([0x00, 0x08, 0x1c])));
         assert_eq!(check.reference_solc, Some(SolcVersion([0x00, 0x08, 0x23])));
@@ -1852,131 +1919,206 @@ mod tests {
         reference.extend_from_slice(&[0u8; 20]);
         reference.extend_from_slice(&cbor);
 
-        let check = compare_normalized(&onchain, &reference, impl_addr, &[5]).unwrap();
+        let check = compare_normalized(&onchain, &reference, impl_addr, 1).unwrap();
         assert_eq!(check.class, MatchClass::Mismatch);
+        let detail = check.mismatch.unwrap();
+        assert!(detail.contains("offset 4"), "{detail}");
     }
 
     // ── TEST:verify-kind-by-bytecode-ok ───────────────────────────────────
     //
-    // For every contract kind: verify that the hardcoded offsets are zero in the
-    // DEPLOYED_BYTECODE core (stale-offsets sync guard), inject a fake impl at those
-    // offsets, and assert compare_normalized returns FullMatch or CodeMatchMetaDiffers.
+    // For every contract kind: locate the __self immutable slots in the
+    // DEPLOYED_BYTECODE core (the only 20+-byte zero runs), inject a fake impl
+    // there, and assert compare_normalized passes. Pinning the run count to
+    // kind.self_windows guards the "difference over zeros must be __self"
+    // assumption: a rebuilt binding that grows a large zero run outside the
+    // immutable slots (e.g. a PUSH32 0 constant) fails here and forces review,
+    // because such a run would be a substitution surface at verify time.
+
+    /// Maximal runs of zero bytes of length >= 20, as (start, len).
+    fn zero_runs(core: &[u8]) -> Vec<(usize, usize)> {
+        let mut runs = vec![];
+        let mut i = 0;
+        while i < core.len() {
+            if core[i] == 0 {
+                let start = i;
+                while i < core.len() && core[i] == 0 {
+                    i += 1;
+                }
+                if i - start >= 20 {
+                    runs.push((start, i - start));
+                }
+            } else {
+                i += 1;
+            }
+        }
+        runs
+    }
 
     #[test]
     fn test_verify_kind_by_bytecode_ok() {
-        struct Case {
-            name: &'static str,
-            bytecode: &'static [u8],
-            offsets: &'static [usize],
-        }
+        for arg in [
+            ContractKindArg::StakeTableV2,
+            ContractKindArg::StakeTableV3,
+            ContractKindArg::EspTokenV2,
+            ContractKindArg::FeeContract,
+            ContractKindArg::RewardClaim,
+        ] {
+            let kind = contract_kind(arg);
+            let name = kind.name;
+            let (ref_core, _) = strip_cbor_metadata(kind.deployed_bytecode);
+            let runs = zero_runs(&ref_core);
+            // Each __self slot is a 32-byte zero run (12-byte pad + 20-byte address).
+            assert_eq!(runs.len(), kind.self_windows, "{name}: {runs:?}");
+            assert!(
+                runs.iter().all(|&(_, len)| len == 32),
+                "{name}: unexpected zero runs {runs:?}"
+            );
 
-        let cases = [
-            Case {
-                name: "StakeTableV2",
-                bytecode: StakeTableV2::DEPLOYED_BYTECODE.as_ref(),
-                offsets: STAKE_TABLE_V2_OFFSETS,
-            },
-            Case {
-                name: "StakeTableV3",
-                bytecode: StakeTableV3::DEPLOYED_BYTECODE.as_ref(),
-                offsets: STAKE_TABLE_V3_OFFSETS,
-            },
-            Case {
-                name: "EspTokenV2",
-                bytecode: EspTokenV2::DEPLOYED_BYTECODE.as_ref(),
-                offsets: ESP_TOKEN_V2_OFFSETS,
-            },
-            Case {
-                name: "FeeContract",
-                bytecode: FeeContract::DEPLOYED_BYTECODE.as_ref(),
-                offsets: FEE_CONTRACT_OFFSETS,
-            },
-            Case {
-                name: "RewardClaim",
-                bytecode: RewardClaim::DEPLOYED_BYTECODE.as_ref(),
-                offsets: REWARD_CLAIM_OFFSETS,
-            },
-        ];
-
-        for case in &cases {
-            let (ref_core, _) = strip_cbor_metadata(case.bytecode);
+            // Inject a fake impl at the address position of each slot.
             let fake_impl = Address::repeat_byte(0x42);
-
-            // Each offset window must be zero in the reference (invariant: compiled with address(this)=0).
-            for &offset in case.offsets {
-                assert!(
-                    offset + 20 <= ref_core.len(),
-                    "{}: offset {offset} + 20 exceeds core length {}",
-                    case.name,
-                    ref_core.len()
-                );
-                assert_eq!(
-                    &ref_core[offset..offset + 20],
-                    &[0u8; 20],
-                    "{}: reference core non-zero at offset {offset}; offsets stale",
-                    case.name
-                );
-            }
-
-            // Inject fake impl at the offsets.
             let mut onchain = ref_core.clone();
-            for &offset in case.offsets {
-                onchain[offset..offset + 20].copy_from_slice(fake_impl.as_slice());
+            for &(start, _) in &runs {
+                onchain[start + 12..start + 32].copy_from_slice(fake_impl.as_slice());
             }
 
-            // compare_normalized on raw bytes (no CBOR tail on the core slices, so we
-            // re-attach a consistent cbor tail to both so strip works symmetrically).
+            // Re-attach a consistent cbor tail to both so strip works symmetrically.
             let cbor = make_cbor_tail([0x00, 0x08, 0x23]);
             let mut onchain_full = onchain;
             onchain_full.extend_from_slice(&cbor);
             let mut ref_full = ref_core;
             ref_full.extend_from_slice(&cbor);
 
-            let check = compare_normalized(&onchain_full, &ref_full, fake_impl, case.offsets)
-                .unwrap_or_else(|e| panic!("{}: compare_normalized failed: {e}", case.name));
-
-            assert!(
-                check.class == MatchClass::FullMatch
-                    || check.class == MatchClass::CodeMatchMetaDiffers,
-                "{}: expected PASS class, got {:?}",
-                case.name,
-                check.class
-            );
+            let check = compare_normalized(&onchain_full, &ref_full, fake_impl, kind.self_windows)
+                .unwrap_or_else(|e| panic!("{name}: compare_normalized failed: {e}"));
+            assert_eq!(check.class, MatchClass::FullMatch, "{name}");
         }
     }
 
-    // ── TEST:verify-impl-at-wrong-offset-mismatch ─────────────────────────
+    // ── TEST:verify-extra-self-window-bails ───────────────────────────────
     //
-    // Impl address placed at a zero window that is NOT in the offsets list
-    // must produce Mismatch (the listed offset still has zeros, not impl_addr).
+    // Impl address substituted into an additional zero region of the reference
+    // (beyond the expected __self slots) must error, not pass.
 
     #[test]
-    fn test_verify_impl_at_wrong_offset_mismatch() {
+    fn test_verify_extra_self_window_bails() {
         let impl_addr = Address::repeat_byte(0x42);
         let cbor = make_cbor_tail([0x00, 0x08, 0x23]);
 
-        // Build 60-byte core with zeros everywhere.
-        let core = vec![0u8; 60];
-        let listed_offset = 5usize;
-        let wrong_offset = 30usize;
-
-        // Reference has zeros at both positions.
-        let mut ref_full = core.clone();
+        let mut ref_full = vec![0x11u8; 10];
+        ref_full.extend_from_slice(&[0u8; 20]); // __self slot
+        ref_full.extend_from_slice(&[0x22u8; 10]);
+        ref_full.extend_from_slice(&[0u8; 20]); // zero constant, not a __self slot
         ref_full.extend_from_slice(&cbor);
 
-        // On-chain has impl_addr at the unlisted offset (wrong_offset), not listed_offset.
-        let mut onchain_core = core;
-        onchain_core[wrong_offset..wrong_offset + 20].copy_from_slice(impl_addr.as_slice());
+        let mut onchain_full = vec![0x11u8; 10];
+        onchain_full.extend_from_slice(impl_addr.as_slice());
+        onchain_full.extend_from_slice(&[0x22u8; 10]);
+        onchain_full.extend_from_slice(impl_addr.as_slice()); // substituted constant
+        onchain_full.extend_from_slice(&cbor);
+
+        let err = compare_normalized(&onchain_full, &ref_full, impl_addr, 1).unwrap_err();
+        assert!(err.to_string().contains("found 2"), "{err}");
+    }
+
+    // ── TEST:verify-missing-self-window-bails ─────────────────────────────
+    //
+    // Only one of two expected __self slots filled (the other byte-equal to
+    // the reference zeros) must error.
+
+    #[test]
+    fn test_verify_missing_self_window_bails() {
+        let impl_addr = Address::repeat_byte(0x42);
+        let cbor = make_cbor_tail([0x00, 0x08, 0x23]);
+
+        let mut ref_full = vec![0x11u8; 10];
+        ref_full.extend_from_slice(&[0u8; 20]);
+        ref_full.extend_from_slice(&[0x22u8; 10]);
+        ref_full.extend_from_slice(&[0u8; 20]);
+        ref_full.extend_from_slice(&cbor);
+
+        let mut onchain_full = vec![0x11u8; 10];
+        onchain_full.extend_from_slice(impl_addr.as_slice());
+        onchain_full.extend_from_slice(&[0x22u8; 10]);
+        onchain_full.extend_from_slice(&[0u8; 20]); // slot left unfilled
+        onchain_full.extend_from_slice(&cbor);
+
+        let err = compare_normalized(&onchain_full, &ref_full, impl_addr, 2).unwrap_err();
+        assert!(err.to_string().contains("found 1"), "{err}");
+    }
+
+    // ── TEST:verify-impl-over-nonzero-reference-mismatch ─────────────────
+    //
+    // Impl address written where the reference has non-zero bytes is not an
+    // explainable difference and must produce Mismatch.
+
+    #[test]
+    fn test_verify_impl_over_nonzero_reference_mismatch() {
+        let impl_addr = Address::repeat_byte(0x42);
+        let cbor = make_cbor_tail([0x00, 0x08, 0x23]);
+
+        let mut ref_full = vec![0x11u8; 30];
+        ref_full.extend_from_slice(&[0u8; 20]); // one genuine __self slot
+        ref_full.extend_from_slice(&cbor);
+
+        let mut onchain_core = vec![0x11u8; 30];
+        onchain_core.extend_from_slice(impl_addr.as_slice());
+        // Overwrite non-zero reference bytes with the impl address.
+        onchain_core[5..25].copy_from_slice(impl_addr.as_slice());
         let mut onchain_full = onchain_core;
         onchain_full.extend_from_slice(&cbor);
 
-        let check =
-            compare_normalized(&onchain_full, &ref_full, impl_addr, &[listed_offset]).unwrap();
-        assert_eq!(
-            check.class,
-            MatchClass::Mismatch,
-            "impl at wrong offset must be Mismatch"
-        );
+        let check = compare_normalized(&onchain_full, &ref_full, impl_addr, 1).unwrap();
+        assert_eq!(check.class, MatchClass::Mismatch);
+    }
+
+    // ── TEST:verify-corrupted-self-window-mismatch ────────────────────────
+    //
+    // A __self slot holding anything other than exactly the impl address
+    // (one byte flipped) must produce Mismatch.
+
+    #[test]
+    fn test_verify_corrupted_self_window_mismatch() {
+        let impl_addr = Address::repeat_byte(0x42);
+        let cbor = make_cbor_tail([0x00, 0x08, 0x23]);
+
+        let mut ref_full = vec![0x11u8; 10];
+        ref_full.extend_from_slice(&[0u8; 20]);
+        ref_full.extend_from_slice(&cbor);
+
+        let mut window: [u8; 20] = impl_addr.into();
+        window[7] ^= 0x01;
+        let mut onchain_full = vec![0x11u8; 10];
+        onchain_full.extend_from_slice(&window);
+        onchain_full.extend_from_slice(&cbor);
+
+        let check = compare_normalized(&onchain_full, &ref_full, impl_addr, 1).unwrap();
+        assert_eq!(check.class, MatchClass::Mismatch);
+    }
+
+    // ── TEST:verify-no-self-window-bails ──────────────────────────────────
+    //
+    // On-chain code byte-identical to the binding has no baked-in __self
+    // address; that is impossible for a real UUPS deploy and must error.
+
+    #[test]
+    fn test_verify_no_self_window_bails() {
+        let impl_addr = Address::repeat_byte(0x42);
+        let cbor = make_cbor_tail([0x00, 0x08, 0x23]);
+        let mut code = vec![0x11u8; 10];
+        code.extend_from_slice(&[0u8; 20]);
+        code.extend_from_slice(&cbor);
+
+        let err = compare_normalized(&code, &code, impl_addr, 1).unwrap_err();
+        assert!(err.to_string().contains("__self"), "{err}");
+    }
+
+    // ── TEST:verify-zero-impl-addr-bails ──────────────────────────────────
+
+    #[test]
+    fn test_verify_zero_impl_addr_bails() {
+        let code = vec![0x11u8; 10];
+        assert!(compare_normalized(&code, &code, Address::ZERO, 1).is_err());
     }
 
     // ── TEST:verify-contract-kind-args ────────────────────────────────────
@@ -2099,13 +2241,37 @@ mod tests {
         assert_eq!(report.exit_code(), 1);
     }
 
-    // ── TEST:verify-empty-init-accepted-ok ────────────────────────────────
+    // ── TEST:verify-empty-init-at-target-ok ───────────────────────────────
+    //
+    // Empty init data is fine when the proxy already reached the target major
+    // (re-verify after upgrade, or a patch within the same major).
 
     #[test]
-    fn test_verify_empty_init_accepted_ok() {
+    fn test_verify_empty_init_at_target_ok() {
         let kind = contract_kind(ContractKindArg::StakeTableV3);
-        let row = check_init_selector(&kind, &Bytes::new());
-        assert!(row.pass, "empty init should be accepted: {}", row.detail);
+        let row = check_init_selector(&kind, &Bytes::new(), Some(3));
+        assert!(row.pass, "{}", row.detail);
+    }
+
+    // ── TEST:verify-empty-init-below-target-fails ─────────────────────────
+    //
+    // A V2→V3 proposal with empty init data would skip initializeV3(); must FAIL.
+
+    #[test]
+    fn test_verify_empty_init_below_target_fails() {
+        let kind = contract_kind(ContractKindArg::StakeTableV3);
+        let row = check_init_selector(&kind, &Bytes::new(), Some(2));
+        assert!(!row.pass, "{}", row.detail);
+        assert!(row.detail.contains("would never run"), "{}", row.detail);
+    }
+
+    // ── TEST:verify-empty-init-unknown-version-fails ──────────────────────
+
+    #[test]
+    fn test_verify_empty_init_unknown_version_fails() {
+        let kind = contract_kind(ContractKindArg::StakeTableV3);
+        let row = check_init_selector(&kind, &Bytes::new(), None);
+        assert!(!row.pass, "{}", row.detail);
     }
 
     // ── TEST:verify-feecontract-no-init-ok ────────────────────────────────
@@ -2113,19 +2279,19 @@ mod tests {
     #[test]
     fn test_verify_feecontract_no_init_ok() {
         let kind = contract_kind(ContractKindArg::FeeContract);
-        let row = check_init_selector(&kind, &Bytes::new());
+        let row = check_init_selector(&kind, &Bytes::new(), None);
         assert!(row.pass, "FeeContract patch should accept empty init");
     }
 
     // ── TEST:verify-feecontract-nonempty-init-fails ───────────────────────
     //
-    // Non-empty init data with expected_init_selector=None must FAIL.
+    // Non-empty init data with expected_init=None must FAIL.
 
     #[test]
     fn test_verify_feecontract_nonempty_init_fails() {
         let kind = contract_kind(ContractKindArg::FeeContract);
         let data = Bytes::from(vec![0xde, 0xad, 0xbe, 0xef, 0x00]);
-        let row = check_init_selector(&kind, &data);
+        let row = check_init_selector(&kind, &data, Some(1));
         assert!(
             !row.pass,
             "non-empty init with no expected selector must FAIL: {}",
@@ -2144,7 +2310,7 @@ mod tests {
     fn test_verify_rewardclaim_nonempty_init_fails() {
         let kind = contract_kind(ContractKindArg::RewardClaim);
         let data = Bytes::from(vec![0xca, 0xfe, 0xba, 0xbe]);
-        let row = check_init_selector(&kind, &data);
+        let row = check_init_selector(&kind, &data, Some(1));
         assert!(
             !row.pass,
             "non-empty init on RewardClaim with no expected selector must FAIL: {}",
