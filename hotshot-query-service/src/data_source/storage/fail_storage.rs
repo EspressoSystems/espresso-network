@@ -263,13 +263,12 @@ impl<S> PruneStorage for FailStorage<S>
 where
     S: PruneStorage + Sync,
 {
-    type Pruner = S::Pruner;
+    type Pruner<'a>
+        = S::Pruner<'a>
+    where
+        S: 'a;
 
-    async fn get_disk_usage(&self) -> anyhow::Result<u64> {
-        self.inner.get_disk_usage().await
-    }
-
-    async fn prune(&self, pruner: &mut Self::Pruner) -> anyhow::Result<Option<u64>> {
+    async fn prune<'a>(&'a self, pruner: &mut Self::Pruner<'a>) -> anyhow::Result<Option<u64>> {
         self.inner.prune(pruner).await
     }
 }
@@ -512,6 +511,11 @@ where
     async fn load_pruned_height(&mut self) -> anyhow::Result<Option<u64>> {
         self.maybe_fail_read(FailableAction::Any).await?;
         self.inner.load_pruned_height().await
+    }
+
+    async fn load_state_pruned_height(&mut self) -> anyhow::Result<Option<u64>> {
+        self.maybe_fail_read(FailableAction::Any).await?;
+        self.inner.load_state_pruned_height().await
     }
 }
 

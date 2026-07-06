@@ -543,6 +543,15 @@ pub struct PruningOptions {
     )]
     pub(crate) minimum_retention: Option<Duration>,
 
+    /// Minimum retention period for Merklized state.
+    /// State is retained for at least this duration, even if there's no free disk space.
+    #[clap(
+        long,
+        env = "ESPRESSO_NODE_PRUNER_STATE_MINIMUM_RETENTION",
+        value_parser = parse_duration,
+    )]
+    state_minimum_retention: Option<Duration>,
+
     /// Target retention period.
     /// Data older than this is pruned to free up space.
     #[clap(
@@ -551,6 +560,15 @@ pub struct PruningOptions {
         value_parser = parse_duration,
     )]
     pub(crate) target_retention: Option<Duration>,
+
+    /// Target retention period for Merklized state.
+    /// State older than this is pruned to free up space.
+    #[clap(
+        long,
+        env = "ESPRESSO_NODE_PRUNER_STATE_TARGET_RETENTION",
+        value_parser = parse_duration,
+    )]
+    state_target_retention: Option<Duration>,
 
     /// Batch size for pruning.
     /// This is the number of blocks data to delete in a single transaction.
@@ -595,8 +613,14 @@ impl From<PruningOptions> for PrunerCfg {
         if let Some(min) = opt.minimum_retention {
             cfg = cfg.with_minimum_retention(min);
         }
+        if let Some(min) = opt.state_minimum_retention {
+            cfg = cfg.with_state_minimum_retention(min);
+        }
         if let Some(target) = opt.target_retention {
             cfg = cfg.with_target_retention(target);
+        }
+        if let Some(target) = opt.state_target_retention {
+            cfg = cfg.with_state_target_retention(target);
         }
         if let Some(batch) = opt.batch_size {
             cfg = cfg.with_batch_size(batch);
@@ -825,6 +849,18 @@ pub struct Persistence {
 /// Transactions that fail with this code are safe to retry from scratch.
 const PG_SERIALIZATION_FAILURE_CODE: &str = "40001";
 
+/// How far behind the newest persisted decide an out-of-order ("gap-fill") decide can still
+/// arrive. Mirrors `DECIDE_BUFFER` in `hotshot-new-protocol`; a leaf missing further behind the
+/// watermark than this will never be filled in by consensus.
+pub(crate) const DECIDE_GAP_FILL_HORIZON: u64 = 20;
+
+/// Whether the height gap directly below the leaf at `view` can still be filled by a late
+/// decide: the missing view (at most `view - 1`) must be within [`DECIDE_GAP_FILL_HORIZON`] of
+/// `watermark`, the newest persisted decide.
+pub(crate) fn within_gap_fill_horizon(view: u64, watermark: u64) -> bool {
+    view.saturating_sub(1) + DECIDE_GAP_FILL_HORIZON > watermark
+}
+
 #[derive(Debug)]
 struct DecidedLeaf {
     info: LeafInfo<SeqTypes>,
@@ -1004,6 +1040,29 @@ impl Persistence {
                 .map(|row| row.get("last_processed_view")))
         })
         .await?;
+        // Seed the height-continuity check below from the leaf at the cursor; if retention
+        // pruning has since removed it, fall back to accepting the first row as before.
+        let mut last_processed_height: Option<u64> = match last_processed_view {
+            Some(view) => {
+                serializable_retry!(self, || async {
+                    self.db
+                        .read()
+                        .await?
+                        .fetch_optional(
+                            query("SELECT leaf FROM anchor_leaf2 WHERE view = $1").bind(view),
+                        )
+                        .await?
+                        .map(|row| -> anyhow::Result<u64> {
+                            let leaf_data: Vec<u8> = row.get("leaf");
+                            let leaf = bincode::deserialize::<Leaf2>(&leaf_data)?;
+                            Ok(leaf.block_header().block_number())
+                        })
+                        .transpose()
+                })
+                .await?
+            },
+            None => None,
+        };
         loop {
             // In SQLite, overlapping read and write transactions can lead to database errors. To
             // avoid this:
@@ -1038,7 +1097,12 @@ impl Persistence {
                 };
                 tracing::debug!(?from_view, "generate decide event");
 
-                let mut parent = None;
+                // The newest persisted decide; bounds how far back a gap-fill can arrive.
+                let (watermark,): (Option<i64>,) = query_as("SELECT max(view) FROM anchor_leaf2")
+                    .fetch_one(tx.as_mut())
+                    .await?;
+
+                let mut parent = last_processed_height;
                 let mut rows = query(
                     "SELECT leaf, qc, next_epoch_qc FROM anchor_leaf2 WHERE view >= $1 ORDER BY \
                      view",
@@ -1082,12 +1146,35 @@ impl Persistence {
                     if let Some(parent) = parent
                         && height != parent + 1
                     {
-                        tracing::debug!(
-                            height,
-                            parent,
-                            "ending decide event at non-consecutive leaf"
-                        );
-                        break;
+                        if !leaves.is_empty() {
+                            tracing::debug!(
+                                height,
+                                parent,
+                                "ending decide event at non-consecutive leaf"
+                            );
+                            break;
+                        }
+                        // A height jump within `DECIDE_GAP_FILL_HORIZON` of the watermark
+                        // can still be gap-filled: hold the cursor (emit nothing) until that
+                        // decide upserts the missing row. Legacy or beyond-horizon gaps are
+                        // permanent; skip as before, leaving the missing block to the
+                        // consumer's own fetching.
+                        let row_view = leaf.view_number().u64();
+                        if height > parent + 1
+                            && leaf.block_header().version() >= versions::NEW_PROTOCOL_VERSION
+                            && watermark
+                                .is_some_and(|w| within_gap_fill_horizon(row_view, w as u64))
+                        {
+                            tracing::info!(
+                                height,
+                                parent,
+                                row_view,
+                                ?watermark,
+                                "waiting for gap-fill decide before advancing the decide cursor"
+                            );
+                            break;
+                        }
+                        // A first row at or below the cursor (a replayed decide) is accepted.
                     }
                     parent = Some(height);
                     let cert = CertificatePair::new(qc, next_epoch_qc);
@@ -1185,6 +1272,10 @@ impl Persistence {
             else {
                 return Ok(());
             };
+
+            let to_height = leaves
+                .last()
+                .map(|(leaf, _)| leaf.block_header().block_number());
 
             // Collate all the information by view number and construct a chain of leaves.
             let chain = leaves
@@ -1327,6 +1418,7 @@ impl Persistence {
             })
             .await?;
             last_processed_view = Some(to_view_i64);
+            last_processed_height = to_height;
         }
     }
 
@@ -1552,6 +1644,7 @@ impl SequencerPersistence for Persistence {
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<Option<ViewNumber>> {
+        let now = Instant::now();
         // Generate events for the new leaves, then GC. On error `last_processed_view` is not
         // advanced past the failure point, so no data is lost and the range is retried.
         self.generate_decide_events(deciding_qc, consumer).await?;
@@ -1560,6 +1653,9 @@ impl SequencerPersistence for Persistence {
         if let Err(err) = self.prune(view).await {
             tracing::warn!(?view, "pruning failed: {err:#}");
         }
+        self.internal_metrics
+            .internal_process_decided_events_duration
+            .add_point(now.elapsed().as_secs_f64());
 
         self.load_processed_view().await
     }

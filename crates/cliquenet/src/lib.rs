@@ -1,5 +1,5 @@
-mod addr;
 mod connection;
+mod delay;
 mod metrics;
 mod msg;
 mod net;
@@ -9,12 +9,14 @@ mod util;
 
 pub mod error;
 pub mod noise;
-pub mod x25519;
 
 use std::{collections::BTreeMap, fmt, num::NonZeroUsize, sync::Arc, time::Duration};
 
-pub use addr::NetAddr;
 use bon::Builder;
+pub use cliquenet_types::{
+    addr::{self, NetAddr},
+    x25519,
+};
 pub use error::NetworkError;
 pub use metrics::Metrics;
 pub use msg::Slot;

@@ -1,5 +1,5 @@
 pub mod error;
-mod metrics;
+pub(crate) mod metrics;
 pub mod timer;
 
 use std::{
@@ -48,14 +48,14 @@ use crate::{
     message::{
         self, BlockMessage, Certificate1, Certificate2, ConsensusMessage, Message, MessageType,
         Proposal, ProposalFetchMessage, ProposalMessage, TimeoutOneHonest, TransactionMessage,
-        Unchecked, Vote2,
+        Unchecked, Validated, Vote2,
     },
     network::Cliquenet,
     outbox::Outbox,
     proposal::{ProposalValidator, ValidatedProposal, VidShareValidator},
     state::{HeaderRequest, StateEntry, StateManager, StateManagerOutput},
     storage::{NewProtocolStorage, Storage},
-    vid::{VidDisperseRequest, VidDisperser, VidReconstructor},
+    vid::{VidDisperseRequest, VidDisperser, VidFragmentAccumulator, VidReconstructor},
     vote::VoteCollector,
 };
 
@@ -97,6 +97,8 @@ pub struct Coordinator<T: NodeType, S> {
     client: CoordinatorClient<T>,
     vid_disperser: VidDisperser<T>,
     vid_reconstructor: VidReconstructor<T>,
+    #[builder(default)]
+    vid_fragment_accumulator: VidFragmentAccumulator<T>,
     vote1_collector: VoteCollector<T, QuorumVote2<T>, QuorumCertificate2<T>>,
     vote2_collector: VoteCollector<T, Vote2<T>, Certificate2<T>>,
     timeout_collector: VoteCollector<T, TimeoutVote2<T>, TimeoutCertificate2<T>>,
@@ -292,7 +294,7 @@ where
                 initializer.epoch_height,
                 upgrade_lock,
             ))
-            .storage(Storage::new(storage, private_key))
+            .storage(Storage::new(storage, private_key).with_metrics(metrics))
             .membership_coordinator(membership_coordinator)
             .timer(Timer::new(timeout_duration, anchor_view, anchor_epoch))
             .public_key(public_key)
@@ -670,7 +672,9 @@ where
                     "leaves decided"
                 );
                 if let Some(m) = &self.metrics {
-                    m.leaf_decided_view.set(*cert1.view_number() as usize);
+                    // A gap-fill decide of an older view must not regress the gauge.
+                    m.leaf_decided_view
+                        .set(*self.consensus.last_decided_view() as usize);
                 }
                 if let Some(cert2) = cert2 {
                     self.storage.append_cert2(cert2.view_number, cert2.clone());
@@ -754,16 +758,10 @@ where
             ConsensusOutput::SendTimeoutVote(vote, lock) => {
                 let view = vote.view_number();
                 debug!(%node, %view, has_lock = lock.is_some(), "send timeout vote");
-                let message = Message {
-                    sender: self.public_key.clone(),
-                    message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote(
-                        message::TimeoutVoteMessage { vote, lock },
-                    )),
-                };
-                self.network
-                    .sender()
-                    .broadcast(self.consensus.current_view(), &message)
-                    .map_err(|e| CoordinatorError::from(e).context("broadcast timeout vote"))?
+                self.broadcast(
+                    ConsensusMessage::TimeoutVote(message::TimeoutVoteMessage { vote, lock }),
+                    "broadcast timeout vote",
+                )?
             },
             ConsensusOutput::SendTimeoutCertificate(tc, view, epoch) => {
                 debug!(
@@ -791,25 +789,11 @@ where
                     epoch_root = vote1.state_vote.is_some(),
                     "send vote1"
                 );
-                let message = Message {
-                    sender: self.public_key.clone(),
-                    message_type: MessageType::Consensus(ConsensusMessage::Vote1(vote1)),
-                };
-                self.network
-                    .sender()
-                    .broadcast(self.consensus.current_view(), &message)
-                    .map_err(|e| CoordinatorError::from(e).context("broadcast vote1"))?
+                self.broadcast(ConsensusMessage::Vote1(vote1), "broadcast vote1")?
             },
             ConsensusOutput::SendVote2(vote2) => {
                 debug!(%node, view = %vote2.view_number(), "send vote2");
-                let message = Message {
-                    sender: self.public_key.clone(),
-                    message_type: MessageType::Consensus(ConsensusMessage::Vote2(vote2)),
-                };
-                self.network
-                    .sender()
-                    .broadcast(self.consensus.current_view(), &message)
-                    .map_err(|e| CoordinatorError::from(e).context("broadcast vote2"))?
+                self.broadcast(ConsensusMessage::Vote2(vote2), "broadcast vote2")?
             },
             ConsensusOutput::PersistHighQc(high_qc) => {
                 debug!(%node, view = %high_qc.view_number(), "persist high qc");
@@ -822,16 +806,10 @@ where
                     epoch = ?epoch_change.cert1.epoch().map(|e| *e),
                     "send epoch change"
                 );
-                let message = Message {
-                    sender: self.public_key.clone(),
-                    message_type: MessageType::Consensus(ConsensusMessage::EpochChange(
-                        epoch_change,
-                    )),
-                };
-                self.network
-                    .sender()
-                    .broadcast(self.consensus.current_view(), &message)
-                    .map_err(|e| CoordinatorError::from(e).context("broadcast epoch change"))?
+                self.broadcast(
+                    ConsensusMessage::EpochChange(epoch_change),
+                    "broadcast epoch change",
+                )?
             },
             ConsensusOutput::SendCertificate1(cert1) => {
                 debug!(
@@ -840,17 +818,22 @@ where
                     epoch = ?cert1.epoch().map(|e| *e),
                     "send certificate1"
                 );
-                let message = Message {
-                    sender: self.public_key.clone(),
-                    message_type: MessageType::Consensus(ConsensusMessage::Certificate1(
-                        cert1,
-                        self.public_key.clone(),
-                    )),
-                };
-                self.network
-                    .sender()
-                    .broadcast(self.consensus.current_view(), &message)
-                    .map_err(|e| CoordinatorError::from(e).context("broadcast certificate1"))?
+                self.broadcast(
+                    ConsensusMessage::Certificate1(cert1, self.public_key.clone()),
+                    "broadcast certificate1",
+                )?
+            },
+            ConsensusOutput::SendCertificate2(cert2) => {
+                debug!(
+                    %node,
+                    view = %cert2.view_number(),
+                    epoch = ?cert2.epoch().map(|e| *e),
+                    "send certificate2"
+                );
+                self.broadcast(
+                    ConsensusMessage::Certificate2(cert2, self.public_key.clone()),
+                    "broadcast certificate2",
+                )?
             },
             ConsensusOutput::ProposalValidated { proposal, sender } => {
                 debug!(
@@ -960,18 +943,47 @@ where
                     }
                     None
                 },
-                ConsensusMessage::VidShare(share) => {
-                    let view = share.data.view_number();
-                    debug!(%node, %sender, %view, "recv vid share");
-                    // The leader unicasts each node only its own share. A share
-                    // addressed to anyone else is bogus and could otherwise
-                    // displace our own in the unpaired-share cache.
-                    if share.data.recipient_key != self.public_key {
-                        warn!(%node, %sender, %view, "ignoring vid share not addressed to this node");
+                ConsensusMessage::VidShareFragment(fragment) => {
+                    let view = fragment.data.view_number();
+                    debug!(%node, %sender, %view, "received vid share fragment");
+                    if fragment.data.recipient_key != self.public_key {
+                        warn!(
+                            %node,
+                            %sender,
+                            %view,
+                            "ignoring vid share fragment not addressed to this node"
+                        );
+                        return None;
+                    }
+                    let leader = fragment
+                        .data
+                        .epoch
+                        .and_then(|epoch| self.leader(view, epoch));
+                    if leader.as_ref() != Some(&message.sender) {
+                        warn!(
+                            %node,
+                            %sender,
+                            %view,
+                            "ignoring vid share fragment not from the view leader"
+                        );
                         return None;
                     }
                     if self.consensus.wants_proposal_for_view(&view) {
-                        self.share_validator.validate(share);
+                        let signature = fragment.signature.clone();
+                        match self.vid_fragment_accumulator.accept(fragment.data) {
+                            Ok(Some(share)) => self
+                                .share_validator
+                                .validate(SignedProposal::new(share, signature)),
+                            Ok(None) => {}, // Still missing some fragments.
+                            Err(err) => {
+                                warn!(
+                                    %node,
+                                    %sender,
+                                    %view,
+                                    %err, "rejecting malformed vid share fragment"
+                                );
+                            },
+                        }
                     }
                     None
                 },
@@ -1053,6 +1065,20 @@ where
                         .accumulate_vote(timeout_msg.vote.clone());
                     self.timeout_one_honest_collector
                         .accumulate_vote(timeout_msg.vote);
+
+                    // If a peer times out in a view at or ahead of us we adopt the
+                    // view of an embedded cert1, so divergent nodes re-converge on
+                    // the highest justified view on restart.
+                    //
+                    // TODO: Above we reject timeout votes too far ahead. A valid cert1
+                    // has precedence over that check so we need to move this up, but
+                    // first we need to verify the cert1 itself.
+                    if let Some(cert) = timeout_msg.lock
+                        && cert.view_number() >= current_view
+                    {
+                        return Some(ConsensusInput::AdvanceView(cert));
+                    }
+
                     None
                 },
                 ConsensusMessage::TimeoutCertificate(tc) => {
@@ -1249,6 +1275,21 @@ where
             validated.message,
             vid_share,
         ))
+    }
+
+    fn broadcast(
+        &self,
+        message_type: ConsensusMessage<T, Validated>,
+        ctx: &'static str,
+    ) -> Result<(), CoordinatorError> {
+        let message = Message {
+            sender: self.public_key.clone(),
+            message_type: MessageType::Consensus(message_type),
+        };
+        self.network
+            .sender()
+            .broadcast(self.consensus.current_view(), &message)
+            .map_err(|e| CoordinatorError::from(e).context(ctx))
     }
 
     fn unicast_to_leader(
@@ -1589,6 +1630,7 @@ where
                     self.cached_validated_proposals.split_off(&(view, vc));
                 self.cached_vid_shares = self.cached_vid_shares.split_off(&(view, vc));
                 self.vid_disperser.gc(view);
+                self.vid_fragment_accumulator.gc(view);
                 // When we enter a new view, we do not want to GC certain data
                 // for the previous view yet:
                 let view = view.saturating_sub(1).into();

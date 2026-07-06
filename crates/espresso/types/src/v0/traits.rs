@@ -36,7 +36,7 @@ use hotshot_types::{
 };
 use indexmap::IndexMap;
 use serde::{Serialize, de::DeserializeOwned};
-use versions::Upgrade;
+use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
 use super::{
     impls::NodeState,
@@ -687,17 +687,19 @@ pub trait SequencerPersistence:
                         leaf_view, high_qc.view_number
                     )
                 );
-                ensure!(
-                    epoch_height == 0
-                        || cert_pair.block_number().is_none()
-                        || cert_pair.verify_next_epoch_qc(epoch_height).is_ok(),
-                    format!(
-                        "Next epoch QC is required but it's not present or doesn't match primary \
-                         QC\nPrimary QC: {:?}\nNext epoch QC: {:?}",
-                        cert_pair.qc(),
-                        cert_pair.next_epoch_qc()
-                    )
-                );
+                if leaf.block_header().version() < NEW_PROTOCOL_VERSION {
+                    ensure!(
+                        epoch_height == 0
+                            || cert_pair.block_number().is_none()
+                            || cert_pair.verify_next_epoch_qc(epoch_height).is_ok(),
+                        format!(
+                            "Next epoch QC is required but it's not present or doesn't match \
+                             primary QC\nPrimary QC: {:?}\nNext epoch QC: {:?}",
+                            cert_pair.qc(),
+                            cert_pair.next_epoch_qc()
+                        )
+                    );
+                }
 
                 let anchor_view = leaf.view_number();
                 (leaf, cert_pair, Some(anchor_view))

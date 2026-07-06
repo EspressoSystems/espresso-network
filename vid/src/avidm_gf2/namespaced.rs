@@ -82,6 +82,12 @@ impl NsAvidmGf2Share {
     }
 }
 
+impl From<Vec<AvidmGf2Share>> for NsAvidmGf2Share {
+    fn from(ns_shares: Vec<AvidmGf2Share>) -> Self {
+        Self(ns_shares)
+    }
+}
+
 impl NsAvidmGf2Scheme {
     /// Setup an instance for AVID-M scheme
     pub fn setup(recovery_threshold: usize, total_weights: usize) -> VidResult<NsAvidmGf2Param> {
@@ -168,6 +174,26 @@ impl NsAvidmGf2Scheme {
                 .for_each(|(share, ns_share)| share.0.push(ns_share))
         });
         Ok((commit, common, shares))
+    }
+
+    /// Disperse a single namespace's slice of the payload.
+    ///
+    /// `ns_payload` is the namespace's bytes and `ns_index` its position in the
+    /// namespace table.
+    pub fn ns_disperse_one(
+        param: &NsAvidmGf2Param,
+        distribution: &[u32],
+        ns_payload: &[u8],
+        ns_index: usize,
+    ) -> VidResult<NsDispersal> {
+        let payload_byte_len = ns_payload.len();
+        let (commit, shares) = AvidmGf2Scheme::disperse(param, distribution, ns_payload)?;
+        Ok(NsDispersal {
+            ns_index,
+            payload_byte_len,
+            commit,
+            shares,
+        })
     }
 
     /// Test-only: like [`Self::ns_disperse`] but commits to a non-codeword in
@@ -298,6 +324,20 @@ impl NsAvidmGf2Scheme {
             .collect();
         AvidmGf2Scheme::recover(&common.param, ns_commit, &shares)
     }
+}
+
+/// A namespaced dispersal.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct NsDispersal {
+    /// Index of this namespace in the namespace table.
+    pub ns_index: usize,
+    /// Byte length of this namespace's slice of the payload.
+    pub payload_byte_len: usize,
+    /// Commitment to this namespace's shards.
+    pub commit: AvidmGf2Commit,
+    /// One share per storage node, in distribution order.
+    pub shares: Vec<AvidmGf2Share>,
 }
 
 /// Unit tests
