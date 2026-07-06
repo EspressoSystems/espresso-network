@@ -12,6 +12,8 @@ import { BN254 } from "bn254/BN254.sol";
 /// https://github.com/EspressoSystems/jellyfish/blob/e1e683c287f20160738e6e737295dd8f9e70577a/primitives/src/signatures/bls_over_bn254.rs
 library BLSSig {
     error BLSSigVerificationFailed();
+    error BLSSigIsInfinity();
+    error BLSVKIsInfinity();
 
     // TODO gas optimization
     function _uint256FromBytesLittleEndian(uint8[] memory input) private pure returns (uint256) {
@@ -179,8 +181,23 @@ library BLSSig {
         internal
         view
     {
+        // The pairing precompile treats (0,0) G1 and all-zero G2 inputs as the point at
+        // infinity, so pk=(0,0,0,0) with sig=(0,0) would satisfy the pairing equation
+        // (e(hash, O) * e(O, P2) = 1) without any proof of possession. Honest keys and
+        // signatures are never the identity, so reject both explicitly.
+        if (BN254.isInfinity(sig)) {
+            revert BLSSigIsInfinity();
+        }
+        if (
+            BN254.BaseField.unwrap(pk.x0) == 0 && BN254.BaseField.unwrap(pk.x1) == 0
+                && BN254.BaseField.unwrap(pk.y0) == 0 && BN254.BaseField.unwrap(pk.y1) == 0
+        ) {
+            revert BLSVKIsInfinity();
+        }
+
         // Check the signature is a valid G1 point
-        // Note: checking pk belong to G2 is not possible in practice
+        // Note: for non-zero G2 points the pairing precompile checks curve and subgroup
+        // membership; a cheaper standalone G2 check is not possible in practice
         // https://ethresear.ch/t/fast-mathbb-g-2-subgroup-check-in-bn254/13974
         BN254.validateG1Point(sig);
 
