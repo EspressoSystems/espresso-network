@@ -253,6 +253,26 @@ where
     P: SequencerPersistence + MembershipPersistence + DhtPersistentStorage,
     Arc<P>: Storage<SeqTypes>,
 {
+    // Expose genesis version fields via the status API.
+    metrics
+        .text_family(
+            "genesis".into(),
+            vec![
+                "base_version".into(),
+                "upgrade_version".into(),
+                "genesis_version".into(),
+            ],
+        )
+        .create(vec![
+            genesis.base_version.to_string(),
+            genesis.upgrade_version.to_string(),
+            genesis.genesis_version.to_string(),
+        ]);
+    let upgrades_family = metrics.text_family("genesis_upgrade".into(), vec!["version".into()]);
+    for version in genesis.upgrades.keys() {
+        upgrades_family.create(vec![version.to_string()]);
+    }
+
     // Expose git information via status API.
     let info = espresso_utils::build_info!();
     metrics
