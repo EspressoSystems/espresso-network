@@ -32,7 +32,9 @@ async fn send_proposal_and_vote1s(
     node_key: &BLSPubKey,
 ) {
     let test_view = &test_data.views[view_idx];
-    harness.message(test_view.vid_share_input(node_key)).await;
+    for fragment in test_view.vid_share_inputs(node_key) {
+        harness.message(fragment).await;
+    }
     harness.message(test_view.proposal_input()).await;
 
     for i in 0..THRESHOLD {
@@ -100,17 +102,17 @@ async fn test_sequential_vote1() {
     let mut harness = TestHarness::new(0).await;
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
-    harness
-        .message(test_data.views[0].vid_share_input(&node_key))
-        .await;
+    for fragment in test_data.views[0].vid_share_inputs(&node_key) {
+        harness.message(fragment).await;
+    }
     harness.message(test_data.views[0].proposal_input()).await;
     harness
         .apply_and_process(test_data.views[0].block_reconstructed_input())
         .await;
 
-    harness
-        .message(test_data.views[1].vid_share_input(&node_key))
-        .await;
+    for fragment in test_data.views[1].vid_share_inputs(&node_key) {
+        harness.message(fragment).await;
+    }
     harness.message(test_data.views[1].proposal_input()).await;
 
     harness
@@ -201,9 +203,9 @@ async fn test_leader_proposal() {
 
     let test_view = &test_data.views[0];
 
-    harness
-        .message(test_view.vid_share_input(&leader_for_view_2))
-        .await;
+    for fragment in test_view.vid_share_inputs(&leader_for_view_2) {
+        harness.message(fragment).await;
+    }
     harness.message(test_view.proposal_input()).await;
 
     for i in 0..THRESHOLD {
@@ -595,5 +597,49 @@ async fn test_f_plus_1_timeout_votes_trigger_timeout_one_honest() {
     assert!(
         any(harness.outputs(), is_send_timeout_vote),
         "f+1 timeout votes should trigger TimeoutOneHonest"
+    );
+}
+
+/// A peer's timeout vote carries its locked QC.
+///
+/// A node that is behind adopts that QC's view (+ 1).
+#[tokio::test]
+async fn test_timeout_vote_lock_advances_view() {
+    use crate::consensus::ConsensusOutput;
+
+    let view_changed_to = |outputs, v| {
+        count_matching(
+            outputs,
+            |o| matches!(o, ConsensusOutput::ViewChanged(view, _) if **view == v),
+        )
+    };
+
+    let test_data = TestData::new(3).await;
+    let mut harness = TestHarness::new(0).await;
+
+    // The node starts at genesis. A peer times out view 2 while carrying a
+    // locked QC for view 1 (`views[0].cert1`). Adopting that QC moves us into
+    // view 2.
+    let high_qc = test_data.views[0].cert1.clone();
+    harness
+        .message(test_data.views[1].timeout_vote_input(1, Some(high_qc.clone())))
+        .await;
+
+    assert_eq!(
+        view_changed_to(harness.outputs(), 2),
+        1,
+        "adopting the locked QC from a timeout vote should advance us to view 2"
+    );
+
+    // A later timeout vote for view 3 carrying the same (now stale) view-1 lock
+    // would not advance us, so no further view change is emitted.
+    let view_changes_before = count_matching(harness.outputs(), is_view_changed);
+    harness
+        .message(test_data.views[2].timeout_vote_input(2, Some(high_qc)))
+        .await;
+    assert_eq!(
+        count_matching(harness.outputs(), is_view_changed),
+        view_changes_before,
+        "a lock below our current view must not advance us"
     );
 }

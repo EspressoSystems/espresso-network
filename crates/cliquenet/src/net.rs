@@ -16,7 +16,7 @@ use tokio::{
 use tracing::{debug, info, warn};
 
 use crate::{
-    Config, Metrics, Role, addr::NetAddr, error::NetworkError, metrics::NoMetrics, msg::Slot,
+    Config, Metrics, NetAddr, Role, error::NetworkError, metrics::NoMetrics, msg::Slot,
     net::server::Server, x25519::PublicKey,
 };
 
@@ -318,7 +318,7 @@ impl NetworkSender {
     ///
     /// The returned future will resolve once the server task finished.
     pub fn shutdown(&self) -> Result<impl Future<Output = ()> + use<>, NetworkError> {
-        debug!("shutdown");
+        warn!("shutdown");
         let (tx, rx) = oneshot::channel();
         self.tx
             .send(Command::Shutdown(tx))

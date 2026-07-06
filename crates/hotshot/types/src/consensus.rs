@@ -13,7 +13,7 @@ use std::{
     sync::Arc,
 };
 
-use alloy::primitives::U256;
+use alloy_primitives::U256;
 use async_lock::{RwLock, RwLockReadGuard, RwLockUpgradableReadGuard, RwLockWriteGuard};
 use committable::{Commitment, Committable};
 use hotshot_utils::anytrace::*;

@@ -869,6 +869,9 @@ impl SequencerPersistence for Persistence {
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<Option<ViewNumber>> {
+        // Started before the lock acquisition: this pass holds the exclusive write lock, so the
+        // metric must include the wait to reflect how long appends can block behind it.
+        let now = Instant::now();
         // On error, GC does not run over the failed range, so the leaves stay on disk and are
         // retried; no data is lost.
         let intervals = self
@@ -886,6 +889,9 @@ impl SequencerPersistence for Persistence {
         if let Err(err) = res {
             tracing::warn!(?view, "GC failed: {err:#}");
         }
+        self.metrics
+            .internal_process_decided_events_duration
+            .add_point(now.elapsed().as_secs_f64());
 
         Ok(processed)
     }
