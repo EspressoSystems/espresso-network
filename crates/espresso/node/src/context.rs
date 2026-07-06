@@ -280,7 +280,6 @@ where
         let request_response_config = RequestResponseConfig {
             incoming_request_ttl: Duration::from_secs(40),
             incoming_request_timeout: Duration::from_secs(5),
-            incoming_response_timeout: Duration::from_secs(5),
             request_batch_size: 5,
             request_batch_interval: Duration::from_secs(2),
             // A node catching up legitimately issues several distinct requests concurrently
@@ -289,7 +288,6 @@ where
             // (possibly from SQL), so the global limit bounds concurrent storage work.
             max_incoming_requests: 32,
             max_incoming_requests_per_key: 4,
-            max_incoming_responses: 200,
         };
 
         // Create the request-response protocol
