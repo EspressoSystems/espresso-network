@@ -26,7 +26,7 @@ use hotshot_types::{
     },
     utils::{epoch_from_block_number, is_epoch_root},
     vid::avidm_gf2::{AvidmGf2Param, init_avidm_gf2_param},
-    vote::HasViewNumber,
+    vote::{HasViewNumber, Vote},
 };
 use metrics::Measurement;
 use tokio::{select, sync::oneshot};
@@ -1001,6 +1001,10 @@ where
                         warn!(%node, %sender, %view, "vote1 is too far ahead");
                         return None;
                     }
+                    if vote1.vote.signing_key() != message.sender {
+                        warn!(%node, %sender, %view, "vote1 signing key != sender");
+                        return None;
+                    }
                     let bn = vote1.vote.data.block_number.unwrap_or(0);
                     let epoch_height = *self.consensus.epoch_height;
                     let is_epoch_root_vote = is_epoch_root(bn, epoch_height);
@@ -1040,6 +1044,10 @@ where
                         warn!(%node, %sender, %view, "vote2 is too far ahead");
                         return None;
                     }
+                    if vote2.signing_key() != message.sender {
+                        warn!(%node, %sender, %view, "vote2 signing key != sender");
+                        return None;
+                    }
                     debug!(%node, %sender, %view, "recv vote2");
                     self.vote2_collector.accumulate_vote(vote2);
                     None
@@ -1066,6 +1074,10 @@ where
                     let view = timeout_msg.vote.view_number();
                     if self.is_too_far_ahead(view) {
                         warn!(%node, %sender, %view, "timeout vote is too far ahead");
+                        return None;
+                    }
+                    if timeout_msg.vote.signing_key() != message.sender {
+                        warn!(%node, %sender, %view, "timeout vote signing key != sender");
                         return None;
                     }
                     let current_view = self.consensus.current_view();
