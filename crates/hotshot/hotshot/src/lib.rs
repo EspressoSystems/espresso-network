@@ -1114,62 +1114,62 @@ pub type InitializerAnchor<TYPES> = (
 #[derive(Clone, Debug)]
 pub struct HotShotInitializer<TYPES: NodeType> {
     /// Instance-level state.
-    pub instance_state: TYPES::InstanceState,
+    instance_state: TYPES::InstanceState,
 
     /// Epoch height
-    pub epoch_height: u64,
+    epoch_height: u64,
 
     /// Epoch start block
-    pub epoch_start_block: u64,
+    epoch_start_block: u64,
 
     /// the anchor leaf for the hotshot initializer
-    pub anchor_leaf: Leaf2<TYPES>,
+    anchor_leaf: Leaf2<TYPES>,
 
     /// ValidatedState for the anchor leaf
-    pub anchor_state: Arc<TYPES::ValidatedState>,
+    anchor_state: Arc<TYPES::ValidatedState>,
 
     /// ValidatedState::Delta for the anchor leaf, optional.
-    pub anchor_state_delta: Option<Arc<<TYPES::ValidatedState as ValidatedState<TYPES>>::Delta>>,
+    anchor_state_delta: Option<Arc<<TYPES::ValidatedState as ValidatedState<TYPES>>::Delta>>,
 
     /// Starting view number that should be equivalent to the view the node shut down with last.
-    pub start_view: ViewNumber,
+    start_view: ViewNumber,
 
     /// The view we last performed an action in.  An action is proposing or voting for
     /// either the quorum or DA.
-    pub last_actioned_view: ViewNumber,
+    last_actioned_view: ViewNumber,
 
     /// Starting epoch number that should be equivalent to the epoch the node shut down with last.
-    pub start_epoch: Option<EpochNumber>,
+    start_epoch: Option<EpochNumber>,
 
     /// Highest QC that was seen, for genesis it's the genesis QC.  It should be for a view greater
     /// than `inner`s view number for the non genesis case because we must have seen higher QCs
     /// to decide on the leaf.
-    pub high_qc: QuorumCertificate2<TYPES>,
+    high_qc: QuorumCertificate2<TYPES>,
 
     /// Next epoch highest QC that was seen. This is needed to propose during epoch transition after restart.
-    pub next_epoch_high_qc: Option<NextEpochQuorumCertificate2<TYPES>>,
+    next_epoch_high_qc: Option<NextEpochQuorumCertificate2<TYPES>>,
 
     /// Proposals we have sent out to provide to others for catchup
-    pub saved_proposals: BTreeMap<ViewNumber, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
+    saved_proposals: BTreeMap<ViewNumber, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
 
     /// Previously decided upgrade certificate; this is necessary if an upgrade has happened and we are not restarting with the new version
-    pub decided_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
+    decided_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
 
     /// Undecided leaves that were seen, but not yet decided on.  These allow a restarting node
     /// to vote and propose right away if they didn't miss anything while down.
-    pub undecided_leaves: BTreeMap<ViewNumber, Leaf2<TYPES>>,
+    undecided_leaves: BTreeMap<ViewNumber, Leaf2<TYPES>>,
 
     /// Not yet decided state
-    pub undecided_state: BTreeMap<ViewNumber, View<TYPES>>,
+    undecided_state: BTreeMap<ViewNumber, View<TYPES>>,
 
     /// Saved VID shares
-    pub saved_vid_shares: VidShares<TYPES>,
+    saved_vid_shares: VidShares<TYPES>,
 
     /// The last formed light client state update certificate if there's any
-    pub state_cert: Option<LightClientStateUpdateCertificateV2<TYPES>>,
+    state_cert: Option<LightClientStateUpdateCertificateV2<TYPES>>,
 
     /// Saved epoch information. This must be sorted ascending by epoch.
-    pub start_epoch_info: Vec<InitializerEpochInfo<TYPES>>,
+    start_epoch_info: Vec<InitializerEpochInfo<TYPES>>,
 }
 
 impl<TYPES: NodeType> HotShotInitializer<TYPES> {
@@ -1210,7 +1210,7 @@ impl<TYPES: NodeType> HotShotInitializer<TYPES> {
 
     /// Use saved proposals to update undecided leaves and state
     #[must_use]
-    pub fn update_undecided(self) -> Self {
+    fn update_undecided(self) -> Self {
         let mut undecided_leaves = self.undecided_leaves.clone();
         let mut undecided_state = self.undecided_state.clone();
 
@@ -1297,6 +1297,63 @@ impl<TYPES: NodeType> HotShotInitializer<TYPES> {
         };
 
         initializer.update_undecided()
+    }
+
+    /// Instance-level state.
+    pub fn instance_state(&self) -> &TYPES::InstanceState {
+        &self.instance_state
+    }
+
+    /// Epoch height.
+    pub fn epoch_height(&self) -> u64 {
+        self.epoch_height
+    }
+
+    /// Epoch start block.
+    pub fn epoch_start_block(&self) -> u64 {
+        self.epoch_start_block
+    }
+
+    /// The anchor (last decided) leaf.
+    pub fn anchor_leaf(&self) -> &Leaf2<TYPES> {
+        &self.anchor_leaf
+    }
+
+    /// ValidatedState for the anchor leaf.
+    pub fn anchor_state(&self) -> &Arc<TYPES::ValidatedState> {
+        &self.anchor_state
+    }
+
+    /// The view to start consensus from.
+    pub fn start_view(&self) -> ViewNumber {
+        self.start_view
+    }
+
+    /// The view we last proposed or voted in.
+    pub fn last_actioned_view(&self) -> ViewNumber {
+        self.last_actioned_view
+    }
+
+    /// Highest QC that was seen.
+    pub fn high_qc(&self) -> &QuorumCertificate2<TYPES> {
+        &self.high_qc
+    }
+
+    /// Next epoch highest QC that was seen.
+    pub fn next_epoch_high_qc(&self) -> Option<&NextEpochQuorumCertificate2<TYPES>> {
+        self.next_epoch_high_qc.as_ref()
+    }
+
+    /// Proposals we have sent out to provide to others for catchup.
+    pub fn saved_proposals(
+        &self,
+    ) -> &BTreeMap<ViewNumber, Proposal<TYPES, QuorumProposalWrapper<TYPES>>> {
+        &self.saved_proposals
+    }
+
+    /// The last formed light client state update certificate, if there is any.
+    pub fn state_cert(&self) -> Option<&LightClientStateUpdateCertificateV2<TYPES>> {
+        self.state_cert.as_ref()
     }
 }
 

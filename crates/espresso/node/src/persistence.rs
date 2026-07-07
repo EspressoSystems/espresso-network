@@ -1324,7 +1324,7 @@ mod tests {
             .unwrap();
 
         // Without the recovery fold this would be the genesis view (0); with it, the persisted lock.
-        assert_eq!(initializer.high_qc.view_number, ViewNumber::new(9));
+        assert_eq!(initializer.high_qc().view_number, ViewNumber::new(9));
     }
 
     /// Recovery must not hand `Consensus::new` a mismatched (high QC, next-epoch QC) pair: when a
@@ -1399,11 +1399,11 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(initializer.high_qc.view_number, ViewNumber::new(9));
+        assert_eq!(initializer.high_qc().view_number, ViewNumber::new(9));
         // The recovered high QC corresponds to neither persisted next-epoch QC, so the pair is left
         // without one rather than recovering a mismatched (high QC, next-epoch QC) pair.
         assert!(
-            initializer.next_epoch_high_qc.is_none(),
+            initializer.next_epoch_high_qc().is_none(),
             "a next-epoch QC that does not correspond to the recovered high QC must be dropped"
         );
     }
