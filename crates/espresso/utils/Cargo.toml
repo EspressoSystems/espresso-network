@@ -20,7 +20,7 @@ log-panics = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 surf = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["signal"] }
 toml = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

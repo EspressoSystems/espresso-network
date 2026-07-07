@@ -14,7 +14,7 @@ use std::{
     hash::Hash,
 };
 
-use alloy::primitives::U256;
+use alloy_primitives::U256;
 use ark_serialize::SerializationError;
 use bitvec::prelude::*;
 use committable::Committable;

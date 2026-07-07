@@ -2640,7 +2640,7 @@ dependencies = [
  "hotshot-example-types",
  "hotshot-state-prover",
  "hotshot-types",
- "jf-signature 0.4.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.4.0)",
+ "jf-signature 0.4.2",
  "rand 0.8.6",
  "surf-disco",
  "tempfile",
@@ -3170,21 +3170,30 @@ name = "cliquenet"
 version = "0.1.0"
 dependencies = [
  "bon",
- "bs58",
  "bytes 1.12.0",
+ "cliquenet-types",
  "criterion 0.8.2",
- "ed25519-compact",
  "parking_lot",
  "quickcheck",
  "rand 0.10.1",
- "serde",
- "serde_bytes",
  "snow",
  "socket2 0.6.4",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
  "tracing",
+]
+
+[[package]]
+name = "cliquenet-types"
+version = "0.1.0"
+dependencies = [
+ "bs58",
+ "ed25519-compact",
+ "quickcheck",
+ "serde",
+ "serde_bytes",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -3299,7 +3308,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3713,9 +3722,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-epoch"
-version = "0.9.18"
+version = "0.9.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b82ac4a3c2ca9c3460964f020e1402edd5753411d7737aa39c3714ad1b5420e"
+checksum = "2d6914041f254d6e9176c01941b21115dcfb7089e55135a35411081bd106ef3f"
 dependencies = [
  "crossbeam-utils",
 ]
@@ -4289,7 +4298,7 @@ dependencies = [
  "jf-merkle-tree-compat",
  "jf-pcs",
  "jf-plonk 0.7.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-plonk-v0.7.0)",
- "jf-signature 0.4.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.4.0)",
+ "jf-signature 0.4.2",
  "jf-utils",
  "sha3 0.10.9",
 ]
@@ -4698,6 +4707,7 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
+ "chrono",
  "clap 4.6.1",
  "derive_builder",
  "derive_more 2.1.1",
@@ -4715,6 +4725,7 @@ dependencies = [
  "test-log",
  "tide-disco",
  "tokio",
+ "toml",
  "tracing",
  "url",
  "vbs",
@@ -4871,7 +4882,7 @@ dependencies = [
  "jf-crhf",
  "jf-merkle-tree-compat",
  "jf-rescue 0.3.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-rescue-v0.3.0)",
- "jf-signature 0.4.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.4.0)",
+ "jf-signature 0.4.2",
  "libp2p",
  "light-client",
  "moka",
@@ -4960,7 +4971,7 @@ dependencies = [
  "clap 4.6.1",
  "derivative",
  "flate2",
- "jf-signature 0.4.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.4.0)",
+ "jf-signature 0.4.2",
  "opentelemetry",
  "opentelemetry-appender-tracing",
  "opentelemetry-otlp",
@@ -6302,7 +6313,7 @@ dependencies = [
  "jf-pcs",
  "jf-plonk 0.7.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-plonk-v0.7.0)",
  "jf-plonk 0.7.0 (git+https://github.com/EspressoSystems/jellyfish?branch=jf-relation-v0.5.0-compat)",
- "jf-signature 0.4.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.4.0)",
+ "jf-signature 0.4.2",
  "jf-utils",
  "num-bigint",
  "num-traits",
@@ -6475,7 +6486,9 @@ dependencies = [
  "hotshot-types",
  "hotshot-utils",
  "parking_lot",
+ "quickcheck",
  "rand 0.8.6",
+ "rayon",
  "serde",
  "serde_bytes",
  "test-utils",
@@ -6667,8 +6680,8 @@ dependencies = [
  "jf-relation 0.5.0 (git+https://github.com/EspressoSystems/jellyfish?branch=jf-relation-v0.5.0-compat)",
  "jf-rescue 0.3.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-rescue-v0.3.0)",
  "jf-rescue 0.3.0 (git+https://github.com/EspressoSystems/jellyfish?branch=jf-relation-v0.5.0-compat)",
- "jf-signature 0.4.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.4.0)",
  "jf-signature 0.4.0 (git+https://github.com/EspressoSystems/jellyfish?branch=jf-relation-v0.5.0-compat)",
+ "jf-signature 0.4.2",
  "jf-utils",
  "reqwest 0.12.28",
  "rstest",
@@ -6771,6 +6784,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tide-disco",
  "tokio",
+ "tokio-util",
  "tracing",
  "url",
  "vbs",
@@ -6782,7 +6796,7 @@ dependencies = [
 name = "hotshot-types"
 version = "0.1.11"
 dependencies = [
- "alloy",
+ "alloy-primitives",
  "alloy-rlp",
  "anyhow",
  "ark-bn254 0.5.0",
@@ -6799,7 +6813,7 @@ dependencies = [
  "blake3",
  "bs58",
  "clap 4.6.1",
- "cliquenet",
+ "cliquenet-types",
  "committable",
  "derive_more 2.1.1",
  "digest 0.10.7",
@@ -6813,7 +6827,7 @@ dependencies = [
  "jf-crhf",
  "jf-pcs",
  "jf-rescue 0.3.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-rescue-v0.3.0)",
- "jf-signature 0.4.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.4.0)",
+ "jf-signature 0.4.2",
  "jf-utils",
  "lazy_static",
  "libp2p-identity",
@@ -7941,6 +7955,35 @@ dependencies = [
  "jf-crhf",
  "jf-relation 0.5.0 (git+https://github.com/EspressoSystems/jellyfish?branch=jf-relation-v0.5.0-compat)",
  "jf-rescue 0.3.0 (git+https://github.com/EspressoSystems/jellyfish?branch=jf-relation-v0.5.0-compat)",
+ "jf-utils",
+ "num-bigint",
+ "num-traits",
+ "serde",
+ "sha3 0.10.9",
+ "tagged-base64",
+ "zeroize",
+]
+
+[[package]]
+name = "jf-signature"
+version = "0.4.2"
+source = "git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.4.2#b1581c26f7195962d17fc5ff3768ac55db610ca1"
+dependencies = [
+ "ark-bls12-381",
+ "ark-bn254 0.5.0",
+ "ark-ec 0.5.0",
+ "ark-ff 0.5.0",
+ "ark-serialize 0.5.0",
+ "ark-std 0.5.0",
+ "derive-where",
+ "digest 0.10.7",
+ "displaydoc",
+ "getrandom 0.2.17",
+ "hashbrown 0.14.5",
+ "itertools 0.12.1",
+ "jf-crhf",
+ "jf-relation 0.5.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-relation-v0.5.0)",
+ "jf-rescue 0.3.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-rescue-v0.3.0)",
  "jf-utils",
  "num-bigint",
  "num-traits",
@@ -12772,7 +12815,7 @@ dependencies = [
  "hotshot-state-prover",
  "hotshot-types",
  "jf-merkle-tree-compat",
- "jf-signature 0.4.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.4.0)",
+ "jf-signature 0.4.2",
  "predicates",
  "pretty_assertions",
  "prometheus-parse",
@@ -13247,7 +13290,7 @@ dependencies = [
  "hotshot-query-service",
  "hotshot-state-prover",
  "hotshot-types",
- "jf-signature 0.4.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.4.0)",
+ "jf-signature 0.4.2",
  "rand 0.8.6",
  "reqwest 0.12.28",
  "serde_json",
@@ -14988,15 +15031,6 @@ name = "windows-sys"
 version = "0.52.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d"
-dependencies = [
- "windows-targets 0.52.6",
-]
-
-[[package]]
-name = "windows-sys"
-version = "0.59.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b"
 dependencies = [
  "windows-targets 0.52.6",
 ]

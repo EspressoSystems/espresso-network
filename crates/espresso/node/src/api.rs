@@ -3924,18 +3924,24 @@ mod test {
     async fn test_epoch_reward_upgrade() {
         // Use fewer nodes: epoch mode from view 0 is resource-heavy on CI with
         // postgres Docker containers, causing view timeouts and consensus stall.
-        test_upgrade_helper_with_nodes::<3>(Upgrade::new(
-            versions::DRB_AND_HEADER_UPGRADE_VERSION,
-            versions::EPOCH_REWARD_VERSION,
-        ))
+        test_upgrade_helper_with_nodes::<3>(
+            Upgrade::new(
+                versions::DRB_AND_HEADER_UPGRADE_VERSION,
+                versions::EPOCH_REWARD_VERSION,
+            ),
+            100,
+        )
         .await;
     }
 
     async fn test_upgrade_helper(upgrade: Upgrade) {
-        test_upgrade_helper_with_nodes::<5>(upgrade).await;
+        test_upgrade_helper_with_nodes::<5>(upgrade, 200).await;
     }
 
-    async fn test_upgrade_helper_with_nodes<const NUM_NODES: usize>(upgrade: Upgrade) {
+    async fn test_upgrade_helper_with_nodes<const NUM_NODES: usize>(
+        upgrade: Upgrade,
+        start_proposing_view: u64,
+    ) {
         // wait this number of views beyond the configured first view
         // before asserting anything.
         let wait_extra_views = 10;
@@ -3951,6 +3957,7 @@ mod test {
             .epoch_start_block(epoch_start_block)
             .set_upgrades(upgrade.target)
             .await
+            .upgrade_proposing_views(start_proposing_view, 1000)
             .build();
 
         let chain_config_genesis = ValidatedState::default().chain_config.resolve().unwrap();

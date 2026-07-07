@@ -47,10 +47,14 @@ pub const EXTERNAL_EVENT_CHANNEL_SIZE: usize = 10_000;
 
 /// Default values for the upgrade constants
 pub const DEFAULT_UPGRADE_CONSTANTS: UpgradeConstants = UpgradeConstants {
-    propose_offset: 5,
+    // lead time before the proposer attaches the cert; votes are collected over it
+    propose_offset: 20,
+    // deadline to decide the cert, else it's discarded
     decide_by_offset: 105,
-    begin_offset: 110,
-    finish_offset: 115,
+    // last old-version view; only empty blocks are proposed until finish
+    begin_offset: 125,
+    // first new-version view; ends the empty-block transition
+    finish_offset: 130,
 };
 
 /// Default values for the upgrade constants to be used in testing
@@ -60,13 +64,6 @@ pub const TEST_UPGRADE_CONSTANTS: UpgradeConstants = UpgradeConstants {
     begin_offset: 15,
     finish_offset: 20,
 };
-
-/// For `STAKE_TABLE_CAPACITY=200`, the light client prover (a.k.a. `hotshot-state-prover`)
-/// would need to generate proof for a circuit of slightly below 2^20 gates.
-/// Thus we need to support this upperbounded degree in our Structured Reference String (SRS),
-/// the `+2` is just an artifact from the jellyfish's Plonk proof system.
-#[allow(clippy::cast_possible_truncation)]
-pub const SRS_DEGREE: usize = 2u64.pow(20) as usize + 2;
 
 /// The `tide` module name for the legacy builder
 pub const LEGACY_BUILDER_MODULE: &str = "block_info";

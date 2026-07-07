@@ -19,7 +19,10 @@ use futures::{
 };
 use hotshot::SystemContext;
 use hotshot_events_service::events_source::{EventConsumer, EventsStreamer};
-use hotshot_new_protocol::{coordinator::Coordinator, network::Cliquenet};
+use hotshot_new_protocol::{
+    coordinator::Coordinator,
+    network::{Cliquenet, NetworkError},
+};
 use hotshot_orchestrator::client::OrchestratorClient;
 use hotshot_types::{
     PeerConfig, ValidatorConfig,
@@ -44,7 +47,7 @@ use tokio::{
     sync::{mpsc::channel, watch},
     task::JoinHandle,
 };
-use tracing::{Instrument, Level};
+use tracing::{Instrument, Level, info};
 use url::Url;
 use versions::NEW_PROTOCOL_VERSION;
 
@@ -109,7 +112,7 @@ where
 {
     #[tracing::instrument(skip_all, fields(node_id = instance_state.node_id))]
     #[allow(clippy::too_many_arguments)]
-    pub async fn init(
+    pub async fn init<F>(
         network_config: NetworkConfig<SeqTypes>,
         upgrade: versions::Upgrade,
         validator_config: ValidatorConfig<SeqTypes>,
@@ -119,14 +122,17 @@ where
         state_catchup: ParallelStateCatchup,
         persistence: Arc<P>,
         network: Arc<N>,
-        mut coordinator_network: Cliquenet<SeqTypes>,
+        coordinator_network: F,
         state_relay_server: Option<Url>,
         metrics: &dyn Metrics,
         stake_table_capacity: usize,
         event_consumer: impl PersistenceEventConsumer + 'static,
         proposal_fetcher_cfg: ProposalFetcherConfig,
         bootstrap_epoch_catchup_timeout: Duration,
-    ) -> anyhow::Result<Self> {
+    ) -> anyhow::Result<Self>
+    where
+        F: AsyncFnOnce(UpgradeLock<SeqTypes>) -> Result<Cliquenet<SeqTypes>, NetworkError>,
+    {
         let config = &network_config.config;
         let pub_key = validator_config.public_key;
         tracing::info!(%pub_key, "initializing consensus");
@@ -144,10 +150,7 @@ where
             .load_consensus_state(instance_state.clone(), upgrade)
             .await?;
 
-        tracing::warn!(
-            "Starting up sequencer context with initializer:\n\n{:?}",
-            initializer
-        );
+        info!(target: "announce", ?initializer, "starting up sequencer context with initializer");
 
         let stake_table = config.hotshot_stake_table();
         let stake_table_commit = stake_table.commitment(stake_table_capacity)?;
@@ -179,6 +182,9 @@ where
         )
         .await?
         .0;
+
+        let mut coordinator_network =
+            coordinator_network(handle.hotshot.upgrade_lock.clone()).await?;
 
         // `load_start_epoch_info` ran inside `SystemContext::init`, so
         // `first_epoch` is now seeded on the shared membership. Walk the
@@ -649,8 +655,12 @@ async fn handle_events<N, P, C>(
                 .persist_event(&event, event_consumer.as_ref())
                 .await
             {
-                // A closed receiver only happens during shutdown.
-                let _ = decide_tx.send(Some(signal));
+                // Keep the max view: a gap-fill decide signals an *older* view
+                // and must not hide a newer, unconsumed tip signal.
+                decide_tx.send_modify(|current| match current {
+                    Some((view, _)) if *view > signal.0 => {},
+                    _ => *current = Some(signal),
+                });
             }
         };
 

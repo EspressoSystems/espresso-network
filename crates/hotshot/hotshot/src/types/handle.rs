@@ -272,6 +272,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static> SystemContextHandl
 
     /// Shut down the inner hotshot and wait until all background threads are closed.
     pub async fn shut_down(&mut self) {
+        self.membership_coordinator.cancel_all_drb();
+
         // this is required because `SystemContextHandle` holds an inactive receiver and
         // `broadcast_direct` below can wait indefinitely
         self.internal_event_stream.0.set_await_active(false);

@@ -25,8 +25,9 @@ use hotshot_testing::{
 };
 use hotshot_types::{
     data::{
-        EpochNumber, Leaf2, VidCommitment, VidDisperse, VidDisperse2, VidDisperseShare2,
-        ViewNumber, vid_commitment,
+        EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperse, VidDisperse2,
+        VidDisperseShare2, ViewNumber, vid_commitment,
+        vid_disperse::{AvidmGf2DisperseShareFragment, AvidmGf2NamespacePiece},
     },
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StakeTableState, StateKeyPair},
@@ -103,36 +104,32 @@ impl TestView {
             .clone()
     }
 
-    /// Build a leader-signed VID share envelope (the wire form). The leader's
-    /// signature is over the share's `payload_commitment`, matching what the
-    /// `VidDisperser` produces in production.
-    pub fn vid_share_message(
+    /// Build the per-namespace `ConsensusMessage::VidShareFragment` wire
+    /// messages the leader unicasts to `recipient_key` for this view — the
+    /// production wire form, where a node reassembles its share from the
+    /// fragments. The leader's signature is over the share's
+    /// `payload_commitment`, matching what the `VidDisperser` produces.
+    ///
+    /// Pair this with `proposal_input` when simulating a leader's send to a
+    /// replica.
+    pub fn vid_share_inputs(
         &self,
         recipient_key: &BLSPubKey,
-    ) -> SignedProposal<TestTypes, VidDisperseShare2<TestTypes>> {
+    ) -> Vec<Message<TestTypes, Validated>> {
         let share = self.vid_share_for(recipient_key);
         let signature = <BLSPubKey as SignatureKey>::sign(
             &self.leader_private_key,
             share.payload_commitment.as_ref(),
         )
         .expect("sign vid share commitment");
-        SignedProposal {
-            data: share,
-            signature,
-            _pd: std::marker::PhantomData,
-        }
-    }
-
-    /// Build a `ConsensusMessage::VidShare` wire message for `recipient_key`.
-    /// Pair this with `proposal_input` when simulating a leader's send to a
-    /// replica — the wire format now carries proposal and share separately.
-    pub fn vid_share_input(&self, recipient_key: &BLSPubKey) -> Message<TestTypes, Validated> {
-        Message {
-            sender: self.leader_public_key,
-            message_type: MessageType::Consensus(ConsensusMessage::VidShare(
-                self.vid_share_message(recipient_key),
-            )),
-        }
+        vid_fragments(&share)
+            .map(|fragment| Message {
+                sender: self.leader_public_key,
+                message_type: MessageType::Consensus(ConsensusMessage::VidShareFragment(
+                    SignedProposal::new(fragment, signature.clone()),
+                )),
+            })
+            .collect()
     }
 
     /// Get the VidCommitment2 for this view (for BlockReconstructed events).
@@ -849,6 +846,46 @@ fn extract_vid_disperse(
     (vid_disperse, vid_shares)
 }
 
+pub(crate) fn vid_fragments(
+    share: &VidDisperseShare2<TestTypes>,
+) -> impl Iterator<Item = AvidmGf2DisperseShareFragment<TestTypes>> {
+    let num_namespaces = share.common.ns_commits.len();
+    (0..num_namespaces).map(move |ns_index| AvidmGf2DisperseShareFragment {
+        view_number: share.view_number,
+        epoch: share.epoch,
+        target_epoch: share.target_epoch,
+        payload_commitment: share.payload_commitment,
+        recipient_key: share.recipient_key,
+        param: share.common.param.clone(),
+        num_namespaces,
+        namespaces: vec![AvidmGf2NamespacePiece {
+            ns_index,
+            ns_payload_byte_len: share.common.ns_lens[ns_index],
+            ns_commit: share.common.ns_commits[ns_index],
+            ns_share: share
+                .share
+                .inner_ns_share(ns_index)
+                .expect("ns_index < num_namespaces"),
+        }],
+    })
+}
+
+/// The `(view, VID commitment)` pairs a restarted node seeds as
+/// already-reconstructed blocks, mirroring `Coordinator::maker`.
+pub fn reconstructed_blocks(
+    headers: impl IntoIterator<Item = (ViewNumber, TestBlockHeader)>,
+) -> Vec<(ViewNumber, VidCommitment2)> {
+    headers
+        .into_iter()
+        .filter_map(
+            |(view, header)| match BlockHeader::<TestTypes>::payload_commitment(&header) {
+                VidCommitment::V2(commitment) => Some((view, commitment)),
+                _ => None,
+            },
+        )
+        .collect()
+}
+
 /// Lightweight consensus-only test harness. Wraps a single [`Consensus`]
 /// instance and auto-responds to outputs that consensus expects feedback for
 /// (`RequestState`, `RequestBlockAndHeader`, `RequestVidDisperse`,
@@ -897,8 +934,9 @@ impl ConsensusHarness {
 
     /// Build a harness whose consensus has been restarted from a persisted
     /// decided anchor, mirroring `Coordinator::maker`: `Consensus::new` is
-    /// given the anchor leaf, the undecided proposals above it are re-seeded,
-    /// and the anchor is installed as the parent via `seed_parent`.
+    /// given the anchor leaf, the undecided proposals above it are re-seeded
+    /// and marked reconstructed, and the anchor is installed as the parent via
+    /// `seed_parent`.
     pub async fn restarted_from(
         node_index: u64,
         anchor_proposal: Proposal<TestTypes>,
@@ -926,8 +964,14 @@ impl ConsensusHarness {
             epoch_height,
         );
 
+        let undecided_proposals: Vec<_> = undecided_proposals.into_iter().collect();
+        let reconstructed = reconstructed_blocks(
+            std::iter::once(&anchor_proposal)
+                .chain(&undecided_proposals)
+                .map(|p| (p.view_number, p.block_header.clone())),
+        );
         consensus.seed_proposals(undecided_proposals);
-        consensus.seed_parent(anchor_cert1, anchor_proposal, std::iter::empty());
+        consensus.seed_parent(anchor_cert1, anchor_proposal, reconstructed);
         consensus.resume_from_restart(anchor_view, anchor_view + 1, anchor_view);
 
         Self {
