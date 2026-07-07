@@ -14,6 +14,7 @@ use hotshot_types::{
     PeerConnectInfo,
     addr::NetAddr,
     data::ViewNumber,
+    epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     traits::{metrics::NoMetrics, signature_key::SignatureKey},
     vote::HasViewNumber,
@@ -31,12 +32,17 @@ use tokio::{
 use tracing::{debug, info};
 
 use crate::{
+    client::CoordinatorClient,
     consensus::{ConsensusOutput, PreCutoverSeed},
     coordinator::{Coordinator, CoordinatorOutput, error::Severity},
     helpers::test_upgrade_lock,
     network::Cliquenet,
     tests::common::{
-        coordinator_builder::build_test_coordinator, utils::mock_membership_with_client,
+        coordinator_builder::build_test_coordinator,
+        utils::{
+            StakeTableSchedule, mock_membership_with_client,
+            mock_membership_with_client_and_schedule,
+        },
     },
 };
 
@@ -115,6 +121,17 @@ pub struct TestRunner {
     /// expected to timeout.
     #[builder(default)]
     down_nodes: BTreeSet<usize>,
+
+    /// Per-epoch stake table schedule shared by all nodes.  When unset, all
+    /// `num_nodes` are members of every epoch.  Incompatible with
+    /// `down_nodes`: failed-view prediction assumes the full committee leads.
+    stake_table_schedule: Option<StakeTableSchedule>,
+
+    /// Per-node overrides of `target_decisions` for the completion check.
+    /// A validator removed from the stake table stops deciding once its
+    /// membership ends and only needs to reach its smaller target.
+    #[builder(default)]
+    node_decision_targets: BTreeMap<usize, usize>,
 
     /// View-triggered node changes.  Each entry is `(view, changes)`.
     /// Changes are applied when any node first decides a leaf at or past
@@ -244,8 +261,48 @@ impl TestRunner {
         &self.node_storages
     }
 
+    fn target_for(&self, idx: usize) -> usize {
+        self.node_decision_targets
+            .get(&idx)
+            .copied()
+            .unwrap_or(self.target_decisions)
+    }
+
+    /// Build a node's membership, honoring the stake table schedule if set.
+    fn make_membership(
+        &self,
+        public_key: BLSPubKey,
+        storage: TestStorage<TestTypes>,
+        connect_infos: &[PeerConnectInfo],
+    ) -> (
+        EpochMembershipCoordinator<TestTypes>,
+        TestStorage<TestTypes>,
+        CoordinatorClient<TestTypes>,
+        Sender<Event<TestTypes>>,
+    ) {
+        match &self.stake_table_schedule {
+            Some(schedule) => mock_membership_with_client_and_schedule(
+                self.num_nodes,
+                self.epoch_height,
+                public_key,
+                storage,
+                schedule,
+                connect_infos,
+            ),
+            None => {
+                mock_membership_with_client(self.num_nodes, self.epoch_height, public_key, storage)
+            },
+        }
+    }
+
     pub async fn run(&mut self) -> Result<(), TestError> {
         crate::logging::init_test_logging();
+
+        debug_assert!(
+            self.stake_table_schedule.is_none() || self.down_nodes.is_empty(),
+            "stake table schedules are incompatible with down_nodes: failed_views_from_down_nodes \
+             assumes the full committee leads"
+        );
 
         self.node_storages = (0..self.num_nodes)
             .map(|_| TestStorage::default())
@@ -270,18 +327,21 @@ impl TestRunner {
                 (keypair, public_key, addr)
             })
             .collect::<Vec<_>>();
+        let connect_infos: Vec<PeerConnectInfo> = parties
+            .iter()
+            .map(|(kp, _, addr)| PeerConnectInfo {
+                x25519_key: kp.public_key(),
+                p2p_addr: addr.clone(),
+            })
+            .collect();
 
         // Spawn one coordinator task per live node.  Each node gets its
         // own membership instance so they don't share internal state.
         for (i, (_, public_key, _)) in parties.iter().enumerate() {
             let network = create_network(i, &parties, &self.upgrade_lock).await;
 
-            let (membership, storage, client, external_events_tx) = mock_membership_with_client(
-                self.num_nodes,
-                self.epoch_height,
-                *public_key,
-                self.node_storages[i].clone(),
-            );
+            let (membership, storage, client, external_events_tx) =
+                self.make_membership(*public_key, self.node_storages[i].clone(), &connect_infos);
 
             let coord = build_test_coordinator(
                 i as u64,
@@ -363,7 +423,7 @@ impl TestRunner {
         while node_commits
             .iter()
             .enumerate()
-            .any(|(i, s)| !currently_down.contains(&i) && s.len() < self.target_decisions)
+            .any(|(i, s)| !currently_down.contains(&i) && s.len() < self.target_for(i))
         {
             let remaining = deadline
                 .checked_duration_since(Instant::now())
@@ -405,15 +465,12 @@ impl TestRunner {
                                 if !self.persistent_storage {
                                     self.node_storages[change.idx] = TestStorage::default();
                                 }
-                                let (membership, storage, client, external_events_tx) = {
-                                    let k = parties[change.idx].1;
-                                    mock_membership_with_client(
-                                        self.num_nodes,
-                                        self.epoch_height,
-                                        k,
+                                let (membership, storage, client, external_events_tx) = self
+                                    .make_membership(
+                                        parties[change.idx].1,
                                         self.node_storages[change.idx].clone(),
-                                    )
-                                };
+                                        &connect_infos,
+                                    );
                                 let coord = build_test_coordinator(
                                     change.idx as u64,
                                     net,
@@ -470,7 +527,7 @@ impl TestRunner {
             if tagged.generation != generations[tagged.idx] {
                 continue;
             }
-            if node_commits[tagged.idx].len() >= self.target_decisions {
+            if node_commits[tagged.idx].len() >= self.target_for(tagged.idx) {
                 continue;
             }
             match tagged.event {
