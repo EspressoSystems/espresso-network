@@ -42,6 +42,7 @@ exclude_lints = [
     "named-struct-fields",
     "asm-keccak256",
     "pascal-case-struct",
+    "block-timestamp",
 ]
 
 [fmt]

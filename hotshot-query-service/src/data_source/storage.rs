@@ -127,7 +127,10 @@ macro_rules! function_name {
         }
         let full: &'static str = type_name_of(__f);
         let trimmed: &'static str = full.strip_suffix("::__f").unwrap_or(full);
-        trimmed.rsplit("::").next().unwrap_or(trimmed)
+        trimmed
+            .rsplit("::")
+            .find(|segment| *segment != "{{closure}}")
+            .unwrap_or(trimmed)
     }};
 }
 
