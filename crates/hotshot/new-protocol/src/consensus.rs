@@ -1875,6 +1875,8 @@ impl<T: NodeType> Consensus<T> {
         outbox.push_back(ConsensusOutput::SendVote1(vote1));
         if let Some(vid_share) = vid_share {
             outbox.push_back(ConsensusOutput::BroadcastVidShare(vid_share));
+        } else {
+            debug!(%view, "vid share gone for released vote1; skipping broadcast");
         }
     }
 
