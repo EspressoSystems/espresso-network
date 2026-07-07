@@ -39,8 +39,8 @@ pub struct EpochRootVoteCollector<T: NodeType> {
     /// Where callers submit their votes.
     ballot_boxes: BTreeMap<ViewNumber, mpsc::Sender<Vote1<T>>>,
 
-    /// Votes for epochs we have yet to resolve.
-    pending: BTreeMap<ViewNumber, Vec<Vote1<T>>>,
+    /// Votes for epochs we have yet to resolve, deduplicated by signer.
+    pending: BTreeMap<ViewNumber, HashMap<T::SignatureKey, Vote1<T>>>,
 
     /// Views that had valid certificates already.
     completed: BTreeSet<ViewNumber>,
@@ -85,6 +85,7 @@ impl<T: NodeType> EpochRootVoteCollector<T> {
                     if err.is_panic() {
                         error!(%view, %err, "epoch-root vote collection task panic");
                     }
+                    self.ballot_boxes.remove(&view);
                 },
                 None => return None,
             }
@@ -106,7 +107,12 @@ impl<T: NodeType> EpochRootVoteCollector<T> {
         }
 
         let Some(membership) = self.resolve_membership(&vote1.vote) else {
-            self.pending.entry(view).or_default().push(vote1);
+            if vote1.vote.epoch().is_some() {
+                self.pending
+                    .entry(view)
+                    .or_default()
+                    .insert(vote1.vote.signing_key(), vote1);
+            }
             return;
         };
 
@@ -136,7 +142,10 @@ impl<T: NodeType> EpochRootVoteCollector<T> {
     }
 
     pub fn retry_pending_votes(&mut self) {
-        for vote in mem::take(&mut self.pending).into_values().flatten() {
+        for vote in mem::take(&mut self.pending)
+            .into_values()
+            .flat_map(HashMap::into_values)
+        {
             self.accumulate_vote(vote)
         }
     }

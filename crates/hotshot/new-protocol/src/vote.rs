@@ -1,7 +1,7 @@
 mod accumulate;
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     mem,
     sync::mpsc,
 };
@@ -26,8 +26,8 @@ pub struct VoteCollector<T: NodeType, V, C> {
     /// Where callers submit their votes.
     ballot_boxes: BTreeMap<ViewNumber, mpsc::Sender<V>>,
 
-    /// Votes for epochs we have yet to resolve.
-    pending: BTreeMap<ViewNumber, Vec<V>>,
+    /// Votes for epochs we have yet to resolve, deduplicated by signer.
+    pending: BTreeMap<ViewNumber, HashMap<T::SignatureKey, V>>,
 
     /// Views that had a valid certificate already.
     completed: BTreeSet<ViewNumber>,
@@ -77,6 +77,7 @@ where
                     if err.is_panic() {
                         error!(%view, %err, "vote collection task panic");
                     }
+                    self.ballot_boxes.remove(&view);
                 },
                 None => return None,
             }
@@ -91,7 +92,12 @@ where
         }
 
         let Some(membership) = self.resolve_membership(&vote) else {
-            self.pending.entry(view).or_default().push(vote);
+            if vote.epoch().is_some() {
+                self.pending
+                    .entry(view)
+                    .or_default()
+                    .insert(vote.signing_key(), vote);
+            }
             return;
         };
 
@@ -121,7 +127,10 @@ where
     }
 
     pub fn retry_pending_votes(&mut self) {
-        for vote in mem::take(&mut self.pending).into_values().flatten() {
+        for vote in mem::take(&mut self.pending)
+            .into_values()
+            .flat_map(|votes| votes.into_values())
+        {
             self.accumulate_vote(vote)
         }
     }
