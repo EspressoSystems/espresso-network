@@ -38,7 +38,7 @@
             const path_to_root = "../../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../../searchindex-06e45538.js";
+            window.path_to_searchindex_js = "../../searchindex-36f04ecd.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../../toc-71d5839c.js"></script>
@@ -181,7 +181,7 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="staketablev3"><a class="header" href="#staketablev3">StakeTableV3</a></h1>
-<p><a href="https://github.com/EspressoSystems/espresso-network/blob/c3d0a1cca0a683328a67d224eec28e3f9127e5b3/contracts/src/StakeTableV3.sol">Git Source</a></p>
+<p><a href="https://github.com/EspressoSystems/espresso-network/blob/4f309fd5777326a887977c946cf97193aa000099/contracts/src/StakeTableV3.sol">Git Source</a></p>
 <p><strong>Inherits:</strong>
 <a href="/contracts/src/StakeTableV2.sol/contract.StakeTableV2.html">StakeTableV2</a></p>
 <p><strong>Title:</strong>
@@ -200,6 +200,10 @@ All new functions are virtual. Deprecated overrides are not virtual (same patter
 <h3 id="max_p2p_addr_length"><a class="header" href="#max_p2p_addr_length">MAX_P2P_ADDR_LENGTH</a></h3>
 <p>Maximum length for p2p address strings (in bytes)</p>
 <pre><code class="language-solidity">uint256 public constant MAX_P2P_ADDR_LENGTH = 512
+</code></pre>
+<h3 id="curve25519_p"><a class="header" href="#curve25519_p">CURVE25519_P</a></h3>
+<p>The Curve25519 field prime 2^255 - 19</p>
+<pre><code class="language-solidity">uint256 public constant CURVE25519_P = (1 &lt;&lt; 255) - 19
 </code></pre>
 <h2 id="state-variables"><a class="header" href="#state-variables">State Variables</a></h2>
 <h3 id="x25519keys"><a class="header" href="#x25519keys">x25519Keys</a></h3>
@@ -226,6 +230,25 @@ All new functions are virtual. Deprecated overrides are not virtual (same patter
     override
     returns (uint8 majorVersion, uint8 minorVersion, uint8 patchVersion);
 </code></pre>
+<h3 id="ensurecanonicalx25519key"><a class="header" href="#ensurecanonicalx25519key">ensureCanonicalX25519Key</a></h3>
+<p>Ensure the x25519 key is a canonical little-endian field element encoding:
+interpreted as a little-endian integer v, require 0 &lt; v &lt; 2^255 - 19.</p>
+<p>The node’s Rust parser rejects non-canonical values in [2^255-19, 2^255-1], and
+x25519 ignores bit 255, so encodings with the top bit set alias the same DH key.
+Enforcing canonical form makes bytes32 uniqueness equal functional key uniqueness.</p>
+<pre><code class="language-solidity">function ensureCanonicalX25519Key(bytes32 x25519Key) internal pure;
+</code></pre>
+<p><strong>Parameters</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Name</th><th>Type</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>x25519Key</code></td><td><code>bytes32</code></td><td>The x25519 key as raw little-endian bytes</td></tr>
+</tbody>
+</table>
+</div>
 <h3 id="validatep2paddr"><a class="header" href="#validatep2paddr">validateP2pAddr</a></h3>
 <p>Validate a p2p address in host:port format.</p>
 <p>Minimal validation to catch common misconfiguration errors early. The contract cannot
@@ -269,7 +292,7 @@ verify that the address is actually reachable.</p>
 <tr><td><code>schnorrSig</code></td><td><code>bytes</code></td><td>The Schnorr signature that authenticates the Schnorr VK</td></tr>
 <tr><td><code>commission</code></td><td><code>uint16</code></td><td>in % with 2 decimals, from 0.00% (value 0) to 100% (value 10_000)</td></tr>
 <tr><td><code>metadataUri</code></td><td><code>string</code></td><td>The metadata URI for the validator</td></tr>
-<tr><td><code>x25519Key</code></td><td><code>bytes32</code></td><td>The x25519 encryption key for the validator</td></tr>
+<tr><td><code>x25519Key</code></td><td><code>bytes32</code></td><td>The x25519 encryption key (raw little-endian bytes, canonical encoding)</td></tr>
 <tr><td><code>p2pAddr</code></td><td><code>string</code></td><td>The p2p address (host:port) for the validator</td></tr>
 </tbody>
 </table>
@@ -298,7 +321,7 @@ used). To also update the p2p address, use updateNetworkConfig instead.</p>
 <tr><th>Name</th><th>Type</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>x25519Key</code></td><td><code>bytes32</code></td><td>The new x25519 encryption key (must be unique, never previously used)</td></tr>
+<tr><td><code>x25519Key</code></td><td><code>bytes32</code></td><td>The new x25519 encryption key (canonical encoding, must be unique, never previously used)</td></tr>
 </tbody>
 </table>
 </div>
@@ -335,7 +358,7 @@ Emits both X25519KeyUpdated and P2pAddrUpdated.</p>
 <tr><th>Name</th><th>Type</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>x25519Key</code></td><td><code>bytes32</code></td><td>The new x25519 encryption key (must be unique, never previously used)</td></tr>
+<tr><td><code>x25519Key</code></td><td><code>bytes32</code></td><td>The new x25519 encryption key (canonical encoding, must be unique, never previously used)</td></tr>
 <tr><td><code>p2pAddr</code></td><td><code>string</code></td><td>The p2p address (host:port)</td></tr>
 </tbody>
 </table>
@@ -389,7 +412,7 @@ Emits both X25519KeyUpdated and P2pAddrUpdated.</p>
 </div>
 <h2 id="errors"><a class="header" href="#errors">Errors</a></h2>
 <h3 id="invalidx25519key"><a class="header" href="#invalidx25519key">InvalidX25519Key</a></h3>
-<p>The x25519 key is bytes32(0)</p>
+<p>The x25519 key is zero or not a canonical little-endian encoding</p>
 <pre><code class="language-solidity">error InvalidX25519Key();
 </code></pre>
 <h3 id="x25519keyalreadyused"><a class="header" href="#x25519keyalreadyused">X25519KeyAlreadyUsed</a></h3>
