@@ -2087,11 +2087,11 @@ impl<T: NodeType> Consensus<T> {
             vote: inner_vote,
             state_vote,
         };
-        let vid_share = vid_share.clone();
+        let can_send = self.stored_actions.contains(&(view, ActionKind::Vote))
+            && self.is_proposal_stored(view, &proposal_commit);
+        let vid_share = can_send.then(|| vid_share.clone());
         self.voted_1_views.insert(view);
-        if self.stored_actions.contains(&(view, ActionKind::Vote))
-            && self.is_proposal_stored(view, &proposal_commit)
-        {
+        if let Some(vid_share) = vid_share {
             outbox.push_back(ConsensusOutput::SendVote1(vote));
             outbox.push_back(ConsensusOutput::BroadcastVidShare(vid_share));
         } else {

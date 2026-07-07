@@ -792,18 +792,11 @@ where
                 self.broadcast(ConsensusMessage::Vote1(vote1), "broadcast vote1")?
             },
             ConsensusOutput::BroadcastVidShare(share) => {
-                let view = share.view_number();
-                debug!(%node, %view, "send vid share");
-                let message = Message {
-                    sender: self.public_key.clone(),
-                    message_type: MessageType::Consensus(ConsensusMessage::VidShareBroadcast(
-                        share,
-                    )),
-                };
-                self.network
-                    .sender()
-                    .broadcast(self.consensus.current_view(), &message)
-                    .map_err(|e| CoordinatorError::from(e).context("broadcast vid share"))?
+                debug!(%node, view = %share.view_number(), "send vid share");
+                self.broadcast(
+                    ConsensusMessage::VidShareBroadcast(share),
+                    "broadcast vid share",
+                )?
             },
             ConsensusOutput::SendVote2(vote2) => {
                 debug!(%node, view = %vote2.view_number(), "send vote2");
