@@ -377,7 +377,7 @@ where
                 message = self.network.receive() => match message {
                     Ok(m) => {
                         finish_measurement(next_input);
-                        if let Some(input) = self.on_network_message(m).await {
+                        if let Some(input) = self.on_network_message(m) {
                             return Ok(input)
                         }
                     }
@@ -414,7 +414,7 @@ where
                 }
                 Some(request) = self.client.next_request() => {
                     finish_measurement(next_input);
-                    if let Err(err) = self.on_client_request(request).await {
+                    if let Err(err) = self.on_client_request(request) {
                         error!(%err, "error while handling client request");
                     }
                 }
@@ -590,6 +590,7 @@ where
                         self.vote2_collector.retry_pending_votes();
                         self.timeout_collector.retry_pending_votes();
                         self.timeout_one_honest_collector.retry_pending_votes();
+                        self.epoch_root_collector.retry_pending_votes();
                         return Ok(ConsensusInput::DrbResult(epoch, drb_result))
                     }
                     Err(failure) => {
@@ -928,7 +929,7 @@ where
         self.client.handle()
     }
 
-    pub(crate) async fn on_network_message(
+    pub(crate) fn on_network_message(
         &mut self,
         message: Message<T, Unchecked>,
     ) -> Option<ConsensusInput<T>> {
@@ -1013,7 +1014,7 @@ where
                         // An epoch-root Vote1 MUST carry a state_vote.
                         // Reject otherwise.
                         vote1.state_vote.as_ref()?;
-                        self.epoch_root_collector.accumulate(vote1).await;
+                        self.epoch_root_collector.accumulate_vote(vote1);
                     } else {
                         self.vote1_collector.accumulate_vote(vote1.vote);
                     }
@@ -1339,10 +1340,7 @@ where
         membership.leader(view).ok()
     }
 
-    async fn on_client_request(
-        &mut self,
-        request: ClientRequest<T>,
-    ) -> Result<(), CoordinatorError> {
+    fn on_client_request(&mut self, request: ClientRequest<T>) -> Result<(), CoordinatorError> {
         let _m = self
             .metrics
             .as_ref()
@@ -1661,7 +1659,7 @@ where
             },
             GcScope::Decided(view) => {
                 self.epoch_manager.gc(epoch);
-                self.epoch_root_collector.gc(view, epoch);
+                self.epoch_root_collector.gc(view);
                 self.pending_proposal_fetches.gc(view);
                 self.state_manager.gc(view);
                 self.storage

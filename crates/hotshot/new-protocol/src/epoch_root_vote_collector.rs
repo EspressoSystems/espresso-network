@@ -1,249 +1,215 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap},
+    mem,
+    sync::mpsc,
+};
 
-use committable::Committable;
-use hotshot::types::SignatureKey;
 use hotshot_types::{
-    data::{EpochNumber, ViewNumber},
+    data::ViewNumber,
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     message::UpgradeLock,
     simple_certificate::{LightClientStateUpdateCertificateV2, QuorumCertificate2},
-    simple_vote::{HasEpoch, QuorumVote2, VersionedVoteData},
-    stake_table::StakeTableEntries,
+    simple_vote::{HasEpoch, QuorumVote2},
     traits::node_implementation::NodeType,
-    vote::{
-        Certificate, HasViewNumber, LightClientStateUpdateVoteAccumulator, Vote, VoteAccumulator,
-    },
+    vote::{HasViewNumber, LightClientStateUpdateVoteAccumulator, Vote},
 };
-use tokio::{
-    sync::mpsc::{self},
-    task::{AbortHandle, JoinSet},
+use tokio_util::task::JoinMap;
+use tracing::{error, info, warn};
+
+use crate::{
+    message::Vote1,
+    vote::{CheckedAccumulator, VoteSig},
 };
-use tracing::{debug, info, instrument, warn};
 
-use crate::message::Vote1;
+/// The pair of certificates formed at an epoch-root view.
+type EpochRootCerts<T> = (
+    QuorumCertificate2<T>,
+    LightClientStateUpdateCertificateV2<T>,
+);
 
-/// Combined collector for epoch-root views. Runs both a quorum-vote accumulator
-/// (producing a `QuorumCertificate2`) and a light-client-state-update-vote
-/// accumulator (producing a `LightClientStateUpdateCertificateV2`) against the
-/// same `Vote1` stream, emitting the pair only when **both** cross threshold.
+/// Collects epoch-root votes and forms the certificate pair for such views.
 ///
-/// This preserves the old protocol's atomicity property: `Consensus` never sees
-/// an epoch-root Cert1 without the matching `state_cert`.
+/// An epoch-root [`Vote1`] carries a quorum vote and a light-client state
+/// update vote. Per view, both are tallied from the same vote stream — quorum
+/// votes into a [`QuorumCertificate2`], state votes into a
+/// [`LightClientStateUpdateCertificateV2`] — and the pair is emitted only once
+/// both cross their threshold, so consensus never sees an epoch-root quorum
+/// certificate without the matching state certificate.
 pub struct EpochRootVoteCollector<T: NodeType> {
-    per_view: BTreeMap<ViewNumber, (mpsc::Sender<Vote1<T>>, AbortHandle)>,
+    /// Tasks collecting votes and verifying certificates.
+    accumulators: JoinMap<ViewNumber, Option<EpochRootCerts<T>>>,
+
+    /// Where callers submit their votes.
+    ballot_boxes: BTreeMap<ViewNumber, mpsc::Sender<Vote1<T>>>,
+
+    /// Votes for epochs we have yet to resolve.
+    pending: BTreeMap<ViewNumber, Vec<Vote1<T>>>,
+
+    /// Views that had valid certificates already.
     completed: BTreeSet<ViewNumber>,
-    epoch_membership_coordinator: EpochMembershipCoordinator<T>,
-    membership_cache: BTreeMap<EpochNumber, EpochMembership<T>>,
+
+    /// The signers and their vote signatures per view.
+    signers: BTreeMap<ViewNumber, HashMap<T::SignatureKey, VoteSig<T>>>,
+
+    /// The GC threshold.
+    lower_bound: ViewNumber,
+
+    membership: EpochMembershipCoordinator<T>,
+
     upgrade_lock: UpgradeLock<T>,
-    tasks: JoinSet<(
-        QuorumCertificate2<T>,
-        LightClientStateUpdateCertificateV2<T>,
-    )>,
 }
 
 impl<T: NodeType> EpochRootVoteCollector<T> {
-    #[instrument(level = "debug", skip_all)]
-    pub fn new(
-        epoch_membership_coordinator: EpochMembershipCoordinator<T>,
-        upgrade_lock: UpgradeLock<T>,
-    ) -> Self {
+    pub fn new(mc: EpochMembershipCoordinator<T>, lock: UpgradeLock<T>) -> Self {
         Self {
-            per_view: BTreeMap::new(),
+            accumulators: JoinMap::new(),
+            ballot_boxes: BTreeMap::new(),
+            pending: BTreeMap::new(),
             completed: BTreeSet::new(),
-            epoch_membership_coordinator,
-            membership_cache: BTreeMap::new(),
-            upgrade_lock,
-            tasks: JoinSet::new(),
+            signers: BTreeMap::new(),
+            lower_bound: ViewNumber::genesis(),
+            membership: mc,
+            upgrade_lock: lock,
         }
     }
 
-    pub async fn next(
-        &mut self,
-    ) -> Option<(
-        QuorumCertificate2<T>,
-        LightClientStateUpdateCertificateV2<T>,
-    )> {
+    pub async fn next(&mut self) -> Option<EpochRootCerts<T>> {
         loop {
-            match self.tasks.join_next().await {
-                Some(Ok((cert1, state_cert))) => {
-                    let view = cert1.view_number();
-                    if self.completed.contains(&view) {
-                        continue;
+            match self.accumulators.join_next().await {
+                Some((view, Ok(Some(certs)))) => {
+                    self.ballot_boxes.remove(&view);
+                    if view >= self.lower_bound {
+                        self.completed.insert(view);
+                        return Some(certs);
                     }
-                    self.completed.insert(view);
-                    return Some((cert1, state_cert));
                 },
-                Some(Err(err)) if err.is_cancelled() => {
-                    debug!(%err, "Epoch-root vote collection task cancelled");
-                },
-                Some(Err(err)) => {
-                    warn!(%err, "Error in epoch-root vote collection task");
+                Some((_, Ok(None))) => {},
+                Some((view, Err(err))) => {
+                    if err.is_panic() {
+                        error!(%view, %err, "epoch-root vote collection task panic");
+                    }
                 },
                 None => return None,
             }
         }
     }
 
-    /// Accumulate a `Vote1` for an epoch-root view. Caller should have verified
-    /// `vote1.state_vote.is_some()`.
-    pub async fn accumulate(&mut self, vote1: Vote1<T>) {
+    /// Accumulate a `Vote1` for an epoch-root view.
+    ///
+    /// Caller should have verified `vote1.state_vote.is_some()`.
+    pub fn accumulate_vote(&mut self, vote1: Vote1<T>) {
         debug_assert!(
             vote1.state_vote.is_some(),
-            "EpochRootVoteCollector::accumulate called with a Vote1 missing state_vote"
+            "EpochRootVoteCollector::accumulate_vote called with a Vote1 missing state_vote"
         );
 
-        let view = vote1.vote.view_number();
-        if self.completed.contains(&view) {
+        let view = vote1.view_number();
+
+        if view < self.lower_bound || self.completed.contains(&view) {
             return;
         }
-        let Some(membership) = self.resolve_membership(&vote1.vote).await else {
+
+        let Some(membership) = self.resolve_membership(&vote1.vote) else {
+            self.pending.entry(view).or_default().push(vote1);
             return;
         };
-        let (tx, _abort_handle) = self.per_view.entry(view).or_insert_with(|| {
-            let (tx, rx) = mpsc::channel(100);
-            let abort_handle = self.tasks.spawn(Self::run_per_view(
-                rx,
-                membership,
-                self.upgrade_lock.clone(),
-            ));
-            (tx, abort_handle)
-        });
-        let _ = tx.send(vote1).await;
-    }
 
-    async fn resolve_membership(&mut self, vote: &QuorumVote2<T>) -> Option<EpochMembership<T>> {
-        let epoch = vote.epoch()?;
-        if let Some(m) = self.membership_cache.get(&epoch) {
-            return Some(m.clone());
-        }
-        let m = self
-            .epoch_membership_coordinator
-            .membership_for_epoch(Some(epoch))
-            .ok()?;
-        self.membership_cache.insert(epoch, m.clone());
-        Some(m)
-    }
+        // Check that we have not received a vote from this signer already.
+        {
+            let key = vote1.vote.signing_key();
+            let sig = vote1.vote.signature();
 
-    #[instrument(level = "debug", skip_all)]
-    async fn run_per_view(
-        mut rx: mpsc::Receiver<Vote1<T>>,
-        membership: EpochMembership<T>,
-        lock: UpgradeLock<T>,
-    ) -> (
-        QuorumCertificate2<T>,
-        LightClientStateUpdateCertificateV2<T>,
-    ) {
-        let mut quorum_accumulator =
-            VoteAccumulator::<T, QuorumVote2<T>, QuorumCertificate2<T>>::new(lock.clone());
-        let mut state_accumulator = LightClientStateUpdateVoteAccumulator::<T> {
-            vote_outcomes: HashMap::new(),
-            upgrade_lock: lock.clone(),
-        };
+            let signers = self.signers.entry(view).or_default();
 
-        let mut quorum_cert: Option<QuorumCertificate2<T>> = None;
-        let mut state_cert: Option<LightClientStateUpdateCertificateV2<T>> = None;
-        let mut quorum_votes: Vec<QuorumVote2<T>> = Vec::new();
-
-        while let Some(vote1) = rx.recv().await {
-            let state_vote = match vote1.state_vote.clone() {
-                Some(sv) => sv,
-                None => {
-                    tracing::error!(
-                        "EpochRootVoteCollector::run_per_view called with a Vote1 missing \
-                         state_vote"
-                    );
-                    continue;
-                },
-            };
-            let bls_key = vote1.vote.signing_key();
-
-            if quorum_cert.is_none() {
-                match quorum_accumulator.accumulate(&vote1.vote, membership.clone()) {
-                    Some(cert) => {
-                        let stake_table =
-                            <QuorumCertificate2<T> as Certificate<T, _>>::stake_table(&membership);
-                        let threshold =
-                            <QuorumCertificate2<T> as Certificate<T, _>>::threshold(&membership);
-                        match cert.is_valid_cert(
-                            &StakeTableEntries::<T>::from(stake_table).0,
-                            threshold,
-                            &lock,
-                        ) {
-                            Ok(()) => {
-                                quorum_cert = Some(cert);
-                            },
-                            Err(err) => {
-                                warn!(%err, "Invalid quorum certificate formed at epoch-root view");
-                                // Retry from previously-seen votes (mirror VoteCollector recovery).
-                                quorum_votes.push(vote1.vote.clone());
-                                quorum_votes.retain(|v| {
-                                    let vote_commitment = generate_vote_commitment(v, &lock);
-                                    vote_commitment.is_some_and(|commitment| {
-                                        v.signing_key()
-                                            .validate(&v.signature(), commitment.as_ref())
-                                    })
-                                });
-                                quorum_accumulator = VoteAccumulator::new(lock.clone());
-                                for v in &quorum_votes {
-                                    if let Some(cert) =
-                                        quorum_accumulator.accumulate(v, membership.clone())
-                                    {
-                                        quorum_cert = Some(cert);
-                                        break;
-                                    }
-                                }
-                            },
-                        }
-                    },
-                    None => {
-                        quorum_votes.push(vote1.vote.clone());
-                    },
+            if let Some(s) = signers.get(&key) {
+                if *s != sig {
+                    warn!(%view, signer = %key, "multiple epoch-root votes in one view");
                 }
-            }
-
-            // Unlike regular votes, we don't have to double check the certificate because votes are
-            // fully checked, including signature in the state_accumulator.
-            if state_cert.is_none()
-                && let Some(cert) = state_accumulator.accumulate(&bls_key, &state_vote, &membership)
-            {
-                state_cert = Some(cert);
-            }
-
-            if let (Some(q), Some(s)) = (&quorum_cert, &state_cert) {
-                info!(
-                    view = %q.view_number(),
-                    epoch = %s.epoch,
-                    "epoch-root certificates formed"
-                );
-                return (q.clone(), s.clone());
+                return;
+            } else {
+                signers.insert(key, sig);
             }
         }
-        // Channel closed without both certs forming; this task is effectively dead.
-        // Await never returns — GC aborts via AbortHandle.
-        futures::future::pending::<()>().await;
-        unreachable!()
+
+        if let Some(tx) = self.ballot_boxes.get(&view) {
+            let _ = tx.send(vote1);
+            return;
+        }
+
+        let (tx, rx) = mpsc::channel();
+
+        let _ = tx.send(vote1);
+        self.ballot_boxes.insert(view, tx);
+
+        let lock = self.upgrade_lock.clone();
+        self.accumulators
+            .spawn_blocking(view, move || accumulate_votes(rx, membership, lock));
     }
 
-    pub fn gc(&mut self, view: ViewNumber, epoch: EpochNumber) {
-        let keep = self.per_view.split_off(&view);
-        self.completed = self.completed.split_off(&view);
-        for (_, handle) in self.per_view.values_mut() {
-            handle.abort();
+    pub fn retry_pending_votes(&mut self) {
+        for vote in mem::take(&mut self.pending).into_values().flatten() {
+            self.accumulate_vote(vote)
         }
-        self.per_view = keep;
-        self.membership_cache = self.membership_cache.split_off(&epoch);
+    }
+
+    pub fn gc(&mut self, view: ViewNumber) {
+        self.ballot_boxes = self.ballot_boxes.split_off(&view);
+        self.completed = self.completed.split_off(&view);
+        self.pending = self.pending.split_off(&view);
+        self.signers = self.signers.split_off(&view);
+        self.lower_bound = view;
+    }
+
+    fn resolve_membership(&mut self, vote: &QuorumVote2<T>) -> Option<EpochMembership<T>> {
+        let epoch = vote.epoch()?;
+        self.membership.membership_for_epoch(Some(epoch)).ok()
     }
 }
 
-fn generate_vote_commitment<T: NodeType, V: Vote<T>>(
-    vote: &V,
-    upgrade_lock: &UpgradeLock<T>,
-) -> Option<committable::Commitment<VersionedVoteData<T, V::Commitment>>> {
-    match VersionedVoteData::new(vote.date().clone(), vote.view_number(), upgrade_lock) {
-        Ok(data) => Some(data.commit()),
-        Err(err) => {
-            tracing::warn!(%err, "Failed to generate versioned vote data");
-            None
-        },
+fn accumulate_votes<T: NodeType>(
+    rx: mpsc::Receiver<Vote1<T>>,
+    membership: EpochMembership<T>,
+    lock: UpgradeLock<T>,
+) -> Option<EpochRootCerts<T>> {
+    let mut quorum_accumulator =
+        CheckedAccumulator::<T, QuorumVote2<T>, QuorumCertificate2<T>>::new(
+            membership.clone(),
+            lock.clone(),
+        );
+    let mut state_accumulator = LightClientStateUpdateVoteAccumulator::<T> {
+        vote_outcomes: HashMap::new(),
+        upgrade_lock: lock,
+    };
+
+    let mut quorum_cert = None;
+    let mut state_cert = None;
+
+    while let Ok(vote1) = rx.recv() {
+        let Some(state_vote) = vote1.state_vote else {
+            error!(view = %vote1.vote.view_number(), "epoch-root vote1 without state vote");
+            continue;
+        };
+        let bls_key = vote1.vote.signing_key();
+
+        if quorum_cert.is_none() {
+            quorum_cert = quorum_accumulator.add(vote1.vote);
+        }
+
+        // Unlike quorum votes, state votes are fully checked, including their
+        // signatures, by the accumulator, so the certificate does not need to
+        // be validated again.
+        if state_cert.is_none() {
+            state_cert = state_accumulator.accumulate(&bls_key, &state_vote, &membership);
+        }
+
+        if let (Some(q), Some(s)) = (&quorum_cert, &state_cert) {
+            info!(
+                view = %q.view_number(),
+                epoch = %s.epoch,
+                "epoch-root certificates formed"
+            );
+            return Some((q.clone(), s.clone()));
+        }
     }
+    None
 }

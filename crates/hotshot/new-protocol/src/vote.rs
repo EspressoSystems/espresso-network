@@ -1,3 +1,5 @@
+mod accumulate;
+
 use std::{
     any::type_name,
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -5,23 +7,23 @@ use std::{
     sync::mpsc,
 };
 
+pub(crate) use accumulate::CheckedAccumulator;
 use alloy::primitives::U256;
-use committable::Committable;
 use hotshot::types::SignatureKey;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     message::UpgradeLock,
-    simple_vote::{HasEpoch, VersionedVoteData},
-    stake_table::StakeTableEntries,
+    simple_vote::HasEpoch,
     traits::{node_implementation::NodeType, signature_key::StakeTableEntryType},
-    vote::{Certificate, Vote, VoteAccumulator},
+    vote::{Certificate, Vote},
 };
 use tokio_util::task::JoinMap;
-use tracing::{error, info, warn};
+use tracing::{error, warn};
 
 #[allow(type_alias_bounds)]
-type VoteSig<T: NodeType> = <T::SignatureKey as SignatureKey>::PureAssembledSignatureType;
+pub(crate) type VoteSig<T: NodeType> =
+    <T::SignatureKey as SignatureKey>::PureAssembledSignatureType;
 
 pub struct VoteCollector<T: NodeType, V, C> {
     /// Tasks collecting votes and verifying certificates.
@@ -43,6 +45,7 @@ pub struct VoteCollector<T: NodeType, V, C> {
     lower_bound: ViewNumber,
 
     membership: EpochMembershipCoordinator<T>,
+
     upgrade_lock: UpgradeLock<T>,
 }
 
@@ -77,7 +80,7 @@ where
                 },
                 Some((_, Ok(None))) => {},
                 Some((view, Err(err))) => {
-                    if !err.is_cancelled() {
+                    if err.is_panic() {
                         error!(%view, %err, "vote collection task panic");
                     }
                 },
@@ -127,7 +130,7 @@ where
 
         let lock = self.upgrade_lock.clone();
         self.accumulators
-            .spawn_blocking(view, move || accumulate_votes(view, rx, membership, lock));
+            .spawn_blocking(view, move || accumulate_votes(rx, membership, lock));
     }
 
     pub fn retry_pending_votes(&mut self) {
@@ -174,7 +177,6 @@ where
 }
 
 fn accumulate_votes<T, V, C>(
-    view: ViewNumber,
     rx: mpsc::Receiver<V>,
     membership: EpochMembership<T>,
     lock: UpgradeLock<T>,
@@ -184,78 +186,13 @@ where
     V: Vote<T>,
     C: Certificate<T, V::Commitment, Voteable = V::Commitment> + Send + 'static,
 {
-    let generate_vote_commitment = |vote: &V, lock| match VersionedVoteData::new(
-        vote.date().clone(),
-        vote.view_number(),
-        lock,
-    ) {
-        Ok(data) => Some(data.commit()),
-        Err(err) => {
-            warn!(%err, "failed to generate versioned vote data");
-            None
-        },
-    };
-
-    let mut accu = VoteAccumulator::<T, V, C>::new(lock.clone());
-    let mut votes = Vec::new();
-
-    // Collect all votes until a certificate can be formed:
-    let cert = loop {
-        let Ok(vote) = rx.recv() else { return None };
-        if let Some(cert) = accu.accumulate(&vote, membership.clone()) {
-            votes.push(vote);
-            break cert;
+    let mut accumulator = CheckedAccumulator::new(membership, lock);
+    while let Ok(vote) = rx.recv() {
+        if let Some(cert) = accumulator.add(vote) {
+            return Some(cert);
         }
-        votes.push(vote);
-    };
-
-    let table = StakeTableEntries::from(C::stake_table(&membership));
-    let thresh = C::threshold(&membership);
-
-    match cert.is_valid_cert(&table.0, thresh, &lock) {
-        Ok(()) => {
-            info!(%view, cert = type_name::<C>(), "certificate formed");
-            Some(cert)
-        },
-        Err(err) => {
-            warn!(%view, %err, "invalid certificate formed");
-
-            // Remove all invalid votes and reset the accumulator:
-            votes.retain(|v| {
-                if let Some(c) = generate_vote_commitment(v, &lock) {
-                    v.signing_key().validate(&v.signature(), c.as_ref())
-                } else {
-                    warn!(%view, cert = type_name::<C>(), signer = %v.signing_key(), "invalid vote");
-                    false
-                }
-            });
-
-            accu.clear();
-
-            for vote in votes {
-                if let Some(cert) = accu.accumulate(&vote, membership.clone()) {
-                    debug_assert!(cert.is_valid_cert(&table.0, thresh, &lock).is_ok());
-                    return Some(cert);
-                }
-            }
-
-            // Continue to collect votes, but check them before accumulating:
-            while let Ok(vote) = rx.recv() {
-                if let Some(c) = generate_vote_commitment(&vote, &lock)
-                    && vote.signing_key().validate(&vote.signature(), c.as_ref())
-                {
-                    if let Some(cert) = accu.accumulate(&vote, membership.clone()) {
-                        debug_assert!(cert.is_valid_cert(&table.0, thresh, &lock).is_ok());
-                        return Some(cert);
-                    }
-                } else {
-                    warn!(%view, cert = type_name::<C>(), signer = %vote.signing_key(), "invalid vote");
-                }
-            }
-
-            None
-        },
     }
+    None
 }
 
 /// Accumulated stake / threshold for a single view.

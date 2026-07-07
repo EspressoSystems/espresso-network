@@ -164,17 +164,13 @@ impl TestHarness {
         }
     }
 
-    pub async fn message<S>(&mut self, m: Message<TestTypes, S>) {
-        if let Some(input) = self
-            .coordinator
-            .on_network_message(m.into_unchecked())
-            .await
-        {
-            self.apply_and_process(input).await;
+    pub fn message<S>(&mut self, m: Message<TestTypes, S>) {
+        if let Some(input) = self.coordinator.on_network_message(m.into_unchecked()) {
+            self.apply_and_process(input);
         }
     }
 
-    pub async fn apply_and_process(&mut self, input: ConsensusInput<TestTypes>) {
+    pub fn apply_and_process(&mut self, input: ConsensusInput<TestTypes>) {
         self.coordinator.apply_consensus(input);
         self.outputs
             .extend(self.coordinator.outbox().iter().cloned());
@@ -202,7 +198,7 @@ impl TestHarness {
         while !pred(&inputs) {
             match self.coordinator.next_consensus_input().await {
                 Ok(input) => {
-                    self.apply_and_process(input.clone()).await;
+                    self.apply_and_process(input.clone());
                     inputs.push(input);
                 },
                 Err(err) if err.severity == Severity::Critical => {
@@ -227,7 +223,7 @@ impl TestHarness {
     {
         while !pred(&self.outputs) {
             match self.coordinator.next_consensus_input().await {
-                Ok(input) => self.apply_and_process(input).await,
+                Ok(input) => self.apply_and_process(input),
                 Err(err) if err.severity == Severity::Critical => {
                     panic!("Critical coordinator error: {err}")
                 },
