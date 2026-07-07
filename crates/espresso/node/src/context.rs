@@ -47,7 +47,7 @@ use tokio::{
     sync::{mpsc::channel, watch},
     task::JoinHandle,
 };
-use tracing::{Instrument, Level};
+use tracing::{Instrument, Level, info};
 use url::Url;
 use versions::NEW_PROTOCOL_VERSION;
 
@@ -150,10 +150,7 @@ where
             .load_consensus_state(instance_state.clone(), upgrade)
             .await?;
 
-        tracing::warn!(
-            "Starting up sequencer context with initializer:\n\n{:?}",
-            initializer
-        );
+        info!(target: "announce", ?initializer, "starting up sequencer context with initializer");
 
         let stake_table = config.hotshot_stake_table();
         let stake_table_commit = stake_table.commitment(stake_table_capacity)?;

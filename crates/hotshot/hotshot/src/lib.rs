@@ -78,7 +78,7 @@ use hotshot_utils::warn;
 /// Reexport rand crate
 pub use rand;
 use tokio::{spawn, time::sleep};
-use tracing::{Instrument, debug, error_span, instrument, trace};
+use tracing::{Instrument, debug, error_span, info, instrument, trace};
 
 // -- Rexports
 // External
@@ -428,7 +428,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
             }
 
             if let Ok(drb_result) = storage.load_drb_result(epoch + 1).await {
-                tracing::error!("Writing DRB result for epoch {}", epoch + 1);
+                info!(target: "announce::drb", epoch = %(epoch + 1), "writing drb result for epoch");
                 if let Ok(mem) = membership_coordinator.stake_table_for_epoch(Some(epoch + 1)) {
                     mem.add_drb_result(drb_result);
                 }
