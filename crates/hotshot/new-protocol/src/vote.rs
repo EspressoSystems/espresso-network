@@ -772,8 +772,6 @@ mod tests {
         assert_no_certs(&mut task).await;
     }
 
-    // ==================== Per-epoch stake table changes ====================
-
     /// Collector over a membership where node 9 is removed from the quorum
     /// committee starting at epoch 3 (9 members of stake 1, threshold 7).
     fn setup_cert1_task_with_removed_node()
@@ -797,15 +795,12 @@ mod tests {
         let view = ViewNumber::new(21);
         let epoch = EpochNumber::new(3);
 
-        // Six member votes plus the removed node's vote stay below the
-        // threshold of 7 — the removed node's vote must not be counted.
         for i in 0..6 {
             task.accumulate_vote(make_quorum_vote(i, view, epoch));
         }
         task.accumulate_vote(make_quorum_vote(9, view, epoch));
         assert_no_certs(&mut task).await;
 
-        // A seventh member vote reaches the threshold.
         task.accumulate_vote(make_quorum_vote(6, view, epoch));
         let cert = timeout(CERT_TIMEOUT, task.next()).await.unwrap().unwrap();
         assert_eq!(cert.view_number(), view);
@@ -819,7 +814,6 @@ mod tests {
         let view = ViewNumber::new(11);
         let epoch = EpochNumber::new(2);
 
-        // Six member votes plus node 9's vote reach the threshold of 7.
         for i in 0..6 {
             task.accumulate_vote(make_quorum_vote(i, view, epoch));
         }

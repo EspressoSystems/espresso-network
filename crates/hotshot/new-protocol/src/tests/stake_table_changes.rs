@@ -74,9 +74,8 @@ async fn validator_leaves_at_epoch_boundary() {
         .build();
     runner.run().await.unwrap();
 
-    // The removed validator never acted after its last member view: all
-    // views 1..=35 decided, so view == block height, and epoch 2 ends at
-    // view 20.
+    // All views 1..=35 decided, so view == block height; node 5's membership
+    // ends with epoch 2 at view 20.
     for (view, action) in runner.node_storages()[5].action_log().await {
         assert!(
             *view <= 20,
