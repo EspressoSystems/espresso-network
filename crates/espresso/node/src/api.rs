@@ -3174,7 +3174,7 @@ mod api_tests {
 mod test {
     use std::{
         collections::{HashMap, HashSet},
-        time::Duration,
+        time::{Duration, Instant},
     };
 
     use ::light_client::{
@@ -6887,8 +6887,6 @@ mod test {
         }
     }
 
-    use std::time::Instant;
-
     use rand::thread_rng;
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -8032,6 +8030,7 @@ mod test {
                 // decided state can also contain accounts added after `avail_block`, so
                 // only accept an account provable at the `avail_block` snapshot queried
                 // in the comparisons.
+                let sample_start = Instant::now();
                 let fee_account = 'fee_account: loop {
                     let state = network.server.decided_state().await.unwrap();
                     for (addr, _) in state.fee_merkle_tree.iter() {
@@ -8046,6 +8045,10 @@ mod test {
                             break 'fee_account *addr;
                         }
                     }
+                    assert!(
+                        sample_start.elapsed() < Duration::from_secs(30),
+                        "no fee account provable at avail_block {avail_block} after 30s"
+                    );
                     sleep(Duration::from_millis(500)).await;
                 };
 
