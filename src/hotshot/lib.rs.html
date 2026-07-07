@@ -78,7 +78,7 @@
 <a href=#78 id=78 data-nosnippet>78</a><span class="doccomment">/// Reexport rand crate
 <a href=#79 id=79 data-nosnippet>79</a></span><span class="kw">pub use </span>rand;
 <a href=#80 id=80 data-nosnippet>80</a><span class="kw">use </span>tokio::{spawn, time::sleep};
-<a href=#81 id=81 data-nosnippet>81</a><span class="kw">use </span>tracing::{Instrument, debug, error_span, instrument, trace};
+<a href=#81 id=81 data-nosnippet>81</a><span class="kw">use </span>tracing::{Instrument, debug, error_span, info, instrument, trace};
 <a href=#82 id=82 data-nosnippet>82</a>
 <a href=#83 id=83 data-nosnippet>83</a><span class="comment">// -- Rexports
 <a href=#84 id=84 data-nosnippet>84</a>// External
@@ -424,7 +424,7 @@
 <a href=#424 id=424 data-nosnippet>424</a>            }
 <a href=#425 id=425 data-nosnippet>425</a>
 <a href=#426 id=426 data-nosnippet>426</a>            <span class="kw">if let </span><span class="prelude-val">Ok</span>(drb_result) = storage.load_drb_result(epoch + <span class="number">1</span>).<span class="kw">await </span>{
-<a href=#427 id=427 data-nosnippet>427</a>                <span class="macro">tracing::error!</span>(<span class="string">"Writing DRB result for epoch {}"</span>, epoch + <span class="number">1</span>);
+<a href=#427 id=427 data-nosnippet>427</a>                <span class="macro">info!</span>(target: <span class="string">"announce::drb"</span>, epoch = %(epoch + <span class="number">1</span>), <span class="string">"writing drb result for epoch"</span>);
 <a href=#428 id=428 data-nosnippet>428</a>                <span class="kw">if let </span><span class="prelude-val">Ok</span>(mem) = membership_coordinator.stake_table_for_epoch(<span class="prelude-val">Some</span>(epoch + <span class="number">1</span>)) {
 <a href=#429 id=429 data-nosnippet>429</a>                    mem.add_drb_result(drb_result);
 <a href=#430 id=430 data-nosnippet>430</a>                }
