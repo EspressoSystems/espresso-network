@@ -113,10 +113,20 @@ impl NsAvidmGf2Scheme {
             ns_commits,
             ns_lens,
         };
-        let commit = MerkleTree::from_elems(None, common.ns_commits.iter().map(|c| c.commit))
+        let commit = Self::aggregate_commit(&common.ns_commits)?;
+        Ok((commit, common))
+    }
+
+    /// Aggregate per-namespace commitments into the top-level namespaced
+    /// commitment (the Merkle root over the namespace commits).
+    ///
+    /// Lets a caller that has already computed each namespace's commit (e.g. via
+    /// [`Self::ns_disperse_one`]) form the block commitment without re-encoding.
+    pub fn aggregate_commit(ns_commits: &[AvidmGf2Commit]) -> VidResult<NsAvidmGf2Commit> {
+        let commit = MerkleTree::from_elems(None, ns_commits.iter().map(|c| c.commit))
             .map_err(|err| VidError::Internal(err.into()))?
             .commitment();
-        Ok((NsAvidmGf2Commit { commit }, common))
+        Ok(NsAvidmGf2Commit { commit })
     }
 
     /// Check whether the namespaced commitment is consistent with the common data
@@ -161,11 +171,7 @@ impl NsAvidmGf2Scheme {
             ns_commits,
             ns_lens,
         };
-        let commit = NsAvidmGf2Commit {
-            commit: MerkleTree::from_elems(None, common.ns_commits.iter().map(|c| c.commit))
-                .map_err(|err| VidError::Internal(err.into()))?
-                .commitment(),
-        };
+        let commit = Self::aggregate_commit(&common.ns_commits)?;
         let mut shares = vec![NsAvidmGf2Share::default(); num_storage_nodes];
         disperses.into_iter().for_each(|ns_disperse| {
             shares
@@ -227,11 +233,7 @@ impl NsAvidmGf2Scheme {
             ns_commits,
             ns_lens,
         };
-        let commit = NsAvidmGf2Commit {
-            commit: MerkleTree::from_elems(None, common.ns_commits.iter().map(|c| c.commit))
-                .map_err(|err| VidError::Internal(err.into()))?
-                .commitment(),
-        };
+        let commit = Self::aggregate_commit(&common.ns_commits)?;
         let mut shares = vec![NsAvidmGf2Share::default(); num_storage_nodes];
         disperses.into_iter().for_each(|ns_disperse| {
             shares
@@ -509,5 +511,38 @@ pub mod tests {
         assert_eq!(ns1_payload_recovered[..], payload[ns_table[1].clone()]);
         let payload_recovered = NsAvidmGf2Scheme::recover(&common, &shares[..cut_index]).unwrap();
         assert_eq!(payload_recovered, payload);
+    }
+
+    /// The block builder encodes each namespace with `ns_disperse_one` and folds
+    /// the per-namespace commits with `aggregate_commit`; that must yield the
+    /// same commitment as the monolithic `commit`, so the proposal and the
+    /// dispersed shares agree.
+    #[test]
+    fn aggregate_commit_matches_commit() {
+        let num_storage_nodes = 9;
+        let ns_table = [(0usize..15), (15..48), (48..49)];
+        let weights = vec![1u32; num_storage_nodes];
+        let params = NsAvidmGf2Scheme::setup(3, num_storage_nodes).unwrap();
+        let payload: Vec<u8> = (0..49).map(|i| i as u8).collect();
+
+        let ns_commits: Vec<_> = ns_table
+            .iter()
+            .enumerate()
+            .map(|(ns_index, range)| {
+                NsAvidmGf2Scheme::ns_disperse_one(
+                    &params,
+                    &weights,
+                    &payload[range.clone()],
+                    ns_index,
+                )
+                .unwrap()
+                .commit
+            })
+            .collect();
+        let aggregated = NsAvidmGf2Scheme::aggregate_commit(&ns_commits).unwrap();
+
+        let (expected, _) =
+            NsAvidmGf2Scheme::commit(&params, &payload, ns_table.iter().cloned()).unwrap();
+        assert_eq!(aggregated, expected);
     }
 }

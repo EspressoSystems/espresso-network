@@ -25,7 +25,7 @@ use crate::{
     proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
     tests::common::mock::MockCoordinator,
-    vid::{VidDisperser, VidReconstructor},
+    vid::VidReconstructor,
     vote::VoteCollector,
 };
 
@@ -91,14 +91,6 @@ impl TestHarness {
 
         let vid_reconstruction_task = VidReconstructor::new();
 
-        let block_config = BlockBuilderConfig::default();
-        let block_builder = BlockBuilder::new(
-            instance.clone(),
-            membership.clone(),
-            block_config,
-            upgrade_lock.clone(),
-        );
-
         let mut state_manager = StateManager::new(instance.clone(), upgrade_lock.clone());
         state_manager.seed_state(ViewNumber::genesis(), Arc::new(genesis_state), genesis_leaf);
 
@@ -124,11 +116,14 @@ impl TestHarness {
         .await
         .expect("cliquenet creation should succeed");
 
-        let vid_disperse_task = VidDisperser::new(
+        let block_builder = BlockBuilder::new(
+            instance.clone(),
             membership.clone(),
             network.sender().clone(),
             public_key,
             private_key.clone(),
+            BlockBuilderConfig::default(),
+            upgrade_lock.clone(),
         );
 
         let coordinator = MockCoordinator::builder()
@@ -140,7 +135,6 @@ impl TestHarness {
             .timeout_collector(timeout_collector)
             .timeout_one_honest_collector(timeout_one_honest_collector)
             .epoch_root_collector(epoch_root_collector)
-            .vid_disperser(vid_disperse_task)
             .vid_reconstructor(vid_reconstruction_task)
             .epoch_manager(epoch_manager)
             .block_builder(block_builder)

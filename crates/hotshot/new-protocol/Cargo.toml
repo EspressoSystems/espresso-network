@@ -42,6 +42,7 @@ tracing-subscriber = { workspace = true }
 url = { workspace = true }
 vec1 = { workspace = true }
 versions = { workspace = true }
+vid = { workspace = true }
 
 [dev-dependencies]
 quickcheck = { workspace = true }

@@ -20,7 +20,7 @@ use hotshot_new_protocol::{
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
-    vid::{VidDisperser, VidReconstructor},
+    vid::VidReconstructor,
     vote::VoteCollector,
 };
 use hotshot_types::{
@@ -142,20 +142,15 @@ async fn build_coordinator(
 
     let epoch_manager = EpochManager::new(epoch_height, membership.clone());
 
-    let vid_disperser = VidDisperser::new(
+    let vid_reconstructor = VidReconstructor::new();
+
+    let block_builder = BlockBuilder::new(
+        instance.clone(),
         membership.clone(),
         network.sender().clone(),
         public_key,
         private_key.clone(),
-    );
-
-    let vid_reconstructor = VidReconstructor::new();
-
-    let block_config = BlockBuilderConfig::default();
-    let block_builder = BlockBuilder::new(
-        instance.clone(),
-        membership.clone(),
-        block_config,
+        BlockBuilderConfig::default(),
         upgrade_lock.clone(),
     );
 
@@ -203,7 +198,6 @@ async fn build_coordinator(
         .timeout_collector(timeout_collector)
         .timeout_one_honest_collector(timeout_one_honest_collector)
         .epoch_root_collector(epoch_root_collector)
-        .vid_disperser(vid_disperser)
         .vid_reconstructor(vid_reconstructor)
         .epoch_manager(epoch_manager)
         .block_builder(block_builder)
@@ -290,8 +284,7 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
                 let block_input = ConsensusInput::BlockBuilt {
                     view: req.view,
                     epoch: req.epoch,
-                    payload: block.block,
-                    metadata: block.metadata,
+                    payload: std::sync::Arc::new(block.block),
                     payload_commitment: block.payload_commitment,
                 };
                 metrics.on_input(&block_input);

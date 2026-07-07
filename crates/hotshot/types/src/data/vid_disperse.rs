@@ -830,17 +830,19 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
         self.payload_byte_len as u32
     }
 
-    /// Resolve the inputs needed to disperse `payload` to `target_epoch`'s
-    /// committee one namespace at a time.
+    /// Resolve the inputs needed to disperse an already-encoded payload to
+    /// `target_epoch`'s committee one namespace at a time.
     ///
-    /// Mirrors the setup in [`Self::calculate_vid_disperse`] but returns the
-    /// owned parameters instead of performing the dispersal, leaving the (heavy,
-    /// per-namespace) computation to the caller.
+    /// Mirrors the setup in [`Self::calculate_vid_disperse`] but takes the
+    /// encoded `payload`/`metadata_bytes` (so a caller that already encoded them
+    /// need not do so again) and returns the owned parameters instead of
+    /// performing the dispersal, leaving the (heavy, per-namespace) computation
+    /// to the caller.
     pub fn disperse_params(
-        payload: &TYPES::BlockPayload,
+        payload: Arc<[u8]>,
+        metadata_bytes: &[u8],
         membership: &EpochMembershipCoordinator<TYPES>,
         target_epoch: Option<EpochNumber>,
-        metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     ) -> Result<AvidmGf2DisperseParams<TYPES>> {
         let target_mem = membership.stake_table_for_epoch(target_epoch)?;
         let stake_table: Vec<_> = target_mem.stake_table().cloned().collect();
@@ -852,8 +854,7 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
             .iter()
             .map(|entry| entry.stake_table_entry.public_key())
             .collect();
-        let payload = payload.encode();
-        let ns_table = parse_ns_table(payload.len(), &metadata.encode());
+        let ns_table = parse_ns_table(payload.len(), metadata_bytes);
         let param = init_avidm_gf2_param(total_weight)?;
         Ok(AvidmGf2DisperseParams {
             param,

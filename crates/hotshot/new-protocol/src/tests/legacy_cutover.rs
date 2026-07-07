@@ -227,7 +227,7 @@ async fn build_cutover_coordinator(
         proposal::{ProposalValidator, VidShareValidator},
         state::StateManager,
         tests::common::coordinator_builder::{build_genesis_cert1, build_genesis_proposal},
-        vid::{VidDisperser, VidReconstructor},
+        vid::VidReconstructor,
         vote::VoteCollector,
     };
 
@@ -277,6 +277,9 @@ async fn build_cutover_coordinator(
     let block_builder = BlockBuilder::new(
         instance.clone(),
         membership.clone(),
+        network.sender().clone(),
+        public_key,
+        private_key.clone(),
         BlockBuilderConfig::default(),
         upgrade_lock.clone(),
     );
@@ -285,13 +288,6 @@ async fn build_cutover_coordinator(
         ProposalValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
     let share_validator =
         VidShareValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
-
-    let vid_disperser = VidDisperser::new(
-        membership.clone(),
-        network.sender().clone(),
-        public_key,
-        private_key.clone(),
-    );
 
     Coordinator::builder()
         .consensus(consensus)
@@ -305,7 +301,6 @@ async fn build_cutover_coordinator(
             membership.clone(),
             upgrade_lock.clone(),
         ))
-        .vid_disperser(vid_disperser)
         .vid_reconstructor(VidReconstructor::new())
         .epoch_manager(EpochManager::new(epoch_height, membership.clone()))
         .block_builder(block_builder)

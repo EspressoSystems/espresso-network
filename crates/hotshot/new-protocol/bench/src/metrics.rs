@@ -13,7 +13,6 @@ pub struct ViewMetrics {
     pub is_leader: bool,
     pub header_created_ns: Option<i128>,
     pub block_built_ns: Option<i128>,
-    pub vid_disperse_ns: Option<i128>,
     pub proposal_sent_ns: Option<i128>,
     pub proposal_recv_ns: Option<i128>,
     pub state_validated_ns: Option<i128>,
@@ -64,10 +63,6 @@ impl MetricsCollector {
             ConsensusInput::BlockBuilt { view, .. } => {
                 let v = **view;
                 self.view_mut(v).block_built_ns = Some(ts);
-            },
-            ConsensusInput::VidDisperseCreated(view, _) => {
-                let v = **view;
-                self.view_mut(v).vid_disperse_ns = Some(ts);
             },
             // Replica: proposal processing
             ConsensusInput::ProposalWithVidShare(_sender, p, _) => {
