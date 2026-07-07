@@ -5,8 +5,8 @@
 //! whose shards cover the recovery threshold. This module owns the three stages
 //! of that lifecycle, one per submodule:
 //!
-//! - [`fanout`] -- the leader side. Called from the block builder: [`encode`]
-//!   erasure-codes each namespace once (deriving the payload commitment), and
+//! - [`fanout`] -- the leader side. The block builder erasure-codes the block
+//!   once (via `NsAvidmGf2Scheme::ns_disperse`, which yields the commitment) and
 //!   [`fan_out`] coalesces namespaces into size-balanced buckets and unicasts to
 //!   every node — including the leader itself, via loopback — a stream of
 //!   [`AvidmGf2DisperseShareFragment`] messages (one per bucket), each carrying
@@ -25,7 +25,6 @@
 //!
 //! [`AvidmGf2DisperseShareFragment`]: hotshot_types::data::vid_disperse::AvidmGf2DisperseShareFragment
 //! [`VidDisperseShare2`]: hotshot_types::data::VidDisperseShare2
-//! [`encode`]: fanout::encode
 //! [`fan_out`]: fanout::fan_out
 
 pub(crate) mod fanout;

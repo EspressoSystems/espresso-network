@@ -17,6 +17,7 @@ use hotshot_types::{
         signature_key::{BuilderSignatureKey, SignatureKey},
     },
     utils::BuilderCommitment,
+    vid::avidm_gf2::AvidmGf2Scheme,
 };
 use tokio::{
     task::{AbortHandle, JoinSet, spawn_blocking},
@@ -190,7 +191,7 @@ impl<T: NodeType> BlockBuilder<T> {
             // commitment from that same computation (this crate always disperses
             // V2/AvidmGf2 shares). Runs on a blocking thread; the proposal is not
             // gated on the fanout that follows.
-            let (commitment, per_bucket, param, recipients, num_namespaces) =
+            let (commitment, common, shares, param, recipients, ns_table) =
                 spawn_blocking(move || -> Result<_, BlockError> {
                     let params = VidDisperse2::<T>::disperse_params(
                         payload_bytes,
@@ -199,15 +200,20 @@ impl<T: NodeType> BlockBuilder<T> {
                         Some(epoch),
                     )
                     .map_err(|e| BlockError::VidDisperse(e.to_string()))?;
-                    let num_namespaces = params.ns_table.len();
-                    let (commitment, per_bucket) = fanout::encode(&params)
-                        .map_err(|e| BlockError::VidDisperse(e.to_string()))?;
+                    let (commitment, common, shares) = AvidmGf2Scheme::ns_disperse(
+                        &params.param,
+                        &params.weights,
+                        &params.payload,
+                        params.ns_table.iter().cloned(),
+                    )
+                    .map_err(|e| BlockError::VidDisperse(e.to_string()))?;
                     Ok((
                         commitment,
-                        per_bucket,
+                        common,
+                        shares,
                         params.param,
                         params.recipients,
-                        num_namespaces,
+                        params.ns_table,
                     ))
                 })
                 .await
@@ -219,11 +225,12 @@ impl<T: NodeType> BlockBuilder<T> {
             // logged, not fatal.
             spawn_blocking(move || {
                 if let Err(err) = fanout::fan_out::<T>(
-                    per_bucket,
+                    shares,
+                    common,
                     commitment,
                     param,
                     recipients,
-                    num_namespaces,
+                    ns_table,
                     view,
                     epoch,
                     network,
