@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["multisig","timelock"]};
+window.SIDEBAR_ITEMS = {"mod":["deployment_info","multisig","proposal_toml","safe_hash","timelock","verify","write"]};

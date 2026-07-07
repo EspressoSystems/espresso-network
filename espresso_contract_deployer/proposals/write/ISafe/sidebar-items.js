@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ISafeCalls"],"fn":["new"],"struct":["ISafeInstance","nonceCall","nonceReturn"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["SAFE_TX_TYPEHASH_PREIMAGE"],"fn":["safe_tx_hashes"],"struct":["SafeTxHashes"]};
