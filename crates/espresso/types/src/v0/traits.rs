@@ -799,26 +799,20 @@ pub trait SequencerPersistence:
         );
 
         Ok((
-            HotShotInitializer {
-                instance_state: state,
+            HotShotInitializer::load(
+                state,
                 epoch_height,
                 epoch_start_block,
-                anchor_leaf: leaf,
-                anchor_state: Arc::new(validated_state),
-                anchor_state_delta: None,
-                start_view: restart_view,
-                start_epoch: epoch,
-                last_actioned_view: highest_voted_view,
-                saved_proposals,
-                high_qc,
-                next_epoch_high_qc,
-                decided_upgrade_certificate: upgrade_certificate,
-                undecided_leaves: Default::default(),
-                undecided_state: Default::default(),
-                saved_vid_shares: Default::default(), // TODO: implement saved_vid_shares
                 start_epoch_info,
+                (leaf, Some(Arc::new(validated_state)), None),
+                (restart_view, epoch),
+                (high_qc, next_epoch_high_qc),
+                highest_voted_view,
+                saved_proposals,
+                Default::default(), // TODO: implement saved_vid_shares
+                upgrade_certificate,
                 state_cert,
-            },
+            ),
             anchor_view,
         ))
     }
