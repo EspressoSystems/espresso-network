@@ -683,18 +683,9 @@ impl StakeTableState {
                     ..
                 } = reg;
 
-                if x25519Key.0 == [0u8; 32] {
-                    return Err(StakeTableError::InvalidX25519Key("zero key".into()));
-                }
-                // The contract only rejects the all-zero key, so other invalid encodings
-                // (e.g. non-canonical field elements) are reachable and must not be fatal.
-                let x25519_key = match x25519::PublicKey::try_from(x25519Key.0.as_slice()) {
-                    Ok(key) => Some(key),
-                    Err(e) => {
-                        tracing::warn!(%e, account = ?account, "Invalid x25519 key");
-                        None
-                    },
-                };
+                let x25519_key = parse_x25519_key(x25519Key.0)
+                    .inspect_err(|e| tracing::warn!(%e, ?account, "Invalid x25519 key"))
+                    .ok();
 
                 // Parse p2p addr
                 let p2p_addr = match p2pAddr.parse::<NetAddr>() {
@@ -768,19 +759,17 @@ impl StakeTableState {
                     .get_mut(&validator)
                     .ok_or(StakeTableError::ValidatorNotFound(validator))?;
 
-                match x25519::PublicKey::try_from(x25519Key.0.as_slice()) {
-                    Ok(key) => {
-                        if self.used_x25519_keys.contains(&key) {
-                            return Err(StakeTableError::X25519KeyAlreadyUsed(key.to_string()));
-                        }
-                        self.used_x25519_keys.insert(key);
-                        val.x25519_key = Some(key);
-                    },
-                    Err(e) => {
-                        tracing::warn!(%e, validator = ?validator, "Invalid x25519 key");
-                        val.x25519_key = None;
-                    },
+                let x25519_key = parse_x25519_key(x25519Key.0)
+                    .inspect_err(|e| tracing::warn!(%e, ?validator, "Invalid x25519 key"))
+                    .ok();
+
+                if let Some(key) = x25519_key {
+                    if self.used_x25519_keys.contains(&key) {
+                        return Err(StakeTableError::X25519KeyAlreadyUsed(key.to_string()));
+                    }
+                    self.used_x25519_keys.insert(key);
                 }
+                val.x25519_key = x25519_key;
             },
 
             StakeTableEvent::P2pAddrUpdate(P2pAddrUpdated {
@@ -804,6 +793,16 @@ impl StakeTableState {
 
         Ok(Ok(()))
     }
+}
+
+/// The contract enforces canonical nonzero encodings, so an error here means a
+/// contract bug. Callers degrade it to `None` instead of aborting (defense in
+/// depth): the key only affects p2p networking, not consensus safety, so this
+/// is preferred over halting stake table processing on every node. The zero
+/// check is explicit because the Rust parser accepts the zero encoding.
+fn parse_x25519_key(bytes: [u8; 32]) -> anyhow::Result<x25519::PublicKey> {
+    ensure!(bytes != [0u8; 32], "zero key");
+    Ok(x25519::PublicKey::try_from(bytes.as_slice())?)
 }
 
 pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
@@ -3675,18 +3674,36 @@ mod tests {
     }
 
     #[test]
-    fn test_register_v3_zero_x25519_errors() -> anyhow::Result<()> {
+    fn test_register_v3_zero_x25519_soft_fails() -> anyhow::Result<()> {
         let val = TestValidator::random().with_x25519_key([0u8; 32]);
 
         let mut state = StakeTableState::default();
-        let result = state.apply_event(StakeTableEvent::RegisterV3((&val).into()));
-        assert_matches!(result, Err(StakeTableError::InvalidX25519Key(_)));
+        state.apply_event(StakeTableEvent::RegisterV3((&val).into()))??;
+
+        let registered = state.validators().get(&val.account).unwrap();
+        assert!(registered.x25519_key.is_none());
+        assert!(state.used_x25519_keys().is_empty());
 
         Ok(())
     }
 
-    /// Little-endian encoding of the curve25519 field prime 2^255 - 19: nonzero,
-    /// so it passes the contract's `x25519Key != 0` check, but non-canonical.
+    #[test]
+    fn test_x25519_key_update_zero_soft_fails() -> anyhow::Result<()> {
+        let val = TestValidator::random();
+
+        let mut state = StakeTableState::default();
+        state.apply_event(StakeTableEvent::RegisterV3((&val).into()))??;
+
+        state.apply_event(val.x25519_update([0u8; 32]))??;
+        let registered = state.validators().get(&val.account).unwrap();
+        assert!(registered.x25519_key.is_none());
+        assert_eq!(state.used_x25519_keys().len(), 1);
+
+        Ok(())
+    }
+
+    /// LE encoding of the curve25519 field prime 2^255 - 19: nonzero but
+    /// rejected by the Rust parser as non-canonical.
     fn noncanonical_x25519_key() -> [u8; 32] {
         let mut key = [0xffu8; 32];
         key[0] = 0xed;
@@ -3694,7 +3711,7 @@ mod tests {
         key
     }
 
-    /// A contract-reachable invalid x25519 key must not halt event processing;
+    /// An invalid x25519 key must not halt event processing;
     /// the validator registers with `x25519_key: None`.
     #[test]
     fn test_register_v3_noncanonical_x25519_soft_fails() -> anyhow::Result<()> {
@@ -3710,7 +3727,7 @@ mod tests {
         Ok(())
     }
 
-    /// A contract-reachable invalid x25519 key in an update must not halt event
+    /// An invalid x25519 key in an update must not halt event
     /// processing; the validator's key is cleared.
     #[test]
     fn test_x25519_key_update_noncanonical_soft_fails() -> anyhow::Result<()> {
@@ -4625,13 +4642,9 @@ mod tests {
     }
 }
 
-// The StakeTableV3 contract enforces canonical x25519 key encodings (nonzero, LE value below
-// 2^255-19), a superset of what Rust `x25519::PublicKey::try_from` rejects (only the LE values
-// in [2^255-19, 2^255-1]; top-bit aliases parse). Should the contract check ever regress,
-// `apply_event` must still degrade unparsable keys to `x25519_key = None` instead of failing:
-// a fatal error here halts stake table processing for the whole network. This proptest deploys
-// StakeTableV3 on anvil and fuzzes the property: Solidity accepts => `apply_event` returns the
-// outer `Ok(_)`.
+// Deploys StakeTableV3 on anvil and fuzzes the property: Solidity accepts an x25519 key =>
+// `apply_event` returns the outer `Ok(_)` and stores `parse_x25519_key(key).ok()`.
+// See `parse_x25519_key` for why contract-rejected keys must still soft-fail.
 #[cfg(test)]
 mod proptest_x25519_key {
     use alloy::{
@@ -4705,9 +4718,9 @@ mod proptest_x25519_key {
         rt.block_on(async {
             let receipt = contract
                 .registerValidatorV3(
-                    registered.bls_vk.clone(),
-                    registered.schnorr_vk.clone(),
-                    registered.bls_sig.clone().into(),
+                    registered.bls_vk,
+                    registered.schnorr_vk,
+                    registered.bls_sig.into(),
                     registered.schnorr_sig.clone(),
                     registered.commission,
                     String::new(),
@@ -4747,9 +4760,9 @@ mod proptest_x25519_key {
                 let sol_valid = rt.block_on(async {
                     contract
                         .registerValidatorV3(
-                            base.bls_vk.clone(),
-                            base.schnorr_vk.clone(),
-                            base.bls_sig.clone().into(),
+                            base.bls_vk,
+                            base.schnorr_vk,
+                            base.bls_sig.into(),
                             base.schnorr_sig.clone(),
                             base.commission,
                             String::new(),
@@ -4773,10 +4786,10 @@ mod proptest_x25519_key {
                          failed: {result:?}"
                     );
                     let stored = state.validators().get(&val.account).unwrap().x25519_key;
-                    match x25519::PublicKey::try_from(key.as_slice()) {
-                        Ok(parsed) => prop_assert_eq!(stored, Some(parsed)),
-                        Err(_) => prop_assert_eq!(stored, None),
-                    }
+                    // Contract-valid keys are always Rust-parsable, so `stored` must
+                    // not degrade to `None`; the eq then pins the exact key.
+                    prop_assert!(stored.is_some());
+                    prop_assert_eq!(stored, parse_x25519_key(key).ok());
                 }
                 Ok(())
             })
@@ -4804,10 +4817,8 @@ mod proptest_x25519_key {
                          {result:?}"
                     );
                     let stored = state.validators().get(&sender).unwrap().x25519_key;
-                    match x25519::PublicKey::try_from(key.as_slice()) {
-                        Ok(parsed) => prop_assert_eq!(stored, Some(parsed)),
-                        Err(_) => prop_assert_eq!(stored, None),
-                    }
+                    prop_assert!(stored.is_some());
+                    prop_assert_eq!(stored, parse_x25519_key(key).ok());
                 }
                 Ok(())
             })
