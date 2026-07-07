@@ -61,8 +61,19 @@ contract StakeTableV3Test is Test {
         r.schnorrSig = new bytes(64);
         r.commission = 500;
         r.metadataUri = "meta";
-        r.x25519Key = keccak256(bytes(seed));
+        r.x25519Key = canonicalX25519Key(keccak256(bytes(seed)));
         r.p2pAddr = "host:8080";
+    }
+
+    /// @dev Map a seed to a canonical x25519 key: little-endian value in [1, CURVE25519_P - 1],
+    /// the range StakeTableV3.ensureCanonicalX25519Key accepts.
+    function canonicalX25519Key(bytes32 seed) internal pure returns (bytes32) {
+        uint256 v = uint256(seed) % (((uint256(1) << 255) - 19) - 1) + 1;
+        uint256 be = 0;
+        for (uint256 i = 0; i < 32; i++) {
+            be |= uint256(uint8(v >> (8 * i))) << (8 * (31 - i));
+        }
+        return bytes32(be);
     }
 
     function registerV3(address validator, RegV3 memory r) internal {
@@ -93,6 +104,14 @@ contract StakeTableV3Test is Test {
         r.x25519Key = x25519Key;
         r.p2pAddr = p2pAddr;
         registerV3(validator, r);
+    }
+
+    /// Build a bytes32 x25519 key from its little-endian layout: LE byte 0 (least significant)
+    /// is `lsb`, LE bytes 1..30 are 0xff, LE byte 31 (holds the top bit) is `msb`. LE byte i
+    /// maps to bytes32 index i.
+    function leBoundaryKey(uint8 lsb, uint8 msb) internal pure returns (bytes32) {
+        uint256 be = (uint256(lsb) << 248) | (((uint256(1) << 240) - 1) << 8) | uint256(msb);
+        return bytes32(be);
     }
 
     // ========== validateP2pAddr ==========
@@ -218,6 +237,75 @@ contract StakeTableV3Test is Test {
         );
     }
 
+    /// All 19 non-canonical values [2^255-19, 2^255-1] are rejected.
+    function test_RegisterValidatorV3_NonCanonicalX25519_Reverts() public {
+        address validator = makeAddr("validator");
+
+        (
+            BN254.G2Point memory blsVK,
+            EdOnBN254.EdOnBN254Point memory schnorrVK,
+            BN254.G1Point memory sig
+        ) = stakeTableUpgradeTest.genClientWallet(validator, "123");
+        bytes memory schnorrSig = new bytes(64);
+
+        for (uint8 k = 0; k < 19; k++) {
+            bytes32 key = leBoundaryKey(0xed + k, 0x7f);
+            vm.prank(validator);
+            vm.expectRevert(StakeTableV3.InvalidX25519Key.selector);
+            proxyV3.registerValidatorV3(
+                blsVK, schnorrVK, sig, schnorrSig, 500, "meta", key, "host:8080"
+            );
+        }
+    }
+
+    /// 2^255-20 (p-1) is the largest canonical value and is accepted.
+    function test_RegisterValidatorV3_MaxCanonicalX25519_Success() public {
+        registerValidatorV3(
+            makeAddr("validator"), "123", 500, "meta", leBoundaryKey(0xec, 0x7f), "host:8080"
+        );
+    }
+
+    /// LE byte 31 = 0x7f with a non-0xff middle byte stays below p and is accepted.
+    function test_RegisterValidatorV3_High7fCanonicalX25519_Success() public {
+        registerValidatorV3(
+            makeAddr("validator"), "123", 500, "meta", leBoundaryKey(0x00, 0x7f), "host:8080"
+        );
+    }
+
+    /// Encodings with bit 255 set alias another key and are rejected.
+    function test_RegisterValidatorV3_TopBitSetX25519_Reverts() public {
+        address validator = makeAddr("validator");
+
+        (
+            BN254.G2Point memory blsVK,
+            EdOnBN254.EdOnBN254Point memory schnorrVK,
+            BN254.G1Point memory sig
+        ) = stakeTableUpgradeTest.genClientWallet(validator, "123");
+        bytes memory schnorrSig = new bytes(64);
+
+        // LE value 2^255: only LE byte 31 set to 0x80
+        bytes32 topBitOnly = bytes32(uint256(0x80));
+        vm.prank(validator);
+        vm.expectRevert(StakeTableV3.InvalidX25519Key.selector);
+        proxyV3.registerValidatorV3(
+            blsVK, schnorrVK, sig, schnorrSig, 500, "meta", topBitOnly, "host:8080"
+        );
+
+        bytes32 allOnes = bytes32(type(uint256).max);
+        vm.prank(validator);
+        vm.expectRevert(StakeTableV3.InvalidX25519Key.selector);
+        proxyV3.registerValidatorV3(
+            blsVK, schnorrVK, sig, schnorrSig, 500, "meta", allOnes, "host:8080"
+        );
+    }
+
+    /// A typical valid key (all LE bytes 0x07, top bit clear) registers.
+    function test_RegisterValidatorV3_TypicalX25519_Success() public {
+        bytes32 key =
+            bytes32(uint256(0x0707070707070707070707070707070707070707070707070707070707070707));
+        registerValidatorV3(makeAddr("validator"), "123", 500, "meta", key, "host:8080");
+    }
+
     function test_RegisterValidatorV3_EmptyP2p_Reverts() public {
         address validator = makeAddr("validator");
 
@@ -274,6 +362,62 @@ contract StakeTableV3Test is Test {
         proxyV3.registerValidatorV3(
             blsVK, schnorrVK, sig, schnorrSig, 500, "meta", x25519Key, "host2:8080"
         );
+    }
+
+    /// @dev Regression: the pairing precompile treats all-zero G2 as infinity, so a zero blsVK
+    /// with a zero blsSig used to pass BLS verification, allowing registration without proof of
+    /// possession.
+    function test_RegisterValidatorV3_ZeroBlsVKAndSig_Reverts() public {
+        address validator = makeAddr("validator");
+
+        (, EdOnBN254.EdOnBN254Point memory schnorrVK,) =
+            stakeTableUpgradeTest.genClientWallet(validator, "123");
+        bytes memory schnorrSig = new bytes(64);
+
+        BN254.G2Point memory zeroBlsVK = BN254.G2Point(
+            BN254.BaseField.wrap(0),
+            BN254.BaseField.wrap(0),
+            BN254.BaseField.wrap(0),
+            BN254.BaseField.wrap(0)
+        );
+        BN254.G1Point memory zeroBlsSig =
+            BN254.G1Point(BN254.BaseField.wrap(0), BN254.BaseField.wrap(0));
+
+        vm.prank(validator);
+        vm.expectRevert(BLSSig.BLSSigIsInfinity.selector);
+        proxyV3.registerValidatorV3(
+            zeroBlsVK,
+            schnorrVK,
+            zeroBlsSig,
+            schnorrSig,
+            500,
+            "meta",
+            bytes32(uint256(1)),
+            "host:8080"
+        );
+    }
+
+    /// @dev Same infinity hole via updateConsensusKeysV2 (inherited from V2).
+    function test_UpdateConsensusKeysV2_ZeroBlsVKAndSig_Reverts() public {
+        address validator = makeAddr("validator");
+        registerValidatorV3(validator, "123", 500, "meta", bytes32(uint256(1)), "host:8080");
+
+        (, EdOnBN254.EdOnBN254Point memory newSchnorrVK,) =
+            stakeTableUpgradeTest.genClientWallet(validator, "45");
+        bytes memory schnorrSig = new bytes(64);
+
+        BN254.G2Point memory zeroBlsVK = BN254.G2Point(
+            BN254.BaseField.wrap(0),
+            BN254.BaseField.wrap(0),
+            BN254.BaseField.wrap(0),
+            BN254.BaseField.wrap(0)
+        );
+        BN254.G1Point memory zeroBlsSig =
+            BN254.G1Point(BN254.BaseField.wrap(0), BN254.BaseField.wrap(0));
+
+        vm.prank(validator);
+        vm.expectRevert(BLSSig.BLSSigIsInfinity.selector);
+        proxyV3.updateConsensusKeysV2(zeroBlsVK, newSchnorrVK, zeroBlsSig, schnorrSig);
     }
 
     function test_RegisterValidatorV3_AlreadyRegistered_Reverts() public {
@@ -418,6 +562,15 @@ contract StakeTableV3Test is Test {
         vm.prank(validator);
         vm.expectRevert(StakeTableV3.InvalidX25519Key.selector);
         proxyV3.updateNetworkConfig(bytes32(0), "host:9090");
+    }
+
+    function test_UpdateNetworkConfig_NonCanonicalX25519_Reverts() public {
+        address validator = makeAddr("validator");
+        registerValidatorV3(validator, "123", 500, "meta", bytes32(uint256(1)), "host:8080");
+
+        vm.prank(validator);
+        vm.expectRevert(StakeTableV3.InvalidX25519Key.selector);
+        proxyV3.updateNetworkConfig(leBoundaryKey(0xed, 0x7f), "host:9090");
     }
 
     function test_UpdateNetworkConfig_EmptyP2p_Reverts() public {
@@ -616,6 +769,15 @@ contract StakeTableV3Test is Test {
         vm.prank(validator);
         vm.expectRevert(StakeTableV3.InvalidX25519Key.selector);
         proxyV3.updateX25519Key(bytes32(0));
+    }
+
+    function test_UpdateX25519Key_NonCanonical_Reverts() public {
+        address validator = makeAddr("validator");
+        registerValidatorV3(validator, "123", 500, "meta", bytes32(uint256(1)), "host:8080");
+
+        vm.prank(validator);
+        vm.expectRevert(StakeTableV3.InvalidX25519Key.selector);
+        proxyV3.updateX25519Key(leBoundaryKey(0xed, 0x7f));
     }
 
     function test_UpdateX25519Key_DuplicateKey_Reverts() public {

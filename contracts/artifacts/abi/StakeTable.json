@@ -816,7 +816,17 @@
   },
   {
     "type": "error",
+    "name": "BLSSigIsInfinity",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "BLSSigVerificationFailed",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "BLSVKIsInfinity",
     "inputs": []
   },
   {
