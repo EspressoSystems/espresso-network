@@ -1,15 +1,13 @@
 mod accumulate;
 
 use std::{
-    any::type_name,
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashSet},
     mem,
     sync::mpsc,
 };
 
 pub(crate) use accumulate::CheckedAccumulator;
 use alloy::primitives::U256;
-use hotshot::types::SignatureKey;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
@@ -19,11 +17,7 @@ use hotshot_types::{
     vote::{Certificate, Vote},
 };
 use tokio_util::task::JoinMap;
-use tracing::{error, warn};
-
-#[allow(type_alias_bounds)]
-pub(crate) type VoteSig<T: NodeType> =
-    <T::SignatureKey as SignatureKey>::PureAssembledSignatureType;
+use tracing::error;
 
 pub struct VoteCollector<T: NodeType, V, C> {
     /// Tasks collecting votes and verifying certificates.
@@ -38,8 +32,8 @@ pub struct VoteCollector<T: NodeType, V, C> {
     /// Views that had a valid certificate already.
     completed: BTreeSet<ViewNumber>,
 
-    /// The signers and their vote signatures per view.
-    signers: BTreeMap<ViewNumber, HashMap<T::SignatureKey, VoteSig<T>>>,
+    /// The signers per view.
+    signers: BTreeMap<ViewNumber, HashSet<T::SignatureKey>>,
 
     /// The GC threshold.
     lower_bound: ViewNumber,
@@ -102,20 +96,13 @@ where
         };
 
         // Check that we have not received a vote from this signer already.
+        if !self
+            .signers
+            .entry(view)
+            .or_default()
+            .insert(vote.signing_key())
         {
-            let key = vote.signing_key();
-            let sig = vote.signature();
-
-            let signers = self.signers.entry(view).or_default();
-
-            if let Some(s) = signers.get(&key) {
-                if *s != sig {
-                    warn!(%view, cert = type_name::<C>(), signer = %key, "multiple votes in one view");
-                }
-                return;
-            } else {
-                signers.insert(key, sig);
-            }
+            return;
         }
 
         if let Some(tx) = self.ballot_boxes.get(&view) {
@@ -154,7 +141,7 @@ where
         let membership = self.membership.membership_for_epoch(Some(epoch)).ok()?;
         let threshold = C::threshold(&membership);
         let mut stake = U256::ZERO;
-        for signer in signers.keys() {
+        for signer in signers {
             if let Some(peer) = C::stake_table_entry(&membership, signer) {
                 stake += peer.stake_table_entry.stake();
             }

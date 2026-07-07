@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     mem,
     sync::mpsc,
 };
@@ -14,12 +14,9 @@ use hotshot_types::{
     vote::{HasViewNumber, LightClientStateUpdateVoteAccumulator, Vote},
 };
 use tokio_util::task::JoinMap;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
-use crate::{
-    message::Vote1,
-    vote::{CheckedAccumulator, VoteSig},
-};
+use crate::{message::Vote1, vote::CheckedAccumulator};
 
 /// The pair of certificates formed at an epoch-root view.
 type EpochRootCerts<T> = (
@@ -48,8 +45,8 @@ pub struct EpochRootVoteCollector<T: NodeType> {
     /// Views that had valid certificates already.
     completed: BTreeSet<ViewNumber>,
 
-    /// The signers and their vote signatures per view.
-    signers: BTreeMap<ViewNumber, HashMap<T::SignatureKey, VoteSig<T>>>,
+    /// The signers per view.
+    signers: BTreeMap<ViewNumber, HashSet<T::SignatureKey>>,
 
     /// The GC threshold.
     lower_bound: ViewNumber,
@@ -98,10 +95,9 @@ impl<T: NodeType> EpochRootVoteCollector<T> {
     ///
     /// Caller should have verified `vote1.state_vote.is_some()`.
     pub fn accumulate_vote(&mut self, vote1: Vote1<T>) {
-        debug_assert!(
-            vote1.state_vote.is_some(),
-            "EpochRootVoteCollector::accumulate_vote called with a Vote1 missing state_vote"
-        );
+        if vote1.state_vote.is_none() {
+            return;
+        }
 
         let view = vote1.view_number();
 
@@ -115,20 +111,13 @@ impl<T: NodeType> EpochRootVoteCollector<T> {
         };
 
         // Check that we have not received a vote from this signer already.
+        if !self
+            .signers
+            .entry(view)
+            .or_default()
+            .insert(vote1.vote.signing_key())
         {
-            let key = vote1.vote.signing_key();
-            let sig = vote1.vote.signature();
-
-            let signers = self.signers.entry(view).or_default();
-
-            if let Some(s) = signers.get(&key) {
-                if *s != sig {
-                    warn!(%view, signer = %key, "multiple epoch-root votes in one view");
-                }
-                return;
-            } else {
-                signers.insert(key, sig);
-            }
+            return;
         }
 
         if let Some(tx) = self.ballot_boxes.get(&view) {
