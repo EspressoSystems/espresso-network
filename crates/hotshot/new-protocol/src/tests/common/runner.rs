@@ -298,7 +298,7 @@ impl TestRunner {
     pub async fn run(&mut self) -> Result<(), TestError> {
         crate::logging::init_test_logging();
 
-        debug_assert!(
+        assert!(
             self.stake_table_schedule.is_none() || self.down_nodes.is_empty(),
             "stake table schedules are incompatible with down_nodes: failed_views_from_down_nodes \
              assumes the full committee leads"
