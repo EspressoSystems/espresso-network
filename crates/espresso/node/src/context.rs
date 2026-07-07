@@ -69,14 +69,12 @@ use crate::{
 pub(crate) type ConsensusNode<N, P> = Node<N, P>;
 pub type Consensus<N, P> = hotshot::types::SystemContextHandle<SeqTypes, ConsensusNode<N, P>>;
 
-/// Capacity of the channel feeding inbound request-response messages from the consensus event
-/// loop to the protocol. Messages are dropped (not queued) when it is full, and a single
+/// Inbound request-response messages are dropped (not queued) when this channel is full, and a
 /// broadcast request can fan in a response from every node at once, so this must comfortably
-/// exceed the network size. Entries are `Arc<Vec<u8>>`, so slots are pointer-sized.
+/// exceed the network size.
 const REQUEST_RESPONSE_CHANNEL_CAPACITY: usize = 256;
 
-/// Capacity of the outbound message channel drained by the external event handler. Responders
-/// block on this channel while holding request-response admission permits.
+/// Responders block on the outbound channel while holding request-response admission permits.
 const OUTBOUND_MESSAGE_CHANNEL_CAPACITY: usize = 128;
 
 /// The sequencer context contains a consensus handle and other sequencer specific information.
@@ -282,10 +280,8 @@ where
             incoming_request_timeout: Duration::from_secs(5),
             request_batch_size: 5,
             request_batch_interval: Duration::from_secs(2),
-            // A node catching up legitimately issues several distinct requests concurrently
-            // (accounts, frontier, leaves, chain config), so the per-key limit must allow that.
-            // Permits are held for up to `incoming_request_timeout` while a response is derived
-            // (possibly from SQL), so the global limit bounds concurrent storage work.
+            // Permits are held while a response is derived (possibly from SQL), and a peer
+            // catching up legitimately issues several distinct requests concurrently
             max_incoming_requests: 32,
             max_incoming_requests_per_key: 4,
         };
