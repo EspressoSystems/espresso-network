@@ -1101,6 +1101,15 @@ pub struct InitializerEpochInfo<TYPES: NodeType> {
     pub block_header: Option<TYPES::BlockHeader>,
 }
 
+/// The anchor leaf with its validated state and optional state delta, as supplied to
+/// [`HotShotInitializer::load`]. The state and delta may be omitted, in which case a
+/// sparse state is constructed from the leaf's header.
+pub type InitializerAnchor<TYPES> = (
+    Leaf2<TYPES>,
+    Option<Arc<<TYPES as NodeType>::ValidatedState>>,
+    Option<Arc<<<TYPES as NodeType>::ValidatedState as ValidatedState<TYPES>>::Delta>>,
+);
+
 /// initializer struct for creating starting block
 #[derive(Clone, Debug)]
 pub struct HotShotInitializer<TYPES: NodeType> {
@@ -1238,18 +1247,17 @@ impl<TYPES: NodeType> HotShotInitializer<TYPES> {
 
     /// Create a `HotShotInitializer` from the given information.
     ///
-    /// This function uses the anchor leaf to set the initial validated state,
-    /// and populates `undecided_leaves` and `undecided_state` using `saved_proposals`.
-    ///
-    /// If you are able to or would prefer to set these yourself,
-    /// you should use the `HotShotInitializer` constructor directly.
+    /// The anchor's validated state and state delta may be supplied by callers that have
+    /// them (e.g. a full genesis state); when absent, a sparse state is constructed from
+    /// the anchor leaf's header. `undecided_leaves` and `undecided_state` are always
+    /// populated from `saved_proposals`.
     #[allow(clippy::too_many_arguments)]
     pub fn load(
         instance_state: TYPES::InstanceState,
         epoch_height: u64,
         epoch_start_block: u64,
         start_epoch_info: Vec<InitializerEpochInfo<TYPES>>,
-        anchor_leaf: Leaf2<TYPES>,
+        (anchor_leaf, anchor_state, anchor_state_delta): InitializerAnchor<TYPES>,
         (start_view, start_epoch): (ViewNumber, Option<EpochNumber>),
         (high_qc, next_epoch_high_qc): (
             QuorumCertificate2<TYPES>,
@@ -1261,10 +1269,11 @@ impl<TYPES: NodeType> HotShotInitializer<TYPES> {
         decided_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
         state_cert: Option<LightClientStateUpdateCertificateV2<TYPES>>,
     ) -> Self {
-        let anchor_state = Arc::new(TYPES::ValidatedState::from_header(
-            anchor_leaf.block_header(),
-        ));
-        let anchor_state_delta = None;
+        let anchor_state = anchor_state.unwrap_or_else(|| {
+            Arc::new(TYPES::ValidatedState::from_header(
+                anchor_leaf.block_header(),
+            ))
+        });
 
         let initializer = Self {
             instance_state,
