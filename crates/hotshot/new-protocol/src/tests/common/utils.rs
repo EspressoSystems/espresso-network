@@ -190,12 +190,6 @@ impl TestView {
             &test_upgrade_lock(),
         )
         .expect("Failed to sign QuorumVote2");
-        let vid_share = self
-            .vid_shares
-            .iter()
-            .find(|s| s.recipient_key == pub_key)
-            .expect("VID share not found for node")
-            .clone();
 
         let block_number = BlockHeader::<TestTypes>::block_number(&self.proposal.data.block_header);
         let state_vote = if self.epoch_height > 0 && is_epoch_root(block_number, self.epoch_height)
@@ -212,14 +206,24 @@ impl TestView {
         };
 
         Message {
-            // A Vote1 is broadcast by the voting validator itself, and carries
-            // that validator's own VID share (recipient_key == pub_key).
+            // A Vote1 is broadcast by the voting validator itself. The VID
+            // share travels separately via `vid_share_broadcast_input`.
             sender: pub_key,
             message_type: MessageType::Consensus(ConsensusMessage::Vote1(Vote1 {
                 vote,
-                vid_share,
                 state_vote,
             })),
+        }
+    }
+
+    /// Build a `ConsensusMessage::VidShareBroadcast` wire message.
+    pub fn vid_share_broadcast_input(&self, node_index: u64) -> Message<TestTypes, Validated> {
+        let (pub_key, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
+        Message {
+            sender: pub_key,
+            message_type: MessageType::Consensus(ConsensusMessage::VidShareBroadcast(
+                self.vid_share_for(&pub_key),
+            )),
         }
     }
 
