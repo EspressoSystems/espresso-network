@@ -50,7 +50,8 @@ impl<TYPES: NodeType> From<TestStakeTableEntry<TYPES::SignatureKey, TYPES::State
     }
 }
 
-// Map from first epoch to DA committee stake table entries
+// Map from first epoch to committee stake table entries. Despite the name,
+// also reused for per-epoch quorum committee schedules.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TestDaCommittees<
     PubKey: SignatureKey,
@@ -157,4 +158,15 @@ pub trait TestStakeTable<
         first_epoch: u64,
         committee: Vec<TestStakeTableEntry<PubKey, StatePubKey>>,
     );
+
+    /// Register a quorum committee effective from `first_epoch` (inclusive).
+    /// Mirrors `add_da_committee`; implementations without per-epoch quorum
+    /// committees keep the panicking default.
+    fn add_quorum_committee(
+        &mut self,
+        _first_epoch: u64,
+        _committee: Vec<TestStakeTableEntry<PubKey, StatePubKey>>,
+    ) {
+        panic!("add_quorum_committee is not supported by this TestStakeTable implementation");
+    }
 }

@@ -30,6 +30,8 @@ pub struct StaticStakeTable<
 
     da_members: Vec<TestStakeTableEntry<PubKey, StatePubKey>>,
 
+    quorum_committees: TestDaCommittees<PubKey, StatePubKey>,
+
     first_epoch: Option<u64>,
 
     epochs: BTreeSet<u64>,
@@ -53,6 +55,7 @@ where
         Self {
             quorum_members,
             da_members,
+            quorum_committees: TestDaCommittees::new(),
             first_epoch: None,
             epochs: BTreeSet::new(),
             drb_results: BTreeMap::new(),
@@ -60,8 +63,10 @@ where
         }
     }
 
-    fn stake_table(&self, _epoch: Option<u64>) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
-        self.quorum_members.clone()
+    fn stake_table(&self, epoch: Option<u64>) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
+        self.quorum_committees
+            .get(epoch)
+            .unwrap_or_else(|| self.quorum_members.clone())
     }
 
     fn da_stake_table(&self, epoch: Option<u64>) -> Vec<TestStakeTableEntry<PubKey, StatePubKey>> {
@@ -74,9 +79,10 @@ where
         self.quorum_members.clone()
     }
 
-    fn lookup_leader(&self, view_number: u64, _epoch: Option<u64>) -> anyhow::Result<PubKey> {
-        let index = view_number as usize % self.quorum_members.len();
-        let leader = self.quorum_members[index].clone();
+    fn lookup_leader(&self, view_number: u64, epoch: Option<u64>) -> anyhow::Result<PubKey> {
+        let committee = self.stake_table(epoch);
+        let index = view_number as usize % committee.len();
+        let leader = committee[index].clone();
         Ok(leader.signature_key)
     }
 
@@ -123,5 +129,100 @@ where
         committee: Vec<TestStakeTableEntry<PubKey, StatePubKey>>,
     ) {
         self.da_committees.add(first_epoch, committee);
+    }
+
+    fn add_quorum_committee(
+        &mut self,
+        first_epoch: u64,
+        committee: Vec<TestStakeTableEntry<PubKey, StatePubKey>>,
+    ) {
+        self.quorum_committees.add(first_epoch, committee);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy::primitives::U256;
+    use hotshot_types::{
+        ValidatorConfig,
+        signature_key::{BLSPubKey, SchnorrPubKey},
+    };
+
+    use super::*;
+    use crate::node_types::TestTypes;
+
+    fn entries(indices: &[u64]) -> Vec<TestStakeTableEntry<BLSPubKey, SchnorrPubKey>> {
+        indices
+            .iter()
+            .map(|i| {
+                let config: ValidatorConfig<TestTypes> =
+                    ValidatorConfig::generated_from_seed_indexed(
+                        [0u8; 32],
+                        *i,
+                        U256::from(1),
+                        false,
+                    );
+                config.public_config().into()
+            })
+            .collect()
+    }
+
+    /// Epochs before the earliest scheduled first-epoch (and `None`) resolve
+    /// to the default committee; later epochs resolve to the greatest
+    /// scheduled first-epoch <= the requested epoch.
+    #[test]
+    fn quorum_schedule_resolution() {
+        let default = entries(&[0, 1, 2, 3, 4]);
+        let smaller = entries(&[0, 1, 2, 3]);
+        let larger = entries(&[0, 1, 2, 3, 4, 5]);
+
+        let mut table = StaticStakeTable::new(default.clone(), default.clone());
+        table.add_quorum_committee(3, smaller.clone());
+        table.add_quorum_committee(6, larger.clone());
+
+        assert_eq!(table.stake_table(None), default);
+        assert_eq!(table.stake_table(Some(1)), default);
+        assert_eq!(table.stake_table(Some(2)), default);
+        assert_eq!(table.stake_table(Some(3)), smaller);
+        assert_eq!(table.stake_table(Some(5)), smaller);
+        assert_eq!(table.stake_table(Some(6)), larger);
+        assert_eq!(table.stake_table(Some(100)), larger);
+    }
+
+    /// The leader rotation uses the scheduled committee for the epoch, so a
+    /// committee of a different size changes which key leads a given view.
+    #[test]
+    fn quorum_schedule_leader_rotation() {
+        let default = entries(&[0, 1, 2, 3, 4]);
+        let scheduled = entries(&[0, 1, 2]);
+
+        let mut table = StaticStakeTable::new(default.clone(), default.clone());
+        table.add_quorum_committee(3, scheduled.clone());
+
+        assert_eq!(
+            table.lookup_leader(4, Some(2)).unwrap(),
+            default[4].signature_key
+        );
+        assert_eq!(
+            table.lookup_leader(4, Some(3)).unwrap(),
+            scheduled[4 % 3].signature_key
+        );
+    }
+
+    /// The quorum and DA schedules are stored and resolved independently.
+    #[test]
+    fn quorum_and_da_schedules_independent() {
+        let default = entries(&[0, 1, 2, 3, 4]);
+        let quorum = entries(&[0, 1, 2, 3]);
+        let da = entries(&[0, 1]);
+
+        let mut table = StaticStakeTable::new(default.clone(), default.clone());
+        table.add_quorum_committee(3, quorum.clone());
+        table.add_da_committee(4, da.clone());
+
+        assert_eq!(table.stake_table(Some(3)), quorum);
+        assert_eq!(table.da_stake_table(Some(3)), default);
+        assert_eq!(table.stake_table(Some(4)), quorum);
+        assert_eq!(table.da_stake_table(Some(4)), da);
     }
 }
