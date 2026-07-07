@@ -45,6 +45,40 @@ contract StakeTableV3Test is Test {
         vm.stopPrank();
     }
 
+    struct RegV3 {
+        BN254.G2Point blsVK;
+        EdOnBN254.EdOnBN254Point schnorrVK;
+        BN254.G1Point blsSig;
+        bytes schnorrSig;
+        uint16 commission;
+        string metadataUri;
+        bytes32 x25519Key;
+        string p2pAddr;
+    }
+
+    function defaultRegV3(address validator, string memory seed) internal returns (RegV3 memory r) {
+        (r.blsVK, r.schnorrVK, r.blsSig) = stakeTableUpgradeTest.genClientWallet(validator, seed);
+        r.schnorrSig = new bytes(64);
+        r.commission = 500;
+        r.metadataUri = "meta";
+        r.x25519Key = keccak256(bytes(seed));
+        r.p2pAddr = "host:8080";
+    }
+
+    function registerV3(address validator, RegV3 memory r) internal {
+        vm.prank(validator);
+        proxyV3.registerValidatorV3(
+            r.blsVK,
+            r.schnorrVK,
+            r.blsSig,
+            r.schnorrSig,
+            r.commission,
+            r.metadataUri,
+            r.x25519Key,
+            r.p2pAddr
+        );
+    }
+
     function registerValidatorV3(
         address validator,
         string memory seed,
@@ -53,16 +87,12 @@ contract StakeTableV3Test is Test {
         bytes32 x25519Key,
         string memory p2pAddr
     ) internal {
-        (
-            BN254.G2Point memory blsVK,
-            EdOnBN254.EdOnBN254Point memory schnorrVK,
-            BN254.G1Point memory sig
-        ) = stakeTableUpgradeTest.genClientWallet(validator, seed);
-        bytes memory schnorrSig = new bytes(64);
-        vm.prank(validator);
-        proxyV3.registerValidatorV3(
-            blsVK, schnorrVK, sig, schnorrSig, commission, metadataUri, x25519Key, p2pAddr
-        );
+        RegV3 memory r = defaultRegV3(validator, seed);
+        r.commission = commission;
+        r.metadataUri = metadataUri;
+        r.x25519Key = x25519Key;
+        r.p2pAddr = p2pAddr;
+        registerV3(validator, r);
     }
 
     /// Build a bytes32 x25519 key from its little-endian layout: LE byte 0 (least significant)
@@ -379,6 +409,89 @@ contract StakeTableV3Test is Test {
         proxyV3.updateConsensusKeysV2(zeroBlsVK, newSchnorrVK, zeroBlsSig, schnorrSig);
     }
 
+    function test_RegisterValidatorV3_AlreadyRegistered_Reverts() public {
+        address validator = makeAddr("validator");
+        registerV3(validator, defaultRegV3(validator, "1"));
+
+        RegV3 memory r = defaultRegV3(validator, "2");
+        vm.expectRevert(S.ValidatorAlreadyRegistered.selector);
+        registerV3(validator, r);
+    }
+
+    function test_RegisterValidatorV3_ZeroSchnorrKey_Reverts() public {
+        address validator = makeAddr("validator");
+        RegV3 memory r = defaultRegV3(validator, "1");
+        r.schnorrVK = EdOnBN254.EdOnBN254Point(0, 0);
+
+        vm.expectRevert(S.InvalidSchnorrVK.selector);
+        registerV3(validator, r);
+    }
+
+    function test_RegisterValidatorV3_DuplicateBlsKey_Reverts() public {
+        address val1 = makeAddr("val1");
+        RegV3 memory r1 = defaultRegV3(val1, "1");
+        registerV3(val1, r1);
+
+        address val2 = makeAddr("val2");
+        RegV3 memory r2 = defaultRegV3(val2, "2");
+        r2.blsVK = r1.blsVK;
+        r2.blsSig = r1.blsSig;
+
+        vm.expectRevert(S.BlsKeyAlreadyUsed.selector);
+        registerV3(val2, r2);
+    }
+
+    function test_RegisterValidatorV3_DuplicateSchnorrKey_Reverts() public {
+        address val1 = makeAddr("val1");
+        RegV3 memory r1 = defaultRegV3(val1, "1");
+        registerV3(val1, r1);
+
+        address val2 = makeAddr("val2");
+        RegV3 memory r2 = defaultRegV3(val2, "2");
+        r2.schnorrVK = r1.schnorrVK;
+
+        vm.expectRevert(StakeTableV2.SchnorrKeyAlreadyUsed.selector);
+        registerV3(val2, r2);
+    }
+
+    function test_RegisterValidatorV3_InvalidBlsSig_Reverts() public {
+        RegV3 memory r = defaultRegV3(makeAddr("validator"), "1");
+
+        vm.expectRevert(BLSSig.BLSSigVerificationFailed.selector);
+        registerV3(makeAddr("other"), r);
+    }
+
+    function test_RegisterValidatorV3_InvalidSchnorrSigLength_Reverts() public {
+        address validator = makeAddr("validator");
+        RegV3 memory r = defaultRegV3(validator, "1");
+        r.schnorrSig = new bytes(32);
+
+        vm.expectRevert(StakeTableV2.InvalidSchnorrSig.selector);
+        registerV3(validator, r);
+    }
+
+    function test_RegisterValidatorV3_CommissionTooHigh_Reverts() public {
+        address validator = makeAddr("validator");
+        RegV3 memory r = defaultRegV3(validator, "1");
+        r.commission = 10001;
+
+        vm.expectRevert(S.InvalidCommission.selector);
+        registerV3(validator, r);
+    }
+
+    function test_RegisterValidatorV3_MetadataUriTooLong_Reverts() public {
+        address validator = makeAddr("validator");
+        RegV3 memory r = defaultRegV3(validator, "1");
+        bytes memory buf = new bytes(2049);
+        for (uint256 i = 0; i < buf.length; i++) {
+            buf[i] = "a";
+        }
+        r.metadataUri = string(buf);
+
+        vm.expectRevert(StakeTableV2.InvalidMetadataUriLength.selector);
+        registerV3(validator, r);
+    }
+
     function test_RegisterValidatorV2_Deprecated_Reverts() public {
         address validator = makeAddr("validator");
 
@@ -467,6 +580,19 @@ contract StakeTableV3Test is Test {
         vm.prank(makeAddr("val2"));
         vm.expectRevert(StakeTableV3.X25519KeyAlreadyUsed.selector);
         proxyV3.updateNetworkConfig(key1, "host2:9090");
+    }
+
+    function test_UpdateNetworkConfig_ReusedAfterUpdate_Reverts() public {
+        address validator = makeAddr("validator");
+        registerValidatorV3(validator, "123", 500, "meta", bytes32(uint256(1)), "host:8080");
+
+        bytes32 key2 = bytes32(uint256(2));
+        vm.prank(validator);
+        proxyV3.updateNetworkConfig(key2, "host:9090");
+
+        vm.prank(validator);
+        vm.expectRevert(StakeTableV3.X25519KeyAlreadyUsed.selector);
+        proxyV3.updateNetworkConfig(key2, "host:9090");
     }
 
     function test_UpdateNetworkConfig_Repeated_Success() public {
@@ -653,6 +779,19 @@ contract StakeTableV3Test is Test {
         vm.prank(val2);
         vm.expectRevert(StakeTableV3.X25519KeyAlreadyUsed.selector);
         proxyV3.updateX25519Key(key);
+    }
+
+    function test_UpdateX25519Key_ReusedAfterUpdate_Reverts() public {
+        address validator = makeAddr("validator");
+        registerValidatorV3(validator, "123", 500, "meta", bytes32(uint256(1)), "host:8080");
+
+        bytes32 key2 = bytes32(uint256(2));
+        vm.prank(validator);
+        proxyV3.updateX25519Key(key2);
+
+        vm.prank(validator);
+        vm.expectRevert(StakeTableV3.X25519KeyAlreadyUsed.selector);
+        proxyV3.updateX25519Key(key2);
     }
 
     function test_UpdateX25519Key_Paused_Reverts() public {
