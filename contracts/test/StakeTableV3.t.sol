@@ -61,8 +61,19 @@ contract StakeTableV3Test is Test {
         r.schnorrSig = new bytes(64);
         r.commission = 500;
         r.metadataUri = "meta";
-        r.x25519Key = keccak256(bytes(seed));
+        r.x25519Key = canonicalX25519Key(keccak256(bytes(seed)));
         r.p2pAddr = "host:8080";
+    }
+
+    /// @dev Map a seed to a canonical x25519 key: little-endian value in [1, CURVE25519_P - 1],
+    /// the range StakeTableV3.ensureCanonicalX25519Key accepts.
+    function canonicalX25519Key(bytes32 seed) internal pure returns (bytes32) {
+        uint256 v = uint256(seed) % (((uint256(1) << 255) - 19) - 1) + 1;
+        uint256 be = 0;
+        for (uint256 i = 0; i < 32; i++) {
+            be |= uint256(uint8(v >> (8 * i))) << (8 * (31 - i));
+        }
+        return bytes32(be);
     }
 
     function registerV3(address validator, RegV3 memory r) internal {
