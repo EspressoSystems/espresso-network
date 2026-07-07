@@ -250,7 +250,7 @@
             foundry
             solc
             dregs-unwrapped
-            nodePackages.prettier
+            prettier
             solhint
             libusb1
             mdbook

@@ -6,6 +6,19 @@
   },
   {
     "type": "function",
+    "name": "CURVE25519_P",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "DEFAULT_ADMIN_ROLE",
     "inputs": [],
     "outputs": [
@@ -2304,7 +2317,17 @@
   },
   {
     "type": "error",
+    "name": "BLSSigIsInfinity",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "BLSSigVerificationFailed",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "BLSVKIsInfinity",
     "inputs": []
   },
   {

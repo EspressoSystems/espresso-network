@@ -29,6 +29,9 @@ contract StakeTableV3 is StakeTableV2 {
     /// @notice Maximum length for p2p address strings (in bytes)
     uint256 public constant MAX_P2P_ADDR_LENGTH = 512;
 
+    /// @notice The Curve25519 field prime 2^255 - 19
+    uint256 public constant CURVE25519_P = (1 << 255) - 19;
+
     // === Events ===
 
     /// @notice A validator is registered with x25519 key and p2p address
@@ -56,7 +59,7 @@ contract StakeTableV3 is StakeTableV2 {
 
     // === Errors ===
 
-    /// The x25519 key is bytes32(0)
+    /// The x25519 key is zero or not a canonical little-endian encoding
     error InvalidX25519Key();
 
     /// The x25519 key has been previously registered
@@ -92,6 +95,21 @@ contract StakeTableV3 is StakeTableV2 {
     }
 
     // === Validation ===
+
+    /// @notice Ensure the x25519 key is a canonical little-endian field element encoding:
+    /// interpreted as a little-endian integer v, require 0 < v < 2^255 - 19.
+    /// @param x25519Key The x25519 key as raw little-endian bytes
+    /// @dev The node's Rust parser rejects non-canonical values in [2^255-19, 2^255-1], and
+    /// x25519 ignores bit 255, so encodings with the top bit set alias the same DH key.
+    /// Enforcing canonical form makes bytes32 uniqueness equal functional key uniqueness.
+    function ensureCanonicalX25519Key(bytes32 x25519Key) internal pure {
+        // Byteswap: bytes32 index 0 is the least significant byte of the little-endian value
+        uint256 v = 0;
+        for (uint256 i = 32; i > 0; i--) {
+            v = (v << 8) | uint8(x25519Key[i - 1]);
+        }
+        require(v != 0 && v < CURVE25519_P, InvalidX25519Key());
+    }
 
     /// @notice Validate a p2p address in host:port format.
     /// @param p2pAddr The p2p address to validate
@@ -136,7 +154,7 @@ contract StakeTableV3 is StakeTableV2 {
     /// @param schnorrSig The Schnorr signature that authenticates the Schnorr VK
     /// @param commission in % with 2 decimals, from 0.00% (value 0) to 100% (value 10_000)
     /// @param metadataUri The metadata URI for the validator
-    /// @param x25519Key The x25519 encryption key for the validator
+    /// @param x25519Key The x25519 encryption key (raw little-endian bytes, canonical encoding)
     /// @param p2pAddr The p2p address (host:port) for the validator
     function registerValidatorV3(
         BN254.G2Point memory blsVK,
@@ -161,7 +179,7 @@ contract StakeTableV3 is StakeTableV2 {
         require(commission <= MAX_COMMISSION_BPS, InvalidCommission());
         validateMetadataUri(metadataUri);
 
-        require(x25519Key != bytes32(0), InvalidX25519Key());
+        ensureCanonicalX25519Key(x25519Key);
         require(!x25519Keys[x25519Key], X25519KeyAlreadyUsed());
         validateP2pAddr(p2pAddr);
 
@@ -202,10 +220,11 @@ contract StakeTableV3 is StakeTableV2 {
 
     /// @notice Update the x25519 encryption key. The key must be unique (never previously
     /// used). To also update the p2p address, use updateNetworkConfig instead.
-    /// @param x25519Key The new x25519 encryption key (must be unique, never previously used)
+    /// @param x25519Key The new x25519 encryption key (canonical encoding, must be unique, never
+    /// previously used)
     function updateX25519Key(bytes32 x25519Key) external virtual whenNotPaused {
         ensureValidatorActive(msg.sender);
-        require(x25519Key != bytes32(0), InvalidX25519Key());
+        ensureCanonicalX25519Key(x25519Key);
         require(!x25519Keys[x25519Key], X25519KeyAlreadyUsed());
         // Old x25519 keys are intentionally not freed. Key operations are rare for ~100 validators.
         x25519Keys[x25519Key] = true;
@@ -228,7 +247,8 @@ contract StakeTableV3 is StakeTableV2 {
     ///
     /// Emits both X25519KeyUpdated and P2pAddrUpdated.
     ///
-    /// @param x25519Key The new x25519 encryption key (must be unique, never previously used)
+    /// @param x25519Key The new x25519 encryption key (canonical encoding, must be unique, never
+    /// previously used)
     /// @param p2pAddr The p2p address (host:port)
     function updateNetworkConfig(bytes32 x25519Key, string memory p2pAddr)
         external
@@ -237,7 +257,7 @@ contract StakeTableV3 is StakeTableV2 {
     {
         ensureValidatorActive(msg.sender);
 
-        require(x25519Key != bytes32(0), InvalidX25519Key());
+        ensureCanonicalX25519Key(x25519Key);
         require(!x25519Keys[x25519Key], X25519KeyAlreadyUsed());
         validateP2pAddr(p2pAddr);
 
