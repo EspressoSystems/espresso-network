@@ -4707,6 +4707,7 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
+ "chrono",
  "clap 4.6.1",
  "derive_builder",
  "derive_more 2.1.1",
@@ -4724,6 +4725,7 @@ dependencies = [
  "test-log",
  "tide-disco",
  "tokio",
+ "toml",
  "tracing",
  "url",
  "vbs",
