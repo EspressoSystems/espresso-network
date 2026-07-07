@@ -18,7 +18,7 @@ use hotshot_types::{
     },
 };
 
-use crate::membership::stake_table::{TestDaCommittees, TestStakeTable, TestStakeTableEntry};
+use crate::membership::stake_table::{TestCommitteeSchedule, TestStakeTable, TestStakeTableEntry};
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 /// Static stake table that doesn't use DRB results for leader election
@@ -30,7 +30,7 @@ pub struct StaticStakeTable<
 
     da_members: Vec<TestStakeTableEntry<PubKey, StatePubKey>>,
 
-    quorum_committees: TestDaCommittees<PubKey, StatePubKey>,
+    quorum_committees: TestCommitteeSchedule<PubKey, StatePubKey>,
 
     first_epoch: Option<u64>,
 
@@ -38,7 +38,7 @@ pub struct StaticStakeTable<
 
     drb_results: BTreeMap<u64, DrbResult>,
 
-    da_committees: TestDaCommittees<PubKey, StatePubKey>,
+    da_committees: TestCommitteeSchedule<PubKey, StatePubKey>,
 }
 
 impl<PubKey, StatePubKey> TestStakeTable<PubKey, StatePubKey>
@@ -55,11 +55,11 @@ where
         Self {
             quorum_members,
             da_members,
-            quorum_committees: TestDaCommittees::new(),
+            quorum_committees: TestCommitteeSchedule::new(),
             first_epoch: None,
             epochs: BTreeSet::new(),
             drb_results: BTreeMap::new(),
-            da_committees: TestDaCommittees::new(),
+            da_committees: TestCommitteeSchedule::new(),
         }
     }
 

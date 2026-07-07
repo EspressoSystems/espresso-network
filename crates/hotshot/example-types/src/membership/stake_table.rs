@@ -50,10 +50,10 @@ impl<TYPES: NodeType> From<TestStakeTableEntry<TYPES::SignatureKey, TYPES::State
     }
 }
 
-// Map from first epoch to committee stake table entries. Despite the name,
-// also reused for per-epoch quorum committee schedules.
+/// Per-epoch committee schedule: each entry is the committee effective from
+/// its first epoch (inclusive) until the next scheduled change.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct TestDaCommittees<
+pub struct TestCommitteeSchedule<
     PubKey: SignatureKey,
     StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
 >(BTreeMap<u64, Vec<TestStakeTableEntry<PubKey, StatePubKey>>>);
@@ -61,7 +61,7 @@ pub struct TestDaCommittees<
 impl<
     PubKey: SignatureKey,
     StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
-> TestDaCommittees<PubKey, StatePubKey>
+> TestCommitteeSchedule<PubKey, StatePubKey>
 {
     pub fn new() -> Self {
         Self(BTreeMap::new())
@@ -92,7 +92,7 @@ impl<
 impl<
     PubKey: SignatureKey,
     StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
-> Default for TestDaCommittees<PubKey, StatePubKey>
+> Default for TestCommitteeSchedule<PubKey, StatePubKey>
 {
     fn default() -> Self {
         Self::new()
