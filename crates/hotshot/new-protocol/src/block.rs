@@ -216,8 +216,8 @@ impl<T: NodeType> BlockBuilder<T> {
             // share (delivered via unicast loopback, which is how the leader
             // obtains the share it votes with). A critical send failure is
             // logged, not fatal.
-            spawn_blocking(move || {
-                if let Err(err) = fanout::fan_out::<T>(
+            let fanout_handle = spawn_blocking(move || {
+                fanout::fan_out::<T>(
                     shares,
                     common,
                     commitment,
@@ -227,8 +227,15 @@ impl<T: NodeType> BlockBuilder<T> {
                     network,
                     public_key,
                     private_key,
-                ) {
-                    error!(%view, %err, "vid share fanout failed");
+                )
+            });
+            // Surface fanout failures and panics; a detached blocking task would
+            // otherwise swallow them silently.
+            tokio::spawn(async move {
+                match fanout_handle.await {
+                    Ok(Ok(())) => {},
+                    Ok(Err(err)) => error!(%view, %err, "vid share fanout failed"),
+                    Err(err) => error!(%view, %err, "vid share fanout task panicked"),
                 }
             });
             let payload_commitment = VidCommitment::V2(commitment);
