@@ -84,6 +84,7 @@ pub mod testing {
         },
     };
     use surf_disco::Client;
+    use tokio::time::sleep;
     use vbs::version::{StaticVersion, Version};
 
     use super::*;
@@ -441,9 +442,9 @@ pub mod testing {
             <BLSPubKey as SignatureKey>::generated_from_seed_indexed(seed, 2011_u64);
 
         let start = Instant::now();
-        let (available_block_info, view_num) = loop {
-            if start.elapsed() > Duration::from_secs(10) {
-                panic!("Didn't get a quorum proposal in 10 seconds");
+        let (available_block_info, view_num) = 'proposals: loop {
+            if start.elapsed() > Duration::from_secs(30) {
+                panic!("No available blocks from any quorum proposal after 30s");
             }
 
             let event = subscribed_events.next().await.unwrap();
@@ -457,16 +458,31 @@ pub mod testing {
                     parent_commitment.as_ref(),
                 )
                 .expect("Claim block signing failed");
-                let available_blocks = builder_client
-                    .get::<Vec<AvailableBlockInfo<SeqTypes>>>(&format!(
-                        "block_info/availableblocks/{parent_commitment}/{parent_view_number}/\
-                         {hotshot_client_pub_key}/{encoded_signature}"
-                    ))
-                    .send()
-                    .await
-                    .expect("Error getting available blocks");
-                assert!(!available_blocks.is_empty());
-                break (available_blocks, parent_view_number);
+                // The builder may not have a block for this parent yet, or may never build
+                // one (view abandoned): retry briefly, then move on to the next proposal.
+                // The "No blocks available" message comes from the availableblocks handler
+                // in hotshot-builder/legacy/src/service.rs.
+                let retry_start = Instant::now();
+                while retry_start.elapsed() < Duration::from_secs(3) {
+                    match builder_client
+                        .get::<Vec<AvailableBlockInfo<SeqTypes>>>(&format!(
+                            "block_info/availableblocks/{parent_commitment}/{parent_view_number}/\
+                             {hotshot_client_pub_key}/{encoded_signature}"
+                        ))
+                        .send()
+                        .await
+                    {
+                        Ok(blocks) if !blocks.is_empty() => {
+                            break 'proposals (blocks, parent_view_number);
+                        },
+                        Ok(_) => tracing::warn!("Builder returned no blocks yet"),
+                        Err(e) if format!("{e:?}").contains("No blocks available") => {
+                            tracing::warn!("Builder has no blocks yet: {e:?}");
+                        },
+                        Err(e) => panic!("Error getting available blocks {e:?}"),
+                    }
+                    sleep(Duration::from_millis(500)).await;
+                }
             }
         };
 

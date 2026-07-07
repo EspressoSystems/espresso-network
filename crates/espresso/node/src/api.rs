@@ -8025,6 +8025,30 @@ mod test {
                 // Wait for the availability query service to index avail_block.
                 wait_until_block_height(&client, "node/block-height", avail_block).await;
 
+                // Sample a fee account for the fee-state comparisons below.
+                // `validated_state` was captured before the fee-paying blocks above were
+                // decided, so its fee tree can still be empty; poll the decided state while
+                // consensus is still running (it is frozen after stop_consensus). The
+                // decided state can also contain accounts added after `avail_block`, so
+                // only accept an account provable at the `avail_block` snapshot queried
+                // in the comparisons.
+                let fee_account = 'fee_account: loop {
+                    let state = network.server.decided_state().await.unwrap();
+                    for (addr, _) in state.fee_merkle_tree.iter() {
+                        if client
+                            .get::<MerkleProof<FeeAmount, FeeAccount, Sha3Node, 256>>(&format!(
+                                "fee-state/{avail_block}/{addr}"
+                            ))
+                            .send()
+                            .await
+                            .is_ok()
+                        {
+                            break 'fee_account *addr;
+                        }
+                    }
+                    sleep(Duration::from_millis(500)).await;
+                };
+
                 network.stop_consensus().await;
 
                 let http = reqwest::Client::new();
@@ -8502,14 +8526,8 @@ mod test {
                 )
                 .await?;
 
-                // fee-state path by height for a known fee account, and
-                // fee-balance/latest for the same account.
-                let fee_account = validated_state
-                    .fee_merkle_tree
-                    .iter()
-                    .next()
-                    .map(|(addr, _)| *addr)
-                    .expect("fee tree should have at least one account");
+                // fee-state path by height for a known fee account (sampled above while
+                // consensus was running), and fee-balance/latest for the same account.
                 compare_endpoints(
                     &http,
                     api_port,
