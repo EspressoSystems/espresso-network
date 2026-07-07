@@ -191,7 +191,7 @@ impl<T: NodeType> BlockBuilder<T> {
             // commitment from that same computation (this crate always disperses
             // V2/AvidmGf2 shares). Runs on a blocking thread; the proposal is not
             // gated on the fanout that follows.
-            let (commitment, common, shares, param, recipients, ns_table) =
+            let (commitment, common, shares, recipients) =
                 spawn_blocking(move || -> Result<_, BlockError> {
                     let params = VidDisperse2::<T>::disperse_params(
                         payload_bytes,
@@ -207,14 +207,7 @@ impl<T: NodeType> BlockBuilder<T> {
                         params.ns_table.iter().cloned(),
                     )
                     .map_err(|e| BlockError::VidDisperse(e.to_string()))?;
-                    Ok((
-                        commitment,
-                        common,
-                        shares,
-                        params.param,
-                        params.recipients,
-                        params.ns_table,
-                    ))
+                    Ok((commitment, common, shares, params.recipients))
                 })
                 .await
                 .map_err(|e| BlockError::VidDisperse(e.to_string()))??;
@@ -228,9 +221,7 @@ impl<T: NodeType> BlockBuilder<T> {
                     shares,
                     common,
                     commitment,
-                    param,
                     recipients,
-                    ns_table,
                     view,
                     epoch,
                     network,
