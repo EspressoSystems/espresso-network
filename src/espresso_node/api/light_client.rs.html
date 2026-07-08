@@ -33,7 +33,7 @@
 <a href=#33 id=33 data-nosnippet>33</a>
 <a href=#34 id=34 data-nosnippet>34</a><span class="kw">use </span><span class="kw">crate</span>::api::data_source::{NodeStateDataSource, StakeTableDataSource};
 <a href=#35 id=35 data-nosnippet>35</a>
-<a href=#36 id=36 data-nosnippet>36</a><span class="kw">async fn </span>get_leaf_proof_with_qc_chain&lt;State&gt;(
+<a href=#36 id=36 data-nosnippet>36</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>get_leaf_proof_with_qc_chain&lt;State&gt;(
 <a href=#37 id=37 data-nosnippet>37</a>    state: <span class="kw-2">&amp;</span>State,
 <a href=#38 id=38 data-nosnippet>38</a>    requested_leaf: LeafQueryData&lt;SeqTypes&gt;,
 <a href=#39 id=39 data-nosnippet>39</a>    fetch_timeout: Duration,
@@ -84,7 +84,7 @@
 <a href=#84 id=84 data-nosnippet>84</a>/// the proof contains only that leaf plus cert2. Otherwise, the proof includes the chain from the
 <a href=#85 id=85 data-nosnippet>85</a>/// requested leaf through the directly committed descendant; the verifier checks parent commitments
 <a href=#86 id=86 data-nosnippet>86</a>/// to prove the requested leaf is on that finalized chain.
-<a href=#87 id=87 data-nosnippet>87</a></span><span class="kw">async fn </span>get_leaf_proof_with_cert2&lt;State&gt;(
+<a href=#87 id=87 data-nosnippet>87</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>get_leaf_proof_with_cert2&lt;State&gt;(
 <a href=#88 id=88 data-nosnippet>88</a>    state: <span class="kw-2">&amp;</span>State,
 <a href=#89 id=89 data-nosnippet>89</a>    requested_leaf: LeafQueryData&lt;SeqTypes&gt;,
 <a href=#90 id=90 data-nosnippet>90</a>    fetch_timeout: Duration,
@@ -153,7 +153,7 @@
 <a href=#153 id=153 data-nosnippet>153</a>    <span class="prelude-val">Err</span>(not_found(<span class="string">"missing cert2 leaf"</span>))
 <a href=#154 id=154 data-nosnippet>154</a>}
 <a href=#155 id=155 data-nosnippet>155</a>
-<a href=#156 id=156 data-nosnippet>156</a><span class="kw">async fn </span>get_leaf_proof_with_finalized_assumption&lt;State&gt;(
+<a href=#156 id=156 data-nosnippet>156</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>get_leaf_proof_with_finalized_assumption&lt;State&gt;(
 <a href=#157 id=157 data-nosnippet>157</a>    state: <span class="kw-2">&amp;</span>State,
 <a href=#158 id=158 data-nosnippet>158</a>    requested_leaf: LeafQueryData&lt;SeqTypes&gt;,
 <a href=#159 id=159 data-nosnippet>159</a>    finalized: usize,
@@ -193,7 +193,7 @@
 <a href=#193 id=193 data-nosnippet>193</a>    <span class="prelude-val">Ok</span>(proof)
 <a href=#194 id=194 data-nosnippet>194</a>}
 <a href=#195 id=195 data-nosnippet>195</a>
-<a href=#196 id=196 data-nosnippet>196</a><span class="kw">async fn </span>get_header_proof&lt;State&gt;(
+<a href=#196 id=196 data-nosnippet>196</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>get_header_proof&lt;State&gt;(
 <a href=#197 id=197 data-nosnippet>197</a>    state: <span class="kw-2">&amp;</span>State,
 <a href=#198 id=198 data-nosnippet>198</a>    root: u64,
 <a href=#199 id=199 data-nosnippet>199</a>    requested: BlockId&lt;SeqTypes&gt;,
@@ -232,7 +232,7 @@
 <a href=#232 id=232 data-nosnippet>232</a>    <span class="prelude-val">Ok</span>(HeaderProof::new(header, path))
 <a href=#233 id=233 data-nosnippet>233</a>}
 <a href=#234 id=234 data-nosnippet>234</a>
-<a href=#235 id=235 data-nosnippet>235</a><span class="kw">async fn </span>fetch_block_data_range&lt;State&gt;(
+<a href=#235 id=235 data-nosnippet>235</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>fetch_block_data_range&lt;State&gt;(
 <a href=#236 id=236 data-nosnippet>236</a>    state: <span class="kw-2">&amp;</span>State,
 <a href=#237 id=237 data-nosnippet>237</a>    start: usize,
 <a href=#238 id=238 data-nosnippet>238</a>    end: usize,
@@ -322,7 +322,7 @@
 <a href=#322 id=322 data-nosnippet>322</a>}
 <a href=#323 id=323 data-nosnippet>323</a>
 <a href=#324 id=324 data-nosnippet>324</a><span class="doccomment">/// Single-namespace version of [`get_namespaces_proof_range`].
-<a href=#325 id=325 data-nosnippet>325</a></span><span class="kw">async fn </span>get_namespace_proof_range&lt;State&gt;(
+<a href=#325 id=325 data-nosnippet>325</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>get_namespace_proof_range&lt;State&gt;(
 <a href=#326 id=326 data-nosnippet>326</a>    state: <span class="kw-2">&amp;</span>State,
 <a href=#327 id=327 data-nosnippet>327</a>    start: usize,
 <a href=#328 id=328 data-nosnippet>328</a>    end: usize,

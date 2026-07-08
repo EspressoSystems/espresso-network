@@ -1137,7 +1137,7 @@
 <a href=#1137 id=1137 data-nosnippet>1137</a>    <span class="prelude-val">Ok</span>(api)
 <a href=#1138 id=1138 data-nosnippet>1138</a>}
 <a href=#1139 id=1139 data-nosnippet>1139</a>
-<a href=#1140 id=1140 data-nosnippet>1140</a><span class="kw">fn </span>get_public_env_vars() -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;String&gt;&gt; {
+<a href=#1140 id=1140 data-nosnippet>1140</a><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">fn </span>get_public_env_vars() -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;String&gt;&gt; {
 <a href=#1141 id=1141 data-nosnippet>1141</a>    <span class="kw">let </span>toml: toml::Value = toml::from_str(<span class="macro">include_str!</span>(<span class="string">"../../api/public-env-vars.toml"</span>))<span class="question-mark">?</span>;
 <a href=#1142 id=1142 data-nosnippet>1142</a>
 <a href=#1143 id=1143 data-nosnippet>1143</a>    <span class="kw">let </span>keys = toml
