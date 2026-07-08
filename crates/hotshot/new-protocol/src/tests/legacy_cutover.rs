@@ -42,7 +42,10 @@ use hotshot_types::{
     x25519::Keypair,
 };
 use tokio::{
-    sync::mpsc::{self, UnboundedSender},
+    sync::{
+        mpsc::{self, UnboundedSender},
+        watch,
+    },
     task::AbortHandle,
     time::sleep,
 };
@@ -52,7 +55,7 @@ use versions::{NEW_PROTOCOL_VERSION, Upgrade, version};
 use crate::{
     consensus::ConsensusOutput,
     coordinator::{Coordinator, CoordinatorOutput, error::Severity, timer::Timer},
-    cutover::{CutoverGate, forward_legacy_high_qc, forward_legacy_timeout_votes},
+    cutover::{CutoverGate, crossed, forward_legacy_high_qc, forward_legacy_timeout_votes},
     helpers::test_upgrade_lock,
     network::Cliquenet,
     outbox::Outbox,
@@ -335,22 +338,39 @@ async fn run_cutover_node(
     decision_tx: UnboundedSender<DecisionEvent>,
     external_events_tx: async_broadcast::Sender<Event<TestTypes>>,
     legacy: Arc<RwLock<SystemContextHandle<TestTypes, MemoryImpl>>>,
-    cutover_gate: CutoverGate,
+    cutover_gate: Arc<CutoverGate>,
 ) {
-    // Mirror production (`consensus_handle::run_coordinator`): kick the
-    // coordinator before pumping the event loop so it runs from genesis
-    // until the cutover seed lands.
-    coord.start();
     let client_api = coord.client_api().clone();
 
-    loop {
-        // Mirror production (`ConsensusHandle::cutover_active`): poll the
-        // cutover gate
-        if !cutover_gate.is_active() {
-            let guard = legacy.read().await;
-            cutover_gate.check(&guard, &client_api).await;
+    // Mirror production (`ConsensusHandle::cutover_active`): a separate task
+    // — in production the event handler — wakes the runner as soon as legacy
+    // crosses into the new version, and only then dispatches the seed via
+    // the gate, so the running main loop below services it.
+    let (activated_tx, mut activated) = watch::channel(false);
+    tokio::spawn({
+        let cutover_gate = cutover_gate.clone();
+        let legacy = legacy.clone();
+        let client_api = client_api.clone();
+        async move {
+            loop {
+                {
+                    let guard = legacy.read().await;
+                    if crossed(&guard).await {
+                        let _ = activated_tx.send(true);
+                        cutover_gate.check(&guard, &client_api).await;
+                        return;
+                    }
+                }
+                sleep(Duration::from_millis(20)).await;
+            }
         }
+    });
 
+    if activated.wait_for(|active| *active).await.is_err() {
+        return;
+    }
+
+    loop {
         match coord.next_consensus_input().await {
             Ok(input) => coord.apply_consensus(input),
             Err(err) if err.severity == Severity::Critical => {
@@ -434,7 +454,7 @@ async fn spawn_node(
         decision_tx,
         external_events_tx,
         legacy,
-        CutoverGate::new(),
+        Arc::new(CutoverGate::new()),
     ))
     .abort_handle();
 

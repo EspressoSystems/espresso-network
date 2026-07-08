@@ -28,6 +28,17 @@ use versions::NEW_PROTOCOL_VERSION;
 
 use crate::{client::ClientApi, consensus::PreCutoverSeed};
 
+/// Whether legacy consensus has crossed into the new protocol at its
+/// current view.
+pub async fn crossed<T, I>(legacy: &SystemContextHandle<T, I>) -> bool
+where
+    T: NodeType,
+    I: NodeImplementation<T>,
+{
+    let cur_view = legacy.cur_view().await;
+    legacy.hotshot.upgrade_lock.version_infallible(cur_view) >= NEW_PROTOCOL_VERSION
+}
+
 /// Walk legacy state to produce a [`PreCutoverSeed`]; `None` on
 /// a broken walk.
 pub async fn extract_pre_cutover_seed<T, I>(
@@ -123,10 +134,7 @@ impl CutoverGate {
         if self.is_active() {
             return true;
         }
-        let cur_view = legacy.cur_view().await;
-        let crossed =
-            legacy.hotshot.upgrade_lock.version_infallible(cur_view) >= NEW_PROTOCOL_VERSION;
-        if !crossed {
+        if !crossed(legacy).await {
             return false;
         }
 

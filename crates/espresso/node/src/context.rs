@@ -21,6 +21,7 @@ use hotshot::SystemContext;
 use hotshot_events_service::events_source::{EventConsumer, EventsStreamer};
 use hotshot_new_protocol::{
     coordinator::Coordinator,
+    cutover::crossed,
     network::{Cliquenet, NetworkError},
 };
 use hotshot_orchestrator::client::OrchestratorClient;
@@ -183,63 +184,75 @@ where
         .await?
         .0;
 
-        let mut coordinator_network =
-            coordinator_network(handle.hotshot.upgrade_lock.clone()).await?;
+        // Only create the new protocol coordinator and its cliquenet network
+        // when the configured version can reach the new protocol
+        let new_protocol_configured =
+            std::cmp::max(upgrade.base, upgrade.target) >= NEW_PROTOCOL_VERSION;
+        // Already on the new protocol at startup (vs merely configured for a
+        // future upgrade) — the same check the cutover gate uses.
+        let new_protocol_active = new_protocol_configured && crossed(&handle).await;
+        let coordinator = if new_protocol_configured {
+            let mut coordinator_network =
+                coordinator_network(handle.hotshot.upgrade_lock.clone()).await?;
 
-        // `load_start_epoch_info` ran inside `SystemContext::init`, so
-        // `first_epoch` is now seeded on the shared membership. Walk the
-        // catchup chain forward to populate the stake-table window for the
-        // current epoch.
-        //
-        // Only the new protocol (cliquenet) needs this
-        let max_configured_version = std::cmp::max(upgrade.base, upgrade.target);
-        if max_configured_version >= NEW_PROTOCOL_VERSION {
-            let current_epoch = bootstrap_epoch_window(
-                &membership_coordinator,
-                epoch_height,
-                bootstrap_epoch_catchup_timeout,
-            )
-            .await
-            .context("startup stake-table catchup failed")?;
-            tracing::info!(%current_epoch, "Startup catchup complete");
+            // `load_start_epoch_info` ran inside `SystemContext::init`, so
+            // `first_epoch` is now seeded on the shared membership. Walk the
+            // catchup chain forward to populate the stake-table window for the
+            // current epoch.
+            if new_protocol_active {
+                let current_epoch = bootstrap_epoch_window(
+                    &membership_coordinator,
+                    epoch_height,
+                    bootstrap_epoch_catchup_timeout,
+                )
+                .await
+                .context("startup stake-table catchup failed")?;
+                tracing::info!(%current_epoch, "Startup catchup complete");
 
-            // Push the resolved peer window into the coordinator network. For
-            // cliquenet this dials the N-1/N/N+1 sliding window for the current
-            // epoch before consensus starts.
-            if let Err(err) =
-                coordinator_network.apply_epoch(current_epoch, &membership_coordinator)
-            {
-                tracing::warn!(%current_epoch, %err, "coordinator network apply_epoch failed at startup");
+                // Push the resolved peer window into the coordinator network. For
+                // cliquenet this dials the N-1/N/N+1 sliding window for the current
+                // epoch before consensus starts.
+                if let Err(err) =
+                    coordinator_network.apply_epoch(current_epoch, &membership_coordinator)
+                {
+                    tracing::warn!(%current_epoch, %err, "coordinator network apply_epoch failed at startup");
+                }
             }
-        }
 
-        // Restore the persisted lock so the new protocol resumes with the lock
-        // it actually held, not the older decided-anchor QC.
-        let locked_qc = persistence
-            .load_high_qc2()
-            .await
-            .context("loading persisted locked QC")?;
+            // Restore the persisted lock so the new protocol resumes with the lock
+            // it actually held, not the older decided-anchor QC.
+            let locked_qc = persistence
+                .load_high_qc2()
+                .await
+                .context("loading persisted locked QC")?;
 
-        let coordinator = Coordinator::maker()
-            .membership_coordinator(membership_coordinator.clone())
-            .network(coordinator_network)
-            .initializer(&initializer_for_coordinator)
-            .upgrade_lock(handle.hotshot.upgrade_lock.clone())
-            .public_key(validator_config.public_key)
-            .private_key(validator_config.private_key.clone())
-            .state_private_key(validator_config.state_private_key.clone())
-            .stake_table_capacity(stake_table_capacity)
-            .timeout_duration(Duration::from_secs(10))
-            .storage(Arc::clone(&persistence))
-            .metrics(metrics)
-            .maybe_locked_qc(locked_qc)
-            .make();
+            Some(
+                Coordinator::maker()
+                    .membership_coordinator(membership_coordinator.clone())
+                    .network(coordinator_network)
+                    .initializer(&initializer_for_coordinator)
+                    .upgrade_lock(handle.hotshot.upgrade_lock.clone())
+                    .public_key(validator_config.public_key)
+                    .private_key(validator_config.private_key.clone())
+                    .state_private_key(validator_config.state_private_key.clone())
+                    .stake_table_capacity(stake_table_capacity)
+                    .timeout_duration(Duration::from_secs(10))
+                    .storage(Arc::clone(&persistence))
+                    .metrics(metrics)
+                    .maybe_locked_qc(locked_qc)
+                    .make(),
+            )
+        } else {
+            tracing::info!("new protocol not configured");
+            None
+        };
 
         let legacy_event_rx = handle.event_stream_known_impl().deactivate();
         let hotshot_handle = Arc::new(RwLock::new(handle));
         let consensus_handle = Arc::new(ConsensusHandle::new(
             hotshot_handle.clone(),
             coordinator,
+            new_protocol_active,
             epoch_height,
             legacy_event_rx,
             EXTERNAL_EVENT_CHANNEL_SIZE,
