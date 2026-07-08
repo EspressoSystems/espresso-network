@@ -1,26 +1,34 @@
+#[cfg(feature = "full")]
 use std::time::Duration;
 
+use alloy::primitives::U256;
+#[cfg(feature = "full")]
 use alloy::{
     contract::SolCallBuilder,
     network::ReceiptResponse,
-    primitives::U256,
     providers::{Provider, ProviderBuilder},
     rpc::types::TransactionReceipt,
     sol_types::{GenericContractError, SolCall},
 };
+#[cfg(feature = "full")]
 use anyhow::anyhow;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, SerializationError};
 use committable::{Commitment, Committable};
+#[cfg(feature = "full")]
 use tokio::time::sleep;
+#[cfg(feature = "full")]
 use url::Url;
 
 pub mod build_info;
 pub mod env_compat;
+#[cfg(feature = "full")]
 pub mod logging;
 pub mod ser;
+#[cfg(feature = "full")]
 pub mod shutdown;
 pub mod test_utils;
 
+#[cfg(feature = "full")]
 pub async fn wait_for_http(
     url: &Url,
     interval: Duration,
@@ -38,6 +46,7 @@ pub async fn wait_for_http(
     Err(format!("Url {url:?} not available."))
 }
 
+#[cfg(feature = "full")]
 pub async fn wait_for_rpc(
     url: &Url,
     interval: Duration,
@@ -88,6 +97,7 @@ macro_rules! impl_to_fixed_bytes {
 /// - `wait_for_transaction_to_be_mined` is removed thanks to alloy's better builtin PendingTransaction await
 /// - DON'T use this if you want parse the exact revert reason/type, since this func will only give err msg like: "custom error 0x23b0db14",
 ///   instead, follow <https://docs.rs/alloy/0.12.5/alloy/contract/enum.Error.html#method.as_decoded_interface_error> to pattern-match err type
+#[cfg(feature = "full")]
 pub async fn contract_send<P, C>(
     call: &SolCallBuilder<P, C>,
 ) -> Result<(TransactionReceipt, u64), anyhow::Error>

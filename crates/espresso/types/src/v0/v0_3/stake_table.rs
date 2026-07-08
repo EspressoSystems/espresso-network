@@ -7,7 +7,6 @@ use alloy::{
 use async_lock::{Mutex, RwLock};
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use derive_more::derive::{From, Into};
-use hotshot::types::SignatureKey;
 use hotshot_contract_adapter::sol_types::StakeTableV3::{
     CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, P2pAddrUpdated,
     Undelegated, UndelegatedV2, ValidatorExit, ValidatorExitV2, ValidatorRegistered,
@@ -15,7 +14,7 @@ use hotshot_contract_adapter::sol_types::StakeTableV3::{
 };
 use hotshot_types::{
     PeerConfig, addr::NetAddr, data::EpochNumber, light_client::StateVerKey,
-    network::PeerConfigKeys, x25519,
+    network::PeerConfigKeys, traits::signature_key::SignatureKey, x25519,
 };
 use itertools::Itertools;
 use jf_utils::to_bytes;
@@ -25,6 +24,7 @@ use tokio::task::JoinHandle;
 use vbs::version::Version;
 use versions::NEW_PROTOCOL_VERSION;
 
+#[cfg(feature = "node")]
 use super::L1Client;
 use crate::{
     AuthenticatedValidatorMap, SeqTypes,
@@ -279,9 +279,11 @@ pub struct Fetcher {
     #[debug(skip)]
     pub(crate) persistence: Arc<Mutex<dyn MembershipPersistence>>,
     /// L1 provider
+    #[cfg(feature = "node")]
     pub(crate) l1_client: L1Client,
     /// Verifiable `ChainConfig` holding contract address
     pub(crate) chain_config: Arc<Mutex<ChainConfig>>,
+    #[cfg_attr(not(feature = "node"), allow(dead_code))]
     pub(crate) update_task: Arc<StakeTableUpdateTask>,
     pub initial_supply: Arc<RwLock<Option<U256>>>,
 }

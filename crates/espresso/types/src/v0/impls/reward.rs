@@ -11,11 +11,11 @@ use ark_serialize::{
 use espresso_utils::{
     impl_serde_from_string_or_integer, impl_to_fixed_bytes, ser::FromStringOrInteger,
 };
-use hotshot::types::BLSPubKey;
 use hotshot_contract_adapter::reward::RewardProofSiblings;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
+    signature_key::BLSPubKey,
     stake_table::HSStakeTable,
     traits::election::{Membership, MembershipSnapshot},
     utils::epoch_from_block_number,
