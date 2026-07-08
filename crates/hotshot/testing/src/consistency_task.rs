@@ -339,18 +339,19 @@ impl<TYPES: NodeType<BlockHeader = TestBlockHeader>> ConsistencyTask<TYPES> {
     pub async fn check_view_failure(&self) -> Result<()> {
         let sanitized_network_map = sanitize_network_map(&self.consensus_leaves)?;
 
-        let mut inverted_map = invert_network_map::<TYPES>(&sanitized_network_map).await?;
+        let inverted_map = invert_network_map::<TYPES>(&sanitized_network_map).await?;
 
-        let (current_view, _) = inverted_map
-            .pop_last()
-            .context(error!("Leaf map is empty, which should be impossible"))?;
-        let Some((last_view, _)) = inverted_map.pop_last() else {
-            // the view cannot fail if there wasn't a prior view in the map.
+        let decided_views: Vec<u64> = inverted_map.keys().map(|view| **view).collect();
+        // the view cannot fail if there wasn't a prior view in the map.
+        if decided_views.len() < 2 {
             return Ok(());
-        };
+        }
 
-        // filter out views we expected to (possibly) fail
-        let unexpected_failed_views: Vec<_> = (*(last_view + 1)..*current_view)
+        // collect all gap views across the run, filtering out views we expected to
+        // (possibly) fail
+        let unexpected_failed_views: Vec<u64> = decided_views
+            .windows(2)
+            .flat_map(|pair| (pair[0] + 1)..pair[1])
             .filter(|view| {
                 !self.safety_properties.expected_view_failures.contains(view)
                     && !self.safety_properties.possible_view_failures.contains(view)
@@ -358,9 +359,10 @@ impl<TYPES: NodeType<BlockHeader = TestBlockHeader>> ConsistencyTask<TYPES> {
             .collect();
 
         ensure!(
-            unexpected_failed_views.is_empty(),
-            "Unexpected failed views: {:?}",
-            unexpected_failed_views
+            unexpected_failed_views.len() <= self.safety_properties.max_unexpected_view_failures,
+            "Unexpected failed views: {:?} (allowed: {})",
+            unexpected_failed_views,
+            self.safety_properties.max_unexpected_view_failures
         );
 
         Ok(())
