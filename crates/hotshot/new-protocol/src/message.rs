@@ -78,7 +78,6 @@ pub type VidShareFragmentMessage<T> = SignedProposal<T, AvidmGf2DisperseShareFra
 #[serde(bound(deserialize = ""))]
 pub struct Vote1<T: NodeType> {
     pub vote: QuorumVote2<T>,
-    pub vid_share: VidDisperseShare2<T>,
     /// Populated only when voting on an epoch-root leaf. Required there; absent otherwise.
     pub state_vote: Option<LightClientStateUpdateVote2<T>>,
 }
@@ -165,7 +164,10 @@ pub enum ConsensusMessage<T: NodeType, S> {
     TimeoutVote(TimeoutVoteMessage<T>),
     TimeoutCertificate(TimeoutCertificate2<T>),
     EpochChange(EpochChangeMessage<T>),
+    /// The leader's unicast of a per-namespace VID share fragment.
     VidShareFragment(VidShareFragmentMessage<T>),
+    /// A node's own VID share, broadcast independently of Vote1.
+    VidShareBroadcast(VidDisperseShare2<T>),
 }
 
 impl<T: NodeType, S> ConsensusMessage<T, S> {
@@ -181,6 +183,7 @@ impl<T: NodeType, S> ConsensusMessage<T, S> {
             Self::TimeoutCertificate(c) => ConsensusMessage::TimeoutCertificate(c),
             Self::EpochChange(c) => ConsensusMessage::EpochChange(c),
             Self::VidShareFragment(v) => ConsensusMessage::VidShareFragment(v),
+            Self::VidShareBroadcast(v) => ConsensusMessage::VidShareBroadcast(v),
         }
     }
 }
@@ -197,6 +200,7 @@ impl<T: NodeType, S> HasViewNumber for ConsensusMessage<T, S> {
             Self::TimeoutCertificate(certificate) => certificate.view_number(),
             Self::EpochChange(epoch_change) => epoch_change.cert1.view_number(),
             Self::VidShareFragment(fragment) => fragment.data.view_number(),
+            Self::VidShareBroadcast(vid_share) => vid_share.view_number(),
         }
     }
 }

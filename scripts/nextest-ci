@@ -29,6 +29,17 @@ Examples:
         --workflow test.yml \
         --artifact-name test-stats-test \
         --out main-test-stats.json
+
+    # Render the flaky/failing issue body to stdout (dry-run, no network).
+    scripts/nextest-ci flaky-issue \
+        --stats hotshot:main-hotshot-stats.json \
+        --stats espresso:main-test-stats.json
+
+    # Create or update the tracking issue on GitHub.
+    scripts/nextest-ci flaky-issue \
+        --stats hotshot:main-hotshot-stats.json \
+        --stats espresso:main-test-stats.json \
+        --update
 """
 
 import argparse
@@ -39,7 +50,9 @@ import subprocess
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -227,6 +240,78 @@ def build_pr_comment(
     return "\n".join(lines) + "\n"
 
 
+# Flaky-issue rendering (pure)
+
+FLAKY_ISSUE_MARKER = (
+    "<!-- managed by scripts/nextest-ci flaky-issue; do not edit by hand -->"
+)
+
+
+def history_strip(tid: str, runs_chrono: list[dict]) -> str:
+    # One square per run, oldest to newest: 🟥 failed, 🟨 flaky, ⬜ passed/absent.
+    cells = []
+    for r in runs_chrono:
+        if tid in r["failed"]:
+            cells.append("🟥")
+        elif tid in r["flaky"]:
+            cells.append("🟨")
+        else:
+            cells.append("⬜")
+    return "".join(cells)
+
+
+def _source_blocks(
+    sources: list[tuple[str, list[dict]]],
+    min_occurrences: int,
+) -> list[str]:
+    lines: list[str] = []
+    any_test = False
+    for name, runs in sources:
+        runs_chrono = sorted(runs, key=lambda r: r["timestamp"])
+        rows: list[tuple[int, int, str, str]] = []
+        ids = {tid for r in runs for tid in (*r["failed"], *r["flaky"])}
+        for tid in ids:
+            failed_count = sum(1 for r in runs if tid in r["failed"])
+            flaky_count = sum(1 for r in runs if tid in r["flaky"])
+            if failed_count + flaky_count < min_occurrences:
+                continue
+            rows.append(
+                (failed_count, flaky_count, tid, history_strip(tid, runs_chrono))
+            )
+        if not rows:
+            continue
+        any_test = True
+        rows.sort(key=lambda row: (-row[0], -row[1], row[2]))
+        lines.append(f"### {name}")
+        lines.append("")
+        lines.append("```")
+        lines.extend(f"{strip} {tid}" for _, _, tid, strip in rows)
+        lines.append("```")
+        lines.append("")
+    if not any_test:
+        return ["_None._", ""]
+    return lines
+
+
+def build_flaky_issue(
+    sources: list[tuple[str, list[dict]]],
+    timestamp: str,
+    min_occurrences: int,
+) -> str:
+    out: list[str] = [
+        FLAKY_ISSUE_MARKER,
+        "",
+        f"Flaky and failing tests on `main`, aggregated from recent CI runs per "
+        f"workflow. Updated {timestamp}.",
+        "",
+        "Each row is one test's recent run history, oldest to newest: "
+        "⬜ passed, 🟨 flaky (failed then passed on retry), 🟥 failed.",
+        "",
+    ]
+    out.extend(_source_blocks(sources, min_occurrences))
+    return "\n".join(out).rstrip("\n") + "\n"
+
+
 # gh helpers (stats-fetch subcommand)
 
 
@@ -296,6 +381,120 @@ def write_empty_runs(out: Path) -> None:
     out.write_text(json.dumps({"runs": []}))
 
 
+def fetch_run_entry(repo: str, run: dict, artifact_name: str) -> dict | None:
+    run_id = run["id"]
+    try:
+        artifacts_data = gh_json(
+            ["api", f"repos/{repo}/actions/runs/{run_id}/artifacts"]
+        )
+        artifacts = (
+            artifacts_data.get("artifacts", [])
+            if isinstance(artifacts_data, dict)
+            else []
+        )
+        match = next(
+            (
+                a
+                for a in artifacts
+                if a.get("name") == artifact_name and not a.get("expired", False)
+            ),
+            None,
+        )
+        if match is None:
+            log.debug("run %s has no matching artifact", run_id)
+            return None
+        return download_artifact(repo, run_id, artifact_name)
+    except (
+        subprocess.CalledProcessError,
+        json.JSONDecodeError,
+        RuntimeError,
+        OSError,
+    ) as e:
+        log.warning("run %s: skipping (%s)", run_id, e)
+        return None
+
+
+def _gh_run(args: list[str]) -> None:
+    cmd = ["gh", *args]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(
+            f"`{' '.join(cmd)}` exited {e.returncode}: {(e.stderr or '').strip()}"
+        ) from e
+
+
+def upsert_flaky_issue(repo: str, title: str, label: str, body: str) -> None:
+    with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as tmp:
+        tmp.write(body)
+        body_path = tmp.name
+    try:
+        existing = gh_json(
+            [
+                "issue",
+                "list",
+                "--repo",
+                repo,
+                "--label",
+                label,
+                "--state",
+                "open",
+                "--json",
+                "number",
+                "--limit",
+                "1",
+            ]
+        )
+        number = existing[0]["number"] if existing else None
+        if number is not None:
+            _gh_run(
+                [
+                    "issue",
+                    "edit",
+                    str(number),
+                    "--repo",
+                    repo,
+                    "--title",
+                    title,
+                    "--body-file",
+                    body_path,
+                ]
+            )
+            log.info("edited issue #%s in %s", number, repo)
+            return
+        _gh_run(
+            [
+                "label",
+                "create",
+                label,
+                "--repo",
+                repo,
+                "--force",
+                "--color",
+                "FBCA04",
+                "--description",
+                "Automatically maintained flaky/failing test tracker",
+            ]
+        )
+        _gh_run(
+            [
+                "issue",
+                "create",
+                "--repo",
+                repo,
+                "--title",
+                title,
+                "--label",
+                label,
+                "--body-file",
+                body_path,
+            ]
+        )
+        log.info("created issue in %s with label %s", repo, label)
+    finally:
+        os.unlink(body_path)
+
+
 # Subcommand implementations
 
 
@@ -319,9 +518,7 @@ def cmd_report(args: argparse.Namespace) -> int:
     # sticky PR comment. Skip writing it when there are no failures so the hash
     # is empty and the comment is cleaned up automatically.
     if args.pr_comment_out is not None and failing:
-        args.pr_comment_out.write_text(
-            build_pr_comment(failing, runs, args.run_url)
-        )
+        args.pr_comment_out.write_text(build_pr_comment(failing, runs, args.run_url))
     return 0
 
 
@@ -368,8 +565,12 @@ def cmd_stats_fetch(args: argparse.Namespace) -> int:
                 "branch=main",
                 "-F",
                 "event=push",
+                # All completed conclusions: a run with a hard test failure is
+                # conclusion=failure, but its stats artifact is exactly what we
+                # want. Runs that died before testing have no artifact and are
+                # skipped below.
                 "-F",
-                "status=success",
+                "status=completed",
                 "-F",
                 f"per_page={args.max_runs}",
             ]
@@ -379,44 +580,17 @@ def cmd_stats_fetch(args: argparse.Namespace) -> int:
         workflow_runs = runs_data.get("workflow_runs", [])
         # Defend against GitHub not guaranteeing newest-first ordering.
         workflow_runs.sort(key=lambda r: r.get("created_at", ""), reverse=True)
-        log.info("found %d successful main runs", len(workflow_runs))
+        log.info("found %d completed main runs", len(workflow_runs))
 
-        aggregated: list[dict] = []
-        for run in workflow_runs:
-            run_id = run["id"]
-            try:
-                artifacts_data = gh_json(
-                    ["api", f"repos/{repo}/actions/runs/{run_id}/artifacts"]
+        with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
+            # map preserves input order, so history stays newest-first.
+            entries = list(
+                pool.map(
+                    lambda run: fetch_run_entry(repo, run, args.artifact_name),
+                    workflow_runs,
                 )
-                artifacts = (
-                    artifacts_data.get("artifacts", [])
-                    if isinstance(artifacts_data, dict)
-                    else []
-                )
-                match = next(
-                    (
-                        a
-                        for a in artifacts
-                        if a.get("name") == args.artifact_name
-                        and not a.get("expired", False)
-                    ),
-                    None,
-                )
-                if match is None:
-                    log.debug("run %s has no matching artifact", run_id)
-                    continue
-                entry = download_artifact(repo, run_id, args.artifact_name)
-                if entry is None:
-                    continue
-                aggregated.append(entry)
-            except (
-                subprocess.CalledProcessError,
-                json.JSONDecodeError,
-                RuntimeError,
-                OSError,
-            ) as e:
-                log.warning("run %s: skipping (%s)", run_id, e)
-                continue
+            )
+        aggregated = [e for e in entries if e is not None]
 
         args.out.write_text(
             json.dumps({"runs": aggregated}, indent=2, sort_keys=False) + "\n"
@@ -432,6 +606,38 @@ def cmd_stats_fetch(args: argparse.Namespace) -> int:
         log.warning("fetch failed, continuing with empty history: %s", e, exc_info=True)
         write_empty_runs(args.out)
         return 0
+
+
+def _parse_stats_arg(spec: str) -> tuple[str, Path]:
+    name, sep, path = spec.partition(":")
+    if not sep or not name:
+        raise argparse.ArgumentTypeError(f"--stats expects SOURCE:PATH, got {spec!r}")
+    return name, Path(path)
+
+
+def cmd_flaky_issue(args: argparse.Namespace) -> int:
+    sources: list[tuple[str, list[dict]]] = []
+    for name, path in args.stats:
+        runs = load_main_stats(path)
+        if runs is None:
+            log.warning(
+                "source %s: no usable runs from %s; treating as zero", name, path
+            )
+            runs = []
+        sources.append((name, runs))
+
+    timestamp = args.timestamp or datetime.now(timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    body = build_flaky_issue(sources, timestamp, args.min_occurrences)
+
+    if args.update:
+        repo = resolve_repo()
+        upsert_flaky_issue(repo, args.title, args.label, body)
+        return 0
+
+    sys.stdout.write(body)
+    return 0
 
 
 def main() -> int:
@@ -512,7 +718,50 @@ def main() -> int:
         default=20,
         help="max recent main runs to scan for the artifact (default: 20, max: 100)",
     )
+    fetch.add_argument(
+        "--concurrency",
+        type=int,
+        default=8,
+        help="parallel gh requests when fetching per-run artifacts (default: 8)",
+    )
     fetch.set_defaults(func=cmd_stats_fetch)
+
+    issue = sub.add_parser(
+        "flaky-issue",
+        help="render or update a tracking issue of flaky/failing tests on main",
+    )
+    issue.add_argument(
+        "--stats",
+        required=True,
+        action="append",
+        type=_parse_stats_arg,
+        metavar="SOURCE:PATH",
+        help="labeled aggregated stats JSON (repeatable); e.g. test:main-test-stats.json",
+    )
+    issue.add_argument(
+        "--title",
+        default="Flaky and failing tests on main",
+        help="issue title",
+    )
+    issue.add_argument(
+        "--label", default="flaky-tests", help="label used to find/create the issue"
+    )
+    issue.add_argument(
+        "--min-occurrences",
+        type=int,
+        default=1,
+        help="only list tests with failed+flaky count >= this (default: 1)",
+    )
+    issue.add_argument(
+        "--timestamp",
+        help="ISO 8601 UTC timestamp shown in the body (default: now)",
+    )
+    issue.add_argument(
+        "--update",
+        action="store_true",
+        help="create or edit the GitHub issue (default: print body to stdout)",
+    )
+    issue.set_defaults(func=cmd_flaky_issue)
 
     args = parser.parse_args()
     logging.basicConfig(
