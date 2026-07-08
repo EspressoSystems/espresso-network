@@ -110,7 +110,7 @@ default-members = [
     "crates/espresso/utils",
     "vid",
 ]
-exclude = ["crates/espresso/node-sqlite"]
+exclude = ["crates/espresso/node-sqlite", "sp1"]
 # Note: workspace members/default-members reference directory paths, not crate names.
 
 [workspace.package]

@@ -1,0 +1,27 @@
+# SP1 zkVM guest proving that espresso-types (without the node feature) compiles
+# for and runs on the riscv32im-succinct-zkvm-elf target.
+[package]
+name = "espresso-sp1-program"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+alloy = { version = "1.0", default-features = false }
+anyhow = "1.0"
+committable = { git = "https://github.com/EspressoSystems/commit.git", features = [
+    "ark-serialize",
+] }
+espresso-types = { path = "../../crates/espresso/types", default-features = false }
+# The custom feature lets getrandom 0.2 compile for the zkVM target; sp1-zkvm
+# provides the __getrandom_custom implementation.
+getrandom = { version = "0.2", features = ["custom"] }
+hotshot-query-service-types = { path = "../../hotshot-query-service-types", default-features = false }
+hotshot-types = { path = "../../crates/hotshot/types" }
+serde_json = "1"
+sha2 = "0.10"
+# sp1-zkvm 3.x: newer majors pull the succinct plonky3 fork (p3-maybe-rayon
+# 0.2.3-succinct), which conflicts with the workspace vid crate's p3-maybe-rayon
+# 0.2 requirement (v6 additionally targets riscv64).
+sp1-zkvm = "3"
+vbs = "0.1"
+versions = { path = "../../crates/versions" }
