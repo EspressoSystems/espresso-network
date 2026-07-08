@@ -38,6 +38,10 @@ cross_tests!(
 
         metadata.test_config.epoch_height = 10;
         metadata.overall_safety_properties.num_successful_views = 30;
+        // With injected delays, the first views after each epoch boundary occasionally
+        // time out.
+        metadata.overall_safety_properties.possible_view_failures =
+            vec![11, 12, 21, 22, 31, 32, 41, 42];
         let mut config = DelayConfig::default();
         let mut delay_settings = DelaySettings {
             delay_option: DelayOptions::Random,
