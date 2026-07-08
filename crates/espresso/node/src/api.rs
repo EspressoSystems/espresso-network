@@ -1232,10 +1232,12 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> CatchupDataSource for
                 "state not available for height {height}, view {view}"
             ))?;
 
-        let merkle_tree_bytes = bincode::serialize(&TryInto::<RewardMerkleTreeV2Data>::try_into(
-            &state.reward_merkle_tree_v2,
-        )?)
-        .context("Merkle tree serialization failed; this should never happen.")?;
+        let tree_data = TryInto::<RewardMerkleTreeV2Data>::try_into(&state.reward_merkle_tree_v2)
+            .inspect_err(
+            |err| tracing::debug!(%err, height, %view, "cannot serve reward merkle tree"),
+        )?;
+        let merkle_tree_bytes = bincode::serialize(&tree_data)
+            .context("Merkle tree serialization failed; this should never happen.")?;
 
         Ok(merkle_tree_bytes)
     }
@@ -1309,16 +1311,10 @@ impl TryInto<RewardMerkleTreeV2Data> for &RewardMerkleTreeV2 {
         if balances.len() as u64 == num_leaves {
             Ok(RewardMerkleTreeV2Data { balances })
         } else {
-            tracing::error!(
-                "Attempted to serialize an incomplete RewardMerkleTreeV2. This is not a fatal \
-                 error, but it should never happen and indicates that something may be seriously \
-                 wrong. Balances length: {}, num_leaves: {}.",
-                balances.len(),
-                num_leaves
-            );
             bail!(
-                "Failed to convert RewardMerkleTreeV2 into key-value pairs. Some accounts are \
-                 missing."
+                "RewardMerkleTreeV2 is incomplete, some accounts are missing. Balances length: \
+                 {}, num_leaves: {num_leaves}.",
+                balances.len(),
             );
         }
     }
@@ -1339,9 +1335,13 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
         merkle_tree: &RewardMerkleTreeV2,
     ) -> impl Send + Future<Output = anyhow::Result<()>> {
         async move {
+            // The merklized state loop always applies full blocks, so an incomplete
+            // tree here indicates something is seriously wrong.
+            let tree_data = TryInto::<RewardMerkleTreeV2Data>::try_into(merkle_tree).inspect_err(
+                |err| tracing::error!(%err, height, "cannot persist incomplete RewardMerkleTreeV2"),
+            )?;
             let serialization =
-                bincode::serialize(&TryInto::<RewardMerkleTreeV2Data>::try_into(merkle_tree)?)
-                    .context("Merkle tree serialization failed")?;
+                bincode::serialize(&tree_data).context("Merkle tree serialization failed")?;
             self.persist_tree(height, serialization).await?;
 
             // Skip garbage collection in tests
