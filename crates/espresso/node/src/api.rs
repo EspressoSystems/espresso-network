@@ -7988,6 +7988,109 @@ mod test {
         Ok(())
     }
 
+    /// Assert both tide-disco and axum return a 2xx for the path. Used for endpoints whose
+    /// content varies between calls (e.g. wall-clock-dependent fields, live metrics).
+    async fn compare_endpoints_ok(
+        http: &reqwest::Client,
+        api_port: u16,
+        axum_port: u16,
+        path: &str,
+    ) -> anyhow::Result<()> {
+        let tide = http
+            .get(format!("http://localhost:{api_port}/v1/{path}"))
+            .send()
+            .await?
+            .status();
+        let axum = http
+            .get(format!("http://localhost:{axum_port}/v1/{path}"))
+            .send()
+            .await?
+            .status();
+        assert!(
+            tide.is_success(),
+            "v1/{path}: tide returned {tide}, expected 2xx"
+        );
+        assert!(
+            axum.is_success(),
+            "v1/{path}: axum returned {axum}, expected 2xx"
+        );
+        Ok(())
+    }
+
+    /// Byte-compare error response bodies between tide and axum for an endpoint that uses
+    /// `Error::catch_all` (which emits `{"Custom":{"message","status"}}` on tide). Axum's
+    /// `ErrorResponse` is shaped to match that envelope, so the JSON bytes are equal modulo
+    /// minor whitespace differences — comparing parsed JSON values neutralizes those.
+    async fn compare_error_body(
+        http: &reqwest::Client,
+        api_port: u16,
+        axum_port: u16,
+        path: &str,
+        expected_status: u16,
+    ) -> anyhow::Result<()> {
+        let fetch = |port: u16| async move {
+            let resp = http
+                .get(format!("http://localhost:{port}/v1/{path}"))
+                .send()
+                .await?;
+            let status = resp.status().as_u16();
+            let body: serde_json::Value = resp.json().await?;
+            anyhow::Ok((status, body))
+        };
+        let (tide_status, tide_body) = fetch(api_port).await?;
+        let (axum_status, axum_body) = fetch(axum_port).await?;
+        assert_eq!(tide_status, expected_status, "v1/{path}: tide status");
+        assert_eq!(axum_status, expected_status, "v1/{path}: axum status");
+        assert_eq!(
+            tide_body, axum_body,
+            "v1/{path}: tide and axum error bodies differ\n  tide: {tide_body}\n  axum: \
+             {axum_body}"
+        );
+        Ok(())
+    }
+
+    /// POST a VBS-binary body to both servers and assert their responses are byte-equal.
+    ///
+    /// VBS (Versioned Binary Serialization) is what production peer-catchup and
+    /// `submit-transactions` clients use via `surf-disco::Request::body_binary`. This helper
+    /// catches regressions where the axum handler accepts only JSON.
+    async fn compare_post_binary<B: serde::Serialize>(
+        http: &reqwest::Client,
+        api_port: u16,
+        axum_port: u16,
+        path: &str,
+        body: &B,
+    ) -> anyhow::Result<()> {
+        use vbs::{BinarySerializer, Serializer, version::StaticVersion};
+        let payload = Serializer::<StaticVersion<0, 1>>::serialize(body)?;
+        let send = |port: u16| {
+            let payload = payload.clone();
+            http.post(format!("http://localhost:{port}/v1/{path}"))
+                .header("Content-Type", "application/octet-stream")
+                .header("Accept", "application/octet-stream")
+                .body(payload)
+                .send()
+        };
+        let (tide_resp, axum_resp) = tokio::join!(send(api_port), send(axum_port));
+        let tide_resp = tide_resp?;
+        let axum_resp = axum_resp?;
+        assert_eq!(
+            tide_resp.status(),
+            axum_resp.status(),
+            "v1/{path}: tide status {} != axum status {}",
+            tide_resp.status(),
+            axum_resp.status(),
+        );
+        // Compare raw bytes — VBS responses aren't JSON.
+        let tide_body = tide_resp.bytes().await?;
+        let axum_body = axum_resp.bytes().await?;
+        assert_eq!(
+            tide_body, axum_body,
+            "v1/{path}: tide and axum binary POST responses differ"
+        );
+        Ok(())
+    }
+
     /// Connect to both tide-disco and axum WebSocket endpoints, collect up to 10 messages each,
     /// and assert that at least 2 messages appear in both streams.
     async fn compare_ws_endpoints(api_port: u16, axum_port: u16, path: &str) -> anyhow::Result<()> {
@@ -8037,6 +8140,60 @@ mod test {
         Ok(())
     }
 
+    /// Same as `compare_ws_endpoints` but exercises the binary (`Accept: application/octet-stream`)
+    /// path that surf-disco clients use by default. Asserts both servers send `Message::Binary`
+    /// frames carrying VBS-encoded payloads.
+    async fn compare_ws_endpoints_binary(
+        api_port: u16,
+        axum_port: u16,
+        path: &str,
+    ) -> anyhow::Result<()> {
+        use std::time::Duration;
+
+        use futures::StreamExt as _;
+        use tokio::time::timeout;
+        use tokio_tungstenite::{
+            connect_async,
+            tungstenite::{client::IntoClientRequest, http::HeaderValue, protocol::Message},
+        };
+
+        async fn collect_binary(port: u16, path: &str) -> anyhow::Result<Vec<Vec<u8>>> {
+            let url = format!("ws://localhost:{port}/v1/{path}");
+            let mut req = url.as_str().into_client_request()?;
+            req.headers_mut().insert(
+                "Accept",
+                HeaderValue::from_static("application/octet-stream"),
+            );
+            let (mut ws, _) = connect_async(req).await?;
+            let mut frames = Vec::new();
+            while frames.len() < 3 {
+                match timeout(Duration::from_millis(500), ws.next()).await {
+                    Ok(Some(Ok(Message::Binary(bytes)))) => frames.push(bytes.to_vec()),
+                    _ => break,
+                }
+            }
+            Ok(frames)
+        }
+
+        let (tide_frames, axum_frames) = tokio::join!(
+            collect_binary(api_port, path),
+            collect_binary(axum_port, path)
+        );
+        let tide_frames = tide_frames?;
+        let axum_frames = axum_frames?;
+
+        assert!(
+            !tide_frames.is_empty(),
+            "v1/{path}: tide sent no binary frames (Accept: application/octet-stream)"
+        );
+        assert!(
+            !axum_frames.is_empty(),
+            "v1/{path}: axum sent no binary frames (Accept: application/octet-stream); handler \
+             likely always sends text",
+        );
+        Ok(())
+    }
+
     #[rstest]
     #[case(POS_V4)]
     #[test_log::test]
@@ -8062,7 +8219,13 @@ mod test {
                 .try_into()
                 .unwrap();
 
-            let mut api_opts = Options::with_port(api_port).catchup(Default::default());
+            let mut api_opts = Options::with_port(api_port)
+                .catchup(Default::default())
+                .config(Default::default())
+                .submit(Default::default())
+                .explorer(Default::default())
+                .light_client(Default::default())
+                .hotshot_events(HotshotEvents);
             api_opts.http.axum_port = Some(axum_port);
 
             let config = TestNetworkConfigBuilder::with_num_nodes()
@@ -8606,6 +8769,16 @@ mod test {
                 )
                 .await?;
 
+                // surf-disco clients default to `Accept: application/octet-stream`, so the
+                // server must emit `Message::Binary` (VBS-encoded) frames on that path.
+                // Verify both servers do so on a representative stream.
+                compare_ws_endpoints_binary(
+                    api_port,
+                    axum_port,
+                    &format!("availability/stream/leaves/{ws_start}"),
+                )
+                .await?;
+
                 // Merklized state parity (block-state and fee-state). Wait for
                 // both backends to have indexed the snapshot we'll query.
                 wait_until_block_height(&client, "block-state/block-height", avail_block).await;
@@ -8673,6 +8846,387 @@ mod test {
                     &format!("fee-state/fee-balance/latest/{fee_account}"),
                 )
                 .await?;
+
+                // Status parity. Block height and success rate are stable since consensus is
+                // stopped; time-since-last-decide and metrics vary by wall-clock so we only
+                // check that both servers return 2xx.
+                compare_endpoints(&http, api_port, axum_port, "status/block-height").await?;
+                compare_endpoints(&http, api_port, axum_port, "status/success-rate").await?;
+                compare_endpoints_ok(&http, api_port, axum_port, "status/time-since-last-decide")
+                    .await?;
+                compare_endpoints_ok(&http, api_port, axum_port, "status/metrics").await?;
+
+                // Config parity. /hotshot and /env are derived from process-level state shared
+                // by both servers; /runtime returns 404 in both because no PublicNodeConfig was
+                // configured for this test.
+                compare_endpoints(&http, api_port, axum_port, "config/hotshot").await?;
+                compare_endpoints(&http, api_port, axum_port, "config/env").await?;
+                compare_error_endpoints(&http, api_port, axum_port, "config/runtime", 404).await?;
+
+                // Node parity. All endpoints share the same data source so byte-equal responses
+                // are expected once consensus is stopped.
+                compare_endpoints(&http, api_port, axum_port, "node/block-height").await?;
+                compare_endpoints(&http, api_port, axum_port, "node/transactions/count").await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("node/transactions/count/{avail_block}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("node/transactions/count/0/{avail_block}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("node/transactions/count/namespace/{avail_ns}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("node/transactions/count/namespace/{avail_ns}/{avail_block}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("node/transactions/count/namespace/{avail_ns}/0/{avail_block}"),
+                )
+                .await?;
+
+                compare_endpoints(&http, api_port, axum_port, "node/payloads/size").await?;
+                compare_endpoints(&http, api_port, axum_port, "node/payloads/total-size").await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("node/payloads/size/{avail_block}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("node/payloads/size/0/{avail_block}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("node/payloads/size/namespace/{avail_ns}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("node/payloads/size/namespace/{avail_ns}/{avail_block}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("node/payloads/size/namespace/{avail_ns}/0/{avail_block}"),
+                )
+                .await?;
+
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("node/vid/share/{avail_block}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("node/vid/share/hash/{block_hash}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("node/vid/share/payload-hash/{payload_hash}"),
+                )
+                .await?;
+
+                compare_endpoints(&http, api_port, axum_port, "node/sync-status").await?;
+                compare_endpoints(&http, api_port, axum_port, "node/limits").await?;
+
+                // Header window: cover all three start variants (time, height, hash). `end` is
+                // an exclusive Unix-second cutoff; using the block's own timestamp + 1 yields
+                // a deterministic single-block window on both servers.
+                let avail_ts = avail_header.timestamp();
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("node/header/window/{avail_ts}/{}", avail_ts + 1),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("node/header/window/from/{avail_block}/{}", avail_ts + 1),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("node/header/window/from/hash/{block_hash}/{}", avail_ts + 1),
+                )
+                .await?;
+
+                compare_endpoints(&http, api_port, axum_port, "node/stake-table/current").await?;
+                compare_endpoints(&http, api_port, axum_port, "node/stake-table/1").await?;
+                compare_endpoints(&http, api_port, axum_port, "node/da-stake-table/current")
+                    .await?;
+                compare_endpoints(&http, api_port, axum_port, "node/da-stake-table/1").await?;
+
+                compare_endpoints(&http, api_port, axum_port, "node/validators/1").await?;
+                compare_endpoints(&http, api_port, axum_port, "node/all-validators/1/0/100")
+                    .await?;
+
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    "node/participation/proposal/current",
+                )
+                .await?;
+                compare_endpoints(&http, api_port, axum_port, "node/participation/proposal/1")
+                    .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    "node/participation/vote/current",
+                )
+                .await?;
+                compare_endpoints(&http, api_port, axum_port, "node/participation/vote/1").await?;
+
+                compare_endpoints(&http, api_port, axum_port, "node/block-reward").await?;
+                compare_endpoints(&http, api_port, axum_port, "node/block-reward/epoch/1").await?;
+
+                compare_endpoints(&http, api_port, axum_port, "node/oldest-block").await?;
+                compare_endpoints(&http, api_port, axum_port, "node/oldest-leaf").await?;
+
+                // Catchup parity. View number and height for in-memory state aren't readily
+                // available after stopping consensus, so we compare error semantics on
+                // intentionally invalid lookups and the deprecated routes.
+                let decided_view = decided_leaf.view_number().u64();
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("catchup/{height}/{decided_view}/blocks"),
+                )
+                .await?;
+                // chain-config: a malformed TaggedBase64 commitment (bad checksum) parses-fails
+                // on the request path and yields 400 from both servers.
+                compare_error_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    "catchup/chain-config/CHAINCONFIG~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                    400,
+                )
+                .await?;
+                // leafchain: undecided height returns 404 from both.
+                compare_error_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    "catchup/999999/leafchain",
+                    404,
+                )
+                .await?;
+                // cert2: missing cert returns 404.
+                compare_error_endpoints(&http, api_port, axum_port, "catchup/999999/cert2", 404)
+                    .await?;
+                // Deprecated catchup routes still respond 404.
+                compare_error_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    "catchup/1/reward-amounts/100/0",
+                    404,
+                )
+                .await?;
+
+                // Production peer-catchup posts VBS-binary bodies via surf-disco.
+                // Exercise the bulk-account POST endpoints in that exact wire format so any
+                // regression to "JSON-only body" is caught here.
+                let fee_account_for_post = validated_state
+                    .fee_merkle_tree
+                    .iter()
+                    .next()
+                    .map(|(addr, _)| *addr)
+                    .expect("fee tree should have at least one account");
+                compare_post_binary(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("catchup/{height}/{decided_view}/accounts"),
+                    &vec![fee_account_for_post],
+                )
+                .await?;
+                // reward-accounts V1 takes a Vec<RewardAccountV1>. We send empty since the V2
+                // tree may not have V1-shaped entries in this test, but the wire format is what
+                // we're validating.
+                compare_post_binary(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("catchup/{height}/{decided_view}/reward-accounts"),
+                    &Vec::<espresso_types::v0_3::RewardAccountV1>::new(),
+                )
+                .await?;
+
+                // State signature parity. Heights that have a signature should return matching
+                // JSON; missing heights should 404 from both servers.
+                compare_error_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    "state-signature/block/999999",
+                    404,
+                )
+                .await?;
+
+                // Error body parity for endpoints that use `Error::catch_all` — both servers
+                // must emit byte-identical `{"Custom":{"message","status"}}` JSON. Availability
+                // endpoints (`availability/leaf/...`, etc.) are excluded because tide-disco
+                // returns specific variants like `{"FetchLeaf":{...}}` there; their status-code
+                // parity is still enforced by `compare_error_endpoints` above.
+                compare_error_body(&http, api_port, axum_port, "catchup/999999/cert2", 404).await?;
+                compare_error_body(&http, api_port, axum_port, "catchup/999999/leafchain", 404)
+                    .await?;
+                compare_error_body(
+                    &http,
+                    api_port,
+                    axum_port,
+                    "state-signature/block/999999",
+                    404,
+                )
+                .await?;
+
+                // Explorer parity.
+                compare_endpoints(&http, api_port, axum_port, "explorer/explorer-summary").await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("explorer/block/{avail_block}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("explorer/block/hash/{block_hash}"),
+                )
+                .await?;
+                compare_endpoints(&http, api_port, axum_port, "explorer/blocks/latest/10").await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("explorer/blocks/{avail_block}/10"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    "explorer/transactions/latest/10",
+                )
+                .await?;
+
+                // Light-client parity. Use the same block we used for availability tests.
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("light-client/leaf/{avail_block}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("light-client/leaf/hash/{leaf_hash}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("light-client/payload/{avail_block}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("light-client/payload/{avail_block}/{}", avail_block + 1),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!(
+                        "light-client/namespace/{avail_block}/{}",
+                        u64::from(avail_ns)
+                    ),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!(
+                        "light-client/namespace/{avail_block}/{}/{}",
+                        avail_block + 1,
+                        u64::from(avail_ns)
+                    ),
+                )
+                .await?;
+
+                // hotshot-events startup info: both must return matching JSON.
+                compare_endpoints(&http, api_port, axum_port, "hotshot-events/startup_info")
+                    .await?;
+
+                // Token parity. Both servers share the same data source, so the cached
+                // L1 supply values must match across calls.
+                compare_endpoints(&http, api_port, axum_port, "token/total-minted-supply").await?;
+                compare_endpoints(&http, api_port, axum_port, "token/circulating-supply").await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    "token/circulating-supply-ethereum",
+                )
+                .await?;
+                compare_endpoints(&http, api_port, axum_port, "token/total-issued-supply").await?;
+                compare_endpoints(&http, api_port, axum_port, "token/total-reward-distributed")
+                    .await?;
 
                 // Error equivalence: both tide-disco and Axum must return the same
                 // HTTP status codes for common failure cases that clients encounter.
