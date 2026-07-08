@@ -11,8 +11,19 @@ consensus-critical.
 
 ## Build the guest
 
-Requires the SP1 toolchain (`sp1up`); on NixOS, patchelf `rustc` and `rust-lld`. The RUSTFLAGS reproduce what
-`sp1-build` v6 passes.
+Requires the SP1 toolchain (`sp1up`). On NixOS the toolchain binaries need patching; find the toolchain id with
+`ls ~/.sp1/toolchains`, then:
+
+```sh
+TC=$HOME/.sp1/toolchains/<id>
+# Interpreter: take the loader from any nix-built binary, e.g. `patchelf --print-interpreter $(command -v cargo)`.
+patchelf --set-interpreter "$(patchelf --print-interpreter "$(command -v cargo)")" \
+    "$TC/bin/rustc" "$TC/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld"
+# rustc also needs glibc, zlib and libgcc plus the toolchain's own libs on its rpath, e.g.:
+# patchelf --set-rpath "<glibc>/lib:<zlib>/lib:<gcc-lib>/lib:$TC/lib" "$TC/bin/rustc"
+```
+
+The RUSTFLAGS reproduce what `sp1-build` v6 passes:
 
 ```sh
 cd program
@@ -29,7 +40,9 @@ cargo run --release              # execute only, prints cycle count + journal
 cargo run --release -- --prove   # additionally setup + core proof + verify
 ```
 
-The guest ELF is loaded from `SP1_ELF` or the default cargo target directory.
+The guest ELF is loaded from `SP1_ELF` if set, otherwise from
+`target/nix/riscv64im-succinct-zkvm-elf/release/espresso-sp1-program` at the repo root. That default only exists because
+the repo's nix shell sets `CARGO_TARGET_DIR=target/nix`; outside the shell, point `SP1_ELF` at the built ELF.
 
 ## Journal layout
 
@@ -39,7 +52,13 @@ The guest ELF is loaded from `SP1_ELF` or the default cargo target directory.
 4. 32 bytes supermajority threshold (big endian)
 5. `u64` epoch
 
+The proof does not bind the epoch to its stake table: a verifier must check `stake_table_digest` against a trusted,
+byte-exact snapshot of the stake table for the journal's epoch (the JSON is not canonicalized, so only exact bytes
+match). The guest also handles only current-epoch (mid-epoch) QCs; epoch-transition leaves additionally require the
+next-epoch quorum check (`StakeTableQuorum::verify_static`).
+
 ## Host tests
 
-`cargo test` in `program/` runs the positive verification against the real fixtures plus negative controls (corrupted
-signature, swapped signature, zeroed stake, truncated stake table, wrong leaf commitment, tampered header).
+`cargo test` in `program/` runs the positive verification against the real fixtures plus negative controls (crafted
+genesis-view QC, corrupted signature, swapped signature, zeroed stake, truncated stake table, wrong leaf commitment,
+tampered header).

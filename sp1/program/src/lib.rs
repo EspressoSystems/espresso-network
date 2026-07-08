@@ -4,6 +4,7 @@ use espresso_types::{Leaf2, SeqTypes};
 use hotshot_query_service_types::availability::LeafQueryData;
 use hotshot_types::{
     PeerConfig,
+    data::ViewNumber,
     stake_table::{HSStakeTable, supermajority_threshold},
 };
 use light_client::consensus::quorum::StakeTable;
@@ -11,12 +12,14 @@ use vbs::version::{StaticVersion, StaticVersionType, Version};
 
 /// Protocol version of the committed decaf fixture.
 ///
-/// The QC signature is over a version-dependent commitment, so verification is
-/// pinned to this version; a re-fetched fixture with a different header version
-/// fails loudly in [`verify_leaf`].
+/// A fixture sanity check: re-fetching the fixture under a different protocol
+/// version fails loudly in [`verify_leaf`]. The QC2 signature check itself does
+/// not depend on this version here (`VersionedVoteData::commit` ignores it in
+/// this tree).
 pub type FixtureVersion = StaticVersion<0, 5>;
 
 /// Outcome of a successful leaf verification, for the proof journal.
+#[derive(Debug)]
 pub struct VerifiedLeaf {
     pub height: u64,
     pub epoch: u64,
@@ -37,8 +40,9 @@ pub fn parse_stake_table(bytes: &[u8]) -> anyhow::Result<Vec<PeerConfig<SeqTypes
 /// `LocalClient` runs).
 ///
 /// Checks, in order: the header protocol version matches [`FixtureVersion`],
-/// the recomputed leaf commitment matches the QC, and the QC carries a valid
-/// supermajority threshold signature of the stake table.
+/// the QC view is past the genesis view, the recomputed leaf commitment
+/// matches the QC, and the QC carries a valid supermajority threshold
+/// signature of the stake table.
 pub fn verify_leaf(
     leaf_data: &LeafQueryData<SeqTypes>,
     peers: Vec<PeerConfig<SeqTypes>>,
@@ -56,16 +60,26 @@ pub fn verify_leaf(
         "header version {header_version} does not match pinned version {pinned}"
     );
 
+    // `is_valid_cert` short-circuits Ok at the genesis view, so a genesis-view
+    // QC would pass without any signature check.
+    anyhow::ensure!(
+        qc.view_number > ViewNumber::genesis(),
+        "QC view {:?} is not past the genesis view",
+        qc.view_number
+    );
+
     let commitment = Committable::commit(leaf);
     anyhow::ensure!(
         qc.data.leaf_commit == commitment,
-        "QC leaf commitment does not match recomputed leaf commitment"
+        "QC leaf commitment {} does not match recomputed leaf commitment {commitment}",
+        qc.data.leaf_commit
     );
 
     let height = leaf.height();
     anyhow::ensure!(
         qc.data.block_number == Some(height),
-        "QC block number does not match leaf height"
+        "QC block number {:?} does not match leaf height {height}",
+        qc.data.block_number
     );
     let epoch = qc
         .data
@@ -95,7 +109,6 @@ pub fn verify_leaf(
 
 #[cfg(test)]
 mod tests {
-    use hotshot_types::data::ViewNumber;
     use tagged_base64::TaggedBase64;
 
     use super::*;
@@ -108,6 +121,14 @@ mod tests {
             parse_leaf(LEAF_JSON).unwrap(),
             parse_stake_table(STAKE_TABLE_JSON).unwrap(),
         )
+    }
+
+    fn assert_err_contains<T: std::fmt::Debug>(result: anyhow::Result<T>, needle: &str) {
+        let message = format!("{:#}", result.unwrap_err());
+        assert!(
+            message.contains(needle),
+            "error {message:?} does not contain {needle:?}"
+        );
     }
 
     #[test]
@@ -123,8 +144,30 @@ mod tests {
         let verified = verify_leaf(&leaf_data, peers).unwrap();
         assert_eq!(verified.height, 10541613);
         assert_eq!(verified.epoch, 3514);
-        assert_eq!(verified.commitment, leaf_data.hash());
+        assert_eq!(
+            verified.commitment,
+            "COMMIT~wlx_EbkGEGdgZO4_t6VYDXTT3RtMcPvNAfnlX4Jri98X"
+                .parse()
+                .unwrap()
+        );
         assert!(verified.threshold > U256::ZERO);
+    }
+
+    /// A crafted genesis-view QC without signatures hits the `is_valid_cert`
+    /// genesis short-circuit; only the view guard can reject it.
+    #[test]
+    fn reject_genesis_view_qc() {
+        let (mut leaf_data, peers) = fixture();
+
+        leaf_data.qc.view_number = ViewNumber::genesis();
+        leaf_data.qc.signatures = None;
+        // The leaf is unchanged, so `qc.data.leaf_commit` still matches it.
+        assert_eq!(leaf_data.qc.data.leaf_commit, leaf_data.leaf.commit());
+
+        assert_err_contains(
+            verify_leaf(&leaf_data, peers),
+            "is not past the genesis view",
+        );
     }
 
     /// Flipping one byte of the aggregate signature must fail, either at parse
@@ -159,7 +202,10 @@ mod tests {
         let (mut leaf_data, peers) = fixture();
 
         leaf_data.qc.signatures = leaf_data.leaf.justify_qc().signatures;
-        assert!(verify_leaf(&leaf_data, peers).is_err());
+        assert_err_contains(
+            verify_leaf(&leaf_data, peers),
+            "invalid threshold signature",
+        );
     }
 
     /// Zeroing out all stake makes the supermajority threshold unreachable.
@@ -170,7 +216,10 @@ mod tests {
         for peer in &mut peers {
             peer.stake_table_entry.stake_amount = U256::ZERO;
         }
-        assert!(verify_leaf(&leaf_data, peers).is_err());
+        assert_err_contains(
+            verify_leaf(&leaf_data, peers),
+            "invalid threshold signature",
+        );
     }
 
     /// Dropping stake table entries must fail (the signer set no longer
@@ -180,7 +229,10 @@ mod tests {
         let (leaf_data, mut peers) = fixture();
 
         peers.truncate(peers.len() / 2);
-        assert!(verify_leaf(&leaf_data, peers).is_err());
+        assert_err_contains(
+            verify_leaf(&leaf_data, peers),
+            "invalid threshold signature",
+        );
     }
 
     /// A QC referencing a different leaf commitment must fail the recomputed
@@ -190,7 +242,10 @@ mod tests {
         let (mut leaf_data, peers) = fixture();
 
         leaf_data.qc.data.leaf_commit = leaf_data.leaf.parent_commitment();
-        assert!(verify_leaf(&leaf_data, peers).is_err());
+        assert_err_contains(
+            verify_leaf(&leaf_data, peers),
+            "does not match recomputed leaf commitment",
+        );
     }
 
     /// Tampering with a header field changes `leaf.commit()`; the
@@ -203,6 +258,6 @@ mod tests {
         fields["timestamp"] = (timestamp + 1).into();
 
         let bytes = serde_json::to_vec(&json).unwrap();
-        assert!(parse_leaf(&bytes).is_err());
+        assert_err_contains(parse_leaf(&bytes), "QC references leaf");
     }
 }
