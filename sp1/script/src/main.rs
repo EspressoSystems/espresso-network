@@ -90,9 +90,21 @@ fn main() -> Result<()> {
         let pk = client.setup(elf).context("setup")?;
         println!("setup in {:.2?}", start.elapsed());
 
+        // The prover network does not serve core proofs; use compressed there.
+        let network = std::env::var("SP1_PROVER").is_ok_and(|v| v == "network");
         let start = Instant::now();
-        let mut proof = client.prove(&pk, stdin).core().run().context("proving")?;
-        println!("proved (core) in {:.2?}", start.elapsed());
+        let request = client.prove(&pk, stdin);
+        let mut proof = if network {
+            request.compressed().run()
+        } else {
+            request.core().run()
+        }
+        .context("proving")?;
+        println!(
+            "proved ({}) in {:.2?}",
+            if network { "compressed" } else { "core" },
+            start.elapsed()
+        );
 
         let start = Instant::now();
         client

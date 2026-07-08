@@ -10,4 +10,4 @@ anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
 hex = "0.4"
 # Matches the guest's sp1-zkvm 6.x.
-sp1-sdk = { version = "6", features = ["blocking"] }
+sp1-sdk = { version = "6", features = ["blocking", "network"] }
