@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{sync::Arc, time::Duration};
 
     use alloy::primitives::U256;
     use async_lock::RwLock;
@@ -17,7 +17,7 @@ mod tests {
     use surf_disco::Client;
     use test_utils::reserve_tcp_port;
     use tide_disco::{App, Url};
-    use tokio::spawn;
+    use tokio::{spawn, time::sleep};
     use tracing_test::traced_test;
     use vbs::version::{StaticVersion, StaticVersionType};
 
@@ -207,6 +207,13 @@ mod tests {
             .unwrap();
 
         tracing::info!("Client 2 Subscribed to events");
+
+        // The server registers a subscriber only when its socket handler starts serving the
+        // stream, asynchronously after `subscribe` returns; events broadcast before that are
+        // lost. Wait until both subscribers are registered before publishing.
+        while events_streamer.read().await.subscriber_count() < 2 {
+            sleep(Duration::from_millis(10)).await;
+        }
 
         let total_count = 5;
         // wait for these events to receive on client 1

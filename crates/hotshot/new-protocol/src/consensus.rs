@@ -93,7 +93,7 @@ pub enum ConsensusInput<T: NodeType> {
     ///
     /// Used to help divergent nodes re-converge on restart.
     AdvanceView(Certificate1<T>),
-    /// Atomic pair emitted by the `EpochRootVoteCollector` for epoch-root views:
+    /// Atomic pair emitted by the `EpochRootTally` for epoch-root views:
     /// a `Certificate1` and its matching `LightClientStateUpdateCertificateV2`.
     /// Consensus never sees an epoch-root Cert1 without the matching state_cert.
     EpochRootCertificates {
@@ -1620,7 +1620,7 @@ impl<T: NodeType> Consensus<T> {
         };
 
         // If the parent QC is for an epoch-root block, attach the state_cert.
-        // By the atomicity invariant (enforced by `EpochRootVoteCollector`),
+        // By the atomicity invariant (enforced by `EpochRootTally`),
         // if we hold the epoch-root Cert1 then `state_certs` also holds the
         // matching cert.
         let parent_block_number = parent_cert.data.block_number.unwrap_or(0);
