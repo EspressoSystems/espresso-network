@@ -14,6 +14,7 @@ pub mod explorer;
 pub mod merklized_state;
 pub mod node;
 pub mod resolvable;
+#[cfg(feature = "web")]
 pub mod status;
 
 mod error;

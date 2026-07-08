@@ -18,6 +18,7 @@ use std::{
 
 use hotshot_types::traits::{block_contents::BlockHeader, node_implementation::NodeType};
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "web")]
 use tide_disco::StatusCode;
 use time::format_description::well_known::Rfc3339;
 
@@ -558,6 +559,7 @@ pub enum GetBlockDetailError {
     QueryError(QueryError),
 }
 
+#[cfg(feature = "web")]
 impl GetBlockDetailError {
     pub fn status(&self) -> StatusCode {
         match self {
@@ -615,6 +617,7 @@ pub enum GetBlockSummariesError {
     QueryError(QueryError),
 }
 
+#[cfg(feature = "web")]
 impl GetBlockSummariesError {
     pub fn status(&self) -> StatusCode {
         match self {
@@ -675,6 +678,7 @@ pub enum GetTransactionDetailError {
     QueryError(QueryError),
 }
 
+#[cfg(feature = "web")]
 impl GetTransactionDetailError {
     pub fn status(&self) -> StatusCode {
         match self {
@@ -742,6 +746,7 @@ pub enum GetTransactionSummariesError {
     QueryError(QueryError),
 }
 
+#[cfg(feature = "web")]
 impl GetTransactionSummariesError {
     pub fn status(&self) -> StatusCode {
         match self {
@@ -804,6 +809,7 @@ pub enum GetExplorerSummaryError {
     GetTransactionSummariesError(GetTransactionSummariesError),
 }
 
+#[cfg(feature = "web")]
 impl GetExplorerSummaryError {
     pub fn status(&self) -> StatusCode {
         match self {
@@ -888,6 +894,7 @@ pub enum GetSearchResultsError {
     InvalidQuery(BadQuery),
 }
 
+#[cfg(feature = "web")]
 impl GetSearchResultsError {
     pub fn status(&self) -> StatusCode {
         match self {
@@ -947,6 +954,7 @@ pub enum Error {
     GetSearchResults(GetSearchResultsError),
 }
 
+#[cfg(feature = "web")]
 impl Error {
     pub fn status(&self) -> StatusCode {
         match self {

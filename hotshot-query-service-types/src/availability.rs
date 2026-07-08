@@ -10,12 +10,9 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-use std::{
-    cmp::Ordering,
-    collections::HashMap,
-    fmt::{Debug, Display},
-    hash::Hash,
-};
+#[cfg(feature = "web")]
+use std::fmt::Display;
+use std::{cmp::Ordering, collections::HashMap, fmt::Debug, hash::Hash};
 
 use committable::{Commitment, Committable};
 use derivative::Derivative;
@@ -33,11 +30,14 @@ use hotshot_types::{
 use jf_advz::VidScheme;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use snafu::{Snafu, ensure};
+#[cfg(feature = "web")]
 use surf_disco::StatusCode;
 use vbs::version::Version;
 use versions::Upgrade;
 
-use crate::{Header, HeightIndexed, Metadata, Payload, QueryError, QuorumCertificate, Transaction};
+#[cfg(feature = "web")]
+use crate::QueryError;
+use crate::{Header, HeightIndexed, Metadata, Payload, QuorumCertificate, Transaction};
 
 pub mod sql;
 
@@ -1205,6 +1205,7 @@ pub struct Limits {
 }
 
 /// Errors surfaced to clients of the availability API.
+#[cfg(feature = "web")]
 #[derive(Clone, Debug, From, Snafu, Deserialize, Serialize)]
 #[snafu(visibility(pub))]
 pub enum Error {
@@ -1260,6 +1261,7 @@ pub enum Error {
     },
 }
 
+#[cfg(feature = "web")]
 impl Error {
     pub fn internal<M: Display>(message: M) -> Self {
         Self::Custom {

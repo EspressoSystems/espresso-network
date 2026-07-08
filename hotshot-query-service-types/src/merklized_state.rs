@@ -4,17 +4,23 @@ use std::{
 };
 
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+#[cfg(feature = "web")]
 use derive_more::From;
 use hotshot_types::traits::node_implementation::NodeType;
 use jf_merkle_tree_compat::{
     DigestAlgorithm, Element, ForgetableMerkleTreeScheme, Index, MerkleCommitment, NodeValue,
     ToTraversalPath, prelude::MerkleProof,
 };
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+#[cfg(feature = "web")]
+use serde::Deserialize;
+use serde::{Serialize, de::DeserializeOwned};
+#[cfg(feature = "web")]
 use snafu::Snafu;
 use tagged_base64::TaggedBase64;
+#[cfg(feature = "web")]
 use tide_disco::StatusCode;
 
+#[cfg(feature = "web")]
 use crate::QueryError;
 
 /// This trait should be implemented by the MerkleTree that the API module is initialized for.
@@ -69,6 +75,7 @@ where
 }
 
 /// Errors surfaced to clients from a Merklized state API.
+#[cfg(feature = "web")]
 #[derive(Clone, Debug, From, Snafu, Deserialize, Serialize)]
 #[snafu(visibility(pub))]
 pub enum Error {
@@ -86,6 +93,7 @@ pub enum Error {
     },
 }
 
+#[cfg(feature = "web")]
 impl Error {
     pub fn status(&self) -> StatusCode {
         match self {

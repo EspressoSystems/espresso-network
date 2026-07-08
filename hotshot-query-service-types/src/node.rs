@@ -10,19 +10,23 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-use std::{
-    fmt::Display,
-    ops::{Bound, RangeBounds},
-};
+#[cfg(feature = "web")]
+use std::fmt::Display;
+use std::ops::{Bound, RangeBounds};
 
 use derivative::Derivative;
+#[cfg(feature = "web")]
 use derive_more::From;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "web")]
 use snafu::Snafu;
+#[cfg(feature = "web")]
 use tide_disco::StatusCode;
 
+use crate::HeightIndexed;
+#[cfg(feature = "web")]
+use crate::QueryError;
 pub use crate::availability::{BlockHash, BlockId};
-use crate::{HeightIndexed, QueryError};
 
 /// A status of a set of resources, regarding its presence in the database.
 ///
@@ -151,6 +155,7 @@ pub struct Limits {
 }
 
 /// Errors exposed to clients of the node API.
+#[cfg(feature = "web")]
 #[derive(Clone, Debug, From, Snafu, Deserialize, Serialize)]
 #[snafu(visibility(pub))]
 pub enum Error {
@@ -183,6 +188,7 @@ pub enum Error {
     },
 }
 
+#[cfg(feature = "web")]
 impl Error {
     pub fn internal<M: Display>(message: M) -> Self {
         Self::Custom {
