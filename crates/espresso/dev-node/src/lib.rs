@@ -34,7 +34,7 @@ pub struct SetHotshotUpReqBody {
     pub chain_id: u64,
 }
 
-#[derive(Debug, Clone, ValueEnum)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 pub enum DevNodeVersion {
     #[value(name = "0.3")]
     V0_3,
@@ -42,6 +42,8 @@ pub enum DevNodeVersion {
     V0_4,
     #[value(name = "0.5")]
     V0_5,
+    #[value(name = "0.6")]
+    V0_6,
 }
 
 impl fmt::Display for DevNodeVersion {
@@ -50,6 +52,7 @@ impl fmt::Display for DevNodeVersion {
             DevNodeVersion::V0_3 => write!(f, "0.3"),
             DevNodeVersion::V0_4 => write!(f, "0.4"),
             DevNodeVersion::V0_5 => write!(f, "0.5"),
+            DevNodeVersion::V0_6 => write!(f, "0.6"),
         }
     }
 }

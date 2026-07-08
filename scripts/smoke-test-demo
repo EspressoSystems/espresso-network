@@ -62,8 +62,8 @@ function wait_for() {
     echo "Endpoint $what @ $url is Ok, after $elapsed seconds"
 }
 
-# usage: get_balance <address> <block>
-function get_balance() {
+# usage: get_balance_once <address> <block>
+function get_balance_once() {
     if which espresso-bridge > /dev/null 2>&1 ; then
         # If the espresso-bridge program is built locally, use it.
         (
@@ -75,6 +75,23 @@ function get_balance() {
         docker run --rm --network="host" -e RUST_LOG=off ghcr.io/espressosystems/espresso-network/bridge:${DOCKER_TAG:-main} \
             bridge balance -e $ESPRESSO_API -a $1 -b $2
     fi
+}
+
+# usage: get_balance <address> <block>
+# Retry because the merklized fee state can lag the consensus tip.
+function get_balance() {
+    local attempts=10
+    local balance
+    local i
+    for (( i = 1; i <= attempts; i++ )); do
+        (( i > 1 )) && sleep 2
+        if balance=$(get_balance_once "$1" "$2"); then
+            echo "$balance"
+            return 0
+        fi
+    done
+    echo "get_balance failed for address $1 at height $2 after $attempts attempts" >&2
+    return 1
 }
 
 function last_light_client_update() {

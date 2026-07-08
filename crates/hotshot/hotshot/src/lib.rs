@@ -78,7 +78,7 @@ use hotshot_utils::warn;
 /// Reexport rand crate
 pub use rand;
 use tokio::{spawn, time::sleep};
-use tracing::{debug, instrument, trace};
+use tracing::{Instrument, debug, error_span, info, instrument, trace};
 
 // -- Rexports
 // External
@@ -424,7 +424,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
             }
 
             if let Ok(drb_result) = storage.load_drb_result(epoch + 1).await {
-                tracing::error!("Writing DRB result for epoch {}", epoch + 1);
+                info!(target: "announce::drb", epoch = %(epoch + 1), "writing drb result for epoch");
                 if let Ok(mem) = membership_coordinator.stake_table_for_epoch(Some(epoch + 1)) {
                     mem.add_drb_result(drb_result);
                 }
@@ -504,7 +504,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
 
         // Spawn a task that will sleep for the next view timeout and then send a timeout event
         // if not cancelled
-        spawn({
+        spawn(
             async move {
                 sleep(Duration::from_millis(next_view_timeout)).await;
                 broadcast_event(
@@ -513,7 +513,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
                 )
                 .await;
             }
-        });
+            .instrument(error_span!("initial timeout", view = *start_view)),
+        );
         #[allow(clippy::panic)]
         self.internal_event_stream
             .0

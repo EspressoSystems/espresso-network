@@ -125,6 +125,54 @@ async fn restart_all_nodes_with_storage() {
     }
 }
 
+/// All nodes crash at the epoch boundary and restart with storage: the quorum
+/// must re-cast its phase-2 votes (without re-recording any action) or the
+/// epoch transition never completes.
+#[tokio::test(flavor = "multi_thread")]
+async fn restart_all_nodes_at_epoch_boundary() {
+    let num_nodes = 5;
+    let crash_view = 10;
+    let mut runner = TestRunner::builder()
+        .num_nodes(num_nodes)
+        .target_decisions(35)
+        .epoch_height(10)
+        .persistent_storage(true)
+        .tolerated_failed_views(views(1..=30))
+        .node_changes(vec![(
+            crash_view,
+            (0..num_nodes)
+                .map(|idx| NodeChange {
+                    idx,
+                    action: NodeAction::Restart,
+                })
+                .collect(),
+        )])
+        .build();
+    runner.run().await.unwrap();
+
+    for (idx, storage) in runner.node_storages().iter().enumerate() {
+        let mut seen = HashSet::new();
+        for (view, action) in storage.action_log().await {
+            assert!(
+                seen.insert((view, action)),
+                "node {idx} recorded {action:?} twice for view {view} — it re-entered a view it \
+                 had already acted in"
+            );
+        }
+
+        let (anchor, _) = storage
+            .anchor_leaf()
+            .await
+            .unwrap_or_else(|| panic!("node {idx} has no persisted anchor"));
+        assert!(
+            *anchor.view_number() > crash_view,
+            "node {idx} anchor stuck at view {} — it did not keep deciding past the epoch \
+             boundary after the restart",
+            anchor.view_number()
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Late start (with epochs)
 // ---------------------------------------------------------------------------

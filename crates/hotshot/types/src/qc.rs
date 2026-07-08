@@ -7,7 +7,7 @@
 //! Implementation for `BitVectorQc` that uses BLS signature + Bit vector.
 //! See more details in hotshot paper.
 
-use alloy::primitives::U256;
+use alloy_primitives::U256;
 use ark_std::{
     fmt::Debug,
     format,

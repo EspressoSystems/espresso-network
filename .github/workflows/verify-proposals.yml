@@ -1,0 +1,105 @@
+name: Verify upgrade proposals
+
+on:
+  pull_request:
+    paths:
+      - "contracts/deployments/proposals/**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  verify-proposals:
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - uses: rui314/setup-mold@v1
+
+      - name: Install Protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - name: Enable Rust Caching
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v3-rust
+          shared-key: verify-proposals
+
+      - name: Build deploy binary
+        run: cargo build --locked --bin deploy --profile test
+
+      - name: Find and verify changed proposals
+        run: |
+          set -euo pipefail
+          # Keep only dirs with at least 5 path components, i.e.
+          # contracts/deployments/proposals/<network>/<slug>, so README or
+          # network-level files do not trigger verification.
+          mapfile -t proposal_dirs < <(
+            git diff --name-only "origin/${{ github.base_ref }}...HEAD" -- 'contracts/deployments/proposals/**' \
+              | xargs -r -n1 dirname \
+              | awk -F/ 'NF >= 5' \
+              | sort -u
+          )
+          if [[ "${#proposal_dirs[@]}" -eq 0 ]]; then
+            echo "No proposal directories changed."
+            exit 0
+          fi
+          comment=pr-comment.md
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          printf '## Upgrade proposal verification\n\n' > "${comment}"
+          exit_code=0
+          for dir in "${proposal_dirs[@]}"; do
+            if [[ ! -d "${dir}" ]]; then
+              echo "Skipping deleted directory ${dir}"
+              printf '### %s\n\nDirectory deleted; skipped.\n\n' "${dir}" >> "${comment}"
+              continue
+            fi
+            echo "Verifying ${dir} ..."
+            rc=0
+            output=$(./target/debug/deploy verify-proposal "${dir}" 2>&1) || rc=$?
+            printf '%s\n' "${output}"
+            if [[ "${rc}" -eq 0 ]]; then
+              status="PASS ✅"
+            else
+              status="FAIL ❌"
+              exit_code="${rc}"
+            fi
+            # Four-backtick fence: proposal descriptions are untrusted and may
+            # contain three-backtick sequences.
+            printf '### %s: %s\n\n````\n%s\n````\n\n' "${dir}" "${status}" "${output}" >> "${comment}"
+          done
+          printf '[Workflow run](%s)\n' "${run_url}" >> "${comment}"
+          exit "${exit_code}"
+
+      - name: Note incomplete verification
+        if: ${{ always() && job.status != 'success' && hashFiles('pr-comment.md') == '' }}
+        run: |
+          {
+            printf '## Upgrade proposal verification\n\n'
+            printf 'FAIL ❌: workflow failed before any proposal was verified.\n\n'
+            printf '[Workflow run](%s)\n' \
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } > pr-comment.md
+
+      - name: Post/update PR comment
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: verify-proposals
+          path: pr-comment.md
+          # No comment file (nothing verified or build failed): remove any stale comment.
+          delete: ${{ hashFiles('pr-comment.md') == '' }}

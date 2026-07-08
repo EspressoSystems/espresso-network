@@ -53,6 +53,7 @@ versions = { workspace = true }
 
 [dev-dependencies]
 test-log = { workspace = true }
+tokio-util = { workspace = true }
 
 [lints]
 workspace = true

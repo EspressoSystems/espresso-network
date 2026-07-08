@@ -418,6 +418,12 @@ impl Inner {
             None,
             prune_intervals,
         )?;
+        self.prune_files(
+            self.decided_cert2_dir_path(),
+            prune_view,
+            None,
+            prune_intervals,
+        )?;
 
         // Save the most recent leaf as it will be our anchor point if the node restarts.
         self.prune_files(
@@ -863,6 +869,9 @@ impl SequencerPersistence for Persistence {
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<Option<ViewNumber>> {
+        // Started before the lock acquisition: this pass holds the exclusive write lock, so the
+        // metric must include the wait to reflect how long appends can block behind it.
+        let now = Instant::now();
         // On error, GC does not run over the failed range, so the leaves stay on disk and are
         // retried; no data is lost.
         let intervals = self
@@ -880,6 +889,9 @@ impl SequencerPersistence for Persistence {
         if let Err(err) = res {
             tracing::warn!(?view, "GC failed: {err:#}");
         }
+        self.metrics
+            .internal_process_decided_events_duration
+            .add_point(now.elapsed().as_secs_f64());
 
         Ok(processed)
     }
@@ -2422,8 +2434,10 @@ fn view_files(
             return None;
         }
         let path = entry.path();
-        if path.extension()? != "txt" {
-            tracing::debug!(%dir, ?entry, "ignoring non-text file in data directory");
+        // Most view-keyed files use a `.txt` extension; cert2 files use `.bin`. Both hold bincode.
+        let ext = path.extension()?;
+        if ext != "txt" && ext != "bin" {
+            tracing::debug!(%dir, ?entry, "ignoring file with unrecognized extension in data directory");
             return None;
         }
         let file_name = path.file_stem()?;

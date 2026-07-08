@@ -205,7 +205,7 @@
           nightlyToolchain = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.minimal.override {
             extensions = [ "rust-analyzer" "rustfmt" ];
           });
-          solc = pkgs.solc-bin."0.8.28";
+          solc = pkgs.solc-bin."0.8.35";
           pre-commit = self.checks.${system}.pre-commit-check;
         in
         myShell (rustEnvVars // {
@@ -250,7 +250,7 @@
             foundry
             solc
             dregs-unwrapped
-            nodePackages.prettier
+            prettier
             solhint
             libusb1
             mdbook

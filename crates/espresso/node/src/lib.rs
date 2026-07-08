@@ -33,7 +33,7 @@ use espresso_types::{
     SeqTypes, ValidatedState,
     traits::{EventConsumer, MembershipPersistence},
     v0::traits::SequencerPersistence,
-    v0_1::ChainId,
+    v0_1::{ChainId, DECAF_CHAIN_ID},
     v0_3::Fetcher,
 };
 
@@ -47,15 +47,15 @@ pub(crate) const DECAF_TELEMETRY_ENDPOINT: &str =
 pub(crate) fn default_telemetry_endpoint(chain_id: ChainId) -> Option<&'static str> {
     if chain_id == MAINNET_CHAIN_ID {
         Some(MAINNET_TELEMETRY_ENDPOINT)
-    } else if chain_id == ChainId(U256::from(0xdecafu64)) {
+    } else if chain_id == DECAF_CHAIN_ID {
         Some(DECAF_TELEMETRY_ENDPOINT)
     } else {
         None
     }
 }
 
-pub use genesis::Genesis;
 use genesis::L1Finalized;
+pub use genesis::{Genesis, GenesisSource};
 use hotshot::{
     traits::implementations::{
         CdnMetricsValue, CdnTopic, CombinedNetworks, GossipConfig, KeyPair, Libp2pNetwork,
@@ -73,7 +73,6 @@ use hotshot_types::{
     data::ViewNumber,
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StateKeyPair, StateSignKey},
-    message::UpgradeLock,
     signature_key::{BLSPrivKey, BLSPubKey},
     traits::{
         metrics::{Metrics, NoMetrics},
@@ -228,6 +227,8 @@ pub struct NetworkParams {
 
     /// Minimum number of Libp2p peers to emit gossip to during a heartbeat
     pub libp2p_gossip_lazy: usize,
+
+    pub libp2p_dht_put_quorum: Option<std::num::NonZeroUsize>,
 }
 
 pub struct L1Params {
@@ -252,6 +253,26 @@ where
     P: SequencerPersistence + MembershipPersistence + DhtPersistentStorage,
     Arc<P>: Storage<SeqTypes>,
 {
+    // Expose genesis version fields via the status API.
+    metrics
+        .text_family(
+            "genesis".into(),
+            vec![
+                "base_version".into(),
+                "upgrade_version".into(),
+                "genesis_version".into(),
+            ],
+        )
+        .create(vec![
+            genesis.base_version.to_string(),
+            genesis.upgrade_version.to_string(),
+            genesis.genesis_version.to_string(),
+        ]);
+    let upgrades_family = metrics.text_family("genesis_upgrade".into(), vec!["version".into()]);
+    for version in genesis.upgrades.keys() {
+        upgrades_family.create(vec![version.to_string()]);
+    }
+
     // Expose git information via status API.
     let info = espresso_utils::build_info!();
     metrics
@@ -793,6 +814,7 @@ where
             &validator_config.private_key,
             hotshot::traits::implementations::Libp2pMetricsValue::new(&*metrics),
             network_discriminator,
+            network_params.libp2p_dht_put_quorum,
         )
         .await
         .with_context(|| {
@@ -818,19 +840,13 @@ where
         CombinedNetworks::new(cdn_network, p2p_network, Some(Duration::from_secs(1)))
     };
 
-    // TODO: This creates a separate UpgradeLock from the one HotShot will
-    // use. They should share a single lock so upgrade certificate updates
-    // are visible to both.
-    let cliquenet = Cliquenet::create(
-        &format!("espresso-{}", genesis.chain_config.chain_id),
-        pub_key,
-        network_params.x25519_secret_key.into(),
-        network_params.cliquenet_bind_addr.clone(),
-        [],
-        UpgradeLock::new(version_upgrade),
-        clone_box(&*metrics),
-    )
-    .await?;
+    let cliquenet = {
+        let metrics = clone_box(&*metrics);
+        let secret_key = network_params.x25519_secret_key.into();
+        let bind_addr = network_params.cliquenet_bind_addr.clone();
+        let name = format!("espresso-{}", genesis.chain_config.chain_id);
+        move |upgrade| Cliquenet::create(name, pub_key, secret_key, bind_addr, [], upgrade, metrics)
+    };
 
     let network = Arc::new(combined_network);
 
@@ -987,7 +1003,6 @@ pub mod testing {
         data::EpochNumber,
         event::LeafInfo,
         light_client::StateKeyPair,
-        message::UpgradeLock,
         new_protocol::CoordinatorEvent,
         traits::{
             EncodeBytes, block_contents::BlockHeader, metrics::NoMetrics, network::Topic,
@@ -1714,18 +1729,18 @@ pub mod testing {
             );
 
             let coordinator_network = {
-                let lock = UpgradeLock::<SeqTypes>::new(upgrade);
-                Cliquenet::create(
-                    "test-coordinator",
-                    my_peer_config.stake_table_entry.stake_key,
-                    x25519_keypair,
-                    coordinator_addr,
-                    [],
-                    lock,
-                    Box::new(NoMetrics),
-                )
-                .await
-                .expect("cliquenet creation should succeed")
+                let pub_key = my_peer_config.stake_table_entry.stake_key;
+                move |upgrade| {
+                    Cliquenet::create(
+                        "test-coordinator",
+                        pub_key,
+                        x25519_keypair,
+                        coordinator_addr,
+                        [],
+                        upgrade,
+                        Box::new(NoMetrics),
+                    )
+                }
             };
 
             SequencerContext::init(
@@ -1858,7 +1873,7 @@ mod test {
             Some(MAINNET_TELEMETRY_ENDPOINT)
         );
         assert_eq!(
-            default_telemetry_endpoint(ChainId(U256::from(0xdecafu64))),
+            default_telemetry_endpoint(DECAF_CHAIN_ID),
             Some(DECAF_TELEMETRY_ENDPOINT)
         );
         // Unknown chains (e.g. the demo chain) get no default.

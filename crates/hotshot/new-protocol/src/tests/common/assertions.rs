@@ -16,6 +16,15 @@ pub(crate) fn is_leaf_decided(output: &ConsensusOutput<TestTypes>) -> bool {
     matches!(output, ConsensusOutput::LeafDecided { .. })
 }
 
+/// True if `output` is a `LeafDecided` whose decided leaves include `view`.
+pub(crate) fn decides_view(output: &ConsensusOutput<TestTypes>, view: u64) -> bool {
+    matches!(
+        output,
+        ConsensusOutput::LeafDecided { leaves, .. }
+            if leaves.iter().any(|l| *l.view_number() == view)
+    )
+}
+
 pub(crate) fn is_request_state(output: &ConsensusOutput<TestTypes>) -> bool {
     matches!(output, ConsensusOutput::RequestState(_))
 }
@@ -64,6 +73,10 @@ pub(crate) fn is_send_timeout_vote(output: &ConsensusOutput<TestTypes>) -> bool 
 
 pub(crate) fn is_send_cert1(output: &ConsensusOutput<TestTypes>) -> bool {
     matches!(output, ConsensusOutput::SendCertificate1(_))
+}
+
+pub(crate) fn is_send_cert2(output: &ConsensusOutput<TestTypes>) -> bool {
+    matches!(output, ConsensusOutput::SendCertificate2(_))
 }
 
 pub(crate) fn is_send_timeout_cert(output: &ConsensusOutput<TestTypes>) -> bool {

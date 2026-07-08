@@ -9,6 +9,7 @@ use std::{
 
 use rand::RngExt;
 use snow::{Builder, HandshakeState, TransportState, params::NoiseParams};
+use socket2::{SockRef, TcpKeepalive};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -18,8 +19,7 @@ use tokio::{
 use tracing::{debug, warn};
 
 use crate::{
-    Config, Version,
-    addr::NetAddr,
+    Config, NetAddr, Version,
     error::NetworkError,
     msg::{Header, MAX_NOISE_MESSAGE_SIZE, hello::Hello},
     util::until,
@@ -44,9 +44,7 @@ impl Connection {
         let node = conf.keypair.public_key();
         let addr = stream.peer_addr()?;
 
-        if let Err(err) = stream.set_nodelay(true) {
-            warn!(name = %conf.name, %node, %err, "failed to enable NO_DELAY option")
-        }
+        configure_socket(&conf, &node, &addr, &stream);
 
         until(conf.handshake_timeout, async move {
             let (version, prologue) =
@@ -197,9 +195,7 @@ async fn try_connect(conf: &Config, peer: &PublicKey, addr: &str) -> Result<Conn
 
     debug!(name = %conf.name, %node, %peer, %addr, "tcp connection established");
 
-    if let Err(err) = stream.set_nodelay(true) {
-        warn!(name = %conf.name, %node, %err, "failed to enable NO_DELAY option");
-    }
+    configure_socket(conf, &node, &addr, &stream);
 
     until(conf.handshake_timeout, async move {
         let (version, prologue) = select_version(&node, &addr, conf, &mut stream, true).await?;
@@ -231,6 +227,21 @@ async fn try_connect(conf: &Config, peer: &PublicKey, addr: &str) -> Result<Conn
         }
     })
     .await
+}
+
+fn configure_socket(conf: &Config, node: &PublicKey, addr: &SocketAddr, stream: &TcpStream) {
+    if let Err(err) = stream.set_nodelay(true) {
+        warn!(name = %conf.name, %node, %addr, %err, "failed to enable no_delay option")
+    }
+
+    let k = TcpKeepalive::new()
+        .with_time(conf.keep_alive_after)
+        .with_interval(conf.keep_alive_interval)
+        .with_retries(conf.keep_alive_retries.into());
+
+    if let Err(err) = SockRef::from(stream).set_tcp_keepalive(&k) {
+        warn!(name = %conf.name, %node, %addr, %err, "failed to enable tcp keepalive");
+    }
 }
 
 fn remote_static_key(state: &TransportState) -> Option<PublicKey> {

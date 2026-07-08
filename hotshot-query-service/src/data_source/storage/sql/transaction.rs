@@ -18,7 +18,12 @@
 //! database connection, so that the updated state of the database can be queried midway through a
 //! transaction.
 
-use std::{collections::HashMap, marker::PhantomData, time::Instant};
+use std::{
+    collections::HashMap,
+    fmt::{Debug, Display},
+    marker::PhantomData,
+    time::Instant,
+};
 
 use anyhow::{Context, bail};
 use async_trait::async_trait;
@@ -73,13 +78,13 @@ use crate::{
 /// so they start immediately instead of waiting for a safe serializable snapshot.
 #[cfg(not(feature = "embedded-db"))]
 static NO_DEFERRABLE_ON_READ: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+    std::sync::atomic::AtomicBool::new(true);
 
 /// Configure whether read transactions on Postgres should omit `DEFERRABLE`.
 ///
 /// When `true`, `Read::begin` issues `SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY`
 /// (no `DEFERRABLE`) so the transaction starts immediately rather than waiting for a safe
-/// serializable snapshot. Default: `false`. Call this once at startup based on the operator's
+/// serializable snapshot. Default: `true`. Call this once at startup based on the operator's
 /// chosen configuration.
 #[cfg(not(feature = "embedded-db"))]
 pub fn set_no_deferrable_on_read(value: bool) {
@@ -193,6 +198,36 @@ impl TransactionMode for Prune {
 
     fn display() -> &'static str {
         "prune"
+    }
+}
+
+/// Marker type indicating a transaction used for deferred-migration batches.
+///
+/// On Postgres this uses READ COMMITTED instead of SERIALIZABLE. Long-running backfill batches
+/// that INSERT into and DELETE from tables consensus is also writing to (e.g. the merkle-tree
+/// tables) trigger Serializable Snapshot Isolation predicate-lock conflicts and abort with
+/// "could not serialize access". Backfill batches are designed to be idempotent (`ON CONFLICT`,
+/// monotonic keyset cursors), so the weaker isolation is acceptable.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Backfill;
+
+impl TransactionMode for Backfill {
+    #[allow(unused_variables)]
+    async fn begin(conn: &mut <Db as Database>::Connection) -> anyhow::Result<()> {
+        // SQLite: same as Write -- acquire an exclusive lock immediately to avoid deadlocks.
+        #[cfg(feature = "embedded-db")]
+        conn.execute("UPDATE pruned_height SET id = id WHERE false")
+            .await?;
+
+        #[cfg(not(feature = "embedded-db"))]
+        conn.execute("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+            .await?;
+
+        Ok(())
+    }
+
+    fn display() -> &'static str {
+        "backfill"
     }
 }
 
@@ -566,7 +601,7 @@ impl Transaction<Prune> {
     #[instrument(skip(self))]
     pub(super) async fn delete_state_batch(
         &mut self,
-        state_tables: Vec<String>,
+        state_tables: impl Debug + IntoIterator<Item: Display>,
         height: u64,
     ) -> anyhow::Result<()> {
         for state_table in state_tables {
@@ -591,19 +626,35 @@ impl Transaction<Prune> {
     }
 }
 
+impl<Mode> Transaction<Mode> {
+    const PRUNED_HEIGHT_ID: i32 = 1;
+    const STATE_PRUNED_HEIGHT_ID: i32 = 2;
+}
+
 /// Query service specific mutations.
 impl Transaction<Write> {
     /// Record the height of the latest pruned header.
     pub(crate) async fn save_pruned_height(&mut self, height: u64) -> anyhow::Result<()> {
-        // id is set to 1 so that there is only one row in the table.
-        // height is updated if the row already exists.
         self.upsert(
             "pruned_height",
             ["id", "last_height"],
             ["id"],
-            [(1i32, height as i64)],
+            [(Self::PRUNED_HEIGHT_ID, height as i64)],
         )
         .await
+        .context("updating pruned height")
+    }
+
+    /// Record the height of the latest pruned merklized state.
+    pub(crate) async fn save_state_pruned_height(&mut self, height: u64) -> anyhow::Result<()> {
+        self.upsert(
+            "pruned_height",
+            ["id", "last_height"],
+            ["id"],
+            [(Self::STATE_PRUNED_HEIGHT_ID, height as i64)],
+        )
+        .await
+        .context("updating state pruned height")
     }
 }
 
@@ -942,9 +993,24 @@ impl<Types: NodeType, State: MerklizedState<Types, ARITY>, const ARITY: usize>
 impl<Mode: TransactionMode> PrunedHeightStorage for Transaction<Mode> {
     async fn load_pruned_height(&mut self) -> anyhow::Result<Option<u64>> {
         let Some((height,)) =
-            query_as::<(i64,)>("SELECT last_height FROM pruned_height ORDER BY id DESC LIMIT 1")
+            query_as::<(i64,)>("SELECT last_height FROM pruned_height WHERE id = $1 LIMIT 1")
+                .bind(Self::PRUNED_HEIGHT_ID)
                 .fetch_optional(self.as_mut())
-                .await?
+                .await
+                .context("loading pruned height")?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(height as u64))
+    }
+
+    async fn load_state_pruned_height(&mut self) -> anyhow::Result<Option<u64>> {
+        let Some((height,)) =
+            query_as::<(i64,)>("SELECT last_height FROM pruned_height WHERE id = $1 LIMIT 1")
+                .bind(Self::STATE_PRUNED_HEIGHT_ID)
+                .fetch_optional(self.as_mut())
+                .await
+                .context("loading state pruned height")?
         else {
             return Ok(None);
         };

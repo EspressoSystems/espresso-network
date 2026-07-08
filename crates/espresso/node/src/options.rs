@@ -21,7 +21,13 @@ use light_client::{state::LightClientOptions, storage::LightClientSqliteOptions}
 use serde::Serialize;
 use url::Url;
 
-use crate::{api, keyset::KeySetOptions, persistence, proposal_fetcher::ProposalFetcherConfig};
+use crate::{
+    api,
+    genesis::{Genesis, GenesisSource},
+    keyset::KeySetOptions,
+    persistence,
+    proposal_fetcher::ProposalFetcherConfig,
+};
 
 // This options struct is a bit unconventional. The sequencer has multiple optional modules which
 // can be added, in any combination, to the service. These include, for example, the API server.
@@ -209,6 +215,10 @@ pub struct Options {
     )]
     pub libp2p_max_direct_transmit_size: u64,
 
+    /// Only for the decaf network unmerge migration. Do not set unless specifically requested.
+    #[clap(long, env = "ESPRESSO_NODE_LIBP2P_DHT_PUT_QUORUM")]
+    pub libp2p_dht_put_quorum: Option<std::num::NonZeroUsize>,
+
     /// The URL we advertise to other nodes as being for our public API.
     /// Should be supplied in `http://host:port` form.
     #[clap(long, env = "ESPRESSO_NODE_PUBLIC_API_URL")]
@@ -254,14 +264,16 @@ pub struct Options {
     #[derivative(Debug(format_with = "Display::fmt"))]
     pub state_relay_server_url: Url,
 
-    /// Path to TOML file containing genesis state.
+    /// Location of the TOML file containing genesis state.
+    ///
+    /// Accepts a plain filesystem path or an `http(s)://` URL.
     #[clap(
         long,
         name = "GENESIS_FILE",
         env = "ESPRESSO_NODE_GENESIS_FILE",
         default_value = "/genesis/demo.toml"
     )]
-    pub genesis_file: PathBuf,
+    pub genesis_file: GenesisSource,
 
     #[clap(flatten)]
     pub key_set: KeySetOptions,
@@ -677,7 +689,8 @@ pub struct PublicNodeConfig {
     pub state_peers: Vec<Url>,
     pub config_peers: Option<Vec<Url>>,
     pub is_da: bool,
-    pub genesis_file: PathBuf,
+    pub genesis_file: GenesisSource,
+    pub genesis: Genesis,
     pub identity: Identity,
     pub catchup_base_timeout: Duration,
     pub local_catchup_timeout: Duration,
@@ -980,7 +993,7 @@ impl From<&L1ClientOptions> for L1Tuning {
 }
 
 impl PublicNodeConfig {
-    pub fn new(opt: &Options, modules: &Modules) -> Self {
+    pub fn new(opt: &Options, modules: &Modules, genesis: &Genesis) -> Self {
         let storage = if let Some(sql) = modules.storage_sql.as_ref() {
             StorageConfig {
                 backend: StorageBackend::Sql,
@@ -1017,6 +1030,7 @@ impl PublicNodeConfig {
             config_peers: opt.config_peers.clone(),
             is_da: opt.is_da,
             genesis_file: opt.genesis_file.clone(),
+            genesis: genesis.clone(),
             identity: opt.identity.clone(),
             catchup_base_timeout: opt.catchup_base_timeout,
             local_catchup_timeout: opt.local_catchup_timeout,
@@ -1040,11 +1054,21 @@ impl PublicNodeConfig {
 
 #[cfg(test)]
 mod tests {
-    use espresso_types::PubKey;
-    use hotshot_types::{light_client::StateKeyPair, traits::signature_key::SignatureKey, x25519};
+    use alloy::primitives::{Address, B256, U256};
+    use espresso_types::{
+        FeeAccount, GenesisHeader, L1BlockInfo, PubKey, SeqTypes, Timestamp, Upgrade, UpgradeMode,
+        UpgradeType, ViewBasedUpgrade, v0_3::ChainConfig,
+    };
+    use espresso_utils::ser::FromStringOrInteger;
+    use hotshot_types::{
+        PeerConfig, VersionedDaCommittee, light_client::StateKeyPair, stake_table::StakeTableEntry,
+        traits::signature_key::SignatureKey, x25519,
+    };
     use tagged_base64::TaggedBase64;
+    use vbs::version::Version;
 
     use super::*;
+    use crate::genesis::{L1Finalized, StakeTableConfig};
 
     #[test]
     fn test_build_version() {
@@ -1102,6 +1126,68 @@ mod tests {
         Options::parse_from(args)
     }
 
+    /// A `Genesis` with every field populated (both upgrade modes, DA committee) so the
+    /// `/config/runtime` snapshot documents the full response shape.
+    fn test_genesis() -> Genesis {
+        let chain_config = ChainConfig {
+            chain_id: 999999999.into(),
+            max_block_size: 3000.into(),
+            base_fee: 1.into(),
+            fee_recipient: FeeAccount::default(),
+            fee_contract: Some(Address::from([0x11; 20])),
+            stake_table_contract: Some(Address::from([0x22; 20])),
+        };
+        let peer = PeerConfig::<SeqTypes> {
+            stake_table_entry: StakeTableEntry {
+                stake_key: PubKey::generated_from_seed_indexed([0; 32], 0).0,
+                stake_amount: U256::from(1),
+            },
+            state_ver_key: StateKeyPair::generate_from_seed_indexed([0; 32], 0).ver_key(),
+            connect_info: None,
+        };
+        Genesis {
+            base_version: Version { major: 0, minor: 4 },
+            upgrade_version: Version { major: 0, minor: 5 },
+            genesis_version: Version { major: 0, minor: 2 },
+            epoch_height: Some(40000),
+            drb_difficulty: Some(25000000000),
+            drb_upgrade_difficulty: Some(25000000000),
+            epoch_start_block: Some(10960201),
+            stake_table_capacity: Some(200),
+            chain_config,
+            stake_table: StakeTableConfig { capacity: 200 },
+            accounts: Default::default(),
+            l1_finalized: L1Finalized::Block(L1BlockInfo {
+                number: 21116303,
+                timestamp: U256::from(1700000000),
+                hash: B256::from([0x44; 32]),
+            }),
+            header: GenesisHeader {
+                timestamp: Timestamp::from_integer(123456).unwrap(),
+                chain_config,
+            },
+            upgrades: [(
+                Version { major: 0, minor: 5 },
+                Upgrade {
+                    mode: UpgradeMode::View(ViewBasedUpgrade {
+                        start_proposing_view: 100,
+                        stop_proposing_view: 200,
+                        start_voting_view: Some(1),
+                        stop_voting_view: Some(300),
+                    }),
+                    upgrade_type: UpgradeType::EpochReward { chain_config },
+                },
+            )]
+            .into_iter()
+            .collect(),
+            da_committees: Some(vec![VersionedDaCommittee {
+                start_version: Version { major: 0, minor: 6 },
+                start_epoch: 10,
+                committee: vec![peer],
+            }]),
+        }
+    }
+
     #[test]
     fn public_node_config_no_secrets() {
         let opt = parse_options_with(&[
@@ -1114,7 +1200,7 @@ mod tests {
         ]);
         let modules = opt.modules();
 
-        let cfg = PublicNodeConfig::new(&opt, &modules);
+        let cfg = PublicNodeConfig::new(&opt, &modules, &test_genesis());
         let json = serde_json::to_string(&cfg).unwrap();
         let json_lc = json.to_lowercase();
 
@@ -1172,7 +1258,7 @@ mod tests {
         let opt = parse_options_with(&[]);
         let modules = opt.modules();
 
-        let cfg = PublicNodeConfig::new(&opt, &modules);
+        let cfg = PublicNodeConfig::new(&opt, &modules, &test_genesis());
 
         assert!(
             cfg.cliquenet_advertise_address.is_none(),
@@ -1268,7 +1354,7 @@ mod tests {
         ]);
         let modules = opt.modules();
 
-        let cfg = PublicNodeConfig::new(&opt, &modules);
+        let cfg = PublicNodeConfig::new(&opt, &modules, &test_genesis());
 
         insta::assert_yaml_snapshot!("config_node_response_postgres", cfg);
     }
@@ -1289,7 +1375,7 @@ mod tests {
         ]);
         let modules = opt.modules();
 
-        let cfg = PublicNodeConfig::new(&opt, &modules);
+        let cfg = PublicNodeConfig::new(&opt, &modules, &test_genesis());
         let json = serde_json::to_string(&cfg).unwrap();
 
         assert_eq!(cfg.storage.backend, StorageBackend::Sql);

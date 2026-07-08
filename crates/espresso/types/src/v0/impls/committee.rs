@@ -881,11 +881,24 @@ impl Membership<SeqTypes> for EpochCommittees {
             .ok_or_else(|| Self::Error::Message(format!("no committee for epoch={epoch}")))?;
         let stake_table = HSStakeTable(snapshot.stake_table().cloned().collect());
         let success_threshold = snapshot.success_threshold();
-        let leaf: Leaf2 = peers
-            .fetch_leaf(block_height, stake_table, success_threshold)
-            .await
-            .map_err(Self::Error::Catchup)?;
-        Ok(leaf)
+
+        // the root block may not exist anywhere yet
+        // Each attempt tries all peers once
+        // `retry` only scales the per peer timeout
+        for retry in 0..3 {
+            match peers
+                .try_fetch_leaf(retry, block_height, stake_table.clone(), success_threshold)
+                .await
+            {
+                Ok(leaf) => return Ok(leaf),
+                Err(err) => {
+                    warn!(%epoch, block_height, retry, "failed to fetch epoch root leaf: {err:#}");
+                },
+            }
+        }
+        Err(Self::Error::Catchup(anyhow::anyhow!(
+            "failed to fetch epoch root leaf for epoch {epoch} (block {block_height}) from peers"
+        )))
     }
 
     async fn get_epoch_drb(&self, epoch: EpochNumber) -> Result<DrbResult, Self::Error> {
