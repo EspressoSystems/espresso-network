@@ -42,7 +42,6 @@ use crate::{
         timer::Timer,
     },
     epoch::{EpochManager, EpochRootResult},
-    epoch_root_vote_collector::EpochRootVoteCollector,
     helpers::proposal_commitment,
     logging::KeyPrefix,
     message::{
@@ -56,7 +55,7 @@ use crate::{
     state::{HeaderRequest, StateEntry, StateManager, StateManagerOutput},
     storage::{NewProtocolStorage, Storage},
     vid::{VidDisperseRequest, VidDisperser, VidFragmentAccumulator, VidReconstructor},
-    vote::VoteCollector,
+    vote::{EpochRootTally, SimpleTally, VoteCollector},
 };
 
 /// Views to retain in the VID reconstructor behind the decided view
@@ -99,11 +98,12 @@ pub struct Coordinator<T: NodeType, S> {
     vid_reconstructor: VidReconstructor<T>,
     #[builder(default)]
     vid_fragment_accumulator: VidFragmentAccumulator<T>,
-    vote1_collector: VoteCollector<T, QuorumVote2<T>, QuorumCertificate2<T>>,
-    vote2_collector: VoteCollector<T, Vote2<T>, Certificate2<T>>,
-    timeout_collector: VoteCollector<T, TimeoutVote2<T>, TimeoutCertificate2<T>>,
-    timeout_one_honest_collector: VoteCollector<T, TimeoutVote2<T>, TimeoutOneHonest<T>>,
-    epoch_root_collector: EpochRootVoteCollector<T>,
+    vote1_collector: VoteCollector<T, SimpleTally<T, QuorumVote2<T>, QuorumCertificate2<T>>>,
+    vote2_collector: VoteCollector<T, SimpleTally<T, Vote2<T>, Certificate2<T>>>,
+    timeout_collector: VoteCollector<T, SimpleTally<T, TimeoutVote2<T>, TimeoutCertificate2<T>>>,
+    timeout_one_honest_collector:
+        VoteCollector<T, SimpleTally<T, TimeoutVote2<T>, TimeoutOneHonest<T>>>,
+    epoch_root_collector: VoteCollector<T, EpochRootTally<T>>,
     epoch_manager: EpochManager<T>,
     block_builder: BlockBuilder<T>,
     proposal_validator: ProposalValidator<T>,
@@ -270,10 +270,7 @@ where
                 membership_coordinator.clone(),
                 lock.clone(),
             ))
-            .epoch_root_collector(EpochRootVoteCollector::new(
-                membership_coordinator.clone(),
-                lock,
-            ))
+            .epoch_root_collector(VoteCollector::new(membership_coordinator.clone(), lock))
             .epoch_manager(EpochManager::new(
                 initializer.epoch_height,
                 membership_coordinator.clone(),

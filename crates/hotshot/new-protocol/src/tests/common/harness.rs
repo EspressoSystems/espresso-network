@@ -16,7 +16,6 @@ use crate::{
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     coordinator::{error::Severity, timer::Timer},
     epoch::EpochManager,
-    epoch_root_vote_collector::EpochRootVoteCollector,
     helpers::test_upgrade_lock,
     logging::KeyPrefix,
     message::Message,
@@ -68,8 +67,7 @@ impl TestHarness {
         let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
         let timeout_one_honest_collector =
             VoteCollector::new(membership.clone(), upgrade_lock.clone());
-        let epoch_root_collector =
-            EpochRootVoteCollector::new(membership.clone(), upgrade_lock.clone());
+        let epoch_root_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
 
         let genesis_state = TestValidatedState::default();
         // Use the same version as `TestViewGenerator` (vid2) so the genesis

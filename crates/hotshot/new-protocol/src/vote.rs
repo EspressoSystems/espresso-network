@@ -1,9 +1,21 @@
+//! Per-view vote collection and certificate formation.
+//!
+//! Votes for views arrive concurrently, and each view is tallied on its own
+//! until it crosses a threshold and forms a certificate. [`VoteCollector`]
+//! owns the machinery common to every kind of vote, inspecting each vote only
+//! through the [`Ballot`] trait. It creates a task per view and routes votes
+//! to the appropriate task, drops duplicate and stale votes, buffers votes
+//! whose epoch is not yet resolved, and GCs decided views. How a view's task
+//! actually combines votes into an output is delegated to a pluggable [`Tally`]
+//! strategy.
+
 mod accumulate;
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    marker::PhantomData,
     mem,
-    sync::mpsc,
+    sync::mpsc::{self, Receiver},
 };
 
 pub(crate) use accumulate::CheckedAccumulator;
@@ -12,22 +24,169 @@ use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     message::UpgradeLock,
-    simple_vote::HasEpoch,
+    simple_certificate::{LightClientStateUpdateCertificateV2, QuorumCertificate2},
+    simple_vote::{HasEpoch, QuorumVote2, SimpleVote, Voteable},
     traits::{node_implementation::NodeType, signature_key::StakeTableEntryType},
-    vote::{Certificate, Vote},
+    vote::{Certificate, HasViewNumber, LightClientStateUpdateVoteAccumulator, Vote},
 };
 use tokio_util::task::JoinMap;
-use tracing::error;
+use tracing::{error, info};
 
-pub struct VoteCollector<T: NodeType, V, C> {
-    /// Tasks collecting votes and verifying certificates.
-    accumulators: JoinMap<ViewNumber, Option<C>>,
+use crate::message::Vote1;
+
+/// Information about a vote.
+///
+/// Used by [`VoteCollector`] to handle incoming votes, i.e. reject
+/// duplicate votes by the same signer, or stale votes for GCed views,
+/// before even tallying the vote.
+pub trait Ballot {
+    type Signer;
+
+    fn view(&self) -> ViewNumber;
+    fn epoch(&self) -> Option<EpochNumber>;
+    fn signer(&self) -> Self::Signer;
+}
+
+/// How to count votes to form a certificate.
+pub trait Tally<T: NodeType> {
+    type Vote: Send + 'static;
+    type Output: Send + 'static;
+
+    fn tally(
+        r: Receiver<Self::Vote>,
+        m: EpochMembership<T>,
+        l: UpgradeLock<T>,
+    ) -> Option<Self::Output>;
+}
+
+impl<T: NodeType, D> Ballot for SimpleVote<T, D>
+where
+    D: Voteable<T> + HasEpoch + 'static,
+{
+    type Signer = T::SignatureKey;
+
+    fn view(&self) -> ViewNumber {
+        self.view_number()
+    }
+
+    fn epoch(&self) -> Option<EpochNumber> {
+        HasEpoch::epoch(self)
+    }
+
+    fn signer(&self) -> Self::Signer {
+        self.signing_key()
+    }
+}
+
+impl<T: NodeType> Ballot for Vote1<T> {
+    type Signer = T::SignatureKey;
+
+    fn view(&self) -> ViewNumber {
+        self.vote.view_number()
+    }
+
+    fn epoch(&self) -> Option<EpochNumber> {
+        HasEpoch::epoch(&self.vote)
+    }
+
+    fn signer(&self) -> Self::Signer {
+        self.vote.signing_key()
+    }
+}
+
+/// Accumulates votes into a single [`Certificate`] via a [`CheckedAccumulator`].
+#[allow(clippy::type_complexity)]
+pub struct SimpleTally<T, V, C>(PhantomData<fn() -> (T, V, C)>);
+
+impl<T, V, C> Tally<T> for SimpleTally<T, V, C>
+where
+    T: NodeType,
+    V: Vote<T> + Send + 'static,
+    C: Certificate<T, V::Commitment, Voteable = V::Commitment> + Send + 'static,
+{
+    type Vote = V;
+    type Output = C;
+
+    fn tally(r: Receiver<V>, m: EpochMembership<T>, l: UpgradeLock<T>) -> Option<Self::Output> {
+        let mut a = CheckedAccumulator::new(m, l);
+        while let Ok(v) = r.recv() {
+            if let Some(c) = a.add(v) {
+                return Some(c);
+            }
+        }
+        None
+    }
+}
+
+/// The quorum and light-client state certificates formed at an epoch-root view.
+pub type EpochRootCerts<T> = (
+    QuorumCertificate2<T>,
+    LightClientStateUpdateCertificateV2<T>,
+);
+
+/// Accumulates epoch-root [`Vote1`]s into the (quorum, state) certificate pair.
+pub struct EpochRootTally<T>(PhantomData<fn() -> T>);
+
+impl<T: NodeType> Tally<T> for EpochRootTally<T> {
+    type Vote = Vote1<T>;
+    type Output = EpochRootCerts<T>;
+
+    fn tally(
+        rx: mpsc::Receiver<Vote1<T>>,
+        mem: EpochMembership<T>,
+        lock: UpgradeLock<T>,
+    ) -> Option<Self::Output> {
+        let mut quorum_accu = CheckedAccumulator::<T, QuorumVote2<T>, QuorumCertificate2<T>>::new(
+            mem.clone(),
+            lock.clone(),
+        );
+
+        let mut state_accu = LightClientStateUpdateVoteAccumulator::<T> {
+            vote_outcomes: HashMap::new(),
+            upgrade_lock: lock,
+        };
+
+        let mut quorum_cert = None;
+        let mut state_cert = None;
+
+        while let Ok(vote1) = rx.recv() {
+            let Some(state_vote) = vote1.state_vote else {
+                error!(view = %vote1.vote.view_number(), "epoch-root vote1 without state vote");
+                continue;
+            };
+            let bls_key = vote1.vote.signing_key();
+
+            if quorum_cert.is_none() {
+                quorum_cert = quorum_accu.add(vote1.vote);
+            }
+
+            // Unlike quorum votes, state votes are fully checked, including
+            // their signatures, by the accumulator, so the certificate does
+            // not need to be validated again.
+            if state_cert.is_none() {
+                state_cert = state_accu.accumulate(&bls_key, &state_vote, &mem);
+            }
+
+            if let (Some(q), Some(s)) = (&quorum_cert, &state_cert) {
+                info!(view = %q.view_number(), epoch = %s.epoch, "epoch-root certificates formed");
+                return Some((q.clone(), s.clone()));
+            }
+        }
+
+        None
+    }
+}
+
+/// Collects votes per view and forms certificate(s) using the strategy `S`.
+pub struct VoteCollector<T: NodeType, S: Tally<T>> {
+    /// Tasks collecting votes and forming certificates.
+    accumulators: JoinMap<ViewNumber, Option<S::Output>>,
 
     /// Where callers submit their votes.
-    ballot_boxes: BTreeMap<ViewNumber, mpsc::Sender<V>>,
+    ballot_boxes: BTreeMap<ViewNumber, mpsc::Sender<S::Vote>>,
 
     /// Votes for epochs we have yet to resolve, deduplicated by signer.
-    pending: BTreeMap<ViewNumber, HashMap<T::SignatureKey, V>>,
+    pending: BTreeMap<ViewNumber, HashMap<T::SignatureKey, S::Vote>>,
 
     /// Views that had a valid certificate already.
     completed: BTreeSet<ViewNumber>,
@@ -43,11 +202,9 @@ pub struct VoteCollector<T: NodeType, V, C> {
     upgrade_lock: UpgradeLock<T>,
 }
 
-impl<T, V, C> VoteCollector<T, V, C>
+impl<T: NodeType, S: Tally<T>> VoteCollector<T, S>
 where
-    T: NodeType,
-    V: Vote<T> + HasEpoch + Send + 'static,
-    C: Certificate<T, V::Commitment, Voteable = V::Commitment> + Send + 'static,
+    <S as Tally<T>>::Vote: Ballot<Signer = T::SignatureKey>,
 {
     pub fn new(mc: EpochMembershipCoordinator<T>, lock: UpgradeLock<T>) -> Self {
         Self {
@@ -62,7 +219,7 @@ where
         }
     }
 
-    pub async fn next(&mut self) -> Option<C> {
+    pub async fn next(&mut self) -> Option<S::Output> {
         loop {
             match self.accumulators.join_next().await {
                 Some((view, Ok(Some(cert)))) => {
@@ -84,30 +241,28 @@ where
         }
     }
 
-    pub fn accumulate_vote(&mut self, vote: V) {
-        let view = vote.view_number();
+    pub fn accumulate_vote(&mut self, vote: S::Vote) {
+        let view = vote.view();
 
         if view < self.lower_bound || self.completed.contains(&view) {
             return;
         }
 
         let Some(membership) = self.resolve_membership(&vote) else {
+            // A missing epoch can never resolve, so we only buffer
+            // votes whose epoch's stake table will eventually become
+            // available:
             if vote.epoch().is_some() {
                 self.pending
                     .entry(view)
                     .or_default()
-                    .insert(vote.signing_key(), vote);
+                    .insert(vote.signer(), vote);
             }
             return;
         };
 
         // Check that we have not received a vote from this signer already.
-        if !self
-            .signers
-            .entry(view)
-            .or_default()
-            .insert(vote.signing_key())
-        {
+        if !self.signers.entry(view).or_default().insert(vote.signer()) {
             return;
         }
 
@@ -123,7 +278,7 @@ where
 
         let lock = self.upgrade_lock.clone();
         self.accumulators
-            .spawn_blocking(view, move || accumulate_votes(rx, membership, lock));
+            .spawn_blocking(view, move || S::tally(rx, membership, lock));
     }
 
     pub fn retry_pending_votes(&mut self) {
@@ -135,6 +290,26 @@ where
         }
     }
 
+    pub fn gc(&mut self, view: ViewNumber) {
+        self.ballot_boxes = self.ballot_boxes.split_off(&view);
+        self.completed = self.completed.split_off(&view);
+        self.pending = self.pending.split_off(&view);
+        self.signers = self.signers.split_off(&view);
+        self.lower_bound = view;
+    }
+
+    fn resolve_membership(&mut self, vote: &S::Vote) -> Option<EpochMembership<T>> {
+        let epoch = vote.epoch()?;
+        self.membership.membership_for_epoch(Some(epoch)).ok()
+    }
+}
+
+impl<T, V, C> VoteCollector<T, SimpleTally<T, V, C>>
+where
+    T: NodeType,
+    V: Vote<T> + Send + 'static,
+    C: Certificate<T, V::Commitment, Voteable = V::Commitment> + Send + 'static,
+{
     /// Compute the accumulated stake.
     ///
     /// This is the sum across unique signers we've routed to the accumulator
@@ -157,38 +332,6 @@ where
         }
         Some(VoteStats { stake, threshold })
     }
-
-    pub fn gc(&mut self, view: ViewNumber) {
-        self.ballot_boxes = self.ballot_boxes.split_off(&view);
-        self.completed = self.completed.split_off(&view);
-        self.pending = self.pending.split_off(&view);
-        self.signers = self.signers.split_off(&view);
-        self.lower_bound = view;
-    }
-
-    fn resolve_membership(&mut self, vote: &V) -> Option<EpochMembership<T>> {
-        let epoch = vote.epoch()?;
-        self.membership.membership_for_epoch(Some(epoch)).ok()
-    }
-}
-
-fn accumulate_votes<T, V, C>(
-    rx: mpsc::Receiver<V>,
-    membership: EpochMembership<T>,
-    lock: UpgradeLock<T>,
-) -> Option<C>
-where
-    T: NodeType,
-    V: Vote<T>,
-    C: Certificate<T, V::Commitment, Voteable = V::Commitment> + Send + 'static,
-{
-    let mut accumulator = CheckedAccumulator::new(membership, lock);
-    while let Ok(vote) = rx.recv() {
-        if let Some(cert) = accumulator.add(vote) {
-            return Some(cert);
-        }
-    }
-    None
 }
 
 /// Accumulated stake / threshold for a single view.
@@ -215,12 +358,12 @@ mod tests {
             HasEpoch, QuorumData2, QuorumVote2, SimpleVote, VersionedVoteData, Vote2Data,
         },
         stake_table::StakeTableEntries,
-        traits::signature_key::SignatureKey,
+        traits::{node_implementation::NodeType, signature_key::SignatureKey},
         vote::{Certificate, HasViewNumber, Vote},
     };
     use tokio::{sync::mpsc, time::timeout};
 
-    use super::VoteCollector;
+    use super::{Ballot, SimpleTally, VoteCollector};
     use crate::{
         helpers::test_upgrade_lock,
         message::{Certificate1, Certificate2, Vote2},
@@ -295,22 +438,31 @@ mod tests {
     /// - vote sender
     /// - cert notification channel (receives (view, cert) when a certificate is formed)
     /// - task JoinHandle (abort this to clean up)
-    fn setup_cert1_task()
-    -> VoteCollector<TestTypes, QuorumVote2<TestTypes>, Certificate1<TestTypes>> {
+    fn setup_cert1_task() -> VoteCollector<
+        TestTypes,
+        SimpleTally<TestTypes, QuorumVote2<TestTypes>, Certificate1<TestTypes>>,
+    > {
         setup_task::<QuorumVote2<TestTypes>, Certificate1<TestTypes>>()
     }
 
-    fn setup_cert2_task() -> VoteCollector<TestTypes, Vote2<TestTypes>, Certificate2<TestTypes>> {
+    fn setup_cert2_task()
+    -> VoteCollector<TestTypes, SimpleTally<TestTypes, Vote2<TestTypes>, Certificate2<TestTypes>>>
+    {
         setup_task::<Vote2<TestTypes>, Certificate2<TestTypes>>()
     }
 
     /// Spawn a VoteCollectionTask for Certificate2.
     fn setup_task<
-        V: Vote<TestTypes> + HasEpoch + Send + Sync + 'static,
+        V: Ballot<Signer = <TestTypes as NodeType>::SignatureKey>
+            + Vote<TestTypes>
+            + HasEpoch
+            + Send
+            + Sync
+            + 'static,
         C: Certificate<TestTypes, V::Commitment, Voteable = V::Commitment> + Send + Sync + 'static,
-    >() -> VoteCollector<TestTypes, V, C> {
+    >() -> VoteCollector<TestTypes, SimpleTally<TestTypes, V, C>> {
         let membership = mock_membership();
-        VoteCollector::<TestTypes, V, C>::new(membership, test_upgrade_lock())
+        VoteCollector::new(membership, test_upgrade_lock())
     }
 
     /// Wait for exactly `expected` certificates, then abort the task.
@@ -331,14 +483,19 @@ mod tests {
 
     /// Confirm no certificates are produced within the timeout, then abort the task.
     async fn assert_no_certs<
-        V: Vote<TestTypes> + HasEpoch + Send + Sync + 'static,
+        V: Ballot<Signer = <TestTypes as NodeType>::SignatureKey>
+            + Vote<TestTypes>
+            + HasEpoch
+            + Send
+            + Sync
+            + 'static,
         C: Certificate<TestTypes, V::Commitment, Voteable = V::Commitment>
             + Debug
             + Send
             + Sync
             + 'static,
     >(
-        task: &mut VoteCollector<TestTypes, V, C>,
+        task: &mut VoteCollector<TestTypes, SimpleTally<TestTypes, V, C>>,
     ) {
         let result = tokio::time::timeout(NO_CERT_TIMEOUT, task.next()).await;
         match result {
