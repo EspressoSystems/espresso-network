@@ -322,7 +322,7 @@ where
 }
 
 /// Single-namespace version of [`get_namespaces_proof_range`].
-async fn get_namespace_proof_range<State>(
+pub(crate) async fn get_namespace_proof_range<State>(
     state: &State,
     start: usize,
     end: usize,
