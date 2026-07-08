@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["accumulate_votes"],"struct":["VoteCollector","VoteStats"],"type":["VoteSig"]};
+window.SIDEBAR_ITEMS = {"mod":["accumulate"],"struct":["EpochRootTally","SimpleTally","VoteCollector","VoteStats"],"trait":["Ballot","Tally"],"type":["EpochRootCerts"]};
