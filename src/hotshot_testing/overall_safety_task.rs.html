@@ -84,21 +84,25 @@
 <a href=#84 id=84 data-nosnippet>84</a>    </span><span class="kw">pub </span>expected_view_failures: Vec&lt;u64&gt;,
 <a href=#85 id=85 data-nosnippet>85</a>    <span class="doccomment">/// pass in the views that may or may not fail.
 <a href=#86 id=86 data-nosnippet>86</a>    </span><span class="kw">pub </span>possible_view_failures: Vec&lt;u64&gt;,
-<a href=#87 id=87 data-nosnippet>87</a>    <span class="doccomment">/// how long to wait between external events before timing out the test
-<a href=#88 id=88 data-nosnippet>88</a>    </span><span class="kw">pub </span>decide_timeout: Duration,
-<a href=#89 id=89 data-nosnippet>89</a>}
-<a href=#90 id=90 data-nosnippet>90</a>
-<a href=#91 id=91 data-nosnippet>91</a><span class="kw">impl </span>Default <span class="kw">for </span>OverallSafetyPropertiesDescription {
-<a href=#92 id=92 data-nosnippet>92</a>    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
-<a href=#93 id=93 data-nosnippet>93</a>        <span class="self">Self </span>{
-<a href=#94 id=94 data-nosnippet>94</a>            num_successful_views: <span class="number">50</span>,
-<a href=#95 id=95 data-nosnippet>95</a>            check_leaf: <span class="bool-val">false</span>,
-<a href=#96 id=96 data-nosnippet>96</a>            check_block: <span class="bool-val">true</span>,
-<a href=#97 id=97 data-nosnippet>97</a>            transaction_threshold: <span class="number">0</span>,
-<a href=#98 id=98 data-nosnippet>98</a>            expected_view_failures: <span class="macro">vec!</span>[],
-<a href=#99 id=99 data-nosnippet>99</a>            possible_view_failures: <span class="macro">vec!</span>[],
-<a href=#100 id=100 data-nosnippet>100</a>            decide_timeout: Duration::from_secs(<span class="number">60</span>),
-<a href=#101 id=101 data-nosnippet>101</a>        }
-<a href=#102 id=102 data-nosnippet>102</a>    }
-<a href=#103 id=103 data-nosnippet>103</a>}
+<a href=#87 id=87 data-nosnippet>87</a>    <span class="doccomment">/// maximum number of unexpected failed views tolerated across the whole run
+<a href=#88 id=88 data-nosnippet>88</a>    /// before the test fails.
+<a href=#89 id=89 data-nosnippet>89</a>    </span><span class="kw">pub </span>max_unexpected_view_failures: usize,
+<a href=#90 id=90 data-nosnippet>90</a>    <span class="doccomment">/// how long to wait between external events before timing out the test
+<a href=#91 id=91 data-nosnippet>91</a>    </span><span class="kw">pub </span>decide_timeout: Duration,
+<a href=#92 id=92 data-nosnippet>92</a>}
+<a href=#93 id=93 data-nosnippet>93</a>
+<a href=#94 id=94 data-nosnippet>94</a><span class="kw">impl </span>Default <span class="kw">for </span>OverallSafetyPropertiesDescription {
+<a href=#95 id=95 data-nosnippet>95</a>    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
+<a href=#96 id=96 data-nosnippet>96</a>        <span class="self">Self </span>{
+<a href=#97 id=97 data-nosnippet>97</a>            num_successful_views: <span class="number">50</span>,
+<a href=#98 id=98 data-nosnippet>98</a>            check_leaf: <span class="bool-val">false</span>,
+<a href=#99 id=99 data-nosnippet>99</a>            check_block: <span class="bool-val">true</span>,
+<a href=#100 id=100 data-nosnippet>100</a>            transaction_threshold: <span class="number">0</span>,
+<a href=#101 id=101 data-nosnippet>101</a>            expected_view_failures: <span class="macro">vec!</span>[],
+<a href=#102 id=102 data-nosnippet>102</a>            possible_view_failures: <span class="macro">vec!</span>[],
+<a href=#103 id=103 data-nosnippet>103</a>            max_unexpected_view_failures: <span class="number">0</span>,
+<a href=#104 id=104 data-nosnippet>104</a>            decide_timeout: Duration::from_secs(<span class="number">60</span>),
+<a href=#105 id=105 data-nosnippet>105</a>        }
+<a href=#106 id=106 data-nosnippet>106</a>    }
+<a href=#107 id=107 data-nosnippet>107</a>}
 </code></pre></div></section></main></body></html>
