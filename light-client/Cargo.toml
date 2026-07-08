@@ -5,12 +5,31 @@ authors.workspace = true
 edition.workspace = true
 
 [features]
-default = ["rlp"]
-rlp = ["alloy-rlp", "hotshot-types/rlp", "espresso-types/rlp"]
-testing = ["espresso-types/testing", "bitvec", "hotshot-contract-adapter", "rand"]
+default = ["client", "rlp"]
+# Host-side query client, sqlite storage and query-service provider; disable
+# for constrained targets (e.g. SP1 zkVM).
+client = [
+    "dep:hotshot-query-service",
+    "dep:serde_json",
+    "dep:sqlx",
+    "dep:surf-disco",
+    "dep:tempfile",
+    "dep:tokio",
+    "espresso-types/node",
+    "hotshot-query-service-types/default",
+]
+rlp = ["alloy-rlp", "espresso-types/rlp", "hotshot-types/rlp"]
+testing = [
+    "bitvec",
+    "client",
+    "espresso-types/testing",
+    "hotshot-contract-adapter",
+    "rand",
+]
 
 [dependencies]
-alloy = { workspace = true }
+# Direct declaration: default-features = false is ignored on workspace-inherited deps.
+alloy = { version = "1.0", default-features = false }
 anyhow = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
@@ -19,21 +38,25 @@ committable = { workspace = true }
 derivative = { workspace = true }
 derive_builder = { workspace = true }
 derive_more = { workspace = true }
-espresso-types = { workspace = true }
+# Direct declaration: default-features = false is ignored on workspace-inherited deps.
+espresso-types = { path = "../crates/espresso/types", default-features = false }
 futures = { workspace = true }
-hotshot-query-service = { workspace = true, features = ["sqlite-options"] }
-hotshot-query-service-types = { workspace = true }
+hotshot-query-service = { workspace = true, features = [
+    "sqlite-options",
+], optional = true }
+# Direct declaration: default-features = false is ignored on workspace-inherited deps.
+hotshot-query-service-types = { path = "../hotshot-query-service-types", default-features = false }
 hotshot-types = { workspace = true }
 jf-advz = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
-sqlx = { workspace = true }
+serde_json = { workspace = true, optional = true }
+sqlx = { workspace = true, optional = true }
 static_assertions = { workspace = true }
-surf-disco = { workspace = true }
+surf-disco = { workspace = true, optional = true }
 tagged-base64 = { workspace = true }
-tempfile = { workspace = true }
-tokio = { workspace = true }
+tempfile = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
 tracing = { workspace = true }
 vbs = { workspace = true }
 versions = { workspace = true }
