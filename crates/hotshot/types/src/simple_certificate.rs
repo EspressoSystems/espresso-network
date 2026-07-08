@@ -27,7 +27,7 @@ use crate::{
         DaData, DaData2, HasEpoch, NextEpochQuorumData2, QuorumData, QuorumData2, QuorumMarker,
         TimeoutData, TimeoutData2, UpgradeProposalData, VersionedVoteData, ViewSyncCommitData,
         ViewSyncCommitData2, ViewSyncFinalizeData, ViewSyncFinalizeData2, ViewSyncPreCommitData,
-        ViewSyncPreCommitData2, Voteable,
+        ViewSyncPreCommitData2, Vote2Data, Voteable,
     },
     stake_table::{HSStakeTable, StakeTableEntries},
     traits::{
@@ -738,6 +738,10 @@ pub type QuorumCertificate2<TYPES> = SimpleCertificate<TYPES, QuorumData2<TYPES>
 /// Type alias for a `QuorumCertificate2`, which is a `SimpleCertificate` over `QuorumData2`
 pub type NextEpochQuorumCertificate2<TYPES> =
     SimpleCertificate<TYPES, NextEpochQuorumData2<TYPES>, SuccessThreshold>;
+/// Type alias for the new protocol's phase-1 certificate over `QuorumData2`
+pub type Certificate1<TYPES> = SimpleCertificate<TYPES, QuorumData2<TYPES>, SuccessThreshold>;
+/// Type alias for the new protocol's phase-2 certificate over `Vote2Data`
+pub type Certificate2<TYPES> = SimpleCertificate<TYPES, Vote2Data<TYPES>, SuccessThreshold>;
 /// Type alias for a `DaCertificate`, which is a `SimpleCertificate` over `DaData`
 pub type DaCertificate<TYPES> = SimpleCertificate<TYPES, DaData, SuccessThreshold>;
 /// Type alias for a `DaCertificate2`, which is a `SimpleCertificate` over `DaData2`
