@@ -243,7 +243,7 @@ impl TestView {
         )
         .expect("Failed to sign Vote2");
         Message {
-            sender: self.leader_public_key,
+            sender: pub_key,
             message_type: MessageType::Consensus(ConsensusMessage::Vote2(vote)),
         }
     }
@@ -268,7 +268,7 @@ impl TestView {
         )
         .expect("Failed to sign TimeoutVote2");
         Message {
-            sender: self.leader_public_key,
+            sender: pub_key,
             message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote(
                 TimeoutVoteMessage { vote, lock },
             )),

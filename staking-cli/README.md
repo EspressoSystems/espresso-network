@@ -43,6 +43,7 @@ Contracts:
       - [Metadata JSON Schema (for custom hosting)](#metadata-json-schema-for-custom-hosting)
     - [De-registering your validator](#de-registering-your-validator)
     - [Rotating your consensus keys](#rotating-your-consensus-keys)
+    - [Configuring networking (x25519 key and p2p address)](#configuring-networking-x25519-key-and-p2p-address)
     - [Exporting Node Signatures](#exporting-node-signatures)
     - [Demo Commands](#demo-commands)
 
@@ -99,6 +100,9 @@ Commands:
   deregister-validator    Deregister a validator
   update-commission       Update validator commission rate
   update-metadata-uri     Update validator metadata URL
+  update-network-config   Set x25519 key and p2p address for a validator
+  update-x25519-key       Set x25519 encryption key for a validator
+  update-p2p-addr         Update p2p address for a validator
   approve                 Approve stake table contract to move tokens
   delegate                Delegate funds to a validator
   undelegate              Initiate a withdrawal of delegated funds from a validator
@@ -380,7 +384,8 @@ Use `--format json` or `--format toml` for the legacy flat format:
 
 This works with all state-changing commands: `approve`, `delegate`, `undelegate`, `claim-withdrawal`,
 `claim-validator-exit`, `claim-rewards`, `register-validator`, `update-commission`, `update-metadata-uri`,
-`update-consensus-keys`, `deregister-validator`, and `transfer`.
+`update-consensus-keys`, `update-network-config`, `update-x25519-key`, `update-p2p-addr`, `deregister-validator`, and
+`transfer`.
 
 Note: When using `--export-calldata`, no wallet/signer is required since the transaction is not sent.
 
@@ -530,15 +535,22 @@ staking-cli register-validator \
     --consensus-private-key BLS_SIGNING_KEY~... \
     --state-private-key SCHNORR_SIGNING_KEY~... \
     --commission 4.99 \
-    --metadata-uri https://my-validator.example.com/status/metrics
+    --metadata-uri https://my-validator.example.com/status/metrics \
+    --x25519-key X25519_PUB_KEY~... \
+    --p2p-addr validator.example.com:9000
 ```
 
-To avoid keys on the command line, use env vars (`CONSENSUS_PRIVATE_KEY`, `STATE_PRIVATE_KEY`) or pre-signed signatures
-(see [Exporting Node Signatures](#exporting-node-signatures)):
+The `--x25519-key` and `--p2p-addr` arguments configure cliquenet peer discovery and are **required** on V3 stake
+tables. See [Configuring networking](#configuring-networking-x25519-key-and-p2p-address) for how to generate the x25519
+key and the accepted address format.
+
+To avoid keys on the command line, use env vars (`CONSENSUS_PRIVATE_KEY`, `STATE_PRIVATE_KEY`, `X25519_KEY`, `P2P_ADDR`)
+or pre-signed signatures (see [Exporting Node Signatures](#exporting-node-signatures)):
 
 ```bash
 staking-cli register-validator --node-signatures signatures.json --commission 4.99 \
-    --metadata-uri https://my-validator.example.com/status/metrics
+    --metadata-uri https://my-validator.example.com/status/metrics \
+    --x25519-key X25519_PUB_KEY~... --p2p-addr validator.example.com:9000
 ```
 
 Notes:
@@ -548,6 +560,7 @@ Notes:
 - Each Ethereum account can only register one validator
 - Commission can be updated later via `update-commission` (subject to rate limits)
 - Metadata URL can be updated anytime via `update-metadata-uri`
+- x25519 key and p2p address can be updated later via `update-x25519-key`, `update-p2p-addr`, or `update-network-config`
 
 ### Updating your commission
 
@@ -637,6 +650,52 @@ staking-cli deregister-validator
     staking-cli update-consensus-keys --node-signatures signatures.json
     staking-cli update-consensus-keys --node-signatures signatures.toml --format toml
     ```
+
+### Configuring networking (x25519 key and p2p address)
+
+Validators connect over cliquenet, a fully-connected, x25519-encrypted mesh that replaces the CDN and libp2p networking.
+Each validator publishes two networking values in the stake table contract so peers can discover and connect to it:
+
+- **x25519 public key**: identifies the validator for encrypted peer connections
+- **p2p address**: the `host:port` other validators dial (IP or hostname, e.g. `10.0.0.1:9000` or
+  `validator.example.com:9000`)
+
+Generate the x25519 keypair with the node `keygen` utility:
+
+```bash
+keygen --scheme x25519
+```
+
+which prints:
+
+```text
+ESPRESSO_NODE_PUBLIC_X25519_KEY=X25519_PUB_KEY~...
+ESPRESSO_NODE_PRIVATE_X25519_KEY=X25519_PRIV_KEY~...
+```
+
+The private key configures the node; the public key is registered on-chain with the commands below.
+
+New validators provide both values at registration (see [Registration Command](#registration-command)). Validators
+registered before the V3 stake table set both values once with `update-network-config`:
+
+```bash
+staking-cli update-network-config \
+    --x25519-key X25519_PUB_KEY~... \
+    --p2p-addr validator.example.com:9000
+```
+
+To change only one value later:
+
+```bash
+# Rotate the x25519 key
+staking-cli update-x25519-key --x25519-key X25519_PUB_KEY~...
+
+# Change the p2p address
+staking-cli update-p2p-addr --p2p-addr validator.example.com:9000
+```
+
+All three commands accept the env vars `X25519_KEY` and `P2P_ADDR`, and support `--export-calldata` for multisig
+wallets.
 
 ### Exporting Node Signatures
 
