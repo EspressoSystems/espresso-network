@@ -30,6 +30,8 @@ extend-exclude = [
 
 [default.extend-words]
 Forgetten = "Forgetten"
+# Serialized network config field name; renaming would break the wire format
+bootrap = "bootrap"
 # Common "spelling" of "type" in Rust/go
 typ = "typ"
 # Token Generation Event
