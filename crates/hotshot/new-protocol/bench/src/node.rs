@@ -14,7 +14,6 @@ use hotshot_new_protocol::{
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     coordinator::{Coordinator, timer::Timer},
     epoch::EpochManager,
-    epoch_root_vote_collector::EpochRootVoteCollector,
     helpers::proposal_commitment,
     network::Cliquenet,
     outbox::Outbox,
@@ -137,8 +136,7 @@ async fn build_coordinator(
     let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let timeout_one_honest_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
-    let epoch_root_collector =
-        EpochRootVoteCollector::new(membership.clone(), upgrade_lock.clone());
+    let epoch_root_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
 
     let epoch_manager = EpochManager::new(epoch_height, membership.clone());
 

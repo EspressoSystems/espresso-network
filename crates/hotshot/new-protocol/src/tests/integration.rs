@@ -33,16 +33,13 @@ async fn send_proposal_and_vote1s(
 ) {
     let test_view = &test_data.views[view_idx];
     for fragment in test_view.vid_share_inputs(node_key) {
-        harness.message(fragment).await;
+        harness.message(fragment);
     }
-    harness.message(test_view.proposal_input()).await;
+    harness.message(test_view.proposal_input());
 
     for i in 0..THRESHOLD {
-        harness.message(test_view.vote1_input(i)).await;
-        // VID shares travel separately from Vote1
-        harness
-            .message(test_view.vid_share_broadcast_input(i))
-            .await;
+        harness.message(test_view.vote1_input(i));
+        harness.message(test_view.vid_share_broadcast_input(i))
     }
 
     harness
@@ -63,7 +60,7 @@ async fn send_proposal_and_vote1s(
 async fn send_vote2s(harness: &mut TestHarness, test_data: &TestData, view_idx: usize) {
     let test_view = &test_data.views[view_idx];
     for i in 0..THRESHOLD {
-        harness.message(test_view.vote2_input(i)).await;
+        harness.message(test_view.vote2_input(i));
     }
     harness
         .process_until(|inputs| {
@@ -82,9 +79,7 @@ async fn send_timeout_votes(
 ) {
     let test_view = &test_data.views[view_idx];
     for i in 0..THRESHOLD {
-        harness
-            .message(test_view.timeout_vote_input(i, lock.clone()))
-            .await;
+        harness.message(test_view.timeout_vote_input(i, lock.clone()));
     }
     harness
         .process_until(|inputs| {
@@ -92,11 +87,9 @@ async fn send_timeout_votes(
             any(inputs, is_timeout_cert)
         })
         .await;
-    harness
-        .apply_and_process(ConsensusInput::TimeoutCertificate(
-            test_view.timeout_cert.clone(),
-        ))
-        .await;
+    harness.apply_and_process(ConsensusInput::TimeoutCertificate(
+        test_view.timeout_cert.clone(),
+    ));
 }
 
 /// Integration: sequential views both produce Vote1 through real state validation.
@@ -107,17 +100,15 @@ async fn test_sequential_vote1() {
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
     for fragment in test_data.views[0].vid_share_inputs(&node_key) {
-        harness.message(fragment).await;
+        harness.message(fragment);
     }
-    harness.message(test_data.views[0].proposal_input()).await;
-    harness
-        .apply_and_process(test_data.views[0].block_reconstructed_input())
-        .await;
+    harness.message(test_data.views[0].proposal_input());
+    harness.apply_and_process(test_data.views[0].block_reconstructed_input());
 
     for fragment in test_data.views[1].vid_share_inputs(&node_key) {
-        harness.message(fragment).await;
+        harness.message(fragment);
     }
-    harness.message(test_data.views[1].proposal_input()).await;
+    harness.message(test_data.views[1].proposal_input());
 
     harness
         .process_until(|inputs| {
@@ -208,15 +199,13 @@ async fn test_leader_proposal() {
     let test_view = &test_data.views[0];
 
     for fragment in test_view.vid_share_inputs(&leader_for_view_2) {
-        harness.message(fragment).await;
+        harness.message(fragment);
     }
-    harness.message(test_view.proposal_input()).await;
+    harness.message(test_view.proposal_input());
 
     for i in 0..THRESHOLD {
-        harness.message(test_view.vote1_input(i)).await;
-        harness
-            .message(test_view.vid_share_broadcast_input(i))
-            .await;
+        harness.message(test_view.vote1_input(i));
+        harness.message(test_view.vid_share_broadcast_input(i))
     }
 
     harness
@@ -399,9 +388,7 @@ async fn test_epoch_change_advances_view() {
     // Apply the epoch change directly to the coordinator (simulating
     // receipt from the network after another node decided the boundary).
     let epoch_change = epoch_change_message(&test_data);
-    harness
-        .apply_and_process(ConsensusInput::EpochChange(epoch_change))
-        .await;
+    harness.apply_and_process(ConsensusInput::EpochChange(epoch_change));
 
     assert!(
         count_matching(harness.outputs(), is_view_changed) > view_changed_before,
@@ -427,9 +414,7 @@ async fn test_leader_requests_block_after_epoch_change() {
 
     // Apply the epoch change (simulating the network round-trip).
     let epoch_change = epoch_change_message(&test_data);
-    harness
-        .apply_and_process(ConsensusInput::EpochChange(epoch_change))
-        .await;
+    harness.apply_and_process(ConsensusInput::EpochChange(epoch_change));
 
     assert!(
         count_matching(harness.outputs(), is_request_block_and_header) > req_before,
@@ -453,9 +438,7 @@ async fn cross_epoch_boundary(
         cert2: boundary_view.cert2.clone(),
         proposal,
     };
-    harness
-        .apply_and_process(ConsensusInput::EpochChange(epoch_change))
-        .await;
+    harness.apply_and_process(ConsensusInput::EpochChange(epoch_change));
 
     // Send vote1s and vote2s through the normal pipeline.
     send_proposal_and_vote1s(harness, test_data, boundary_idx + 1, node_key).await;
@@ -589,9 +572,7 @@ async fn test_f_plus_1_timeout_votes_trigger_timeout_one_honest() {
     let test_view = &test_data.views[1];
     let lock = Some(test_data.views[0].cert1.clone());
     for i in 0..ONE_HONEST_THRESHOLD {
-        harness
-            .message(test_view.timeout_vote_input(i, lock.clone()))
-            .await;
+        harness.message(test_view.timeout_vote_input(i, lock.clone()));
     }
 
     harness
@@ -628,9 +609,7 @@ async fn test_timeout_vote_lock_advances_view() {
     // locked QC for view 1 (`views[0].cert1`). Adopting that QC moves us into
     // view 2.
     let high_qc = test_data.views[0].cert1.clone();
-    harness
-        .message(test_data.views[1].timeout_vote_input(1, Some(high_qc.clone())))
-        .await;
+    harness.message(test_data.views[1].timeout_vote_input(1, Some(high_qc.clone())));
 
     assert_eq!(
         view_changed_to(harness.outputs(), 2),
@@ -641,9 +620,7 @@ async fn test_timeout_vote_lock_advances_view() {
     // A later timeout vote for view 3 carrying the same (now stale) view-1 lock
     // would not advance us, so no further view change is emitted.
     let view_changes_before = count_matching(harness.outputs(), is_view_changed);
-    harness
-        .message(test_data.views[2].timeout_vote_input(2, Some(high_qc)))
-        .await;
+    harness.message(test_data.views[2].timeout_vote_input(2, Some(high_qc)));
     assert_eq!(
         count_matching(harness.outputs(), is_view_changed),
         view_changes_before,
