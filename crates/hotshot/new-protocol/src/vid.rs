@@ -27,7 +27,7 @@
 //! [`VidDisperseShare2`]: hotshot_types::data::VidDisperseShare2
 //! [`fan_out`]: fanout::fan_out
 
-pub(crate) mod fanout;
+pub mod fanout;
 mod fragments;
 mod reconstruct;
 

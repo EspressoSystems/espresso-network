@@ -36,7 +36,7 @@ static NUM_THREADS: LazyLock<usize> = LazyLock::new(|| rayon::current_num_thread
 /// leader obtains its own share to vote. Parallel over recipients, overlapping
 /// serialization with the network sends of others.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn fan_out<T: NodeType>(
+pub fn fan_out<T: NodeType>(
     shares: Vec<AvidmGf2Share>,
     common: AvidmGf2Common,
     payload_commitment: AvidmGf2Commitment,
