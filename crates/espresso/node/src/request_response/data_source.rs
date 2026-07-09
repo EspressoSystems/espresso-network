@@ -328,10 +328,16 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
             Request::RewardMerkleTreeV2(height, view) => {
                 // Try to get the reward merkle tree from memory first, then fall back to storage
                 if let Some(state) = self.consensus_handle.state(ViewNumber::new(*view)).await {
-                    let merkle_tree_bytes = bincode::serialize(
-                        &TryInto::<RewardMerkleTreeV2Data>::try_into(&state.reward_merkle_tree_v2)?,
-                    )
-                    .context("Merkle tree serialization failed; this should never happen.")?;
+                    let tree_data =
+                        TryInto::<RewardMerkleTreeV2Data>::try_into(&state.reward_merkle_tree_v2)
+                            .inspect_err(|err| {
+                            tracing::debug!(
+                                %err, height, view,
+                                "cannot serve reward merkle tree from memory"
+                            )
+                        })?;
+                    let merkle_tree_bytes = bincode::serialize(&tree_data)
+                        .context("Merkle tree serialization failed; this should never happen.")?;
 
                     return Ok(Response::RewardMerkleTreeV2(merkle_tree_bytes));
                 }
