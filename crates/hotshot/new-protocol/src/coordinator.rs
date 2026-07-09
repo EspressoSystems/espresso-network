@@ -26,7 +26,7 @@ use hotshot_types::{
     },
     utils::{epoch_from_block_number, is_epoch_root},
     vid::avidm_gf2::{AvidmGf2Param, init_avidm_gf2_param},
-    vote::HasViewNumber,
+    vote::{HasViewNumber, Vote},
 };
 use metrics::Measurement;
 use tokio::{select, sync::oneshot};
@@ -42,7 +42,6 @@ use crate::{
         timer::Timer,
     },
     epoch::{EpochManager, EpochRootResult},
-    epoch_root_vote_collector::EpochRootVoteCollector,
     helpers::proposal_commitment,
     logging::KeyPrefix,
     message::{
@@ -56,7 +55,7 @@ use crate::{
     state::{HeaderRequest, StateEntry, StateManager, StateManagerOutput},
     storage::{NewProtocolStorage, Storage},
     vid::{VidFragmentAccumulator, VidReconstructor},
-    vote::VoteCollector,
+    vote::{EpochRootTally, SimpleTally, VoteCollector},
 };
 
 /// Views to retain in the VID reconstructor behind the decided view
@@ -98,11 +97,12 @@ pub struct Coordinator<T: NodeType, S> {
     vid_reconstructor: VidReconstructor<T>,
     #[builder(default)]
     vid_fragment_accumulator: VidFragmentAccumulator<T>,
-    vote1_collector: VoteCollector<T, QuorumVote2<T>, QuorumCertificate2<T>>,
-    vote2_collector: VoteCollector<T, Vote2<T>, Certificate2<T>>,
-    timeout_collector: VoteCollector<T, TimeoutVote2<T>, TimeoutCertificate2<T>>,
-    timeout_one_honest_collector: VoteCollector<T, TimeoutVote2<T>, TimeoutOneHonest<T>>,
-    epoch_root_collector: EpochRootVoteCollector<T>,
+    vote1_collector: VoteCollector<T, SimpleTally<T, QuorumVote2<T>, QuorumCertificate2<T>>>,
+    vote2_collector: VoteCollector<T, SimpleTally<T, Vote2<T>, Certificate2<T>>>,
+    timeout_collector: VoteCollector<T, SimpleTally<T, TimeoutVote2<T>, TimeoutCertificate2<T>>>,
+    timeout_one_honest_collector:
+        VoteCollector<T, SimpleTally<T, TimeoutVote2<T>, TimeoutOneHonest<T>>>,
+    epoch_root_collector: VoteCollector<T, EpochRootTally<T>>,
     epoch_manager: EpochManager<T>,
     block_builder: BlockBuilder<T>,
     proposal_validator: ProposalValidator<T>,
@@ -265,10 +265,7 @@ where
                 membership_coordinator.clone(),
                 lock.clone(),
             ))
-            .epoch_root_collector(EpochRootVoteCollector::new(
-                membership_coordinator.clone(),
-                lock,
-            ))
+            .epoch_root_collector(VoteCollector::new(membership_coordinator.clone(), lock))
             .epoch_manager(EpochManager::new(
                 initializer.epoch_height,
                 membership_coordinator.clone(),
@@ -375,7 +372,7 @@ where
                 message = self.network.receive() => match message {
                     Ok(m) => {
                         finish_measurement(next_input);
-                        if let Some(input) = self.on_network_message(m).await {
+                        if let Some(input) = self.on_network_message(m) {
                             return Ok(input)
                         }
                     }
@@ -412,7 +409,7 @@ where
                 }
                 Some(request) = self.client.next_request() => {
                     finish_measurement(next_input);
-                    if let Err(err) = self.on_client_request(request).await {
+                    if let Err(err) = self.on_client_request(request) {
                         error!(%err, "error while handling client request");
                     }
                 }
@@ -578,6 +575,7 @@ where
                         self.vote2_collector.retry_pending_votes();
                         self.timeout_collector.retry_pending_votes();
                         self.timeout_one_honest_collector.retry_pending_votes();
+                        self.epoch_root_collector.retry_pending_votes();
                         return Ok(ConsensusInput::DrbResult(epoch, drb_result))
                     }
                     Err(failure) => {
@@ -900,7 +898,7 @@ where
         self.client.handle()
     }
 
-    pub(crate) async fn on_network_message(
+    pub(crate) fn on_network_message(
         &mut self,
         message: Message<T, Unchecked>,
     ) -> Option<ConsensusInput<T>> {
@@ -972,6 +970,10 @@ where
                         warn!(%node, %sender, %view, "vote1 is too far ahead");
                         return None;
                     }
+                    if vote1.vote.signing_key() != message.sender {
+                        warn!(%node, %sender, %view, "vote1 signing key != sender");
+                        return None;
+                    }
                     let bn = vote1.vote.data.block_number.unwrap_or(0);
                     let epoch_height = *self.consensus.epoch_height;
                     let is_epoch_root_vote = is_epoch_root(bn, epoch_height);
@@ -985,7 +987,7 @@ where
                         // An epoch-root Vote1 MUST carry a state_vote.
                         // Reject otherwise.
                         vote1.state_vote.as_ref()?;
-                        self.epoch_root_collector.accumulate(vote1).await;
+                        self.epoch_root_collector.accumulate_vote(vote1);
                     } else {
                         self.vote1_collector.accumulate_vote(vote1.vote);
                     }
@@ -1009,6 +1011,10 @@ where
                     let view = vote2.view_number();
                     if self.is_too_far_ahead(view) {
                         warn!(%node, %sender, %view, "vote2 is too far ahead");
+                        return None;
+                    }
+                    if vote2.signing_key() != message.sender {
+                        warn!(%node, %sender, %view, "vote2 signing key != sender");
                         return None;
                     }
                     debug!(%node, %sender, %view, "recv vote2");
@@ -1037,6 +1043,10 @@ where
                     let view = timeout_msg.vote.view_number();
                     if self.is_too_far_ahead(view) {
                         warn!(%node, %sender, %view, "timeout vote is too far ahead");
+                        return None;
+                    }
+                    if timeout_msg.vote.signing_key() != message.sender {
+                        warn!(%node, %sender, %view, "timeout vote signing key != sender");
                         return None;
                     }
                     let current_view = self.consensus.current_view();
@@ -1311,10 +1321,7 @@ where
         membership.leader(view).ok()
     }
 
-    async fn on_client_request(
-        &mut self,
-        request: ClientRequest<T>,
-    ) -> Result<(), CoordinatorError> {
+    fn on_client_request(&mut self, request: ClientRequest<T>) -> Result<(), CoordinatorError> {
         let _m = self
             .metrics
             .as_ref()
@@ -1632,7 +1639,7 @@ where
             },
             GcScope::Decided(view) => {
                 self.epoch_manager.gc(epoch);
-                self.epoch_root_collector.gc(view, epoch);
+                self.epoch_root_collector.gc(view);
                 self.pending_proposal_fetches.gc(view);
                 self.state_manager.gc(view);
                 self.storage

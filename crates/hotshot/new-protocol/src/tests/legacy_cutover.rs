@@ -223,7 +223,6 @@ async fn build_cutover_coordinator(
         block::{BlockBuilder, BlockBuilderConfig},
         consensus::Consensus,
         epoch::EpochManager,
-        epoch_root_vote_collector::EpochRootVoteCollector,
         proposal::{ProposalValidator, VidShareValidator},
         state::StateManager,
         tests::common::coordinator_builder::{build_genesis_cert1, build_genesis_proposal},
@@ -297,10 +296,7 @@ async fn build_cutover_coordinator(
         .vote2_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
         .timeout_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
         .timeout_one_honest_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
-        .epoch_root_collector(EpochRootVoteCollector::new(
-            membership.clone(),
-            upgrade_lock.clone(),
-        ))
+        .epoch_root_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
         .vid_reconstructor(VidReconstructor::new())
         .epoch_manager(EpochManager::new(epoch_height, membership.clone()))
         .block_builder(block_builder)

@@ -33,6 +33,9 @@ cross_tests!(
 
         let overall_safety_properties = OverallSafetyPropertiesDescription {
             num_successful_views: 35,
+            // after the scripted CDN crash a few views can time out at arbitrary points
+            // during libp2p fallback
+            max_unexpected_view_failures: 5,
             ..Default::default()
         };
 
