@@ -282,10 +282,7 @@ cross_tests!(
           // Make sure we keep committing rounds after the catchup, but not the full 50.
           num_successful_views: 22,
           expected_view_failures: vec![13],
-          // View-sync convergence after the all-node restart lands on different views
-          // run to run on loaded CI runners (observed gaps anywhere in views 19-25), so
-          // a fixed possible_view_failures list cannot express the tolerance. Budget the
-          // gaps instead; the run must still reach 22 successful views.
+          // Post-restart gaps land on different views run to run; budget them.
           max_unexpected_view_failures: 5,
           decide_timeout: Duration::from_secs(20),
           ..Default::default()
@@ -335,8 +332,7 @@ cross_tests!(
           // Make sure we keep committing rounds after the catchup, but not the full 50.
           num_successful_views: 22,
           expected_view_failures: vec![13],
-          // Post-restart view failures land on different views run to run (see
-          // test_all_restart), so budget the gaps rather than list fixed views.
+          // Post-restart gaps land on different views run to run; budget them.
           max_unexpected_view_failures: 5,
           decide_timeout: Duration::from_secs(20),
           ..Default::default()
