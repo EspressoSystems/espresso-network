@@ -19,7 +19,6 @@ use futures::{
 };
 use hotshot::SystemContext;
 use hotshot_events_service::events_source::{EventConsumer, EventsStreamer};
-use hotshot_new_protocol::{coordinator::Coordinator, network::Network};
 use hotshot_orchestrator::client::OrchestratorClient;
 use hotshot_types::{
     PeerConfig, ValidatorConfig,
@@ -38,7 +37,6 @@ use request_response::RequestResponseConfig;
 use tokio::{spawn, sync::mpsc::channel, task::JoinHandle};
 use tracing::{Instrument, Level};
 use url::Url;
-use versions::NEW_PROTOCOL_VERSION;
 
 use crate::{
     Node, SeqTypes, SequencerApiVersion,
@@ -52,7 +50,6 @@ use crate::{
         network::Sender as RequestResponseSender,
         recipient_source::RecipientSource,
     },
-    startup_catchup::bootstrap_epoch_window,
     state_signature::{self, StateSigner},
 };
 pub(crate) type ConsensusNode<N, P> = Node<N, P>;
@@ -101,7 +98,7 @@ where
 {
     #[tracing::instrument(skip_all, fields(node_id = instance_state.node_id))]
     #[allow(clippy::too_many_arguments)]
-    pub async fn init<T: Network<SeqTypes> + Send + 'static>(
+    pub async fn init(
         network_config: NetworkConfig<SeqTypes>,
         upgrade: versions::Upgrade,
         validator_config: ValidatorConfig<SeqTypes>,
@@ -111,13 +108,12 @@ where
         state_catchup: ParallelStateCatchup,
         persistence: Arc<P>,
         network: Arc<N>,
-        mut coordinator_network: T,
         state_relay_server: Option<Url>,
         metrics: &dyn Metrics,
         stake_table_capacity: usize,
         event_consumer: impl PersistenceEventConsumer + 'static,
         proposal_fetcher_cfg: ProposalFetcherConfig,
-        bootstrap_epoch_catchup_timeout: Duration,
+        _bootstrap_epoch_catchup_timeout: Duration,
     ) -> anyhow::Result<Self> {
         let config = &network_config.config;
         let pub_key = validator_config.public_key;
@@ -149,8 +145,6 @@ where
 
         let epoch_height = initializer.epoch_height;
 
-        let initializer_for_coordinator = initializer.clone();
-
         let event_streamer = Arc::new(RwLock::new(EventsStreamer::<SeqTypes>::new(
             stake_table.0,
             0,
@@ -172,60 +166,10 @@ where
         .await?
         .0;
 
-        // `load_start_epoch_info` ran inside `SystemContext::init`, so
-        // `first_epoch` is now seeded on the shared membership. Walk the
-        // catchup chain forward to populate the stake-table window for the
-        // current epoch.
-        //
-        // Only the new protocol (cliquenet) needs this
-        let max_configured_version = std::cmp::max(upgrade.base, upgrade.target);
-        if max_configured_version >= NEW_PROTOCOL_VERSION {
-            let current_epoch = bootstrap_epoch_window(
-                &membership_coordinator,
-                epoch_height,
-                bootstrap_epoch_catchup_timeout,
-            )
-            .await
-            .context("startup stake-table catchup failed")?;
-            tracing::info!(%current_epoch, "Startup catchup complete");
-
-            // Push the resolved peer window into the coordinator network. For
-            // cliquenet this dials the N-1/N/N+1 sliding window for the current
-            // epoch before consensus starts.
-            if let Err(err) = coordinator_network
-                .on_epoch_change(current_epoch, &membership_coordinator)
-                .await
-            {
-                tracing::warn!(%current_epoch, %err, "coordinator network on_epoch_change failed at startup");
-            }
-        }
-
-        let coordinator = Coordinator::maker()
-            .membership_coordinator(membership_coordinator.clone())
-            .network(coordinator_network)
-            .initializer(&initializer_for_coordinator)
-            .upgrade_lock({
-                // TODO: The Coordinator and HotShot each create their own UpgradeLock
-                // from the same inputs. They need to share a single lock so that upgrade
-                // certificate updates are visible to both.
-                UpgradeLock::from_certificate(
-                    upgrade,
-                    &initializer_for_coordinator.decided_upgrade_certificate,
-                )
-            })
-            .public_key(validator_config.public_key)
-            .private_key(validator_config.private_key.clone())
-            .state_private_key(validator_config.state_private_key.clone())
-            .stake_table_capacity(stake_table_capacity)
-            .timeout_duration(Duration::from_secs(10))
-            .storage(Arc::clone(&persistence))
-            .make();
-
         let legacy_event_rx = handle.event_stream_known_impl().deactivate();
         let hotshot_handle = Arc::new(RwLock::new(handle));
         let consensus_handle = Arc::new(ConsensusHandle::new(
             hotshot_handle.clone(),
-            coordinator,
             epoch_height,
             legacy_event_rx,
             EXTERNAL_EVENT_CHANNEL_SIZE,

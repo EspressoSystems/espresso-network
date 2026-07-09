@@ -28,7 +28,7 @@ use hotshot_types::{
 /// Preconditions: `reload_stake` should have run before this — it populates
 /// the membership from local persistence so the walk skips epochs we
 /// already know.
-pub async fn bootstrap_epoch_window(
+pub async fn _bootstrap_epoch_window(
     coordinator: &EpochMembershipCoordinator<SeqTypes>,
     epoch_height: u64,
     step_timeout: Duration,
