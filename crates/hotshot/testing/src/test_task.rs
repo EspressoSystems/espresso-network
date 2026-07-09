@@ -154,6 +154,15 @@ impl<S: TestTaskState + Send + 'static> TestTask<S> {
 
                 self.receivers.retain(|receiver| !receiver.is_closed());
 
+                // All receivers closed (e.g. every node restarting at once drops the old
+                // internal event channels). Receivers are never re-subscribed, so the task
+                // is now inert and only its final `check()` runs. `select_all` panics on an
+                // empty set, so idle until the shutdown signal instead of polling nothing.
+                if self.receivers.is_empty() {
+                    sleep(Duration::from_millis(500)).await;
+                    continue;
+                }
+
                 let mut messages = Vec::new();
 
                 for receiver in &mut self.receivers {
