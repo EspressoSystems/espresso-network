@@ -19,7 +19,6 @@ use hotshot_types::{
 pub struct ConsensusHandle<T: NodeType, I: NodeImplementation<T>> {
     legacy_handle: Arc<RwLock<SystemContextHandle<T, I>>>,
     legacy_event_rx: InactiveReceiver<Event<T>>,
-    event_rx: InactiveReceiver<CoordinatorEvent<T>>,
 }
 
 impl<T, I> ConsensusHandle<T, I>
@@ -31,20 +30,14 @@ where
         legacy_handle: Arc<RwLock<SystemContextHandle<T, I>>>,
         _epoch_height: u64,
         legacy_event_rx: InactiveReceiver<Event<T>>,
-        event_channel_capacity: usize,
+        _event_channel_capacity: usize,
     ) -> Self
     where
         I::Storage: NewProtocolStorage<T>,
     {
-        let (mut event_tx, mut event_rx) =
-            async_broadcast::broadcast::<CoordinatorEvent<T>>(event_channel_capacity);
-        event_tx.set_await_active(false);
-        event_rx.set_overflow(true);
-
         Self {
             legacy_handle,
             legacy_event_rx,
-            event_rx: event_rx.deactivate(),
         }
     }
 
@@ -53,14 +46,10 @@ where
     }
 
     pub fn event_stream(&self) -> BoxStream<'static, CoordinatorEvent<T>> {
-        let old_stream = self
-            .legacy_event_rx
+        self.legacy_event_rx
             .activate_cloned()
-            .map(CoordinatorEvent::LegacyEvent);
-
-        let new_stream = self.event_rx.activate_cloned();
-
-        futures::stream::select(old_stream, new_stream).boxed()
+            .map(CoordinatorEvent::LegacyEvent)
+            .boxed()
     }
 
     pub async fn current_view(&self) -> ViewNumber {
