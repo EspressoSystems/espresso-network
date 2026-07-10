@@ -38,3 +38,5 @@ typ = "typ"
 tge = "tge"
 # Rust crate name
 bimap = "bimap"
+# espresso-utils serialization module
+ser = "ser"
