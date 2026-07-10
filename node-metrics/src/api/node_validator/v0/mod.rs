@@ -380,9 +380,9 @@ pub async fn get_node_identity_from_url(url: url::Url) -> anyhow::Result<NodeIde
         .build()
         .with_context(|| "failed to build reqwest client")?;
 
-    // Join the URL with the status metrics API path
+    // Nodes serve /v1 natively; /v0 only works via the legacy path rewrite.
     let completed_url = url
-        .join("v0/status/metrics")
+        .join("v1/status/metrics")
         .with_context(|| "failed to join URL")?;
 
     // Send the request (with a timeout)
