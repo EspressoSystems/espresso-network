@@ -41,7 +41,7 @@ use hotshot_types::{
     vid::{
         advz::advz_scheme,
         avidm::init_avidm_param,
-        avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
+        avidm_gf2::{AvidmGf2Common, AvidmGf2Scheme, init_avidm_gf2_param},
     },
 };
 use jf_advz::VidScheme;
@@ -76,6 +76,7 @@ type V2Serializer = vbs::Serializer<StaticVersion<0, 2>>;
 type V3Serializer = vbs::Serializer<StaticVersion<0, 3>>;
 type V4Serializer = vbs::Serializer<StaticVersion<0, 4>>;
 type V5Serializer = vbs::Serializer<StaticVersion<0, 5>>;
+type V6Serializer = vbs::Serializer<StaticVersion<0, 6>>;
 
 const REFERENCE_NAMESPACE_ID: u32 = 12648430;
 
@@ -161,6 +162,39 @@ async fn reference_ns_proof_enum_avidm() -> NamespaceProofQueryData {
 
     let avidm_param = init_avidm_param(10).unwrap();
     let proof = NsProof::new(&payload, &ns_index, &VidCommon::V1(avidm_param));
+    let transactions = proof
+        .as_ref()
+        .unwrap()
+        .export_all_txs(&REFERENCE_NAMESPACE_ID.into());
+    NamespaceProofQueryData {
+        proof,
+        transactions,
+    }
+}
+
+async fn reference_avidm_gf2_common() -> AvidmGf2Common {
+    let payload = reference_payload().await;
+    let encoded = payload.encode();
+    let payload_byte_len = payload.byte_len();
+    let ns_table = payload.ns_table();
+    let ns_table = ns_table
+        .iter()
+        .map(|index| ns_table.ns_range(&index, &payload_byte_len).0)
+        .collect::<Vec<_>>();
+    let param = init_avidm_gf2_param(10).unwrap();
+    let (_, common) = AvidmGf2Scheme::commit(&param, &encoded, ns_table).unwrap();
+    common
+}
+
+async fn reference_ns_proof_enum_avidm_gf2() -> NamespaceProofQueryData {
+    let payload = reference_payload().await;
+    let ns_index = payload
+        .ns_table()
+        .find_ns_id(&(REFERENCE_NAMESPACE_ID.into()))
+        .unwrap();
+
+    let common = reference_avidm_gf2_common().await;
+    let proof = NsProof::new(&payload, &ns_index, &VidCommon::V2(common));
     let transactions = proof
         .as_ref()
         .unwrap()
@@ -284,6 +318,7 @@ const REFERENCE_V2_HEADER_COMMITMENT: &str = "BLOCK~V0GJjL19nCrlm9n1zZ6gaOKEekSM
 const REFERENCE_V3_HEADER_COMMITMENT: &str = "BLOCK~qKb0axY9NwpusJn5ZFhjJAyG8IYpJpHN2-BDIsIkhrEd";
 const REFERENCE_V4_HEADER_COMMITMENT: &str = "BLOCK~hPVq9NasWW1vVYGGGr0PSRv1TV3nUV_8ARw5fWHlQLx3";
 const REFERENCE_V5_HEADER_COMMITMENT: &str = "BLOCK~yYZmWrTIWJerGV7VA-EeKWL4tnsdJya1BpK4HWdvnwAA";
+const REFERENCE_V6_HEADER_COMMITMENT: &str = "BLOCK~nAVIoY9ekw8WPwzHnLwTgsPZ1qvBox-WQev4nhcrLoZP";
 
 fn reference_transaction<R>(ns_id: NamespaceId, rng: &mut R) -> Transaction
 where
@@ -359,6 +394,7 @@ change in the serialization of this data structure.
         "v3" => V3Serializer::serialize(&reference).unwrap(),
         "v4" => V4Serializer::serialize(&reference).unwrap(),
         "v5" => V5Serializer::serialize(&reference).unwrap(),
+        "v6" => V6Serializer::serialize(&reference).unwrap(),
         _ => panic!("invalid version"),
     };
     if actual != expected {
@@ -390,6 +426,7 @@ change in the serialization of this data structure.
         "v3" => V3Serializer::deserialize(&expected).unwrap(),
         "v4" => V4Serializer::deserialize(&expected).unwrap(),
         "v5" => V5Serializer::deserialize(&expected).unwrap(),
+        "v6" => V6Serializer::deserialize(&expected).unwrap(),
         _ => panic!("invalid version"),
     };
 
@@ -548,6 +585,16 @@ async fn test_reference_header_v5() {
     );
 }
 
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_reference_header_v6() {
+    reference_test(
+        "v6",
+        "header",
+        reference_header(version(0, 6)).await,
+        REFERENCE_V6_HEADER_COMMITMENT,
+    );
+}
+
 #[test_log::test]
 fn test_reference_transaction() {
     reference_test(
@@ -574,6 +621,17 @@ async fn test_reference_ns_proof_enum_advz() {
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_reference_ns_proof_enum_avidm() {
     reference_test_without_committable("v3", "ns_proof_V1", &reference_ns_proof_enum_avidm().await);
+}
+
+// "V2" does not refer to the version scheme used in this crate but to the NSProof::V2 variant,
+// the AvidmGf2 (VID2) proof introduced with the new protocol.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_reference_ns_proof_enum_avidm_gf2() {
+    reference_test_without_committable(
+        "v6",
+        "ns_proof_V2",
+        &reference_ns_proof_enum_avidm_gf2().await,
+    );
 }
 
 // Legacy leaf query data
