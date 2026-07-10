@@ -269,11 +269,7 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
             // First add the epoch root to `membership`
             {
                 let start = Instant::now();
-                if let Err(e) = membership_clone
-                    .membership()
-                    .add_epoch_root(decided_block_header)
-                    .await
-                {
+                if let Err(e) = membership_clone.add_epoch_root(decided_block_header).await {
                     tracing::error!("Failed to add epoch root for epoch {next_epoch_number}: {e}");
                 }
                 tracing::info!("Time taken to add epoch root: {:?}", start.elapsed());
