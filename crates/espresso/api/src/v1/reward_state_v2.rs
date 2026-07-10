@@ -27,6 +27,26 @@ pub trait RewardApi {
     /// Type for raw merkle tree snapshots (must be serializable to JSON)
     type RewardMerkleTreeData: Serialize + Send + Sync;
 
+    /// Type for reward account proof queries against the V1 (RewardMerkleTreeV1) tree
+    type RewardAccountQueryDataV1: Serialize + Send + Sync;
+
+    /// Get the height of the last persisted reward-state-v1 merklized state snapshot
+    async fn get_reward_state_height(&self) -> anyhow::Result<u64>;
+
+    /// Get the height of the last persisted reward-state-v2 merklized state snapshot
+    async fn get_reward_state_v2_height(&self) -> anyhow::Result<u64>;
+
+    /// Get Merkle proof for a reward account against the V1 (RewardMerkleTreeV1) tree
+    ///
+    /// # Arguments
+    /// * `height` - Block height to query
+    /// * `address` - Ethereum address to query proof for
+    async fn get_reward_account_proof_v1(
+        &self,
+        height: u64,
+        address: String,
+    ) -> anyhow::Result<Self::RewardAccountQueryDataV1>;
+
     /// Get reward claim input for L1 contract submission
     ///
     /// Returns all data needed to call the claimRewards function on the L1 contract,

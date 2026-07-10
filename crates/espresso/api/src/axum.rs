@@ -400,7 +400,7 @@ where
                 .get_reward_amounts(height, offset, limit)
                 .await
                 .map(Json)
-                .map_err(ApiError::Internal)
+                .map_err(classify_availability_error)
         };
 
     let get_reward_merkle_tree_v2 = |State(state): State<S>, Path(height): Path<u64>| async move {
@@ -409,6 +409,42 @@ where
             .map(Json)
             .map_err(ApiError::Internal)
     };
+
+    let get_reward_state_height = |State(state): State<S>| async move {
+        state
+            .get_reward_state_height()
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
+    let get_reward_state_v2_height = |State(state): State<S>| async move {
+        state
+            .get_reward_state_v2_height()
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
+    // Same underlying V2-tree lookup as `reward-state-v2/reward-balance`; tide registers this
+    // route unconditionally for both merklized-state modules regardless of tree version.
+    let get_reward_balance_v1 =
+        |State(state): State<S>, Path((height, address)): Path<(u64, String)>| async move {
+            state
+                .get_reward_balance(height, address)
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+
+    let get_reward_account_proof_v1 =
+        |State(state): State<S>, Path((height, address)): Path<(u64, String)>| async move {
+            state
+                .get_reward_account_proof_v1(height, address)
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
 
     // Availability API handlers
     // Route: /v1/availability/block/{height}/namespace/{namespace}
@@ -1655,6 +1691,22 @@ where
         .route(
             routes::v1::REWARD_MERKLE_TREE_V2_ROUTE,
             get(get_reward_merkle_tree_v2),
+        )
+        .route(
+            routes::v1::REWARD_STATE_HEIGHT_ROUTE,
+            get(get_reward_state_height),
+        )
+        .route(
+            routes::v1::REWARD_STATE_V2_HEIGHT_ROUTE,
+            get(get_reward_state_v2_height),
+        )
+        .route(
+            routes::v1::REWARD_V1_BALANCE_ROUTE,
+            get(get_reward_balance_v1),
+        )
+        .route(
+            routes::v1::REWARD_V1_ACCOUNT_PROOF_ROUTE,
+            get(get_reward_account_proof_v1),
         )
         // Availability API routes
         .route(

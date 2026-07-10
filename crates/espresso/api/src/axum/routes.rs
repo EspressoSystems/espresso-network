@@ -48,6 +48,10 @@ pub mod v1 {
         "/v1/reward-state-v2/reward-amounts/{height}/{offset}/{limit}";
     pub const REWARD_MERKLE_TREE_V2_ROUTE: &str =
         "/v1/reward-state-v2/reward-merkle-tree-v2/{height}";
+    pub const REWARD_STATE_HEIGHT_ROUTE: &str = "/v1/reward-state/block-height";
+    pub const REWARD_STATE_V2_HEIGHT_ROUTE: &str = "/v1/reward-state-v2/block-height";
+    pub const REWARD_V1_ACCOUNT_PROOF_ROUTE: &str = "/v1/reward-state/proof/{height}/{address}";
+    pub const REWARD_V1_BALANCE_ROUTE: &str = "/v1/reward-state/reward-balance/{height}/{address}";
 
     pub const NAMESPACE_PROOF_BY_HEIGHT_ROUTE: &str =
         "/v1/availability/block/{height}/namespace/{namespace}";
@@ -316,6 +320,10 @@ pub mod v1 {
     path_fn!(latest_reward_account_proof, LATEST_REWARD_ACCOUNT_PROOF_ROUTE, "address" => address);
     path_fn!(reward_amounts, REWARD_AMOUNTS_ROUTE, "height" => height, "offset" => offset, "limit" => limit);
     path_fn!(reward_merkle_tree_v2, REWARD_MERKLE_TREE_V2_ROUTE, "height" => height);
+    path_fn!(reward_state_height, REWARD_STATE_HEIGHT_ROUTE);
+    path_fn!(reward_state_v2_height, REWARD_STATE_V2_HEIGHT_ROUTE);
+    path_fn!(reward_v1_account_proof, REWARD_V1_ACCOUNT_PROOF_ROUTE, "height" => height, "address" => address);
+    path_fn!(reward_v1_balance, REWARD_V1_BALANCE_ROUTE, "height" => height, "address" => address);
 
     // Availability — namespace proofs
     path_fn!(namespace_proof_by_height, NAMESPACE_PROOF_BY_HEIGHT_ROUTE, "height" => height, "namespace" => namespace);

@@ -661,13 +661,54 @@ where
 #[async_trait]
 impl<D> espresso_api::v1::RewardApi for NodeApiStateImpl<D>
 where
-    D: RewardMerkleTreeDataSource,
+    D: RewardMerkleTreeDataSource + std::ops::Deref,
+    D::Target: hotshot_query_service::merklized_state::MerklizedStateHeightPersistence,
 {
     type RewardClaimInput = InternalRewardClaimInput;
     type RewardBalance = InternalRewardAmount;
     type RewardAccountQueryData = InternalRewardAccountQueryData;
     type RewardAmounts = Vec<(alloy::primitives::Address, InternalRewardAmount)>;
     type RewardMerkleTreeData = Vec<u8>;
+    type RewardAccountQueryDataV1 = espresso_types::v0_3::RewardAccountQueryDataV1;
+
+    async fn get_reward_state_height(&self) -> anyhow::Result<u64> {
+        use hotshot_query_service::merklized_state::MerklizedStateHeightPersistence;
+
+        let ds = &*self.data_source;
+        ds.get_last_state_height()
+            .await
+            .map(|h| h as u64)
+            .map_err(classify_query_error)
+    }
+
+    async fn get_reward_state_v2_height(&self) -> anyhow::Result<u64> {
+        // Both the V1 and V2 reward merklized-state modules share the same underlying
+        // `last_merklized_state_height` row; mirrors tide registering the height route
+        // once per module against the same data source.
+        self.get_reward_state_height().await
+    }
+
+    async fn get_reward_account_proof_v1(
+        &self,
+        height: u64,
+        address: String,
+    ) -> anyhow::Result<Self::RewardAccountQueryDataV1> {
+        let account: espresso_types::v0_3::RewardAccountV1 = address
+            .parse()
+            .map_err(|_| anyhow::anyhow!("invalid ethereum address: {}", address))?;
+
+        self.data_source
+            .load_v1_reward_account_proof(height, account)
+            .await
+            .map_err(|err| {
+                anyhow::anyhow!(
+                    "failed to load v1 reward account {} at height {}: {}",
+                    address,
+                    height,
+                    err
+                )
+            })
+    }
 
     async fn get_reward_claim_input(
         &self,
@@ -817,10 +858,10 @@ where
     ) -> anyhow::Result<Self::RewardAmounts> {
         // Validate limit (from reward.toml: limit <= 10000)
         if limit > 10000 {
-            return Err(anyhow::anyhow!(
+            return Err(bad_request(format!(
                 "limit {} exceeds maximum allowed value of 10000",
                 limit
-            ));
+            )));
         }
 
         // Load the merkle tree at the given height
@@ -1161,7 +1202,7 @@ where
         &self,
         block_id: espresso_api::v1::availability::BlockId,
         namespace: u32,
-    ) -> anyhow::Result<Option<Self::NamespaceProofQueryData>> {
+    ) -> anyhow::Result<Self::NamespaceProofQueryData> {
         let ns_id = NamespaceId::from(namespace);
 
         // Convert v1 BlockId to hotshot BlockId
@@ -1170,13 +1211,13 @@ where
             espresso_api::v1::availability::BlockId::Hash(h) => {
                 let hash = h
                     .parse()
-                    .map_err(|_| anyhow::anyhow!("invalid block hash: {}", h))?;
+                    .map_err(|_| bad_request(format!("invalid block hash: {}", h)))?;
                 HsBlockId::Hash(hash)
             },
             espresso_api::v1::availability::BlockId::PayloadHash(h) => {
                 let payload_hash = h
                     .parse()
-                    .map_err(|_| anyhow::anyhow!("invalid payload hash: {}", h))?;
+                    .map_err(|_| bad_request(format!("invalid payload hash: {}", h)))?;
                 HsBlockId::PayloadHash(payload_hash)
             },
         };
@@ -1191,34 +1232,39 @@ where
             vid_fetch.with_timeout(timeout)
         );
 
-        let Some(block) = block else {
-            return Ok(None);
-        };
-        let Some(vid_common) = vid_common else {
-            return Ok(None);
-        };
+        let block =
+            block.ok_or_else(|| not_found(format!("block {} not available", hs_block_id)))?;
+        let vid_common = vid_common.ok_or_else(|| {
+            not_found(format!(
+                "VID common for block {} not available",
+                hs_block_id
+            ))
+        })?;
 
-        // Check if namespace is present
+        // Namespace absent from the block: matches tide's empty-result semantics.
         let ns_table = block.payload().ns_table();
         let Some(ns_index) = ns_table.find_ns_id(&ns_id) else {
-            return Ok(None);
+            return Ok(espresso_types::NamespaceProofQueryData {
+                transactions: vec![],
+                proof: None,
+            });
         };
 
         // Generate namespace proof
         let Some(proof) = NsProof::new(block.payload(), &ns_index, vid_common.common()) else {
             // Failed to generate proof - namespace exists but proof generation failed
-            return Ok(Some(espresso_types::NamespaceProofQueryData {
+            return Ok(espresso_types::NamespaceProofQueryData {
                 transactions: vec![],
                 proof: None,
-            }));
+            });
         };
 
         let transactions = proof.export_all_txs(&ns_id);
 
-        Ok(Some(espresso_types::NamespaceProofQueryData {
+        Ok(espresso_types::NamespaceProofQueryData {
             transactions,
             proof: Some(proof),
-        }))
+        })
     }
 
     async fn get_namespace_proof_range(

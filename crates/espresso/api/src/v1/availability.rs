@@ -36,7 +36,7 @@ pub trait AvailabilityApi {
         &self,
         block_id: BlockId,
         namespace: u32,
-    ) -> anyhow::Result<Option<Self::NamespaceProofQueryData>>;
+    ) -> anyhow::Result<Self::NamespaceProofQueryData>;
 
     async fn get_namespace_proof_range(
         &self,

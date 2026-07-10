@@ -35,6 +35,30 @@ impl v1::RewardApi for TestApi {
     type RewardAccountQueryData = (u128, Vec<u8>);
     type RewardAmounts = (Vec<(u128, u128)>, u64);
     type RewardMerkleTreeData = Vec<u8>;
+    type RewardAccountQueryDataV1 = (u128, Vec<u8>);
+
+    async fn get_reward_state_height(&self) -> Result<u64> {
+        tracing::info!("v1: get_reward_state_height()");
+        Ok(42)
+    }
+
+    async fn get_reward_state_v2_height(&self) -> Result<u64> {
+        tracing::info!("v1: get_reward_state_v2_height()");
+        Ok(42)
+    }
+
+    async fn get_reward_account_proof_v1(
+        &self,
+        height: u64,
+        address: String,
+    ) -> Result<Self::RewardAccountQueryDataV1> {
+        tracing::info!(
+            "v1: get_reward_account_proof_v1(height={}, address={})",
+            height,
+            address
+        );
+        Ok((500_000_000_000_000_000, vec![0xde, 0xad, 0xbe, 0xef]))
+    }
 
     async fn get_reward_claim_input(
         &self,
@@ -133,13 +157,13 @@ impl v1::AvailabilityApi for TestApi {
         &self,
         block_id: v1::availability::BlockId,
         namespace: u32,
-    ) -> Result<Option<Self::NamespaceProofQueryData>> {
+    ) -> Result<Self::NamespaceProofQueryData> {
         tracing::info!(
             "v1: get_namespace_proof(block_id={:?}, namespace={})",
             block_id,
             namespace
         );
-        Ok(Some((vec![0xaa, 0xbb, 0xcc], Some(vec![0x11, 0x22, 0x33]))))
+        Ok((vec![0xaa, 0xbb, 0xcc], Some(vec![0x11, 0x22, 0x33])))
     }
 
     async fn get_namespace_proof_range(
