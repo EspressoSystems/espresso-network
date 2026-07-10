@@ -56,7 +56,7 @@ espresso-api = { path = "../api" }
 espresso-contract-deployer = { workspace = true }
 espresso-keyset = { workspace = true }
 espresso-telemetry = { workspace = true }
-espresso-types = { workspace = true }
+espresso-types = { workspace = true, features = ["node"] }
 espresso-utils = { workspace = true }
 futures = { workspace = true }
 generic-tests = { workspace = true }
