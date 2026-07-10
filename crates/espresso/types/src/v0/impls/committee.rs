@@ -17,7 +17,7 @@ use hotshot_types::{
     },
     epoch_membership::EpochMembershipCoordinator,
     signature_key::BLSPubKey,
-    stake_table::{HSStakeTable, StakeTableEntry},
+    stake_table::StakeTableEntry,
     traits::{
         election::{Membership, MembershipSnapshot, NonEpochMembershipSnapshot},
         signature_key::{SignatureKey as _, StakeTableEntryType},
@@ -255,6 +255,7 @@ impl EpochCommittees {
         epoch: EpochNumber,
         header: &Header,
         validators: &AuthenticatedValidatorMap,
+        coordinator: &EpochMembershipCoordinator<SeqTypes>,
     ) -> anyhow::Result<Option<RewardAmount>> {
         let epoch_height = self.epoch_height;
         let current_epoch = epoch_from_block_number(header.height(), *epoch_height);
@@ -313,16 +314,9 @@ impl EpochCommittees {
                          root height",
                     )?;
 
-                    let prev_snapshot = self
-                        .snapshot(EpochNumber::new(previous_epoch))
-                        .context("Stake table not found")?;
-                    let prev_stake_table =
-                        HSStakeTable(prev_snapshot.stake_table().cloned().collect());
-                    let success_threshold = prev_snapshot.success_threshold();
-
                     self.fetcher
                         .peers
-                        .fetch_leaf(root_height, prev_stake_table, success_threshold)
+                        .fetch_leaf(coordinator.clone(), root_height)
                         .await
                         .context("Epoch root leaf not found")?
                         .block_header()
@@ -629,7 +623,6 @@ pub async fn fetch_and_calculate_block_reward(
             info!(?root_epoch, "catchup epoch root header");
 
             let leaf = coordinator
-                .membership()
                 .get_epoch_root(EpochNumber::new(root_epoch))
                 .await
                 .with_context(|| format!("Failed to get epoch root for root_epoch={root_epoch}"))?;
@@ -664,7 +657,7 @@ pub async fn fetch_and_calculate_block_reward(
 
     coordinator
         .membership()
-        .calculate_dynamic_block_reward(current_epoch, &header, &committee.validators)
+        .calculate_dynamic_block_reward(current_epoch, &header, &committee.validators, &coordinator)
         .await
         .with_context(|| {
             format!("dynamic block reward calculation failed for epoch={current_epoch}")
@@ -689,7 +682,11 @@ impl Membership<SeqTypes> for EpochCommittees {
     /// either by fetching from L1 or using local state if available.
     /// It also calculates and stores the block reward based on header version.
     #[cfg(not(feature = "node"))]
-    async fn add_epoch_root(&self, _block_header: Header) -> Result<(), Self::Error> {
+    async fn add_epoch_root(
+        &self,
+        _block_header: Header,
+        _coordinator: &EpochMembershipCoordinator<SeqTypes>,
+    ) -> Result<(), Self::Error> {
         // Fetching stake table events for the new epoch requires an L1 client.
         unimplemented!("add_epoch_root requires the node feature");
     }
@@ -698,7 +695,11 @@ impl Membership<SeqTypes> for EpochCommittees {
     /// either by fetching from L1 or using local state if available.
     /// It also calculates and stores the block reward based on header version.
     #[cfg(feature = "node")]
-    async fn add_epoch_root(&self, block_header: Header) -> Result<(), Self::Error> {
+    async fn add_epoch_root(
+        &self,
+        block_header: Header,
+        coordinator: &EpochMembershipCoordinator<SeqTypes>,
+    ) -> Result<(), Self::Error> {
         let block_number = block_header.block_number();
 
         let epoch_height = *self.epoch_height;
@@ -804,7 +805,12 @@ impl Membership<SeqTypes> for EpochCommittees {
         if block_reward.is_none() && version >= DRB_AND_HEADER_UPGRADE_VERSION {
             info!(?epoch, "calculating dynamic block reward");
             let reward = self
-                .calculate_dynamic_block_reward(epoch, &block_header, &active_validators)
+                .calculate_dynamic_block_reward(
+                    epoch,
+                    &block_header,
+                    &active_validators,
+                    coordinator,
+                )
                 .await
                 .map_err(Self::Error::Reward)?;
 
@@ -884,21 +890,20 @@ impl Membership<SeqTypes> for EpochCommittees {
         Ok(())
     }
 
-    async fn get_epoch_root(&self, epoch: EpochNumber) -> Result<Leaf2, Self::Error> {
+    async fn get_epoch_root(
+        &self,
+        epoch: EpochNumber,
+        coordinator: &EpochMembershipCoordinator<SeqTypes>,
+    ) -> Result<Leaf2, Self::Error> {
         let block_height = root_block_in_epoch(*epoch, *self.epoch_height());
         let peers = self.fetcher.peers.clone();
-        let snapshot = self
-            .snapshot(epoch)
-            .ok_or_else(|| Self::Error::Message(format!("no committee for epoch={epoch}")))?;
-        let stake_table = HSStakeTable(snapshot.stake_table().cloned().collect());
-        let success_threshold = snapshot.success_threshold();
 
         // the root block may not exist anywhere yet
         // Each attempt tries all peers once
         // `retry` only scales the per peer timeout
         for retry in 0..3 {
             match peers
-                .try_fetch_leaf(retry, block_height, stake_table.clone(), success_threshold)
+                .try_fetch_leaf(retry, coordinator.clone(), block_height)
                 .await
             {
                 Ok(leaf) => return Ok(leaf),
@@ -912,7 +917,11 @@ impl Membership<SeqTypes> for EpochCommittees {
         )))
     }
 
-    async fn get_epoch_drb(&self, epoch: EpochNumber) -> Result<DrbResult, Self::Error> {
+    async fn get_epoch_drb(
+        &self,
+        epoch: EpochNumber,
+        coordinator: &EpochMembershipCoordinator<SeqTypes>,
+    ) -> Result<DrbResult, Self::Error> {
         let peers = self.fetcher.peers.clone();
 
         // Try to retrieve the DRB result from an existing snapshot's randomized committee.
@@ -937,12 +946,6 @@ impl Membership<SeqTypes> for EpochCommittees {
             },
         };
 
-        let prev_snapshot = self.snapshot(previous_epoch).ok_or_else(|| {
-            Self::Error::Message(format!("no committee for previous_epoch={previous_epoch}"))
-        })?;
-        let stake_table = HSStakeTable(prev_snapshot.stake_table().cloned().collect());
-        let success_threshold = prev_snapshot.success_threshold();
-
         let block_height = transition_block_for_epoch(*previous_epoch, *self.epoch_height());
 
         debug!(
@@ -950,7 +953,7 @@ impl Membership<SeqTypes> for EpochCommittees {
             epoch, block_height
         );
         let drb_leaf = peers
-            .try_fetch_leaf(1, block_height, stake_table, success_threshold)
+            .try_fetch_leaf(1, coordinator.clone(), block_height)
             .await
             .map_err(Self::Error::Catchup)?;
 
@@ -1863,7 +1866,12 @@ mod tests {
             // Brief warmup so the reader is in its loop before the
             // mutation lands.
             tokio::time::sleep(Duration::from_millis(2)).await;
-            committees
+            let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(
+                committees.clone(),
+                *committees.epoch_height(),
+                &hotshot_example_types::storage_types::TestStorage::default(),
+            );
+            coordinator
                 .add_epoch_root(header.clone())
                 .await
                 .expect("add_epoch_root should succeed for the prefilled state");
