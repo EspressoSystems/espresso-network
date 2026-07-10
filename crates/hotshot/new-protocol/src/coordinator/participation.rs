@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
-use alloy::primitives::U256;
 use hotshot_types::{
-    consensus::{ValidatorParticipation, VoteParticipation},
+    consensus::{
+        ValidatorParticipation, VoteParticipation, resolve_participation_stake_table,
+        track_decided_qc_participation,
+    },
     data::{EpochNumber, Leaf2},
     epoch_membership::EpochMembershipCoordinator,
-    simple_vote::HasEpoch,
-    stake_table::HSStakeTable,
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
 };
 use tracing::warn;
@@ -18,18 +18,20 @@ pub struct ParticipationTracker<T: NodeType> {
 
 impl<T: NodeType> Default for ParticipationTracker<T> {
     fn default() -> Self {
+        let (stake_table, success_threshold) = VoteParticipation::<T>::unresolved_stake_table();
         Self {
             validator: ValidatorParticipation::new(),
-            vote: VoteParticipation::new(HSStakeTable::default(), U256::MAX, None),
+            vote: VoteParticipation::new(stake_table, success_threshold, None),
         }
     }
 }
 
 impl<T: NodeType> ParticipationTracker<T> {
     pub fn new(membership: &EpochMembershipCoordinator<T>, epoch: EpochNumber) -> Self {
-        let (stake_table, success_threshold) = stake_table_for(membership, Some(epoch));
+        let (stake_table, success_threshold) =
+            resolve_participation_stake_table(membership, Some(epoch));
         Self {
-            validator: ValidatorParticipation::new(),
+            validator: ValidatorParticipation::new_in_epoch(epoch),
             vote: VoteParticipation::new(stake_table, success_threshold, Some(epoch)),
         }
     }
@@ -42,26 +44,22 @@ impl<T: NodeType> ParticipationTracker<T> {
         self.validator.update_participation(leader, epoch, false);
     }
 
+    /// Advance the proposal tracker as soon as the view enters a new epoch:
+    /// proposals and timeouts are attributed to the view's epoch, which runs
+    /// ahead of the decide chain that otherwise advances the tracker.
+    pub fn on_view_changed(&mut self, epoch: EpochNumber) {
+        self.validator.update_participation_epoch(epoch);
+    }
+
     /// Call with the oldest decided leaf first.
     pub fn on_leaf_decided(&mut self, leaf: &Leaf2<T>, membership: &EpochMembershipCoordinator<T>) {
-        let qc = leaf.justify_qc();
-        let qc_epoch = qc.epoch();
-        if let Some(epoch) = qc_epoch
-            && epoch > self.validator.current_epoch()
-        {
-            self.validator.update_participation_epoch(epoch);
-        }
-        if qc_epoch > self.vote.current_epoch() {
-            let (stake_table, success_threshold) = stake_table_for(membership, qc_epoch);
-            if let Err(err) =
-                self.vote
-                    .update_participation_epoch(stake_table, success_threshold, qc_epoch)
-            {
-                warn!(%err, "failed to update vote participation epoch");
-            }
-        }
-        if let Err(err) = self.vote.update_participation(qc) {
-            warn!(%err, "failed to update vote participation");
+        if let Err(err) = track_decided_qc_participation(
+            &leaf.justify_qc(),
+            membership,
+            &mut self.validator,
+            &mut self.vote,
+        ) {
+            warn!(%err, "failed to update vote participation epoch");
         }
     }
 
@@ -84,21 +82,5 @@ impl<T: NodeType> ParticipationTracker<T> {
         epoch: Option<EpochNumber>,
     ) -> HashMap<<T::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
         self.vote.vote_participation(epoch)
-    }
-}
-
-fn stake_table_for<T: NodeType>(
-    membership: &EpochMembershipCoordinator<T>,
-    epoch: Option<EpochNumber>,
-) -> (HSStakeTable<T>, U256) {
-    match membership.stake_table_for_epoch(epoch) {
-        Ok(m) => (
-            HSStakeTable::from_iter(m.stake_table()),
-            m.success_threshold(),
-        ),
-        Err(err) => {
-            warn!(?epoch, %err, "no stake table for participation tracking");
-            (HSStakeTable::default(), U256::MAX)
-        },
     }
 }

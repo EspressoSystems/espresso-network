@@ -6,7 +6,7 @@ use hotshot_types::{
 };
 
 pub struct Metrics {
-    pub(crate) consensus: Arc<ConsensusMetricsValue>,
+    pub(crate) consensus: ConsensusMetricsValue,
     pub(crate) apply_consensus: Arc<dyn Histogram>,
     pub(crate) next_consensus_input: Arc<dyn Histogram>,
     pub(crate) process_consensus_output: Arc<dyn Histogram>,
@@ -17,7 +17,7 @@ pub struct Metrics {
 }
 
 impl Metrics {
-    pub fn new(m: &dyn HotshotMetrics, consensus: Arc<ConsensusMetricsValue>) -> Self {
+    pub fn new(m: &dyn HotshotMetrics, consensus: ConsensusMetricsValue) -> Self {
         Self {
             consensus,
             apply_consensus: m

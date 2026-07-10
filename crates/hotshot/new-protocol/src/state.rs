@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, HashMap},
     sync::Arc,
+    time::Instant,
 };
 
 use committable::{Commitment, Committable};
@@ -10,6 +11,7 @@ use hotshot_types::{
     message::UpgradeLock,
     traits::{
         block_contents::{BlockHeader, BuilderFee},
+        metrics::Histogram,
         node_implementation::NodeType,
     },
     utils::BuilderCommitment,
@@ -94,6 +96,7 @@ pub struct StateManager<T: NodeType> {
     pending_requests: HashMap<Commitment<Leaf2<T>>, Vec<Pending<T>>>,
     upgrade_lock: UpgradeLock<T>,
     tasks: JoinSet<Completed<T>>,
+    validate_duration_metric: Option<Box<dyn Histogram>>,
 }
 
 enum Pending<T: NodeType> {
@@ -131,7 +134,14 @@ impl<T: NodeType> StateManager<T> {
             pending_requests: HashMap::new(),
             upgrade_lock,
             tasks: JoinSet::new(),
+            validate_duration_metric: None,
         }
+    }
+
+    /// Record successful `validate_and_apply_header` durations in `hist`.
+    pub fn with_metrics(mut self, hist: Option<Box<dyn Histogram>>) -> Self {
+        self.validate_duration_metric = hist;
+        self
     }
 
     /// Get the validated state for a given view.
@@ -203,7 +213,9 @@ impl<T: NodeType> StateManager<T> {
             return;
         };
 
+        let duration_metric = self.validate_duration_metric.clone();
         let handle = self.tasks.spawn(async move {
+            let validate_started = Instant::now();
             let result = parent_entry
                 .state
                 .validate_and_apply_header(
@@ -214,17 +226,23 @@ impl<T: NodeType> StateManager<T> {
                     upgrade_lock,
                     *view,
                 )
-                .await
-                .map(|(state, delta)| StateResponse {
-                    view,
-                    commitment,
-                    state: Arc::new(state),
-                    delta: Some(Arc::new(delta)),
-                });
+                .await;
+            let validate_duration = validate_started.elapsed();
+            let result = result.map(|(state, delta)| StateResponse {
+                view,
+                commitment,
+                state: Arc::new(state),
+                delta: Some(Arc::new(delta)),
+            });
             match result {
-                Ok(response) => Completed::State {
-                    response,
-                    leaf: Some(request.proposal.into()),
+                Ok(response) => {
+                    if let Some(hist) = &duration_metric {
+                        hist.add_point(validate_duration.as_secs_f64());
+                    }
+                    Completed::State {
+                        response,
+                        leaf: Some(request.proposal.into()),
+                    }
                 },
                 Err(err) => {
                     warn!(%err, "state validation failed");

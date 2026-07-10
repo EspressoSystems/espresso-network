@@ -368,15 +368,16 @@ where
 
     pub async fn current_proposal_participation(&self) -> HashMap<T::SignatureKey, f64> {
         if self.cutover_active().await {
-            return match self.client_api.current_proposal_participation().await {
-                Ok(participation) => participation,
-                Err(err) => {
+            return self
+                .client_api
+                .current_proposal_participation()
+                .await
+                .inspect_err(|err| {
                     tracing::warn!(
                         "coordinator unavailable for current_proposal_participation: {err:#}"
                     );
-                    HashMap::new()
-                },
-            };
+                })
+                .unwrap_or_default();
         }
         self.legacy_handle
             .read()
@@ -387,18 +388,21 @@ where
             .current_proposal_participation()
     }
 
+    /// Participation for `epoch`. The coordinator only tracks epochs since
+    /// the cutover, so when it has nothing for `epoch` (or errors) fall back
+    /// to the legacy handle, which retains pre-cutover history.
     pub async fn proposal_participation(
         &self,
         epoch: EpochNumber,
     ) -> HashMap<T::SignatureKey, f64> {
         if self.cutover_active().await {
-            return match self.client_api.proposal_participation(epoch).await {
-                Ok(participation) => participation,
+            match self.client_api.proposal_participation(epoch).await {
+                Ok(participation) if !participation.is_empty() => return participation,
+                Ok(_) => {},
                 Err(err) => {
                     tracing::warn!("coordinator unavailable for proposal_participation: {err:#}");
-                    HashMap::new()
                 },
-            };
+            }
         }
         self.legacy_handle
             .read()
@@ -413,15 +417,16 @@ where
         &self,
     ) -> HashMap<<T::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
         if self.cutover_active().await {
-            return match self.client_api.current_vote_participation().await {
-                Ok(participation) => participation,
-                Err(err) => {
+            return self
+                .client_api
+                .current_vote_participation()
+                .await
+                .inspect_err(|err| {
                     tracing::warn!(
                         "coordinator unavailable for current_vote_participation: {err:#}"
                     );
-                    HashMap::new()
-                },
-            };
+                })
+                .unwrap_or_default();
         }
         self.legacy_handle
             .read()
@@ -432,18 +437,28 @@ where
             .current_vote_participation()
     }
 
+    /// Participation for `epoch` (`None` = current epoch). As with
+    /// [`Self::proposal_participation`], epoch queries the coordinator has no
+    /// data for fall back to the legacy handle's pre-cutover history.
     pub async fn vote_participation(
         &self,
         epoch: Option<EpochNumber>,
     ) -> HashMap<<T::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
         if self.cutover_active().await {
-            return match self.client_api.vote_participation(epoch).await {
-                Ok(participation) => participation,
+            match self.client_api.vote_participation(epoch).await {
+                Ok(participation) if !participation.is_empty() || epoch.is_none() => {
+                    return participation;
+                },
+                Ok(_) => {},
                 Err(err) => {
                     tracing::warn!("coordinator unavailable for vote_participation: {err:#}");
-                    HashMap::new()
+                    // Only epoch queries can be answered from legacy history;
+                    // for the current epoch the coordinator is authoritative.
+                    if epoch.is_none() {
+                        return HashMap::new();
+                    }
                 },
-            };
+            }
         }
         self.legacy_handle
             .read()

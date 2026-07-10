@@ -166,7 +166,7 @@ where
             stake_table.0,
             0,
         )));
-        let consensus_metrics = Arc::new(ConsensusMetricsValue::new(metrics));
+        let consensus_metrics = ConsensusMetricsValue::new(metrics);
 
         let handle = SystemContext::init(
             validator_config.public_key,
@@ -178,7 +178,7 @@ where
             membership_coordinator.clone(),
             network.clone(),
             initializer,
-            (*consensus_metrics).clone(),
+            consensus_metrics.clone(),
             Arc::clone(&persistence),
             StorageMetricsValue::new(metrics),
         )

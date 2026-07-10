@@ -1,4 +1,5 @@
 use std::{
+    cell::Cell,
     cmp::max,
     collections::{BTreeMap, BTreeSet},
     marker::PhantomData,
@@ -201,6 +202,9 @@ pub struct Consensus<T: NodeType> {
     /// `decided_views` is not persisted, so a replayed certificate pair could
     /// otherwise re-decide pre-anchor views.
     decide_floor_view: ViewNumber,
+    /// Certificates that failed cryptographic verification, cumulative.
+    /// `Cell` because rejections happen behind `&self`.
+    invalid_certs: Cell<u64>,
     last_decided_view: ViewNumber,
     last_decided_leaf: Leaf2<T>,
     drb_results: BTreeMap<EpochNumber, DrbResult>,
@@ -331,6 +335,7 @@ impl<T: NodeType> Consensus<T> {
             leaves: BTreeMap::new(),
             decided_views: BTreeSet::from([last_decided_view]),
             decide_floor_view: ViewNumber::genesis(),
+            invalid_certs: Cell::new(0),
             last_decided_view,
             last_decided_leaf: genesis_leaf,
             headers: BTreeMap::new(),
@@ -605,10 +610,15 @@ impl<T: NodeType> Consensus<T> {
         self.locked_cert.as_ref().map(|c| c.view_number())
     }
 
+    /// Certificates that failed cryptographic verification since startup.
+    pub(crate) fn invalid_certs(&self) -> u64 {
+        self.invalid_certs.get()
+    }
+
     /// Newest view that can no longer be decided (and below which decide
     /// inputs are dropped): slides [`DECIDE_BUFFER`] behind the watermark,
     /// pinned at the restart/cutover anchor.
-    fn decide_floor(&self) -> ViewNumber {
+    pub(crate) fn decide_floor(&self) -> ViewNumber {
         max(
             self.last_decided_view.saturating_sub(DECIDE_BUFFER).into(),
             self.decide_floor_view,
@@ -2304,6 +2314,7 @@ impl<T: NodeType> Consensus<T> {
                     Ok(()) => CertVerification::Valid,
                     Err(err) => {
                         warn!(%epoch, %err, "invalid threshold signature");
+                        self.invalid_certs.set(self.invalid_certs.get() + 1);
                         CertVerification::Invalid
                     },
                 }

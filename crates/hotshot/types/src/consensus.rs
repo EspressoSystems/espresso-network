@@ -305,8 +305,15 @@ impl<TYPES: NodeType> Default for ValidatorParticipation<TYPES> {
 
 impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
     pub fn new() -> Self {
+        Self::new_in_epoch(EpochNumber::genesis())
+    }
+
+    /// Start tracking at `epoch`. Updates for other epochs are dropped, so a
+    /// tracker created mid-chain must be seeded with the current epoch or it
+    /// records nothing until the epoch advances.
+    pub fn new_in_epoch(epoch: EpochNumber) -> Self {
         Self {
-            epoch: EpochNumber::genesis(),
+            epoch,
             current_epoch_participation: HashMap::new(),
             previous_epoch_participation: BTreeMap::new(),
         }
@@ -452,6 +459,41 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
             current_epoch_participation,
             previous_epoch_participation: BTreeMap::new(),
         }
+    }
+
+    /// Placeholder installed when the stake table for an epoch cannot be
+    /// resolved yet: no keys, and a threshold no certificate can meet, so
+    /// every update fails until [`Self::reseed_stake_table`] replaces it.
+    pub fn unresolved_stake_table() -> (HSStakeTable<TYPES>, U256) {
+        (HSStakeTable::default(), U256::MAX)
+    }
+
+    /// Whether the current epoch's stake table is the
+    /// [`Self::unresolved_stake_table`] placeholder. A real epoch always has
+    /// a non-empty stake table.
+    pub fn stake_table_unresolved(&self) -> bool {
+        self.stake_table.is_empty()
+    }
+
+    /// Replace an [`Self::unresolved_stake_table`] placeholder with the real
+    /// stake table for the current epoch. No participation was recorded
+    /// against the placeholder (all updates fail), so the counts restart
+    /// from zero.
+    pub fn reseed_stake_table(&mut self, stake_table: HSStakeTable<TYPES>, threshold: U256) {
+        self.current_epoch_participation = stake_table
+            .iter()
+            .map(|peer_config| {
+                (
+                    peer_config
+                        .stake_table_entry
+                        .public_key()
+                        .to_verification_key(),
+                    0u64,
+                )
+            })
+            .collect();
+        self.stake_table = stake_table;
+        self.success_threshold = threshold;
     }
 
     pub fn update_participation(&mut self, qc: QuorumCertificate2<TYPES>) -> Result<()> {
@@ -613,6 +655,67 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
     pub fn current_epoch(&self) -> Option<EpochNumber> {
         self.epoch
     }
+}
+
+/// Resolve the stake table and success threshold for `epoch`, falling back to
+/// [`VoteParticipation::unresolved_stake_table`] when the snapshot is not
+/// cached yet (the lookup also kicks off catchup, so a later call can
+/// succeed).
+pub fn resolve_participation_stake_table<TYPES: NodeType>(
+    membership: &EpochMembershipCoordinator<TYPES>,
+    epoch: Option<EpochNumber>,
+) -> (HSStakeTable<TYPES>, U256) {
+    match membership.stake_table_for_epoch(epoch) {
+        Ok(m) => (
+            HSStakeTable::from_iter(m.stake_table()),
+            m.success_threshold(),
+        ),
+        Err(err) => {
+            tracing::warn!(?epoch, %err, "no stake table for participation tracking");
+            VoteParticipation::unresolved_stake_table()
+        },
+    }
+}
+
+/// Fold one decided leaf's justify QC into the participation trackers:
+/// advance both trackers' epochs when the QC enters a new epoch, recover a
+/// vote tracker stuck on an unresolved stake table, and record the QC's
+/// signers. Call with the oldest decided leaf first.
+///
+/// A failure to advance the vote tracker's epoch is returned to the caller;
+/// a failure to record the QC itself (duplicate view, unknown signer) is
+/// only logged, matching how both consensus paths have always treated it.
+pub fn track_decided_qc_participation<TYPES: NodeType>(
+    qc: &QuorumCertificate2<TYPES>,
+    membership: &EpochMembershipCoordinator<TYPES>,
+    validator: &mut ValidatorParticipation<TYPES>,
+    vote: &mut VoteParticipation<TYPES>,
+) -> Result<()> {
+    let qc_epoch = qc.epoch();
+    if let Some(epoch) = qc_epoch
+        && epoch > validator.current_epoch()
+    {
+        validator.update_participation_epoch(epoch);
+    }
+    if qc_epoch > vote.current_epoch() {
+        let (stake_table, success_threshold) =
+            resolve_participation_stake_table(membership, qc_epoch);
+        vote.update_participation_epoch(stake_table, success_threshold, qc_epoch)
+            .context(warn!("Updating vote participation"))?;
+    } else if qc_epoch == vote.current_epoch() && vote.stake_table_unresolved() {
+        // The epoch was entered while its stake table was still being caught
+        // up; retry until it resolves so the epoch is not silently empty.
+        if let Ok(m) = membership.stake_table_for_epoch(qc_epoch) {
+            vote.reseed_stake_table(
+                HSStakeTable::from_iter(m.stake_table()),
+                m.success_threshold(),
+            );
+        }
+    }
+    if let Err(e) = vote.update_participation(qc.clone()) {
+        tracing::warn!("Failed to update vote participation: {e}");
+    }
+    Ok(())
 }
 
 /// A reference to the consensus algorithm
@@ -1034,6 +1137,21 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     /// Get the proposal participation for a given epoch
     pub fn proposal_participation(&self, epoch: EpochNumber) -> HashMap<TYPES::SignatureKey, f64> {
         self.validator_participation.proposal_participation(epoch)
+    }
+
+    /// Fold a decided leaf's justify QC into both participation trackers.
+    /// See [`track_decided_qc_participation`].
+    pub fn update_participation_from_qc(
+        &mut self,
+        qc: &QuorumCertificate2<TYPES>,
+        membership: &EpochMembershipCoordinator<TYPES>,
+    ) -> Result<()> {
+        track_decided_qc_participation(
+            qc,
+            membership,
+            &mut self.validator_participation,
+            &mut self.vote_participation,
+        )
     }
 
     /// Update the vote participation
