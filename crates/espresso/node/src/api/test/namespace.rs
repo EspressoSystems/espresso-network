@@ -1,5 +1,3 @@
-use std::time::Instant;
-
 use rand::thread_rng;
 
 use super::*;

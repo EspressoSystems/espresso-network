@@ -24,6 +24,7 @@ use crate::{
     PeerConfig,
     data::{EpochNumber, Leaf2, ViewNumber},
     drb::DrbResult,
+    epoch_membership::EpochMembershipCoordinator,
     stake_table::supermajority_threshold,
     traits::signature_key::StakeTableEntryType,
 };
@@ -293,18 +294,21 @@ pub trait Membership<T: NodeType>: Debug + Send + Sync {
     fn get_epoch_root(
         &self,
         e: EpochNumber,
+        coordinator: &EpochMembershipCoordinator<T>,
     ) -> impl Future<Output = Result<Leaf2<T>, Self::Error>> + Send;
 
     /// Gets the DRB result for the given epoch.
     fn get_epoch_drb(
         &self,
         e: EpochNumber,
+        coordinator: &EpochMembershipCoordinator<T>,
     ) -> impl Future<Output = Result<DrbResult, Self::Error>> + Send;
 
     /// Handles notifications that a new epoch root has been created.
     fn add_epoch_root(
         &self,
         h: T::BlockHeader,
+        coordinator: &EpochMembershipCoordinator<T>,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 
     /// Called to notify the Membership when a new DRB result has been calculated.

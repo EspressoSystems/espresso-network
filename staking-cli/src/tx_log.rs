@@ -2,7 +2,10 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -562,46 +565,86 @@ async fn execute_signed_tx_log_inner<P: Provider + Clone + 'static>(
             // Use batching for single-sender phases in geth mode (avoids geth txpool drops)
             execute_single_sender_batched(provider.clone(), phase, to_submit).await?;
         } else {
-            // Multi-sender flow: semaphore for unconfirmed + semaphore for concurrency
+            // Multi-sender flow: one task per sender, submitting that sender's txs in
+            // nonce order. Out-of-order nonces strand txs in the node's queued pool
+            // (anvil automine does not reliably promote them). Distinct senders still
+            // submit concurrently.
             let total = to_submit.len();
-            let unconfirmed_sem = Arc::new(Semaphore::new(MAX_UNCONFIRMED));
-            let concurrency_sem = Arc::new(Semaphore::new(parallelism));
-            let submitted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-
-            let mut tasks: JoinSet<Result<TransactionReceipt>> = JoinSet::new();
+            let mut by_sender: HashMap<Address, Vec<SignedTx>> = HashMap::new();
             for tx in to_submit {
-                let provider = provider.clone();
-                let unconfirmed_sem = unconfirmed_sem.clone();
-                let concurrency_sem = concurrency_sem.clone();
-                let submitted = submitted.clone();
-                tasks.spawn(async move {
-                    // Acquire unconfirmed permit (limits total in-flight)
-                    let unconfirmed_permit = unconfirmed_sem.acquire_owned().await?;
-
-                    // Acquire concurrency permit (limits concurrent RPC calls)
-                    let concurrency_permit = concurrency_sem.acquire().await?;
-                    submit_with_retry(&provider, &tx.signed_bytes, tx.tx_hash).await?;
-                    drop(concurrency_permit);
-
-                    let count = submitted.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                    if count.is_multiple_of(100) || count == total {
-                        tracing::info!("phase {}: submitted {}/{}", phase, count, total);
-                    }
-
-                    // Wait for confirmation (holds unconfirmed_permit)
-                    wait_for_confirmation(provider, tx, unconfirmed_permit).await
-                });
+                by_sender.entry(tx.from).or_default().push(tx);
             }
 
-            // Wait for all confirmations (aborts all on first failure)
-            let mut confirmed = 0;
+            let ctx = Arc::new(PhaseCtx {
+                phase,
+                total,
+                unconfirmed_sem: Arc::new(Semaphore::new(MAX_UNCONFIRMED)),
+                concurrency_sem: Semaphore::new(parallelism),
+                submitted: AtomicUsize::new(0),
+                confirmed: AtomicUsize::new(0),
+            });
+
+            let mut tasks: JoinSet<Result<()>> = JoinSet::new();
+            for (_, mut txs) in by_sender {
+                txs.sort_by_key(|tx| tx.nonce);
+                tasks.spawn(execute_sender_txs(provider.clone(), ctx.clone(), txs));
+            }
+
+            // Wait for all senders (aborts all on first failure)
             while let Some(result) = tasks.join_next().await {
                 result??;
-                confirmed += 1;
-                if confirmed % 100 == 0 || confirmed == total {
-                    tracing::info!("phase {}: confirmed {}/{}", phase, confirmed, total);
-                }
             }
+        }
+    }
+
+    Ok(())
+}
+
+/// Progress and flow-control state shared by the sender tasks of one phase.
+struct PhaseCtx {
+    phase: TxPhase,
+    total: usize,
+    /// Arc so permits can be held across the spawned confirmation tasks.
+    unconfirmed_sem: Arc<Semaphore>,
+    concurrency_sem: Semaphore,
+    submitted: AtomicUsize,
+    confirmed: AtomicUsize,
+}
+
+/// Submit one sender's txs sequentially in nonce order, each submission fully
+/// completing before the next; confirmations are awaited concurrently.
+async fn execute_sender_txs<P: Provider + Clone + 'static>(
+    provider: P,
+    ctx: Arc<PhaseCtx>,
+    txs: Vec<SignedTx>,
+) -> Result<()> {
+    let mut confirmations: JoinSet<Result<TransactionReceipt>> = JoinSet::new();
+    for tx in txs {
+        // Acquire unconfirmed permit (limits total in-flight, held until confirmation)
+        let unconfirmed_permit = ctx.unconfirmed_sem.clone().acquire_owned().await?;
+
+        // Acquire concurrency permit (limits concurrent RPC calls)
+        let concurrency_permit = ctx.concurrency_sem.acquire().await?;
+        submit_with_retry(&provider, &tx.signed_bytes, tx.tx_hash).await?;
+        drop(concurrency_permit);
+
+        let count = ctx.submitted.fetch_add(1, Ordering::Relaxed) + 1;
+        if count.is_multiple_of(100) || count == ctx.total {
+            tracing::info!("phase {}: submitted {}/{}", ctx.phase, count, ctx.total);
+        }
+
+        confirmations.spawn(wait_for_confirmation(
+            provider.clone(),
+            tx,
+            unconfirmed_permit,
+        ));
+    }
+
+    while let Some(result) = confirmations.join_next().await {
+        result??;
+        let count = ctx.confirmed.fetch_add(1, Ordering::Relaxed) + 1;
+        if count.is_multiple_of(100) || count == ctx.total {
+            tracing::info!("phase {}: confirmed {}/{}", ctx.phase, count, ctx.total);
         }
     }
 

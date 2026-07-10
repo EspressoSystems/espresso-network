@@ -70,9 +70,19 @@ pub async fn assert_native_demo_works(requirements: TestRequirements) -> Result<
         }
 
         if start.elapsed() > requirements.global_timeout {
+            if let Some(first_reward_block) = requirements.first_reward_block
+                && new.rewards_claimed == U256::ZERO
+                && new.light_client_finalized_block_height < first_reward_block
+            {
+                panic!(
+                    "Timeout: light client finalized height {} has not reached the first reward \
+                     block {}, so no rewards are claimable",
+                    new.light_client_finalized_block_height, first_reward_block
+                );
+            }
             panic!(
                 "Timeout waiting for block height, transaction count, light client updates, and \
-                 reward claim after LC threshold to increase."
+                 reward claim after LC threshold to increase. Last state: {new:?}"
             );
         }
 

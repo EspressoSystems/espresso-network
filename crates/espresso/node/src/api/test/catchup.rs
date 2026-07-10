@@ -1246,12 +1246,7 @@ async fn test_fetch_leaf_returns_exact_height() -> anyhow::Result<()> {
         Client::new(format!("http://localhost:{port}").parse().unwrap());
     wait_until_block_height(&height_client, "node/block-height", TARGET_HEIGHT + 5).await;
 
-    // Get the stake table and threshold for the epoch containing TARGET_HEIGHT
     let coordinator = network.server.node_state().coordinator;
-    let epoch = EpochNumber::new(epoch_from_block_number(TARGET_HEIGHT, EPOCH_HEIGHT));
-    let snapshot = coordinator.membership().snapshot(epoch).expect("snapshot");
-    let stake_table = HSStakeTable::from_iter(snapshot.stake_table());
-    let success_threshold = snapshot.success_threshold();
 
     // Use StatePeers to fetch the leaf at the exact target height
     let catchup = StatePeers::<StaticVersion<0, 1>>::from_urls(
@@ -1261,9 +1256,7 @@ async fn test_fetch_leaf_returns_exact_height() -> anyhow::Result<()> {
         &NoMetrics,
     );
 
-    let leaf = catchup
-        .fetch_leaf(TARGET_HEIGHT, stake_table, success_threshold)
-        .await?;
+    let leaf = catchup.fetch_leaf(coordinator, TARGET_HEIGHT).await?;
 
     assert_eq!(
         leaf.height(),
