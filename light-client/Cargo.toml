@@ -24,13 +24,13 @@ futures = { workspace = true }
 hotshot-query-service = { workspace = true, features = ["sqlite-options"] }
 hotshot-query-service-types = { workspace = true }
 hotshot-types = { workspace = true }
+http-client = { workspace = true }
 jf-advz = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true }
 static_assertions = { workspace = true }
-surf-disco = { workspace = true }
 tagged-base64 = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }

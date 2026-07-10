@@ -26,10 +26,9 @@ use hotshot_types::{
         epoch_from_block_number, is_epoch_root, is_ge_epoch_root, option_epoch_from_block_number,
     },
 };
+use http_client::{Client, error::ClientErr};
 use jf_pcs::prelude::UnivariateUniversalParams;
 use jf_relation_compat::Circuit as _;
-use surf_disco::Client;
-use tide_disco::error::ServerError;
 use time::ext::InstantExt;
 use tokio::{task::spawn_blocking, time::sleep};
 use url::Url;
@@ -79,7 +78,7 @@ pub fn load_proving_key(stake_table_capacity: usize) -> ProvingKey {
 #[inline(always)]
 /// Get the latest LightClientState and signature bundle from Sequencer network
 pub async fn fetch_latest_state<ApiVer: StaticVersionType>(
-    client: &Client<ServerError, ApiVer>,
+    client: &Client<ClientErr, ApiVer>,
 ) -> Result<LCV2StateSignaturesBundle, ProverError> {
     tracing::info!("Fetching the latest state signatures bundle from relay server.");
     client
@@ -163,10 +162,7 @@ async fn fetch_epoch_state_from_sequencer(
     sequencer_url: &Url,
     epoch: u64,
 ) -> Result<LightClientStateUpdateCertificateV1<SeqTypes>, ProverError> {
-    let state_cert =
-        surf_disco::Client::<tide_disco::error::ServerError, StaticVersion<0, 1>>::new(
-            sequencer_url.clone(),
-        )
+    let state_cert = Client::<ClientErr, StaticVersion<0, 1>>::new(sequencer_url.clone())
         .get::<StateCertQueryDataV1<SeqTypes>>(&format!("availability/state-cert/{epoch}"))
         .header("Accept", "application/json")
         .send()
@@ -330,7 +326,7 @@ async fn advance_epoch(
 pub async fn sync_state<ApiVer: StaticVersionType>(
     state: &mut ProverServiceState,
     proving_key: &ProvingKey,
-    relay_server_client: &Client<ServerError, ApiVer>,
+    relay_server_client: &Client<ClientErr, ApiVer>,
 ) -> Result<(), ProverError> {
     let light_client_address = state.config.light_client_address;
     let wallet = EthereumWallet::from(state.config.signer.clone());
@@ -495,7 +491,7 @@ pub async fn run_prover_service<ApiVer: StaticVersionType + 'static>(
         state.config.light_client_address
     );
 
-    let relay_server_client = Arc::new(Client::<ServerError, ApiVer>::new(
+    let relay_server_client = Arc::new(Client::<ClientErr, ApiVer>::new(
         state.config.relay_server.clone(),
     ));
 
@@ -535,7 +531,7 @@ pub async fn run_prover_once<ApiVer: StaticVersionType>(
     let stake_table_capacity = state.config.stake_table_capacity;
     let proving_key =
         spawn_blocking(move || Arc::new(load_proving_key(stake_table_capacity))).await?;
-    let relay_server_client = Client::<ServerError, ApiVer>::new(state.config.relay_server.clone());
+    let relay_server_client = Client::<ClientErr, ApiVer>::new(state.config.relay_server.clone());
 
     for _ in 0..state.config.max_retries {
         match sync_state(&mut state, &proving_key, &relay_server_client).await {

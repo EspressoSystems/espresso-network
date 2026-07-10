@@ -17,10 +17,9 @@ espresso-safe-tx-builder = { workspace = true }
 espresso-types = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-types = { workspace = true }
+http-client = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-surf-disco = { workspace = true }
-tide-disco = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }

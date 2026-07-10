@@ -34,7 +34,7 @@ use hotshot_query_service::{
 };
 use hotshot_types::data::VidCommitment;
 use serde::Serialize;
-use surf_disco::Error as _;
+use tide_disco::Error as _;
 use vbs::{BinarySerializer, Serializer, version::StaticVersion};
 
 /// Binary framing version for VBS-negotiated responses, matching the wire version this service
@@ -56,7 +56,7 @@ fn wants_binary(headers: &HeaderMap) -> bool {
 }
 
 /// Maps `hotshot_query_service`'s wrapped `reqwest`-based status code onto axum's.
-fn wire_status(status: surf_disco::StatusCode) -> StatusCode {
+fn wire_status(status: tide_disco::StatusCode) -> StatusCode {
     StatusCode::from_u16(u16::from(status)).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
 }
 
@@ -114,7 +114,7 @@ where
 {
     value.parse().map_err(|e| availability::Error::Custom {
         message: format!("invalid {field}: {e}"),
-        status: surf_disco::StatusCode::BAD_REQUEST,
+        status: tide_disco::StatusCode::BAD_REQUEST,
     })
 }
 
@@ -125,7 +125,7 @@ where
 {
     value.parse().map_err(|e| node::Error::Custom {
         message: format!("invalid {field}: {e}"),
-        status: surf_disco::StatusCode::BAD_REQUEST,
+        status: tide_disco::StatusCode::BAD_REQUEST,
     })
 }
 

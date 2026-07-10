@@ -12,7 +12,7 @@ use hotshot_query_service_types::{
     node::BlockId,
 };
 use hotshot_types::data::EpochNumber;
-use surf_disco::Url;
+use http_client::Url;
 use tagged_base64::TaggedBase64;
 use tokio::time::sleep;
 use vbs::version::StaticVersion;
@@ -121,7 +121,7 @@ pub trait Client: Send + Sync + 'static {
     ) -> impl Send + Future<Output = Result<Option<Certificate2<SeqTypes>>>>;
 }
 
-type HttpClient = surf_disco::Client<hotshot_query_service_types::Error, StaticVersion<0, 1>>;
+type HttpClient = http_client::Client<hotshot_query_service_types::Error, StaticVersion<0, 1>>;
 
 /// A [`Client`] connected to the HotShot query service.
 #[derive(Clone, Debug)]
@@ -133,7 +133,7 @@ impl QueryServiceClient {
     /// Connect to a HotShot query service at the given base URL.
     pub fn new(url: Url) -> Self {
         Self {
-            client: surf_disco::Client::builder(url)
+            client: http_client::Client::builder(url)
                 .set_timeout(Some(Duration::from_secs(10)))
                 .build(),
         }

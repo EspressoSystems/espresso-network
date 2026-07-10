@@ -20,6 +20,7 @@ derivative.workspace = true
 derive_more.workspace = true
 either.workspace = true
 hotshot-events-service.workspace = true
+http-client.workspace = true
 
 # Testing dependencies.
 hotshot-example-types = { workspace = true, optional = true }

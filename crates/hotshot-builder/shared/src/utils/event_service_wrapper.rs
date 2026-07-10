@@ -6,18 +6,15 @@ use futures::{Stream, StreamExt, stream::unfold};
 use hotshot::types::Event;
 use hotshot_events_service::events::Error as EventStreamError;
 use hotshot_types::traits::node_implementation::NodeType;
-use surf_disco::{Client, client::HealthStatus, reexports::WebSocketConfig};
+use http_client::{Client, healthcheck::HealthStatus, socket::Unsupported};
 use tokio::time::{sleep, timeout};
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tracing::{error, warn};
 use url::Url;
 use vbs::version::StaticVersionType;
 
-type EventServiceConnection<Types, ApiVer> = surf_disco::socket::Connection<
-    Event<Types>,
-    surf_disco::socket::Unsupported,
-    EventStreamError,
-    ApiVer,
->;
+type EventServiceConnection<Types, ApiVer> =
+    http_client::socket::Connection<Event<Types>, Unsupported, EventStreamError, ApiVer>;
 
 type EventServiceReconnect<Types, ApiVer> = Pin<
     Box<dyn Future<Output = anyhow::Result<EventServiceConnection<Types, ApiVer>>> + Send + Sync>,
@@ -39,12 +36,7 @@ impl<Types: NodeType, ApiVer: StaticVersionType + 'static> EventServiceStream<Ty
     async fn connect_inner(
         url: Url,
     ) -> anyhow::Result<
-        surf_disco::socket::Connection<
-            Event<Types>,
-            surf_disco::socket::Unsupported,
-            EventStreamError,
-            ApiVer,
-        >,
+        http_client::socket::Connection<Event<Types>, Unsupported, EventStreamError, ApiVer>,
     > {
         let client = Client::<hotshot_events_service::events::Error, ApiVer>::new(url.clone());
 
@@ -66,11 +58,9 @@ impl<Types: NodeType, ApiVer: StaticVersionType + 'static> EventServiceStream<Ty
 
         // Create a new [`WebSocketConfig`]. We trust the events service on our nodes to not
         // send us malicious messages.
-        let websocket_config = WebSocketConfig {
-            max_message_size: None,
-            max_frame_size: None,
-            ..Default::default()
-        };
+        let websocket_config = WebSocketConfig::default()
+            .max_message_size(None)
+            .max_frame_size(None);
 
         Ok(client
             .socket_with_config("hotshot-events/events", websocket_config)

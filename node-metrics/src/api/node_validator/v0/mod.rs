@@ -251,12 +251,12 @@ where
 }
 
 /// [get_config_stake_table_from_sequencer] retrieves the stake table from the
-/// Sequencer.  It expects a [surf_disco::Client] to be provided so that it can
+/// Sequencer.  It expects a [http_client::Client] to be provided so that it can
 /// make the request to the Hotshot Query Service.  It will return a
 /// [StakeTable] that is populated with the data retrieved from the Hotshot
 /// Query Service.
 pub async fn get_config_stake_table_from_sequencer(
-    client: surf_disco::Client<hotshot_query_service::Error, Version01>,
+    client: http_client::Client<hotshot_query_service::Error, Version01>,
 ) -> Result<PublicHotShotConfig, hotshot_query_service::Error> {
     let request = client
         .get("config/hotshot")
@@ -281,7 +281,7 @@ pub async fn get_config_stake_table_from_sequencer(
 // [get_config_stake_table_from_sequencer], but it retrieves the stake table,
 // and only the stake table from a sequencer for a given epoch.
 pub async fn get_node_stake_table_from_sequencer(
-    client: surf_disco::Client<hotshot_query_service::Error, Version01>,
+    client: http_client::Client<hotshot_query_service::Error, Version01>,
     epoch: u64,
 ) -> Result<Vec<PeerConfig<SeqTypes>>, hotshot_query_service::Error> {
     let path = format!("node/stake-table/{epoch}");
@@ -307,7 +307,7 @@ pub async fn get_node_stake_table_from_sequencer(
 // [get_node_validators_from_sequencer] retrieves the validators from the
 // Sequencer for a given epoch.
 pub async fn get_node_validators_from_sequencer(
-    client: surf_disco::Client<hotshot_query_service::Error, Version01>,
+    client: http_client::Client<hotshot_query_service::Error, Version01>,
     epoch: u64,
 ) -> Result<IndexMap<Address, AuthenticatedValidator<BLSPubKey>>, hotshot_query_service::Error> {
     let path = format!("node/validators/{epoch}");
@@ -423,11 +423,11 @@ pub async fn get_node_identity_from_url(url: url::Url) -> anyhow::Result<NodeIde
 }
 
 /// [AvailabilityConnection] is a simple short-hand type alias for a
-/// surf-disco [Connection] that is used to retrieve data from the
+/// http-client [Connection] that is used to retrieve data from the
 /// Availability API.
-type AvailabilityConnection<T> = surf_disco::socket::Connection<
+type AvailabilityConnection<T> = http_client::socket::Connection<
     T,
-    surf_disco::socket::Unsupported,
+    http_client::socket::Unsupported,
     hotshot_query_service::Error,
     Version01,
 >;
@@ -439,7 +439,7 @@ type BoxFutureConnection<'a, T> =
 
 pub struct SurfDiscoAvailabilityAPIStream<'a, T> {
     // path_url: Url,
-    client: surf_disco::Client<hotshot_query_service::Error, Version01>,
+    client: http_client::Client<hotshot_query_service::Error, Version01>,
 
     connection: Option<AvailabilityConnection<T>>,
 
@@ -523,7 +523,7 @@ impl UpdateBlockHeightForEntry<BlockQueryData<SeqTypes>>
 
 impl SurfDiscoAvailabilityAPIStream<'_, Leaf1QueryData<SeqTypes>> {
     pub fn new_leaf_stream(
-        client: surf_disco::Client<hotshot_query_service::Error, Version01>,
+        client: http_client::Client<hotshot_query_service::Error, Version01>,
         starting_block: u64,
     ) -> Self {
         Self {
@@ -538,7 +538,7 @@ impl SurfDiscoAvailabilityAPIStream<'_, Leaf1QueryData<SeqTypes>> {
 
 impl SurfDiscoAvailabilityAPIStream<'_, BlockQueryData<SeqTypes>> {
     pub fn new_block_stream(
-        client: surf_disco::Client<hotshot_query_service::Error, Version01>,
+        client: http_client::Client<hotshot_query_service::Error, Version01>,
         starting_block: u64,
     ) -> Self {
         Self {

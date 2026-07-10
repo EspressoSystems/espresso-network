@@ -39,13 +39,13 @@ use hotshot_types::{
         signature_key::{SignatureKey, StakeTableEntryType},
     },
 };
+use http_client::{Url, error::ClientErr};
 use libp2p_identity::{
     Keypair, PeerId,
     ed25519::{Keypair as EdKeypair, SecretKey},
 };
 use multiaddr::Multiaddr;
 use serde::{Serialize, de::DeserializeOwned};
-use surf_disco::Url;
 use tide_disco::error::ServerError;
 use tokio::net::TcpListener;
 use vbs::{BinarySerializer, Serializer, version::StaticVersion};
@@ -686,7 +686,7 @@ fn axum_status(status: tide_disco::StatusCode) -> StatusCode {
 }
 
 /// Encode a successful response body, negotiating VBS binary vs JSON from the `Accept` header, to
-/// match tide-disco's content negotiation for `OrchestratorClient`, whose surf-disco client
+/// match tide-disco's content negotiation for `OrchestratorClient`, whose http-client client
 /// defaults to `Accept: application/octet-stream`.
 fn encode_ok<T: Serialize>(headers: &HeaderMap, value: T) -> Response {
     if wants_binary(headers) {
@@ -881,8 +881,8 @@ async fn post_builder<TYPES: NodeType>(
             let mut reachable = urls
                 .into_iter()
                 .map(|url| async {
-                    let client: surf_disco::Client<ServerError, OrchestratorVersion> =
-                        surf_disco::Client::builder(url.clone()).build();
+                    let client: http_client::Client<ClientErr, OrchestratorVersion> =
+                        http_client::Client::builder(url.clone()).build();
                     client
                         .connect(Some(Duration::from_secs(2)))
                         .await

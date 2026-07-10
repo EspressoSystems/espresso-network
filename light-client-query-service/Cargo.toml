@@ -23,11 +23,12 @@ espresso-types = { workspace = true }
 futures = { workspace = true }
 hotshot-query-service = { workspace = true }
 hotshot-types = { workspace = true }
+http-client = { workspace = true }
 light-client = { workspace = true }
 log-panics = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-surf-disco = { workspace = true }
+tide-disco = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }

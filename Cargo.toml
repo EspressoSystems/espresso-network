@@ -251,6 +251,7 @@ hotshot-task-impls = { path = "crates/hotshot/task-impls" }
 hotshot-testing = { path = "crates/hotshot/testing" }
 hotshot-types = { path = "crates/hotshot/types" }
 hotshot-utils = { path = "crates/hotshot/utils" }
+http-client = { path = "crates/http-client" }
 humantime = "2"
 include_dir = "0.7"
 indexmap = { version = "2", features = ["serde"] }

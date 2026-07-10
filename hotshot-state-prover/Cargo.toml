@@ -31,6 +31,7 @@ hotshot-contract-adapter = { workspace = true }
 hotshot-query-service = { workspace = true }
 hotshot-task-impls = { workspace = true }
 hotshot-types = { workspace = true }
+http-client = { workspace = true }
 itertools = { workspace = true }
 jf-crhf = { workspace = true }
 jf-pcs = { workspace = true }
@@ -47,8 +48,6 @@ jf-utils = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-surf-disco = { workspace = true }
-tide-disco = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
