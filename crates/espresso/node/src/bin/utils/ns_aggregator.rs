@@ -5,7 +5,7 @@ use clap::Parser;
 use espresso_node::SequencerApiVersion;
 use espresso_types::{Header, NamespaceId, NamespaceProofQueryData};
 use futures::{future::try_join_all, stream::StreamExt};
-use surf_disco::Url;
+use http_client::{Client, Url};
 
 /// Count transactions and bytes confirmed in a given namespace.
 #[derive(Debug, Parser)]
@@ -38,9 +38,7 @@ pub struct Options {
 
 pub async fn run(opt: Options) -> anyhow::Result<()> {
     let ns = NamespaceId::from(opt.namespace);
-    let client = surf_disco::Client::<hotshot_query_service::Error, SequencerApiVersion>::new(
-        opt.url.clone(),
-    );
+    let client = Client::<hotshot_query_service::Error, SequencerApiVersion>::new(opt.url.clone());
 
     // Convert optional closed [from, to] interval to a semi-open [start, end) interval, which makes
     // arithmetic simpler later on.
@@ -79,7 +77,7 @@ async fn process_chunk(
     start: usize,
     end: usize,
 ) -> anyhow::Result<(usize, usize)> {
-    let client = surf_disco::Client::<hotshot_query_service::Error, SequencerApiVersion>::new(url);
+    let client = Client::<hotshot_query_service::Error, SequencerApiVersion>::new(url);
     let mut headers = client
         .socket(&format!("availability/stream/headers/{start}"))
         .subscribe::<Header>()

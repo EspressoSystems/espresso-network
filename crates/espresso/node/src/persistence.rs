@@ -253,11 +253,10 @@ mod tests {
         vid::avidm::{AvidMScheme, init_avidm_param},
         vote::HasViewNumber,
     };
+    use http_client::{Client, error::ClientErr};
     use indexmap::IndexMap;
     use staking_cli::demo::{DelegationConfig, StakingTransactions};
-    use surf_disco::Client;
     use test_utils::reserve_tcp_port;
-    use tide_disco::error::ServerError;
     use tokio::{spawn, time::sleep};
     use vbs::version::Version;
     use versions::{Upgrade, version};
@@ -2063,7 +2062,7 @@ mod tests {
         //start the network
         let test_network = TestNetwork::new(testnet_config, upgrade).await;
 
-        let client: Client<ServerError, SequencerApiVersion> = Client::new(
+        let client: Client<ClientErr, SequencerApiVersion> = Client::new(
             format!("http://localhost:{query_service_port}")
                 .parse()
                 .unwrap(),

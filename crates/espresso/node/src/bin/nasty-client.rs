@@ -52,6 +52,7 @@ use hotshot_types::traits::{
     block_contents::BlockHeader,
     metrics::{Counter, Gauge, Histogram, Metrics as _},
 };
+use http_client::{StatusCode, Url, error::ClientErr, socket};
 use jf_merkle_tree_compat::{
     ForgetableMerkleTreeScheme, MerkleTreeScheme, UniversalMerkleTreeScheme,
 };
@@ -59,7 +60,6 @@ use prometheus::{Encoder, TextEncoder};
 use rand::{RngCore, seq::SliceRandom};
 use serde::de::DeserializeOwned;
 use strum::{EnumDiscriminants, VariantArray};
-use surf_disco::{Error, StatusCode, Url, error::ClientError, socket};
 use time::OffsetDateTime;
 use tokio::{net::TcpListener, task::spawn, time::sleep};
 use tracing::info_span;
@@ -455,7 +455,7 @@ impl Queryable for PayloadQueryData<SeqTypes> {
     }
 }
 
-type Connection<T> = socket::Connection<T, socket::Unsupported, ClientError, SequencerApiVersion>;
+type Connection<T> = socket::Connection<T, socket::Unsupported, ClientErr, SequencerApiVersion>;
 
 #[derive(Derivative)]
 #[derivative(Debug)]
@@ -468,7 +468,7 @@ struct Subscription<T: Queryable> {
 
 #[derive(Debug)]
 struct ResourceManager<T: Queryable> {
-    client: surf_disco::Client<ClientError, SequencerApiVersion>,
+    client: http_client::Client<ClientErr, SequencerApiVersion>,
     open_streams: BTreeMap<u64, Subscription<T>>,
     next_stream_id: u64,
     metrics: Arc<Metrics>,
@@ -478,7 +478,7 @@ struct ResourceManager<T: Queryable> {
 impl<T: Queryable> ResourceManager<T> {
     fn new(opt: &Options, metrics: Arc<Metrics>) -> Self {
         Self {
-            client: surf_disco::Client::builder(opt.url.clone())
+            client: http_client::Client::builder(opt.url.clone())
                 .set_timeout(Some(opt.client_config.http_timeout_error))
                 .build(),
             open_streams: BTreeMap::new(),
@@ -562,7 +562,7 @@ impl<T: Queryable> ResourceManager<T> {
 
         let status = match &res {
             Ok(_) => StatusCode::OK,
-            Err(err) => err.status(),
+            Err(err) => err.status,
         };
         tracing::debug!("<- GET {path} {} ({elapsed:?})", u16::from(status));
 

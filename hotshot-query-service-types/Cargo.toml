@@ -32,7 +32,6 @@ serde.workspace = true
 serde_json.workspace = true
 snafu.workspace = true
 sqlx = { workspace = true, optional = true }
-surf-disco.workspace = true
 tagged-base64.workspace = true
 tide-disco.workspace = true
 time = { workspace = true, features = ["formatting", "parsing"] }

@@ -70,9 +70,9 @@ use hotshot_types::{
     traits::signature_key::SignatureKey,
     x25519,
 };
+use http_client::{Client, Url, error::ClientErr};
 use itertools::Itertools;
 use staking_cli::demo::{DelegationConfig, StakingKeySet, StakingTransactions};
-use surf_disco::{Url, error::ClientError};
 use tagged_base64::TaggedBase64;
 use tempfile::TempDir;
 use test_utils::reserve_tcp_port;
@@ -652,7 +652,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         })));
 
         // Wait for the API to start serving.
-        let client = surf_disco::Client::<ClientError, SequencerApiVersion>::new(url);
+        let client = Client::<ClientErr, SequencerApiVersion>::new(url);
         assert!(
             client.connect(Some(Duration::from_secs(60))).await,
             "timed out connecting to builder API"

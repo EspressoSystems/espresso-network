@@ -68,7 +68,7 @@ pub mod testing {
             signature_key::BuilderSignatureKey as _,
         },
     };
-    use surf_disco::Client;
+    use http_client::Client;
     use tide_disco::App;
     use vbs::version::{StaticVersion, StaticVersionType, Version};
 

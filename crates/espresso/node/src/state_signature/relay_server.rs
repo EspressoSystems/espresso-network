@@ -33,10 +33,10 @@ pub mod lcv3_relay;
 pub mod stake_table_tracker;
 
 /// Binary framing version used by `state_signature.rs` and `hotshot-state-prover`, whose
-/// surf-disco clients default to `Accept`/`Content-Type: application/octet-stream`.
+/// `http-client` clients default to `Accept`/`Content-Type: application/octet-stream`.
 type WireVersion = StaticVersion<0, 1>;
 
-/// Wire-compatible error envelope: mirrors `tide_disco::error::ServerError`'s `{status, message}`
+/// Wire-compatible error envelope: mirrors `http_client::error::ClientErr`'s `{status, message}`
 /// JSON/VBS shape, since production clients (`state_signature.rs`, `hotshot-state-prover`)
 /// deserialize error responses into that type.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,7 +70,7 @@ fn wants_binary(headers: &HeaderMap) -> bool {
 }
 
 /// Encode a successful response body, negotiating VBS binary vs JSON from the `Accept` header,
-/// matching tide-disco's content negotiation for the real (default-binary) surf-disco clients.
+/// matching the content negotiation of the real (default-binary) `http-client` clients.
 fn encode_ok<T: Serialize>(headers: &HeaderMap, value: T) -> Response {
     if wants_binary(headers) {
         match Serializer::<WireVersion>::serialize(&value) {
@@ -435,8 +435,7 @@ mod test {
         light_client::{LightClientState, StakeTableState},
         traits::signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey},
     };
-    use surf_disco::Client;
-    use tide_disco::error::ServerError;
+    use http_client::{Client, error::ClientErr};
     use vbs::version::StaticVersion;
 
     use super::*;
@@ -523,7 +522,7 @@ mod test {
             v2_signature,
         };
 
-        let client = Client::<ServerError, TestApiVer>::new(relay_url);
+        let client = Client::<ClientErr, TestApiVer>::new(relay_url);
         client
             .post::<()>("api/state")
             .body_binary(&request_body)

@@ -28,7 +28,6 @@ vbs = { workspace = true }
 
 [dev-dependencies]
 hotshot-example-types = { workspace = true }
-surf-disco = { workspace = true }
 test-utils = { workspace = true }
 
 [lints]

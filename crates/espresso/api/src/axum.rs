@@ -324,7 +324,7 @@ async fn healthcheck() -> Json<serde_json::Value> {
 }
 
 /// Tide-disco-compatible version response. Tide emits the binary's clap version; we emit the
-/// crate version so `surf_disco::Client::connect` and similar polling helpers succeed.
+/// crate version so `http_client::Client::connect` and similar polling helpers succeed.
 async fn version() -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),

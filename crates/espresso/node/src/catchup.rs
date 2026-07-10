@@ -45,13 +45,12 @@ use hotshot_types::{
     },
     utils::verify_leaf_chain,
 };
+use http_client::{Request, error::ClientErr};
 use itertools::Itertools;
 use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme, prelude::MerkleNode};
 use parking_lot::Mutex;
 use priority_queue::PriorityQueue;
 use serde::de::DeserializeOwned;
-use surf_disco::Request;
-use tide_disco::error::ServerError;
 use tokio::time::timeout;
 use tokio_util::task::AbortOnDropHandle;
 use url::Url;
@@ -66,28 +65,28 @@ use crate::{
 // This newtype is probably not worth having. It's only used to be able to log
 // URLs before doing requests.
 #[derive(Debug, Clone)]
-struct Client<ServerError, ApiVer: StaticVersionType> {
-    inner: surf_disco::Client<ServerError, ApiVer>,
+struct Client<ApiVer: StaticVersionType> {
+    inner: http_client::Client<ClientErr, ApiVer>,
     url: Url,
     requests: Arc<Box<dyn Counter>>,
     failures: Arc<Box<dyn Counter>>,
 }
 
-impl<ApiVer: StaticVersionType> Client<ServerError, ApiVer> {
+impl<ApiVer: StaticVersionType> Client<ApiVer> {
     pub fn new(
         url: Url,
         requests: &(impl CounterFamily + ?Sized),
         failures: &(impl CounterFamily + ?Sized),
     ) -> Self {
         Self {
-            inner: surf_disco::Client::new(url.clone()),
+            inner: http_client::Client::new(url.clone()),
             requests: Arc::new(requests.create(vec![url.to_string()])),
             failures: Arc::new(failures.create(vec![url.to_string()])),
             url,
         }
     }
 
-    pub fn get<T: DeserializeOwned>(&self, route: &str) -> Request<T, ServerError, ApiVer> {
+    pub fn get<T: DeserializeOwned>(&self, route: &str) -> Request<T, ClientErr, ApiVer> {
         self.inner.get(route)
     }
 }
@@ -134,7 +133,7 @@ impl Eq for PeerScore {}
 pub struct StatePeers<ApiVer: StaticVersionType> {
     // Peer IDs, ordered by reliability score. Each ID is an index into `clients`.
     scores: Arc<RwLock<PriorityQueue<usize, PeerScore>>>,
-    clients: Vec<Client<ServerError, ApiVer>>,
+    clients: Vec<Client<ApiVer>>,
     backoff: BackoffParams,
     /// Base timeout for per peer catchup request
     base_timeout: Duration,
@@ -144,7 +143,7 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
     async fn fetch<Fut>(
         &self,
         retry: usize,
-        f: impl Fn(Client<ServerError, ApiVer>) -> Fut,
+        f: impl Fn(Client<ApiVer>) -> Fut,
     ) -> anyhow::Result<Fut::Ok>
     where
         Fut: TryFuture<Error: Display>,

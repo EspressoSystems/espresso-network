@@ -14,9 +14,9 @@ mod tests {
         signature_key::BLSPubKey,
         traits::{node_implementation::NodeType, signature_key::SignatureKey},
     };
-    use surf_disco::Client;
+    use http_client::{Client, Url};
     use test_utils::reserve_tcp_port;
-    use tide_disco::{App, Url};
+    use tide_disco::App;
     use tokio::spawn;
     use tracing_test::traced_test;
     use vbs::version::{StaticVersion, StaticVersionType};

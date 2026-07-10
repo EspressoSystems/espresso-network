@@ -4,7 +4,7 @@ use derive_more::From;
 use http_client::ClientError;
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
-use surf_disco::StatusCode;
+use tide_disco::StatusCode;
 
 use crate::{availability, explorer, merklized_state, node, status};
 
@@ -37,7 +37,7 @@ impl Error {
     }
 }
 
-impl surf_disco::Error for Error {
+impl tide_disco::Error for Error {
     fn catch_all(status: StatusCode, message: String) -> Self {
         Self::Custom { status, message }
     }
@@ -54,7 +54,7 @@ impl surf_disco::Error for Error {
     }
 }
 
-/// Mirrors the `surf_disco::Error` impl above, converting between `tide_disco::StatusCode` and
+/// Mirrors the `tide_disco::Error` impl above, converting between `tide_disco::StatusCode` and
 /// `reqwest::StatusCode` (the wire status carried by `http_client`).
 impl ClientError for Error {
     fn status(&self) -> http_client::StatusCode {

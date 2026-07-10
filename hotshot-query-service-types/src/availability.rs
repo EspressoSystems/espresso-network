@@ -33,7 +33,7 @@ use hotshot_types::{
 use jf_advz::VidScheme;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use snafu::{Snafu, ensure};
-use surf_disco::StatusCode;
+use tide_disco::StatusCode;
 use vbs::version::Version;
 use versions::Upgrade;
 

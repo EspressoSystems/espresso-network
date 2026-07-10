@@ -32,8 +32,8 @@ use hotshot_types::{
     utils::BuilderCommitment,
 };
 use serde::{Serialize, de::DeserializeOwned};
-use surf_disco::{Error as _, StatusCode};
 use tagged_base64::TaggedBase64;
+use tide_disco::{Error as _, StatusCode};
 use vbs::{BinarySerializer, Serializer, version::StaticVersion};
 
 /// Binary framing version for VBS-negotiated responses, matching `hotshot_builder_api::v0_1`'s
