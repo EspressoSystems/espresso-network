@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, mem, ops::Range, sync::LazyLock};
+use std::{collections::BTreeMap, mem, ops::Range, sync::LazyLock, time::Instant};
 
 use hotshot::traits::BlockPayload;
 use hotshot_types::{
@@ -8,7 +8,7 @@ use hotshot_types::{
     },
     epoch_membership::EpochMembershipCoordinator,
     message::Proposal as SignedProposal,
-    traits::{node_implementation::NodeType, signature_key::SignatureKey},
+    traits::{metrics::Histogram, node_implementation::NodeType, signature_key::SignatureKey},
     vid::avidm_gf2::AvidmGf2Scheme,
 };
 use hotshot_utils::anytrace::{self, Wrap};
@@ -44,6 +44,7 @@ pub struct VidDisperser<T: NodeType> {
     public_key: T::SignatureKey,
     private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
     tasks: JoinSet<Result<VidDisperseOutput, VidDisperseError>>,
+    duration_metric: Option<Box<dyn Histogram>>,
 }
 
 impl<T: NodeType> VidDisperser<T> {
@@ -60,7 +61,13 @@ impl<T: NodeType> VidDisperser<T> {
             public_key,
             private_key,
             tasks: JoinSet::new(),
+            duration_metric: None,
         }
+    }
+
+    pub fn with_metrics(mut self, hist: Option<Box<dyn Histogram>>) -> Self {
+        self.duration_metric = hist;
+        self
     }
 
     pub fn request_vid_disperse(&mut self, vid_disperse_request: VidDisperseRequest<T>) {
@@ -75,14 +82,22 @@ impl<T: NodeType> VidDisperser<T> {
         let network = self.network.clone();
         let public_key = self.public_key.clone();
         let private_key = self.private_key.clone();
+        let duration_metric = self.duration_metric.clone();
         let handle = self.tasks.spawn_blocking(move || {
-            handle_vid_disperse_request(
+            let started = Instant::now();
+            let result = handle_vid_disperse_request(
                 membership,
                 network,
                 public_key,
                 private_key,
                 vid_disperse_request,
-            )
+            );
+            if result.is_ok()
+                && let Some(hist) = &duration_metric
+            {
+                hist.add_point(started.elapsed().as_secs_f64());
+            }
+            result
         });
         self.calculations.insert(key, handle);
     }

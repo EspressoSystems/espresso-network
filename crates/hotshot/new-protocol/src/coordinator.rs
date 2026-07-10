@@ -5,13 +5,14 @@ pub mod timer;
 use std::{
     collections::{BTreeMap, HashMap},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use bon::{Builder, bon};
 use committable::Commitment;
 use hotshot::{HotShotInitializer, traits::BlockPayload, types::SignatureKey};
 use hotshot_types::{
+    consensus::ConsensusMetricsValue,
     data::{
         EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperseShare2, ViewNumber,
         vid_disperse::vid_total_weight,
@@ -29,6 +30,7 @@ use hotshot_types::{
     vote::{HasViewNumber, Vote},
 };
 use metrics::Measurement;
+use time::OffsetDateTime;
 use tokio::{select, sync::oneshot};
 use tracing::{debug, error, info, warn};
 
@@ -126,6 +128,10 @@ pub struct Coordinator<T: NodeType, S> {
     #[builder(skip)]
     da_payloads: BTreeMap<(ViewNumber, VidCommitment2), PendingDa<T>>,
     metrics: Option<metrics::Metrics>,
+    #[builder(skip)]
+    view_started: Option<(ViewNumber, EpochNumber, Instant)>,
+    #[builder(skip)]
+    payload_txn_bytes: BTreeMap<ViewNumber, usize>,
 }
 
 #[bon]
@@ -148,6 +154,7 @@ where
         timeout_duration: Duration,
         storage: S,
         metrics: &dyn Metrics,
+        consensus_metrics: Arc<ConsensusMetricsValue>,
         /// Locked QC persisted on a prior run; restored so the lock survives restart.
         locked_qc: Option<Certificate1<T>>,
     ) -> Self {
@@ -240,11 +247,20 @@ where
             consensus.seed_state_cert(state_cert);
         }
 
+        let coordinator_metrics = metrics
+            .is_recording()
+            .then(|| metrics::Metrics::new(metrics, consensus_metrics));
+
         let vid_disperser = VidDisperser::new(
             membership_coordinator.clone(),
             network.sender().clone(),
             public_key.clone(),
             private_key.clone(),
+        )
+        .with_metrics(
+            coordinator_metrics
+                .as_ref()
+                .map(|m| m.consensus.vid_disperse_duration.clone()),
         );
 
         let lock = upgrade_lock.clone();
@@ -295,11 +311,7 @@ where
             .membership_coordinator(membership_coordinator)
             .timer(Timer::new(timeout_duration, anchor_view, anchor_epoch))
             .public_key(public_key)
-            .maybe_metrics(
-                metrics
-                    .is_recording()
-                    .then(|| metrics::Metrics::new(metrics)),
-            )
+            .maybe_metrics(coordinator_metrics)
             .build()
     }
 
@@ -398,8 +410,12 @@ where
                     }
                     let input = ConsensusInput::Timeout(view, epoch);
                     finish_measurement(next_input);
-                    if let Some(m) = &mut self.metrics {
-                        m.timeouts.add(1)
+                    let leader = self.leader(view, epoch);
+                    if let Some(m) = &self.metrics {
+                        m.consensus.number_of_timeouts.add(1);
+                        if leader.as_ref() == Some(&self.public_key) {
+                            m.consensus.number_of_timeouts_as_leader.add(1);
+                        }
                     }
                     return Ok(input)
                 }
@@ -540,6 +556,9 @@ where
                 Some(item) = self.vid_reconstructor.next() => match item {
                     Ok(out) => {
                         finish_measurement(next_input);
+                        if self.metrics.is_some() {
+                            self.payload_txn_bytes.insert(out.view, out.payload.txn_bytes());
+                        }
                         self.block_builder.on_block_reconstructed(out.tx_commitments);
                         self.storage.append_da(
                             out.view,
@@ -669,11 +688,8 @@ where
                     leaves = leaves.len(),
                     "leaves decided"
                 );
-                if let Some(m) = &self.metrics {
-                    // A gap-fill decide of an older view must not regress the gauge.
-                    m.leaf_decided_view
-                        .set(*self.consensus.last_decided_view() as usize);
-                }
+                let now = OffsetDateTime::now_utc().unix_timestamp();
+                self.on_decide_metrics(&leaves, now);
                 if let Some(cert2) = cert2 {
                     self.storage.append_cert2(cert2.view_number, cert2.clone());
                 }
@@ -685,8 +701,24 @@ where
                     self.gc(gc_epoch, GcScope::Decided(gc_view))?;
                 }
                 for leaf in leaves {
+                    if let Some(m) = &self.metrics {
+                        if let Some(age) = (now as u64).checked_sub(leaf.block_header().timestamp())
+                        {
+                            m.consensus.proposal_to_decide_time.add_point(age as f64);
+                        }
+                        let txn_bytes = leaf
+                            .block_payload()
+                            .map(|p| p.txn_bytes())
+                            .or_else(|| self.payload_txn_bytes.get(&leaf.view_number()).copied());
+                        if let Some(txn_bytes) = txn_bytes {
+                            m.consensus.finalized_bytes.add_point(txn_bytes as f64);
+                        }
+                    }
                     self.epoch_manager.handle_leaf_decided(leaf);
                 }
+                self.payload_txn_bytes = self
+                    .payload_txn_bytes
+                    .split_off(&(self.consensus.last_decided_view() + 1));
             },
             ConsensusOutput::LockUpdated(cert) => {
                 debug!(
@@ -717,6 +749,12 @@ where
                 // wins and we persist just that one:
                 if let VidCommitment::V2(commit) = proposal.data.block_header.payload_commitment() {
                     if let Some(da) = self.da_payloads.remove(&(view, commit)) {
+                        if let Some(m) = &self.metrics {
+                            if da.payload.num_transactions(&da.metadata) == 0 {
+                                m.consensus.number_of_empty_blocks_proposed.add(1);
+                            }
+                            self.payload_txn_bytes.insert(view, da.payload.txn_bytes());
+                        }
                         self.storage.append_da(
                             view,
                             da.epoch,
@@ -787,6 +825,9 @@ where
                     epoch_root = vote1.state_vote.is_some(),
                     "send vote1"
                 );
+                if let Some(m) = &self.metrics {
+                    m.consensus.last_voted_view.set(*view as usize);
+                }
                 self.broadcast(ConsensusMessage::Vote1(vote1), "broadcast vote1")?
             },
             ConsensusOutput::BroadcastVidShare(share) => {
@@ -797,7 +838,11 @@ where
                 )?
             },
             ConsensusOutput::SendVote2(vote2) => {
-                debug!(%node, view = %vote2.view_number(), "send vote2");
+                let view = vote2.view_number();
+                debug!(%node, %view, "send vote2");
+                if let Some(m) = &self.metrics {
+                    m.consensus.last_voted_view.set(*view as usize);
+                }
                 self.broadcast(ConsensusMessage::Vote2(vote2), "broadcast vote2")?
             },
             ConsensusOutput::PersistHighQc(high_qc) => {
@@ -861,6 +906,7 @@ where
                 self.timer.reset_with_epoch(view, epoch);
                 self.gc(epoch, GcScope::Local(view))?;
                 let txns = self.block_builder.on_view_changed(view, epoch);
+                self.on_view_changed_metrics(view, epoch);
                 if !txns.is_empty() {
                     let next_view = view + 1;
                     self.unicast_to_leader(
@@ -1610,6 +1656,56 @@ where
         }
 
         Ok(())
+    }
+
+    fn on_view_changed_metrics(&mut self, view: ViewNumber, epoch: EpochNumber) {
+        if self.metrics.is_none() {
+            return;
+        }
+        let prev = self.view_started.replace((view, epoch, Instant::now()));
+        let duration_as_leader = prev.and_then(|(prev_view, prev_epoch, entered)| {
+            (self.leader(prev_view, prev_epoch).as_ref() == Some(&self.public_key))
+                .then(|| entered.elapsed())
+        });
+        let last_decided_view = self.consensus.last_decided_view();
+        let (outstanding_txns, outstanding_bytes) = self.block_builder.outstanding_transactions();
+        let Some(m) = &self.metrics else { return };
+        let consensus = &m.consensus;
+        consensus.current_view.set(*view as usize);
+        if view > last_decided_view {
+            consensus
+                .number_of_views_since_last_decide
+                .set((*view - *last_decided_view) as usize);
+        }
+        if let Some(duration) = duration_as_leader {
+            consensus
+                .view_duration_as_leader
+                .add_point(duration.as_secs_f64());
+        }
+        consensus.outstanding_transactions.set(outstanding_txns);
+        consensus
+            .outstanding_transactions_memory_size
+            .set(outstanding_bytes);
+    }
+
+    fn on_decide_metrics(&self, leaves: &[Leaf2<T>], now: i64) {
+        let Some(m) = &self.metrics else { return };
+        let consensus = &m.consensus;
+        // A gap-fill decide of an older view must not regress the gauges.
+        let decided_view = self.consensus.last_decided_view();
+        consensus.last_decided_view.set(*decided_view as usize);
+        consensus.last_decided_time.set(now as usize);
+        consensus.invalid_qc.set(0);
+        if let Some(newest) = leaves.first() {
+            consensus
+                .last_synced_block_height
+                .set(newest.block_header().block_number() as usize);
+        }
+        if let Some(views_in_flight) = (*self.consensus.current_view()).checked_sub(*decided_view) {
+            consensus
+                .number_of_views_per_decide_event
+                .add_point(views_in_flight as f64);
+        }
     }
 
     /// Kick the leader after the seed lands when a forwarded TC2 had
