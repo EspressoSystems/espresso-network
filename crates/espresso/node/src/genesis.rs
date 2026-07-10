@@ -16,7 +16,7 @@ use hotshot_types::{VersionedDaCommittee, version_ser};
 use serde::{Deserialize, Serialize, Serializer};
 use url::Url;
 use vbs::version::Version;
-use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION};
 
 /// A location from which to load the genesis file.
 ///
@@ -156,6 +156,12 @@ impl Genesis {
             self.drb_upgrade_difficulty
                 .context("drb_upgrade_difficulty missing from genesis")?;
         }
+
+        ensure!(
+            version < NEW_PROTOCOL_VERSION,
+            "Genesis requires version {version}, but versions >= {NEW_PROTOCOL_VERSION} are not \
+             supported by this binary."
+        );
 
         Ok(())
     }
@@ -463,6 +469,26 @@ mod test {
         ))
         .unwrap();
         assert!(genesis.validate().is_err());
+    }
+
+    #[test]
+    fn test_genesis_validation_rejects_new_protocol_version() {
+        let genesis: Genesis = toml::from_str(&minimal_genesis_toml(
+            "0.8",
+            r#"
+                epoch_height = 20
+                epoch_start_block = 1
+                stake_table_capacity = 200
+                drb_difficulty = 10
+                drb_upgrade_difficulty = 20
+                "#,
+        ))
+        .unwrap();
+        let err = genesis.validate().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Genesis requires version 0.8, but versions >= 0.8 are not supported by this binary."
+        );
     }
 
     #[test]

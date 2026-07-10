@@ -64,7 +64,6 @@ use hotshot::{
     types::SignatureKey,
 };
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
-use hotshot_new_protocol::network::cliquenet::Cliquenet;
 use hotshot_orchestrator::client::{OrchestratorClient, get_complete_config};
 use hotshot_types::{
     ValidatorConfig,
@@ -72,7 +71,6 @@ use hotshot_types::{
     data::ViewNumber,
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StateKeyPair, StateSignKey},
-    message::UpgradeLock,
     signature_key::{BLSPrivKey, BLSPubKey},
     traits::{
         metrics::{Metrics, NoMetrics},
@@ -841,27 +839,6 @@ where
         CombinedNetworks::new(cdn_network, p2p_network, Some(Duration::from_secs(1)))
     };
 
-    // Legacy HotShot uses CombinedNetworks (CDN + libp2p).
-    // The new Coordinator uses CliqueNet directly.
-    // Each protocol gets its own dedicated network
-    // If we later upgrade to CliqueNet before the Fast Finality upgrade, we can
-    // reintroduce CompatNetwork for legacy and spin up a separate CliqueNet network
-    // for the fast finality consensus upgrade i.e Coordinator.
-    let cliquenet = {
-        // TODO: This creates a separate UpgradeLock from the one HotShot will
-        // use. They should share a single lock so upgrade certificate updates
-        // are visible to both.
-        Cliquenet::create(
-            "espresso",
-            pub_key,
-            network_params.x25519_secret_key.into(),
-            network_params.cliquenet_bind_addr.clone(),
-            vec![], // Initialize with no peers, they are set during init.
-            UpgradeLock::new(version_upgrade),
-        )
-        .await?
-    };
-
     let network = Arc::new(combined_network);
 
     let mut ctx = SequencerContext::init(
@@ -874,7 +851,6 @@ where
         state_catchup_providers,
         persistence,
         network.clone(),
-        cliquenet,
         Some(network_params.state_relay_server_url),
         &*metrics,
         genesis.stake_table.capacity,
@@ -966,7 +942,6 @@ pub mod testing {
     use std::{
         cmp::max,
         collections::{BTreeMap, HashMap},
-        net::Ipv4Addr,
         time::Duration,
     };
 
@@ -1018,7 +993,6 @@ pub mod testing {
         data::EpochNumber,
         event::LeafInfo,
         light_client::StateKeyPair,
-        message::UpgradeLock,
         new_protocol::CoordinatorEvent,
         traits::{
             EncodeBytes, block_contents::BlockHeader, metrics::NoMetrics, network::Topic,
@@ -1694,25 +1668,6 @@ pub mod testing {
                 "starting node",
             );
 
-            let coordinator_network = {
-                let keypair = x25519::Keypair::derive_from::<PubKey>(&self.priv_keys[i])
-                    .expect("keypair derivation should succeed");
-                let port = test_utils::reserve_tcp_port()
-                    .expect("OS should have ephemeral ports available");
-                let addr = NetAddr::Inet(Ipv4Addr::LOCALHOST.into(), port);
-                let lock = UpgradeLock::<SeqTypes>::new(upgrade);
-                Cliquenet::create(
-                    "test-coordinator",
-                    my_peer_config.stake_table_entry.stake_key,
-                    keypair,
-                    addr,
-                    vec![],
-                    lock,
-                )
-                .await
-                .expect("cliquenet creation should succeed")
-            };
-
             SequencerContext::init(
                 NetworkConfig {
                     config,
@@ -1728,7 +1683,6 @@ pub mod testing {
                 catchup_providers,
                 persistence,
                 network,
-                coordinator_network,
                 self.state_relay_url.clone(),
                 metrics,
                 stake_table_capacity,
