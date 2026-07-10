@@ -6935,6 +6935,24 @@ dependencies = [
 
 [[package]]
 name = "http-client"
+version = "0.1.0"
+dependencies = [
+ "axum 0.8.9",
+ "futures",
+ "hex",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite 0.28.0",
+ "tracing",
+ "url",
+ "vbs",
+]
+
+[[package]]
+name = "http-client"
 version = "6.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1947510dc91e2bf586ea5ffb412caad7673264e14bb39fb9078da114a94ce1a5"
@@ -12996,7 +13014,7 @@ dependencies = [
  "encoding_rs",
  "futures-util",
  "getrandom 0.2.17",
- "http-client",
+ "http-client 6.5.3",
  "http-types",
  "log",
  "mime_guess",
@@ -13396,7 +13414,7 @@ dependencies = [
  "async-std",
  "async-trait",
  "futures-util",
- "http-client",
+ "http-client 6.5.3",
  "http-types",
  "kv-log-macro",
  "log",
