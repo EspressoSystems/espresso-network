@@ -21,7 +21,7 @@ environment:
   - ESPRESSO_L1_PROVIDER=http://localhost:${ESPRESSO_L1_PORT}
   - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-data/genesis/demo.toml}
   - ESPRESSO_STATE_RELAY_SERVER_URL=http://localhost:${ESPRESSO_STATE_RELAY_SERVER_PORT}
-  - QUERY_SERVICE_URI=http://localhost:${ESPRESSO_NODE_1_API_PORT}/v0/
+  - QUERY_SERVICE_URI=http://localhost:${ESPRESSO_NODE_1_API_PORT}/v1/
   - NODE_VALIDATOR_URI=ws://localhost:${ESPRESSO_NODE_VALIDATOR_PORT}/v0/
 processes:
   # Cheating a bit here but since we don't usually have to debug go-ethereum
@@ -526,8 +526,8 @@ processes:
   node_validator:
     command: node-metrics --
     environment:
-      - ESPRESSO_NODE_VALIDATOR_STAKE_TABLE_SOURCE_BASE_URL=http://localhost:${ESPRESSO_NODE_0_API_PORT}/v0/
-      - ESPRESSO_NODE_VALIDATOR_LEAF_STREAM_SOURCE_BASE_URL=http://localhost:${ESPRESSO_NODE_0_API_PORT}/v0/
+      - ESPRESSO_NODE_VALIDATOR_STAKE_TABLE_SOURCE_BASE_URL=http://localhost:${ESPRESSO_NODE_0_API_PORT}/v1/
+      - ESPRESSO_NODE_VALIDATOR_LEAF_STREAM_SOURCE_BASE_URL=http://localhost:${ESPRESSO_NODE_0_API_PORT}/v1/
       - ESPRESSO_NODE_VALIDATOR_INITIAL_NODE_PUBLIC_BASE_URLS=http://localhost:${ESPRESSO_NODE_0_API_PORT}/,http://localhost:${ESPRESSO_NODE_1_API_PORT}/,http://localhost:${ESPRESSO_NODE_2_API_PORT}/,http://localhost:${ESPRESSO_NODE_3_API_PORT}/,http://localhost:${ESPRESSO_NODE_4_API_PORT}/
     depends_on:
       broker_0:
