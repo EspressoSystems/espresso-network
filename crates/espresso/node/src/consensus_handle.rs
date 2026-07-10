@@ -11,7 +11,7 @@ use futures::{
 use hotshot::{traits::NodeImplementation, types::SystemContextHandle};
 use hotshot_new_protocol::{
     client::ClientApi,
-    consensus::{ConsensusInput, ConsensusOutput},
+    consensus::{ConsensusInput, ConsensusOutput, PreCutoverSeed},
     coordinator::{
         Coordinator,
         error::{CoordinatorError, Severity},
@@ -37,6 +37,10 @@ use tokio::{select, spawn};
 use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 use tracing::{error, warn};
 
+type StartFn<T> = Box<
+    dyn FnOnce(Option<PreCutoverSeed<T>>, CancellationToken) -> AbortOnDropHandle<()> + Send + Sync,
+>;
+
 pub struct ConsensusHandle<T: NodeType, I: NodeImplementation<T>> {
     legacy_handle: Arc<AsyncRwLock<SystemContextHandle<T, I>>>,
     epoch_height: BlockNumber,
@@ -51,7 +55,7 @@ enum NewProtocol<T: NodeType> {
     Empty,
     Init {
         client_api: ClientApi<T>,
-        start: Box<dyn FnOnce(CancellationToken) -> AbortOnDropHandle<()> + Send + Sync>
+        start: StartFn<T>,
     },
     Running {
         coordinator: AbortOnDropHandle<()>,
@@ -113,15 +117,16 @@ where
             event_rx: event_rx.deactivate(),
             new_proto: RwLock::new(NewProtocol::Init {
                 client_api: coordinator.client_api().clone(),
-                start: Box::new(move |shutdown| {
+                start: Box::new(move |seed, shutdown| {
                     AbortOnDropHandle::new(spawn(run_coordinator(
                         coordinator,
                         event_tx,
+                        seed,
                         shutdown,
                     )))
                 }),
             }),
-            tasks
+            tasks,
         }
     }
 
@@ -141,35 +146,22 @@ where
             extract_pre_cutover_seed(&legacy).await
         };
 
-        let client_api;
-
-        // Start coordinator task and get client API handle.
-        {
-            let mut new_proto = self.new_proto.write();
-
-            match new_proto.take() {
-                NewProtocol::Init { client_api: api, start } => {
-                    let shutdown = CancellationToken::new();
-                    *new_proto = NewProtocol::Running {
-                        coordinator: start(shutdown.clone()),
-                        client_api: api.clone(),
-                        shutdown,
-                    };
-                    client_api = api
-                }
-                other => {
-                    *new_proto = other;
-                    return
-                }
-            }
+        if seed.is_none() {
+            warn!("seed extraction returned None; coordinator will not be seeded");
         }
 
-        if let Some(seed) = seed {
-            if let Err(err) = client_api.seed_pre_cutover(seed).await {
-                warn!(%err, "seed_pre_cutover client request failed");
-            }
-        } else {
-            warn!("seed extraction returned None; coordinator will not be seeded");
+        let mut new_proto = self.new_proto.write();
+
+        match new_proto.take() {
+            NewProtocol::Init { client_api, start } => {
+                let shutdown = CancellationToken::new();
+                *new_proto = NewProtocol::Running {
+                    coordinator: start(seed, shutdown.clone()),
+                    client_api,
+                    shutdown,
+                };
+            },
+            other => *new_proto = other,
         }
     }
 
@@ -221,7 +213,7 @@ where
 
     pub async fn state(&self, view: ViewNumber) -> Option<Arc<T::ValidatedState>> {
         if !self.upgrade_lock.new_protocol_active(view) {
-            return self.legacy_handle.read().await.state(view).await
+            return self.legacy_handle.read().await.state(view).await;
         }
         match self.client_api().await?.state(view).await {
             Ok(state) => state,
@@ -234,17 +226,18 @@ where
 
     pub async fn state_and_delta(&self, view: ViewNumber) -> StateAndDelta<T> {
         if !self.upgrade_lock.new_protocol_active(view) {
-            return self.legacy_handle
+            return self
+                .legacy_handle
                 .read()
                 .await
                 .hotshot
                 .consensus()
                 .read()
                 .await
-                .state_and_delta(view)
+                .state_and_delta(view);
         }
         let Some(client_api) = self.client_api().await else {
-            return (None, None)
+            return (None, None);
         };
         match client_api.state_and_delta(view).await {
             Ok(state_and_delta) => state_and_delta,
@@ -484,18 +477,18 @@ where
             None
         }
     }
-
 }
 
 async fn run_coordinator<T, S>(
     mut coord: Coordinator<T, S>,
     tx: Sender<CoordinatorEvent<T>>,
+    seed: Option<PreCutoverSeed<T>>,
     shutdown: CancellationToken,
 ) where
     T: NodeType,
     S: NewProtocolStorage<T>,
 {
-    coord.start();
+    coord.start(seed);
 
     loop {
         select! {
@@ -546,7 +539,7 @@ where
     while let Some(m) = coord.coordinator_outbox_mut().pop_front() {
         let e = CoordinatorEvent::ExternalMessageReceived {
             sender: m.sender,
-            data: m.data
+            data: m.data,
         };
         broadcast_event(tx, e).await;
     }

@@ -245,7 +245,8 @@ where
                 epoch_height.into(),
                 legacy_event_rx,
                 EXTERNAL_EVENT_CHANNEL_SIZE,
-            ).await;
+            )
+            .await;
             Arc::new(handle)
         };
 

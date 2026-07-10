@@ -707,7 +707,7 @@ async fn run_node(
                             data: output.data,
                         },
                     })
-                .await;
+                    .await;
             }
         }
     }

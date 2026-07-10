@@ -310,4 +310,3 @@ pub struct OpaqueMessage<K> {
     pub sender: K,
     pub data: Vec<u8>,
 }
-
