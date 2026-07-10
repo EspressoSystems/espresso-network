@@ -1,26 +1,30 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, mem, sync::Arc};
 
-use async_broadcast::{InactiveReceiver, Sender};
-use async_lock::RwLock;
+use async_broadcast::{InactiveReceiver, Sender, broadcast};
+use async_lock::RwLock as AsyncRwLock;
 use committable::Commitment;
-use futures::{FutureExt, StreamExt, future::BoxFuture, stream::BoxStream};
+use futures::{
+    FutureExt, StreamExt,
+    future::BoxFuture,
+    stream::{self, BoxStream},
+};
 use hotshot::{traits::NodeImplementation, types::SystemContextHandle};
 use hotshot_new_protocol::{
     client::ClientApi,
-    consensus::{ConsensusInput, ConsensusOutput, PreCutoverSeed},
+    consensus::{ConsensusInput, ConsensusOutput},
     coordinator::{
-        Coordinator, CoordinatorOutput,
+        Coordinator,
         error::{CoordinatorError, Severity},
     },
     cutover::{
-        CutoverGate, extract_pre_cutover_seed, forward_legacy_epoch_changes,
-        forward_legacy_high_qc, forward_legacy_timeout_votes,
+        extract_pre_cutover_seed, forward_legacy_epoch_changes, forward_legacy_high_qc,
+        forward_legacy_timeout_votes,
     },
     state::UpdateLeaf,
     storage::NewProtocolStorage,
 };
 use hotshot_types::{
-    data::{EpochNumber, Leaf2, QuorumProposalWrapper, VidDisperseShare, ViewNumber},
+    data::{BlockNumber, EpochNumber, Leaf2, QuorumProposalWrapper, VidDisperseShare, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, LeafInfo},
     message::{Proposal as SignedProposal, UpgradeLock, convert_proposal},
@@ -28,107 +32,38 @@ use hotshot_types::{
     traits::{ValidatedState, node_implementation::NodeType, signature_key::SignatureKey},
     utils::StateAndDelta,
 };
+use parking_lot::RwLock;
 use tokio::{select, spawn};
 use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
-use versions::NEW_PROTOCOL_VERSION;
-
-// TODO: `ConsensusOutput::LeafDecided` still carries fields (leaves +
-// vid_shares) rather than a `Vec<LeafInfo>`. This is because `Consensus` doesn't own `StateManager`
-// state and delta only become available one level up, in `Coordinator`.
-fn consensus_event<T, S>(
-    coordinator: &Coordinator<T, S>,
-    output: &ConsensusOutput<T>,
-) -> Option<CoordinatorEvent<T>>
-where
-    T: NodeType,
-    S: NewProtocolStorage<T>,
-{
-    match output {
-        ConsensusOutput::LeafDecided {
-            leaves,
-            cert1,
-            cert2,
-            vid_shares,
-        } => {
-            if leaves.is_empty() {
-                tracing::error!("coordinator emitted LeafDecided with empty leaves");
-                return None;
-            }
-            let leaf_infos = leaves
-                .iter()
-                .zip(vid_shares.iter())
-                .map(|(leaf, vid_share)| {
-                    let (state, delta) = match coordinator.state(leaf.view_number()) {
-                        Some(s) => (s.state.clone(), s.delta.clone()),
-                        None => {
-                            let s = Arc::new(T::ValidatedState::from_header(leaf.block_header()));
-                            (s, None)
-                        },
-                    };
-                    let vid_share = vid_share
-                        .as_ref()
-                        .map(|share| VidDisperseShare::V2(share.data.clone()));
-                    LeafInfo::new(leaf.clone(), state, delta, vid_share, None)
-                })
-                .collect();
-            Some(CoordinatorEvent::NewDecide {
-                leaf_infos,
-                cert1: cert1.clone(),
-                cert2: cert2.clone(),
-            })
-        },
-        ConsensusOutput::ProposalValidated { proposal, sender } => {
-            Some(CoordinatorEvent::QuorumProposal {
-                proposal: proposal.clone(),
-                sender: sender.clone(),
-            })
-        },
-        ConsensusOutput::BlockPayloadReconstructed {
-            view,
-            header,
-            payload,
-        } => Some(CoordinatorEvent::BlockPayloadReconstructed {
-            view: *view,
-            header: header.clone(),
-            payload: payload.clone(),
-        }),
-        _ => None,
-    }
-}
-
-fn coordinator_event<T, S>(
-    coordinator: &Coordinator<T, S>,
-    output: &CoordinatorOutput<T>,
-) -> Option<CoordinatorEvent<T>>
-where
-    T: NodeType,
-    S: NewProtocolStorage<T>,
-{
-    match output {
-        CoordinatorOutput::Consensus(inner) => consensus_event(coordinator, inner),
-        CoordinatorOutput::ExternalMessageReceived { sender, data } => {
-            Some(CoordinatorEvent::ExternalMessageReceived {
-                sender: sender.clone(),
-                data: data.clone(),
-            })
-        },
-    }
-}
+use tracing::{error, warn};
 
 pub struct ConsensusHandle<T: NodeType, I: NodeImplementation<T>> {
-    legacy_handle: Arc<RwLock<SystemContextHandle<T, I>>>,
-    client_api: ClientApi<T>,
-    /// Safety net: aborts the coordinator task on drop if `shut_down()` was never called.
-    #[allow(dead_code)]
-    coordinator_task: AbortOnDropHandle<()>,
-    /// Signals the coordinator loop to stop
-    shutdown: CancellationToken,
-    /// Cancelled by the coordinator loop once it has stopped
-    shutdown_complete: CancellationToken,
-    epoch_height: u64,
-    cutover_gate: CutoverGate,
+    legacy_handle: Arc<AsyncRwLock<SystemContextHandle<T, I>>>,
+    epoch_height: BlockNumber,
     legacy_event_rx: InactiveReceiver<Event<T>>,
     event_rx: InactiveReceiver<CoordinatorEvent<T>>,
+    upgrade_lock: UpgradeLock<T>,
+    new_proto: RwLock<NewProtocol<T>>,
+    tasks: Vec<AbortOnDropHandle<()>>,
+}
+
+enum NewProtocol<T: NodeType> {
+    Empty,
+    Init {
+        client_api: ClientApi<T>,
+        start: Box<dyn FnOnce(CancellationToken) -> AbortOnDropHandle<()> + Send + Sync>
+    },
+    Running {
+        coordinator: AbortOnDropHandle<()>,
+        client_api: ClientApi<T>,
+        shutdown: CancellationToken,
+    },
+}
+
+impl<T: NodeType> NewProtocol<T> {
+    fn take(&mut self) -> Self {
+        mem::replace(self, Self::Empty)
+    }
 }
 
 impl<T, I> ConsensusHandle<T, I>
@@ -136,96 +71,110 @@ where
     T: NodeType,
     I: NodeImplementation<T>,
 {
-    pub fn new(
-        legacy_handle: Arc<RwLock<SystemContextHandle<T, I>>>,
+    pub async fn new(
+        ctx: Arc<AsyncRwLock<SystemContextHandle<T, I>>>,
         coordinator: Coordinator<T, I::Storage>,
-        epoch_height: u64,
-        legacy_event_rx: InactiveReceiver<Event<T>>,
+        epoch_height: BlockNumber,
+        rx: InactiveReceiver<Event<T>>,
         event_channel_capacity: usize,
     ) -> Self
     where
         I::Storage: NewProtocolStorage<T>,
     {
-        let client_api = coordinator.client_api().clone();
-
-        let (mut event_tx, mut event_rx) =
-            async_broadcast::broadcast::<CoordinatorEvent<T>>(event_channel_capacity);
+        let (mut event_tx, mut event_rx) = broadcast(event_channel_capacity);
         event_tx.set_await_active(false);
         event_rx.set_overflow(true);
 
-        let shutdown = CancellationToken::new();
-        let shutdown_complete = CancellationToken::new();
-        let coordinator_task = AbortOnDropHandle::new(spawn(run_coordinator(
-            coordinator,
-            event_tx,
-            shutdown.clone(),
-            shutdown_complete.clone(),
-        )));
+        let upgrade_lock = ctx.read().await.hotshot.upgrade_lock.clone();
 
-        spawn(forward_legacy_timeout_votes(
-            legacy_event_rx.clone(),
-            client_api.clone(),
-        ));
-        spawn(forward_legacy_high_qc(
-            legacy_event_rx.clone(),
-            client_api.clone(),
-        ));
-        spawn(forward_legacy_epoch_changes(
-            legacy_event_rx.clone(),
-            client_api.clone(),
-            epoch_height,
-        ));
+        let client_api = coordinator.client_api();
+
+        let tasks = vec![
+            AbortOnDropHandle::new(spawn(forward_legacy_timeout_votes(
+                rx.clone(),
+                client_api.clone(),
+            ))),
+            AbortOnDropHandle::new(spawn(forward_legacy_high_qc(
+                rx.clone(),
+                client_api.clone(),
+            ))),
+            AbortOnDropHandle::new(spawn(forward_legacy_epoch_changes(
+                rx.clone(),
+                client_api.clone(),
+                epoch_height.into(),
+            ))),
+        ];
 
         Self {
-            legacy_handle,
-            client_api,
-            coordinator_task,
-            shutdown,
-            shutdown_complete,
+            upgrade_lock,
+            legacy_handle: ctx,
             epoch_height,
-            cutover_gate: CutoverGate::new(),
-            legacy_event_rx,
+            legacy_event_rx: rx,
             event_rx: event_rx.deactivate(),
+            new_proto: RwLock::new(NewProtocol::Init {
+                client_api: coordinator.client_api().clone(),
+                start: Box::new(move |shutdown| {
+                    AbortOnDropHandle::new(spawn(run_coordinator(
+                        coordinator,
+                        event_tx,
+                        shutdown,
+                    )))
+                }),
+            }),
+            tasks
         }
     }
 
-    pub async fn extract_pre_cutover_seed(&self) -> Option<PreCutoverSeed<T>> {
-        let legacy = self.legacy_handle.read().await;
-        extract_pre_cutover_seed(&legacy).await
+    pub async fn activate(&self) {
+        if matches!(*self.new_proto.read(), NewProtocol::Running { .. }) {
+            return;
+        }
+
+        let view = self.legacy_handle.read().await.cur_view().await;
+
+        if !self.upgrade_lock.new_protocol_active(view) {
+            return;
+        }
+
+        let seed = {
+            let legacy = self.legacy_handle.read().await;
+            extract_pre_cutover_seed(&legacy).await
+        };
+
+        let client_api;
+
+        // Start coordinator task and get client API handle.
+        {
+            let mut new_proto = self.new_proto.write();
+
+            match new_proto.take() {
+                NewProtocol::Init { client_api: api, start } => {
+                    let shutdown = CancellationToken::new();
+                    *new_proto = NewProtocol::Running {
+                        coordinator: start(shutdown.clone()),
+                        client_api: api.clone(),
+                        shutdown,
+                    };
+                    client_api = api
+                }
+                other => {
+                    *new_proto = other;
+                    return
+                }
+            }
+        }
+
+        if let Some(seed) = seed {
+            if let Err(err) = client_api.seed_pre_cutover(seed).await {
+                warn!(%err, "seed_pre_cutover client request failed");
+            }
+        } else {
+            warn!("seed extraction returned None; coordinator will not be seeded");
+        }
     }
 
-    pub fn legacy_consensus(&self) -> Arc<RwLock<SystemContextHandle<T, I>>> {
+    pub fn legacy_consensus(&self) -> Arc<AsyncRwLock<SystemContextHandle<T, I>>> {
         self.legacy_handle.clone()
-    }
-
-    pub fn client_api(&self) -> &ClientApi<T> {
-        &self.client_api
-    }
-
-    /// Whether `view` is at or past the new-protocol upgrade boundary,
-    /// according to the legacy upgrade lock. This is a stateless version
-    /// check — use it when routing per-view queries like `state(view)`.
-    /// For "should we route to the coordinator?" use [`cutover_active`](Self::cutover_active).
-    async fn at_or_past_cutover(&self, view: ViewNumber) -> bool {
-        self.legacy_handle
-            .read()
-            .await
-            .hotshot
-            .upgrade_lock
-            .version_infallible(view)
-            >= NEW_PROTOCOL_VERSION
-    }
-
-    /// Whether the cutover has happened — the gate has latched on this
-    /// node. Stateful: the first call after legacy crosses the cutover
-    /// view triggers seed extraction + dispatch. Use this for "should
-    /// we route to the coordinator?" decisions.
-    pub async fn cutover_active(&self) -> bool {
-        if self.cutover_gate.is_active() {
-            return true;
-        }
-        let legacy = self.legacy_handle.read().await;
-        self.cutover_gate.check(&legacy, &self.client_api).await
     }
 
     pub fn event_stream(&self) -> BoxStream<'static, CoordinatorEvent<T>> {
@@ -233,40 +182,36 @@ where
             .legacy_event_rx
             .activate_cloned()
             .map(CoordinatorEvent::LegacyEvent);
-
         let new_stream = self.event_rx.activate_cloned();
-
-        futures::stream::select(old_stream, new_stream).boxed()
+        stream::select(old_stream, new_stream).boxed()
     }
 
     pub async fn current_view(&self) -> ViewNumber {
-        if self.cutover_active().await {
-            return self
-                .client_api
+        if let Some(client_api) = self.client_api().await {
+            return client_api
                 .current_view()
                 .await
-                .expect("coordinator channel closed");
+                .expect("coordinator channel closed"); // FIXME
         }
         self.legacy_handle.read().await.cur_view().await
     }
 
     pub async fn decided_leaf(&self) -> Leaf2<T> {
-        if self.cutover_active().await {
-            return self
-                .client_api
+        if let Some(client_api) = self.client_api().await {
+            return client_api
                 .decided_leaf()
                 .await
-                .expect("coordinator channel closed");
+                .expect("coordinator channel closed"); // FIXME
         }
         self.legacy_handle.read().await.decided_leaf().await
     }
 
     pub async fn decided_state(&self) -> Option<Arc<T::ValidatedState>> {
-        if self.cutover_active().await {
-            return match self.client_api.decided_state().await {
+        if let Some(client_api) = self.client_api().await {
+            return match client_api.decided_state().await {
                 Ok(state) => state,
                 Err(err) => {
-                    tracing::warn!("coordinator unavailable for decided_state: {err:#}");
+                    warn!(%err, "coordinator unavailable for decided_state");
                     None
                 },
             };
@@ -275,44 +220,47 @@ where
     }
 
     pub async fn state(&self, view: ViewNumber) -> Option<Arc<T::ValidatedState>> {
-        if self.at_or_past_cutover(view).await {
-            return match self.client_api.state(view).await {
-                Ok(state) => state,
-                Err(err) => {
-                    tracing::warn!(%view, "coordinator unavailable for state: {err:#}");
-                    None
-                },
-            };
+        if !self.upgrade_lock.new_protocol_active(view) {
+            return self.legacy_handle.read().await.state(view).await
         }
-        self.legacy_handle.read().await.state(view).await
+        match self.client_api().await?.state(view).await {
+            Ok(state) => state,
+            Err(err) => {
+                warn!(%view, %err, "coordinator unavailable for state");
+                None
+            },
+        }
     }
 
     pub async fn state_and_delta(&self, view: ViewNumber) -> StateAndDelta<T> {
-        if self.at_or_past_cutover(view).await {
-            return match self.client_api.state_and_delta(view).await {
-                Ok(state_and_delta) => state_and_delta,
-                Err(err) => {
-                    tracing::warn!(%view, "coordinator unavailable for state_and_delta: {err:#}");
-                    (None, None)
-                },
-            };
+        if !self.upgrade_lock.new_protocol_active(view) {
+            return self.legacy_handle
+                .read()
+                .await
+                .hotshot
+                .consensus()
+                .read()
+                .await
+                .state_and_delta(view)
         }
-        self.legacy_handle
-            .read()
-            .await
-            .hotshot
-            .consensus()
-            .read()
-            .await
-            .state_and_delta(view)
+        let Some(client_api) = self.client_api().await else {
+            return (None, None)
+        };
+        match client_api.state_and_delta(view).await {
+            Ok(state_and_delta) => state_and_delta,
+            Err(err) => {
+                warn!(%view, %err, "coordinator unavailable for state_and_delta");
+                (None, None)
+            },
+        }
     }
 
     pub async fn undecided_leaves(&self) -> Vec<Leaf2<T>> {
-        if self.cutover_active().await {
-            return match self.client_api.undecided_leaves().await {
+        if let Some(client_api) = self.client_api().await {
+            return match client_api.undecided_leaves().await {
                 Ok(leaves) => leaves,
                 Err(err) => {
-                    tracing::warn!("coordinator unavailable for undecided_leaves: {err:#}");
+                    warn!(%err, "coordinator unavailable for undecided_leaves");
                     Vec::new()
                 },
             };
@@ -328,11 +276,11 @@ where
     }
 
     pub async fn current_epoch(&self) -> Option<EpochNumber> {
-        if self.cutover_active().await {
-            return match self.client_api.current_epoch().await {
+        if let Some(client_api) = self.client_api().await {
+            return match client_api.current_epoch().await {
                 Ok(epoch) => epoch,
                 Err(err) => {
-                    tracing::warn!("coordinator unavailable for current_epoch: {err:#}");
+                    warn!(%err, "coordinator unavailable for current_epoch");
                     None
                 },
             };
@@ -340,11 +288,11 @@ where
         self.legacy_handle.read().await.cur_epoch().await
     }
 
-    pub async fn epoch_height(&self) -> u64 {
-        if self.cutover_active().await {
+    pub async fn epoch_height(&self) -> BlockNumber {
+        if self.is_new_proto_running() {
             return self.epoch_height;
         }
-        self.legacy_handle.read().await.epoch_height
+        self.legacy_handle.read().await.epoch_height.into()
     }
 
     // TODO: implement for new protocol
@@ -422,8 +370,9 @@ where
     ) -> anyhow::Result<
         BoxFuture<'static, anyhow::Result<SignedProposal<T, QuorumProposalWrapper<T>>>>,
     > {
-        if self.at_or_past_cutover(view).await {
-            let client_api = self.client_api.clone();
+        if self.upgrade_lock.new_protocol_active(view)
+            && let Some(client_api) = self.client_api().await
+        {
             return Ok(async move {
                 client_api
                     .request_proposal(view, leaf_commitment)
@@ -440,14 +389,13 @@ where
             .await
             .request_proposal(view, leaf_commitment)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
-        Ok(async move { future.await.map_err(|e| anyhow::anyhow!("{e}")) }.boxed())
+
+        Ok(future.boxed())
     }
 
     pub async fn submit_transaction(&self, tx: T::Transaction) -> anyhow::Result<()> {
-        let view = self.current_view().await;
-        if self.at_or_past_cutover(view).await {
-            return self
-                .client_api
+        if let Some(client_api) = self.client_api().await {
+            return client_api
                 .submit_transaction(tx)
                 .await
                 .map_err(|e| anyhow::anyhow!("{e}"));
@@ -467,9 +415,10 @@ where
         delta: Option<Arc<<T::ValidatedState as ValidatedState<T>>::Delta>>,
     ) -> anyhow::Result<()> {
         let view = leaf.view_number();
-        if self.at_or_past_cutover(view).await {
-            return self
-                .client_api
+        if self.upgrade_lock.new_protocol_active(view)
+            && let Some(client_api) = self.client_api().await
+        {
+            return client_api
                 .update_leaf(UpdateLeaf {
                     view,
                     leaf,
@@ -491,9 +440,8 @@ where
     }
 
     pub async fn start_consensus(&self) {
-        if self.cutover_active().await {
-            // New protocol consensus is already running via the coordinator task.
-            // Don't start legacy HotShot consensus tasks.
+        self.activate().await;
+        if self.is_new_proto_running() {
             return;
         }
         self.legacy_handle
@@ -505,75 +453,169 @@ where
     }
 
     pub async fn shut_down(&self) {
-        self.shutdown.cancel();
-        self.shutdown_complete.cancelled().await;
+        for t in &self.tasks {
+            t.abort()
+        }
         self.legacy_handle.write().await.shut_down().await;
+        let NewProtocol::Running {
+            shutdown,
+            coordinator,
+            ..
+        } = self.new_proto.write().take()
+        else {
+            return;
+        };
+        shutdown.cancel();
+        let _ = coordinator.await;
     }
+
+    fn is_new_proto_running(&self) -> bool {
+        matches!(*self.new_proto.read(), NewProtocol::Running { .. })
+    }
+
+    async fn client_api(&self) -> Option<ClientApi<T>> {
+        if let NewProtocol::Running { client_api, .. } = &*self.new_proto.read() {
+            return Some(client_api.clone());
+        }
+        self.activate().await;
+        if let NewProtocol::Running { client_api, .. } = &*self.new_proto.read() {
+            Some(client_api.clone())
+        } else {
+            None
+        }
+    }
+
 }
 
 async fn run_coordinator<T, S>(
     mut coord: Coordinator<T, S>,
     tx: Sender<CoordinatorEvent<T>>,
     shutdown: CancellationToken,
-    shutdown_complete: CancellationToken,
 ) where
     T: NodeType,
     S: NewProtocolStorage<T>,
 {
-    let _done = shutdown_complete.drop_guard();
-
     coord.start();
 
     loop {
-        let input = select! {
+        select! {
             () = shutdown.cancelled() => break,
-            input = coord.next_consensus_input() => input,
-        };
-        if let Err(err) = apply_input(&mut coord, &tx, input).await {
-            tracing::error!(%err, "coordinator: critical error");
-            break;
+            it = coord.next_consensus_input() => {
+                if let Err(err) = apply_input(&mut coord, &tx, it).await {
+                    error!(%err, "coordinator: critical error");
+                    break;
+                }
+            }
         }
     }
+
     coord.stop().await;
 }
 
 async fn apply_input<T, S>(
     coord: &mut Coordinator<T, S>,
     tx: &Sender<CoordinatorEvent<T>>,
-    input: Result<ConsensusInput<T>, CoordinatorError>,
+    it: Result<ConsensusInput<T>, CoordinatorError>,
 ) -> Result<(), CoordinatorError>
 where
     T: NodeType,
     S: NewProtocolStorage<T>,
 {
-    match input {
-        Ok(input) => coord.apply_consensus(input),
-        Err(err) if err.severity == Severity::Critical => return Err(err),
+    match it {
+        Ok(it) => coord.apply_consensus(it),
         Err(err) => {
-            tracing::warn!(%err, "coordinator: non-critical error");
-            return Ok(());
+            if err.severity == Severity::Critical {
+                return Err(err);
+            }
+            warn!(%err, "coordinator: non-critical error");
         },
     }
 
-    while let Some(output) = coord.outbox_mut().pop_front() {
-        if let Some(event) = consensus_event(coord, &output) {
-            broadcast_event(tx, event).await;
+    while let Some(out) = coord.outbox_mut().pop_front() {
+        if let Some(e) = consensus_event(coord, &out) {
+            broadcast_event(tx, e).await;
         }
-        if let Err(err) = coord.process_consensus_output(output) {
+        if let Err(err) = coord.process_consensus_output(out) {
             if err.severity == Severity::Critical {
-                return Err(err.context("processing consensus output"));
+                return Err(err);
             }
-            tracing::warn!(%err, "coordinator: error processing output");
+            warn!(%err, "coordinator: error processing output");
         }
     }
 
-    while let Some(output) = coord.coordinator_outbox_mut().pop_front() {
-        if let Some(event) = coordinator_event(coord, &output) {
-            broadcast_event(tx, event).await;
-        }
+    while let Some(m) = coord.coordinator_outbox_mut().pop_front() {
+        let e = CoordinatorEvent::ExternalMessageReceived {
+            sender: m.sender,
+            data: m.data
+        };
+        broadcast_event(tx, e).await;
     }
 
     Ok(())
+}
+
+// TODO: `ConsensusOutput::LeafDecided` still carries fields (leaves +
+// vid_shares) rather than a `Vec<LeafInfo>`. This is because `Consensus` doesn't own `StateManager`
+// state and delta only become available one level up, in `Coordinator`.
+fn consensus_event<T, S>(
+    coordinator: &Coordinator<T, S>,
+    output: &ConsensusOutput<T>,
+) -> Option<CoordinatorEvent<T>>
+where
+    T: NodeType,
+    S: NewProtocolStorage<T>,
+{
+    match output {
+        ConsensusOutput::LeafDecided {
+            leaves,
+            cert1,
+            cert2,
+            vid_shares,
+        } => {
+            if leaves.is_empty() {
+                tracing::error!("coordinator emitted LeafDecided with empty leaves");
+                return None;
+            }
+            let leaf_infos = leaves
+                .iter()
+                .zip(vid_shares.iter())
+                .map(|(leaf, vid_share)| {
+                    let (state, delta) = match coordinator.state(leaf.view_number()) {
+                        Some(s) => (s.state.clone(), s.delta.clone()),
+                        None => {
+                            let s = Arc::new(T::ValidatedState::from_header(leaf.block_header()));
+                            (s, None)
+                        },
+                    };
+                    let vid_share = vid_share
+                        .as_ref()
+                        .map(|share| VidDisperseShare::V2(share.data.clone()));
+                    LeafInfo::new(leaf.clone(), state, delta, vid_share, None)
+                })
+                .collect();
+            Some(CoordinatorEvent::NewDecide {
+                leaf_infos,
+                cert1: cert1.clone(),
+                cert2: cert2.clone(),
+            })
+        },
+        ConsensusOutput::ProposalValidated { proposal, sender } => {
+            Some(CoordinatorEvent::QuorumProposal {
+                proposal: proposal.clone(),
+                sender: sender.clone(),
+            })
+        },
+        ConsensusOutput::BlockPayloadReconstructed {
+            view,
+            header,
+            payload,
+        } => Some(CoordinatorEvent::BlockPayloadReconstructed {
+            view: *view,
+            header: header.clone(),
+            payload: payload.clone(),
+        }),
+        _ => None,
+    }
 }
 
 async fn broadcast_event<T>(sender: &Sender<CoordinatorEvent<T>>, event: CoordinatorEvent<T>)
@@ -583,13 +625,10 @@ where
     match sender.broadcast_direct(event).await {
         Ok(None) => {},
         Ok(Some(overflowed)) => {
-            tracing::warn!(
-                %overflowed,
-                "coordinator event channel overflow, oldest event dropped"
-            );
+            warn!(%overflowed, "coordinator event channel overflow, oldest event dropped");
         },
         Err(err) => {
-            tracing::warn!(%err, "failed to broadcast consensus event");
+            warn!(%err, "failed to broadcast consensus event");
         },
     }
 }

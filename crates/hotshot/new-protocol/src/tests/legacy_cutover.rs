@@ -51,7 +51,7 @@ use versions::{NEW_PROTOCOL_VERSION, Upgrade, version};
 
 use crate::{
     consensus::ConsensusOutput,
-    coordinator::{Coordinator, CoordinatorOutput, error::Severity, timer::Timer},
+    coordinator::{Coordinator, error::Severity, timer::Timer},
     cutover::{CutoverGate, forward_legacy_high_qc, forward_legacy_timeout_votes},
     helpers::test_upgrade_lock,
     network::Cliquenet,
@@ -374,14 +374,15 @@ async fn run_cutover_node(
         }
 
         while let Some(output) = coord.coordinator_outbox_mut().pop_front() {
-            if let CoordinatorOutput::ExternalMessageReceived { sender, data } = output {
-                let _ = external_events_tx
-                    .broadcast_direct(Event {
-                        view_number: coord.current_view(),
-                        event: EventType::ExternalMessageReceived { sender, data },
-                    })
-                    .await;
-            }
+            let _ = external_events_tx
+                .broadcast_direct(Event {
+                    view_number: coord.current_view(),
+                    event: EventType::ExternalMessageReceived {
+                        sender: output.sender,
+                        data:output.data
+                    },
+                })
+                .await;
         }
     }
 }

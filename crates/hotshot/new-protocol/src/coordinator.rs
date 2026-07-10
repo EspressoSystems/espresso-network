@@ -45,9 +45,7 @@ use crate::{
     helpers::proposal_commitment,
     logging::KeyPrefix,
     message::{
-        self, BlockMessage, Certificate1, Certificate2, ConsensusMessage, Message, MessageType,
-        Proposal, ProposalFetchMessage, ProposalMessage, TimeoutOneHonest, TransactionMessage,
-        Unchecked, Validated, Vote2,
+        self, BlockMessage, Certificate1, Certificate2, ConsensusMessage, Message, MessageType, OpaqueMessage, Proposal, ProposalFetchMessage, ProposalMessage, TimeoutOneHonest, TransactionMessage, Unchecked, Validated, Vote2
     },
     network::Cliquenet,
     outbox::Outbox,
@@ -77,15 +75,6 @@ pub(crate) const VID_RECONSTRUCT_GC_MARGIN: u64 = 5;
 /// storage writes for recent views aren't aborted before they persist.
 const STORAGE_GC_MARGIN: u64 = 5;
 
-#[allow(clippy::large_enum_variant)]
-pub enum CoordinatorOutput<T: NodeType> {
-    Consensus(ConsensusOutput<T>),
-    ExternalMessageReceived {
-        sender: T::SignatureKey,
-        data: Vec<u8>,
-    },
-}
-
 #[derive(Builder)]
 pub struct Coordinator<T: NodeType, S> {
     membership_coordinator: EpochMembershipCoordinator<T>,
@@ -112,7 +101,7 @@ pub struct Coordinator<T: NodeType, S> {
     #[builder(default)]
     outbox: Outbox<ConsensusOutput<T>>,
     #[builder(default)]
-    coordinator_outbox: Outbox<CoordinatorOutput<T>>,
+    coordinator_outbox: Outbox<OpaqueMessage<T::SignatureKey>>,
     public_key: T::SignatureKey,
     #[builder(default = KeyPrefix::from(&public_key))]
     node_id: KeyPrefix,
@@ -906,11 +895,11 @@ where
         &mut self.outbox
     }
 
-    pub fn coordinator_outbox(&self) -> &Outbox<CoordinatorOutput<T>> {
+    pub fn coordinator_outbox(&self) -> &Outbox<OpaqueMessage<T::SignatureKey>> {
         &self.coordinator_outbox
     }
 
-    pub fn coordinator_outbox_mut(&mut self) -> &mut Outbox<CoordinatorOutput<T>> {
+    pub fn coordinator_outbox_mut(&mut self) -> &mut Outbox<OpaqueMessage<T::SignatureKey>> {
         &mut self.coordinator_outbox
     }
 
@@ -1199,10 +1188,7 @@ where
             MessageType::External(data) => {
                 debug!(%node, %sender, bytes = data.len(), "recv external message");
                 self.coordinator_outbox
-                    .push_back(CoordinatorOutput::ExternalMessageReceived {
-                        sender: message.sender,
-                        data,
-                    });
+                    .push_back(OpaqueMessage { sender: message.sender, data });
                 None
             },
         }
