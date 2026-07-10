@@ -9867,177 +9867,170 @@
 <a href=#9867 id=9867 data-nosnippet>9867</a>            Client::new(<span class="macro">format!</span>(<span class="string">"http://localhost:{port}"</span>).parse().unwrap());
 <a href=#9868 id=9868 data-nosnippet>9868</a>        wait_until_block_height(<span class="kw-2">&amp;</span>height_client, <span class="string">"node/block-height"</span>, TARGET_HEIGHT + <span class="number">5</span>).<span class="kw">await</span>;
 <a href=#9869 id=9869 data-nosnippet>9869</a>
-<a href=#9870 id=9870 data-nosnippet>9870</a>        <span class="comment">// Get the stake table and threshold for the epoch containing TARGET_HEIGHT
-<a href=#9871 id=9871 data-nosnippet>9871</a>        </span><span class="kw">let </span>coordinator = network.server.node_state().coordinator;
-<a href=#9872 id=9872 data-nosnippet>9872</a>        <span class="kw">let </span>epoch = EpochNumber::new(epoch_from_block_number(TARGET_HEIGHT, EPOCH_HEIGHT));
-<a href=#9873 id=9873 data-nosnippet>9873</a>        <span class="kw">let </span>snapshot = coordinator.membership().snapshot(epoch).expect(<span class="string">"snapshot"</span>);
-<a href=#9874 id=9874 data-nosnippet>9874</a>        <span class="kw">let </span>stake_table = HSStakeTable::from_iter(snapshot.stake_table());
-<a href=#9875 id=9875 data-nosnippet>9875</a>        <span class="kw">let </span>success_threshold = snapshot.success_threshold();
-<a href=#9876 id=9876 data-nosnippet>9876</a>
-<a href=#9877 id=9877 data-nosnippet>9877</a>        <span class="comment">// Use StatePeers to fetch the leaf at the exact target height
-<a href=#9878 id=9878 data-nosnippet>9878</a>        </span><span class="kw">let </span>catchup = StatePeers::&lt;StaticVersion&lt;<span class="number">0</span>, <span class="number">1</span>&gt;&gt;::from_urls(
-<a href=#9879 id=9879 data-nosnippet>9879</a>            <span class="macro">vec!</span>[<span class="macro">format!</span>(<span class="string">"http://localhost:{port}"</span>).parse().unwrap()],
-<a href=#9880 id=9880 data-nosnippet>9880</a>            Default::default(),
-<a href=#9881 id=9881 data-nosnippet>9881</a>            Duration::from_secs(<span class="number">5</span>),
-<a href=#9882 id=9882 data-nosnippet>9882</a>            <span class="kw-2">&amp;</span>NoMetrics,
-<a href=#9883 id=9883 data-nosnippet>9883</a>        );
-<a href=#9884 id=9884 data-nosnippet>9884</a>
-<a href=#9885 id=9885 data-nosnippet>9885</a>        <span class="kw">let </span>leaf = catchup
-<a href=#9886 id=9886 data-nosnippet>9886</a>            .fetch_leaf(TARGET_HEIGHT, stake_table, success_threshold)
-<a href=#9887 id=9887 data-nosnippet>9887</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#9888 id=9888 data-nosnippet>9888</a>
-<a href=#9889 id=9889 data-nosnippet>9889</a>        <span class="macro">assert_eq!</span>(
-<a href=#9890 id=9890 data-nosnippet>9890</a>            leaf.height(),
-<a href=#9891 id=9891 data-nosnippet>9891</a>            TARGET_HEIGHT,
-<a href=#9892 id=9892 data-nosnippet>9892</a>            <span class="string">"fetch_leaf must return the leaf at exactly the requested height"
-<a href=#9893 id=9893 data-nosnippet>9893</a>        </span>);
-<a href=#9894 id=9894 data-nosnippet>9894</a>
-<a href=#9895 id=9895 data-nosnippet>9895</a>        <span class="prelude-val">Ok</span>(())
-<a href=#9896 id=9896 data-nosnippet>9896</a>    }
-<a href=#9897 id=9897 data-nosnippet>9897</a>
-<a href=#9898 id=9898 data-nosnippet>9898</a>    <span class="doccomment">/// Start a network at V5 from genesis, restart ALL nodes just before an epoch transition block
-<a href=#9899 id=9899 data-nosnippet>9899</a>    /// (`boundary - 3`), and confirm the chain keeps producing blocks afterward.
-<a href=#9900 id=9900 data-nosnippet>9900</a>    </span><span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
-<a href=#9901 id=9901 data-nosnippet>9901</a>    </span><span class="kw">async fn </span>test_v5_restart_before_epoch_boundary() {
-<a href=#9902 id=9902 data-nosnippet>9902</a>        <span class="kw">const </span>NUM_NODES: usize = <span class="number">3</span>;
-<a href=#9903 id=9903 data-nosnippet>9903</a>        <span class="kw">const </span>EPOCH_HEIGHT: u64 = <span class="number">10</span>;
-<a href=#9904 id=9904 data-nosnippet>9904</a>        <span class="comment">// Rewards start in epoch 4. Restart 3 blocks before the boundary that closes epoch 4, so
-<a href=#9905 id=9905 data-nosnippet>9905</a>        // the restarted network produces the boundary block (`4 * EPOCH_HEIGHT`) itself.
-<a href=#9906 id=9906 data-nosnippet>9906</a>        </span><span class="kw">const </span>RESTART_EPOCH: u64 = <span class="number">4</span>;
-<a href=#9907 id=9907 data-nosnippet>9907</a>        <span class="kw">const </span>RESTART_BOUNDARY: u64 = RESTART_EPOCH * EPOCH_HEIGHT;
-<a href=#9908 id=9908 data-nosnippet>9908</a>        <span class="kw">const </span>RESTART_HEIGHT: u64 = RESTART_BOUNDARY - <span class="number">3</span>;
-<a href=#9909 id=9909 data-nosnippet>9909</a>        <span class="comment">// Blocks to produce after the restart before declaring success.
-<a href=#9910 id=9910 data-nosnippet>9910</a>        </span><span class="kw">const </span>BLOCKS_AFTER_RESTART: u64 = <span class="number">5</span>;
-<a href=#9911 id=9911 data-nosnippet>9911</a>
-<a href=#9912 id=9912 data-nosnippet>9912</a>        <span class="kw">const </span>V5: Upgrade = Upgrade::trivial(EPOCH_REWARD_VERSION);
-<a href=#9913 id=9913 data-nosnippet>9913</a>
-<a href=#9914 id=9914 data-nosnippet>9914</a>        <span class="kw">let </span>port = reserve_tcp_port().expect(<span class="string">"OS should have ephemeral ports available"</span>);
-<a href=#9915 id=9915 data-nosnippet>9915</a>
-<a href=#9916 id=9916 data-nosnippet>9916</a>        <span class="comment">// Slow empty-block production so we comfortably stop at the exact target height. On an idle
-<a href=#9917 id=9917 data-nosnippet>9917</a>        // chain the empty-block time is ~`builder_timeout`; raise `next_view_timeout` above it so
-<a href=#9918 id=9918 data-nosnippet>9918</a>        // the slow (but healthy) views aren't treated as failures.
-<a href=#9919 id=9919 data-nosnippet>9919</a>        </span><span class="kw">let </span>network_config = TestConfigBuilder::&lt;NUM_NODES&gt;::default()
-<a href=#9920 id=9920 data-nosnippet>9920</a>            .epoch_height(EPOCH_HEIGHT)
-<a href=#9921 id=9921 data-nosnippet>9921</a>            .builder_timeout(Duration::from_secs(<span class="number">3</span>))
-<a href=#9922 id=9922 data-nosnippet>9922</a>            .next_view_timeout(Duration::from_secs(<span class="number">10</span>))
-<a href=#9923 id=9923 data-nosnippet>9923</a>            .build();
-<a href=#9924 id=9924 data-nosnippet>9924</a>
-<a href=#9925 id=9925 data-nosnippet>9925</a>        <span class="kw">let </span>storage = join_all((<span class="number">0</span>..NUM_NODES).map(|<span class="kw">_</span>| SqlDataSource::create_storage())).<span class="kw">await</span>;
-<a href=#9926 id=9926 data-nosnippet>9926</a>        <span class="kw">let </span>persistence: [<span class="kw">_</span>; NUM_NODES] = storage
-<a href=#9927 id=9927 data-nosnippet>9927</a>            .iter()
-<a href=#9928 id=9928 data-nosnippet>9928</a>            .map(&lt;SqlDataSource <span class="kw">as </span>TestableSequencerDataSource&gt;::persistence_options)
-<a href=#9929 id=9929 data-nosnippet>9929</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
-<a href=#9930 id=9930 data-nosnippet>9930</a>            .try_into()
-<a href=#9931 id=9931 data-nosnippet>9931</a>            .unwrap();
-<a href=#9932 id=9932 data-nosnippet>9932</a>
-<a href=#9933 id=9933 data-nosnippet>9933</a>        <span class="kw">let </span>config = TestNetworkConfigBuilder::&lt;NUM_NODES, <span class="kw">_</span>, <span class="kw">_</span>&gt;::with_num_nodes()
-<a href=#9934 id=9934 data-nosnippet>9934</a>            .api_config(SqlDataSource::options(
-<a href=#9935 id=9935 data-nosnippet>9935</a>                <span class="kw-2">&amp;</span>storage[<span class="number">0</span>],
-<a href=#9936 id=9936 data-nosnippet>9936</a>                Options::with_port(port),
-<a href=#9937 id=9937 data-nosnippet>9937</a>            ))
-<a href=#9938 id=9938 data-nosnippet>9938</a>            .persistences(persistence.clone())
-<a href=#9939 id=9939 data-nosnippet>9939</a>            .catchups(std::array::from_fn(|<span class="kw">_</span>| {
-<a href=#9940 id=9940 data-nosnippet>9940</a>                StatePeers::&lt;SequencerApiVersion&gt;::from_urls(
-<a href=#9941 id=9941 data-nosnippet>9941</a>                    <span class="macro">vec!</span>[<span class="macro">format!</span>(<span class="string">"http://localhost:{port}"</span>).parse().unwrap()],
-<a href=#9942 id=9942 data-nosnippet>9942</a>                    Default::default(),
-<a href=#9943 id=9943 data-nosnippet>9943</a>                    Duration::from_secs(<span class="number">2</span>),
-<a href=#9944 id=9944 data-nosnippet>9944</a>                    <span class="kw-2">&amp;</span>NoMetrics,
-<a href=#9945 id=9945 data-nosnippet>9945</a>                )
-<a href=#9946 id=9946 data-nosnippet>9946</a>            }))
-<a href=#9947 id=9947 data-nosnippet>9947</a>            .network_config(network_config)
-<a href=#9948 id=9948 data-nosnippet>9948</a>            .pos_hook(DelegationConfig::MultipleDelegators, Default::default(), V5)
-<a href=#9949 id=9949 data-nosnippet>9949</a>            .<span class="kw">await
-<a href=#9950 id=9950 data-nosnippet>9950</a>            </span>.unwrap()
-<a href=#9951 id=9951 data-nosnippet>9951</a>            .build();
-<a href=#9952 id=9952 data-nosnippet>9952</a>
-<a href=#9953 id=9953 data-nosnippet>9953</a>        <span class="kw">let </span><span class="kw-2">mut </span>network = TestNetwork::new(config, V5).<span class="kw">await</span>;
-<a href=#9954 id=9954 data-nosnippet>9954</a>
-<a href=#9955 id=9955 data-nosnippet>9955</a>        <span class="comment">// Watch the decide stream and stop as soon as `boundary - 3` is decided. Consuming the
-<a href=#9956 id=9956 data-nosnippet>9956</a>        // stream (rather than polling `decided_leaf`) makes this independent of block timing: we
-<a href=#9957 id=9957 data-nosnippet>9957</a>        // see every decided leaf and stop the network the moment the target height appears, so we
-<a href=#9958 id=9958 data-nosnippet>9958</a>        // can never race past it regardless of how fast blocks are produced.
-<a href=#9959 id=9959 data-nosnippet>9959</a>        </span>{
-<a href=#9960 id=9960 data-nosnippet>9960</a>            <span class="kw">let </span><span class="kw-2">mut </span>events = network.server.event_stream();
-<a href=#9961 id=9961 data-nosnippet>9961</a>            <span class="lifetime">'wait</span>: <span class="kw">loop </span>{
-<a href=#9962 id=9962 data-nosnippet>9962</a>                <span class="kw">let </span>event = events
-<a href=#9963 id=9963 data-nosnippet>9963</a>                    .next()
-<a href=#9964 id=9964 data-nosnippet>9964</a>                    .<span class="kw">await
-<a href=#9965 id=9965 data-nosnippet>9965</a>                    </span>.expect(<span class="string">"event stream ended unexpectedly"</span>);
-<a href=#9966 id=9966 data-nosnippet>9966</a>                <span class="kw">let </span>CoordinatorEvent::LegacyEvent(Event {
-<a href=#9967 id=9967 data-nosnippet>9967</a>                    event: EventType::Decide { leaf_chain, .. },
-<a href=#9968 id=9968 data-nosnippet>9968</a>                    ..
-<a href=#9969 id=9969 data-nosnippet>9969</a>                }) = event
-<a href=#9970 id=9970 data-nosnippet>9970</a>                <span class="kw">else </span>{
-<a href=#9971 id=9971 data-nosnippet>9971</a>                    <span class="kw">continue</span>;
-<a href=#9972 id=9972 data-nosnippet>9972</a>                };
-<a href=#9973 id=9973 data-nosnippet>9973</a>                <span class="comment">// `leaf_chain` is newest-first; once any decided leaf has reached the target
-<a href=#9974 id=9974 data-nosnippet>9974</a>                // height, the chain is at or past it.
-<a href=#9975 id=9975 data-nosnippet>9975</a>                </span><span class="kw">for </span>LeafInfo { leaf, .. } <span class="kw">in </span>leaf_chain.iter() {
-<a href=#9976 id=9976 data-nosnippet>9976</a>                    <span class="kw">if </span>leaf.block_header().height() &gt;= RESTART_HEIGHT {
-<a href=#9977 id=9977 data-nosnippet>9977</a>                        <span class="kw">break </span><span class="lifetime">'wait</span>;
-<a href=#9978 id=9978 data-nosnippet>9978</a>                    }
-<a href=#9979 id=9979 data-nosnippet>9979</a>                }
-<a href=#9980 id=9980 data-nosnippet>9980</a>            }
-<a href=#9981 id=9981 data-nosnippet>9981</a>        }
-<a href=#9982 id=9982 data-nosnippet>9982</a>
-<a href=#9983 id=9983 data-nosnippet>9983</a>        <span class="kw">let </span>restart_height = network.server.decided_leaf().<span class="kw">await</span>.height();
-<a href=#9984 id=9984 data-nosnippet>9984</a>        <span class="macro">tracing::info!</span>(
-<a href=#9985 id=9985 data-nosnippet>9985</a>            restart_height,
-<a href=#9986 id=9986 data-nosnippet>9986</a>            restart_epoch = RESTART_EPOCH,
-<a href=#9987 id=9987 data-nosnippet>9987</a>            restart_boundary = RESTART_BOUNDARY,
-<a href=#9988 id=9988 data-nosnippet>9988</a>            <span class="string">"restarting all nodes 3 blocks before an epoch boundary"
-<a href=#9989 id=9989 data-nosnippet>9989</a>        </span>);
-<a href=#9990 id=9990 data-nosnippet>9990</a>
-<a href=#9991 id=9991 data-nosnippet>9991</a>        <span class="comment">// Clone the TestConfig before dropping the network so the anvil/L1/contracts stay alive.
-<a href=#9992 id=9992 data-nosnippet>9992</a>        </span><span class="kw">let </span>saved_cfg = network.cfg.clone();
-<a href=#9993 id=9993 data-nosnippet>9993</a>
-<a href=#9994 id=9994 data-nosnippet>9994</a>        network.stop_consensus().<span class="kw">await</span>;
-<a href=#9995 id=9995 data-nosnippet>9995</a>        drop(network);
-<a href=#9996 id=9996 data-nosnippet>9996</a>
-<a href=#9997 id=9997 data-nosnippet>9997</a>        <span class="comment">// Rebuild reusing the same persistence so nodes resume from stored state.
-<a href=#9998 id=9998 data-nosnippet>9998</a>        </span><span class="kw">let </span>port2 = reserve_tcp_port().expect(<span class="string">"OS should have ephemeral ports available"</span>);
-<a href=#9999 id=9999 data-nosnippet>9999</a>        <span class="kw">let </span>config2 = TestNetworkConfigBuilder::&lt;NUM_NODES, <span class="kw">_</span>, <span class="kw">_</span>&gt;::with_num_nodes()
-<a href=#10000 id=10000 data-nosnippet>10000</a>            .api_config(SqlDataSource::options(
-<a href=#10001 id=10001 data-nosnippet>10001</a>                <span class="kw-2">&amp;</span>storage[<span class="number">0</span>],
-<a href=#10002 id=10002 data-nosnippet>10002</a>                Options::with_port(port2),
-<a href=#10003 id=10003 data-nosnippet>10003</a>            ))
-<a href=#10004 id=10004 data-nosnippet>10004</a>            .persistences(persistence)
-<a href=#10005 id=10005 data-nosnippet>10005</a>            .catchups(std::array::from_fn(|<span class="kw">_</span>| {
-<a href=#10006 id=10006 data-nosnippet>10006</a>                StatePeers::&lt;SequencerApiVersion&gt;::from_urls(
-<a href=#10007 id=10007 data-nosnippet>10007</a>                    <span class="macro">vec!</span>[<span class="macro">format!</span>(<span class="string">"http://localhost:{port2}"</span>).parse().unwrap()],
-<a href=#10008 id=10008 data-nosnippet>10008</a>                    Default::default(),
-<a href=#10009 id=10009 data-nosnippet>10009</a>                    Duration::from_secs(<span class="number">2</span>),
-<a href=#10010 id=10010 data-nosnippet>10010</a>                    <span class="kw-2">&amp;</span>NoMetrics,
-<a href=#10011 id=10011 data-nosnippet>10011</a>                )
-<a href=#10012 id=10012 data-nosnippet>10012</a>            }))
-<a href=#10013 id=10013 data-nosnippet>10013</a>            .network_config(saved_cfg)
-<a href=#10014 id=10014 data-nosnippet>10014</a>            .build();
-<a href=#10015 id=10015 data-nosnippet>10015</a>        <span class="kw">let </span>network2 = TestNetwork::new(config2, V5).<span class="kw">await</span>;
-<a href=#10016 id=10016 data-nosnippet>10016</a>
-<a href=#10017 id=10017 data-nosnippet>10017</a>        <span class="comment">// The restarted network must keep advancing, including across the next epoch boundary.
-<a href=#10018 id=10018 data-nosnippet>10018</a>        // Require BLOCKS_AFTER_RESTART new decides, using a lack-of-progress watchdog so a
-<a href=#10019 id=10019 data-nosnippet>10019</a>        // healthy-but-slow chain still passes.
-<a href=#10020 id=10020 data-nosnippet>10020</a>        </span><span class="kw">let </span>target_height = restart_height + BLOCKS_AFTER_RESTART;
-<a href=#10021 id=10021 data-nosnippet>10021</a>        <span class="kw">let </span>stall_limit = <span class="number">30</span>; <span class="comment">// 30 polls * 2s = 60s without a new decide =&gt; stalled
-<a href=#10022 id=10022 data-nosnippet>10022</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>last_height = network2.server.decided_leaf().<span class="kw">await</span>.height();
-<a href=#10023 id=10023 data-nosnippet>10023</a>        <span class="kw">let </span><span class="kw-2">mut </span>stalled_polls = <span class="number">0</span>;
-<a href=#10024 id=10024 data-nosnippet>10024</a>        <span class="kw">while </span>last_height &lt; target_height {
-<a href=#10025 id=10025 data-nosnippet>10025</a>            sleep(Duration::from_secs(<span class="number">2</span>)).<span class="kw">await</span>;
-<a href=#10026 id=10026 data-nosnippet>10026</a>            <span class="kw">let </span>height = network2.server.decided_leaf().<span class="kw">await</span>.height();
-<a href=#10027 id=10027 data-nosnippet>10027</a>            <span class="kw">if </span>height &gt; last_height {
-<a href=#10028 id=10028 data-nosnippet>10028</a>                last_height = height;
-<a href=#10029 id=10029 data-nosnippet>10029</a>                stalled_polls = <span class="number">0</span>;
-<a href=#10030 id=10030 data-nosnippet>10030</a>            } <span class="kw">else </span>{
-<a href=#10031 id=10031 data-nosnippet>10031</a>                stalled_polls += <span class="number">1</span>;
-<a href=#10032 id=10032 data-nosnippet>10032</a>                <span class="kw">if </span>stalled_polls &gt;= stall_limit {
-<a href=#10033 id=10033 data-nosnippet>10033</a>                    <span class="macro">panic!</span>(
-<a href=#10034 id=10034 data-nosnippet>10034</a>                        <span class="string">"chain stalled after restart 3 blocks before boundary {RESTART_BOUNDARY}: \
-<a href=#10035 id=10035 data-nosnippet>10035</a>                         no new decide for 60s at height {last_height}, unable to produce/cross \
-<a href=#10036 id=10036 data-nosnippet>10036</a>                         the epoch boundary (target height was {target_height})."
-<a href=#10037 id=10037 data-nosnippet>10037</a>                    </span>);
-<a href=#10038 id=10038 data-nosnippet>10038</a>                }
-<a href=#10039 id=10039 data-nosnippet>10039</a>            }
-<a href=#10040 id=10040 data-nosnippet>10040</a>        }
-<a href=#10041 id=10041 data-nosnippet>10041</a>    }
-<a href=#10042 id=10042 data-nosnippet>10042</a>}
+<a href=#9870 id=9870 data-nosnippet>9870</a>        <span class="kw">let </span>coordinator = network.server.node_state().coordinator;
+<a href=#9871 id=9871 data-nosnippet>9871</a>
+<a href=#9872 id=9872 data-nosnippet>9872</a>        <span class="comment">// Use StatePeers to fetch the leaf at the exact target height
+<a href=#9873 id=9873 data-nosnippet>9873</a>        </span><span class="kw">let </span>catchup = StatePeers::&lt;StaticVersion&lt;<span class="number">0</span>, <span class="number">1</span>&gt;&gt;::from_urls(
+<a href=#9874 id=9874 data-nosnippet>9874</a>            <span class="macro">vec!</span>[<span class="macro">format!</span>(<span class="string">"http://localhost:{port}"</span>).parse().unwrap()],
+<a href=#9875 id=9875 data-nosnippet>9875</a>            Default::default(),
+<a href=#9876 id=9876 data-nosnippet>9876</a>            Duration::from_secs(<span class="number">5</span>),
+<a href=#9877 id=9877 data-nosnippet>9877</a>            <span class="kw-2">&amp;</span>NoMetrics,
+<a href=#9878 id=9878 data-nosnippet>9878</a>        );
+<a href=#9879 id=9879 data-nosnippet>9879</a>
+<a href=#9880 id=9880 data-nosnippet>9880</a>        <span class="kw">let </span>leaf = catchup.fetch_leaf(coordinator, TARGET_HEIGHT).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#9881 id=9881 data-nosnippet>9881</a>
+<a href=#9882 id=9882 data-nosnippet>9882</a>        <span class="macro">assert_eq!</span>(
+<a href=#9883 id=9883 data-nosnippet>9883</a>            leaf.height(),
+<a href=#9884 id=9884 data-nosnippet>9884</a>            TARGET_HEIGHT,
+<a href=#9885 id=9885 data-nosnippet>9885</a>            <span class="string">"fetch_leaf must return the leaf at exactly the requested height"
+<a href=#9886 id=9886 data-nosnippet>9886</a>        </span>);
+<a href=#9887 id=9887 data-nosnippet>9887</a>
+<a href=#9888 id=9888 data-nosnippet>9888</a>        <span class="prelude-val">Ok</span>(())
+<a href=#9889 id=9889 data-nosnippet>9889</a>    }
+<a href=#9890 id=9890 data-nosnippet>9890</a>
+<a href=#9891 id=9891 data-nosnippet>9891</a>    <span class="doccomment">/// Start a network at V5 from genesis, restart ALL nodes just before an epoch transition block
+<a href=#9892 id=9892 data-nosnippet>9892</a>    /// (`boundary - 3`), and confirm the chain keeps producing blocks afterward.
+<a href=#9893 id=9893 data-nosnippet>9893</a>    </span><span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#9894 id=9894 data-nosnippet>9894</a>    </span><span class="kw">async fn </span>test_v5_restart_before_epoch_boundary() {
+<a href=#9895 id=9895 data-nosnippet>9895</a>        <span class="kw">const </span>NUM_NODES: usize = <span class="number">3</span>;
+<a href=#9896 id=9896 data-nosnippet>9896</a>        <span class="kw">const </span>EPOCH_HEIGHT: u64 = <span class="number">10</span>;
+<a href=#9897 id=9897 data-nosnippet>9897</a>        <span class="comment">// Rewards start in epoch 4. Restart 3 blocks before the boundary that closes epoch 4, so
+<a href=#9898 id=9898 data-nosnippet>9898</a>        // the restarted network produces the boundary block (`4 * EPOCH_HEIGHT`) itself.
+<a href=#9899 id=9899 data-nosnippet>9899</a>        </span><span class="kw">const </span>RESTART_EPOCH: u64 = <span class="number">4</span>;
+<a href=#9900 id=9900 data-nosnippet>9900</a>        <span class="kw">const </span>RESTART_BOUNDARY: u64 = RESTART_EPOCH * EPOCH_HEIGHT;
+<a href=#9901 id=9901 data-nosnippet>9901</a>        <span class="kw">const </span>RESTART_HEIGHT: u64 = RESTART_BOUNDARY - <span class="number">3</span>;
+<a href=#9902 id=9902 data-nosnippet>9902</a>        <span class="comment">// Blocks to produce after the restart before declaring success.
+<a href=#9903 id=9903 data-nosnippet>9903</a>        </span><span class="kw">const </span>BLOCKS_AFTER_RESTART: u64 = <span class="number">5</span>;
+<a href=#9904 id=9904 data-nosnippet>9904</a>
+<a href=#9905 id=9905 data-nosnippet>9905</a>        <span class="kw">const </span>V5: Upgrade = Upgrade::trivial(EPOCH_REWARD_VERSION);
+<a href=#9906 id=9906 data-nosnippet>9906</a>
+<a href=#9907 id=9907 data-nosnippet>9907</a>        <span class="kw">let </span>port = reserve_tcp_port().expect(<span class="string">"OS should have ephemeral ports available"</span>);
+<a href=#9908 id=9908 data-nosnippet>9908</a>
+<a href=#9909 id=9909 data-nosnippet>9909</a>        <span class="comment">// Slow empty-block production so we comfortably stop at the exact target height. On an idle
+<a href=#9910 id=9910 data-nosnippet>9910</a>        // chain the empty-block time is ~`builder_timeout`; raise `next_view_timeout` above it so
+<a href=#9911 id=9911 data-nosnippet>9911</a>        // the slow (but healthy) views aren't treated as failures.
+<a href=#9912 id=9912 data-nosnippet>9912</a>        </span><span class="kw">let </span>network_config = TestConfigBuilder::&lt;NUM_NODES&gt;::default()
+<a href=#9913 id=9913 data-nosnippet>9913</a>            .epoch_height(EPOCH_HEIGHT)
+<a href=#9914 id=9914 data-nosnippet>9914</a>            .builder_timeout(Duration::from_secs(<span class="number">3</span>))
+<a href=#9915 id=9915 data-nosnippet>9915</a>            .next_view_timeout(Duration::from_secs(<span class="number">10</span>))
+<a href=#9916 id=9916 data-nosnippet>9916</a>            .build();
+<a href=#9917 id=9917 data-nosnippet>9917</a>
+<a href=#9918 id=9918 data-nosnippet>9918</a>        <span class="kw">let </span>storage = join_all((<span class="number">0</span>..NUM_NODES).map(|<span class="kw">_</span>| SqlDataSource::create_storage())).<span class="kw">await</span>;
+<a href=#9919 id=9919 data-nosnippet>9919</a>        <span class="kw">let </span>persistence: [<span class="kw">_</span>; NUM_NODES] = storage
+<a href=#9920 id=9920 data-nosnippet>9920</a>            .iter()
+<a href=#9921 id=9921 data-nosnippet>9921</a>            .map(&lt;SqlDataSource <span class="kw">as </span>TestableSequencerDataSource&gt;::persistence_options)
+<a href=#9922 id=9922 data-nosnippet>9922</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
+<a href=#9923 id=9923 data-nosnippet>9923</a>            .try_into()
+<a href=#9924 id=9924 data-nosnippet>9924</a>            .unwrap();
+<a href=#9925 id=9925 data-nosnippet>9925</a>
+<a href=#9926 id=9926 data-nosnippet>9926</a>        <span class="kw">let </span>config = TestNetworkConfigBuilder::&lt;NUM_NODES, <span class="kw">_</span>, <span class="kw">_</span>&gt;::with_num_nodes()
+<a href=#9927 id=9927 data-nosnippet>9927</a>            .api_config(SqlDataSource::options(
+<a href=#9928 id=9928 data-nosnippet>9928</a>                <span class="kw-2">&amp;</span>storage[<span class="number">0</span>],
+<a href=#9929 id=9929 data-nosnippet>9929</a>                Options::with_port(port),
+<a href=#9930 id=9930 data-nosnippet>9930</a>            ))
+<a href=#9931 id=9931 data-nosnippet>9931</a>            .persistences(persistence.clone())
+<a href=#9932 id=9932 data-nosnippet>9932</a>            .catchups(std::array::from_fn(|<span class="kw">_</span>| {
+<a href=#9933 id=9933 data-nosnippet>9933</a>                StatePeers::&lt;SequencerApiVersion&gt;::from_urls(
+<a href=#9934 id=9934 data-nosnippet>9934</a>                    <span class="macro">vec!</span>[<span class="macro">format!</span>(<span class="string">"http://localhost:{port}"</span>).parse().unwrap()],
+<a href=#9935 id=9935 data-nosnippet>9935</a>                    Default::default(),
+<a href=#9936 id=9936 data-nosnippet>9936</a>                    Duration::from_secs(<span class="number">2</span>),
+<a href=#9937 id=9937 data-nosnippet>9937</a>                    <span class="kw-2">&amp;</span>NoMetrics,
+<a href=#9938 id=9938 data-nosnippet>9938</a>                )
+<a href=#9939 id=9939 data-nosnippet>9939</a>            }))
+<a href=#9940 id=9940 data-nosnippet>9940</a>            .network_config(network_config)
+<a href=#9941 id=9941 data-nosnippet>9941</a>            .pos_hook(DelegationConfig::MultipleDelegators, Default::default(), V5)
+<a href=#9942 id=9942 data-nosnippet>9942</a>            .<span class="kw">await
+<a href=#9943 id=9943 data-nosnippet>9943</a>            </span>.unwrap()
+<a href=#9944 id=9944 data-nosnippet>9944</a>            .build();
+<a href=#9945 id=9945 data-nosnippet>9945</a>
+<a href=#9946 id=9946 data-nosnippet>9946</a>        <span class="kw">let </span><span class="kw-2">mut </span>network = TestNetwork::new(config, V5).<span class="kw">await</span>;
+<a href=#9947 id=9947 data-nosnippet>9947</a>
+<a href=#9948 id=9948 data-nosnippet>9948</a>        <span class="comment">// Watch the decide stream and stop as soon as `boundary - 3` is decided. Consuming the
+<a href=#9949 id=9949 data-nosnippet>9949</a>        // stream (rather than polling `decided_leaf`) makes this independent of block timing: we
+<a href=#9950 id=9950 data-nosnippet>9950</a>        // see every decided leaf and stop the network the moment the target height appears, so we
+<a href=#9951 id=9951 data-nosnippet>9951</a>        // can never race past it regardless of how fast blocks are produced.
+<a href=#9952 id=9952 data-nosnippet>9952</a>        </span>{
+<a href=#9953 id=9953 data-nosnippet>9953</a>            <span class="kw">let </span><span class="kw-2">mut </span>events = network.server.event_stream();
+<a href=#9954 id=9954 data-nosnippet>9954</a>            <span class="lifetime">'wait</span>: <span class="kw">loop </span>{
+<a href=#9955 id=9955 data-nosnippet>9955</a>                <span class="kw">let </span>event = events
+<a href=#9956 id=9956 data-nosnippet>9956</a>                    .next()
+<a href=#9957 id=9957 data-nosnippet>9957</a>                    .<span class="kw">await
+<a href=#9958 id=9958 data-nosnippet>9958</a>                    </span>.expect(<span class="string">"event stream ended unexpectedly"</span>);
+<a href=#9959 id=9959 data-nosnippet>9959</a>                <span class="kw">let </span>CoordinatorEvent::LegacyEvent(Event {
+<a href=#9960 id=9960 data-nosnippet>9960</a>                    event: EventType::Decide { leaf_chain, .. },
+<a href=#9961 id=9961 data-nosnippet>9961</a>                    ..
+<a href=#9962 id=9962 data-nosnippet>9962</a>                }) = event
+<a href=#9963 id=9963 data-nosnippet>9963</a>                <span class="kw">else </span>{
+<a href=#9964 id=9964 data-nosnippet>9964</a>                    <span class="kw">continue</span>;
+<a href=#9965 id=9965 data-nosnippet>9965</a>                };
+<a href=#9966 id=9966 data-nosnippet>9966</a>                <span class="comment">// `leaf_chain` is newest-first; once any decided leaf has reached the target
+<a href=#9967 id=9967 data-nosnippet>9967</a>                // height, the chain is at or past it.
+<a href=#9968 id=9968 data-nosnippet>9968</a>                </span><span class="kw">for </span>LeafInfo { leaf, .. } <span class="kw">in </span>leaf_chain.iter() {
+<a href=#9969 id=9969 data-nosnippet>9969</a>                    <span class="kw">if </span>leaf.block_header().height() &gt;= RESTART_HEIGHT {
+<a href=#9970 id=9970 data-nosnippet>9970</a>                        <span class="kw">break </span><span class="lifetime">'wait</span>;
+<a href=#9971 id=9971 data-nosnippet>9971</a>                    }
+<a href=#9972 id=9972 data-nosnippet>9972</a>                }
+<a href=#9973 id=9973 data-nosnippet>9973</a>            }
+<a href=#9974 id=9974 data-nosnippet>9974</a>        }
+<a href=#9975 id=9975 data-nosnippet>9975</a>
+<a href=#9976 id=9976 data-nosnippet>9976</a>        <span class="kw">let </span>restart_height = network.server.decided_leaf().<span class="kw">await</span>.height();
+<a href=#9977 id=9977 data-nosnippet>9977</a>        <span class="macro">tracing::info!</span>(
+<a href=#9978 id=9978 data-nosnippet>9978</a>            restart_height,
+<a href=#9979 id=9979 data-nosnippet>9979</a>            restart_epoch = RESTART_EPOCH,
+<a href=#9980 id=9980 data-nosnippet>9980</a>            restart_boundary = RESTART_BOUNDARY,
+<a href=#9981 id=9981 data-nosnippet>9981</a>            <span class="string">"restarting all nodes 3 blocks before an epoch boundary"
+<a href=#9982 id=9982 data-nosnippet>9982</a>        </span>);
+<a href=#9983 id=9983 data-nosnippet>9983</a>
+<a href=#9984 id=9984 data-nosnippet>9984</a>        <span class="comment">// Clone the TestConfig before dropping the network so the anvil/L1/contracts stay alive.
+<a href=#9985 id=9985 data-nosnippet>9985</a>        </span><span class="kw">let </span>saved_cfg = network.cfg.clone();
+<a href=#9986 id=9986 data-nosnippet>9986</a>
+<a href=#9987 id=9987 data-nosnippet>9987</a>        network.stop_consensus().<span class="kw">await</span>;
+<a href=#9988 id=9988 data-nosnippet>9988</a>        drop(network);
+<a href=#9989 id=9989 data-nosnippet>9989</a>
+<a href=#9990 id=9990 data-nosnippet>9990</a>        <span class="comment">// Rebuild reusing the same persistence so nodes resume from stored state.
+<a href=#9991 id=9991 data-nosnippet>9991</a>        </span><span class="kw">let </span>port2 = reserve_tcp_port().expect(<span class="string">"OS should have ephemeral ports available"</span>);
+<a href=#9992 id=9992 data-nosnippet>9992</a>        <span class="kw">let </span>config2 = TestNetworkConfigBuilder::&lt;NUM_NODES, <span class="kw">_</span>, <span class="kw">_</span>&gt;::with_num_nodes()
+<a href=#9993 id=9993 data-nosnippet>9993</a>            .api_config(SqlDataSource::options(
+<a href=#9994 id=9994 data-nosnippet>9994</a>                <span class="kw-2">&amp;</span>storage[<span class="number">0</span>],
+<a href=#9995 id=9995 data-nosnippet>9995</a>                Options::with_port(port2),
+<a href=#9996 id=9996 data-nosnippet>9996</a>            ))
+<a href=#9997 id=9997 data-nosnippet>9997</a>            .persistences(persistence)
+<a href=#9998 id=9998 data-nosnippet>9998</a>            .catchups(std::array::from_fn(|<span class="kw">_</span>| {
+<a href=#9999 id=9999 data-nosnippet>9999</a>                StatePeers::&lt;SequencerApiVersion&gt;::from_urls(
+<a href=#10000 id=10000 data-nosnippet>10000</a>                    <span class="macro">vec!</span>[<span class="macro">format!</span>(<span class="string">"http://localhost:{port2}"</span>).parse().unwrap()],
+<a href=#10001 id=10001 data-nosnippet>10001</a>                    Default::default(),
+<a href=#10002 id=10002 data-nosnippet>10002</a>                    Duration::from_secs(<span class="number">2</span>),
+<a href=#10003 id=10003 data-nosnippet>10003</a>                    <span class="kw-2">&amp;</span>NoMetrics,
+<a href=#10004 id=10004 data-nosnippet>10004</a>                )
+<a href=#10005 id=10005 data-nosnippet>10005</a>            }))
+<a href=#10006 id=10006 data-nosnippet>10006</a>            .network_config(saved_cfg)
+<a href=#10007 id=10007 data-nosnippet>10007</a>            .build();
+<a href=#10008 id=10008 data-nosnippet>10008</a>        <span class="kw">let </span>network2 = TestNetwork::new(config2, V5).<span class="kw">await</span>;
+<a href=#10009 id=10009 data-nosnippet>10009</a>
+<a href=#10010 id=10010 data-nosnippet>10010</a>        <span class="comment">// The restarted network must keep advancing, including across the next epoch boundary.
+<a href=#10011 id=10011 data-nosnippet>10011</a>        // Require BLOCKS_AFTER_RESTART new decides, using a lack-of-progress watchdog so a
+<a href=#10012 id=10012 data-nosnippet>10012</a>        // healthy-but-slow chain still passes.
+<a href=#10013 id=10013 data-nosnippet>10013</a>        </span><span class="kw">let </span>target_height = restart_height + BLOCKS_AFTER_RESTART;
+<a href=#10014 id=10014 data-nosnippet>10014</a>        <span class="kw">let </span>stall_limit = <span class="number">30</span>; <span class="comment">// 30 polls * 2s = 60s without a new decide =&gt; stalled
+<a href=#10015 id=10015 data-nosnippet>10015</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>last_height = network2.server.decided_leaf().<span class="kw">await</span>.height();
+<a href=#10016 id=10016 data-nosnippet>10016</a>        <span class="kw">let </span><span class="kw-2">mut </span>stalled_polls = <span class="number">0</span>;
+<a href=#10017 id=10017 data-nosnippet>10017</a>        <span class="kw">while </span>last_height &lt; target_height {
+<a href=#10018 id=10018 data-nosnippet>10018</a>            sleep(Duration::from_secs(<span class="number">2</span>)).<span class="kw">await</span>;
+<a href=#10019 id=10019 data-nosnippet>10019</a>            <span class="kw">let </span>height = network2.server.decided_leaf().<span class="kw">await</span>.height();
+<a href=#10020 id=10020 data-nosnippet>10020</a>            <span class="kw">if </span>height &gt; last_height {
+<a href=#10021 id=10021 data-nosnippet>10021</a>                last_height = height;
+<a href=#10022 id=10022 data-nosnippet>10022</a>                stalled_polls = <span class="number">0</span>;
+<a href=#10023 id=10023 data-nosnippet>10023</a>            } <span class="kw">else </span>{
+<a href=#10024 id=10024 data-nosnippet>10024</a>                stalled_polls += <span class="number">1</span>;
+<a href=#10025 id=10025 data-nosnippet>10025</a>                <span class="kw">if </span>stalled_polls &gt;= stall_limit {
+<a href=#10026 id=10026 data-nosnippet>10026</a>                    <span class="macro">panic!</span>(
+<a href=#10027 id=10027 data-nosnippet>10027</a>                        <span class="string">"chain stalled after restart 3 blocks before boundary {RESTART_BOUNDARY}: \
+<a href=#10028 id=10028 data-nosnippet>10028</a>                         no new decide for 60s at height {last_height}, unable to produce/cross \
+<a href=#10029 id=10029 data-nosnippet>10029</a>                         the epoch boundary (target height was {target_height})."
+<a href=#10030 id=10030 data-nosnippet>10030</a>                    </span>);
+<a href=#10031 id=10031 data-nosnippet>10031</a>                }
+<a href=#10032 id=10032 data-nosnippet>10032</a>            }
+<a href=#10033 id=10033 data-nosnippet>10033</a>        }
+<a href=#10034 id=10034 data-nosnippet>10034</a>    }
+<a href=#10035 id=10035 data-nosnippet>10035</a>}
 </code></pre></div></section></main></body></html>

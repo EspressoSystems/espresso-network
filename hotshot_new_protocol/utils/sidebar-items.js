@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["verify_leaf_chain_with_cert2"]};
+window.SIDEBAR_ITEMS = {"fn":["verify_new_protocol_leaf_chain"]};
