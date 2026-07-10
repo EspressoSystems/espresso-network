@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/espresso/node/src/api.rs`."><title>api.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-17e0aaed.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="espresso_node" data-themes="" data-resource-suffix="" data-rustdoc-version="1.96.1 (31fca3adb 2026-06-26)" data-channel="1.96.1" data-search-js="search-b5634cc7.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="../../static.files/src-script-813739b1.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">espresso_node/</div>api.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-5"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="kw">use </span>std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/espresso/node/src/api.rs`."><title>api.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-17e0aaed.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="espresso_node" data-themes="" data-resource-suffix="" data-rustdoc-version="1.97.0 (2d8144b78 2026-07-07)" data-channel="1.97.0" data-search-js="search-fd9372ac.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="../../static.files/src-script-813739b1.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-fcd733ba.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">espresso_node/</div>api.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-5"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="kw">use </span>std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
 <a href=#2 id=2 data-nosnippet>2</a>
 <a href=#3 id=3 data-nosnippet>3</a><span class="kw">use </span>::light_client::{
 <a href=#4 id=4 data-nosnippet>4</a>    LightClient,
@@ -72,7 +72,7 @@
 <a href=#72 id=72 data-nosnippet>72</a><span class="kw">use </span>vbs::version::Version;
 <a href=#73 id=73 data-nosnippet>73</a>
 <a href=#74 id=74 data-nosnippet>74</a><span class="kw">use </span><span class="self">self</span>::data_source::{HotShotConfigDataSource, NodeStateDataSource, StateSignatureDataSource};
-<a href=#75 id=75 data-nosnippet>75</a><span class="kw">use </span>crate::{
+<a href=#75 id=75 data-nosnippet>75</a><span class="kw">use crate</span>::{
 <a href=#76 id=76 data-nosnippet>76</a>    SeqTypes, SequencerApiVersion, SequencerContext,
 <a href=#77 id=77 data-nosnippet>77</a>    api::data_source::TokenDataSource,
 <a href=#78 id=78 data-nosnippet>78</a>    catchup::{
@@ -1905,8 +1905,8 @@
 <a href=#1905 id=1905 data-nosnippet>1905</a>    <span class="kw">use </span>vbs::version::{StaticVersion, StaticVersionType};
 <a href=#1906 id=1906 data-nosnippet>1906</a>    <span class="kw">use </span>versions::{EPOCH_VERSION, Upgrade};
 <a href=#1907 id=1907 data-nosnippet>1907</a>
-<a href=#1908 id=1908 data-nosnippet>1908</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;
-<a href=#1909 id=1909 data-nosnippet>1909</a>    <span class="kw">use </span>crate::{
+<a href=#1908 id=1908 data-nosnippet>1908</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
+<a href=#1909 id=1909 data-nosnippet>1909</a>    <span class="kw">use crate</span>::{
 <a href=#1910 id=1910 data-nosnippet>1910</a>        catchup::NullStateCatchup,
 <a href=#1911 id=1911 data-nosnippet>1911</a>        network,
 <a href=#1912 id=1912 data-nosnippet>1912</a>        persistence::no_storage,
@@ -2532,7 +2532,7 @@
 <a href=#2532 id=2532 data-nosnippet>2532</a>
 <a href=#2533 id=2533 data-nosnippet>2533</a>        api.get(<span class="string">"account"</span>, |_req, _state: <span class="kw-2">&amp;</span>()| {
 <a href=#2534 id=2534 data-nosnippet>2534</a>            <span class="kw">async move </span>{
-<a href=#2535 id=2535 data-nosnippet>2535</a>                Result::&lt;AccountQueryData, <span class="kw">_</span>&gt;::Err(hotshot_query_service::Error::catch_all(
+<a href=#2535 id=2535 data-nosnippet>2535</a>                <span class="prelude-ty">Result</span>::&lt;AccountQueryData, <span class="kw">_</span>&gt;::Err(hotshot_query_service::Error::catch_all(
 <a href=#2536 id=2536 data-nosnippet>2536</a>                    StatusCode::BAD_REQUEST,
 <a href=#2537 id=2537 data-nosnippet>2537</a>                    <span class="string">"no account found"</span>.to_string(),
 <a href=#2538 id=2538 data-nosnippet>2538</a>                ))
@@ -2541,7 +2541,7 @@
 <a href=#2541 id=2541 data-nosnippet>2541</a>        })<span class="question-mark">?
 <a href=#2542 id=2542 data-nosnippet>2542</a>        </span>.get(<span class="string">"blocks"</span>, |_req, _state| {
 <a href=#2543 id=2543 data-nosnippet>2543</a>            <span class="kw">async move </span>{
-<a href=#2544 id=2544 data-nosnippet>2544</a>                Result::&lt;BlocksFrontier, <span class="kw">_</span>&gt;::Err(hotshot_query_service::Error::catch_all(
+<a href=#2544 id=2544 data-nosnippet>2544</a>                <span class="prelude-ty">Result</span>::&lt;BlocksFrontier, <span class="kw">_</span>&gt;::Err(hotshot_query_service::Error::catch_all(
 <a href=#2545 id=2545 data-nosnippet>2545</a>                    StatusCode::BAD_REQUEST,
 <a href=#2546 id=2546 data-nosnippet>2546</a>                    <span class="string">"no block found"</span>.to_string(),
 <a href=#2547 id=2547 data-nosnippet>2547</a>                ))
@@ -2550,7 +2550,7 @@
 <a href=#2550 id=2550 data-nosnippet>2550</a>        })<span class="question-mark">?
 <a href=#2551 id=2551 data-nosnippet>2551</a>        </span>.get(<span class="string">"chainconfig"</span>, |_req, _state| {
 <a href=#2552 id=2552 data-nosnippet>2552</a>            <span class="kw">async move </span>{
-<a href=#2553 id=2553 data-nosnippet>2553</a>                Result::&lt;ChainConfig, <span class="kw">_</span>&gt;::Ok(ChainConfig {
+<a href=#2553 id=2553 data-nosnippet>2553</a>                <span class="prelude-ty">Result</span>::&lt;ChainConfig, <span class="kw">_</span>&gt;::Ok(ChainConfig {
 <a href=#2554 id=2554 data-nosnippet>2554</a>                    max_block_size: <span class="number">300</span>.into(),
 <a href=#2555 id=2555 data-nosnippet>2555</a>                    base_fee: <span class="number">1</span>.into(),
 <a href=#2556 id=2556 data-nosnippet>2556</a>                    fee_recipient: <span class="string">"0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
@@ -2563,7 +2563,7 @@
 <a href=#2563 id=2563 data-nosnippet>2563</a>        })<span class="question-mark">?
 <a href=#2564 id=2564 data-nosnippet>2564</a>        </span>.get(<span class="string">"leafchain"</span>, |_req, _state| {
 <a href=#2565 id=2565 data-nosnippet>2565</a>            <span class="kw">async move </span>{
-<a href=#2566 id=2566 data-nosnippet>2566</a>                Result::&lt;Vec&lt;Leaf2&gt;, <span class="kw">_</span>&gt;::Err(hotshot_query_service::Error::catch_all(
+<a href=#2566 id=2566 data-nosnippet>2566</a>                <span class="prelude-ty">Result</span>::&lt;Vec&lt;Leaf2&gt;, <span class="kw">_</span>&gt;::Err(hotshot_query_service::Error::catch_all(
 <a href=#2567 id=2567 data-nosnippet>2567</a>                    StatusCode::BAD_REQUEST,
 <a href=#2568 id=2568 data-nosnippet>2568</a>                    <span class="string">"No leafchain found"</span>.to_string(),
 <a href=#2569 id=2569 data-nosnippet>2569</a>                ))
@@ -2627,8 +2627,8 @@
 <a href=#2627 id=2627 data-nosnippet>2627</a>    <span class="kw">use </span>tide_disco::error::ServerError;
 <a href=#2628 id=2628 data-nosnippet>2628</a>    <span class="kw">use </span>vbs::version::StaticVersion;
 <a href=#2629 id=2629 data-nosnippet>2629</a>
-<a href=#2630 id=2630 data-nosnippet>2630</a>    <span class="kw">use </span>super::{update::ApiEventConsumer, <span class="kw-2">*</span>};
-<a href=#2631 id=2631 data-nosnippet>2631</a>    <span class="kw">use </span>crate::{
+<a href=#2630 id=2630 data-nosnippet>2630</a>    <span class="kw">use super</span>::{update::ApiEventConsumer, <span class="kw-2">*</span>};
+<a href=#2631 id=2631 data-nosnippet>2631</a>    <span class="kw">use crate</span>::{
 <a href=#2632 id=2632 data-nosnippet>2632</a>        network,
 <a href=#2633 id=2633 data-nosnippet>2633</a>        persistence::no_storage::NoStorage,
 <a href=#2634 id=2634 data-nosnippet>2634</a>        testing::{TestConfigBuilder, wait_for_decide_on_handle},
@@ -3269,11 +3269,11 @@
 <a href=#3269 id=3269 data-nosnippet>3269</a>        NEW_PROTOCOL_VERSION, Upgrade, version,
 <a href=#3270 id=3270 data-nosnippet>3270</a>    };
 <a href=#3271 id=3271 data-nosnippet>3271</a>
-<a href=#3272 id=3272 data-nosnippet>3272</a>    <span class="kw">use </span>self::{
+<a href=#3272 id=3272 data-nosnippet>3272</a>    <span class="kw">use </span><span class="self">self</span>::{
 <a href=#3273 id=3273 data-nosnippet>3273</a>        data_source::testing::TestableSequencerDataSource, options::HotshotEvents,
 <a href=#3274 id=3274 data-nosnippet>3274</a>        sql::DataSource <span class="kw">as </span>SqlDataSource,
 <a href=#3275 id=3275 data-nosnippet>3275</a>    };
-<a href=#3276 id=3276 data-nosnippet>3276</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;
+<a href=#3276 id=3276 data-nosnippet>3276</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
 <a href=#3277 id=3277 data-nosnippet>3277</a>
 <a href=#3278 id=3278 data-nosnippet>3278</a>    <span class="kw">async fn </span>wait_until_block_height(
 <a href=#3279 id=3279 data-nosnippet>3279</a>        client: <span class="kw-2">&amp;</span>Client&lt;ServerError, StaticVersion&lt;<span class="number">0</span>, <span class="number">1</span>&gt;&gt;,
@@ -3293,7 +3293,7 @@
 <a href=#3293 id=3293 data-nosnippet>3293</a>            sleep(Duration::from_secs(<span class="number">3</span>)).<span class="kw">await</span>;
 <a href=#3294 id=3294 data-nosnippet>3294</a>        }
 <a href=#3295 id=3295 data-nosnippet>3295</a>    }
-<a href=#3296 id=3296 data-nosnippet>3296</a>    <span class="kw">use </span>crate::{
+<a href=#3296 id=3296 data-nosnippet>3296</a>    <span class="kw">use crate</span>::{
 <a href=#3297 id=3297 data-nosnippet>3297</a>        api::{
 <a href=#3298 id=3298 data-nosnippet>3298</a>            options::Query,
 <a href=#3299 id=3299 data-nosnippet>3299</a>            sql::{impl_testable_data_source::tmp_options, reconstruct_state},
@@ -3623,7 +3623,7 @@
 <a href=#3623 id=3623 data-nosnippet>3623</a>                <span class="number">1</span>,
 <a href=#3624 id=3624 data-nosnippet>3624</a>                ValidatedState::default(),
 <a href=#3625 id=3625 data-nosnippet>3625</a>                no_storage::Options,
-<a href=#3626 id=3626 data-nosnippet>3626</a>                None::&lt;NullStateCatchup&gt;,
+<a href=#3626 id=3626 data-nosnippet>3626</a>                <span class="prelude-val">None</span>::&lt;NullStateCatchup&gt;,
 <a href=#3627 id=3627 data-nosnippet>3627</a>                <span class="prelude-val">None</span>,
 <a href=#3628 id=3628 data-nosnippet>3628</a>                <span class="kw-2">&amp;</span>NoMetrics,
 <a href=#3629 id=3629 data-nosnippet>3629</a>                test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
@@ -3731,7 +3731,7 @@
 <a href=#3731 id=3731 data-nosnippet>3731</a>                <span class="number">1</span>,
 <a href=#3732 id=3732 data-nosnippet>3732</a>                ValidatedState::default(),
 <a href=#3733 id=3733 data-nosnippet>3733</a>                no_storage::Options,
-<a href=#3734 id=3734 data-nosnippet>3734</a>                None::&lt;NullStateCatchup&gt;,
+<a href=#3734 id=3734 data-nosnippet>3734</a>                <span class="prelude-val">None</span>::&lt;NullStateCatchup&gt;,
 <a href=#3735 id=3735 data-nosnippet>3735</a>                <span class="prelude-val">None</span>,
 <a href=#3736 id=3736 data-nosnippet>3736</a>                <span class="kw-2">&amp;</span>NoMetrics,
 <a href=#3737 id=3737 data-nosnippet>3737</a>                test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
@@ -9727,7 +9727,7 @@
 <a href=#9727 id=9727 data-nosnippet>9727</a>                .map(|path| <span class="kw">async move </span>{
 <a href=#9728 id=9728 data-nosnippet>9728</a>                    <span class="macro">tracing::info!</span>(i, path, <span class="string">"fetch leaf proof"</span>);
 <a href=#9729 id=9729 data-nosnippet>9729</a>                    <span class="kw">let </span>proof = client.get::&lt;LeafProof&gt;(<span class="kw-2">&amp;</span>path).send().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#9730 id=9730 data-nosnippet>9730</a>                    Ok::&lt;<span class="kw">_</span>, anyhow::Error&gt;((path, proof))
+<a href=#9730 id=9730 data-nosnippet>9730</a>                    <span class="prelude-val">Ok</span>::&lt;<span class="kw">_</span>, anyhow::Error&gt;((path, proof))
 <a href=#9731 id=9731 data-nosnippet>9731</a>                }),
 <a href=#9732 id=9732 data-nosnippet>9732</a>            )
 <a href=#9733 id=9733 data-nosnippet>9733</a>            .<span class="kw">await
@@ -9757,7 +9757,7 @@
 <a href=#9757 id=9757 data-nosnippet>9757</a>                .map(|path| <span class="kw">async move </span>{
 <a href=#9758 id=9758 data-nosnippet>9758</a>                    <span class="macro">tracing::info!</span>(i, path, <span class="string">"get header proof"</span>);
 <a href=#9759 id=9759 data-nosnippet>9759</a>                    <span class="kw">let </span>proof = client.get::&lt;HeaderProof&gt;(<span class="kw-2">&amp;</span>path).send().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#9760 id=9760 data-nosnippet>9760</a>                    Ok::&lt;<span class="kw">_</span>, anyhow::Error&gt;((path, proof))
+<a href=#9760 id=9760 data-nosnippet>9760</a>                    <span class="prelude-val">Ok</span>::&lt;<span class="kw">_</span>, anyhow::Error&gt;((path, proof))
 <a href=#9761 id=9761 data-nosnippet>9761</a>                }),
 <a href=#9762 id=9762 data-nosnippet>9762</a>            )
 <a href=#9763 id=9763 data-nosnippet>9763</a>            .<span class="kw">await

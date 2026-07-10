@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["u32_fits","u32_from_bytes","u32_max_from_byte_len","u32_to_bytes","usize_fits","usize_from_bytes","usize_max_from_byte_len","usize_to_bytes"],"macro":["bytes_serde_impl","uint_bytes_impl"]};
+window.SIDEBAR_ITEMS = {"fn":["u32_fits","u32_from_bytes","u32_max_from_byte_len","u32_to_bytes","usize_fits","usize_from_bytes","usize_max_from_byte_len","usize_to_bytes"],"macro":[["bytes_serde_impl",1],["uint_bytes_impl",1]]};

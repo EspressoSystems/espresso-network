@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"macro":["impl_serde_from_string_or_integer"],"mod":["string_or_integer"],"trait":["FromStringOrInteger"]};
+window.SIDEBAR_ITEMS = {"macro":[["impl_serde_from_string_or_integer",1]],"mod":["string_or_integer"],"trait":["FromStringOrInteger"]};

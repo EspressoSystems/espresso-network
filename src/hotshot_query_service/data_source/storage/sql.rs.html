@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `hotshot-query-service/src/data_source/storage/sql.rs`."><title>sql.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-17e0aaed.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="hotshot_query_service" data-themes="" data-resource-suffix="" data-rustdoc-version="1.96.1 (31fca3adb 2026-06-26)" data-channel="1.96.1" data-search-js="search-b5634cc7.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../../static.files/storage-41dd4d93.js"></script><script defer src="../../../../static.files/src-script-813739b1.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">hotshot_query_service/data_source/storage/</div>sql.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Copyright (c) 2022 Espresso Systems (espressosys.com)
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `hotshot-query-service/src/data_source/storage/sql.rs`."><title>sql.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-17e0aaed.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="hotshot_query_service" data-themes="" data-resource-suffix="" data-rustdoc-version="1.97.0 (2d8144b78 2026-07-07)" data-channel="1.97.0" data-search-js="search-fd9372ac.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../../static.files/storage-41dd4d93.js"></script><script defer src="../../../../static.files/src-script-813739b1.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-fcd733ba.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">hotshot_query_service/data_source/storage/</div>sql.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="comment">// Copyright (c) 2022 Espresso Systems (espressosys.com)
 <a href=#2 id=2 data-nosnippet>2</a>// This file is part of the HotShot Query Service library.
 <a href=#3 id=3 data-nosnippet>3</a>//
 <a href=#4 id=4 data-nosnippet>4</a>// This program is free software: you can redistribute it and/or modify it under the terms of the GNU
@@ -36,7 +36,7 @@
 <a href=#36 id=36 data-nosnippet>36</a><span class="kw">use </span>tokio::time::sleep;
 <a href=#37 id=37 data-nosnippet>37</a><span class="kw">use </span>tracing::instrument;
 <a href=#38 id=38 data-nosnippet>38</a>
-<a href=#39 id=39 data-nosnippet>39</a><span class="kw">use </span>crate::{
+<a href=#39 id=39 data-nosnippet>39</a><span class="kw">use crate</span>::{
 <a href=#40 id=40 data-nosnippet>40</a>    Header, QueryError, QueryResult,
 <a href=#41 id=41 data-nosnippet>41</a>    availability::{QueryableHeader, QueryablePayload, VidCommonMetadata, VidCommonQueryData},
 <a href=#42 id=42 data-nosnippet>42</a>    data_source::{
@@ -66,8 +66,8 @@
 <a href=#66 id=66 data-nosnippet>66</a><span class="kw">pub use </span>refinery::Migration;
 <a href=#67 id=67 data-nosnippet>67</a><span class="kw">pub use </span>transaction::<span class="kw-2">*</span>;
 <a href=#68 id=68 data-nosnippet>68</a>
-<a href=#69 id=69 data-nosnippet>69</a><span class="kw">use </span>self::{migrate::Migrator, transaction::PoolMetrics};
-<a href=#70 id=70 data-nosnippet>70</a><span class="kw">use </span>super::{AvailabilityStorage, NodeStorage};
+<a href=#69 id=69 data-nosnippet>69</a><span class="kw">use </span><span class="self">self</span>::{migrate::Migrator, transaction::PoolMetrics};
+<a href=#70 id=70 data-nosnippet>70</a><span class="kw">use super</span>::{AvailabilityStorage, NodeStorage};
 <a href=#71 id=71 data-nosnippet>71</a><span class="comment">// This needs to be reexported so that we can reference it by absolute path relative to this crate
 <a href=#72 id=72 data-nosnippet>72</a>// in the expansion of `include_migrations`, even when `include_migrations` is invoked from another
 <a href=#73 id=73 data-nosnippet>73</a>// crate which doesn't have `include_dir` as a dependency.
@@ -1005,7 +1005,7 @@
 <a href=#1005 id=1005 data-nosnippet>1005</a>        atomic::{AtomicU32, Ordering},
 <a href=#1006 id=1006 data-nosnippet>1006</a>    };
 <a href=#1007 id=1007 data-nosnippet>1007</a>
-<a href=#1008 id=1008 data-nosnippet>1008</a>    <span class="kw">use </span>super::{Duration, SerializableRetryConfig, is_serialization_conflict_err};
+<a href=#1008 id=1008 data-nosnippet>1008</a>    <span class="kw">use super</span>::{Duration, SerializableRetryConfig, is_serialization_conflict_err};
 <a href=#1009 id=1009 data-nosnippet>1009</a>
 <a href=#1010 id=1010 data-nosnippet>1010</a>    <span class="doccomment">/// A retry policy with small delays and a low retry cap, so the exhaustion test runs quickly.
 <a href=#1011 id=1011 data-nosnippet>1011</a>    </span><span class="kw">const </span>TEST_RETRY: SerializableRetryConfig = SerializableRetryConfig::new(
@@ -1803,8 +1803,8 @@
 <a href=#1803 id=1803 data-nosnippet>1803</a>    };
 <a href=#1804 id=1804 data-nosnippet>1804</a>    <span class="kw">use </span>tokio::time::sleep;
 <a href=#1805 id=1805 data-nosnippet>1805</a>
-<a href=#1806 id=1806 data-nosnippet>1806</a>    <span class="kw">use </span>super::{testing::TmpDb, <span class="kw-2">*</span>};
-<a href=#1807 id=1807 data-nosnippet>1807</a>    <span class="kw">use </span>crate::{
+<a href=#1806 id=1806 data-nosnippet>1806</a>    <span class="kw">use super</span>::{testing::TmpDb, <span class="kw-2">*</span>};
+<a href=#1807 id=1807 data-nosnippet>1807</a>    <span class="kw">use crate</span>::{
 <a href=#1808 id=1808 data-nosnippet>1808</a>        availability::{BlockQueryData, LeafQueryData},
 <a href=#1809 id=1809 data-nosnippet>1809</a>        data_source::storage::{
 <a href=#1810 id=1810 data-nosnippet>1810</a>            MerklizedStateStorage, UpdateAvailabilityStorage, pruning::PrunedHeightStorage,
@@ -1842,7 +1842,7 @@
 <a href=#1842 id=1842 data-nosnippet>1842</a>                    cfg = cfg.no_migrations();
 <a href=#1843 id=1843 data-nosnippet>1843</a>                }
 <a href=#1844 id=1844 data-nosnippet>1844</a>                <span class="kw">let </span>client = SqlStorage::connect(cfg, StorageConnectionType::Query).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#1845 id=1845 data-nosnippet>1845</a>                Ok::&lt;<span class="kw">_</span>, Error&gt;(client)
+<a href=#1845 id=1845 data-nosnippet>1845</a>                <span class="prelude-val">Ok</span>::&lt;<span class="kw">_</span>, Error&gt;(client)
 <a href=#1846 id=1846 data-nosnippet>1846</a>            }
 <a href=#1847 id=1847 data-nosnippet>1847</a>        };
 <a href=#1848 id=1848 data-nosnippet>1848</a>
