@@ -15,8 +15,7 @@ use hotshot_types::{
 };
 use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
-use surf_disco::{Client, error::ClientError};
-use tide_disco::Url;
+use surf_disco::{Client, Url, error::ClientError};
 use tokio::time::sleep;
 use tracing::{info, instrument};
 use vbs::BinarySerializer;
