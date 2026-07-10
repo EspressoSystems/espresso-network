@@ -25,7 +25,6 @@ use hotshot_types::{
         VidCommitment, VidDisperseShare,
     },
     drb::{DrbInput, DrbResult},
-    epoch_membership::EpochMembershipCoordinator,
     event::{HotShotAction, LeafInfo},
     message::{Proposal, convert_proposal},
     simple_certificate::{
@@ -41,9 +40,9 @@ use hotshot_types::{
 };
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
+    epoch_membership::EpochMembershipCoordinator,
     new_protocol::CoordinatorEvent,
     simple_certificate::LightClientStateUpdateCertificateV2,
-    stake_table::HSStakeTable,
 };
 use indexmap::IndexMap;
 use serde::{Serialize, de::DeserializeOwned};
