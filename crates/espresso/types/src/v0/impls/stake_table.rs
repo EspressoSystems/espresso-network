@@ -83,10 +83,10 @@ use crate::traits::EventsPersistenceRead;
 #[cfg(feature = "node")]
 use crate::v0_1::L1Provider;
 #[cfg(feature = "node")]
-use crate::v0_3::{BLOCKS_PER_YEAR, FetchRewardError, INFLATION_RATE};
+use crate::v0_3::{BLOCKS_PER_YEAR, INFLATION_RATE};
 use crate::v0_3::{
-    COMMISSION_BASIS_POINTS, EventSortingError, ExpectedStakeTableError, MILLISECONDS_PER_YEAR,
-    RewardAmount, StakeTableError,
+    COMMISSION_BASIS_POINTS, EventSortingError, ExpectedStakeTableError, FetchRewardError,
+    MILLISECONDS_PER_YEAR, RewardAmount, StakeTableError,
 };
 
 pub type RegisteredValidatorMap = IndexMap<Address, RegisteredValidator<BLSPubKey>>;
@@ -1390,17 +1390,28 @@ impl Fetcher {
             .context("failed to construct validators set from l1 events")
     }
 
-    /// Calculates the fixed block reward based on the token's initial supply.
-    /// - The initial supply is fetched from the token contract
-    /// - If the supply is not present, it invokes `fetch_and_update_initial_supply` to retrieve it.
+    /// Returns the initial token supply, fetching it from L1 if not yet known.
+    #[cfg(feature = "node")]
+    pub async fn initial_supply_or_fetch(&self) -> Result<U256, FetchRewardError> {
+        // `fetch_and_update_initial_supply` needs a write lock, create temporary to drop lock
+        let supply = *self.initial_supply.read().await;
+        match supply {
+            Some(supply) => Ok(supply),
+            None => self.fetch_and_update_initial_supply().await,
+        }
+    }
+
+    /// Returns the initial token supply, fetching it from L1 if not yet known.
+    #[cfg(not(feature = "node"))]
+    pub async fn initial_supply_or_fetch(&self) -> Result<U256, FetchRewardError> {
+        Ok((*self.initial_supply.read().await).expect("initial supply pre-populated"))
+    }
+
+    /// Calculates the fixed block reward based on the token's initial supply,
+    /// obtained via `initial_supply_or_fetch`.
     #[cfg(feature = "node")]
     pub async fn fetch_fixed_block_reward(&self) -> Result<RewardAmount, FetchRewardError> {
-        // `fetch_and_update_initial_supply` needs a write lock, create temporary to drop lock
-        let initial_supply = *self.initial_supply.read().await;
-        let initial_supply = match initial_supply {
-            Some(supply) => supply,
-            None => self.fetch_and_update_initial_supply().await?,
-        };
+        let initial_supply = self.initial_supply_or_fetch().await?;
 
         let reward = ((initial_supply * U256::from(INFLATION_RATE)) / U256::from(BLOCKS_PER_YEAR))
             .checked_div(U256::from(COMMISSION_BASIS_POINTS))
