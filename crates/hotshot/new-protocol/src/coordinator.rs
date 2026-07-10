@@ -143,6 +143,8 @@ pub struct Coordinator<T: NodeType, S> {
     #[builder(skip)]
     view_started: Option<(ViewNumber, EpochNumber, Instant)>,
     #[builder(skip)]
+    proposal_received_at: Option<(ViewNumber, Instant)>,
+    #[builder(skip)]
     invalid_certs_at_decide: u64,
     #[builder(skip)]
     payload_txn_bytes: BTreeMap<ViewNumber, usize>,
@@ -219,6 +221,9 @@ where
             coordinator_metrics
                 .as_ref()
                 .map(|m| m.consensus.validate_and_apply_header_duration.clone()),
+            coordinator_metrics
+                .as_ref()
+                .map(|m| m.consensus.update_leaf_duration.clone()),
         );
         // Seed `from_header` stubs for restored undecided proposals so a child
         // proposal can be validated; anchor seeded last so its state wins.
@@ -770,8 +775,11 @@ where
                 // wins and we persist just that one:
                 if let VidCommitment::V2(commit) = proposal.data.block_header.payload_commitment() {
                     if let Some(da) = self.da_payloads.remove(&(view, commit)) {
-                        if self.metrics.is_some() {
+                        if let Some(m) = &self.metrics {
                             self.payload_txn_bytes.insert(view, da.payload.txn_bytes());
+                            if da.payload.transactions(&da.metadata).next().is_none() {
+                                m.consensus.number_of_empty_blocks_proposed.add(1);
+                            }
                         }
                         self.storage.append_da(
                             view,
@@ -790,6 +798,15 @@ where
                 let epoch = proposal.data.epoch;
                 let block = proposal.data.block_header.block_number();
                 info!(%node, %view, %epoch, %block, "send proposal");
+                if let Some(m) = &self.metrics
+                    && proposal.data.view_change_evidence.is_none()
+                    && let Some((prev_view, received_at)) = self.proposal_received_at
+                    && prev_view + 1 == view
+                {
+                    m.consensus
+                        .previous_proposal_to_proposal_time
+                        .add_point(received_at.elapsed().as_millis() as f64);
+                }
                 let message = Message {
                     sender: self.public_key.clone(),
                     message_type: MessageType::Consensus(ConsensusMessage::Proposal(
@@ -1006,6 +1023,11 @@ where
                     let epoch = p.proposal.data.epoch;
                     let block = p.proposal.data.block_header.block_number();
                     debug!(%node, %sender, %view, %epoch, %block, "recv proposal");
+                    if self.metrics.is_some()
+                        && self.proposal_received_at.is_none_or(|(v, _)| v < view)
+                    {
+                        self.proposal_received_at = Some((view, Instant::now()));
+                    }
                     if self.consensus.wants_proposal_for_view(&view) {
                         self.proposal_validator.validate(p);
                     }

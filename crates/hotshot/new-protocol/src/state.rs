@@ -97,6 +97,7 @@ pub struct StateManager<T: NodeType> {
     upgrade_lock: UpgradeLock<T>,
     tasks: JoinSet<Completed<T>>,
     validate_duration_metric: Option<Box<dyn Histogram>>,
+    update_leaf_duration_metric: Option<Box<dyn Histogram>>,
 }
 
 enum Pending<T: NodeType> {
@@ -135,12 +136,19 @@ impl<T: NodeType> StateManager<T> {
             upgrade_lock,
             tasks: JoinSet::new(),
             validate_duration_metric: None,
+            update_leaf_duration_metric: None,
         }
     }
 
-    /// Record successful `validate_and_apply_header` durations in `hist`.
-    pub fn with_metrics(mut self, hist: Option<Box<dyn Histogram>>) -> Self {
-        self.validate_duration_metric = hist;
+    /// Record successful `validate_and_apply_header` durations in `validate`
+    /// and validated leaf/state insertions in `update_leaf`.
+    pub fn with_metrics(
+        mut self,
+        validate: Option<Box<dyn Histogram>>,
+        update_leaf: Option<Box<dyn Histogram>>,
+    ) -> Self {
+        self.validate_duration_metric = validate;
+        self.update_leaf_duration_metric = update_leaf;
         self
     }
 
@@ -369,12 +377,16 @@ impl<T: NodeType> StateManager<T> {
                             continue;
                         }
                         if let Some(leaf) = leaf2 {
+                            let insert_started = Instant::now();
                             self.insert_state(
                                 response.view,
                                 response.state.clone(),
                                 response.delta.clone(),
                                 leaf,
                             );
+                            if let Some(hist) = &self.update_leaf_duration_metric {
+                                hist.add_point(insert_started.elapsed().as_secs_f64());
+                            }
                             self.start_pending(response.commitment);
                             return Some(StateManagerOutput::State {
                                 response,
