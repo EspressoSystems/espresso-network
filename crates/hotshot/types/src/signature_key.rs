@@ -6,7 +6,7 @@
 
 //! Types and structs for the hotshot signature keys
 
-use alloy::primitives::U256;
+use alloy_primitives::U256;
 use ark_serialize::SerializationError;
 use bitvec::{slice::BitSlice, vec::BitVec};
 use generic_array::GenericArray;
@@ -314,7 +314,7 @@ impl LCV3StateSignatureKey for SchnorrPubKey {
 
 #[cfg(test)]
 mod tests {
-    use alloy::primitives::U256;
+    use alloy_primitives::U256;
     use bitvec::prelude::*;
     use jf_signature::bls_over_bn254::{BLSOverBN254CurveSignatureScheme, KeyPair};
 

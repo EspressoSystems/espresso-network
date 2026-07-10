@@ -29,7 +29,9 @@ use espresso_dev_node::{
 use espresso_node::{
     SequencerApiVersion,
     api::{
+        data_source::testing::TestableSequencerDataSource,
         options,
+        sql::DataSource,
         test_helpers::{STAKE_TABLE_CAPACITY_FOR_TEST, TestNetwork, TestNetworkConfigBuilder},
     },
     persistence,
@@ -40,7 +42,11 @@ use espresso_types::{
     L1ClientOptions, SeqTypes, ValidatedState, parse_duration, v0_3::ChainConfig,
 };
 use espresso_utils::logging;
-use futures::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
+use futures::{
+    FutureExt, StreamExt,
+    future::{BoxFuture, join_all},
+    stream::FuturesUnordered,
+};
 use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
 use hotshot_state_prover::{StateProverConfig, v2::service::run_prover_service};
 use hotshot_types::{
@@ -324,7 +330,7 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
         .stake_table_capacity(STAKE_TABLE_CAPACITY_FOR_TEST)
         .state_relay_url(relay_server_url.clone())
         .l1_url(l1_url.clone())
-        .l1_opt(l1_opt)
+        .l1_opt(l1_opt.clone())
         .build();
     let blocks_per_epoch = network_config.hotshot_config().epoch_height;
     let epoch_start_block = network_config.hotshot_config().epoch_start_block;
@@ -516,6 +522,14 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
                 admin,
             )
             .await?;
+
+            if matches!(version, DevNodeVersion::V0_6) {
+                let l1_client = l1_opt.clone().connect(vec![l1_url.clone()])?;
+                deployer::upgrade_stake_table_v2(&provider, l1_client, contracts, admin, admin)
+                    .await?;
+                deployer::upgrade_stake_table_v3(&provider, contracts).await?;
+            }
+
             if let Some(multisig) = multisig_address {
                 deployer::transfer_ownership(
                     &provider,
@@ -652,11 +666,19 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     .query_sql(Default::default(), sql)
     .hotshot_events(Default::default())
     .light_client(Default::default());
+    let consensus_dbs = join_all((0..NUM_NODES).map(|_| DataSource::create_storage())).await;
+    let persistences: [_; NUM_NODES] = consensus_dbs
+        .iter()
+        .map(DataSource::persistence_options)
+        .collect::<Vec<_>>()
+        .try_into()
+        .expect("one persistence per node");
 
     let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
         .api_config(api_options)
         .network_config(network_config)
         .states(states)
+        .persistences(persistences)
         .build();
 
     // Start the nodes
@@ -665,6 +687,7 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
             DevNodeVersion::V0_3 => Upgrade::trivial(versions::version(0, 3)),
             DevNodeVersion::V0_4 => Upgrade::trivial(versions::version(0, 4)),
             DevNodeVersion::V0_5 => Upgrade::trivial(versions::version(0, 5)),
+            DevNodeVersion::V0_6 => Upgrade::trivial(versions::NEW_PROTOCOL_VERSION),
         };
         TestNetwork::new(config, u).await
     };
@@ -740,12 +763,13 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     ));
     handles.push(dev_node_handle);
 
+    // if any of the async task is complete or a shutdown signal arrives, the
+    // dev node binary exits
     tokio::select! {
         Some(item) = handles.next() => {
             tracing::error!("exiting dev node: {item:?}");
-            drop(network);
         },
-        _ = espresso_utils::shutdown::wait_for_shutdown_signal() => drop(network),
+        _ = espresso_utils::shutdown::wait_for_shutdown_signal() => {},
     }
 
     Ok(())

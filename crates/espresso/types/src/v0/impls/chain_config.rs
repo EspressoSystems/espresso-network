@@ -77,6 +77,13 @@ mod tests {
     use crate::v0_3::{ChainConfig, ResolvableChainConfig};
 
     #[test]
+    fn decaf_chain_id_value() {
+        use crate::v0_1::DECAF_CHAIN_ID;
+        assert_eq!(DECAF_CHAIN_ID, ChainId(U256::from(0xdecafu64)));
+        assert_ne!(DECAF_CHAIN_ID, ChainConfig::default().chain_id);
+    }
+
+    #[test]
     fn test_chainid_serde_json_as_decimal() {
         let id = ChainId::from(123);
         let serialized = serde_json::to_string(&id).unwrap();

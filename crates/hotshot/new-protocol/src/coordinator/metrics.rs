@@ -1,9 +1,10 @@
 use std::{sync::Arc, time::Instant};
 
-use hotshot_types::traits::metrics::{Counter, Histogram, Metrics as HotshotMetrics};
+use hotshot_types::traits::metrics::{Counter, Gauge, Histogram, Metrics as HotshotMetrics};
 
 pub struct Metrics {
     pub(crate) timeouts: Box<dyn Counter>,
+    pub(crate) leaf_decided_view: Box<dyn Gauge>,
     pub(crate) apply_consensus: Arc<dyn Histogram>,
     pub(crate) next_consensus_input: Arc<dyn Histogram>,
     pub(crate) process_consensus_output: Arc<dyn Histogram>,
@@ -17,6 +18,7 @@ impl Metrics {
     pub fn new(m: &dyn HotshotMetrics) -> Self {
         Self {
             timeouts: m.create_counter("coordinator_timeouts".into(), None),
+            leaf_decided_view: m.create_gauge("leaf_decided_view".into(), None),
             apply_consensus: m
                 .create_histogram("coordinator_apply_consensus".into(), Some("s".into()))
                 .into(),

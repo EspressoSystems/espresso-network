@@ -22,7 +22,7 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     // Genesis carries the chain ID, which selects the default telemetry
     // endpoint. Load it before telemetry init; the genesis log line is emitted
     // later, once the subscriber is installed.
-    let genesis = Genesis::from_file(&opt.genesis_file)?;
+    let genesis = Genesis::load(&opt.genesis_file).await?;
     let telemetry_endpoint: Option<Url> = opt.telemetry.endpoint.clone().or_else(|| {
         default_telemetry_endpoint(genesis.chain_config.chain_id).map(|s| {
             s.parse()
@@ -74,7 +74,7 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     let mut modules = opt.modules();
     tracing::warn!(?modules, "sequencer starting up");
 
-    let public_node_config = PublicNodeConfig::new(&opt, &modules);
+    let public_node_config = PublicNodeConfig::new(&opt, &modules, &genesis);
 
     tracing::warn!(?genesis, "genesis");
 
@@ -209,6 +209,7 @@ where
         libp2p_heartbeat_initial_delay: opt.libp2p_heartbeat_initial_delay,
         libp2p_gossip_factor: opt.libp2p_gossip_factor,
         libp2p_gossip_lazy: opt.libp2p_gossip_lazy,
+        libp2p_dht_put_quorum: opt.libp2p_dht_put_quorum,
     };
 
     let proposal_fetcher_config = opt.proposal_fetcher_config;
@@ -299,7 +300,10 @@ where
 mod test {
     use std::time::Duration;
 
-    use espresso_types::PubKey;
+    use espresso_types::{
+        PubKey, Upgrade, UpgradeType,
+        v0_1::{UpgradeMode, ViewBasedUpgrade},
+    };
     use hotshot_types::{light_client::StateKeyPair, traits::signature_key::SignatureKey, x25519};
     use surf_disco::{Client, Url, error::ClientError};
     use tagged_base64::TaggedBase64;
@@ -333,7 +337,24 @@ mod test {
             accounts: Default::default(),
             l1_finalized: L1Finalized::Number { number: 0 },
             header: Default::default(),
-            upgrades: Default::default(),
+            // `validate_fee_contract` would reject this upgrade (no fee_contract); the test
+            // never reaches validation because startup blocks at the orchestrator first.
+            upgrades: [(
+                Version { major: 0, minor: 2 },
+                Upgrade {
+                    mode: UpgradeMode::View(ViewBasedUpgrade {
+                        start_proposing_view: 100,
+                        stop_proposing_view: 200,
+                        start_voting_view: None,
+                        stop_voting_view: None,
+                    }),
+                    upgrade_type: UpgradeType::Fee {
+                        chain_config: Default::default(),
+                    },
+                },
+            )]
+            .into_iter()
+            .collect(),
             base_version: Version { major: 0, minor: 1 },
             upgrade_version: Version { major: 0, minor: 2 },
             epoch_height: None,
@@ -382,7 +403,7 @@ mod test {
         // be waiting for the orchestrator, but it should at least start up the API server and
         // populate some metrics.
         tracing::info!(port = %port1, "starting sequencer");
-        let public_node_config = PublicNodeConfig::new(&opt, &modules);
+        let public_node_config = PublicNodeConfig::new(&opt, &modules, &genesis);
         let task = spawn(async move {
             if let Err(err) = init_with_storage(
                 genesis,
@@ -452,6 +473,18 @@ mod test {
             build_info_line.contains("testing"),
             "expected testing in features: {lines:#?}"
         );
+        let genesis_line = concat!(
+            r#"consensus_genesis{base_version="0.1",genesis_version="0.1","#,
+            r#"upgrade_version="0.2"} 1"#
+        );
+        assert!(
+            lines.contains(&genesis_line),
+            "missing consensus_genesis metric: {lines:#?}"
+        );
+        assert!(
+            lines.contains(&r#"consensus_genesis_upgrade{version="0.2"} 1"#),
+            "missing consensus_genesis_upgrade metric: {lines:#?}"
+        );
 
         // The /config/runtime endpoint should be available and reflect CLI overrides. Use a raw
         // reqwest client to fetch JSON, since surf-disco defaults to bincode encoding which can't
@@ -490,6 +523,21 @@ mod test {
                 "top-level key '{key}' contains 'private': {node_cfg}"
             );
         }
+        assert_eq!(
+            node_cfg["genesis"]["base_version"],
+            serde_json::Value::String("0.1".into()),
+            "genesis.base_version mismatch: {node_cfg}"
+        );
+        assert_eq!(
+            node_cfg["genesis"]["upgrade"][0]["version"],
+            serde_json::Value::String("0.2".into()),
+            "genesis.upgrade[0].version mismatch: {node_cfg}"
+        );
+        assert_eq!(
+            node_cfg["genesis"]["upgrade"][0]["start_proposing_view"],
+            serde_json::Value::Number(100.into()),
+            "genesis.upgrade[0].start_proposing_view mismatch: {node_cfg}"
+        );
 
         task.abort();
     }

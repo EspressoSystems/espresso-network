@@ -6,7 +6,7 @@
 
 //! Types and structs related to the stake table
 
-use alloy::primitives::U256;
+use alloy_primitives::U256;
 use ark_ff::PrimeField;
 use derive_more::derive::{Deref, DerefMut};
 use jf_crhf::CRHF;

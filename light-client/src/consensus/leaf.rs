@@ -6,7 +6,7 @@ use espresso_types::{Certificate2, Leaf2, SeqTypes};
 use hotshot_query_service_types::availability::LeafQueryData;
 use hotshot_types::{
     data::EpochNumber, epoch_membership::EpochMembership, simple_certificate::QuorumCertificate2,
-    simple_vote::HasEpoch, traits::block_contents::BlockHeader, vote::HasViewNumber,
+    traits::block_contents::BlockHeader, utils::epoch_from_block_number, vote::HasViewNumber,
 };
 use serde::{Deserialize, Serialize};
 use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION};
@@ -56,23 +56,6 @@ pub enum FinalityProof {
         deciding_qc: Arc<Certificate>,
     },
 }
-
-impl FinalityProof {
-    /// The epoch number whose quorum is needed to verify this proof.
-    ///
-    /// This determines the kind of [`LeafProofHint`] needed to verify the proof. If [`Some`], then
-    /// a [`LeafProofHint::Quorum`] is needed with a quorum from this epoch. If [`None`], then a
-    /// [`LeafProofHint::Assumption`] is needed.
-    pub fn epoch(&self) -> Option<EpochNumber> {
-        match self {
-            Self::Assumption => None,
-            Self::HotStuff2 { committing_qc, .. } => committing_qc.epoch(),
-            Self::HotStuff { precommit_qc, .. } => precommit_qc.epoch(),
-            Self::NewProtocol { cert2, .. } => cert2.epoch(),
-        }
-    }
-}
-
 /// A hint that allows a verifier to verify a proof.
 ///
 /// The hint should be supplied by the verifier (e.g. the light client). It represents the root of
@@ -357,6 +340,21 @@ impl LeafProof {
     /// Inspect the raw finality proof within the larger proof.
     pub fn proof(&self) -> &FinalityProof {
         &self.proof
+    }
+
+    /// The epoch number whose quorum is needed to verify this proof.
+    ///
+    /// This determines the kind of [`LeafProofHint`] needed to verify the proof. If [`Some`], then
+    /// a [`LeafProofHint::Quorum`] is needed with a quorum from this epoch. If [`None`], then a
+    /// [`LeafProofHint::Assumption`] is needed.
+    pub fn epoch(&self, epoch_height: u64) -> Result<Option<EpochNumber>> {
+        if matches!(self.proof, FinalityProof::Assumption) {
+            Ok(None)
+        } else {
+            let height = self.leaves.last().context("empty leaf chain")?.height();
+            let epoch = epoch_from_block_number(height, epoch_height);
+            Ok(Some(epoch.into()))
+        }
     }
 }
 

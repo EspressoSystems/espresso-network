@@ -2,8 +2,8 @@ use std::io;
 
 use thiserror::Error;
 
+use crate::{NetAddr, x25519::PublicKey};
 pub use crate::{addr::InvalidNetAddr, msg::InvalidHeader};
-use crate::{addr::NetAddr, x25519::PublicKey};
 
 /// The empty type has no values.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

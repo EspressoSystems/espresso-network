@@ -147,7 +147,7 @@ where
     Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
-    type Pruner = ();
+    type Pruner<'a> = ();
 }
 
 impl<Types: NodeType> FileSystemStorage<Types>

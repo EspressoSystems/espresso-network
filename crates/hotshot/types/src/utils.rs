@@ -12,7 +12,7 @@ use std::{
     sync::Arc,
 };
 
-use alloy::primitives::U256;
+use alloy_primitives::U256;
 use anyhow::{anyhow, ensure};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use bincode::{

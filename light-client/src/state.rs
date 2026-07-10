@@ -1,13 +1,17 @@
 //! Client-side state used to implement light client fetching and verification.
 
-use std::{collections::BTreeMap, future::Future, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    future::Future,
+    sync::Arc,
+};
 
 use anyhow::{Context, Result, bail, ensure};
 use async_lock::RwLock;
 use committable::Committable;
 use espresso_types::{
-    Certificate2, DrbAndHeaderUpgradeVersion, Header, Leaf2, NamespaceId, PubKey, SeqTypes,
-    StakeTableState, Transaction, ValidatorSet,
+    Certificate2, ChainId, DECAF_CHAIN_ID, DrbAndHeaderUpgradeVersion, Header, Leaf2, NamespaceId,
+    PubKey, SeqTypes, StakeTableState, Transaction, ValidatorSet,
 };
 use futures::future::try_join;
 use hotshot_query_service_types::{
@@ -50,6 +54,9 @@ pub struct Genesis {
 
     /// The fixed stake table used before epochs begin.
     pub stake_table: Vec<StakeTableEntry<PubKey>>,
+
+    /// Genesis chain id, used to derive Decaf-specific behavior.
+    pub chain_id: ChainId,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -65,26 +72,12 @@ pub struct LightClientOptions {
         )
     )]
     pub num_stake_tables_in_memory: usize,
-
-    /// Enable unsafe behavior for Decaf testnet.
-    ///
-    /// This flag allows the light client to skip certain safety checks that are not possible to
-    /// evaluate on Decaf. It is NOT SAFE to provide this flag in a Mainnet environment.
-    #[cfg(feature = "decaf")]
-    #[cfg_attr(
-        feature = "clap",
-        clap(long = "light-client-decaf", env = "LIGHT_CLIENT_DECAF")
-    )]
-    pub decaf: bool,
 }
 
 impl Default for LightClientOptions {
     fn default() -> Self {
         Self {
             num_stake_tables_in_memory: 100,
-
-            #[cfg(feature = "decaf")]
-            decaf: false,
         }
     }
 }
@@ -102,6 +95,7 @@ pub struct LightClient<P, S> {
     server: S,
     opt: LightClientOptions,
 
+    chain_id: ChainId,
     epoch_height: u64,
     first_epoch_with_dynamic_stake_table: EpochNumber,
     genesis_stake_table: Arc<StakeTable>,
@@ -141,6 +135,7 @@ where
             db,
             server,
             opt,
+            chain_id: genesis.chain_id,
             epoch_height: genesis.epoch_height,
             genesis_stake_table: Arc::new(genesis.stake_table.into()),
             first_epoch_with_dynamic_stake_table: genesis.first_epoch_with_dynamic_stake_table,
@@ -563,6 +558,42 @@ where
             .collect()
     }
 
+    /// Fetch and verify the transactions in the given namespaces of blocks in the range
+    /// `[start_height, end_height)`.
+    ///
+    /// For each block, the result maps a namespace ID to its verified transactions, including only
+    /// those requested namespaces that are actually present in that block.
+    pub async fn fetch_all_namespaces_in_range(
+        &self,
+        start_height: usize,
+        end_height: usize,
+        namespaces: &[NamespaceId],
+    ) -> Result<Vec<HashMap<NamespaceId, Vec<Transaction>>>> {
+        let headers = self
+            .fetch_headers_in_range(start_height, end_height)
+            .await?;
+        let proofs = self
+            .server
+            .namespaces_proofs_in_range(start_height as u64, end_height as u64, namespaces)
+            .await?;
+        ensure!(
+            proofs.len() == headers.len(),
+            "server returned wrong number of namespace proofs (expected {}, got {})",
+            headers.len(),
+            proofs.len()
+        );
+        proofs
+            .into_iter()
+            .zip(&headers)
+            .map(|(proofs, header)| {
+                proofs
+                    .into_iter()
+                    .map(|(namespace, proof)| Ok((namespace, proof.verify(header, namespace)?)))
+                    .collect()
+            })
+            .collect()
+    }
+
     /// Fetch and verify the stake table for the requested epoch.
     pub async fn quorum_for_epoch(&self, epoch: EpochNumber) -> Result<Arc<StakeTable>> {
         if epoch < self.first_epoch_with_dynamic_stake_table {
@@ -704,6 +735,7 @@ where
                 tracing::warn!(epoch, "failed to cache stake table: {err:#}");
             }
 
+            tracing::info!(epoch, "finished stake table catchup for epoch");
             prev_quorum = next_quorum;
             epoch_root_protocol_version = root.version();
         }
@@ -728,7 +760,7 @@ where
                 .leaf_proof(id, known_finalized.map(Leaf2::height))
                 .await?;
             let quorum;
-            let hint = match proof.proof().epoch() {
+            let hint = match proof.epoch(self.epoch_height)? {
                 Some(epoch) => {
                     quorum = make_quorum(epoch);
                     LeafProofHint::Quorum(&quorum)
@@ -786,11 +818,7 @@ where
     }
 
     fn decaf(&self) -> bool {
-        #[cfg(feature = "decaf")]
-        return self.opt.decaf;
-
-        #[cfg(not(feature = "decaf"))]
-        return false;
+        self.chain_id == DECAF_CHAIN_ID
     }
 }
 
@@ -1239,7 +1267,6 @@ mod test {
             genesis.clone(),
             LightClientOptions {
                 num_stake_tables_in_memory: 2,
-                ..Default::default()
             },
         );
 
@@ -1662,6 +1689,64 @@ mod test {
 
     #[tokio::test]
     #[test_log::test]
+    async fn test_fetch_all_namespaces_in_range() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+
+        // Request the namespaces from the first few blocks (which may differ per block), plus one
+        // that is absent everywhere.
+        let mut requested = vec![];
+        for height in 1..4 {
+            requested.push(
+                client
+                    .payload(height)
+                    .await
+                    .transaction(&TransactionIndex {
+                        ns_index: 0.into(),
+                        position: 0,
+                    })
+                    .unwrap()
+                    .namespace(),
+            );
+        }
+        let absent =
+            NamespaceId::from(requested.iter().map(|ns| u64::from(*ns)).max().unwrap() + 1);
+        requested.push(absent);
+
+        let (start, end) = (1, 10);
+        let blocks = lc
+            .fetch_all_namespaces_in_range(start, end, &requested)
+            .await
+            .unwrap();
+        assert_eq!(blocks.len(), end - start);
+
+        for (i, block) in blocks.iter().enumerate() {
+            let height = i + 1;
+            let header = client.leaf(height).await.header().clone();
+
+            // The map contains exactly the requested namespaces present in this block, and the
+            // absent namespace is never included.
+            assert!(!block.contains_key(&absent), "block {height}");
+            for &ns in &requested {
+                let expected = lc
+                    .fetch_namespace(BlockId::Number(height), ns)
+                    .await
+                    .unwrap();
+                if header.ns_table().find_ns_id(&ns).is_some() {
+                    assert_eq!(block.get(&ns), Some(&expected), "block {height}, ns {ns}");
+                } else {
+                    assert!(!block.contains_key(&ns), "block {height}, ns {ns}");
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[test_log::test]
     async fn test_fetch_namespace_invalid() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(
@@ -1712,6 +1797,7 @@ mod rlp_test {
                 .0,
                 stake_amount: U256::MAX,
             }],
+            chain_id: DECAF_CHAIN_ID,
         };
 
         let mut buf = vec![];

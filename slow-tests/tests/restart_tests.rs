@@ -461,14 +461,14 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             // with a backoff.
             let mut retries = 5;
             let mut delay = Duration::from_secs(1);
-            let genesis = Genesis::from_file(&self.opt.genesis_file).unwrap();
+            let genesis = Genesis::load(&self.opt.genesis_file).await.unwrap();
             let ctx = loop {
                 match init_with_storage(
                     genesis.clone(),
                     self.modules.clone(),
                     self.opt.clone(),
                     S::persistence_options(&self.storage),
-                    PublicNodeConfig::new(&self.opt, &self.modules),
+                    PublicNodeConfig::new(&self.opt, &self.modules, &genesis),
                 )
                 .await
                 {

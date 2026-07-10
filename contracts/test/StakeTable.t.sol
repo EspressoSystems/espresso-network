@@ -237,7 +237,7 @@ contract StakeTable_register_Test is LightClientCommonTest {
             BN254.BaseField.wrap(0),
             BN254.BaseField.wrap(0)
         );
-        vm.expectRevert(BLSSig.BLSSigVerificationFailed.selector);
+        vm.expectRevert(BLSSig.BLSVKIsInfinity.selector);
         stakeTable.registerValidator(zeroBlsVK, schnorrVK, sig, COMMISSION);
 
         // revert when the schnorrVK is the zero point
@@ -379,7 +379,7 @@ contract StakeTable_register_Test is LightClientCommonTest {
             genClientWallet(validator, seed2);
 
         // Step 3: attempt to update the consensus keys with the new keys but invalid signature
-        vm.expectRevert(BLSSig.BLSSigVerificationFailed.selector);
+        vm.expectRevert(BLSSig.BLSSigIsInfinity.selector);
         stakeTable.updateConsensusKeys(newBlsVK, newSchnorrVK, badSig);
 
         vm.stopPrank();
@@ -416,8 +416,8 @@ contract StakeTable_register_Test is LightClientCommonTest {
             BN254.BaseField.wrap(0)
         );
 
-        // Step 3: empty bls key -> wrong signature
-        vm.expectRevert(BLSSig.BLSSigVerificationFailed.selector);
+        // Step 3: empty bls key -> infinity pubkey rejected
+        vm.expectRevert(BLSSig.BLSVKIsInfinity.selector);
         stakeTable.updateConsensusKeys(emptyBlsVK, newSchnorrVK, sig);
 
         vm.stopPrank();

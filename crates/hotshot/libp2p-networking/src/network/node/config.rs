@@ -75,6 +75,9 @@ pub struct NetworkNodeConfig {
     /// `None` is the legacy value, used for mainnet.
     #[builder(default)]
     pub network_discriminator: Option<U256>,
+
+    #[builder(default)]
+    pub dht_put_quorum: Option<NonZeroUsize>,
 }
 
 impl Clone for NetworkNodeConfig {
@@ -93,6 +96,7 @@ impl Clone for NetworkNodeConfig {
             auth_message: self.auth_message.clone(),
             dht_timeout: self.dht_timeout,
             network_discriminator: self.network_discriminator,
+            dht_put_quorum: self.dht_put_quorum,
         }
     }
 }
