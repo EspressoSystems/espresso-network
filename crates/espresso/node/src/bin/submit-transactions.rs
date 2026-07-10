@@ -9,6 +9,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use axum::{Json, response::IntoResponse, routing::get};
 use clap::Parser;
 use committable::{Commitment, Committable};
 #[cfg(feature = "benchmarking")]
@@ -26,8 +27,7 @@ use rand::{Rng, RngCore, SeedableRng};
 use rand_chacha::ChaChaRng;
 use rand_distr::Distribution;
 use surf_disco::{Client, Url, reexports::WebSocketConfig};
-use tide_disco::{App, error::ServerError};
-use tokio::{task::spawn, time::sleep};
+use tokio::{net::TcpListener, task::spawn, time::sleep};
 use vbs::version::StaticVersionType;
 
 /// Submit random transactions to an Espresso Sequencer.
@@ -237,7 +237,7 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) {
 
     // Start healthcheck endpoint once tasks are running.
     if let Some(port) = opt.port {
-        spawn(server(port, SequencerApiVersion::instance()));
+        spawn(server(port));
     }
 
     // Keep track of the results.
@@ -509,13 +509,24 @@ async fn submit_transactions<ApiVer: StaticVersionType>(
     }
 }
 
-async fn server<ApiVer: StaticVersionType + 'static>(port: u16, bind_version: ApiVer) {
-    if let Err(err) = App::<(), ServerError>::with_state(())
-        .serve(format!("0.0.0.0:{port}"), bind_version)
-        .await
-    {
+async fn server(port: u16) {
+    let app = axum::Router::new().route("/healthcheck", get(healthcheck));
+    let addr = format!("0.0.0.0:{port}");
+    let listener = match TcpListener::bind(&addr).await {
+        Ok(listener) => listener,
+        Err(err) => {
+            tracing::error!("failed to bind web server to {addr}: {err}");
+            return;
+        },
+    };
+    if let Err(err) = axum::serve(listener, app).await {
         tracing::error!("web server exited: {err}");
     }
+}
+
+/// Tide-disco-compatible healthcheck response: `{"status":"Available"}`.
+async fn healthcheck() -> impl IntoResponse {
+    Json(serde_json::json!({ "status": "Available" }))
 }
 
 fn random_transaction(opt: &Options, rng: &mut ChaChaRng) -> Transaction {
