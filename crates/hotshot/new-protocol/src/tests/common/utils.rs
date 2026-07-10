@@ -444,7 +444,6 @@ impl TestData {
                 let target_epoch =
                     EpochNumber::new(epoch_from_block_number(block_number, epoch_height) + 2);
                 let _ = membership
-                    .membership()
                     .add_epoch_root(proposal.block_header.clone())
                     .await;
                 if let Ok(drb) = membership
@@ -1107,7 +1106,6 @@ impl ConsensusHarness {
                     }
                     let header = leaf.block_header().clone();
                     self.membership_coordinator
-                        .membership()
                         .add_epoch_root(header)
                         .await
                         .expect("add_epoch_root should succeed in test harness");

@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use alloy::primitives::U256;
 use anyhow::Context;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
@@ -17,9 +16,12 @@ use espresso_types::{
 use hotshot::traits::NodeImplementation;
 use hotshot_new_protocol::utils::verify_leaf_chain_with_cert2;
 use hotshot_types::{
-    data::ViewNumber, message::UpgradeLock,
-    simple_certificate::LightClientStateUpdateCertificateV2, stake_table::HSStakeTable,
-    traits::network::ConnectedNetwork, utils::verify_leaf_chain,
+    data::{EpochNumber, ViewNumber},
+    epoch_membership::EpochMembershipCoordinator,
+    message::UpgradeLock,
+    simple_certificate::LightClientStateUpdateCertificateV2,
+    traits::network::ConnectedNetwork,
+    utils::{epoch_from_block_number, verify_leaf_chain},
 };
 use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
 use request_response::RequestType;
@@ -41,20 +43,16 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
     async fn try_fetch_leaf(
         &self,
         _retry: usize,
+        coordinator: EpochMembershipCoordinator<SeqTypes>,
         height: u64,
-        stake_table: HSStakeTable<SeqTypes>,
-        success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
         // Timeout after a few batches
         let timeout_duration = self.config.request_batch_interval * 3;
 
         // Fetch the leaf
-        timeout(
-            timeout_duration,
-            self.fetch_leaf(height, stake_table, success_threshold),
-        )
-        .await
-        .with_context(|| "timed out while fetching leaf")?
+        timeout(timeout_duration, self.fetch_leaf(coordinator, height))
+            .await
+            .with_context(|| "timed out while fetching leaf")?
     }
 
     async fn try_fetch_accounts(
@@ -241,9 +239,8 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
 
     async fn fetch_leaf(
         &self,
+        coordinator: EpochMembershipCoordinator<SeqTypes>,
         height: u64,
-        stake_table: HSStakeTable<SeqTypes>,
-        success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
         tracing::info!("Fetching leaf for height: {height}");
 
@@ -298,23 +295,24 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
                 .await
                 .with_context(|| format!("failed to request cert2 at height {cert2_height}"))?;
 
-            verify_leaf_chain_with_cert2(
-                leaf_chain,
-                &stake_table,
-                success_threshold,
-                height,
-                &upgrade_lock,
-                cert2,
-            )
-            .await
-            .with_context(|| "leaf chain verification with cert2 failed")?
+            verify_leaf_chain_with_cert2(leaf_chain, &coordinator, height, &upgrade_lock, cert2)
+                .await
+                .with_context(|| "leaf chain verification with cert2 failed")?
         } else {
             let upgrade_lock =
                 UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(EPOCH_VERSION));
+            let epoch =
+                EpochNumber::new(epoch_from_block_number(height, *coordinator.epoch_height()));
+            let membership = coordinator
+                .stake_table_for_epoch(Some(epoch))
+                .map_err(|err| {
+                    anyhow::anyhow!("no stake table available for epoch {epoch}: {err:?}")
+                })?;
+            let stake_table: Vec<_> = membership.stake_table().cloned().collect();
             verify_leaf_chain(
                 leaf_chain,
                 &stake_table,
-                success_threshold,
+                membership.success_threshold(),
                 height,
                 &upgrade_lock,
             )

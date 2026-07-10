@@ -106,6 +106,31 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         &self.membership
     }
 
+    /// Handles notifications that a new epoch root has been created.
+    pub async fn add_epoch_root(
+        &self,
+        header: TYPES::BlockHeader,
+    ) -> std::result::Result<(), <TYPES::Membership as Membership<TYPES>>::Error> {
+        self.membership.add_epoch_root(header, self).await
+    }
+
+    /// Gets the validated block header and epoch number of the epoch root
+    /// at the given block height.
+    pub async fn get_epoch_root(
+        &self,
+        epoch: EpochNumber,
+    ) -> std::result::Result<Leaf2<TYPES>, <TYPES::Membership as Membership<TYPES>>::Error> {
+        self.membership.get_epoch_root(epoch, self).await
+    }
+
+    /// Gets the DRB result for the given epoch.
+    pub async fn get_epoch_drb(
+        &self,
+        epoch: EpochNumber,
+    ) -> std::result::Result<DrbResult, <TYPES::Membership as Membership<TYPES>>::Error> {
+        self.membership.get_epoch_drb(epoch, self).await
+    }
+
     /// Set the DRB difficulty selector
     pub fn set_drb_difficulty_selector(&self, f: DrbDifficultySelectorFn) {
         let mut drb_difficulty_selector_writer = self.drb_difficulty_selector.write();
@@ -412,7 +437,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             },
         };
 
-        match self.membership.get_epoch_drb(epoch).await {
+        match self.get_epoch_drb(epoch).await {
             Ok(drb_result) => {
                 tracing::warn!(
                     ?drb_result,
@@ -578,8 +603,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             ));
         };
 
-        self.membership
-            .add_epoch_root(root_leaf.block_header().clone())
+        self.add_epoch_root(root_leaf.block_header().clone())
             .await
             .map_err(|e| {
                 anytrace::error!("Failed to add epoch root for epoch {epoch:?} to membership: {e}")
@@ -656,7 +680,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             Some(drb) => drb,
             None => {
                 self.clear_drb_state(epoch);
-                return self.membership.get_epoch_drb(epoch).await.map_err(|e| {
+                return self.get_epoch_drb(epoch).await.map_err(|e| {
                     anytrace::error!(
                         "DRB calculation for epoch {epoch} was cancelled but no externally \
                          supplied result is available: {e}"
@@ -805,7 +829,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
         let Some(epoch) = self.epoch() else {
             anyhow::bail!("Cannot get root for None epoch");
         };
-        let leaf = self.coordinator.membership.get_epoch_root(epoch).await?;
+        let leaf = self.coordinator.get_epoch_root(epoch).await?;
         Ok(leaf)
     }
 
@@ -813,11 +837,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
         let Some(epoch) = self.epoch() else {
             return Err(anytrace::warn!("Cannot get drb for None epoch"));
         };
-        self.coordinator
-            .membership
-            .get_epoch_drb(epoch)
-            .await
-            .wrap()
+        self.coordinator.get_epoch_drb(epoch).await.wrap()
     }
 
     /// Borrow the per-epoch snapshot, or `None` for the pre-epoch case.
