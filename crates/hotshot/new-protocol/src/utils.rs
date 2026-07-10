@@ -1,11 +1,12 @@
 use anyhow::{anyhow, ensure};
 use committable::Committable;
 use hotshot_types::{
-    data::Leaf2,
+    data::{EpochNumber, Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     stake_table::StakeTableEntries,
     traits::node_implementation::NodeType,
+    utils::epoch_from_block_number,
     vote::{Certificate, HasViewNumber},
 };
 
@@ -22,7 +23,7 @@ use crate::message::Certificate2;
 /// leaves that are not on the certified ancestry path. Those leaves are ignored;
 /// every accepted step must match the current leaf's justify QC, parent
 /// commitment, and block height.
-pub async fn verify_leaf_chain_with_cert2<T: NodeType>(
+pub async fn verify_new_protocol_leaf_chain<T: NodeType>(
     mut leaf_chain: Vec<Leaf2<T>>,
     coordinator: &EpochMembershipCoordinator<T>,
     expected_height: u64,
@@ -35,14 +36,24 @@ pub async fn verify_leaf_chain_with_cert2<T: NodeType>(
     ensure!(!leaf_chain.is_empty(), "empty leaf chain");
     let newest = &leaf_chain[0];
 
+    ensure!(
+        cert2.view_number() > ViewNumber::genesis(),
+        "cert2 must not be the genesis view"
+    );
+    let epoch = EpochNumber::new(epoch_from_block_number(
+        cert2.data.block_number,
+        *coordinator.epoch_height(),
+    ));
+    ensure!(
+        cert2.data.epoch == epoch,
+        "cert2 epoch {} does not match epoch {epoch} derived from its block number {}",
+        cert2.data.epoch,
+        cert2.data.block_number
+    );
+
     let membership = coordinator
-        .stake_table_for_epoch(Some(cert2.data.epoch))
-        .map_err(|err| {
-            anyhow!(
-                "no stake table available for epoch {}: {err:?}",
-                cert2.data.epoch
-            )
-        })?;
+        .stake_table_for_epoch(Some(epoch))
+        .map_err(|err| anyhow!("no stake table available for epoch {epoch}: {err:?}"))?;
     let entries = StakeTableEntries::<T>::from_iter(membership.stake_table()).0;
     cert2.is_valid_cert(&entries, membership.success_threshold(), upgrade_lock)?;
 

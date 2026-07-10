@@ -14,7 +14,7 @@ use espresso_types::{
     },
 };
 use hotshot::traits::NodeImplementation;
-use hotshot_new_protocol::utils::verify_leaf_chain_with_cert2;
+use hotshot_new_protocol::utils::verify_new_protocol_leaf_chain;
 use hotshot_types::{
     data::ViewNumber, epoch_membership::EpochMembershipCoordinator, message::UpgradeLock,
     simple_certificate::LightClientStateUpdateCertificateV2, traits::network::ConnectedNetwork,
@@ -292,7 +292,7 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
                 .await
                 .with_context(|| format!("failed to request cert2 at height {cert2_height}"))?;
 
-            verify_leaf_chain_with_cert2(leaf_chain, &coordinator, height, &upgrade_lock, cert2)
+            verify_new_protocol_leaf_chain(leaf_chain, &coordinator, height, &upgrade_lock, cert2)
                 .await
                 .with_context(|| "leaf chain verification with cert2 failed")?
         } else {

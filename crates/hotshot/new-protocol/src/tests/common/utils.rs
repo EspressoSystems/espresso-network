@@ -647,7 +647,7 @@ pub fn mock_membership_with_leaf_fetcher_network(
     membership.set_first_epoch(EpochNumber::genesis(), [0u8; 32]);
 
     let coordinator =
-        EpochMembershipCoordinator::new(membership, num_nodes as u64, &TestStorage::default());
+        EpochMembershipCoordinator::new(membership, epoch_height, &TestStorage::default());
     // Set the DRB difficulty selector so compute_drb_result can run.
     // Difficulty 0 makes the computation instant for tests.
     coordinator
