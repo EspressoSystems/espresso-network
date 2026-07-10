@@ -12,6 +12,7 @@ use hotshot_types::{
     PeerConfig,
     data::{BlockNumber, EpochNumber, Leaf2, ViewNumber},
     drb::DrbResult,
+    epoch_membership::EpochMembershipCoordinator,
     event::Event,
     traits::{
         block_contents::BlockHeader,
@@ -161,7 +162,11 @@ where
         inner.table.set_first_epoch(*e, initial_drb_result);
     }
 
-    async fn add_epoch_root(&self, hdr: T::BlockHeader) -> Result<(), Self::Error> {
+    async fn add_epoch_root(
+        &self,
+        hdr: T::BlockHeader,
+        _coordinator: &EpochMembershipCoordinator<T>,
+    ) -> Result<(), Self::Error> {
         let epoch = epoch_from_block_number(hdr.block_number(), *self.epoch_height) + 2;
 
         let mut inner = self.inner.write();
@@ -171,7 +176,11 @@ where
         Ok(())
     }
 
-    async fn get_epoch_root(&self, e: EpochNumber) -> Result<Leaf2<T>, Self::Error> {
+    async fn get_epoch_root(
+        &self,
+        e: EpochNumber,
+        _coordinator: &EpochMembershipCoordinator<T>,
+    ) -> Result<Leaf2<T>, Self::Error> {
         let block_height = root_block_in_epoch(*e, *self.epoch_height);
 
         let (stake_table, fetcher) = {
@@ -198,7 +207,11 @@ where
         Err(anyhow!("Failed to fetch epoch root from any peer").into())
     }
 
-    async fn get_epoch_drb(&self, e: EpochNumber) -> Result<DrbResult, Self::Error> {
+    async fn get_epoch_drb(
+        &self,
+        e: EpochNumber,
+        _coordinator: &EpochMembershipCoordinator<T>,
+    ) -> Result<DrbResult, Self::Error> {
         let epoch_height = self.epoch_height;
 
         let (epoch_drb, fetcher) = {
