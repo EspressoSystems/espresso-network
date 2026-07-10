@@ -151,7 +151,7 @@ impl<TYPES: NodeType> StatsTaskState<TYPES> {
 
     fn dump_stats(&self) -> Result<()> {
         let mut writer = csv::Writer::from_writer(vec![]);
-        for (_, leader_stats) in self.leader_stats.iter() {
+        for leader_stats in self.leader_stats.values() {
             writer
                 .serialize(leader_stats)
                 .map_err(|e| warn!("Failed to serialize leader stats: {}", e))?;
@@ -165,7 +165,7 @@ impl<TYPES: NodeType> StatsTaskState<TYPES> {
                 .map_err(|e| warn!("Failed to convert leader stats to string: {}", e))?
         );
         let mut writer = csv::Writer::from_writer(vec![]);
-        for (_, replica_stats) in self.replica_stats.iter() {
+        for replica_stats in self.replica_stats.values() {
             writer
                 .serialize(replica_stats)
                 .map_err(|e| warn!("Failed to serialize replica stats: {}", e))?;

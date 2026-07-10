@@ -133,7 +133,6 @@ where
                     LeafInfo {
                         leaf: leaf2,
                         vid_share,
-                        state_cert: _,
                         ..
                     },
                 ) in qcs.zip(leaf_chain.iter().rev())
