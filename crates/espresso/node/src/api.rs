@@ -3433,6 +3433,38 @@ mod test {
             .unwrap_err();
     }
 
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_database_metadata_endpoints() {
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+
+        let storage = SqlDataSource::create_storage().await;
+        let options = SqlDataSource::options(&storage, Options::with_port(port));
+
+        let network_config = TestConfigBuilder::default().build();
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(options)
+            .network_config(network_config)
+            .build();
+        let _network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
+        let url = format!("http://localhost:{port}").parse().unwrap();
+        let client: Client<ServerError, SequencerApiVersion> = Client::new(url);
+        client.connect(Some(Duration::from_secs(15))).await;
+
+        let table_sizes = client
+            .get::<Vec<data_source::TableSize>>("database/table-sizes")
+            .send()
+            .await
+            .unwrap();
+        assert!(!table_sizes.is_empty());
+
+        let migration_status = client
+            .get::<Vec<data_source::MigrationStatus>>("database/migration-status")
+            .send()
+            .await
+            .unwrap();
+        assert!(migration_status.is_empty());
+    }
+
     async fn run_catchup_test(url_suffix: &str) {
         // Start a sequencer network, using the query service for catchup.
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
@@ -8079,7 +8111,12 @@ mod test {
                 .try_into()
                 .unwrap();
 
-            let api_opts = Options::with_port(api_port).catchup(Default::default());
+            let api_opts = Options::with_port(api_port)
+                .catchup(Default::default())
+                .config(Default::default())
+                .explorer(Default::default())
+                .light_client(Default::default())
+                .hotshot_events(Default::default());
 
             let config = TestNetworkConfigBuilder::with_num_nodes()
                 .api_config(SqlDataSource::options(&storage[0], api_opts))
@@ -8261,6 +8298,24 @@ mod test {
                         &format!("reward-state-v2/reward-balance/latest/{address}"),
                     )
                     .await?;
+
+                    // Tide-disco registered the same reward.toml handlers on both the
+                    // reward-state and reward-state-v2 mounts, so these two routes hit the
+                    // same v2-tree-backed handlers as the pair above, just under reward-state.
+                    compare_endpoints(
+                        &http,
+                        api_port,
+                        axum_port,
+                        &format!("reward-state/proof/latest/{address}"),
+                    )
+                    .await?;
+                    compare_endpoints(
+                        &http,
+                        api_port,
+                        axum_port,
+                        &format!("reward-state/reward-balance/latest/{address}"),
+                    )
+                    .await?;
                 }
 
                 compare_endpoints(
@@ -8277,6 +8332,60 @@ mod test {
                     &format!("reward-state-v2/reward-merkle-tree-v2/{height}"),
                 )
                 .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("reward-state/reward-amounts/{height}/0/1000"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("reward-state/reward-merkle-tree-v2/{height}"),
+                )
+                .await?;
+
+                // Merklized-state `get_path` routes, inherited by both reward mounts from
+                // `hotshot-query-service`'s base `state.toml` (mirrors the block-state /
+                // fee-state checks below). Nothing in this codebase populates the generic
+                // merklized-state tables for the reward trees today; the reward-state modules
+                // persist snapshots via the separate `persist_tree`/`load_tree` bincode-blob
+                // mechanism instead, so these routes 404 in practice. We only assert that both
+                // mounts, in both height and commit form, return well-formed (and identical
+                // between the two "servers") JSON.
+                let reward_address = validated_state
+                    .reward_merkle_tree_v2
+                    .iter()
+                    .next()
+                    .map(|(addr, _)| *addr)
+                    .expect("reward tree should have at least one account");
+                let reward_header: Header = client
+                    .get(&format!("availability/header/{height}"))
+                    .send()
+                    .await
+                    .unwrap();
+                let reward_mt_commit = match reward_header.reward_merkle_tree_root() {
+                    either::Either::Left(commit) => commit.to_string(),
+                    either::Either::Right(commit) => commit.to_string(),
+                };
+                for mount in ["reward-state", "reward-state-v2"] {
+                    compare_endpoints(
+                        &http,
+                        api_port,
+                        axum_port,
+                        &format!("{mount}/{height}/{reward_address}"),
+                    )
+                    .await?;
+                    compare_endpoints(
+                        &http,
+                        api_port,
+                        axum_port,
+                        &format!("{mount}/commit/{reward_mt_commit}/{reward_address}"),
+                    )
+                    .await?;
+                }
 
                 // Availability v1 parity: verify the axum v1 routes return the same JSON as tide.
 

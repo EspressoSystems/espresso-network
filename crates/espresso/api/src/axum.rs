@@ -431,6 +431,57 @@ where
                 .map_err(ApiError::Internal)
         };
 
+    // Merklized-state `get_path` handlers, inherited by both reward mounts from
+    // `hotshot-query-service`'s base `state.toml` routes (mirrors router_block_state /
+    // router_fee_state below).
+    let get_reward_state_path_v1_by_height =
+        |State(state): State<S>, Path((height, key)): Path<(u64, String)>| async move {
+            <S as v1::RewardApi>::get_reward_state_path_v1(
+                &state,
+                v1::Snapshot::Height(height),
+                key,
+            )
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+        };
+
+    let get_reward_state_path_v1_by_commit =
+        |State(state): State<S>, Path((commit, key)): Path<(String, String)>| async move {
+            <S as v1::RewardApi>::get_reward_state_path_v1(
+                &state,
+                v1::Snapshot::Commit(commit),
+                key,
+            )
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+        };
+
+    let get_reward_state_path_v2_by_height =
+        |State(state): State<S>, Path((height, key)): Path<(u64, String)>| async move {
+            <S as v1::RewardApi>::get_reward_state_path_v2(
+                &state,
+                v1::Snapshot::Height(height),
+                key,
+            )
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+        };
+
+    let get_reward_state_path_v2_by_commit =
+        |State(state): State<S>, Path((commit, key)): Path<(String, String)>| async move {
+            <S as v1::RewardApi>::get_reward_state_path_v2(
+                &state,
+                v1::Snapshot::Commit(commit),
+                key,
+            )
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+        };
+
     Router::new()
         .route(
             routes::v1::REWARD_CLAIM_INPUT_ROUTE,
@@ -469,6 +520,37 @@ where
         .route(
             routes::v1::REWARD_V1_ACCOUNT_PROOF_ROUTE,
             get(get_reward_account_proof_v1),
+        )
+        // Tide-disco twins of the reward-state-v2 routes above, registered on the same
+        // handlers (tide shared them across both merklized-state modules).
+        .route(
+            routes::v1::REWARD_V1_LATEST_BALANCE_ROUTE,
+            get(get_latest_reward_balance),
+        )
+        .route(
+            routes::v1::REWARD_V1_LATEST_ACCOUNT_PROOF_ROUTE,
+            get(get_latest_reward_account_proof),
+        )
+        .route(routes::v1::REWARD_V1_AMOUNTS_ROUTE, get(get_reward_amounts))
+        .route(
+            routes::v1::REWARD_V1_MERKLE_TREE_V2_ROUTE,
+            get(get_reward_merkle_tree_v2),
+        )
+        .route(
+            routes::v1::REWARD_STATE_PATH_BY_HEIGHT_ROUTE,
+            get(get_reward_state_path_v1_by_height),
+        )
+        .route(
+            routes::v1::REWARD_STATE_PATH_BY_COMMIT_ROUTE,
+            get(get_reward_state_path_v1_by_commit),
+        )
+        .route(
+            routes::v1::REWARD_STATE_V2_PATH_BY_HEIGHT_ROUTE,
+            get(get_reward_state_path_v2_by_height),
+        )
+        .route(
+            routes::v1::REWARD_STATE_V2_PATH_BY_COMMIT_ROUTE,
+            get(get_reward_state_path_v2_by_commit),
         )
         .with_state(state)
 }
@@ -2372,11 +2454,21 @@ where
             .map(Json)
             .map_err(ApiError::Internal)
     };
+    let database_migration_status = |State(state): State<S>| async move {
+        <S as v1::DatabaseApi>::get_migration_status(&state)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
 
     Router::new()
         .route(
             routes::v1::DATABASE_TABLE_SIZES_ROUTE,
             get(database_table_sizes),
+        )
+        .route(
+            routes::v1::DATABASE_MIGRATION_STATUS_ROUTE,
+            get(database_migration_status),
         )
         .with_state(state)
 }

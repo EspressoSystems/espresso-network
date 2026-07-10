@@ -253,12 +253,16 @@ impl Options {
                 catchup: self.catchup.is_some(),
                 config: self.config.is_some(),
                 hotshot_events: self.hotshot_events.is_some(),
+                ..Default::default()
             };
+            let max_connections = self.http.max_connections;
             tasks.spawn("API server", async move {
                 let state = NodeApiStateImpl::new(axum_ds)
                     .with_env_vars(env_vars)
                     .with_public_node_config(node_cfg);
-                if let Err(e) = espresso_api::serve_axum_status(port, state, modules).await {
+                if let Err(e) =
+                    espresso_api::serve_axum_status(port, state, modules, max_connections).await
+                {
                     tracing::error!("Axum server error: {}", e);
                 }
                 anyhow::Ok(())
@@ -294,13 +298,17 @@ impl Options {
                 catchup: self.catchup.is_some(),
                 config: self.config.is_some(),
                 hotshot_events: self.hotshot_events.is_some(),
+                ..Default::default()
             };
             let axum_ds = Arc::new(state.clone());
+            let max_connections = self.http.max_connections;
             tasks.spawn("API server", async move {
                 let state = NodeApiStateImpl::new(axum_ds)
                     .with_env_vars(env_vars)
                     .with_public_node_config(node_cfg);
-                if let Err(e) = espresso_api::serve_axum_bare(port, state, modules).await {
+                if let Err(e) =
+                    espresso_api::serve_axum_bare(port, state, modules, max_connections).await
+                {
                     tracing::error!("Axum server error: {}", e);
                 }
                 anyhow::Ok(())
@@ -447,11 +455,13 @@ impl Options {
             hotshot_events: self.hotshot_events.is_some(),
             ..Default::default()
         };
+        let max_connections = self.http.max_connections;
         tasks.spawn("API server", async move {
             let state = NodeApiStateImpl::new(ds_for_axum)
                 .with_env_vars(env_vars)
                 .with_public_node_config(node_cfg);
-            if let Err(e) = espresso_api::serve_axum_fs(port, state, modules).await {
+            if let Err(e) = espresso_api::serve_axum_fs(port, state, modules, max_connections).await
+            {
                 tracing::error!("Axum server error: {}", e);
             }
             anyhow::Ok(())
@@ -588,11 +598,20 @@ impl Options {
         let ds_for_axum = ds.clone();
         let env_vars = endpoints::get_public_env_vars().unwrap_or_default();
         let node_cfg = self.public_node_config.as_deref().cloned();
+        let modules = espresso_api::OptionalModules {
+            submit: self.submit.is_some(),
+            config: self.config.is_some(),
+            explorer: self.explorer.is_some(),
+            light_client: self.light_client.is_some(),
+            hotshot_events: self.hotshot_events.is_some(),
+            ..Default::default()
+        };
+        let max_connections = self.http.max_connections;
         tasks.spawn("API server", async move {
             let state = NodeApiStateImpl::new(ds_for_axum)
                 .with_env_vars(env_vars)
                 .with_public_node_config(node_cfg);
-            if let Err(e) = espresso_api::serve_axum(port, state).await {
+            if let Err(e) = espresso_api::serve_axum(port, state, modules, max_connections).await {
                 tracing::error!("Axum server error: {}", e);
             }
             anyhow::Ok(())
@@ -688,6 +707,8 @@ impl Options {
         Ok(())
     }
 
+    // Kept until tide-disco removal; no longer called since the axum cutover.
+    #[allow(dead_code)]
     fn listen<S, E, ApiVer>(
         &self,
         port: u16,

@@ -52,6 +52,25 @@ pub mod v1 {
     pub const REWARD_STATE_V2_HEIGHT_ROUTE: &str = "/v1/reward-state-v2/block-height";
     pub const REWARD_V1_ACCOUNT_PROOF_ROUTE: &str = "/v1/reward-state/proof/{height}/{address}";
     pub const REWARD_V1_BALANCE_ROUTE: &str = "/v1/reward-state/reward-balance/{height}/{address}";
+    // Tide registered the same reward.toml handlers on both the reward-state and
+    // reward-state-v2 mounts; these four mirror LATEST_REWARD_BALANCE_ROUTE,
+    // LATEST_REWARD_ACCOUNT_PROOF_ROUTE, REWARD_AMOUNTS_ROUTE, and REWARD_MERKLE_TREE_V2_ROUTE.
+    pub const REWARD_V1_LATEST_BALANCE_ROUTE: &str =
+        "/v1/reward-state/reward-balance/latest/{address}";
+    pub const REWARD_V1_LATEST_ACCOUNT_PROOF_ROUTE: &str =
+        "/v1/reward-state/proof/latest/{address}";
+    pub const REWARD_V1_AMOUNTS_ROUTE: &str =
+        "/v1/reward-state/reward-amounts/{height}/{offset}/{limit}";
+    pub const REWARD_V1_MERKLE_TREE_V2_ROUTE: &str =
+        "/v1/reward-state/reward-merkle-tree-v2/{height}";
+
+    // Merklized-state `get_path` base routes, inherited from
+    // `hotshot-query-service`'s `merklized_state::define_api` for both reward mounts.
+    pub const REWARD_STATE_PATH_BY_HEIGHT_ROUTE: &str = "/v1/reward-state/{height}/{key}";
+    pub const REWARD_STATE_PATH_BY_COMMIT_ROUTE: &str = "/v1/reward-state/commit/{commit}/{key}";
+    pub const REWARD_STATE_V2_PATH_BY_HEIGHT_ROUTE: &str = "/v1/reward-state-v2/{height}/{key}";
+    pub const REWARD_STATE_V2_PATH_BY_COMMIT_ROUTE: &str =
+        "/v1/reward-state-v2/commit/{commit}/{key}";
 
     pub const NAMESPACE_PROOF_BY_HEIGHT_ROUTE: &str =
         "/v1/availability/block/{height}/namespace/{namespace}";
@@ -302,6 +321,7 @@ pub mod v1 {
 
     // Database (diagnostic)
     pub const DATABASE_TABLE_SIZES_ROUTE: &str = "/v1/database/table-sizes";
+    pub const DATABASE_MIGRATION_STATUS_ROUTE: &str = "/v1/database/migration-status";
 
     // ---------------------------------------------------------------------
     // Path builders
@@ -324,6 +344,14 @@ pub mod v1 {
     path_fn!(reward_state_v2_height, REWARD_STATE_V2_HEIGHT_ROUTE);
     path_fn!(reward_v1_account_proof, REWARD_V1_ACCOUNT_PROOF_ROUTE, "height" => height, "address" => address);
     path_fn!(reward_v1_balance, REWARD_V1_BALANCE_ROUTE, "height" => height, "address" => address);
+    path_fn!(reward_v1_latest_balance, REWARD_V1_LATEST_BALANCE_ROUTE, "address" => address);
+    path_fn!(reward_v1_latest_account_proof, REWARD_V1_LATEST_ACCOUNT_PROOF_ROUTE, "address" => address);
+    path_fn!(reward_v1_amounts, REWARD_V1_AMOUNTS_ROUTE, "height" => height, "offset" => offset, "limit" => limit);
+    path_fn!(reward_v1_merkle_tree_v2, REWARD_V1_MERKLE_TREE_V2_ROUTE, "height" => height);
+    path_fn!(reward_state_path_by_height, REWARD_STATE_PATH_BY_HEIGHT_ROUTE, "height" => height, "key" => key);
+    path_fn!(reward_state_path_by_commit, REWARD_STATE_PATH_BY_COMMIT_ROUTE, "commit" => commit, "key" => key);
+    path_fn!(reward_state_v2_path_by_height, REWARD_STATE_V2_PATH_BY_HEIGHT_ROUTE, "height" => height, "key" => key);
+    path_fn!(reward_state_v2_path_by_commit, REWARD_STATE_V2_PATH_BY_COMMIT_ROUTE, "commit" => commit, "key" => key);
 
     // Availability — namespace proofs
     path_fn!(namespace_proof_by_height, NAMESPACE_PROOF_BY_HEIGHT_ROUTE, "height" => height, "namespace" => namespace);
@@ -552,6 +580,7 @@ pub mod v1 {
 
     // Database (diagnostic)
     path_fn!(database_table_sizes, DATABASE_TABLE_SIZES_ROUTE);
+    path_fn!(database_migration_status, DATABASE_MIGRATION_STATUS_ROUTE);
 }
 
 pub mod v2 {

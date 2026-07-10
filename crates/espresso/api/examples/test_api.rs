@@ -36,6 +36,8 @@ impl v1::RewardApi for TestApi {
     type RewardAmounts = (Vec<(u128, u128)>, u64);
     type RewardMerkleTreeData = Vec<u8>;
     type RewardAccountQueryDataV1 = (u128, Vec<u8>);
+    type RewardStatePathV1 = serde_json::Value;
+    type RewardStatePathV2 = serde_json::Value;
 
     async fn get_reward_state_height(&self) -> Result<u64> {
         tracing::info!("v1: get_reward_state_height()");
@@ -142,6 +144,22 @@ impl v1::RewardApi for TestApi {
     async fn get_reward_merkle_tree_v2(&self, height: u64) -> Result<Self::RewardMerkleTreeData> {
         tracing::info!("v1: get_reward_merkle_tree_v2(height={})", height);
         Ok(vec![0x00, 0x11, 0x22, 0x33, 0x44, 0x55])
+    }
+
+    async fn get_reward_state_path_v1(
+        &self,
+        _snapshot: v1::Snapshot,
+        _key: String,
+    ) -> Result<Self::RewardStatePathV1> {
+        Ok(serde_json::Value::Null)
+    }
+
+    async fn get_reward_state_path_v2(
+        &self,
+        _snapshot: v1::Snapshot,
+        _key: String,
+    ) -> Result<Self::RewardStatePathV2> {
+        Ok(serde_json::Value::Null)
     }
 }
 
@@ -739,8 +757,13 @@ impl v1::TokenApi for TestApi {
 #[async_trait]
 impl v1::DatabaseApi for TestApi {
     type TableSizes = serde_json::Value;
+    type MigrationStatus = serde_json::Value;
 
     async fn get_table_sizes(&self) -> Result<Self::TableSizes> {
+        Ok(serde_json::Value::Null)
+    }
+
+    async fn get_migration_status(&self) -> Result<Self::MigrationStatus> {
         Ok(serde_json::Value::Null)
     }
 }
@@ -1115,8 +1138,16 @@ async fn main() -> Result<()> {
 
     let state = TestApi;
 
-    // Start Axum server with combined v1 and v2 APIs
-    espresso_api::serve_axum(API_PORT, state).await?;
+    // Start Axum server with combined v1 and v2 APIs, all optional modules enabled
+    let modules = espresso_api::OptionalModules {
+        submit: true,
+        catchup: true,
+        config: true,
+        hotshot_events: true,
+        explorer: true,
+        light_client: true,
+    };
+    espresso_api::serve_axum(API_PORT, state, modules, None).await?;
 
     Ok(())
 }

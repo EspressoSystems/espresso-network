@@ -35,7 +35,17 @@ pub fn url(base: &::url::Url, path: impl AsRef<str>) -> ::url::Url {
 /// Start Axum HTTP server with combined v1 and v2 APIs
 ///
 /// This serves both APIs at /v1/* and /v2/* from a single state implementation.
-pub async fn serve_axum<S>(port: u16, state: S) -> anyhow::Result<()>
+///
+/// `catchup`, like the query-service modules (`status`, `availability`, `node`, `token`,
+/// `block-state`, `fee-state`, `reward-state`, `database`) and `v2`, is always on: tide-disco's
+/// SQL mode registered it unconditionally. `submit`, `config`, `explorer`, `light-client`, and
+/// `hotshot-events` follow `Options`, matching `Options::init_with_query_module_sql`.
+pub async fn serve_axum<S>(
+    port: u16,
+    state: S,
+    modules: OptionalModules,
+    max_connections: Option<usize>,
+) -> anyhow::Result<()>
 where
     S: v1::RewardApi
         + v1::AvailabilityApi
@@ -61,17 +71,46 @@ where
         + Sync
         + 'static,
 {
-    serve_router(port, "v1 and v2", create_combined_router(state)).await
+    let mut router = axum::router_reward(state.clone())
+        .merge(axum::router_availability(state.clone()))
+        .merge(axum::router_block_state(state.clone()))
+        .merge(axum::router_fee_state(state.clone()))
+        .merge(axum::router_status(state.clone()))
+        .merge(axum::router_node(state.clone()))
+        .merge(axum::router_catchup(state.clone()))
+        .merge(axum::router_state_signature(state.clone()))
+        .merge(axum::router_token(state.clone()))
+        .merge(axum::router_database(state.clone()))
+        .merge(axum::create_router_v2(state.clone()));
+    if modules.submit {
+        router = router.merge(axum::router_submit(state.clone()));
+    }
+    if modules.config {
+        router = router.merge(axum::router_config(state.clone()));
+    }
+    if modules.explorer {
+        router = router.merge(axum::router_explorer(state.clone()));
+    }
+    if modules.light_client {
+        router = router.merge(axum::router_light_client(state.clone()));
+    }
+    if modules.hotshot_events {
+        router = router.merge(axum::router_hotshot_events(state));
+    }
+    serve_router(port, "v1 and v2", router, max_connections).await
 }
 
 /// Which of the optional API modules to serve, for modes that make them conditional
-/// (mirroring `Options::submit`/`Options::config`/`Options::hotshot_events`).
+/// (mirroring `Options::submit`/`Options::config`/`Options::explorer`/`Options::light_client`/
+/// `Options::hotshot_events`).
 #[derive(Default, Clone, Copy, Debug)]
 pub struct OptionalModules {
     pub submit: bool,
     pub catchup: bool,
     pub config: bool,
     pub hotshot_events: bool,
+    pub explorer: bool,
+    pub light_client: bool,
 }
 
 /// Serve the query API used by the filesystem-backed storage mode: status, availability, node,
@@ -79,7 +118,12 @@ pub struct OptionalModules {
 /// submit, config, and hotshot-events follow `Options`. Filesystem storage doesn't implement the
 /// reward/merklized-state/explorer/database traits, so those modules aren't served (a request to
 /// one of their routes 404s, matching tide).
-pub async fn serve_axum_fs<S>(port: u16, state: S, modules: OptionalModules) -> anyhow::Result<()>
+pub async fn serve_axum_fs<S>(
+    port: u16,
+    state: S,
+    modules: OptionalModules,
+    max_connections: Option<usize>,
+) -> anyhow::Result<()>
 where
     S: v1::StatusApi
         + v1::AvailabilityApi
@@ -111,7 +155,7 @@ where
     if modules.hotshot_events {
         router = router.merge(axum::router_hotshot_events(state));
     }
-    serve_router(port, "fs", router).await
+    serve_router(port, "fs", router, max_connections).await
 }
 
 /// Serve the status-only API: no availability/node/token data source is available, so only
@@ -121,6 +165,7 @@ pub async fn serve_axum_status<S>(
     port: u16,
     state: S,
     modules: OptionalModules,
+    max_connections: Option<usize>,
 ) -> anyhow::Result<()>
 where
     S: v1::StatusApi
@@ -137,13 +182,18 @@ where
     let mut router =
         axum::router_status(state.clone()).merge(axum::router_state_signature(state.clone()));
     router = merge_hotshot_modules(router, &state, modules);
-    serve_router(port, "status", router).await
+    serve_router(port, "status", router, max_connections).await
 }
 
 /// Serve the bare API (no query or status module): only the HotShot modules are available,
 /// since the only app state is the HotShot handle. State-signature is always on; the rest follow
 /// `Options`, matching `Options::init_hotshot_modules`.
-pub async fn serve_axum_bare<S>(port: u16, state: S, modules: OptionalModules) -> anyhow::Result<()>
+pub async fn serve_axum_bare<S>(
+    port: u16,
+    state: S,
+    modules: OptionalModules,
+    max_connections: Option<usize>,
+) -> anyhow::Result<()>
 where
     S: v1::SubmitApi
         + v1::CatchupApi
@@ -157,7 +207,7 @@ where
 {
     let router = axum::router_state_signature(state.clone());
     let router = merge_hotshot_modules(router, &state, modules);
-    serve_router(port, "bare", router).await
+    serve_router(port, "bare", router, max_connections).await
 }
 
 fn merge_hotshot_modules<S>(
@@ -190,12 +240,32 @@ where
     router
 }
 
-/// Add the reserved top-level routes, rewrite legacy URIs, and bind/serve the router. Shared by
-/// all `serve_axum*` entry points.
-async fn serve_router(port: u16, mode: &str, router: ::axum::Router) -> anyhow::Result<()> {
+/// Add the reserved top-level routes, apply the optional concurrency limit, rewrite legacy URIs,
+/// and bind/serve the router. Shared by all `serve_axum*` entry points.
+///
+/// `max_connections` matches tide-disco's `RateLimitListener` semantics: at most that many
+/// requests are in flight at once, and excess requests fail immediately with 429 Too Many
+/// Requests instead of queueing. The load-shed layer converts the concurrency limit's "not
+/// ready" into an error, which `HandleErrorLayer` maps to the 429 response.
+async fn serve_router(
+    port: u16,
+    mode: &str,
+    router: ::axum::Router,
+    max_connections: Option<usize>,
+) -> anyhow::Result<()> {
     tracing::info!("Starting Axum server on port {} ({} mode)", port, mode);
 
-    let router = axum::with_top_level_routes(router);
+    let mut router = axum::with_top_level_routes(router);
+    if let Some(limit) = max_connections {
+        router = router.layer(
+            tower::ServiceBuilder::new()
+                .layer(::axum::error_handling::HandleErrorLayer::new(
+                    |_: tower::BoxError| async { ::axum::http::StatusCode::TOO_MANY_REQUESTS },
+                ))
+                .layer(tower::load_shed::LoadShedLayer::new())
+                .layer(tower::limit::GlobalConcurrencyLimitLayer::new(limit)),
+        );
+    }
     // `Router::layer` middleware runs after routing, so it can't rewrite a URI to match a
     // different route. Wrapping the whole router with `MapRequestLayer` instead runs the
     // rewrite before routing, per the axum-documented pattern for this case.

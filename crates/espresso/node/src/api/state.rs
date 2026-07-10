@@ -662,7 +662,21 @@ where
 impl<D> espresso_api::v1::RewardApi for NodeApiStateImpl<D>
 where
     D: RewardMerkleTreeDataSource + std::ops::Deref,
-    D::Target: hotshot_query_service::merklized_state::MerklizedStateHeightPersistence,
+    D::Target: hotshot_query_service::merklized_state::MerklizedStateHeightPersistence
+        + hotshot_query_service::merklized_state::MerklizedStateDataSource<
+            espresso_types::SeqTypes,
+            espresso_types::v0_3::RewardMerkleTreeV1,
+            {
+                <espresso_types::v0_3::RewardMerkleTreeV1 as jf_merkle_tree_compat::MerkleTreeScheme>::ARITY
+            },
+        > + hotshot_query_service::merklized_state::MerklizedStateDataSource<
+            espresso_types::SeqTypes,
+            espresso_types::v0_4::RewardMerkleTreeV2,
+            {
+                <espresso_types::v0_4::RewardMerkleTreeV2 as jf_merkle_tree_compat::MerkleTreeScheme>::ARITY
+            },
+        > + Send
+        + Sync,
 {
     type RewardClaimInput = InternalRewardClaimInput;
     type RewardBalance = InternalRewardAmount;
@@ -670,6 +684,22 @@ where
     type RewardAmounts = Vec<(alloy::primitives::Address, InternalRewardAmount)>;
     type RewardMerkleTreeData = Vec<u8>;
     type RewardAccountQueryDataV1 = espresso_types::v0_3::RewardAccountQueryDataV1;
+    type RewardStatePathV1 = InternalMerkleProof<
+        InternalRewardAmount,
+        espresso_types::v0_3::RewardAccountV1,
+        jf_merkle_tree_compat::prelude::Sha3Node,
+        {
+            <espresso_types::v0_3::RewardMerkleTreeV1 as jf_merkle_tree_compat::MerkleTreeScheme>::ARITY
+        },
+    >;
+    type RewardStatePathV2 = InternalMerkleProof<
+        InternalRewardAmount,
+        RewardAccountV2,
+        KeccakNode,
+        {
+            <espresso_types::v0_4::RewardMerkleTreeV2 as jf_merkle_tree_compat::MerkleTreeScheme>::ARITY
+        },
+    >;
 
     async fn get_reward_state_height(&self) -> anyhow::Result<u64> {
         use hotshot_query_service::merklized_state::MerklizedStateHeightPersistence;
@@ -906,6 +936,74 @@ where
         self.data_source.load_tree(height).await.map_err(|err| {
             anyhow::anyhow!("failed to load reward tree at height {}: {}", height, err)
         })
+    }
+
+    async fn get_reward_state_path_v1(
+        &self,
+        snapshot: espresso_api::v1::Snapshot,
+        key: String,
+    ) -> anyhow::Result<Self::RewardStatePathV1> {
+        use hotshot_query_service::merklized_state::{
+            MerklizedStateDataSource, Snapshot as HsSnapshot,
+        };
+
+        let hs_snapshot = match snapshot {
+            espresso_api::v1::Snapshot::Height(h) => HsSnapshot::Index(h),
+            espresso_api::v1::Snapshot::Commit(c) => {
+                let tb64: TaggedBase64 = c
+                    .parse()
+                    .map_err(|_| bad_request("failed to parse commit param"))?;
+                let commit = (&tb64)
+                    .try_into()
+                    .map_err(|_| bad_request("failed to parse commit param"))?;
+                HsSnapshot::Commit(commit)
+            },
+        };
+        let key: espresso_types::v0_3::RewardAccountV1 = key
+            .parse()
+            .map_err(|_| bad_request("failed to parse Key param"))?;
+        let ds = &*self.data_source;
+        MerklizedStateDataSource::<
+            espresso_types::SeqTypes,
+            espresso_types::v0_3::RewardMerkleTreeV1,
+            _,
+        >::get_path(ds, hs_snapshot, key)
+        .await
+        .map_err(classify_query_error)
+    }
+
+    async fn get_reward_state_path_v2(
+        &self,
+        snapshot: espresso_api::v1::Snapshot,
+        key: String,
+    ) -> anyhow::Result<Self::RewardStatePathV2> {
+        use hotshot_query_service::merklized_state::{
+            MerklizedStateDataSource, Snapshot as HsSnapshot,
+        };
+
+        let hs_snapshot = match snapshot {
+            espresso_api::v1::Snapshot::Height(h) => HsSnapshot::Index(h),
+            espresso_api::v1::Snapshot::Commit(c) => {
+                let tb64: TaggedBase64 = c
+                    .parse()
+                    .map_err(|_| bad_request("failed to parse commit param"))?;
+                let commit = (&tb64)
+                    .try_into()
+                    .map_err(|_| bad_request("failed to parse commit param"))?;
+                HsSnapshot::Commit(commit)
+            },
+        };
+        let key: RewardAccountV2 = key
+            .parse()
+            .map_err(|_| bad_request("failed to parse Key param"))?;
+        let ds = &*self.data_source;
+        MerklizedStateDataSource::<
+            espresso_types::SeqTypes,
+            espresso_types::v0_4::RewardMerkleTreeV2,
+            _,
+        >::get_path(ds, hs_snapshot, key)
+        .await
+        .map_err(classify_query_error)
     }
 }
 
@@ -3414,11 +3512,18 @@ where
     D::Target: super::data_source::DatabaseMetadataSource + Send + Sync,
 {
     type TableSizes = Vec<super::data_source::TableSize>;
+    type MigrationStatus = Vec<super::data_source::MigrationStatus>;
 
     async fn get_table_sizes(&self) -> anyhow::Result<Self::TableSizes> {
         use super::data_source::DatabaseMetadataSource as _;
         let ds = &*self.data_source;
         ds.get_table_sizes().await
+    }
+
+    async fn get_migration_status(&self) -> anyhow::Result<Self::MigrationStatus> {
+        use super::data_source::DatabaseMetadataSource as _;
+        let ds = &*self.data_source;
+        ds.get_migration_status().await
     }
 }
 
