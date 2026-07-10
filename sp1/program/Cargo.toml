@@ -1,0 +1,36 @@
+# SP1 zkVM guest verifying a real decaf leaf and QC with the light-client
+# crate on the riscv64im-succinct-zkvm-elf target.
+#
+# The 32-bit target cannot verify mainnet/decaf data: `serialize_signature2`
+# feeds the bincode encoding of the signer `BitVec<usize>` into QC (and thus
+# leaf) commitments, so the word width of the committing platform (64 bits)
+# is consensus-critical.
+[package]
+name = "espresso-sp1-program"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+alloy = { version = "1.0", default-features = false }
+anyhow = "1.0"
+committable = { git = "https://github.com/EspressoSystems/commit.git", features = [
+    "ark-serialize",
+] }
+espresso-types = { path = "../../crates/espresso/types", default-features = false }
+futures = "0.3"
+# The custom feature lets getrandom 0.2 compile for the zkVM target; sp1-zkvm
+# provides the __getrandom_custom implementation.
+getrandom = { version = "0.2", features = ["custom"] }
+hotshot-query-service-types = { path = "../../hotshot-query-service-types", default-features = false }
+hotshot-types = { path = "../../crates/hotshot/types" }
+light-client = { path = "../../light-client", default-features = false }
+serde_json = "1"
+sha2 = "0.10"
+# 6.x targets riscv64 and matches espresso-stack's zk-reader guest; 4.x/5.x
+# pull the succinct plonky3 fork (p3-maybe-rayon 0.2.3-succinct), which
+# conflicts with the workspace vid crate's p3-maybe-rayon 0.2 requirement.
+sp1-zkvm = "6"
+vbs = "0.1"
+
+[dev-dependencies]
+tagged-base64 = "0.4"

@@ -1,0 +1,13 @@
+# Host runner: executes (and optionally proves) the SP1 guest against the
+# committed decaf fixtures.
+[package]
+name = "espresso-sp1-script"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+hex = "0.4"
+# Matches the guest's sp1-zkvm 6.x.
+sp1-sdk = { version = "6", features = ["blocking", "network"] }
