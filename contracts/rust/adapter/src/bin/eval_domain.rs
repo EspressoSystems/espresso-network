@@ -32,5 +32,5 @@ fn main() {
         let new_element_str = format!("0x{:X} ", element_bigint.clone()).to_lowercase();
         domain_elements_str = domain_elements_str.to_owned() + &new_element_str;
     }
-    println!("domain elements: {}", &domain_elements_str);
+    println!("domain elements: {}", domain_elements_str);
 }
