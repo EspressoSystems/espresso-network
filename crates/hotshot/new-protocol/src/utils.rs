@@ -1,12 +1,12 @@
-use alloy::primitives::U256;
 use anyhow::{anyhow, ensure};
 use committable::Committable;
 use hotshot_types::{
-    PeerConfig,
-    data::Leaf2,
+    data::{EpochNumber, Leaf2, ViewNumber},
+    epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     stake_table::StakeTableEntries,
     traits::node_implementation::NodeType,
+    utils::epoch_from_block_number,
     vote::{Certificate, HasViewNumber},
 };
 
@@ -23,10 +23,9 @@ use crate::message::Certificate2;
 /// leaves that are not on the certified ancestry path. Those leaves are ignored;
 /// every accepted step must match the current leaf's justify QC, parent
 /// commitment, and block height.
-pub async fn verify_leaf_chain_with_cert2<T: NodeType>(
+pub async fn verify_new_protocol_leaf_chain<T: NodeType>(
     mut leaf_chain: Vec<Leaf2<T>>,
-    stake_table: &[PeerConfig<T>],
-    success_threshold: U256,
+    coordinator: &EpochMembershipCoordinator<T>,
     expected_height: u64,
     upgrade_lock: &UpgradeLock<T>,
     cert2: Certificate2<T>,
@@ -35,29 +34,47 @@ pub async fn verify_leaf_chain_with_cert2<T: NodeType>(
     leaf_chain.reverse();
 
     ensure!(!leaf_chain.is_empty(), "empty leaf chain");
-
-    let stake_table_entries = StakeTableEntries::<T>::from(stake_table.to_vec()).0;
-
-    cert2.is_valid_cert(&stake_table_entries, success_threshold, upgrade_lock)?;
+    let newest = &leaf_chain[0];
 
     ensure!(
-        cert2.data.leaf_commit == leaf_chain[0].commit(),
+        cert2.view_number() > ViewNumber::genesis(),
+        "cert2 must not be the genesis view"
+    );
+    let epoch = EpochNumber::new(epoch_from_block_number(
+        cert2.data.block_number,
+        *coordinator.epoch_height(),
+    ));
+    ensure!(
+        cert2.data.epoch == epoch,
+        "cert2 epoch {} does not match epoch {epoch} derived from its block number {}",
+        cert2.data.epoch,
+        cert2.data.block_number
+    );
+
+    let membership = coordinator
+        .stake_table_for_epoch(Some(epoch))
+        .map_err(|err| anyhow!("no stake table available for epoch {epoch}: {err:?}"))?;
+    let entries = StakeTableEntries::<T>::from_iter(membership.stake_table()).0;
+    cert2.is_valid_cert(&entries, membership.success_threshold(), upgrade_lock)?;
+
+    ensure!(
+        cert2.data.leaf_commit == newest.commit(),
         "cert2 does not match the newest leaf in the chain"
     );
     ensure!(
-        cert2.data.block_number == leaf_chain[0].height(),
+        cert2.data.block_number == newest.height(),
         "cert2 block number does not match the newest leaf"
     );
     ensure!(
-        cert2.view_number() == leaf_chain[0].view_number(),
+        cert2.view_number() == newest.view_number(),
         "cert2 view does not match the newest leaf"
     );
 
-    if leaf_chain[0].height() == expected_height {
-        return Ok(leaf_chain[0].clone());
+    if newest.height() == expected_height {
+        return Ok(newest.clone());
     }
 
-    let mut current = &leaf_chain[0];
+    let mut current = newest;
     for leaf in leaf_chain[1..].iter() {
         let justify_qc = current.justify_qc();
         if justify_qc.view_number() != leaf.view_number()
@@ -78,7 +95,15 @@ pub async fn verify_leaf_chain_with_cert2<T: NodeType>(
             leaf.height().checked_add(1) == Some(current.height()),
             "leaf heights do not chain"
         );
-        justify_qc.is_valid_cert(&stake_table_entries, success_threshold, upgrade_lock)?;
+        let qc_epoch = justify_qc
+            .data()
+            .epoch
+            .ok_or_else(|| anyhow!("justify QC at height {} is missing an epoch", leaf.height()))?;
+        let membership = coordinator
+            .stake_table_for_epoch(Some(qc_epoch))
+            .map_err(|err| anyhow!("no stake table available for epoch {qc_epoch}: {err:?}"))?;
+        let entries = StakeTableEntries::<T>::from_iter(membership.stake_table()).0;
+        justify_qc.is_valid_cert(&entries, membership.success_threshold(), upgrade_lock)?;
         if leaf.height() == expected_height {
             return Ok(leaf.clone());
         }
