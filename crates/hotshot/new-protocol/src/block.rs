@@ -7,7 +7,10 @@ use std::{
 use committable::{Commitment, Committable};
 use hotshot::traits::{BlockPayload, ValidatedState as _};
 use hotshot_types::{
-    data::{EpochNumber, Leaf2, VidCommitment, VidDisperse2, ViewNumber},
+    data::{
+        EpochNumber, Leaf2, VidCommitment, VidDisperse2, ViewNumber, vid_commitment,
+        vid_disperse::vid_total_weight,
+    },
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     traits::{
@@ -24,6 +27,7 @@ use tokio::{
     time::sleep,
 };
 use tracing::{error, warn};
+use versions::NEW_PROTOCOL_VERSION;
 
 use crate::{
     consensus::ConsensusInput,
@@ -149,10 +153,10 @@ impl<T: NodeType> BlockBuilder<T> {
         if self.calculations.contains_key(&(view, parent_commitment)) {
             return;
         }
-        if self.upgrade_lock.version(view).is_err() {
+        let Ok(version) = self.upgrade_lock.version(view) else {
             warn!(%view, "unsupported version");
             return;
-        }
+        };
         let epoch = request.epoch;
         let buffer = std::mem::take(&mut self.leader_buffer);
         self.leader_total_bytes = 0;
@@ -187,58 +191,77 @@ impl<T: NodeType> BlockBuilder<T> {
             let metadata_bytes = metadata.encode();
             let block_size = payload_bytes.len() as u64;
 
-            // Erasure-code every namespace exactly once and derive the payload
-            // commitment from that same computation (this crate always disperses
-            // V2/AvidmGf2 shares). Runs on a blocking thread; the proposal is not
-            // gated on the fanout that follows.
-            let (commitment, common, shares, recipients) =
-                spawn_blocking(move || -> Result<_, BlockError> {
-                    let params = VidDisperse2::<T>::disperse_params(
-                        payload_bytes,
-                        metadata_bytes.as_ref(),
-                        &membership,
-                        Some(epoch),
-                    )
-                    .map_err(|e| BlockError::VidDisperse(e.to_string()))?;
-                    let (commitment, common, shares) = AvidmGf2Scheme::ns_disperse(
-                        &params.param,
-                        &params.weights,
-                        &params.payload,
-                        params.ns_table.iter().cloned(),
-                    )
-                    .map_err(|e| BlockError::VidDisperse(e.to_string()))?;
-                    Ok((commitment, common, shares, params.recipients))
-                })
-                .await
-                .map_err(|e| BlockError::VidDisperse(e.to_string()))??;
+            // Only the new protocol (>= V0_6) disperses V2/AvidmGf2 shares. During
+            // the cutover period this builder also produces pre-V0_6 blocks, which
+            // must carry a version-appropriate commitment so their headers match
+            // the legacy builder's; those are not dispersed here (the `BlockBuilt`
+            // handler ignores non-V2 commitments).
+            let payload_commitment = if version >= NEW_PROTOCOL_VERSION {
+                // Erasure-code every namespace exactly once and derive the payload
+                // commitment from that same computation. Runs on a blocking thread;
+                // the proposal is not gated on the fanout that follows.
+                let (commitment, common, shares, recipients) =
+                    spawn_blocking(move || -> Result<_, BlockError> {
+                        let params = VidDisperse2::<T>::disperse_params(
+                            payload_bytes,
+                            metadata_bytes.as_ref(),
+                            &membership,
+                            Some(epoch),
+                        )
+                        .map_err(|e| BlockError::VidDisperse(e.to_string()))?;
+                        let (commitment, common, shares) = AvidmGf2Scheme::ns_disperse(
+                            &params.param,
+                            &params.weights,
+                            &params.payload,
+                            params.ns_table.iter().cloned(),
+                        )
+                        .map_err(|e| BlockError::VidDisperse(e.to_string()))?;
+                        Ok((commitment, common, shares, params.recipients))
+                    })
+                    .await
+                    .map_err(|e| BlockError::VidDisperse(e.to_string()))??;
 
-            // Fan the shares out in the background, including the leader's own
-            // share (delivered via unicast loopback, which is how the leader
-            // obtains the share it votes with). A critical send failure is
-            // logged, not fatal.
-            let fanout_handle = spawn_blocking(move || {
-                fanout::fan_out::<T>(
-                    shares,
-                    common,
-                    commitment,
-                    recipients,
-                    view,
-                    epoch,
-                    network,
-                    public_key,
-                    private_key,
+                // Fan the shares out in the background, including the leader's own
+                // share (delivered via unicast loopback, which is how the leader
+                // obtains the share it votes with). A critical send failure is
+                // logged, not fatal.
+                let fanout_handle = spawn_blocking(move || {
+                    fanout::fan_out::<T>(
+                        shares,
+                        common,
+                        commitment,
+                        recipients,
+                        view,
+                        epoch,
+                        network,
+                        public_key,
+                        private_key,
+                    )
+                });
+                // Surface fanout failures and panics; a detached blocking task
+                // would otherwise swallow them silently.
+                tokio::spawn(async move {
+                    match fanout_handle.await {
+                        Ok(Ok(())) => {},
+                        Ok(Err(err)) => error!(%view, %err, "vid share fanout failed"),
+                        Err(err) => error!(%view, %err, "vid share fanout task panicked"),
+                    }
+                });
+                VidCommitment::V2(commitment)
+            } else {
+                let total_weight = {
+                    let target_mem = membership
+                        .stake_table_for_epoch(Some(epoch))
+                        .map_err(|_| BlockError::StakeTableUnavailable)?;
+                    vid_total_weight(target_mem.stake_table(), Some(epoch))
+                };
+                vid_commitment(
+                    payload_bytes.as_ref(),
+                    metadata_bytes.as_ref(),
+                    total_weight,
+                    version,
                 )
-            });
-            // Surface fanout failures and panics; a detached blocking task would
-            // otherwise swallow them silently.
-            tokio::spawn(async move {
-                match fanout_handle.await {
-                    Ok(Ok(())) => {},
-                    Ok(Err(err)) => error!(%view, %err, "vid share fanout failed"),
-                    Err(err) => error!(%view, %err, "vid share fanout task panicked"),
-                }
-            });
-            let payload_commitment = VidCommitment::V2(commitment);
+            };
 
             let builder_commitment = payload.builder_commitment(&metadata);
             let (builder_key, builder_private_key) =
