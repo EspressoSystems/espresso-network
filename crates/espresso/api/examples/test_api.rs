@@ -645,6 +645,14 @@ impl v1::LightClientApi for TestApi {
     ) -> Result<Vec<Self::NamespaceProof>> {
         Ok(vec![])
     }
+    async fn get_lc_namespaces_proof_range(
+        &self,
+        _start: u64,
+        _end: u64,
+        _namespaces: String,
+    ) -> Result<Vec<std::collections::HashMap<u64, Self::NamespaceProof>>> {
+        Ok(vec![])
+    }
 }
 
 #[async_trait]

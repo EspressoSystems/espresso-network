@@ -14,7 +14,6 @@ use axum::{
     body::Bytes,
     extract::{Path, Request, State, ws::WebSocketUpgrade},
     http::{HeaderMap, StatusCode, Uri, header},
-    middleware::{self, Next},
     response::{Html, IntoResponse, Response},
     routing::get,
 };
@@ -151,56 +150,41 @@ async fn serve_swagger_ui() -> Html<&'static str> {
     Html(include_str!("../templates/swagger.html"))
 }
 
-/// Middleware to rewrite root paths to /v2 paths
-///
-/// Requests to `/rewards/...` get rewritten to `/v2/rewards/...`
-/// Paths already prefixed with `/v2` are left unchanged
-///
-/// Note: This middleware is only applied to the v2 router, so v1 routes never pass through it
-async fn rewrite_root_to_v2(mut req: Request, next: Next) -> Response {
-    let uri = req.uri().clone();
-    let path = uri.path();
-
-    // Only rewrite unversioned paths (not starting with /v2)
-    if !path.starts_with("/v2") && path != "/" {
-        let new_path = format!("/v2{}", path);
-        let pq = if let Some(q) = uri.query() {
-            format!("{}?{}", new_path, q)
-        } else {
-            new_path
-        };
-        if let Ok(new_uri) = Uri::builder().path_and_query(pq).build() {
-            *req.uri_mut() = new_uri;
-        }
-    }
-
-    next.run(req).await
-}
-
 /// Redirect handler for root path
 async fn redirect_to_docs() -> axum::response::Redirect {
     axum::response::Redirect::permanent("/v2")
 }
 
-/// Tide-disco served every v1 module at both `/<module>/...` and `/v1/<module>/...`. The
-/// axum router only declares the `/v1/...` shape; this middleware preserves backward
-/// compatibility for unversioned clients (and for tests written against the tide-disco
-/// surface) by rewriting any incoming path that isn't already version-prefixed.
+/// Tide-disco served every v1 module at both `/<module>/...` and `/v1/<module>/...`, and legacy
+/// clients (surf-disco, the light-client, tests) still address the unversioned and `/v0` forms.
+/// Axum only declares the `/v1/...` and `/v2/...` route shapes, and `Router::layer` middleware
+/// runs after routing, so it can never redirect a request onto a route it doesn't already match.
+/// This function is instead wrapped around the whole router with `tower::util::MapRequestLayer`
+/// (see `serve_axum`), which runs before routing, to rewrite the URI so the declared routes match.
 ///
-/// Excludes paths that are intentionally unversioned: `/`, `/healthcheck`, `/version`,
-/// and the `rewrite_root_to_v2`-managed v2 paths (which take priority and short-circuit
-/// before this layer if applied first via merging).
-async fn rewrite_legacy_root_to_v1(mut req: Request, next: Next) -> Response {
+/// Excludes paths that are intentionally unversioned: `/`, `/healthcheck`, `/version`, and
+/// anything already prefixed with `/v1` or `/v2`.
+pub(crate) fn rewrite_legacy_uri(mut req: Request) -> Request {
     let uri = req.uri().clone();
     let path = uri.path();
 
-    let is_unversioned = !path.starts_with("/v1") && !path.starts_with("/v2");
     let is_reserved =
         path == "/" || path == "/healthcheck" || path == "/version" || path.is_empty();
-    if is_unversioned && !is_reserved {
-        let new_path = format!("/v1{}", path);
+    let is_versioned =
+        path == "/v1" || path.starts_with("/v1/") || path == "/v2" || path.starts_with("/v2/");
+    let new_path = if is_versioned || is_reserved {
+        None
+    } else if path == "/v0" {
+        Some("/v1".to_string())
+    } else if let Some(rest) = path.strip_prefix("/v0/") {
+        Some(format!("/v1/{rest}"))
+    } else {
+        Some(format!("/v1{path}"))
+    };
+
+    if let Some(new_path) = new_path {
         let pq = if let Some(q) = uri.query() {
-            format!("{}?{}", new_path, q)
+            format!("{new_path}?{q}")
         } else {
             new_path
         };
@@ -209,7 +193,7 @@ async fn rewrite_legacy_root_to_v1(mut req: Request, next: Next) -> Response {
         }
     }
 
-    next.run(req).await
+    req
 }
 
 struct SendQuery<T>(T);
@@ -320,17 +304,13 @@ where
         + 'static,
 {
     let router_v1 = create_router_v1(state.clone());
-    let router_v2 = create_router_v2(state).layer(middleware::from_fn(rewrite_root_to_v2));
+    let router_v2 = create_router_v2(state);
 
     router_v2
         .merge(router_v1)
         .route("/", get(redirect_to_docs))
         .route("/healthcheck", get(healthcheck))
         .route("/version", get(version))
-        // Top-level layer so it runs before routing for *any* request — required to
-        // catch unversioned paths (e.g. `/availability/leaf/5`) that won't match a
-        // declared route directly.
-        .layer(middleware::from_fn(rewrite_legacy_root_to_v1))
 }
 
 /// Tide-disco-compatible healthcheck response: `{"status":"Available"}`.
@@ -1429,6 +1409,14 @@ where
                 .map(Json)
                 .map_err(classify_availability_error)
         };
+    let lc_namespaces_range =
+        |State(state): State<S>, Path((start, end, namespaces)): Path<(u64, u64, String)>| async move {
+            state
+                .get_lc_namespaces_proof_range(start, end, namespaces)
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
 
     // Explorer handlers
     let explorer_block_detail_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
@@ -2033,6 +2021,10 @@ where
             routes::v1::LC_NAMESPACE_RANGE_ROUTE,
             get(lc_namespace_range),
         )
+        .route(
+            routes::v1::LC_NAMESPACES_RANGE_ROUTE,
+            get(lc_namespaces_range),
+        )
         // Explorer
         .route(
             routes::v1::EXPLORER_BLOCK_DETAIL_BY_HEIGHT_ROUTE,
@@ -2336,4 +2328,74 @@ where
         )
         .layer(Extension(api))
         .with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rewritten_uri(uri: &str) -> String {
+        let req = Request::builder()
+            .uri(uri)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        rewrite_legacy_uri(req).uri().to_string()
+    }
+
+    #[test]
+    fn rewrite_legacy_uri_prefixes_unversioned_paths() {
+        assert_eq!(
+            rewritten_uri("/status/block-height"),
+            "/v1/status/block-height"
+        );
+    }
+
+    #[test]
+    fn rewrite_legacy_uri_rewrites_v0_to_v1() {
+        assert_eq!(
+            rewritten_uri("/v0/status/block-height"),
+            "/v1/status/block-height"
+        );
+        assert_eq!(rewritten_uri("/v0"), "/v1");
+    }
+
+    #[test]
+    fn rewrite_legacy_uri_leaves_v1_unchanged() {
+        assert_eq!(
+            rewritten_uri("/v1/node/block-height"),
+            "/v1/node/block-height"
+        );
+    }
+
+    #[test]
+    fn rewrite_legacy_uri_leaves_v2_unchanged() {
+        assert_eq!(
+            rewritten_uri("/v2/rewards/balance/0xabc"),
+            "/v2/rewards/balance/0xabc"
+        );
+    }
+
+    #[test]
+    fn rewrite_legacy_uri_respects_version_prefix_boundaries() {
+        assert_eq!(rewritten_uri("/v1"), "/v1");
+        assert_eq!(rewritten_uri("/v2"), "/v2");
+        assert_eq!(rewritten_uri("/v1x"), "/v1/v1x");
+        assert_eq!(rewritten_uri("/v2-foo/bar"), "/v1/v2-foo/bar");
+        assert_eq!(rewritten_uri("/v0x/leaf"), "/v1/v0x/leaf");
+    }
+
+    #[test]
+    fn rewrite_legacy_uri_leaves_reserved_paths_unchanged() {
+        assert_eq!(rewritten_uri("/"), "/");
+        assert_eq!(rewritten_uri("/healthcheck"), "/healthcheck");
+        assert_eq!(rewritten_uri("/version"), "/version");
+    }
+
+    #[test]
+    fn rewrite_legacy_uri_preserves_query_string() {
+        assert_eq!(
+            rewritten_uri("/availability/leaf/1?foo=bar"),
+            "/v1/availability/leaf/1?foo=bar"
+        );
+    }
 }

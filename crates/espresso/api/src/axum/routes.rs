@@ -253,6 +253,8 @@ pub mod v1 {
     pub const LC_NAMESPACE_ROUTE: &str = "/v1/light-client/namespace/{height}/{namespace}";
     pub const LC_NAMESPACE_RANGE_ROUTE: &str =
         "/v1/light-client/namespace/{start}/{end}/{namespace}";
+    pub const LC_NAMESPACES_RANGE_ROUTE: &str =
+        "/v1/light-client/namespaces/{start}/{end}/{namespaces}";
 
     // Explorer
     pub const EXPLORER_BLOCK_DETAIL_BY_HEIGHT_ROUTE: &str = "/v1/explorer/block/{height}";
@@ -504,6 +506,7 @@ pub mod v1 {
     path_fn!(lc_payload_range, LC_PAYLOAD_RANGE_ROUTE, "start" => start, "end" => end);
     path_fn!(lc_namespace, LC_NAMESPACE_ROUTE, "height" => height, "namespace" => namespace);
     path_fn!(lc_namespace_range, LC_NAMESPACE_RANGE_ROUTE, "start" => start, "end" => end, "namespace" => namespace);
+    path_fn!(lc_namespaces_range, LC_NAMESPACES_RANGE_ROUTE, "start" => start, "end" => end, "namespaces" => namespaces);
 
     // Explorer — blocks
     path_fn!(explorer_block_detail_by_height, EXPLORER_BLOCK_DETAIL_BY_HEIGHT_ROUTE, "height" => height);

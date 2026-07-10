@@ -8,6 +8,8 @@ mod tonic;
 pub mod v1;
 pub mod v2;
 
+use tower::Layer;
+
 // Generated gRPC service code - committed to git for visibility in code review
 pub mod proto {
     include!("espresso.api.v2.rs");
@@ -62,6 +64,10 @@ where
     tracing::info!("Starting Axum server on port {} with v1 and v2 APIs", port);
 
     let app = create_combined_router(state);
+    // `Router::layer` middleware runs after routing, so it can't rewrite a URI to match a
+    // different route. Wrapping the whole router with `MapRequestLayer` instead runs the
+    // rewrite before routing, per the axum-documented pattern for this case.
+    let app = tower::util::MapRequestLayer::new(axum::rewrite_legacy_uri).layer(app);
     let addr = format!("0.0.0.0:{}", port);
 
     tracing::info!("Binding to {}", addr);
@@ -71,7 +77,7 @@ where
         "Axum API server listening on {} (v1 and v2 routes available)",
         addr
     );
-    ::axum::serve(listener, app.into_make_service()).await?;
+    ::axum::serve(listener, ::axum::ServiceExt::into_make_service(app)).await?;
 
     tracing::info!("Axum server stopped");
     Ok(())

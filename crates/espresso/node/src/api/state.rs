@@ -47,6 +47,7 @@ use serialization_api::v2::{
     reward_merkle_proof_v2::ProofType,
 };
 use tagged_base64::TaggedBase64;
+use tide_disco::{Error as _, StatusCode};
 
 use super::{
     RewardMerkleTreeDataSource, RewardMerkleTreeV2Data as InternalRewardTreeData,
@@ -3142,7 +3143,7 @@ where
             lc_large_object_range_limit(),
         )
         .await
-        .map_err(|err| anyhow::anyhow!("{err}"))?;
+        .map_err(lc_error)?;
         if proofs.len() != 1 {
             return Err(anyhow::anyhow!("internal consistency error"));
         }
@@ -3166,7 +3167,29 @@ where
             lc_large_object_range_limit(),
         )
         .await
-        .map_err(|err| anyhow::anyhow!("{err}"))
+        .map_err(lc_error)
+    }
+
+    async fn get_lc_namespaces_proof_range(
+        &self,
+        start: u64,
+        end: u64,
+        namespaces: String,
+    ) -> anyhow::Result<Vec<std::collections::HashMap<u64, Self::NamespaceProof>>> {
+        let namespaces = crate::api::light_client::parse_namespaces_str(&namespaces)
+            .map_err(|err| bad_request(err.to_string()))?;
+        let ds = &*self.data_source;
+        let fetch_timeout = lc_fetch_timeout();
+        crate::api::light_client::get_namespaces_proof_range(
+            ds,
+            start as usize,
+            end as usize,
+            &namespaces,
+            fetch_timeout,
+            lc_large_object_range_limit(),
+        )
+        .await
+        .map_err(lc_error)
     }
 }
 
@@ -3176,6 +3199,16 @@ fn lc_fetch_timeout() -> std::time::Duration {
 
 fn lc_large_object_range_limit() -> usize {
     hotshot_query_service::availability::Options::default().large_object_range_limit
+}
+
+/// Convert a query-service error to an [`AvailabilityError`]-carrying anyhow error so the HTTP
+/// layer returns the status tide-disco returned (400/404) instead of 500.
+pub(crate) fn lc_error(err: hotshot_query_service::Error) -> anyhow::Error {
+    match err.status() {
+        StatusCode::NOT_FOUND => not_found(err.to_string()),
+        StatusCode::BAD_REQUEST => bad_request(err.to_string()),
+        _ => anyhow::anyhow!("{err}"),
+    }
 }
 
 // ============================================================================
@@ -3309,5 +3342,43 @@ where
         use super::data_source::DatabaseMetadataSource as _;
         let ds = &*self.data_source;
         ds.get_table_sizes().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn custom(status: StatusCode) -> hotshot_query_service::Error {
+        hotshot_query_service::Error::Custom {
+            message: "boom".into(),
+            status,
+        }
+    }
+
+    // Regression: the light-client trait methods used to map query-service errors through
+    // `anyhow::anyhow!("{err}")`, erasing the status; every 400/404 became a 500.
+    #[test]
+    fn lc_error_preserves_bad_request() {
+        let err = lc_error(custom(StatusCode::BAD_REQUEST));
+        assert!(matches!(
+            err.downcast_ref::<AvailabilityError>(),
+            Some(AvailabilityError::BadRequest(_))
+        ));
+    }
+
+    #[test]
+    fn lc_error_preserves_not_found() {
+        let err = lc_error(custom(StatusCode::NOT_FOUND));
+        assert!(matches!(
+            err.downcast_ref::<AvailabilityError>(),
+            Some(AvailabilityError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn lc_error_other_statuses_stay_internal() {
+        let err = lc_error(custom(StatusCode::INTERNAL_SERVER_ERROR));
+        assert!(err.downcast_ref::<AvailabilityError>().is_none());
     }
 }

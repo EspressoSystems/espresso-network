@@ -9062,6 +9062,24 @@ mod test {
                 )
                 .await?;
 
+                // Regression: an oversized range on the plural namespaces route must return
+                // 400 Bad Request (the status carried by the query-service error), not 500.
+                let encoded_ns = tagged_base64::TaggedBase64::new(
+                    ::light_client::client::NAMESPACES_PARAM_TAG,
+                    &serde_json::to_vec(&vec![u64::from(avail_ns)])?,
+                )?;
+                compare_error_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!(
+                        "light-client/namespaces/{avail_block}/{}/{encoded_ns}",
+                        avail_block + 200
+                    ),
+                    400,
+                )
+                .await?;
+
                 // hotshot-events startup info: both must return matching JSON.
                 compare_endpoints(&http, api_port, axum_port, "hotshot-events/startup_info")
                     .await?;
