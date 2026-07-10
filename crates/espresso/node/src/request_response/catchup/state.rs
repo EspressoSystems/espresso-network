@@ -16,20 +16,17 @@ use espresso_types::{
 use hotshot::traits::NodeImplementation;
 use hotshot_new_protocol::utils::verify_leaf_chain_with_cert2;
 use hotshot_types::{
-    data::{EpochNumber, ViewNumber},
-    epoch_membership::EpochMembershipCoordinator,
-    message::UpgradeLock,
-    simple_certificate::LightClientStateUpdateCertificateV2,
-    traits::network::ConnectedNetwork,
-    utils::{epoch_from_block_number, verify_leaf_chain},
+    data::ViewNumber, epoch_membership::EpochMembershipCoordinator, message::UpgradeLock,
+    simple_certificate::LightClientStateUpdateCertificateV2, traits::network::ConnectedNetwork,
 };
 use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
 use request_response::RequestType;
 use tokio::time::timeout;
-use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION};
+use versions::NEW_PROTOCOL_VERSION;
 
 use crate::{
     api::RewardMerkleTreeV2Data,
+    catchup::verify_legacy_leaf_chain,
     request_response::{
         RequestResponseProtocol,
         request::{Request, Response},
@@ -299,25 +296,7 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
                 .await
                 .with_context(|| "leaf chain verification with cert2 failed")?
         } else {
-            let upgrade_lock =
-                UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(EPOCH_VERSION));
-            let epoch =
-                EpochNumber::new(epoch_from_block_number(height, *coordinator.epoch_height()));
-            let membership = coordinator
-                .stake_table_for_epoch(Some(epoch))
-                .map_err(|err| {
-                    anyhow::anyhow!("no stake table available for epoch {epoch}: {err:?}")
-                })?;
-            let stake_table: Vec<_> = membership.stake_table().cloned().collect();
-            verify_leaf_chain(
-                leaf_chain,
-                &stake_table,
-                membership.success_threshold(),
-                height,
-                &upgrade_lock,
-            )
-            .await
-            .with_context(|| "leaf chain verification failed")?
+            verify_legacy_leaf_chain(leaf_chain, &coordinator, height).await?
         };
 
         tracing::info!("Fetched leaf for height: {height}");

@@ -278,6 +278,29 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
     }
 }
 
+/// Verify a legacy (pre-V6) leaf chain
+pub(crate) async fn verify_legacy_leaf_chain(
+    leaf_chain: Vec<Leaf2>,
+    coordinator: &EpochMembershipCoordinator<SeqTypes>,
+    height: u64,
+) -> anyhow::Result<Leaf2> {
+    let upgrade_lock = UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(EPOCH_VERSION));
+    let epoch = EpochNumber::new(epoch_from_block_number(height, *coordinator.epoch_height()));
+    let membership = coordinator
+        .stake_table_for_epoch(Some(epoch))
+        .map_err(|err| anyhow!("no stake table available for epoch {epoch}: {err:?}"))?;
+    let stake_table: Vec<_> = membership.stake_table().cloned().collect();
+    verify_leaf_chain(
+        leaf_chain,
+        &stake_table,
+        membership.success_threshold(),
+        height,
+        &upgrade_lock,
+    )
+    .await
+    .with_context(|| format!("failed to verify leaf chain at height {height}"))
+}
+
 #[async_trait]
 impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
     #[tracing::instrument(skip(self, _instance))]
@@ -414,23 +437,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
                     format!("failed to verify leaf chain with cert2 at height {height}")
                 })
         } else {
-            let upgrade_lock =
-                UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(EPOCH_VERSION));
-            let epoch =
-                EpochNumber::new(epoch_from_block_number(height, *coordinator.epoch_height()));
-            let membership = coordinator
-                .stake_table_for_epoch(Some(epoch))
-                .map_err(|err| anyhow!("no stake table available for epoch {epoch}: {err:?}"))?;
-            let stake_table: Vec<_> = membership.stake_table().cloned().collect();
-            verify_leaf_chain(
-                leaf_chain,
-                &stake_table,
-                membership.success_threshold(),
-                height,
-                &upgrade_lock,
-            )
-            .await
-            .with_context(|| format!("failed to verify leaf chain at height {height}"))
+            verify_legacy_leaf_chain(leaf_chain, &coordinator, height).await
         }
     }
 
