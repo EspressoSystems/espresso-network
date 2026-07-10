@@ -342,7 +342,7 @@ where
                 .get_reward_claim_input(height, address)
                 .await
                 .map(Json)
-                .map_err(ApiError::Internal)
+                .map_err(classify_availability_error)
         };
 
     let get_reward_balance =
@@ -351,7 +351,7 @@ where
                 .get_reward_balance(height, address)
                 .await
                 .map(Json)
-                .map_err(ApiError::Internal)
+                .map_err(classify_availability_error)
         };
 
     let get_latest_reward_balance = |State(state): State<S>, Path(address): Path<String>| async move {
@@ -359,7 +359,7 @@ where
             .get_latest_reward_balance(address)
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
 
     let get_reward_account_proof =
@@ -368,7 +368,7 @@ where
                 .get_reward_account_proof(height, address)
                 .await
                 .map(Json)
-                .map_err(ApiError::Internal)
+                .map_err(classify_availability_error)
         };
 
     let get_latest_reward_account_proof = |State(state): State<S>, Path(address): Path<String>| async move {
@@ -376,7 +376,7 @@ where
             .get_latest_reward_account_proof(address)
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
 
     let get_reward_amounts =
@@ -392,7 +392,7 @@ where
         <S as v1::RewardApi>::get_reward_merkle_tree_v2(&state, height)
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
 
     let get_reward_state_height = |State(state): State<S>| async move {
@@ -400,7 +400,7 @@ where
             .get_reward_state_height()
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
 
     let get_reward_state_v2_height = |State(state): State<S>| async move {
@@ -408,7 +408,7 @@ where
             .get_reward_state_v2_height()
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
 
     // Same underlying V2-tree lookup as `reward-state-v2/reward-balance`; tide registers this
@@ -419,7 +419,7 @@ where
                 .get_reward_balance(height, address)
                 .await
                 .map(Json)
-                .map_err(ApiError::Internal)
+                .map_err(classify_availability_error)
         };
 
     let get_reward_account_proof_v1 =
@@ -428,7 +428,7 @@ where
                 .get_reward_account_proof_v1(height, address)
                 .await
                 .map(Json)
-                .map_err(ApiError::Internal)
+                .map_err(classify_availability_error)
         };
 
     // Merklized-state `get_path` handlers, inherited by both reward mounts from

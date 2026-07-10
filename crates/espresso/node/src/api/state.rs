@@ -623,7 +623,7 @@ where
 
         // Validate offset is within bounds
         if offset_usize > tree_data.balances.len() {
-            return Err(anyhow::anyhow!("offset {} out of bounds", offset));
+            return Err(not_found(format!("offset {} out of bounds", offset)));
         }
 
         let end = std::cmp::min(offset_usize + limit_usize, tree_data.balances.len());
@@ -725,7 +725,7 @@ where
     ) -> anyhow::Result<Self::RewardAccountQueryDataV1> {
         let account: espresso_types::v0_3::RewardAccountV1 = address
             .parse()
-            .map_err(|_| anyhow::anyhow!("invalid ethereum address: {}", address))?;
+            .map_err(|_| bad_request(format!("invalid ethereum address: {}", address)))?;
 
         self.data_source
             .load_v1_reward_account_proof(height, account)
@@ -748,7 +748,7 @@ where
         // Parse the Ethereum address
         let addr: alloy::primitives::Address = address
             .parse()
-            .map_err(|_| anyhow::anyhow!("invalid ethereum address: {}", address))?;
+            .map_err(|_| bad_request(format!("invalid ethereum address: {}", address)))?;
 
         // Load the reward account proof from the data source
         let proof = self
@@ -794,7 +794,7 @@ where
         // Parse the Ethereum address
         let addr: alloy::primitives::Address = address
             .parse()
-            .map_err(|_| anyhow::anyhow!("invalid ethereum address: {}", address))?;
+            .map_err(|_| bad_request(format!("invalid ethereum address: {}", address)))?;
 
         // Load the reward account proof from the data source
         let proof = self
@@ -819,7 +819,7 @@ where
     ) -> anyhow::Result<Self::RewardBalance> {
         let addr: alloy::primitives::Address = address
             .parse()
-            .map_err(|_| anyhow::anyhow!("invalid ethereum address: {}", address))?;
+            .map_err(|_| bad_request(format!("invalid ethereum address: {}", address)))?;
 
         let proof = self
             .data_source
@@ -840,7 +840,7 @@ where
         // Parse the Ethereum address
         let addr: alloy::primitives::Address = address
             .parse()
-            .map_err(|_| anyhow::anyhow!("invalid ethereum address: {}", address))?;
+            .map_err(|_| bad_request(format!("invalid ethereum address: {}", address)))?;
 
         // Load and return the reward account proof directly (internal type)
         let proof = self
@@ -866,7 +866,7 @@ where
         // Parse the Ethereum address
         let addr: alloy::primitives::Address = address
             .parse()
-            .map_err(|_| anyhow::anyhow!("invalid ethereum address: {}", address))?;
+            .map_err(|_| bad_request(format!("invalid ethereum address: {}", address)))?;
 
         // Load and return the latest reward account proof directly (internal type)
         let proof = self
@@ -914,7 +914,7 @@ where
 
         // Validate offset is within bounds
         if offset_usize > tree_data.balances.len() {
-            return Err(anyhow::anyhow!("offset {} out of bounds", offset));
+            return Err(not_found(format!("offset {} out of bounds", offset)));
         }
 
         let end = std::cmp::min(offset_usize + limit_usize, tree_data.balances.len());
@@ -934,7 +934,10 @@ where
         height: u64,
     ) -> anyhow::Result<Self::RewardMerkleTreeData> {
         self.data_source.load_tree(height).await.map_err(|err| {
-            anyhow::anyhow!("failed to load reward tree at height {}: {}", height, err)
+            not_found(format!(
+                "failed to load reward tree at height {}: {}",
+                height, err
+            ))
         })
     }
 
