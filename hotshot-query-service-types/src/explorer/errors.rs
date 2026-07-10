@@ -12,9 +12,8 @@
 
 use std::fmt::{Debug, Display};
 
+use disco_types::status::StatusCode;
 use serde::{Deserialize, Serialize, Serializer, ser::SerializeStruct};
-#[cfg(feature = "web")]
-use tide_disco::StatusCode;
 
 /// [ExplorerAPIError] is a trait that represents an error that can be returned
 /// returned from the ExplorerAPI for various reasons.
@@ -49,7 +48,6 @@ impl std::error::Error for dyn ExplorerAPIError {
 #[serde(tag = "code", rename = "UNIMPLEMENTED")]
 pub struct Unimplemented {}
 
-#[cfg(feature = "web")]
 impl Unimplemented {
     pub fn status(&self) -> StatusCode {
         StatusCode::NOT_IMPLEMENTED
@@ -89,7 +87,6 @@ impl Serialize for Unimplemented {
 #[serde(tag = "code", rename = "INVALID_LIMIT")]
 pub struct InvalidLimit {}
 
-#[cfg(feature = "web")]
 impl InvalidLimit {
     pub fn status(&self) -> StatusCode {
         StatusCode::BAD_REQUEST
@@ -134,7 +131,6 @@ pub struct NotFound {
 }
 
 impl NotFound {
-    #[cfg(feature = "web")]
     pub fn status(&self) -> StatusCode {
         StatusCode::NOT_FOUND
     }
@@ -180,7 +176,6 @@ pub struct QueryError {
 }
 
 impl QueryError {
-    #[cfg(feature = "web")]
     pub fn status(&self) -> StatusCode {
         self.error.status()
     }
@@ -237,7 +232,6 @@ impl From<crate::QueryError> for QueryError {
 #[serde(tag = "code", rename = "BAD_QUERY")]
 pub struct BadQuery {}
 
-#[cfg(feature = "web")]
 impl BadQuery {
     pub fn status(&self) -> StatusCode {
         StatusCode::BAD_REQUEST

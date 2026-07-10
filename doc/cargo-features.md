@@ -3,12 +3,12 @@
 Four crates have a default-on feature whose absence yields a build for constrained targets (SP1 zkVM, riscv32/riscv64).
 Default builds are unaffected.
 
-| Crate                       | Feature  | Gates                                                                                       |
-| --------------------------- | -------- | ------------------------------------------------------------------------------------------- |
-| espresso-types              | `node`   | L1 client, persistence traits, Fetcher L1 methods, block proposal, full alloy               |
-| hotshot-query-service-types | `web`    | tide-disco/surf-disco/events-service error types                                            |
-| espresso-utils              | `full`   | node and tooling helpers (clap, tokio, surf, ...); the pure `ser` module stays              |
-| light-client                | `client` | host query client, sqlite storage, query-service provider; `state.rs` and `consensus/` stay |
+| Crate                       | Feature  | Gates                                                                                                 |
+| --------------------------- | -------- | ----------------------------------------------------------------------------------------------------- |
+| espresso-types              | `node`   | L1 client, persistence traits, Fetcher L1 methods, block proposal, full alloy                         |
+| hotshot-query-service-types | `web`    | events-service error conversion (error types and client-error impl are unconditional via disco-types) |
+| espresso-utils              | `full`   | node and tooling helpers (clap, tokio, surf, ...); the pure `ser` module stays                        |
+| light-client                | `client` | host query client, sqlite storage, query-service provider; `state.rs` and `consensus/` stay           |
 
 - `espresso-types/testing` implies `node`.
 - Types, serde, `Committable` impls, the `SeqTypes: NodeType` impl and pure validation compile without `node`.

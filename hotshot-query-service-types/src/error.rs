@@ -1,20 +1,15 @@
-#[cfg(feature = "web")]
 use std::fmt::Display;
 
-#[cfg(feature = "web")]
 use derive_more::From;
+#[cfg(feature = "web")]
+use disco_types::error::Error as _;
+use disco_types::status::StatusCode;
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
-#[cfg(feature = "web")]
-use surf_disco::StatusCode;
-#[cfg(feature = "web")]
-use tide_disco::Error as _;
 
-#[cfg(feature = "web")]
 use crate::{availability, explorer, merklized_state, node, status};
 
 /// External error type surfaced to clients of the API.
-#[cfg(feature = "web")]
 #[derive(Clone, Debug, From, Snafu, Deserialize, Serialize)]
 pub enum Error {
     #[snafu(display("{source}"))]
@@ -34,7 +29,6 @@ pub enum Error {
     Custom { message: String, status: StatusCode },
 }
 
-#[cfg(feature = "web")]
 impl Error {
     pub fn internal<M: Display>(message: M) -> Self {
         Self::Custom {
@@ -44,8 +38,7 @@ impl Error {
     }
 }
 
-#[cfg(feature = "web")]
-impl surf_disco::Error for Error {
+impl disco_types::error::Error for Error {
     fn catch_all(status: StatusCode, message: String) -> Self {
         Self::Custom { status, message }
     }
@@ -62,7 +55,7 @@ impl surf_disco::Error for Error {
     }
 }
 
-/// Here we converge the events service error type into the `tide-disco` error type
+/// Here we converge the events service error type into the API error type
 #[cfg(feature = "web")]
 impl From<hotshot_events_service::events::Error> for Error {
     fn from(err: hotshot_events_service::events::Error) -> Self {
@@ -89,7 +82,6 @@ pub enum QueryError {
     Error { message: String },
 }
 
-#[cfg(feature = "web")]
 impl QueryError {
     pub fn status(&self) -> StatusCode {
         match self {

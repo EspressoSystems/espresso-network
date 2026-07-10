@@ -206,6 +206,7 @@ derive_more = { version = "2.0", features = ["full"] }
 diff-test-bn254 = { git = "https://github.com/EspressoSystems/solidity-bn254.git", tag = "v0.2.0" }
 digest = { version = "0.10", features = ["rand_core"] }
 directories = "6.0.0"
+disco-types = { version = "0.9.7", default-features = false }
 displaydoc = "0.2.5"
 dotenvy = "0.15"
 dyn-clone = "1.0.17"
