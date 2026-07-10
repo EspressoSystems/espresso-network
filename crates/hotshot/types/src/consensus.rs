@@ -288,7 +288,7 @@ impl HotShotActionViews {
 type ValidatorParticipationMap<TYPES> = HashMap<<TYPES as NodeType>::SignatureKey, (u64, u64)>;
 
 #[derive(Debug, Clone)]
-struct ValidatorParticipation<TYPES: NodeType> {
+pub struct ValidatorParticipation<TYPES: NodeType> {
     epoch: EpochNumber,
     /// Current epoch participation by key maps key -> (num leader, num times proposed)
     current_epoch_participation: ValidatorParticipationMap<TYPES>,
@@ -297,8 +297,14 @@ struct ValidatorParticipation<TYPES: NodeType> {
     previous_epoch_participation: BTreeMap<EpochNumber, ValidatorParticipationMap<TYPES>>,
 }
 
+impl<TYPES: NodeType> Default for ValidatorParticipation<TYPES> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             epoch: EpochNumber::genesis(),
             current_epoch_participation: HashMap::new(),
@@ -306,7 +312,7 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
         }
     }
 
-    fn update_participation(
+    pub fn update_participation(
         &mut self,
         key: TYPES::SignatureKey,
         epoch: EpochNumber,
@@ -325,7 +331,7 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
         entry.0 += 1;
     }
 
-    fn update_participation_epoch(&mut self, epoch: EpochNumber) {
+    pub fn update_participation_epoch(&mut self, epoch: EpochNumber) {
         if epoch <= self.epoch {
             return;
         }
@@ -342,7 +348,7 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
         self.current_epoch_participation = HashMap::new();
     }
 
-    fn current_proposal_participation(&self) -> HashMap<TYPES::SignatureKey, f64> {
+    pub fn current_proposal_participation(&self) -> HashMap<TYPES::SignatureKey, f64> {
         self.current_epoch_participation
             .iter()
             .map(|(key, (leader, proposed))| {
@@ -357,7 +363,7 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
             })
             .collect()
     }
-    fn proposal_participation(&self, epoch: EpochNumber) -> HashMap<TYPES::SignatureKey, f64> {
+    pub fn proposal_participation(&self, epoch: EpochNumber) -> HashMap<TYPES::SignatureKey, f64> {
         let tracked_participation = if epoch == self.epoch {
             self.current_epoch_participation.clone()
         } else {
@@ -382,7 +388,7 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
             .collect()
     }
 
-    fn current_epoch(&self) -> EpochNumber {
+    pub fn current_epoch(&self) -> EpochNumber {
         self.epoch
     }
 }
@@ -393,7 +399,7 @@ type VoteParticipationMap<TYPES> = (
 );
 
 #[derive(Clone, Debug)]
-struct VoteParticipation<TYPES: NodeType> {
+pub struct VoteParticipation<TYPES: NodeType> {
     /// Current epoch
     epoch: Option<EpochNumber>,
 
@@ -418,7 +424,7 @@ struct VoteParticipation<TYPES: NodeType> {
 }
 
 impl<TYPES: NodeType> VoteParticipation<TYPES> {
-    fn new(
+    pub fn new(
         stake_table: HSStakeTable<TYPES>,
         success_threshold: U256,
         epoch: Option<EpochNumber>,
@@ -448,7 +454,7 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
         }
     }
 
-    fn update_participation(&mut self, qc: QuorumCertificate2<TYPES>) -> Result<()> {
+    pub fn update_participation(&mut self, qc: QuorumCertificate2<TYPES>) -> Result<()> {
         ensure!(
             qc.epoch() == self.epoch,
             info!(
@@ -485,7 +491,7 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
         Ok(())
     }
 
-    fn update_participation_epoch(
+    pub fn update_participation_epoch(
         &mut self,
         stake_table: HSStakeTable<TYPES>,
         success_threshold: U256,
@@ -555,7 +561,7 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
         Ok(())
     }
 
-    fn current_vote_participation(
+    pub fn current_vote_participation(
         &self,
     ) -> HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
         self.current_epoch_participation
@@ -568,7 +574,7 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
             })
             .collect()
     }
-    fn vote_participation(
+    pub fn vote_participation(
         &self,
         epoch: Option<EpochNumber>,
     ) -> HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
@@ -604,7 +610,7 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
         }
     }
 
-    fn current_epoch(&self) -> Option<EpochNumber> {
+    pub fn current_epoch(&self) -> Option<EpochNumber> {
         self.epoch
     }
 }

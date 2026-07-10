@@ -1,5 +1,6 @@
 pub mod error;
 pub(crate) mod metrics;
+pub(crate) mod participation;
 pub mod timer;
 
 use std::{
@@ -41,6 +42,7 @@ use crate::{
     coordinator::{
         error::{CoordinatorError, ErrorSource, Severity},
         metrics::finish_measurement,
+        participation::ParticipationTracker,
         timer::Timer,
     },
     epoch::{EpochManager, EpochRootResult},
@@ -128,6 +130,8 @@ pub struct Coordinator<T: NodeType, S> {
     #[builder(skip)]
     da_payloads: BTreeMap<(ViewNumber, VidCommitment2), PendingDa<T>>,
     metrics: Option<metrics::Metrics>,
+    #[builder(default)]
+    participation: ParticipationTracker<T>,
     #[builder(skip)]
     view_started: Option<(ViewNumber, EpochNumber, Instant)>,
     #[builder(skip)]
@@ -251,6 +255,8 @@ where
             .is_recording()
             .then(|| metrics::Metrics::new(metrics, consensus_metrics));
 
+        let participation = ParticipationTracker::new(&membership_coordinator, anchor_epoch);
+
         let vid_disperser = VidDisperser::new(
             membership_coordinator.clone(),
             network.sender().clone(),
@@ -312,6 +318,7 @@ where
             .timer(Timer::new(timeout_duration, anchor_view, anchor_epoch))
             .public_key(public_key)
             .maybe_metrics(coordinator_metrics)
+            .participation(participation)
             .build()
     }
 
@@ -411,6 +418,9 @@ where
                     let input = ConsensusInput::Timeout(view, epoch);
                     finish_measurement(next_input);
                     let leader = self.leader(view, epoch);
+                    if let Some(leader) = leader.clone() {
+                        self.participation.leader_missed(leader, epoch);
+                    }
                     if let Some(m) = &self.metrics {
                         m.consensus.number_of_timeouts.add(1);
                         if leader.as_ref() == Some(&self.public_key) {
@@ -700,7 +710,9 @@ where
                     let gc_epoch = newest.justify_qc().epoch().unwrap_or_default();
                     self.gc(gc_epoch, GcScope::Decided(gc_view))?;
                 }
-                for leaf in leaves {
+                for leaf in leaves.into_iter().rev() {
+                    self.participation
+                        .on_leaf_decided(&leaf, &self.membership_coordinator);
                     if let Some(m) = &self.metrics {
                         if let Some(age) = (now as u64).checked_sub(leaf.block_header().timestamp())
                         {
@@ -892,6 +904,8 @@ where
                     sender = %KeyPrefix::from(&sender),
                     "proposal validated"
                 );
+                self.participation
+                    .leader_proposed(sender, proposal.data.epoch);
             },
             ConsensusOutput::ViewChanged(view, epoch) => {
                 let current_view = self.consensus.current_view();
@@ -1425,6 +1439,18 @@ where
                     Some(s) => (Some(s.state.clone()), s.delta.clone()),
                     None => (None, None),
                 });
+            },
+            ClientRequest::CurrentProposalParticipation(tx) => {
+                let _ = tx.send(self.participation.current_proposal_participation());
+            },
+            ClientRequest::ProposalParticipation { epoch, respond } => {
+                let _ = respond.send(self.participation.proposal_participation(epoch));
+            },
+            ClientRequest::CurrentVoteParticipation(tx) => {
+                let _ = tx.send(self.participation.current_vote_participation());
+            },
+            ClientRequest::VoteParticipation { epoch, respond } => {
+                let _ = respond.send(self.participation.vote_participation(epoch));
             },
             ClientRequest::SubmitTransaction { tx, respond } => {
                 self.block_builder.on_submit_transaction(tx);

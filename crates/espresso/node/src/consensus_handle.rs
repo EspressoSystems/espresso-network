@@ -366,8 +366,18 @@ where
         self.legacy_handle.read().await.storage()
     }
 
-    // TODO: implement for new protocol
     pub async fn current_proposal_participation(&self) -> HashMap<T::SignatureKey, f64> {
+        if self.cutover_active().await {
+            return match self.client_api.current_proposal_participation().await {
+                Ok(participation) => participation,
+                Err(err) => {
+                    tracing::warn!(
+                        "coordinator unavailable for current_proposal_participation: {err:#}"
+                    );
+                    HashMap::new()
+                },
+            };
+        }
         self.legacy_handle
             .read()
             .await
@@ -381,6 +391,15 @@ where
         &self,
         epoch: EpochNumber,
     ) -> HashMap<T::SignatureKey, f64> {
+        if self.cutover_active().await {
+            return match self.client_api.proposal_participation(epoch).await {
+                Ok(participation) => participation,
+                Err(err) => {
+                    tracing::warn!("coordinator unavailable for proposal_participation: {err:#}");
+                    HashMap::new()
+                },
+            };
+        }
         self.legacy_handle
             .read()
             .await
@@ -393,6 +412,17 @@ where
     pub async fn current_vote_participation(
         &self,
     ) -> HashMap<<T::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
+        if self.cutover_active().await {
+            return match self.client_api.current_vote_participation().await {
+                Ok(participation) => participation,
+                Err(err) => {
+                    tracing::warn!(
+                        "coordinator unavailable for current_vote_participation: {err:#}"
+                    );
+                    HashMap::new()
+                },
+            };
+        }
         self.legacy_handle
             .read()
             .await
@@ -406,6 +436,15 @@ where
         &self,
         epoch: Option<EpochNumber>,
     ) -> HashMap<<T::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
+        if self.cutover_active().await {
+            return match self.client_api.vote_participation(epoch).await {
+                Ok(participation) => participation,
+                Err(err) => {
+                    tracing::warn!("coordinator unavailable for vote_participation: {err:#}");
+                    HashMap::new()
+                },
+            };
+        }
         self.legacy_handle
             .read()
             .await
