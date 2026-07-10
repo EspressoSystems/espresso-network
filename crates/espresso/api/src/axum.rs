@@ -306,8 +306,13 @@ where
     let router_v1 = create_router_v1(state.clone());
     let router_v2 = create_router_v2(state);
 
-    router_v2
-        .merge(router_v1)
+    with_top_level_routes(router_v2.merge(router_v1))
+}
+
+/// Add the routes that every mode serves regardless of which API modules are enabled:
+/// `/`, `/healthcheck`, and `/version`.
+pub(crate) fn with_top_level_routes(router: Router) -> Router {
+    router
         .route("/", get(redirect_to_docs))
         .route("/healthcheck", get(healthcheck))
         .route("/version", get(version))
@@ -326,29 +331,9 @@ async fn version() -> Json<serde_json::Value> {
     }))
 }
 
-/// Create v1 router without OpenAPI documentation (internal types)
-pub fn create_router_v1<S>(state: S) -> Router
+pub(crate) fn router_reward<S>(state: S) -> Router
 where
-    S: v1::RewardApi
-        + v1::AvailabilityApi
-        + v1::HotShotAvailabilityApi
-        + v1::BlockStateApi
-        + v1::FeeStateApi
-        + v1::StatusApi
-        + v1::ConfigApi
-        + v1::NodeApi
-        + v1::CatchupApi
-        + v1::SubmitApi
-        + v1::StateSignatureApi
-        + v1::HotShotEventsApi
-        + v1::LightClientApi
-        + v1::ExplorerApi
-        + v1::TokenApi
-        + v1::DatabaseApi
-        + Clone
-        + Send
-        + Sync
-        + 'static,
+    S: v1::RewardApi + Clone + Send + Sync + 'static,
 {
     // Create handler closures that capture the generic state type
     let get_reward_claim_input =
@@ -446,6 +431,52 @@ where
                 .map_err(ApiError::Internal)
         };
 
+    Router::new()
+        .route(
+            routes::v1::REWARD_CLAIM_INPUT_ROUTE,
+            get(get_reward_claim_input),
+        )
+        .route(routes::v1::REWARD_BALANCE_ROUTE, get(get_reward_balance))
+        .route(
+            routes::v1::LATEST_REWARD_BALANCE_ROUTE,
+            get(get_latest_reward_balance),
+        )
+        .route(
+            routes::v1::REWARD_ACCOUNT_PROOF_ROUTE,
+            get(get_reward_account_proof),
+        )
+        .route(
+            routes::v1::LATEST_REWARD_ACCOUNT_PROOF_ROUTE,
+            get(get_latest_reward_account_proof),
+        )
+        .route(routes::v1::REWARD_AMOUNTS_ROUTE, get(get_reward_amounts))
+        .route(
+            routes::v1::REWARD_MERKLE_TREE_V2_ROUTE,
+            get(get_reward_merkle_tree_v2),
+        )
+        .route(
+            routes::v1::REWARD_STATE_HEIGHT_ROUTE,
+            get(get_reward_state_height),
+        )
+        .route(
+            routes::v1::REWARD_STATE_V2_HEIGHT_ROUTE,
+            get(get_reward_state_v2_height),
+        )
+        .route(
+            routes::v1::REWARD_V1_BALANCE_ROUTE,
+            get(get_reward_balance_v1),
+        )
+        .route(
+            routes::v1::REWARD_V1_ACCOUNT_PROOF_ROUTE,
+            get(get_reward_account_proof_v1),
+        )
+        .with_state(state)
+}
+
+pub(crate) fn router_availability<S>(state: S) -> Router
+where
+    S: v1::AvailabilityApi + v1::HotShotAvailabilityApi + Clone + Send + Sync + 'static,
+{
     // Availability API handlers
     // Route: /v1/availability/block/{height}/namespace/{namespace}
     let get_namespace_proof_by_height =
@@ -518,7 +549,6 @@ where
     };
 
     // HotShot availability API handlers
-
     let get_leaf_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
         state
             .get_leaf(v1::LeafId::Height(height))
@@ -526,6 +556,7 @@ where
             .map(Json)
             .map_err(classify_availability_error)
     };
+
     let get_leaf_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
         state
             .get_leaf(v1::LeafId::Hash(hash))
@@ -533,6 +564,7 @@ where
             .map(Json)
             .map_err(classify_availability_error)
     };
+
     let get_leaf_range = |State(state): State<S>, Path((from, until)): Path<(usize, usize)>| async move {
         state
             .get_leaf_range(from, until)
@@ -548,6 +580,7 @@ where
             .map(Json)
             .map_err(classify_availability_error)
     };
+
     let get_header_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
         state
             .get_header(v1::BlockId::Hash(hash))
@@ -555,6 +588,7 @@ where
             .map(Json)
             .map_err(classify_availability_error)
     };
+
     let get_header_by_payload_hash = |State(state): State<S>, Path(payload_hash): Path<String>| async move {
         state
             .get_header(v1::BlockId::PayloadHash(payload_hash))
@@ -562,6 +596,7 @@ where
             .map(Json)
             .map_err(classify_availability_error)
     };
+
     let get_header_range = |State(state): State<S>, Path((from, until)): Path<(usize, usize)>| async move {
         state
             .get_header_range(from, until)
@@ -577,6 +612,7 @@ where
             .map(Json)
             .map_err(classify_availability_error)
     };
+
     let get_block_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
         state
             .get_block(v1::BlockId::Hash(hash))
@@ -584,6 +620,7 @@ where
             .map(Json)
             .map_err(classify_availability_error)
     };
+
     let get_block_by_payload_hash = |State(state): State<S>, Path(payload_hash): Path<String>| async move {
         state
             .get_block(v1::BlockId::PayloadHash(payload_hash))
@@ -591,6 +628,7 @@ where
             .map(Json)
             .map_err(classify_availability_error)
     };
+
     let get_block_range = |State(state): State<S>, Path((from, until)): Path<(usize, usize)>| async move {
         state
             .get_block_range(from, until)
@@ -606,6 +644,7 @@ where
             .map(Json)
             .map_err(classify_availability_error)
     };
+
     let get_payload_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
         state
             .get_payload(v1::PayloadId::Hash(hash))
@@ -613,6 +652,7 @@ where
             .map(Json)
             .map_err(classify_availability_error)
     };
+
     let get_payload_by_block_hash = |State(state): State<S>, Path(block_hash): Path<String>| async move {
         state
             .get_payload(v1::PayloadId::BlockHash(block_hash))
@@ -620,6 +660,7 @@ where
             .map(Json)
             .map_err(classify_availability_error)
     };
+
     let get_payload_range = |State(state): State<S>, Path((from, until)): Path<(usize, usize)>| async move {
         state
             .get_payload_range(from, until)
@@ -635,6 +676,7 @@ where
             .map(Json)
             .map_err(classify_availability_error)
     };
+
     let get_vid_common_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
         state
             .get_vid_common(v1::BlockId::Hash(hash))
@@ -642,6 +684,7 @@ where
             .map(Json)
             .map_err(classify_availability_error)
     };
+
     let get_vid_common_by_payload_hash =
         |State(state): State<S>, Path(payload_hash): Path<String>| async move {
             state
@@ -650,6 +693,7 @@ where
                 .map(Json)
                 .map_err(classify_availability_error)
         };
+
     let get_vid_common_range =
         |State(state): State<S>, Path((from, until)): Path<(usize, usize)>| async move {
             state
@@ -667,6 +711,7 @@ where
                 .map(Json)
                 .map_err(classify_availability_error)
         };
+
     let get_transaction_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
         state
             .get_transaction_by_hash(hash)
@@ -674,6 +719,7 @@ where
             .map(Json)
             .map_err(classify_availability_error)
     };
+
     let get_transaction_proof_by_position =
         |State(state): State<S>, Path((height, index)): Path<(u64, u64)>| async move {
             state
@@ -682,6 +728,7 @@ where
                 .map(Json)
                 .map_err(classify_availability_error)
         };
+
     let get_transaction_proof_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
         state
             .get_transaction_proof_by_hash(hash)
@@ -697,6 +744,7 @@ where
             .map(Json)
             .map_err(classify_availability_error)
     };
+
     let get_block_summary_range =
         |State(state): State<S>, Path((from, until)): Path<(usize, usize)>| async move {
             state
@@ -734,6 +782,7 @@ where
             }
         })
     };
+
     let stream_headers = |ws: WebSocketUpgrade,
                           State(state): State<S>,
                           headers: HeaderMap,
@@ -746,6 +795,7 @@ where
             }
         })
     };
+
     let stream_blocks = |ws: WebSocketUpgrade,
                          State(state): State<S>,
                          headers: HeaderMap,
@@ -758,6 +808,7 @@ where
             }
         })
     };
+
     let stream_payloads = |ws: WebSocketUpgrade,
                            State(state): State<S>,
                            headers: HeaderMap,
@@ -770,6 +821,7 @@ where
             }
         })
     };
+
     let stream_vid_common = |ws: WebSocketUpgrade,
                              State(state): State<S>,
                              headers: HeaderMap,
@@ -782,6 +834,7 @@ where
             }
         })
     };
+
     let stream_transactions = |ws: WebSocketUpgrade,
                                State(state): State<S>,
                                headers: HeaderMap,
@@ -794,6 +847,7 @@ where
             }
         })
     };
+
     let stream_transactions_ns =
         |ws: WebSocketUpgrade,
          State(state): State<S>,
@@ -807,6 +861,7 @@ where
                 }
             })
         };
+
     let stream_namespace_proofs =
         |ws: WebSocketUpgrade,
          State(state): State<S>,
@@ -821,894 +876,7 @@ where
             })
         };
 
-    // Merklized state handlers: block-state
-    let get_block_state_path_by_height =
-        |State(state): State<S>, Path((height, key)): Path<(u64, String)>| async move {
-            <S as v1::BlockStateApi>::get_block_state_path(
-                &state,
-                v1::Snapshot::Height(height),
-                key,
-            )
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-        };
-    let get_block_state_path_by_commit =
-        |State(state): State<S>, Path((commit, key)): Path<(String, String)>| async move {
-            <S as v1::BlockStateApi>::get_block_state_path(
-                &state,
-                v1::Snapshot::Commit(commit),
-                key,
-            )
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-        };
-    let get_block_state_height = |State(state): State<S>| async move {
-        <S as v1::BlockStateApi>::get_block_state_height(&state)
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-
-    // Merklized state handlers: fee-state
-    let get_fee_state_path_by_height =
-        |State(state): State<S>, Path((height, key)): Path<(u64, String)>| async move {
-            <S as v1::FeeStateApi>::get_fee_state_path(&state, v1::Snapshot::Height(height), key)
-                .await
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
-    let get_fee_state_path_by_commit =
-        |State(state): State<S>, Path((commit, key)): Path<(String, String)>| async move {
-            <S as v1::FeeStateApi>::get_fee_state_path(&state, v1::Snapshot::Commit(commit), key)
-                .await
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
-    let get_fee_state_height = |State(state): State<S>| async move {
-        <S as v1::FeeStateApi>::get_fee_state_height(&state)
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let get_fee_balance_latest = |State(state): State<S>, Path(address): Path<String>| async move {
-        state
-            .get_fee_balance_latest(address)
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-
-    let status_block_height = |State(state): State<S>| async move {
-        <S as v1::StatusApi>::block_height(&state)
-            .await
-            .map(Json)
-            .map_err(ApiError::Internal)
-    };
-    let status_success_rate = |State(state): State<S>| async move {
-        <S as v1::StatusApi>::success_rate(&state)
-            .await
-            .map(Json)
-            .map_err(ApiError::Internal)
-    };
-    let status_time_since_last_decide = |State(state): State<S>| async move {
-        <S as v1::StatusApi>::time_since_last_decide(&state)
-            .await
-            .map(Json)
-            .map_err(ApiError::Internal)
-    };
-    let status_metrics = |State(state): State<S>| async move {
-        match <S as v1::StatusApi>::metrics(&state).await {
-            Ok(text) => Ok((
-                [(
-                    axum::http::header::CONTENT_TYPE,
-                    "text/plain; charset=utf-8",
-                )],
-                text,
-            )),
-            Err(e) => Err(ApiError::Internal(e)),
-        }
-    };
-
-    let config_hotshot = |State(state): State<S>| async move {
-        <S as v1::ConfigApi>::hotshot_config(&state)
-            .await
-            .map(Json)
-            .map_err(ApiError::Internal)
-    };
-    let config_env = |State(state): State<S>| async move {
-        <S as v1::ConfigApi>::env(&state)
-            .await
-            .map(Json)
-            .map_err(ApiError::Internal)
-    };
-    let config_runtime = |State(state): State<S>| async move {
-        <S as v1::ConfigApi>::runtime_config(&state)
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-
-    let node_block_height = |State(state): State<S>| async move {
-        <S as v1::NodeApi>::block_height(&state)
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-
-    let node_count_txs = |State(state): State<S>| async move {
-        state
-            .count_transactions(None, None, None)
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let node_count_txs_to = |State(state): State<S>, Path(to): Path<u64>| async move {
-        state
-            .count_transactions(None, Some(to), None)
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let node_count_txs_from_to = |State(state): State<S>, Path((from, to)): Path<(u64, u64)>| async move {
-        state
-            .count_transactions(Some(from), Some(to), None)
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let node_count_txs_ns = |State(state): State<S>, Path(namespace): Path<u64>| async move {
-        state
-            .count_transactions(None, None, Some(namespace))
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let node_count_txs_ns_to = |State(state): State<S>, Path((namespace, to)): Path<(u64, u64)>| async move {
-        state
-            .count_transactions(None, Some(to), Some(namespace))
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let node_count_txs_ns_from_to =
-        |State(state): State<S>, Path((namespace, from, to)): Path<(u64, u64, u64)>| async move {
-            state
-                .count_transactions(Some(from), Some(to), Some(namespace))
-                .await
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
-
-    let node_payload_size = |State(state): State<S>| async move {
-        state
-            .payload_size(None, None, None)
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let node_payload_size_to = |State(state): State<S>, Path(to): Path<u64>| async move {
-        state
-            .payload_size(None, Some(to), None)
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let node_payload_size_from_to = |State(state): State<S>, Path((from, to)): Path<(u64, u64)>| async move {
-        state
-            .payload_size(Some(from), Some(to), None)
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let node_payload_size_ns = |State(state): State<S>, Path(namespace): Path<u64>| async move {
-        state
-            .payload_size(None, None, Some(namespace))
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let node_payload_size_ns_to =
-        |State(state): State<S>, Path((namespace, to)): Path<(u64, u64)>| async move {
-            state
-                .payload_size(None, Some(to), Some(namespace))
-                .await
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
-    let node_payload_size_ns_from_to =
-        |State(state): State<S>, Path((namespace, from, to)): Path<(u64, u64, u64)>| async move {
-            state
-                .payload_size(Some(from), Some(to), Some(namespace))
-                .await
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
-
-    let node_vid_share_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
-        state
-            .get_vid_share(v1::VidShareId::Height(height))
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let node_vid_share_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
-        state
-            .get_vid_share(v1::VidShareId::Hash(hash))
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let node_vid_share_by_payload_hash =
-        |State(state): State<S>, Path(payload_hash): Path<String>| async move {
-            state
-                .get_vid_share(v1::VidShareId::PayloadHash(payload_hash))
-                .await
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
-
-    let node_sync_status = |State(state): State<S>| async move {
-        state
-            .sync_status()
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-
-    let node_header_window_time = |State(state): State<S>, Path((start, end)): Path<(u64, u64)>| async move {
-        state
-            .get_header_window(v1::HeaderWindowStart::Time(start), end)
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let node_header_window_height =
-        |State(state): State<S>, Path((height, end)): Path<(u64, u64)>| async move {
-            state
-                .get_header_window(v1::HeaderWindowStart::Height(height), end)
-                .await
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
-    let node_header_window_hash =
-        |State(state): State<S>, Path((hash, end)): Path<(String, u64)>| async move {
-            state
-                .get_header_window(v1::HeaderWindowStart::Hash(hash), end)
-                .await
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
-
-    let node_limits = |State(state): State<S>| async move {
-        <S as v1::NodeApi>::limits(&state)
-            .await
-            .map(Json)
-            .map_err(ApiError::Internal)
-    };
-
-    let node_stake_table_current = |State(state): State<S>| async move {
-        state
-            .stake_table_current()
-            .await
-            .map(Json)
-            .map_err(ApiError::Internal)
-    };
-    let node_stake_table = |State(state): State<S>, Path(epoch): Path<u64>| async move {
-        state
-            .stake_table(epoch)
-            .await
-            .map(Json)
-            .map_err(ApiError::Internal)
-    };
-    let node_da_stake_table_current = |State(state): State<S>| async move {
-        state
-            .da_stake_table_current()
-            .await
-            .map(Json)
-            .map_err(ApiError::Internal)
-    };
-    let node_da_stake_table = |State(state): State<S>, Path(epoch): Path<u64>| async move {
-        state
-            .da_stake_table(epoch)
-            .await
-            .map(Json)
-            .map_err(ApiError::Internal)
-    };
-
-    let node_validators = |State(state): State<S>, Path(epoch): Path<u64>| async move {
-        state
-            .get_validators(epoch)
-            .await
-            .map(Json)
-            .map_err(ApiError::Internal)
-    };
-    let node_all_validators =
-        |State(state): State<S>, Path((epoch, offset, limit)): Path<(u64, u64, u64)>| async move {
-            state
-                .get_all_validators(epoch, offset, limit)
-                .await
-                .map(Json)
-                .map_err(ApiError::BadRequest)
-        };
-
-    let node_proposal_participation_current = |State(state): State<S>| async move {
-        state
-            .current_proposal_participation()
-            .await
-            .map(Json)
-            .map_err(ApiError::Internal)
-    };
-    let node_proposal_participation = |State(state): State<S>, Path(epoch): Path<u64>| async move {
-        state
-            .proposal_participation(epoch)
-            .await
-            .map(Json)
-            .map_err(ApiError::Internal)
-    };
-    let node_vote_participation_current = |State(state): State<S>| async move {
-        state
-            .current_vote_participation()
-            .await
-            .map(Json)
-            .map_err(ApiError::Internal)
-    };
-    let node_vote_participation = |State(state): State<S>, Path(epoch): Path<u64>| async move {
-        state
-            .vote_participation(epoch)
-            .await
-            .map(Json)
-            .map_err(ApiError::Internal)
-    };
-
-    let node_block_reward = |State(state): State<S>| async move {
-        state
-            .get_block_reward(None)
-            .await
-            .map(Json)
-            .map_err(ApiError::Internal)
-    };
-    let node_block_reward_epoch = |State(state): State<S>, Path(epoch): Path<u64>| async move {
-        state
-            .get_block_reward(Some(epoch))
-            .await
-            .map(Json)
-            .map_err(ApiError::Internal)
-    };
-
-    let node_oldest_block = |State(state): State<S>| async move {
-        state
-            .get_oldest_block()
-            .await
-            .map(Json)
-            .map_err(ApiError::Internal)
-    };
-    let node_oldest_leaf = |State(state): State<S>| async move {
-        state
-            .get_oldest_leaf()
-            .await
-            .map(Json)
-            .map_err(ApiError::Internal)
-    };
-
-    // Catchup handlers
-    let catchup_account =
-        |State(state): State<S>, Path((height, view, address)): Path<(u64, u64, String)>| async move {
-            state
-                .get_account(height, view, address)
-                .await
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
-    let catchup_accounts = |State(state): State<S>,
-                            Path((height, view)): Path<(u64, u64)>,
-                            headers: HeaderMap,
-                            body: Bytes| async move {
-        let accounts: Vec<<S as v1::CatchupApi>::FeeAccount> = decode_body(&headers, &body)?;
-        let tree = state
-            .get_accounts(height, view, accounts)
-            .await
-            .map_err(classify_availability_error)?;
-        encode_response(&headers, tree)
-    };
-    let catchup_blocks = |State(state): State<S>, Path((height, view)): Path<(u64, u64)>| async move {
-        state
-            .get_blocks_frontier(height, view)
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let catchup_chainconfig = |State(state): State<S>, Path(commitment): Path<String>| async move {
-        <S as v1::CatchupApi>::get_chain_config(&state, commitment)
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let catchup_leafchain = |State(state): State<S>, Path(height): Path<u64>| async move {
-        state
-            .get_leaf_chain(height)
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let catchup_cert2 = |State(state): State<S>, Path(height): Path<u64>| async move {
-        <S as v1::CatchupApi>::get_cert2(&state, height)
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let catchup_reward_account =
-        |State(state): State<S>, Path((height, view, address)): Path<(u64, u64, String)>| async move {
-            state
-                .get_reward_account_v1(height, view, address)
-                .await
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
-    let catchup_reward_accounts = |State(state): State<S>,
-                                   Path((height, view)): Path<(u64, u64)>,
-                                   headers: HeaderMap,
-                                   body: Bytes| async move {
-        let accounts: Vec<<S as v1::CatchupApi>::RewardAccountV1> = decode_body(&headers, &body)?;
-        let tree = state
-            .get_reward_accounts_v1(height, view, accounts)
-            .await
-            .map_err(classify_availability_error)?;
-        encode_response(&headers, tree)
-    };
-    let catchup_reward_account_v2 =
-        |State(state): State<S>, Path((height, view, address)): Path<(u64, u64, String)>| async move {
-            state
-                .get_reward_account_v2(height, view, address)
-                .await
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
-    let catchup_reward_accounts_v2 =
-        |State(_): State<S>, Path((_height, _view)): Path<(u64, u64)>| async move {
-            Err::<Json<()>, ApiError>(ApiError::NotFound(anyhow::anyhow!(
-                "catchup/reward-accounts-v2 is deprecated"
-            )))
-        };
-    let catchup_reward_amounts =
-        |State(_): State<S>, Path((_height, _limit, _offset)): Path<(u64, u64, u64)>| async move {
-            Err::<Json<()>, ApiError>(ApiError::NotFound(anyhow::anyhow!(
-                "catchup/reward-amounts is deprecated"
-            )))
-        };
-    let catchup_reward_merkle_tree_v2 =
-        |State(state): State<S>, Path((height, view)): Path<(u64, u64)>| async move {
-            <S as v1::CatchupApi>::get_reward_merkle_tree_v2(&state, height, view)
-                .await
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
-    let catchup_state_cert = |State(state): State<S>, Path(epoch): Path<u64>| async move {
-        <S as v1::CatchupApi>::get_state_cert(&state, epoch)
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-
-    // Submit handler — body is decoded as VBS (binary) or JSON based on Content-Type, matching
-    // tide-disco's `body_auto`.
-    let submit_submit = |State(state): State<S>, headers: HeaderMap, body: Bytes| async move {
-        let tx: <S as v1::SubmitApi>::Transaction = decode_body(&headers, &body)?;
-        let hash = state.submit(tx).await.map_err(ApiError::Internal)?;
-        encode_response(&headers, hash)
-    };
-
-    // State signature handler
-    let state_signature_block = |State(state): State<S>, Path(height): Path<u64>| async move {
-        state
-            .get_state_signature(height)
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-
-    // HotShot events handlers
-    let hotshot_events_startup = |State(state): State<S>| async move {
-        state
-            .startup_info()
-            .await
-            .map(Json)
-            .map_err(ApiError::Internal)
-    };
-    let hotshot_events_stream =
-        |State(state): State<S>, headers: HeaderMap, ws: WebSocketUpgrade| async move {
-            let format = ws_format(&headers);
-            match <S as v1::HotShotEventsApi>::events(&state).await {
-                Ok(stream) => ws.on_upgrade(move |socket| drive_ws_stream(socket, stream, format)),
-                Err(err) => ApiError::Internal(err).into_response(),
-            }
-        };
-
-    // Light-client handlers
-    let lc_leaf_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
-        state
-            .get_leaf_proof(v1::LeafQuery::Height(height), None)
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let lc_leaf_by_height_finalized =
-        |State(state): State<S>, Path((height, finalized)): Path<(u64, u64)>| async move {
-            state
-                .get_leaf_proof(v1::LeafQuery::Height(height), Some(finalized))
-                .await
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
-    let lc_leaf_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
-        state
-            .get_leaf_proof(v1::LeafQuery::Hash(hash), None)
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let lc_leaf_by_hash_finalized =
-        |State(state): State<S>, Path((hash, finalized)): Path<(String, u64)>| async move {
-            state
-                .get_leaf_proof(v1::LeafQuery::Hash(hash), Some(finalized))
-                .await
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
-    let lc_leaf_by_block_hash = |State(state): State<S>, Path(block_hash): Path<String>| async move {
-        state
-            .get_leaf_proof(v1::LeafQuery::BlockHash(block_hash), None)
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let lc_leaf_by_block_hash_finalized =
-        |State(state): State<S>, Path((block_hash, finalized)): Path<(String, u64)>| async move {
-            state
-                .get_leaf_proof(v1::LeafQuery::BlockHash(block_hash), Some(finalized))
-                .await
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
-    let lc_leaf_by_payload_hash = |State(state): State<S>, Path(payload_hash): Path<String>| async move {
-        state
-            .get_leaf_proof(v1::LeafQuery::PayloadHash(payload_hash), None)
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let lc_leaf_by_payload_hash_finalized =
-        |State(state): State<S>, Path((payload_hash, finalized)): Path<(String, u64)>| async move {
-            state
-                .get_leaf_proof(v1::LeafQuery::PayloadHash(payload_hash), Some(finalized))
-                .await
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
-
-    let lc_header_by_height = |State(state): State<S>, Path((root, height)): Path<(u64, u64)>| async move {
-        state
-            .get_header_proof(root, v1::HeaderQuery::Height(height))
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let lc_header_by_hash = |State(state): State<S>, Path((root, hash)): Path<(u64, String)>| async move {
-        state
-            .get_header_proof(root, v1::HeaderQuery::Hash(hash))
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let lc_header_by_payload_hash =
-        |State(state): State<S>, Path((root, payload_hash)): Path<(u64, String)>| async move {
-            state
-                .get_header_proof(root, v1::HeaderQuery::PayloadHash(payload_hash))
-                .await
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
-    let lc_stake_table = |State(state): State<S>, Path(epoch): Path<u64>| async move {
-        state
-            .get_light_client_stake_table(epoch)
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let lc_payload = |State(state): State<S>, Path(height): Path<u64>| async move {
-        state
-            .get_payload_proof(height)
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let lc_payload_range = |State(state): State<S>, Path((start, end)): Path<(u64, u64)>| async move {
-        state
-            .get_payload_proof_range(start, end)
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let lc_namespace = |State(state): State<S>, Path((height, namespace)): Path<(u64, u64)>| async move {
-        state
-            .get_lc_namespace_proof(height, namespace)
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let lc_namespace_range =
-        |State(state): State<S>, Path((start, end, namespace)): Path<(u64, u64, u64)>| async move {
-            state
-                .get_lc_namespace_proof_range(start, end, namespace)
-                .await
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
-    let lc_namespaces_range =
-        |State(state): State<S>, Path((start, end, namespaces)): Path<(u64, u64, String)>| async move {
-            state
-                .get_lc_namespaces_proof_range(start, end, namespaces)
-                .await
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
-
-    // Explorer handlers
-    let explorer_block_detail_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
-        state
-            .get_block_detail(v1::BlockIdent::Height(height))
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let explorer_block_detail_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
-        state
-            .get_block_detail(v1::BlockIdent::Hash(hash))
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let explorer_block_summaries_latest = |State(state): State<S>, Path(limit): Path<u64>| async move {
-        state
-            .get_block_summaries(v1::BlockIdent::Latest, limit)
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let explorer_block_summaries_from =
-        |State(state): State<S>, Path((from, limit)): Path<(u64, u64)>| async move {
-            state
-                .get_block_summaries(v1::BlockIdent::Height(from), limit)
-                .await
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
-    let explorer_tx_detail_by_position =
-        |State(state): State<S>, Path((height, offset)): Path<(u64, u64)>| async move {
-            state
-                .get_transaction_detail(v1::TxIdent::HeightAndOffset(height, offset))
-                .await
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
-    let explorer_tx_detail_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
-        state
-            .get_transaction_detail(v1::TxIdent::Hash(hash))
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let explorer_tx_summaries_latest = |State(state): State<S>, Path(limit): Path<u64>| async move {
-        state
-            .get_transaction_summaries(v1::TxIdent::Latest, limit, v1::TxSummaryFilter::None)
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let explorer_tx_summaries_from =
-        |State(state): State<S>, Path((height, offset, limit)): Path<(u64, u64, u64)>| async move {
-            state
-                .get_transaction_summaries(
-                    v1::TxIdent::HeightAndOffset(height, offset),
-                    limit,
-                    v1::TxSummaryFilter::None,
-                )
-                .await
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
-    let explorer_tx_summaries_by_hash =
-        |State(state): State<S>, Path((hash, limit)): Path<(String, u64)>| async move {
-            state
-                .get_transaction_summaries(
-                    v1::TxIdent::Hash(hash),
-                    limit,
-                    v1::TxSummaryFilter::None,
-                )
-                .await
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
-    let explorer_tx_summaries_latest_block =
-        |State(state): State<S>, Path((limit, block)): Path<(u64, u64)>| async move {
-            state
-                .get_transaction_summaries(
-                    v1::TxIdent::Latest,
-                    limit,
-                    v1::TxSummaryFilter::Block(block),
-                )
-                .await
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
-    let explorer_tx_summaries_from_block =
-        |State(state): State<S>,
-         Path((height, offset, limit, block)): Path<(u64, u64, u64, u64)>| async move {
-            state
-                .get_transaction_summaries(
-                    v1::TxIdent::HeightAndOffset(height, offset),
-                    limit,
-                    v1::TxSummaryFilter::Block(block),
-                )
-                .await
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
-    let explorer_tx_summaries_by_hash_block =
-        |State(state): State<S>, Path((hash, limit, block)): Path<(String, u64, u64)>| async move {
-            state
-                .get_transaction_summaries(
-                    v1::TxIdent::Hash(hash),
-                    limit,
-                    v1::TxSummaryFilter::Block(block),
-                )
-                .await
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
-    let explorer_tx_summaries_latest_ns =
-        |State(state): State<S>, Path((limit, namespace)): Path<(u64, i64)>| async move {
-            state
-                .get_transaction_summaries(
-                    v1::TxIdent::Latest,
-                    limit,
-                    v1::TxSummaryFilter::Namespace(namespace),
-                )
-                .await
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
-    let explorer_tx_summaries_from_ns =
-        |State(state): State<S>,
-         Path((height, offset, limit, namespace)): Path<(u64, u64, u64, i64)>| async move {
-            state
-                .get_transaction_summaries(
-                    v1::TxIdent::HeightAndOffset(height, offset),
-                    limit,
-                    v1::TxSummaryFilter::Namespace(namespace),
-                )
-                .await
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
-    let explorer_tx_summaries_by_hash_ns = |State(state): State<S>,
-                                            Path((hash, limit, namespace)): Path<(
-        String,
-        u64,
-        i64,
-    )>| async move {
-        state
-            .get_transaction_summaries(
-                v1::TxIdent::Hash(hash),
-                limit,
-                v1::TxSummaryFilter::Namespace(namespace),
-            )
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let explorer_summary = |State(state): State<S>| async move {
-        state
-            .get_explorer_summary()
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let explorer_search = |State(state): State<S>, Path(query): Path<String>| async move {
-        state
-            .get_search_result(query)
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-
-    // Token handlers
-    let token_total_minted = |State(state): State<S>| async move {
-        state
-            .total_minted_supply()
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let token_circulating = |State(state): State<S>| async move {
-        state
-            .circulating_supply()
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let token_circulating_eth = |State(state): State<S>| async move {
-        state
-            .circulating_supply_ethereum()
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let token_total_issued = |State(state): State<S>| async move {
-        state
-            .total_issued_supply()
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-    let token_total_reward_distributed = |State(state): State<S>| async move {
-        state
-            .total_reward_distributed()
-            .await
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-
-    // Database handlers
-    let database_table_sizes = |State(state): State<S>| async move {
-        <S as v1::DatabaseApi>::get_table_sizes(&state)
-            .await
-            .map(Json)
-            .map_err(ApiError::Internal)
-    };
-
-    // Build plain Axum router without OpenAPI (for v1 - internal types)
     Router::new()
-        .route(
-            routes::v1::REWARD_CLAIM_INPUT_ROUTE,
-            get(get_reward_claim_input),
-        )
-        .route(routes::v1::REWARD_BALANCE_ROUTE, get(get_reward_balance))
-        .route(
-            routes::v1::LATEST_REWARD_BALANCE_ROUTE,
-            get(get_latest_reward_balance),
-        )
-        .route(
-            routes::v1::REWARD_ACCOUNT_PROOF_ROUTE,
-            get(get_reward_account_proof),
-        )
-        .route(
-            routes::v1::LATEST_REWARD_ACCOUNT_PROOF_ROUTE,
-            get(get_latest_reward_account_proof),
-        )
-        .route(routes::v1::REWARD_AMOUNTS_ROUTE, get(get_reward_amounts))
-        .route(
-            routes::v1::REWARD_MERKLE_TREE_V2_ROUTE,
-            get(get_reward_merkle_tree_v2),
-        )
-        .route(
-            routes::v1::REWARD_STATE_HEIGHT_ROUTE,
-            get(get_reward_state_height),
-        )
-        .route(
-            routes::v1::REWARD_STATE_V2_HEIGHT_ROUTE,
-            get(get_reward_state_v2_height),
-        )
-        .route(
-            routes::v1::REWARD_V1_BALANCE_ROUTE,
-            get(get_reward_balance_v1),
-        )
-        .route(
-            routes::v1::REWARD_V1_ACCOUNT_PROOF_ROUTE,
-            get(get_reward_account_proof_v1),
-        )
-        // Availability API routes
         .route(
             routes::v1::NAMESPACE_PROOF_BY_HEIGHT_ROUTE,
             get(get_namespace_proof_by_height),
@@ -1731,7 +899,6 @@ where
         )
         .route(routes::v1::STATE_CERT_V1_ROUTE, get(get_state_cert_v1))
         .route(routes::v1::STATE_CERT_V2_ROUTE, get(get_state_cert_v2))
-        // HotShot availability API routes
         .route(routes::v1::LEAF_BY_HEIGHT_ROUTE, get(get_leaf_by_height))
         .route(routes::v1::LEAF_BY_HASH_ROUTE, get(get_leaf_by_hash))
         .route(routes::v1::LEAF_RANGE_ROUTE, get(get_leaf_range))
@@ -1756,10 +923,7 @@ where
             routes::v1::PAYLOAD_BY_HEIGHT_ROUTE,
             get(get_payload_by_height),
         )
-        .route(
-            routes::v1::PAYLOAD_BY_HASH_ROUTE,
-            get(get_payload_by_hash),
-        )
+        .route(routes::v1::PAYLOAD_BY_HASH_ROUTE, get(get_payload_by_hash))
         .route(
             routes::v1::PAYLOAD_BY_BLOCK_HASH_ROUTE,
             get(get_payload_by_block_hash),
@@ -1815,7 +979,6 @@ where
         )
         .route(routes::v1::LIMITS_ROUTE, get(get_limits))
         .route(routes::v1::CERT2_BY_HEIGHT_ROUTE, get(get_cert2))
-        // WebSocket streaming routes
         .route(routes::v1::STREAM_LEAVES_ROUTE, get(stream_leaves))
         .route(routes::v1::STREAM_HEADERS_ROUTE, get(stream_headers))
         .route(routes::v1::STREAM_BLOCKS_ROUTE, get(stream_blocks))
@@ -1833,7 +996,46 @@ where
             routes::v1::STREAM_NAMESPACE_PROOFS_ROUTE,
             get(stream_namespace_proofs),
         )
-        // Merklized state: block-state.
+        .with_state(state)
+}
+
+pub(crate) fn router_block_state<S>(state: S) -> Router
+where
+    S: v1::BlockStateApi + Clone + Send + Sync + 'static,
+{
+    let get_block_state_height = |State(state): State<S>| async move {
+        <S as v1::BlockStateApi>::get_block_state_height(&state)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let get_block_state_path_by_commit =
+        |State(state): State<S>, Path((commit, key)): Path<(String, String)>| async move {
+            <S as v1::BlockStateApi>::get_block_state_path(
+                &state,
+                v1::Snapshot::Commit(commit),
+                key,
+            )
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+        };
+
+    // Merklized state handlers: block-state
+    let get_block_state_path_by_height =
+        |State(state): State<S>, Path((height, key)): Path<(u64, String)>| async move {
+            <S as v1::BlockStateApi>::get_block_state_path(
+                &state,
+                v1::Snapshot::Height(height),
+                key,
+            )
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+        };
+
+    Router::new()
         .route(
             routes::v1::BLOCK_STATE_HEIGHT_ROUTE,
             get(get_block_state_height),
@@ -1846,7 +1048,46 @@ where
             routes::v1::BLOCK_STATE_PATH_BY_HEIGHT_ROUTE,
             get(get_block_state_path_by_height),
         )
-        // Merklized state: fee-state
+        .with_state(state)
+}
+
+pub(crate) fn router_fee_state<S>(state: S) -> Router
+where
+    S: v1::FeeStateApi + Clone + Send + Sync + 'static,
+{
+    let get_fee_state_height = |State(state): State<S>| async move {
+        <S as v1::FeeStateApi>::get_fee_state_height(&state)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let get_fee_balance_latest = |State(state): State<S>, Path(address): Path<String>| async move {
+        state
+            .get_fee_balance_latest(address)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let get_fee_state_path_by_commit =
+        |State(state): State<S>, Path((commit, key)): Path<(String, String)>| async move {
+            <S as v1::FeeStateApi>::get_fee_state_path(&state, v1::Snapshot::Commit(commit), key)
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+
+    // Merklized state handlers: fee-state
+    let get_fee_state_path_by_height =
+        |State(state): State<S>, Path((height, key)): Path<(u64, String)>| async move {
+            <S as v1::FeeStateApi>::get_fee_state_path(&state, v1::Snapshot::Height(height), key)
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+
+    Router::new()
         .route(
             routes::v1::FEE_STATE_HEIGHT_ROUTE,
             get(get_fee_state_height),
@@ -1863,21 +1104,391 @@ where
             routes::v1::FEE_STATE_PATH_BY_HEIGHT_ROUTE,
             get(get_fee_state_path_by_height),
         )
-        // Status routes
-        .route(routes::v1::STATUS_BLOCK_HEIGHT_ROUTE, get(status_block_height))
-        .route(routes::v1::STATUS_SUCCESS_RATE_ROUTE, get(status_success_rate))
+        .with_state(state)
+}
+
+pub(crate) fn router_status<S>(state: S) -> Router
+where
+    S: v1::StatusApi + Clone + Send + Sync + 'static,
+{
+    let status_block_height = |State(state): State<S>| async move {
+        <S as v1::StatusApi>::block_height(&state)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
+    let status_success_rate = |State(state): State<S>| async move {
+        <S as v1::StatusApi>::success_rate(&state)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
+    let status_time_since_last_decide = |State(state): State<S>| async move {
+        <S as v1::StatusApi>::time_since_last_decide(&state)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
+    let status_metrics = |State(state): State<S>| async move {
+        match <S as v1::StatusApi>::metrics(&state).await {
+            Ok(text) => Ok((
+                [(
+                    axum::http::header::CONTENT_TYPE,
+                    "text/plain; charset=utf-8",
+                )],
+                text,
+            )),
+            Err(e) => Err(ApiError::Internal(e)),
+        }
+    };
+
+    Router::new()
+        .route(
+            routes::v1::STATUS_BLOCK_HEIGHT_ROUTE,
+            get(status_block_height),
+        )
+        .route(
+            routes::v1::STATUS_SUCCESS_RATE_ROUTE,
+            get(status_success_rate),
+        )
         .route(
             routes::v1::STATUS_TIME_SINCE_LAST_DECIDE_ROUTE,
             get(status_time_since_last_decide),
         )
         .route(routes::v1::STATUS_METRICS_ROUTE, get(status_metrics))
-        // Config routes
+        .with_state(state)
+}
+
+pub(crate) fn router_config<S>(state: S) -> Router
+where
+    S: v1::ConfigApi + Clone + Send + Sync + 'static,
+{
+    let config_hotshot = |State(state): State<S>| async move {
+        <S as v1::ConfigApi>::hotshot_config(&state)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
+    let config_env = |State(state): State<S>| async move {
+        <S as v1::ConfigApi>::env(&state)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
+    let config_runtime = |State(state): State<S>| async move {
+        <S as v1::ConfigApi>::runtime_config(&state)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    Router::new()
         .route(routes::v1::CONFIG_HOTSHOT_ROUTE, get(config_hotshot))
         .route(routes::v1::CONFIG_ENV_ROUTE, get(config_env))
         .route(routes::v1::CONFIG_RUNTIME_ROUTE, get(config_runtime))
-        // Node routes
+        .with_state(state)
+}
+
+pub(crate) fn router_node<S>(state: S) -> Router
+where
+    S: v1::NodeApi + Clone + Send + Sync + 'static,
+{
+    let node_block_height = |State(state): State<S>| async move {
+        <S as v1::NodeApi>::block_height(&state)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let node_count_txs = |State(state): State<S>| async move {
+        state
+            .count_transactions(None, None, None)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let node_count_txs_ns = |State(state): State<S>, Path(namespace): Path<u64>| async move {
+        state
+            .count_transactions(None, None, Some(namespace))
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let node_count_txs_ns_to = |State(state): State<S>, Path((namespace, to)): Path<(u64, u64)>| async move {
+        state
+            .count_transactions(None, Some(to), Some(namespace))
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let node_count_txs_ns_from_to =
+        |State(state): State<S>, Path((namespace, from, to)): Path<(u64, u64, u64)>| async move {
+            state
+                .count_transactions(Some(from), Some(to), Some(namespace))
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+
+    let node_count_txs_to = |State(state): State<S>, Path(to): Path<u64>| async move {
+        state
+            .count_transactions(None, Some(to), None)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let node_count_txs_from_to = |State(state): State<S>, Path((from, to)): Path<(u64, u64)>| async move {
+        state
+            .count_transactions(Some(from), Some(to), None)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let node_payload_size = |State(state): State<S>| async move {
+        state
+            .payload_size(None, None, None)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let node_payload_size_ns = |State(state): State<S>, Path(namespace): Path<u64>| async move {
+        state
+            .payload_size(None, None, Some(namespace))
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let node_payload_size_ns_to =
+        |State(state): State<S>, Path((namespace, to)): Path<(u64, u64)>| async move {
+            state
+                .payload_size(None, Some(to), Some(namespace))
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+
+    let node_payload_size_ns_from_to =
+        |State(state): State<S>, Path((namespace, from, to)): Path<(u64, u64, u64)>| async move {
+            state
+                .payload_size(Some(from), Some(to), Some(namespace))
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+
+    let node_payload_size_to = |State(state): State<S>, Path(to): Path<u64>| async move {
+        state
+            .payload_size(None, Some(to), None)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let node_payload_size_from_to = |State(state): State<S>, Path((from, to)): Path<(u64, u64)>| async move {
+        state
+            .payload_size(Some(from), Some(to), None)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let node_vid_share_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
+        state
+            .get_vid_share(v1::VidShareId::Hash(hash))
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let node_vid_share_by_payload_hash =
+        |State(state): State<S>, Path(payload_hash): Path<String>| async move {
+            state
+                .get_vid_share(v1::VidShareId::PayloadHash(payload_hash))
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+
+    let node_vid_share_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
+        state
+            .get_vid_share(v1::VidShareId::Height(height))
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let node_sync_status = |State(state): State<S>| async move {
+        state
+            .sync_status()
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let node_header_window_hash =
+        |State(state): State<S>, Path((hash, end)): Path<(String, u64)>| async move {
+            state
+                .get_header_window(v1::HeaderWindowStart::Hash(hash), end)
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+
+    let node_header_window_height =
+        |State(state): State<S>, Path((height, end)): Path<(u64, u64)>| async move {
+            state
+                .get_header_window(v1::HeaderWindowStart::Height(height), end)
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+
+    let node_header_window_time = |State(state): State<S>, Path((start, end)): Path<(u64, u64)>| async move {
+        state
+            .get_header_window(v1::HeaderWindowStart::Time(start), end)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let node_limits = |State(state): State<S>| async move {
+        <S as v1::NodeApi>::limits(&state)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
+    let node_stake_table_current = |State(state): State<S>| async move {
+        state
+            .stake_table_current()
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
+    let node_stake_table = |State(state): State<S>, Path(epoch): Path<u64>| async move {
+        state
+            .stake_table(epoch)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
+    let node_da_stake_table_current = |State(state): State<S>| async move {
+        state
+            .da_stake_table_current()
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
+    let node_da_stake_table = |State(state): State<S>, Path(epoch): Path<u64>| async move {
+        state
+            .da_stake_table(epoch)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
+    let node_validators = |State(state): State<S>, Path(epoch): Path<u64>| async move {
+        state
+            .get_validators(epoch)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
+    let node_all_validators =
+        |State(state): State<S>, Path((epoch, offset, limit)): Path<(u64, u64, u64)>| async move {
+            state
+                .get_all_validators(epoch, offset, limit)
+                .await
+                .map(Json)
+                .map_err(ApiError::BadRequest)
+        };
+
+    let node_proposal_participation_current = |State(state): State<S>| async move {
+        state
+            .current_proposal_participation()
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
+    let node_proposal_participation = |State(state): State<S>, Path(epoch): Path<u64>| async move {
+        state
+            .proposal_participation(epoch)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
+    let node_vote_participation_current = |State(state): State<S>| async move {
+        state
+            .current_vote_participation()
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
+    let node_vote_participation = |State(state): State<S>, Path(epoch): Path<u64>| async move {
+        state
+            .vote_participation(epoch)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
+    let node_block_reward = |State(state): State<S>| async move {
+        state
+            .get_block_reward(None)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
+    let node_block_reward_epoch = |State(state): State<S>, Path(epoch): Path<u64>| async move {
+        state
+            .get_block_reward(Some(epoch))
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
+    let node_oldest_block = |State(state): State<S>| async move {
+        state
+            .get_oldest_block()
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
+    let node_oldest_leaf = |State(state): State<S>| async move {
+        state
+            .get_oldest_leaf()
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
+    Router::new()
         .route(routes::v1::NODE_BLOCK_HEIGHT_ROUTE, get(node_block_height))
-        .route(routes::v1::NODE_TRANSACTIONS_COUNT_ROUTE, get(node_count_txs))
+        .route(
+            routes::v1::NODE_TRANSACTIONS_COUNT_ROUTE,
+            get(node_count_txs),
+        )
         .route(
             routes::v1::NODE_TRANSACTIONS_COUNT_NS_ROUTE,
             get(node_count_txs_ns),
@@ -1958,9 +1569,15 @@ where
             routes::v1::NODE_DA_STAKE_TABLE_CURRENT_ROUTE,
             get(node_da_stake_table_current),
         )
-        .route(routes::v1::NODE_DA_STAKE_TABLE_ROUTE, get(node_da_stake_table))
+        .route(
+            routes::v1::NODE_DA_STAKE_TABLE_ROUTE,
+            get(node_da_stake_table),
+        )
         .route(routes::v1::NODE_VALIDATORS_ROUTE, get(node_validators))
-        .route(routes::v1::NODE_ALL_VALIDATORS_ROUTE, get(node_all_validators))
+        .route(
+            routes::v1::NODE_ALL_VALIDATORS_ROUTE,
+            get(node_all_validators),
+        )
         .route(
             routes::v1::NODE_PROPOSAL_PARTICIPATION_CURRENT_ROUTE,
             get(node_proposal_participation_current),
@@ -1984,11 +1601,135 @@ where
         )
         .route(routes::v1::NODE_OLDEST_BLOCK_ROUTE, get(node_oldest_block))
         .route(routes::v1::NODE_OLDEST_LEAF_ROUTE, get(node_oldest_leaf))
-        // Catchup routes
+        .with_state(state)
+}
+
+pub(crate) fn router_catchup<S>(state: S) -> Router
+where
+    S: v1::CatchupApi + Clone + Send + Sync + 'static,
+{
+    // Catchup handlers
+    let catchup_account =
+        |State(state): State<S>, Path((height, view, address)): Path<(u64, u64, String)>| async move {
+            state
+                .get_account(height, view, address)
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+
+    let catchup_accounts = |State(state): State<S>,
+                            Path((height, view)): Path<(u64, u64)>,
+                            headers: HeaderMap,
+                            body: Bytes| async move {
+        let accounts: Vec<<S as v1::CatchupApi>::FeeAccount> = decode_body(&headers, &body)?;
+        let tree = state
+            .get_accounts(height, view, accounts)
+            .await
+            .map_err(classify_availability_error)?;
+        encode_response(&headers, tree)
+    };
+
+    let catchup_blocks = |State(state): State<S>, Path((height, view)): Path<(u64, u64)>| async move {
+        state
+            .get_blocks_frontier(height, view)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let catchup_chainconfig = |State(state): State<S>, Path(commitment): Path<String>| async move {
+        <S as v1::CatchupApi>::get_chain_config(&state, commitment)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let catchup_leafchain = |State(state): State<S>, Path(height): Path<u64>| async move {
+        state
+            .get_leaf_chain(height)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let catchup_cert2 = |State(state): State<S>, Path(height): Path<u64>| async move {
+        <S as v1::CatchupApi>::get_cert2(&state, height)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let catchup_reward_account =
+        |State(state): State<S>, Path((height, view, address)): Path<(u64, u64, String)>| async move {
+            state
+                .get_reward_account_v1(height, view, address)
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+
+    let catchup_reward_accounts = |State(state): State<S>,
+                                   Path((height, view)): Path<(u64, u64)>,
+                                   headers: HeaderMap,
+                                   body: Bytes| async move {
+        let accounts: Vec<<S as v1::CatchupApi>::RewardAccountV1> = decode_body(&headers, &body)?;
+        let tree = state
+            .get_reward_accounts_v1(height, view, accounts)
+            .await
+            .map_err(classify_availability_error)?;
+        encode_response(&headers, tree)
+    };
+
+    let catchup_reward_account_v2 =
+        |State(state): State<S>, Path((height, view, address)): Path<(u64, u64, String)>| async move {
+            state
+                .get_reward_account_v2(height, view, address)
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+
+    let catchup_reward_accounts_v2 =
+        |State(_): State<S>, Path((_height, _view)): Path<(u64, u64)>| async move {
+            Err::<Json<()>, ApiError>(ApiError::NotFound(anyhow::anyhow!(
+                "catchup/reward-accounts-v2 is deprecated"
+            )))
+        };
+
+    let catchup_reward_amounts =
+        |State(_): State<S>, Path((_height, _limit, _offset)): Path<(u64, u64, u64)>| async move {
+            Err::<Json<()>, ApiError>(ApiError::NotFound(anyhow::anyhow!(
+                "catchup/reward-amounts is deprecated"
+            )))
+        };
+
+    let catchup_reward_merkle_tree_v2 =
+        |State(state): State<S>, Path((height, view)): Path<(u64, u64)>| async move {
+            <S as v1::CatchupApi>::get_reward_merkle_tree_v2(&state, height, view)
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+
+    let catchup_state_cert = |State(state): State<S>, Path(epoch): Path<u64>| async move {
+        <S as v1::CatchupApi>::get_state_cert(&state, epoch)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    Router::new()
         .route(routes::v1::CATCHUP_ACCOUNT_ROUTE, get(catchup_account))
-        .route(routes::v1::CATCHUP_ACCOUNTS_ROUTE, ::axum::routing::post(catchup_accounts))
+        .route(
+            routes::v1::CATCHUP_ACCOUNTS_ROUTE,
+            ::axum::routing::post(catchup_accounts),
+        )
         .route(routes::v1::CATCHUP_BLOCKS_ROUTE, get(catchup_blocks))
-        .route(routes::v1::CATCHUP_CHAINCONFIG_ROUTE, get(catchup_chainconfig))
+        .route(
+            routes::v1::CATCHUP_CHAINCONFIG_ROUTE,
+            get(catchup_chainconfig),
+        )
         .route(routes::v1::CATCHUP_LEAFCHAIN_ROUTE, get(catchup_leafchain))
         .route(routes::v1::CATCHUP_CERT2_ROUTE, get(catchup_cert2))
         .route(
@@ -2015,15 +1756,77 @@ where
             routes::v1::CATCHUP_REWARD_MERKLE_TREE_V2_ROUTE,
             get(catchup_reward_merkle_tree_v2),
         )
-        .route(routes::v1::CATCHUP_STATE_CERT_ROUTE, get(catchup_state_cert))
-        // Submit
-        .route(routes::v1::SUBMIT_ROUTE, ::axum::routing::post(submit_submit))
-        // State signature
+        .route(
+            routes::v1::CATCHUP_STATE_CERT_ROUTE,
+            get(catchup_state_cert),
+        )
+        .with_state(state)
+}
+
+pub(crate) fn router_submit<S>(state: S) -> Router
+where
+    S: v1::SubmitApi + Clone + Send + Sync + 'static,
+{
+    // Submit handler — body is decoded as VBS (binary) or JSON based on Content-Type, matching
+    // tide-disco's `body_auto`.
+    let submit_submit = |State(state): State<S>, headers: HeaderMap, body: Bytes| async move {
+        let tx: <S as v1::SubmitApi>::Transaction = decode_body(&headers, &body)?;
+        let hash = state.submit(tx).await.map_err(ApiError::Internal)?;
+        encode_response(&headers, hash)
+    };
+
+    Router::new()
+        .route(
+            routes::v1::SUBMIT_ROUTE,
+            ::axum::routing::post(submit_submit),
+        )
+        .with_state(state)
+}
+
+pub(crate) fn router_state_signature<S>(state: S) -> Router
+where
+    S: v1::StateSignatureApi + Clone + Send + Sync + 'static,
+{
+    // State signature handler
+    let state_signature_block = |State(state): State<S>, Path(height): Path<u64>| async move {
+        state
+            .get_state_signature(height)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    Router::new()
         .route(
             routes::v1::STATE_SIGNATURE_BLOCK_ROUTE,
             get(state_signature_block),
         )
-        // HotShot events
+        .with_state(state)
+}
+
+pub(crate) fn router_hotshot_events<S>(state: S) -> Router
+where
+    S: v1::HotShotEventsApi + Clone + Send + Sync + 'static,
+{
+    // HotShot events handlers
+    let hotshot_events_startup = |State(state): State<S>| async move {
+        state
+            .startup_info()
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
+    let hotshot_events_stream =
+        |State(state): State<S>, headers: HeaderMap, ws: WebSocketUpgrade| async move {
+            let format = ws_format(&headers);
+            match <S as v1::HotShotEventsApi>::events(&state).await {
+                Ok(stream) => ws.on_upgrade(move |socket| drive_ws_stream(socket, stream, format)),
+                Err(err) => ApiError::Internal(err).into_response(),
+            }
+        };
+
+    Router::new()
         .route(
             routes::v1::HOTSHOT_EVENTS_STARTUP_ROUTE,
             get(hotshot_events_startup),
@@ -2032,7 +1835,158 @@ where
             routes::v1::HOTSHOT_EVENTS_STREAM_ROUTE,
             get(hotshot_events_stream),
         )
-        // Light client
+        .with_state(state)
+}
+
+pub(crate) fn router_light_client<S>(state: S) -> Router
+where
+    S: v1::LightClientApi + Clone + Send + Sync + 'static,
+{
+    // Light-client handlers
+    let lc_leaf_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
+        state
+            .get_leaf_proof(v1::LeafQuery::Height(height), None)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let lc_leaf_by_height_finalized =
+        |State(state): State<S>, Path((height, finalized)): Path<(u64, u64)>| async move {
+            state
+                .get_leaf_proof(v1::LeafQuery::Height(height), Some(finalized))
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+
+    let lc_leaf_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
+        state
+            .get_leaf_proof(v1::LeafQuery::Hash(hash), None)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let lc_leaf_by_hash_finalized =
+        |State(state): State<S>, Path((hash, finalized)): Path<(String, u64)>| async move {
+            state
+                .get_leaf_proof(v1::LeafQuery::Hash(hash), Some(finalized))
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+
+    let lc_leaf_by_block_hash = |State(state): State<S>, Path(block_hash): Path<String>| async move {
+        state
+            .get_leaf_proof(v1::LeafQuery::BlockHash(block_hash), None)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let lc_leaf_by_block_hash_finalized =
+        |State(state): State<S>, Path((block_hash, finalized)): Path<(String, u64)>| async move {
+            state
+                .get_leaf_proof(v1::LeafQuery::BlockHash(block_hash), Some(finalized))
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+
+    let lc_leaf_by_payload_hash = |State(state): State<S>, Path(payload_hash): Path<String>| async move {
+        state
+            .get_leaf_proof(v1::LeafQuery::PayloadHash(payload_hash), None)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let lc_leaf_by_payload_hash_finalized =
+        |State(state): State<S>, Path((payload_hash, finalized)): Path<(String, u64)>| async move {
+            state
+                .get_leaf_proof(v1::LeafQuery::PayloadHash(payload_hash), Some(finalized))
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+
+    let lc_header_by_height = |State(state): State<S>, Path((root, height)): Path<(u64, u64)>| async move {
+        state
+            .get_header_proof(root, v1::HeaderQuery::Height(height))
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let lc_header_by_hash = |State(state): State<S>, Path((root, hash)): Path<(u64, String)>| async move {
+        state
+            .get_header_proof(root, v1::HeaderQuery::Hash(hash))
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let lc_header_by_payload_hash =
+        |State(state): State<S>, Path((root, payload_hash)): Path<(u64, String)>| async move {
+            state
+                .get_header_proof(root, v1::HeaderQuery::PayloadHash(payload_hash))
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+
+    let lc_stake_table = |State(state): State<S>, Path(epoch): Path<u64>| async move {
+        state
+            .get_light_client_stake_table(epoch)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let lc_payload = |State(state): State<S>, Path(height): Path<u64>| async move {
+        state
+            .get_payload_proof(height)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let lc_payload_range = |State(state): State<S>, Path((start, end)): Path<(u64, u64)>| async move {
+        state
+            .get_payload_proof_range(start, end)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let lc_namespace = |State(state): State<S>, Path((height, namespace)): Path<(u64, u64)>| async move {
+        state
+            .get_lc_namespace_proof(height, namespace)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let lc_namespace_range =
+        |State(state): State<S>, Path((start, end, namespace)): Path<(u64, u64, u64)>| async move {
+            state
+                .get_lc_namespace_proof_range(start, end, namespace)
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+
+    let lc_namespaces_range =
+        |State(state): State<S>, Path((start, end, namespaces)): Path<(u64, u64, String)>| async move {
+            state
+                .get_lc_namespaces_proof_range(start, end, namespaces)
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+
+    Router::new()
         .route(routes::v1::LC_LEAF_BY_HEIGHT_ROUTE, get(lc_leaf_by_height))
         .route(
             routes::v1::LC_LEAF_BY_HEIGHT_FINALIZED_ROUTE,
@@ -2059,7 +2013,10 @@ where
             routes::v1::LC_LEAF_BY_PAYLOAD_HASH_FINALIZED_ROUTE,
             get(lc_leaf_by_payload_hash_finalized),
         )
-        .route(routes::v1::LC_HEADER_BY_HEIGHT_ROUTE, get(lc_header_by_height))
+        .route(
+            routes::v1::LC_HEADER_BY_HEIGHT_ROUTE,
+            get(lc_header_by_height),
+        )
         .route(routes::v1::LC_HEADER_BY_HASH_ROUTE, get(lc_header_by_hash))
         .route(
             routes::v1::LC_HEADER_BY_PAYLOAD_HASH_ROUTE,
@@ -2077,7 +2034,199 @@ where
             routes::v1::LC_NAMESPACES_RANGE_ROUTE,
             get(lc_namespaces_range),
         )
-        // Explorer
+        .with_state(state)
+}
+
+pub(crate) fn router_explorer<S>(state: S) -> Router
+where
+    S: v1::ExplorerApi + Clone + Send + Sync + 'static,
+{
+    // Explorer handlers
+    let explorer_block_detail_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
+        state
+            .get_block_detail(v1::BlockIdent::Height(height))
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let explorer_block_detail_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
+        state
+            .get_block_detail(v1::BlockIdent::Hash(hash))
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let explorer_block_summaries_latest = |State(state): State<S>, Path(limit): Path<u64>| async move {
+        state
+            .get_block_summaries(v1::BlockIdent::Latest, limit)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let explorer_block_summaries_from =
+        |State(state): State<S>, Path((from, limit)): Path<(u64, u64)>| async move {
+            state
+                .get_block_summaries(v1::BlockIdent::Height(from), limit)
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+
+    let explorer_tx_detail_by_position =
+        |State(state): State<S>, Path((height, offset)): Path<(u64, u64)>| async move {
+            state
+                .get_transaction_detail(v1::TxIdent::HeightAndOffset(height, offset))
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+
+    let explorer_tx_detail_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
+        state
+            .get_transaction_detail(v1::TxIdent::Hash(hash))
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let explorer_tx_summaries_latest_block =
+        |State(state): State<S>, Path((limit, block)): Path<(u64, u64)>| async move {
+            state
+                .get_transaction_summaries(
+                    v1::TxIdent::Latest,
+                    limit,
+                    v1::TxSummaryFilter::Block(block),
+                )
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+
+    let explorer_tx_summaries_from_block =
+        |State(state): State<S>,
+         Path((height, offset, limit, block)): Path<(u64, u64, u64, u64)>| async move {
+            state
+                .get_transaction_summaries(
+                    v1::TxIdent::HeightAndOffset(height, offset),
+                    limit,
+                    v1::TxSummaryFilter::Block(block),
+                )
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+
+    let explorer_tx_summaries_by_hash_block =
+        |State(state): State<S>, Path((hash, limit, block)): Path<(String, u64, u64)>| async move {
+            state
+                .get_transaction_summaries(
+                    v1::TxIdent::Hash(hash),
+                    limit,
+                    v1::TxSummaryFilter::Block(block),
+                )
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+
+    let explorer_tx_summaries_latest_ns =
+        |State(state): State<S>, Path((limit, namespace)): Path<(u64, i64)>| async move {
+            state
+                .get_transaction_summaries(
+                    v1::TxIdent::Latest,
+                    limit,
+                    v1::TxSummaryFilter::Namespace(namespace),
+                )
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+
+    let explorer_tx_summaries_from_ns =
+        |State(state): State<S>,
+         Path((height, offset, limit, namespace)): Path<(u64, u64, u64, i64)>| async move {
+            state
+                .get_transaction_summaries(
+                    v1::TxIdent::HeightAndOffset(height, offset),
+                    limit,
+                    v1::TxSummaryFilter::Namespace(namespace),
+                )
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+
+    let explorer_tx_summaries_by_hash_ns = |State(state): State<S>,
+                                            Path((hash, limit, namespace)): Path<(
+        String,
+        u64,
+        i64,
+    )>| async move {
+        state
+            .get_transaction_summaries(
+                v1::TxIdent::Hash(hash),
+                limit,
+                v1::TxSummaryFilter::Namespace(namespace),
+            )
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let explorer_tx_summaries_latest = |State(state): State<S>, Path(limit): Path<u64>| async move {
+        state
+            .get_transaction_summaries(v1::TxIdent::Latest, limit, v1::TxSummaryFilter::None)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let explorer_tx_summaries_from =
+        |State(state): State<S>, Path((height, offset, limit)): Path<(u64, u64, u64)>| async move {
+            state
+                .get_transaction_summaries(
+                    v1::TxIdent::HeightAndOffset(height, offset),
+                    limit,
+                    v1::TxSummaryFilter::None,
+                )
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+
+    let explorer_tx_summaries_by_hash =
+        |State(state): State<S>, Path((hash, limit)): Path<(String, u64)>| async move {
+            state
+                .get_transaction_summaries(
+                    v1::TxIdent::Hash(hash),
+                    limit,
+                    v1::TxSummaryFilter::None,
+                )
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+
+    let explorer_summary = |State(state): State<S>| async move {
+        state
+            .get_explorer_summary()
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let explorer_search = |State(state): State<S>, Path(query): Path<String>| async move {
+        state
+            .get_search_result(query)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    Router::new()
         .route(
             routes::v1::EXPLORER_BLOCK_DETAIL_BY_HEIGHT_ROUTE,
             get(explorer_block_detail_by_height),
@@ -2140,7 +2289,55 @@ where
         )
         .route(routes::v1::EXPLORER_SUMMARY_ROUTE, get(explorer_summary))
         .route(routes::v1::EXPLORER_SEARCH_ROUTE, get(explorer_search))
-        // Token
+        .with_state(state)
+}
+
+pub(crate) fn router_token<S>(state: S) -> Router
+where
+    S: v1::TokenApi + Clone + Send + Sync + 'static,
+{
+    // Token handlers
+    let token_total_minted = |State(state): State<S>| async move {
+        state
+            .total_minted_supply()
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let token_circulating = |State(state): State<S>| async move {
+        state
+            .circulating_supply()
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let token_circulating_eth = |State(state): State<S>| async move {
+        state
+            .circulating_supply_ethereum()
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let token_total_issued = |State(state): State<S>| async move {
+        state
+            .total_issued_supply()
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let token_total_reward_distributed = |State(state): State<S>| async move {
+        state
+            .total_reward_distributed()
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    Router::new()
         .route(
             routes::v1::TOKEN_TOTAL_MINTED_SUPPLY_ROUTE,
             get(token_total_minted),
@@ -2161,7 +2358,22 @@ where
             routes::v1::TOKEN_TOTAL_REWARD_DISTRIBUTED_ROUTE,
             get(token_total_reward_distributed),
         )
-        // Database (diagnostic)
+        .with_state(state)
+}
+
+pub(crate) fn router_database<S>(state: S) -> Router
+where
+    S: v1::DatabaseApi + Clone + Send + Sync + 'static,
+{
+    // Database handlers
+    let database_table_sizes = |State(state): State<S>| async move {
+        <S as v1::DatabaseApi>::get_table_sizes(&state)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
+    Router::new()
         .route(
             routes::v1::DATABASE_TABLE_SIZES_ROUTE,
             get(database_table_sizes),
@@ -2169,6 +2381,46 @@ where
         .with_state(state)
 }
 
+/// Create v1 router without OpenAPI documentation (internal types)
+pub fn create_router_v1<S>(state: S) -> Router
+where
+    S: v1::RewardApi
+        + v1::AvailabilityApi
+        + v1::HotShotAvailabilityApi
+        + v1::BlockStateApi
+        + v1::FeeStateApi
+        + v1::StatusApi
+        + v1::ConfigApi
+        + v1::NodeApi
+        + v1::CatchupApi
+        + v1::SubmitApi
+        + v1::StateSignatureApi
+        + v1::HotShotEventsApi
+        + v1::LightClientApi
+        + v1::ExplorerApi
+        + v1::TokenApi
+        + v1::DatabaseApi
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+{
+    router_reward(state.clone())
+        .merge(router_availability(state.clone()))
+        .merge(router_block_state(state.clone()))
+        .merge(router_fee_state(state.clone()))
+        .merge(router_status(state.clone()))
+        .merge(router_config(state.clone()))
+        .merge(router_node(state.clone()))
+        .merge(router_catchup(state.clone()))
+        .merge(router_submit(state.clone()))
+        .merge(router_state_signature(state.clone()))
+        .merge(router_hotshot_events(state.clone()))
+        .merge(router_light_client(state.clone()))
+        .merge(router_explorer(state.clone()))
+        .merge(router_token(state.clone()))
+        .merge(router_database(state))
+}
 /// Create v2 router with OpenAPI documentation (proto types)
 pub fn create_router_v2<S>(state: S) -> Router
 where

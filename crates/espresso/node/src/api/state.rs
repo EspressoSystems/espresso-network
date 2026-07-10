@@ -1184,8 +1184,10 @@ where
 impl<D> espresso_api::v1::AvailabilityApi for NodeApiStateImpl<D>
 where
     D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target: RewardMerkleTreeDataSource
-        + hotshot_query_service::availability::AvailabilityDataSource<espresso_types::SeqTypes>
+    // No `RewardMerkleTreeDataSource` bound here: unlike `v1::RewardApi`, none of these methods
+    // touch the reward merkle tree, so filesystem storage (which doesn't implement it) can serve
+    // this module too.
+    D::Target: hotshot_query_service::availability::AvailabilityDataSource<espresso_types::SeqTypes>
         + hotshot_query_service::node::NodeDataSource<espresso_types::SeqTypes>
         + super::data_source::RequestResponseDataSource<espresso_types::SeqTypes>
         + super::data_source::StateCertDataSource
@@ -2728,6 +2730,19 @@ where
     }
 }
 
+// Bare mode (no query/status API) has no `ExtensibleDataSource` wrapper: the app state is
+// `ApiState<N, P>` directly, so it needs its own erased forwarding impl.
+#[async_trait]
+impl<N, P> SubmitDataSourceErased for crate::api::ApiState<N, P>
+where
+    N: hotshot_types::traits::network::ConnectedNetwork<espresso_types::PubKey>,
+    P: espresso_types::v0::traits::SequencerPersistence,
+{
+    async fn submit_erased(&self, tx: espresso_types::Transaction) -> anyhow::Result<()> {
+        <Self as super::data_source::SubmitDataSource<N, P>>::submit(self, tx).await
+    }
+}
+
 // ============================================================================
 // v1::StateSignatureApi implementation
 // ============================================================================
@@ -2763,6 +2778,22 @@ where
     N: hotshot_types::traits::network::ConnectedNetwork<espresso_types::PubKey>,
     P: espresso_types::v0::traits::SequencerPersistence,
     D: Send + Sync,
+{
+    async fn get_state_signature_erased(
+        &self,
+        height: u64,
+    ) -> Option<hotshot_types::light_client::LCV3StateSignatureRequestBody> {
+        <Self as StateSignatureDataSource<N>>::get_state_signature(self, height).await
+    }
+}
+
+// Bare mode (no query/status API) has no `ExtensibleDataSource` wrapper: the app state is
+// `ApiState<N, P>` directly, so it needs its own erased forwarding impl.
+#[async_trait]
+impl<N, P> StateSignatureDataSourceErased for crate::api::ApiState<N, P>
+where
+    N: hotshot_types::traits::network::ConnectedNetwork<espresso_types::PubKey>,
+    P: espresso_types::v0::traits::SequencerPersistence,
 {
     async fn get_state_signature_erased(
         &self,

@@ -225,6 +225,7 @@ impl Options {
             let metrics = ds.populate_metrics();
             telemetry::set_registry(Arc::new(ds.metrics().registry().clone()));
             tasks.spawn("process_metrics", ProcessMetrics::new(ds.metrics()).run());
+            let axum_ds = Arc::new(ExtensibleDataSource::new(ds.clone(), state.clone()));
             let mut app = App::<_, Error>::with_state(AppState::from(ExtensibleDataSource::new(
                 ds,
                 state.clone(),
@@ -242,16 +243,27 @@ impl Options {
             if self.hotshot_events.is_some() {
                 self.init_hotshot_events_module(&mut app)?;
             }
+            drop(app);
 
-            tasks.spawn(
-                "API server",
-                self.listen(self.http.port, app, SequencerApiVersion::instance()),
-            );
+            let port = self.http.port;
+            let env_vars = endpoints::get_public_env_vars().unwrap_or_default();
+            let node_cfg = self.public_node_config.as_deref().cloned();
+            let modules = espresso_api::OptionalModules {
+                submit: self.submit.is_some(),
+                catchup: self.catchup.is_some(),
+                config: self.config.is_some(),
+                hotshot_events: self.hotshot_events.is_some(),
+            };
+            tasks.spawn("API server", async move {
+                let state = NodeApiStateImpl::new(axum_ds)
+                    .with_env_vars(env_vars)
+                    .with_public_node_config(node_cfg);
+                if let Err(e) = espresso_api::serve_axum_status(port, state, modules).await {
+                    tracing::error!("Axum server error: {}", e);
+                }
+                anyhow::Ok(())
+            });
 
-            // TODO(axum-cutover): status-only mode still serves tide-disco. The data source
-            // (MetricsDataSource) doesn't implement the full v1 trait set required by
-            // `serve_axum`. Either add a `serve_axum_lite` with a reduced trait bound or stub
-            // out the unsupported traits so this mode can also drop tide.
             if self.http.tonic_port.is_some() {
                 tracing::warn!("gRPC reward API not available in status-only mode");
             }
@@ -272,11 +284,27 @@ impl Options {
             if self.hotshot_events.is_some() {
                 self.init_hotshot_events_module(&mut app)?;
             }
+            drop(app);
 
-            tasks.spawn(
-                "API server",
-                self.listen(self.http.port, app, SequencerApiVersion::instance()),
-            );
+            let port = self.http.port;
+            let env_vars = endpoints::get_public_env_vars().unwrap_or_default();
+            let node_cfg = self.public_node_config.as_deref().cloned();
+            let modules = espresso_api::OptionalModules {
+                submit: self.submit.is_some(),
+                catchup: self.catchup.is_some(),
+                config: self.config.is_some(),
+                hotshot_events: self.hotshot_events.is_some(),
+            };
+            let axum_ds = Arc::new(state.clone());
+            tasks.spawn("API server", async move {
+                let state = NodeApiStateImpl::new(axum_ds)
+                    .with_env_vars(env_vars)
+                    .with_public_node_config(node_cfg);
+                if let Err(e) = espresso_api::serve_axum_bare(port, state, modules).await {
+                    tracing::error!("Axum server error: {}", e);
+                }
+                anyhow::Ok(())
+            });
 
             (Box::new(NoMetrics), Box::new(NullEventConsumer), None)
         };
@@ -407,12 +435,28 @@ impl Options {
         if self.hotshot_events.is_some() {
             self.init_hotshot_events_module(&mut app)?;
         }
+        drop(app);
 
-        tasks.spawn("API server", self.listen(self.http.port, app, bind_version));
+        let port = self.http.port;
+        let ds_for_axum = ds.clone();
+        let env_vars = endpoints::get_public_env_vars().unwrap_or_default();
+        let node_cfg = self.public_node_config.as_deref().cloned();
+        let modules = espresso_api::OptionalModules {
+            submit: self.submit.is_some(),
+            config: self.config.is_some(),
+            hotshot_events: self.hotshot_events.is_some(),
+            ..Default::default()
+        };
+        tasks.spawn("API server", async move {
+            let state = NodeApiStateImpl::new(ds_for_axum)
+                .with_env_vars(env_vars)
+                .with_public_node_config(node_cfg);
+            if let Err(e) = espresso_api::serve_axum_fs(port, state, modules).await {
+                tracing::error!("Axum server error: {}", e);
+            }
+            anyhow::Ok(())
+        });
 
-        // TODO(axum-cutover): fs mode still serves tide-disco. Filesystem storage doesn't
-        // implement `RewardMerkleTreeDataSource`, so `serve_axum`'s trait bound isn't
-        // satisfied without stubbing the reward-state traits.
         if self.http.tonic_port.is_some() {
             tracing::warn!("gRPC reward API not available with filesystem storage");
         }

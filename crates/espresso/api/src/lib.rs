@@ -61,23 +61,152 @@ where
         + Sync
         + 'static,
 {
-    tracing::info!("Starting Axum server on port {} with v1 and v2 APIs", port);
+    serve_router(port, "v1 and v2", create_combined_router(state)).await
+}
 
-    let app = create_combined_router(state);
+/// Which of the optional API modules to serve, for modes that make them conditional
+/// (mirroring `Options::submit`/`Options::config`/`Options::hotshot_events`).
+#[derive(Default, Clone, Copy, Debug)]
+pub struct OptionalModules {
+    pub submit: bool,
+    pub catchup: bool,
+    pub config: bool,
+    pub hotshot_events: bool,
+}
+
+/// Serve the query API used by the filesystem-backed storage mode: status, availability, node,
+/// token, catchup, and state-signature are always on (tide registered them unconditionally);
+/// submit, config, and hotshot-events follow `Options`. Filesystem storage doesn't implement the
+/// reward/merklized-state/explorer/database traits, so those modules aren't served (a request to
+/// one of their routes 404s, matching tide).
+pub async fn serve_axum_fs<S>(port: u16, state: S, modules: OptionalModules) -> anyhow::Result<()>
+where
+    S: v1::StatusApi
+        + v1::AvailabilityApi
+        + v1::HotShotAvailabilityApi
+        + v1::NodeApi
+        + v1::TokenApi
+        + v1::CatchupApi
+        + v1::SubmitApi
+        + v1::StateSignatureApi
+        + v1::ConfigApi
+        + v1::HotShotEventsApi
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+{
+    let mut router = axum::router_status(state.clone())
+        .merge(axum::router_availability(state.clone()))
+        .merge(axum::router_node(state.clone()))
+        .merge(axum::router_token(state.clone()))
+        .merge(axum::router_catchup(state.clone()))
+        .merge(axum::router_state_signature(state.clone()));
+    if modules.submit {
+        router = router.merge(axum::router_submit(state.clone()));
+    }
+    if modules.config {
+        router = router.merge(axum::router_config(state.clone()));
+    }
+    if modules.hotshot_events {
+        router = router.merge(axum::router_hotshot_events(state));
+    }
+    serve_router(port, "fs", router).await
+}
+
+/// Serve the status-only API: no availability/node/token data source is available, so only
+/// status and the HotShot modules (submit, catchup, state-signature, config, hotshot-events) can
+/// be served. State-signature is always on; the rest follow `Options`.
+pub async fn serve_axum_status<S>(
+    port: u16,
+    state: S,
+    modules: OptionalModules,
+) -> anyhow::Result<()>
+where
+    S: v1::StatusApi
+        + v1::SubmitApi
+        + v1::CatchupApi
+        + v1::StateSignatureApi
+        + v1::ConfigApi
+        + v1::HotShotEventsApi
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+{
+    let mut router =
+        axum::router_status(state.clone()).merge(axum::router_state_signature(state.clone()));
+    router = merge_hotshot_modules(router, &state, modules);
+    serve_router(port, "status", router).await
+}
+
+/// Serve the bare API (no query or status module): only the HotShot modules are available,
+/// since the only app state is the HotShot handle. State-signature is always on; the rest follow
+/// `Options`, matching `Options::init_hotshot_modules`.
+pub async fn serve_axum_bare<S>(port: u16, state: S, modules: OptionalModules) -> anyhow::Result<()>
+where
+    S: v1::SubmitApi
+        + v1::CatchupApi
+        + v1::StateSignatureApi
+        + v1::ConfigApi
+        + v1::HotShotEventsApi
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+{
+    let router = axum::router_state_signature(state.clone());
+    let router = merge_hotshot_modules(router, &state, modules);
+    serve_router(port, "bare", router).await
+}
+
+fn merge_hotshot_modules<S>(
+    mut router: ::axum::Router,
+    state: &S,
+    modules: OptionalModules,
+) -> ::axum::Router
+where
+    S: v1::SubmitApi
+        + v1::CatchupApi
+        + v1::ConfigApi
+        + v1::HotShotEventsApi
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+{
+    if modules.submit {
+        router = router.merge(axum::router_submit(state.clone()));
+    }
+    if modules.catchup {
+        router = router.merge(axum::router_catchup(state.clone()));
+    }
+    if modules.config {
+        router = router.merge(axum::router_config(state.clone()));
+    }
+    if modules.hotshot_events {
+        router = router.merge(axum::router_hotshot_events(state.clone()));
+    }
+    router
+}
+
+/// Add the reserved top-level routes, rewrite legacy URIs, and bind/serve the router. Shared by
+/// all `serve_axum*` entry points.
+async fn serve_router(port: u16, mode: &str, router: ::axum::Router) -> anyhow::Result<()> {
+    tracing::info!("Starting Axum server on port {} ({} mode)", port, mode);
+
+    let router = axum::with_top_level_routes(router);
     // `Router::layer` middleware runs after routing, so it can't rewrite a URI to match a
     // different route. Wrapping the whole router with `MapRequestLayer` instead runs the
     // rewrite before routing, per the axum-documented pattern for this case.
-    let app = tower::util::MapRequestLayer::new(axum::rewrite_legacy_uri).layer(app);
+    let router = tower::util::MapRequestLayer::new(axum::rewrite_legacy_uri).layer(router);
     let addr = format!("0.0.0.0:{}", port);
 
     tracing::info!("Binding to {}", addr);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
-    tracing::info!(
-        "Axum API server listening on {} (v1 and v2 routes available)",
-        addr
-    );
-    ::axum::serve(listener, ::axum::ServiceExt::into_make_service(app)).await?;
+    tracing::info!("Axum API server listening on {} ({} mode)", addr, mode);
+    ::axum::serve(listener, ::axum::ServiceExt::into_make_service(router)).await?;
 
     tracing::info!("Axum server stopped");
     Ok(())
