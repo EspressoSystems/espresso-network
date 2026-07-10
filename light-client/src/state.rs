@@ -706,7 +706,7 @@ where
                 // hash of the expected stake table, and so we can not verify that we computed the
                 // correct stake table. Since this applies only to Decaf, which is a testnet, it is
                 // acceptable to trust that the server supplied the correct events in this case.
-                tracing::warn!(
+                tracing::debug!(
                     ?epoch,
                     root_height,
                     computed_hash = %stake_table.commit(),

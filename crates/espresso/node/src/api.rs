@@ -8952,18 +8952,14 @@ mod test {
                 // Production peer-catchup posts VBS-binary bodies via surf-disco.
                 // Exercise the bulk-account POST endpoints in that exact wire format so any
                 // regression to "JSON-only body" is caught here.
-                let fee_account_for_post = validated_state
-                    .fee_merkle_tree
-                    .iter()
-                    .next()
-                    .map(|(addr, _)| *addr)
-                    .expect("fee tree should have at least one account");
+                // Reuse the account sampled above; `validated_state.fee_merkle_tree` was
+                // captured before the fee-paying blocks and can be empty.
                 compare_post_binary(
                     &http,
                     api_port,
                     axum_port,
                     &format!("catchup/{height}/{decided_view}/accounts"),
-                    &vec![fee_account_for_post],
+                    &vec![fee_account],
                 )
                 .await?;
                 // reward-accounts V1 takes a Vec<RewardAccountV1>. We send empty since the V2
