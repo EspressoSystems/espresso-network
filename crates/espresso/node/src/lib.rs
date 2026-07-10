@@ -396,7 +396,7 @@ where
         .with_context(|| {
             format!(
                 "Failed to derive Libp2p bind address of {}",
-                &network_params.libp2p_bind_address
+                network_params.libp2p_bind_address
             )
         })?;
     let advertise_multiaddr = network_params

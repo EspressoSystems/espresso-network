@@ -1232,10 +1232,12 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> CatchupDataSource for
                 "state not available for height {height}, view {view}"
             ))?;
 
-        let merkle_tree_bytes = bincode::serialize(&TryInto::<RewardMerkleTreeV2Data>::try_into(
-            &state.reward_merkle_tree_v2,
-        )?)
-        .context("Merkle tree serialization failed; this should never happen.")?;
+        let tree_data = TryInto::<RewardMerkleTreeV2Data>::try_into(&state.reward_merkle_tree_v2)
+            .inspect_err(
+            |err| tracing::debug!(%err, height, %view, "cannot serve reward merkle tree"),
+        )?;
+        let merkle_tree_bytes = bincode::serialize(&tree_data)
+            .context("Merkle tree serialization failed; this should never happen.")?;
 
         Ok(merkle_tree_bytes)
     }
@@ -1309,16 +1311,10 @@ impl TryInto<RewardMerkleTreeV2Data> for &RewardMerkleTreeV2 {
         if balances.len() as u64 == num_leaves {
             Ok(RewardMerkleTreeV2Data { balances })
         } else {
-            tracing::error!(
-                "Attempted to serialize an incomplete RewardMerkleTreeV2. This is not a fatal \
-                 error, but it should never happen and indicates that something may be seriously \
-                 wrong. Balances length: {}, num_leaves: {}.",
-                balances.len(),
-                num_leaves
-            );
             bail!(
-                "Failed to convert RewardMerkleTreeV2 into key-value pairs. Some accounts are \
-                 missing."
+                "RewardMerkleTreeV2 is incomplete, some accounts are missing. Balances length: \
+                 {}, num_leaves: {num_leaves}.",
+                balances.len(),
             );
         }
     }
@@ -1339,9 +1335,13 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
         merkle_tree: &RewardMerkleTreeV2,
     ) -> impl Send + Future<Output = anyhow::Result<()>> {
         async move {
+            // The merklized state loop always applies full blocks, so an incomplete
+            // tree here indicates something is seriously wrong.
+            let tree_data = TryInto::<RewardMerkleTreeV2Data>::try_into(merkle_tree).inspect_err(
+                |err| tracing::error!(%err, height, "cannot persist incomplete RewardMerkleTreeV2"),
+            )?;
             let serialization =
-                bincode::serialize(&TryInto::<RewardMerkleTreeV2Data>::try_into(merkle_tree)?)
-                    .context("Merkle tree serialization failed")?;
+                bincode::serialize(&tree_data).context("Merkle tree serialization failed")?;
             self.persist_tree(height, serialization).await?;
 
             // Skip garbage collection in tests
@@ -3173,7 +3173,7 @@ mod api_tests {
 mod test {
     use std::{
         collections::{HashMap, HashSet},
-        time::Duration,
+        time::{Duration, Instant},
     };
 
     use ::light_client::{
@@ -6915,8 +6915,6 @@ mod test {
         }
     }
 
-    use std::time::Instant;
-
     use rand::thread_rng;
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -8216,6 +8214,35 @@ mod test {
                 // Wait for the availability query service to index avail_block.
                 wait_until_block_height(&client, "node/block-height", avail_block).await;
 
+                // Sample a fee account for the fee-state comparisons below.
+                // `validated_state` was captured before the fee-paying blocks above were
+                // decided, so its fee tree can still be empty; poll the decided state while
+                // consensus is still running (it is frozen after stop_consensus). The
+                // decided state can also contain accounts added after `avail_block`, so
+                // only accept an account provable at the `avail_block` snapshot queried
+                // in the comparisons.
+                let sample_start = Instant::now();
+                let fee_account = 'fee_account: loop {
+                    let state = network.server.decided_state().await.unwrap();
+                    for (addr, _) in state.fee_merkle_tree.iter() {
+                        if client
+                            .get::<MerkleProof<FeeAmount, FeeAccount, Sha3Node, 256>>(&format!(
+                                "fee-state/{avail_block}/{addr}"
+                            ))
+                            .send()
+                            .await
+                            .is_ok()
+                        {
+                            break 'fee_account *addr;
+                        }
+                    }
+                    assert!(
+                        sample_start.elapsed() < Duration::from_secs(30),
+                        "no fee account provable at avail_block {avail_block} after 30s"
+                    );
+                    sleep(Duration::from_millis(500)).await;
+                };
+
                 network.stop_consensus().await;
 
                 let http = reqwest::Client::new();
@@ -8775,14 +8802,8 @@ mod test {
                 )
                 .await?;
 
-                // fee-state path by height for a known fee account, and
-                // fee-balance/latest for the same account.
-                let fee_account = validated_state
-                    .fee_merkle_tree
-                    .iter()
-                    .next()
-                    .map(|(addr, _)| *addr)
-                    .expect("fee tree should have at least one account");
+                // fee-state path by height for a known fee account (sampled above while
+                // consensus was running), and fee-balance/latest for the same account.
                 compare_endpoints(
                     &http,
                     api_port,
@@ -9031,18 +9052,14 @@ mod test {
                 // Production peer-catchup posts VBS-binary bodies via http-client.
                 // Exercise the bulk-account POST endpoints in that exact wire format so any
                 // regression to "JSON-only body" is caught here.
-                let fee_account_for_post = validated_state
-                    .fee_merkle_tree
-                    .iter()
-                    .next()
-                    .map(|(addr, _)| *addr)
-                    .expect("fee tree should have at least one account");
+                // Reuse the account sampled above; `validated_state.fee_merkle_tree` was
+                // captured before the fee-paying blocks and can be empty.
                 compare_post_binary(
                     &http,
                     api_port,
                     axum_port,
                     &format!("catchup/{height}/{decided_view}/accounts"),
-                    &vec![fee_account_for_post],
+                    &vec![fee_account],
                 )
                 .await?;
                 // reward-accounts V1 takes a Vec<RewardAccountV1>. We send empty since the V2
@@ -9967,12 +9984,7 @@ mod test {
             Client::new(format!("http://localhost:{port}").parse().unwrap());
         wait_until_block_height(&height_client, "node/block-height", TARGET_HEIGHT + 5).await;
 
-        // Get the stake table and threshold for the epoch containing TARGET_HEIGHT
         let coordinator = network.server.node_state().coordinator;
-        let epoch = EpochNumber::new(epoch_from_block_number(TARGET_HEIGHT, EPOCH_HEIGHT));
-        let snapshot = coordinator.membership().snapshot(epoch).expect("snapshot");
-        let stake_table = HSStakeTable::from_iter(snapshot.stake_table());
-        let success_threshold = snapshot.success_threshold();
 
         // Use StatePeers to fetch the leaf at the exact target height
         let catchup = StatePeers::<StaticVersion<0, 1>>::from_urls(
@@ -9982,9 +9994,7 @@ mod test {
             &NoMetrics,
         );
 
-        let leaf = catchup
-            .fetch_leaf(TARGET_HEIGHT, stake_table, success_threshold)
-            .await?;
+        let leaf = catchup.fetch_leaf(coordinator, TARGET_HEIGHT).await?;
 
         assert_eq!(
             leaf.height(),

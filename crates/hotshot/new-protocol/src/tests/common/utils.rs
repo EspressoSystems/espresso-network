@@ -243,7 +243,7 @@ impl TestView {
         )
         .expect("Failed to sign Vote2");
         Message {
-            sender: self.leader_public_key,
+            sender: pub_key,
             message_type: MessageType::Consensus(ConsensusMessage::Vote2(vote)),
         }
     }
@@ -268,7 +268,7 @@ impl TestView {
         )
         .expect("Failed to sign TimeoutVote2");
         Message {
-            sender: self.leader_public_key,
+            sender: pub_key,
             message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote(
                 TimeoutVoteMessage { vote, lock },
             )),
@@ -444,7 +444,6 @@ impl TestData {
                 let target_epoch =
                     EpochNumber::new(epoch_from_block_number(block_number, epoch_height) + 2);
                 let _ = membership
-                    .membership()
                     .add_epoch_root(proposal.block_header.clone())
                     .await;
                 if let Ok(drb) = membership
@@ -648,7 +647,7 @@ pub fn mock_membership_with_leaf_fetcher_network(
     membership.set_first_epoch(EpochNumber::genesis(), [0u8; 32]);
 
     let coordinator =
-        EpochMembershipCoordinator::new(membership, num_nodes as u64, &TestStorage::default());
+        EpochMembershipCoordinator::new(membership, epoch_height, &TestStorage::default());
     // Set the DRB difficulty selector so compute_drb_result can run.
     // Difficulty 0 makes the computation instant for tests.
     coordinator
@@ -1107,7 +1106,6 @@ impl ConsensusHarness {
                     }
                     let header = leaf.block_header().clone();
                     self.membership_coordinator
-                        .membership()
                         .add_epoch_root(header)
                         .await
                         .expect("add_epoch_root should succeed in test harness");
