@@ -12531,6 +12531,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sp1-target-check"
+version = "0.1.0"
+dependencies = [
+ "espresso-types",
+ "getrandom 0.2.17",
+ "light-client",
+]
+
+[[package]]
 name = "spin"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

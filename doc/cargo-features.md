@@ -14,7 +14,8 @@ Default builds are unaffected.
 - Types, serde, `Committable` impls, the `SeqTypes: NodeType` impl and pure validation compile without `node`.
 - Cargo silently ignores `default-features = false` on workspace-inherited deps; alloy, espresso-utils and
   hotshot-query-service-types are declared directly (non-inherited) in the affected crates for this reason.
-- `cargo check -p espresso-types --no-default-features` and `just check-features-ci` cover these profiles in CI.
+- CI coverage: `just check-features-ci` (host feature powerset) and `just check-sp1-target` (SP1 target build of the
+  `sp1/target-check` probe crate, which also carries the getrandom zkVM workarounds).
 
 ## Footguns: panics without `node`
 

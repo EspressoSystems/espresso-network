@@ -272,10 +272,10 @@ check-features-ci *args:
 # requires the succinct toolchain (`sp1up`, https://docs.succinct.xyz/docs/sp1/getting-started/install)
 # check that the zkVM client crates compile for the SP1 target
 check-sp1-target:
-    # getrandom 0.3/0.4 have no zkVM backend; opt out explicitly
+    # getrandom 0.3/0.4 have no zkVM backend; opt out explicitly (0.2 is
+    # handled by the `custom` feature in sp1/target-check)
     CARGO_TARGET_RISCV64IM_SUCCINCT_ZKVM_ELF_RUSTFLAGS='--cfg getrandom_backend="unsupported"' \
-        cargo +succinct check --target riscv64im-succinct-zkvm-elf \
-        -p espresso-types -p light-client --no-default-features
+        cargo +succinct check --target riscv64im-succinct-zkvm-elf -p sp1-target-check
 
 # Helpful shortcuts for local development
 dev-orchestrator:

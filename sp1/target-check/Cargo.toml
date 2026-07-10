@@ -1,0 +1,13 @@
+[package]
+name = "sp1-target-check"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+espresso-types = { path = "../../crates/espresso/types", default-features = false }
+# getrandom 0.2 (via rand 0.8) compile-errors on zkVM targets unless a consumer
+# enables `custom`; transitive-dep features cannot be set on the command line
+getrandom = { version = "0.2", features = ["custom"] }
+light-client = { path = "../../light-client", default-features = false, features = ["rlp"] }
