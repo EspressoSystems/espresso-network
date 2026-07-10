@@ -13,7 +13,7 @@ use hotshot_new_protocol::{
         error::{CoordinatorError, Severity},
     },
     cutover::{
-        CutoverGate, extract_pre_cutover_seed, forward_legacy_epoch_changes,
+        CutoverGate, crossed, extract_pre_cutover_seed, forward_legacy_epoch_changes,
         forward_legacy_high_qc, forward_legacy_timeout_votes,
     },
     state::UpdateLeaf,
@@ -28,7 +28,7 @@ use hotshot_types::{
     traits::{ValidatedState, node_implementation::NodeType, signature_key::SignatureKey},
     utils::StateAndDelta,
 };
-use tokio::{select, spawn};
+use tokio::{select, spawn, sync::watch};
 use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 use versions::NEW_PROTOCOL_VERSION;
 
@@ -117,14 +117,16 @@ where
 
 pub struct ConsensusHandle<T: NodeType, I: NodeImplementation<T>> {
     legacy_handle: Arc<RwLock<SystemContextHandle<T, I>>>,
-    client_api: ClientApi<T>,
+    client_api: Option<ClientApi<T>>,
     /// Safety net: aborts the coordinator task on drop if `shut_down()` was never called.
     #[allow(dead_code)]
-    coordinator_task: AbortOnDropHandle<()>,
+    coordinator_task: Option<AbortOnDropHandle<()>>,
     /// Signals the coordinator loop to stop
     shutdown: CancellationToken,
     /// Cancelled by the coordinator loop once it has stopped
     shutdown_complete: CancellationToken,
+    /// Set to `true` when the new protocol is active. This wakes the coordinator loop.
+    activated: watch::Sender<bool>,
     epoch_height: u64,
     cutover_gate: CutoverGate,
     legacy_event_rx: InactiveReceiver<Event<T>>,
@@ -136,9 +138,11 @@ where
     T: NodeType,
     I: NodeImplementation<T>,
 {
+    /// `coordinator` is `None` if the base version or upgrade version is not set to new protocol version
     pub fn new(
         legacy_handle: Arc<RwLock<SystemContextHandle<T, I>>>,
-        coordinator: Coordinator<T, I::Storage>,
+        coordinator: Option<Coordinator<T, I::Storage>>,
+        new_protocol_active: bool,
         epoch_height: u64,
         legacy_event_rx: InactiveReceiver<Event<T>>,
         event_channel_capacity: usize,
@@ -146,8 +150,6 @@ where
     where
         I::Storage: NewProtocolStorage<T>,
     {
-        let client_api = coordinator.client_api().clone();
-
         let (mut event_tx, mut event_rx) =
             async_broadcast::broadcast::<CoordinatorEvent<T>>(event_channel_capacity);
         event_tx.set_await_active(false);
@@ -155,26 +157,41 @@ where
 
         let shutdown = CancellationToken::new();
         let shutdown_complete = CancellationToken::new();
-        let coordinator_task = AbortOnDropHandle::new(spawn(run_coordinator(
-            coordinator,
-            event_tx,
-            shutdown.clone(),
-            shutdown_complete.clone(),
-        )));
+        let (activated, activated_rx) = watch::channel(new_protocol_active);
 
-        spawn(forward_legacy_timeout_votes(
-            legacy_event_rx.clone(),
-            client_api.clone(),
-        ));
-        spawn(forward_legacy_high_qc(
-            legacy_event_rx.clone(),
-            client_api.clone(),
-        ));
-        spawn(forward_legacy_epoch_changes(
-            legacy_event_rx.clone(),
-            client_api.clone(),
-            epoch_height,
-        ));
+        let (client_api, coordinator_task) = match coordinator {
+            Some(coordinator) => {
+                let client_api = coordinator.client_api().clone();
+
+                let coordinator_task = AbortOnDropHandle::new(spawn(run_coordinator(
+                    coordinator,
+                    event_tx,
+                    activated_rx,
+                    shutdown.clone(),
+                    shutdown_complete.clone(),
+                )));
+
+                spawn(forward_legacy_timeout_votes(
+                    legacy_event_rx.clone(),
+                    client_api.clone(),
+                ));
+                spawn(forward_legacy_high_qc(
+                    legacy_event_rx.clone(),
+                    client_api.clone(),
+                ));
+                spawn(forward_legacy_epoch_changes(
+                    legacy_event_rx.clone(),
+                    client_api.clone(),
+                    epoch_height,
+                ));
+
+                (Some(client_api), Some(coordinator_task))
+            },
+            None => {
+                shutdown_complete.cancel();
+                (None, None)
+            },
+        };
 
         Self {
             legacy_handle,
@@ -182,6 +199,7 @@ where
             coordinator_task,
             shutdown,
             shutdown_complete,
+            activated,
             epoch_height,
             cutover_gate: CutoverGate::new(),
             legacy_event_rx,
@@ -198,8 +216,10 @@ where
         self.legacy_handle.clone()
     }
 
-    pub fn client_api(&self) -> &ClientApi<T> {
-        &self.client_api
+    fn client_api(&self) -> &ClientApi<T> {
+        self.client_api
+            .as_ref()
+            .expect("cutover active without a coordinator")
     }
 
     /// Whether `view` is at or past the new-protocol upgrade boundary,
@@ -221,11 +241,19 @@ where
     /// view triggers seed extraction + dispatch. Use this for "should
     /// we route to the coordinator?" decisions.
     pub async fn cutover_active(&self) -> bool {
+        let Some(client_api) = &self.client_api else {
+            return false;
+        };
         if self.cutover_gate.is_active() {
             return true;
         }
         let legacy = self.legacy_handle.read().await;
-        self.cutover_gate.check(&legacy, &self.client_api).await
+        if !crossed(&legacy).await {
+            return false;
+        }
+        // Wake the coordinator loop
+        self.activated.send_replace(true);
+        self.cutover_gate.check(&legacy, client_api).await
     }
 
     pub fn event_stream(&self) -> BoxStream<'static, CoordinatorEvent<T>> {
@@ -242,7 +270,7 @@ where
     pub async fn current_view(&self) -> ViewNumber {
         if self.cutover_active().await {
             return self
-                .client_api
+                .client_api()
                 .current_view()
                 .await
                 .expect("coordinator channel closed");
@@ -253,7 +281,7 @@ where
     pub async fn decided_leaf(&self) -> Leaf2<T> {
         if self.cutover_active().await {
             return self
-                .client_api
+                .client_api()
                 .decided_leaf()
                 .await
                 .expect("coordinator channel closed");
@@ -263,7 +291,7 @@ where
 
     pub async fn decided_state(&self) -> Option<Arc<T::ValidatedState>> {
         if self.cutover_active().await {
-            return match self.client_api.decided_state().await {
+            return match self.client_api().decided_state().await {
                 Ok(state) => state,
                 Err(err) => {
                     tracing::warn!("coordinator unavailable for decided_state: {err:#}");
@@ -276,7 +304,7 @@ where
 
     pub async fn state(&self, view: ViewNumber) -> Option<Arc<T::ValidatedState>> {
         if self.at_or_past_cutover(view).await {
-            return match self.client_api.state(view).await {
+            return match self.client_api().state(view).await {
                 Ok(state) => state,
                 Err(err) => {
                     tracing::warn!(%view, "coordinator unavailable for state: {err:#}");
@@ -289,7 +317,7 @@ where
 
     pub async fn state_and_delta(&self, view: ViewNumber) -> StateAndDelta<T> {
         if self.at_or_past_cutover(view).await {
-            return match self.client_api.state_and_delta(view).await {
+            return match self.client_api().state_and_delta(view).await {
                 Ok(state_and_delta) => state_and_delta,
                 Err(err) => {
                     tracing::warn!(%view, "coordinator unavailable for state_and_delta: {err:#}");
@@ -309,7 +337,7 @@ where
 
     pub async fn undecided_leaves(&self) -> Vec<Leaf2<T>> {
         if self.cutover_active().await {
-            return match self.client_api.undecided_leaves().await {
+            return match self.client_api().undecided_leaves().await {
                 Ok(leaves) => leaves,
                 Err(err) => {
                     tracing::warn!("coordinator unavailable for undecided_leaves: {err:#}");
@@ -329,7 +357,7 @@ where
 
     pub async fn current_epoch(&self) -> Option<EpochNumber> {
         if self.cutover_active().await {
-            return match self.client_api.current_epoch().await {
+            return match self.client_api().current_epoch().await {
                 Ok(epoch) => epoch,
                 Err(err) => {
                     tracing::warn!("coordinator unavailable for current_epoch: {err:#}");
@@ -423,7 +451,7 @@ where
         BoxFuture<'static, anyhow::Result<SignedProposal<T, QuorumProposalWrapper<T>>>>,
     > {
         if self.at_or_past_cutover(view).await {
-            let client_api = self.client_api.clone();
+            let client_api = self.client_api().clone();
             return Ok(async move {
                 client_api
                     .request_proposal(view, leaf_commitment)
@@ -447,7 +475,7 @@ where
         let view = self.current_view().await;
         if self.at_or_past_cutover(view).await {
             return self
-                .client_api
+                .client_api()
                 .submit_transaction(tx)
                 .await
                 .map_err(|e| anyhow::anyhow!("{e}"));
@@ -469,7 +497,7 @@ where
         let view = leaf.view_number();
         if self.at_or_past_cutover(view).await {
             return self
-                .client_api
+                .client_api()
                 .update_leaf(UpdateLeaf {
                     view,
                     leaf,
@@ -514,6 +542,7 @@ where
 async fn run_coordinator<T, S>(
     mut coord: Coordinator<T, S>,
     tx: Sender<CoordinatorEvent<T>>,
+    mut activated: watch::Receiver<bool>,
     shutdown: CancellationToken,
     shutdown_complete: CancellationToken,
 ) where
@@ -522,7 +551,23 @@ async fn run_coordinator<T, S>(
 {
     let _done = shutdown_complete.drop_guard();
 
-    coord.start();
+    if *activated.borrow() {
+        // Already on the new protocol
+        coord.start();
+    } else {
+        select! {
+            () = shutdown.cancelled() => {
+                tracing::info!("shutdown before new protocol activation");
+                return;
+            },
+            res = activated.wait_for(|active| *active) => {
+                if res.is_err() {
+                    tracing::info!("activation channel closed without shutdown");
+                    return;
+                }
+            },
+        }
+    }
 
     loop {
         let input = select! {
