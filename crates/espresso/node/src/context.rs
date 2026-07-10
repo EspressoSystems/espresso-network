@@ -69,6 +69,14 @@ use crate::{
 pub(crate) type ConsensusNode<N, P> = Node<N, P>;
 pub type Consensus<N, P> = hotshot::types::SystemContextHandle<SeqTypes, ConsensusNode<N, P>>;
 
+/// Inbound request-response messages are dropped (not queued) when this channel is full, and a
+/// broadcast request can fan in a response from every node at once, so this must comfortably
+/// exceed the network size.
+const REQUEST_RESPONSE_CHANNEL_CAPACITY: usize = 256;
+
+/// Responders block on the outbound channel while holding request-response admission permits.
+const OUTBOUND_MESSAGE_CHANNEL_CAPACITY: usize = 128;
+
 /// The sequencer context contains a consensus handle and other sequencer specific information.
 #[derive(Derivative, Clone)]
 #[derivative(Debug(bound = ""))]
@@ -258,19 +266,21 @@ where
         }
 
         // Create the channel for sending outbound messages from the external event handler
-        let (outbound_message_sender, outbound_message_receiver) = channel(20);
-        let (request_response_sender, request_response_receiver) = channel(20);
+        let (outbound_message_sender, outbound_message_receiver) =
+            channel(OUTBOUND_MESSAGE_CHANNEL_CAPACITY);
+        let (request_response_sender, request_response_receiver) =
+            channel(REQUEST_RESPONSE_CHANNEL_CAPACITY);
 
         // Configure the request-response protocol
         let request_response_config = RequestResponseConfig {
             incoming_request_ttl: Duration::from_secs(40),
             incoming_request_timeout: Duration::from_secs(5),
-            incoming_response_timeout: Duration::from_secs(5),
             request_batch_size: 5,
             request_batch_interval: Duration::from_secs(2),
-            max_incoming_requests: 10,
-            max_incoming_requests_per_key: 1,
-            max_incoming_responses: 200,
+            // Permits are held while a response is derived (possibly from SQL), and a peer
+            // catching up legitimately issues several distinct requests concurrently
+            max_incoming_requests: 32,
+            max_incoming_requests_per_key: 4,
         };
 
         // Create the request-response protocol
@@ -307,6 +317,10 @@ where
             outbound_message_receiver,
             network,
             pub_key,
+            metrics
+                .subgroup("request_response".into())
+                .create_counter("inbound_dropped".into(), None)
+                .into(),
         )
         .await
         .with_context(|| "Failed to create external event handler")?;
