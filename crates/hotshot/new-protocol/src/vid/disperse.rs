@@ -92,8 +92,6 @@ impl<T: NodeType> VidDisperser<T> {
                 private_key,
                 vid_disperse_request,
             );
-            // Failed attempts count too — they are the ones whose latency
-            // most needs to be visible.
             if let Some(hist) = &duration_metric {
                 hist.add_point(started.elapsed().as_secs_f64());
             }

@@ -44,9 +44,8 @@ impl<T: NodeType> ParticipationTracker<T> {
         self.validator.update_participation(leader, epoch, false);
     }
 
-    /// Advance the proposal tracker as soon as the view enters a new epoch:
-    /// proposals and timeouts are attributed to the view's epoch, which runs
-    /// ahead of the decide chain that otherwise advances the tracker.
+    /// Advance the proposal tracker as soon as the view enters a new epoch,
+    /// which runs ahead of the decide chain that otherwise advances it.
     pub fn on_view_changed(&mut self, epoch: EpochNumber) {
         self.validator.update_participation_epoch(epoch);
     }

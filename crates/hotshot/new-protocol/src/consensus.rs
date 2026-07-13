@@ -203,7 +203,6 @@ pub struct Consensus<T: NodeType> {
     /// otherwise re-decide pre-anchor views.
     decide_floor_view: ViewNumber,
     /// Certificates that failed cryptographic verification, cumulative.
-    /// `Cell` because rejections happen behind `&self`.
     invalid_certs: Cell<u64>,
     last_decided_view: ViewNumber,
     last_decided_leaf: Leaf2<T>,
@@ -610,7 +609,6 @@ impl<T: NodeType> Consensus<T> {
         self.locked_cert.as_ref().map(|c| c.view_number())
     }
 
-    /// Certificates that failed cryptographic verification since startup.
     pub(crate) fn invalid_certs(&self) -> u64 {
         self.invalid_certs.get()
     }
@@ -836,6 +834,10 @@ impl<T: NodeType> Consensus<T> {
 
     pub fn current_view(&self) -> ViewNumber {
         self.current_view
+    }
+
+    pub fn new_protocol_active(&self, view: ViewNumber) -> bool {
+        self.upgrade_lock.new_protocol_active(view)
     }
 
     pub fn current_epoch(&self) -> Option<EpochNumber> {

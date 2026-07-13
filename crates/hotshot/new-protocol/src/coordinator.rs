@@ -132,8 +132,7 @@ pub struct Coordinator<T: NodeType, S> {
     metrics: Option<metrics::Metrics>,
     #[builder(default)]
     participation: ParticipationTracker<T>,
-    /// Anchor view at construction; deciding past it means the new protocol
-    /// is live (see [`Self::live`]).
+    /// Anchor view at construction (see [`Self::live`]).
     #[builder(default = ViewNumber::genesis())]
     anchor_view: ViewNumber,
     #[builder(skip)]
@@ -148,6 +147,11 @@ pub struct Coordinator<T: NodeType, S> {
     invalid_certs_at_decide: u64,
     #[builder(skip)]
     payload_txn_bytes: BTreeMap<ViewNumber, usize>,
+    /// Newest view already recorded by `on_decide_metrics`. Distinct from the
+    /// consensus watermark, which is already at the last batch's view when
+    /// one apply queues several `LeafDecided` outputs.
+    #[builder(skip)]
+    decided_metrics_view: Option<ViewNumber>,
 }
 
 #[bon]
@@ -438,9 +442,6 @@ where
                     }
                     let input = ConsensusInput::Timeout(view, epoch);
                     finish_measurement(next_input);
-                    // Pre-cutover the idle coordinator still times out while
-                    // legacy consensus is healthy; those are not consensus
-                    // timeouts.
                     if self.live() {
                         let leader = self.leader(view, epoch);
                         if let Some(leader) = leader.clone() {
@@ -740,8 +741,6 @@ where
                         .on_leaf_decided(&leaf, &self.membership_coordinator);
                     self.epoch_manager.handle_leaf_decided(leaf);
                 }
-                // Keep entries above the decide floor: a late Cert2 can still
-                // gap-fill those views and their sizes must be recordable.
                 self.payload_txn_bytes = self
                     .payload_txn_bytes
                     .split_off(&(self.consensus.decide_floor() + 1));
@@ -801,7 +800,7 @@ where
                 if let Some(m) = &self.metrics
                     && proposal.data.view_change_evidence.is_none()
                     && let Some((prev_view, received_at)) = self.proposal_received_at
-                    && prev_view + 1 == view
+                    && (*prev_view).checked_add(1) == Some(*view)
                 {
                     m.consensus
                         .previous_proposal_to_proposal_time
@@ -861,6 +860,11 @@ where
                     "send vote1"
                 );
                 self.record_voted_view(view);
+                if let Some(epoch) = vote1.vote.data.epoch
+                    && let Some(leader) = self.leader(view, epoch)
+                {
+                    self.participation.leader_proposed(leader, epoch);
+                }
                 self.broadcast(ConsensusMessage::Vote1(vote1), "broadcast vote1")?
             },
             ConsensusOutput::BroadcastVidShare(share) => {
@@ -923,8 +927,6 @@ where
                     sender = %KeyPrefix::from(&sender),
                     "proposal validated"
                 );
-                self.participation
-                    .leader_proposed(sender, proposal.data.epoch);
             },
             ConsensusOutput::ViewChanged(view, epoch) => {
                 let current_view = self.consensus.current_view();
@@ -1024,6 +1026,7 @@ where
                     let block = p.proposal.data.block_header.block_number();
                     debug!(%node, %sender, %view, %epoch, %block, "recv proposal");
                     if self.metrics.is_some()
+                        && !self.is_too_far_ahead(view)
                         && self.proposal_received_at.is_none_or(|(v, _)| v < view)
                     {
                         self.proposal_received_at = Some((view, Instant::now()));
@@ -1554,6 +1557,7 @@ where
                         cutover_view = *seed.cutover_view,
                         "ignoring pre-cutover seed; already past the cutover",
                     );
+                    self.cutover_seeded = true;
                     let _ = respond.send(());
                     return Ok(());
                 }
@@ -1590,8 +1594,6 @@ where
                 let cutover_view = seed.cutover_view;
 
                 self.consensus.apply_pre_cutover_seed(seed);
-                // The seed means legacy consensus reached the cutover: from
-                // here on this coordinator owns the legacy consensus metrics.
                 self.cutover_seeded = true;
 
                 // Refresh peers for the cutover epoch before kicking the
@@ -1712,13 +1714,16 @@ where
         Ok(())
     }
 
-    /// Whether the new protocol is (or has been) the live consensus engine:
-    /// the cutover seed arrived or a leaf past the anchor was decided.
-    /// Before that the coordinator idles — its timer fires and timeout
+    /// Whether the new protocol is (or has been) the live consensus engine.
+    /// Before the cutover the coordinator idles — its timer fires and timeout
     /// certificates can advance views — and it must not write the legacy
     /// consensus metrics the still-live legacy engine owns.
     fn live(&self) -> bool {
-        self.cutover_seeded || self.consensus.last_decided_view() > self.anchor_view
+        self.cutover_seeded
+            || self.consensus.last_decided_view() > self.anchor_view
+            || self
+                .consensus
+                .new_protocol_active(self.consensus.current_view())
     }
 
     /// Record the last-voted-view gauge monotonically: vote2 for a view is
@@ -1738,13 +1743,12 @@ where
         if self.metrics.is_none() || !self.live() {
             return;
         }
-        // A re-announcement of the current view (e.g. a late timeout
-        // certificate) must not reset the view clock or record a bogus
-        // near-zero leader duration.
-        if self
-            .view_started
-            .is_some_and(|(started_view, ..)| started_view == view)
+        if let Some((started_view, started_epoch, started_at)) = self.view_started
+            && started_view == view
         {
+            if epoch > started_epoch {
+                self.view_started = Some((view, epoch, started_at));
+            }
             return;
         }
         let prev = self.view_started.replace((view, epoch, Instant::now()));
@@ -1779,15 +1783,19 @@ where
     }
 
     fn on_decide_metrics(&mut self, leaves: &[Leaf2<T>]) {
+        if self.metrics.is_none() || !self.live() {
+            return;
+        }
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let newest_view = leaves.first().map(|leaf| leaf.view_number());
+        let advanced = newest_view
+            .is_some_and(|view| view > self.decided_metrics_view.unwrap_or(self.anchor_view));
+        if advanced {
+            self.decided_metrics_view = newest_view;
+            self.invalid_certs_at_decide = self.consensus.invalid_certs();
+        }
         let Some(m) = &self.metrics else { return };
         let consensus = &m.consensus;
-        let now = OffsetDateTime::now_utc().unix_timestamp();
-        let decided_view = self.consensus.last_decided_view();
-        // A gap-fill decide of an older view must not regress or refresh the
-        // progress gauges; only its payload sizes are still meaningful.
-        let advanced = leaves
-            .first()
-            .is_some_and(|newest| newest.view_number() == decided_view);
         for leaf in leaves {
             let txn_bytes = self
                 .payload_txn_bytes
@@ -1810,19 +1818,22 @@ where
         if !advanced {
             return;
         }
-        consensus.last_decided_view.set(*decided_view as usize);
         consensus.last_decided_time.set(now as usize);
-        self.invalid_certs_at_decide = self.consensus.invalid_certs();
         consensus.invalid_qc.set(0);
         if let Some(newest) = leaves.first() {
             consensus
+                .last_decided_view
+                .set(*newest.view_number() as usize);
+            consensus
                 .last_synced_block_height
                 .set(newest.block_header().block_number() as usize);
-        }
-        if let Some(views_in_flight) = (*self.consensus.current_view()).checked_sub(*decided_view) {
-            consensus
-                .number_of_views_per_decide_event
-                .add_point(views_in_flight as f64);
+            if let Some(views_in_flight) =
+                (*self.consensus.current_view()).checked_sub(*newest.view_number())
+            {
+                consensus
+                    .number_of_views_per_decide_event
+                    .add_point(views_in_flight as f64);
+            }
         }
     }
 

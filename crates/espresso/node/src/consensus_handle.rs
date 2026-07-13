@@ -437,9 +437,6 @@ where
             .current_vote_participation()
     }
 
-    /// Participation for `epoch` (`None` = current epoch). As with
-    /// [`Self::proposal_participation`], epoch queries the coordinator has no
-    /// data for fall back to the legacy handle's pre-cutover history.
     pub async fn vote_participation(
         &self,
         epoch: Option<EpochNumber>,
@@ -452,8 +449,6 @@ where
                 Ok(_) => {},
                 Err(err) => {
                     tracing::warn!("coordinator unavailable for vote_participation: {err:#}");
-                    // Only epoch queries can be answered from legacy history;
-                    // for the current epoch the coordinator is authoritative.
                     if epoch.is_none() {
                         return HashMap::new();
                     }

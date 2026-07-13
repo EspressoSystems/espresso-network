@@ -140,8 +140,6 @@ impl<T: NodeType> StateManager<T> {
         }
     }
 
-    /// Record successful `validate_and_apply_header` durations in `validate`
-    /// and validated leaf/state insertions in `update_leaf`.
     pub fn with_metrics(
         mut self,
         validate: Option<Box<dyn Histogram>>,
