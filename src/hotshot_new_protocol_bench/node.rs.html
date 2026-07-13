@@ -219,7 +219,7 @@
 <a href=#219 id=219 data-nosnippet>219</a>        .build();
 <a href=#220 id=220 data-nosnippet>220</a>
 <a href=#221 id=221 data-nosnippet>221</a>    <span class="comment">// Emit initial ViewChanged and (for the leader) RequestBlockAndHeader.
-<a href=#222 id=222 data-nosnippet>222</a>    </span>coordinator.start();
+<a href=#222 id=222 data-nosnippet>222</a>    </span>coordinator.start(<span class="prelude-val">None</span>);
 <a href=#223 id=223 data-nosnippet>223</a>
 <a href=#224 id=224 data-nosnippet>224</a>    <span class="comment">// Process initial outputs so the timer resets before the event loop.
 <a href=#225 id=225 data-nosnippet>225</a>    </span><span class="kw">while let </span><span class="prelude-val">Some</span>(output) = coordinator.outbox_mut().pop_front() {

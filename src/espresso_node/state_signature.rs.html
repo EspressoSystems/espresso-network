@@ -120,7 +120,7 @@
 <a href=#120 id=120 data-nosnippet>120</a>                <span class="macro">tracing::debug!</span>(<span class="string">"New leaves decided. Latest block height: {}"</span>, leaf.height(),);
 <a href=#121 id=121 data-nosnippet>121</a>
 <a href=#122 id=122 data-nosnippet>122</a>                <span class="kw">let </span>cur_block_height = state.block_height;
-<a href=#123 id=123 data-nosnippet>123</a>                <span class="kw">let </span>blocks_per_epoch = consensus_handle.epoch_height().<span class="kw">await</span>;
+<a href=#123 id=123 data-nosnippet>123</a>                <span class="kw">let </span>blocks_per_epoch = <span class="kw-2">*</span>consensus_handle.epoch_height().<span class="kw">await</span>;
 <a href=#124 id=124 data-nosnippet>124</a>
 <a href=#125 id=125 data-nosnippet>125</a>                <span class="kw">let </span>option_state_epoch = option_epoch_from_block_number(
 <a href=#126 id=126 data-nosnippet>126</a>                    leaf.with_epoch,
