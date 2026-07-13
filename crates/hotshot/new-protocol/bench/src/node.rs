@@ -1,7 +1,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Result;
-use hotshot::{traits::BlockPayload, types::BLSPubKey};
+use hotshot::types::BLSPubKey;
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
     node_types::{TEST_VERSIONS, TestTypes},
@@ -9,10 +9,10 @@ use hotshot_example_types::{
     storage_types::TestStorage,
 };
 use hotshot_new_protocol::{
-    block::{BlockBuilder, BlockBuilderConfig},
+    block::{BlockAndHeaderRequest, BlockBuilder, BlockBuilderConfig},
     client::CoordinatorClient,
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
-    coordinator::{Coordinator, timer::Timer},
+    coordinator::{Coordinator, error::Severity, timer::Timer},
     epoch::EpochManager,
     helpers::proposal_commitment,
     network::{Cliquenet, Sender},
@@ -31,9 +31,11 @@ use hotshot_types::{
     traits::{
         EncodeBytes, metrics::NoMetrics, node_implementation::NodeType, signature_key::SignatureKey,
     },
+    utils::BuilderCommitment,
     vid::avidm_gf2::{AvidmGf2Commitment, AvidmGf2Scheme},
     x25519::Keypair,
 };
+use tokio::task::JoinSet;
 use tracing::{error, info, warn};
 use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
@@ -46,6 +48,7 @@ type BenchCoordinator = Coordinator<TestTypes, TestStorage<TestTypes>>;
 /// The bench injects synthetic blocks straight as `BlockBuilt`, bypassing the
 /// real `BlockBuilder`. Since VID dispersal now lives in the builder, the bench
 /// must fan the shares out on its own — this bundles what `fan_out` needs.
+#[derive(Clone)]
 struct BenchDisperser {
     network: Sender<TestTypes>,
     membership: EpochMembershipCoordinator<TestTypes>,
@@ -262,75 +265,56 @@ async fn run_instrumented(
         "entering event loop"
     );
 
+    // Test blocks are built off the event loop (as the real BlockBuilder is) and
+    // injected once ready, so the loop keeps serving consensus — votes, certs,
+    // messages — while a block is being built, rather than blocking on it.
+    let mut builds: JoinSet<BuiltBlock> = JoinSet::new();
+
     loop {
-        match coordinator.next_consensus_input().await {
-            Ok(input) => {
-                metrics.on_input(&input);
-                coordinator.apply_consensus(input);
+        tokio::select! {
+            biased;
+            Some(built) = builds.join_next() => match built {
+                Ok(built) => inject_test_block(&mut coordinator, &mut metrics, built),
+                Err(err) => error!(%err, "test block build task panicked"),
             },
-            Err(err)
-                if err.severity == hotshot_new_protocol::coordinator::error::Severity::Critical =>
-            {
-                error!(%err, "critical error in consensus input");
-                metrics.write_csv(&output_path)?;
-                return Err(anyhow::anyhow!("{err}"));
-            },
-            Err(err) => {
-                warn!(%err, "recoverable error in consensus input");
-                continue;
+            result = coordinator.next_consensus_input() => match result {
+                Ok(input) => {
+                    metrics.on_input(&input);
+                    coordinator.apply_consensus(input);
+                },
+                Err(err) if err.severity == Severity::Critical => {
+                    error!(%err, "critical error in consensus input");
+                    metrics.write_csv(&output_path)?;
+                    return Err(anyhow::anyhow!("{err}"));
+                },
+                Err(err) => {
+                    warn!(%err, "recoverable error in consensus input");
+                    continue;
+                },
             },
         }
 
         while let Some(output) = coordinator.outbox_mut().pop_front() {
             metrics.on_output(&output);
 
-            // Intercept block requests and inject a test block, bypassing the
-            // BlockBuilder. VID dispersal now lives in the builder, so replicate
-            // it here: erasure-code once, derive the commitment from that, inject
-            // the block, and fan the shares out (as the builder would).
+            // Intercept block requests: build + erasure-code on a blocking task
+            // (bypassing the real BlockBuilder), then inject the result once ready
+            // via the `builds` JoinSet (see `inject_test_block`).
             if let ConsensusOutput::RequestBlockAndHeader(ref req) = output
                 && cfg.block_size > 0
             {
-                // Build + disperse the test block (fanout happens inside), then
-                // inject it as if the BlockBuilder had produced it.
-                let td = build_test_block(cfg.block_size, &disperser, req.view, req.epoch);
-                let payload = std::sync::Arc::new(td.block);
-                let builder_commitment =
-                    <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(
-                        payload.as_ref(),
-                        &td.metadata,
-                    );
-                let payload_commitment = VidCommitment::V2(td.commitment);
-
-                let parent_leaf = req.parent_proposal.clone().into();
-                let version = bench_upgrade_lock().version_infallible(req.view);
-                let header = TestBlockHeader::new::<TestTypes>(
-                    &parent_leaf,
-                    payload_commitment,
-                    builder_commitment,
-                    td.metadata,
-                    version,
-                );
-                let header_input = ConsensusInput::HeaderCreated(
-                    req.view,
-                    proposal_commitment(&req.parent_proposal),
-                    header,
-                );
-                metrics.on_input(&header_input);
-                coordinator.apply_consensus(header_input);
-                let block_input = ConsensusInput::BlockBuilt {
-                    view: req.view,
-                    epoch: req.epoch,
-                    payload,
-                    payload_commitment,
-                };
-                metrics.on_input(&block_input);
-                coordinator.apply_consensus(block_input);
+                let disperser = disperser.clone();
+                let size = cfg.block_size;
+                let req = req.clone();
+                builds.spawn_blocking(move || {
+                    let td = build_test_block(size, &disperser, req.view, req.epoch);
+                    BuiltBlock { req, td }
+                });
                 continue; // skip process_consensus_output for this one
             }
 
             if let Err(err) = coordinator.process_consensus_output(output) {
-                if err.severity == hotshot_new_protocol::coordinator::error::Severity::Critical {
+                if err.severity == Severity::Critical {
                     error!(%err, "critical error processing output");
                     metrics.write_csv(&output_path)?;
                     return Err(anyhow::anyhow!("{err}"));
@@ -365,6 +349,53 @@ struct TestBlock {
     commitment: AvidmGf2Commitment,
 }
 
+/// A test block built off the event loop, paired with the request it answers,
+/// sent back to the loop for injection.
+struct BuiltBlock {
+    req: BlockAndHeaderRequest<TestTypes>,
+    td: TestBlock,
+}
+
+/// Inject a built test block as if the `BlockBuilder` had produced it, feeding
+/// the header and the block into the coordinator.
+fn inject_test_block(
+    coordinator: &mut BenchCoordinator,
+    metrics: &mut MetricsCollector,
+    built: BuiltBlock,
+) {
+    let BuiltBlock { req, td } = built;
+    let payload = Arc::new(td.block);
+    // `builder_commitment` is being deprecated and the bench never checks it, so
+    // inject a dummy rather than computing it from the payload.
+    let builder_commitment = BuilderCommitment::from_bytes([]);
+    let payload_commitment = VidCommitment::V2(td.commitment);
+
+    let parent_leaf = req.parent_proposal.clone().into();
+    let version = bench_upgrade_lock().version_infallible(req.view);
+    let header = TestBlockHeader::new::<TestTypes>(
+        &parent_leaf,
+        payload_commitment,
+        builder_commitment,
+        td.metadata,
+        version,
+    );
+    let header_input =
+        ConsensusInput::HeaderCreated(req.view, proposal_commitment(&req.parent_proposal), header);
+    metrics.on_input(&header_input);
+    coordinator.apply_consensus(header_input);
+
+    let block_input = ConsensusInput::BlockBuilt {
+        view: req.view,
+        epoch: req.epoch,
+        payload,
+        payload_commitment,
+    };
+    metrics.on_input(&block_input);
+    coordinator.apply_consensus(block_input);
+}
+
+/// Build and disperse a test block. Synchronous and CPU-bound (erasure coding);
+/// callers run it on a blocking task so it stays off the async runtime.
 fn build_test_block(
     size: usize,
     disperser: &BenchDisperser,
@@ -378,6 +409,8 @@ fn build_test_block(
     let metadata = TestMetadata {
         num_transactions: 1,
     };
+
+    // Erasure-code the block, deriving the commitment from that computation.
     let params = VidDisperse2::<TestTypes>::disperse_params(
         block.encode(),
         metadata.encode().as_ref(),
@@ -393,34 +426,21 @@ fn build_test_block(
     )
     .expect("erasure-code test block");
 
-    // Fan the shares out in the background, so the caller proceeds without
-    // waiting and never needs the shares or recipients. Mirrors the production
-    // BlockBuilder: run the fanout on a blocking task, and surface its failures
-    // and panics from a second task (a detached handle would swallow them).
-    let network = disperser.network.clone();
-    let public_key = disperser.public_key;
-    let private_key = disperser.private_key.clone();
-    let recipients = params.recipients;
-    let fanout_handle = tokio::task::spawn_blocking(move || {
-        fanout::fan_out::<TestTypes>(
-            shares,
-            common,
-            commitment,
-            recipients,
-            view,
-            epoch,
-            network,
-            public_key,
-            private_key,
-        )
-    });
-    tokio::spawn(async move {
-        match fanout_handle.await {
-            Ok(Ok(())) => {},
-            Ok(Err(err)) => error!(%view, %err, "bench vid fanout failed"),
-            Err(err) => error!(%view, %err, "bench vid fanout task panicked"),
-        }
-    });
+    // Fan the shares out to the nodes, including the leader's own share via
+    // loopback (as the production BlockBuilder does).
+    if let Err(err) = fanout::fan_out::<TestTypes>(
+        shares,
+        common,
+        commitment,
+        params.recipients,
+        view,
+        epoch,
+        disperser.network.clone(),
+        disperser.public_key,
+        disperser.private_key.clone(),
+    ) {
+        warn!(%view, %err, "bench vid fanout failed");
+    }
 
     TestBlock {
         block,
