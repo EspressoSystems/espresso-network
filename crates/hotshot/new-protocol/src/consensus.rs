@@ -201,7 +201,6 @@ pub struct Consensus<T: NodeType> {
     /// `decided_views` is not persisted, so a replayed certificate pair could
     /// otherwise re-decide pre-anchor views.
     decide_floor_view: ViewNumber,
-    /// Certificates that failed cryptographic verification, cumulative.
     invalid_certs: u64,
     last_decided_view: ViewNumber,
     last_decided_leaf: Leaf2<T>,

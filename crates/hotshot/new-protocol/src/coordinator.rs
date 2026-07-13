@@ -132,7 +132,6 @@ pub struct Coordinator<T: NodeType, S> {
     metrics: Option<metrics::Metrics>,
     #[builder(default)]
     participation: ParticipationTracker<T>,
-    /// Anchor view at construction (see [`Self::live`]).
     #[builder(default = ViewNumber::genesis())]
     anchor_view: ViewNumber,
     #[builder(skip)]
@@ -147,9 +146,6 @@ pub struct Coordinator<T: NodeType, S> {
     invalid_certs_at_decide: u64,
     #[builder(skip)]
     payload_txn_bytes: BTreeMap<ViewNumber, usize>,
-    /// Newest view already recorded by `on_decide_metrics`. Distinct from the
-    /// consensus watermark, which is already at the last batch's view when
-    /// one apply queues several `LeafDecided` outputs.
     #[builder(skip)]
     decided_metrics_view: Option<ViewNumber>,
 }
@@ -1717,10 +1713,6 @@ where
         Ok(())
     }
 
-    /// Whether the new protocol is (or has been) the live consensus engine.
-    /// Before the cutover the coordinator idles — its timer fires and timeout
-    /// certificates can advance views — and it must not write the legacy
-    /// consensus metrics the still-live legacy engine owns.
     fn live(&self) -> bool {
         self.cutover_seeded
             || self.consensus.last_decided_view() > self.anchor_view
@@ -1729,9 +1721,6 @@ where
                 .new_protocol_active(self.consensus.current_view())
     }
 
-    /// Record the last-voted-view gauge monotonically: vote2 for a view is
-    /// released by a storage confirmation that can land after vote1 for the
-    /// next view was already sent.
     fn record_voted_view(&mut self, view: ViewNumber) {
         if self.voted_view.is_some_and(|v| v >= view) {
             return;

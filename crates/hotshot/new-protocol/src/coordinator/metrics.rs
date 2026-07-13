@@ -80,7 +80,6 @@ impl Drop for Measurement {
 
 pub fn finish_measurement(_: Option<Measurement>) {}
 
-/// Drop the measurement without recording it, e.g. on error paths.
 pub fn ignore_measurement(m: Option<Measurement>) {
     if let Some(mut m) = m {
         m.record = false;

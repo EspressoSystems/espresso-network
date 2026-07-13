@@ -388,9 +388,6 @@ where
             .current_proposal_participation()
     }
 
-    /// Participation for `epoch`. The coordinator only tracks epochs since
-    /// the cutover, so when it has nothing for `epoch` (or errors) fall back
-    /// to the legacy handle, which retains pre-cutover history.
     pub async fn proposal_participation(
         &self,
         epoch: EpochNumber,

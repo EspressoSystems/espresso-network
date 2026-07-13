@@ -44,13 +44,10 @@ impl<T: NodeType> ParticipationTracker<T> {
         self.validator.update_participation(leader, epoch, false);
     }
 
-    /// Advance the proposal tracker as soon as the view enters a new epoch,
-    /// which runs ahead of the decide chain that otherwise advances it.
     pub fn on_view_changed(&mut self, epoch: EpochNumber) {
         self.validator.update_participation_epoch(epoch);
     }
 
-    /// Call with the oldest decided leaf first.
     pub fn on_leaf_decided(&mut self, leaf: &Leaf2<T>, membership: &EpochMembershipCoordinator<T>) {
         if let Err(err) = track_decided_qc_participation(
             &leaf.justify_qc(),

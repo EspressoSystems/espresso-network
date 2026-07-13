@@ -316,9 +316,6 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
         }
     }
 
-    /// Record a leader slot for `key`. At epoch boundaries the update's epoch
-    /// can run ahead of or behind the tracker; both are recorded against
-    /// their own epoch, not dropped.
     pub fn update_participation(
         &mut self,
         key: TYPES::SignatureKey,
@@ -468,22 +465,14 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
         }
     }
 
-    /// Placeholder installed when the stake table for an epoch cannot be
-    /// resolved yet: no keys, and a threshold no certificate can meet, so
-    /// every update fails until [`Self::reseed_stake_table`] replaces it.
     pub fn unresolved_stake_table() -> (HSStakeTable<TYPES>, U256) {
         (HSStakeTable::default(), U256::MAX)
     }
 
-    /// Whether the current epoch's stake table is the
-    /// [`Self::unresolved_stake_table`] placeholder.
     pub fn stake_table_unresolved(&self) -> bool {
         self.stake_table.is_empty()
     }
 
-    /// Replace an [`Self::unresolved_stake_table`] placeholder with the real
-    /// stake table for the current epoch. No participation was recorded
-    /// against the placeholder, so the counts restart from zero.
     pub fn reseed_stake_table(&mut self, stake_table: HSStakeTable<TYPES>, threshold: U256) {
         self.current_epoch_participation = stake_table
             .iter()
@@ -660,9 +649,6 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
     }
 }
 
-/// Resolve the stake table and success threshold for `epoch`, falling back to
-/// [`VoteParticipation::unresolved_stake_table`] when the snapshot is not
-/// cached yet.
 pub fn resolve_participation_stake_table<TYPES: NodeType>(
     membership: &EpochMembershipCoordinator<TYPES>,
     epoch: Option<EpochNumber>,
@@ -679,8 +665,6 @@ pub fn resolve_participation_stake_table<TYPES: NodeType>(
     }
 }
 
-/// Fold one decided leaf's justify QC into the participation trackers.
-/// Call with the oldest decided leaf first.
 pub fn track_decided_qc_participation<TYPES: NodeType>(
     qc: &QuorumCertificate2<TYPES>,
     membership: &EpochMembershipCoordinator<TYPES>,
@@ -1134,7 +1118,6 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         self.validator_participation.proposal_participation(epoch)
     }
 
-    /// Fold a decided leaf's justify QC into both participation trackers.
     pub fn update_participation_from_qc(
         &mut self,
         qc: &QuorumCertificate2<TYPES>,

@@ -1663,7 +1663,6 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
         self.block_payload.clone()
     }
 
-    /// Optional block payload, borrowed.
     pub fn block_payload_ref(&self) -> Option<&TYPES::BlockPayload> {
         self.block_payload.as_ref()
     }
