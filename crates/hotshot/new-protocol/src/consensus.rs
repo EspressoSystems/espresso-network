@@ -692,6 +692,8 @@ impl<T: NodeType> Consensus<T> {
             ConsensusInput::BlockReconstructed(view, vid_commitment) => {
                 debug!(%view, "apply: block reconstructed");
                 self.blocks_reconstructed.insert((view, vid_commitment));
+                // Retry the child whose vote1 is gated on this parent reconstruction.
+                self.maybe_vote_1(view + 1, outbox);
                 Protocol::Continue
             },
             ConsensusInput::StateValidated(state_response) => {
