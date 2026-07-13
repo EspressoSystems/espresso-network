@@ -26,6 +26,8 @@ type Result<T> = std::result::Result<T, ValidationError>;
 pub struct ValidatedProposal<T: NodeType> {
     pub sender: T::SignatureKey,
     pub message: ProposalMessage<T, Validated>,
+    /// True if this proposal was fetched from a peer
+    pub fetched: bool,
 }
 
 /// A proposal validator checks proposal signature and integrity.
@@ -73,6 +75,17 @@ impl<T: NodeType> ProposalValidator<T> {
     }
 
     pub fn validate(&mut self, p: ProposalMessage<T, Unchecked>) {
+        self.spawn_validation(p, false)
+    }
+
+    /// Validate a proposal fetched from a peer.
+    /// The coordinator routes it into the decide
+    /// backfill path instead of the vote path.
+    pub fn validate_fetched(&mut self, p: ProposalMessage<T, Unchecked>) {
+        self.spawn_validation(p, true)
+    }
+
+    fn spawn_validation(&mut self, p: ProposalMessage<T, Unchecked>, fetched: bool) {
         let v = self.validator.clone();
         self.tasks.spawn(async move {
             let sender = v.signature(&p.proposal).await?;
@@ -82,6 +95,7 @@ impl<T: NodeType> ProposalValidator<T> {
             let validated_proposal = ValidatedProposal {
                 sender,
                 message: ProposalMessage::validated(p.proposal),
+                fetched,
             };
             Ok(validated_proposal)
         });
