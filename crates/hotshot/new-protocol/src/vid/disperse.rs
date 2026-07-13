@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, mem, ops::Range, sync::LazyLock, time::Instant};
+use std::{
+    collections::BTreeMap,
+    mem,
+    ops::Range,
+    sync::{Arc, LazyLock},
+};
 
 use hotshot::traits::BlockPayload;
 use hotshot_types::{
@@ -17,6 +22,7 @@ use tokio::task::{AbortHandle, JoinSet};
 use tracing::{error, warn};
 
 use crate::{
+    coordinator::metrics::{Measurement, finish_measurement},
     message::{ConsensusMessage, Message, MessageType},
     network::{NetworkError, Sender},
 };
@@ -44,7 +50,7 @@ pub struct VidDisperser<T: NodeType> {
     public_key: T::SignatureKey,
     private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
     tasks: JoinSet<Result<VidDisperseOutput, VidDisperseError>>,
-    duration_metric: Option<Box<dyn Histogram>>,
+    duration_metric: Option<Arc<dyn Histogram>>,
 }
 
 impl<T: NodeType> VidDisperser<T> {
@@ -65,7 +71,7 @@ impl<T: NodeType> VidDisperser<T> {
         }
     }
 
-    pub fn with_metrics(mut self, hist: Option<Box<dyn Histogram>>) -> Self {
+    pub fn with_metrics(mut self, hist: Option<Arc<dyn Histogram>>) -> Self {
         self.duration_metric = hist;
         self
     }
@@ -84,7 +90,7 @@ impl<T: NodeType> VidDisperser<T> {
         let private_key = self.private_key.clone();
         let duration_metric = self.duration_metric.clone();
         let handle = self.tasks.spawn_blocking(move || {
-            let started = Instant::now();
+            let measurement = duration_metric.map(Measurement::start);
             let result = handle_vid_disperse_request(
                 membership,
                 network,
@@ -92,9 +98,7 @@ impl<T: NodeType> VidDisperser<T> {
                 private_key,
                 vid_disperse_request,
             );
-            if let Some(hist) = &duration_metric {
-                hist.add_point(started.elapsed().as_secs_f64());
-            }
+            finish_measurement(measurement);
             result
         });
         self.calculations.insert(key, handle);

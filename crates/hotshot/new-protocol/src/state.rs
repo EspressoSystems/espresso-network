@@ -1,7 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap},
     sync::Arc,
-    time::Instant,
 };
 
 use committable::{Commitment, Committable};
@@ -20,7 +19,11 @@ use hotshot_types::{
 use tokio::task::{AbortHandle, JoinSet};
 use tracing::{error, warn};
 
-use crate::{helpers::proposal_commitment, message::Proposal};
+use crate::{
+    coordinator::metrics::{Measurement, finish_measurement, ignore_measurement},
+    helpers::proposal_commitment,
+    message::Proposal,
+};
 
 pub struct UpdateLeaf<T: NodeType> {
     pub view: ViewNumber,
@@ -96,8 +99,8 @@ pub struct StateManager<T: NodeType> {
     pending_requests: HashMap<Commitment<Leaf2<T>>, Vec<Pending<T>>>,
     upgrade_lock: UpgradeLock<T>,
     tasks: JoinSet<Completed<T>>,
-    validate_duration_metric: Option<Box<dyn Histogram>>,
-    update_leaf_duration_metric: Option<Box<dyn Histogram>>,
+    validate_duration_metric: Option<Arc<dyn Histogram>>,
+    update_leaf_duration_metric: Option<Arc<dyn Histogram>>,
 }
 
 enum Pending<T: NodeType> {
@@ -142,8 +145,8 @@ impl<T: NodeType> StateManager<T> {
 
     pub fn with_metrics(
         mut self,
-        validate: Option<Box<dyn Histogram>>,
-        update_leaf: Option<Box<dyn Histogram>>,
+        validate: Option<Arc<dyn Histogram>>,
+        update_leaf: Option<Arc<dyn Histogram>>,
     ) -> Self {
         self.validate_duration_metric = validate;
         self.update_leaf_duration_metric = update_leaf;
@@ -221,7 +224,7 @@ impl<T: NodeType> StateManager<T> {
 
         let duration_metric = self.validate_duration_metric.clone();
         let handle = self.tasks.spawn(async move {
-            let validate_started = Instant::now();
+            let measurement = duration_metric.map(Measurement::start);
             let result = parent_entry
                 .state
                 .validate_and_apply_header(
@@ -233,24 +236,21 @@ impl<T: NodeType> StateManager<T> {
                     *view,
                 )
                 .await;
-            let validate_duration = validate_started.elapsed();
-            let result = result.map(|(state, delta)| StateResponse {
-                view,
-                commitment,
-                state: Arc::new(state),
-                delta: Some(Arc::new(delta)),
-            });
             match result {
-                Ok(response) => {
-                    if let Some(hist) = &duration_metric {
-                        hist.add_point(validate_duration.as_secs_f64());
-                    }
+                Ok((state, delta)) => {
+                    finish_measurement(measurement);
                     Completed::State {
-                        response,
+                        response: StateResponse {
+                            view,
+                            commitment,
+                            state: Arc::new(state),
+                            delta: Some(Arc::new(delta)),
+                        },
                         leaf: Some(request.proposal.into()),
                     }
                 },
                 Err(err) => {
+                    ignore_measurement(measurement);
                     warn!(%err, "state validation failed");
                     Completed::State {
                         response: StateResponse {
@@ -375,16 +375,17 @@ impl<T: NodeType> StateManager<T> {
                             continue;
                         }
                         if let Some(leaf) = leaf2 {
-                            let insert_started = Instant::now();
+                            let measurement = self
+                                .update_leaf_duration_metric
+                                .clone()
+                                .map(Measurement::start);
                             self.insert_state(
                                 response.view,
                                 response.state.clone(),
                                 response.delta.clone(),
                                 leaf,
                             );
-                            if let Some(hist) = &self.update_leaf_duration_metric {
-                                hist.add_point(insert_started.elapsed().as_secs_f64());
-                            }
+                            finish_measurement(measurement);
                             self.start_pending(response.commitment);
                             return Some(StateManagerOutput::State {
                                 response,

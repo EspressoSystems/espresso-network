@@ -222,12 +222,15 @@ where
             upgrade_lock.clone(),
         )
         .with_metrics(
+            coordinator_metrics.as_ref().map(|m| {
+                m.consensus
+                    .validate_and_apply_header_duration
+                    .clone()
+                    .into()
+            }),
             coordinator_metrics
                 .as_ref()
-                .map(|m| m.consensus.validate_and_apply_header_duration.clone()),
-            coordinator_metrics
-                .as_ref()
-                .map(|m| m.consensus.update_leaf_duration.clone()),
+                .map(|m| m.consensus.update_leaf_duration.clone().into()),
         );
         // Seed `from_header` stubs for restored undecided proposals so a child
         // proposal can be validated; anchor seeded last so its state wins.
@@ -290,7 +293,7 @@ where
         .with_metrics(
             coordinator_metrics
                 .as_ref()
-                .map(|m| m.consensus.vid_disperse_duration.clone()),
+                .map(|m| m.consensus.vid_disperse_duration.clone().into()),
         );
 
         let lock = upgrade_lock.clone();

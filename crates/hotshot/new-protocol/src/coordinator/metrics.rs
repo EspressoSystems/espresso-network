@@ -57,6 +57,7 @@ impl Metrics {
 pub struct Measurement {
     hist: Arc<dyn Histogram>,
     start: Instant,
+    record: bool,
 }
 
 impl Measurement {
@@ -64,14 +65,24 @@ impl Measurement {
         Self {
             hist: h,
             start: Instant::now(),
+            record: true,
         }
     }
 }
 
 impl Drop for Measurement {
     fn drop(&mut self) {
-        self.hist.add_point(self.start.elapsed().as_secs_f64());
+        if self.record {
+            self.hist.add_point(self.start.elapsed().as_secs_f64());
+        }
     }
 }
 
 pub fn finish_measurement(_: Option<Measurement>) {}
+
+/// Drop the measurement without recording it, e.g. on error paths.
+pub fn ignore_measurement(m: Option<Measurement>) {
+    if let Some(mut m) = m {
+        m.record = false;
+    }
+}
