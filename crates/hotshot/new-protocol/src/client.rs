@@ -15,10 +15,7 @@ use hotshot_types::{
 };
 use tokio::sync::{mpsc, oneshot};
 
-use crate::{
-    consensus::PreCutoverSeed, coordinator::error::CoordinatorError, message::Proposal,
-    state::UpdateLeaf,
-};
+use crate::{coordinator::error::CoordinatorError, message::Proposal, state::UpdateLeaf};
 
 #[derive(Clone)]
 pub struct ClientApi<T: NodeType> {
@@ -176,14 +173,6 @@ impl<T: NodeType> ClientApi<T> {
             .await
     }
 
-    /// Bridge legacy state into the coordinator at the cutover.
-    /// Idempotent at the consensus layer.
-    pub async fn seed_pre_cutover(&self, seed: PreCutoverSeed<T>) -> Result<(), QueryError> {
-        let (respond, rx) = oneshot::channel();
-        self.call(ClientRequest::SeedPreCutover { seed, respond }, rx)
-            .await
-    }
-
     async fn call<A>(
         &self,
         request: ClientRequest<T>,
@@ -275,10 +264,6 @@ pub(crate) enum ClientRequest<T: NodeType> {
         payload: Vec<u8>,
         recipient: T::SignatureKey,
         respond: oneshot::Sender<Result<(), QueryError>>,
-    },
-    SeedPreCutover {
-        seed: PreCutoverSeed<T>,
-        respond: oneshot::Sender<()>,
     },
     SubmitTimeoutVote {
         vote: TimeoutVote2<T>,

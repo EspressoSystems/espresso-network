@@ -276,12 +276,12 @@ async fn test_leader_proposes_after_timeout() {
     let leader_for_view_3 = test_data.views[2].leader_public_key;
     let leader_index = node_index_for_key(&leader_for_view_3);
     // Timer must be long enough for the empty-block throttle sleep
-    // (BlockBuilder sleeps 500ms when its buffer is empty), VID disperse,
+    // (BlockBuilder sleeps 1s when its buffer is empty), VID disperse,
     // and header creation to all complete before the view 3 timer fires.
     // It must also be short enough to actually fire for view 2 during
     // the test in a reasonable amount of time.
     let mut harness =
-        TestHarness::new_with_timer(leader_index, std::time::Duration::from_millis(1500)).await;
+        TestHarness::new_with_timer(leader_index, std::time::Duration::from_millis(2000)).await;
 
     // View 1: process fully to establish locked_qc
     send_proposal_and_vote1s(&mut harness, &test_data, 0, &leader_for_view_3).await;

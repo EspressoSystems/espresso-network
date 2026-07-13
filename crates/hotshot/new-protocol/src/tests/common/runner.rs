@@ -32,7 +32,7 @@ use tracing::{debug, info};
 
 use crate::{
     consensus::{ConsensusOutput, PreCutoverSeed},
-    coordinator::{Coordinator, CoordinatorOutput, error::Severity},
+    coordinator::{Coordinator, error::Severity},
     helpers::test_upgrade_lock,
     network::Cliquenet,
     tests::common::{
@@ -699,17 +699,15 @@ async fn run_node(
             }
 
             while let Some(output) = coord.coordinator_outbox_mut().pop_front() {
-                if let CoordinatorOutput::ExternalMessageReceived { sender, data } = &output {
-                    let _ = external_events_tx
-                        .broadcast_direct(Event {
-                            view_number: coord.current_view(),
-                            event: EventType::ExternalMessageReceived {
-                                sender: *sender,
-                                data: data.clone(),
-                            },
-                        })
-                        .await;
-                }
+                let _ = external_events_tx
+                    .broadcast_direct(Event {
+                        view_number: coord.current_view(),
+                        event: EventType::ExternalMessageReceived {
+                            sender: output.sender,
+                            data: output.data,
+                        },
+                    })
+                    .await;
             }
         }
     }
