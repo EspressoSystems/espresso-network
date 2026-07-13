@@ -698,13 +698,14 @@ pub fn track_decided_qc_participation<TYPES: NodeType>(
             resolve_participation_stake_table(membership, qc_epoch);
         vote.update_participation_epoch(stake_table, success_threshold, qc_epoch)
             .context(warn!("Updating vote participation"))?;
-    } else if qc_epoch == vote.current_epoch() && vote.stake_table_unresolved() {
-        if let Ok(m) = membership.stake_table_for_epoch(qc_epoch) {
-            vote.reseed_stake_table(
-                HSStakeTable::from_iter(m.stake_table()),
-                m.success_threshold(),
-            );
-        }
+    } else if qc_epoch == vote.current_epoch()
+        && vote.stake_table_unresolved()
+        && let Ok(m) = membership.stake_table_for_epoch(qc_epoch)
+    {
+        vote.reseed_stake_table(
+            HSStakeTable::from_iter(m.stake_table()),
+            m.success_threshold(),
+        );
     }
     if let Err(e) = vote.update_participation(qc.clone()) {
         tracing::warn!("Failed to update vote participation: {e}");
