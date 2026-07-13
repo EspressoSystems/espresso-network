@@ -124,6 +124,9 @@ vec1 = { workspace = true }
 versions = { workspace = true }
 vid = { workspace = true }
 
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator = "0.7"
+
 [build-dependencies]
 anyhow = { workspace = true }
 vergen = { workspace = true }
