@@ -283,7 +283,7 @@ async fn build_coordinator(
         .build();
 
     // Emit initial ViewChanged and (for the leader) RequestBlockAndHeader.
-    coordinator.start();
+    coordinator.start(None);
 
     // Process initial outputs so the timer resets before the event loop.
     while let Some(output) = coordinator.outbox_mut().pop_front() {
@@ -517,23 +517,35 @@ fn build_test_block(
         hotshot_new_protocol::leader_trace::LeaderEvent::NsDisperseEnd
     );
 
-    // Fan the shares out to the nodes, including the leader's own share via
-    // loopback (as the production BlockBuilder does). `build_test_block` already
-    // runs on the blocking pool, so fan out inline.
-    if let Err(err) = fanout::fan_out::<TestTypes>(
-        shares,
-        common,
-        commitment,
-        params.recipients,
-        view,
-        epoch,
-        disperser.network.clone(),
-        disperser.public_key,
-        disperser.private_key.clone(),
-        tracer,
-    ) {
-        warn!(%view, %err, "bench vid fanout failed");
-    }
+    // Fan the shares out on background tasks, including the leader's own share
+    // via loopback (as the production BlockBuilder does). A watcher surfaces
+    // failures and panics; the build does not wait for the fanout, so the
+    // proposal is not gated on it.
+    let recipients = params.recipients;
+    let network = disperser.network.clone();
+    let public_key = disperser.public_key;
+    let private_key = disperser.private_key.clone();
+    let fanout_handle = tokio::task::spawn_blocking(move || {
+        fanout::fan_out::<TestTypes>(
+            shares,
+            common,
+            commitment,
+            recipients,
+            view,
+            epoch,
+            network,
+            public_key,
+            private_key,
+            tracer,
+        )
+    });
+    tokio::spawn(async move {
+        match fanout_handle.await {
+            Ok(Ok(())) => {},
+            Ok(Err(err)) => error!(%view, %err, "bench vid fanout failed"),
+            Err(err) => error!(%view, %err, "bench vid fanout task panicked"),
+        }
+    });
 
     TestBlock {
         block,

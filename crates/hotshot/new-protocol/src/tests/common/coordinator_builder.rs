@@ -263,7 +263,7 @@ pub async fn build_test_coordinator(
         .build();
 
     // Emit initial ViewChanged + RequestBlockAndHeader (if leader).
-    coordinator.start();
+    coordinator.start(None);
 
     // Process the initial outputs so the timer resets and block builder
     // gets notified before the event loop starts.

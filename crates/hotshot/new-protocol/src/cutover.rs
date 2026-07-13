@@ -1,19 +1,14 @@
 //! Legacy → new-protocol cutover machinery.
 //!
-//! Three concerns live here:
+//! Two concerns live here:
 //! - [`extract_pre_cutover_seed`] walks a live legacy [`SystemContextHandle`]
 //!   and produces a [`PreCutoverSeed`].
-//! - [`CutoverGate`] latches once legacy has crossed into the new version,
-//!   extracts the seed, and dispatches it into the new coordinator.
 //! - [`forward_legacy_timeout_votes`] and [`forward_legacy_epoch_changes`]
 //!   tail the legacy event stream and bridge those events into the
 //!   coordinator's client API so the new protocol can form TC2s and
 //!   refresh its peer set at epoch boundaries.
 
-use std::{
-    collections::BTreeMap,
-    sync::atomic::{AtomicBool, Ordering},
-};
+use std::collections::BTreeMap;
 
 use async_broadcast::InactiveReceiver;
 use futures::StreamExt;
@@ -24,7 +19,6 @@ use hotshot_types::{
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
     utils::epoch_from_block_number,
 };
-use versions::NEW_PROTOCOL_VERSION;
 
 use crate::{client::ClientApi, consensus::PreCutoverSeed};
 
@@ -85,62 +79,6 @@ where
         validated_states,
         cutover_view,
     })
-}
-
-/// Latches once legacy crosses into the new protocol. The single API
-/// production and tests share: poll [`check`](Self::check) on every
-/// coordinator loop iteration; once it returns `true` the cutover has
-/// happened and subsequent calls short-circuit.
-#[derive(Debug, Default)]
-pub struct CutoverGate {
-    active: AtomicBool,
-}
-
-impl CutoverGate {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// `true` once a previous `check` succeeded. Lets callers skip the
-    /// legacy read lock when already crossed.
-    pub fn is_active(&self) -> bool {
-        self.active.load(Ordering::Relaxed)
-    }
-
-    /// Returns `true` once legacy has crossed into the new protocol.
-    /// On the first call that observes the crossing, extracts the
-    /// pre-cutover seed and dispatches it into the coordinator;
-    /// subsequent calls short-circuit.
-    pub async fn check<T, I>(
-        &self,
-        legacy: &SystemContextHandle<T, I>,
-        client_api: &ClientApi<T>,
-    ) -> bool
-    where
-        T: NodeType,
-        I: NodeImplementation<T>,
-    {
-        if self.is_active() {
-            return true;
-        }
-        let cur_view = legacy.cur_view().await;
-        let crossed =
-            legacy.hotshot.upgrade_lock.version_infallible(cur_view) >= NEW_PROTOCOL_VERSION;
-        if !crossed {
-            return false;
-        }
-
-        if let Some(seed) = extract_pre_cutover_seed(legacy).await {
-            if let Err(err) = client_api.seed_pre_cutover(seed).await {
-                tracing::warn!(%err, "seed_pre_cutover client request failed");
-            }
-        } else {
-            tracing::warn!("seed extraction returned None; coordinator will not be seeded");
-        }
-
-        self.active.store(true, Ordering::Relaxed);
-        true
-    }
 }
 
 /// Forward legacy `TimeoutVote2` events into the new-protocol timeout
