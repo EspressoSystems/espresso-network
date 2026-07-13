@@ -354,6 +354,365 @@ impl v1::FeeStateApi for TestApi {
     }
 }
 
+#[async_trait]
+impl v1::StatusApi for TestApi {
+    async fn block_height(&self) -> Result<u64> {
+        Ok(0)
+    }
+    async fn success_rate(&self) -> Result<f64> {
+        Ok(1.0)
+    }
+    async fn time_since_last_decide(&self) -> Result<u64> {
+        Ok(0)
+    }
+    async fn metrics(&self) -> Result<String> {
+        Ok(String::new())
+    }
+}
+
+#[async_trait]
+impl v1::ConfigApi for TestApi {
+    type HotShotConfig = serde_json::Value;
+    type RuntimeConfig = serde_json::Value;
+
+    async fn hotshot_config(&self) -> Result<Self::HotShotConfig> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn env(&self) -> Result<Vec<String>> {
+        Ok(Vec::new())
+    }
+    async fn runtime_config(&self) -> Result<Self::RuntimeConfig> {
+        Ok(serde_json::Value::Null)
+    }
+}
+
+#[async_trait]
+impl v1::NodeApi for TestApi {
+    type VidShare = serde_json::Value;
+    type SyncStatus = serde_json::Value;
+    type HeaderWindow = serde_json::Value;
+    type Limits = serde_json::Value;
+    type StakeTable = serde_json::Value;
+    type StakeTableCurrent = serde_json::Value;
+    type Validators = serde_json::Value;
+    type AllValidators = serde_json::Value;
+    type Participation = serde_json::Value;
+    type BlockReward = serde_json::Value;
+    type Block = serde_json::Value;
+    type Leaf = serde_json::Value;
+
+    async fn block_height(&self) -> Result<u64> {
+        Ok(0)
+    }
+    async fn count_transactions(
+        &self,
+        _from: Option<u64>,
+        _to: Option<u64>,
+        _namespace: Option<u64>,
+    ) -> Result<u64> {
+        Ok(0)
+    }
+    async fn payload_size(
+        &self,
+        _from: Option<u64>,
+        _to: Option<u64>,
+        _namespace: Option<u64>,
+    ) -> Result<u64> {
+        Ok(0)
+    }
+    async fn get_vid_share(&self, _id: v1::VidShareId) -> Result<Self::VidShare> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn sync_status(&self) -> Result<Self::SyncStatus> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn get_header_window(
+        &self,
+        _start: v1::HeaderWindowStart,
+        _end: u64,
+    ) -> Result<Self::HeaderWindow> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn limits(&self) -> Result<Self::Limits> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn stake_table(&self, _epoch: u64) -> Result<Self::StakeTable> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn stake_table_current(&self) -> Result<Self::StakeTableCurrent> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn da_stake_table(&self, _epoch: u64) -> Result<Self::StakeTable> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn da_stake_table_current(&self) -> Result<Self::StakeTableCurrent> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn get_validators(&self, _epoch: u64) -> Result<Self::Validators> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn get_all_validators(
+        &self,
+        _epoch: u64,
+        _offset: u64,
+        _limit: u64,
+    ) -> Result<Self::AllValidators> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn current_proposal_participation(&self) -> Result<Self::Participation> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn proposal_participation(&self, _epoch: u64) -> Result<Self::Participation> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn current_vote_participation(&self) -> Result<Self::Participation> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn vote_participation(&self, _epoch: u64) -> Result<Self::Participation> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn get_block_reward(&self, _epoch: Option<u64>) -> Result<Self::BlockReward> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn get_oldest_block(&self) -> Result<Option<Self::Block>> {
+        Ok(None)
+    }
+    async fn get_oldest_leaf(&self) -> Result<Option<Self::Leaf>> {
+        Ok(None)
+    }
+}
+
+#[async_trait]
+impl v1::CatchupApi for TestApi {
+    type FeeAccount = serde_json::Value;
+    type RewardAccountV1 = serde_json::Value;
+    type RewardAccountV2 = serde_json::Value;
+    type AccountQueryData = serde_json::Value;
+    type FeeMerkleTree = serde_json::Value;
+    type BlocksFrontier = serde_json::Value;
+    type ChainConfig = serde_json::Value;
+    type LeafChain = serde_json::Value;
+    type Cert2 = serde_json::Value;
+    type RewardAccountQueryDataV1 = serde_json::Value;
+    type RewardMerkleTreeV1 = serde_json::Value;
+    type RewardAccountQueryDataV2 = serde_json::Value;
+    type RewardMerkleTreeV2Data = serde_json::Value;
+    type StateCert = serde_json::Value;
+
+    async fn get_account(
+        &self,
+        _height: u64,
+        _view: u64,
+        _address: String,
+    ) -> Result<Self::AccountQueryData> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn get_accounts(
+        &self,
+        _height: u64,
+        _view: u64,
+        _accounts: Vec<Self::FeeAccount>,
+    ) -> Result<Self::FeeMerkleTree> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn get_blocks_frontier(&self, _h: u64, _v: u64) -> Result<Self::BlocksFrontier> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn get_chain_config(&self, _c: String) -> Result<Self::ChainConfig> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn get_leaf_chain(&self, _h: u64) -> Result<Self::LeafChain> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn get_cert2(&self, _h: u64) -> Result<Self::Cert2> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn get_reward_account_v1(
+        &self,
+        _height: u64,
+        _view: u64,
+        _address: String,
+    ) -> Result<Self::RewardAccountQueryDataV1> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn get_reward_accounts_v1(
+        &self,
+        _height: u64,
+        _view: u64,
+        _accounts: Vec<Self::RewardAccountV1>,
+    ) -> Result<Self::RewardMerkleTreeV1> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn get_reward_account_v2(
+        &self,
+        _height: u64,
+        _view: u64,
+        _address: String,
+    ) -> Result<Self::RewardAccountQueryDataV2> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn get_reward_merkle_tree_v2(
+        &self,
+        _height: u64,
+        _view: u64,
+    ) -> Result<Self::RewardMerkleTreeV2Data> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn get_state_cert(&self, _epoch: u64) -> Result<Self::StateCert> {
+        Ok(serde_json::Value::Null)
+    }
+}
+
+#[async_trait]
+impl v1::SubmitApi for TestApi {
+    type Transaction = serde_json::Value;
+    type TxHash = serde_json::Value;
+
+    async fn submit(&self, _tx: Self::Transaction) -> Result<Self::TxHash> {
+        Ok(serde_json::Value::Null)
+    }
+}
+
+#[async_trait]
+impl v1::StateSignatureApi for TestApi {
+    type Signature = serde_json::Value;
+
+    async fn get_state_signature(&self, _height: u64) -> Result<Self::Signature> {
+        Ok(serde_json::Value::Null)
+    }
+}
+
+#[async_trait]
+impl v1::HotShotEventsApi for TestApi {
+    type Event = serde_json::Value;
+    type StartupInfo = serde_json::Value;
+
+    async fn startup_info(&self) -> Result<Self::StartupInfo> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn events(&self) -> Result<futures::stream::BoxStream<'static, Self::Event>> {
+        Ok(Box::pin(futures::stream::empty()))
+    }
+}
+
+#[async_trait]
+impl v1::LightClientApi for TestApi {
+    type LeafProof = serde_json::Value;
+    type HeaderProof = serde_json::Value;
+    type StakeTableEvents = serde_json::Value;
+    type PayloadProof = serde_json::Value;
+    type NamespaceProof = serde_json::Value;
+
+    async fn get_leaf_proof(
+        &self,
+        _query: v1::LeafQuery,
+        _finalized: Option<u64>,
+    ) -> Result<Self::LeafProof> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn get_header_proof(
+        &self,
+        _root: u64,
+        _requested: v1::HeaderQuery,
+    ) -> Result<Self::HeaderProof> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn get_light_client_stake_table(&self, _epoch: u64) -> Result<Self::StakeTableEvents> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn get_payload_proof(&self, _height: u64) -> Result<Self::PayloadProof> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn get_payload_proof_range(
+        &self,
+        _start: u64,
+        _end: u64,
+    ) -> Result<Vec<Self::PayloadProof>> {
+        Ok(vec![])
+    }
+    async fn get_lc_namespace_proof(
+        &self,
+        _height: u64,
+        _namespace: u64,
+    ) -> Result<Self::NamespaceProof> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn get_lc_namespace_proof_range(
+        &self,
+        _start: u64,
+        _end: u64,
+        _namespace: u64,
+    ) -> Result<Vec<Self::NamespaceProof>> {
+        Ok(vec![])
+    }
+}
+
+#[async_trait]
+impl v1::ExplorerApi for TestApi {
+    type BlockDetail = serde_json::Value;
+    type BlockSummaries = serde_json::Value;
+    type TransactionDetail = serde_json::Value;
+    type TransactionSummaries = serde_json::Value;
+    type ExplorerSummary = serde_json::Value;
+    type SearchResult = serde_json::Value;
+
+    async fn get_block_detail(&self, _ident: v1::BlockIdent) -> Result<Self::BlockDetail> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn get_block_summaries(
+        &self,
+        _target: v1::BlockIdent,
+        _limit: u64,
+    ) -> Result<Self::BlockSummaries> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn get_transaction_detail(&self, _ident: v1::TxIdent) -> Result<Self::TransactionDetail> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn get_transaction_summaries(
+        &self,
+        _target: v1::TxIdent,
+        _limit: u64,
+        _filter: v1::TxSummaryFilter,
+    ) -> Result<Self::TransactionSummaries> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn get_explorer_summary(&self) -> Result<Self::ExplorerSummary> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn get_search_result(&self, _query: String) -> Result<Self::SearchResult> {
+        Ok(serde_json::Value::Null)
+    }
+}
+
+#[async_trait]
+impl v1::TokenApi for TestApi {
+    async fn total_minted_supply(&self) -> Result<String> {
+        Ok("0".to_string())
+    }
+    async fn circulating_supply(&self) -> Result<String> {
+        Ok("0".to_string())
+    }
+    async fn circulating_supply_ethereum(&self) -> Result<String> {
+        Ok("0".to_string())
+    }
+    async fn total_issued_supply(&self) -> Result<String> {
+        Ok("0".to_string())
+    }
+    async fn total_reward_distributed(&self) -> Result<String> {
+        Ok("0".to_string())
+    }
+}
+
+#[async_trait]
+impl v1::DatabaseApi for TestApi {
+    type TableSizes = serde_json::Value;
+
+    async fn get_table_sizes(&self) -> Result<Self::TableSizes> {
+        Ok(serde_json::Value::Null)
+    }
+}
+
 // Implement v2::RewardApi (simplified API - latest-only for claim/balance/proof)
 #[async_trait]
 impl v2::RewardApi for TestApi {

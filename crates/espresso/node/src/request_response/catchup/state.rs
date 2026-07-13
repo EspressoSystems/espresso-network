@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use alloy::primitives::U256;
 use anyhow::Context;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
@@ -15,19 +14,19 @@ use espresso_types::{
     },
 };
 use hotshot::traits::NodeImplementation;
-use hotshot_new_protocol::utils::verify_leaf_chain_with_cert2;
+use hotshot_new_protocol::utils::verify_new_protocol_leaf_chain;
 use hotshot_types::{
-    data::ViewNumber, message::UpgradeLock,
-    simple_certificate::LightClientStateUpdateCertificateV2, stake_table::HSStakeTable,
-    traits::network::ConnectedNetwork, utils::verify_leaf_chain,
+    data::ViewNumber, epoch_membership::EpochMembershipCoordinator, message::UpgradeLock,
+    simple_certificate::LightClientStateUpdateCertificateV2, traits::network::ConnectedNetwork,
 };
 use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
 use request_response::RequestType;
 use tokio::time::timeout;
-use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION};
+use versions::NEW_PROTOCOL_VERSION;
 
 use crate::{
     api::RewardMerkleTreeV2Data,
+    catchup::verify_legacy_leaf_chain,
     request_response::{
         RequestResponseProtocol,
         request::{Request, Response},
@@ -41,20 +40,16 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
     async fn try_fetch_leaf(
         &self,
         _retry: usize,
+        coordinator: EpochMembershipCoordinator<SeqTypes>,
         height: u64,
-        stake_table: HSStakeTable<SeqTypes>,
-        success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
         // Timeout after a few batches
         let timeout_duration = self.config.request_batch_interval * 3;
 
         // Fetch the leaf
-        timeout(
-            timeout_duration,
-            self.fetch_leaf(height, stake_table, success_threshold),
-        )
-        .await
-        .with_context(|| "timed out while fetching leaf")?
+        timeout(timeout_duration, self.fetch_leaf(coordinator, height))
+            .await
+            .with_context(|| "timed out while fetching leaf")?
     }
 
     async fn try_fetch_accounts(
@@ -241,9 +236,8 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
 
     async fn fetch_leaf(
         &self,
+        coordinator: EpochMembershipCoordinator<SeqTypes>,
         height: u64,
-        stake_table: HSStakeTable<SeqTypes>,
-        success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
         tracing::info!("Fetching leaf for height: {height}");
 
@@ -298,28 +292,11 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
                 .await
                 .with_context(|| format!("failed to request cert2 at height {cert2_height}"))?;
 
-            verify_leaf_chain_with_cert2(
-                leaf_chain,
-                &stake_table,
-                success_threshold,
-                height,
-                &upgrade_lock,
-                cert2,
-            )
-            .await
-            .with_context(|| "leaf chain verification with cert2 failed")?
+            verify_new_protocol_leaf_chain(leaf_chain, &coordinator, height, &upgrade_lock, cert2)
+                .await
+                .with_context(|| "leaf chain verification with cert2 failed")?
         } else {
-            let upgrade_lock =
-                UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(EPOCH_VERSION));
-            verify_leaf_chain(
-                leaf_chain,
-                &stake_table,
-                success_threshold,
-                height,
-                &upgrade_lock,
-            )
-            .await
-            .with_context(|| "leaf chain verification failed")?
+            verify_legacy_leaf_chain(leaf_chain, &coordinator, height).await?
         };
 
         tracing::info!("Fetched leaf for height: {height}");

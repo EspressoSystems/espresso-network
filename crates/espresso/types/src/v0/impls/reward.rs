@@ -16,7 +16,6 @@ use hotshot_contract_adapter::reward::RewardProofSiblings;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
-    stake_table::HSStakeTable,
     traits::election::{Membership, MembershipSnapshot},
     utils::epoch_from_block_number,
 };
@@ -1196,17 +1195,10 @@ impl EpochRewardsCalculator {
         } else {
             // Fetch the leaf at the last block of the epoch so we can verify
             // the header via QC against the stake table
-            let snapshot = coordinator
-                .membership()
-                .snapshot(epoch)
-                .context(format!("no committee for epoch={epoch}"))?;
-            let stake_table = HSStakeTable::from_iter(snapshot.stake_table());
-            let success_threshold = snapshot.success_threshold();
-
             let leaf = instance_state
                 .state_catchup
                 .as_ref()
-                .fetch_leaf(epoch_last_block_height, stake_table, success_threshold)
+                .fetch_leaf(coordinator.clone(), epoch_last_block_height)
                 .await
                 .with_context(|| {
                     format!(

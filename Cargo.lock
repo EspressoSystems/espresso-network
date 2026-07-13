@@ -4699,6 +4699,7 @@ dependencies = [
  "tower 0.4.13",
  "tracing",
  "tracing-subscriber 0.3.23",
+ "vbs",
 ]
 
 [[package]]
@@ -5046,6 +5047,7 @@ dependencies = [
  "parking_lot",
  "paste",
  "pretty_assertions",
+ "proptest",
  "rand 0.8.6",
  "rand_chacha 0.3.1",
  "rstest",

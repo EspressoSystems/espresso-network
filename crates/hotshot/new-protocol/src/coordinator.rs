@@ -26,7 +26,7 @@ use hotshot_types::{
     },
     utils::{epoch_from_block_number, is_epoch_root},
     vid::avidm_gf2::{AvidmGf2Param, init_avidm_gf2_param},
-    vote::HasViewNumber,
+    vote::{HasViewNumber, Vote},
 };
 use metrics::Measurement;
 use tokio::{select, sync::oneshot};
@@ -35,20 +35,19 @@ use tracing::{debug, error, info, warn};
 use crate::{
     block::{BlockAndHeaderRequest, BlockBuilder, BlockBuilderConfig},
     client::{ClientApi, ClientRequest, CoordinatorClient, QueryError},
-    consensus::{Consensus, ConsensusInput, ConsensusOutput},
+    consensus::{Consensus, ConsensusInput, ConsensusOutput, PreCutoverSeed},
     coordinator::{
         error::{CoordinatorError, ErrorSource, Severity},
         metrics::finish_measurement,
         timer::Timer,
     },
     epoch::{EpochManager, EpochRootResult},
-    epoch_root_vote_collector::EpochRootVoteCollector,
     helpers::proposal_commitment,
     logging::KeyPrefix,
     message::{
         self, BlockMessage, Certificate1, Certificate2, ConsensusMessage, Message, MessageType,
-        Proposal, ProposalFetchMessage, ProposalMessage, TimeoutOneHonest, TransactionMessage,
-        Unchecked, Validated, Vote2,
+        OpaqueMessage, Proposal, ProposalFetchMessage, ProposalMessage, TimeoutOneHonest,
+        TransactionMessage, Unchecked, Validated, Vote2,
     },
     network::Cliquenet,
     outbox::Outbox,
@@ -56,7 +55,7 @@ use crate::{
     state::{HeaderRequest, StateEntry, StateManager, StateManagerOutput},
     storage::{NewProtocolStorage, Storage},
     vid::{VidDisperseRequest, VidDisperser, VidFragmentAccumulator, VidReconstructor},
-    vote::VoteCollector,
+    vote::{EpochRootTally, SimpleTally, VoteCollector},
 };
 
 /// Views to retain in the VID reconstructor behind the decided view
@@ -78,15 +77,6 @@ pub(crate) const VID_RECONSTRUCT_GC_MARGIN: u64 = 5;
 /// storage writes for recent views aren't aborted before they persist.
 const STORAGE_GC_MARGIN: u64 = 5;
 
-#[allow(clippy::large_enum_variant)]
-pub enum CoordinatorOutput<T: NodeType> {
-    Consensus(ConsensusOutput<T>),
-    ExternalMessageReceived {
-        sender: T::SignatureKey,
-        data: Vec<u8>,
-    },
-}
-
 #[derive(Builder)]
 pub struct Coordinator<T: NodeType, S> {
     membership_coordinator: EpochMembershipCoordinator<T>,
@@ -99,11 +89,12 @@ pub struct Coordinator<T: NodeType, S> {
     vid_reconstructor: VidReconstructor<T>,
     #[builder(default)]
     vid_fragment_accumulator: VidFragmentAccumulator<T>,
-    vote1_collector: VoteCollector<T, QuorumVote2<T>, QuorumCertificate2<T>>,
-    vote2_collector: VoteCollector<T, Vote2<T>, Certificate2<T>>,
-    timeout_collector: VoteCollector<T, TimeoutVote2<T>, TimeoutCertificate2<T>>,
-    timeout_one_honest_collector: VoteCollector<T, TimeoutVote2<T>, TimeoutOneHonest<T>>,
-    epoch_root_collector: EpochRootVoteCollector<T>,
+    vote1_collector: VoteCollector<T, SimpleTally<T, QuorumVote2<T>, QuorumCertificate2<T>>>,
+    vote2_collector: VoteCollector<T, SimpleTally<T, Vote2<T>, Certificate2<T>>>,
+    timeout_collector: VoteCollector<T, SimpleTally<T, TimeoutVote2<T>, TimeoutCertificate2<T>>>,
+    timeout_one_honest_collector:
+        VoteCollector<T, SimpleTally<T, TimeoutVote2<T>, TimeoutOneHonest<T>>>,
+    epoch_root_collector: VoteCollector<T, EpochRootTally<T>>,
     epoch_manager: EpochManager<T>,
     block_builder: BlockBuilder<T>,
     proposal_validator: ProposalValidator<T>,
@@ -112,7 +103,7 @@ pub struct Coordinator<T: NodeType, S> {
     #[builder(default)]
     outbox: Outbox<ConsensusOutput<T>>,
     #[builder(default)]
-    coordinator_outbox: Outbox<CoordinatorOutput<T>>,
+    coordinator_outbox: Outbox<OpaqueMessage<T::SignatureKey>>,
     public_key: T::SignatureKey,
     #[builder(default = KeyPrefix::from(&public_key))]
     node_id: KeyPrefix,
@@ -272,10 +263,7 @@ where
                 membership_coordinator.clone(),
                 lock.clone(),
             ))
-            .epoch_root_collector(EpochRootVoteCollector::new(
-                membership_coordinator.clone(),
-                lock,
-            ))
+            .epoch_root_collector(VoteCollector::new(membership_coordinator.clone(), lock))
             .epoch_manager(EpochManager::new(
                 initializer.epoch_height,
                 membership_coordinator.clone(),
@@ -310,7 +298,19 @@ where
 
     /// Emit `ViewChanged(current_view + 1)` and, if leader, a
     /// `RequestBlockAndHeader`.
-    pub fn start(&mut self) {
+    ///
+    /// A pre-cutover `seed` is applied first, so the coordinator starts
+    /// from the bridged legacy state instead of genesis. When the seed
+    /// carries no QC for the last legacy view, the coordinator parks on
+    /// that view instead of proposing; a bridged high QC or a timeout
+    /// advances it.
+    pub fn start(&mut self, seed: Option<PreCutoverSeed<T>>) {
+        if let Some(seed) = seed
+            && !self.apply_cutover_seed(seed)
+        {
+            return;
+        }
+
         let cur_view = self.consensus.current_view();
         let next_view = cur_view + 1;
         let epoch = self
@@ -379,7 +379,7 @@ where
                 message = self.network.receive() => match message {
                     Ok(m) => {
                         finish_measurement(next_input);
-                        if let Some(input) = self.on_network_message(m).await {
+                        if let Some(input) = self.on_network_message(m) {
                             return Ok(input)
                         }
                     }
@@ -416,7 +416,7 @@ where
                 }
                 Some(request) = self.client.next_request() => {
                     finish_measurement(next_input);
-                    if let Err(err) = self.on_client_request(request).await {
+                    if let Err(err) = self.on_client_request(request) {
                         error!(%err, "error while handling client request");
                     }
                 }
@@ -596,6 +596,7 @@ where
                         self.vote2_collector.retry_pending_votes();
                         self.timeout_collector.retry_pending_votes();
                         self.timeout_one_honest_collector.retry_pending_votes();
+                        self.epoch_root_collector.retry_pending_votes();
                         return Ok(ConsensusInput::DrbResult(epoch, drb_result))
                     }
                     Err(failure) => {
@@ -803,6 +804,13 @@ where
                 );
                 self.broadcast(ConsensusMessage::Vote1(vote1), "broadcast vote1")?
             },
+            ConsensusOutput::BroadcastVidShare(share) => {
+                debug!(%node, view = %share.view_number(), "send vid share");
+                self.broadcast(
+                    ConsensusMessage::VidShareBroadcast(share),
+                    "broadcast vid share",
+                )?
+            },
             ConsensusOutput::SendVote2(vote2) => {
                 debug!(%node, view = %vote2.view_number(), "send vote2");
                 self.broadcast(ConsensusMessage::Vote2(vote2), "broadcast vote2")?
@@ -913,11 +921,11 @@ where
         &mut self.outbox
     }
 
-    pub fn coordinator_outbox(&self) -> &Outbox<CoordinatorOutput<T>> {
+    pub fn coordinator_outbox(&self) -> &Outbox<OpaqueMessage<T::SignatureKey>> {
         &self.coordinator_outbox
     }
 
-    pub fn coordinator_outbox_mut(&mut self) -> &mut Outbox<CoordinatorOutput<T>> {
+    pub fn coordinator_outbox_mut(&mut self) -> &mut Outbox<OpaqueMessage<T::SignatureKey>> {
         &mut self.coordinator_outbox
     }
 
@@ -933,7 +941,7 @@ where
         self.client.handle()
     }
 
-    pub(crate) async fn on_network_message(
+    pub(crate) fn on_network_message(
         &mut self,
         message: Message<T, Unchecked>,
     ) -> Option<ConsensusInput<T>> {
@@ -1005,6 +1013,10 @@ where
                         warn!(%node, %sender, %view, "vote1 is too far ahead");
                         return None;
                     }
+                    if vote1.vote.signing_key() != message.sender {
+                        warn!(%node, %sender, %view, "vote1 signing key != sender");
+                        return None;
+                    }
                     let bn = vote1.vote.data.block_number.unwrap_or(0);
                     let epoch_height = *self.consensus.epoch_height;
                     let is_epoch_root_vote = is_epoch_root(bn, epoch_height);
@@ -1018,18 +1030,34 @@ where
                         // An epoch-root Vote1 MUST carry a state_vote.
                         // Reject otherwise.
                         vote1.state_vote.as_ref()?;
-                        self.epoch_root_collector.accumulate(vote1.clone()).await;
+                        self.epoch_root_collector.accumulate_vote(vote1);
                     } else {
-                        self.vote1_collector.accumulate_vote(vote1.vote.clone());
+                        self.vote1_collector.accumulate_vote(vote1.vote);
                     }
+                    None
+                },
+                ConsensusMessage::VidShareBroadcast(share) => {
+                    let view = share.view_number();
+                    if self.is_too_far_ahead(view) {
+                        warn!(%node, %sender, %view, "vid share broadcast is too far ahead");
+                        return None;
+                    }
+                    debug!(%node, %sender, %view, "recv vid share broadcast");
+                    // The share belongs to the sender (`recipient_key == sender`,
+                    // enforced by `handle_vid_share`); it is verified lazily
+                    // against the pinned commitment at reconstruction time.
                     self.vid_reconstructor
-                        .handle_vid_share(message.sender.clone(), vote1.vid_share);
+                        .handle_vid_share(message.sender.clone(), share);
                     None
                 },
                 ConsensusMessage::Vote2(vote2) => {
                     let view = vote2.view_number();
                     if self.is_too_far_ahead(view) {
                         warn!(%node, %sender, %view, "vote2 is too far ahead");
+                        return None;
+                    }
+                    if vote2.signing_key() != message.sender {
+                        warn!(%node, %sender, %view, "vote2 signing key != sender");
                         return None;
                     }
                     debug!(%node, %sender, %view, "recv vote2");
@@ -1058,6 +1086,10 @@ where
                     let view = timeout_msg.vote.view_number();
                     if self.is_too_far_ahead(view) {
                         warn!(%node, %sender, %view, "timeout vote is too far ahead");
+                        return None;
+                    }
+                    if timeout_msg.vote.signing_key() != message.sender {
+                        warn!(%node, %sender, %view, "timeout vote signing key != sender");
                         return None;
                     }
                     let current_view = self.consensus.current_view();
@@ -1182,11 +1214,10 @@ where
             },
             MessageType::External(data) => {
                 debug!(%node, %sender, bytes = data.len(), "recv external message");
-                self.coordinator_outbox
-                    .push_back(CoordinatorOutput::ExternalMessageReceived {
-                        sender: message.sender,
-                        data,
-                    });
+                self.coordinator_outbox.push_back(OpaqueMessage {
+                    sender: message.sender,
+                    data,
+                });
                 None
             },
         }
@@ -1333,10 +1364,7 @@ where
         membership.leader(view).ok()
     }
 
-    async fn on_client_request(
-        &mut self,
-        request: ClientRequest<T>,
-    ) -> Result<(), CoordinatorError> {
+    fn on_client_request(&mut self, request: ClientRequest<T>) -> Result<(), CoordinatorError> {
         let _m = self
             .metrics
             .as_ref()
@@ -1415,91 +1443,6 @@ where
                     });
                 let _ = respond.send(result);
             },
-            ClientRequest::SeedPreCutover { seed, respond } => {
-                let current_view = self.consensus.current_view();
-                if seed.cutover_view > ViewNumber::genesis() && current_view >= seed.cutover_view {
-                    info!(
-                        node = %self.node_id,
-                        %current_view,
-                        cutover_view = *seed.cutover_view,
-                        "ignoring pre-cutover seed; already past the cutover",
-                    );
-                    let _ = respond.send(());
-                    return Ok(());
-                }
-                info!(
-                    node = %self.node_id,
-                    undecided = seed.undecided.len(),
-                    anchor_view = *seed.decided_anchor.view_number(),
-                    high_qc_view = seed.high_qc.as_ref().map(|qc| *qc.view_number()),
-                    cutover_view = *seed.cutover_view,
-                    states = seed.validated_states.len(),
-                    "applying legacy -> new-protocol seed",
-                );
-
-                // State manager is owned by the coordinator, so the
-                // validated-state map must be applied here before the
-                // seed is consumed by consensus.
-                let anchor_view = seed.decided_anchor.view_number();
-                if let Some(state) = seed.validated_states.get(&anchor_view).cloned() {
-                    self.state_manager
-                        .seed_state(anchor_view, state, seed.decided_anchor.clone());
-                }
-                for leaf in &seed.undecided {
-                    let view = leaf.view_number();
-                    if let Some(state) = seed.validated_states.get(&view).cloned() {
-                        self.state_manager.seed_state(view, state, leaf.clone());
-                    }
-                }
-
-                let highest_seeded_leaf = seed.undecided.last().unwrap_or(&seed.decided_anchor);
-                let cutover_epoch = EpochNumber::new(epoch_from_block_number(
-                    highest_seeded_leaf.block_header().block_number(),
-                    *self.consensus.epoch_height,
-                ));
-                let cutover_view = seed.cutover_view;
-
-                self.consensus.apply_pre_cutover_seed(seed);
-
-                // Refresh peers for the cutover epoch before kicking the
-                // leader — the proposal-driven site can't fire yet.
-                if let Err(err) = self
-                    .network
-                    .apply_epoch(cutover_epoch, &self.membership_coordinator)
-                {
-                    error!(
-                        %cutover_epoch,
-                        %err,
-                        "network on_epoch_change failed during seed_pre_cutover",
-                    );
-                }
-
-                let cur_view = self.consensus.current_view();
-                if self.consensus.timeout_cert_at(cur_view).is_some() {
-                    self.resume_after_cutover_tc();
-                } else if cur_view + 1 == cutover_view
-                    && self.consensus.cert1_at(cur_view).is_some()
-                    && self.consensus.proposal_at(cur_view).is_some()
-                {
-                    self.start();
-                } else {
-                    let epoch = self
-                        .consensus
-                        .current_epoch()
-                        .unwrap_or(EpochNumber::genesis());
-                    self.outbox
-                        .push_back(ConsensusOutput::ViewChanged(cur_view, epoch));
-                }
-                while let Some(output) = self.outbox.pop_front() {
-                    if let Err(err) = self.process_consensus_output(output) {
-                        warn!(
-                            %err,
-                            "error processing post-seed bootstrap output"
-                        );
-                    }
-                }
-                let _ = respond.send(());
-            },
             ClientRequest::SubmitTimeoutVote { vote, respond } => {
                 let view = vote.view_number();
                 let current_view = self.consensus.current_view();
@@ -1553,7 +1496,7 @@ where
                         %cutover_view,
                         "bridged late legacy high QC; proposing cutover view on it (no timeout)"
                     );
-                    self.start();
+                    self.start(None);
                     while let Some(output) = self.outbox.pop_front() {
                         if let Err(err) = self.process_consensus_output(output) {
                             warn!(
@@ -1577,40 +1520,6 @@ where
         }
 
         Ok(())
-    }
-
-    /// Kick the leader after the seed lands when a forwarded TC2 had
-    /// already advanced `current_view`. No-op unless leader and all
-    /// prerequisites are present.
-    fn resume_after_cutover_tc(&mut self) {
-        let cur_view = self.consensus.current_view();
-        if self.consensus.timeout_cert_at(cur_view).is_none() {
-            return;
-        }
-        let epoch = self
-            .consensus
-            .current_epoch()
-            .unwrap_or(EpochNumber::genesis());
-        let Some(leader) = self.leader(cur_view, epoch) else {
-            return;
-        };
-        if leader != self.public_key {
-            return;
-        }
-        let Some(locked_view) = self.consensus.locked_view() else {
-            return;
-        };
-        let Some(parent_proposal) = self.consensus.proposal_at(locked_view).cloned() else {
-            return;
-        };
-        self.outbox
-            .push_back(ConsensusOutput::RequestBlockAndHeader(
-                BlockAndHeaderRequest {
-                    view: cur_view,
-                    epoch,
-                    parent_proposal,
-                },
-            ));
     }
 
     /// Broadcast a signed proposal fetch request for `view` to all peers.
@@ -1681,7 +1590,7 @@ where
             },
             GcScope::Decided(view) => {
                 self.epoch_manager.gc(epoch);
-                self.epoch_root_collector.gc(view, epoch);
+                self.epoch_root_collector.gc(view);
                 self.pending_proposal_fetches.gc(view);
                 self.requested_missing_proposals
                     .retain(|key| key.view > view);
@@ -1702,6 +1611,86 @@ where
             },
         }
         Ok(())
+    }
+
+    /// Bridge legacy state into the coordinator before it starts.
+    ///
+    /// Returns `false` when the coordinator must park on the last seeded
+    /// view because the cutover view cannot be proposed off it yet. A
+    /// stale seed (the coordinator has already restarted past the
+    /// cutover) is ignored and the normal start path proceeds.
+    fn apply_cutover_seed(&mut self, seed: PreCutoverSeed<T>) -> bool {
+        let current_view = self.consensus.current_view();
+        if seed.cutover_view > ViewNumber::genesis() && current_view >= seed.cutover_view {
+            info!(
+                node = %self.node_id,
+                %current_view,
+                cutover_view = *seed.cutover_view,
+                "ignoring pre-cutover seed; already past the cutover",
+            );
+            return true;
+        }
+        info!(
+            node = %self.node_id,
+            undecided = seed.undecided.len(),
+            anchor_view = *seed.decided_anchor.view_number(),
+            high_qc_view = seed.high_qc.as_ref().map(|qc| *qc.view_number()),
+            cutover_view = *seed.cutover_view,
+            states = seed.validated_states.len(),
+            "applying legacy -> new-protocol seed",
+        );
+
+        // State manager is owned by the coordinator, so the
+        // validated-state map must be applied here before the
+        // seed is consumed by consensus.
+        let anchor_view = seed.decided_anchor.view_number();
+        if let Some(state) = seed.validated_states.get(&anchor_view).cloned() {
+            self.state_manager
+                .seed_state(anchor_view, state, seed.decided_anchor.clone());
+        }
+        for leaf in &seed.undecided {
+            let view = leaf.view_number();
+            if let Some(state) = seed.validated_states.get(&view).cloned() {
+                self.state_manager.seed_state(view, state, leaf.clone());
+            }
+        }
+
+        let highest_seeded_leaf = seed.undecided.last().unwrap_or(&seed.decided_anchor);
+        let cutover_epoch = EpochNumber::new(epoch_from_block_number(
+            highest_seeded_leaf.block_header().block_number(),
+            *self.consensus.epoch_height,
+        ));
+        let cutover_view = seed.cutover_view;
+
+        self.consensus.apply_pre_cutover_seed(seed);
+
+        // Refresh peers for the cutover epoch before kicking the
+        // leader — the proposal-driven site can't fire yet.
+        if let Err(err) = self
+            .network
+            .apply_epoch(cutover_epoch, &self.membership_coordinator)
+        {
+            error!(
+                %cutover_epoch,
+                %err,
+                "network on_epoch_change failed while applying the cutover seed",
+            );
+        }
+
+        let cur_view = self.consensus.current_view();
+        if cur_view + 1 == cutover_view
+            && self.consensus.cert1_at(cur_view).is_some()
+            && self.consensus.proposal_at(cur_view).is_some()
+        {
+            return true;
+        }
+        let epoch = self
+            .consensus
+            .current_epoch()
+            .unwrap_or(EpochNumber::genesis());
+        self.outbox
+            .push_back(ConsensusOutput::ViewChanged(cur_view, epoch));
+        false
     }
 
     /// We ignore votes more that 30 views ahead of our current view.

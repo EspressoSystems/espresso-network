@@ -14,7 +14,6 @@ use hotshot_new_protocol::{
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     coordinator::{Coordinator, timer::Timer},
     epoch::EpochManager,
-    epoch_root_vote_collector::EpochRootVoteCollector,
     helpers::proposal_commitment,
     network::Cliquenet,
     outbox::Outbox,
@@ -137,8 +136,7 @@ async fn build_coordinator(
     let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let timeout_one_honest_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
-    let epoch_root_collector =
-        EpochRootVoteCollector::new(membership.clone(), upgrade_lock.clone());
+    let epoch_root_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
 
     let epoch_manager = EpochManager::new(epoch_height, membership.clone());
 
@@ -221,7 +219,7 @@ async fn build_coordinator(
         .build();
 
     // Emit initial ViewChanged and (for the leader) RequestBlockAndHeader.
-    coordinator.start();
+    coordinator.start(None);
 
     // Process initial outputs so the timer resets before the event loop.
     while let Some(output) = coordinator.outbox_mut().pop_front() {

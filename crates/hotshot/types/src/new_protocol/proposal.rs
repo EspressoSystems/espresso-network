@@ -104,6 +104,6 @@ impl<T: NodeType> From<Proposal<T>> for QuorumProposalWrapper<T> {
 
 impl<T: NodeType> From<Proposal<T>> for Leaf2<T> {
     fn from(p: Proposal<T>) -> Self {
-        Self::from_quorum_proposal(&QuorumProposalWrapper::from(p))
+        QuorumProposalWrapper::from(p).into()
     }
 }

@@ -47,7 +47,7 @@ use tokio::{
     sync::{mpsc::channel, watch},
     task::JoinHandle,
 };
-use tracing::{Instrument, Level};
+use tracing::{Instrument, Level, info};
 use url::Url;
 use versions::NEW_PROTOCOL_VERSION;
 
@@ -150,10 +150,7 @@ where
             .load_consensus_state(instance_state.clone(), upgrade)
             .await?;
 
-        tracing::warn!(
-            "Starting up sequencer context with initializer:\n\n{:?}",
-            initializer
-        );
+        info!(target: "announce", ?initializer, "starting up sequencer context with initializer");
 
         let stake_table = config.hotshot_stake_table();
         let stake_table_commit = stake_table.commitment(stake_table_capacity)?;
@@ -240,13 +237,18 @@ where
 
         let legacy_event_rx = handle.event_stream_known_impl().deactivate();
         let hotshot_handle = Arc::new(RwLock::new(handle));
-        let consensus_handle = Arc::new(ConsensusHandle::new(
-            hotshot_handle.clone(),
-            coordinator,
-            epoch_height,
-            legacy_event_rx,
-            EXTERNAL_EVENT_CHANNEL_SIZE,
-        ));
+
+        let consensus_handle = {
+            let handle = ConsensusHandle::new(
+                hotshot_handle.clone(),
+                coordinator,
+                epoch_height.into(),
+                legacy_event_rx,
+                EXTERNAL_EVENT_CHANNEL_SIZE,
+            )
+            .await;
+            Arc::new(handle)
+        };
 
         let mut state_signer = StateSigner::new(
             validator_config.state_private_key.clone(),
@@ -632,8 +634,7 @@ async fn handle_events<N, P, C>(
                 {
                     tracing::warn!(%err, "Failed to handle legacy external message");
                 }
-                // Check if we're ready to start the new protocol
-                consensus_handle.cutover_active().await;
+                consensus_handle.activate().await;
             },
             CoordinatorEvent::ExternalMessageReceived { data, .. } => {
                 if let Err(err) = external_event_handler.handle_event(data).await {

@@ -57,6 +57,9 @@ async fn test_combined_network_cdn_crash() {
         },
         overall_safety_properties: OverallSafetyPropertiesDescription {
             num_successful_views: 35,
+            // after the scripted CDN crash a few views can time out at arbitrary points
+            // during libp2p fallback
+            max_unexpected_view_failures: 5,
             ..Default::default()
         },
         // allow more time to pass in CI
@@ -151,6 +154,9 @@ async fn test_combined_network_half_dc() {
         },
         overall_safety_properties: OverallSafetyPropertiesDescription {
             num_successful_views: 35,
+            // libp2p fallback after the CDN drop occasionally stalls a few views
+            // mid-run (observed gaps like [30,31,32]); budget them.
+            max_unexpected_view_failures: 5,
             ..Default::default()
         },
         // allow more time to pass in CI

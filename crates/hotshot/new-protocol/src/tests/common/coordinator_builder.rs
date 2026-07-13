@@ -25,7 +25,6 @@ use crate::{
     consensus::{Consensus, PreCutoverSeed},
     coordinator::{Coordinator, timer::Timer},
     epoch::EpochManager,
-    epoch_root_vote_collector::EpochRootVoteCollector,
     helpers::test_upgrade_lock,
     message::{Certificate1, Proposal},
     network::Cliquenet,
@@ -59,8 +58,7 @@ pub async fn build_test_coordinator(
     let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let timeout_one_honest_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
-    let epoch_root_collector =
-        EpochRootVoteCollector::new(membership.clone(), upgrade_lock.clone());
+    let epoch_root_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
 
     let genesis_state = TestValidatedState::default();
     let genesis_leaf =
@@ -269,7 +267,7 @@ pub async fn build_test_coordinator(
         .build();
 
     // Emit initial ViewChanged + RequestBlockAndHeader (if leader).
-    coordinator.start();
+    coordinator.start(None);
 
     // Process the initial outputs so the timer resets and block builder
     // gets notified before the event loop starts.

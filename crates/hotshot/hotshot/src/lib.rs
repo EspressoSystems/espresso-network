@@ -78,7 +78,7 @@ use hotshot_utils::warn;
 /// Reexport rand crate
 pub use rand;
 use tokio::{spawn, time::sleep};
-use tracing::{Instrument, debug, error_span, instrument, trace};
+use tracing::{Instrument, debug, error_span, info, instrument, trace};
 
 // -- Rexports
 // External
@@ -321,7 +321,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
         let validated_state = initializer.anchor_state;
 
         load_start_epoch_info(
-            membership_coordinator.membership(),
+            &membership_coordinator,
             &initializer.start_epoch_info,
             config.epoch_height,
             config.epoch_start_block,
@@ -424,7 +424,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
             }
 
             if let Ok(drb_result) = storage.load_drb_result(epoch + 1).await {
-                tracing::error!("Writing DRB result for epoch {}", epoch + 1);
+                info!(target: "announce::drb", epoch = %(epoch + 1), "writing drb result for epoch");
                 if let Ok(mem) = membership_coordinator.stake_table_for_epoch(Some(epoch + 1)) {
                     mem.add_drb_result(drb_result);
                 }
@@ -1288,11 +1288,12 @@ impl<TYPES: NodeType> HotShotInitializer<TYPES> {
 }
 
 async fn load_start_epoch_info<TYPES: NodeType>(
-    membership: &TYPES::Membership,
+    coordinator: &EpochMembershipCoordinator<TYPES>,
     start_epoch_info: &Vec<InitializerEpochInfo<TYPES>>,
     epoch_height: u64,
     epoch_start_block: u64,
 ) {
+    let membership = coordinator.membership();
     let first_epoch_number =
         EpochNumber::new(epoch_from_block_number(epoch_start_block, epoch_height));
 
@@ -1305,7 +1306,7 @@ async fn load_start_epoch_info<TYPES: NodeType>(
         if let Some(block_header) = &epoch_info.block_header {
             tracing::warn!("Calling add_epoch_root for epoch {}", epoch_info.epoch);
 
-            membership
+            coordinator
                 .add_epoch_root(block_header.clone())
                 .await
                 .unwrap_or_else(|err| {

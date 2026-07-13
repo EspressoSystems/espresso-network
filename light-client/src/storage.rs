@@ -28,6 +28,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{QueryBuilder, SqlitePool, query, query_as, sqlite::SqlitePoolOptions};
 use tempfile::{Builder, TempDir};
+use tokio::runtime::Handle;
 use vbs::version::Version;
 
 /// Different ways to ask the database for a leaf.
@@ -82,23 +83,11 @@ impl Recency {
     fn drain(&self) -> Vec<(i64, i64)> {
         self.dirty.lock().unwrap().drain().collect()
     }
-}
 
-impl Drop for Recency {
-    /// Flush pending read-path touches to the DB on graceful shutdown.
-    ///
-    /// Touches are otherwise only persisted by the next `insert_leaf`; without this, GC after a
-    /// restart would rank recently-read leaves by a stale `last_used` and could evict them.
-    /// Best-effort: a failure only degrades GC ranking, it never corrupts data. The flush is a
-    /// short, file-local write driven on the current thread; the SQLite work runs on sqlx's own
-    /// worker thread, so it does not deadlock a runtime worker.
-    fn drop(&mut self) {
-        let pending: Vec<(i64, i64)> = self.dirty.get_mut().unwrap().drain().collect();
-        if pending.is_empty() {
-            return;
-        }
-        let pool = self.pool.clone();
-        let flush = async move {
+    /// Persist drained touches to `last_used`. Best-effort: a failure only degrades GC ranking,
+    /// it never corrupts data.
+    async fn flush(pool: SqlitePool, pending: Vec<(i64, i64)>) {
+        let res: sqlx::Result<()> = async {
             let mut tx = pool.begin().await?;
             for (h, tick) in &pending {
                 query("UPDATE leaf SET last_used = $1 WHERE height = $2")
@@ -108,9 +97,35 @@ impl Drop for Recency {
                     .await?;
             }
             tx.commit().await
-        };
-        if let Err(err) = futures::executor::block_on(flush) {
-            tracing::warn!(%err, "failed to flush LRU recency on drop");
+        }
+        .await;
+        if let Err(err) = res {
+            tracing::warn!(%err, "failed to flush LRU recency");
+        }
+    }
+}
+
+impl Drop for Recency {
+    /// Flush pending read-path touches to the DB on shutdown, best-effort.
+    ///
+    /// Touches are otherwise only persisted by the next `insert_leaf`; without this, GC after a
+    /// restart would rank recently-read leaves by a stale `last_used` and could evict them.
+    /// Inside a tokio runtime the flush is spawned, not driven synchronously: blocking the
+    /// current thread on the pool's acquire path deadlocks a current-thread runtime, because
+    /// acquire depends on tokio timers and tasks that cannot run while the thread is blocked.
+    /// A spawned flush may be cancelled by runtime shutdown, losing the pending touches, which
+    /// only degrades GC ranking. Outside a runtime the flush is driven to completion here.
+    fn drop(&mut self) {
+        let pending = self.drain();
+        if pending.is_empty() {
+            return;
+        }
+        let flush = Self::flush(self.pool.clone(), pending);
+        match Handle::try_current() {
+            Ok(handle) => {
+                handle.spawn(flush);
+            },
+            Err(_) => futures::executor::block_on(flush),
         }
     }
 }
@@ -1127,11 +1142,13 @@ mod test {
         }
     }
 
-    // Dropping the last clone (graceful shutdown) must persist read-path touches
-    // when no insert follows the final reads, so GC after restart honours them.
+    // The shutdown flush must persist read-path touches when no insert follows the
+    // final reads, so GC after restart honours them. `Drop` spawns the flush as a
+    // detached task inside a runtime, so the test awaits the same flush directly to
+    // stay deterministic; the subsequent drop is then a no-op.
     #[tokio::test]
     #[test_log::test]
-    async fn test_recency_flushed_on_drop_without_insert() {
+    async fn test_recency_flushed_on_shutdown_without_insert() {
         let dir = tempdir().unwrap();
         let lc_path = dir.path().join("lc.db");
 
@@ -1151,7 +1168,8 @@ mod test {
             // Touch leaf 0 via a read; recorded only in memory.
             db.leaf_upper_bound(LeafId::Number(0)).await.unwrap();
 
-            // No insert follows. Dropping db at the end of this scope must flush the touch.
+            // No insert follows; run the shutdown flush explicitly and await it.
+            Recency::flush(db.pool.clone(), db.recency.drain()).await;
         }
 
         // Reopen and insert leaf 2; GC evicts the lowest last_used. With the touch

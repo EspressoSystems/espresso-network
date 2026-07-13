@@ -2210,6 +2210,40 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
     }
 }
 
+impl<TYPES: NodeType> From<QuorumProposalWrapper<TYPES>> for Leaf2<TYPES> {
+    fn from(value: QuorumProposalWrapper<TYPES>) -> Self {
+        let QuorumProposalWrapper {
+            proposal:
+                QuorumProposal2 {
+                    view_number,
+                    epoch,
+                    justify_qc,
+                    next_epoch_justify_qc,
+                    block_header,
+                    upgrade_certificate,
+                    view_change_evidence,
+                    next_drb_result,
+                    state_cert: _,
+                },
+        } = value;
+
+        let parent_commitment = justify_qc.data().leaf_commit;
+
+        Self {
+            view_number,
+            justify_qc,
+            next_epoch_justify_qc,
+            parent_commitment,
+            block_header,
+            upgrade_certificate,
+            block_payload: None,
+            view_change_evidence,
+            next_drb_result,
+            with_epoch: epoch.is_some(),
+        }
+    }
+}
+
 impl<TYPES: NodeType> Leaf<TYPES> {
     /// Constructs a leaf from a given quorum proposal.
     pub fn from_quorum_proposal(quorum_proposal: &QuorumProposal<TYPES>) -> Self {
