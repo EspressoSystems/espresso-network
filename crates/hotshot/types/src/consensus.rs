@@ -287,8 +287,88 @@ impl HotShotActionViews {
 
 type ValidatorParticipationMap<TYPES> = HashMap<<TYPES as NodeType>::SignatureKey, (u64, u64)>;
 
+/// Tracks proposal and vote participation per validator across epochs.
+///
+/// Owned by whichever consensus implementation is active: legacy
+/// [`Consensus`] feeds the same underlying trackers through its own
+/// methods, while the new-protocol coordinator owns one of these
+/// directly. Both serve the node participation API from it.
+pub struct ParticipationTracker<TYPES: NodeType> {
+    validator: ValidatorParticipation<TYPES>,
+    vote: VoteParticipation<TYPES>,
+}
+
+impl<TYPES: NodeType> Default for ParticipationTracker<TYPES> {
+    fn default() -> Self {
+        let (stake_table, success_threshold) = VoteParticipation::unresolved_stake_table();
+        Self {
+            validator: ValidatorParticipation::new(),
+            vote: VoteParticipation::new(stake_table, success_threshold, None),
+        }
+    }
+}
+
+impl<TYPES: NodeType> ParticipationTracker<TYPES> {
+    pub fn new(membership: &EpochMembershipCoordinator<TYPES>, epoch: EpochNumber) -> Self {
+        let (stake_table, success_threshold) =
+            resolve_participation_stake_table(membership, Some(epoch));
+        Self {
+            validator: ValidatorParticipation::new_in_epoch(epoch),
+            vote: VoteParticipation::new(stake_table, success_threshold, Some(epoch)),
+        }
+    }
+
+    pub fn leader_proposed(&mut self, leader: TYPES::SignatureKey, epoch: EpochNumber) {
+        self.validator.update_participation(leader, epoch, true);
+    }
+
+    pub fn leader_missed(&mut self, leader: TYPES::SignatureKey, epoch: EpochNumber) {
+        self.validator.update_participation(leader, epoch, false);
+    }
+
+    pub fn on_view_changed(&mut self, epoch: EpochNumber) {
+        self.validator.update_participation_epoch(epoch);
+    }
+
+    pub fn on_leaf_decided(
+        &mut self,
+        leaf: &Leaf2<TYPES>,
+        membership: &EpochMembershipCoordinator<TYPES>,
+    ) {
+        if let Err(err) = track_decided_qc_participation(
+            &leaf.justify_qc(),
+            membership,
+            &mut self.validator,
+            &mut self.vote,
+        ) {
+            tracing::warn!(%err, "failed to update vote participation epoch");
+        }
+    }
+
+    pub fn current_proposal_participation(&self) -> HashMap<TYPES::SignatureKey, f64> {
+        self.validator.current_proposal_participation()
+    }
+
+    pub fn proposal_participation(&self, epoch: EpochNumber) -> HashMap<TYPES::SignatureKey, f64> {
+        self.validator.proposal_participation(epoch)
+    }
+
+    pub fn current_vote_participation(
+        &self,
+    ) -> HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
+        self.vote.current_vote_participation()
+    }
+
+    pub fn vote_participation(
+        &self,
+        epoch: EpochNumber,
+    ) -> HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
+        self.vote.vote_participation(Some(epoch))
+    }
+}
+
 #[derive(Debug, Clone)]
-pub struct ValidatorParticipation<TYPES: NodeType> {
+struct ValidatorParticipation<TYPES: NodeType> {
     epoch: EpochNumber,
     /// Current epoch participation by key maps key -> (num leader, num times proposed)
     current_epoch_participation: ValidatorParticipationMap<TYPES>,
@@ -297,18 +377,12 @@ pub struct ValidatorParticipation<TYPES: NodeType> {
     previous_epoch_participation: BTreeMap<EpochNumber, ValidatorParticipationMap<TYPES>>,
 }
 
-impl<TYPES: NodeType> Default for ValidatorParticipation<TYPES> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self::new_in_epoch(EpochNumber::genesis())
     }
 
-    pub fn new_in_epoch(epoch: EpochNumber) -> Self {
+    fn new_in_epoch(epoch: EpochNumber) -> Self {
         Self {
             epoch,
             current_epoch_participation: HashMap::new(),
@@ -316,7 +390,7 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
         }
     }
 
-    pub fn update_participation(
+    fn update_participation(
         &mut self,
         key: TYPES::SignatureKey,
         epoch: EpochNumber,
@@ -342,7 +416,7 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
         entry.0 += 1;
     }
 
-    pub fn update_participation_epoch(&mut self, epoch: EpochNumber) {
+    fn update_participation_epoch(&mut self, epoch: EpochNumber) {
         if epoch <= self.epoch {
             return;
         }
@@ -359,7 +433,7 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
         self.current_epoch_participation = HashMap::new();
     }
 
-    pub fn current_proposal_participation(&self) -> HashMap<TYPES::SignatureKey, f64> {
+    fn current_proposal_participation(&self) -> HashMap<TYPES::SignatureKey, f64> {
         self.current_epoch_participation
             .iter()
             .map(|(key, (leader, proposed))| {
@@ -374,7 +448,7 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
             })
             .collect()
     }
-    pub fn proposal_participation(&self, epoch: EpochNumber) -> HashMap<TYPES::SignatureKey, f64> {
+    fn proposal_participation(&self, epoch: EpochNumber) -> HashMap<TYPES::SignatureKey, f64> {
         let tracked_participation = if epoch == self.epoch {
             self.current_epoch_participation.clone()
         } else {
@@ -399,7 +473,7 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
             .collect()
     }
 
-    pub fn current_epoch(&self) -> EpochNumber {
+    fn current_epoch(&self) -> EpochNumber {
         self.epoch
     }
 }
@@ -410,7 +484,7 @@ type VoteParticipationMap<TYPES> = (
 );
 
 #[derive(Clone, Debug)]
-pub struct VoteParticipation<TYPES: NodeType> {
+struct VoteParticipation<TYPES: NodeType> {
     /// Current epoch
     epoch: Option<EpochNumber>,
 
@@ -435,7 +509,7 @@ pub struct VoteParticipation<TYPES: NodeType> {
 }
 
 impl<TYPES: NodeType> VoteParticipation<TYPES> {
-    pub fn new(
+    fn new(
         stake_table: HSStakeTable<TYPES>,
         success_threshold: U256,
         epoch: Option<EpochNumber>,
@@ -465,15 +539,15 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
         }
     }
 
-    pub fn unresolved_stake_table() -> (HSStakeTable<TYPES>, U256) {
+    fn unresolved_stake_table() -> (HSStakeTable<TYPES>, U256) {
         (HSStakeTable::default(), U256::MAX)
     }
 
-    pub fn stake_table_unresolved(&self) -> bool {
+    fn stake_table_unresolved(&self) -> bool {
         self.stake_table.is_empty()
     }
 
-    pub fn reseed_stake_table(&mut self, stake_table: HSStakeTable<TYPES>, threshold: U256) {
+    fn reseed_stake_table(&mut self, stake_table: HSStakeTable<TYPES>, threshold: U256) {
         self.current_epoch_participation = stake_table
             .iter()
             .map(|peer_config| {
@@ -490,7 +564,7 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
         self.success_threshold = threshold;
     }
 
-    pub fn update_participation(&mut self, qc: QuorumCertificate2<TYPES>) -> Result<()> {
+    fn update_participation(&mut self, qc: QuorumCertificate2<TYPES>) -> Result<()> {
         ensure!(
             qc.epoch() == self.epoch,
             info!(
@@ -527,7 +601,7 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
         Ok(())
     }
 
-    pub fn update_participation_epoch(
+    fn update_participation_epoch(
         &mut self,
         stake_table: HSStakeTable<TYPES>,
         success_threshold: U256,
@@ -597,7 +671,7 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
         Ok(())
     }
 
-    pub fn current_vote_participation(
+    fn current_vote_participation(
         &self,
     ) -> HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
         self.current_epoch_participation
@@ -610,7 +684,7 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
             })
             .collect()
     }
-    pub fn vote_participation(
+    fn vote_participation(
         &self,
         epoch: Option<EpochNumber>,
     ) -> HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
@@ -644,12 +718,12 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
         }
     }
 
-    pub fn current_epoch(&self) -> Option<EpochNumber> {
+    fn current_epoch(&self) -> Option<EpochNumber> {
         self.epoch
     }
 }
 
-pub fn resolve_participation_stake_table<TYPES: NodeType>(
+fn resolve_participation_stake_table<TYPES: NodeType>(
     membership: &EpochMembershipCoordinator<TYPES>,
     epoch: Option<EpochNumber>,
 ) -> (HSStakeTable<TYPES>, U256) {
@@ -665,7 +739,7 @@ pub fn resolve_participation_stake_table<TYPES: NodeType>(
     }
 }
 
-pub fn track_decided_qc_participation<TYPES: NodeType>(
+fn track_decided_qc_participation<TYPES: NodeType>(
     qc: &QuorumCertificate2<TYPES>,
     membership: &EpochMembershipCoordinator<TYPES>,
     validator: &mut ValidatorParticipation<TYPES>,
@@ -1108,11 +1182,6 @@ impl<TYPES: NodeType> Consensus<TYPES> {
             .current_proposal_participation()
     }
 
-    /// Get the current proposal participation epoch
-    pub fn current_proposal_participation_epoch(&self) -> EpochNumber {
-        self.validator_participation.current_epoch()
-    }
-
     /// Get the proposal participation for a given epoch
     pub fn proposal_participation(&self, epoch: EpochNumber) -> HashMap<TYPES::SignatureKey, f64> {
         self.validator_participation.proposal_participation(epoch)
@@ -1152,11 +1221,6 @@ impl<TYPES: NodeType> Consensus<TYPES> {
         &self,
     ) -> HashMap<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
         self.vote_participation.current_vote_participation()
-    }
-
-    /// Get the current vote participation
-    pub fn current_vote_participation_epoch(&self) -> Option<EpochNumber> {
-        self.vote_participation.current_epoch()
     }
 
     /// Get the previous vote participation

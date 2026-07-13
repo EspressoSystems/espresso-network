@@ -834,10 +834,6 @@ impl<T: NodeType> Consensus<T> {
         self.current_view
     }
 
-    pub fn new_protocol_active(&self, view: ViewNumber) -> bool {
-        self.upgrade_lock.new_protocol_active(view)
-    }
-
     pub fn current_epoch(&self) -> Option<EpochNumber> {
         self.current_epoch
     }

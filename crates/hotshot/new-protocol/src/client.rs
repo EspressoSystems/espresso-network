@@ -115,32 +115,17 @@ impl<T: NodeType> ClientApi<T> {
         .await?
     }
 
-    pub async fn current_proposal_participation(
-        &self,
-    ) -> Result<HashMap<T::SignatureKey, f64>, QueryError> {
-        let (tx, rx) = oneshot::channel();
-        self.call(ClientRequest::CurrentProposalParticipation(tx), rx)
-            .await
-    }
-
+    /// Proposal participation ratios; `None` queries the current epoch.
     pub async fn proposal_participation(
         &self,
-        epoch: EpochNumber,
+        epoch: Option<EpochNumber>,
     ) -> Result<HashMap<T::SignatureKey, f64>, QueryError> {
         let (respond, rx) = oneshot::channel();
         self.call(ClientRequest::ProposalParticipation { epoch, respond }, rx)
             .await
     }
 
-    pub async fn current_vote_participation(
-        &self,
-    ) -> Result<HashMap<<T::SignatureKey as SignatureKey>::VerificationKeyType, f64>, QueryError>
-    {
-        let (tx, rx) = oneshot::channel();
-        self.call(ClientRequest::CurrentVoteParticipation(tx), rx)
-            .await
-    }
-
+    /// Vote participation ratios; `None` queries the current epoch.
     pub async fn vote_participation(
         &self,
         epoch: Option<EpochNumber>,
@@ -234,14 +219,10 @@ pub(crate) enum ClientRequest<T: NodeType> {
         view: ViewNumber,
         respond: oneshot::Sender<StateAndDelta<T>>,
     },
-    CurrentProposalParticipation(oneshot::Sender<HashMap<T::SignatureKey, f64>>),
     ProposalParticipation {
-        epoch: EpochNumber,
+        epoch: Option<EpochNumber>,
         respond: oneshot::Sender<HashMap<T::SignatureKey, f64>>,
     },
-    CurrentVoteParticipation(
-        oneshot::Sender<HashMap<<T::SignatureKey as SignatureKey>::VerificationKeyType, f64>>,
-    ),
     VoteParticipation {
         epoch: Option<EpochNumber>,
         respond:

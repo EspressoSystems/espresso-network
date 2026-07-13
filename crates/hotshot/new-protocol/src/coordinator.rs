@@ -1,6 +1,5 @@
 pub mod error;
 pub(crate) mod metrics;
-pub(crate) mod participation;
 pub mod timer;
 
 use std::{
@@ -13,7 +12,7 @@ use bon::{Builder, bon};
 use committable::Commitment;
 use hotshot::{HotShotInitializer, traits::BlockPayload, types::SignatureKey};
 use hotshot_types::{
-    consensus::ConsensusMetricsValue,
+    consensus::{ConsensusMetricsValue, ParticipationTracker},
     data::{
         EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperseShare2, ViewNumber,
         vid_disperse::vid_total_weight,
@@ -42,7 +41,6 @@ use crate::{
     coordinator::{
         error::{CoordinatorError, ErrorSource, Severity},
         metrics::finish_measurement,
-        participation::ParticipationTracker,
         timer::Timer,
     },
     epoch::{EpochManager, EpochRootResult},
@@ -123,8 +121,6 @@ pub struct Coordinator<T: NodeType, S> {
     metrics: Option<metrics::Metrics>,
     #[builder(default)]
     participation: ParticipationTracker<T>,
-    #[builder(default = ViewNumber::genesis())]
-    anchor_view: ViewNumber,
     #[builder(skip)]
     voted_view: Option<ViewNumber>,
     #[builder(skip)]
@@ -135,8 +131,6 @@ pub struct Coordinator<T: NodeType, S> {
     invalid_certs_at_decide: u64,
     #[builder(skip)]
     payload_txn_bytes: BTreeMap<ViewNumber, usize>,
-    #[builder(skip)]
-    decided_metrics_view: Option<ViewNumber>,
 }
 
 #[bon]
@@ -331,7 +325,6 @@ where
             .public_key(public_key)
             .maybe_metrics(coordinator_metrics)
             .participation(participation)
-            .anchor_view(anchor_view)
             .build()
     }
 
@@ -591,9 +584,7 @@ where
                 Some(item) = self.vid_reconstructor.next() => match item {
                     Ok(out) => {
                         finish_measurement(next_input);
-                        if self.metrics.is_some() {
-                            self.payload_txn_bytes.insert(out.view, out.payload.txn_bytes());
-                        }
+                        self.payload_txn_bytes.insert(out.view, out.payload.txn_bytes());
                         self.block_builder.on_block_reconstructed(out.tx_commitments);
                         self.storage.append_da(
                             out.view,
@@ -772,11 +763,11 @@ where
                 // wins and we persist just that one:
                 if let VidCommitment::V2(commit) = proposal.data.block_header.payload_commitment() {
                     if let Some(da) = self.da_payloads.remove(&(view, commit)) {
-                        if let Some(m) = &self.metrics {
-                            self.payload_txn_bytes.insert(view, da.payload.txn_bytes());
-                            if da.payload.transactions(&da.metadata).next().is_none() {
-                                m.consensus.number_of_empty_blocks_proposed.add(1);
-                            }
+                        self.payload_txn_bytes.insert(view, da.payload.txn_bytes());
+                        if let Some(m) = &self.metrics
+                            && da.payload.transactions(&da.metadata).next().is_none()
+                        {
+                            m.consensus.number_of_empty_blocks_proposed.add(1);
                         }
                         self.storage.append_da(
                             view,
@@ -1023,8 +1014,7 @@ where
                     let epoch = p.proposal.data.epoch;
                     let block = p.proposal.data.block_header.block_number();
                     debug!(%node, %sender, %view, %epoch, %block, "recv proposal");
-                    if self.metrics.is_some()
-                        && !self.is_too_far_ahead(view)
+                    if !self.is_too_far_ahead(view)
                         && self.proposal_received_at.is_none_or(|(v, _)| v < view)
                     {
                         self.proposal_received_at = Some((view, Instant::now()));
@@ -1465,17 +1455,17 @@ where
                     None => (None, None),
                 });
             },
-            ClientRequest::CurrentProposalParticipation(tx) => {
-                let _ = tx.send(self.participation.current_proposal_participation());
-            },
             ClientRequest::ProposalParticipation { epoch, respond } => {
-                let _ = respond.send(self.participation.proposal_participation(epoch));
-            },
-            ClientRequest::CurrentVoteParticipation(tx) => {
-                let _ = tx.send(self.participation.current_vote_participation());
+                let _ = respond.send(match epoch {
+                    Some(epoch) => self.participation.proposal_participation(epoch),
+                    None => self.participation.current_proposal_participation(),
+                });
             },
             ClientRequest::VoteParticipation { epoch, respond } => {
-                let _ = respond.send(self.participation.vote_participation(epoch));
+                let _ = respond.send(match epoch {
+                    Some(epoch) => self.participation.vote_participation(epoch),
+                    None => self.participation.current_vote_participation(),
+                });
             },
             ClientRequest::SubmitTransaction { tx, respond } => {
                 self.block_builder.on_submit_transaction(tx);
@@ -1635,9 +1625,6 @@ where
     }
 
     fn on_view_changed_metrics(&mut self, view: ViewNumber, epoch: EpochNumber) {
-        if self.metrics.is_none() {
-            return;
-        }
         if let Some((started_view, started_epoch, started_at)) = self.view_started
             && started_view == view
         {
@@ -1651,16 +1638,15 @@ where
             (self.leader(prev_view, prev_epoch).as_ref() == Some(&self.public_key))
                 .then(|| entered.elapsed())
         });
-        let last_decided_view = self.consensus.last_decided_view();
-        let (outstanding_txns, outstanding_bytes) = self.block_builder.outstanding_transactions();
+        let Some(m) = &self.metrics else { return };
+        let consensus = &m.consensus;
+        consensus.current_view.set(*view as usize);
         let invalid_certs = self
             .consensus
             .invalid_certs()
             .saturating_sub(self.invalid_certs_at_decide);
-        let Some(m) = &self.metrics else { return };
-        let consensus = &m.consensus;
-        consensus.current_view.set(*view as usize);
         consensus.invalid_qc.set(invalid_certs as usize);
+        let last_decided_view = self.consensus.last_decided_view();
         if view > last_decided_view {
             consensus
                 .number_of_views_since_last_decide
@@ -1671,6 +1657,7 @@ where
                 .view_duration_as_leader
                 .add_point(duration.as_secs_f64());
         }
+        let (outstanding_txns, outstanding_bytes) = self.block_builder.outstanding_transactions();
         consensus.outstanding_transactions.set(outstanding_txns);
         consensus
             .outstanding_transactions_memory_size
@@ -1678,19 +1665,17 @@ where
     }
 
     fn on_decide_metrics(&mut self, leaves: &[Leaf2<T>]) {
-        if self.metrics.is_none() {
-            return;
-        }
-        let now = OffsetDateTime::now_utc().unix_timestamp();
-        let newest_view = leaves.first().map(|leaf| leaf.view_number());
-        let advanced = newest_view
-            .is_some_and(|view| view > self.decided_metrics_view.unwrap_or(self.anchor_view));
+        let Some(newest) = leaves.first() else { return };
+        // The consensus watermark already includes this batch, so the batch
+        // advanced the decide frontier iff its newest view is the watermark;
+        // a gap-fill decide of older views must not regress the gauges.
+        let advanced = newest.view_number() == self.consensus.last_decided_view();
         if advanced {
-            self.decided_metrics_view = newest_view;
             self.invalid_certs_at_decide = self.consensus.invalid_certs();
         }
         let Some(m) = &self.metrics else { return };
         let consensus = &m.consensus;
+        let now = OffsetDateTime::now_utc().unix_timestamp();
         for leaf in leaves {
             let txn_bytes = self
                 .payload_txn_bytes
@@ -1715,20 +1700,18 @@ where
         }
         consensus.last_decided_time.set(now as usize);
         consensus.invalid_qc.set(0);
-        if let Some(newest) = leaves.first() {
+        consensus
+            .last_decided_view
+            .set(*newest.view_number() as usize);
+        consensus
+            .last_synced_block_height
+            .set(newest.block_header().block_number() as usize);
+        if let Some(views_in_flight) =
+            (*self.consensus.current_view()).checked_sub(*newest.view_number())
+        {
             consensus
-                .last_decided_view
-                .set(*newest.view_number() as usize);
-            consensus
-                .last_synced_block_height
-                .set(newest.block_header().block_number() as usize);
-            if let Some(views_in_flight) =
-                (*self.consensus.current_view()).checked_sub(*newest.view_number())
-            {
-                consensus
-                    .number_of_views_per_decide_event
-                    .add_point(views_in_flight as f64);
-            }
+                .number_of_views_per_decide_event
+                .add_point(views_in_flight as f64);
         }
     }
 
