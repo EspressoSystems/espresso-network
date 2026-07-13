@@ -650,6 +650,9 @@ impl<T: NodeType> Consensus<T> {
                     "apply: fetched proposal"
                 );
                 self.handle_fetched_proposal(message, outbox);
+                // The fetched proposal itself may now be decidable (e.g. cert2
+                // arrived first and triggered the fetch).
+                self.maybe_decide(view, outbox);
                 // Views extending the fetched one may be blocked on it
                 let views_extending_fetched: Vec<ViewNumber> = self
                     .proposals
@@ -660,6 +663,7 @@ impl<T: NodeType> Consensus<T> {
                 for extending_view in views_extending_fetched {
                     self.maybe_vote_1(extending_view, outbox);
                     self.maybe_vote_2_and_update_lock(extending_view, outbox);
+                    self.maybe_decide(extending_view, outbox);
                 }
                 self.maybe_propose(view + 1, outbox);
                 return;
