@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use hotshot::types::BLSPubKey;
@@ -15,6 +15,7 @@ use hotshot_new_protocol::{
     coordinator::{Coordinator, error::Severity, timer::Timer},
     epoch::EpochManager,
     helpers::proposal_commitment,
+    leader_trace::LeaderTracerHandle,
     network::{Cliquenet, Sender},
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
@@ -39,7 +40,10 @@ use tokio::task::JoinSet;
 use tracing::{error, info, warn};
 use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
-use crate::{config::NodeConfig, membership::make_membership, metrics::MetricsCollector};
+use crate::{
+    config::NodeConfig, cpu_sampler::CpuSampler, leader_trace::CsvLeaderTracer,
+    membership::make_membership, metrics::MetricsCollector,
+};
 
 type BenchCoordinator = Coordinator<TestTypes, TestStorage<TestTypes>>;
 
@@ -64,6 +68,24 @@ pub async fn run(cfg: NodeConfig) -> Result<()> {
     let (membership, client) = make_membership(cfg.total_nodes, public_key).await;
     let network = create_network(cfg.node_id, &public_key, &private_key, &cfg).await?;
 
+    // Per-node leader-event tracer. Production binaries leave this `None`; the
+    // bench wires it through `Consensus::set_tracer` (and the VID reconstructor
+    // and block builder) so every leader-duty call site emits a wall-clock-ns
+    // stamp to disk for offline reconstruction.
+    let tracer = Arc::new(CsvLeaderTracer::new(cfg.node_id, leader_trace_path(&cfg)));
+
+    // Start the CPU sampler (no-op on non-Linux). Outputs land in the same
+    // directory as the leader-trace CSV so analysis scripts can pick them up.
+    let cpu_out_dir = PathBuf::from(&cfg.output_file)
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_default();
+    let cpu_sampler = CpuSampler::start(
+        cfg.node_id,
+        cpu_out_dir,
+        Duration::from_millis(cfg.sampler_tick_ms),
+    );
+
     let disperser = BenchDisperser {
         network: network.sender().clone(),
         membership: membership.clone(),
@@ -71,10 +93,29 @@ pub async fn run(cfg: NodeConfig) -> Result<()> {
         private_key: private_key.clone(),
     };
 
-    let coordinator =
-        build_coordinator(public_key, private_key, membership, network, client, &cfg).await;
+    let coordinator = build_coordinator(
+        public_key,
+        private_key,
+        membership,
+        network,
+        client,
+        &cfg,
+        tracer.clone() as LeaderTracerHandle,
+    )
+    .await;
 
-    run_instrumented(coordinator, &cfg, disperser).await
+    let result = run_instrumented(coordinator, &cfg, disperser, tracer.clone()).await;
+    if let Err(err) = tracer.flush() {
+        warn!(%err, "failed to flush leader trace");
+    }
+    cpu_sampler.stop().await;
+    result
+}
+
+fn leader_trace_path(cfg: &NodeConfig) -> PathBuf {
+    let out = PathBuf::from(&cfg.output_file);
+    let dir = out.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+    dir.join(format!("leader_trace_node{}.csv", cfg.node_id))
 }
 
 async fn create_network(
@@ -131,6 +172,7 @@ async fn build_coordinator(
     network: Cliquenet<TestTypes>,
     client: CoordinatorClient<TestTypes>,
     cfg: &NodeConfig,
+    tracer: LeaderTracerHandle,
 ) -> BenchCoordinator {
     let instance = Arc::new(TestInstanceState::default());
     let epoch_height = u64::MAX;
@@ -156,6 +198,7 @@ async fn build_coordinator(
         genesis_leaf.clone(),
         epoch_height,
     );
+    consensus.set_tracer(Some(tracer.clone()));
 
     let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
@@ -165,9 +208,10 @@ async fn build_coordinator(
 
     let epoch_manager = EpochManager::new(epoch_height, membership.clone());
 
-    let vid_reconstructor = VidReconstructor::new();
+    let mut vid_reconstructor = VidReconstructor::new();
+    vid_reconstructor.set_tracer(Some(tracer.clone()));
 
-    let block_builder = BlockBuilder::new(
+    let mut block_builder = BlockBuilder::new(
         instance.clone(),
         membership.clone(),
         network.sender().clone(),
@@ -176,6 +220,7 @@ async fn build_coordinator(
         BlockBuilderConfig::default(),
         upgrade_lock.clone(),
     );
+    block_builder.set_tracer(Some(tracer.clone()));
 
     let mut state_manager = StateManager::new(instance.clone(), upgrade_lock.clone());
     let genesis_state = Arc::new(genesis_state);
@@ -255,6 +300,7 @@ async fn run_instrumented(
     mut coordinator: BenchCoordinator,
     cfg: &NodeConfig,
     disperser: BenchDisperser,
+    tracer: LeaderTracerHandle,
 ) -> Result<()> {
     let mut metrics = MetricsCollector::new(cfg.node_id);
     let output_path = PathBuf::from(&cfg.output_file);
@@ -304,10 +350,18 @@ async fn run_instrumented(
                 && cfg.block_size > 0
             {
                 let disperser = disperser.clone();
-                let size = cfg.block_size;
+                let tracer = tracer.clone();
+                let (size, namespaces) = (cfg.block_size, cfg.namespaces);
                 let req = req.clone();
                 builds.spawn_blocking(move || {
-                    let td = build_test_block(size, &disperser, req.view, req.epoch);
+                    let td = build_test_block(
+                        size,
+                        namespaces,
+                        &disperser,
+                        req.view,
+                        req.epoch,
+                        Some(tracer),
+                    );
                     BuiltBlock { req, td }
                 });
                 continue; // skip process_consensus_output for this one
@@ -394,25 +448,57 @@ fn inject_test_block(
     coordinator.apply_consensus(block_input);
 }
 
+/// Per-transaction byte size when splitting the configured `--block-size` into
+/// many small transactions. 1 KiB matches realistic rollup-style traffic and
+/// — critically — turns `transaction_commitments` into a long Vec of small
+/// Keccak256 calls that `TestBlockPayload::transaction_commitments` parallelizes
+/// over the rayon pool, instead of one giant single-threaded Keccak.
+const BENCH_TX_BYTES: usize = 1024;
+
 /// Build and disperse a test block. Synchronous and CPU-bound (erasure coding);
 /// callers run it on a blocking task so it stays off the async runtime.
 fn build_test_block(
     size: usize,
+    n_namespaces: u32,
     disperser: &BenchDisperser,
     view: ViewNumber,
     epoch: EpochNumber,
+    tracer: Option<LeaderTracerHandle>,
 ) -> TestBlock {
-    let tx = TestTransaction::new(vec![0u8; size]);
-    let block = TestBlockPayload {
-        transactions: vec![tx],
-    };
+    // Split the configured payload into many BENCH_TX_BYTES-byte transactions.
+    // At least one tx so an empty `--block-size=0` config still produces a
+    // valid (small) payload.
+    let num_txs = (size / BENCH_TX_BYTES).max(1);
+    let transactions: Vec<TestTransaction> = (0..num_txs)
+        .map(|_| TestTransaction::new(vec![0u8; BENCH_TX_BYTES]))
+        .collect();
+    let block = TestBlockPayload { transactions };
+    let encoded = block.encode();
+
+    // `TestMetadata` itself emits the namespace table when `num_transactions
+    // > 1` AND `payload_byte_len > 0`. The bench sets both so AvidM dispersal
+    // splits the payload into N evenly-sized namespaces and parallelizes
+    // per-namespace via rayon (same wire format as production `NsTable`).
+    //
+    // NOTE: `metadata.num_transactions` here is being repurposed as the
+    // namespace count for the wiring trick; it is independent of the actual
+    // `block.transactions.len()` (which is now ≈ size / 1 KiB).
+    let n = n_namespaces.max(1);
     let metadata = TestMetadata {
-        num_transactions: 1,
+        num_transactions: n as u64,
+        payload_byte_len: if n > 1 { encoded.len() as u64 } else { 0 },
     };
 
-    // Erasure-code the block, deriving the commitment from that computation.
+    // Mirror the production BlockBuilder's dispersal-timing trace: the bench
+    // builds+disperses here (bypassing BlockBuilder::request_block), so emit the
+    // NsDisperse span around the erasure-coding step directly.
+    hotshot_new_protocol::trace_leader_event!(
+        tracer,
+        view,
+        hotshot_new_protocol::leader_trace::LeaderEvent::NsDisperseStart
+    );
     let params = VidDisperse2::<TestTypes>::disperse_params(
-        block.encode(),
+        encoded,
         metadata.encode().as_ref(),
         &disperser.membership,
         Some(epoch),
@@ -425,9 +511,15 @@ fn build_test_block(
         params.ns_table.iter().cloned(),
     )
     .expect("erasure-code test block");
+    hotshot_new_protocol::trace_leader_event!(
+        tracer,
+        view,
+        hotshot_new_protocol::leader_trace::LeaderEvent::NsDisperseEnd
+    );
 
     // Fan the shares out to the nodes, including the leader's own share via
-    // loopback (as the production BlockBuilder does).
+    // loopback (as the production BlockBuilder does). `build_test_block` already
+    // runs on the blocking pool, so fan out inline.
     if let Err(err) = fanout::fan_out::<TestTypes>(
         shares,
         common,
@@ -438,6 +530,7 @@ fn build_test_block(
         disperser.network.clone(),
         disperser.public_key,
         disperser.private_key.clone(),
+        tracer,
     ) {
         warn!(%view, %err, "bench vid fanout failed");
     }

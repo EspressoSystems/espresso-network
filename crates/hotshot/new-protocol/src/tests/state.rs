@@ -46,6 +46,7 @@ fn make_header_request(
     let block = TestBlockPayload::genesis();
     let metadata = TestMetadata {
         num_transactions: 0,
+        payload_byte_len: 0,
     };
     let payload_commitment = vid_commitment(
         &block.encode(),

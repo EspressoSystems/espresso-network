@@ -154,7 +154,8 @@ async fn test_upgrade_task_with_proposal() {
                     .await,
                 builder_commitment.clone(),
                 TestMetadata {
-                    num_transactions: 0
+                    num_transactions: 0,
+                    payload_byte_len: 0,
                 },
                 ViewNumber::new(1),
                 vec1![builder_fee.clone()],

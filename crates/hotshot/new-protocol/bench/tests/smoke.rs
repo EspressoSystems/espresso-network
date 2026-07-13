@@ -39,6 +39,8 @@ fn node_config(
             .to_string_lossy()
             .into_owned(),
         block_size,
+        namespaces: 1,
+        sampler_tick_ms: 50,
     }
 }
 

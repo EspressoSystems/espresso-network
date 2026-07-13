@@ -46,6 +46,7 @@ pub fn fan_out<T: NodeType>(
     network: Sender<T>,
     public_key: T::SignatureKey,
     private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
+    tracer: Option<crate::leader_trace::LeaderTracerHandle>,
 ) -> Result<(), FanoutError> {
     let signature = T::SignatureKey::sign(&private_key, payload_commitment.as_ref())
         .map_err(|err| FanoutError::Sign(err.into()))?;
@@ -60,7 +61,12 @@ pub fn fan_out<T: NodeType>(
         .max(256 * 1024);
     let buckets = bucketize(&common.ns_lens, threshold);
 
-    shares.into_par_iter().zip(recipients).try_for_each_with(
+    crate::trace_leader_event!(
+        tracer,
+        view,
+        crate::leader_trace::LeaderEvent::VidSharesUnicastStart
+    );
+    let result = shares.into_par_iter().zip(recipients).try_for_each_with(
         network,
         |network, (share, recipient)| -> Result<(), FanoutError> {
             // Buckets partition the namespaces contiguously in order, so draining
@@ -103,7 +109,13 @@ pub fn fan_out<T: NodeType>(
             }
             Ok(())
         },
-    )
+    );
+    crate::trace_leader_event!(
+        tracer,
+        view,
+        crate::leader_trace::LeaderEvent::VidSharesUnicastEnd
+    );
+    result
 }
 
 /// Group namespace indices into buckets whose payload sizes are each at least

@@ -108,6 +108,9 @@ pub struct BlockBuilder<T: NodeType> {
     config: BlockBuilderConfig,
     upgrade_lock: UpgradeLock<T>,
     current_view: ViewNumber,
+    // Optional leader-event tracer (wired by the bench). Production builds leave
+    // this `None`, which short-circuits every `trace_leader_event!` site.
+    tracer: Option<crate::leader_trace::LeaderTracerHandle>,
     // Keyed by (view, parent_proposal commitment) so that two requests for
     // the same view but different parents (e.g. one from
     // `handle_proposal_with_vid_share` and one from
@@ -144,7 +147,13 @@ impl<T: NodeType> BlockBuilder<T> {
             current_view: ViewNumber::genesis(),
             calculations: BTreeMap::new(),
             tasks: JoinSet::new(),
+            tracer: None,
         }
+    }
+
+    /// Register a leader-event tracer. Production builds leave this `None`.
+    pub fn set_tracer(&mut self, tracer: Option<crate::leader_trace::LeaderTracerHandle>) {
+        self.tracer = tracer;
     }
 
     pub fn request_block(&mut self, request: BlockAndHeaderRequest<T>) {
@@ -165,6 +174,7 @@ impl<T: NodeType> BlockBuilder<T> {
         let network = self.network.clone();
         let public_key = self.public_key.clone();
         let private_key = self.private_key.clone();
+        let tracer = self.tracer.clone();
 
         let handle = self.tasks.spawn(async move {
             // Throttle empty block production: when no transactions are pending,
@@ -200,6 +210,11 @@ impl<T: NodeType> BlockBuilder<T> {
                 // Erasure-code every namespace exactly once and derive the payload
                 // commitment from that same computation. Runs on a blocking thread;
                 // the proposal is not gated on the fanout that follows.
+                crate::trace_leader_event!(
+                    tracer,
+                    view,
+                    crate::leader_trace::LeaderEvent::NsDisperseStart
+                );
                 let (commitment, common, shares, recipients) =
                     spawn_blocking(move || -> Result<_, BlockError> {
                         let params = VidDisperse2::<T>::disperse_params(
@@ -220,6 +235,11 @@ impl<T: NodeType> BlockBuilder<T> {
                     })
                     .await
                     .map_err(|e| BlockError::VidDisperse(e.to_string()))??;
+                crate::trace_leader_event!(
+                    tracer,
+                    view,
+                    crate::leader_trace::LeaderEvent::NsDisperseEnd
+                );
 
                 // Fan the shares out in the background, including the leader's own
                 // share (delivered via unicast loopback, which is how the leader
@@ -236,6 +256,7 @@ impl<T: NodeType> BlockBuilder<T> {
                         network,
                         public_key,
                         private_key,
+                        tracer,
                     )
                 });
                 // Surface fanout failures and panics; a detached blocking task

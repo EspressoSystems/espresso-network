@@ -1,0 +1,453 @@
+//! Periodic CPU usage sampler.
+//!
+//! Spawns one tokio task that reads `/proc` every `tick`, computes deltas
+//! against the previous tick, and writes per-node CSVs alongside the leader
+//! trace:
+//!
+//!   * `cpu_node{N}.csv`  — per-process + per-thread user/sys microseconds
+//!   * `net_node{N}.csv`  — per-interface rx/tx byte deltas
+//!   * `mem_node{N}.csv`  — VmRSS / VmHWM / MemAvailable snapshots
+//!
+//! Per-core utilisation used to be recorded as `core_node{N}.csv` but was
+//! removed: scanning `/proc/stat` for ~192 CPUs on a c8g.48xlarge cost a
+//! meaningful slice of each tick.  CPU load can still be derived from the
+//! aggregate `cpu_node{N}.csv` (process-wide user+sys).
+//!
+//! On non-Linux targets this is a no-op stub so local development on macOS
+//! still compiles and runs.
+
+#[cfg(target_os = "linux")]
+use std::path::Path;
+use std::{path::PathBuf, sync::Arc, time::Duration};
+
+use parking_lot::Mutex;
+use serde::Serialize;
+#[cfg(target_os = "linux")]
+use time::OffsetDateTime;
+use tokio::task::JoinHandle;
+use tracing::warn;
+
+/// Handle to a running sampler. Holding it does nothing; drop it to leave
+/// the sampler running, or call [`CpuSampler::stop`] to flush + join.
+pub struct CpuSampler {
+    inner: Arc<Inner>,
+    join: Option<JoinHandle<()>>,
+}
+
+struct Inner {
+    node_id: u64,
+    out_dir: PathBuf,
+    cpu_rows: Mutex<Vec<CpuRow>>,
+    net_rows: Mutex<Vec<NetRow>>,
+    /// Memory snapshots from `/proc/self/status` + `/proc/meminfo`, one row
+    /// per sampler tick.  Designed for **leak detection** over a long bench:
+    /// downstream analysis fits RSS(t) and per-view RSS deltas to flag a
+    /// rising floor (true retention leak) vs. a rising ceiling (burst peaks).
+    mem_rows: Mutex<Vec<MemRow>>,
+}
+
+#[derive(Serialize)]
+struct CpuRow {
+    t_ns: i128,
+    kind: &'static str, // "proc" | "thread"
+    id: i64,            // -1 for proc; tid for thread
+    user_us: u64,
+    sys_us: u64,
+}
+
+/// Per-interface byte deltas since the previous tick. Loopback (`lo`) is
+/// dropped. Rate is derived downstream as
+/// `rx_bytes / (t_ns_curr - t_ns_prev_for_same_iface) * 1e9`, so the tick
+/// period can be changed without breaking the schema.
+#[derive(Serialize)]
+struct NetRow {
+    t_ns: i128,
+    iface: String,
+    rx_bytes: u64,
+    tx_bytes: u64,
+}
+
+/// One memory snapshot per sampler tick.  All sizes are kibibytes (matching
+/// the `kB` units in `/proc/self/status`).  Absolute values, not deltas —
+/// memory is a level, not a rate, so leak analysis is cleaner with raw
+/// readings.
+///
+/// Field meanings:
+///   * `vm_rss_kb`     — current resident set size (process pages in RAM)
+///   * `vm_hwm_kb`     — peak RSS ever observed (only decreases on exec)
+///   * `vm_size_kb`    — total virtual address space size
+///   * `rss_anon_kb`   — anonymous portion of RSS (heap + stacks)
+///   * `rss_file_kb`   — file-backed portion of RSS (mmap, code segments)
+///   * `mem_total_kb`  — total physical RAM (constant per node — included on
+///     every row so analysis scripts can compute pressure
+///     ratios without joining an extra capacity file)
+///   * `mem_avail_kb`  — kernel's estimate of how much RAM is still claimable
+#[derive(Serialize)]
+struct MemRow {
+    t_ns: i128,
+    vm_rss_kb: u64,
+    vm_hwm_kb: u64,
+    vm_size_kb: u64,
+    rss_anon_kb: u64,
+    rss_file_kb: u64,
+    mem_total_kb: u64,
+    mem_avail_kb: u64,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Default)]
+struct MemSnapshot {
+    vm_rss_kb: u64,
+    vm_hwm_kb: u64,
+    vm_size_kb: u64,
+    rss_anon_kb: u64,
+    rss_file_kb: u64,
+}
+
+impl CpuSampler {
+    /// Start sampling. `out_dir` is the directory next to `leader_trace_node*.csv`.
+    pub fn start(node_id: u64, out_dir: PathBuf, tick: Duration) -> Self {
+        let inner = Arc::new(Inner {
+            node_id,
+            out_dir,
+            cpu_rows: Mutex::new(Vec::with_capacity(4096)),
+            net_rows: Mutex::new(Vec::with_capacity(4096)),
+            mem_rows: Mutex::new(Vec::with_capacity(4096)),
+        });
+
+        let join = {
+            let inner = inner.clone();
+            tokio::spawn(async move {
+                run_sampler(inner, tick).await;
+            })
+        };
+
+        Self {
+            inner,
+            join: Some(join),
+        }
+    }
+
+    /// Abort the sampler task and flush whatever is buffered to disk.
+    pub async fn stop(mut self) {
+        if let Some(h) = self.join.take() {
+            h.abort();
+            let _ = h.await;
+        }
+        if let Err(err) = flush(&self.inner) {
+            warn!(%err, "failed to flush cpu sampler");
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn run_sampler(inner: Arc<Inner>, tick: Duration) {
+    use std::collections::HashMap;
+
+    let mut prev_proc: Option<(u64, u64)> = None;
+    let mut prev_threads: HashMap<i64, (u64, u64)> = HashMap::new();
+    let mut prev_net: HashMap<String, (u64, u64)> = HashMap::new();
+    let clk_tck = clk_tck();
+    let mut ticker = tokio::time::interval(tick);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    loop {
+        ticker.tick().await;
+        let t_ns = OffsetDateTime::now_utc().unix_timestamp_nanos();
+
+        // ---- process-wide /proc/self/stat ----
+        if let Some((utime, stime)) = read_self_stat() {
+            if let Some((p_u, p_s)) = prev_proc {
+                let du = ticks_to_us(utime.saturating_sub(p_u), clk_tck);
+                let ds = ticks_to_us(stime.saturating_sub(p_s), clk_tck);
+                inner.cpu_rows.lock().push(CpuRow {
+                    t_ns,
+                    kind: "proc",
+                    id: -1,
+                    user_us: du,
+                    sys_us: ds,
+                });
+            }
+            prev_proc = Some((utime, stime));
+        }
+
+        // ---- per-thread /proc/self/task/<tid>/stat ----
+        if let Ok(rd) = std::fs::read_dir("/proc/self/task") {
+            for ent in rd.flatten() {
+                let tid: i64 = match ent.file_name().to_str().and_then(|s| s.parse().ok()) {
+                    Some(v) => v,
+                    None => continue,
+                };
+                let path = ent.path().join("stat");
+                if let Some((utime, stime)) = read_stat_file(&path) {
+                    if let Some(&(p_u, p_s)) = prev_threads.get(&tid) {
+                        let du = ticks_to_us(utime.saturating_sub(p_u), clk_tck);
+                        let ds = ticks_to_us(stime.saturating_sub(p_s), clk_tck);
+                        if du + ds > 0 {
+                            inner.cpu_rows.lock().push(CpuRow {
+                                t_ns,
+                                kind: "thread",
+                                id: tid,
+                                user_us: du,
+                                sys_us: ds,
+                            });
+                        }
+                    }
+                    prev_threads.insert(tid, (utime, stime));
+                }
+            }
+        }
+
+        // ---- /proc/self/status + /proc/meminfo (memory snapshot) ----
+        // Absolute snapshot per tick (no deltas).  Cheap: two small text
+        // reads, ~50 µs total on Linux.  Designed for leak detection — the
+        // downstream `memory_leak.py` script fits a slope and per-view delta
+        // to flag a rising floor.
+        if let Some(snap) = read_self_status() {
+            let (mem_total_kb, mem_avail_kb) = read_meminfo();
+            inner.mem_rows.lock().push(MemRow {
+                t_ns,
+                vm_rss_kb: snap.vm_rss_kb,
+                vm_hwm_kb: snap.vm_hwm_kb,
+                vm_size_kb: snap.vm_size_kb,
+                rss_anon_kb: snap.rss_anon_kb,
+                rss_file_kb: snap.rss_file_kb,
+                mem_total_kb,
+                mem_avail_kb,
+            });
+        }
+
+        // ---- per-interface /proc/net/dev ----
+        if let Some(ifaces) = read_proc_net_dev() {
+            for (iface, rx, tx) in ifaces {
+                if let Some(&(prev_rx, prev_tx)) = prev_net.get(&iface) {
+                    let drx = rx.saturating_sub(prev_rx);
+                    let dtx = tx.saturating_sub(prev_tx);
+                    if drx > 0 || dtx > 0 {
+                        inner.net_rows.lock().push(NetRow {
+                            t_ns,
+                            iface: iface.clone(),
+                            rx_bytes: drx,
+                            tx_bytes: dtx,
+                        });
+                    }
+                }
+                prev_net.insert(iface, (rx, tx));
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn run_sampler(_inner: Arc<Inner>, _tick: Duration) {
+    // On non-Linux we don't sample. The task will be aborted on shutdown.
+    std::future::pending::<()>().await;
+}
+
+fn flush(inner: &Inner) -> std::io::Result<()> {
+    std::fs::create_dir_all(&inner.out_dir).ok();
+
+    let cpu_rows = std::mem::take(&mut *inner.cpu_rows.lock());
+    if !cpu_rows.is_empty() {
+        let path = inner.out_dir.join(format!("cpu_node{}.csv", inner.node_id));
+        let mut wtr = csv::Writer::from_path(&path)?;
+        for r in cpu_rows {
+            wtr.serialize(r)
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
+        }
+        wtr.flush()?;
+    }
+
+    let net_rows = std::mem::take(&mut *inner.net_rows.lock());
+    if !net_rows.is_empty() {
+        let path = inner.out_dir.join(format!("net_node{}.csv", inner.node_id));
+        let mut wtr = csv::Writer::from_path(&path)?;
+        for r in net_rows {
+            wtr.serialize(r)
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
+        }
+        wtr.flush()?;
+    }
+
+    let mem_rows = std::mem::take(&mut *inner.mem_rows.lock());
+    if !mem_rows.is_empty() {
+        let path = inner.out_dir.join(format!("mem_node{}.csv", inner.node_id));
+        let mut wtr = csv::Writer::from_path(&path)?;
+        for r in mem_rows {
+            wtr.serialize(r)
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
+        }
+        wtr.flush()?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn read_self_stat() -> Option<(u64, u64)> {
+    read_stat_file(Path::new("/proc/self/stat"))
+}
+
+#[cfg(target_os = "linux")]
+fn read_stat_file(path: &Path) -> Option<(u64, u64)> {
+    let s = std::fs::read_to_string(path).ok()?;
+    // The comm field (field 2) can contain spaces and parens, so split around
+    // the last ')'. Fields after that are space-separated.
+    let close = s.rfind(')')?;
+    let tail = &s[close + 1..];
+    let fields: Vec<&str> = tail.split_whitespace().collect();
+    // After comm, fields shift: index 0 here = original field 3 (state).
+    // utime is original field 14 = index 11 here; stime is field 15 = index 12.
+    let utime: u64 = fields.get(11)?.parse().ok()?;
+    let stime: u64 = fields.get(12)?.parse().ok()?;
+    Some((utime, stime))
+}
+
+/// Read `/proc/net/dev` and return cumulative `(iface, rx_bytes, tx_bytes)`
+/// for every non-loopback interface. Each line looks like
+///
+/// ```text
+///   ens5: 1234567890 9876543 0 0 ...  87654321098 1234567 ...
+/// ```
+///
+/// where the first field after the colon is `rx_bytes` and the 9th is
+/// `tx_bytes` (Linux man-page order).
+#[cfg(target_os = "linux")]
+fn read_proc_net_dev() -> Option<Vec<(String, u64, u64)>> {
+    let s = std::fs::read_to_string("/proc/net/dev").ok()?;
+    let mut out = Vec::new();
+    for line in s.lines().skip(2) {
+        let (name, rest) = line.split_once(':')?;
+        let iface = name.trim();
+        if iface == "lo" || iface.is_empty() {
+            continue;
+        }
+        let nums: Vec<u64> = rest
+            .split_whitespace()
+            .filter_map(|f| f.parse().ok())
+            .collect();
+        if nums.len() < 9 {
+            continue;
+        }
+        out.push((iface.to_string(), nums[0], nums[8]));
+    }
+    Some(out)
+}
+
+/// Parse `/proc/self/status` for the six VmRSS/HWM/Size/RssAnon/RssFile
+/// fields.  Format is `Key:\t<value> kB` (kibibytes); we drop the unit since
+/// the schema names already include `_kb`.  Missing fields default to 0 —
+/// kernels without `RssAnon`/`RssFile` (pre-4.5) just report zeros there.
+#[cfg(target_os = "linux")]
+fn read_self_status() -> Option<MemSnapshot> {
+    let s = std::fs::read_to_string("/proc/self/status").ok()?;
+    let mut snap = MemSnapshot::default();
+    for line in s.lines() {
+        let Some((key, rest)) = line.split_once(':') else {
+            continue;
+        };
+        // `rest` looks like "  12345 kB" — first whitespace-separated token
+        // is the value, second is the "kB" unit which we ignore.
+        let val: u64 = match rest.split_whitespace().next().and_then(|s| s.parse().ok()) {
+            Some(v) => v,
+            None => continue,
+        };
+        match key {
+            "VmRSS" => snap.vm_rss_kb = val,
+            "VmHWM" => snap.vm_hwm_kb = val,
+            "VmSize" => snap.vm_size_kb = val,
+            "RssAnon" => snap.rss_anon_kb = val,
+            "RssFile" => snap.rss_file_kb = val,
+            _ => {},
+        }
+    }
+    Some(snap)
+}
+
+/// Parse `/proc/meminfo` for `MemTotal` and `MemAvailable`.  Returns
+/// `(total_kb, available_kb)` — total is the machine's physical RAM (constant
+/// per boot), available is the kernel's estimate of how much can still be
+/// claimed without paging out (accounts for slab + reclaimable cache).
+#[cfg(target_os = "linux")]
+fn read_meminfo() -> (u64, u64) {
+    let mut total = 0u64;
+    let mut avail = 0u64;
+    if let Ok(s) = std::fs::read_to_string("/proc/meminfo") {
+        for line in s.lines() {
+            if let Some(rest) = line.strip_prefix("MemTotal:") {
+                total = rest
+                    .split_whitespace()
+                    .next()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
+            } else if let Some(rest) = line.strip_prefix("MemAvailable:") {
+                avail = rest
+                    .split_whitespace()
+                    .next()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
+            }
+            if total != 0 && avail != 0 {
+                break;
+            }
+        }
+    }
+    (total, avail)
+}
+
+#[cfg(target_os = "linux")]
+fn clk_tck() -> u64 {
+    // SAFETY: sysconf with a valid name is always safe.
+    let v = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+    if v > 0 { v as u64 } else { 100 }
+}
+
+#[cfg(target_os = "linux")]
+fn ticks_to_us(ticks: u64, clk_tck: u64) -> u64 {
+    ticks.saturating_mul(1_000_000) / clk_tck.max(1)
+}
+
+#[cfg(target_os = "linux")]
+fn parse_stat(s: &str) -> Option<(u64, u64)> {
+    // Same logic as read_stat_file, factored for testing.
+    let close = s.rfind(')')?;
+    let tail = &s[close + 1..];
+    let fields: Vec<&str> = tail.split_whitespace().collect();
+    let utime: u64 = fields.get(11)?.parse().ok()?;
+    let stime: u64 = fields.get(12)?.parse().ok()?;
+    Some((utime, stime))
+}
+
+#[cfg(test)]
+#[cfg(target_os = "linux")]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_stat_with_spaces_in_comm() {
+        // Real-world example: comm can contain spaces, parens, etc.
+        // Fields after comm: state ppid pgrp session tty_nr tpgid flags
+        //                    minflt cminflt majflt cmajflt UTIME STIME ...
+        let line = "1234 ((my proc (foo))) S 1 1 1 0 -1 4194304 100 200 0 0 1500 750 0 0 20 0 8 0 \
+                    1234 0 0";
+        let (u, s) = parse_stat(line).expect("parse");
+        assert_eq!(u, 1500);
+        assert_eq!(s, 750);
+    }
+
+    #[test]
+    fn parses_real_self_stat() {
+        let s = std::fs::read_to_string("/proc/self/stat").expect("read");
+        let _ = parse_stat(&s).expect("parse self");
+    }
+
+    #[test]
+    fn reads_real_proc_net_dev() {
+        let ifs = read_proc_net_dev().expect("proc/net/dev present");
+        // At least one non-loopback interface should be present on any
+        // realistic Linux build host. We don't assert *which* one.
+        assert!(!ifs.is_empty(), "expected at least one non-lo interface");
+        for (iface, _rx, _tx) in &ifs {
+            assert_ne!(iface, "lo");
+        }
+    }
+}
