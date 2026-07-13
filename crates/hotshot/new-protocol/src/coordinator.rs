@@ -697,9 +697,6 @@ where
                         .on_leaf_decided(&leaf, &self.membership_coordinator);
                     self.epoch_manager.handle_leaf_decided(leaf);
                 }
-                self.payload_txn_bytes = self
-                    .payload_txn_bytes
-                    .split_off(&(self.consensus.decide_floor() + 1));
             },
             ConsensusOutput::LockUpdated(cert) => {
                 debug!(
@@ -1732,6 +1729,11 @@ where
                     .gc(view.saturating_sub(VID_RECONSTRUCT_GC_MARGIN).into());
                 let vc = VidCommitment2::default();
                 self.da_payloads = self.da_payloads.split_off(&(view, vc));
+                // Views within the decide buffer keep their txn bytes so a
+                // late gap-fill decide can still report finalized bytes.
+                self.payload_txn_bytes = self
+                    .payload_txn_bytes
+                    .split_off(&(self.consensus.decide_floor() + 1));
             },
             GcScope::Timeout(view) => {
                 self.vid_reconstructor.retire_view(view);

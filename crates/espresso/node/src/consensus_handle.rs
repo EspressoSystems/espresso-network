@@ -308,16 +308,12 @@ where
     }
 
     pub async fn current_proposal_participation(&self) -> HashMap<T::SignatureKey, f64> {
-        // Once the coordinator is running it is authoritative for the
-        // current epoch; there is no legacy fallback.
         if let Some(client_api) = self.client_api().await {
             return client_api
                 .proposal_participation(None)
                 .await
                 .inspect_err(|err| {
-                    tracing::warn!(
-                        "coordinator unavailable for current_proposal_participation: {err:#}"
-                    );
+                    warn!(%err, "coordinator unavailable for current_proposal_participation");
                 })
                 .unwrap_or_default();
         }
@@ -334,14 +330,12 @@ where
         &self,
         epoch: EpochNumber,
     ) -> HashMap<T::SignatureKey, f64> {
-        // A historical epoch may predate the cutover, so an epoch the
-        // coordinator doesn't know (empty map) falls back to legacy.
         if let Some(client_api) = self.client_api().await {
             match client_api.proposal_participation(Some(epoch)).await {
                 Ok(participation) if !participation.is_empty() => return participation,
                 Ok(_) => {},
                 Err(err) => {
-                    tracing::warn!("coordinator unavailable for proposal_participation: {err:#}");
+                    warn!(%err, "coordinator unavailable for proposal_participation");
                 },
             }
         }
@@ -357,16 +351,12 @@ where
     pub async fn current_vote_participation(
         &self,
     ) -> HashMap<<T::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
-        // Once the coordinator is running it is authoritative for the
-        // current epoch; there is no legacy fallback.
         if let Some(client_api) = self.client_api().await {
             return client_api
                 .vote_participation(None)
                 .await
                 .inspect_err(|err| {
-                    tracing::warn!(
-                        "coordinator unavailable for current_vote_participation: {err:#}"
-                    );
+                    warn!(%err, "coordinator unavailable for current_vote_participation");
                 })
                 .unwrap_or_default();
         }
@@ -383,14 +373,12 @@ where
         &self,
         epoch: EpochNumber,
     ) -> HashMap<<T::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
-        // A historical epoch may predate the cutover, so an epoch the
-        // coordinator doesn't know (empty map) falls back to legacy.
         if let Some(client_api) = self.client_api().await {
             match client_api.vote_participation(Some(epoch)).await {
                 Ok(participation) if !participation.is_empty() => return participation,
                 Ok(_) => {},
                 Err(err) => {
-                    tracing::warn!("coordinator unavailable for vote_participation: {err:#}");
+                    warn!(%err, "coordinator unavailable for vote_participation");
                 },
             }
         }
