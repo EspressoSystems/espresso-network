@@ -1,56 +1,14 @@
 use std::{sync::Arc, time::Instant};
 
-use hotshot_types::{
-    consensus::ConsensusMetricsValue,
-    traits::metrics::{Histogram, Metrics as HotshotMetrics},
-};
+use hotshot_types::{consensus::ConsensusMetricsValue, traits::metrics::Histogram};
 
 pub struct Metrics {
     pub(crate) consensus: ConsensusMetricsValue,
-    pub(crate) apply_consensus: Arc<dyn Histogram>,
-    pub(crate) next_consensus_input: Arc<dyn Histogram>,
-    pub(crate) process_consensus_output: Arc<dyn Histogram>,
-    pub(crate) on_network_message: Arc<dyn Histogram>,
-    pub(crate) on_state_manager_output: Arc<dyn Histogram>,
-    pub(crate) on_proposal_and_vid_share: Arc<dyn Histogram>,
-    pub(crate) on_client_request: Arc<dyn Histogram>,
 }
 
 impl Metrics {
-    pub fn new(m: &dyn HotshotMetrics, consensus: ConsensusMetricsValue) -> Self {
-        Self {
-            consensus,
-            apply_consensus: m
-                .create_histogram("coordinator_apply_consensus".into(), Some("s".into()))
-                .into(),
-            next_consensus_input: m
-                .create_histogram("coordinator_next_consensus_input".into(), Some("s".into()))
-                .into(),
-            process_consensus_output: m
-                .create_histogram(
-                    "coordinator_process_consensus_output".into(),
-                    Some("s".into()),
-                )
-                .into(),
-            on_network_message: m
-                .create_histogram("coordinator_on_network_message".into(), Some("s".into()))
-                .into(),
-            on_state_manager_output: m
-                .create_histogram(
-                    "coordinator_on_state_manager_output".into(),
-                    Some("s".into()),
-                )
-                .into(),
-            on_proposal_and_vid_share: m
-                .create_histogram(
-                    "coordinator_on_proposal_and_vid_share".into(),
-                    Some("s".into()),
-                )
-                .into(),
-            on_client_request: m
-                .create_histogram("coordinator_on_client_request".into(), Some("s".into()))
-                .into(),
-        }
+    pub fn new(consensus: ConsensusMetricsValue) -> Self {
+        Self { consensus }
     }
 }
 
