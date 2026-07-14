@@ -3189,7 +3189,7 @@ mod test {
         eips::BlockId,
         network::EthereumWallet,
         primitives::{Address, U256},
-        providers::ProviderBuilder,
+        providers::{ProviderBuilder, ext::AnvilApi},
     };
     use async_lock::Mutex;
     use committable::{Commitment, Committable};
@@ -3239,7 +3239,10 @@ mod test {
         data::EpochNumber,
         event::LeafInfo,
         new_protocol::CoordinatorEvent,
-        traits::{block_contents::BlockHeader, election::Membership, metrics::NoMetrics},
+        traits::{
+            block_contents::BlockHeader, election::Membership, metrics::NoMetrics,
+            network::ConnectedNetwork,
+        },
         utils::epoch_from_block_number,
         x25519,
     };
@@ -3300,7 +3303,7 @@ mod test {
             test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
         },
         catchup::{NullStateCatchup, StatePeers},
-        persistence,
+        network, persistence,
         persistence::no_storage,
         testing::{TestConfig, TestConfigBuilder, wait_for_decide_on_handle, wait_for_epochs},
     };
@@ -5096,6 +5099,120 @@ mod test {
         Ok(())
     }
 
+    /// Pure-V6 network: a submitted transaction must be included in a block
+    /// and served by the query service. (The with-proof transaction endpoint
+    /// is not asserted: inclusion proofs against VID2 common data are not
+    /// implemented yet.)
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_new_protocol_transaction_queryable() {
+        const EPOCH_HEIGHT: u64 = 100;
+        const NUM_NODES: usize = 5;
+
+        const NEW_PROTOCOL: Upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .epoch_start_block(0)
+            .build();
+
+        let api_port = reserve_tcp_port().expect("No ports free for query service");
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence)
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<SequencerApiVersion>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    Duration::from_secs(2),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                StakeTableContractVersion::V3,
+                NEW_PROTOCOL,
+            )
+            .await
+            .unwrap()
+            .build();
+
+        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
+
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+        client.connect(Some(Duration::from_secs(30))).await;
+
+        // Let the chain produce a few blocks first.
+        wait_for_decided_height(&network.server, 5, "startup").await;
+
+        let ns_id = NamespaceId::from(1_u32);
+        let tx = Transaction::new(ns_id, vec![1, 2, 3]);
+        network
+            .server
+            .submit_transaction(tx.clone())
+            .await
+            .expect("transaction submission");
+
+        let mut events = network.server.event_stream();
+        let tx_height = timeout(Duration::from_secs(120), async {
+            loop {
+                let event = events.next().await.expect("event stream ended");
+                if let Some(leaf) = decided_leaves(&event)
+                    .into_iter()
+                    .find(|leaf| leaf.block_header().ns_table().find_ns_id(&ns_id).is_some())
+                {
+                    break leaf.height();
+                }
+            }
+        })
+        .await
+        .expect("transaction was not included in any block");
+        drop(events);
+        tracing::info!(tx_height, "transaction included");
+
+        for attempt in 0..30 {
+            match client
+                .get::<TransactionQueryData<SeqTypes>>(&format!(
+                    "availability/transaction/hash/{}/noproof",
+                    tx.commit()
+                ))
+                .send()
+                .await
+            {
+                Ok(data) => {
+                    tracing::info!(height = data.block_height(), "transaction served");
+                    return;
+                },
+                Err(err) => tracing::warn!(attempt, %err, "tx-by-hash not available"),
+            }
+            sleep(Duration::from_secs(2)).await;
+        }
+
+        // Dump what the query service has for the block that contains the tx.
+        let block = client
+            .get::<BlockQueryData<SeqTypes>>(&format!("availability/block/{tx_height}"))
+            .send()
+            .await;
+        let block_summary = block.map(|b| (b.height(), b.size(), b.num_transactions()));
+        panic!(
+            "transaction included at height {tx_height} but never served; block at that height \
+             from query service: {block_summary:?}"
+        );
+    }
+
     /// Run a `TestNetwork` based directly on the new protocol version (V0_6,
     /// no upgrade/cutover) and verify it produces blocks from genesis.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -5183,6 +5300,660 @@ mod test {
         );
 
         Ok(())
+    }
+
+    /// Upgrade a live network from V5 to V6 (the new protocol) around the
+    /// epoch 4 -> 5 boundary, then exercise the restart paths that matter
+    /// operationally on the new protocol:
+    ///
+    /// 1. Post-upgrade sanity: V6 blocks are produced, a submitted transaction
+    ///    is finalized, and epochs keep changing (with V6-computed DRBs).
+    /// 2. A rolling restart of every node, one at a time a few seconds apart,
+    ///    after which every node makes progress.
+    /// 3. A simultaneous restart of all nodes, after which the chain extends
+    ///    the pre-restart history without rewriting it.
+    /// 4. A restart of one node as a query node with fresh storage, which must
+    ///    catch up, rejoin consensus, and serve current merklized state.
+    #[test_log::test]
+    fn test_new_protocol_upgrade_rolling_restarts() {
+        // Backtrace capture segfaults libunwind on some debug builds, and the
+        // restart phases hit error paths (best-effort fetch retries) often
+        // enough to make that near-certain over a long run. nextest forces
+        // RUST_BACKTRACE=1, so turn it back off inside the process before any
+        // capture happens.
+        //
+        // SAFETY: nextest runs one test per process; nothing else reads the
+        // environment concurrently this early in the test.
+        unsafe { std::env::set_var("RUST_BACKTRACE", "0") };
+
+        // `block_on` polls the future on the calling thread, and this test's
+        // async state machine (contract deployment, three network builds,
+        // several `serve` closures) overflows the default test thread stack
+        // in debug builds. Run it on a dedicated thread with a big stack.
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(|| {
+                tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(new_protocol_upgrade_rolling_restarts())
+            })
+            .unwrap()
+            .join()
+            .unwrap()
+    }
+
+    async fn new_protocol_upgrade_rolling_restarts() {
+        const NUM_NODES: usize = 5;
+        const EPOCH_HEIGHT: u64 = 70;
+        // The upgrade is proposed at this view and takes effect
+        // `UPGRADE_CONSTANTS.finish_offset` (130) views later, around view
+        // 345. Views can only run ahead of block heights (failed views produce
+        // no block), so the first V6 block lands at height <= ~345: epoch 5
+        // (heights 281..=350) on a healthy run, epoch 4 if some views fail.
+        //
+        // The whole upgrade window (proposal, votes, and every proposal the
+        // certificate is attached to) must stay within epochs >= 3: epochs 1-2
+        // run on the genesis-seeded stake table while epochs >= 3 use the
+        // (differently ordered and weighted) PoS table from L1, and
+        // `UpgradeCertificate::validate` checks the cert against the epoch of
+        // the proposal carrying it, not the epoch its votes were collected in.
+        // A window crossing that table change wedges the chain: the cert's
+        // positional signer bitmap re-resolves to the wrong signers and every
+        // proposal attaching it is rejected. Since the window is view-based
+        // but epochs are height-based, proposing a full epoch after the epoch
+        // 3 boundary keeps the votes inside PoS epochs even if views run up to
+        // `EPOCH_HEIGHT` ahead of heights.
+        const UPGRADE_START_PROPOSING_VIEW: u64 = 3 * EPOCH_HEIGHT + 5;
+        // Decided blocks each progress check requires.
+        const PROGRESS_BLOCKS: u64 = 5;
+        // Pause between nodes during the rolling restart.
+        const ROLLING_RESTART_GAP: Duration = Duration::from_secs(3);
+
+        const UPGRADE: Upgrade = Upgrade::new(EPOCH_REWARD_VERSION, NEW_PROTOCOL_VERSION);
+
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+
+        let test_config = TestConfigBuilder::<NUM_NODES>::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .epoch_start_block(0)
+            // Most pre-upgrade views are empty; don't spend the default 1s per
+            // view waiting on the builder.
+            .builder_timeout(Duration::from_millis(500))
+            .set_upgrades(NEW_PROTOCOL_VERSION)
+            .await
+            .upgrade_proposing_views(UPGRADE_START_PROPOSING_VIEW, 1000)
+            .build();
+
+        // `set_upgrades` deploys the stake table but, unlike `pos_hook`, does
+        // not enable interval mining; without it the L1 stops finalizing
+        // blocks and stake-table fetches for later epochs stall.
+        test_config
+            .anvil()
+            .expect("TestConfigBuilder starts an anvil")
+            .anvil_set_interval_mining(1)
+            .await
+            .expect("interval mining");
+
+        // The base version (V5) already has epochs, so the genesis chain
+        // config must contain the stake table contract deployed above.
+        let genesis_state = ValidatedState {
+            chain_config: test_config
+                .get_upgrade_map()
+                .chain_config(NEW_PROTOCOL_VERSION)
+                .into(),
+            ..Default::default()
+        };
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let node_1_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+
+        // Query nodes must serve the light-client API: query services
+        // validate blocks fetched from their peers against light-client
+        // proofs, so without it inter-query-node backfill cannot work.
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port)
+                    .catchup(Default::default())
+                    .light_client(Default::default()),
+            ))
+            .persistences(persistence.clone())
+            .states(std::array::from_fn(|_| genesis_state.clone()))
+            .catchups(std::array::from_fn(|_| {
+                state_peers(&[api_port, node_1_port])
+            }))
+            .network_config(test_config)
+            .build();
+        let mut network = TestNetwork::new(config, UPGRADE).await;
+
+        // Run node 1 as a second query node. A single query node cannot
+        // survive the rolling restart: every restarted validator refetches
+        // merkle frontiers from the query service, and a restarted query node
+        // must backfill the blocks it missed while down from another query
+        // service. With only one, its own restart wedges the whole network in
+        // a catchup loop. (This mirrors production, which always runs several
+        // query nodes.)
+        network.peers[0].shut_down().await;
+        network.peers.remove(0);
+        let mut query_node_1 = serve_second_query_node(
+            network.cfg.clone(),
+            genesis_state.clone(),
+            &storage[1],
+            &storage[1],
+            node_1_port,
+            api_port,
+            UPGRADE,
+        )
+        .await;
+
+        // Wait for the network to propose upgrading. UpgradeProposal events
+        // are HotShot-specific and not surfaced through the CoordinatorEvent
+        // adapter, so use the raw HotShot stream here.
+        let mut hotshot_events = network
+            .server
+            .consensus_handle()
+            .legacy_consensus()
+            .read()
+            .await
+            .event_stream();
+        timeout(Duration::from_secs(600), async {
+            loop {
+                let event = hotshot_events.next().await.unwrap();
+                if let EventType::UpgradeProposal { proposal, .. } = event.event {
+                    assert_eq!(
+                        proposal.data.upgrade_proposal.new_version,
+                        NEW_PROTOCOL_VERSION
+                    );
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("no upgrade proposal");
+        drop(hotshot_events);
+
+        // Wait for the first block decided under the new protocol version and
+        // check the cutover landed around the epoch 4 -> 5 boundary.
+        let mut events = network.server.event_stream();
+        let first_v6 = timeout(Duration::from_secs(900), async {
+            loop {
+                let event = events.next().await.expect("event stream ended");
+                if let Some(leaf) = decided_leaves(&event)
+                    .into_iter()
+                    .find(|leaf| leaf.block_header().version() == NEW_PROTOCOL_VERSION)
+                {
+                    break leaf;
+                }
+            }
+        })
+        .await
+        .expect("no block was decided under the new protocol version");
+        drop(events);
+        let cutover_epoch = epoch_from_block_number(first_v6.height(), EPOCH_HEIGHT);
+        tracing::info!(
+            height = first_v6.height(),
+            cutover_epoch,
+            "first new-protocol block decided"
+        );
+        assert!(
+            (4..=5).contains(&cutover_epoch),
+            "the upgrade should land around the epoch 4 -> 5 boundary, but the first V6 block \
+             (height {}) is in epoch {cutover_epoch}",
+            first_v6.height(),
+        );
+
+        // A transaction submitted under the new protocol must be finalized and
+        // served by the query node.
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+        client.connect(Some(Duration::from_secs(30))).await;
+        let ns_id = NamespaceId::from(1_u32);
+        let tx = Transaction::new(ns_id, vec![1, 2, 3]);
+        network
+            .server
+            .submit_transaction(tx.clone())
+            .await
+            .expect("transaction submission under the new protocol");
+
+        // First check inclusion: the block containing the transaction lists
+        // its namespace in the header, which decide events carry even when
+        // the payload is not attached.
+        let mut events = network.server.event_stream();
+        let tx_height = timeout(Duration::from_secs(240), async {
+            loop {
+                let event = events.next().await.expect("event stream ended");
+                if let Some(leaf) = decided_leaves(&event)
+                    .into_iter()
+                    .find(|leaf| leaf.block_header().ns_table().find_ns_id(&ns_id).is_some())
+                {
+                    break leaf.height();
+                }
+            }
+        })
+        .await
+        .expect("transaction was not included in any block under the new protocol");
+        drop(events);
+
+        // Then check the query service serves it. Use the `noproof` variant:
+        // transaction inclusion proofs against VID2 common data are not
+        // implemented yet, so the with-proof endpoint fails for V6 blocks.
+        let mut finalized = false;
+        for _ in 0..60 {
+            if client
+                .get::<TransactionQueryData<SeqTypes>>(&format!(
+                    "availability/transaction/hash/{}/noproof",
+                    tx.commit()
+                ))
+                .send()
+                .await
+                .is_ok()
+            {
+                finalized = true;
+                break;
+            }
+            sleep(Duration::from_secs(2)).await;
+        }
+        if !finalized {
+            let stored_height = client.get::<u64>("status/block-height").send().await;
+            panic!(
+                "transaction was included at height {tx_height} but the query service does not \
+                 serve it (query service block height: {stored_height:?})"
+            );
+        }
+
+        // Epochs must keep changing: cross two boundaries past the cutover so
+        // the chain runs on a stake table and DRB produced by the new
+        // protocol itself.
+        wait_for_decided_height(
+            &network.server,
+            (cutover_epoch + 1) * EPOCH_HEIGHT + 1,
+            "post-upgrade epoch changes",
+        )
+        .await;
+
+        // ----- Rolling restart: every node, one at a time -----
+
+        for i in 0..network.peers.len() {
+            let node_id = i + 2;
+            tracing::info!(node_id, "rolling restart: node going down");
+            network.peers[i].shut_down().await;
+            sleep(ROLLING_RESTART_GAP).await;
+            let ctx = network
+                .cfg
+                .init_node(
+                    node_id,
+                    genesis_state.clone(),
+                    persistence[node_id].clone(),
+                    Some(state_peers(&[api_port, node_1_port])),
+                    None,
+                    &NoMetrics,
+                    STAKE_TABLE_CAPACITY_FOR_TEST,
+                    NullEventConsumer,
+                    UPGRADE,
+                    network.cfg.upgrades(),
+                )
+                .await;
+            ctx.start_consensus().await;
+            network.peers[i] = ctx;
+            tracing::info!(node_id, "rolling restart: node back up");
+            sleep(ROLLING_RESTART_GAP).await;
+        }
+
+        tracing::info!("rolling restart: query node 1 going down");
+        query_node_1.shut_down().await;
+        sleep(ROLLING_RESTART_GAP).await;
+        query_node_1 = serve_second_query_node(
+            network.cfg.clone(),
+            genesis_state.clone(),
+            &storage[1],
+            &storage[1],
+            node_1_port,
+            api_port,
+            UPGRADE,
+        )
+        .await;
+        tracing::info!("rolling restart: query node 1 back up");
+        // Do not take down the other query node until this one serves state
+        // catchup again, or no current catchup source is left in the network.
+        wait_for_merklized_state(
+            &query_node_1,
+            node_1_port,
+            "rolling restart: query node 1 recovery",
+        )
+        .await;
+        sleep(ROLLING_RESTART_GAP).await;
+
+        tracing::info!("rolling restart: query node (node 0) going down");
+        network.server.shut_down().await;
+        sleep(ROLLING_RESTART_GAP).await;
+        let cfg = network.cfg.clone();
+        let node_0_state = genesis_state.clone();
+        let node_0_persistence = persistence[0].clone();
+        let node_0_catchup = state_peers(&[api_port, node_1_port]);
+        let server = Options::with_port(api_port)
+            .catchup(Default::default())
+            .light_client(Default::default())
+            .query_sql(
+                Query {
+                    peers: vec![format!("http://localhost:{node_1_port}").parse().unwrap()],
+                    ..Default::default()
+                },
+                tmp_options(&storage[0]),
+            )
+            .serve(move |metrics, consumer, rr_storage| {
+                async move {
+                    Ok(cfg
+                        .init_node(
+                            0,
+                            node_0_state,
+                            node_0_persistence,
+                            Some(node_0_catchup),
+                            rr_storage,
+                            &*metrics,
+                            STAKE_TABLE_CAPACITY_FOR_TEST,
+                            consumer,
+                            UPGRADE,
+                            cfg.upgrades(),
+                        )
+                        .await)
+                }
+                .boxed()
+            })
+            .await
+            .expect("query node restart");
+        server.start_consensus().await;
+        network.server = server;
+        tracing::info!("rolling restart: query node back up");
+        wait_for_merklized_state(
+            &network.server,
+            api_port,
+            "rolling restart: query node 0 recovery",
+        )
+        .await;
+
+        // Every node must make progress after the rolling restart.
+        let tip = network.server.decided_leaf().await.height();
+        wait_for_decided_height(
+            &network.server,
+            tip + PROGRESS_BLOCKS,
+            "rolling restart: node 0",
+        )
+        .await;
+        wait_for_decided_height(
+            &query_node_1,
+            tip + PROGRESS_BLOCKS,
+            "rolling restart: node 1",
+        )
+        .await;
+        for (i, peer) in network.peers.iter().enumerate() {
+            wait_for_decided_height(
+                peer,
+                tip + PROGRESS_BLOCKS,
+                &format!("rolling restart: node {}", i + 2),
+            )
+            .await;
+        }
+
+        // ----- Simultaneous restart of all nodes -----
+
+        let restart_height = network.server.decided_leaf().await.height();
+        // Record the leaf at that height so we can verify the restarted chain
+        // extends this history rather than rewriting it.
+        let pre_restart_leaf = leaf_from_query_service(&client, restart_height).await;
+
+        tracing::info!(restart_height, "restarting all nodes simultaneously");
+        let saved_cfg = network.cfg.clone();
+        network.stop_consensus().await;
+        query_node_1.shut_down().await;
+        drop(query_node_1);
+        drop(network);
+
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(port)
+                    .catchup(Default::default())
+                    .light_client(Default::default()),
+            ))
+            .persistences(persistence.clone())
+            .states(std::array::from_fn(|_| genesis_state.clone()))
+            .catchups(std::array::from_fn(|_| state_peers(&[port])))
+            .network_config(saved_cfg)
+            .build();
+        let mut network = TestNetwork::new(config, UPGRADE).await;
+
+        wait_for_decided_height(
+            &network.server,
+            restart_height + PROGRESS_BLOCKS,
+            "simultaneous restart",
+        )
+        .await;
+
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{port}").parse().unwrap());
+        client.connect(Some(Duration::from_secs(30))).await;
+        let post_restart_leaf = leaf_from_query_service(&client, restart_height).await;
+        assert_eq!(
+            pre_restart_leaf.hash(),
+            post_restart_leaf.hash(),
+            "the restart rewrote the decided chain at height {restart_height}"
+        );
+
+        // ----- Fresh-storage query node catches up -----
+
+        // Bring node 1 back as a query node with fresh query storage: its
+        // whole archive (blocks, leaves, merklized state) must be rebuilt
+        // from its peers. Consensus persistence is kept: a node with a blank
+        // consensus state hundreds of views behind the tip cannot join a live
+        // V6 network today — the new protocol's vote rules require the parent
+        // chain and there is no seed-from-live-anchor catchup path yet.
+        tracing::info!("restarting node 1 as a query node with fresh storage");
+        network.peers[0].shut_down().await;
+        network.peers.remove(0);
+
+        let fresh_storage = SqlDataSource::create_storage().await;
+        let node_1_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let node_1 = serve_second_query_node(
+            network.cfg.clone(),
+            genesis_state.clone(),
+            &storage[1],
+            &fresh_storage,
+            node_1_port,
+            port,
+            UPGRADE,
+        )
+        .await;
+
+        // It must rejoin consensus and keep up with the chain...
+        let tip = network.server.decided_leaf().await.height();
+        wait_for_decided_height(&node_1, tip + PROGRESS_BLOCKS, "fresh query node").await;
+
+        // ...and serve current merklized state through its own API.
+        let node_1_client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{node_1_port}").parse().unwrap());
+        node_1_client.connect(Some(Duration::from_secs(30))).await;
+        let target_height = network.server.decided_leaf().await.height();
+        let mut retries = 0;
+        loop {
+            let height = node_1_client
+                .get::<u64>("block-state/block-height")
+                .send()
+                .await
+                .unwrap_or(0);
+            if height >= target_height {
+                break;
+            }
+            retries += 1;
+            assert!(
+                retries <= 120,
+                "fresh query node merklized state is stuck at {height}, target {target_height}"
+            );
+            sleep(Duration::from_secs(3)).await;
+        }
+        let leaf = leaf_from_query_service(&node_1_client, target_height).await;
+        assert_eq!(leaf.header().version(), NEW_PROTOCOL_VERSION);
+    }
+
+    /// Consensus state catchup pointed at the query services on `ports`.
+    fn state_peers(ports: &[u16]) -> StatePeers<SequencerApiVersion> {
+        StatePeers::from_urls(
+            ports
+                .iter()
+                .map(|port| format!("http://localhost:{port}").parse().unwrap())
+                .collect(),
+            Default::default(),
+            Duration::from_secs(2),
+            &NoMetrics,
+        )
+    }
+
+    /// (Re)start node 1 of `test_new_protocol_upgrade_rolling_restarts` as the
+    /// secondary query node: consensus persistence in `consensus_db`, query
+    /// module backed by `query_db`, serving on `port`, backfilling from (and
+    /// doing consensus catchup against) the primary query node on
+    /// `primary_port`.
+    async fn serve_second_query_node(
+        cfg: TestConfig<5>,
+        state: ValidatedState,
+        consensus_db: &<SqlDataSource as TestableSequencerDataSource>::Storage,
+        query_db: &<SqlDataSource as TestableSequencerDataSource>::Storage,
+        port: u16,
+        primary_port: u16,
+        upgrade: Upgrade,
+    ) -> SequencerContext<network::Memory, persistence::sql::Persistence> {
+        let persistence =
+            <SqlDataSource as TestableSequencerDataSource>::persistence_options(consensus_db);
+        let catchup = state_peers(&[primary_port, port]);
+        let ctx = Options::with_port(port)
+            .catchup(Default::default())
+            .light_client(Default::default())
+            .query_sql(
+                Query {
+                    peers: vec![format!("http://localhost:{primary_port}").parse().unwrap()],
+                    ..Default::default()
+                },
+                tmp_options(query_db),
+            )
+            .serve(move |metrics, consumer, rr_storage| {
+                async move {
+                    Ok(cfg
+                        .init_node(
+                            1,
+                            state,
+                            persistence,
+                            Some(catchup),
+                            rr_storage,
+                            &*metrics,
+                            STAKE_TABLE_CAPACITY_FOR_TEST,
+                            consumer,
+                            upgrade,
+                            cfg.upgrades(),
+                        )
+                        .await)
+                }
+                .boxed()
+            })
+            .await
+            .expect("second query node");
+        ctx.start_consensus().await;
+        ctx
+    }
+
+    /// Wait until the query service on `port` has rebuilt merklized state up
+    /// to `ctx`'s current decided height. Until then the node cannot serve
+    /// state catchup (merkle frontiers, fee/reward accounts) to its peers, so
+    /// a rolling restart must not take down the next query node before this
+    /// point — with no current query service left, restarted validators
+    /// cannot finish state validation and the chain halts.
+    async fn wait_for_merklized_state<N, P>(ctx: &SequencerContext<N, P>, port: u16, what: &str)
+    where
+        N: ConnectedNetwork<PubKey>,
+        P: SequencerPersistence,
+    {
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{port}").parse().unwrap());
+        client.connect(Some(Duration::from_secs(30))).await;
+        let target = ctx.decided_leaf().await.height();
+        for _ in 0..60 {
+            let height = client
+                .get::<u64>("block-state/block-height")
+                .send()
+                .await
+                .unwrap_or(0);
+            if height >= target {
+                return;
+            }
+            sleep(Duration::from_secs(2)).await;
+        }
+        panic!("{what}: merklized state did not recover to height {target} within 120s");
+    }
+
+    /// The decided leaves in `event`, whether it is a legacy HotShot decide or
+    /// a new-protocol decide, newest first.
+    fn decided_leaves(event: &CoordinatorEvent<SeqTypes>) -> Vec<Leaf2> {
+        let infos: &[LeafInfo<SeqTypes>] = match event {
+            CoordinatorEvent::LegacyEvent(Event {
+                event: EventType::Decide { leaf_chain, .. },
+                ..
+            }) => leaf_chain,
+            CoordinatorEvent::NewDecide { leaf_infos, .. } => leaf_infos,
+            _ => return Vec::new(),
+        };
+        infos.iter().map(|info| info.leaf.clone()).collect()
+    }
+
+    /// Poll `ctx` until it has decided a leaf at or above `target`, panicking
+    /// if no new leaf is decided for two minutes.
+    async fn wait_for_decided_height<N, P>(ctx: &SequencerContext<N, P>, target: u64, what: &str)
+    where
+        N: ConnectedNetwork<PubKey>,
+        P: SequencerPersistence,
+    {
+        let mut height = ctx.decided_leaf().await.height();
+        let mut stalled_polls = 0;
+        while height < target {
+            sleep(Duration::from_secs(2)).await;
+            let new_height = ctx.decided_leaf().await.height();
+            if new_height > height {
+                height = new_height;
+                stalled_polls = 0;
+            } else {
+                stalled_polls += 1;
+                assert!(
+                    stalled_polls < 60,
+                    "{what}: chain stalled at height {height} before reaching {target}"
+                );
+            }
+        }
+    }
+
+    /// Fetch the leaf at `height`, retrying while the query service catches up
+    /// to its node's decided height.
+    async fn leaf_from_query_service(
+        client: &Client<ServerError, SequencerApiVersion>,
+        height: u64,
+    ) -> LeafQueryData<SeqTypes> {
+        for _ in 0..60 {
+            if let Ok(leaf) = client
+                .get::<LeafQueryData<SeqTypes>>(&format!("availability/leaf/{height}"))
+                .send()
+                .await
+            {
+                return leaf;
+            }
+            sleep(Duration::from_secs(2)).await;
+        }
+        panic!("leaf {height} did not become available");
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

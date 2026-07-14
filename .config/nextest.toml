@@ -43,6 +43,13 @@ filter = 'test(slow_test_restart)'
 slow-timeout = { period = "1m", terminate-after = 3 }
 threads-required = 'num-cpus'
 
+# Runs a full network through a V5 -> V6 upgrade (~345 views) plus three
+# restart scenarios, so it needs far more than the default 6 minutes.
+[[profile.default.overrides]]
+filter = 'test(test_new_protocol_upgrade_rolling_restarts)'
+slow-timeout = { period = "2m", terminate-after = 25 }
+threads-required = 'num-cpus'
+
 [[profile.default.overrides]]
 filter = 'package(request-response)'
 threads-required = 'num-cpus'

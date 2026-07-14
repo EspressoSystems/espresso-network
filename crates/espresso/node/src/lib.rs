@@ -1764,7 +1764,7 @@ pub mod testing {
                 stake_table_capacity,
                 event_consumer,
                 Default::default(),
-                Duration::from_secs(2),
+                Duration::from_secs(10),
             )
             .await
             .unwrap()

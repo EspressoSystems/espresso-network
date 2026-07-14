@@ -74,7 +74,10 @@ impl ExternalEventHandler {
                     .try_send(request_response.into())
                 {
                     Ok(()) => Ok(()),
-                    Err(TrySendError::Full(..)) => bail!("request-response channel full"),
+                    Err(TrySendError::Full(..)) => {
+                        tracing::debug!("request-response channel full, dropping message");
+                        Ok(())
+                    },
                     Err(TrySendError::Closed(..)) => bail!("request-response channel closed"),
                 }
             },
