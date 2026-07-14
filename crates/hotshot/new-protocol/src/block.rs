@@ -152,7 +152,7 @@ impl<T: NodeType> BlockBuilder<T> {
             // sleep so the coordinator's event queue doesnot overflow
             // because if there are no transactions then the block production is way too fast
             if buffer.is_empty() {
-                sleep(Duration::from_millis(500)).await;
+                sleep(Duration::from_secs(1)).await;
             }
             let (hashes, txs): (Vec<_>, Vec<_>) = buffer.into_iter().unzip();
             let manifest = DedupManifest {
@@ -239,6 +239,10 @@ impl<T: NodeType> BlockBuilder<T> {
                 true
             }
         });
+    }
+
+    pub fn outstanding_transactions(&self) -> (usize, usize) {
+        (self.retry_pending.len(), self.retry_total_bytes as usize)
     }
 
     pub fn on_submit_transaction(&mut self, tx: T::Transaction) {
