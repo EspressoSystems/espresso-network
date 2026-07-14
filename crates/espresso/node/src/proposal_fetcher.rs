@@ -174,13 +174,18 @@ where
     async fn fetch_request(&self, (view, leaf): Request) {
         let span = tracing::warn_span!("fetch proposal", ?view, %leaf);
         let res: anyhow::Result<()> = async {
-            let anchor_view = self
-                .persistence
-                .load_anchor_view()
-                .await
-                .context("loading anchor view")?;
-            if view <= anchor_view {
-                tracing::debug!(?anchor_view, "skipping already-decided proposal");
+            let mut decided_view = self.consensus_handle.decided_leaf().await.view_number();
+            if decided_view == ViewNumber::genesis() {
+                // A freshly restarted node may not have decided anything
+                // yet sofall back to the persisted anchor view
+                decided_view = self
+                    .persistence
+                    .load_anchor_view()
+                    .await
+                    .context("loading anchor view")?;
+            }
+            if view <= decided_view {
+                tracing::debug!(?decided_view, "skipping already-decided proposal");
                 return Ok(());
             }
 
@@ -228,7 +233,7 @@ where
         .instrument(span)
         .await;
         if let Err(err) = res {
-            tracing::warn!("failed to fetch proposal: {err:#}");
+            tracing::warn!(?view, err = %format!("{err:#}"), "failed to fetch proposal");
             self.metrics.failed.add(1);
 
             // Avoid busy loop when operations are failing.
