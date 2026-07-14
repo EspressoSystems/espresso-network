@@ -351,6 +351,7 @@ mod tests {
     use committable::Committable;
     use hotshot::types::BLSPubKey;
     use hotshot_example_types::node_types::TestTypes;
+    use hotshot_testing::{node_stake::TestNodeStakes, test_builder::gen_node_lists};
     use hotshot_types::{
         data::{EpochNumber, ViewNumber},
         epoch_membership::EpochMembership,
@@ -859,5 +860,55 @@ mod tests {
             task.accumulate_vote(vote);
         }
         assert_no_certs(&mut task).await;
+    }
+
+    /// Collector over a membership where node 9 is removed from the quorum
+    /// committee starting at epoch 3 (9 members of stake 1, threshold 7).
+    fn setup_cert1_task_with_removed_node()
+    -> VoteCollector<TestTypes, QuorumVote2<TestTypes>, Certificate1<TestTypes>> {
+        let membership = mock_membership();
+        let committee = gen_node_lists::<TestTypes>(9, 9, &TestNodeStakes::default()).0;
+        membership
+            .membership()
+            .add_quorum_committee(EpochNumber::new(3), committee);
+        membership
+            .membership()
+            .register_epoch(EpochNumber::new(3), [0u8; 32]);
+        VoteCollector::new(membership, test_upgrade_lock())
+    }
+
+    /// A vote from a validator that was removed from the quorum committee in
+    /// a later epoch does not count toward that epoch's certificate.
+    #[tokio::test]
+    async fn test_vote_from_removed_validator_ignored() {
+        let mut task = setup_cert1_task_with_removed_node();
+        let view = ViewNumber::new(21);
+        let epoch = EpochNumber::new(3);
+
+        for i in 0..6 {
+            task.accumulate_vote(make_quorum_vote(i, view, epoch));
+        }
+        task.accumulate_vote(make_quorum_vote(9, view, epoch));
+        assert_no_certs(&mut task).await;
+
+        task.accumulate_vote(make_quorum_vote(6, view, epoch));
+        let cert = timeout(CERT_TIMEOUT, task.next()).await.unwrap().unwrap();
+        assert_eq!(cert.view_number(), view);
+    }
+
+    /// The same membership still counts node 9's vote in an epoch where it
+    /// is a member: committee resolution is per-epoch.
+    #[tokio::test]
+    async fn test_vote_counts_in_epoch_before_removal() {
+        let mut task = setup_cert1_task_with_removed_node();
+        let view = ViewNumber::new(11);
+        let epoch = EpochNumber::new(2);
+
+        for i in 0..6 {
+            task.accumulate_vote(make_quorum_vote(i, view, epoch));
+        }
+        task.accumulate_vote(make_quorum_vote(9, view, epoch));
+        let cert = timeout(CERT_TIMEOUT, task.next()).await.unwrap().unwrap();
+        assert_eq!(cert.view_number(), view);
     }
 }
