@@ -103,6 +103,7 @@ impl<T: NodeType> HasViewNumber for Vote1<T> {
 pub struct TimeoutVoteMessage<T: NodeType> {
     pub vote: TimeoutVote2<T>,
     pub lock: Option<Certificate1<T>>,
+    pub tc: Option<TimeoutCertificate2<T>>,
 }
 
 impl<T: NodeType> HasViewNumber for TimeoutVoteMessage<T> {
@@ -178,6 +179,7 @@ pub enum ConsensusMessage<T: NodeType, S> {
     VidShareFragment(VidShareFragmentMessage<T>),
     /// A node's own VID share, broadcast independently of Vote1.
     VidShareBroadcast(VidDisperseShare2<T>),
+    HighQc(Certificate1<T>),
 }
 
 impl<T: NodeType, S> ConsensusMessage<T, S> {
@@ -194,6 +196,7 @@ impl<T: NodeType, S> ConsensusMessage<T, S> {
             Self::EpochChange(c) => ConsensusMessage::EpochChange(c),
             Self::VidShareFragment(v) => ConsensusMessage::VidShareFragment(v),
             Self::VidShareBroadcast(v) => ConsensusMessage::VidShareBroadcast(v),
+            Self::HighQc(c) => ConsensusMessage::HighQc(c),
         }
     }
 }
@@ -211,6 +214,7 @@ impl<T: NodeType, S> HasViewNumber for ConsensusMessage<T, S> {
             Self::EpochChange(epoch_change) => epoch_change.cert1.view_number(),
             Self::VidShareFragment(fragment) => fragment.data.view_number(),
             Self::VidShareBroadcast(vid_share) => vid_share.view_number(),
+            Self::HighQc(certificate) => certificate.view_number(),
         }
     }
 }

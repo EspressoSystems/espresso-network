@@ -1,11 +1,13 @@
+use std::time::Duration;
+
 use hotshot::types::BLSPubKey;
 use hotshot_example_types::node_types::TestTypes;
-use hotshot_types::traits::signature_key::SignatureKey;
+use hotshot_types::{traits::signature_key::SignatureKey, vote::HasViewNumber};
 
 use super::common::{harness::TestHarness, utils::TestData};
 use crate::{
     consensus::ConsensusInput,
-    message::{Certificate1, EpochChangeMessage, Proposal},
+    message::{Certificate1, ConsensusMessage, EpochChangeMessage, Proposal},
     tests::common::assertions::{
         any, count_matching, is_block_built, is_block_reconstructed, is_cert1, is_cert2,
         is_drb_result, is_header_created, is_header_created_for_view, is_leaf_decided, is_proposal,
@@ -626,4 +628,64 @@ async fn test_timeout_vote_lock_advances_view() {
         view_changes_before,
         "a lock below our current view must not advance us"
     );
+}
+
+/// A peer's timeout vote carries its latest timeout certificate.
+///
+/// A node that fell behind on views that only advanced via timeouts (so no
+/// newer QC exists anywhere) adopts the certificate and re-arms its timer,
+/// so its next local timeout is for the adopted view.
+#[tokio::test]
+async fn test_timeout_vote_tc_advances_view() {
+    let test_data = TestData::new(3).await;
+    let mut harness = TestHarness::new_with_timer(0, Duration::from_millis(250)).await;
+
+    // The node starts at genesis. A peer times out view 3, attaching the
+    // timeout certificate for view 2 that formed without us.
+    let tc = test_data.views[1].timeout_cert.clone();
+    harness.message(test_data.views[2].timeout_vote_input_with_tc(1, None, Some(tc)));
+
+    assert_eq!(
+        *harness.current_view(),
+        3,
+        "the attached timeout certificate should advance us to view 3"
+    );
+
+    harness
+        .process_until(|inputs| {
+            inputs
+                .iter()
+                .any(|i| matches!(i, ConsensusInput::Timeout(view, _) if **view == 3))
+        })
+        .await;
+}
+
+/// A stale timeout vote is answered with the responder's newest certificate,
+/// so a node stuck behind receives the evidence it needs to advance.
+#[tokio::test]
+async fn test_stale_timeout_vote_answered_with_catchup_evidence() {
+    let test_data = TestData::new(3).await;
+    let mut harness = TestHarness::new(0).await;
+
+    // Advance to view 3 via the network's timeout certificates.
+    harness.apply_and_process(test_data.views[0].timeout_cert_input());
+    harness.apply_and_process(test_data.views[1].timeout_cert_input());
+    assert_eq!(*harness.current_view(), 3);
+
+    let evidence = harness
+        .coordinator()
+        .catchup_evidence()
+        .expect("a node past genesis has catchup evidence");
+    assert!(
+        matches!(
+            &evidence,
+            ConsensusMessage::TimeoutCertificate(tc) if *tc.view_number() == 2
+        ),
+        "expected the view-2 timeout certificate, got {evidence:?}"
+    );
+
+    // The stale vote itself is only answered (unicast to its sender), never
+    // tallied: it must not regress or otherwise disturb consensus state.
+    harness.message(test_data.views[0].timeout_vote_input(1, None));
+    assert_eq!(*harness.current_view(), 3);
 }

@@ -255,6 +255,16 @@ impl TestView {
         node_index: u64,
         lock: Option<Certificate1<TestTypes>>,
     ) -> Message<TestTypes, Validated> {
+        self.timeout_vote_input_with_tc(node_index, lock, None)
+    }
+
+    /// Build a TimeoutVote Event carrying the sender's latest timeout cert.
+    pub fn timeout_vote_input_with_tc(
+        &self,
+        node_index: u64,
+        lock: Option<Certificate1<TestTypes>>,
+        tc: Option<TimeoutCertificate2<TestTypes>>,
+    ) -> Message<TestTypes, Validated> {
         let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
         let data = TimeoutData2 {
             view: self.view_number,
@@ -271,7 +281,7 @@ impl TestView {
         Message {
             sender: pub_key,
             message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote(
-                TimeoutVoteMessage { vote, lock },
+                TimeoutVoteMessage { vote, lock, tc },
             )),
         }
     }
@@ -1262,7 +1272,7 @@ pub(crate) fn build_cert2(
     )
 }
 
-fn build_timeout_cert(
+pub(crate) fn build_timeout_cert(
     view_number: ViewNumber,
     epoch: EpochNumber,
     epoch_membership: &hotshot_types::epoch_membership::EpochMembership<TestTypes>,

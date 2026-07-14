@@ -784,11 +784,16 @@ where
                     }
                 }
             },
-            ConsensusOutput::SendTimeoutVote(vote, lock) => {
+            ConsensusOutput::SendTimeoutVote(vote, lock, tc) => {
                 let view = vote.view_number();
-                debug!(%node, %view, has_lock = lock.is_some(), "send timeout vote");
+                debug!(
+                    %node, %view,
+                    has_lock = lock.is_some(),
+                    has_tc = tc.is_some(),
+                    "send timeout vote"
+                );
                 self.broadcast(
-                    ConsensusMessage::TimeoutVote(message::TimeoutVoteMessage { vote, lock }),
+                    ConsensusMessage::TimeoutVote(message::TimeoutVoteMessage { vote, lock, tc }),
                     "broadcast timeout vote",
                 )?
             },
@@ -1123,13 +1128,15 @@ where
                     if view < current_view {
                         debug!(
                             %node, %sender, %view, %current_view,
-                            "ignoring timeout vote for stale view"
+                            "timeout vote for stale view; replying with catchup evidence"
                         );
+                        self.send_catchup_evidence(&message.sender, view);
                         return None;
                     }
                     debug!(
                         %node, %sender, %view,
                         has_lock = timeout_msg.lock.is_some(),
+                        has_tc = timeout_msg.tc.is_some(),
                         "recv timeout vote"
                     );
                     self.timeout_collector
@@ -1137,13 +1144,19 @@ where
                     self.timeout_one_honest_collector
                         .accumulate_vote(timeout_msg.vote);
 
-                    // If a peer times out in a view at or ahead of us we adopt the
-                    // view of an embedded cert1, so divergent nodes re-converge on
-                    // the highest justified view on restart.
+                    // If a peer times out in a view at or ahead of us we adopt its
+                    // highest certificate.
                     //
-                    // TODO: Above we reject timeout votes too far ahead. A valid cert1
-                    // has precedence over that check so we need to move this up, but
-                    // first we need to verify the cert1 itself.
+                    // TODO: Above we reject timeout votes too far ahead. Valid
+                    // evidence has precedence over that check so we need to move
+                    // this up, but first we need to verify the certs themselves.
+                    let lock_view = timeout_msg.lock.as_ref().map(|c| c.view_number());
+                    if let Some(tc) = timeout_msg.tc
+                        && tc.view_number() >= current_view
+                        && lock_view.is_none_or(|lv| tc.view_number() >= lv)
+                    {
+                        return Some(ConsensusInput::TimeoutCertificate(tc));
+                    }
                     if let Some(cert) = timeout_msg.lock
                         && cert.view_number() >= current_view
                     {
@@ -1160,6 +1173,15 @@ where
                         "recv timeout certificate"
                     );
                     Some(ConsensusInput::TimeoutCertificate(tc))
+                },
+                ConsensusMessage::HighQc(qc) => {
+                    debug!(
+                        %node, %sender,
+                        view = %qc.view_number(),
+                        epoch = ?qc.epoch().map(|e| *e),
+                        "recv high qc"
+                    );
+                    Some(ConsensusInput::AdvanceView(qc))
                 },
                 ConsensusMessage::EpochChange(epoch_change) => {
                     debug!(
@@ -1488,7 +1510,11 @@ where
                 let message = Message {
                     sender: self.public_key.clone(),
                     message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote(
-                        message::TimeoutVoteMessage { vote, lock: None },
+                        message::TimeoutVoteMessage {
+                            vote,
+                            lock: None,
+                            tc: None,
+                        },
                     )),
                 };
                 if let Err(err) = self
@@ -1827,6 +1853,39 @@ where
     /// We ignore votes more that 30 views ahead of our current view.
     fn is_too_far_ahead(&self, v: ViewNumber) -> bool {
         v > self.consensus.current_view() + 30
+    }
+
+    pub(crate) fn catchup_evidence(&self) -> Option<ConsensusMessage<T, Validated>> {
+        let tc = self.consensus.latest_timeout_cert();
+        let qc = self.consensus.locked_cert();
+        match (tc, qc) {
+            (Some(tc), Some(qc)) if qc.view_number() > tc.view_number() => {
+                Some(ConsensusMessage::HighQc(qc.clone()))
+            },
+            (Some(tc), _) => Some(ConsensusMessage::TimeoutCertificate(tc.clone())),
+            (None, Some(qc)) => Some(ConsensusMessage::HighQc(qc.clone())),
+            (None, None) => None,
+        }
+    }
+
+    fn send_catchup_evidence(&mut self, peer: &T::SignatureKey, stale_view: ViewNumber) {
+        let Some(evidence) = self.catchup_evidence() else {
+            return;
+        };
+        if evidence.view_number() < stale_view {
+            return;
+        }
+        let message = Message {
+            sender: self.public_key.clone(),
+            message_type: MessageType::Consensus(evidence),
+        };
+        if let Err(err) =
+            self.network
+                .sender()
+                .unicast(self.consensus.current_view(), peer, &message)
+        {
+            warn!(%stale_view, %err, "failed to send catchup evidence");
+        }
     }
 }
 
