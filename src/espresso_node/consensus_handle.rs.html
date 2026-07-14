@@ -406,7 +406,7 @@
 <a href=#406 id=406 data-nosnippet>406</a>                    .request_proposal(view, leaf_commitment)
 <a href=#407 id=407 data-nosnippet>407</a>                    .<span class="kw">await
 <a href=#408 id=408 data-nosnippet>408</a>                    </span>.map(convert_proposal)
-<a href=#409 id=409 data-nosnippet>409</a>                    .map_err(|err| <span class="macro">anyhow::anyhow!</span>(<span class="string">"{err}"</span>))
+<a href=#409 id=409 data-nosnippet>409</a>                    .map_err(anyhow::Error::new)
 <a href=#410 id=410 data-nosnippet>410</a>            }
 <a href=#411 id=411 data-nosnippet>411</a>            .boxed());
 <a href=#412 id=412 data-nosnippet>412</a>        }
