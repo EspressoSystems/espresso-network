@@ -166,6 +166,8 @@ where
             stake_table.0,
             0,
         )));
+        let consensus_metrics = ConsensusMetricsValue::new(metrics);
+
         let handle = SystemContext::init(
             validator_config.public_key,
             validator_config.private_key.clone(),
@@ -176,7 +178,7 @@ where
             membership_coordinator.clone(),
             network.clone(),
             initializer,
-            ConsensusMetricsValue::new(metrics),
+            consensus_metrics.clone(),
             Arc::clone(&persistence),
             StorageMetricsValue::new(metrics),
         )
@@ -232,6 +234,7 @@ where
             .timeout_duration(Duration::from_secs(10))
             .storage(Arc::clone(&persistence))
             .metrics(metrics)
+            .consensus_metrics(consensus_metrics)
             .maybe_locked_qc(locked_qc)
             .make();
 
