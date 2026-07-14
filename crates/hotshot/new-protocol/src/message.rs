@@ -102,13 +102,32 @@ impl<T: NodeType> HasViewNumber for Vote1<T> {
 #[serde(bound(deserialize = ""))]
 pub struct TimeoutVoteMessage<T: NodeType> {
     pub vote: TimeoutVote2<T>,
-    pub lock: Option<Certificate1<T>>,
-    pub tc: Option<TimeoutCertificate2<T>>,
+    pub evidence: Option<CatchupEvidence<T>>,
 }
 
 impl<T: NodeType> HasViewNumber for TimeoutVoteMessage<T> {
     fn view_number(&self) -> ViewNumber {
         self.vote.view_number()
+    }
+}
+
+/// The highest certificate a node holds: its locked QC or its latest timeout
+/// certificate, whichever has the higher view. Attached to timeout votes and
+/// sent to peers stuck on stale views, so divergent nodes re-converge on the
+/// highest justified view.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = ""))]
+pub enum CatchupEvidence<T: NodeType> {
+    Qc(Certificate1<T>),
+    Tc(TimeoutCertificate2<T>),
+}
+
+impl<T: NodeType> HasViewNumber for CatchupEvidence<T> {
+    fn view_number(&self) -> ViewNumber {
+        match self {
+            Self::Qc(qc) => qc.view_number(),
+            Self::Tc(tc) => tc.view_number(),
+        }
     }
 }
 

@@ -7,7 +7,7 @@ use hotshot_types::{traits::signature_key::SignatureKey, vote::HasViewNumber};
 use super::common::{harness::TestHarness, utils::TestData};
 use crate::{
     consensus::ConsensusInput,
-    message::{Certificate1, ConsensusMessage, EpochChangeMessage, Proposal},
+    message::{CatchupEvidence, ConsensusMessage, EpochChangeMessage, Proposal},
     tests::common::assertions::{
         any, count_matching, is_block_built, is_block_reconstructed, is_cert1, is_cert2,
         is_drb_result, is_header_created, is_header_created_for_view, is_leaf_decided, is_proposal,
@@ -77,11 +77,11 @@ async fn send_timeout_votes(
     harness: &mut TestHarness,
     test_data: &TestData,
     view_idx: usize,
-    lock: Option<Certificate1<TestTypes>>,
+    evidence: Option<CatchupEvidence<TestTypes>>,
 ) {
     let test_view = &test_data.views[view_idx];
     for i in 0..THRESHOLD {
-        harness.message(test_view.timeout_vote_input(i, lock.clone()));
+        harness.message(test_view.timeout_vote_input(i, evidence.clone()));
     }
     harness
         .process_until(|inputs| {
@@ -259,7 +259,7 @@ async fn test_timeout_votes_form_tc() {
     // Process view 1 to establish locked_qc (needed for TC handling)
     send_proposal_and_vote1s(&mut harness, &test_data, 0, &node_key).await;
     // Send timeout votes for view 2 and form a TimeoutCertificate.
-    let lock = Some(test_data.views[0].cert1.clone());
+    let lock = Some(CatchupEvidence::Qc(test_data.views[0].cert1.clone()));
     send_timeout_votes(&mut harness, &test_data, 1, lock).await;
 
     assert!(
@@ -298,7 +298,7 @@ async fn test_leader_proposes_after_timeout() {
     // The TC input view is 3 (cert.view+1), which passes the stale filter
     // (3 > timeout_view=2). After ViewChanged(3) resets the timer, the leader
     // must complete VID disperse before the timer fires for view 3.
-    let lock = Some(test_data.views[0].cert1.clone());
+    let lock = Some(CatchupEvidence::Qc(test_data.views[0].cert1.clone()));
     send_timeout_votes(&mut harness, &test_data, 1, lock).await;
 
     harness
@@ -572,7 +572,7 @@ async fn test_f_plus_1_timeout_votes_trigger_timeout_one_honest() {
 
     // Send exactly f+1 timeout votes for view 2 (below the 2f+1 TC threshold).
     let test_view = &test_data.views[1];
-    let lock = Some(test_data.views[0].cert1.clone());
+    let lock = Some(CatchupEvidence::Qc(test_data.views[0].cert1.clone()));
     for i in 0..ONE_HONEST_THRESHOLD {
         harness.message(test_view.timeout_vote_input(i, lock.clone()));
     }
@@ -610,7 +610,7 @@ async fn test_timeout_vote_lock_advances_view() {
     // The node starts at genesis. A peer times out view 2 while carrying a
     // locked QC for view 1 (`views[0].cert1`). Adopting that QC moves us into
     // view 2.
-    let high_qc = test_data.views[0].cert1.clone();
+    let high_qc = CatchupEvidence::Qc(test_data.views[0].cert1.clone());
     harness.message(test_data.views[1].timeout_vote_input(1, Some(high_qc.clone())));
 
     assert_eq!(
@@ -642,8 +642,8 @@ async fn test_timeout_vote_tc_advances_view() {
 
     // The node starts at genesis. A peer times out view 3, attaching the
     // timeout certificate for view 2 that formed without us.
-    let tc = test_data.views[1].timeout_cert.clone();
-    harness.message(test_data.views[2].timeout_vote_input_with_tc(1, None, Some(tc)));
+    let tc = CatchupEvidence::Tc(test_data.views[1].timeout_cert.clone());
+    harness.message(test_data.views[2].timeout_vote_input(1, Some(tc)));
 
     assert_eq!(
         *harness.current_view(),
@@ -658,6 +658,27 @@ async fn test_timeout_vote_tc_advances_view() {
                 .any(|i| matches!(i, ConsensusInput::Timeout(view, _) if **view == 3))
         })
         .await;
+}
+
+/// Catchup evidence takes precedence over the "too far ahead" distance
+/// check: the vote itself is dropped, but the attached certificate still
+/// advances a node that fell far behind.
+#[tokio::test]
+async fn test_timeout_vote_evidence_overrides_distance_check() {
+    let test_data = TestData::new(32).await;
+    let mut harness = TestHarness::new(0).await;
+
+    // The node starts at genesis (view 1). A peer times out view 32 — more
+    // than 30 views ahead, so the vote is dropped — attaching the timeout
+    // certificate for view 31.
+    let tc = CatchupEvidence::Tc(test_data.views[30].timeout_cert.clone());
+    harness.message(test_data.views[31].timeout_vote_input(1, Some(tc)));
+
+    assert_eq!(
+        *harness.current_view(),
+        32,
+        "the attached timeout certificate should advance us to view 32"
+    );
 }
 
 /// A stale timeout vote is answered with the responder's newest certificate,
