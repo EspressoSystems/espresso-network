@@ -18,7 +18,7 @@
 <a href=#18 id=18 data-nosnippet>18</a>    },
 <a href=#19 id=19 data-nosnippet>19</a>};
 <a href=#20 id=20 data-nosnippet>20</a>
-<a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span><span class="kw">crate</span>::membership::stake_table::{TestDaCommittees, TestStakeTable, TestStakeTableEntry};
+<a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span><span class="kw">crate</span>::membership::stake_table::{TestCommitteeSchedule, TestStakeTable, TestStakeTableEntry};
 <a href=#22 id=22 data-nosnippet>22</a>
 <a href=#23 id=23 data-nosnippet>23</a><span class="attr">#[derive(Clone, Debug)]
 <a href=#24 id=24 data-nosnippet>24</a>
@@ -40,7 +40,7 @@
 <a href=#40 id=40 data-nosnippet>40</a>    <span class="doccomment">/// Stake tables randomized with the DRB, used (only) for leader election
 <a href=#41 id=41 data-nosnippet>41</a>    </span>randomized_committee: RandomizedCommittee&lt;&lt;PubKey <span class="kw">as </span>SignatureKey&gt;::StakeTableEntry&gt;,
 <a href=#42 id=42 data-nosnippet>42</a>
-<a href=#43 id=43 data-nosnippet>43</a>    da_committees: TestDaCommittees&lt;PubKey, StatePubKey&gt;,
+<a href=#43 id=43 data-nosnippet>43</a>    da_committees: TestCommitteeSchedule&lt;PubKey, StatePubKey&gt;,
 <a href=#44 id=44 data-nosnippet>44</a>}
 <a href=#45 id=45 data-nosnippet>45</a>
 <a href=#46 id=46 data-nosnippet>46</a><span class="kw">impl</span>&lt;PubKey, StatePubKey&gt; TestStakeTable&lt;PubKey, StatePubKey&gt;
@@ -71,7 +71,7 @@
 <a href=#71 id=71 data-nosnippet>71</a>            randomized_committee,
 <a href=#72 id=72 data-nosnippet>72</a>            epochs: BTreeSet::new(),
 <a href=#73 id=73 data-nosnippet>73</a>            drb_results: BTreeMap::new(),
-<a href=#74 id=74 data-nosnippet>74</a>            da_committees: TestDaCommittees::new(),
+<a href=#74 id=74 data-nosnippet>74</a>            da_committees: TestCommitteeSchedule::new(),
 <a href=#75 id=75 data-nosnippet>75</a>        }
 <a href=#76 id=76 data-nosnippet>76</a>    }
 <a href=#77 id=77 data-nosnippet>77</a>

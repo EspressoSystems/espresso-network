@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["TestDaCommittees","TestStakeTableEntry"],"trait":["TestStakeTable"]};
+window.SIDEBAR_ITEMS = {"struct":["TestCommitteeSchedule","TestStakeTableEntry"],"trait":["TestStakeTable"]};
