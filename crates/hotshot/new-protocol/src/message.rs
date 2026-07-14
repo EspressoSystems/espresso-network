@@ -49,6 +49,16 @@ impl<T: NodeType> ProposalMessage<T, Validated> {
     }
 }
 
+impl<T: NodeType> ProposalMessage<T, Unchecked> {
+    /// Wrap a proposal that has not been validated yet
+    pub fn unchecked(p: SignedProposal<T, Proposal<T>>) -> Self {
+        Self {
+            proposal: p,
+            _marker: PhantomData,
+        }
+    }
+}
+
 impl<T: NodeType, S> ProposalMessage<T, S> {
     #[cfg(test)]
     pub fn into_unchecked(self) -> ProposalMessage<T, Unchecked> {
@@ -304,4 +314,9 @@ impl<T: NodeType, S> HasViewNumber for Message<T, S> {
             MessageType::External(_) => ViewNumber::new(1), // TODO: This can become a problem
         }
     }
+}
+
+pub struct OpaqueMessage<K> {
+    pub sender: K,
+    pub data: Vec<u8>,
 }

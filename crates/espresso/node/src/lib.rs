@@ -1828,21 +1828,24 @@ pub mod testing {
     ) {
         tracing::info!(target_epoch, "waiting for epoch");
         while let Some(event) = events.next().await {
-            if let CoordinatorEvent::LegacyEvent(Event {
-                event: EventType::Decide { leaf_chain, .. },
-                ..
-            }) = event
-            {
-                let leaf = leaf_chain[0].leaf.clone();
-                let epoch = leaf.epoch(epoch_height);
-                tracing::debug!(
-                    "Node decided at height: {}, epoch: {epoch:?}",
-                    leaf.height(),
-                );
+            // Decides arrive as `LegacyEvent` before the new protocol and as
+            // `NewDecide` after; both carry the most recent leaf first.
+            let leaf = match event {
+                CoordinatorEvent::LegacyEvent(Event {
+                    event: EventType::Decide { leaf_chain, .. },
+                    ..
+                }) => leaf_chain[0].leaf.clone(),
+                CoordinatorEvent::NewDecide { leaf_infos, .. } => leaf_infos[0].leaf.clone(),
+                _ => continue,
+            };
+            let epoch = leaf.epoch(epoch_height);
+            tracing::debug!(
+                "Node decided at height: {}, epoch: {epoch:?}",
+                leaf.height(),
+            );
 
-                if epoch > Some(EpochNumber::new(target_epoch)) {
-                    break;
-                }
+            if epoch > Some(EpochNumber::new(target_epoch)) {
+                break;
             }
         }
         tracing::info!(target_epoch, "epoch started");
