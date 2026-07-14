@@ -899,7 +899,7 @@ where
                 info!(%node, %view, %epoch, "view changed");
                 self.timer.reset_with_epoch(view, epoch);
                 self.gc(epoch, GcScope::Local(view))?;
-                let txns = self.block_builder.on_view_changed(view, epoch);
+                let txns = self.block_builder.on_view_changed(view);
                 self.participation.on_view_changed(epoch);
                 self.on_view_changed_metrics(view, epoch);
                 if !txns.is_empty() {
@@ -1190,7 +1190,8 @@ where
                             hashes = manifest.hashes.len(),
                             "recv dedup manifest"
                         );
-                        if let Some(view_leader) = self.leader(manifest.view, manifest.epoch)
+                        if !self.is_too_far_ahead(manifest.view)
+                            && let Some(view_leader) = self.leader(manifest.view, manifest.epoch)
                             && view_leader == message.sender
                         {
                             self.block_builder.on_dedup_manifest(manifest)
