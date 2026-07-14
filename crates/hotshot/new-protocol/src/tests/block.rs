@@ -61,7 +61,7 @@ async fn test_retry_buffer() {
     // t1 reconstructed and should be removed from retry
     b.on_block_reconstructed(vec![t1.commit()]);
 
-    let forwarded = b.on_view_changed(view(1), epoch());
+    let forwarded = b.on_view_changed(view(1));
     assert_eq!(
         forwarded,
         vec![t2],
@@ -69,7 +69,7 @@ async fn test_retry_buffer() {
     );
 
     // past ttl
-    let forwarded = b.on_view_changed(view(6), epoch());
+    let forwarded = b.on_view_changed(view(6));
     assert!(forwarded.is_empty(), "tx past ttl should expire");
 }
 
@@ -193,7 +193,7 @@ async fn test_dedup_window() {
     );
 
     // Advance past the threshold: current_view - view(1) > window_size(2)
-    b.on_view_changed(view(4), epoch());
+    b.on_view_changed(view(4));
     b.on_dedup_manifest(DedupManifest {
         view: view(4),
         epoch: epoch(),
