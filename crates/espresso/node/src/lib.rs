@@ -1504,6 +1504,15 @@ pub mod testing {
             self.priv_keys.len()
         }
 
+        pub fn refresh_coordinator_addr(&mut self, i: usize) {
+            let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+            let addr = NetAddr::Inet(Ipv4Addr::LOCALHOST.into(), port);
+            self.coordinator_addrs[i] = addr.clone();
+            if let Some(info) = self.config.known_nodes_with_stake[i].connect_info.as_mut() {
+                info.p2p_addr = addr;
+            }
+        }
+
         pub fn hotshot_config(&self) -> &HotShotConfig<SeqTypes> {
             &self.config
         }

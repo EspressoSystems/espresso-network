@@ -6370,6 +6370,9 @@ mod test {
         // So, we remove this node and re-add it using the same index.
         network.peers.remove(0);
 
+        // the dropped node's socket may still be bound
+        network.cfg.refresh_coordinator_addr(1);
+
         let node_0_storage = &storage[1];
         let node_0_persistence = persistence[1].clone();
         let node_0_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
