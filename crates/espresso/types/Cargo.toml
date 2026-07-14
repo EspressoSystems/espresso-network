@@ -12,7 +12,7 @@ ignored = ["base64_bytes", "hotshot_testing"]
 doctest = false
 
 [features]
-default = ["node"]
+default = []
 # L1 client, consensus persistence and networking integration; disable for
 # constrained targets (e.g. SP1 zkVM).
 node = [
@@ -26,7 +26,8 @@ node = [
     "dep:hotshot-libp2p-networking",
     "dep:hotshot-new-protocol",
     "espresso-utils/full",
-    "hotshot-query-service-types/default",
+    "hotshot-query-service-types/sqlx",
+    "hotshot-query-service-types/web",
 ]
 testing = ["dep:hotshot-example-types", "hotshot-query-service-types/testing", "node"]
 rlp = ["alloy-rlp"]
@@ -63,8 +64,7 @@ cld = { workspace = true }
 committable = { workspace = true }
 derive_more = { workspace = true }
 either = { workspace = true }
-# Direct declaration: default-features = false is ignored on workspace-inherited deps.
-espresso-utils = { path = "../utils", default-features = false }
+espresso-utils = { workspace = true }
 ethers-core = { workspace = true }
 futures = { workspace = true }
 hotshot = { workspace = true, optional = true }
@@ -72,8 +72,7 @@ hotshot-contract-adapter = { workspace = true }
 hotshot-example-types = { workspace = true, optional = true }
 hotshot-libp2p-networking = { workspace = true, optional = true }
 hotshot-new-protocol = { workspace = true, optional = true }
-# Direct declaration: default-features = false is ignored on workspace-inherited deps.
-hotshot-query-service-types = { path = "../../../hotshot-query-service-types", default-features = false }
+hotshot-query-service-types = { workspace = true }
 hotshot-types = { workspace = true }
 humantime = { workspace = true }
 indexmap = { workspace = true }

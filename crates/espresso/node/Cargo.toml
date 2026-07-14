@@ -57,7 +57,7 @@ espresso-contract-deployer = { workspace = true }
 espresso-keyset = { workspace = true }
 espresso-telemetry = { workspace = true }
 espresso-types = { workspace = true, features = ["node"] }
-espresso-utils = { workspace = true }
+espresso-utils = { workspace = true, features = ["full"] }
 futures = { workspace = true }
 generic-tests = { workspace = true }
 hotshot = { workspace = true }
@@ -81,7 +81,7 @@ jf-merkle-tree-compat = { workspace = true }
 jf-rescue = { workspace = true }
 jf-signature = { workspace = true }
 libp2p = { workspace = true }
-light-client = { workspace = true }
+light-client = { workspace = true, features = ["client", "rlp"] }
 moka = { workspace = true }
 num_enum = { workspace = true }
 parking_lot = { workspace = true }
@@ -138,7 +138,7 @@ hotshot-example-types = { workspace = true }
 hotshot-query-service = { workspace = true }
 hotshot-testing = { workspace = true }
 insta = { workspace = true }
-light-client = { workspace = true, features = ["testing"] }
+light-client = { workspace = true, features = ["rlp", "testing"] }
 pretty_assertions = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }

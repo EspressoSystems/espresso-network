@@ -5,8 +5,8 @@ authors = ["Espresso Systems <hello@espressosys.com>"]
 edition.workspace = true
 
 [features]
+default = []
 # Full node/tooling helpers; disable for constrained targets (e.g. SP1 zkVM).
-default = ["full"]
 full = [
     "alloy/contract",
     "alloy/default",

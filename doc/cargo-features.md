@@ -1,19 +1,22 @@
 # Cargo features for zkVM builds
 
-Four crates have a default-on feature whose absence yields a build for constrained targets (SP1 zkVM, riscv32/riscv64).
-Default builds are unaffected.
+Four crates gate node-side functionality behind an opt-in feature; their `default` feature lists are empty. Building
+without the feature yields a build for constrained targets (SP1 zkVM, riscv32/riscv64). In-repo dependents enable the
+features they need explicitly in their manifests.
 
 | Crate                       | Feature  | Gates                                                                                                 |
 | --------------------------- | -------- | ----------------------------------------------------------------------------------------------------- |
 | espresso-types              | `node`   | L1 client, persistence traits, Fetcher L1 methods, block proposal, full alloy                         |
-| hotshot-query-service-types | `web`    | events-service error conversion (error types and client-error impl are unconditional via disco-types) |
+| hotshot-query-service-types | `sqlx`, `web` | sql storage types; events-service error conversion (error types and client-error impl are unconditional via disco-types) |
 | espresso-utils              | `full`   | node and tooling helpers (clap, tokio, surf, ...); the pure `ser` module stays                        |
 | light-client                | `client` | host query client, sqlite storage, query-service provider; `state.rs` and `consensus/` stay           |
 
-- `espresso-types/testing` implies `node`.
+- `espresso-types/testing` implies `node`. `light-client/testing` implies `client` but not `rlp`.
+  `espresso-utils/testing` implies nothing; request `full` alongside it where needed.
 - Types, serde, `Committable` impls, the `SeqTypes: NodeType` impl and pure validation compile without `node`.
-- Cargo silently ignores `default-features = false` on workspace-inherited deps; alloy, espresso-utils and
-  hotshot-query-service-types are declared directly (non-inherited) in the affected crates for this reason.
+- Cargo silently ignores `default-features = false` on workspace-inherited deps; alloy (external, default-on features)
+  is declared directly (non-inherited) in the affected crates for this reason. The four in-repo crates need no such
+  workaround since their defaults are empty.
 - CI coverage: `just check-features-ci` (host feature powerset) and `just check-sp1-target` (SP1 target build of the
   `sp1/target-check` probe crate, which also carries the getrandom zkVM workarounds).
 

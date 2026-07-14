@@ -13,5 +13,5 @@ path = "src/main.rs"
 anyhow = { workspace = true }
 # disable default features to allow including versions on demand
 espresso-node = { workspace = true, default-features = false, features = ["embedded-db"] }
-espresso-utils = { workspace = true }
+espresso-utils = { workspace = true, features = ["full"] }
 tokio = { workspace = true }

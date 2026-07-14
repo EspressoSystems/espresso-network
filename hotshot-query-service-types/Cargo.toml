@@ -5,7 +5,7 @@ authors.workspace = true
 edition.workspace = true
 
 [features]
-default = ["sqlx", "web"]
+default = []
 sqlx = ["bincode", "dep:sqlx"]
 testing = ["hotshot-example-types"]
 # hotshot-events-service error conversion; disabled for constrained targets (e.g. SP1 zkVM).
