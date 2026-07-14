@@ -449,17 +449,22 @@ where
         for t in &self.tasks {
             t.abort()
         }
+        // Release the cliquenet listener port before the slow legacy
+        // shutdown; `drop(other)` because a non-binding pattern would not
+        // move the value.
+        let new_proto = self.new_proto.write().take();
+        match new_proto {
+            NewProtocol::Running {
+                shutdown,
+                coordinator,
+                ..
+            } => {
+                shutdown.cancel();
+                let _ = coordinator.await;
+            },
+            other => drop(other),
+        }
         self.legacy_handle.write().await.shut_down().await;
-        let NewProtocol::Running {
-            shutdown,
-            coordinator,
-            ..
-        } = self.new_proto.write().take()
-        else {
-            return;
-        };
-        shutdown.cancel();
-        let _ = coordinator.await;
     }
 
     fn is_new_proto_running(&self) -> bool {

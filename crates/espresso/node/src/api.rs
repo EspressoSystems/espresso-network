@@ -6227,6 +6227,9 @@ mod test {
         // Adding an additional node to the test network is not straight forward,
         // as the keys have already been initialized in the config above.
         // So, we remove this node and re-add it using the same index.
+        // Await the shutdown so the node's cliquenet listener releases its
+        // port before the replacement node binds the same address.
+        network.peers[0].shut_down().await;
         network.peers.remove(0);
 
         let node_0_storage = &storage[1];
