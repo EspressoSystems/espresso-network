@@ -864,8 +864,10 @@ mod tests {
 
     /// Collector over a membership where node 9 is removed from the quorum
     /// committee starting at epoch 3 (9 members of stake 1, threshold 7).
-    fn setup_cert1_task_with_removed_node()
-    -> VoteCollector<TestTypes, QuorumVote2<TestTypes>, Certificate1<TestTypes>> {
+    fn setup_cert1_task_with_removed_node() -> VoteCollector<
+        TestTypes,
+        SimpleTally<TestTypes, QuorumVote2<TestTypes>, Certificate1<TestTypes>>,
+    > {
         let membership = mock_membership();
         let committee = gen_node_lists::<TestTypes>(9, 9, &TestNodeStakes::default()).0;
         membership
