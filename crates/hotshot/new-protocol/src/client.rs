@@ -1,4 +1,4 @@
-use std::{num::NonZeroUsize, sync::Arc};
+use std::{collections::HashMap, num::NonZeroUsize, sync::Arc};
 
 use async_trait::async_trait;
 use committable::Commitment;
@@ -7,7 +7,10 @@ use hotshot_types::{
     message::Proposal as SignedProposal,
     simple_certificate::QuorumCertificate2,
     simple_vote::TimeoutVote2,
-    traits::{leaf_fetcher_network::LeafFetcherNetwork, node_implementation::NodeType},
+    traits::{
+        leaf_fetcher_network::LeafFetcherNetwork, node_implementation::NodeType,
+        signature_key::SignatureKey,
+    },
     utils::StateAndDelta,
 };
 use tokio::sync::{mpsc, oneshot};
@@ -112,6 +115,27 @@ impl<T: NodeType> ClientApi<T> {
         .await?
     }
 
+    /// Proposal participation ratios; `None` queries the current epoch.
+    pub async fn proposal_participation(
+        &self,
+        epoch: Option<EpochNumber>,
+    ) -> Result<HashMap<T::SignatureKey, f64>, QueryError> {
+        let (respond, rx) = oneshot::channel();
+        self.call(ClientRequest::ProposalParticipation { epoch, respond }, rx)
+            .await
+    }
+
+    /// Vote participation ratios; `None` queries the current epoch.
+    pub async fn vote_participation(
+        &self,
+        epoch: Option<EpochNumber>,
+    ) -> Result<HashMap<<T::SignatureKey as SignatureKey>::VerificationKeyType, f64>, QueryError>
+    {
+        let (respond, rx) = oneshot::channel();
+        self.call(ClientRequest::VoteParticipation { epoch, respond }, rx)
+            .await
+    }
+
     /// Forward a legacy `TimeoutVote2` into the new-protocol timeout collectors.
     pub async fn submit_timeout_vote(&self, vote: TimeoutVote2<T>) -> Result<(), QueryError> {
         let (respond, rx) = oneshot::channel();
@@ -194,6 +218,15 @@ pub(crate) enum ClientRequest<T: NodeType> {
     GetStateAndDelta {
         view: ViewNumber,
         respond: oneshot::Sender<StateAndDelta<T>>,
+    },
+    ProposalParticipation {
+        epoch: Option<EpochNumber>,
+        respond: oneshot::Sender<HashMap<T::SignatureKey, f64>>,
+    },
+    VoteParticipation {
+        epoch: Option<EpochNumber>,
+        respond:
+            oneshot::Sender<HashMap<<T::SignatureKey as SignatureKey>::VerificationKeyType, f64>>,
     },
     UpdateLeaf {
         update: UpdateLeaf<T>,

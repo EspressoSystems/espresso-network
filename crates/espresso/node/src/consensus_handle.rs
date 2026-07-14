@@ -307,8 +307,16 @@ where
         self.legacy_handle.read().await.storage()
     }
 
-    // TODO: implement for new protocol
     pub async fn current_proposal_participation(&self) -> HashMap<T::SignatureKey, f64> {
+        if let Some(client_api) = self.client_api().await {
+            return client_api
+                .proposal_participation(None)
+                .await
+                .inspect_err(|err| {
+                    warn!(%err, "coordinator unavailable for current_proposal_participation");
+                })
+                .unwrap_or_default();
+        }
         self.legacy_handle
             .read()
             .await
@@ -322,6 +330,15 @@ where
         &self,
         epoch: EpochNumber,
     ) -> HashMap<T::SignatureKey, f64> {
+        if let Some(client_api) = self.client_api().await {
+            match client_api.proposal_participation(Some(epoch)).await {
+                Ok(participation) if !participation.is_empty() => return participation,
+                Ok(_) => {},
+                Err(err) => {
+                    warn!(%err, "coordinator unavailable for proposal_participation");
+                },
+            }
+        }
         self.legacy_handle
             .read()
             .await
@@ -334,6 +351,15 @@ where
     pub async fn current_vote_participation(
         &self,
     ) -> HashMap<<T::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
+        if let Some(client_api) = self.client_api().await {
+            return client_api
+                .vote_participation(None)
+                .await
+                .inspect_err(|err| {
+                    warn!(%err, "coordinator unavailable for current_vote_participation");
+                })
+                .unwrap_or_default();
+        }
         self.legacy_handle
             .read()
             .await
@@ -345,15 +371,24 @@ where
 
     pub async fn vote_participation(
         &self,
-        epoch: Option<EpochNumber>,
+        epoch: EpochNumber,
     ) -> HashMap<<T::SignatureKey as SignatureKey>::VerificationKeyType, f64> {
+        if let Some(client_api) = self.client_api().await {
+            match client_api.vote_participation(Some(epoch)).await {
+                Ok(participation) if !participation.is_empty() => return participation,
+                Ok(_) => {},
+                Err(err) => {
+                    warn!(%err, "coordinator unavailable for vote_participation");
+                },
+            }
+        }
         self.legacy_handle
             .read()
             .await
             .consensus()
             .read()
             .await
-            .vote_participation(epoch)
+            .vote_participation(Some(epoch))
     }
 
     pub async fn request_proposal(
