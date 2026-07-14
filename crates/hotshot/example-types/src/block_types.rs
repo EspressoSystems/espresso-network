@@ -94,7 +94,11 @@ impl TestTransaction {
     /// # Errors
     /// If the transaction length conversion fails.
     pub fn encode(transactions: &[Self]) -> Vec<u8> {
-        let mut encoded = Vec::new();
+        // Pre-size to the exact encoded length (4-byte size prefix per txn +
+        // payload) so a large multi-MiB block fills a single allocation instead
+        // of growing an empty Vec through ~log2(size) reallocating copies.
+        let total = transactions.iter().map(|txn| 4 + txn.0.len()).sum();
+        let mut encoded = Vec::with_capacity(total);
 
         for txn in transactions {
             // The transaction length is converted from `usize` to `u32` to ensure consistent
