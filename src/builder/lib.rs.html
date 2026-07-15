@@ -443,8 +443,8 @@
 <a href=#443 id=443 data-nosnippet>443</a>
 <a href=#444 id=444 data-nosnippet>444</a>        <span class="kw">let </span>start = Instant::now();
 <a href=#445 id=445 data-nosnippet>445</a>        <span class="kw">let </span>(available_block_info, view_num) = <span class="lifetime">'proposals</span>: <span class="kw">loop </span>{
-<a href=#446 id=446 data-nosnippet>446</a>            <span class="kw">if </span>start.elapsed() &gt; Duration::from_secs(<span class="number">30</span>) {
-<a href=#447 id=447 data-nosnippet>447</a>                <span class="macro">panic!</span>(<span class="string">"No available blocks from any quorum proposal after 30s"</span>);
+<a href=#446 id=446 data-nosnippet>446</a>            <span class="kw">if </span>start.elapsed() &gt; Duration::from_secs(<span class="number">120</span>) {
+<a href=#447 id=447 data-nosnippet>447</a>                <span class="macro">panic!</span>(<span class="string">"No available blocks from any quorum proposal after 120s"</span>);
 <a href=#448 id=448 data-nosnippet>448</a>            }
 <a href=#449 id=449 data-nosnippet>449</a>
 <a href=#450 id=450 data-nosnippet>450</a>            <span class="kw">let </span>event = subscribed_events.next().<span class="kw">await</span>.unwrap();

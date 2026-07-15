@@ -1819,202 +1819,206 @@
 <a href=#1819 id=1819 data-nosnippet>1819</a>
 <a href=#1820 id=1820 data-nosnippet>1820</a>    <span class="doccomment">/// Waits until a node has reached the given target epoch (exclusive).
 <a href=#1821 id=1821 data-nosnippet>1821</a>    /// The function returns once the first event indicates an epoch higher than `target_epoch`.
-<a href=#1822 id=1822 data-nosnippet>1822</a>    </span><span class="kw">pub async fn </span>wait_for_epochs(
-<a href=#1823 id=1823 data-nosnippet>1823</a>        events: <span class="kw-2">&amp;mut </span>(<span class="kw">impl </span>futures::Stream&lt;Item = CoordinatorEvent&lt;SeqTypes&gt;&gt; + std::marker::Unpin),
-<a href=#1824 id=1824 data-nosnippet>1824</a>        epoch_height: u64,
-<a href=#1825 id=1825 data-nosnippet>1825</a>        target_epoch: u64,
-<a href=#1826 id=1826 data-nosnippet>1826</a>    ) {
-<a href=#1827 id=1827 data-nosnippet>1827</a>        <span class="macro">tracing::info!</span>(target_epoch, <span class="string">"waiting for epoch"</span>);
-<a href=#1828 id=1828 data-nosnippet>1828</a>        <span class="kw">while let </span><span class="prelude-val">Some</span>(event) = events.next().<span class="kw">await </span>{
-<a href=#1829 id=1829 data-nosnippet>1829</a>            <span class="comment">// Decides arrive as `LegacyEvent` before the new protocol and as
-<a href=#1830 id=1830 data-nosnippet>1830</a>            // `NewDecide` after; both carry the most recent leaf first.
-<a href=#1831 id=1831 data-nosnippet>1831</a>            </span><span class="kw">let </span>leaf = <span class="kw">match </span>event {
-<a href=#1832 id=1832 data-nosnippet>1832</a>                CoordinatorEvent::LegacyEvent(Event {
-<a href=#1833 id=1833 data-nosnippet>1833</a>                    event: EventType::Decide { leaf_chain, .. },
-<a href=#1834 id=1834 data-nosnippet>1834</a>                    ..
-<a href=#1835 id=1835 data-nosnippet>1835</a>                }) =&gt; leaf_chain[<span class="number">0</span>].leaf.clone(),
-<a href=#1836 id=1836 data-nosnippet>1836</a>                CoordinatorEvent::NewDecide { leaf_infos, .. } =&gt; leaf_infos[<span class="number">0</span>].leaf.clone(),
-<a href=#1837 id=1837 data-nosnippet>1837</a>                <span class="kw">_ </span>=&gt; <span class="kw">continue</span>,
-<a href=#1838 id=1838 data-nosnippet>1838</a>            };
-<a href=#1839 id=1839 data-nosnippet>1839</a>            <span class="kw">let </span>epoch = leaf.epoch(epoch_height);
-<a href=#1840 id=1840 data-nosnippet>1840</a>            <span class="macro">tracing::debug!</span>(
-<a href=#1841 id=1841 data-nosnippet>1841</a>                <span class="string">"Node decided at height: {}, epoch: {epoch:?}"</span>,
-<a href=#1842 id=1842 data-nosnippet>1842</a>                leaf.height(),
-<a href=#1843 id=1843 data-nosnippet>1843</a>            );
-<a href=#1844 id=1844 data-nosnippet>1844</a>
-<a href=#1845 id=1845 data-nosnippet>1845</a>            <span class="kw">if </span>epoch &gt; <span class="prelude-val">Some</span>(EpochNumber::new(target_epoch)) {
-<a href=#1846 id=1846 data-nosnippet>1846</a>                <span class="kw">break</span>;
-<a href=#1847 id=1847 data-nosnippet>1847</a>            }
-<a href=#1848 id=1848 data-nosnippet>1848</a>        }
-<a href=#1849 id=1849 data-nosnippet>1849</a>        <span class="macro">tracing::info!</span>(target_epoch, <span class="string">"epoch started"</span>);
-<a href=#1850 id=1850 data-nosnippet>1850</a>    }
-<a href=#1851 id=1851 data-nosnippet>1851</a>}
-<a href=#1852 id=1852 data-nosnippet>1852</a>
-<a href=#1853 id=1853 data-nosnippet>1853</a><span class="attr">#[cfg(test)]
-<a href=#1854 id=1854 data-nosnippet>1854</a></span><span class="kw">mod </span>test {
-<a href=#1855 id=1855 data-nosnippet>1855</a>    <span class="kw">use </span>alloy::node_bindings::Anvil;
-<a href=#1856 id=1856 data-nosnippet>1856</a>    <span class="kw">use </span>espresso_types::{Header, MOCK_SEQUENCER_VERSIONS, NamespaceId, Payload, Transaction};
-<a href=#1857 id=1857 data-nosnippet>1857</a>    <span class="kw">use </span>futures::StreamExt;
-<a href=#1858 id=1858 data-nosnippet>1858</a>    <span class="kw">use </span>hotshot::types::{Event, EventType};
-<a href=#1859 id=1859 data-nosnippet>1859</a>    <span class="kw">use </span>hotshot_example_types::node_types::TEST_VERSIONS;
-<a href=#1860 id=1860 data-nosnippet>1860</a>    <span class="kw">use </span>hotshot_types::{
-<a href=#1861 id=1861 data-nosnippet>1861</a>        event::LeafInfo,
-<a href=#1862 id=1862 data-nosnippet>1862</a>        new_protocol::CoordinatorEvent,
-<a href=#1863 id=1863 data-nosnippet>1863</a>        traits::block_contents::{BlockHeader, BlockPayload},
-<a href=#1864 id=1864 data-nosnippet>1864</a>    };
-<a href=#1865 id=1865 data-nosnippet>1865</a>    <span class="kw">use </span>testing::{TestConfigBuilder, wait_for_decide_on_handle};
-<a href=#1866 id=1866 data-nosnippet>1866</a>
-<a href=#1867 id=1867 data-nosnippet>1867</a>    <span class="attr">#[test]
-<a href=#1868 id=1868 data-nosnippet>1868</a>    </span><span class="kw">fn </span>telemetry_endpoint_defaults_by_chain() {
-<a href=#1869 id=1869 data-nosnippet>1869</a>        <span class="kw">use super</span>::{
-<a href=#1870 id=1870 data-nosnippet>1870</a>            ChainId, DECAF_TELEMETRY_ENDPOINT, MAINNET_CHAIN_ID, MAINNET_TELEMETRY_ENDPOINT, U256,
-<a href=#1871 id=1871 data-nosnippet>1871</a>            default_telemetry_endpoint,
-<a href=#1872 id=1872 data-nosnippet>1872</a>        };
-<a href=#1873 id=1873 data-nosnippet>1873</a>
-<a href=#1874 id=1874 data-nosnippet>1874</a>        <span class="macro">assert_eq!</span>(
-<a href=#1875 id=1875 data-nosnippet>1875</a>            default_telemetry_endpoint(MAINNET_CHAIN_ID),
-<a href=#1876 id=1876 data-nosnippet>1876</a>            <span class="prelude-val">Some</span>(MAINNET_TELEMETRY_ENDPOINT)
-<a href=#1877 id=1877 data-nosnippet>1877</a>        );
+<a href=#1822 id=1822 data-nosnippet>1822</a>    /// Panics if the event stream ends before reaching `target_epoch`.
+<a href=#1823 id=1823 data-nosnippet>1823</a>    </span><span class="kw">pub async fn </span>wait_for_epochs(
+<a href=#1824 id=1824 data-nosnippet>1824</a>        events: <span class="kw-2">&amp;mut </span>(<span class="kw">impl </span>futures::Stream&lt;Item = CoordinatorEvent&lt;SeqTypes&gt;&gt; + std::marker::Unpin),
+<a href=#1825 id=1825 data-nosnippet>1825</a>        epoch_height: u64,
+<a href=#1826 id=1826 data-nosnippet>1826</a>        target_epoch: u64,
+<a href=#1827 id=1827 data-nosnippet>1827</a>    ) {
+<a href=#1828 id=1828 data-nosnippet>1828</a>        <span class="macro">tracing::info!</span>(target_epoch, <span class="string">"waiting for epoch"</span>);
+<a href=#1829 id=1829 data-nosnippet>1829</a>        <span class="kw">let </span><span class="kw-2">mut </span>last_seen = <span class="prelude-val">None</span>;
+<a href=#1830 id=1830 data-nosnippet>1830</a>        <span class="kw">while let </span><span class="prelude-val">Some</span>(event) = events.next().<span class="kw">await </span>{
+<a href=#1831 id=1831 data-nosnippet>1831</a>            <span class="comment">// Decides arrive as `LegacyEvent` before the new protocol and as
+<a href=#1832 id=1832 data-nosnippet>1832</a>            // `NewDecide` after; both carry the most recent leaf first.
+<a href=#1833 id=1833 data-nosnippet>1833</a>            </span><span class="kw">let </span>leaf = <span class="kw">match </span>event {
+<a href=#1834 id=1834 data-nosnippet>1834</a>                CoordinatorEvent::LegacyEvent(Event {
+<a href=#1835 id=1835 data-nosnippet>1835</a>                    event: EventType::Decide { leaf_chain, .. },
+<a href=#1836 id=1836 data-nosnippet>1836</a>                    ..
+<a href=#1837 id=1837 data-nosnippet>1837</a>                }) =&gt; leaf_chain[<span class="number">0</span>].leaf.clone(),
+<a href=#1838 id=1838 data-nosnippet>1838</a>                CoordinatorEvent::NewDecide { leaf_infos, .. } =&gt; leaf_infos[<span class="number">0</span>].leaf.clone(),
+<a href=#1839 id=1839 data-nosnippet>1839</a>                <span class="kw">_ </span>=&gt; <span class="kw">continue</span>,
+<a href=#1840 id=1840 data-nosnippet>1840</a>            };
+<a href=#1841 id=1841 data-nosnippet>1841</a>            <span class="kw">let </span>epoch = leaf.epoch(epoch_height);
+<a href=#1842 id=1842 data-nosnippet>1842</a>            <span class="macro">tracing::debug!</span>(
+<a href=#1843 id=1843 data-nosnippet>1843</a>                <span class="string">"Node decided at height: {}, epoch: {epoch:?}"</span>,
+<a href=#1844 id=1844 data-nosnippet>1844</a>                leaf.height(),
+<a href=#1845 id=1845 data-nosnippet>1845</a>            );
+<a href=#1846 id=1846 data-nosnippet>1846</a>
+<a href=#1847 id=1847 data-nosnippet>1847</a>            <span class="kw">if </span>epoch &gt; <span class="prelude-val">Some</span>(EpochNumber::new(target_epoch)) {
+<a href=#1848 id=1848 data-nosnippet>1848</a>                <span class="macro">tracing::info!</span>(target_epoch, <span class="string">"epoch started"</span>);
+<a href=#1849 id=1849 data-nosnippet>1849</a>                <span class="kw">return</span>;
+<a href=#1850 id=1850 data-nosnippet>1850</a>            }
+<a href=#1851 id=1851 data-nosnippet>1851</a>            last_seen = <span class="prelude-val">Some</span>((leaf.height(), epoch));
+<a href=#1852 id=1852 data-nosnippet>1852</a>        }
+<a href=#1853 id=1853 data-nosnippet>1853</a>        <span class="macro">panic!</span>(<span class="string">"event stream ended before target epoch {target_epoch}, last decide: {last_seen:?}"</span>);
+<a href=#1854 id=1854 data-nosnippet>1854</a>    }
+<a href=#1855 id=1855 data-nosnippet>1855</a>}
+<a href=#1856 id=1856 data-nosnippet>1856</a>
+<a href=#1857 id=1857 data-nosnippet>1857</a><span class="attr">#[cfg(test)]
+<a href=#1858 id=1858 data-nosnippet>1858</a></span><span class="kw">mod </span>test {
+<a href=#1859 id=1859 data-nosnippet>1859</a>    <span class="kw">use </span>alloy::node_bindings::Anvil;
+<a href=#1860 id=1860 data-nosnippet>1860</a>    <span class="kw">use </span>espresso_types::{Header, MOCK_SEQUENCER_VERSIONS, NamespaceId, Payload, Transaction};
+<a href=#1861 id=1861 data-nosnippet>1861</a>    <span class="kw">use </span>futures::StreamExt;
+<a href=#1862 id=1862 data-nosnippet>1862</a>    <span class="kw">use </span>hotshot::types::{Event, EventType};
+<a href=#1863 id=1863 data-nosnippet>1863</a>    <span class="kw">use </span>hotshot_example_types::node_types::TEST_VERSIONS;
+<a href=#1864 id=1864 data-nosnippet>1864</a>    <span class="kw">use </span>hotshot_types::{
+<a href=#1865 id=1865 data-nosnippet>1865</a>        event::LeafInfo,
+<a href=#1866 id=1866 data-nosnippet>1866</a>        new_protocol::CoordinatorEvent,
+<a href=#1867 id=1867 data-nosnippet>1867</a>        traits::block_contents::{BlockHeader, BlockPayload},
+<a href=#1868 id=1868 data-nosnippet>1868</a>    };
+<a href=#1869 id=1869 data-nosnippet>1869</a>    <span class="kw">use </span>testing::{TestConfigBuilder, wait_for_decide_on_handle};
+<a href=#1870 id=1870 data-nosnippet>1870</a>
+<a href=#1871 id=1871 data-nosnippet>1871</a>    <span class="attr">#[test]
+<a href=#1872 id=1872 data-nosnippet>1872</a>    </span><span class="kw">fn </span>telemetry_endpoint_defaults_by_chain() {
+<a href=#1873 id=1873 data-nosnippet>1873</a>        <span class="kw">use super</span>::{
+<a href=#1874 id=1874 data-nosnippet>1874</a>            ChainId, DECAF_TELEMETRY_ENDPOINT, MAINNET_CHAIN_ID, MAINNET_TELEMETRY_ENDPOINT, U256,
+<a href=#1875 id=1875 data-nosnippet>1875</a>            default_telemetry_endpoint,
+<a href=#1876 id=1876 data-nosnippet>1876</a>        };
+<a href=#1877 id=1877 data-nosnippet>1877</a>
 <a href=#1878 id=1878 data-nosnippet>1878</a>        <span class="macro">assert_eq!</span>(
-<a href=#1879 id=1879 data-nosnippet>1879</a>            default_telemetry_endpoint(DECAF_CHAIN_ID),
-<a href=#1880 id=1880 data-nosnippet>1880</a>            <span class="prelude-val">Some</span>(DECAF_TELEMETRY_ENDPOINT)
+<a href=#1879 id=1879 data-nosnippet>1879</a>            default_telemetry_endpoint(MAINNET_CHAIN_ID),
+<a href=#1880 id=1880 data-nosnippet>1880</a>            <span class="prelude-val">Some</span>(MAINNET_TELEMETRY_ENDPOINT)
 <a href=#1881 id=1881 data-nosnippet>1881</a>        );
-<a href=#1882 id=1882 data-nosnippet>1882</a>        <span class="comment">// Unknown chains (e.g. the demo chain) get no default.
-<a href=#1883 id=1883 data-nosnippet>1883</a>        </span><span class="macro">assert_eq!</span>(
-<a href=#1884 id=1884 data-nosnippet>1884</a>            default_telemetry_endpoint(ChainId(U256::from(<span class="number">999999999u64</span>))),
-<a href=#1885 id=1885 data-nosnippet>1885</a>            <span class="prelude-val">None
-<a href=#1886 id=1886 data-nosnippet>1886</a>        </span>);
-<a href=#1887 id=1887 data-nosnippet>1887</a>    }
-<a href=#1888 id=1888 data-nosnippet>1888</a>
-<a href=#1889 id=1889 data-nosnippet>1889</a>    <span class="kw">use </span><span class="self">self</span>::testing::run_test_builder;
-<a href=#1890 id=1890 data-nosnippet>1890</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
-<a href=#1891 id=1891 data-nosnippet>1891</a>
-<a href=#1892 id=1892 data-nosnippet>1892</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
-<a href=#1893 id=1893 data-nosnippet>1893</a>    </span><span class="kw">async fn </span>test_skeleton_instantiation() {
-<a href=#1894 id=1894 data-nosnippet>1894</a>        <span class="comment">// Assign `config` so it isn't dropped early.
-<a href=#1895 id=1895 data-nosnippet>1895</a>        </span><span class="kw">let </span>anvil = Anvil::new().spawn();
-<a href=#1896 id=1896 data-nosnippet>1896</a>        <span class="kw">let </span>url = anvil.endpoint_url();
-<a href=#1897 id=1897 data-nosnippet>1897</a>        <span class="kw">const </span>NUM_NODES: usize = <span class="number">5</span>;
-<a href=#1898 id=1898 data-nosnippet>1898</a>        <span class="kw">let </span><span class="kw-2">mut </span>config = TestConfigBuilder::&lt;NUM_NODES&gt;::default()
-<a href=#1899 id=1899 data-nosnippet>1899</a>            .l1_url(url)
-<a href=#1900 id=1900 data-nosnippet>1900</a>            .build();
-<a href=#1901 id=1901 data-nosnippet>1901</a>
-<a href=#1902 id=1902 data-nosnippet>1902</a>        <span class="kw">let </span>(builder_task, builder_url) = run_test_builder::&lt;NUM_NODES&gt;(<span class="prelude-val">None</span>).<span class="kw">await</span>;
-<a href=#1903 id=1903 data-nosnippet>1903</a>
-<a href=#1904 id=1904 data-nosnippet>1904</a>        config.set_builder_urls(<span class="macro">vec1::vec1!</span>[builder_url]);
+<a href=#1882 id=1882 data-nosnippet>1882</a>        <span class="macro">assert_eq!</span>(
+<a href=#1883 id=1883 data-nosnippet>1883</a>            default_telemetry_endpoint(DECAF_CHAIN_ID),
+<a href=#1884 id=1884 data-nosnippet>1884</a>            <span class="prelude-val">Some</span>(DECAF_TELEMETRY_ENDPOINT)
+<a href=#1885 id=1885 data-nosnippet>1885</a>        );
+<a href=#1886 id=1886 data-nosnippet>1886</a>        <span class="comment">// Unknown chains (e.g. the demo chain) get no default.
+<a href=#1887 id=1887 data-nosnippet>1887</a>        </span><span class="macro">assert_eq!</span>(
+<a href=#1888 id=1888 data-nosnippet>1888</a>            default_telemetry_endpoint(ChainId(U256::from(<span class="number">999999999u64</span>))),
+<a href=#1889 id=1889 data-nosnippet>1889</a>            <span class="prelude-val">None
+<a href=#1890 id=1890 data-nosnippet>1890</a>        </span>);
+<a href=#1891 id=1891 data-nosnippet>1891</a>    }
+<a href=#1892 id=1892 data-nosnippet>1892</a>
+<a href=#1893 id=1893 data-nosnippet>1893</a>    <span class="kw">use </span><span class="self">self</span>::testing::run_test_builder;
+<a href=#1894 id=1894 data-nosnippet>1894</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;
+<a href=#1895 id=1895 data-nosnippet>1895</a>
+<a href=#1896 id=1896 data-nosnippet>1896</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#1897 id=1897 data-nosnippet>1897</a>    </span><span class="kw">async fn </span>test_skeleton_instantiation() {
+<a href=#1898 id=1898 data-nosnippet>1898</a>        <span class="comment">// Assign `config` so it isn't dropped early.
+<a href=#1899 id=1899 data-nosnippet>1899</a>        </span><span class="kw">let </span>anvil = Anvil::new().spawn();
+<a href=#1900 id=1900 data-nosnippet>1900</a>        <span class="kw">let </span>url = anvil.endpoint_url();
+<a href=#1901 id=1901 data-nosnippet>1901</a>        <span class="kw">const </span>NUM_NODES: usize = <span class="number">5</span>;
+<a href=#1902 id=1902 data-nosnippet>1902</a>        <span class="kw">let </span><span class="kw-2">mut </span>config = TestConfigBuilder::&lt;NUM_NODES&gt;::default()
+<a href=#1903 id=1903 data-nosnippet>1903</a>            .l1_url(url)
+<a href=#1904 id=1904 data-nosnippet>1904</a>            .build();
 <a href=#1905 id=1905 data-nosnippet>1905</a>
-<a href=#1906 id=1906 data-nosnippet>1906</a>        <span class="kw">let </span>handles = config.init_nodes(MOCK_SEQUENCER_VERSIONS).<span class="kw">await</span>;
+<a href=#1906 id=1906 data-nosnippet>1906</a>        <span class="kw">let </span>(builder_task, builder_url) = run_test_builder::&lt;NUM_NODES&gt;(<span class="prelude-val">None</span>).<span class="kw">await</span>;
 <a href=#1907 id=1907 data-nosnippet>1907</a>
-<a href=#1908 id=1908 data-nosnippet>1908</a>        <span class="kw">let </span>handle_0 = <span class="kw-2">&amp;</span>handles[<span class="number">0</span>];
+<a href=#1908 id=1908 data-nosnippet>1908</a>        config.set_builder_urls(<span class="macro">vec1::vec1!</span>[builder_url]);
 <a href=#1909 id=1909 data-nosnippet>1909</a>
-<a href=#1910 id=1910 data-nosnippet>1910</a>        <span class="comment">// Hook the builder up to the event stream from the first node
-<a href=#1911 id=1911 data-nosnippet>1911</a>        </span>builder_task.start(Box::new(
-<a href=#1912 id=1912 data-nosnippet>1912</a>            handle_0
-<a href=#1913 id=1913 data-nosnippet>1913</a>                .consensus_handle()
-<a href=#1914 id=1914 data-nosnippet>1914</a>                .legacy_consensus()
-<a href=#1915 id=1915 data-nosnippet>1915</a>                .read()
-<a href=#1916 id=1916 data-nosnippet>1916</a>                .<span class="kw">await
-<a href=#1917 id=1917 data-nosnippet>1917</a>                </span>.event_stream(),
-<a href=#1918 id=1918 data-nosnippet>1918</a>        ));
-<a href=#1919 id=1919 data-nosnippet>1919</a>
-<a href=#1920 id=1920 data-nosnippet>1920</a>        <span class="kw">let </span><span class="kw-2">mut </span>events = handle_0.event_stream();
-<a href=#1921 id=1921 data-nosnippet>1921</a>
-<a href=#1922 id=1922 data-nosnippet>1922</a>        <span class="kw">for </span>handle <span class="kw">in </span>handles.iter() {
-<a href=#1923 id=1923 data-nosnippet>1923</a>            handle.start_consensus().<span class="kw">await</span>;
-<a href=#1924 id=1924 data-nosnippet>1924</a>        }
+<a href=#1910 id=1910 data-nosnippet>1910</a>        <span class="kw">let </span>handles = config.init_nodes(MOCK_SEQUENCER_VERSIONS).<span class="kw">await</span>;
+<a href=#1911 id=1911 data-nosnippet>1911</a>
+<a href=#1912 id=1912 data-nosnippet>1912</a>        <span class="kw">let </span>handle_0 = <span class="kw-2">&amp;</span>handles[<span class="number">0</span>];
+<a href=#1913 id=1913 data-nosnippet>1913</a>
+<a href=#1914 id=1914 data-nosnippet>1914</a>        <span class="comment">// Hook the builder up to the event stream from the first node
+<a href=#1915 id=1915 data-nosnippet>1915</a>        </span>builder_task.start(Box::new(
+<a href=#1916 id=1916 data-nosnippet>1916</a>            handle_0
+<a href=#1917 id=1917 data-nosnippet>1917</a>                .consensus_handle()
+<a href=#1918 id=1918 data-nosnippet>1918</a>                .legacy_consensus()
+<a href=#1919 id=1919 data-nosnippet>1919</a>                .read()
+<a href=#1920 id=1920 data-nosnippet>1920</a>                .<span class="kw">await
+<a href=#1921 id=1921 data-nosnippet>1921</a>                </span>.event_stream(),
+<a href=#1922 id=1922 data-nosnippet>1922</a>        ));
+<a href=#1923 id=1923 data-nosnippet>1923</a>
+<a href=#1924 id=1924 data-nosnippet>1924</a>        <span class="kw">let </span><span class="kw-2">mut </span>events = handle_0.event_stream();
 <a href=#1925 id=1925 data-nosnippet>1925</a>
-<a href=#1926 id=1926 data-nosnippet>1926</a>        <span class="comment">// Submit target transaction to handle
-<a href=#1927 id=1927 data-nosnippet>1927</a>        </span><span class="kw">let </span>txn = Transaction::new(NamespaceId::from(<span class="number">1_u32</span>), <span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>]);
-<a href=#1928 id=1928 data-nosnippet>1928</a>        handles[<span class="number">0</span>]
-<a href=#1929 id=1929 data-nosnippet>1929</a>            .submit_transaction(txn.clone())
-<a href=#1930 id=1930 data-nosnippet>1930</a>            .<span class="kw">await
-<a href=#1931 id=1931 data-nosnippet>1931</a>            </span>.expect(<span class="string">"Failed to submit transaction"</span>);
-<a href=#1932 id=1932 data-nosnippet>1932</a>        <span class="macro">tracing::info!</span>(<span class="string">"Submitted transaction to handle: {txn:?}"</span>);
-<a href=#1933 id=1933 data-nosnippet>1933</a>
-<a href=#1934 id=1934 data-nosnippet>1934</a>        wait_for_decide_on_handle(<span class="kw-2">&amp;mut </span>events, <span class="kw-2">&amp;</span>txn).<span class="kw">await</span>;
-<a href=#1935 id=1935 data-nosnippet>1935</a>    }
-<a href=#1936 id=1936 data-nosnippet>1936</a>
-<a href=#1937 id=1937 data-nosnippet>1937</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
-<a href=#1938 id=1938 data-nosnippet>1938</a>    </span><span class="kw">async fn </span>test_header_invariants() {
-<a href=#1939 id=1939 data-nosnippet>1939</a>        <span class="kw">let </span>success_height = <span class="number">30</span>;
-<a href=#1940 id=1940 data-nosnippet>1940</a>        <span class="comment">// Assign `config` so it isn't dropped early.
-<a href=#1941 id=1941 data-nosnippet>1941</a>        </span><span class="kw">let </span>anvil = Anvil::new().spawn();
-<a href=#1942 id=1942 data-nosnippet>1942</a>        <span class="kw">let </span>url = anvil.endpoint_url();
-<a href=#1943 id=1943 data-nosnippet>1943</a>        <span class="kw">const </span>NUM_NODES: usize = <span class="number">5</span>;
-<a href=#1944 id=1944 data-nosnippet>1944</a>        <span class="kw">let </span><span class="kw-2">mut </span>config = TestConfigBuilder::&lt;NUM_NODES&gt;::default()
-<a href=#1945 id=1945 data-nosnippet>1945</a>            .l1_url(url)
-<a href=#1946 id=1946 data-nosnippet>1946</a>            .build();
-<a href=#1947 id=1947 data-nosnippet>1947</a>
-<a href=#1948 id=1948 data-nosnippet>1948</a>        <span class="kw">let </span>(builder_task, builder_url) = run_test_builder::&lt;NUM_NODES&gt;(<span class="prelude-val">None</span>).<span class="kw">await</span>;
-<a href=#1949 id=1949 data-nosnippet>1949</a>
-<a href=#1950 id=1950 data-nosnippet>1950</a>        config.set_builder_urls(<span class="macro">vec1::vec1!</span>[builder_url]);
-<a href=#1951 id=1951 data-nosnippet>1951</a>        <span class="kw">let </span>handles = config.init_nodes(MOCK_SEQUENCER_VERSIONS).<span class="kw">await</span>;
-<a href=#1952 id=1952 data-nosnippet>1952</a>
-<a href=#1953 id=1953 data-nosnippet>1953</a>        <span class="kw">let </span>handle_0 = <span class="kw-2">&amp;</span>handles[<span class="number">0</span>];
-<a href=#1954 id=1954 data-nosnippet>1954</a>
-<a href=#1955 id=1955 data-nosnippet>1955</a>        <span class="kw">let </span><span class="kw-2">mut </span>events = handle_0.event_stream();
+<a href=#1926 id=1926 data-nosnippet>1926</a>        <span class="kw">for </span>handle <span class="kw">in </span>handles.iter() {
+<a href=#1927 id=1927 data-nosnippet>1927</a>            handle.start_consensus().<span class="kw">await</span>;
+<a href=#1928 id=1928 data-nosnippet>1928</a>        }
+<a href=#1929 id=1929 data-nosnippet>1929</a>
+<a href=#1930 id=1930 data-nosnippet>1930</a>        <span class="comment">// Submit target transaction to handle
+<a href=#1931 id=1931 data-nosnippet>1931</a>        </span><span class="kw">let </span>txn = Transaction::new(NamespaceId::from(<span class="number">1_u32</span>), <span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>]);
+<a href=#1932 id=1932 data-nosnippet>1932</a>        handles[<span class="number">0</span>]
+<a href=#1933 id=1933 data-nosnippet>1933</a>            .submit_transaction(txn.clone())
+<a href=#1934 id=1934 data-nosnippet>1934</a>            .<span class="kw">await
+<a href=#1935 id=1935 data-nosnippet>1935</a>            </span>.expect(<span class="string">"Failed to submit transaction"</span>);
+<a href=#1936 id=1936 data-nosnippet>1936</a>        <span class="macro">tracing::info!</span>(<span class="string">"Submitted transaction to handle: {txn:?}"</span>);
+<a href=#1937 id=1937 data-nosnippet>1937</a>
+<a href=#1938 id=1938 data-nosnippet>1938</a>        wait_for_decide_on_handle(<span class="kw-2">&amp;mut </span>events, <span class="kw-2">&amp;</span>txn).<span class="kw">await</span>;
+<a href=#1939 id=1939 data-nosnippet>1939</a>    }
+<a href=#1940 id=1940 data-nosnippet>1940</a>
+<a href=#1941 id=1941 data-nosnippet>1941</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#1942 id=1942 data-nosnippet>1942</a>    </span><span class="kw">async fn </span>test_header_invariants() {
+<a href=#1943 id=1943 data-nosnippet>1943</a>        <span class="kw">let </span>success_height = <span class="number">30</span>;
+<a href=#1944 id=1944 data-nosnippet>1944</a>        <span class="comment">// Assign `config` so it isn't dropped early.
+<a href=#1945 id=1945 data-nosnippet>1945</a>        </span><span class="kw">let </span>anvil = Anvil::new().spawn();
+<a href=#1946 id=1946 data-nosnippet>1946</a>        <span class="kw">let </span>url = anvil.endpoint_url();
+<a href=#1947 id=1947 data-nosnippet>1947</a>        <span class="kw">const </span>NUM_NODES: usize = <span class="number">5</span>;
+<a href=#1948 id=1948 data-nosnippet>1948</a>        <span class="kw">let </span><span class="kw-2">mut </span>config = TestConfigBuilder::&lt;NUM_NODES&gt;::default()
+<a href=#1949 id=1949 data-nosnippet>1949</a>            .l1_url(url)
+<a href=#1950 id=1950 data-nosnippet>1950</a>            .build();
+<a href=#1951 id=1951 data-nosnippet>1951</a>
+<a href=#1952 id=1952 data-nosnippet>1952</a>        <span class="kw">let </span>(builder_task, builder_url) = run_test_builder::&lt;NUM_NODES&gt;(<span class="prelude-val">None</span>).<span class="kw">await</span>;
+<a href=#1953 id=1953 data-nosnippet>1953</a>
+<a href=#1954 id=1954 data-nosnippet>1954</a>        config.set_builder_urls(<span class="macro">vec1::vec1!</span>[builder_url]);
+<a href=#1955 id=1955 data-nosnippet>1955</a>        <span class="kw">let </span>handles = config.init_nodes(MOCK_SEQUENCER_VERSIONS).<span class="kw">await</span>;
 <a href=#1956 id=1956 data-nosnippet>1956</a>
-<a href=#1957 id=1957 data-nosnippet>1957</a>        <span class="comment">// Hook the builder up to the event stream from the first node
-<a href=#1958 id=1958 data-nosnippet>1958</a>        </span>builder_task.start(Box::new(
-<a href=#1959 id=1959 data-nosnippet>1959</a>            handle_0
-<a href=#1960 id=1960 data-nosnippet>1960</a>                .consensus_handle()
-<a href=#1961 id=1961 data-nosnippet>1961</a>                .legacy_consensus()
-<a href=#1962 id=1962 data-nosnippet>1962</a>                .read()
-<a href=#1963 id=1963 data-nosnippet>1963</a>                .<span class="kw">await
-<a href=#1964 id=1964 data-nosnippet>1964</a>                </span>.event_stream(),
-<a href=#1965 id=1965 data-nosnippet>1965</a>        ));
-<a href=#1966 id=1966 data-nosnippet>1966</a>
-<a href=#1967 id=1967 data-nosnippet>1967</a>        <span class="kw">for </span>handle <span class="kw">in </span>handles.iter() {
-<a href=#1968 id=1968 data-nosnippet>1968</a>            handle.start_consensus().<span class="kw">await</span>;
-<a href=#1969 id=1969 data-nosnippet>1969</a>        }
+<a href=#1957 id=1957 data-nosnippet>1957</a>        <span class="kw">let </span>handle_0 = <span class="kw-2">&amp;</span>handles[<span class="number">0</span>];
+<a href=#1958 id=1958 data-nosnippet>1958</a>
+<a href=#1959 id=1959 data-nosnippet>1959</a>        <span class="kw">let </span><span class="kw-2">mut </span>events = handle_0.event_stream();
+<a href=#1960 id=1960 data-nosnippet>1960</a>
+<a href=#1961 id=1961 data-nosnippet>1961</a>        <span class="comment">// Hook the builder up to the event stream from the first node
+<a href=#1962 id=1962 data-nosnippet>1962</a>        </span>builder_task.start(Box::new(
+<a href=#1963 id=1963 data-nosnippet>1963</a>            handle_0
+<a href=#1964 id=1964 data-nosnippet>1964</a>                .consensus_handle()
+<a href=#1965 id=1965 data-nosnippet>1965</a>                .legacy_consensus()
+<a href=#1966 id=1966 data-nosnippet>1966</a>                .read()
+<a href=#1967 id=1967 data-nosnippet>1967</a>                .<span class="kw">await
+<a href=#1968 id=1968 data-nosnippet>1968</a>                </span>.event_stream(),
+<a href=#1969 id=1969 data-nosnippet>1969</a>        ));
 <a href=#1970 id=1970 data-nosnippet>1970</a>
-<a href=#1971 id=1971 data-nosnippet>1971</a>        <span class="kw">let </span><span class="kw-2">mut </span>parent = {
-<a href=#1972 id=1972 data-nosnippet>1972</a>            <span class="comment">// TODO refactor repeated code from other tests
-<a href=#1973 id=1973 data-nosnippet>1973</a>            </span><span class="kw">let </span>(genesis_payload, genesis_ns_table) =
-<a href=#1974 id=1974 data-nosnippet>1974</a>                Payload::from_transactions([], <span class="kw-2">&amp;</span>ValidatedState::default(), <span class="kw-2">&amp;</span>NodeState::mock())
-<a href=#1975 id=1975 data-nosnippet>1975</a>                    .<span class="kw">await
-<a href=#1976 id=1976 data-nosnippet>1976</a>                    </span>.unwrap();
-<a href=#1977 id=1977 data-nosnippet>1977</a>
-<a href=#1978 id=1978 data-nosnippet>1978</a>            <span class="kw">let </span>genesis_state = NodeState::mock();
-<a href=#1979 id=1979 data-nosnippet>1979</a>            Header::genesis(
-<a href=#1980 id=1980 data-nosnippet>1980</a>                <span class="kw-2">&amp;</span>genesis_state,
-<a href=#1981 id=1981 data-nosnippet>1981</a>                genesis_payload,
-<a href=#1982 id=1982 data-nosnippet>1982</a>                <span class="kw-2">&amp;</span>genesis_ns_table,
-<a href=#1983 id=1983 data-nosnippet>1983</a>                TEST_VERSIONS.test.base,
-<a href=#1984 id=1984 data-nosnippet>1984</a>            )
-<a href=#1985 id=1985 data-nosnippet>1985</a>        };
-<a href=#1986 id=1986 data-nosnippet>1986</a>
-<a href=#1987 id=1987 data-nosnippet>1987</a>        <span class="kw">loop </span>{
-<a href=#1988 id=1988 data-nosnippet>1988</a>            <span class="kw">let </span>event = events.next().<span class="kw">await</span>.unwrap();
-<a href=#1989 id=1989 data-nosnippet>1989</a>            <span class="macro">tracing::info!</span>(<span class="string">"Received event from handle: {event:?}"</span>);
-<a href=#1990 id=1990 data-nosnippet>1990</a>            <span class="kw">let </span>CoordinatorEvent::LegacyEvent(Event {
-<a href=#1991 id=1991 data-nosnippet>1991</a>                event: EventType::Decide { leaf_chain, .. },
-<a href=#1992 id=1992 data-nosnippet>1992</a>                ..
-<a href=#1993 id=1993 data-nosnippet>1993</a>            }) = event
-<a href=#1994 id=1994 data-nosnippet>1994</a>            <span class="kw">else </span>{
-<a href=#1995 id=1995 data-nosnippet>1995</a>                <span class="kw">continue</span>;
-<a href=#1996 id=1996 data-nosnippet>1996</a>            };
-<a href=#1997 id=1997 data-nosnippet>1997</a>            <span class="macro">tracing::info!</span>(<span class="string">"Got decide {leaf_chain:?}"</span>);
-<a href=#1998 id=1998 data-nosnippet>1998</a>
-<a href=#1999 id=1999 data-nosnippet>1999</a>            <span class="comment">// Check that each successive header satisfies invariants relative to its parent: all
-<a href=#2000 id=2000 data-nosnippet>2000</a>            // the fields which should be monotonic are.
-<a href=#2001 id=2001 data-nosnippet>2001</a>            </span><span class="kw">for </span>LeafInfo { leaf, .. } <span class="kw">in </span>leaf_chain.iter().rev() {
-<a href=#2002 id=2002 data-nosnippet>2002</a>                <span class="kw">let </span>header = leaf.block_header().clone();
-<a href=#2003 id=2003 data-nosnippet>2003</a>                <span class="kw">if </span>header.height() == <span class="number">0 </span>{
-<a href=#2004 id=2004 data-nosnippet>2004</a>                    parent = header;
-<a href=#2005 id=2005 data-nosnippet>2005</a>                    <span class="kw">continue</span>;
-<a href=#2006 id=2006 data-nosnippet>2006</a>                }
-<a href=#2007 id=2007 data-nosnippet>2007</a>                <span class="macro">assert_eq!</span>(header.height(), parent.height() + <span class="number">1</span>);
-<a href=#2008 id=2008 data-nosnippet>2008</a>                <span class="macro">assert!</span>(header.timestamp() &gt;= parent.timestamp());
-<a href=#2009 id=2009 data-nosnippet>2009</a>                <span class="macro">assert!</span>(header.l1_head() &gt;= parent.l1_head());
-<a href=#2010 id=2010 data-nosnippet>2010</a>                <span class="macro">assert!</span>(header.l1_finalized() &gt;= parent.l1_finalized());
-<a href=#2011 id=2011 data-nosnippet>2011</a>                parent = header;
-<a href=#2012 id=2012 data-nosnippet>2012</a>            }
-<a href=#2013 id=2013 data-nosnippet>2013</a>
-<a href=#2014 id=2014 data-nosnippet>2014</a>            <span class="kw">if </span>parent.height() &gt;= success_height {
-<a href=#2015 id=2015 data-nosnippet>2015</a>                <span class="kw">break</span>;
+<a href=#1971 id=1971 data-nosnippet>1971</a>        <span class="kw">for </span>handle <span class="kw">in </span>handles.iter() {
+<a href=#1972 id=1972 data-nosnippet>1972</a>            handle.start_consensus().<span class="kw">await</span>;
+<a href=#1973 id=1973 data-nosnippet>1973</a>        }
+<a href=#1974 id=1974 data-nosnippet>1974</a>
+<a href=#1975 id=1975 data-nosnippet>1975</a>        <span class="kw">let </span><span class="kw-2">mut </span>parent = {
+<a href=#1976 id=1976 data-nosnippet>1976</a>            <span class="comment">// TODO refactor repeated code from other tests
+<a href=#1977 id=1977 data-nosnippet>1977</a>            </span><span class="kw">let </span>(genesis_payload, genesis_ns_table) =
+<a href=#1978 id=1978 data-nosnippet>1978</a>                Payload::from_transactions([], <span class="kw-2">&amp;</span>ValidatedState::default(), <span class="kw-2">&amp;</span>NodeState::mock())
+<a href=#1979 id=1979 data-nosnippet>1979</a>                    .<span class="kw">await
+<a href=#1980 id=1980 data-nosnippet>1980</a>                    </span>.unwrap();
+<a href=#1981 id=1981 data-nosnippet>1981</a>
+<a href=#1982 id=1982 data-nosnippet>1982</a>            <span class="kw">let </span>genesis_state = NodeState::mock();
+<a href=#1983 id=1983 data-nosnippet>1983</a>            Header::genesis(
+<a href=#1984 id=1984 data-nosnippet>1984</a>                <span class="kw-2">&amp;</span>genesis_state,
+<a href=#1985 id=1985 data-nosnippet>1985</a>                genesis_payload,
+<a href=#1986 id=1986 data-nosnippet>1986</a>                <span class="kw-2">&amp;</span>genesis_ns_table,
+<a href=#1987 id=1987 data-nosnippet>1987</a>                TEST_VERSIONS.test.base,
+<a href=#1988 id=1988 data-nosnippet>1988</a>            )
+<a href=#1989 id=1989 data-nosnippet>1989</a>        };
+<a href=#1990 id=1990 data-nosnippet>1990</a>
+<a href=#1991 id=1991 data-nosnippet>1991</a>        <span class="kw">loop </span>{
+<a href=#1992 id=1992 data-nosnippet>1992</a>            <span class="kw">let </span>event = events.next().<span class="kw">await</span>.unwrap();
+<a href=#1993 id=1993 data-nosnippet>1993</a>            <span class="macro">tracing::info!</span>(<span class="string">"Received event from handle: {event:?}"</span>);
+<a href=#1994 id=1994 data-nosnippet>1994</a>            <span class="kw">let </span>CoordinatorEvent::LegacyEvent(Event {
+<a href=#1995 id=1995 data-nosnippet>1995</a>                event: EventType::Decide { leaf_chain, .. },
+<a href=#1996 id=1996 data-nosnippet>1996</a>                ..
+<a href=#1997 id=1997 data-nosnippet>1997</a>            }) = event
+<a href=#1998 id=1998 data-nosnippet>1998</a>            <span class="kw">else </span>{
+<a href=#1999 id=1999 data-nosnippet>1999</a>                <span class="kw">continue</span>;
+<a href=#2000 id=2000 data-nosnippet>2000</a>            };
+<a href=#2001 id=2001 data-nosnippet>2001</a>            <span class="macro">tracing::info!</span>(<span class="string">"Got decide {leaf_chain:?}"</span>);
+<a href=#2002 id=2002 data-nosnippet>2002</a>
+<a href=#2003 id=2003 data-nosnippet>2003</a>            <span class="comment">// Check that each successive header satisfies invariants relative to its parent: all
+<a href=#2004 id=2004 data-nosnippet>2004</a>            // the fields which should be monotonic are.
+<a href=#2005 id=2005 data-nosnippet>2005</a>            </span><span class="kw">for </span>LeafInfo { leaf, .. } <span class="kw">in </span>leaf_chain.iter().rev() {
+<a href=#2006 id=2006 data-nosnippet>2006</a>                <span class="kw">let </span>header = leaf.block_header().clone();
+<a href=#2007 id=2007 data-nosnippet>2007</a>                <span class="kw">if </span>header.height() == <span class="number">0 </span>{
+<a href=#2008 id=2008 data-nosnippet>2008</a>                    parent = header;
+<a href=#2009 id=2009 data-nosnippet>2009</a>                    <span class="kw">continue</span>;
+<a href=#2010 id=2010 data-nosnippet>2010</a>                }
+<a href=#2011 id=2011 data-nosnippet>2011</a>                <span class="macro">assert_eq!</span>(header.height(), parent.height() + <span class="number">1</span>);
+<a href=#2012 id=2012 data-nosnippet>2012</a>                <span class="macro">assert!</span>(header.timestamp() &gt;= parent.timestamp());
+<a href=#2013 id=2013 data-nosnippet>2013</a>                <span class="macro">assert!</span>(header.l1_head() &gt;= parent.l1_head());
+<a href=#2014 id=2014 data-nosnippet>2014</a>                <span class="macro">assert!</span>(header.l1_finalized() &gt;= parent.l1_finalized());
+<a href=#2015 id=2015 data-nosnippet>2015</a>                parent = header;
 <a href=#2016 id=2016 data-nosnippet>2016</a>            }
-<a href=#2017 id=2017 data-nosnippet>2017</a>        }
-<a href=#2018 id=2018 data-nosnippet>2018</a>    }
-<a href=#2019 id=2019 data-nosnippet>2019</a>}
+<a href=#2017 id=2017 data-nosnippet>2017</a>
+<a href=#2018 id=2018 data-nosnippet>2018</a>            <span class="kw">if </span>parent.height() &gt;= success_height {
+<a href=#2019 id=2019 data-nosnippet>2019</a>                <span class="kw">break</span>;
+<a href=#2020 id=2020 data-nosnippet>2020</a>            }
+<a href=#2021 id=2021 data-nosnippet>2021</a>        }
+<a href=#2022 id=2022 data-nosnippet>2022</a>    }
+<a href=#2023 id=2023 data-nosnippet>2023</a>}
 </code></pre></div></section></main></body></html>
