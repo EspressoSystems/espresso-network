@@ -18,7 +18,7 @@ ark-ff = { workspace = true }
 ark-poly = { workspace = true }
 ark-std = { workspace = true }
 clap = { workspace = true }
-espresso-types = { workspace = true }
+espresso-types = { workspace = true, features = ["node"] }
 hotshot-contract-adapter = { workspace = true }
 hotshot-state-prover = { workspace = true }
 hotshot-types = { workspace = true }

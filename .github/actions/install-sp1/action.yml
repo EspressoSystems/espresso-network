@@ -1,0 +1,38 @@
+name: Install SP1
+description: Install the SP1 toolchain via sp1up with retries.
+
+inputs:
+  version:
+    description: sp1 release to install (e.g. v6.3.1)
+    required: false
+    default: v6.3.1
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        SP1_VERSION: ${{ inputs.version }}
+        GITHUB_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+
+        run_with_retry() {
+          local -i max_attempts=15
+          local -i attempts=0
+          until "$@"; do
+            attempts=$((attempts + 1))
+            if [ "$attempts" -ge "$max_attempts" ]; then
+              echo "Command '$*' failed after $attempts attempts." >&2
+              exit 1
+            fi
+            echo "Command failed. Retrying in $((attempts * 5))s..." >&2
+            sleep $((attempts * 5))
+          done
+        }
+
+        run_with_retry bash -c "curl -sSfL https://sp1up.succinct.xyz | bash"
+
+        run_with_retry "$HOME/.sp1/bin/sp1up" --version "$SP1_VERSION" --token "$GITHUB_TOKEN"
+
+        cargo +succinct --version
