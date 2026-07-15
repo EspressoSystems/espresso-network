@@ -1,13 +1,13 @@
-# fetched at block 2655684 (2026-04-20T12:25:48Z)
+# fetched at block 3220236 (2026-07-15T14:53:24Z)
 network = "hoodi"
 
 [multisigs.espresso_labs]
 address = "0x26bf8656f1654a14570af587adc8cac68fda6fcf"
 version = "1.4.1"
 owners = [
-    "0x811caa1c5c96bfe0ab12b2eeb542994b0c368627",
-    "0x647e90723669b6bb163a46e8bfebcb95beb94849",
-    "0x53d5385d897872bb8199309be70810fc09e58ce5",
+    "0x74560e14de4426d1aa461801edc782ad653d9847",
+    "0x3f3662e0b1d652cb6ddcd2dc31dfe5d762bbd3f2",
+    "0x1584f9d22ba5c56ac0bb6496c447a95a721eb709",
     "0xf4b7676d9ec86d2011ab87855424219a97deb40c",
 ]
 threshold = 2
