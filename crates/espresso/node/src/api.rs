@@ -503,7 +503,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
     async fn vote_participation(&self, epoch: EpochNumber) -> HashMap<PubKey, f64> {
         self.consensus_handle()
             .await
-            .vote_participation(Some(epoch))
+            .vote_participation(epoch)
             .await
     }
 

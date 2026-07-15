@@ -241,6 +241,10 @@ impl<T: NodeType> BlockBuilder<T> {
         });
     }
 
+    pub fn outstanding_transactions(&self) -> (usize, usize) {
+        (self.retry_pending.len(), self.retry_total_bytes as usize)
+    }
+
     pub fn on_submit_transaction(&mut self, tx: T::Transaction) {
         let hash = tx.commit();
 
