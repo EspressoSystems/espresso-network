@@ -25,7 +25,7 @@ pub struct ValidCert<C> {
 }
 
 impl<C> ValidCert<C> {
-    pub fn new(cert: C, epoch: EpochNumber) -> Self {
+    pub(crate) fn new(cert: C, epoch: EpochNumber) -> Self {
         Self { cert, epoch }
     }
 

@@ -89,9 +89,7 @@ async fn send_timeout_votes(
             any(inputs, is_timeout_cert)
         })
         .await;
-    harness.apply_and_process(ConsensusInput::TimeoutCertificate(
-        test_view.timeout_cert.clone(),
-    ));
+    harness.apply_and_process(test_view.timeout_cert_input());
 }
 
 /// Integration: sequential views both produce Vote1 through real state validation.
