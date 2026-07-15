@@ -5,18 +5,24 @@ use std::{
     ops::Deref,
 };
 
+use alloy::primitives::U256;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
-    simple_certificate::{Certificate1, Certificate2, TimeoutCertificate2},
-    simple_vote::HasEpoch,
+    simple_certificate::{
+        Certificate1, Certificate2, SimpleCertificate, Threshold, TimeoutCertificate2,
+    },
+    simple_vote::{HasEpoch, Voteable},
     stake_table::StakeTableEntries,
-    traits::node_implementation::NodeType,
+    traits::{node_implementation::NodeType, signature_key::SignatureKey},
     vote::{Certificate, HasViewNumber},
 };
+use hotshot_utils::anytrace::Result;
 use tokio_util::task::JoinMap;
 use tracing::{error, warn};
+
+use crate::message::{EpochChangeMessage, Unchecked, Validated};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ValidCert<C> {
@@ -56,17 +62,65 @@ impl<C: HasViewNumber> HasViewNumber for ValidCert<C> {
     }
 }
 
+pub trait Verifiable<T: NodeType>: HasViewNumber + HasEpoch + Sized {
+    type Output: Send + 'static;
+
+    fn check(
+        self,
+        stake_table: &[<T::SignatureKey as SignatureKey>::StakeTableEntry],
+        threshold: U256,
+        upgrade_lock: &UpgradeLock<T>,
+    ) -> Result<Self::Output>;
+}
+
+impl<T, D, V> Verifiable<T> for SimpleCertificate<T, D, V>
+where
+    T: NodeType,
+    D: Voteable<T> + HasEpoch + 'static,
+    V: Threshold<T>,
+    Self: Certificate<T, D> + Send + 'static,
+{
+    type Output = Self;
+
+    fn check(
+        self,
+        stake_table: &[<T::SignatureKey as SignatureKey>::StakeTableEntry],
+        threshold: U256,
+        upgrade_lock: &UpgradeLock<T>,
+    ) -> Result<Self> {
+        self.is_valid_cert(stake_table, threshold, upgrade_lock)?;
+        Ok(self)
+    }
+}
+
+impl<T: NodeType> Verifiable<T> for EpochChangeMessage<T, Unchecked> {
+    type Output = EpochChangeMessage<T, Validated>;
+
+    fn check(
+        self,
+        stake_table: &[<T::SignatureKey as SignatureKey>::StakeTableEntry],
+        threshold: U256,
+        upgrade_lock: &UpgradeLock<T>,
+    ) -> Result<Self::Output> {
+        self.cert1
+            .is_valid_cert(stake_table, threshold, upgrade_lock)?;
+        self.cert2
+            .is_valid_cert(stake_table, threshold, upgrade_lock)?;
+        Ok(self.into_validated())
+    }
+}
+
 /// Verifies certificates received from the network off the main coordinator
 /// thread.
 ///
 /// The threshold-signature check is slow (> 1ms), so running it inline would
-/// stall the consensus loop. Each certificate's check runs in a `spawn_blocking`
-/// task; `next()` yields only those that pass. A certificate whose epoch
+/// stall the consensus loop. Each item's check runs in a `spawn_blocking`
+/// task; `next()` yields only those that pass. An item whose epoch
 /// membership isn't known yet is held in `pending` and retried on
-/// [`Self::retry_pending`]. One verifier handles one certificate type, keyed by
-/// view so duplicates are dropped.
-pub struct CertVerifier<T: NodeType, C> {
-    tasks: JoinMap<ViewNumber, Option<ValidCert<C>>>,
+/// [`Self::retry_pending`]. One verifier handles one [`Verifiable`] type,
+/// keyed by view so duplicates are dropped.
+pub struct CertVerifier<T: NodeType, C: Verifiable<T>> {
+    tasks: JoinMap<ViewNumber, Option<ValidCert<C::Output>>>,
     pending: BTreeMap<ViewNumber, C>,
     completed: BTreeSet<ViewNumber>,
     lower_bound: ViewNumber,
@@ -75,7 +129,7 @@ pub struct CertVerifier<T: NodeType, C> {
     invalid_certs: u64,
 }
 
-impl<T: NodeType, C: Send + 'static> CertVerifier<T, C> {
+impl<T: NodeType, C: Verifiable<T> + Send + 'static> CertVerifier<T, C> {
     pub fn new(membership: EpochMembershipCoordinator<T>, upgrade_lock: UpgradeLock<T>) -> Self {
         Self {
             tasks: JoinMap::new(),
@@ -88,13 +142,10 @@ impl<T: NodeType, C: Send + 'static> CertVerifier<T, C> {
         }
     }
 
-    /// Submit a certificate received from the network for verification. If the
-    /// epoch's membership isn't ready the cert is held and its epoch returned so
-    /// the caller can drive that epoch's catchup. Duplicates are dropped.
-    pub fn verify<A>(&mut self, cert: C) -> Option<EpochNumber>
-    where
-        C: Certificate<T, A> + HasEpoch,
-    {
+    /// Submit an item received from the network for verification. If the
+    /// epoch's membership isn't ready the item is held and its epoch returned
+    /// so the caller can drive that epoch's catchup. Duplicates are dropped.
+    pub fn verify(&mut self, cert: C) -> Option<EpochNumber> {
         let view = cert.view_number();
 
         if view < self.lower_bound
@@ -120,8 +171,8 @@ impl<T: NodeType, C: Send + 'static> CertVerifier<T, C> {
         self.tasks.spawn_blocking(view, move || {
             let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
             let threshold = membership.success_threshold();
-            match cert.is_valid_cert(&entries, threshold, &lock) {
-                Ok(()) => Some(ValidCert::new(cert, epoch)),
+            match cert.check(&entries, threshold, &lock) {
+                Ok(valid) => Some(ValidCert::new(valid, epoch)),
                 Err(err) => {
                     warn!(%view, %epoch, %err, cert = type_name::<C>(), "invalid certificate");
                     None
@@ -132,21 +183,18 @@ impl<T: NodeType, C: Send + 'static> CertVerifier<T, C> {
         None
     }
 
-    /// Re-attempt any certificates deferred because their epoch stake table
-    /// wasn't available. Called when new epoch data arrives. Returns the epochs
+    /// Re-attempt any items deferred because their epoch stake table wasn't
+    /// available. Called when new epoch data arrives. Returns the epochs
     /// whose stake table is still missing so the caller can keep driving their
     /// catchup.
-    pub fn retry_pending<A>(&mut self) -> Vec<EpochNumber>
-    where
-        C: Certificate<T, A> + HasEpoch,
-    {
+    pub fn retry_pending(&mut self) -> Vec<EpochNumber> {
         mem::take(&mut self.pending)
             .into_values()
             .filter_map(|cert| self.verify(cert))
             .collect()
     }
 
-    pub async fn next(&mut self) -> Option<ValidCert<C>> {
+    pub async fn next(&mut self) -> Option<ValidCert<C::Output>> {
         loop {
             match self.tasks.join_next().await? {
                 (view, Ok(Some(cert))) => {
@@ -185,6 +233,7 @@ pub struct CertVerifiers<T: NodeType> {
     pub cert2: CertVerifier<T, Certificate2<T>>,
     pub timeout: CertVerifier<T, TimeoutCertificate2<T>>,
     pub advance: CertVerifier<T, Certificate1<T>>,
+    pub epoch_change: CertVerifier<T, EpochChangeMessage<T, Unchecked>>,
 }
 
 impl<T: NodeType> CertVerifiers<T> {
@@ -193,7 +242,8 @@ impl<T: NodeType> CertVerifiers<T> {
             cert1: CertVerifier::new(membership.clone(), upgrade_lock.clone()),
             cert2: CertVerifier::new(membership.clone(), upgrade_lock.clone()),
             timeout: CertVerifier::new(membership.clone(), upgrade_lock.clone()),
-            advance: CertVerifier::new(membership, upgrade_lock),
+            advance: CertVerifier::new(membership.clone(), upgrade_lock.clone()),
+            epoch_change: CertVerifier::new(membership, upgrade_lock),
         }
     }
 
@@ -213,6 +263,9 @@ impl<T: NodeType> CertVerifiers<T> {
         for epoch in self.advance.retry_pending() {
             request(epoch);
         }
+        for epoch in self.epoch_change.retry_pending() {
+            request(epoch);
+        }
     }
 
     pub fn gc(&mut self, view: ViewNumber) {
@@ -220,6 +273,7 @@ impl<T: NodeType> CertVerifiers<T> {
         self.cert2.gc(view);
         self.timeout.gc(view);
         self.advance.gc(view);
+        self.epoch_change.gc(view);
     }
 
     pub fn num_invalid_certs(&self) -> u64 {
@@ -228,5 +282,6 @@ impl<T: NodeType> CertVerifiers<T> {
             .saturating_add(self.cert2.num_invalid_certs())
             .saturating_add(self.timeout.num_invalid_certs())
             .saturating_add(self.advance.num_invalid_certs())
+            .saturating_add(self.epoch_change.num_invalid_certs())
     }
 }

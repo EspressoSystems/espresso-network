@@ -487,6 +487,9 @@ where
                 Some(cert1) = self.cert_verifiers.advance.next() => {
                     return Ok(ConsensusInput::AdvanceView(cert1))
                 }
+                Some(epoch_change) = self.cert_verifiers.epoch_change.next() => {
+                    return Ok(ConsensusInput::EpochChange(epoch_change.into_cert()))
+                }
                 Some((cert1, state_cert)) = self.epoch_root_collector.next() => {
                     self.storage.append_state_cert(
                         ViewNumber::new(state_cert.light_client_state.view_number),
@@ -1224,7 +1227,10 @@ where
                         epoch = ?epoch_change.cert1.epoch().map(|e| *e),
                         "recv epoch change"
                     );
-                    Some(ConsensusInput::EpochChange(epoch_change))
+                    if let Some(epoch) = self.cert_verifiers.epoch_change.verify(epoch_change) {
+                        self.epoch_manager.request_drb_result(epoch);
+                    }
+                    None
                 },
             },
             MessageType::Block(msg) => {

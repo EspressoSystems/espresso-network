@@ -24,7 +24,7 @@ use hotshot_types::{
         HasEpoch, LightClientStateUpdateVote2, QuorumData2, SimpleVote, TimeoutData2, TimeoutVote2,
         Vote2Data,
     },
-    stake_table::{HSStakeTable, StakeTableEntries},
+    stake_table::HSStakeTable,
     traits::{
         block_contents::BlockHeader,
         node_implementation::NodeType,
@@ -33,7 +33,7 @@ use hotshot_types::{
         },
     },
     utils::{epoch_from_block_number, is_epoch_root, is_epoch_transition, is_last_block},
-    vote::{self, Certificate, HasViewNumber},
+    vote::{Certificate, HasViewNumber},
 };
 use hotshot_utils::anytrace;
 use tracing::{debug, info, instrument, warn};
@@ -101,7 +101,7 @@ pub enum ConsensusInput<T: NodeType> {
         cert1: ValidCert<Certificate1<T>>,
         state_cert: LightClientStateUpdateCertificateV2<T>,
     },
-    EpochChange(EpochChangeMessage<T>),
+    EpochChange(EpochChangeMessage<T, Validated>),
     HeaderCreated(ViewNumber, Commitment<Leaf2<T>>, T::BlockHeader),
     ProposalWithVidShare(
         T::SignatureKey,
@@ -137,7 +137,7 @@ pub enum ConsensusOutput<T: NodeType> {
     /// Broadcast a first-obtained Cert2 so peers that could not assemble it
     /// from votes can still decide. Mirrors `SendCertificate1`.
     SendCertificate2(Certificate2<T>),
-    SendEpochChange(EpochChangeMessage<T>),
+    SendEpochChange(EpochChangeMessage<T, Validated>),
     RequestVidDisperse {
         view: ViewNumber,
         epoch: EpochNumber,
@@ -1004,31 +1004,6 @@ impl<T: NodeType> Consensus<T> {
             return Protocol::Abort;
         }
 
-        // if the previous block is the last block of the epoch, this proposal is the first proposal of the new epoch
-        if is_last_block(block_number.saturating_sub(1), *self.epoch_height) {
-            let Some(cert2) = &proposal.next_epoch_justify_qc else {
-                warn!(
-                    %view, %proposer, block = %block_number, %epoch, %qc_view, %qc_epoch,
-                    "no next epoch justify QC"
-                );
-                return Protocol::Abort;
-            };
-            if cert2.data.leaf_commit != proposal.justify_qc.data().leaf_commit {
-                warn!(
-                    %view, %proposer, block = %block_number, %epoch, %qc_view, %qc_epoch,
-                    "next epoch justify QC does not match proposal"
-                );
-                return Protocol::Abort;
-            }
-            if !self.verify_cert(cert2, qc_epoch) {
-                warn!(
-                    %view, %proposer, block = %block_number, %epoch, %qc_view, %qc_epoch,
-                    "next epoch justify QC not verified"
-                );
-                return Protocol::Abort;
-            }
-        }
-
         let payload_size = vid_share.payload_byte_len();
 
         // Store the proposal before the DRB check so it is not lost when
@@ -1426,13 +1401,14 @@ impl<T: NodeType> Consensus<T> {
     #[instrument(level = "debug", skip_all)]
     fn handle_epoch_change(
         &mut self,
-        epoch_change: EpochChangeMessage<T>,
+        epoch_change: EpochChangeMessage<T, Validated>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> Protocol {
         let EpochChangeMessage {
             cert1,
             cert2,
             proposal,
+            ..
         } = epoch_change;
         // Compare epochs (not views) so a node that timed out past a boundary
         // it never saw can still recover via a genuinely new epoch change.
@@ -1477,19 +1453,6 @@ impl<T: NodeType> Consensus<T> {
         // Check if the proposal matches the certificate1
         if proposal_commitment(&proposal) != cert1.data.leaf_commit {
             warn!("epoch change proposal commitment does not match certificate1 leaf commitment");
-            return Protocol::Abort;
-        }
-        // Verify the certificates
-        let Some(cert1_epoch) = cert1.epoch() else {
-            warn!("epoch change certificate1 has no epoch number");
-            return Protocol::Abort;
-        };
-        if !self.verify_cert(&cert1, cert1_epoch) {
-            warn!("epoch change certificate not verified");
-            return Protocol::Abort;
-        }
-        if !self.verify_cert(&cert2, cert2.data.epoch) {
-            warn!("epoch change certificate not verified");
             return Protocol::Abort;
         }
         let next_view = cert2.view_number() + 1;
@@ -1727,11 +1690,8 @@ impl<T: NodeType> Consensus<T> {
         if is_last_block(proposal.block_header.block_number(), *self.epoch_height)
             && cert1.data.leaf_commit == proposal_commit
         {
-            let epoch_change = EpochChangeMessage {
-                cert1: cert1.clone(),
-                cert2: cert2.clone(),
-                proposal: proposal.clone(),
-            };
+            let epoch_change =
+                EpochChangeMessage::validated(cert1.clone(), cert2.clone(), proposal.clone());
             outbox.push_back(ConsensusOutput::SendEpochChange(epoch_change));
         }
         // we have a second certificate, and matching proposal, it is decided.
@@ -2265,33 +2225,6 @@ impl<T: NodeType> Consensus<T> {
             parent_commit: parent_commit.to_string(),
             locked_commit: locked_commit.to_string(),
         })
-    }
-
-    #[instrument(level = "trace", skip_all)]
-    fn verify_cert<A, C>(&self, cert: &C, epoch: EpochNumber) -> bool
-    where
-        C: vote::Certificate<T, A>,
-    {
-        match self
-            .stake_table_coordinator
-            .membership_for_epoch(Some(epoch))
-        {
-            Ok(stake_table) => {
-                let entries = StakeTableEntries::from_iter(stake_table.stake_table()).0;
-                let threshold = stake_table.success_threshold();
-                match cert.is_valid_cert(&entries, threshold, &self.upgrade_lock) {
-                    Ok(()) => true,
-                    Err(err) => {
-                        warn!(%epoch, %err, "invalid threshold signature");
-                        false
-                    },
-                }
-            },
-            Err(err) => {
-                warn!(%epoch, %err, "failed to get stake table");
-                false
-            },
-        }
     }
 
     /// Format the leader's key prefix for the given view/epoch, or `"unknown"`

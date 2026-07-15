@@ -7,7 +7,7 @@ use hotshot_types::{traits::signature_key::SignatureKey, vote::HasViewNumber};
 use super::common::{harness::TestHarness, utils::TestData};
 use crate::{
     consensus::ConsensusInput,
-    message::{CatchupEvidence, ConsensusMessage, EpochChangeMessage, Proposal},
+    message::{CatchupEvidence, ConsensusMessage, EpochChangeMessage, Proposal, Validated},
     tests::common::assertions::{
         any, count_matching, is_block_built, is_block_reconstructed, is_cert1, is_cert2,
         is_drb_result, is_header_created, is_header_created_for_view, is_leaf_decided, is_proposal,
@@ -330,14 +330,10 @@ async fn test_leader_proposes_after_timeout() {
 const EPOCH_HEIGHT: u64 = 10;
 
 /// Helper to build an EpochChangeMessage from test data at the epoch boundary view.
-fn epoch_change_message(test_data: &TestData) -> EpochChangeMessage<TestTypes> {
+fn epoch_change_message(test_data: &TestData) -> EpochChangeMessage<TestTypes, Validated> {
     let epoch_view = &test_data.views[9]; // view 10, last block of epoch 1
     let proposal: Proposal<TestTypes> = epoch_view.proposal.data.clone();
-    EpochChangeMessage {
-        cert1: epoch_view.cert1.clone(),
-        cert2: epoch_view.cert2.clone(),
-        proposal,
-    }
+    EpochChangeMessage::validated(epoch_view.cert1.clone(), epoch_view.cert2.clone(), proposal)
 }
 
 /// Run views through the full integration pipeline.
@@ -433,11 +429,11 @@ async fn cross_epoch_boundary(
 ) {
     let boundary_view = &test_data.views[boundary_idx];
     let proposal: Proposal<TestTypes> = boundary_view.proposal.data.clone();
-    let epoch_change = EpochChangeMessage {
-        cert1: boundary_view.cert1.clone(),
-        cert2: boundary_view.cert2.clone(),
+    let epoch_change = EpochChangeMessage::validated(
+        boundary_view.cert1.clone(),
+        boundary_view.cert2.clone(),
         proposal,
-    };
+    );
     harness.apply_and_process(ConsensusInput::EpochChange(epoch_change));
 
     // Send vote1s and vote2s through the normal pipeline.
