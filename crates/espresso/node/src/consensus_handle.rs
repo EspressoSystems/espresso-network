@@ -429,7 +429,7 @@ where
                     .request_proposal(view, leaf_commitment)
                     .await
                     .map(convert_proposal)
-                    .map_err(|err| anyhow::anyhow!("{err}"))
+                    .map_err(anyhow::Error::new)
             }
             .boxed());
         }
