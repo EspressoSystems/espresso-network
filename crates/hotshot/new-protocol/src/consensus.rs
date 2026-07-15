@@ -232,14 +232,6 @@ pub struct Consensus<T: NodeType> {
     /// Skipped by `maybe_vote_2_and_update_lock` (V1 AvidM dispersal).
     pre_cutover_views: BTreeSet<ViewNumber>,
 
-    /// Certificates whose epoch membership was not yet available when they
-    /// arrived.  They are retried when new epoch data becomes available.
-    pending_certs1: BTreeMap<ViewNumber, Certificate1<T>>,
-    pending_certs2: BTreeMap<ViewNumber, Certificate2<T>>,
-    /// Timeout certificates deferred for the same reason, keyed by the view
-    /// they certify as timed out.
-    pending_timeout_certs: BTreeMap<ViewNumber, TimeoutCertificate2<T>>,
-
     timeout_view: ViewNumber,
     /// Highest view this node may have acted in before a restart (from the
     /// persisted action log). Bars re-*recording* a view's Vote action, not
@@ -360,9 +352,6 @@ impl<T: NodeType> Consensus<T> {
             pending_vote2: BTreeMap::new(),
             pending_proposal: BTreeMap::new(),
             pre_cutover_views: BTreeSet::new(),
-            pending_certs1: BTreeMap::new(),
-            pending_certs2: BTreeMap::new(),
-            pending_timeout_certs: BTreeMap::new(),
             private_key,
             state_private_key,
             stake_table_capacity,
@@ -644,10 +633,6 @@ impl<T: NodeType> Consensus<T> {
     /// Apply consensus to the given input and collect protocol outputs.
     #[instrument(level = "debug", skip_all, fields(node = %self.node_id, view = %input.view_number()))]
     pub fn apply(&mut self, input: ConsensusInput<T>, outbox: &mut Outbox<ConsensusOutput<T>>) {
-        let drb_epoch = match &input {
-            ConsensusInput::DrbResult(epoch, _) => Some(*epoch),
-            _ => None,
-        };
         // DRB results arrive asynchronously with no specific view attached.
         // Use `current_view` so that the post-apply retries (`maybe_propose`,
         // `maybe_vote_*`) target the view the node is actually on — in
@@ -697,14 +682,14 @@ impl<T: NodeType> Consensus<T> {
                     epoch = ?certificate.epoch().map(|e| *e),
                     "apply: certificate1"
                 );
-                self.handle_certificate1(certificate, outbox)
+                self.handle_certificate1(certificate)
             },
             ConsensusInput::Certificate2(certificate) => {
                 debug!(
                     epoch = ?certificate.epoch().map(|e| *e),
                     "apply: certificate2"
                 );
-                self.handle_certificate2(certificate, outbox)
+                self.handle_certificate2(certificate)
             },
             ConsensusInput::AdvanceView(certificate) => {
                 debug!(
@@ -723,7 +708,7 @@ impl<T: NodeType> Consensus<T> {
                 // proposer has it on hand. Atomicity invariant: this pair always
                 // arrives together; Consensus never sees the Cert1 alone.
                 self.state_certs.insert(state_cert.epoch, state_cert);
-                self.handle_certificate1(cert1, outbox)
+                self.handle_certificate1(cert1)
             },
             ConsensusInput::TimeoutCertificate(certificate) => {
                 let timed_out_view = certificate.view_number();
@@ -850,13 +835,6 @@ impl<T: NodeType> Consensus<T> {
         self.maybe_propose(view, outbox);
         // An event from the current view or the previous view can trigger a propose
         self.maybe_propose(view + 1, outbox);
-
-        // When new epoch data arrives (DRB result or epoch change), retry
-        // any pending certificates that were deferred because their epoch
-        // membership wasn't available yet.
-        if drb_epoch.is_some() {
-            self.retry_pending_certs(outbox);
-        }
     }
 
     pub fn last_decided_view(&self) -> ViewNumber {
@@ -1177,6 +1155,7 @@ impl<T: NodeType> Consensus<T> {
         self.request_parent_proposal_if_missing(&proposal, outbox);
         self.proposals.insert(view, proposal);
     }
+
     fn request_parent_proposal_if_missing(
         &self,
         proposal: &Proposal<T>,
@@ -1197,40 +1176,15 @@ impl<T: NodeType> Consensus<T> {
     }
 
     #[instrument(level = "debug", skip_all)]
-    fn handle_certificate1(
-        &mut self,
-        certificate: Certificate1<T>,
-        outbox: &mut Outbox<ConsensusOutput<T>>,
-    ) -> Protocol {
+    fn handle_certificate1(&mut self, certificate: Certificate1<T>) -> Protocol {
         let view = certificate.view_number();
         // Below the decide floor the certificate is useless and its per-view
         // state was GC'd; drop it before paying for signature verification.
         if view <= self.decide_floor() {
             return Protocol::Continue;
         }
-        if self.certs.contains_key(&view) {
-            return Protocol::Continue;
-        }
-        let Some(certificate_epoch) = certificate.epoch() else {
-            warn!(%view, "certificate1 has no epoch number");
-            return Protocol::Abort;
-        };
-        // TODO: This signature check is slow (> 1ms).  We should consider
-        // if this should be done off the main thread.
-        match self.try_verify_cert(&certificate, certificate_epoch) {
-            CertVerification::Valid => {},
-            CertVerification::Invalid => {
-                warn!(%view, "certificate1 not verified");
-                return Protocol::Abort;
-            },
-            CertVerification::EpochUnavailable => {
-                debug!(%view, %certificate_epoch, "certificate1 deferred (epoch unavailable)");
-                self.pending_certs1.insert(view, certificate);
-                outbox.push_back(ConsensusOutput::RequestDrbResult(certificate_epoch));
-                return Protocol::Continue;
-            },
-        }
-        self.certs.insert(view, certificate);
+        self.certs.entry(view).or_insert(certificate);
+        self.adopt_certified_drb(view);
         Protocol::Continue
     }
 
@@ -1241,31 +1195,11 @@ impl<T: NodeType> Consensus<T> {
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> Protocol {
         let view = certificate.view_number();
-        // Same intake floor as `handle_certificate1`.
         if view <= self.decide_floor() {
             return Protocol::Continue;
         }
         if self.certs2.contains_key(&view) {
             return Protocol::Continue;
-        }
-        let Some(certificate_epoch) = certificate.epoch() else {
-            warn!(%view, "certificate2 has no epoch number");
-            return Protocol::Abort;
-        };
-        // TODO: This signature check is slow (> 1ms).  We should consider
-        // if this should be done off the main thread.
-        match self.try_verify_cert(&certificate, certificate_epoch) {
-            CertVerification::Valid => {},
-            CertVerification::Invalid => {
-                warn!(%view, "certificate2 not verified");
-                return Protocol::Abort;
-            },
-            CertVerification::EpochUnavailable => {
-                debug!(%view, %certificate_epoch, "certificate2 deferred (epoch unavailable)");
-                self.pending_certs2.insert(view, certificate);
-                outbox.push_back(ConsensusOutput::RequestDrbResult(certificate_epoch));
-                return Protocol::Continue;
-            },
         }
         // Relay a first-obtained Cert2 so peers that missed the vote2s can
         // still decide. Skip decided views so a GC'd-then-re-received Cert2
@@ -1296,27 +1230,7 @@ impl<T: NodeType> Consensus<T> {
         if view < self.current_view {
             return Protocol::Continue;
         }
-
-        let Some(epoch) = cert1.epoch() else {
-            warn!(%view, "cert1 has no epoch number");
-            return Protocol::Abort;
-        };
-
-        match self.try_verify_cert(&cert1, epoch) {
-            CertVerification::Valid => {},
-            CertVerification::Invalid => {
-                warn!(%view, "cert1 is invalid");
-                return Protocol::Abort;
-            },
-            CertVerification::EpochUnavailable => {
-                debug!(%view, %epoch, "missing epoch to verify cert1");
-                outbox.push_back(ConsensusOutput::RequestDrbResult(epoch));
-                return Protocol::Continue;
-            },
-        }
-
         self.certs.entry(view).or_insert(cert1);
-
         // Ensure we submit a vote2 if we can:
         self.maybe_vote_2_and_update_lock(view, outbox);
 
@@ -1464,22 +1378,7 @@ impl<T: NodeType> Consensus<T> {
             warn!(view = %certificate.view_number(), "timeout certificate has no epoch number");
             return Protocol::Abort;
         };
-        // Verify the threshold signature before acting on the certificate.
-        // Matches `handle_certificate1`/`handle_certificate2`.
-        match self.try_verify_cert(&certificate, epoch) {
-            CertVerification::Valid => {},
-            CertVerification::Invalid => {
-                warn!(%view, %epoch, "timeout certificate not verified");
-                return Protocol::Abort;
-            },
-            CertVerification::EpochUnavailable => {
-                debug!(%view, %epoch, "timeout certificate deferred (epoch unavailable)");
-                self.pending_timeout_certs
-                    .insert(certificate.view_number(), certificate);
-                outbox.push_back(ConsensusOutput::RequestDrbResult(epoch));
-                return Protocol::Continue;
-            },
-        }
+        // The certificate is already verified before it reaches consensus.
         self.timeout_certs.insert(view, certificate.clone());
         self.current_view = self.current_view.max(view);
         self.current_epoch = Some(epoch);
@@ -1616,6 +1515,12 @@ impl<T: NodeType> Consensus<T> {
             return;
         }
         if self.proposed_views.contains(&view) {
+            return;
+        }
+        // Never (re)propose a view at or below `timeout_view`. `proposed_views`
+        // resets on restart, so this guards a recovered leader from re-proposing
+        // a view it already acted in. Mirrors the guard in `maybe_vote_1`.
+        if view <= self.timeout_view {
             return;
         }
 
@@ -2385,33 +2290,6 @@ impl<T: NodeType> Consensus<T> {
                 warn!(%epoch, %err, "failed to get stake table");
                 false
             },
-        }
-    }
-
-    /// Try to verify a certificate, distinguishing between "epoch not available"
-    /// and "cryptographically invalid".
-    #[instrument(level = "trace", skip_all)]
-    fn try_verify_cert<A, C>(&mut self, cert: &C, epoch: EpochNumber) -> CertVerification
-    where
-        C: vote::Certificate<T, A>,
-    {
-        match self
-            .stake_table_coordinator
-            .membership_for_epoch(Some(epoch))
-        {
-            Ok(stake_table) => {
-                let entries = StakeTableEntries::from_iter(stake_table.stake_table()).0;
-                let threshold = stake_table.success_threshold();
-                match cert.is_valid_cert(&entries, threshold, &self.upgrade_lock) {
-                    Ok(()) => CertVerification::Valid,
-                    Err(err) => {
-                        warn!(%epoch, %err, "invalid threshold signature");
-                        self.invalid_certs += 1;
-                        CertVerification::Invalid
-                    },
-                }
-            },
-            Err(_) => CertVerification::EpochUnavailable,
         }
     }
 

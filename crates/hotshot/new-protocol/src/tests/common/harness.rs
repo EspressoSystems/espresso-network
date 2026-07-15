@@ -13,6 +13,7 @@ use hotshot_types::{
 use super::utils::mock_membership_with_num_nodes;
 use crate::{
     block::{BlockBuilder, BlockBuilderConfig},
+    cert_verifier::CertVerifiers,
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     coordinator::{error::Severity, timer::Timer},
     epoch::EpochManager,
@@ -138,6 +139,7 @@ impl TestHarness {
             .timeout_collector(timeout_collector)
             .timeout_one_honest_collector(timeout_one_honest_collector)
             .epoch_root_collector(epoch_root_collector)
+            .cert_verifiers(CertVerifiers::new(membership.clone(), upgrade_lock.clone()))
             .vid_disperser(vid_disperse_task)
             .vid_reconstructor(vid_reconstruction_task)
             .epoch_manager(epoch_manager)
