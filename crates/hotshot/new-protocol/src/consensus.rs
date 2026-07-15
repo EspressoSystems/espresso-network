@@ -44,8 +44,8 @@ use crate::{
     helpers::proposal_commitment,
     logging::KeyPrefix,
     message::{
-        Certificate1, Certificate2, EpochChangeMessage, Proposal, ProposalFetchRequest,
-        ProposalMessage, Validated, Vote1, Vote2,
+        CatchupEvidence, Certificate1, Certificate2, EpochChangeMessage, Proposal,
+        ProposalFetchRequest, ProposalMessage, Validated, Vote1, Vote2,
     },
     outbox::Outbox,
     state::{StateRequest, StateResponse},
@@ -126,7 +126,7 @@ pub enum ConsensusOutput<T: NodeType> {
     RecordAction(ViewNumber, Option<EpochNumber>, ActionKind),
     PersistProposal(SignedProposal<T, Proposal<T>>),
     SendProposal(SignedProposal<T, Proposal<T>>),
-    SendTimeoutVote(TimeoutVote2<T>, Option<Certificate1<T>>),
+    SendTimeoutVote(TimeoutVote2<T>, Option<CatchupEvidence<T>>),
     SendVote1(Vote1<T>),
     SendVote2(Vote2<T>),
     /// Persist the locked QC before the matching phase-2 vote is released.
@@ -576,6 +576,21 @@ impl<T: NodeType> Consensus<T> {
     /// Return the Certificate1 (QC) stored at the given view, if any.
     pub fn cert1_at(&self, view: ViewNumber) -> Option<&Certificate1<T>> {
         self.certs.get(&view)
+    }
+
+    /// The highest certificate we hold: the locked QC or the latest timeout
+    /// certificate, whichever has the higher view (ties go to the timeout
+    /// certificate).
+    pub fn catchup_evidence(&self) -> Option<CatchupEvidence<T>> {
+        let tc = self.timeout_certs.last_key_value().map(|(_, tc)| tc);
+        match (tc, self.locked_cert.as_ref()) {
+            (Some(tc), Some(qc)) if qc.view_number() > tc.view_number() => {
+                Some(CatchupEvidence::Qc(qc.clone()))
+            },
+            (Some(tc), _) => Some(CatchupEvidence::Tc(tc.clone())),
+            (None, Some(qc)) => Some(CatchupEvidence::Qc(qc.clone())),
+            (None, None) => None,
+        }
     }
 
     fn signed_vid_share(
@@ -1422,7 +1437,7 @@ impl<T: NodeType> Consensus<T> {
         };
         outbox.push_back(ConsensusOutput::SendTimeoutVote(
             vote,
-            self.locked_cert.clone(),
+            self.catchup_evidence(),
         ));
         Protocol::Abort
     }
