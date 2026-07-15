@@ -40,6 +40,7 @@ use tracing::{debug, info, instrument, warn};
 
 use crate::{
     block::BlockAndHeaderRequest,
+    cert_verifier::ValidCert,
     coordinator::{GcScope, VID_RECONSTRUCT_GC_MARGIN},
     helpers::proposal_commitment,
     logging::KeyPrefix,
@@ -87,17 +88,17 @@ pub enum ConsensusInput<T: NodeType> {
         payload_commitment: VidCommitment,
     },
     BlockReconstructed(ViewNumber, VidCommitment2),
-    Certificate1(Certificate1<T>),
-    Certificate2(Certificate2<T>),
+    Certificate1(ValidCert<Certificate1<T>>),
+    Certificate2(ValidCert<Certificate2<T>>),
     /// A quorum certificate allows us to advance our view.
     ///
     /// Used to help divergent nodes re-converge on restart.
-    AdvanceView(Certificate1<T>),
+    AdvanceView(ValidCert<Certificate1<T>>),
     /// Atomic pair emitted by the `EpochRootTally` for epoch-root views:
     /// a `Certificate1` and its matching `LightClientStateUpdateCertificateV2`.
     /// Consensus never sees an epoch-root Cert1 without the matching state_cert.
     EpochRootCertificates {
-        cert1: Certificate1<T>,
+        cert1: ValidCert<Certificate1<T>>,
         state_cert: LightClientStateUpdateCertificateV2<T>,
     },
     EpochChange(EpochChangeMessage<T>),
@@ -112,7 +113,7 @@ pub enum ConsensusInput<T: NodeType> {
     StateValidationFailed(StateResponse<T>),
     Stored(StorageOutput<T>),
     Timeout(ViewNumber, EpochNumber),
-    TimeoutCertificate(TimeoutCertificate2<T>),
+    TimeoutCertificate(ValidCert<TimeoutCertificate2<T>>),
     TimeoutOneHonest(ViewNumber, EpochNumber),
     VidDisperseCreated(ViewNumber, VidCommitment2),
     DrbResult(EpochNumber, DrbResult),
@@ -206,7 +207,6 @@ pub struct Consensus<T: NodeType> {
     /// `decided_views` is not persisted, so a replayed certificate pair could
     /// otherwise re-decide pre-anchor views.
     decide_floor_view: ViewNumber,
-    invalid_certs: u64,
     last_decided_view: ViewNumber,
     last_decided_leaf: Leaf2<T>,
     drb_results: BTreeMap<EpochNumber, DrbResult>,
@@ -261,16 +261,6 @@ enum Protocol {
     Abort,
     /// Continue with protocol.
     Continue,
-}
-
-/// Result of attempting to verify a certificate's epoch membership.
-enum CertVerification {
-    /// Certificate is cryptographically valid.
-    Valid,
-    /// Certificate is cryptographically invalid (bad signature).
-    Invalid,
-    /// The epoch's stake table is not yet available (catchup in progress).
-    EpochUnavailable,
 }
 
 /// Reason a proposal failed the safety/liveness rule.
@@ -329,7 +319,6 @@ impl<T: NodeType> Consensus<T> {
             leaves: BTreeMap::new(),
             decided_views: BTreeSet::from([last_decided_view]),
             decide_floor_view: ViewNumber::genesis(),
-            invalid_certs: 0,
             last_decided_view,
             last_decided_leaf: genesis_leaf,
             headers: BTreeMap::new(),
@@ -616,10 +605,6 @@ impl<T: NodeType> Consensus<T> {
         self.locked_cert.as_ref().map(|c| c.view_number())
     }
 
-    pub(crate) fn invalid_certs(&self) -> u64 {
-        self.invalid_certs
-    }
-
     /// Newest view that can no longer be decided (and below which decide
     /// inputs are dropped): slides [`DECIDE_BUFFER`] behind the watermark,
     /// pinned at the restart/cutover anchor.
@@ -678,23 +663,17 @@ impl<T: NodeType> Consensus<T> {
                 return;
             },
             ConsensusInput::Certificate1(certificate) => {
-                debug!(
-                    epoch = ?certificate.epoch().map(|e| *e),
-                    "apply: certificate1"
-                );
+                debug!(epoch = %certificate.epoch(), "apply: certificate1");
                 self.handle_certificate1(certificate)
             },
             ConsensusInput::Certificate2(certificate) => {
-                debug!(
-                    epoch = ?certificate.epoch().map(|e| *e),
-                    "apply: certificate2"
-                );
-                self.handle_certificate2(certificate)
+                debug!(epoch = %certificate.epoch(), "apply: certificate2");
+                self.handle_certificate2(certificate, outbox)
             },
             ConsensusInput::AdvanceView(certificate) => {
                 debug!(
                     view  = %certificate.view_number(),
-                    epoch = ?certificate.epoch().map(|e| *e),
+                    epoch = %certificate.epoch(),
                     "apply: advance view"
                 );
                 self.handle_advance_view(certificate, outbox)
@@ -712,13 +691,10 @@ impl<T: NodeType> Consensus<T> {
             },
             ConsensusInput::TimeoutCertificate(certificate) => {
                 let timed_out_view = certificate.view_number();
-                let cert_epoch = certificate.epoch();
-                let leader = cert_epoch
-                    .map(|e| self.leader_label(timed_out_view, e))
-                    .unwrap_or_else(|| "unknown".to_string());
+                let leader = self.leader_label(timed_out_view, certificate.epoch());
                 warn!(
                     view = %timed_out_view,
-                    epoch = ?cert_epoch.map(|e| *e),
+                    epoch = %certificate.epoch(),
                     %leader,
                     "apply: timeout certificate"
                 );
@@ -917,9 +893,11 @@ impl<T: NodeType> Consensus<T> {
         self.signed_proposals.get(view)
     }
 
-    /// Garbage-collect per-view state. The decide inputs (`proposals`,
-    /// `certs`, `certs2`, deferred certs, `decided_views`) survive down to
-    /// [`Self::decide_floor`] so a late Cert2 can still decide a gap view.
+    /// Garbage-collect per-view state.
+    ///
+    /// The decide inputs (`proposals`, `certs`, `certs2`, deferred certs,
+    /// `decided_views`) survive down to [`Self::decide_floor`] so a late
+    /// Cert2 can still decide a gap view.
     pub fn gc(&mut self, scope: GcScope) {
         match scope {
             GcScope::Local(view) => {
@@ -939,13 +917,10 @@ impl<T: NodeType> Consensus<T> {
                 self.certs = self.certs.split_off(&keep_from);
                 self.certs2 = self.certs2.split_off(&keep_from);
                 self.decided_views = self.decided_views.split_off(&keep_from);
-                self.pending_certs1 = self.pending_certs1.split_off(&keep_from);
-                self.pending_certs2 = self.pending_certs2.split_off(&keep_from);
                 self.proposals = self.proposals.split_off(&keep_from);
                 self.leaves = self.leaves.split_off(&view);
                 self.signed_proposals = self.signed_proposals.split_off(&view);
                 self.vid_shares = self.vid_shares.split_off(&view);
-                self.pending_timeout_certs = self.pending_timeout_certs.split_off(&view);
                 self.stored_proposals = self.stored_proposals.split_off(&view);
                 self.stored_vids = self.stored_vids.split_off(&view);
                 self.stored_actions = self.stored_actions.split_off(&(view, ActionKind::Vote));
@@ -1176,14 +1151,12 @@ impl<T: NodeType> Consensus<T> {
     }
 
     #[instrument(level = "debug", skip_all)]
-    fn handle_certificate1(&mut self, certificate: Certificate1<T>) -> Protocol {
+    fn handle_certificate1(&mut self, certificate: ValidCert<Certificate1<T>>) -> Protocol {
         let view = certificate.view_number();
-        // Below the decide floor the certificate is useless and its per-view
-        // state was GC'd; drop it before paying for signature verification.
         if view <= self.decide_floor() {
             return Protocol::Continue;
         }
-        self.certs.entry(view).or_insert(certificate);
+        self.certs.entry(view).or_insert(certificate.into_cert());
         self.adopt_certified_drb(view);
         Protocol::Continue
     }
@@ -1191,7 +1164,7 @@ impl<T: NodeType> Consensus<T> {
     #[instrument(level = "debug", skip_all)]
     fn handle_certificate2(
         &mut self,
-        certificate: Certificate2<T>,
+        certificate: ValidCert<Certificate2<T>>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> Protocol {
         let view = certificate.view_number();
@@ -1205,7 +1178,9 @@ impl<T: NodeType> Consensus<T> {
         // still decide. Skip decided views so a GC'd-then-re-received Cert2
         // cannot ping-pong between nodes forever.
         if !self.decided_views.contains(&view) {
-            outbox.push_back(ConsensusOutput::SendCertificate2(certificate.clone()));
+            outbox.push_back(ConsensusOutput::SendCertificate2(
+                certificate.cert().clone(),
+            ));
         }
         if view > self.last_decided_view && !self.proposals.contains_key(&view) {
             warn!(%view, "have certificate2 but no proposal; requesting fetch");
@@ -1214,15 +1189,47 @@ impl<T: NodeType> Consensus<T> {
                 leaf_commit: certificate.data.leaf_commit,
             });
         }
-        self.certs2.insert(view, certificate);
+        self.certs2.insert(view, certificate.into_cert());
         Protocol::Continue
+    }
+
+    /// Adopt the successor-epoch DRB carried by the transition leaf at `view`,
+    /// once we hold both its proposal and a QC certifying it. A Cert1 over the
+    /// leaf is a quorum's endorsement of its `next_drb_result`, so a catching-up
+    /// node can use it without waiting on a separate successor-epoch catchup.
+    fn adopt_certified_drb(&mut self, view: ViewNumber) {
+        let Some(proposal) = self.proposals.get(&view) else {
+            return;
+        };
+        // Only transition leaves in epoch >= 1 carry the next epoch's DRB.
+        if proposal.epoch <= EpochNumber::genesis()
+            || !is_epoch_transition(proposal.block_header.block_number(), *self.epoch_height)
+        {
+            return;
+        }
+        let Some(drb) = proposal.next_drb_result else {
+            return;
+        };
+        let next_epoch = proposal.epoch + 1;
+        if self.drb_results.contains_key(&next_epoch) {
+            return;
+        }
+        // Adopt only from the exact leaf the QC certified (hashes the leaf).
+        let Some(cert) = self.certs.get(&view) else {
+            return;
+        };
+        if proposal_commitment(proposal) != cert.data.leaf_commit {
+            return;
+        }
+        self.drb_results.insert(next_epoch, drb);
+        debug!(%view, %next_epoch, "adopted quorum-certified next_drb_result");
     }
 
     /// Advance our view based on a quorum certificate.
     #[instrument(level = "debug", skip_all)]
     fn handle_advance_view(
         &mut self,
-        cert1: Certificate1<T>,
+        cert1: ValidCert<Certificate1<T>>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> Protocol {
         let view = cert1.view_number();
@@ -1230,7 +1237,11 @@ impl<T: NodeType> Consensus<T> {
         if view < self.current_view {
             return Protocol::Continue;
         }
-        self.certs.entry(view).or_insert(cert1);
+
+        let epoch = cert1.epoch();
+
+        self.certs.entry(view).or_insert(cert1.into_cert());
+
         // Ensure we submit a vote2 if we can:
         self.maybe_vote_2_and_update_lock(view, outbox);
 
@@ -1359,7 +1370,7 @@ impl<T: NodeType> Consensus<T> {
     #[instrument(level = "debug", skip_all)]
     fn handle_timeout_certificate(
         &mut self,
-        certificate: TimeoutCertificate2<T>,
+        certificate: ValidCert<TimeoutCertificate2<T>>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> Protocol {
         let view = certificate.view_number() + 1;
@@ -1374,18 +1385,14 @@ impl<T: NodeType> Consensus<T> {
         if self.timeout_certs.contains_key(&view) {
             return Protocol::Continue;
         }
-        let Some(epoch) = certificate.epoch() else {
-            warn!(view = %certificate.view_number(), "timeout certificate has no epoch number");
-            return Protocol::Abort;
-        };
-        // The certificate is already verified before it reaches consensus.
-        self.timeout_certs.insert(view, certificate.clone());
+        let epoch = certificate.epoch();
+        self.timeout_certs.insert(view, certificate.cert().clone());
         self.current_view = self.current_view.max(view);
         self.current_epoch = Some(epoch);
         outbox.push_back(ConsensusOutput::ViewChanged(view, epoch));
         outbox.push_back(ConsensusOutput::ViewTimedOut(certificate.view_number()));
         outbox.push_back(ConsensusOutput::SendTimeoutCertificate(
-            certificate,
+            certificate.into_cert(),
             view,
             epoch,
         ));
@@ -1515,12 +1522,6 @@ impl<T: NodeType> Consensus<T> {
             return;
         }
         if self.proposed_views.contains(&view) {
-            return;
-        }
-        // Never (re)propose a view at or below `timeout_view`. `proposed_views`
-        // resets on restart, so this guards a recovered leader from re-proposing
-        // a view it already acted in. Mirrors the guard in `maybe_vote_1`.
-        if view <= self.timeout_view {
             return;
         }
 
@@ -2290,32 +2291,6 @@ impl<T: NodeType> Consensus<T> {
                 warn!(%epoch, %err, "failed to get stake table");
                 false
             },
-        }
-    }
-
-    /// Retry verification of pending certificates whose epoch may now be available.
-    fn retry_pending_certs(&mut self, outbox: &mut Outbox<ConsensusOutput<T>>) {
-        // Retry pending cert1s.
-        let pending = std::mem::take(&mut self.pending_certs1);
-        for (view, cert) in pending {
-            self.handle_certificate1(cert.clone(), outbox);
-            self.maybe_vote_2_and_update_lock(view, outbox);
-            // The deferred Cert1 can be the last missing decide ingredient.
-            self.maybe_decide(view, outbox);
-            self.maybe_propose(view, outbox);
-        }
-
-        // Retry pending cert2s.
-        let pending = std::mem::take(&mut self.pending_certs2);
-        for (view, cert) in pending {
-            self.handle_certificate2(cert.clone(), outbox);
-            self.maybe_decide(view, outbox);
-            self.maybe_propose(view, outbox);
-        }
-
-        let pending = std::mem::take(&mut self.pending_timeout_certs);
-        for (_view, cert) in pending {
-            self.handle_timeout_certificate(cert, outbox);
         }
     }
 

@@ -304,7 +304,10 @@ where
                 membership_coordinator.clone(),
                 lock.clone(),
             ))
-            .cert_verifiers(CertVerifiers::new(membership_coordinator.clone(), lock))
+            .cert_verifiers(CertVerifiers::new(
+                membership_coordinator.clone(),
+                lock.clone(),
+            ))
             .epoch_manager(EpochManager::new(
                 initializer.epoch_height,
                 membership_coordinator.clone(),
@@ -481,6 +484,9 @@ where
                 Some(tc) = self.cert_verifiers.timeout.next() => {
                     return Ok(ConsensusInput::TimeoutCertificate(tc))
                 }
+                Some(cert1) = self.cert_verifiers.advance.next() => {
+                    return Ok(ConsensusInput::AdvanceView(cert1))
+                }
                 Some((cert1, state_cert)) = self.epoch_root_collector.next() => {
                     self.storage.append_state_cert(
                         ViewNumber::new(state_cert.light_client_state.view_number),
@@ -618,13 +624,12 @@ where
                 },
                 Some(result) = self.epoch_manager.next() => match result {
                     Ok(EpochRootResult::DrbResult(epoch, drb_result)) => {
-                        // New epoch data available — retry votes that were
-                        // buffered because their membership wasn't ready.
                         self.vote1_collector.retry_pending_votes();
                         self.vote2_collector.retry_pending_votes();
                         self.timeout_collector.retry_pending_votes();
                         self.timeout_one_honest_collector.retry_pending_votes();
                         self.epoch_root_collector.retry_pending_votes();
+                        self.cert_verifiers.retry_pending(|e| self.epoch_manager.request_drb_result(e));
                         return Ok(ConsensusInput::DrbResult(epoch, drb_result))
                     }
                     Err(failure) => {
@@ -1117,11 +1122,6 @@ where
                         epoch = ?certificate1.epoch().map(|e| *e),
                         "recv certificate1"
                     );
-                    // Verify the QC off-thread, then feed it to consensus. A
-                    // node catching up to lead a view needs the parent QC, and
-                    // the network certificate is its only source. If the cert's
-                    // epoch membership isn't ready the verifier holds it and
-                    // returns the epoch so we drive that epoch's catchup.
                     if let Some(epoch) = self.cert_verifiers.cert1.verify(certificate1) {
                         self.epoch_manager.request_drb_result(epoch);
                     }
@@ -1134,7 +1134,6 @@ where
                         epoch = ?certificate2.epoch().map(|e| *e),
                         "recv certificate2"
                     );
-                    // Like Certificate1: verified off-thread, then fed to consensus.
                     if let Some(epoch) = self.cert_verifiers.cert2.verify(certificate2) {
                         self.epoch_manager.request_drb_result(epoch);
                     }
@@ -1152,37 +1151,47 @@ where
                     // If a peer times out in a view at or ahead of us we adopt its
                     // highest certificate. Evidence takes precedence over
                     // the vote being too far ahead, and a valid certificate proves
-                    // the network reached that view, and consensus verifies it
-                    // before acting on it.
-                    //
-                    // TODO: Make verification asynchronous
-                    let evidence = timeout_msg
+                    // the network reached that view.
+                    if let Some(e) = timeout_msg
                         .evidence
                         .filter(|e| e.view_number() >= current_view)
-                        .map(|e| match e {
-                            CatchupEvidence::Qc(qc) => ConsensusInput::AdvanceView(qc),
-                            CatchupEvidence::Tc(tc) => ConsensusInput::TimeoutCertificate(tc),
-                        });
+                    {
+                        match e {
+                            CatchupEvidence::Qc(qc) => {
+                                if let Some(epoch) = self.cert_verifiers.advance.verify(qc) {
+                                    self.epoch_manager.request_drb_result(epoch);
+                                }
+                            },
+                            CatchupEvidence::Tc(tc) => {
+                                if let Some(epoch) = self.cert_verifiers.timeout.verify(tc) {
+                                    self.epoch_manager.request_drb_result(epoch);
+                                }
+                            },
+                        }
+                    }
 
                     if self.is_too_far_ahead(view) {
                         warn!(%node, %sender, %view, "timeout vote is too far ahead");
-                        return evidence;
+                        return None;
                     }
+
                     if view < current_view {
                         debug!(
                             %node, %sender, %view, %current_view,
                             "timeout vote for stale view; replying with catchup evidence"
                         );
                         self.send_catchup_evidence(&message.sender, view);
-                        return evidence;
+                        return None;
                     }
+
                     debug!(%node, %sender, %view, has_evidence, "recv timeout vote");
+
                     self.timeout_collector
                         .accumulate_vote(timeout_msg.vote.clone());
                     self.timeout_one_honest_collector
                         .accumulate_vote(timeout_msg.vote);
 
-                    evidence
+                    None
                 },
                 ConsensusMessage::TimeoutCertificate(tc) => {
                     debug!(
@@ -1203,7 +1212,10 @@ where
                         epoch = ?qc.epoch().map(|e| *e),
                         "recv high qc"
                     );
-                    Some(ConsensusInput::AdvanceView(qc))
+                    if let Some(epoch) = self.cert_verifiers.advance.verify(qc) {
+                        self.epoch_manager.request_drb_result(epoch);
+                    }
+                    None
                 },
                 ConsensusMessage::EpochChange(epoch_change) => {
                     debug!(
@@ -1625,8 +1637,8 @@ where
         let consensus = &m.consensus;
         consensus.current_view.set(*view as usize);
         let invalid_certs = self
-            .consensus
-            .invalid_certs()
+            .cert_verifiers
+            .num_invalid_certs()
             .saturating_sub(self.invalid_certs_at_decide);
         consensus.invalid_qc.set(invalid_certs as usize);
         let last_decided_view = self.consensus.last_decided_view();
@@ -1654,7 +1666,7 @@ where
         // a gap-fill decide of older views must not regress the gauges.
         let advanced = newest.view_number() == self.consensus.last_decided_view();
         if advanced {
-            self.invalid_certs_at_decide = self.consensus.invalid_certs();
+            self.invalid_certs_at_decide = self.cert_verifiers.num_invalid_certs();
         }
         let Some(m) = &self.metrics else { return };
         let consensus = &m.consensus;
@@ -1765,9 +1777,10 @@ where
                 self.vote2_collector.gc(view);
             },
             GcScope::Decided(view) => {
+                let decide_floor = self.consensus.decide_floor();
                 self.epoch_manager.gc(epoch);
                 self.epoch_root_collector.gc(view);
-                self.cert_verifiers.gc(view);
+                self.cert_verifiers.gc(decide_floor);
                 self.pending_proposal_fetches.gc(view);
                 self.requested_missing_proposals
                     .retain(|key| key.view > view);
@@ -1778,9 +1791,7 @@ where
                     .gc(view.saturating_sub(VID_RECONSTRUCT_GC_MARGIN).into());
                 let vc = VidCommitment2::default();
                 self.da_payloads = self.da_payloads.split_off(&(view, vc));
-                self.payload_txn_bytes = self
-                    .payload_txn_bytes
-                    .split_off(&(self.consensus.decide_floor() + 1));
+                self.payload_txn_bytes = self.payload_txn_bytes.split_off(&(decide_floor + 1));
             },
             GcScope::Timeout(view) => {
                 self.vid_reconstructor.retire_view(view);
