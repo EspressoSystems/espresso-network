@@ -66,28 +66,31 @@
 <a href=#66 id=66 data-nosnippet>66</a>#[display(<span class="string">"{_0}"</span>)]
 <a href=#67 id=67 data-nosnippet>67</a></span><span class="kw">pub struct </span>RewardAmount(<span class="kw">pub </span>U256);
 <a href=#68 id=68 data-nosnippet>68</a>
-<a href=#69 id=69 data-nosnippet>69</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">const </span>INFLATION_RATE: u128 = <span class="number">300</span>; <span class="comment">// 3% in basis points
-<a href=#70 id=70 data-nosnippet>70</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">const </span>ASSUMED_BLOCK_TIME_SECONDS: u128 = <span class="number">2</span>;
-<a href=#71 id=71 data-nosnippet>71</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">const </span>SECONDS_PER_YEAR: u128 = <span class="number">60 </span>* <span class="number">60 </span>* <span class="number">24 </span>* <span class="number">365</span>;
-<a href=#72 id=72 data-nosnippet>72</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">const </span>MILLISECONDS_PER_YEAR: u128 = <span class="number">86_400_000 </span>* <span class="number">365</span>;
-<a href=#73 id=73 data-nosnippet>73</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">const </span>BLOCKS_PER_YEAR: u128 = SECONDS_PER_YEAR / ASSUMED_BLOCK_TIME_SECONDS;
-<a href=#74 id=74 data-nosnippet>74</a><span class="kw">pub const </span>COMMISSION_BASIS_POINTS: u16 = <span class="number">10_000</span>;
-<a href=#75 id=75 data-nosnippet>75</a>
-<a href=#76 id=76 data-nosnippet>76</a><span class="attr">#[derive(Clone, Debug, Serialize, Deserialize)]
-<a href=#77 id=77 data-nosnippet>77</a></span><span class="kw">pub struct </span>RewardAccountQueryDataV1 {
-<a href=#78 id=78 data-nosnippet>78</a>    <span class="kw">pub </span>balance: U256,
-<a href=#79 id=79 data-nosnippet>79</a>    <span class="kw">pub </span>proof: RewardAccountProofV1,
-<a href=#80 id=80 data-nosnippet>80</a>}
-<a href=#81 id=81 data-nosnippet>81</a>
-<a href=#82 id=82 data-nosnippet>82</a><span class="attr">#[derive(Clone, Debug, Deserialize, Serialize)]
-<a href=#83 id=83 data-nosnippet>83</a></span><span class="kw">pub struct </span>RewardAccountProofV1 {
-<a href=#84 id=84 data-nosnippet>84</a>    <span class="kw">pub </span>account: Address,
-<a href=#85 id=85 data-nosnippet>85</a>    <span class="kw">pub </span>proof: RewardMerkleProofV1,
-<a href=#86 id=86 data-nosnippet>86</a>}
-<a href=#87 id=87 data-nosnippet>87</a>
-<a href=#88 id=88 data-nosnippet>88</a><span class="attr">#[derive(Clone, Debug, Deserialize, Serialize)]
-<a href=#89 id=89 data-nosnippet>89</a></span><span class="kw">pub enum </span>RewardMerkleProofV1 {
-<a href=#90 id=90 data-nosnippet>90</a>    Presence(&lt;RewardMerkleTreeV1 <span class="kw">as </span>MerkleTreeScheme&gt;::MembershipProof),
-<a href=#91 id=91 data-nosnippet>91</a>    Absence(&lt;RewardMerkleTreeV1 <span class="kw">as </span>UniversalMerkleTreeScheme&gt;::NonMembershipProof),
-<a href=#92 id=92 data-nosnippet>92</a>}
+<a href=#69 id=69 data-nosnippet>69</a><span class="attr">#[cfg_attr(not(feature = <span class="string">"node"</span>), allow(dead_code))]
+<a href=#70 id=70 data-nosnippet>70</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">const </span>INFLATION_RATE: u128 = <span class="number">300</span>; <span class="comment">// 3% in basis points
+<a href=#71 id=71 data-nosnippet>71</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">const </span>ASSUMED_BLOCK_TIME_SECONDS: u128 = <span class="number">2</span>;
+<a href=#72 id=72 data-nosnippet>72</a><span class="attr">#[cfg_attr(not(feature = <span class="string">"node"</span>), allow(dead_code))]
+<a href=#73 id=73 data-nosnippet>73</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">const </span>SECONDS_PER_YEAR: u128 = <span class="number">60 </span>* <span class="number">60 </span>* <span class="number">24 </span>* <span class="number">365</span>;
+<a href=#74 id=74 data-nosnippet>74</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">const </span>MILLISECONDS_PER_YEAR: u128 = <span class="number">86_400_000 </span>* <span class="number">365</span>;
+<a href=#75 id=75 data-nosnippet>75</a><span class="attr">#[cfg_attr(not(feature = <span class="string">"node"</span>), allow(dead_code))]
+<a href=#76 id=76 data-nosnippet>76</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">const </span>BLOCKS_PER_YEAR: u128 = SECONDS_PER_YEAR / ASSUMED_BLOCK_TIME_SECONDS;
+<a href=#77 id=77 data-nosnippet>77</a><span class="kw">pub const </span>COMMISSION_BASIS_POINTS: u16 = <span class="number">10_000</span>;
+<a href=#78 id=78 data-nosnippet>78</a>
+<a href=#79 id=79 data-nosnippet>79</a><span class="attr">#[derive(Clone, Debug, Serialize, Deserialize)]
+<a href=#80 id=80 data-nosnippet>80</a></span><span class="kw">pub struct </span>RewardAccountQueryDataV1 {
+<a href=#81 id=81 data-nosnippet>81</a>    <span class="kw">pub </span>balance: U256,
+<a href=#82 id=82 data-nosnippet>82</a>    <span class="kw">pub </span>proof: RewardAccountProofV1,
+<a href=#83 id=83 data-nosnippet>83</a>}
+<a href=#84 id=84 data-nosnippet>84</a>
+<a href=#85 id=85 data-nosnippet>85</a><span class="attr">#[derive(Clone, Debug, Deserialize, Serialize)]
+<a href=#86 id=86 data-nosnippet>86</a></span><span class="kw">pub struct </span>RewardAccountProofV1 {
+<a href=#87 id=87 data-nosnippet>87</a>    <span class="kw">pub </span>account: Address,
+<a href=#88 id=88 data-nosnippet>88</a>    <span class="kw">pub </span>proof: RewardMerkleProofV1,
+<a href=#89 id=89 data-nosnippet>89</a>}
+<a href=#90 id=90 data-nosnippet>90</a>
+<a href=#91 id=91 data-nosnippet>91</a><span class="attr">#[derive(Clone, Debug, Deserialize, Serialize)]
+<a href=#92 id=92 data-nosnippet>92</a></span><span class="kw">pub enum </span>RewardMerkleProofV1 {
+<a href=#93 id=93 data-nosnippet>93</a>    Presence(&lt;RewardMerkleTreeV1 <span class="kw">as </span>MerkleTreeScheme&gt;::MembershipProof),
+<a href=#94 id=94 data-nosnippet>94</a>    Absence(&lt;RewardMerkleTreeV1 <span class="kw">as </span>UniversalMerkleTreeScheme&gt;::NonMembershipProof),
+<a href=#95 id=95 data-nosnippet>95</a>}
 </code></pre></div></section></main></body></html>

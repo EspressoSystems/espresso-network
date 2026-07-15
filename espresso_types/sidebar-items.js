@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["eth_signature_key","v0"]};
+window.SIDEBAR_ITEMS = {"fn":["assert_node_feature"],"mod":["eth_signature_key","v0"]};
