@@ -15,6 +15,7 @@ use hotshot_types::{
     addr::NetAddr,
     data::ViewNumber,
     message::UpgradeLock,
+    simple_certificate::TimeoutCertificate2,
     traits::{metrics::NoMetrics, signature_key::SignatureKey},
     vote::HasViewNumber,
     x25519::Keypair,
@@ -31,7 +32,7 @@ use tokio::{
 use tracing::{debug, info};
 
 use crate::{
-    consensus::{ConsensusOutput, PreCutoverSeed},
+    consensus::{ConsensusInput, ConsensusOutput, PreCutoverSeed},
     coordinator::{Coordinator, CoordinatorOutput, error::Severity},
     helpers::test_upgrade_lock,
     network::Cliquenet,
@@ -121,6 +122,13 @@ pub struct TestRunner {
     /// the specified view.
     #[builder(default)]
     node_changes: Vec<(u64, Vec<NodeChange>)>,
+
+    /// Timeout certificates applied to specific nodes' coordinators before
+    /// they start, advancing their view past the rest of the network.
+    /// Simulates certificates that formed while other nodes were down (the
+    /// certs are not forwarded, so only the seeded nodes know them).
+    #[builder(default)]
+    initial_timeout_certs: BTreeMap<usize, Vec<TimeoutCertificate2<TestTypes>>>,
 
     pre_cutover_seed: Option<PreCutoverSeed<TestTypes>>,
 
@@ -283,7 +291,7 @@ impl TestRunner {
                 self.node_storages[i].clone(),
             );
 
-            let coord = build_test_coordinator(
+            let mut coord = build_test_coordinator(
                 i as u64,
                 network,
                 membership,
@@ -294,6 +302,20 @@ impl TestRunner {
                 self.pre_cutover_seed.clone(),
             )
             .await;
+
+            if let Some(certs) = self.initial_timeout_certs.get(&i) {
+                for tc in certs {
+                    coord.apply_consensus(ConsensusInput::TimeoutCertificate(tc.clone()));
+                    for output in coord.outbox_mut().take() {
+                        // Keep the seeded certs local to this node; the
+                        // real network never delivered them to the others.
+                        if matches!(output, ConsensusOutput::SendTimeoutCertificate(..)) {
+                            continue;
+                        }
+                        let _ = coord.process_consensus_output(output);
+                    }
+                }
+            }
 
             let tx = event_tx.clone();
             let generation = generations[i];
@@ -675,7 +697,7 @@ async fn run_node(
                     }
                 }
                 send(NodeEvent::Decided(commits.clone()));
-            } else if let ConsensusOutput::SendTimeoutVote(vote, _) = &output {
+            } else if let ConsensusOutput::SendTimeoutVote(vote, ..) = &output {
                 let view = vote.view_number();
                 debug!(node = %coord.node_id(), %view, "timeout vote");
                 send(NodeEvent::TimedOut(view));

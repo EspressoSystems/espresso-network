@@ -1,7 +1,17 @@
-use std::{collections::HashSet, time::Duration};
+use std::{
+    collections::{BTreeMap, HashSet},
+    time::Duration,
+};
+
+use hotshot::types::BLSPubKey;
+use hotshot_types::{
+    data::{EpochNumber, ViewNumber},
+    traits::signature_key::SignatureKey,
+};
 
 use crate::tests::common::{
     runner::{NodeAction, NodeChange, TestRunner},
+    utils::{build_timeout_cert, mock_membership_with_num_nodes},
     views,
 };
 
@@ -171,6 +181,58 @@ async fn restart_all_nodes_at_epoch_boundary() {
             anchor.view_number()
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// View divergence between cohorts
+// ---------------------------------------------------------------------------
+
+/// Reproduces a devnet stall after a mass restart. 4 of 6 nodes (2/3 of
+/// stake — one short of the 2f+1 = 5 timeout-cert threshold) sit on view 1,
+/// while nodes 4 and 5 (1/3 of stake — one short of the f+1 = 3 one-honest
+/// threshold) advanced to view 3 via timeout certificates the majority never
+/// received, e.g. formed while it was down.
+///
+/// Without catchup this deadlocks permanently: the majority's view-1 timeout
+/// votes are stale to the minority (dropped on receipt), so it only ever
+/// re-forms a one-honest cert for view 1, while the minority cannot reach
+/// any threshold at view 3 — no certificate forms on any single view. The
+/// stale-vote catchup reply and the TC attached to timeout votes let the
+/// majority adopt view 3; the pooled timeout votes then form a full timeout
+/// certificate and views progress normally.
+#[tokio::test(flavor = "multi_thread")]
+async fn view_divergence_between_cohorts_recovers() {
+    let num_nodes = 6;
+    let epoch_height = 100;
+    let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
+    let (membership, _storage, _client) =
+        mock_membership_with_num_nodes(num_nodes, epoch_height, public_key);
+    let epoch_membership = membership
+        .membership_for_epoch(Some(EpochNumber::genesis()))
+        .unwrap();
+    let ahead: Vec<_> = [1, 2]
+        .map(|view| {
+            build_timeout_cert(
+                ViewNumber::new(view),
+                EpochNumber::genesis(),
+                &epoch_membership,
+                &public_key,
+                &private_key,
+            )
+        })
+        .into_iter()
+        .collect();
+
+    TestRunner::builder()
+        .num_nodes(num_nodes)
+        .target_decisions(10)
+        .epoch_height(epoch_height)
+        .initial_timeout_certs(BTreeMap::from([(4, ahead.clone()), (5, ahead)]))
+        .tolerated_failed_views(views(1..=3))
+        .build()
+        .run()
+        .await
+        .unwrap();
 }
 
 // ---------------------------------------------------------------------------
