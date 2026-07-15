@@ -346,6 +346,13 @@ impl TestRunner {
         // Spawn one coordinator task per live node.  Each node gets its
         // own membership instance so they don't share internal state.
         for (i, (_, public_key, _)) in parties.iter().enumerate() {
+            // Down nodes get their network when `NodeAction::Start` fires. Binding
+            // the port here would leave it held until the discarded instance's server
+            // task exits (release is asynchronous), racing the later rebind.
+            if currently_down.contains(&i) {
+                node_handles.push(None);
+                continue;
+            }
             let network = create_network(i, &parties, &self.upgrade_lock).await;
 
             let (membership, storage, client, external_events_tx) =
@@ -379,34 +386,30 @@ impl TestRunner {
 
             let tx = event_tx.clone();
             let generation = generations[i];
-            node_handles.push(if currently_down.contains(&i) {
-                None
-            } else {
-                let (cancel_tx, cancel_rx) = oneshot::channel();
-                cancels.insert(i, cancel_tx);
-                let mut initial_commits: BTreeMap<ViewNumber, [u8; 32]> = BTreeMap::new();
-                if let Some(seed) = &self.pre_cutover_seed {
-                    let anchor_view = seed.decided_anchor.view_number();
-                    let anchor_commit: [u8; 32] = seed.decided_anchor.commit().into();
-                    for v in 1..*anchor_view {
-                        initial_commits.insert(ViewNumber::new(v), anchor_commit);
-                    }
-                    initial_commits.insert(anchor_view, anchor_commit);
-                    for leaf in &seed.undecided {
-                        initial_commits.insert(leaf.view_number(), leaf.commit().into());
-                    }
+            let (cancel_tx, cancel_rx) = oneshot::channel();
+            cancels.insert(i, cancel_tx);
+            let mut initial_commits: BTreeMap<ViewNumber, [u8; 32]> = BTreeMap::new();
+            if let Some(seed) = &self.pre_cutover_seed {
+                let anchor_view = seed.decided_anchor.view_number();
+                let anchor_commit: [u8; 32] = seed.decided_anchor.commit().into();
+                for v in 1..*anchor_view {
+                    initial_commits.insert(ViewNumber::new(v), anchor_commit);
                 }
-                Some(tokio::spawn(run_node(
-                    coord,
-                    self.node_storages[i].clone(),
-                    tx,
-                    i,
-                    generation,
-                    external_events_tx,
-                    cancel_rx,
-                    initial_commits,
-                )))
-            });
+                initial_commits.insert(anchor_view, anchor_commit);
+                for leaf in &seed.undecided {
+                    initial_commits.insert(leaf.view_number(), leaf.commit().into());
+                }
+            }
+            node_handles.push(Some(tokio::spawn(run_node(
+                coord,
+                self.node_storages[i].clone(),
+                tx,
+                i,
+                generation,
+                external_events_tx,
+                cancel_rx,
+                initial_commits,
+            ))));
         }
 
         // Build pending changes sorted by view.
