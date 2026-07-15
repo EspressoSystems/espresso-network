@@ -13,7 +13,7 @@ ark-ed-on-bn254 = { workspace = true }
 ark-ff = { workspace = true }
 ark-serialize = { workspace = true }
 committable = { workspace = true }
-espresso-types = { workspace = true }
+espresso-types = { workspace = true, features = ["node"] }
 hotshot-query-service = { workspace = true }
 hotshot-types = { workspace = true }
 jf-crhf = { workspace = true }

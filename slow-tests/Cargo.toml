@@ -18,7 +18,7 @@ committable = { workspace = true }
 derivative = { workspace = true }
 espresso-contract-deployer = { workspace = true }
 espresso-node = { workspace = true, default-features = false, features = ["testing"] }
-espresso-types = { workspace = true }
+espresso-types = { workspace = true, features = ["node"] }
 futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-contract-adapter = { workspace = true }

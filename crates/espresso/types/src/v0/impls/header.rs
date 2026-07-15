@@ -9,6 +9,8 @@ use either::Either;
 use hotshot_query_service_types::{
     HeightIndexed, availability::QueryableHeader, explorer::traits::ExplorerHeader,
 };
+#[cfg(feature = "node")]
+use hotshot_types::utils::is_ge_epoch_root;
 use hotshot_types::{
     data::{EpochNumber, VidCommitment, ViewNumber, vid_commitment},
     light_client::LightClientState,
@@ -19,7 +21,7 @@ use hotshot_types::{
         node_implementation::NodeType,
         signature_key::BuilderSignatureKey,
     },
-    utils::{BuilderCommitment, epoch_from_block_number, is_ge_epoch_root, is_last_block},
+    utils::{BuilderCommitment, epoch_from_block_number, is_last_block},
 };
 use jf_merkle_tree_compat::{AppendableMerkleTreeScheme, MerkleCommitment, MerkleTreeScheme};
 use serde::{
@@ -28,9 +30,12 @@ use serde::{
 };
 use serde_json::{Map, Value};
 use thiserror::Error;
+#[cfg(feature = "node")]
 use time::OffsetDateTime;
 use vbs::version::Version;
-use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION};
+use versions::EPOCH_REWARD_VERSION;
+#[cfg(feature = "node")]
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 
 use super::{
     instance_state::NodeState, state::ValidatedState, v0_1::IterableFeeInfo, v0_3::ChainConfig,
@@ -38,11 +43,11 @@ use super::{
 use crate::{
     BlockMerkleCommitment, FeeAccount, FeeAmount, FeeInfo, FeeMerkleCommitment, Header,
     L1BlockInfo, L1Snapshot, Leaf2, NamespaceId, NsIndex, NsTable, PayloadByteLen, SeqTypes,
-    TimestampMillis, UpgradeType,
+    TimestampMillis,
     eth_signature_key::BuilderSignature,
     v0::{
         header::{EitherOrVersion, VersionedHeader},
-        impls::{StakeTableHash, distribute_block_reward},
+        impls::StakeTableHash,
     },
     v0_1::{self},
     v0_2,
@@ -54,6 +59,8 @@ use crate::{
     v0_5::{self, LeaderCounts, MAX_VALIDATORS},
     v0_6::{self},
 };
+#[cfg(feature = "node")]
+use crate::{UpgradeType, v0::impls::distribute_block_reward};
 
 impl v0_1::Header {
     pub(crate) fn commit(&self) -> Commitment<Header> {
@@ -514,6 +521,7 @@ macro_rules! field_mut {
 }
 
 impl Header {
+    #[cfg_attr(not(feature = "node"), allow(dead_code))]
     #[allow(clippy::too_many_arguments)]
     fn from_info(
         payload_commitment: VidCommitment,
@@ -989,6 +997,7 @@ impl Header {
         Ok((epoch_rewards_applied, changed_accounts))
     }
 
+    #[cfg_attr(not(feature = "node"), allow(dead_code))]
     async fn get_chain_config(
         validated_state: &ValidatedState,
         instance_state: &NodeState,
@@ -1276,6 +1285,7 @@ impl BlockHeader<SeqTypes> for Header {
             version,
         )
     )]
+    #[cfg_attr(not(feature = "node"), allow(unused_variables))]
     async fn new(
         parent_state: &ValidatedState,
         instance_state: &NodeState,
@@ -1287,213 +1297,223 @@ impl BlockHeader<SeqTypes> for Header {
         version: Version,
         view_number: u64,
     ) -> Result<Self, Self::Error> {
-        tracing::info!("preparing to propose header");
-
-        let height = parent_leaf.height();
-        let view = parent_leaf.view_number();
-
-        let mut validated_state = parent_state.clone();
-
-        let chain_config = if version > instance_state.current_version {
-            match instance_state.upgrades.get(&version) {
-                Some(upgrade) => match upgrade.upgrade_type {
-                    UpgradeType::Fee { chain_config } => chain_config,
-                    UpgradeType::Epoch { chain_config } => chain_config,
-                    UpgradeType::DrbAndHeader { chain_config } => chain_config,
-                    UpgradeType::NewProtocol { chain_config } => chain_config,
-                    UpgradeType::EpochReward { chain_config } => chain_config,
-                },
-                None => Header::get_chain_config(&validated_state, instance_state).await?,
-            }
-        } else {
-            Header::get_chain_config(&validated_state, instance_state).await?
-        };
-
-        validated_state.chain_config = chain_config.into();
-
-        // Fetch the latest L1 snapshot.
-        let l1_snapshot = instance_state.l1_client.snapshot().await;
-        // Fetch the new L1 deposits between parent and current finalized L1 block.
-        let l1_deposits = if let (Some(addr), Some(block_info)) =
-            (chain_config.fee_contract, l1_snapshot.finalized)
+        // Proposing requires the L1 client for the L1 snapshot and deposits.
+        #[cfg(not(feature = "node"))]
         {
-            instance_state
-                .l1_client
-                .get_finalized_deposits(
-                    addr,
-                    parent_leaf
-                        .block_header()
-                        .l1_finalized()
-                        .map(|block_info| block_info.number),
-                    block_info.number,
-                )
-                .await
-        } else {
-            vec![]
-        };
-        // Find missing fee state entries. We will need to use the builder account which is paying a
-        // fee and the recipient account which is receiving it, plus any counts receiving deposits
-        // in this block.
-        let missing_accounts = parent_state.forgotten_accounts(
-            [builder_fee.fee_account, chain_config.fee_recipient]
-                .into_iter()
-                .chain(l1_deposits.iter().map(|info| info.account())),
-        );
-        if !missing_accounts.is_empty() {
-            tracing::warn!(
-                height,
-                ?view,
-                ?missing_accounts,
-                "fetching missing accounts from peers"
-            );
+            unimplemented!("proposing a block header requires the node feature");
+        }
+        #[cfg(feature = "node")]
+        {
+            tracing::info!("preparing to propose header");
 
-            // Fetch missing fee state entries
-            let missing_account_proofs = instance_state
-                .state_catchup
-                .as_ref()
-                .fetch_accounts(
-                    instance_state,
+            let height = parent_leaf.height();
+            let view = parent_leaf.view_number();
+
+            let mut validated_state = parent_state.clone();
+
+            let chain_config = if version > instance_state.current_version {
+                match instance_state.upgrades.get(&version) {
+                    Some(upgrade) => match upgrade.upgrade_type {
+                        UpgradeType::Fee { chain_config } => chain_config,
+                        UpgradeType::Epoch { chain_config } => chain_config,
+                        UpgradeType::DrbAndHeader { chain_config } => chain_config,
+                        UpgradeType::NewProtocol { chain_config } => chain_config,
+                        UpgradeType::EpochReward { chain_config } => chain_config,
+                    },
+                    None => Header::get_chain_config(&validated_state, instance_state).await?,
+                }
+            } else {
+                Header::get_chain_config(&validated_state, instance_state).await?
+            };
+
+            validated_state.chain_config = chain_config.into();
+
+            // Fetch the latest L1 snapshot.
+            let l1_snapshot = instance_state.l1_client.snapshot().await;
+            // Fetch the new L1 deposits between parent and current finalized L1 block.
+            let l1_deposits = if let (Some(addr), Some(block_info)) =
+                (chain_config.fee_contract, l1_snapshot.finalized)
+            {
+                instance_state
+                    .l1_client
+                    .get_finalized_deposits(
+                        addr,
+                        parent_leaf
+                            .block_header()
+                            .l1_finalized()
+                            .map(|block_info| block_info.number),
+                        block_info.number,
+                    )
+                    .await
+            } else {
+                vec![]
+            };
+            // Find missing fee state entries. We will need to use the builder account which is paying a
+            // fee and the recipient account which is receiving it, plus any counts receiving deposits
+            // in this block.
+            let missing_accounts = parent_state.forgotten_accounts(
+                [builder_fee.fee_account, chain_config.fee_recipient]
+                    .into_iter()
+                    .chain(l1_deposits.iter().map(|info| info.account())),
+            );
+            if !missing_accounts.is_empty() {
+                tracing::warn!(
                     height,
-                    view,
-                    parent_state.fee_merkle_tree.commitment(),
-                    missing_accounts,
+                    ?view,
+                    ?missing_accounts,
+                    "fetching missing accounts from peers"
+                );
+
+                // Fetch missing fee state entries
+                let missing_account_proofs = instance_state
+                    .state_catchup
+                    .as_ref()
+                    .fetch_accounts(
+                        instance_state,
+                        height,
+                        view,
+                        parent_state.fee_merkle_tree.commitment(),
+                        missing_accounts,
+                    )
+                    .await?;
+
+                // Insert missing fee state entries
+                for proof in missing_account_proofs.iter() {
+                    proof
+                        .remember(&mut validated_state.fee_merkle_tree)
+                        .context("remembering fee account")?;
+                }
+            }
+
+            // Ensure merkle tree has frontier
+            if validated_state.need_to_fetch_blocks_mt_frontier() {
+                tracing::warn!(height, ?view, "fetching block frontier from peers");
+                instance_state
+                    .state_catchup
+                    .as_ref()
+                    .remember_blocks_merkle_tree(
+                        instance_state,
+                        height,
+                        view,
+                        &mut validated_state.block_merkle_tree,
+                    )
+                    .await
+                    .context("remembering block proof")?;
+            }
+
+            // Handle rewards and calculate leader_counts based on version
+            let (leader_counts, total_reward_distributed) = if version >= EPOCH_REWARD_VERSION {
+                let epoch_height = instance_state
+                    .epoch_height
+                    .context("epoch_height not configured for V6")?;
+                // Use the new block's height (parent + 1), not the parent's height
+                let new_height = height + 1;
+                let leader_index =
+                    Header::get_leader_index(version, new_height, view_number, instance_state)
+                        .await?
+                        .context("leader_index must be present for V6")?;
+
+                let leader_counts = Header::calculate_leader_counts(
+                    parent_leaf.block_header(),
+                    new_height,
+                    leader_index,
+                    epoch_height,
+                );
+
+                let (epoch_rewards_applied, _changed_accounts) = Header::handle_epoch_rewards(
+                    new_height,
+                    &leader_counts,
+                    instance_state,
+                    &mut validated_state,
+                    None,
                 )
                 .await?;
 
-            // Insert missing fee state entries
-            for proof in missing_account_proofs.iter() {
-                proof
-                    .remember(&mut validated_state.fee_merkle_tree)
-                    .context("remembering fee account")?;
-            }
-        }
+                // Note: changed_accounts are not used here during header creation.
+                // Delta updates are handled in apply_header during validation.
 
-        // Ensure merkle tree has frontier
-        if validated_state.need_to_fetch_blocks_mt_frontier() {
-            tracing::warn!(height, ?view, "fetching block frontier from peers");
-            instance_state
-                .state_catchup
-                .as_ref()
-                .remember_blocks_merkle_tree(
-                    instance_state,
-                    height,
-                    view,
-                    &mut validated_state.block_merkle_tree,
+                let parent_total = parent_leaf
+                    .block_header()
+                    .total_reward_distributed()
+                    .unwrap_or_default();
+
+                (
+                    Some(leader_counts),
+                    Some(RewardAmount(parent_total.0 + epoch_rewards_applied.0)),
                 )
-                .await
-                .context("remembering block proof")?;
-        }
+            } else if version >= EPOCH_VERSION {
+                // V3-V4: per-block distribution returns cumulative total
+                let total = distribute_block_reward(
+                    instance_state,
+                    &mut validated_state,
+                    parent_leaf,
+                    ViewNumber::new(view_number),
+                    version,
+                )
+                .await?
+                .map(|r| r.total_distributed());
 
-        // Handle rewards and calculate leader_counts based on version
-        let (leader_counts, total_reward_distributed) = if version >= EPOCH_REWARD_VERSION {
-            let epoch_height = instance_state
-                .epoch_height
-                .context("epoch_height not configured for V6")?;
-            // Use the new block's height (parent + 1), not the parent's height
-            let new_height = height + 1;
-            let leader_index =
-                Header::get_leader_index(version, new_height, view_number, instance_state)
-                    .await?
-                    .context("leader_index must be present for V6")?;
+                (None, total)
+            } else {
+                (None, None)
+            };
 
-            let leader_counts = Header::calculate_leader_counts(
-                parent_leaf.block_header(),
-                new_height,
-                leader_index,
-                epoch_height,
-            );
+            let mut next_stake_table_hash = None;
 
-            let (epoch_rewards_applied, _changed_accounts) = Header::handle_epoch_rewards(
-                new_height,
-                &leader_counts,
-                instance_state,
-                &mut validated_state,
-                None,
-            )
-            .await?;
+            if version >= DRB_AND_HEADER_UPGRADE_VERSION {
+                let epoch_height = instance_state
+                    .epoch_height
+                    .context("epoch height not in instance state")?;
+                if is_ge_epoch_root(height + 1, epoch_height) {
+                    let coordinator = instance_state.coordinator.clone();
+                    let first_epoch = {
+                        coordinator
+                            .membership()
+                            .first_epoch()
+                            .context("The first epoch was not set.")?
+                    };
 
-            // Note: changed_accounts are not used here during header creation.
-            // Delta updates are handled in apply_header during validation.
+                    let epoch = EpochNumber::new(epoch_from_block_number(height + 1, epoch_height));
 
-            let parent_total = parent_leaf
-                .block_header()
-                .total_reward_distributed()
-                .unwrap_or_default();
-
-            (
-                Some(leader_counts),
-                Some(RewardAmount(parent_total.0 + epoch_rewards_applied.0)),
-            )
-        } else if version >= EPOCH_VERSION {
-            // V3-V4: per-block distribution returns cumulative total
-            let total = distribute_block_reward(
-                instance_state,
-                &mut validated_state,
-                parent_leaf,
-                ViewNumber::new(view_number),
-                version,
-            )
-            .await?
-            .map(|r| r.total_distributed());
-
-            (None, total)
-        } else {
-            (None, None)
-        };
-
-        let mut next_stake_table_hash = None;
-
-        if version >= DRB_AND_HEADER_UPGRADE_VERSION {
-            let epoch_height = instance_state
-                .epoch_height
-                .context("epoch height not in instance state")?;
-            if is_ge_epoch_root(height + 1, epoch_height) {
-                let coordinator = instance_state.coordinator.clone();
-                let first_epoch = {
-                    coordinator
-                        .membership()
-                        .first_epoch()
-                        .context("The first epoch was not set.")?
-                };
-
-                let epoch = EpochNumber::new(epoch_from_block_number(height + 1, epoch_height));
-
-                // first 2 epochs don't have a stake table hash because they are configured.
-                if epoch > first_epoch {
-                    let epoch_membership = coordinator
-                        .stake_table_for_epoch(Some(epoch + 1))
-                        .map_err(|e| anyhow::anyhow!("failed to get epoch membership: {e}"))?;
-                    next_stake_table_hash = Some(
-                        epoch_membership
-                            .stake_table_hash()
-                            .context("failed to get next stake table hash")?,
-                    );
+                    // first 2 epochs don't have a stake table hash because they are configured.
+                    if epoch > first_epoch {
+                        let epoch_membership = coordinator
+                            .stake_table_for_epoch(Some(epoch + 1))
+                            .map_err(|e| {
+                            anyhow::anyhow!("failed to get epoch membership: {e}")
+                        })?;
+                        next_stake_table_hash = Some(
+                            epoch_membership
+                                .stake_table_hash()
+                                .context("failed to get next stake table hash")?,
+                        );
+                    }
                 }
             }
+
+            let now = OffsetDateTime::now_utc();
+
+            let timestamp = now.unix_timestamp() as u64;
+            let timestamp_millis = TimestampMillis::from_time(&now).u64();
+
+            Ok(Self::from_info(
+                payload_commitment,
+                builder_commitment,
+                metadata,
+                parent_leaf,
+                l1_snapshot,
+                &l1_deposits,
+                vec![builder_fee],
+                timestamp,
+                timestamp_millis,
+                validated_state,
+                chain_config,
+                version,
+                total_reward_distributed,
+                next_stake_table_hash,
+                leader_counts,
+            )?)
         }
-
-        let now = OffsetDateTime::now_utc();
-
-        let timestamp = now.unix_timestamp() as u64;
-        let timestamp_millis = TimestampMillis::from_time(&now).u64();
-
-        Ok(Self::from_info(
-            payload_commitment,
-            builder_commitment,
-            metadata,
-            parent_leaf,
-            l1_snapshot,
-            &l1_deposits,
-            vec![builder_fee],
-            timestamp,
-            timestamp_millis,
-            validated_state,
-            chain_config,
-            version,
-            total_reward_distributed,
-            next_stake_table_hash,
-            leader_counts,
-        )?)
     }
 
     fn genesis(

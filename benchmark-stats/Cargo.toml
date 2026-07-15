@@ -9,7 +9,7 @@ license = "MIT"
 chrono = { workspace = true }
 clap = { workspace = true }
 csv = { workspace = true }
-espresso-types = { workspace = true }
+espresso-types = { workspace = true, features = ["node"] }
 hotshot-task-impls = { workspace = true }
 hotshot-types = { workspace = true }
 plotly = { workspace = true }
