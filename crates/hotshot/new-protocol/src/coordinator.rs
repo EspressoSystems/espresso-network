@@ -78,6 +78,14 @@ pub(crate) const VID_RECONSTRUCT_GC_MARGIN: u64 = 5;
 /// storage writes for recent views aren't aborted before they persist.
 const STORAGE_GC_MARGIN: u64 = 5;
 
+/// Epoch changes claiming an epoch further ahead than this are dropped at
+/// intake. We could not verify them anyway: an epoch's stake table only
+/// materializes by walking the DRB chain, so parking such a message and
+/// driving catchup for an arbitrary claimed epoch just burns resources.
+/// Within the ceiling, deferred changes verify progressively as catchup
+/// advances ([`CertVerifiers::retry_pending`] runs on every DRB arrival).
+const EPOCH_CHANGE_LOOKAHEAD: u64 = 3;
+
 #[derive(Builder)]
 pub struct Coordinator<T: NodeType, S> {
     membership_coordinator: EpochMembershipCoordinator<T>,
@@ -1123,24 +1131,32 @@ where
                     None
                 },
                 ConsensusMessage::Certificate1(certificate1, _key) => {
+                    let view = certificate1.view_number();
                     debug!(
-                        %node, %sender,
-                        view = %certificate1.view_number(),
+                        %node, %sender, %view,
                         epoch = ?certificate1.epoch().map(|e| *e),
                         "recv certificate1"
                     );
+                    if self.is_too_far_ahead(view) {
+                        warn!(%node, %sender, %view, "certificate1 is too far ahead");
+                        return None;
+                    }
                     if let Some(epoch) = self.cert_verifiers.cert1.verify(certificate1) {
                         self.epoch_manager.request_drb_result(epoch);
                     }
                     None
                 },
                 ConsensusMessage::Certificate2(certificate2, _key) => {
+                    let view = certificate2.view_number();
                     debug!(
-                        %node, %sender,
-                        view = %certificate2.view_number(),
+                        %node, %sender, %view,
                         epoch = ?certificate2.epoch().map(|e| *e),
                         "recv certificate2"
                     );
+                    if self.is_too_far_ahead(view) {
+                        warn!(%node, %sender, %view, "certificate2 is too far ahead");
+                        return None;
+                    }
                     if let Some(epoch) = self.cert_verifiers.cert2.verify(certificate2) {
                         self.epoch_manager.request_drb_result(epoch);
                     }
@@ -1165,12 +1181,20 @@ where
                     {
                         match e {
                             CatchupEvidence::Qc(qc) => {
-                                if let Some(epoch) = self.cert_verifiers.advance.verify(qc) {
+                                if let Some(epoch) = self
+                                    .cert_verifiers
+                                    .advance
+                                    .verify(message.sender.clone(), qc)
+                                {
                                     self.epoch_manager.request_drb_result(epoch);
                                 }
                             },
                             CatchupEvidence::Tc(tc) => {
-                                if let Some(epoch) = self.cert_verifiers.timeout.verify(tc) {
+                                if let Some(epoch) = self
+                                    .cert_verifiers
+                                    .timeout
+                                    .verify(message.sender.clone(), tc)
+                                {
                                     self.epoch_manager.request_drb_result(epoch);
                                 }
                             },
@@ -1207,7 +1231,11 @@ where
                         epoch = ?tc.epoch().map(|e| *e),
                         "recv timeout certificate"
                     );
-                    if let Some(epoch) = self.cert_verifiers.timeout.verify(tc) {
+                    if let Some(epoch) = self
+                        .cert_verifiers
+                        .timeout
+                        .verify(message.sender.clone(), tc)
+                    {
                         self.epoch_manager.request_drb_result(epoch);
                     }
                     None
@@ -1219,18 +1247,27 @@ where
                         epoch = ?qc.epoch().map(|e| *e),
                         "recv high qc"
                     );
-                    if let Some(epoch) = self.cert_verifiers.advance.verify(qc) {
+                    if let Some(epoch) = self
+                        .cert_verifiers
+                        .advance
+                        .verify(message.sender.clone(), qc)
+                    {
                         self.epoch_manager.request_drb_result(epoch);
                     }
                     None
                 },
                 ConsensusMessage::EpochChange(epoch_change) => {
-                    debug!(
-                        %node, %sender,
-                        view = %epoch_change.cert1.view_number(),
-                        epoch = ?epoch_change.cert1.epoch().map(|e| *e),
-                        "recv epoch change"
-                    );
+                    let view = epoch_change.cert1.view_number();
+                    let epoch = epoch_change.cert1.epoch();
+                    debug!(%node, %sender, %view, epoch = ?epoch.map(|e| *e), "recv epoch change");
+                    let current_epoch = self
+                        .consensus
+                        .current_epoch()
+                        .unwrap_or(EpochNumber::genesis());
+                    if epoch.is_some_and(|e| e > current_epoch + EPOCH_CHANGE_LOOKAHEAD) {
+                        warn!(%node, %sender, %view, ?epoch, "epoch change is too far ahead");
+                        return None;
+                    }
                     if let Some(epoch) = self.cert_verifiers.epoch_change.verify(epoch_change) {
                         self.epoch_manager.request_drb_result(epoch);
                     }

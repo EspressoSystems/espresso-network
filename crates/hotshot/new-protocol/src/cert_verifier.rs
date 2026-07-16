@@ -1,6 +1,6 @@
 use std::{
     any::type_name,
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     mem,
     ops::Deref,
 };
@@ -110,8 +110,7 @@ impl<T: NodeType> Verifiable<T> for EpochChangeMessage<T, Unchecked> {
     }
 }
 
-/// Verifies certificates received from the network off the main coordinator
-/// thread.
+/// Verifies certificates off the main coordinator thread.
 ///
 /// The threshold-signature check is slow (> 1ms), so running it inline would
 /// stall the consensus loop. Each item's check runs in a `spawn_blocking`
@@ -119,7 +118,7 @@ impl<T: NodeType> Verifiable<T> for EpochChangeMessage<T, Unchecked> {
 /// membership isn't known yet is held in `pending` and retried on
 /// [`Self::retry_pending`]. One verifier handles one [`Verifiable`] type,
 /// keyed by view so duplicates are dropped.
-pub struct CertVerifier<T: NodeType, C: Verifiable<T>> {
+pub struct CertByViewVerifier<T: NodeType, C: Verifiable<T>> {
     tasks: JoinMap<ViewNumber, Option<ValidCert<C::Output>>>,
     pending: BTreeMap<ViewNumber, C>,
     completed: BTreeSet<ViewNumber>,
@@ -129,7 +128,7 @@ pub struct CertVerifier<T: NodeType, C: Verifiable<T>> {
     invalid_certs: u64,
 }
 
-impl<T: NodeType, C: Verifiable<T> + Send + 'static> CertVerifier<T, C> {
+impl<T: NodeType, C: Verifiable<T> + Send + 'static> CertByViewVerifier<T, C> {
     pub fn new(membership: EpochMembershipCoordinator<T>, upgrade_lock: UpgradeLock<T>) -> Self {
         Self {
             tasks: JoinMap::new(),
@@ -239,23 +238,150 @@ impl<T: NodeType, C: Verifiable<T> + Send + 'static> CertVerifier<T, C> {
     }
 }
 
+/// Verifies certificates off the main coordinator thread.
+///
+/// Unlike [`CertByViewVerifier`], these certificates are keyed by sender key
+/// instead of view, helping a lagging node jump to the frontier. While a
+/// certificate is verified, subsequent requests are dropped which bounds each
+/// peer to one verification at a time.
+pub struct CertBySenderVerifier<T: NodeType, C: Verifiable<T>> {
+    tasks: JoinMap<T::SignatureKey, Option<ValidCert<C::Output>>>,
+    pending: HashMap<T::SignatureKey, C>,
+    completed: BTreeSet<ViewNumber>,
+    lower_bound: ViewNumber,
+    membership: EpochMembershipCoordinator<T>,
+    upgrade_lock: UpgradeLock<T>,
+    invalid_certs: u64,
+}
+
+impl<T: NodeType, C: Verifiable<T> + Send + 'static> CertBySenderVerifier<T, C>
+where
+    C::Output: HasViewNumber,
+{
+    pub fn new(membership: EpochMembershipCoordinator<T>, upgrade_lock: UpgradeLock<T>) -> Self {
+        Self {
+            tasks: JoinMap::new(),
+            pending: HashMap::new(),
+            completed: BTreeSet::new(),
+            lower_bound: ViewNumber::genesis(),
+            membership,
+            upgrade_lock,
+            invalid_certs: 0,
+        }
+    }
+
+    /// Submit an item received from `sender` for verification.
+    ///
+    /// Dropped if the sender's previous submission is still being verified. If
+    /// the epoch's membership isn't ready the item is held and its epoch
+    /// returned so the caller can drive that epoch's catchup.
+    pub fn verify(&mut self, sender: T::SignatureKey, cert: C) -> Option<EpochNumber> {
+        let view = cert.view_number();
+
+        if view < self.lower_bound
+            || self.completed.contains(&view)
+            || self.tasks.contains_key(&sender)
+        {
+            return None;
+        }
+
+        let Some(epoch) = cert.epoch() else {
+            warn!(%view, cert = type_name::<C>(), "received certificate has no epoch number");
+            return None;
+        };
+
+        let Ok(membership) = self.membership.membership_for_epoch(Some(epoch)) else {
+            self.pending.insert(sender, cert);
+            return Some(epoch);
+        };
+
+        let lock = self.upgrade_lock.clone();
+
+        self.tasks.spawn_blocking(sender, move || {
+            let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
+            let threshold = membership.success_threshold();
+            match cert.check(&entries, threshold, &lock) {
+                Ok(valid) => Some(ValidCert::new(valid, epoch)),
+                Err(err) => {
+                    warn!(%view, %epoch, %err, cert = type_name::<C>(), "invalid certificate");
+                    None
+                },
+            }
+        });
+
+        None
+    }
+
+    /// Record that this view's item was completed by other means.
+    ///
+    /// This can happen locally from votes for example.
+    pub fn mark_completed(&mut self, view: ViewNumber) {
+        if view < self.lower_bound {
+            return;
+        }
+        self.completed.insert(view);
+        self.pending.retain(|_, c| c.view_number() != view);
+    }
+
+    /// Re-attempt any items deferred because their epoch stake table wasn't
+    /// available. Returns the epochs whose stake table is still missing so
+    /// the caller can keep driving their catchup.
+    pub fn retry_pending(&mut self) -> Vec<EpochNumber> {
+        mem::take(&mut self.pending)
+            .into_iter()
+            .filter_map(|(sender, cert)| self.verify(sender, cert))
+            .collect()
+    }
+
+    pub async fn next(&mut self) -> Option<ValidCert<C::Output>> {
+        loop {
+            match self.tasks.join_next().await? {
+                (_, Ok(Some(cert))) => {
+                    let view = cert.view_number();
+                    if view >= self.lower_bound && self.completed.insert(view) {
+                        return Some(cert);
+                    }
+                },
+                (_, Ok(None)) => {
+                    self.invalid_certs += 1;
+                },
+                (sender, Err(err)) => {
+                    if err.is_panic() {
+                        error!(?sender, %err, cert = type_name::<C>(), "cert verification task panic");
+                    }
+                },
+            }
+        }
+    }
+
+    pub fn gc(&mut self, view: ViewNumber) {
+        self.completed = self.completed.split_off(&view);
+        self.pending.retain(|_, c| c.view_number() >= view);
+        self.lower_bound = view;
+    }
+
+    pub fn num_invalid_certs(&self) -> u64 {
+        self.invalid_certs
+    }
+}
+
 /// The coordinator's network-certificate verifiers, one per certificate type.
 pub struct CertVerifiers<T: NodeType> {
-    pub cert1: CertVerifier<T, Certificate1<T>>,
-    pub cert2: CertVerifier<T, Certificate2<T>>,
-    pub timeout: CertVerifier<T, TimeoutCertificate2<T>>,
-    pub advance: CertVerifier<T, Certificate1<T>>,
-    pub epoch_change: CertVerifier<T, EpochChangeMessage<T, Unchecked>>,
+    pub cert1: CertByViewVerifier<T, Certificate1<T>>,
+    pub cert2: CertByViewVerifier<T, Certificate2<T>>,
+    pub timeout: CertBySenderVerifier<T, TimeoutCertificate2<T>>,
+    pub advance: CertBySenderVerifier<T, Certificate1<T>>,
+    pub epoch_change: CertByViewVerifier<T, EpochChangeMessage<T, Unchecked>>,
 }
 
 impl<T: NodeType> CertVerifiers<T> {
     pub fn new(membership: EpochMembershipCoordinator<T>, upgrade_lock: UpgradeLock<T>) -> Self {
         Self {
-            cert1: CertVerifier::new(membership.clone(), upgrade_lock.clone()),
-            cert2: CertVerifier::new(membership.clone(), upgrade_lock.clone()),
-            timeout: CertVerifier::new(membership.clone(), upgrade_lock.clone()),
-            advance: CertVerifier::new(membership.clone(), upgrade_lock.clone()),
-            epoch_change: CertVerifier::new(membership, upgrade_lock),
+            cert1: CertByViewVerifier::new(membership.clone(), upgrade_lock.clone()),
+            cert2: CertByViewVerifier::new(membership.clone(), upgrade_lock.clone()),
+            timeout: CertBySenderVerifier::new(membership.clone(), upgrade_lock.clone()),
+            advance: CertBySenderVerifier::new(membership.clone(), upgrade_lock.clone()),
+            epoch_change: CertByViewVerifier::new(membership, upgrade_lock),
         }
     }
 
