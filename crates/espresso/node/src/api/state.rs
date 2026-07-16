@@ -534,17 +534,16 @@ where
             .load_latest_reward_account_proof_v2(address.into())
             .await
             .map_err(|err| {
-                anyhow::anyhow!(
+                not_found(format!(
                     "failed to load latest reward account {:?}: {}",
-                    address,
-                    err
-                )
+                    address, err
+                ))
             })?;
 
         // Convert the proof to reward claim input and return internal type
         proof.to_reward_claim_input().map_err(|err| match err {
             RewardClaimError::ZeroRewardError => {
-                anyhow::anyhow!("zero reward balance for {:?}", address)
+                not_found(format!("zero reward balance for {:?}", address))
             },
             RewardClaimError::ProofConversionError(e) => {
                 anyhow::anyhow!("failed to create solidity proof for {:?}: {}", address, e)
@@ -562,11 +561,10 @@ where
             .load_latest_reward_account_proof_v2(address.into())
             .await
             .map_err(|err| {
-                anyhow::anyhow!(
+                not_found(format!(
                     "failed to load latest reward account {:?}: {}",
-                    address,
-                    err
-                )
+                    address, err
+                ))
             })?;
 
         // Return internal balance type
@@ -582,11 +580,10 @@ where
             .load_latest_reward_account_proof_v2(address.into())
             .await
             .map_err(|err| {
-                anyhow::anyhow!(
+                not_found(format!(
                     "failed to load latest reward account proof for {:?}: {}",
-                    address,
-                    err
-                )
+                    address, err
+                ))
             })
     }
 
@@ -598,25 +595,27 @@ where
     ) -> anyhow::Result<Self::RewardBalances> {
         // Validate limit (from reward.toml: limit <= 10000)
         if limit > 10000 {
-            return Err(anyhow::anyhow!(
+            return Err(bad_request(format!(
                 "limit {} exceeds maximum allowed value of 10000",
                 limit
-            ));
+            )));
         }
 
         // Load the merkle tree at the given height
         let tree_bytes = self.data_source.load_tree(height).await.map_err(|err| {
-            anyhow::anyhow!("failed to load reward tree at height {}: {}", height, err)
+            not_found(format!(
+                "failed to load reward tree at height {}: {}",
+                height, err
+            ))
         })?;
 
         // Deserialize the tree into internal format
         let tree_data: InternalRewardTreeData =
             bincode::deserialize(&tree_bytes).map_err(|err| {
-                anyhow::anyhow!(
+                not_found(format!(
                     "failed to deserialize RewardMerkleTreeV2Data at height {}: {}",
-                    height,
-                    err
-                )
+                    height, err
+                ))
             })?;
 
         let offset_usize = offset as usize;
@@ -642,7 +641,10 @@ where
     ) -> anyhow::Result<Self::RewardMerkleTreeData> {
         // Load the raw merkle tree bytes
         let tree_bytes = self.data_source.load_tree(height).await.map_err(|err| {
-            anyhow::anyhow!("failed to load reward tree at height {}: {}", height, err)
+            not_found(format!(
+                "failed to load reward tree at height {}: {}",
+                height, err
+            ))
         })?;
 
         // Deserialize and return internal type
@@ -758,23 +760,18 @@ where
             .load_reward_account_proof_v2(block_height, addr.into())
             .await
             .map_err(|err| {
-                anyhow::anyhow!(
+                not_found(format!(
                     "failed to load reward account {} at height {}: {}",
-                    address,
-                    block_height,
-                    err
-                )
+                    address, block_height, err
+                ))
             })?;
 
         // Convert the proof to reward claim input (internal type)
         let claim_input = proof.to_reward_claim_input().map_err(|err| match err {
-            RewardClaimError::ZeroRewardError => {
-                anyhow::anyhow!(
-                    "zero reward balance for {} at height {}",
-                    address,
-                    block_height
-                )
-            },
+            RewardClaimError::ZeroRewardError => not_found(format!(
+                "zero reward balance for {} at height {}",
+                address, block_height
+            )),
             RewardClaimError::ProofConversionError(e) => {
                 anyhow::anyhow!(
                     "failed to create solidity proof for {} at height {}: {}",
@@ -804,12 +801,10 @@ where
             .load_reward_account_proof_v2(height, addr.into())
             .await
             .map_err(|err| {
-                anyhow::anyhow!(
+                not_found(format!(
                     "failed to load reward account {} at height {}: {}",
-                    address,
-                    height,
-                    err
-                )
+                    address, height, err
+                ))
             })?;
 
         Ok(InternalRewardAmount(proof.balance))
@@ -828,7 +823,10 @@ where
             .load_latest_reward_account_proof_v2(addr.into())
             .await
             .map_err(|err| {
-                anyhow::anyhow!("failed to load latest reward account {}: {}", address, err)
+                not_found(format!(
+                    "failed to load latest reward account {}: {}",
+                    address, err
+                ))
             })?;
 
         Ok(InternalRewardAmount(proof.balance))
@@ -850,12 +848,10 @@ where
             .load_reward_account_proof_v2(height, addr.into())
             .await
             .map_err(|err| {
-                anyhow::anyhow!(
+                not_found(format!(
                     "failed to load reward account {} at height {}: {}",
-                    address,
-                    height,
-                    err
-                )
+                    address, height, err
+                ))
             })?;
 
         Ok(proof)
@@ -876,7 +872,10 @@ where
             .load_latest_reward_account_proof_v2(addr.into())
             .await
             .map_err(|err| {
-                anyhow::anyhow!("failed to load latest reward account {}: {}", address, err)
+                not_found(format!(
+                    "failed to load latest reward account {}: {}",
+                    address, err
+                ))
             })?;
 
         Ok(proof)
@@ -898,17 +897,19 @@ where
 
         // Load the merkle tree at the given height
         let tree_bytes = self.data_source.load_tree(height).await.map_err(|err| {
-            anyhow::anyhow!("failed to load reward tree at height {}: {}", height, err)
+            not_found(format!(
+                "failed to load reward tree at height {}: {}",
+                height, err
+            ))
         })?;
 
         // Deserialize the tree into internal format
         let tree_data: InternalRewardTreeData =
             bincode::deserialize(&tree_bytes).map_err(|err| {
-                anyhow::anyhow!(
+                not_found(format!(
                     "failed to deserialize RewardMerkleTreeV2Data at height {}: {}",
-                    height,
-                    err
-                )
+                    height, err
+                ))
             })?;
 
         let offset_usize = offset as usize;

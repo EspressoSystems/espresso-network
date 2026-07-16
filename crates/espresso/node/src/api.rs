@@ -8364,6 +8364,19 @@ mod test {
 
                     assert_eq!(reward_claim_input, res.to_reward_claim_input()?);
 
+                    // Tide contract relied on by scripts/claim-rewards-loop: an account with no
+                    // rewards yields 404; any other error status makes the claim loop exit and
+                    // process-compose tear down the whole demo.
+                    let err = client
+                        .get::<RewardClaimInput>(&format!(
+                            "reward-state-v2/reward-claim-input/{height}/\
+                             0x00000000000000000000000000000000000000aa"
+                        ))
+                        .send()
+                        .await
+                        .unwrap_err();
+                    assert_matches!(err, ClientErr { status, .. } if status == StatusCode::NOT_FOUND);
+
                     // Both servers share the same underlying SQL data source; compare responses
                     // for each per-address endpoint under reward-state-v2.
                     compare_endpoints(
