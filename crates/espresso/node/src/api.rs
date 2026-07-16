@@ -503,7 +503,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
     async fn vote_participation(&self, epoch: EpochNumber) -> HashMap<PubKey, f64> {
         self.consensus_handle()
             .await
-            .vote_participation(Some(epoch))
+            .vote_participation(epoch)
             .await
     }
 
@@ -3251,7 +3251,8 @@ mod test {
     use rand::seq::SliceRandom;
     use rstest::rstest;
     use staking_cli::{
-        demo::DelegationConfig, fetch_commission, update_commission, update_network_config,
+        Transaction as StakingTransaction, demo::DelegationConfig, fetch_commission,
+        update_commission, update_network_config,
     };
     use test_helpers::{
         TestNetwork, TestNetworkConfigBuilder, catchup_test_helper, state_signature_test_helper,
@@ -5213,6 +5214,146 @@ mod test {
         Ok(())
     }
 
+    /// Full-application epoch-boundary committee change: a validator sends a
+    /// real `deregisterValidator` transaction to the StakeTable contract on
+    /// L1 mid-run, drops out of the consensus committee at the epoch boundary
+    /// where the exit activates, and the reduced committee keeps deciding.
+    ///
+    /// Runs genesis at `NEW_PROTOCOL_VERSION` (StakeTable V3), so this covers
+    /// the whole pipeline the HotShot-level tests in
+    /// `hotshot-new-protocol/src/tests/stake_table_changes.rs` mock out:
+    /// L1 event fetching, `select_active_validator_set`, and epoch-root-driven
+    /// membership updates.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_new_protocol_validator_exit_at_epoch_boundary() -> anyhow::Result<()> {
+        const NUM_NODES: usize = 5;
+        const EPOCH_HEIGHT: u64 = 10;
+        const NEW_PROTOCOL: Upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
+        /// How many epochs after the exit transaction we allow for the event
+        /// to finalize on L1 and reach a stake table snapshot before failing.
+        const MAX_ACTIVATION_EPOCHS: u64 = 10;
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .epoch_start_block(0)
+            .build();
+
+        let api_port = reserve_tcp_port().expect("No ports free for query service");
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config.clone())
+            .persistences(persistence)
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<SequencerApiVersion>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    Duration::from_secs(2),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                StakeTableContractVersion::V3,
+                NEW_PROTOCOL,
+            )
+            .await
+            .unwrap()
+            .build();
+
+        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let st_addr = network
+            .contracts
+            .as_ref()
+            .unwrap()
+            .address(Contract::StakeTableProxy)
+            .unwrap();
+
+        // Exit the last node's validator. The node keeps running (matching
+        // the HotShot-level leave test), but must disappear from the
+        // committee. Node 0 serves the query API, so it stays a member.
+        let (exiting, exiting_provider) = network_config
+            .validator_providers()
+            .pop()
+            .expect("at least one validator");
+
+        let client: Client<ClientErr, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+        client.connect(Some(Duration::from_secs(30))).await;
+
+        // Let the network settle into normal epoch operation before exiting.
+        let mut events = network.peers[0].event_stream();
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, 3).await;
+        let exit_epoch = network.peers[0]
+            .decided_leaf()
+            .await
+            .epoch(EPOCH_HEIGHT)
+            .unwrap()
+            .u64();
+
+        let validators = client
+            .get::<AuthenticatedValidatorMap>(&format!("node/validators/{exit_epoch}"))
+            .send()
+            .await
+            .expect("validators for the exit epoch");
+        assert!(
+            validators.contains_key(&exiting),
+            "exiting validator should be in the committee before its exit activates"
+        );
+        assert_eq!(validators.len(), NUM_NODES);
+
+        let receipt = StakingTransaction::DeregisterValidator {
+            stake_table: st_addr,
+        }
+        .send(&exiting_provider)
+        .await?
+        .get_receipt()
+        .await?;
+        assert!(receipt.status(), "deregistration transaction reverted");
+
+        // The exit activates at the first epoch whose stake table snapshot is
+        // taken after the event finalizes on L1; scan forward until it does.
+        let mut activation_epoch = None;
+        for epoch in exit_epoch + 1..=exit_epoch + MAX_ACTIVATION_EPOCHS {
+            wait_for_epochs(&mut events, EPOCH_HEIGHT, epoch).await;
+            let validators = client
+                .get::<AuthenticatedValidatorMap>(&format!("node/validators/{epoch}"))
+                .send()
+                .await
+                .expect("validators for a decided epoch");
+            if !validators.contains_key(&exiting) {
+                assert_eq!(
+                    validators.len(),
+                    NUM_NODES - 1,
+                    "only the exited validator should have left the committee"
+                );
+                activation_epoch = Some(epoch);
+                break;
+            }
+            assert_eq!(validators.len(), NUM_NODES);
+        }
+        let activation_epoch = activation_epoch.unwrap_or_else(|| {
+            panic!("validator still in the committee {MAX_ACTIVATION_EPOCHS} epochs after exiting")
+        });
+
+        // The reduced committee must keep deciding across further epoch
+        // boundaries.
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, activation_epoch + 2).await;
+
+        Ok(())
+    }
+
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_epoch_reward_total_distributed_rewards() -> anyhow::Result<()> {
         // Epochs 1-3: No rewards distributed (total_reward_distributed = 0)
@@ -6255,6 +6396,9 @@ mod test {
         // Adding an additional node to the test network is not straight forward,
         // as the keys have already been initialized in the config above.
         // So, we remove this node and re-add it using the same index.
+        // Await the shutdown so the node's cliquenet listener releases its
+        // port before the replacement node binds the same address.
+        network.peers[0].shut_down().await;
         network.peers.remove(0);
 
         let node_0_storage = &storage[1];

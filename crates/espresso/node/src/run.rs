@@ -17,6 +17,7 @@ use super::{
 use crate::{default_telemetry_endpoint, keyset::KeySet};
 
 pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
+    espresso_types::assert_node_feature();
     let opt = Options::parse();
 
     // Genesis carries the chain ID, which selects the default telemetry

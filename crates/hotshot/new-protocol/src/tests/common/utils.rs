@@ -24,6 +24,7 @@ use hotshot_testing::{
     view_generator::TestViewGenerator,
 };
 use hotshot_types::{
+    PeerConnectInfo,
     data::{
         EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperse, VidDisperse2,
         VidDisperseShare2, ViewNumber, vid_commitment,
@@ -56,8 +57,8 @@ use crate::{
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     helpers::{proposal_commitment, test_upgrade_lock},
     message::{
-        Certificate1, Certificate2, ConsensusMessage, Message, MessageType, Proposal,
-        ProposalMessage, TimeoutVoteMessage, Validated, Vote1, Vote2,
+        CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, Message, MessageType,
+        Proposal, ProposalMessage, TimeoutVoteMessage, Validated, Vote1, Vote2,
     },
     outbox::Outbox,
     state::StateResponse,
@@ -248,11 +249,12 @@ impl TestView {
         }
     }
 
-    /// Build a TimeoutVote Event from a specific validator.
+    /// Build a TimeoutVote Event from a specific validator, optionally
+    /// carrying the sender's catchup evidence.
     pub fn timeout_vote_input(
         &self,
         node_index: u64,
-        lock: Option<Certificate1<TestTypes>>,
+        evidence: Option<CatchupEvidence<TestTypes>>,
     ) -> Message<TestTypes, Validated> {
         let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
         let data = TimeoutData2 {
@@ -270,7 +272,7 @@ impl TestView {
         Message {
             sender: pub_key,
             message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote(
-                TimeoutVoteMessage { vote, lock },
+                TimeoutVoteMessage { vote, evidence },
             )),
         }
     }
@@ -605,6 +607,47 @@ pub fn mock_membership_with_client(
     (coord, storage, client, external_events_tx)
 }
 
+/// Per-epoch stake table schedule, by node index into the seed-indexed key
+/// space (`BLSPubKey::generated_from_seed_indexed([0u8; 32], i)`).
+#[derive(Clone, Debug)]
+pub struct StakeTableSchedule {
+    /// Committee for the genesis epochs (1 and 2 at minimum).
+    pub initial: Vec<usize>,
+    /// `(first_epoch, committee)` overrides, applied to both the quorum and
+    /// DA tables. `first_epoch` must be >= 3: epochs 1 and 2 are fixed at
+    /// genesis by `set_first_epoch`.
+    pub changes: Vec<(u64, Vec<usize>)>,
+}
+
+/// Like `mock_membership_with_client`, but with a per-epoch stake table
+/// schedule. Members carry connect info so cliquenet can add scheduled
+/// joiners as peers at the epoch boundary.
+pub fn mock_membership_with_client_and_schedule(
+    num_nodes: usize,
+    epoch_height: u64,
+    public_key: BLSPubKey,
+    storage: TestStorage<TestTypes>,
+    schedule: &StakeTableSchedule,
+    connect_infos: &[PeerConnectInfo],
+) -> (
+    EpochMembershipCoordinator<TestTypes>,
+    TestStorage<TestTypes>,
+    CoordinatorClient<TestTypes>,
+    async_broadcast::Sender<hotshot_types::event::Event<TestTypes>>,
+) {
+    let client = CoordinatorClient::<TestTypes>::default();
+    let leaf_fetcher_network = Arc::new(ClientLeafFetcherNetwork::new(client.handle().clone()));
+    let (coord, storage, external_events_tx) = mock_membership_core(
+        num_nodes,
+        epoch_height,
+        leaf_fetcher_network,
+        public_key,
+        storage,
+        Some((schedule, connect_infos)),
+    );
+    (coord, storage, client, external_events_tx)
+}
+
 pub fn mock_membership_with_leaf_fetcher_network(
     num_nodes: usize,
     epoch_height: u64,
@@ -618,18 +661,58 @@ pub fn mock_membership_with_leaf_fetcher_network(
     TestStorage<TestTypes>,
     async_broadcast::Sender<hotshot_types::event::Event<TestTypes>>,
 ) {
-    let members = gen_node_lists(
+    mock_membership_core(
+        num_nodes,
+        epoch_height,
+        leaf_fetcher_network,
+        public_key,
+        storage,
+        None,
+    )
+}
+
+fn mock_membership_core(
+    num_nodes: usize,
+    epoch_height: u64,
+    leaf_fetcher_network: Arc<
+        dyn hotshot_types::traits::leaf_fetcher_network::LeafFetcherNetwork<TestTypes>,
+    >,
+    public_key: BLSPubKey,
+    storage: TestStorage<TestTypes>,
+    schedule: Option<(&StakeTableSchedule, &[PeerConnectInfo])>,
+) -> (
+    EpochMembershipCoordinator<TestTypes>,
+    TestStorage<TestTypes>,
+    async_broadcast::Sender<hotshot_types::event::Event<TestTypes>>,
+) {
+    let mut members = gen_node_lists(
         num_nodes as u64,
         num_nodes as u64,
         &TestNodeStakes::default(),
     )
     .0;
+    if let Some((_, connect_infos)) = schedule {
+        for (member, info) in members.iter_mut().zip(connect_infos) {
+            member.connect_info = Some(info.clone());
+        }
+    }
+    let initial: Vec<_> = match schedule {
+        Some((s, _)) => s.initial.iter().map(|&i| members[i].clone()).collect(),
+        None => members.clone(),
+    };
     let membership = StrictMembership::<TestTypes, StaticStakeTable<BLSPubKey, SchnorrPubKey>>::new(
-        members.clone(),
-        members.clone(),
+        initial.clone(),
+        initial,
         public_key,
         epoch_height,
     );
+    if let Some((s, _)) = schedule {
+        for (first_epoch, committee) in &s.changes {
+            let committee: Vec<_> = committee.iter().map(|&i| members[i].clone()).collect();
+            membership.add_quorum_committee(EpochNumber::new(*first_epoch), committee.clone());
+            membership.add_da_committee(EpochNumber::new(*first_epoch), committee);
+        }
+    }
     // Channel used by the Coordinator to forward ExternalMessageReceived
     // events to the membership's Leaf2Fetcher (drives epoch catchup).
     // Overflow is enabled so slow listeners don't stall the Coordinator.
@@ -1180,7 +1263,7 @@ pub(crate) fn build_cert2(
     )
 }
 
-fn build_timeout_cert(
+pub(crate) fn build_timeout_cert(
     view_number: ViewNumber,
     epoch: EpochNumber,
     epoch_membership: &hotshot_types::epoch_membership::EpochMembership<TestTypes>,

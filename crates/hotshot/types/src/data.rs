@@ -1663,6 +1663,10 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
         self.block_payload.clone()
     }
 
+    pub fn block_payload_ref(&self) -> Option<&TYPES::BlockPayload> {
+        self.block_payload.as_ref()
+    }
+
     /// A commitment to the block payload contained in this leaf.
     pub fn payload_commitment(&self) -> VidCommitment {
         self.block_header().payload_commitment()

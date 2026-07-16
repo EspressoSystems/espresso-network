@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet},
     sync::Arc,
     time::Duration,
 };
@@ -39,8 +39,10 @@ use crate::{
 pub enum BlockError {
     #[error("payload construction failed: {0}")]
     PayloadConstruction(String),
+
     #[error("stake table unavailable")]
     StakeTableUnavailable,
+
     #[error("builder signature failed")]
     BuilderSignature,
 }
@@ -94,8 +96,7 @@ pub struct BlockBuilder<T: NodeType> {
     retry_total_bytes: u64,
     leader_buffer: HashMap<Commitment<T::Transaction>, T::Transaction>,
     leader_total_bytes: u64,
-    dedup_set: HashSet<Commitment<T::Transaction>>,
-    dedup_views: VecDeque<(ViewNumber, Vec<Commitment<T::Transaction>>)>,
+    dedups: BTreeMap<ViewNumber, HashSet<Commitment<T::Transaction>>>,
     config: BlockBuilderConfig,
     upgrade_lock: UpgradeLock<T>,
     current_view: ViewNumber,
@@ -123,8 +124,7 @@ impl<T: NodeType> BlockBuilder<T> {
             retry_total_bytes: 0,
             leader_buffer: HashMap::new(),
             leader_total_bytes: 0,
-            dedup_set: HashSet::new(),
-            dedup_views: VecDeque::new(),
+            dedups: BTreeMap::new(),
             current_view: ViewNumber::genesis(),
             calculations: BTreeMap::new(),
             tasks: JoinSet::new(),
@@ -152,7 +152,7 @@ impl<T: NodeType> BlockBuilder<T> {
             // sleep so the coordinator's event queue doesnot overflow
             // because if there are no transactions then the block production is way too fast
             if buffer.is_empty() {
-                sleep(Duration::from_millis(500)).await;
+                sleep(Duration::from_secs(1)).await;
             }
             let (hashes, txs): (Vec<_>, Vec<_>) = buffer.into_iter().unzip();
             let manifest = DedupManifest {
@@ -241,6 +241,10 @@ impl<T: NodeType> BlockBuilder<T> {
         });
     }
 
+    pub fn outstanding_transactions(&self) -> (usize, usize) {
+        (self.retry_pending.len(), self.retry_total_bytes as usize)
+    }
+
     pub fn on_submit_transaction(&mut self, tx: T::Transaction) {
         let hash = tx.commit();
 
@@ -271,7 +275,7 @@ impl<T: NodeType> BlockBuilder<T> {
         for tx in msg.transactions {
             let hash = tx.commit();
 
-            if self.dedup_set.contains(&hash) {
+            if self.dedups.values().any(|hs| hs.contains(&hash)) {
                 continue;
             }
 
@@ -298,28 +302,19 @@ impl<T: NodeType> BlockBuilder<T> {
             }
         }
 
-        self.dedup_set.extend(hashes.iter().copied());
-        self.dedup_views.push_back((view, hashes));
+        let lower_bound: ViewNumber = self
+            .current_view
+            .saturating_sub(self.config.dedup_window_size)
+            .into();
 
-        let current = self.current_view.u64();
-        let window = self.config.dedup_window_size;
-
-        while let Some((view, hashes)) = self.dedup_views.pop_front() {
-            if current.saturating_sub(view.u64()) <= window {
-                self.dedup_views.push_front((view, hashes));
-                break;
-            }
-            for hash in &hashes {
-                self.dedup_set.remove(hash);
-            }
+        if view >= lower_bound {
+            self.dedups.entry(view).or_default().extend(hashes);
         }
+
+        self.dedups = self.dedups.split_off(&lower_bound);
     }
 
-    pub fn on_view_changed(
-        &mut self,
-        view: ViewNumber,
-        _epoch: EpochNumber,
-    ) -> Vec<T::Transaction> {
+    pub fn on_view_changed(&mut self, view: ViewNumber) -> Vec<T::Transaction> {
         self.current_view = view;
 
         let mut expired_bytes = 0u64;
@@ -347,7 +342,8 @@ impl<T: NodeType> BlockBuilder<T> {
         }
     }
 
-    pub fn drain(
+    #[cfg(test)]
+    pub(crate) fn drain(
         &mut self,
         view: ViewNumber,
         epoch: EpochNumber,

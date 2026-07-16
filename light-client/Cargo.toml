@@ -5,12 +5,32 @@ authors.workspace = true
 edition.workspace = true
 
 [features]
-default = ["rlp"]
-rlp = ["alloy-rlp", "hotshot-types/rlp", "espresso-types/rlp"]
-testing = ["espresso-types/testing", "bitvec", "hotshot-contract-adapter", "rand"]
+default = []
+# Host-side query client, sqlite storage and query-service provider; disable
+# for constrained targets (e.g. SP1 zkVM).
+client = [
+    "dep:hotshot-query-service",
+    "dep:http-client",
+    "dep:serde_json",
+    "dep:sqlx",
+    "dep:tempfile",
+    "dep:tokio",
+    "espresso-types/node",
+    "hotshot-query-service-types/sqlx",
+    "hotshot-query-service-types/web",
+]
+rlp = ["alloy-rlp", "espresso-types/rlp", "hotshot-types/rlp"]
+testing = [
+    "bitvec",
+    "client",
+    "espresso-types/testing",
+    "hotshot-contract-adapter",
+    "rand",
+]
 
 [dependencies]
-alloy = { workspace = true }
+# Direct declaration: default-features = false is ignored on workspace-inherited deps.
+alloy = { version = "1.0", default-features = false }
 anyhow = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
@@ -21,19 +41,21 @@ derive_builder = { workspace = true }
 derive_more = { workspace = true }
 espresso-types = { workspace = true }
 futures = { workspace = true }
-hotshot-query-service = { workspace = true, features = ["sqlite-options"] }
+hotshot-query-service = { workspace = true, features = [
+    "sqlite-options",
+], optional = true }
 hotshot-query-service-types = { workspace = true }
 hotshot-types = { workspace = true }
-http-client = { workspace = true }
+http-client = { workspace = true, optional = true }
 jf-advz = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
-sqlx = { workspace = true }
+serde_json = { workspace = true, optional = true }
+sqlx = { workspace = true, optional = true }
 static_assertions = { workspace = true }
 tagged-base64 = { workspace = true }
-tempfile = { workspace = true }
-tokio = { workspace = true }
+tempfile = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
 tracing = { workspace = true }
 vbs = { workspace = true }
 versions = { workspace = true }
@@ -51,7 +73,7 @@ espresso-node = { workspace = true, default-features = false, features = [
     "testing",
 ] }
 itertools = { workspace = true }
-light-client = { path = ".", features = ["testing"] }
+light-client = { path = ".", features = ["rlp", "testing"] }
 pretty_assertions = { workspace = true }
 test-log = { workspace = true }
 test-utils = { workspace = true }

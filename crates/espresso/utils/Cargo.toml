@@ -5,26 +5,42 @@ authors = ["Espresso Systems <hello@espressosys.com>"]
 edition.workspace = true
 
 [features]
+default = []
+# Full node/tooling helpers; disable for constrained targets (e.g. SP1 zkVM).
+full = [
+    "alloy/contract",
+    "alloy/default",
+    "alloy/network",
+    "alloy/node-bindings",
+    "alloy/providers",
+    "alloy/rpc-types",
+    "alloy/sol-types",
+    "dep:clap",
+    "dep:hotshot",
+    "dep:log-panics",
+    "dep:surf",
+    "dep:tokio",
+    "dep:tracing-subscriber",
+    "dep:url",
+    "tokio/signal",
+]
 testing = []
 
 [dependencies]
-alloy = { workspace = true }
+# Direct declaration: default-features = false is ignored on workspace-inherited deps.
+alloy = { version = "1.0", default-features = false }
 anyhow = { workspace = true }
 ark-serialize = { workspace = true }
-async-trait = { workspace = true }
-clap = { workspace = true }
+clap = { workspace = true, optional = true }
 committable = { workspace = true }
-hotshot = { workspace = true }
-hotshot-example-types = { workspace = true }
-log-panics = { workspace = true }
+hotshot = { workspace = true, optional = true }
+log-panics = { workspace = true, optional = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
-surf = { workspace = true }
-tokio = { workspace = true, features = ["signal"] }
-toml = { workspace = true }
+surf = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-url = { workspace = true }
+tracing-subscriber = { workspace = true, optional = true }
+url = { workspace = true, optional = true }
 
 [build-dependencies]
 anyhow = { workspace = true }

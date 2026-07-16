@@ -12,11 +12,38 @@ ignored = ["base64_bytes", "hotshot_testing"]
 doctest = false
 
 [features]
-testing = ["hotshot-query-service-types/testing"]
+default = []
+# L1 client, consensus persistence and networking integration; disable for
+# constrained targets (e.g. SP1 zkVM).
+node = [
+    "alloy/default",
+    "alloy/getrandom",
+    "alloy/json-rpc",
+    "alloy/node-bindings",
+    "alloy/provider-ws",
+    "alloy/signer-ledger",
+    "dep:hotshot",
+    "dep:hotshot-libp2p-networking",
+    "dep:hotshot-new-protocol",
+    "espresso-utils/full",
+    "hotshot-query-service-types/sqlx",
+    "hotshot-query-service-types/web",
+]
+testing = ["dep:hotshot-example-types", "hotshot-query-service-types/testing", "node"]
 rlp = ["alloy-rlp"]
 
 [dependencies]
-alloy = { workspace = true }
+# Direct declaration (not workspace) so SP1 zkVM builds can drop the default
+# reqwest/ws transports; the node feature restores the workspace feature set.
+alloy = { version = "1.0", default-features = false, features = [
+    "contract",
+    "eips",
+    "rpc-types",
+    "serde",
+    "signer-local",
+    "signer-mnemonic",
+    "sol-types",
+] }
 alloy-compat = { workspace = true }
 alloy-rlp = { workspace = true, optional = true }
 anyhow = { workspace = true }
@@ -39,18 +66,16 @@ derive_more = { workspace = true }
 either = { workspace = true }
 espresso-utils = { workspace = true }
 ethers-core = { workspace = true }
-fluent-asserter = { workspace = true }
 futures = { workspace = true }
-hotshot = { workspace = true }
+hotshot = { workspace = true, optional = true }
 hotshot-contract-adapter = { workspace = true }
-hotshot-example-types = { workspace = true }
-hotshot-libp2p-networking = { workspace = true }
-hotshot-new-protocol = { workspace = true }
+hotshot-example-types = { workspace = true, optional = true }
+hotshot-libp2p-networking = { workspace = true, optional = true }
+hotshot-new-protocol = { workspace = true, optional = true }
 hotshot-query-service-types = { workspace = true }
 hotshot-types = { workspace = true }
 humantime = { workspace = true }
 indexmap = { workspace = true }
-insta = { workspace = true }
 itertools = { workspace = true }
 jf-advz = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
@@ -60,7 +85,6 @@ moka = { workspace = true }
 num-traits = { workspace = true }
 parking_lot = { workspace = true }
 paste = { workspace = true }
-pretty_assertions = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
@@ -69,10 +93,8 @@ sha2 = { workspace = true }                        # TODO temporary, used only f
 sha3 = { workspace = true }
 static_assertions = { workspace = true }
 tagged-base64 = { workspace = true }
-tempfile = { workspace = true }
 thiserror = { workspace = true }
-tide-disco = { workspace = true }
-time = { workspace = true }
+time = { workspace = true, features = ["formatting", "macros", "parsing"] }
 tokio = { workspace = true }
 tower-service = { workspace = true }
 tracing = { workspace = true }
@@ -86,7 +108,11 @@ vid = { workspace = true }
 criterion = "0.5"
 espresso-contract-deployer = { workspace = true }
 espresso-types = { path = ".", features = ["testing"] }
+fluent-asserter = { workspace = true }
+hotshot-example-types = { workspace = true }
 hotshot-query-service = { workspace = true, features = ["testing"] }
+insta = { workspace = true }
+pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 rand_chacha = { workspace = true }
 rstest = { workspace = true }

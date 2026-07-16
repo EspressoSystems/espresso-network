@@ -14,7 +14,7 @@ derive_builder = { workspace = true }
 derive_more = { workspace = true }
 dotenvy = { workspace = true }
 espresso-safe-tx-builder = { workspace = true }
-espresso-types = { workspace = true }
+espresso-types = { workspace = true, features = ["node"] }
 hotshot-contract-adapter = { workspace = true }
 hotshot-types = { workspace = true }
 http-client = { workspace = true }
@@ -28,7 +28,7 @@ vbs = { workspace = true }
 
 [dev-dependencies]
 espresso-types = { workspace = true, features = ["testing"] }
-espresso-utils = { workspace = true }
+espresso-utils = { workspace = true, features = ["full"] }
 rand = { workspace = true }
 tempfile = { workspace = true }
 test-log = { workspace = true }

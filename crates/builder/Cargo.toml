@@ -14,8 +14,8 @@ axum = { workspace = true }
 clap = { workspace = true }
 committable = { workspace = true }
 espresso-node = { workspace = true, default-features = false }
-espresso-types = { workspace = true }
-espresso-utils = { workspace = true }
+espresso-types = { workspace = true, features = ["node"] }
+espresso-utils = { workspace = true, features = ["full"] }
 futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-builder-api = { workspace = true }

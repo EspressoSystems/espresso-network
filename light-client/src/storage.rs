@@ -1,6 +1,7 @@
+use std::future::Future;
+#[cfg(feature = "client")]
 use std::{
     collections::HashMap,
-    future::Future,
     path::PathBuf,
     str::FromStr,
     sync::{
@@ -9,25 +10,35 @@ use std::{
     },
     time::Duration,
 };
-#[cfg(unix)]
+#[cfg(all(unix, feature = "client"))]
 use std::{fs::Permissions, os::unix::fs::PermissionsExt};
 
+#[cfg(feature = "client")]
 use alloy::primitives::Address;
-use anyhow::{Context, Result};
+#[cfg(feature = "client")]
+use anyhow::Context;
+use anyhow::Result;
 use derive_more::{Display, From};
-use espresso_types::{
-    BackoffParams, PubKey, Ratio, SeqTypes, StakeTableState, v0_3::RegisteredValidator,
-};
+#[cfg(feature = "client")]
+use espresso_types::{BackoffParams, PubKey, Ratio, v0_3::RegisteredValidator};
+use espresso_types::{SeqTypes, StakeTableState};
+#[cfg(feature = "client")]
 use futures::TryStreamExt;
-use hotshot_query_service_types::{
-    HeightIndexed,
-    availability::{BlockId, LeafId, LeafQueryData},
-};
-use hotshot_types::{data::EpochNumber, light_client::StateVerKey, x25519};
+#[cfg(feature = "client")]
+use hotshot_query_service_types::HeightIndexed;
+use hotshot_query_service_types::availability::{BlockId, LeafId, LeafQueryData};
+use hotshot_types::data::EpochNumber;
+#[cfg(feature = "client")]
+use hotshot_types::{light_client::StateVerKey, x25519};
+#[cfg(feature = "client")]
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "client")]
 use serde_json::Value;
+#[cfg(feature = "client")]
 use sqlx::{QueryBuilder, SqlitePool, query, query_as, sqlite::SqlitePoolOptions};
+#[cfg(feature = "client")]
 use tempfile::{Builder, TempDir};
+#[cfg(feature = "client")]
 use tokio::runtime::Handle;
 use vbs::version::Version;
 
@@ -44,9 +55,11 @@ pub enum LeafRequest {
 }
 
 /// Maximum number of retries for a failed write before propagating the error.
+#[cfg(feature = "client")]
 const WRITE_RETRY_MAX: u32 = 5;
 
 /// Backoff for retrying failed writes. Staggered so concurrent writers don't lock-step.
+#[cfg(feature = "client")]
 const WRITE_BACKOFF: BackoffParams = BackoffParams::new(
     Duration::from_millis(50),
     Duration::from_millis(1_000),
@@ -63,6 +76,7 @@ const WRITE_BACKOFF: BackoffParams = BackoffParams::new(
 /// `insert_leaf` to flush pending recency updates as part of the existing write transaction.
 /// Held in an `Arc`, so its `Drop` runs exactly once, when the last `SqliteStorage` clone is
 /// dropped, flushing any touches that no `insert_leaf` persisted (graceful shutdown).
+#[cfg(feature = "client")]
 #[derive(Debug)]
 struct Recency {
     /// Monotonically increasing tick counter. Persisted maximum is seeded at `connect` time so
@@ -74,6 +88,7 @@ struct Recency {
     pool: SqlitePool,
 }
 
+#[cfg(feature = "client")]
 impl Recency {
     fn touch(&self, height: i64) {
         let t = self.next_tick.fetch_add(1, Ordering::Relaxed);
@@ -105,6 +120,7 @@ impl Recency {
     }
 }
 
+#[cfg(feature = "client")]
 impl Drop for Recency {
     /// Flush pending read-path touches to the DB on shutdown, best-effort.
     ///
@@ -202,6 +218,7 @@ pub trait Storage: Sized + Send + Sync + 'static {
     ) -> impl Send + Future<Output = Result<()>>;
 }
 
+#[cfg(feature = "client")]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "clap", derive(clap::Parser))]
 pub struct LightClientSqliteOptions {
@@ -250,6 +267,7 @@ pub struct LightClientSqliteOptions {
     pub lc_path: Option<PathBuf>,
 }
 
+#[cfg(feature = "client")]
 impl Default for LightClientSqliteOptions {
     fn default() -> Self {
         Self {
@@ -261,6 +279,7 @@ impl Default for LightClientSqliteOptions {
     }
 }
 
+#[cfg(feature = "client")]
 impl LightClientSqliteOptions {
     /// Create or connect to a database with the given options.
     pub async fn connect(self) -> Result<SqliteStorage> {
@@ -314,6 +333,7 @@ impl LightClientSqliteOptions {
 }
 
 /// [`Storage`] based on a SQLite database.
+#[cfg(feature = "client")]
 #[derive(Clone, Debug)]
 pub struct SqliteStorage {
     pool: SqlitePool,
@@ -324,6 +344,7 @@ pub struct SqliteStorage {
     _tmp: Option<Arc<TempDir>>,
 }
 
+#[cfg(feature = "client")]
 impl Storage for SqliteStorage {
     async fn default() -> Result<Self> {
         LightClientSqliteOptions::default().connect().await

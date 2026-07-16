@@ -4385,6 +4385,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "212d0f5754cb6769937f4501cc0e67f4f4483c8d2c3e1e922ee9edbe4ab4c7c0"
 
 [[package]]
+name = "disco-types"
+version = "0.9.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96930910ace4f58fe9fe00a8adf103bc234bf104caa3bae13ff5fa9068cd0ae8"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "config",
+ "futures",
+ "http 1.4.2",
+ "http-types",
+ "serde",
+ "serde_json",
+ "snafu 0.8.9",
+ "strum 0.26.3",
+ "strum_macros 0.26.4",
+]
+
+[[package]]
 name = "displaydoc"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5034,11 +5053,9 @@ dependencies = [
  "sha3 0.10.9",
  "static_assertions",
  "tagged-base64",
- "tempfile",
  "test-log",
  "test-utils",
  "thiserror 2.0.18",
- "tide-disco",
  "time 0.3.51",
  "tokio",
  "tower-service",
@@ -5057,18 +5074,14 @@ dependencies = [
  "alloy",
  "anyhow",
  "ark-serialize 0.5.0",
- "async-trait",
  "clap 4.6.1",
  "committable",
  "hotshot",
- "hotshot-example-types",
  "log-panics",
  "serde",
- "serde_json",
  "surf",
  "test-log",
  "tokio",
- "toml",
  "tracing",
  "tracing-subscriber 0.3.23",
  "url",
@@ -6608,6 +6621,7 @@ dependencies = [
  "committable",
  "derivative",
  "derive_more 2.1.1",
+ "disco-types",
  "either",
  "hotshot-events-service",
  "hotshot-example-types",
@@ -6621,7 +6635,6 @@ dependencies = [
  "snafu 0.8.9",
  "sqlx",
  "tagged-base64",
- "tide-disco",
  "time 0.3.51",
  "vbs",
  "versions",
@@ -12498,6 +12511,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sp1-target-check"
+version = "0.1.0"
+dependencies = [
+ "espresso-types",
+ "getrandom 0.2.17",
+ "light-client",
+]
+
+[[package]]
 name = "spin"
 version = "0.9.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13331,9 +13353,9 @@ dependencies = [
 
 [[package]]
 name = "tide-disco"
-version = "0.9.6"
+version = "0.9.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dbe10c8886d96e3cd22aaf962dcb9de254918d5424c658829e4d13c238ffce12"
+checksum = "4f9c0a30fbbff9c60a6c3050d9c049b062ebf392a6bfec9172945b9494546a16"
 dependencies = [
  "anyhow",
  "async-h1",
@@ -13345,6 +13367,7 @@ dependencies = [
  "derivative",
  "derive_more 0.99.20",
  "dirs 5.0.1",
+ "disco-types",
  "edit-distance",
  "futures",
  "futures-util",

@@ -5,9 +5,12 @@ authors.workspace = true
 edition.workspace = true
 
 [features]
-default = ["sqlx"]
+default = []
 sqlx = ["bincode", "dep:sqlx"]
 testing = ["hotshot-example-types"]
+# hotshot-events-service error conversion and http-client error impl; disabled for constrained
+# targets (e.g. SP1 zkVM).
+web = ["dep:hotshot-events-service", "dep:http-client"]
 
 [dependencies]
 anyhow.workspace = true
@@ -18,9 +21,10 @@ bincode = { workspace = true, optional = true }
 committable.workspace = true
 derivative.workspace = true
 derive_more.workspace = true
+disco-types.workspace = true
 either.workspace = true
-hotshot-events-service.workspace = true
-http-client.workspace = true
+hotshot-events-service = { workspace = true, optional = true }
+http-client = { workspace = true, optional = true }
 
 # Testing dependencies.
 hotshot-example-types = { workspace = true, optional = true }
@@ -33,7 +37,6 @@ serde_json.workspace = true
 snafu.workspace = true
 sqlx = { workspace = true, optional = true }
 tagged-base64.workspace = true
-tide-disco.workspace = true
 time = { workspace = true, features = ["formatting", "parsing"] }
 vbs.workspace = true
 versions.workspace = true

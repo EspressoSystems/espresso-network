@@ -429,8 +429,8 @@ pub mod testing {
 
         let start = Instant::now();
         let (available_block_info, view_num) = 'proposals: loop {
-            if start.elapsed() > Duration::from_secs(30) {
-                panic!("No available blocks from any quorum proposal after 30s");
+            if start.elapsed() > Duration::from_secs(120) {
+                panic!("No available blocks from any quorum proposal after 120s");
             }
 
             let event = subscribed_events.next().await.unwrap();

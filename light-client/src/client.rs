@@ -1,20 +1,29 @@
-use std::{collections::HashMap, fmt::Debug, future::Future, pin::pin, time::Duration};
+use std::{collections::HashMap, future::Future};
+#[cfg(feature = "client")]
+use std::{fmt::Debug, pin::pin, time::Duration};
 
-use anyhow::{Context, Result};
+#[cfg(feature = "client")]
+use anyhow::Context;
+use anyhow::Result;
+#[cfg(feature = "client")]
 use derive_builder::Builder;
 use espresso_types::{Certificate2, NamespaceId, SeqTypes, v0_3::StakeTableEvent};
+#[cfg(feature = "client")]
 use futures::{
     FutureExt, TryFuture, TryFutureExt,
     future::{BoxFuture, Either, select, select_ok},
 };
-use hotshot_query_service_types::{
-    availability::{LeafId, LeafQueryData},
-    node::BlockId,
-};
+#[cfg(feature = "client")]
+use hotshot_query_service_types::availability::LeafId;
+use hotshot_query_service_types::{availability::LeafQueryData, node::BlockId};
 use hotshot_types::data::EpochNumber;
+#[cfg(feature = "client")]
 use http_client::Url;
+#[cfg(feature = "client")]
 use tagged_base64::TaggedBase64;
+#[cfg(feature = "client")]
 use tokio::time::sleep;
+#[cfg(feature = "client")]
 use vbs::version::StaticVersion;
 
 use crate::{
@@ -121,14 +130,17 @@ pub trait Client: Send + Sync + 'static {
     ) -> impl Send + Future<Output = Result<Option<Certificate2<SeqTypes>>>>;
 }
 
+#[cfg(feature = "client")]
 type HttpClient = http_client::Client<hotshot_query_service_types::Error, StaticVersion<0, 1>>;
 
 /// A [`Client`] connected to the HotShot query service.
+#[cfg(feature = "client")]
 #[derive(Clone, Debug)]
 pub struct QueryServiceClient {
     client: HttpClient,
 }
 
+#[cfg(feature = "client")]
 impl QueryServiceClient {
     /// Connect to a HotShot query service at the given base URL.
     pub fn new(url: Url) -> Self {
@@ -140,6 +152,7 @@ impl QueryServiceClient {
     }
 }
 
+#[cfg(feature = "client")]
 impl Client for QueryServiceClient {
     async fn block_height(&self) -> Result<u64> {
         Ok(self.client.get("/node/block-height").send().await?)
@@ -248,6 +261,7 @@ impl Client for QueryServiceClient {
     }
 }
 
+#[cfg(feature = "client")]
 fn fmt_block_id(id: BlockId<SeqTypes>) -> String {
     match id {
         BlockId::Number(n) => format!("{n}"),
@@ -256,6 +270,7 @@ fn fmt_block_id(id: BlockId<SeqTypes>) -> String {
     }
 }
 
+#[cfg(feature = "client")]
 #[derive(Clone, Debug, Builder)]
 #[builder(pattern = "owned")]
 pub struct FallbackClient<T> {
@@ -276,6 +291,7 @@ pub struct FallbackClient<T> {
     clients: Vec<T>,
 }
 
+#[cfg(feature = "client")]
 impl<T> FallbackClient<T> {
     pub fn new(clients: Vec<T>) -> Result<Self, FallbackClientBuilderError> {
         Self::builder().clients(clients).build()
@@ -286,6 +302,7 @@ impl<T> FallbackClient<T> {
     }
 }
 
+#[cfg(feature = "client")]
 impl<T> Client for FallbackClient<T>
 where
     T: Client,
@@ -374,6 +391,7 @@ where
     }
 }
 
+#[cfg(feature = "client")]
 impl<T> FallbackClient<T> {
     async fn get_any<C, F>(
         &self,
