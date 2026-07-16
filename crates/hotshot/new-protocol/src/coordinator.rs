@@ -1549,7 +1549,7 @@ where
                 }
                 let _ = respond.send(());
             },
-            ClientRequest::SubmitTimeoutVote { vote, respond } => {
+            ClientRequest::SubmitTimeoutVote { vote } => {
                 let view = vote.view_number();
                 let current_view = self.consensus.current_view();
                 if view < current_view {
@@ -1557,7 +1557,6 @@ where
                         %view, %current_view,
                         "ignoring bridged timeout vote for stale view"
                     );
-                    let _ = respond.send(());
                     return Ok(());
                 }
                 self.timeout_collector.accumulate_vote(vote.clone());
@@ -1580,9 +1579,8 @@ where
                 {
                     warn!(%err, "failed to rebroadcast bridged timeout vote");
                 }
-                let _ = respond.send(());
             },
-            ClientRequest::SubmitLegacyHighQc { qc, respond } => {
+            ClientRequest::SubmitLegacyHighQc { qc } => {
                 // QC certifies the last legacy view; cutover view is the next.
                 // Register idempotently so the smooth-start precondition holds
                 // regardless of arrival order vs. the cutover seed.
@@ -1615,16 +1613,6 @@ where
                         }
                     }
                 }
-                let _ = respond.send(());
-            },
-            ClientRequest::BumpNetworkEpoch { epoch, respond } => {
-                if let Err(err) = self
-                    .network
-                    .apply_epoch(epoch, &self.membership_coordinator)
-                {
-                    warn!(%epoch, %err, "network on_epoch_change failed");
-                }
-                let _ = respond.send(());
             },
         }
 
