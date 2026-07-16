@@ -20,7 +20,7 @@ use axum::{
     routing::get,
 };
 use futures::{StreamExt, stream::BoxStream};
-use http_client::healthcheck::HealthStatus;
+use http_client::healthcheck::{AppHealth, HealthStatus};
 use schemars::transform::Transform;
 use serde::Serialize;
 use serialization_api::v2::{
@@ -325,18 +325,11 @@ pub(crate) fn with_top_level_routes(router: Router) -> Router {
         .route("/version", get(version))
 }
 
-/// Wire-compatible with `tide_disco::app::AppHealth`: JSON keys, variant casing, and the
-/// vbs/bincode field order (status ordinal, then modules map) must not change.
-#[derive(Serialize)]
-struct AppHealth {
-    status: HealthStatus,
-    // Tide populated this with each module's versioned health status; the axum modules don't
-    // report individual health, so it stays empty.
-    modules: BTreeMap<String, BTreeMap<u64, u16>>,
-}
-
 /// Top-level healthcheck, matching tide-disco's app-level `AppHealth` response for multi-module
 /// apps, in JSON or vbs binary depending on `Accept`.
+///
+/// Tide populated `modules` with each module's versioned health status; the axum modules don't
+/// report individual health, so it stays empty.
 async fn healthcheck(headers: HeaderMap) -> Result<Response, ApiError> {
     encode_response(
         &headers,

@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 
@@ -34,6 +36,24 @@ impl HealthCheck for HealthStatus {
             Self::Available | Self::Initializing | Self::ShuttingDown => StatusCode::OK,
             _ => StatusCode::SERVICE_UNAVAILABLE,
         }
+    }
+}
+
+/// An application-level healthcheck response.
+///
+/// Wire-compatible with `tide_disco::app::AppHealth` 0.9.7: JSON keys, [`HealthStatus`] variant
+/// casing, and the vbs/bincode field order (status ordinal, then modules map) must not change.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct AppHealth {
+    /// The status of the overall application.
+    pub status: HealthStatus,
+    /// The status of each registered module, indexed by version.
+    pub modules: BTreeMap<String, BTreeMap<u64, u16>>,
+}
+
+impl HealthCheck for AppHealth {
+    fn status(&self) -> StatusCode {
+        self.status.status()
     }
 }
 

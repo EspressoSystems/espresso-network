@@ -30,6 +30,7 @@ use axum::{
 };
 use client::{BenchResults, BenchResultsDownloadConfig};
 use csv::Writer;
+use disco_types::error::ServerError;
 use futures::{StreamExt, stream::FuturesUnordered};
 use hotshot_types::{
     PeerConfig,
@@ -46,7 +47,6 @@ use libp2p_identity::{
 };
 use multiaddr::Multiaddr;
 use serde::{Serialize, de::DeserializeOwned};
-use tide_disco::error::ServerError;
 use tokio::net::TcpListener;
 use vbs::{BinarySerializer, Serializer, version::StaticVersion};
 
@@ -264,7 +264,7 @@ where
 
         if !self.accepting_new_keys {
             return Err(ServerError {
-                status: tide_disco::StatusCode::FORBIDDEN,
+                status: disco_types::status::StatusCode::FORBIDDEN,
                 message: "Network has been started manually, and is no longer registering new \
                           keys."
                     .to_string(),
@@ -351,7 +351,7 @@ where
             })
         else {
             return Err(ServerError {
-                status: tide_disco::StatusCode::FORBIDDEN,
+                status: disco_types::status::StatusCode::FORBIDDEN,
                 message: "You are unauthorized to register with the orchestrator".to_string(),
             });
         };
@@ -359,7 +359,7 @@ where
         // Check that our recorded DA status for the node matches what the node actually requested
         if node_config.da != da_requested {
             return Err(ServerError {
-                status: tide_disco::StatusCode::BAD_REQUEST,
+                status: disco_types::status::StatusCode::BAD_REQUEST,
                 message: format!(
                     "Mismatch in DA status in registration for node {}. DA requested: {}, \
                      expected: {}",
@@ -412,7 +412,7 @@ where
 
         if usize::from(node_index) >= self.config.config.num_nodes_with_stake.get() {
             return Err(ServerError {
-                status: tide_disco::StatusCode::BAD_REQUEST,
+                status: disco_types::status::StatusCode::BAD_REQUEST,
                 message: "Network has reached capacity".to_string(),
             });
         }
@@ -447,7 +447,7 @@ where
 
         if usize::from(tmp_node_index) >= self.config.config.num_nodes_with_stake.get() {
             return Err(ServerError {
-                status: tide_disco::StatusCode::BAD_REQUEST,
+                status: disco_types::status::StatusCode::BAD_REQUEST,
                 message: "Node index getter for key pair generation has reached capacity"
                     .to_string(),
             });
@@ -472,7 +472,7 @@ where
     fn peer_pub_ready(&self) -> Result<bool, ServerError> {
         if !self.peer_pub_ready {
             return Err(ServerError {
-                status: tide_disco::StatusCode::BAD_REQUEST,
+                status: disco_types::status::StatusCode::BAD_REQUEST,
                 message: "Peer's public configs are not ready".to_string(),
             });
         }
@@ -482,7 +482,7 @@ where
     fn post_config_after_peer_collected(&mut self) -> Result<NetworkConfig<TYPES>, ServerError> {
         if !self.peer_pub_ready {
             return Err(ServerError {
-                status: tide_disco::StatusCode::BAD_REQUEST,
+                status: disco_types::status::StatusCode::BAD_REQUEST,
                 message: "Peer's public configs are not ready".to_string(),
             });
         }
@@ -494,7 +494,7 @@ where
         // println!("{}", self.start);
         if !self.start {
             return Err(ServerError {
-                status: tide_disco::StatusCode::BAD_REQUEST,
+                status: disco_types::status::StatusCode::BAD_REQUEST,
                 message: "Network is not ready to start".to_string(),
             });
         }
@@ -512,7 +512,7 @@ where
             .contains(peer_config)
         {
             return Err(ServerError {
-                status: tide_disco::StatusCode::FORBIDDEN,
+                status: disco_types::status::StatusCode::FORBIDDEN,
                 message: "You are unauthorized to register with the orchestrator".to_string(),
             });
         }
@@ -542,7 +542,7 @@ where
     fn post_manual_start(&mut self, password_bytes: Vec<u8>) -> Result<(), ServerError> {
         if !self.manual_start_allowed {
             return Err(ServerError {
-                status: tide_disco::StatusCode::FORBIDDEN,
+                status: disco_types::status::StatusCode::FORBIDDEN,
                 message: "Configs have already been distributed to nodes, and the network can no \
                           longer be started manually."
                     .to_string(),
@@ -555,7 +555,7 @@ where
         // Check that the password matches
         if self.config.manual_start_password != Some(password) {
             return Err(ServerError {
-                status: tide_disco::StatusCode::FORBIDDEN,
+                status: disco_types::status::StatusCode::FORBIDDEN,
                 message: "Incorrect password.".to_string(),
             });
         }
@@ -571,7 +571,7 @@ where
             self.config.config.da_staked_committee_size = registered_da_nodes;
         } else {
             return Err(ServerError {
-                status: tide_disco::StatusCode::FORBIDDEN,
+                status: disco_types::status::StatusCode::FORBIDDEN,
                 message: format!(
                     "We cannot manually start the network, because we only have \
                      {registered_nodes_with_stake} nodes with stake registered, with \
@@ -663,7 +663,7 @@ where
             && self.builders.len() != self.config.config.da_staked_committee_size
         {
             return Err(ServerError {
-                status: tide_disco::StatusCode::NOT_FOUND,
+                status: disco_types::status::StatusCode::NOT_FOUND,
                 message: "Not all builders are registered yet".to_string(),
             });
         }
@@ -681,7 +681,7 @@ fn wants_binary(headers: &HeaderMap) -> bool {
         .is_some_and(|v| v.contains("application/octet-stream"))
 }
 
-fn axum_status(status: tide_disco::StatusCode) -> StatusCode {
+fn axum_status(status: disco_types::status::StatusCode) -> StatusCode {
     StatusCode::from_u16(u16::from(status)).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
 }
 
@@ -697,7 +697,7 @@ fn encode_ok<T: Serialize>(headers: &HeaderMap, value: T) -> Response {
             Err(err) => encode_err(
                 headers,
                 ServerError {
-                    status: tide_disco::StatusCode::INTERNAL_SERVER_ERROR,
+                    status: disco_types::status::StatusCode::INTERNAL_SERVER_ERROR,
                     message: err.to_string(),
                 },
             ),
@@ -734,7 +734,7 @@ fn respond<T: Serialize>(headers: &HeaderMap, result: Result<T, ServerError>) ->
 
 fn malformed_body() -> ServerError {
     ServerError {
-        status: tide_disco::StatusCode::BAD_REQUEST,
+        status: disco_types::status::StatusCode::BAD_REQUEST,
         message: "Malformed body".to_string(),
     }
 }
@@ -895,7 +895,7 @@ async fn post_builder<TYPES: NodeType>(
             match reachable.next().await {
                 Some(url) => state.write().await.post_builder(url),
                 None => Err(ServerError {
-                    status: tide_disco::StatusCode::BAD_REQUEST,
+                    status: disco_types::status::StatusCode::BAD_REQUEST,
                     message: "No reachable addresses".to_string(),
                 }),
             }
