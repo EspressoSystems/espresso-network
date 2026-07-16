@@ -35,34 +35,6 @@ pub struct Route {
     pub tag: &'static str,
 }
 
-/// Legacy `/v0` availability routes whose response formats differ from `/v1`: namespace proofs
-/// (ADVZ `ADVZNamespaceProofQueryData`), leaves (`Leaf1`-based), and VID common data (ADVZ).
-/// All other `/v0` paths are rewritten to `/v1` (see `rewrite_legacy_uri`).
-pub mod v0 {
-    pub const NAMESPACE_PROOF_BY_HEIGHT_ROUTE: &str =
-        "/v0/availability/block/{height}/namespace/{namespace}";
-    pub const NAMESPACE_PROOF_BY_HASH_ROUTE: &str =
-        "/v0/availability/block/hash/{hash}/namespace/{namespace}";
-    pub const NAMESPACE_PROOF_BY_PAYLOAD_HASH_ROUTE: &str =
-        "/v0/availability/block/payload-hash/{payload_hash}/namespace/{namespace}";
-    pub const NAMESPACE_PROOF_RANGE_ROUTE: &str =
-        "/v0/availability/block/{from}/{until}/namespace/{namespace}";
-    pub const STREAM_NAMESPACE_PROOFS_ROUTE: &str =
-        "/v0/availability/stream/blocks/{height}/namespace/{namespace}";
-
-    pub const LEAF_BY_HEIGHT_ROUTE: &str = "/v0/availability/leaf/{height}";
-    pub const LEAF_BY_HASH_ROUTE: &str = "/v0/availability/leaf/hash/{hash}";
-    pub const LEAF_RANGE_ROUTE: &str = "/v0/availability/leaf/{from}/{until}";
-    pub const STREAM_LEAVES_ROUTE: &str = "/v0/availability/stream/leaves/{height}";
-
-    pub const VID_COMMON_BY_HEIGHT_ROUTE: &str = "/v0/availability/vid/common/{height}";
-    pub const VID_COMMON_BY_HASH_ROUTE: &str = "/v0/availability/vid/common/hash/{hash}";
-    pub const VID_COMMON_BY_PAYLOAD_HASH_ROUTE: &str =
-        "/v0/availability/vid/common/payload-hash/{payload_hash}";
-    pub const VID_COMMON_RANGE_ROUTE: &str = "/v0/availability/vid/common/{from}/{until}";
-    pub const STREAM_VID_COMMON_ROUTE: &str = "/v0/availability/stream/vid/common/{height}";
-}
-
 pub mod v1 {
     pub const REWARD_CLAIM_INPUT_ROUTE: &str =
         "/v1/reward-state-v2/reward-claim-input/{height}/{address}";

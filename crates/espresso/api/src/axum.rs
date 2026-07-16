@@ -180,14 +180,7 @@ pub(crate) fn rewrite_legacy_uri(mut req: Request) -> Request {
     } else if path == "/v0" {
         Some("/v1".to_string())
     } else if let Some(rest) = path.strip_prefix("/v0/") {
-        // The v0 namespace-proof, leaf, and VID-common endpoints serve legacy response
-        // formats and are registered natively under `/v0` (see `routes::v0`); everything
-        // else on v0 is identical to v1.
-        if is_legacy_availability_path(rest) {
-            None
-        } else {
-            Some(format!("/v1/{rest}"))
-        }
+        Some(format!("/v1/{rest}"))
     } else {
         Some(format!("/v1{path}"))
     };
@@ -204,22 +197,6 @@ pub(crate) fn rewrite_legacy_uri(mut req: Request) -> Request {
     }
 
     req
-}
-
-/// Matches exactly the path shapes of the routes in [`routes::v0`], where tide's v0 availability
-/// module served legacy response formats: namespace proofs (single/range/stream), leaves
-/// (single/range/stream), and VID common data (single/range/stream). Other `/v0/availability`
-/// paths (headers, blocks, transactions, `stream/transactions/{height}/namespace/{ns}`, ...)
-/// have the same format on v1 and are rewritten.
-fn is_legacy_availability_path(rest: &str) -> bool {
-    let is_ns_proof = (rest.starts_with("availability/block/")
-        || rest.starts_with("availability/stream/blocks/"))
-        && rest.contains("/namespace/");
-    let is_leaf =
-        rest.starts_with("availability/leaf/") || rest.starts_with("availability/stream/leaves/");
-    let is_vid_common = rest.starts_with("availability/vid/common/")
-        || rest.starts_with("availability/stream/vid/common/");
-    is_ns_proof || is_leaf || is_vid_common
 }
 
 struct SendQuery<T>(T);
@@ -1024,248 +1001,7 @@ where
             })
         };
 
-    // Legacy `/v0` namespace-proof handlers: same state lookups as v1, converted to the ADVZ
-    // format tide's v0 availability module served. Conversion fails (404) for post-ADVZ VID
-    // versions.
-    //
-    // Like the v1 handlers, v0 GETs respond JSON regardless of `Accept` (tide also served vbs
-    // for octet-stream); compatibility holds because clients decode by response `Content-Type`.
-    let get_ns_proof_v0_by_height =
-        |State(state): State<S>, Path((height, namespace)): Path<(u64, u32)>| async move {
-            let proof = state
-                .get_namespace_proof(v1::availability::BlockId::Height(height), namespace)
-                .await
-                .map_err(classify_availability_error)?;
-            S::to_legacy_namespace_proof(proof)
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
-
-    let get_ns_proof_v0_by_hash =
-        |State(state): State<S>, Path((hash, namespace)): Path<(String, u32)>| async move {
-            let proof = state
-                .get_namespace_proof(v1::availability::BlockId::Hash(hash), namespace)
-                .await
-                .map_err(classify_availability_error)?;
-            S::to_legacy_namespace_proof(proof)
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
-
-    let get_ns_proof_v0_by_payload_hash =
-        |State(state): State<S>, Path((payload_hash, namespace)): Path<(String, u32)>| async move {
-            let proof = state
-                .get_namespace_proof(
-                    v1::availability::BlockId::PayloadHash(payload_hash),
-                    namespace,
-                )
-                .await
-                .map_err(classify_availability_error)?;
-            S::to_legacy_namespace_proof(proof)
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
-
-    let get_ns_proof_v0_range =
-        |State(state): State<S>, Path((from, until, namespace)): Path<(u64, u64, u32)>| async move {
-            let proofs = state
-                .get_namespace_proof_range(from, until, namespace)
-                .await
-                .map_err(classify_availability_error)?;
-            proofs
-                .into_iter()
-                .map(S::to_legacy_namespace_proof)
-                .collect::<anyhow::Result<Vec<_>>>()
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
-
-    let stream_namespace_proofs_v0 =
-        |ws: WebSocketUpgrade,
-         State(state): State<S>,
-         headers: HeaderMap,
-         Path((height, namespace)): Path<(usize, u32)>| async move {
-            let format = ws_format(&headers);
-            ws.on_upgrade(move |socket| async move {
-                match state.stream_namespace_proofs(height, namespace).await {
-                    Ok(stream) => {
-                        // Tide closed the socket when a handler in the stream errored; ending
-                        // the stream on the first unconvertible (post-ADVZ) proof reproduces
-                        // that end-of-stream behavior for legacy clients.
-                        let legacy = stream
-                            .map(S::to_legacy_namespace_proof)
-                            .take_while(|res| futures::future::ready(res.is_ok()))
-                            .filter_map(|res| futures::future::ready(res.ok()))
-                            .boxed();
-                        drive_ws_stream(socket, legacy, format).await
-                    },
-                    Err(e) => tracing::warn!("stream_namespace_proofs_v0: {e}"),
-                }
-            })
-        };
-
-    // Legacy `/v0` leaf handlers: `Leaf1`-based format, mirroring tide's
-    // `downgrade_leaf_query_data` version gate.
-    let get_leaf_v0_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
-        state
-            .get_leaf(v1::LeafId::Height(height))
-            .await
-            .map(S::to_legacy_leaf)
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-
-    let get_leaf_v0_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
-        state
-            .get_leaf(v1::LeafId::Hash(hash))
-            .await
-            .map(S::to_legacy_leaf)
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-
-    let get_leaf_v0_range = |State(state): State<S>, Path((from, until)): Path<(usize, usize)>| async move {
-        state
-            .get_leaf_range(from, until)
-            .await
-            .map(|leaves| {
-                leaves
-                    .into_iter()
-                    .map(S::to_legacy_leaf)
-                    .collect::<Vec<_>>()
-            })
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-
-    let stream_leaves_v0 = |ws: WebSocketUpgrade,
-                            State(state): State<S>,
-                            headers: HeaderMap,
-                            Path(height): Path<usize>| async move {
-        let format = ws_format(&headers);
-        ws.on_upgrade(move |socket| async move {
-            match state.stream_leaves(height).await {
-                Ok(stream) => {
-                    drive_ws_stream(socket, stream.map(S::to_legacy_leaf).boxed(), format).await
-                },
-                Err(e) => tracing::warn!("stream_leaves_v0: {e}"),
-            }
-        })
-    };
-
-    // Legacy `/v0` VID-common handlers: ADVZ format, mirroring tide's
-    // `downgrade_vid_common_query_data` version gate (400 for newer VID versions).
-    let get_vid_common_v0_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
-        let data = state
-            .get_vid_common(v1::BlockId::Height(height))
-            .await
-            .map_err(classify_availability_error)?;
-        S::to_legacy_vid_common(data)
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-
-    let get_vid_common_v0_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
-        let data = state
-            .get_vid_common(v1::BlockId::Hash(hash))
-            .await
-            .map_err(classify_availability_error)?;
-        S::to_legacy_vid_common(data)
-            .map(Json)
-            .map_err(classify_availability_error)
-    };
-
-    let get_vid_common_v0_by_payload_hash =
-        |State(state): State<S>, Path(payload_hash): Path<String>| async move {
-            let data = state
-                .get_vid_common(v1::BlockId::PayloadHash(payload_hash))
-                .await
-                .map_err(classify_availability_error)?;
-            S::to_legacy_vid_common(data)
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
-
-    let get_vid_common_v0_range =
-        |State(state): State<S>, Path((from, until)): Path<(usize, usize)>| async move {
-            let data = state
-                .get_vid_common_range(from, until)
-                .await
-                .map_err(classify_availability_error)?;
-            data.into_iter()
-                .map(S::to_legacy_vid_common)
-                .collect::<anyhow::Result<Vec<_>>>()
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
-
-    let stream_vid_common_v0 = |ws: WebSocketUpgrade,
-                                State(state): State<S>,
-                                headers: HeaderMap,
-                                Path(height): Path<usize>| async move {
-        let format = ws_format(&headers);
-        ws.on_upgrade(move |socket| async move {
-            match state.stream_vid_common(height).await {
-                Ok(stream) => {
-                    // Tide's v0 stream yielded an error item on an incompatible VID version;
-                    // ending the stream closes the socket at that point.
-                    let legacy = stream
-                        .map(S::to_legacy_vid_common)
-                        .take_while(|res| futures::future::ready(res.is_ok()))
-                        .filter_map(|res| futures::future::ready(res.ok()))
-                        .boxed();
-                    drive_ws_stream(socket, legacy, format).await
-                },
-                Err(e) => tracing::warn!("stream_vid_common_v0: {e}"),
-            }
-        })
-    };
-
     Router::new()
-        .route(
-            routes::v0::NAMESPACE_PROOF_BY_HEIGHT_ROUTE,
-            get(get_ns_proof_v0_by_height),
-        )
-        .route(
-            routes::v0::NAMESPACE_PROOF_BY_HASH_ROUTE,
-            get(get_ns_proof_v0_by_hash),
-        )
-        .route(
-            routes::v0::NAMESPACE_PROOF_BY_PAYLOAD_HASH_ROUTE,
-            get(get_ns_proof_v0_by_payload_hash),
-        )
-        .route(
-            routes::v0::NAMESPACE_PROOF_RANGE_ROUTE,
-            get(get_ns_proof_v0_range),
-        )
-        .route(
-            routes::v0::STREAM_NAMESPACE_PROOFS_ROUTE,
-            get(stream_namespace_proofs_v0),
-        )
-        .route(routes::v0::LEAF_BY_HEIGHT_ROUTE, get(get_leaf_v0_by_height))
-        .route(routes::v0::LEAF_BY_HASH_ROUTE, get(get_leaf_v0_by_hash))
-        .route(routes::v0::LEAF_RANGE_ROUTE, get(get_leaf_v0_range))
-        .route(routes::v0::STREAM_LEAVES_ROUTE, get(stream_leaves_v0))
-        .route(
-            routes::v0::VID_COMMON_BY_HEIGHT_ROUTE,
-            get(get_vid_common_v0_by_height),
-        )
-        .route(
-            routes::v0::VID_COMMON_BY_HASH_ROUTE,
-            get(get_vid_common_v0_by_hash),
-        )
-        .route(
-            routes::v0::VID_COMMON_BY_PAYLOAD_HASH_ROUTE,
-            get(get_vid_common_v0_by_payload_hash),
-        )
-        .route(
-            routes::v0::VID_COMMON_RANGE_ROUTE,
-            get(get_vid_common_v0_range),
-        )
-        .route(
-            routes::v0::STREAM_VID_COMMON_ROUTE,
-            get(stream_vid_common_v0),
-        )
         .route(
             routes::v1::NAMESPACE_PROOF_BY_HEIGHT_ROUTE,
             get(get_namespace_proof_by_height),
@@ -3063,93 +2799,23 @@ mod tests {
     }
 
     #[test]
-    fn rewrite_legacy_uri_keeps_v0_namespace_proof_routes() {
+    fn rewrite_legacy_uri_rewrites_v0_availability_paths() {
         assert_eq!(
             rewritten_uri("/v0/availability/block/1/namespace/2"),
-            "/v0/availability/block/1/namespace/2"
+            "/v1/availability/block/1/namespace/2"
         );
-        assert_eq!(
-            rewritten_uri("/v0/availability/block/hash/0xabc/namespace/2"),
-            "/v0/availability/block/hash/0xabc/namespace/2"
-        );
-        assert_eq!(
-            rewritten_uri("/v0/availability/block/payload-hash/0xabc/namespace/2"),
-            "/v0/availability/block/payload-hash/0xabc/namespace/2"
-        );
-        assert_eq!(
-            rewritten_uri("/v0/availability/block/1/2/namespace/3"),
-            "/v0/availability/block/1/2/namespace/3"
-        );
-        assert_eq!(
-            rewritten_uri("/v0/availability/stream/blocks/0/namespace/2"),
-            "/v0/availability/stream/blocks/0/namespace/2"
-        );
-    }
-
-    #[test]
-    fn rewrite_legacy_uri_keeps_v0_leaf_routes() {
         assert_eq!(
             rewritten_uri("/v0/availability/leaf/1"),
-            "/v0/availability/leaf/1"
+            "/v1/availability/leaf/1"
         );
         assert_eq!(
-            rewritten_uri("/v0/availability/leaf/hash/0xabc"),
-            "/v0/availability/leaf/hash/0xabc"
-        );
-        assert_eq!(
-            rewritten_uri("/v0/availability/leaf/1/2"),
-            "/v0/availability/leaf/1/2"
+            rewritten_uri("/v0/availability/vid/common/1"),
+            "/v1/availability/vid/common/1"
         );
         assert_eq!(
             rewritten_uri("/v0/availability/stream/leaves/0"),
-            "/v0/availability/stream/leaves/0"
+            "/v1/availability/stream/leaves/0"
         );
-    }
-
-    #[test]
-    fn rewrite_legacy_uri_keeps_v0_vid_common_routes() {
-        assert_eq!(
-            rewritten_uri("/v0/availability/vid/common/1"),
-            "/v0/availability/vid/common/1"
-        );
-        assert_eq!(
-            rewritten_uri("/v0/availability/vid/common/hash/0xabc"),
-            "/v0/availability/vid/common/hash/0xabc"
-        );
-        assert_eq!(
-            rewritten_uri("/v0/availability/vid/common/payload-hash/0xabc"),
-            "/v0/availability/vid/common/payload-hash/0xabc"
-        );
-        assert_eq!(
-            rewritten_uri("/v0/availability/vid/common/1/2"),
-            "/v0/availability/vid/common/1/2"
-        );
-        assert_eq!(
-            rewritten_uri("/v0/availability/stream/vid/common/0"),
-            "/v0/availability/stream/vid/common/0"
-        );
-    }
-
-    #[test]
-    fn rewrite_legacy_uri_rewrites_other_availability_paths() {
-        // Same wire format on v1, so these are not served under /v0.
-        assert_eq!(
-            rewritten_uri("/v0/availability/stream/transactions/0/namespace/2"),
-            "/v1/availability/stream/transactions/0/namespace/2"
-        );
-        assert_eq!(
-            rewritten_uri("/v0/availability/header/1"),
-            "/v1/availability/header/1"
-        );
-        assert_eq!(
-            rewritten_uri("/v0/availability/block/1"),
-            "/v1/availability/block/1"
-        );
-        assert_eq!(
-            rewritten_uri("/v0/availability/stream/blocks/0"),
-            "/v1/availability/stream/blocks/0"
-        );
-        // Unversioned requests get the v1 format.
         assert_eq!(
             rewritten_uri("/availability/block/1/namespace/2"),
             "/v1/availability/block/1/namespace/2"

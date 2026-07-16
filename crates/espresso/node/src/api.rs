@@ -3198,10 +3198,10 @@ mod test {
         upgrade_stake_table_v3,
     };
     use espresso_types::{
-        ADVZNamespaceProofQueryData, FeeAmount, Header, L1Client, L1ClientOptions,
-        MOCK_SEQUENCER_VERSIONS, NamespaceId, NamespaceProofQueryData, NsProof,
-        RegisteredValidatorMap, RewardDistributor, StakeTableState, StateCertQueryDataV1,
-        StateCertQueryDataV2, ValidatedState, ValidatorLeaderCounts,
+        FeeAmount, Header, L1Client, L1ClientOptions, MOCK_SEQUENCER_VERSIONS, NamespaceId,
+        NamespaceProofQueryData, NsProof, RegisteredValidatorMap, RewardDistributor,
+        StakeTableState, StateCertQueryDataV1, StateCertQueryDataV2, ValidatedState,
+        ValidatorLeaderCounts,
         config::PublicHotShotConfig,
         traits::{MembershipPersistence, NullEventConsumer, PersistenceOptions},
         v0_3::{COMMISSION_BASIS_POINTS, Fetcher, RewardAmount, RewardMerkleProofV1},
@@ -9751,87 +9751,6 @@ mod test {
                 assert_eq!(&proof.transactions, std::slice::from_ref(&tx));
                 break;
             }
-        }
-
-        // The legacy version of the API only works for old VID.
-        tracing::info!("test namespace API version: v0");
-        if version < EPOCH_VERSION {
-            let ns_proof: ADVZNamespaceProofQueryData = client
-                .get(&format!("v0/availability/block/{block}/namespace/{ns}"))
-                .send()
-                .await
-                .unwrap();
-            let proof = ns_proof.proof.as_ref().unwrap();
-            let VidCommon::V0(common) = common.common() else {
-                panic!("wrong VID common version");
-            };
-            let (txs, ns_from_proof) = proof
-                .verify(header.ns_table(), &header.payload_commitment(), common)
-                .unwrap();
-            assert_eq!(ns_from_proof, ns);
-            assert_eq!(txs, ns_proof.transactions);
-            assert_eq!(&txs, std::slice::from_ref(&tx));
-
-            // Test range endpoint.
-            let ns_proofs: Vec<ADVZNamespaceProofQueryData> = client
-                .get(&format!(
-                    "v0/availability/block/{}/{}/namespace/{ns}",
-                    block,
-                    block + 1
-                ))
-                .send()
-                .await
-                .unwrap();
-            assert_eq!(&ns_proofs, std::slice::from_ref(&ns_proof));
-        } else {
-            // It will fail if we ask for a proof for a block using new VID.
-            client
-                .get::<ADVZNamespaceProofQueryData>(&format!(
-                    "v0/availability/block/{block}/namespace/{ns}"
-                ))
-                .send()
-                .await
-                .unwrap_err();
-        }
-
-        // Any API version can correctly tell us that the namespace does not exist.
-        let ns_proof: ADVZNamespaceProofQueryData = client
-            .get(&format!(
-                "v0/availability/block/{}/namespace/{ns}",
-                block - 1
-            ))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(ns_proof.proof, None);
-        assert_eq!(ns_proof.transactions, vec![]);
-
-        // Use the legacy API to stream namespace proofs until we get to a non-trivial proof or a
-        // VID version we can't deal with.
-        let mut proofs = client
-            .socket(&format!("v0/availability/stream/blocks/0/namespace/{ns}"))
-            .subscribe()
-            .await
-            .unwrap();
-        for i in 0.. {
-            tracing::info!(i, "stream proof");
-            let proof: ADVZNamespaceProofQueryData = match proofs.next().await {
-                Some(proof) => proof.unwrap(),
-                None => {
-                    // Steam not expected to end on legacy consensus version.
-                    assert!(
-                        version >= EPOCH_VERSION,
-                        "legacy steam ended while still on legacy consensus"
-                    );
-                    break;
-                },
-            };
-            if proof.proof.is_none() {
-                tracing::info!("waiting for non-trivial proof from stream");
-                continue;
-            }
-            assert_eq!(&proof.transactions, std::slice::from_ref(&tx));
-            break;
         }
 
         network.server.shut_down().await;
