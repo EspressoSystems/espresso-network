@@ -351,3 +351,13 @@ async fn test_v2_message_compat() {
 async fn test_v3_message_compat() {
     test_message_compat(StaticVersion::<0, 3> {}).await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_v4_message_compat() {
+    test_message_compat(StaticVersion::<0, 4> {}).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_v5_message_compat() {
+    test_message_compat(StaticVersion::<0, 5> {}).await;
+}

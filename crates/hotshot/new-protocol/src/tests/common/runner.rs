@@ -16,6 +16,7 @@ use hotshot_types::{
     data::ViewNumber,
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
+    simple_certificate::TimeoutCertificate2,
     traits::{metrics::NoMetrics, signature_key::SignatureKey},
     vote::HasViewNumber,
     x25519::Keypair,
@@ -33,7 +34,7 @@ use tracing::{debug, info};
 
 use crate::{
     client::CoordinatorClient,
-    consensus::{ConsensusOutput, PreCutoverSeed},
+    consensus::{ConsensusInput, ConsensusOutput, PreCutoverSeed},
     coordinator::{Coordinator, error::Severity},
     helpers::test_upgrade_lock,
     network::Cliquenet,
@@ -138,6 +139,13 @@ pub struct TestRunner {
     /// the specified view.
     #[builder(default)]
     node_changes: Vec<(u64, Vec<NodeChange>)>,
+
+    /// Timeout certificates applied to specific nodes' coordinators before
+    /// they start, advancing their view past the rest of the network.
+    /// Simulates certificates that formed while other nodes were down (the
+    /// certs are not forwarded, so only the seeded nodes know them).
+    #[builder(default)]
+    initial_timeout_certs: BTreeMap<usize, Vec<TimeoutCertificate2<TestTypes>>>,
 
     pre_cutover_seed: Option<PreCutoverSeed<TestTypes>>,
 
@@ -338,12 +346,19 @@ impl TestRunner {
         // Spawn one coordinator task per live node.  Each node gets its
         // own membership instance so they don't share internal state.
         for (i, (_, public_key, _)) in parties.iter().enumerate() {
+            // Down nodes get their network when `NodeAction::Start` fires. Binding
+            // the port here would leave it held until the discarded instance's server
+            // task exits (release is asynchronous), racing the later rebind.
+            if currently_down.contains(&i) {
+                node_handles.push(None);
+                continue;
+            }
             let network = create_network(i, &parties, &self.upgrade_lock).await;
 
             let (membership, storage, client, external_events_tx) =
                 self.make_membership(*public_key, self.node_storages[i].clone(), &connect_infos);
 
-            let coord = build_test_coordinator(
+            let mut coord = build_test_coordinator(
                 i as u64,
                 network,
                 membership,
@@ -355,36 +370,46 @@ impl TestRunner {
             )
             .await;
 
-            let tx = event_tx.clone();
-            let generation = generations[i];
-            node_handles.push(if currently_down.contains(&i) {
-                None
-            } else {
-                let (cancel_tx, cancel_rx) = oneshot::channel();
-                cancels.insert(i, cancel_tx);
-                let mut initial_commits: BTreeMap<ViewNumber, [u8; 32]> = BTreeMap::new();
-                if let Some(seed) = &self.pre_cutover_seed {
-                    let anchor_view = seed.decided_anchor.view_number();
-                    let anchor_commit: [u8; 32] = seed.decided_anchor.commit().into();
-                    for v in 1..*anchor_view {
-                        initial_commits.insert(ViewNumber::new(v), anchor_commit);
-                    }
-                    initial_commits.insert(anchor_view, anchor_commit);
-                    for leaf in &seed.undecided {
-                        initial_commits.insert(leaf.view_number(), leaf.commit().into());
+            if let Some(certs) = self.initial_timeout_certs.get(&i) {
+                for tc in certs {
+                    coord.apply_consensus(ConsensusInput::TimeoutCertificate(tc.clone()));
+                    for output in coord.outbox_mut().take() {
+                        // Keep the seeded certs local to this node; the
+                        // real network never delivered them to the others.
+                        if matches!(output, ConsensusOutput::SendTimeoutCertificate(..)) {
+                            continue;
+                        }
+                        let _ = coord.process_consensus_output(output);
                     }
                 }
-                Some(tokio::spawn(run_node(
-                    coord,
-                    self.node_storages[i].clone(),
-                    tx,
-                    i,
-                    generation,
-                    external_events_tx,
-                    cancel_rx,
-                    initial_commits,
-                )))
-            });
+            }
+
+            let tx = event_tx.clone();
+            let generation = generations[i];
+            let (cancel_tx, cancel_rx) = oneshot::channel();
+            cancels.insert(i, cancel_tx);
+            let mut initial_commits: BTreeMap<ViewNumber, [u8; 32]> = BTreeMap::new();
+            if let Some(seed) = &self.pre_cutover_seed {
+                let anchor_view = seed.decided_anchor.view_number();
+                let anchor_commit: [u8; 32] = seed.decided_anchor.commit().into();
+                for v in 1..*anchor_view {
+                    initial_commits.insert(ViewNumber::new(v), anchor_commit);
+                }
+                initial_commits.insert(anchor_view, anchor_commit);
+                for leaf in &seed.undecided {
+                    initial_commits.insert(leaf.view_number(), leaf.commit().into());
+                }
+            }
+            node_handles.push(Some(tokio::spawn(run_node(
+                coord,
+                self.node_storages[i].clone(),
+                tx,
+                i,
+                generation,
+                external_events_tx,
+                cancel_rx,
+                initial_commits,
+            ))));
         }
 
         // Build pending changes sorted by view.
@@ -732,7 +757,7 @@ async fn run_node(
                     }
                 }
                 send(NodeEvent::Decided(commits.clone()));
-            } else if let ConsensusOutput::SendTimeoutVote(vote, _) = &output {
+            } else if let ConsensusOutput::SendTimeoutVote(vote, ..) = &output {
                 let view = vote.view_number();
                 debug!(node = %coord.node_id(), %view, "timeout vote");
                 send(NodeEvent::TimedOut(view));

@@ -1821,12 +1821,14 @@ pub mod testing {
 
     /// Waits until a node has reached the given target epoch (exclusive).
     /// The function returns once the first event indicates an epoch higher than `target_epoch`.
+    /// Panics if the event stream ends before reaching `target_epoch`.
     pub async fn wait_for_epochs(
         events: &mut (impl futures::Stream<Item = CoordinatorEvent<SeqTypes>> + std::marker::Unpin),
         epoch_height: u64,
         target_epoch: u64,
     ) {
         tracing::info!(target_epoch, "waiting for epoch");
+        let mut last_seen = None;
         while let Some(event) = events.next().await {
             // Decides arrive as `LegacyEvent` before the new protocol and as
             // `NewDecide` after; both carry the most recent leaf first.
@@ -1845,10 +1847,12 @@ pub mod testing {
             );
 
             if epoch > Some(EpochNumber::new(target_epoch)) {
-                break;
+                tracing::info!(target_epoch, "epoch started");
+                return;
             }
+            last_seen = Some((leaf.height(), epoch));
         }
-        tracing::info!(target_epoch, "epoch started");
+        panic!("event stream ended before target epoch {target_epoch}, last decide: {last_seen:?}");
     }
 }
 

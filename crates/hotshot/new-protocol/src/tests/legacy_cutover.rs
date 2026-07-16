@@ -418,16 +418,25 @@ async fn spawn_node(
 
     let client_api = coord.client_api().clone();
 
+    // Same lock production wires in: the legacy handle's, which receives the
+    // decided upgrade certificate and opens the forwarders' cutover gate.
+    let legacy_upgrade_lock = legacy.read().await.hotshot.upgrade_lock.clone();
     let legacy_event_rx = legacy.read().await.event_stream_known_impl().deactivate();
     bg_handles.push(
         tokio::spawn(forward_legacy_timeout_votes(
             legacy_event_rx.clone(),
             client_api.clone(),
+            legacy_upgrade_lock.clone(),
         ))
         .abort_handle(),
     );
     bg_handles.push(
-        tokio::spawn(forward_legacy_high_qc(legacy_event_rx, client_api.clone())).abort_handle(),
+        tokio::spawn(forward_legacy_high_qc(
+            legacy_event_rx,
+            client_api.clone(),
+            legacy_upgrade_lock,
+        ))
+        .abort_handle(),
     );
 
     let (decision_tx, decision_rx) = mpsc::unbounded_channel::<DecisionEvent>();
@@ -811,12 +820,13 @@ fn perm_num_nodes(n_silent: usize) -> usize {
     }
 }
 
+// Deadlines must stay under nextest's terminate-after ceiling (3 x 2m, .config/nextest.toml)
+// so the deadline panic with per-node diagnostics fires before nextest kills the test.
 fn perm_deadline(n_silent: usize) -> Duration {
     match n_silent {
         0..=2 => Duration::from_secs(240),
         3 => Duration::from_secs(300),
-        4 => Duration::from_secs(360),
-        _ => Duration::from_secs(480),
+        _ => Duration::from_secs(350),
     }
 }
 
@@ -839,11 +849,13 @@ fn silent_for_view(view: u64, num_nodes: usize) -> SilentNode {
 }
 
 /// Build a permissive failed-views superset for the loose check.
-/// Includes the natural TC2 skip, each silencer's `at_view` (boundary
-/// effect when the silent node disconnects mid-view), and every
-/// downstream view where the silent node would be leader. `max_view`
-/// is a conservative ceiling on the highest view a live node will
-/// decide before the loop exits.
+/// Includes the natural TC2 skip, the first post-cutover view (nodes
+/// detect the cutover and start their coordinators at slightly
+/// different times, so it can time out before enough of them are up),
+/// each silencer's `at_view` (boundary effect when the silent node
+/// disconnects mid-view), and every downstream view where the silent
+/// node would be leader. `max_view` is a conservative ceiling on the
+/// highest view a live node will decide before the loop exits.
 fn permitted_failures(
     num_nodes: usize,
     silent_nodes: &[SilentNode],
@@ -851,6 +863,7 @@ fn permitted_failures(
 ) -> BTreeSet<ViewNumber> {
     let mut failed = BTreeSet::new();
     failed.insert(ViewNumber::new(PREDICTED_CUTOVER_VIEW - 1));
+    failed.insert(ViewNumber::new(PREDICTED_CUTOVER_VIEW));
     for s in silent_nodes {
         let at_view = *s.at_view;
         failed.insert(ViewNumber::new(at_view));

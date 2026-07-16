@@ -57,8 +57,8 @@ use crate::{
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     helpers::{proposal_commitment, test_upgrade_lock},
     message::{
-        Certificate1, Certificate2, ConsensusMessage, Message, MessageType, Proposal,
-        ProposalMessage, TimeoutVoteMessage, Validated, Vote1, Vote2,
+        CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, Message, MessageType,
+        Proposal, ProposalMessage, TimeoutVoteMessage, Validated, Vote1, Vote2,
     },
     outbox::Outbox,
     state::StateResponse,
@@ -249,11 +249,12 @@ impl TestView {
         }
     }
 
-    /// Build a TimeoutVote Event from a specific validator.
+    /// Build a TimeoutVote Event from a specific validator, optionally
+    /// carrying the sender's catchup evidence.
     pub fn timeout_vote_input(
         &self,
         node_index: u64,
-        lock: Option<Certificate1<TestTypes>>,
+        evidence: Option<CatchupEvidence<TestTypes>>,
     ) -> Message<TestTypes, Validated> {
         let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
         let data = TimeoutData2 {
@@ -271,7 +272,7 @@ impl TestView {
         Message {
             sender: pub_key,
             message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote(
-                TimeoutVoteMessage { vote, lock },
+                TimeoutVoteMessage { vote, evidence },
             )),
         }
     }
@@ -1262,7 +1263,7 @@ pub(crate) fn build_cert2(
     )
 }
 
-fn build_timeout_cert(
+pub(crate) fn build_timeout_cert(
     view_number: ViewNumber,
     epoch: EpochNumber,
     epoch_membership: &hotshot_types::epoch_membership::EpochMembership<TestTypes>,
