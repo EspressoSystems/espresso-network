@@ -625,6 +625,10 @@ where
         self.consensus.apply(input, &mut self.outbox)
     }
 
+    pub fn retire_reconstruction(&mut self, view: ViewNumber) {
+        self.vid_reconstructor.retire_view(view);
+    }
+
     pub fn process_consensus_output(
         &mut self,
         output: ConsensusOutput<T>,

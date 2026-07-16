@@ -446,6 +446,7 @@ fn inject_test_block(
     };
     metrics.on_input(&block_input);
     coordinator.apply_consensus(block_input);
+    coordinator.retire_reconstruction(req.view);
 }
 
 /// Per-transaction byte size when splitting the configured `--block-size` into
