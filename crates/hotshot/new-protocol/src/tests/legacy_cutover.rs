@@ -418,16 +418,25 @@ async fn spawn_node(
 
     let client_api = coord.client_api().clone();
 
+    // Same lock production wires in: the legacy handle's, which receives the
+    // decided upgrade certificate and opens the forwarders' cutover gate.
+    let legacy_upgrade_lock = legacy.read().await.hotshot.upgrade_lock.clone();
     let legacy_event_rx = legacy.read().await.event_stream_known_impl().deactivate();
     bg_handles.push(
         tokio::spawn(forward_legacy_timeout_votes(
             legacy_event_rx.clone(),
             client_api.clone(),
+            legacy_upgrade_lock.clone(),
         ))
         .abort_handle(),
     );
     bg_handles.push(
-        tokio::spawn(forward_legacy_high_qc(legacy_event_rx, client_api.clone())).abort_handle(),
+        tokio::spawn(forward_legacy_high_qc(
+            legacy_event_rx,
+            client_api.clone(),
+            legacy_upgrade_lock,
+        ))
+        .abort_handle(),
     );
 
     let (decision_tx, decision_rx) = mpsc::unbounded_channel::<DecisionEvent>();

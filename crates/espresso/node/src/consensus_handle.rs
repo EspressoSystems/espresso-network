@@ -97,10 +97,12 @@ where
             AbortOnDropHandle::new(spawn(forward_legacy_timeout_votes(
                 rx.clone(),
                 client_api.clone(),
+                upgrade_lock.clone(),
             ))),
             AbortOnDropHandle::new(spawn(forward_legacy_high_qc(
                 rx.clone(),
                 client_api.clone(),
+                upgrade_lock.clone(),
             ))),
             AbortOnDropHandle::new(spawn(forward_legacy_epoch_changes(
                 rx.clone(),

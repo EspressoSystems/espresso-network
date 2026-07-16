@@ -83,15 +83,28 @@ where
     })
 }
 
+/// Whether the upgrade to `NEW_PROTOCOL_VERSION` is decided. The forwarders
+/// only bridge events once this holds: bridged requests only matter at the
+/// V0_6 cutover, and forwarding earlier would queue requests the parked
+/// coordinator can't drain and, on networks that never upgrade, would fill
+/// the bounded request queue.
+fn cutover_decided<T: NodeType>(upgrade_lock: &UpgradeLock<T>) -> bool {
+    upgrade_lock
+        .decided_upgrade_cert()
+        .is_some_and(|cert| cert.data.new_version >= NEW_PROTOCOL_VERSION)
+}
+
 /// Forward legacy `TimeoutVote2` events into the new-protocol timeout
 /// collectors so the first new leader can form TC2 at the boundary.
 pub async fn forward_legacy_timeout_votes<T: NodeType>(
     legacy_event_rx: InactiveReceiver<Event<T>>,
     client_api: ClientApi<T>,
+    upgrade_lock: UpgradeLock<T>,
 ) {
     let mut rx = legacy_event_rx.activate_cloned();
     while let Some(event) = rx.next().await {
         if let EventType::LegacyTimeoutVoteEmitted { vote } = event.event
+            && cutover_decided(&upgrade_lock)
             && let Err(err) = client_api.submit_timeout_vote(vote)
         {
             tracing::warn!(%err, "failed to forward legacy TimeoutVote2 to new-protocol coordinator");
@@ -105,10 +118,12 @@ pub async fn forward_legacy_timeout_votes<T: NodeType>(
 pub async fn forward_legacy_high_qc<T: NodeType>(
     legacy_event_rx: InactiveReceiver<Event<T>>,
     client_api: ClientApi<T>,
+    upgrade_lock: UpgradeLock<T>,
 ) {
     let mut rx = legacy_event_rx.activate_cloned();
     while let Some(event) = rx.next().await {
         if let EventType::LegacyHighQcFormed { qc } = event.event
+            && cutover_decided(&upgrade_lock)
             && let Err(err) = client_api.submit_legacy_high_qc(qc)
         {
             tracing::warn!(%err, "failed to forward legacy high QC to new-protocol coordinator");
@@ -136,14 +151,7 @@ pub async fn forward_legacy_epoch_changes<T: NodeType>(
         let Some(newest) = leaf_chain.first() else {
             continue;
         };
-        // Epoch bumps only matter for dialing the peer window ahead of the
-        // V0_6 cutover. Forwarding earlier would queue requests the parked
-        // coordinator can't drain and, on networks that never upgrade, would
-        // fill the bounded request queue.
-        let cutover_decided = upgrade_lock
-            .decided_upgrade_cert()
-            .is_some_and(|cert| cert.data.new_version >= NEW_PROTOCOL_VERSION);
-        if !cutover_decided {
+        if !cutover_decided(&upgrade_lock) {
             continue;
         }
         let block_number = newest.leaf.block_header().block_number();
