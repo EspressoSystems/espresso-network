@@ -427,6 +427,7 @@ async fn spawn_node(
             legacy_event_rx.clone(),
             client_api.clone(),
             legacy_upgrade_lock.clone(),
+            None,
         ))
         .abort_handle(),
     );
