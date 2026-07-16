@@ -13,7 +13,6 @@
 //! count of various types of actions performed and the number of open streams.
 
 use std::{
-    borrow::Cow,
     cmp::max,
     collections::{BTreeMap, HashMap},
     fmt::Debug,
@@ -23,7 +22,12 @@ use std::{
 };
 
 use anyhow::{Context, bail, ensure};
-use async_lock::RwLock;
+use axum::{
+    extract::State,
+    http::{HeaderMap, StatusCode as AxumStatusCode, header},
+    response::{IntoResponse, Response},
+    routing::get,
+};
 use clap::Parser;
 use committable::Committable;
 use derivative::Derivative;
@@ -50,16 +54,14 @@ use hotshot_types::traits::{
 use jf_merkle_tree_compat::{
     ForgetableMerkleTreeScheme, MerkleTreeScheme, UniversalMerkleTreeScheme,
 };
+use prometheus::{Encoder, TextEncoder};
 use rand::{RngCore, seq::SliceRandom};
 use serde::de::DeserializeOwned;
 use strum::{EnumDiscriminants, VariantArray};
 use surf_disco::{Error, StatusCode, Url, error::ClientError, socket};
-use tide_disco::{App, error::ServerError};
 use time::OffsetDateTime;
-use tokio::{task::spawn, time::sleep};
-use toml::toml;
+use tokio::{net::TcpListener, task::spawn, time::sleep};
 use tracing::info_span;
-use vbs::version::StaticVersionType;
 
 /// An adversarial stress test for sequencer APIs.
 #[derive(Clone, Debug, Parser)]
@@ -1378,23 +1380,44 @@ impl Client {
 }
 
 async fn serve(port: u16, metrics: PrometheusMetrics) {
-    let api = toml! {
-        [route.metrics]
-        PATH = ["/metrics"]
-        METHOD = "METRICS"
+    let metrics = Arc::new(metrics);
+    let app = axum::Router::new()
+        .route("/healthcheck", get(healthcheck))
+        .route("/status/metrics", get(status_metrics))
+        .route("/v0/status/metrics", get(status_metrics))
+        .with_state(metrics);
+
+    let addr = format!("0.0.0.0:{port}");
+    let listener = match TcpListener::bind(&addr).await {
+        Ok(listener) => listener,
+        Err(err) => {
+            tracing::error!("failed to bind web server to {addr}: {err:#}");
+            return;
+        },
     };
-    let mut app = App::<_, ServerError>::with_state(RwLock::new(metrics));
-    app.module::<ServerError, SequencerApiVersion>("status", api)
-        .unwrap()
-        .metrics("metrics", |_req, state| {
-            async move { Ok(Cow::Borrowed(state)) }.boxed()
-        })
-        .unwrap();
-    if let Err(err) = app
-        .serve(format!("0.0.0.0:{port}"), SequencerApiVersion::instance())
-        .await
-    {
+    if let Err(err) = axum::serve(listener, app).await {
         tracing::error!("web server exited unexpectedly: {err:#}");
+    }
+}
+
+async fn healthcheck(headers: HeaderMap) -> Response {
+    espresso_api::healthcheck_response(&headers)
+}
+
+/// Prometheus text exposition of `metrics`, matching the `text/plain; charset=utf-8` content type
+/// tide-disco's `METHOD = "METRICS"` route used.
+async fn status_metrics(State(metrics): State<Arc<PrometheusMetrics>>) -> impl IntoResponse {
+    let encoder = TextEncoder::new();
+    let families = metrics.registry().gather();
+    let mut buffer = Vec::new();
+    match encoder.encode(&families, &mut buffer).and_then(|()| {
+        String::from_utf8(buffer).map_err(|err| prometheus::Error::Msg(err.to_string()))
+    }) {
+        Ok(text) => ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], text).into_response(),
+        Err(err) => {
+            tracing::error!("failed to export metrics: {err:#}");
+            AxumStatusCode::INTERNAL_SERVER_ERROR.into_response()
+        },
     }
 }
 
