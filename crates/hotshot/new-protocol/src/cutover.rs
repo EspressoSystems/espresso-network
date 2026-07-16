@@ -16,9 +16,11 @@ use hotshot::{traits::NodeImplementation, types::SystemContextHandle};
 use hotshot_types::{
     data::{EpochNumber, Leaf2},
     event::{Event, EventType},
+    message::UpgradeLock,
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
     utils::epoch_from_block_number,
 };
+use versions::NEW_PROTOCOL_VERSION;
 
 use crate::{client::ClientApi, consensus::PreCutoverSeed};
 
@@ -90,7 +92,7 @@ pub async fn forward_legacy_timeout_votes<T: NodeType>(
     let mut rx = legacy_event_rx.activate_cloned();
     while let Some(event) = rx.next().await {
         if let EventType::LegacyTimeoutVoteEmitted { vote } = event.event
-            && let Err(err) = client_api.submit_timeout_vote(vote).await
+            && let Err(err) = client_api.submit_timeout_vote(vote)
         {
             tracing::warn!(%err, "failed to forward legacy TimeoutVote2 to new-protocol coordinator");
         }
@@ -107,7 +109,7 @@ pub async fn forward_legacy_high_qc<T: NodeType>(
     let mut rx = legacy_event_rx.activate_cloned();
     while let Some(event) = rx.next().await {
         if let EventType::LegacyHighQcFormed { qc } = event.event
-            && let Err(err) = client_api.submit_legacy_high_qc(qc).await
+            && let Err(err) = client_api.submit_legacy_high_qc(qc)
         {
             tracing::warn!(%err, "failed to forward legacy high QC to new-protocol coordinator");
         }
@@ -120,6 +122,7 @@ pub async fn forward_legacy_epoch_changes<T: NodeType>(
     legacy_event_rx: InactiveReceiver<Event<T>>,
     client_api: ClientApi<T>,
     epoch_height: u64,
+    upgrade_lock: UpgradeLock<T>,
 ) {
     if epoch_height == 0 {
         return;
@@ -133,12 +136,22 @@ pub async fn forward_legacy_epoch_changes<T: NodeType>(
         let Some(newest) = leaf_chain.first() else {
             continue;
         };
+        // Epoch bumps only matter for dialing the peer window ahead of the
+        // V0_6 cutover. Forwarding earlier would queue requests the parked
+        // coordinator can't drain and, on networks that never upgrade, would
+        // fill the bounded request queue.
+        let cutover_decided = upgrade_lock
+            .decided_upgrade_cert()
+            .is_some_and(|cert| cert.data.new_version >= NEW_PROTOCOL_VERSION);
+        if !cutover_decided {
+            continue;
+        }
         let block_number = newest.leaf.block_header().block_number();
         let epoch = EpochNumber::new(epoch_from_block_number(block_number, epoch_height));
         if last_forwarded.is_some_and(|prev| epoch <= prev) {
             continue;
         }
-        if let Err(err) = client_api.bump_network_epoch(epoch).await {
+        if let Err(err) = client_api.bump_network_epoch(epoch) {
             tracing::warn!(%epoch, %err, "failed to forward legacy epoch change to new-protocol coordinator");
             continue;
         }

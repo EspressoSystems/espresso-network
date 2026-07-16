@@ -106,6 +106,7 @@ where
                 rx.clone(),
                 client_api.clone(),
                 epoch_height.into(),
+                upgrade_lock.clone(),
             ))),
         ];
 

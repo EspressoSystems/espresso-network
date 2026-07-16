@@ -1,21 +1,29 @@
 //! Unit tests for the cutover bridging API.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, num::NonZeroUsize, sync::Arc, time::Duration};
 
+use committable::Committable;
 use hotshot::types::{BLSPubKey, SignatureKey};
 use hotshot_example_types::{node_types::TestTypes, state_types::TestValidatedState};
 use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
+    event::{Event, EventType, LeafInfo},
+    message::UpgradeLock,
+    simple_certificate::{CertificatePair, UpgradeCertificate},
     simple_vote::UpgradeProposalData,
     stake_table::StakeTableEntries,
+    traits::block_contents::BlockHeader,
+    utils::epoch_from_block_number,
     vote::{Certificate, HasViewNumber},
 };
 use versions::{NEW_PROTOCOL_VERSION, version};
 
 use crate::{
+    client::{ClientApi, ClientRequest, CoordinatorClient},
     consensus::PreCutoverSeed,
+    cutover::forward_legacy_epoch_changes,
     helpers::test_upgrade_lock,
-    tests::common::utils::{ConsensusHarness, TestData},
+    tests::common::utils::{ConsensusHarness, TestData, TestView},
 };
 
 /// Build a `PreCutoverSeed` from leaves, using `TestValidatedState::default()`
@@ -236,4 +244,171 @@ async fn upgrade_certificate_cutover() {
         .run()
         .await
         .expect("new protocol should decide past the upgrade boundary");
+}
+
+/// Build a `Decide` event carrying a single leaf, for feeding `forward_legacy_epoch_changes`.
+fn decide_event(view: &TestView) -> Event<TestTypes> {
+    let state = Arc::new(TestValidatedState::default());
+    let leaf_info = LeafInfo::new(view.leaf.clone(), state, None, None, None);
+    Event {
+        view_number: view.view_number,
+        event: EventType::Decide {
+            leaf_chain: Arc::new(vec![leaf_info]),
+            committing_qc: Arc::new(CertificatePair::non_epoch_change(view.cert1.clone())),
+            deciding_qc: None,
+            block_size: None,
+        },
+    }
+}
+
+/// Certificate that decides the upgrade to `NEW_PROTOCOL_VERSION`, opening
+/// the `forward_legacy_epoch_changes` gate.
+fn new_protocol_upgrade_cert() -> UpgradeCertificate<TestTypes> {
+    let upgrade_data = UpgradeProposalData {
+        old_version: version(0, 1),
+        new_version: NEW_PROTOCOL_VERSION,
+        decide_by: ViewNumber::genesis(),
+        new_version_hash: Default::default(),
+        old_version_last_view: ViewNumber::genesis(),
+        new_version_first_view: ViewNumber::genesis(),
+    };
+    UpgradeCertificate::new(
+        upgrade_data.clone(),
+        upgrade_data.commit(),
+        ViewNumber::genesis(),
+        Default::default(),
+        Default::default(),
+    )
+}
+
+/// Regression test for the memory leak fixed by making `bump_network_epoch`
+/// fire-and-forget: with the coordinator parked (never polling
+/// `next_request`), the forwarder must keep draining the legacy event
+/// broadcast channel instead of blocking forever awaiting a response that
+/// will never come.
+#[tokio::test]
+async fn forward_legacy_epoch_changes_never_blocks_on_parked_coordinator() {
+    let test_data = TestData::new(6).await;
+
+    // Small capacity: the coordinator is parked, so nothing ever drains this.
+    let client = CoordinatorClient::<TestTypes>::new(NonZeroUsize::new(4).unwrap());
+    let client_api = client.handle().clone();
+
+    let (legacy_tx, legacy_rx) = async_broadcast::broadcast::<Event<TestTypes>>(8);
+
+    let upgrade_lock = test_upgrade_lock::<TestTypes>();
+    upgrade_lock.set_decided_upgrade_cert(Some(new_protocol_upgrade_cert()));
+
+    let epoch_height = 1; // every Decide crosses an epoch boundary
+    let forwarder = tokio::spawn(forward_legacy_epoch_changes(
+        legacy_rx.deactivate(),
+        client_api,
+        epoch_height,
+        upgrade_lock,
+    ));
+
+    for view in &test_data.views {
+        legacy_tx
+            .broadcast_direct(decide_event(view))
+            .await
+            .expect("legacy event channel should accept the send");
+    }
+    drop(legacy_tx);
+
+    // With the sender dropped, the forwarder exits once it has drained the
+    // channel. Pre-fix it blocked awaiting the parked coordinator's response
+    // and never finished.
+    tokio::time::timeout(Duration::from_secs(5), forwarder)
+        .await
+        .expect(
+            "forward_legacy_epoch_changes stalled: broadcast channel did not drain (parked \
+             coordinator blocked bump_network_epoch)",
+        )
+        .expect("forwarder task should not panic");
+
+    drop(client);
+}
+
+/// Feed `views` as epoch-boundary `Decide`s through a fresh forwarder run
+/// and wait (bounded) for it to drain and exit.
+async fn run_epoch_forwarder(
+    api: ClientApi<TestTypes>,
+    views: &[TestView],
+    lock: UpgradeLock<TestTypes>,
+    epoch_height: u64,
+) {
+    let (legacy_tx, legacy_rx) = async_broadcast::broadcast::<Event<TestTypes>>(8);
+    let forwarder = tokio::spawn(forward_legacy_epoch_changes(
+        legacy_rx.deactivate(),
+        api,
+        epoch_height,
+        lock,
+    ));
+    for view in views {
+        legacy_tx
+            .broadcast_direct(decide_event(view))
+            .await
+            .expect("legacy event channel should accept the send");
+    }
+    drop(legacy_tx);
+    tokio::time::timeout(Duration::from_secs(5), forwarder)
+        .await
+        .expect("forwarder should drain and exit")
+        .expect("forwarder task should not panic");
+}
+
+/// The forwarder must not queue `BumpNetworkEpoch` requests before the
+/// upgrade to `NEW_PROTOCOL_VERSION` is decided, and must forward exactly
+/// one request per epoch once it is.
+#[tokio::test]
+async fn forward_legacy_epoch_changes_gates_on_decided_upgrade() {
+    let test_data = TestData::new(3).await;
+    let mut client = CoordinatorClient::<TestTypes>::new(NonZeroUsize::new(8).unwrap());
+    let upgrade_lock = test_upgrade_lock::<TestTypes>();
+    let epoch_height = 1; // every Decide crosses an epoch boundary
+
+    // Gate closed: no decided upgrade certificate.
+    run_epoch_forwarder(
+        client.handle().clone(),
+        &test_data.views[..2],
+        upgrade_lock.clone(),
+        epoch_height,
+    )
+    .await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), client.next_request())
+            .await
+            .is_err(),
+        "no request should be forwarded while the upgrade is undecided",
+    );
+
+    // Gate open: decided certificate targeting NEW_PROTOCOL_VERSION.
+    upgrade_lock.set_decided_upgrade_cert(Some(new_protocol_upgrade_cert()));
+    let boundary_view = &test_data.views[2];
+    run_epoch_forwarder(
+        client.handle().clone(),
+        std::slice::from_ref(boundary_view),
+        upgrade_lock,
+        epoch_height,
+    )
+    .await;
+
+    let request = tokio::time::timeout(Duration::from_millis(50), client.next_request())
+        .await
+        .expect("a request should be forwarded once the upgrade is decided")
+        .expect("request channel should be open");
+    let expected_epoch = EpochNumber::new(epoch_from_block_number(
+        BlockHeader::<TestTypes>::block_number(boundary_view.leaf.block_header()),
+        epoch_height,
+    ));
+    assert!(
+        matches!(request, ClientRequest::BumpNetworkEpoch { epoch } if epoch == expected_epoch),
+        "expected BumpNetworkEpoch for epoch {expected_epoch}",
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), client.next_request())
+            .await
+            .is_err(),
+        "exactly one request should be forwarded per epoch boundary",
+    );
 }
