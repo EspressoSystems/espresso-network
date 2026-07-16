@@ -13,9 +13,8 @@ use hotshot_new_protocol::{
         error::{CoordinatorError, Severity},
     },
     cutover::{
-        CutoverGate, extract_pre_cutover_seed, forward_legacy_epoch_changes,
-        forward_legacy_high_qc, forward_legacy_timeout_votes,
-    },
+        CutoverGate, extract_pre_cutover_seed,
+        forward_legacy_high_qc, forward_legacy_timeout_votes},
     state::UpdateLeaf,
     storage::NewProtocolStorage,
 };
@@ -162,6 +161,7 @@ where
             shutdown_complete.clone(),
         )));
 
+<<<<<<< HEAD
         spawn(forward_legacy_timeout_votes(
             legacy_event_rx.clone(),
             client_api.clone(),
@@ -175,6 +175,40 @@ where
             client_api.clone(),
             epoch_height,
         ));
+||||||| parent of 8a30bdee2a6 (fix(new-protocol): don't stall legacy-event forwarders pre-cutover (#4694))
+        let client_api = coordinator.client_api();
+
+        let tasks = vec![
+            AbortOnDropHandle::new(spawn(forward_legacy_timeout_votes(
+                rx.clone(),
+                client_api.clone(),
+            ))),
+            AbortOnDropHandle::new(spawn(forward_legacy_high_qc(
+                rx.clone(),
+                client_api.clone(),
+            ))),
+            AbortOnDropHandle::new(spawn(forward_legacy_epoch_changes(
+                rx.clone(),
+                client_api.clone(),
+                epoch_height.into(),
+            ))),
+        ];
+=======
+        let client_api = coordinator.client_api();
+
+        let tasks = vec![
+            AbortOnDropHandle::new(spawn(forward_legacy_timeout_votes(
+                rx.clone(),
+                client_api.clone(),
+                upgrade_lock.clone(),
+            ))),
+            AbortOnDropHandle::new(spawn(forward_legacy_high_qc(
+                rx.clone(),
+                client_api.clone(),
+                upgrade_lock.clone(),
+            ))),
+        ];
+>>>>>>> 8a30bdee2a6 (fix(new-protocol): don't stall legacy-event forwarders pre-cutover (#4694))
 
         Self {
             legacy_handle,
