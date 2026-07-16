@@ -607,6 +607,15 @@ async fn test_timeout_vote_lock_advances_view() {
     let high_qc = CatchupEvidence::Qc(test_data.views[0].cert1.clone());
     harness.message(test_data.views[1].timeout_vote_input(1, Some(high_qc.clone())));
 
+    harness
+        .process_until_output(|outputs| {
+            any(
+                outputs,
+                |o| matches!(o, ConsensusOutput::ViewChanged(view, _) if **view == 2),
+            )
+        })
+        .await;
+
     assert_eq!(
         view_changed_to(harness.outputs(), 2),
         1,
@@ -639,6 +648,10 @@ async fn test_timeout_vote_tc_advances_view() {
     let tc = CatchupEvidence::Tc(test_data.views[1].timeout_cert.clone());
     harness.message(test_data.views[2].timeout_vote_input(1, Some(tc)));
 
+    harness
+        .process_until(|inputs| any(inputs, is_timeout_cert))
+        .await;
+
     assert_eq!(
         *harness.current_view(),
         3,
@@ -667,6 +680,10 @@ async fn test_timeout_vote_evidence_overrides_distance_check() {
     // certificate for view 31.
     let tc = CatchupEvidence::Tc(test_data.views[30].timeout_cert.clone());
     harness.message(test_data.views[31].timeout_vote_input(1, Some(tc)));
+
+    harness
+        .process_until(|inputs| any(inputs, is_timeout_cert))
+        .await;
 
     assert_eq!(
         *harness.current_view(),

@@ -183,6 +183,18 @@ impl<T: NodeType, C: Verifiable<T> + Send + 'static> CertVerifier<T, C> {
         None
     }
 
+    /// Record that this view's item was completed by other means.
+    ///
+    /// This can happen locally from votes for example.
+    pub fn mark_completed(&mut self, view: ViewNumber) {
+        if view < self.lower_bound {
+            return;
+        }
+        self.completed.insert(view);
+        self.pending.remove(&view);
+        self.tasks.abort(&view);
+    }
+
     /// Re-attempt any items deferred because their epoch stake table wasn't
     /// available. Called when new epoch data arrives. Returns the epochs
     /// whose stake table is still missing so the caller can keep driving their
