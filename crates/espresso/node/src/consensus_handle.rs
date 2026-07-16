@@ -16,10 +16,7 @@ use hotshot_new_protocol::{
         Coordinator,
         error::{CoordinatorError, Severity},
     },
-    cutover::{
-        extract_pre_cutover_seed, forward_legacy_epoch_changes, forward_legacy_high_qc,
-        forward_legacy_timeout_votes,
-    },
+    cutover::{extract_pre_cutover_seed, forward_legacy_high_qc, forward_legacy_timeout_votes},
     state::UpdateLeaf,
     storage::NewProtocolStorage,
 };
@@ -97,15 +94,12 @@ where
             AbortOnDropHandle::new(spawn(forward_legacy_timeout_votes(
                 rx.clone(),
                 client_api.clone(),
+                upgrade_lock.clone(),
             ))),
             AbortOnDropHandle::new(spawn(forward_legacy_high_qc(
                 rx.clone(),
                 client_api.clone(),
-            ))),
-            AbortOnDropHandle::new(spawn(forward_legacy_epoch_changes(
-                rx.clone(),
-                client_api.clone(),
-                epoch_height.into(),
+                upgrade_lock.clone(),
             ))),
         ];
 
