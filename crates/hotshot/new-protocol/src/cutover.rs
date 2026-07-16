@@ -83,11 +83,9 @@ where
     })
 }
 
-/// Whether the upgrade to `NEW_PROTOCOL_VERSION` is decided. The forwarders
-/// only bridge events once this holds: bridged requests only matter at the
-/// V0_6 cutover, and forwarding earlier would queue requests the parked
-/// coordinator can't drain and, on networks that never upgrade, would fill
-/// the bounded request queue.
+/// Bridged requests only matter at the `NEW_PROTOCOL_VERSION` cutover;
+/// forwarding earlier fills the bounded request queue the parked coordinator
+/// can't drain.
 fn cutover_decided<T: NodeType>(upgrade_lock: &UpgradeLock<T>) -> bool {
     upgrade_lock
         .decided_upgrade_cert()

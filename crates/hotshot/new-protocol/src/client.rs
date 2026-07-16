@@ -136,30 +136,24 @@ impl<T: NodeType> ClientApi<T> {
             .await
     }
 
-    /// Fire-and-forget a legacy `TimeoutVote2` into the new-protocol timeout
-    /// collectors.
+    /// Forward a legacy `TimeoutVote2` into the new-protocol timeout collectors.
     pub fn submit_timeout_vote(&self, vote: TimeoutVote2<T>) -> Result<(), QueryError> {
         self.try_send(ClientRequest::SubmitTimeoutVote { vote })
     }
 
-    /// Fire-and-forget the last legacy view's QC so the first new-protocol
-    /// leader can propose on it even if the cutover seed was snapshotted
-    /// before it formed.
+    /// Forward the last legacy view's QC so the first new-protocol leader can
+    /// propose on it even if the cutover seed was snapshotted before it formed.
     pub fn submit_legacy_high_qc(&self, qc: QuorumCertificate2<T>) -> Result<(), QueryError> {
         self.try_send(ClientRequest::SubmitLegacyHighQc { qc })
     }
 
-    /// Fire-and-forget a refresh of the coordinator network's peer set for
-    /// `epoch`.
+    /// Refresh the coordinator network's peer set for `epoch`.
     pub fn bump_network_epoch(&self, epoch: EpochNumber) -> Result<(), QueryError> {
         self.try_send(ClientRequest::BumpNetworkEpoch { epoch })
     }
 
-    /// Send `request` without waiting for a response. The fire-and-forget
-    /// bridge methods above use this because they must never block on a
-    /// coordinator that hasn't started processing requests yet: requests
-    /// queue in the bounded request channel until the coordinator starts and
-    /// are dropped with an error when the queue is full.
+    /// Bridge sends must never block on a coordinator that hasn't started:
+    /// requests queue in the bounded channel and are dropped when it is full.
     fn try_send(&self, request: ClientRequest<T>) -> Result<(), QueryError> {
         self.tx.try_send(request).map_err(|err| match err {
             TrySendError::Closed(_) => QueryError::ChannelClosed,

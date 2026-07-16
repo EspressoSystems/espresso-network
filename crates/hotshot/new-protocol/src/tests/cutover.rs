@@ -246,7 +246,6 @@ async fn upgrade_certificate_cutover() {
         .expect("new protocol should decide past the upgrade boundary");
 }
 
-/// Build a `Decide` event carrying a single leaf, for feeding `forward_legacy_epoch_changes`.
 fn decide_event(view: &TestView) -> Event<TestTypes> {
     let state = Arc::new(TestValidatedState::default());
     let leaf_info = LeafInfo::new(view.leaf.clone(), state, None, None, None);
@@ -261,8 +260,7 @@ fn decide_event(view: &TestView) -> Event<TestTypes> {
     }
 }
 
-/// Certificate that decides the upgrade to `NEW_PROTOCOL_VERSION`, opening
-/// the `forward_legacy_epoch_changes` gate.
+/// Certificate deciding the upgrade to `NEW_PROTOCOL_VERSION`.
 fn new_protocol_upgrade_cert() -> UpgradeCertificate<TestTypes> {
     let upgrade_data = UpgradeProposalData {
         old_version: version(0, 1),
@@ -281,16 +279,12 @@ fn new_protocol_upgrade_cert() -> UpgradeCertificate<TestTypes> {
     )
 }
 
-/// Regression test for the memory leak fixed by making `bump_network_epoch`
-/// fire-and-forget: with the coordinator parked (never polling
-/// `next_request`), the forwarder must keep draining the legacy event
-/// broadcast channel instead of blocking forever awaiting a response that
-/// will never come.
+/// With the coordinator parked (never polling `next_request`), the forwarder
+/// must keep draining the legacy event stream instead of blocking on a reply.
 #[tokio::test]
 async fn forward_legacy_epoch_changes_never_blocks_on_parked_coordinator() {
     let test_data = TestData::new(6).await;
 
-    // Small capacity: the coordinator is parked, so nothing ever drains this.
     let client = CoordinatorClient::<TestTypes>::new(NonZeroUsize::new(4).unwrap());
     let client_api = client.handle().clone();
 
@@ -315,9 +309,7 @@ async fn forward_legacy_epoch_changes_never_blocks_on_parked_coordinator() {
     }
     drop(legacy_tx);
 
-    // With the sender dropped, the forwarder exits once it has drained the
-    // channel. Pre-fix it blocked awaiting the parked coordinator's response
-    // and never finished.
+    // Pre-fix: blocked awaiting the parked coordinator's reply, never exited.
     tokio::time::timeout(Duration::from_secs(5), forwarder)
         .await
         .expect(
@@ -329,8 +321,7 @@ async fn forward_legacy_epoch_changes_never_blocks_on_parked_coordinator() {
     drop(client);
 }
 
-/// Feed `views` as epoch-boundary `Decide`s through a fresh forwarder run
-/// and wait (bounded) for it to drain and exit.
+/// Feed `views` as epoch-boundary `Decide`s and wait for the forwarder to exit.
 async fn run_epoch_forwarder(
     api: ClientApi<TestTypes>,
     views: &[TestView],
@@ -357,9 +348,7 @@ async fn run_epoch_forwarder(
         .expect("forwarder task should not panic");
 }
 
-/// The forwarder must not queue `BumpNetworkEpoch` requests before the
-/// upgrade to `NEW_PROTOCOL_VERSION` is decided, and must forward exactly
-/// one request per epoch once it is.
+/// No request queues before the V0_6 upgrade is decided; one per epoch after.
 #[tokio::test]
 async fn forward_legacy_epoch_changes_gates_on_decided_upgrade() {
     let test_data = TestData::new(3).await;
@@ -367,7 +356,6 @@ async fn forward_legacy_epoch_changes_gates_on_decided_upgrade() {
     let upgrade_lock = test_upgrade_lock::<TestTypes>();
     let epoch_height = 1; // every Decide crosses an epoch boundary
 
-    // Gate closed: no decided upgrade certificate.
     run_epoch_forwarder(
         client.handle().clone(),
         &test_data.views[..2],
@@ -382,7 +370,6 @@ async fn forward_legacy_epoch_changes_gates_on_decided_upgrade() {
         "no request should be forwarded while the upgrade is undecided",
     );
 
-    // Gate open: decided certificate targeting NEW_PROTOCOL_VERSION.
     upgrade_lock.set_decided_upgrade_cert(Some(new_protocol_upgrade_cert()));
     let boundary_view = &test_data.views[2];
     run_epoch_forwarder(
