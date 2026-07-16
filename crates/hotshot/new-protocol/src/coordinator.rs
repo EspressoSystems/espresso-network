@@ -495,12 +495,7 @@ where
                     Ok(validated) => {
                         // Refresh the network's peer set when a proposal is validated.
                         let epoch = validated.message.proposal.data.epoch;
-                        if let Err(err) = self
-                            .network
-                            .apply_epoch(epoch, &self.membership_coordinator)
-                        {
-                            error!(%epoch, %err, "network apply_epoch failed");
-                        }
+                        self.bump_network_epoch(epoch);
 
                         let view = validated.message.proposal.data.view_number();
                         let VidCommitment::V2(commit) =
@@ -969,6 +964,20 @@ where
 
     pub fn client_api(&self) -> &ClientApi<T> {
         self.client.handle()
+    }
+
+    /// Refresh the network's peer window for `epoch`.
+    ///
+    /// The coordinator does this itself whenever a proposal validates, but
+    /// before its event loop is started callers can trigger this explicitly
+    /// to keep the network up to date.
+    pub fn bump_network_epoch(&mut self, epoch: EpochNumber) {
+        if let Err(err) = self
+            .network
+            .apply_epoch(epoch, &self.membership_coordinator)
+        {
+            error!(%epoch, %err, "network apply_epoch failed");
+        }
     }
 
     pub(crate) fn on_network_message(
