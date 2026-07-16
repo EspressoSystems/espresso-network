@@ -23,9 +23,9 @@ use crate::{
     tests::common::{
         assertions::{
             any, count_matching, decides_view, is_leaf_decided, is_persist_proposal, is_proposal,
-            is_record_action, is_request_block_and_header, is_request_state, is_send_cert2,
-            is_send_timeout_cert, is_send_timeout_vote, is_view_changed, is_vote1, is_vote2,
-            node_index_for_key,
+            is_proposal_for_view, is_record_action, is_request_block_and_header, is_request_state,
+            is_send_cert2, is_send_timeout_cert, is_send_timeout_vote, is_view_changed, is_vote1,
+            is_vote2, node_index_for_key,
         },
         utils::{ConsensusHarness, MockBlock, state_verified_input},
     },
@@ -835,6 +835,179 @@ async fn test_leader_proposes_after_timeout() {
     assert!(
         any(harness.outputs(), is_proposal),
         "Leader should send proposal with timeout view change evidence"
+    );
+}
+
+/// A timeout-backed proposal chains only from the locked cert, never from a
+/// Cert1 of the timed-out view.
+#[tokio::test]
+async fn test_timeout_proposal_chains_from_lock_not_timed_out_cert1() {
+    let test_data = TestData::new(5).await;
+    let leader_for_view_3 = test_data.views[2].leader_public_key;
+    let leader_index = node_index_for_key(&leader_for_view_3);
+    let mut harness = ConsensusHarness::new(leader_index).await;
+
+    // Lock on cert1(1).
+    harness
+        .apply(test_data.views[0].proposal_input_consensus(&leader_for_view_3))
+        .await;
+    harness
+        .apply(test_data.views[0].block_reconstructed_input())
+        .await;
+    harness.apply(test_data.views[0].cert1_input()).await;
+
+    // View 2 arrives via fetch (no optimistic header request); its cert1
+    // forms but the block is never reconstructed, so the lock stays at 1.
+    harness
+        .apply(ConsensusInput::FetchedProposal(
+            test_data.views[1].proposal_message(),
+        ))
+        .await;
+    harness.apply(test_data.views[1].cert1_input()).await;
+    assert!(
+        harness
+            .consensus
+            .cert1_at(ViewNumber::new(2))
+            .is_some_and(|_| harness.consensus.locked_view() == Some(ViewNumber::new(1))),
+        "setup: cert1(2) must be held while the lock stays at view 1"
+    );
+    assert!(
+        !any(harness.outputs(), |o| is_proposal_for_view(o, 3)),
+        "no header for a view-2 parent yet, so view 3 must not be proposed"
+    );
+
+    harness.apply(test_data.views[1].timeout_cert_input()).await;
+
+    let justify_views: Vec<u64> = harness
+        .outputs()
+        .iter()
+        .filter_map(|output| match output {
+            ConsensusOutput::SendProposal(p) if *p.data.view_number == 3 => {
+                Some(*p.data.justify_qc.view_number)
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        justify_views,
+        vec![1],
+        "timeout-backed proposal must chain from the locked cert1(1), not the timed-out view's \
+         cert1(2)"
+    );
+}
+
+/// Cutover exception: a bridged legacy QC higher than the lock is adopted
+/// as the lock and proposing is retried on it, re-requesting the header for
+/// the new lock.
+#[tokio::test]
+async fn test_bridged_legacy_qc_adopts_lock_and_reproposes() {
+    let test_data = TestData::new(5).await;
+    let leader_for_view_3 = test_data.views[2].leader_public_key;
+    let leader_index = node_index_for_key(&leader_for_view_3);
+    let mut harness = ConsensusHarness::new(leader_index).await;
+
+    // Lock on cert1(1); hold view 2's proposal but no cert for it.
+    harness
+        .apply(test_data.views[0].proposal_input_consensus(&leader_for_view_3))
+        .await;
+    harness
+        .apply(test_data.views[0].block_reconstructed_input())
+        .await;
+    harness.apply(test_data.views[0].cert1_input()).await;
+    harness
+        .apply(ConsensusInput::FetchedProposal(
+            test_data.views[1].proposal_message(),
+        ))
+        .await;
+
+    // Manual outbox from here: the TC's header request stays unfulfilled, so
+    // the leader has not proposed view 3 when the legacy QC arrives.
+    let mut outbox = Outbox::new();
+    harness
+        .consensus
+        .apply(test_data.views[1].timeout_cert_input(), &mut outbox);
+    assert!(
+        !outbox
+            .iter()
+            .any(|o| matches!(o, ConsensusOutput::PersistProposal(_))),
+        "view 3 must not be proposed while the header is outstanding"
+    );
+
+    harness
+        .consensus
+        .register_legacy_qc(&test_data.views[1].cert1);
+    assert_eq!(harness.consensus.locked_view(), Some(ViewNumber::new(2)));
+
+    // The TC-time header request (parent view 1) completes; its HeaderCreated
+    // retriggers maybe_propose, which must re-request for the adopted lock.
+    let old_parent = test_data.views[0].proposal_message().proposal.data;
+    let old_commitment = proposal_commitment(&old_parent);
+    let old_leaf: Leaf2<TestTypes> = old_parent.into();
+    let stale_block = MockBlock::new();
+    let stale_header = TestBlockHeader::new(
+        &old_leaf,
+        stale_block.payload_commitment,
+        stale_block.builder_commitment,
+        stale_block.metadata,
+        TEST_VERSIONS.test.base,
+    );
+    harness.consensus.apply(
+        ConsensusInput::HeaderCreated(ViewNumber::new(3), old_commitment, stale_header),
+        &mut outbox,
+    );
+    let request_epoch = outbox
+        .iter()
+        .find_map(|o| match o {
+            ConsensusOutput::RequestBlockAndHeader(r)
+                if r.parent_proposal.view_number == ViewNumber::new(2) =>
+            {
+                Some(r.epoch)
+            },
+            _ => None,
+        })
+        .expect("header must be re-requested for the adopted lock's parent");
+
+    // Fulfill the re-request.
+    let parent_proposal = test_data.views[1].proposal_message().proposal.data;
+    let parent_commitment = proposal_commitment(&parent_proposal);
+    let mock_block = MockBlock::new();
+    let parent_leaf: Leaf2<TestTypes> = parent_proposal.into();
+    let header = TestBlockHeader::new(
+        &parent_leaf,
+        mock_block.payload_commitment,
+        mock_block.builder_commitment,
+        mock_block.metadata,
+        TEST_VERSIONS.test.base,
+    );
+    harness.consensus.apply(
+        ConsensusInput::BlockBuilt {
+            view: ViewNumber::new(3),
+            epoch: request_epoch,
+            payload: mock_block.block,
+            metadata: mock_block.metadata,
+            payload_commitment: mock_block.payload_commitment,
+        },
+        &mut outbox,
+    );
+    harness.consensus.apply(
+        ConsensusInput::HeaderCreated(ViewNumber::new(3), parent_commitment, header),
+        &mut outbox,
+    );
+
+    let proposals: Vec<(u64, bool)> = outbox
+        .iter()
+        .filter_map(|output| match output {
+            ConsensusOutput::PersistProposal(p) if *p.data.view_number == 3 => Some((
+                *p.data.justify_qc.view_number,
+                p.data.view_change_evidence.is_some(),
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        proposals,
+        vec![(2, true)],
+        "re-proposal must justify the adopted legacy QC and carry the TC"
     );
 }
 
