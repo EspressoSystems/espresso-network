@@ -305,7 +305,7 @@ async fn forward_legacy_high_qc_never_blocks_on_parked_coordinator() {
         .await
         .expect(
             "forward_legacy_high_qc stalled: broadcast channel did not drain (parked coordinator \
-             blocked submit_legacy_high_qc)",
+             blocked try_submit_legacy_high_qc)",
         )
         .expect("forwarder task should not panic");
 

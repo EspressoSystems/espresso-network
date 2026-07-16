@@ -137,13 +137,13 @@ impl<T: NodeType> ClientApi<T> {
     }
 
     /// Forward a legacy `TimeoutVote2` into the new-protocol timeout collectors.
-    pub fn submit_timeout_vote(&self, vote: TimeoutVote2<T>) -> Result<(), QueryError> {
+    pub fn try_submit_legacy_timeout_vote(&self, vote: TimeoutVote2<T>) -> Result<(), QueryError> {
         self.try_send(ClientRequest::SubmitTimeoutVote { vote })
     }
 
     /// Forward the last legacy view's QC so the first new-protocol leader can
     /// propose on it even if the cutover seed was snapshotted before it formed.
-    pub fn submit_legacy_high_qc(&self, qc: QuorumCertificate2<T>) -> Result<(), QueryError> {
+    pub fn try_submit_legacy_high_qc(&self, qc: QuorumCertificate2<T>) -> Result<(), QueryError> {
         self.try_send(ClientRequest::SubmitLegacyHighQc { qc })
     }
 

@@ -102,7 +102,7 @@ pub async fn forward_legacy_timeout_votes<T: NodeType>(
     while let Some(event) = rx.next().await {
         if let EventType::LegacyTimeoutVoteEmitted { vote } = event.event
             && cutover_decided(&upgrade_lock)
-            && let Err(err) = client_api.submit_timeout_vote(vote)
+            && let Err(err) = client_api.try_submit_legacy_timeout_vote(vote)
         {
             tracing::warn!(%err, "failed to forward legacy TimeoutVote2 to new-protocol coordinator");
         }
@@ -121,7 +121,7 @@ pub async fn forward_legacy_high_qc<T: NodeType>(
     while let Some(event) = rx.next().await {
         if let EventType::LegacyHighQcFormed { qc } = event.event
             && cutover_decided(&upgrade_lock)
-            && let Err(err) = client_api.submit_legacy_high_qc(qc)
+            && let Err(err) = client_api.try_submit_legacy_high_qc(qc)
         {
             tracing::warn!(%err, "failed to forward legacy high QC to new-protocol coordinator");
         }
