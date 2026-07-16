@@ -225,6 +225,7 @@ impl Options {
             let metrics = ds.populate_metrics();
             telemetry::set_registry(Arc::new(ds.metrics().registry().clone()));
             tasks.spawn("process_metrics", ProcessMetrics::new(ds.metrics()).run());
+            let axum_ds = Arc::new(ExtensibleDataSource::new(ds.clone(), state.clone()));
             let mut app = App::<_, Error>::with_state(AppState::from(ExtensibleDataSource::new(
                 ds,
                 state.clone(),
@@ -242,17 +243,30 @@ impl Options {
             if self.hotshot_events.is_some() {
                 self.init_hotshot_events_module(&mut app)?;
             }
+            drop(app);
 
-            tasks.spawn(
-                "API server",
-                self.listen(self.http.port, app, SequencerApiVersion::instance()),
-            );
-
-            // Spawn new Axum and gRPC servers if ports are configured
-            // TODO: Use NodeApiStateImpl with real data source once available for status-only mode
-            if self.http.axum_port.is_some() {
-                tracing::warn!("Axum reward API not available in status-only mode");
-            }
+            let port = self.http.port;
+            let env_vars = endpoints::get_public_env_vars().unwrap_or_default();
+            let node_cfg = self.public_node_config.as_deref().cloned();
+            let modules = espresso_api::OptionalModules {
+                submit: self.submit.is_some(),
+                catchup: self.catchup.is_some(),
+                config: self.config.is_some(),
+                hotshot_events: self.hotshot_events.is_some(),
+                ..Default::default()
+            };
+            let max_connections = self.http.max_connections;
+            tasks.spawn("API server", async move {
+                let state = NodeApiStateImpl::new(axum_ds)
+                    .with_env_vars(env_vars)
+                    .with_public_node_config(node_cfg);
+                if let Err(e) =
+                    espresso_api::serve_axum_status(port, state, modules, max_connections).await
+                {
+                    tracing::error!("Axum server error: {}", e);
+                }
+                anyhow::Ok(())
+            });
 
             if self.http.tonic_port.is_some() {
                 tracing::warn!("gRPC reward API not available in status-only mode");
@@ -274,11 +288,31 @@ impl Options {
             if self.hotshot_events.is_some() {
                 self.init_hotshot_events_module(&mut app)?;
             }
+            drop(app);
 
-            tasks.spawn(
-                "API server",
-                self.listen(self.http.port, app, SequencerApiVersion::instance()),
-            );
+            let port = self.http.port;
+            let env_vars = endpoints::get_public_env_vars().unwrap_or_default();
+            let node_cfg = self.public_node_config.as_deref().cloned();
+            let modules = espresso_api::OptionalModules {
+                submit: self.submit.is_some(),
+                catchup: self.catchup.is_some(),
+                config: self.config.is_some(),
+                hotshot_events: self.hotshot_events.is_some(),
+                ..Default::default()
+            };
+            let axum_ds = Arc::new(state.clone());
+            let max_connections = self.http.max_connections;
+            tasks.spawn("API server", async move {
+                let state = NodeApiStateImpl::new(axum_ds)
+                    .with_env_vars(env_vars)
+                    .with_public_node_config(node_cfg);
+                if let Err(e) =
+                    espresso_api::serve_axum_bare(port, state, modules, max_connections).await
+                {
+                    tracing::error!("Axum server error: {}", e);
+                }
+                anyhow::Ok(())
+            });
 
             (Box::new(NoMetrics), Box::new(NullEventConsumer), None)
         };
@@ -409,14 +443,29 @@ impl Options {
         if self.hotshot_events.is_some() {
             self.init_hotshot_events_module(&mut app)?;
         }
+        drop(app);
 
-        tasks.spawn("API server", self.listen(self.http.port, app, bind_version));
-
-        // Reward APIs not available with filesystem storage
-        // Note: Filesystem storage doesn't support RewardMerkleTreeDataSource
-        if self.http.axum_port.is_some() {
-            tracing::warn!("Axum reward API not available with filesystem storage");
-        }
+        let port = self.http.port;
+        let ds_for_axum = ds.clone();
+        let env_vars = endpoints::get_public_env_vars().unwrap_or_default();
+        let node_cfg = self.public_node_config.as_deref().cloned();
+        let modules = espresso_api::OptionalModules {
+            submit: self.submit.is_some(),
+            config: self.config.is_some(),
+            hotshot_events: self.hotshot_events.is_some(),
+            ..Default::default()
+        };
+        let max_connections = self.http.max_connections;
+        tasks.spawn("API server", async move {
+            let state = NodeApiStateImpl::new(ds_for_axum)
+                .with_env_vars(env_vars)
+                .with_public_node_config(node_cfg);
+            if let Err(e) = espresso_api::serve_axum_fs(port, state, modules, max_connections).await
+            {
+                tracing::error!("Axum server error: {}", e);
+            }
+            anyhow::Ok(())
+        });
 
         if self.http.tonic_port.is_some() {
             tracing::warn!("gRPC reward API not available with filesystem storage");
@@ -539,25 +588,34 @@ impl Options {
             })?;
         }
 
-        tasks.spawn(
-            "API server",
-            self.listen(self.http.port, app, SequencerApiVersion::instance()),
-        );
+        // Drop the tide-disco app — SQL mode is fully served by Axum. The unused `app` here
+        // is kept above only so the registrations exercise the tide-disco module definitions
+        // (which still compile against `App::register_module`) until all callers are off
+        // tide-disco. TODO: stop building `app` once the unused tide-disco branches are gone.
+        drop(app);
 
-        // Spawn new Axum and gRPC servers if ports are configured
-        if let Some(axum_port) = self.http.axum_port {
-            let ds_for_axum = ds.clone();
-            let env_vars = endpoints::get_public_env_vars().unwrap_or_default();
-            let node_cfg = self.public_node_config.as_deref().cloned();
-            tasks.spawn("Axum API server", async move {
-                let state = NodeApiStateImpl::new(ds_for_axum)
-                    .with_env_vars(env_vars)
-                    .with_public_node_config(node_cfg);
-                if let Err(e) = espresso_api::serve_axum(axum_port, state).await {
-                    tracing::error!("Axum server error: {}", e);
-                }
-            });
-        }
+        let port = self.http.port;
+        let ds_for_axum = ds.clone();
+        let env_vars = endpoints::get_public_env_vars().unwrap_or_default();
+        let node_cfg = self.public_node_config.as_deref().cloned();
+        let modules = espresso_api::OptionalModules {
+            submit: self.submit.is_some(),
+            config: self.config.is_some(),
+            explorer: self.explorer.is_some(),
+            light_client: self.light_client.is_some(),
+            hotshot_events: self.hotshot_events.is_some(),
+            ..Default::default()
+        };
+        let max_connections = self.http.max_connections;
+        tasks.spawn("API server", async move {
+            let state = NodeApiStateImpl::new(ds_for_axum)
+                .with_env_vars(env_vars)
+                .with_public_node_config(node_cfg);
+            if let Err(e) = espresso_api::serve_axum(port, state, modules, max_connections).await {
+                tracing::error!("Axum server error: {}", e);
+            }
+            anyhow::Ok(())
+        });
 
         if let Some(tonic_port) = self.http.tonic_port {
             let ds_for_tonic = ds.clone();
@@ -649,6 +707,8 @@ impl Options {
         Ok(())
     }
 
+    // Kept until tide-disco removal; no longer called since the axum cutover.
+    #[allow(dead_code)]
     fn listen<S, E, ApiVer>(
         &self,
         port: u16,
@@ -692,10 +752,6 @@ pub struct Http {
     #[clap(long, env = "ESPRESSO_NODE_API_MAX_CONNECTIONS")]
     pub max_connections: Option<usize>,
 
-    /// Optional port for new Axum API server (skeleton implementation).
-    #[clap(long, env = "ESPRESSO_NODE_AXUM_PORT")]
-    pub axum_port: Option<u16>,
-
     /// Optional port for Tonic gRPC API server.
     #[clap(long, env = "ESPRESSO_NODE_TONIC_PORT")]
     pub tonic_port: Option<u16>,
@@ -707,7 +763,6 @@ impl Http {
         Self {
             port,
             max_connections: None,
-            axum_port: None,
             tonic_port: None,
         }
     }

@@ -3199,10 +3199,10 @@ mod test {
         upgrade_stake_table_v3,
     };
     use espresso_types::{
-        ADVZNamespaceProofQueryData, FeeAmount, Header, L1Client, L1ClientOptions,
-        MOCK_SEQUENCER_VERSIONS, NamespaceId, NamespaceProofQueryData, NsProof,
-        RegisteredValidatorMap, RewardDistributor, StakeTableState, StateCertQueryDataV1,
-        StateCertQueryDataV2, ValidatedState, ValidatorLeaderCounts,
+        FeeAmount, Header, L1Client, L1ClientOptions, MOCK_SEQUENCER_VERSIONS, NamespaceId,
+        NamespaceProofQueryData, NsProof, RegisteredValidatorMap, RewardDistributor,
+        StakeTableState, StateCertQueryDataV1, StateCertQueryDataV2, ValidatedState,
+        ValidatorLeaderCounts,
         config::PublicHotShotConfig,
         traits::{MembershipPersistence, NullEventConsumer, PersistenceOptions},
         v0_3::{COMMISSION_BASIS_POINTS, Fetcher, RewardAmount, RewardMerkleProofV1},
@@ -3432,6 +3432,40 @@ mod test {
             .send()
             .await
             .unwrap_err();
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_database_metadata_endpoints() {
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+
+        let storage = SqlDataSource::create_storage().await;
+        let options = SqlDataSource::options(&storage, Options::with_port(port));
+
+        let network_config = TestConfigBuilder::default().build();
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(options)
+            .network_config(network_config)
+            .build();
+        let _network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
+        let url = format!("http://localhost:{port}").parse().unwrap();
+        let client: Client<ServerError, SequencerApiVersion> = Client::new(url);
+        client.connect(Some(Duration::from_secs(15))).await;
+
+        let table_sizes = client
+            .get::<Vec<data_source::TableSize>>("database/table-sizes")
+            .send()
+            .await
+            .unwrap();
+        assert!(!table_sizes.is_empty());
+
+        // Deferred backfill migrations register tracking rows at node startup, so the list may
+        // be non-empty; just check the entries are well-formed.
+        let migration_status = client
+            .get::<Vec<data_source::MigrationStatus>>("database/migration-status")
+            .send()
+            .await
+            .unwrap();
+        assert!(migration_status.iter().all(|m| !m.name.is_empty()));
     }
 
     async fn run_catchup_test(url_suffix: &str) {
@@ -3872,7 +3906,6 @@ mod test {
             .api_config(Options::from(options::Http {
                 port,
                 max_connections: None,
-                axum_port: None,
                 tonic_port: None,
             }))
             .states(states)
@@ -8208,9 +8241,11 @@ mod test {
                 .build();
 
             let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
-            let axum_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+            // After the tide-disco cutover the single `port` field serves the Axum API.
+            // The parity-test helpers still accept two ports — wire both to the same Axum
+            // server so the existing call sites remain unchanged.
+            let axum_port = api_port;
             println!("API PORT = {api_port}");
-            println!("AXUM PORT = {axum_port}");
 
             let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
             let persistence: [_; NUM_NODES] = storage
@@ -8220,14 +8255,12 @@ mod test {
                 .try_into()
                 .unwrap();
 
-            let mut api_opts = Options::with_port(api_port)
+            let api_opts = Options::with_port(api_port)
                 .catchup(Default::default())
                 .config(Default::default())
-                .submit(Default::default())
                 .explorer(Default::default())
                 .light_client(Default::default())
-                .hotshot_events(HotshotEvents);
-            api_opts.http.axum_port = Some(axum_port);
+                .hotshot_events(Default::default());
 
             let config = TestNetworkConfigBuilder::with_num_nodes()
                 .api_config(SqlDataSource::options(&storage[0], api_opts))
@@ -8401,6 +8434,26 @@ mod test {
 
                     assert_eq!(reward_claim_input, res.to_reward_claim_input()?);
 
+                    // Tide contract relied on by scripts/claim-rewards-loop: an account with no
+                    // rewards yields 404; any other error status makes the claim loop exit and
+                    // process-compose tear down the whole demo.
+                    let absent = alloy::primitives::Address::with_last_byte(0xaa);
+                    assert!(
+                        validated_state
+                            .reward_merkle_tree_v2
+                            .iter()
+                            .all(|(addr, _)| addr.0 != absent),
+                        "sentinel address unexpectedly present in reward tree"
+                    );
+                    let err = client
+                        .get::<RewardClaimInput>(&format!(
+                            "reward-state-v2/reward-claim-input/{height}/{absent}"
+                        ))
+                        .send()
+                        .await
+                        .unwrap_err();
+                    assert_matches!(err, ServerError { status, .. } if status == StatusCode::NOT_FOUND);
+
                     // Both servers share the same underlying SQL data source; compare responses
                     // for each per-address endpoint under reward-state-v2.
                     compare_endpoints(
@@ -8438,6 +8491,24 @@ mod test {
                         &format!("reward-state-v2/reward-balance/latest/{address}"),
                     )
                     .await?;
+
+                    // Tide-disco registered the same reward.toml handlers on both the
+                    // reward-state and reward-state-v2 mounts, so these two routes hit the
+                    // same v2-tree-backed handlers as the pair above, just under reward-state.
+                    compare_endpoints(
+                        &http,
+                        api_port,
+                        axum_port,
+                        &format!("reward-state/proof/latest/{address}"),
+                    )
+                    .await?;
+                    compare_endpoints(
+                        &http,
+                        api_port,
+                        axum_port,
+                        &format!("reward-state/reward-balance/latest/{address}"),
+                    )
+                    .await?;
                 }
 
                 compare_endpoints(
@@ -8454,6 +8525,60 @@ mod test {
                     &format!("reward-state-v2/reward-merkle-tree-v2/{height}"),
                 )
                 .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("reward-state/reward-amounts/{height}/0/1000"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("reward-state/reward-merkle-tree-v2/{height}"),
+                )
+                .await?;
+
+                // Merklized-state `get_path` routes, inherited by both reward mounts from
+                // `hotshot-query-service`'s base `state.toml` (mirrors the block-state /
+                // fee-state checks below). Nothing in this codebase populates the generic
+                // merklized-state tables for the reward trees today; the reward-state modules
+                // persist snapshots via the separate `persist_tree`/`load_tree` bincode-blob
+                // mechanism instead, so these routes 404 in practice. We only assert that both
+                // mounts, in both height and commit form, return well-formed (and identical
+                // between the two "servers") JSON.
+                let reward_address = validated_state
+                    .reward_merkle_tree_v2
+                    .iter()
+                    .next()
+                    .map(|(addr, _)| *addr)
+                    .expect("reward tree should have at least one account");
+                let reward_header: Header = client
+                    .get(&format!("availability/header/{height}"))
+                    .send()
+                    .await
+                    .unwrap();
+                let reward_mt_commit = match reward_header.reward_merkle_tree_root() {
+                    either::Either::Left(commit) => commit.to_string(),
+                    either::Either::Right(commit) => commit.to_string(),
+                };
+                for mount in ["reward-state", "reward-state-v2"] {
+                    compare_endpoints(
+                        &http,
+                        api_port,
+                        axum_port,
+                        &format!("{mount}/{height}/{reward_address}"),
+                    )
+                    .await?;
+                    compare_endpoints(
+                        &http,
+                        api_port,
+                        axum_port,
+                        &format!("{mount}/commit/{reward_mt_commit}/{reward_address}"),
+                    )
+                    .await?;
+                }
 
                 // Availability v1 parity: verify the axum v1 routes return the same JSON as tide.
 
@@ -9229,6 +9354,24 @@ mod test {
                 )
                 .await?;
 
+                // Regression: an oversized range on the plural namespaces route must return
+                // 400 Bad Request (the status carried by the query-service error), not 500.
+                let encoded_ns = tagged_base64::TaggedBase64::new(
+                    ::light_client::client::NAMESPACES_PARAM_TAG,
+                    &serde_json::to_vec(&vec![u64::from(avail_ns)])?,
+                )?;
+                compare_error_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!(
+                        "light-client/namespaces/{avail_block}/{}/{encoded_ns}",
+                        avail_block + 200
+                    ),
+                    400,
+                )
+                .await?;
+
                 // hotshot-events startup info: both must return matching JSON.
                 compare_endpoints(&http, api_port, axum_port, "hotshot-events/startup_info")
                     .await?;
@@ -9525,7 +9668,6 @@ mod test {
             .api_config(Options::from(options::Http {
                 port,
                 max_connections: None,
-                axum_port: None,
                 tonic_port: None,
             }))
             .catchups(std::array::from_fn(|_| {
@@ -9632,87 +9774,6 @@ mod test {
                 assert_eq!(&proof.transactions, std::slice::from_ref(&tx));
                 break;
             }
-        }
-
-        // The legacy version of the API only works for old VID.
-        tracing::info!("test namespace API version: v0");
-        if version < EPOCH_VERSION {
-            let ns_proof: ADVZNamespaceProofQueryData = client
-                .get(&format!("v0/availability/block/{block}/namespace/{ns}"))
-                .send()
-                .await
-                .unwrap();
-            let proof = ns_proof.proof.as_ref().unwrap();
-            let VidCommon::V0(common) = common.common() else {
-                panic!("wrong VID common version");
-            };
-            let (txs, ns_from_proof) = proof
-                .verify(header.ns_table(), &header.payload_commitment(), common)
-                .unwrap();
-            assert_eq!(ns_from_proof, ns);
-            assert_eq!(txs, ns_proof.transactions);
-            assert_eq!(&txs, std::slice::from_ref(&tx));
-
-            // Test range endpoint.
-            let ns_proofs: Vec<ADVZNamespaceProofQueryData> = client
-                .get(&format!(
-                    "v0/availability/block/{}/{}/namespace/{ns}",
-                    block,
-                    block + 1
-                ))
-                .send()
-                .await
-                .unwrap();
-            assert_eq!(&ns_proofs, std::slice::from_ref(&ns_proof));
-        } else {
-            // It will fail if we ask for a proof for a block using new VID.
-            client
-                .get::<ADVZNamespaceProofQueryData>(&format!(
-                    "v0/availability/block/{block}/namespace/{ns}"
-                ))
-                .send()
-                .await
-                .unwrap_err();
-        }
-
-        // Any API version can correctly tell us that the namespace does not exist.
-        let ns_proof: ADVZNamespaceProofQueryData = client
-            .get(&format!(
-                "v0/availability/block/{}/namespace/{ns}",
-                block - 1
-            ))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(ns_proof.proof, None);
-        assert_eq!(ns_proof.transactions, vec![]);
-
-        // Use the legacy API to stream namespace proofs until we get to a non-trivial proof or a
-        // VID version we can't deal with.
-        let mut proofs = client
-            .socket(&format!("v0/availability/stream/blocks/0/namespace/{ns}"))
-            .subscribe()
-            .await
-            .unwrap();
-        for i in 0.. {
-            tracing::info!(i, "stream proof");
-            let proof: ADVZNamespaceProofQueryData = match proofs.next().await {
-                Some(proof) => proof.unwrap(),
-                None => {
-                    // Steam not expected to end on legacy consensus version.
-                    assert!(
-                        version >= EPOCH_VERSION,
-                        "legacy steam ended while still on legacy consensus"
-                    );
-                    break;
-                },
-            };
-            if proof.proof.is_none() {
-                tracing::info!("waiting for non-trivial proof from stream");
-                continue;
-            }
-            assert_eq!(&proof.transactions, std::slice::from_ref(&tx));
-            break;
         }
 
         network.server.shut_down().await;

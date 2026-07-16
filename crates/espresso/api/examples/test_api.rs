@@ -35,6 +35,32 @@ impl v1::RewardApi for TestApi {
     type RewardAccountQueryData = (u128, Vec<u8>);
     type RewardAmounts = (Vec<(u128, u128)>, u64);
     type RewardMerkleTreeData = Vec<u8>;
+    type RewardAccountQueryDataV1 = (u128, Vec<u8>);
+    type RewardStatePathV1 = serde_json::Value;
+    type RewardStatePathV2 = serde_json::Value;
+
+    async fn get_reward_state_height(&self) -> Result<u64> {
+        tracing::info!("v1: get_reward_state_height()");
+        Ok(42)
+    }
+
+    async fn get_reward_state_v2_height(&self) -> Result<u64> {
+        tracing::info!("v1: get_reward_state_v2_height()");
+        Ok(42)
+    }
+
+    async fn get_reward_account_proof_v1(
+        &self,
+        height: u64,
+        address: String,
+    ) -> Result<Self::RewardAccountQueryDataV1> {
+        tracing::info!(
+            "v1: get_reward_account_proof_v1(height={}, address={})",
+            height,
+            address
+        );
+        Ok((500_000_000_000_000_000, vec![0xde, 0xad, 0xbe, 0xef]))
+    }
 
     async fn get_reward_claim_input(
         &self,
@@ -119,6 +145,22 @@ impl v1::RewardApi for TestApi {
         tracing::info!("v1: get_reward_merkle_tree_v2(height={})", height);
         Ok(vec![0x00, 0x11, 0x22, 0x33, 0x44, 0x55])
     }
+
+    async fn get_reward_state_path_v1(
+        &self,
+        _snapshot: v1::Snapshot,
+        _key: String,
+    ) -> Result<Self::RewardStatePathV1> {
+        Ok(serde_json::Value::Null)
+    }
+
+    async fn get_reward_state_path_v2(
+        &self,
+        _snapshot: v1::Snapshot,
+        _key: String,
+    ) -> Result<Self::RewardStatePathV2> {
+        Ok(serde_json::Value::Null)
+    }
 }
 
 // Implement v1::AvailabilityApi with test data
@@ -133,13 +175,13 @@ impl v1::AvailabilityApi for TestApi {
         &self,
         block_id: v1::availability::BlockId,
         namespace: u32,
-    ) -> Result<Option<Self::NamespaceProofQueryData>> {
+    ) -> Result<Self::NamespaceProofQueryData> {
         tracing::info!(
             "v1: get_namespace_proof(block_id={:?}, namespace={})",
             block_id,
             namespace
         );
-        Ok(Some((vec![0xaa, 0xbb, 0xcc], Some(vec![0x11, 0x22, 0x33]))))
+        Ok((vec![0xaa, 0xbb, 0xcc], Some(vec![0x11, 0x22, 0x33])))
     }
 
     async fn get_namespace_proof_range(
@@ -645,6 +687,14 @@ impl v1::LightClientApi for TestApi {
     ) -> Result<Vec<Self::NamespaceProof>> {
         Ok(vec![])
     }
+    async fn get_lc_namespaces_proof_range(
+        &self,
+        _start: u64,
+        _end: u64,
+        _namespaces: String,
+    ) -> Result<Vec<std::collections::HashMap<u64, Self::NamespaceProof>>> {
+        Ok(vec![])
+    }
 }
 
 #[async_trait]
@@ -707,8 +757,13 @@ impl v1::TokenApi for TestApi {
 #[async_trait]
 impl v1::DatabaseApi for TestApi {
     type TableSizes = serde_json::Value;
+    type MigrationStatus = serde_json::Value;
 
     async fn get_table_sizes(&self) -> Result<Self::TableSizes> {
+        Ok(serde_json::Value::Null)
+    }
+
+    async fn get_migration_status(&self) -> Result<Self::MigrationStatus> {
         Ok(serde_json::Value::Null)
     }
 }
@@ -1083,8 +1138,16 @@ async fn main() -> Result<()> {
 
     let state = TestApi;
 
-    // Start Axum server with combined v1 and v2 APIs
-    espresso_api::serve_axum(API_PORT, state).await?;
+    // Start Axum server with combined v1 and v2 APIs, all optional modules enabled
+    let modules = espresso_api::OptionalModules {
+        submit: true,
+        catchup: true,
+        config: true,
+        hotshot_events: true,
+        explorer: true,
+        light_client: true,
+    };
+    espresso_api::serve_axum(API_PORT, state, modules, None).await?;
 
     Ok(())
 }

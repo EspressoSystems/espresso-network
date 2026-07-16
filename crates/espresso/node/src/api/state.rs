@@ -47,6 +47,7 @@ use serialization_api::v2::{
     reward_merkle_proof_v2::ProofType,
 };
 use tagged_base64::TaggedBase64;
+use tide_disco::{Error as _, StatusCode};
 
 use super::{
     RewardMerkleTreeDataSource, RewardMerkleTreeV2Data as InternalRewardTreeData,
@@ -531,17 +532,16 @@ where
             .load_latest_reward_account_proof_v2(address.into())
             .await
             .map_err(|err| {
-                anyhow::anyhow!(
+                not_found(format!(
                     "failed to load latest reward account {:?}: {}",
-                    address,
-                    err
-                )
+                    address, err
+                ))
             })?;
 
         // Convert the proof to reward claim input and return internal type
         proof.to_reward_claim_input().map_err(|err| match err {
             RewardClaimError::ZeroRewardError => {
-                anyhow::anyhow!("zero reward balance for {:?}", address)
+                not_found(format!("zero reward balance for {:?}", address))
             },
             RewardClaimError::ProofConversionError(e) => {
                 anyhow::anyhow!("failed to create solidity proof for {:?}: {}", address, e)
@@ -559,11 +559,10 @@ where
             .load_latest_reward_account_proof_v2(address.into())
             .await
             .map_err(|err| {
-                anyhow::anyhow!(
+                not_found(format!(
                     "failed to load latest reward account {:?}: {}",
-                    address,
-                    err
-                )
+                    address, err
+                ))
             })?;
 
         // Return internal balance type
@@ -579,11 +578,10 @@ where
             .load_latest_reward_account_proof_v2(address.into())
             .await
             .map_err(|err| {
-                anyhow::anyhow!(
+                not_found(format!(
                     "failed to load latest reward account proof for {:?}: {}",
-                    address,
-                    err
-                )
+                    address, err
+                ))
             })
     }
 
@@ -595,25 +593,27 @@ where
     ) -> anyhow::Result<Self::RewardBalances> {
         // Validate limit (from reward.toml: limit <= 10000)
         if limit > 10000 {
-            return Err(anyhow::anyhow!(
+            return Err(bad_request(format!(
                 "limit {} exceeds maximum allowed value of 10000",
                 limit
-            ));
+            )));
         }
 
         // Load the merkle tree at the given height
         let tree_bytes = self.data_source.load_tree(height).await.map_err(|err| {
-            anyhow::anyhow!("failed to load reward tree at height {}: {}", height, err)
+            not_found(format!(
+                "failed to load reward tree at height {}: {}",
+                height, err
+            ))
         })?;
 
         // Deserialize the tree into internal format
         let tree_data: InternalRewardTreeData =
             bincode::deserialize(&tree_bytes).map_err(|err| {
-                anyhow::anyhow!(
+                not_found(format!(
                     "failed to deserialize RewardMerkleTreeV2Data at height {}: {}",
-                    height,
-                    err
-                )
+                    height, err
+                ))
             })?;
 
         let offset_usize = offset as usize;
@@ -622,7 +622,7 @@ where
 
         // Validate offset is within bounds
         if offset_usize > tree_data.balances.len() {
-            return Err(anyhow::anyhow!("offset {} out of bounds", offset));
+            return Err(not_found(format!("offset {} out of bounds", offset)));
         }
 
         let end = std::cmp::min(offset_usize + limit_usize, tree_data.balances.len());
@@ -639,16 +639,18 @@ where
     ) -> anyhow::Result<Self::RewardMerkleTreeData> {
         // Load the raw merkle tree bytes
         let tree_bytes = self.data_source.load_tree(height).await.map_err(|err| {
-            anyhow::anyhow!("failed to load reward tree at height {}: {}", height, err)
+            not_found(format!(
+                "failed to load reward tree at height {}: {}",
+                height, err
+            ))
         })?;
 
         // Deserialize and return internal type
         bincode::deserialize(&tree_bytes).map_err(|err| {
-            anyhow::anyhow!(
+            not_found(format!(
                 "failed to deserialize RewardMerkleTreeV2Data at height {}: {}",
-                height,
-                err
-            )
+                height, err
+            ))
         })
     }
 }
@@ -660,13 +662,82 @@ where
 #[async_trait]
 impl<D> espresso_api::v1::RewardApi for NodeApiStateImpl<D>
 where
-    D: RewardMerkleTreeDataSource,
+    D: RewardMerkleTreeDataSource + std::ops::Deref,
+    D::Target: hotshot_query_service::merklized_state::MerklizedStateHeightPersistence
+        + hotshot_query_service::merklized_state::MerklizedStateDataSource<
+            espresso_types::SeqTypes,
+            espresso_types::v0_3::RewardMerkleTreeV1,
+            {
+                <espresso_types::v0_3::RewardMerkleTreeV1 as jf_merkle_tree_compat::MerkleTreeScheme>::ARITY
+            },
+        > + hotshot_query_service::merklized_state::MerklizedStateDataSource<
+            espresso_types::SeqTypes,
+            espresso_types::v0_4::RewardMerkleTreeV2,
+            {
+                <espresso_types::v0_4::RewardMerkleTreeV2 as jf_merkle_tree_compat::MerkleTreeScheme>::ARITY
+            },
+        > + Send
+        + Sync,
 {
     type RewardClaimInput = InternalRewardClaimInput;
     type RewardBalance = InternalRewardAmount;
     type RewardAccountQueryData = InternalRewardAccountQueryData;
     type RewardAmounts = Vec<(alloy::primitives::Address, InternalRewardAmount)>;
     type RewardMerkleTreeData = Vec<u8>;
+    type RewardAccountQueryDataV1 = espresso_types::v0_3::RewardAccountQueryDataV1;
+    type RewardStatePathV1 = InternalMerkleProof<
+        InternalRewardAmount,
+        espresso_types::v0_3::RewardAccountV1,
+        jf_merkle_tree_compat::prelude::Sha3Node,
+        {
+            <espresso_types::v0_3::RewardMerkleTreeV1 as jf_merkle_tree_compat::MerkleTreeScheme>::ARITY
+        },
+    >;
+    type RewardStatePathV2 = InternalMerkleProof<
+        InternalRewardAmount,
+        RewardAccountV2,
+        KeccakNode,
+        {
+            <espresso_types::v0_4::RewardMerkleTreeV2 as jf_merkle_tree_compat::MerkleTreeScheme>::ARITY
+        },
+    >;
+
+    async fn get_reward_state_height(&self) -> anyhow::Result<u64> {
+        use hotshot_query_service::merklized_state::MerklizedStateHeightPersistence;
+
+        let ds = &*self.data_source;
+        ds.get_last_state_height()
+            .await
+            .map(|h| h as u64)
+            .map_err(classify_query_error)
+    }
+
+    async fn get_reward_state_v2_height(&self) -> anyhow::Result<u64> {
+        // Both the V1 and V2 reward merklized-state modules share the same underlying
+        // `last_merklized_state_height` row; mirrors tide registering the height route
+        // once per module against the same data source.
+        self.get_reward_state_height().await
+    }
+
+    async fn get_reward_account_proof_v1(
+        &self,
+        height: u64,
+        address: String,
+    ) -> anyhow::Result<Self::RewardAccountQueryDataV1> {
+        let account: espresso_types::v0_3::RewardAccountV1 = address
+            .parse()
+            .map_err(|_| bad_request(format!("invalid ethereum address: {}", address)))?;
+
+        self.data_source
+            .load_v1_reward_account_proof(height, account)
+            .await
+            .map_err(|err| {
+                not_found(format!(
+                    "failed to load v1 reward account {} at height {}: {}",
+                    address, height, err
+                ))
+            })
+    }
 
     async fn get_reward_claim_input(
         &self,
@@ -676,7 +747,7 @@ where
         // Parse the Ethereum address
         let addr: alloy::primitives::Address = address
             .parse()
-            .map_err(|_| anyhow::anyhow!("invalid ethereum address: {}", address))?;
+            .map_err(|_| bad_request(format!("invalid ethereum address: {}", address)))?;
 
         // Load the reward account proof from the data source
         let proof = self
@@ -684,23 +755,18 @@ where
             .load_reward_account_proof_v2(block_height, addr.into())
             .await
             .map_err(|err| {
-                anyhow::anyhow!(
+                not_found(format!(
                     "failed to load reward account {} at height {}: {}",
-                    address,
-                    block_height,
-                    err
-                )
+                    address, block_height, err
+                ))
             })?;
 
         // Convert the proof to reward claim input (internal type)
         let claim_input = proof.to_reward_claim_input().map_err(|err| match err {
-            RewardClaimError::ZeroRewardError => {
-                anyhow::anyhow!(
-                    "zero reward balance for {} at height {}",
-                    address,
-                    block_height
-                )
-            },
+            RewardClaimError::ZeroRewardError => not_found(format!(
+                "zero reward balance for {} at height {}",
+                address, block_height
+            )),
             RewardClaimError::ProofConversionError(e) => {
                 anyhow::anyhow!(
                     "failed to create solidity proof for {} at height {}: {}",
@@ -722,7 +788,7 @@ where
         // Parse the Ethereum address
         let addr: alloy::primitives::Address = address
             .parse()
-            .map_err(|_| anyhow::anyhow!("invalid ethereum address: {}", address))?;
+            .map_err(|_| bad_request(format!("invalid ethereum address: {}", address)))?;
 
         // Load the reward account proof from the data source
         let proof = self
@@ -730,12 +796,10 @@ where
             .load_reward_account_proof_v2(height, addr.into())
             .await
             .map_err(|err| {
-                anyhow::anyhow!(
+                not_found(format!(
                     "failed to load reward account {} at height {}: {}",
-                    address,
-                    height,
-                    err
-                )
+                    address, height, err
+                ))
             })?;
 
         Ok(InternalRewardAmount(proof.balance))
@@ -747,14 +811,17 @@ where
     ) -> anyhow::Result<Self::RewardBalance> {
         let addr: alloy::primitives::Address = address
             .parse()
-            .map_err(|_| anyhow::anyhow!("invalid ethereum address: {}", address))?;
+            .map_err(|_| bad_request(format!("invalid ethereum address: {}", address)))?;
 
         let proof = self
             .data_source
             .load_latest_reward_account_proof_v2(addr.into())
             .await
             .map_err(|err| {
-                anyhow::anyhow!("failed to load latest reward account {}: {}", address, err)
+                not_found(format!(
+                    "failed to load latest reward account {}: {}",
+                    address, err
+                ))
             })?;
 
         Ok(InternalRewardAmount(proof.balance))
@@ -768,7 +835,7 @@ where
         // Parse the Ethereum address
         let addr: alloy::primitives::Address = address
             .parse()
-            .map_err(|_| anyhow::anyhow!("invalid ethereum address: {}", address))?;
+            .map_err(|_| bad_request(format!("invalid ethereum address: {}", address)))?;
 
         // Load and return the reward account proof directly (internal type)
         let proof = self
@@ -776,12 +843,10 @@ where
             .load_reward_account_proof_v2(height, addr.into())
             .await
             .map_err(|err| {
-                anyhow::anyhow!(
+                not_found(format!(
                     "failed to load reward account {} at height {}: {}",
-                    address,
-                    height,
-                    err
-                )
+                    address, height, err
+                ))
             })?;
 
         Ok(proof)
@@ -794,7 +859,7 @@ where
         // Parse the Ethereum address
         let addr: alloy::primitives::Address = address
             .parse()
-            .map_err(|_| anyhow::anyhow!("invalid ethereum address: {}", address))?;
+            .map_err(|_| bad_request(format!("invalid ethereum address: {}", address)))?;
 
         // Load and return the latest reward account proof directly (internal type)
         let proof = self
@@ -802,7 +867,10 @@ where
             .load_latest_reward_account_proof_v2(addr.into())
             .await
             .map_err(|err| {
-                anyhow::anyhow!("failed to load latest reward account {}: {}", address, err)
+                not_found(format!(
+                    "failed to load latest reward account {}: {}",
+                    address, err
+                ))
             })?;
 
         Ok(proof)
@@ -816,25 +884,27 @@ where
     ) -> anyhow::Result<Self::RewardAmounts> {
         // Validate limit (from reward.toml: limit <= 10000)
         if limit > 10000 {
-            return Err(anyhow::anyhow!(
+            return Err(bad_request(format!(
                 "limit {} exceeds maximum allowed value of 10000",
                 limit
-            ));
+            )));
         }
 
         // Load the merkle tree at the given height
         let tree_bytes = self.data_source.load_tree(height).await.map_err(|err| {
-            anyhow::anyhow!("failed to load reward tree at height {}: {}", height, err)
+            not_found(format!(
+                "failed to load reward tree at height {}: {}",
+                height, err
+            ))
         })?;
 
         // Deserialize the tree into internal format
         let tree_data: InternalRewardTreeData =
             bincode::deserialize(&tree_bytes).map_err(|err| {
-                anyhow::anyhow!(
+                not_found(format!(
                     "failed to deserialize RewardMerkleTreeV2Data at height {}: {}",
-                    height,
-                    err
-                )
+                    height, err
+                ))
             })?;
 
         let offset_usize = offset as usize;
@@ -842,7 +912,7 @@ where
 
         // Validate offset is within bounds
         if offset_usize > tree_data.balances.len() {
-            return Err(anyhow::anyhow!("offset {} out of bounds", offset));
+            return Err(not_found(format!("offset {} out of bounds", offset)));
         }
 
         let end = std::cmp::min(offset_usize + limit_usize, tree_data.balances.len());
@@ -862,8 +932,79 @@ where
         height: u64,
     ) -> anyhow::Result<Self::RewardMerkleTreeData> {
         self.data_source.load_tree(height).await.map_err(|err| {
-            anyhow::anyhow!("failed to load reward tree at height {}: {}", height, err)
+            not_found(format!(
+                "failed to load reward tree at height {}: {}",
+                height, err
+            ))
         })
+    }
+
+    async fn get_reward_state_path_v1(
+        &self,
+        snapshot: espresso_api::v1::Snapshot,
+        key: String,
+    ) -> anyhow::Result<Self::RewardStatePathV1> {
+        use hotshot_query_service::merklized_state::{
+            MerklizedStateDataSource, Snapshot as HsSnapshot,
+        };
+
+        let hs_snapshot = match snapshot {
+            espresso_api::v1::Snapshot::Height(h) => HsSnapshot::Index(h),
+            espresso_api::v1::Snapshot::Commit(c) => {
+                let tb64: TaggedBase64 = c
+                    .parse()
+                    .map_err(|_| bad_request("failed to parse commit param"))?;
+                let commit = (&tb64)
+                    .try_into()
+                    .map_err(|_| bad_request("failed to parse commit param"))?;
+                HsSnapshot::Commit(commit)
+            },
+        };
+        let key: espresso_types::v0_3::RewardAccountV1 = key
+            .parse()
+            .map_err(|_| bad_request("failed to parse Key param"))?;
+        let ds = &*self.data_source;
+        MerklizedStateDataSource::<
+            espresso_types::SeqTypes,
+            espresso_types::v0_3::RewardMerkleTreeV1,
+            _,
+        >::get_path(ds, hs_snapshot, key)
+        .await
+        .map_err(classify_query_error)
+    }
+
+    async fn get_reward_state_path_v2(
+        &self,
+        snapshot: espresso_api::v1::Snapshot,
+        key: String,
+    ) -> anyhow::Result<Self::RewardStatePathV2> {
+        use hotshot_query_service::merklized_state::{
+            MerklizedStateDataSource, Snapshot as HsSnapshot,
+        };
+
+        let hs_snapshot = match snapshot {
+            espresso_api::v1::Snapshot::Height(h) => HsSnapshot::Index(h),
+            espresso_api::v1::Snapshot::Commit(c) => {
+                let tb64: TaggedBase64 = c
+                    .parse()
+                    .map_err(|_| bad_request("failed to parse commit param"))?;
+                let commit = (&tb64)
+                    .try_into()
+                    .map_err(|_| bad_request("failed to parse commit param"))?;
+                HsSnapshot::Commit(commit)
+            },
+        };
+        let key: RewardAccountV2 = key
+            .parse()
+            .map_err(|_| bad_request("failed to parse Key param"))?;
+        let ds = &*self.data_source;
+        MerklizedStateDataSource::<
+            espresso_types::SeqTypes,
+            espresso_types::v0_4::RewardMerkleTreeV2,
+            _,
+        >::get_path(ds, hs_snapshot, key)
+        .await
+        .map_err(classify_query_error)
     }
 }
 
@@ -1142,8 +1283,10 @@ where
 impl<D> espresso_api::v1::AvailabilityApi for NodeApiStateImpl<D>
 where
     D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target: RewardMerkleTreeDataSource
-        + hotshot_query_service::availability::AvailabilityDataSource<espresso_types::SeqTypes>
+    // No `RewardMerkleTreeDataSource` bound here: unlike `v1::RewardApi`, none of these methods
+    // touch the reward merkle tree, so filesystem storage (which doesn't implement it) can serve
+    // this module too.
+    D::Target: hotshot_query_service::availability::AvailabilityDataSource<espresso_types::SeqTypes>
         + hotshot_query_service::node::NodeDataSource<espresso_types::SeqTypes>
         + super::data_source::RequestResponseDataSource<espresso_types::SeqTypes>
         + super::data_source::StateCertDataSource
@@ -1160,7 +1303,7 @@ where
         &self,
         block_id: espresso_api::v1::availability::BlockId,
         namespace: u32,
-    ) -> anyhow::Result<Option<Self::NamespaceProofQueryData>> {
+    ) -> anyhow::Result<Self::NamespaceProofQueryData> {
         let ns_id = NamespaceId::from(namespace);
 
         // Convert v1 BlockId to hotshot BlockId
@@ -1169,13 +1312,13 @@ where
             espresso_api::v1::availability::BlockId::Hash(h) => {
                 let hash = h
                     .parse()
-                    .map_err(|_| anyhow::anyhow!("invalid block hash: {}", h))?;
+                    .map_err(|_| bad_request(format!("invalid block hash: {}", h)))?;
                 HsBlockId::Hash(hash)
             },
             espresso_api::v1::availability::BlockId::PayloadHash(h) => {
                 let payload_hash = h
                     .parse()
-                    .map_err(|_| anyhow::anyhow!("invalid payload hash: {}", h))?;
+                    .map_err(|_| bad_request(format!("invalid payload hash: {}", h)))?;
                 HsBlockId::PayloadHash(payload_hash)
             },
         };
@@ -1190,34 +1333,39 @@ where
             vid_fetch.with_timeout(timeout)
         );
 
-        let Some(block) = block else {
-            return Ok(None);
-        };
-        let Some(vid_common) = vid_common else {
-            return Ok(None);
-        };
+        let block =
+            block.ok_or_else(|| not_found(format!("block {} not available", hs_block_id)))?;
+        let vid_common = vid_common.ok_or_else(|| {
+            not_found(format!(
+                "VID common for block {} not available",
+                hs_block_id
+            ))
+        })?;
 
-        // Check if namespace is present
+        // Namespace absent from the block: matches tide's empty-result semantics.
         let ns_table = block.payload().ns_table();
         let Some(ns_index) = ns_table.find_ns_id(&ns_id) else {
-            return Ok(None);
+            return Ok(espresso_types::NamespaceProofQueryData {
+                transactions: vec![],
+                proof: None,
+            });
         };
 
         // Generate namespace proof
         let Some(proof) = NsProof::new(block.payload(), &ns_index, vid_common.common()) else {
             // Failed to generate proof - namespace exists but proof generation failed
-            return Ok(Some(espresso_types::NamespaceProofQueryData {
+            return Ok(espresso_types::NamespaceProofQueryData {
                 transactions: vec![],
                 proof: None,
-            }));
+            });
         };
 
         let transactions = proof.export_all_txs(&ns_id);
 
-        Ok(Some(espresso_types::NamespaceProofQueryData {
+        Ok(espresso_types::NamespaceProofQueryData {
             transactions,
             proof: Some(proof),
-        }))
+        })
     }
 
     async fn get_namespace_proof_range(
@@ -2681,6 +2829,19 @@ where
     }
 }
 
+// Bare mode (no query/status API) has no `ExtensibleDataSource` wrapper: the app state is
+// `ApiState<N, P>` directly, so it needs its own erased forwarding impl.
+#[async_trait]
+impl<N, P> SubmitDataSourceErased for crate::api::ApiState<N, P>
+where
+    N: hotshot_types::traits::network::ConnectedNetwork<espresso_types::PubKey>,
+    P: espresso_types::v0::traits::SequencerPersistence,
+{
+    async fn submit_erased(&self, tx: espresso_types::Transaction) -> anyhow::Result<()> {
+        <Self as super::data_source::SubmitDataSource<N, P>>::submit(self, tx).await
+    }
+}
+
 // ============================================================================
 // v1::StateSignatureApi implementation
 // ============================================================================
@@ -2716,6 +2877,22 @@ where
     N: hotshot_types::traits::network::ConnectedNetwork<espresso_types::PubKey>,
     P: espresso_types::v0::traits::SequencerPersistence,
     D: Send + Sync,
+{
+    async fn get_state_signature_erased(
+        &self,
+        height: u64,
+    ) -> Option<hotshot_types::light_client::LCV3StateSignatureRequestBody> {
+        <Self as StateSignatureDataSource<N>>::get_state_signature(self, height).await
+    }
+}
+
+// Bare mode (no query/status API) has no `ExtensibleDataSource` wrapper: the app state is
+// `ApiState<N, P>` directly, so it needs its own erased forwarding impl.
+#[async_trait]
+impl<N, P> StateSignatureDataSourceErased for crate::api::ApiState<N, P>
+where
+    N: hotshot_types::traits::network::ConnectedNetwork<espresso_types::PubKey>,
+    P: espresso_types::v0::traits::SequencerPersistence,
 {
     async fn get_state_signature_erased(
         &self,
@@ -3142,7 +3319,7 @@ where
             lc_large_object_range_limit(),
         )
         .await
-        .map_err(|err| anyhow::anyhow!("{err}"))?;
+        .map_err(lc_error)?;
         if proofs.len() != 1 {
             return Err(anyhow::anyhow!("internal consistency error"));
         }
@@ -3166,7 +3343,29 @@ where
             lc_large_object_range_limit(),
         )
         .await
-        .map_err(|err| anyhow::anyhow!("{err}"))
+        .map_err(lc_error)
+    }
+
+    async fn get_lc_namespaces_proof_range(
+        &self,
+        start: u64,
+        end: u64,
+        namespaces: String,
+    ) -> anyhow::Result<Vec<std::collections::HashMap<u64, Self::NamespaceProof>>> {
+        let namespaces = crate::api::light_client::parse_namespaces_str(&namespaces)
+            .map_err(|err| bad_request(err.to_string()))?;
+        let ds = &*self.data_source;
+        let fetch_timeout = lc_fetch_timeout();
+        crate::api::light_client::get_namespaces_proof_range(
+            ds,
+            start as usize,
+            end as usize,
+            &namespaces,
+            fetch_timeout,
+            lc_large_object_range_limit(),
+        )
+        .await
+        .map_err(lc_error)
     }
 }
 
@@ -3176,6 +3375,16 @@ fn lc_fetch_timeout() -> std::time::Duration {
 
 fn lc_large_object_range_limit() -> usize {
     hotshot_query_service::availability::Options::default().large_object_range_limit
+}
+
+/// Convert a query-service error to an [`AvailabilityError`]-carrying anyhow error so the HTTP
+/// layer returns the status tide-disco returned (400/404) instead of 500.
+pub(crate) fn lc_error(err: hotshot_query_service::Error) -> anyhow::Error {
+    match err.status() {
+        StatusCode::NOT_FOUND => not_found(err.to_string()),
+        StatusCode::BAD_REQUEST => bad_request(err.to_string()),
+        _ => anyhow::anyhow!("{err}"),
+    }
 }
 
 // ============================================================================
@@ -3304,10 +3513,55 @@ where
     D::Target: super::data_source::DatabaseMetadataSource + Send + Sync,
 {
     type TableSizes = Vec<super::data_source::TableSize>;
+    type MigrationStatus = Vec<super::data_source::MigrationStatus>;
 
     async fn get_table_sizes(&self) -> anyhow::Result<Self::TableSizes> {
         use super::data_source::DatabaseMetadataSource as _;
         let ds = &*self.data_source;
         ds.get_table_sizes().await
+    }
+
+    async fn get_migration_status(&self) -> anyhow::Result<Self::MigrationStatus> {
+        use super::data_source::DatabaseMetadataSource as _;
+        let ds = &*self.data_source;
+        ds.get_migration_status().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn custom(status: StatusCode) -> hotshot_query_service::Error {
+        hotshot_query_service::Error::Custom {
+            message: "boom".into(),
+            status,
+        }
+    }
+
+    // Regression: the light-client trait methods used to map query-service errors through
+    // `anyhow::anyhow!("{err}")`, erasing the status; every 400/404 became a 500.
+    #[test]
+    fn lc_error_preserves_bad_request() {
+        let err = lc_error(custom(StatusCode::BAD_REQUEST));
+        assert!(matches!(
+            err.downcast_ref::<AvailabilityError>(),
+            Some(AvailabilityError::BadRequest(_))
+        ));
+    }
+
+    #[test]
+    fn lc_error_preserves_not_found() {
+        let err = lc_error(custom(StatusCode::NOT_FOUND));
+        assert!(matches!(
+            err.downcast_ref::<AvailabilityError>(),
+            Some(AvailabilityError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn lc_error_other_statuses_stay_internal() {
+        let err = lc_error(custom(StatusCode::INTERNAL_SERVER_ERROR));
+        assert!(err.downcast_ref::<AvailabilityError>().is_none());
     }
 }
