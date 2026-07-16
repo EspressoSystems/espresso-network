@@ -813,12 +813,13 @@ fn perm_num_nodes(n_silent: usize) -> usize {
     }
 }
 
+// Deadlines must stay under nextest's terminate-after ceiling (3 x 2m, .config/nextest.toml)
+// so the deadline panic with per-node diagnostics fires before nextest kills the test.
 fn perm_deadline(n_silent: usize) -> Duration {
     match n_silent {
         0..=2 => Duration::from_secs(240),
         3 => Duration::from_secs(300),
-        4 => Duration::from_secs(360),
-        _ => Duration::from_secs(480),
+        _ => Duration::from_secs(350),
     }
 }
 
@@ -841,11 +842,13 @@ fn silent_for_view(view: u64, num_nodes: usize) -> SilentNode {
 }
 
 /// Build a permissive failed-views superset for the loose check.
-/// Includes the natural TC2 skip, each silencer's `at_view` (boundary
-/// effect when the silent node disconnects mid-view), and every
-/// downstream view where the silent node would be leader. `max_view`
-/// is a conservative ceiling on the highest view a live node will
-/// decide before the loop exits.
+/// Includes the natural TC2 skip, the first post-cutover view (nodes
+/// detect the cutover and start their coordinators at slightly
+/// different times, so it can time out before enough of them are up),
+/// each silencer's `at_view` (boundary effect when the silent node
+/// disconnects mid-view), and every downstream view where the silent
+/// node would be leader. `max_view` is a conservative ceiling on the
+/// highest view a live node will decide before the loop exits.
 fn permitted_failures(
     num_nodes: usize,
     silent_nodes: &[SilentNode],
@@ -853,6 +856,7 @@ fn permitted_failures(
 ) -> BTreeSet<ViewNumber> {
     let mut failed = BTreeSet::new();
     failed.insert(ViewNumber::new(PREDICTED_CUTOVER_VIEW - 1));
+    failed.insert(ViewNumber::new(PREDICTED_CUTOVER_VIEW));
     for s in silent_nodes {
         let at_view = *s.at_view;
         failed.insert(ViewNumber::new(at_view));
