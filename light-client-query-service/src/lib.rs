@@ -2,6 +2,8 @@ use clap::ValueEnum;
 use log_panics::BacktraceMode;
 use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan};
 
+pub mod api;
+
 /// Controls how logs are displayed and how backtraces are logged on panic.
 ///
 /// The values here match the possible values of `RUST_LOG_FORMAT`, and their corresponding behavior

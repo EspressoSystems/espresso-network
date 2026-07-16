@@ -8,6 +8,7 @@ license = "MIT"
 alloy = { workspace = true }
 anyhow = { workspace = true }
 async-lock = { workspace = true }
+axum = { workspace = true }
 blake3 = { workspace = true }
 clap = { workspace = true }
 csv = { workspace = true }
@@ -16,6 +17,10 @@ hotshot-types = { workspace = true }
 libp2p-identity = { workspace = true }
 multiaddr = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
+# Only used for its `error::ServerError` wire-error type and `Error` trait: `surf_disco::Client`
+# is generic over `E: tide_disco::Error`, so `OrchestratorClient` and the builder-pinging client
+# in `post_builder` both still name it. The HTTP server itself is axum.
 surf-disco = { workspace = true }
 tide-disco = { workspace = true }
 tokio = { workspace = true }

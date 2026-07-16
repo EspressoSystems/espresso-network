@@ -10,6 +10,7 @@ alloy = { workspace = true }
 anyhow = { workspace = true }
 async-broadcast = { workspace = true }
 async-lock = { workspace = true }
+axum = { workspace = true }
 clap = { workspace = true }
 committable = { workspace = true }
 espresso-node = { workspace = true, default-features = false }
@@ -25,7 +26,10 @@ hotshot-example-types = { workspace = true }
 hotshot-state-prover = { workspace = true }
 hotshot-types = { workspace = true }
 rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 surf-disco = { workspace = true }
+tagged-base64 = { workspace = true }
 test-utils = { workspace = true }
 tide-disco = { workspace = true }
 tokio = { workspace = true }
