@@ -90,7 +90,6 @@ use crate::{
 };
 
 pub mod data_source;
-pub mod endpoints;
 pub mod fs;
 pub mod light_client;
 pub mod options;
@@ -1883,10 +1882,7 @@ pub mod test_helpers {
         MOCK_SEQUENCER_VERSIONS, NamespaceId, ValidatedState,
         v0::traits::{NullEventConsumer, PersistenceOptions, StateCatchup},
     };
-    use futures::{
-        future::{FutureExt, join_all},
-        stream::StreamExt,
-    };
+    use futures::{future::join_all, stream::StreamExt};
     use hotshot::types::{Event, EventType};
     use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
     use hotshot_types::{
@@ -1899,10 +1895,8 @@ pub mod test_helpers {
     use staking_cli::demo::{DelegationConfig, StakingTransactions};
     use tempfile::TempDir;
     use test_utils::reserve_tcp_port;
-    use tide_disco::{Api, App, Error, StatusCode};
-    use tokio::{spawn, task::JoinHandle, time::sleep};
-    use url::Url;
-    use vbs::version::{StaticVersion, StaticVersionType};
+    use tokio::time::sleep;
+    use vbs::version::StaticVersion;
     use versions::{EPOCH_VERSION, Upgrade};
 
     use super::*;
@@ -2523,70 +2517,6 @@ pub mod test_helpers {
         BlockMerkleTree::verify(root, root.size() - 1, res)
             .unwrap()
             .unwrap();
-    }
-
-    pub async fn spawn_dishonest_peer_catchup_api() -> anyhow::Result<(Url, JoinHandle<()>)> {
-        let toml = toml::from_str::<toml::Value>(include_str!("../api/catchup.toml")).unwrap();
-        let mut api =
-            Api::<(), hotshot_query_service::Error, SequencerApiVersion>::new(toml).unwrap();
-
-        api.get("account", |_req, _state: &()| {
-            async move {
-                Result::<AccountQueryData, _>::Err(hotshot_query_service::Error::catch_all(
-                    StatusCode::BAD_REQUEST,
-                    "no account found".to_string(),
-                ))
-            }
-            .boxed()
-        })?
-        .get("blocks", |_req, _state| {
-            async move {
-                Result::<BlocksFrontier, _>::Err(hotshot_query_service::Error::catch_all(
-                    StatusCode::BAD_REQUEST,
-                    "no block found".to_string(),
-                ))
-            }
-            .boxed()
-        })?
-        .get("chainconfig", |_req, _state| {
-            async move {
-                Result::<ChainConfig, _>::Ok(ChainConfig {
-                    max_block_size: 300.into(),
-                    base_fee: 1.into(),
-                    fee_recipient: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
-                        .parse()
-                        .unwrap(),
-                    ..Default::default()
-                })
-            }
-            .boxed()
-        })?
-        .get("leafchain", |_req, _state| {
-            async move {
-                Result::<Vec<Leaf2>, _>::Err(hotshot_query_service::Error::catch_all(
-                    StatusCode::BAD_REQUEST,
-                    "No leafchain found".to_string(),
-                ))
-            }
-            .boxed()
-        })?;
-
-        let mut app = App::<_, hotshot_query_service::Error>::with_state(());
-        app.with_version(env!("CARGO_PKG_VERSION").parse().unwrap());
-
-        app.register_module::<_, _>("catchup", api).unwrap();
-
-        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
-        let url: Url = Url::parse(&format!("http://localhost:{port}")).unwrap();
-
-        let handle = spawn({
-            let url = url.clone();
-            async move {
-                let _ = app.serve(url, SequencerApiVersion::instance()).await;
-            }
-        });
-
-        Ok((url, handle))
     }
 }
 
@@ -3242,7 +3172,11 @@ mod test {
         utils::epoch_from_block_number,
         x25519,
     };
-    use http_client::{Client, StatusCode, error::ClientErr};
+    use http_client::{
+        Client, StatusCode,
+        error::ClientErr,
+        healthcheck::{AppHealth, HealthStatus},
+    };
     use jf_merkle_tree_compat::{
         MerkleTreeScheme,
         prelude::{MerkleProof, Sha3Node},
@@ -3259,7 +3193,6 @@ mod test {
         status_test_helper, submit_test_helper,
     };
     use test_utils::reserve_tcp_port;
-    use tide_disco::{app::AppHealth, healthcheck::HealthStatus};
     use tokio::time::sleep;
     use vbs::version::StaticVersion;
     use versions::{

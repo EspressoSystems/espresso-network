@@ -1,5 +1,5 @@
 //! Axum port of the `availability` and `node` API modules that this service used to serve via
-//! `hotshot_query_service::{availability, node}::define_api` on a `tide_disco::App`.
+//! `hotshot_query_service::{availability, node}::define_api` on a tide-disco `App`.
 //!
 //! Route paths, status codes and the wire error type are all taken directly from
 //! `hotshot-query-service` (see `availability.rs`/`node.rs` there and their handler bodies) so
@@ -17,6 +17,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
+use disco_types::error::Error as _;
 use espresso_node::api::sql::DataSource;
 use espresso_types::SeqTypes;
 use futures::{StreamExt as _, TryStreamExt as _, stream::BoxStream};
@@ -35,7 +36,6 @@ use hotshot_query_service::{
 use hotshot_types::data::VidCommitment;
 use http_client::healthcheck::HealthStatus;
 use serde::Serialize;
-use tide_disco::Error as _;
 use vbs::{BinarySerializer, Serializer, version::StaticVersion};
 
 /// Binary framing version for VBS-negotiated responses, matching the wire version this service
@@ -57,7 +57,7 @@ fn wants_binary(headers: &HeaderMap) -> bool {
 }
 
 /// Maps `hotshot_query_service`'s wrapped `reqwest`-based status code onto axum's.
-fn wire_status(status: tide_disco::StatusCode) -> StatusCode {
+fn wire_status(status: disco_types::status::StatusCode) -> StatusCode {
     StatusCode::from_u16(u16::from(status)).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
 }
 
@@ -115,7 +115,7 @@ where
 {
     value.parse().map_err(|e| availability::Error::Custom {
         message: format!("invalid {field}: {e}"),
-        status: tide_disco::StatusCode::BAD_REQUEST,
+        status: disco_types::status::StatusCode::BAD_REQUEST,
     })
 }
 
@@ -126,7 +126,7 @@ where
 {
     value.parse().map_err(|e| node::Error::Custom {
         message: format!("invalid {field}: {e}"),
-        status: tide_disco::StatusCode::BAD_REQUEST,
+        status: disco_types::status::StatusCode::BAD_REQUEST,
     })
 }
 
