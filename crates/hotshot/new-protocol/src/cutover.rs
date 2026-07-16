@@ -3,10 +3,10 @@
 //! Two concerns live here:
 //! - [`extract_pre_cutover_seed`] walks a live legacy [`SystemContextHandle`]
 //!   and produces a [`PreCutoverSeed`].
-//! - [`forward_legacy_timeout_votes`] and [`forward_legacy_epoch_changes`]
-//!   tail the legacy event stream and bridge those events into the
-//!   coordinator's client API so the new protocol can form TC2s and
-//!   refresh its peer set at epoch boundaries.
+//! - [`forward_legacy_timeout_votes`] and [`forward_legacy_high_qc`] tail the
+//!   legacy event stream and bridge those events into the coordinator's
+//!   client API so the new protocol can form TC2s and propose at the
+//!   boundary.
 
 use std::collections::BTreeMap;
 
@@ -14,11 +14,10 @@ use async_broadcast::InactiveReceiver;
 use futures::StreamExt;
 use hotshot::{traits::NodeImplementation, types::SystemContextHandle};
 use hotshot_types::{
-    data::{EpochNumber, Leaf2},
+    data::Leaf2,
     event::{Event, EventType},
     message::UpgradeLock,
-    traits::{block_contents::BlockHeader, node_implementation::NodeType},
-    utils::epoch_from_block_number,
+    traits::node_implementation::NodeType,
 };
 use versions::NEW_PROTOCOL_VERSION;
 
@@ -126,41 +125,5 @@ pub async fn forward_legacy_high_qc<T: NodeType>(
         {
             tracing::warn!(%err, "failed to forward legacy high QC to new-protocol coordinator");
         }
-    }
-}
-
-/// Forward legacy epoch transitions into `bump_network_epoch`.
-/// `epoch_height == 0` disables forwarding.
-pub async fn forward_legacy_epoch_changes<T: NodeType>(
-    legacy_event_rx: InactiveReceiver<Event<T>>,
-    client_api: ClientApi<T>,
-    epoch_height: u64,
-    upgrade_lock: UpgradeLock<T>,
-) {
-    if epoch_height == 0 {
-        return;
-    }
-    let mut rx = legacy_event_rx.activate_cloned();
-    let mut last_forwarded: Option<EpochNumber> = None;
-    while let Some(event) = rx.next().await {
-        let EventType::Decide { leaf_chain, .. } = &event.event else {
-            continue;
-        };
-        let Some(newest) = leaf_chain.first() else {
-            continue;
-        };
-        if !cutover_decided(&upgrade_lock) {
-            continue;
-        }
-        let block_number = newest.leaf.block_header().block_number();
-        let epoch = EpochNumber::new(epoch_from_block_number(block_number, epoch_height));
-        if last_forwarded.is_some_and(|prev| epoch <= prev) {
-            continue;
-        }
-        if let Err(err) = client_api.bump_network_epoch(epoch) {
-            tracing::warn!(%epoch, %err, "failed to forward legacy epoch change to new-protocol coordinator");
-            continue;
-        }
-        last_forwarded = Some(epoch);
     }
 }

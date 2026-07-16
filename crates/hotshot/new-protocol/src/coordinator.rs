@@ -1550,14 +1550,6 @@ where
                     }
                 }
             },
-            ClientRequest::BumpNetworkEpoch { epoch } => {
-                if let Err(err) = self
-                    .network
-                    .apply_epoch(epoch, &self.membership_coordinator)
-                {
-                    warn!(%epoch, %err, "network on_epoch_change failed");
-                }
-            },
         }
 
         Ok(())

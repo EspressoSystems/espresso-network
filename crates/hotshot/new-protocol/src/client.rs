@@ -147,11 +147,6 @@ impl<T: NodeType> ClientApi<T> {
         self.try_send(ClientRequest::SubmitLegacyHighQc { qc })
     }
 
-    /// Refresh the coordinator network's peer set for `epoch`.
-    pub fn bump_network_epoch(&self, epoch: EpochNumber) -> Result<(), QueryError> {
-        self.try_send(ClientRequest::BumpNetworkEpoch { epoch })
-    }
-
     /// Bridge sends must never block on a coordinator that hasn't started:
     /// requests queue in the bounded channel and are dropped when it is full.
     fn try_send(&self, request: ClientRequest<T>) -> Result<(), QueryError> {
@@ -254,9 +249,6 @@ pub(crate) enum ClientRequest<T: NodeType> {
     },
     SubmitLegacyHighQc {
         qc: QuorumCertificate2<T>,
-    },
-    BumpNetworkEpoch {
-        epoch: EpochNumber,
     },
 }
 
