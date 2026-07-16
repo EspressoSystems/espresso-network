@@ -660,6 +660,49 @@ async fn test_timeout_vote_tc_advances_view() {
         .await;
 }
 
+/// A stuck node's view timer keeps re-firing for the same view (and
+/// re-broadcasting its timeout vote) as long as no progress is made. A
+/// single lost timeout-vote broadcast must not deadlock the network forever.
+#[tokio::test]
+async fn test_timer_refires_for_same_view_without_progress() {
+    let mut harness = TestHarness::new_with_timer(0, Duration::from_millis(100)).await;
+
+    let first_view = harness
+        .process_until(|inputs| any(inputs, is_timeout))
+        .await
+        .into_iter()
+        .find_map(|i| match i {
+            ConsensusInput::Timeout(view, _) => Some(view),
+            _ => None,
+        })
+        .expect("timer should fire");
+
+    let timeout_votes_before = count_matching(harness.outputs(), is_send_timeout_vote);
+
+    let second_view = tokio::time::timeout(
+        Duration::from_secs(5),
+        harness.process_until(|inputs| any(inputs, is_timeout)),
+    )
+    .await
+    .expect("timer should re-fire for the same view within one timeout period")
+    .into_iter()
+    .find_map(|i| match i {
+        ConsensusInput::Timeout(view, _) => Some(view),
+        _ => None,
+    })
+    .expect("timer should re-fire for the same view when no progress is made");
+
+    assert_eq!(
+        second_view, first_view,
+        "the timer should keep re-firing for the same view until it advances"
+    );
+    assert_eq!(
+        count_matching(harness.outputs(), is_send_timeout_vote),
+        timeout_votes_before + 1,
+        "the re-fired timeout should trigger another timeout vote broadcast"
+    );
+}
+
 /// Catchup evidence takes precedence over the "too far ahead" distance
 /// check: the vote itself is dropped, but the attached certificate still
 /// advances a node that fell far behind.

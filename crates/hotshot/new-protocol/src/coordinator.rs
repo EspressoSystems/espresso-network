@@ -123,6 +123,11 @@ pub struct Coordinator<T: NodeType, S> {
     participation: ParticipationTracker<T>,
     #[builder(skip)]
     voted_view: Option<ViewNumber>,
+    /// View of the last timer fire that counted towards participation and
+    /// timeout metrics, so a re-fire for the same (stuck) view doesn't
+    /// double-count it.
+    #[builder(skip)]
+    last_timeout_view: Option<ViewNumber>,
     #[builder(skip)]
     view_started: Option<(ViewNumber, EpochNumber, Instant)>,
     #[builder(skip)]
@@ -417,6 +422,11 @@ where
                 () = &mut self.timer => {
                     let view = self.timer.view();
                     let epoch = self.timer.epoch();
+                    // Re-arm for the same view: a node stuck exactly at TC2
+                    // threshold can lose its only timeout-vote broadcast, so
+                    // the vote is re-sent every timeout period until the
+                    // view advances.
+                    self.timer.reset();
                     if let Some(stats) = self.vote1_collector.stats(view, epoch) {
                         warn!(
                             %view, %epoch,
@@ -428,14 +438,17 @@ where
                         warn!(%view, %epoch, "timeout: no vote1 received for this view");
                     }
                     let input = ConsensusInput::Timeout(view, epoch);
-                    let leader = self.leader(view, epoch);
-                    if let Some(leader) = leader.clone() {
-                        self.participation.leader_missed(leader, epoch);
-                    }
-                    if let Some(m) = &self.metrics {
-                        m.consensus.number_of_timeouts.add(1);
-                        if leader.as_ref() == Some(&self.public_key) {
-                            m.consensus.number_of_timeouts_as_leader.add(1);
+                    if self.last_timeout_view != Some(view) {
+                        self.last_timeout_view = Some(view);
+                        let leader = self.leader(view, epoch);
+                        if let Some(leader) = leader.clone() {
+                            self.participation.leader_missed(leader, epoch);
+                        }
+                        if let Some(m) = &self.metrics {
+                            m.consensus.number_of_timeouts.add(1);
+                            if leader.as_ref() == Some(&self.public_key) {
+                                m.consensus.number_of_timeouts_as_leader.add(1);
+                            }
                         }
                     }
                     return Ok(input)
