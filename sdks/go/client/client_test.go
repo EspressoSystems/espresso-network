@@ -218,6 +218,37 @@ func TestExplorerFetchTransactionByHash(t *testing.T) {
 	require.NoError(t, err, "failed to fetch transaction by hash from explorer")
 }
 
+func TestFetchBlockSummaries(t *testing.T) {
+	ctx, info := setupDevNode(t)
+	client := NewClient(info.nodeURL)
+
+	var height uint64
+	err := waitForWith(ctx, 30*time.Second, 2*time.Second, func() bool {
+		h, fetchErr := client.FetchLatestBlockHeight(ctx)
+		if fetchErr != nil {
+			return false
+		}
+		height = h
+		return height >= 3
+	})
+	require.NoError(t, err, "failed to wait for blocks")
+
+	resp, err := client.FetchBlockSummaries(ctx, nil, 3)
+	require.NoError(t, err, "FetchBlockSummaries(nil, 3) failed")
+	require.NotEmpty(t, resp.BlockSummaries)
+	require.LessOrEqual(t, len(resp.BlockSummaries), 3)
+
+	from := uint64(2)
+	resp, err = client.FetchBlockSummaries(ctx, &from, 2)
+	require.NoError(t, err, "FetchBlockSummaries(&2, 2) failed")
+	require.NotEmpty(t, resp.BlockSummaries)
+	require.LessOrEqual(t, len(resp.BlockSummaries), 2)
+
+	for _, bs := range resp.BlockSummaries {
+		require.LessOrEqual(t, bs.Height, from)
+	}
+}
+
 func TestNamespaceTransactionsInRange(t *testing.T) {
 	ctx, info := setupDevNode(t)
 	client := NewClient(info.nodeURL)
