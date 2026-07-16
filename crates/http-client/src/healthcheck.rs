@@ -66,6 +66,22 @@ mod test {
     type Ver01 = StaticVersion<0, 1>;
 
     #[test]
+    fn app_health_wire_format_matches_tide_disco() {
+        let health = AppHealth::default();
+        assert_eq!(
+            serde_json::to_string(&health).unwrap(),
+            r#"{"status":"available","modules":{}}"#
+        );
+        // version prefix, u32 status ordinal, u64 map length
+        let bytes = Serializer::<Ver01>::serialize(&health).unwrap();
+        assert_eq!(bytes, [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(
+            Serializer::<Ver01>::deserialize::<AppHealth>(&bytes).unwrap(),
+            health
+        );
+    }
+
+    #[test]
     fn vbs_ordinals_match_tide_disco_0_9_6_variant_order() {
         // Regression test: bincode encodes the enum tag as the declaration-order ordinal
         // (u32 LE), so reordering variants silently breaks decoding of binary-content-type

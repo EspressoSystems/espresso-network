@@ -649,11 +649,10 @@ where
 
         // Deserialize and return internal type
         bincode::deserialize(&tree_bytes).map_err(|err| {
-            anyhow::anyhow!(
+            not_found(format!(
                 "failed to deserialize RewardMerkleTreeV2Data at height {}: {}",
-                height,
-                err
-            )
+                height, err
+            ))
         })
     }
 }
@@ -735,12 +734,10 @@ where
             .load_v1_reward_account_proof(height, account)
             .await
             .map_err(|err| {
-                anyhow::anyhow!(
+                not_found(format!(
                     "failed to load v1 reward account {} at height {}: {}",
-                    address,
-                    height,
-                    err
-                )
+                    address, height, err
+                ))
             })
     }
 

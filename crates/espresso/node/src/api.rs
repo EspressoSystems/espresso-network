@@ -8367,10 +8367,17 @@ mod test {
                     // Tide contract relied on by scripts/claim-rewards-loop: an account with no
                     // rewards yields 404; any other error status makes the claim loop exit and
                     // process-compose tear down the whole demo.
+                    let absent = alloy::primitives::Address::with_last_byte(0xaa);
+                    assert!(
+                        validated_state
+                            .reward_merkle_tree_v2
+                            .iter()
+                            .all(|(addr, _)| addr.0 != absent),
+                        "sentinel address unexpectedly present in reward tree"
+                    );
                     let err = client
                         .get::<RewardClaimInput>(&format!(
-                            "reward-state-v2/reward-claim-input/{height}/\
-                             0x00000000000000000000000000000000000000aa"
+                            "reward-state-v2/reward-claim-input/{height}/{absent}"
                         ))
                         .send()
                         .await

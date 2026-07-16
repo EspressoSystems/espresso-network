@@ -128,7 +128,7 @@ fn decode_body<T: serde::de::DeserializeOwned>(
 /// Classify an `anyhow::Error` from an availability handler into the appropriate `ApiError`
 /// variant. Errors produced via [`AvailabilityError`] in the state implementation carry semantic
 /// meaning; everything else falls back to a 500 Internal Server Error.
-fn classify_availability_error(err: anyhow::Error) -> ApiError {
+pub(crate) fn classify_availability_error(err: anyhow::Error) -> ApiError {
     let is_not_found = err
         .downcast_ref::<AvailabilityError>()
         .map(|e| matches!(e, AvailabilityError::NotFound(_)));
