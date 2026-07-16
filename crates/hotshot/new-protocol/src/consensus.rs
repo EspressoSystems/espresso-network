@@ -1014,6 +1014,7 @@ impl<T: NodeType> Consensus<T> {
         self.signed_proposals.insert(view, signed_proposal.clone());
         self.leaves.insert(view, proposal.clone().into());
         self.vid_shares.insert(view, vid_share);
+        self.adopt_certified_drb(view);
 
         self.request_parent_proposal_if_missing(&proposal, outbox);
 
@@ -1104,6 +1105,7 @@ impl<T: NodeType> Consensus<T> {
         self.signed_proposals.insert(view, signed_proposal);
         self.request_parent_proposal_if_missing(&proposal, outbox);
         self.proposals.insert(view, proposal);
+        self.adopt_certified_drb(view);
     }
 
     fn request_parent_proposal_if_missing(
@@ -1216,6 +1218,7 @@ impl<T: NodeType> Consensus<T> {
         let epoch = cert1.epoch();
 
         self.certs.entry(view).or_insert(cert1.into_cert());
+        self.adopt_certified_drb(view);
 
         // Ensure we submit a vote2 if we can:
         self.maybe_vote_2_and_update_lock(view, outbox);
@@ -1473,9 +1476,11 @@ impl<T: NodeType> Consensus<T> {
             ));
         }
 
-        self.proposals.insert(cert2.view_number(), proposal);
+        let boundary_view = cert2.view_number();
+        self.proposals.insert(boundary_view, proposal);
         self.certs.insert(cert1.view_number(), cert1);
-        self.certs2.insert(cert2.view_number(), cert2);
+        self.certs2.insert(boundary_view, cert2);
+        self.adopt_certified_drb(boundary_view);
         Protocol::Continue
     }
 
