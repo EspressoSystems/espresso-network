@@ -33,6 +33,7 @@ use hotshot_query_service::{
     types::HeightIndexed as _,
 };
 use hotshot_types::data::VidCommitment;
+use http_client::healthcheck::HealthStatus;
 use serde::Serialize;
 use tide_disco::Error as _;
 use vbs::{BinarySerializer, Serializer, version::StaticVersion};
@@ -136,8 +137,10 @@ fn enforce_range_limit(from: usize, until: usize, limit: usize) -> Result<(), av
     Ok(())
 }
 
-async fn healthcheck() -> impl IntoResponse {
-    Json(serde_json::json!({ "status": "Available" }))
+/// Tide-disco-compatible singleton-app healthcheck: a bare [`HealthStatus`], negotiated JSON or
+/// vbs binary from `Accept`.
+async fn healthcheck(headers: HeaderMap) -> Response {
+    encode_ok(&headers, HealthStatus::Available)
 }
 
 async fn drive_ws_stream<T: Serialize + Send + 'static>(

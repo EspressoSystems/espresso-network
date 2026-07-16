@@ -167,6 +167,7 @@ impl v1::RewardApi for TestApi {
 #[async_trait]
 impl v1::AvailabilityApi for TestApi {
     type NamespaceProofQueryData = (Vec<u8>, Option<Vec<u8>>); // (transactions, proof)
+    type ADVZNamespaceProofQueryData = (Vec<u8>, Option<Vec<u8>>);
     type IncorrectEncodingProof = Vec<u8>;
     type StateCertQueryDataV1 = Vec<u8>;
     type StateCertQueryDataV2 = Vec<u8>;
@@ -220,6 +221,12 @@ impl v1::AvailabilityApi for TestApi {
         Ok(Box::pin(futures::stream::empty()))
     }
 
+    fn to_legacy_namespace_proof(
+        proof: Self::NamespaceProofQueryData,
+    ) -> Result<Self::ADVZNamespaceProofQueryData> {
+        Ok(proof)
+    }
+
     async fn get_state_cert(&self, epoch: u64) -> Result<Self::StateCertQueryDataV1> {
         tracing::info!("v1: get_state_cert(epoch={})", epoch);
         Ok(vec![0x01, 0x02, 0x03])
@@ -235,6 +242,8 @@ impl v1::AvailabilityApi for TestApi {
 #[async_trait]
 impl v1::HotShotAvailabilityApi for TestApi {
     type Leaf = serde_json::Value;
+    type LeafV0 = serde_json::Value;
+    type VidCommonV0 = serde_json::Value;
     type Block = serde_json::Value;
     type Header = serde_json::Value;
     type Payload = serde_json::Value;
@@ -354,6 +363,14 @@ impl v1::HotShotAvailabilityApi for TestApi {
         _namespace: Option<u32>,
     ) -> Result<futures::stream::BoxStream<'static, Self::Transaction>> {
         Ok(Box::pin(futures::stream::empty()))
+    }
+
+    fn to_legacy_leaf(leaf: Self::Leaf) -> Self::LeafV0 {
+        leaf
+    }
+
+    fn to_legacy_vid_common(common: Self::VidCommon) -> Result<Self::VidCommonV0> {
+        Ok(common)
     }
 }
 

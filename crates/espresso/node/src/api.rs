@@ -3455,12 +3455,14 @@ mod test {
             .unwrap();
         assert!(!table_sizes.is_empty());
 
+        // Deferred backfill migrations register tracking rows at node startup, so the list may
+        // be non-empty; just check the entries are well-formed.
         let migration_status = client
             .get::<Vec<data_source::MigrationStatus>>("database/migration-status")
             .send()
             .await
             .unwrap();
-        assert!(migration_status.is_empty());
+        assert!(migration_status.iter().all(|m| !m.name.is_empty()));
     }
 
     async fn run_catchup_test(url_suffix: &str) {

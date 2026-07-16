@@ -26,6 +26,9 @@ pub enum PayloadId {
 pub trait AvailabilityApi {
     type NamespaceProofQueryData: Serialize + Send + Sync + 'static;
 
+    /// Legacy ADVZ namespace-proof format served by the `/v0` availability routes.
+    type ADVZNamespaceProofQueryData: Serialize + Send + Sync + 'static;
+
     type IncorrectEncodingProof: Serialize + Send + Sync;
 
     type StateCertQueryDataV1: Serialize + Send + Sync;
@@ -51,6 +54,14 @@ pub trait AvailabilityApi {
         namespace: u32,
     ) -> anyhow::Result<BoxStream<'static, Self::NamespaceProofQueryData>>;
 
+    /// Convert a namespace proof into the legacy ADVZ format served under `/v0`.
+    ///
+    /// Fails (classified as 404 Not Found) when the proof was generated with a VID version the
+    /// legacy format cannot represent.
+    fn to_legacy_namespace_proof(
+        proof: Self::NamespaceProofQueryData,
+    ) -> anyhow::Result<Self::ADVZNamespaceProofQueryData>;
+
     async fn get_incorrect_encoding_proof(
         &self,
         block_id: BlockId,
@@ -69,6 +80,13 @@ pub trait AvailabilityApi {
 #[async_trait]
 pub trait HotShotAvailabilityApi {
     type Leaf: Serialize + Send + Sync + 'static;
+
+    /// Legacy `Leaf1`-based leaf format served by the `/v0` availability routes.
+    type LeafV0: Serialize + Send + Sync + 'static;
+
+    /// Legacy ADVZ VID-common format served by the `/v0` availability routes.
+    type VidCommonV0: Serialize + Send + Sync + 'static;
+
     type Block: Serialize + Send + Sync + 'static;
     type Header: Serialize + Send + Sync + 'static;
     type Payload: Serialize + Send + Sync + 'static;
@@ -156,4 +174,14 @@ pub trait HotShotAvailabilityApi {
         from: usize,
         namespace: Option<u32>,
     ) -> anyhow::Result<BoxStream<'static, Self::Transaction>>;
+
+    /// Downgrade a leaf to the legacy (`/v0`) `Leaf1`-based format. Infallible, matching
+    /// tide-disco's `downgrade_leaf_query_data`.
+    fn to_legacy_leaf(leaf: Self::Leaf) -> Self::LeafV0;
+
+    /// Downgrade VID common data to the legacy (`/v0`) ADVZ format.
+    ///
+    /// Fails (classified as 400 Bad Request) for post-ADVZ VID versions, matching tide-disco's
+    /// `downgrade_vid_common_query_data`.
+    fn to_legacy_vid_common(common: Self::VidCommon) -> anyhow::Result<Self::VidCommonV0>;
 }

@@ -31,6 +31,7 @@ use hotshot_types::{
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
     utils::BuilderCommitment,
 };
+use http_client::healthcheck::HealthStatus;
 use serde::{Serialize, de::DeserializeOwned};
 use tagged_base64::TaggedBase64;
 use tide_disco::{Error as _, StatusCode};
@@ -155,8 +156,10 @@ fn parse_sender_signature(
     Ok((sender, signature))
 }
 
+/// Tide-disco-compatible singleton-app healthcheck: a bare [`HealthStatus`], so
+/// `BuilderClient::connect` can decode it in both JSON and binary form.
 async fn healthcheck(headers: HeaderMap) -> Response {
-    encode_ok(&headers, serde_json::json!({ "status": "Available" }))
+    encode_ok(&headers, HealthStatus::Available)
 }
 
 // --- block_info -----------------------------------------------------------------------------

@@ -25,16 +25,16 @@ use hotshot_new_protocol::message::Certificate2;
 use hotshot_query_service::{
     Header as HsHeader,
     availability::{
-        AvailabilityDataSource, BlockId as HsBlockId, BlockQueryData, BlockSummaryQueryData,
-        LeafId as HsLeafId, LeafQueryData, Limits as HsLimits, PayloadQueryData,
-        QueryablePayload as _, TransactionQueryData, TransactionWithProofQueryData,
-        VidCommonQueryData,
+        ADVZCommonQueryData, AvailabilityDataSource, BlockId as HsBlockId, BlockQueryData,
+        BlockSummaryQueryData, Leaf1QueryData, LeafId as HsLeafId, LeafQueryData,
+        Limits as HsLimits, PayloadQueryData, QueryablePayload as _, TransactionQueryData,
+        TransactionWithProofQueryData, VidCommonQueryData,
     },
     node::NodeDataSource as _,
     types::HeightIndexed as _,
 };
 use hotshot_types::{
-    data::{EpochNumber, VidShare},
+    data::{EpochNumber, Leaf, Leaf2, QuorumProposal, VidCommitment, VidCommon, VidShare},
     vid::avidm::AvidMShare,
 };
 use jf_merkle_tree_compat::prelude::{
@@ -1297,6 +1297,7 @@ where
         + Sync,
 {
     type NamespaceProofQueryData = espresso_types::NamespaceProofQueryData;
+    type ADVZNamespaceProofQueryData = espresso_types::ADVZNamespaceProofQueryData;
     type IncorrectEncodingProof = espresso_types::v0_3::AvidMIncorrectEncodingNsProof;
     type StateCertQueryDataV1 = espresso_types::StateCertQueryDataV1<espresso_types::SeqTypes>;
     type StateCertQueryDataV2 = espresso_types::StateCertQueryDataV2<espresso_types::SeqTypes>;
@@ -1490,6 +1491,25 @@ where
         Ok(stream)
     }
 
+    fn to_legacy_namespace_proof(
+        proof: Self::NamespaceProofQueryData,
+    ) -> anyhow::Result<Self::ADVZNamespaceProofQueryData> {
+        let advz = match proof.proof {
+            Some(NsProof::V0(p)) => Some(p),
+            // Message and 404 status match tide's v0 handler (`extract_ns_proof_v0`).
+            Some(_) => {
+                return Err(not_found(
+                    "Unsupported VID version, use new API version instead.",
+                ));
+            },
+            None => None,
+        };
+        Ok(espresso_types::ADVZNamespaceProofQueryData {
+            proof: advz,
+            transactions: proof.transactions,
+        })
+    }
+
     async fn get_incorrect_encoding_proof(
         &self,
         block_id: espresso_api::v1::availability::BlockId,
@@ -1657,6 +1677,29 @@ fn enforce_range(from: usize, until: usize, limit: usize) -> anyhow::Result<()> 
     Ok(())
 }
 
+/// Ports tide-disco's private `downgrade_leaf_query_data`
+/// (hotshot-query-service/src/availability.rs) for the legacy `/v0` leaf endpoints.
+fn downgrade_leaf_query_data(
+    leaf: LeafQueryData<espresso_types::SeqTypes>,
+) -> Leaf1QueryData<espresso_types::SeqTypes> {
+    Leaf1QueryData::new(downgrade_leaf(leaf.leaf), leaf.qc.to_qc())
+}
+
+fn downgrade_leaf(leaf2: Leaf2<espresso_types::SeqTypes>) -> Leaf<espresso_types::SeqTypes> {
+    let quorum_proposal = QuorumProposal {
+        block_header: leaf2.block_header().clone(),
+        view_number: leaf2.view_number(),
+        justify_qc: leaf2.justify_qc().to_qc(),
+        upgrade_certificate: leaf2.upgrade_certificate(),
+        proposal_certificate: None,
+    };
+    let mut leaf = Leaf::from_quorum_proposal(&quorum_proposal);
+    if let Some(payload) = leaf2.block_payload() {
+        leaf.fill_block_payload_unchecked(payload);
+    }
+    leaf
+}
+
 #[async_trait]
 impl<D> HotShotAvailabilityApi for NodeApiStateImpl<D>
 where
@@ -1664,6 +1707,8 @@ where
     D::Target: AvailabilityDataSource<espresso_types::SeqTypes> + Send + Sync,
 {
     type Leaf = LeafQueryData<espresso_types::SeqTypes>;
+    type LeafV0 = Leaf1QueryData<espresso_types::SeqTypes>;
+    type VidCommonV0 = ADVZCommonQueryData<espresso_types::SeqTypes>;
     type Block = BlockQueryData<espresso_types::SeqTypes>;
     type Header = HsHeader<espresso_types::SeqTypes>;
     type Payload = PayloadQueryData<espresso_types::SeqTypes>;
@@ -2085,6 +2130,29 @@ where
             })
             .boxed();
         Ok(stream)
+    }
+
+    fn to_legacy_leaf(leaf: Self::Leaf) -> Self::LeafV0 {
+        downgrade_leaf_query_data(leaf)
+    }
+
+    fn to_legacy_vid_common(data: Self::VidCommon) -> anyhow::Result<Self::VidCommonV0> {
+        // Message and 400 status match tide's v0 `get_vid_common` version gate.
+        let VidCommonQueryData {
+            height,
+            block_hash,
+            payload_hash: VidCommitment::V0(payload_hash),
+            common: VidCommon::V0(common),
+        } = data
+        else {
+            return Err(bad_request("Incompatible VID version."));
+        };
+        Ok(ADVZCommonQueryData {
+            height,
+            block_hash,
+            payload_hash,
+            common,
+        })
     }
 }
 

@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use axum::{Json, response::IntoResponse, routing::get};
+use axum::{http::HeaderMap, response::Response, routing::get};
 use clap::Parser;
 use committable::{Commitment, Committable};
 #[cfg(feature = "benchmarking")]
@@ -523,9 +523,8 @@ async fn server(port: u16) {
     }
 }
 
-/// Tide-disco-compatible healthcheck response: `{"status":"Available"}`.
-async fn healthcheck() -> impl IntoResponse {
-    Json(serde_json::json!({ "status": "Available" }))
+async fn healthcheck(headers: HeaderMap) -> Response {
+    espresso_api::healthcheck_response(&headers)
 }
 
 fn random_transaction(opt: &Options, rng: &mut ChaChaRng) -> Transaction {

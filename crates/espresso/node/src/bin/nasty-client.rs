@@ -23,10 +23,9 @@ use std::{
 
 use anyhow::{Context, bail, ensure};
 use axum::{
-    Json,
     extract::State,
-    http::{StatusCode as AxumStatusCode, header},
-    response::IntoResponse,
+    http::{HeaderMap, StatusCode as AxumStatusCode, header},
+    response::{IntoResponse, Response},
     routing::get,
 };
 use clap::Parser;
@@ -1401,9 +1400,8 @@ async fn serve(port: u16, metrics: PrometheusMetrics) {
     }
 }
 
-/// Tide-disco-compatible healthcheck response: `{"status":"Available"}`.
-async fn healthcheck() -> impl IntoResponse {
-    Json(serde_json::json!({ "status": "Available" }))
+async fn healthcheck(headers: HeaderMap) -> Response {
+    espresso_api::healthcheck_response(&headers)
 }
 
 /// Prometheus text exposition of `metrics`, matching the `text/plain; charset=utf-8` content type

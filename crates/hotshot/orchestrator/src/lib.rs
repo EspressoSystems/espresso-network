@@ -39,7 +39,7 @@ use hotshot_types::{
         signature_key::{SignatureKey, StakeTableEntryType},
     },
 };
-use http_client::{Url, error::ClientErr};
+use http_client::{Url, error::ClientErr, healthcheck::HealthStatus};
 use libp2p_identity::{
     Keypair, PeerId,
     ed25519::{Keypair as EdKeypair, SecretKey},
@@ -761,8 +761,10 @@ fn decode_wrapped_peer_config<TYPES: NodeType>(
         .ok_or_else(malformed_body)
 }
 
-async fn healthcheck() -> impl IntoResponse {
-    Json(serde_json::json!({ "status": "Available" }))
+/// Tide-disco-compatible module healthcheck: a bare [`HealthStatus`], negotiated JSON or vbs
+/// binary from `Accept`.
+async fn healthcheck(headers: HeaderMap) -> Response {
+    encode_ok(&headers, HealthStatus::Available)
 }
 
 async fn post_identity<TYPES: NodeType>(

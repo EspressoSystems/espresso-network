@@ -14,6 +14,7 @@ alloy = { workspace = true }
 anyhow = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }
+espresso-api = { workspace = true }
 espresso-contract-deployer = { workspace = true }
 espresso-node = { path = "../node", features = ["testing", "embedded-db"] }
 espresso-types = { workspace = true, features = ["node"] }

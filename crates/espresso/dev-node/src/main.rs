@@ -932,8 +932,8 @@ async fn set_hotshot_up(
     Ok(Json(()))
 }
 
-async fn healthcheck() -> Json<serde_json::Value> {
-    Json(serde_json::json!({ "status": "Available" }))
+async fn healthcheck(headers: HeaderMap) -> Response {
+    espresso_api::healthcheck_response(&headers)
 }
 
 /// Serves the dev-info/set-hotshot-down/set-hotshot-up routes at both the `/v0/api/...` forms

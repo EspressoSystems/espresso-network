@@ -11,6 +11,7 @@ axum = { workspace = true }
 base64 = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
+http-client = { workspace = true }
 prost = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }

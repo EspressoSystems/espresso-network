@@ -25,6 +25,7 @@ hotshot-events-service = { workspace = true }
 hotshot-example-types = { workspace = true }
 hotshot-state-prover = { workspace = true }
 hotshot-types = { workspace = true }
+http-client = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -40,7 +41,6 @@ versions = { workspace = true }
 
 [dev-dependencies]
 espresso-node = { workspace = true, default-features = false, features = ["testing"] }
-http-client = { workspace = true }
 jf-signature = { workspace = true }
 tempfile = { workspace = true }
 test-log = { workspace = true }

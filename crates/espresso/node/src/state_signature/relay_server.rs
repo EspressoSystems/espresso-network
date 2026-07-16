@@ -16,6 +16,7 @@ use hotshot_types::{
     },
     traits::signature_key::LCV1StateSignatureKey,
 };
+use http_client::healthcheck::HealthStatus;
 use lcv1_relay::{LCV1StateRelayServerDataSource, LCV1StateRelayServerState};
 use lcv2_relay::{LCV2StateRelayServerDataSource, LCV2StateRelayServerState};
 use lcv3_relay::{LCV3StateRelayServerDataSource, LCV3StateRelayServerState};
@@ -298,8 +299,10 @@ async fn get_latest_state_v3(state: &SharedState) -> Result<LCV3StateSignaturesB
     LCV3StateRelayServerDataSource::get_latest_signature_bundle(&*state)
 }
 
-async fn healthcheck() -> impl IntoResponse {
-    Json(serde_json::json!({ "status": "Available" }))
+/// Tide-disco-compatible singleton-app healthcheck: a bare [`HealthStatus`], negotiated JSON or
+/// vbs binary from `Accept`.
+async fn healthcheck(headers: HeaderMap) -> Response {
+    encode_ok(&headers, HealthStatus::Available)
 }
 
 async fn post_state(State(state): State<SharedState>, headers: HeaderMap, body: Bytes) -> Response {
