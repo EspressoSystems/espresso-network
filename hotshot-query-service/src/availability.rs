@@ -782,11 +782,11 @@ mod test {
     use futures::future::FutureExt;
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::{data::Leaf2, simple_certificate::QuorumCertificate2};
+    use http_client::Client;
     use serde::de::DeserializeOwned;
-    use surf_disco::{Client, Error as _};
     use tempfile::TempDir;
     use test_utils::reserve_tcp_port;
-    use tide_disco::App;
+    use tide_disco::{App, Error as _};
     use toml::toml;
 
     use super::*;

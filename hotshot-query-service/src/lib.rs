@@ -565,7 +565,7 @@ mod test {
     use futures::future::FutureExt;
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::{data::VidShare, simple_certificate::QuorumCertificate2};
-    use surf_disco::Client;
+    use http_client::Client;
     use tempfile::TempDir;
     use test_utils::reserve_tcp_port;
     use testing::mocks::MockBase;

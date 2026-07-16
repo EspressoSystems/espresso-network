@@ -226,7 +226,7 @@ pub async fn run_standalone_service(options: Options) {
 
     let (leaf_and_block_pair_sender, leaf_and_block_pair_receiver) = mpsc::channel(10);
 
-    let client = surf_disco::Client::new(options.leaf_stream_base_url().clone());
+    let client = http_client::Client::new(options.leaf_stream_base_url().clone());
 
     // Let's get the current starting block height.
     let block_height = {

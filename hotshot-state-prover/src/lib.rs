@@ -15,8 +15,8 @@ use espresso_contract_deployer::{
 };
 use espresso_types::SeqTypes;
 use hotshot_types::{data::EpochNumber, light_client::StakeTableState, stake_table::HSStakeTable};
+use http_client::error::ClientErr;
 use jf_plonk::PlonkError;
-use tide_disco::error::ServerError;
 use url::Url;
 
 /// The original prover for light client V1
@@ -130,9 +130,9 @@ pub enum ProverError {
     /// Error when communicating with the smart contract: {0}
     ContractError(anyhow::Error),
     /// Error when communicating with the state relay server: {0}
-    RelayServerError(ServerError),
+    RelayServerError(ClientErr),
     /// Error when communicating with the sequencer. Url: {0}, Error: {1}
-    SequencerCommunicationError(Url, ServerError),
+    SequencerCommunicationError(Url, ClientErr),
     /// Internal error when generating the SNARK proof: {0}
     PlonkError(PlonkError),
     /// Internal error: {0}

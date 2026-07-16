@@ -938,7 +938,7 @@ async fn healthcheck(headers: HeaderMap) -> Response {
 
 /// Serves the dev-info/set-hotshot-down/set-hotshot-up routes at both the `/v0/api/...` forms
 /// tide-disco served directly and the unversioned `/api/...` forms it served via a redirect
-/// (used by the Go SDK and surf-disco clients, respectively).
+/// (used by the Go SDK and our HTTP clients, respectively).
 fn dev_node_router(state: DevNodeState) -> Router {
     let api = Router::new()
         .route("/dev-info", get(get_dev_info))
