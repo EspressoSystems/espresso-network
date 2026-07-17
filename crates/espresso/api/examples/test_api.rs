@@ -13,7 +13,7 @@ use espresso_api::{v1, v2};
 use serde::Serialize;
 use serialization_api::ApiSerializations;
 
-/// Port for the test API server. 5000 would collide with macOS AirPlay (ControlCenter).
+/// Port for the test API server
 const API_PORT: u16 = 5001;
 
 /// Test API implementation with hardcoded mock data
