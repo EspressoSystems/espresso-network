@@ -3,7 +3,7 @@
 //! This module provides implementations for both v1::RewardApi (internal types)
 //! and v2::RewardApi (proto types), backed by the same data source.
 
-use std::time::Duration;
+use std::{ops::Bound, time::Duration};
 
 use alloy::primitives::U256;
 use async_trait::async_trait;
@@ -12,35 +12,47 @@ use espresso_api::{error::AvailabilityError, v1::HotShotAvailabilityApi};
 use espresso_types::{
     NamespaceId, NamespaceProofQueryData, NsProof, SeqTypes,
     v0::sparse_mt::KeccakNode,
-    v0_3::RewardAmount as InternalRewardAmount,
+    v0_3::{RewardAccountV1, RewardAmount as InternalRewardAmount, RewardMerkleTreeV1},
     v0_4::{
         RewardAccountProofV2 as InternalRewardAccountProofV2,
         RewardAccountQueryDataV2 as InternalRewardAccountQueryData, RewardAccountV2,
-        RewardMerkleProofV2 as InternalRewardMerkleProofV2,
+        RewardMerkleProofV2 as InternalRewardMerkleProofV2, RewardMerkleTreeV2,
     },
     v0_6::RewardClaimError,
 };
 use futures::{StreamExt as _, join, stream::BoxStream};
 use hotshot_contract_adapter::reward::RewardClaimInput as InternalRewardClaimInput;
+use hotshot_events_service::events_source::EventsSource as _;
 use hotshot_new_protocol::message::Certificate2;
 use hotshot_query_service::{
-    Header as HsHeader,
+    Header as HsHeader, QueryError,
     availability::{
         AvailabilityDataSource, BlockId as HsBlockId, BlockQueryData, BlockSummaryQueryData,
         LeafId as HsLeafId, LeafQueryData, Limits as HsLimits, PayloadQueryData,
         QueryablePayload as _, TransactionQueryData, TransactionWithProofQueryData,
         VidCommonQueryData,
     },
-    node::NodeDataSource as _,
     status::HasMetrics as _,
+    explorer::{
+        BlockIdentifier, BlockRange, ExplorerDataSource as _, GetBlockSummariesRequest,
+        GetTransactionSummariesRequest, TransactionIdentifier, TransactionRange,
+        TransactionSummaryFilter,
+    },
+    merklized_state::{
+        MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot as HsSnapshot,
+    },
+    node::{NodeDataSource as _, WindowStart},
+    status::HasMetrics,
     types::HeightIndexed as _,
 };
 use hotshot_types::{
     data::{EpochNumber, VidShare},
+    utils::{epoch_from_block_number, root_block_in_epoch},
     vid::avidm::AvidMShare,
 };
 use jf_merkle_tree_compat::prelude::{
     MerkleNode as InternalMerkleNode, MerkleProof as InternalMerkleProof,
+    MerkleProof as JfMerkleProof,
 };
 use prometheus::Encoder as _;
 use serde_json;
@@ -50,12 +62,16 @@ use serialization_api::v2::{
     reward_merkle_proof_v2::ProofType,
 };
 use tagged_base64::TaggedBase64;
+use committable::Committable as _;
+use tide_disco::{Error as _, StatusCode, metrics::Metrics as _};
 
 use super::{
     RewardMerkleTreeDataSource, RewardMerkleTreeV2Data as InternalRewardTreeData,
     data_source::{
-        RequestResponseDataSource as _, StakeTableDataSource, StateCertDataSource,
-        StateCertFetchingDataSource, StateSignatureDataSource,
+        CatchupDataSource as _, DatabaseMetadataSource as _, HotShotConfigDataSource as _,
+        NodeStateDataSource as _, PruningDataSource as _, RequestResponseDataSource as _,
+        StakeTableDataSource, StateCertDataSource, StateCertFetchingDataSource,
+        StateSignatureDataSource, TokenDataSource as _,
     },
 };
 
@@ -705,8 +721,6 @@ where
     >;
 
     async fn get_reward_state_height(&self) -> anyhow::Result<u64> {
-        use hotshot_query_service::merklized_state::MerklizedStateHeightPersistence;
-
         let ds = &*self.data_source;
         ds.get_last_state_height()
             .await
@@ -715,9 +729,9 @@ where
     }
 
     async fn get_reward_state_v2_height(&self) -> anyhow::Result<u64> {
-        // Both the V1 and V2 reward merklized-state modules share the same underlying
-        // `last_merklized_state_height` row; mirrors tide registering the height route
-        // once per module against the same data source.
+        // `last_merklized_state_height` is the same row for every merklized-state module in
+        // this file (reward V1/V2, block-state, fee-state), not just these two; mirrors tide
+        // registering the height route once per module against the same data source.
         self.get_reward_state_height().await
     }
 
@@ -726,7 +740,7 @@ where
         height: u64,
         address: String,
     ) -> anyhow::Result<Self::RewardAccountQueryDataV1> {
-        let account: espresso_types::v0_3::RewardAccountV1 = address
+        let account: RewardAccountV1 = address
             .parse()
             .map_err(|_| bad_request(format!("invalid ethereum address: {}", address)))?;
 
@@ -946,10 +960,6 @@ where
         snapshot: espresso_api::v1::Snapshot,
         key: String,
     ) -> anyhow::Result<Self::RewardStatePathV1> {
-        use hotshot_query_service::merklized_state::{
-            MerklizedStateDataSource, Snapshot as HsSnapshot,
-        };
-
         let hs_snapshot = match snapshot {
             espresso_api::v1::Snapshot::Height(h) => HsSnapshot::Index(h),
             espresso_api::v1::Snapshot::Commit(c) => {
@@ -962,17 +972,13 @@ where
                 HsSnapshot::Commit(commit)
             },
         };
-        let key: espresso_types::v0_3::RewardAccountV1 = key
+        let key: RewardAccountV1 = key
             .parse()
             .map_err(|_| bad_request("failed to parse Key param"))?;
         let ds = &*self.data_source;
-        MerklizedStateDataSource::<
-            espresso_types::SeqTypes,
-            espresso_types::v0_3::RewardMerkleTreeV1,
-            _,
-        >::get_path(ds, hs_snapshot, key)
-        .await
-        .map_err(classify_query_error)
+        MerklizedStateDataSource::<SeqTypes, RewardMerkleTreeV1, _>::get_path(ds, hs_snapshot, key)
+            .await
+            .map_err(classify_query_error)
     }
 
     async fn get_reward_state_path_v2(
@@ -980,10 +986,6 @@ where
         snapshot: espresso_api::v1::Snapshot,
         key: String,
     ) -> anyhow::Result<Self::RewardStatePathV2> {
-        use hotshot_query_service::merklized_state::{
-            MerklizedStateDataSource, Snapshot as HsSnapshot,
-        };
-
         let hs_snapshot = match snapshot {
             espresso_api::v1::Snapshot::Height(h) => HsSnapshot::Index(h),
             espresso_api::v1::Snapshot::Commit(c) => {
@@ -1000,13 +1002,9 @@ where
             .parse()
             .map_err(|_| bad_request("failed to parse Key param"))?;
         let ds = &*self.data_source;
-        MerklizedStateDataSource::<
-            espresso_types::SeqTypes,
-            espresso_types::v0_4::RewardMerkleTreeV2,
-            _,
-        >::get_path(ds, hs_snapshot, key)
-        .await
-        .map_err(classify_query_error)
+        MerklizedStateDataSource::<SeqTypes, RewardMerkleTreeV2, _>::get_path(ds, hs_snapshot, key)
+            .await
+            .map_err(classify_query_error)
     }
 }
 
@@ -2129,7 +2127,6 @@ fn payload_id_to_hs(
 }
 
 fn classify_query_error(err: hotshot_query_service::QueryError) -> anyhow::Error {
-    use hotshot_query_service::QueryError;
     match err {
         QueryError::NotFound | QueryError::Missing => not_found(err.to_string()),
         QueryError::Error { .. } => anyhow::anyhow!(err.to_string()),
@@ -2160,10 +2157,6 @@ where
         snapshot: espresso_api::v1::Snapshot,
         key: String,
     ) -> anyhow::Result<Self::MerkleProof> {
-        use hotshot_query_service::merklized_state::{
-            MerklizedStateDataSource, Snapshot as HsSnapshot,
-        };
-
         let hs_snapshot = match snapshot {
             espresso_api::v1::Snapshot::Height(h) => HsSnapshot::Index(h),
             espresso_api::v1::Snapshot::Commit(c) => {
@@ -2190,8 +2183,6 @@ where
     }
 
     async fn get_block_state_height(&self) -> anyhow::Result<u64> {
-        use hotshot_query_service::merklized_state::MerklizedStateHeightPersistence;
-
         let ds = &*self.data_source;
         ds.get_last_state_height()
             .await
@@ -2225,10 +2216,6 @@ where
         snapshot: espresso_api::v1::Snapshot,
         key: String,
     ) -> anyhow::Result<Self::MerkleProof> {
-        use hotshot_query_service::merklized_state::{
-            MerklizedStateDataSource, Snapshot as HsSnapshot,
-        };
-
         let hs_snapshot = match snapshot {
             espresso_api::v1::Snapshot::Height(h) => HsSnapshot::Index(h),
             espresso_api::v1::Snapshot::Commit(c) => {
@@ -2255,8 +2242,6 @@ where
     }
 
     async fn get_fee_state_height(&self) -> anyhow::Result<u64> {
-        use hotshot_query_service::merklized_state::MerklizedStateHeightPersistence;
-
         let ds = &*self.data_source;
         ds.get_last_state_height()
             .await
@@ -2268,11 +2253,6 @@ where
         &self,
         address: String,
     ) -> anyhow::Result<Option<Self::FeeAmount>> {
-        use hotshot_query_service::merklized_state::{
-            MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot as HsSnapshot,
-        };
-        use jf_merkle_tree_compat::prelude::MerkleProof as JfMerkleProof;
-
         let key: espresso_types::FeeAccount = address
             .parse()
             .map_err(|_| bad_request("failed to parse address"))?;
@@ -2352,7 +2332,6 @@ where
     type RuntimeConfig = crate::options::PublicNodeConfig;
 
     async fn hotshot_config(&self) -> anyhow::Result<Self::HotShotConfig> {
-        use super::data_source::HotShotConfigDataSource as _;
         let ds = &*self.data_source;
         Ok(ds.get_config().await)
     }
@@ -2418,7 +2397,6 @@ where
         to: Option<u64>,
         namespace: Option<u64>,
     ) -> anyhow::Result<u64> {
-        use std::ops::Bound;
         let ds = &*self.data_source;
         let from = match from {
             Some(f) => Bound::Included(f as usize),
@@ -2442,7 +2420,6 @@ where
         to: Option<u64>,
         namespace: Option<u64>,
     ) -> anyhow::Result<u64> {
-        use std::ops::Bound;
         let ds = &*self.data_source;
         let from = match from {
             Some(f) => Bound::Included(f as usize),
@@ -2493,7 +2470,6 @@ where
         start: espresso_api::v1::HeaderWindowStart,
         end: u64,
     ) -> anyhow::Result<Self::HeaderWindow> {
-        use hotshot_query_service::node::WindowStart;
         let ds = &*self.data_source;
         let start: WindowStart<espresso_types::SeqTypes> = match start {
             espresso_api::v1::HeaderWindowStart::Time(t) => WindowStart::Time(t),
@@ -2587,13 +2563,11 @@ where
     }
 
     async fn get_oldest_block(&self) -> anyhow::Result<Option<Self::Block>> {
-        use super::data_source::PruningDataSource as _;
         let ds = &*self.data_source;
         ds.get_oldest_block().await
     }
 
     async fn get_oldest_leaf(&self) -> anyhow::Result<Option<Self::Leaf>> {
-        use super::data_source::PruningDataSource as _;
         let ds = &*self.data_source;
         ds.get_oldest_leaf().await
     }
@@ -2640,7 +2614,6 @@ where
         view: u64,
         address: String,
     ) -> anyhow::Result<Self::AccountQueryData> {
-        use super::data_source::{CatchupDataSource as _, NodeStateDataSource as _};
         let ds = &*self.data_source;
         let view = hotshot_types::data::ViewNumber::new(view);
         let account: espresso_types::FeeAccount = address
@@ -2658,7 +2631,6 @@ where
         view: u64,
         accounts: Vec<Self::FeeAccount>,
     ) -> anyhow::Result<Self::FeeMerkleTree> {
-        use super::data_source::{CatchupDataSource as _, NodeStateDataSource as _};
         let ds = &*self.data_source;
         let view = hotshot_types::data::ViewNumber::new(view);
         let instance = ds.node_state().await;
@@ -2672,7 +2644,6 @@ where
         height: u64,
         view: u64,
     ) -> anyhow::Result<Self::BlocksFrontier> {
-        use super::data_source::{CatchupDataSource as _, NodeStateDataSource as _};
         let ds = &*self.data_source;
         let view = hotshot_types::data::ViewNumber::new(view);
         let instance = ds.node_state().await;
@@ -2682,7 +2653,6 @@ where
     }
 
     async fn get_chain_config(&self, commitment: String) -> anyhow::Result<Self::ChainConfig> {
-        use super::data_source::CatchupDataSource as _;
         let ds = &*self.data_source;
         let parsed: committable::Commitment<espresso_types::v0_3::ChainConfig> = commitment
             .parse()
@@ -2693,7 +2663,6 @@ where
     }
 
     async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Self::LeafChain> {
-        use super::data_source::CatchupDataSource as _;
         let ds = &*self.data_source;
         ds.get_leaf_chain(height)
             .await
@@ -2701,7 +2670,6 @@ where
     }
 
     async fn get_cert2(&self, height: u64) -> anyhow::Result<Self::Cert2> {
-        use super::data_source::CatchupDataSource as _;
         let ds = &*self.data_source;
         let response = ds
             .get_cert2(height)
@@ -2716,7 +2684,6 @@ where
         view: u64,
         address: String,
     ) -> anyhow::Result<Self::RewardAccountQueryDataV1> {
-        use super::data_source::{CatchupDataSource as _, NodeStateDataSource as _};
         let ds = &*self.data_source;
         let view = hotshot_types::data::ViewNumber::new(view);
         let account: espresso_types::v0_4::RewardAccountV2 = address
@@ -2734,7 +2701,6 @@ where
         view: u64,
         accounts: Vec<Self::RewardAccountV1>,
     ) -> anyhow::Result<Self::RewardMerkleTreeV1> {
-        use super::data_source::{CatchupDataSource as _, NodeStateDataSource as _};
         let ds = &*self.data_source;
         let view = hotshot_types::data::ViewNumber::new(view);
         let instance = ds.node_state().await;
@@ -2749,7 +2715,6 @@ where
         view: u64,
         address: String,
     ) -> anyhow::Result<Self::RewardAccountQueryDataV2> {
-        use super::data_source::{CatchupDataSource as _, NodeStateDataSource as _};
         let ds = &*self.data_source;
         let view = hotshot_types::data::ViewNumber::new(view);
         let account: espresso_types::v0_4::RewardAccountV2 = address
@@ -2766,7 +2731,6 @@ where
         height: u64,
         view: u64,
     ) -> anyhow::Result<Self::RewardMerkleTreeV2Data> {
-        use super::data_source::CatchupDataSource as _;
         let ds = &*self.data_source;
         let view = hotshot_types::data::ViewNumber::new(view);
         let bytes = ds
@@ -2779,7 +2743,6 @@ where
     }
 
     async fn get_state_cert(&self, epoch: u64) -> anyhow::Result<Self::StateCert> {
-        use super::data_source::CatchupDataSource as _;
         let ds = &*self.data_source;
         ds.get_state_cert(epoch)
             .await
@@ -2801,7 +2764,6 @@ where
     type TxHash = committable::Commitment<espresso_types::Transaction>;
 
     async fn submit(&self, tx: Self::Transaction) -> anyhow::Result<Self::TxHash> {
-        use committable::Committable as _;
         let hash = tx.commit();
         let ds = &*self.data_source;
         ds.submit_erased(tx)
@@ -2933,7 +2895,6 @@ where
         &self,
         ident: espresso_api::v1::BlockIdent,
     ) -> anyhow::Result<Self::BlockDetail> {
-        use hotshot_query_service::explorer::{BlockIdentifier, ExplorerDataSource as _};
         let ds = &*self.data_source;
         let target = match ident {
             espresso_api::v1::BlockIdent::Height(h) => BlockIdentifier::Height(h as usize),
@@ -2954,9 +2915,6 @@ where
         target: espresso_api::v1::BlockIdent,
         limit: u64,
     ) -> anyhow::Result<Self::BlockSummaries> {
-        use hotshot_query_service::explorer::{
-            BlockIdentifier, BlockRange, ExplorerDataSource as _, GetBlockSummariesRequest,
-        };
         let ds = &*self.data_source;
         let num_blocks = std::num::NonZeroUsize::new(limit as usize)
             .ok_or_else(|| bad_request("limit must be greater than 0"))?;
@@ -2981,7 +2939,6 @@ where
         &self,
         ident: espresso_api::v1::TxIdent,
     ) -> anyhow::Result<Self::TransactionDetail> {
-        use hotshot_query_service::explorer::{ExplorerDataSource as _, TransactionIdentifier};
         let ds = &*self.data_source;
         let target = match ident {
             espresso_api::v1::TxIdent::HeightAndOffset(h, o) => {
@@ -3005,10 +2962,6 @@ where
         limit: u64,
         filter: espresso_api::v1::TxSummaryFilter,
     ) -> anyhow::Result<Self::TransactionSummaries> {
-        use hotshot_query_service::explorer::{
-            ExplorerDataSource as _, GetTransactionSummariesRequest, TransactionIdentifier,
-            TransactionRange, TransactionSummaryFilter,
-        };
         let ds = &*self.data_source;
         let num_transactions = std::num::NonZeroUsize::new(limit as usize)
             .ok_or_else(|| bad_request("limit must be greater than 0"))?;
@@ -3047,7 +3000,6 @@ where
     }
 
     async fn get_explorer_summary(&self) -> anyhow::Result<Self::ExplorerSummary> {
-        use hotshot_query_service::explorer::ExplorerDataSource as _;
         let ds = &*self.data_source;
         ds.get_explorer_summary()
             .await
@@ -3056,7 +3008,6 @@ where
     }
 
     async fn get_search_result(&self, query: String) -> anyhow::Result<Self::SearchResult> {
-        use hotshot_query_service::explorer::ExplorerDataSource as _;
         let ds = &*self.data_source;
         let parsed: tagged_base64::TaggedBase64 = query
             .parse()
@@ -3101,13 +3052,12 @@ where
         query: espresso_api::v1::LeafQuery,
         finalized: Option<u64>,
     ) -> anyhow::Result<Self::LeafProof> {
-        use hotshot_query_service::availability::LeafId;
         let ds = &*self.data_source;
         let fetch_timeout = lc_fetch_timeout();
 
         let requested = match query {
-            espresso_api::v1::LeafQuery::Height(h) => LeafId::Number(h as usize),
-            espresso_api::v1::LeafQuery::Hash(h) => LeafId::Hash(
+            espresso_api::v1::LeafQuery::Height(h) => HsLeafId::Number(h as usize),
+            espresso_api::v1::LeafQuery::Hash(h) => HsLeafId::Hash(
                 h.parse()
                     .map_err(|err| bad_request(format!("invalid leaf hash {h}: {err}")))?,
             ),
@@ -3120,7 +3070,7 @@ where
                     .with_timeout(fetch_timeout)
                     .await
                     .ok_or_else(|| not_found(format!("unknown block hash {h}")))?;
-                LeafId::Number(header.height() as usize)
+                HsLeafId::Number(header.height() as usize)
             },
             espresso_api::v1::LeafQuery::PayloadHash(h) => {
                 let parsed = h
@@ -3131,7 +3081,7 @@ where
                     .with_timeout(fetch_timeout)
                     .await
                     .ok_or_else(|| not_found(format!("unknown payload hash {h}")))?;
-                LeafId::Number(header.height() as usize)
+                HsLeafId::Number(header.height() as usize)
             },
         };
 
@@ -3190,7 +3140,6 @@ where
         &self,
         epoch: u64,
     ) -> anyhow::Result<Self::StakeTableEvents> {
-        use hotshot_types::utils::{epoch_from_block_number, root_block_in_epoch};
         let ds = &*self.data_source;
         let fetch_timeout = lc_fetch_timeout();
 
@@ -3273,7 +3222,6 @@ where
         start: u64,
         end: u64,
     ) -> anyhow::Result<Vec<Self::PayloadProof>> {
-        use futures::StreamExt as _;
         let ds = &*self.data_source;
         let fetch_timeout = lc_fetch_timeout();
         let start = start as usize;
@@ -3405,13 +3353,11 @@ where
     type StartupInfo = hotshot_events_service::events_source::StartupInfo<espresso_types::SeqTypes>;
 
     async fn startup_info(&self) -> anyhow::Result<Self::StartupInfo> {
-        use hotshot_events_service::events_source::EventsSource as _;
         let ds = &*self.data_source;
         Ok(ds.get_startup_info().await)
     }
 
     async fn events(&self) -> anyhow::Result<futures::stream::BoxStream<'static, Self::Event>> {
-        use hotshot_events_service::events_source::EventsSource as _;
         let ds = &*self.data_source;
         let stream = ds.get_event_stream(None).await;
         Ok(Box::pin(stream))
@@ -3432,7 +3378,6 @@ where
         + Sync,
 {
     async fn total_minted_supply(&self) -> anyhow::Result<String> {
-        use super::data_source::TokenDataSource as _;
         let ds = &*self.data_source;
         let value = ds
             .get_total_supply_l1()
@@ -3519,13 +3464,11 @@ where
     type MigrationStatus = Vec<super::data_source::MigrationStatus>;
 
     async fn get_table_sizes(&self) -> anyhow::Result<Self::TableSizes> {
-        use super::data_source::DatabaseMetadataSource as _;
         let ds = &*self.data_source;
         ds.get_table_sizes().await
     }
 
     async fn get_migration_status(&self) -> anyhow::Result<Self::MigrationStatus> {
-        use super::data_source::DatabaseMetadataSource as _;
         let ds = &*self.data_source;
         ds.get_migration_status().await
     }
