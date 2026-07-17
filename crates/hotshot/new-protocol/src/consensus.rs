@@ -1578,6 +1578,26 @@ impl<T: NodeType> Consensus<T> {
             parent_cert.data.leaf_commit
         };
         let Some(header) = self.headers.get(&(view, parent_commitment)) else {
+            // The header request issued on the TC targeted the lock held at
+            // that moment; if the lock moved since (bridged legacy QC at
+            // cutover), re-request. The block builder dedups by (view, parent).
+            if view_change_evidence.is_some() {
+                let request_epoch =
+                    if is_last_block(proposal.block_header.block_number(), *self.epoch_height) {
+                        proposal.epoch + 1
+                    } else {
+                        proposal.epoch
+                    };
+                if self.is_leader(view, request_epoch) {
+                    outbox.push_back(ConsensusOutput::RequestBlockAndHeader(
+                        BlockAndHeaderRequest {
+                            view,
+                            epoch: request_epoch,
+                            parent_proposal: proposal.clone(),
+                        },
+                    ));
+                }
+            }
             debug!("no block header");
             return;
         };
