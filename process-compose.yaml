@@ -1,7 +1,7 @@
 version: "3"
 
-# When adding/removing native processes (non-docker commands), update the NATIVE_PROCESSES
-# array in scripts/cleanup-process-compose to ensure proper cleanup on test failures.
+# When adding/removing processes, update the NATIVE_PROCESSES array in
+# scripts/cleanup-process-compose to ensure proper cleanup on test failures.
 
 x-availability:
   # terminate process compose if process exits
@@ -21,13 +21,12 @@ environment:
   - ESPRESSO_L1_PROVIDER=http://localhost:${ESPRESSO_L1_PORT}
   - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-data/genesis/demo.toml}
   - ESPRESSO_STATE_RELAY_SERVER_URL=http://localhost:${ESPRESSO_STATE_RELAY_SERVER_PORT}
-  - QUERY_SERVICE_URI=http://localhost:${ESPRESSO_NODE_1_API_PORT}/v0/
-  - NODE_VALIDATOR_URI=ws://localhost:${ESPRESSO_NODE_VALIDATOR_PORT}/v0/
 processes:
-  # Cheating a bit here but since we don't usually have to debug go-ethereum
-  # it's using the docker compose service which is a bit easier.
   demo-l1-network:
-    command: docker compose up demo-l1-network --force-recreate --renew-anon-volumes
+    command: >-
+      anvil --host 0.0.0.0 --port ${ESPRESSO_L1_PORT} --chain-id 31337
+      --accounts 20 --balance 1000000000 --block-time 1
+      --slots-in-an-epoch 32
     readiness_probe:
       exec:
         command: >-
@@ -203,16 +202,6 @@ processes:
         path: /healthcheck
     availability: *run-forever
 
-  telemetry-collector:
-    command: docker compose up vector --force-recreate --renew-anon-volumes
-    log_location: logs/vector.log
-    # Telemetry is not load-bearing: a failure (e.g. Docker Hub pull timeout in CI)
-    # must not tear down the whole demo like *run-forever would.
-    availability:
-      restart: on_failure
-      backoff_seconds: 5
-      max_restarts: 5
-
   prover-one-shot:
     # "nice" this compute heavy process to reduce load
     command: nice state-prover
@@ -304,7 +293,7 @@ processes:
     command: espresso-node -- storage-sql -- http -- config -- query -- submit -- explorer -- catchup
     environment:
       - ESPRESSO_NODE_TELEMETRY_METRICS_ENABLE=true
-      - ESPRESSO_NODE_TELEMETRY_ENDPOINT=http://localhost:${ESPRESSO_DEMO_TELEMETRY_PRW_PORT}
+      - ESPRESSO_NODE_TELEMETRY_ENDPOINT=http://intentionally-unreachable-telemetry-endpoint
       - ESPRESSO_NODE_API_PORT=${ESPRESSO_NODE_1_API_PORT}
       - ESPRESSO_NODE_AXUM_PORT=${ESPRESSO_NODE_1_AXUM_PORT}
       - ESPRESSO_NODE_TONIC_PORT=${ESPRESSO_NODE_1_TONIC_PORT}
@@ -334,7 +323,8 @@ processes:
       - ESPRESSO_NODE_IDENTITY_LATITUDE=39.0742
       - ESPRESSO_NODE_IDENTITY_LONGITUDE=21.8243
       - ESPRESSO_NODE_PUBLIC_API_URL=http://localhost:${ESPRESSO_NODE_1_API_PORT}/
-      - ESPRESSO_L1_WS_PROVIDER=ws://localhost:${ESPRESSO_L1_WS_PORT}
+      # Anvil serves WS on the same port as HTTP (no separate ESPRESSO_L1_WS_PORT).
+      - ESPRESSO_L1_WS_PROVIDER=ws://localhost:${ESPRESSO_L1_PORT}
     depends_on:
       orchestrator:
         condition: process_healthy
@@ -423,7 +413,7 @@ processes:
     command: espresso-node -- http -- config -- query -- storage-fs
     environment:
       - ESPRESSO_NODE_TELEMETRY_LOGS_ENABLE=true
-      - ESPRESSO_NODE_TELEMETRY_ENDPOINT=http://localhost:${ESPRESSO_DEMO_TELEMETRY_OTLP_PORT}
+      - ESPRESSO_NODE_TELEMETRY_ENDPOINT=http://intentionally-unreachable-telemetry-endpoint
       - ESPRESSO_NODE_TELEMETRY_LOG=info
       - ESPRESSO_NODE_API_PORT=${ESPRESSO_NODE_3_API_PORT}
       - ESPRESSO_NODE_AXUM_PORT=${ESPRESSO_NODE_3_AXUM_PORT}
@@ -449,7 +439,8 @@ processes:
       - ESPRESSO_NODE_IDENTITY_LATITUDE=35.8617
       - ESPRESSO_NODE_IDENTITY_LONGITUDE=104.1954
       - ESPRESSO_NODE_PUBLIC_API_URL=http://localhost:${ESPRESSO_NODE_3_API_PORT}/
-      - ESPRESSO_L1_WS_PROVIDER=ws://localhost:${ESPRESSO_L1_WS_PORT}
+      # Anvil serves WS on the same port as HTTP (no separate ESPRESSO_L1_WS_PORT).
+      - ESPRESSO_L1_WS_PROVIDER=ws://localhost:${ESPRESSO_L1_PORT}
     depends_on:
       orchestrator:
         condition: process_healthy
@@ -564,13 +555,9 @@ processes:
       failure_threshold: 100
     availability: *run-forever
 
-  # We use KeyDB (a Redis variant) to maintain consistency between
-  # different parts of the CDN
-  # Cheating a bit here too, but KeyDB is not available as a Nix package.
-  # Could do local (SQLite) discovery, but removes some of the spirit
-  # from the local demo.
+  # Redis backs CDN discovery (shared state between marshal and brokers).
   keydb:
-    command: docker run --rm -p 0.0.0.0:6379:6379 eqalpha/keydb --requirepass changeme!
+    command: redis-server --port 6379 --requirepass 'changeme!'
     readiness_probe:
       exec:
         command: nc -zv localhost 6379
@@ -719,48 +706,27 @@ processes:
     availability: *run-forever
 
   espresso-node-db-0:
-    command:
-      docker run -e POSTGRES_PASSWORD -e POSTGRES_USER -e POSTGRES_DB -p ${ESPRESSO_NODE_0_DB_PORT}:5432 postgres
-    environment:
-      - POSTGRES_PASSWORD=password
-      - POSTGRES_USER=root
-      - POSTGRES_DB=espresso
+    command: scripts/run-postgres ${ESPRESSO_NODE_0_DB_PORT} ${ESPRESSO_BASE_STORAGE_PATH}/pg0
     readiness_probe:
       exec:
-        command: pg_isready -h localhost -p ${ESPRESSO_NODE_0_DB_PORT}
+        # Gate on the espresso DB: the server accepts connections before run-postgres runs
+        # createdb, so a plain pg_isready would report ready too early.
+        command: psql -h localhost -p ${ESPRESSO_NODE_0_DB_PORT} -U root -d espresso -c 'SELECT 1'
       initial_delay_seconds: 5
       period_seconds: 5
       timeout_seconds: 4
-      # Postgres can be falsely "ready" once before running init scripts.
-      # See https://github.com/docker-library/postgres/issues/146 for discussion.
-      success_threshold: 2
       failure_threshold: 20
     availability: *run-forever
 
   espresso-node-db-1:
-    command:
-      docker run -e POSTGRES_PASSWORD -e POSTGRES_USER -e POSTGRES_DB -p ${ESPRESSO_NODE_1_DB_PORT}:5432 postgres
-    environment:
-      - POSTGRES_PASSWORD=password
-      - POSTGRES_USER=root
-      - POSTGRES_DB=espresso
+    command: scripts/run-postgres ${ESPRESSO_NODE_1_DB_PORT} ${ESPRESSO_BASE_STORAGE_PATH}/pg1
     readiness_probe:
       exec:
-        command: pg_isready -h localhost -p ${ESPRESSO_NODE_1_DB_PORT}
+        # Gate on the espresso DB: the server accepts connections before run-postgres runs
+        # createdb, so a plain pg_isready would report ready too early.
+        command: psql -h localhost -p ${ESPRESSO_NODE_1_DB_PORT} -U root -d espresso -c 'SELECT 1'
       initial_delay_seconds: 5
       period_seconds: 5
       timeout_seconds: 4
-      # Postgres can be falsely "ready" once before running init scripts.
-      # See https://github.com/docker-library/postgres/issues/146 for discussion.
-      success_threshold: 2
       failure_threshold: 20
-    availability: *run-forever
-
-  block-explorer:
-    command:
-      docker run --rm -p ${ESPRESSO_BLOCK_EXPLORER_PORT}:3000 -e QUERY_SERVICE_URI -e NODE_VALIDATOR_URI
-      ghcr.io/espressosystems/espresso-block-explorer:main
-    depends_on:
-      espresso-node-1:
-        condition: process_healthy
     availability: *run-forever

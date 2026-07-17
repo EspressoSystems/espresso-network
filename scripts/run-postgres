@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+#
+# Start a single native PostgreSQL instance for the process-compose demo.
+#
+# The caller provides a port and a data directory; this script initializes
+# the cluster, starts postgres bound to 127.0.0.1, creates the "espresso"
+# database, and then blocks in the foreground so process-compose can manage
+# it as one long-lived service. SIGTERM/SIGINT are forwarded to postgres so
+# process-compose can stop it cleanly. The data directory is expected to
+# live under a caller-managed temp path; it is not created or removed here.
+#
+set -euo pipefail
+
+readonly SCRIPT_NAME="${0##*/}"
+
+usage() {
+  cat <<EOF
+Usage: ${SCRIPT_NAME} PORT DATADIR
+
+Start a native postgres instance bound to 127.0.0.1:PORT, storing data
+and the unix socket under DATADIR, with a "root" superuser (trust auth)
+and an "espresso" database.
+
+ARGUMENTS:
+  PORT      TCP port for postgres to listen on
+  DATADIR   Existing empty data directory to initialize and use
+
+OPTIONS:
+  -h, --help   Show this help
+EOF
+}
+
+err() {
+  echo "[${SCRIPT_NAME}] $*" >&2
+}
+
+main() {
+  if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    usage
+    exit 0
+  fi
+
+  if [[ $# -ne 2 ]]; then
+    err "Expected 2 arguments, got $#"
+    usage >&2
+    exit 1
+  fi
+
+  local port="$1"
+  local datadir="$2"
+  local pg_pid
+
+  initdb -D "${datadir}" -U root --auth=trust >/dev/null
+
+  postgres -D "${datadir}" -p "${port}" -k "${datadir}" -h 127.0.0.1 &
+  pg_pid=$!
+
+  # SIGINT triggers postgres "fast shutdown" (rolls back and disconnects clients
+  # immediately). SIGTERM would be a "smart shutdown" that blocks until every client
+  # disconnects, hanging until process-compose force-kills on teardown.
+  trap 'kill -INT "${pg_pid}" 2>/dev/null' TERM INT
+
+  until pg_isready -h 127.0.0.1 -p "${port}" >/dev/null 2>&1; do
+    sleep 0.5
+  done
+
+  createdb -h 127.0.0.1 -p "${port}" -U root espresso
+
+  # Double wait: the first returns as soon as the trap fires; the second blocks until
+  # postgres has actually exited so it is never left orphaned (see scripts/demo-native).
+  wait "${pg_pid}" || true
+  wait "${pg_pid}" 2>/dev/null || true
+}
+
+main "$@"
