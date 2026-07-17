@@ -3568,7 +3568,27 @@ pub fn finish_v1_docs(router: ApiRouter) -> Router {
 /// aide only derives path parameters from `Path<T>` extractors whose `T` is a named-field
 /// struct; the v1 handlers all use primitives and tuples (`Path<u64>`, `Path<(u64, String)>`),
 /// so nothing is derived and Swagger's try-it-out cannot fill the URL templates. The template
-/// itself names every parameter, so declare them from it (as strings; the handlers parse).
+/// itself names every parameter, so declare them from it.
+///
+/// Parameter types come from [`path_parameter_schema`]; the handlers parse the raw segment
+/// either way, so a wrong entry there affects only documentation, not behavior.
+/// OpenAPI schema for a v1 path template parameter, by segment name.
+///
+/// The names form a closed set and each type was read off the handler's `Path<T>` extractor:
+/// every name listed as integer binds an unsigned integer in all its handlers (including
+/// `finalized`, a `u64` flag-like argument, and `namespace`, a `u32` id). `namespaces` is a
+/// comma-separated list bound as `String`. Unknown names (future routes) default to string,
+/// which any handler can parse from the raw segment.
+fn path_parameter_schema(name: &str) -> schemars::Schema {
+    match name {
+        "height" | "block_number" | "from" | "until" | "to" | "start" | "end" | "epoch"
+        | "epoch_number" | "view" | "index" | "limit" | "offset" | "namespace" | "finalized" => {
+            schemars::json_schema!({"type": "integer", "minimum": 0})
+        },
+        _ => schemars::json_schema!({"type": "string"}),
+    }
+}
+
 fn declare_path_template_parameters(api: &mut OpenApi) {
     let Some(ref mut paths) = api.paths else {
         return;
@@ -3619,7 +3639,7 @@ fn declare_path_template_parameters(api: &mut OpenApi) {
                             required: true,
                             deprecated: None,
                             format: ParameterSchemaOrContent::Schema(SchemaObject {
-                                json_schema: schemars::json_schema!({"type": "string"}),
+                                json_schema: path_parameter_schema(name),
                                 external_docs: None,
                                 example: None,
                             }),
@@ -4778,7 +4798,7 @@ mod tests {
         );
         assert_eq!(params[0]["in"], "path");
         assert_eq!(params[0]["required"], true);
-        assert_eq!(params[0]["schema"]["type"], "string");
+        assert_eq!(params[0]["schema"]["type"], "integer");
     }
 
     /// Multi-segment templates declare one parameter per `{name}`, in template order.
@@ -4814,5 +4834,12 @@ mod tests {
                 );
             }
         }
+
+        // Numeric segments are typed integer, hash/key-like segments string.
+        let key_path = &paths[routes::v1::REWARD_STATE_PATH_BY_HEIGHT_ROUTE]["get"]["parameters"];
+        assert_eq!(key_path[0]["name"], "height");
+        assert_eq!(key_path[0]["schema"]["type"], "integer");
+        assert_eq!(key_path[1]["name"], "key");
+        assert_eq!(key_path[1]["schema"]["type"], "string");
     }
 }
