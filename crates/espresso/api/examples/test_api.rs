@@ -13,8 +13,8 @@ use espresso_api::{v1, v2};
 use serde::Serialize;
 use serialization_api::ApiSerializations;
 
-/// Port for the test API server
-const API_PORT: u16 = 5000;
+/// Port for the test API server. 5000 would collide with macOS AirPlay (ControlCenter).
+const API_PORT: u16 = 5001;
 
 /// Test API implementation with hardcoded mock data
 #[derive(Clone)]
@@ -1113,11 +1113,16 @@ async fn main() -> Result<()> {
     tracing::info!("Serving API at 127.0.0.1:{}", API_PORT);
     tracing::info!("");
     tracing::info!("API documentation: http://localhost:{}/", API_PORT);
-    tracing::info!("Swagger UI:        http://localhost:{}/v2", API_PORT);
-    tracing::info!("Scalar UI:         http://localhost:{}/v2/scalar", API_PORT);
-    tracing::info!("Redoc UI:          http://localhost:{}/v2/redoc", API_PORT);
+    tracing::info!("v1 Swagger UI:     http://localhost:{}/v1", API_PORT);
+    tracing::info!("v1 Scalar UI:      http://localhost:{}/v1/scalar", API_PORT);
     tracing::info!(
-        "OpenAPI spec:      http://localhost:{}/v2/docs/openapi.json",
+        "v1 OpenAPI spec:   http://localhost:{}/v1/docs/openapi.json",
+        API_PORT
+    );
+    tracing::info!("v2 Swagger UI:     http://localhost:{}/v2", API_PORT);
+    tracing::info!("v2 Scalar UI:      http://localhost:{}/v2/scalar", API_PORT);
+    tracing::info!(
+        "v2 OpenAPI spec:   http://localhost:{}/v2/docs/openapi.json",
         API_PORT
     );
     tracing::info!("");
