@@ -99,7 +99,7 @@ where
     if modules.hotshot_events {
         router = router.merge(axum::router_hotshot_events(state));
     }
-    serve_router(port, "v1 and v2", router, max_connections).await
+    serve_router(port, "v1 and v2", router.into(), max_connections).await
 }
 
 /// Which of the optional API modules to serve, for modes that make them conditional
@@ -157,7 +157,7 @@ where
     if modules.hotshot_events {
         router = router.merge(axum::router_hotshot_events(state));
     }
-    serve_router(port, "fs", router, max_connections).await
+    serve_router(port, "fs", router.into(), max_connections).await
 }
 
 /// Serve the status-only API: no availability/node/token data source is available, so only
@@ -181,9 +181,9 @@ where
         + Sync
         + 'static,
 {
-    let mut router =
+    let router =
         axum::router_status(state.clone()).merge(axum::router_state_signature(state.clone()));
-    router = merge_hotshot_modules(router, &state, modules);
+    let router = merge_hotshot_modules(router.into(), &state, modules);
     serve_router(port, "status", router, max_connections).await
 }
 
@@ -208,7 +208,7 @@ where
         + 'static,
 {
     let router = axum::router_state_signature(state.clone());
-    let router = merge_hotshot_modules(router, &state, modules);
+    let router = merge_hotshot_modules(router.into(), &state, modules);
     serve_router(port, "bare", router, max_connections).await
 }
 
