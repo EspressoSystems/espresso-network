@@ -338,7 +338,17 @@ async fn drive_ws_stream<T: Serialize>(
 ) {
     use axum::extract::ws::Message;
     futures::pin_mut!(stream);
-    while let Some(item) = stream.next().await {
+    loop {
+        // Also poll the client side: a disconnect must end this task even while the stream is
+        // quiet, or the socket's connection slot and the stream task leak until the next send.
+        let item = tokio::select! {
+            item = stream.next() => item,
+            msg = socket.recv() => match msg {
+                None | Some(Err(_)) | Some(Ok(Message::Close(_))) => return,
+                Some(Ok(_)) => continue,
+            },
+        };
+        let Some(item) = item else { break };
         let msg = match format {
             WsFormat::Binary => match Serializer::<StaticVersion<0, 1>>::serialize(&item) {
                 Ok(bytes) => Message::Binary(bytes.into()),
@@ -4874,11 +4884,9 @@ mod tests {
             };
             ws.on_upgrade(move |socket| async move {
                 let _permit = permit;
-                let stream: BoxStream<'static, u64> =
-                    Box::pin(futures::stream::unfold((), |()| async {
-                        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-                        Some((0u64, ()))
-                    }));
+                // Never yields: slot release on disconnect must come from polling the client
+                // side, not from a failed send.
+                let stream: BoxStream<'static, u64> = Box::pin(futures::stream::pending());
                 drive_ws_stream(socket, stream, WsFormat::Json).await
             })
         };
