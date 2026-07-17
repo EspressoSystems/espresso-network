@@ -9,7 +9,7 @@ use hotshot_types::{
     x25519,
 };
 use serde::{Deserialize, Serialize};
-use tide_disco::Url;
+use url::Url;
 use vec1::Vec1;
 
 use crate::{PubKey, SeqTypes};

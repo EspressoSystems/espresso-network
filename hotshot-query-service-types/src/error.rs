@@ -1,10 +1,11 @@
 use std::fmt::Display;
 
 use derive_more::From;
+#[cfg(feature = "web")]
+use disco_types::error::Error as _;
+use disco_types::status::StatusCode;
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
-use surf_disco::StatusCode;
-use tide_disco::Error as _;
 
 use crate::{availability, explorer, merklized_state, node, status};
 
@@ -37,7 +38,7 @@ impl Error {
     }
 }
 
-impl surf_disco::Error for Error {
+impl disco_types::error::Error for Error {
     fn catch_all(status: StatusCode, message: String) -> Self {
         Self::Custom { status, message }
     }
@@ -54,7 +55,8 @@ impl surf_disco::Error for Error {
     }
 }
 
-/// Here we converge the events service error type into the `tide-disco` error type
+/// Here we converge the events service error type into the API error type
+#[cfg(feature = "web")]
 impl From<hotshot_events_service::events::Error> for Error {
     fn from(err: hotshot_events_service::events::Error) -> Self {
         Self::Custom {

@@ -262,13 +262,15 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> ConsensusTaskState<TYPES, I>
                 }
             },
             HotShotEvent::Qc2Formed(either::Left(qc))
-                if self.upgrade_lock.new_protocol_active(self.cur_view)
+                if self.upgrade_lock.new_protocol_active(qc.view_number() + 1)
                     && !self.upgrade_lock.new_protocol_active(qc.view_number()) =>
             {
                 // Cutover boundary only: the gated proposal path won't land this
                 // last-legacy QC in `high_qc`, so capture it here for
-                // `extract_pre_cutover_seed` to carry across. `update_high_qc` is
-                // monotone, so this is a no-op outside the cutover window.
+                // `extract_pre_cutover_seed` to carry across. Keyed on the QC's
+                // view, not `cur_view`: `Qc2Formed` fires once, and the
+                // aggregator can form this QC before processing its own
+                // ViewChange into the cutover view.
                 let mut consensus_writer = self.consensus.write().await;
                 let _ = consensus_writer.update_high_qc(qc.clone());
                 drop(consensus_writer);

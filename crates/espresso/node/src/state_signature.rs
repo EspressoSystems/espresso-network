@@ -97,6 +97,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
         consensus_handle: &ConsensusHandle<SeqTypes, I>,
     ) where
         I: hotshot::traits::NodeImplementation<SeqTypes>,
+        I::Storage: hotshot_new_protocol::storage::NewProtocolStorage<SeqTypes>,
     {
         let leaf: &Leaf2<SeqTypes> = match event {
             CoordinatorEvent::LegacyEvent(Event {
@@ -120,7 +121,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                 tracing::debug!("New leaves decided. Latest block height: {}", leaf.height(),);
 
                 let cur_block_height = state.block_height;
-                let blocks_per_epoch = consensus_handle.epoch_height().await;
+                let blocks_per_epoch = *consensus_handle.epoch_height().await;
 
                 let option_state_epoch = option_epoch_from_block_number(
                     leaf.with_epoch,
