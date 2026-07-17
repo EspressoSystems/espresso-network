@@ -3,8 +3,9 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
-use espresso_types::{PubKey, SeqTypes};
+use espresso_types::{PubKey, SeqTypes, v0::traits::SequencerPersistence};
 use hotshot::types::Message;
+use hotshot_new_protocol::client::ClientApi;
 use hotshot_types::{
     message::MessageKind,
     traits::network::{BroadcastDelay, ConnectedNetwork, Topic, ViewMessage},
@@ -14,7 +15,10 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{Receiver, Sender, error::TrySendError};
 use vbs::{BinarySerializer, bincode_serializer::BincodeSerializer, version::StaticVersion};
 
-use crate::context::TaskList;
+use crate::{
+    consensus_handle::ConsensusHandle,
+    context::{ConsensusNode, TaskList},
+};
 
 /// An external message that can be sent to or received from a node
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -39,17 +43,27 @@ pub enum OutboundMessage {
 
 impl ExternalEventHandler {
     /// Creates a new `ExternalEventHandler` with the given network
-    pub async fn new<N: ConnectedNetwork<PubKey>>(
+    pub async fn new<N, P>(
         tasks: &mut TaskList,
         request_response_sender: Sender<Bytes>,
         outbound_message_receiver: Receiver<OutboundMessage>,
+        consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
         network: Arc<N>,
         public_key: PubKey,
-    ) -> Result<Self> {
+    ) -> Result<Self>
+    where
+        N: ConnectedNetwork<PubKey>,
+        P: SequencerPersistence,
+    {
         // Spawn the outbound message handling loop
         tasks.spawn(
             "ExternalEventHandler",
-            Self::outbound_message_loop(outbound_message_receiver, network, public_key),
+            Self::outbound_message_loop(
+                outbound_message_receiver,
+                consensus_handle,
+                network,
+                public_key,
+            ),
         );
 
         Ok(Self {
@@ -82,12 +96,32 @@ impl ExternalEventHandler {
     }
 
     /// The main loop for sending outbound messages.
-    async fn outbound_message_loop<N: ConnectedNetwork<PubKey>>(
+    async fn outbound_message_loop<N, P>(
         mut receiver: Receiver<OutboundMessage>,
+        consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
         network: Arc<N>,
         public_key: PubKey,
-    ) {
+    ) where
+        N: ConnectedNetwork<PubKey>,
+        P: SequencerPersistence,
+    {
+        // Dropped as soon as the coordinator takes over, so the legacy
+        // network can be freed after the cutover.
+        let mut network = Some(network);
+
         while let Some(message) = receiver.recv().await {
+            // Once the coordinator is running it owns the only live network;
+            // route external messages through it. The coordinator never
+            // stops once started, so this switch is permanent.
+            if let Some(client_api) = consensus_handle.client_api().await {
+                network = None;
+                Self::send_via_coordinator(&client_api, message, public_key).await;
+                continue;
+            }
+            let Some(network) = &network else {
+                continue;
+            };
+
             // Match the message type
             match message {
                 OutboundMessage::Direct(message, recipient) => {
@@ -109,7 +143,7 @@ impl ExternalEventHandler {
                         };
 
                     // Send the message to the recipient
-                    let network = Arc::clone(&network);
+                    let network = Arc::clone(network);
                     tokio::spawn(async move {
                         if let Err(err) =
                             network.direct_message(view, message_bytes, recipient).await
@@ -146,6 +180,50 @@ impl ExternalEventHandler {
                     };
                 },
             }
+        }
+    }
+
+    /// Send an outbound message through the coordinator's network.
+    ///
+    /// The coordinator's network sends external payloads over the wire
+    /// verbatim, so they must be self-framing: wrap the payload in the same
+    /// versioned `Message` envelope the legacy path uses, which the receiving
+    /// side's fallback decoder recognizes and unwraps.
+    async fn send_via_coordinator(
+        client_api: &ClientApi<SeqTypes>,
+        message: OutboundMessage,
+        public_key: PubKey,
+    ) {
+        match message {
+            OutboundMessage::Direct(kind @ MessageKind::External(_), recipient) => {
+                let message = Message {
+                    sender: public_key,
+                    kind,
+                };
+                let message_bytes =
+                    match BincodeSerializer::<StaticVersion<0, 0>>::serialize(&message) {
+                        Ok(message_bytes) => message_bytes,
+                        Err(err) => {
+                            tracing::warn!("Failed to serialize direct message: {}", err);
+                            return;
+                        },
+                    };
+                if let Err(err) = client_api
+                    .send_external_message(message_bytes, recipient)
+                    .await
+                {
+                    tracing::warn!(%err, "failed to send external message via coordinator");
+                }
+            },
+            // Nothing sends these today: all catchup requests are batched
+            // direct messages, and the coordinator's network has no broadcast
+            // topic for external messages.
+            other => {
+                tracing::warn!(
+                    message = ?other,
+                    "dropping unsupported external message after cutover"
+                );
+            },
         }
     }
 }

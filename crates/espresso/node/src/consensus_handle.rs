@@ -518,11 +518,32 @@ where
         let _ = coordinator.await;
     }
 
+    /// Permanently tear down the legacy consensus stack — its tasks and the
+    /// legacy network — once the new protocol has decided enough leaves that
+    /// nothing can still depend on it.
+    ///
+    /// The in-memory legacy consensus state stays readable for pre-cutover
+    /// queries, and in-flight DRB computations on the shared membership
+    /// coordinator keep running (the new protocol needs them for upcoming
+    /// epochs).
+    pub async fn shut_down_legacy(&self) {
+        for t in &self.tasks {
+            t.abort()
+        }
+        self.legacy_handle
+            .write()
+            .await
+            .shut_down_tasks_and_network()
+            .await;
+    }
+
     fn is_new_proto_running(&self) -> bool {
         matches!(*self.new_proto.read(), NewProtocol::Running { .. })
     }
 
-    async fn client_api(&self) -> Option<ClientApi<T>> {
+    /// The coordinator's client API, if the new protocol is running (trying
+    /// to activate it first if it isn't yet).
+    pub(crate) async fn client_api(&self) -> Option<ClientApi<T>> {
         if let NewProtocol::Running { client_api, .. } = &*self.new_proto.read() {
             return Some(client_api.clone());
         }
