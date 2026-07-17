@@ -3474,16 +3474,6 @@ where
         + Sync
         + 'static,
 {
-    let mut api = OpenApi {
-        info: Info {
-            title: "Espresso Node API v1".to_string(),
-            description: None,
-            version: "1.0.0".to_string(),
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-
     // Each `router_*` function already calls `with_state`, so the merged router is already
     // stateless (`ApiRouter<()>`) by the time it reaches `finish_api`.
     let router = router_reward(state.clone())
@@ -3500,8 +3490,28 @@ where
         .merge(router_light_client(state.clone()))
         .merge(router_explorer(state.clone()))
         .merge(router_token(state.clone()))
-        .merge(router_database(state))
-        .finish_api(&mut api);
+        .merge(router_database(state));
+
+    finish_v1_docs(router)
+}
+
+/// Finish a composed v1 [`ApiRouter`]: generate the OpenAPI spec from whatever routes the caller
+/// actually mounted, and attach the docs routes (spec JSON, Swagger UI, Scalar). Every serve
+/// mode must go through this — routes registered with `api_route` carry their documentation, but
+/// the spec and the `/v1` docs pages only exist once the router is finished here. The spec
+/// therefore reflects exactly the modules the running mode serves.
+pub fn finish_v1_docs(router: ApiRouter) -> Router {
+    let mut api = OpenApi {
+        info: Info {
+            title: "Espresso Node API v1".to_string(),
+            description: None,
+            version: "1.0.0".to_string(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let router = router.finish_api(&mut api);
 
     // Transform examples (array) to example (singular) for OpenAPI 3.0/Swagger compatibility,
     // matching create_router_v2 (a no-op unless a future v1 route adds a JsonSchema body/query).
@@ -4615,6 +4625,53 @@ mod tests {
             "expected {} in spec paths: {}",
             routes::v1::STATUS_BLOCK_HEIGHT_ROUTE,
             body
+        );
+    }
+
+    /// Regression test: the docs routes must exist in the app a serve mode actually builds, not
+    /// only in `create_router_v1` (which the serve modes don't call). Assembles a router the way
+    /// `serve_axum_status` does, wrapped in the same top-level routes and legacy-URI rewrite
+    /// layers as `serve_router`, and checks the docs are reachable and the spec reflects only
+    /// the mounted modules.
+    #[tokio::test]
+    async fn serve_mode_assembly_serves_v1_docs() {
+        let api_router = router_status(MockState).merge(router_state_signature(MockState));
+        let router = with_top_level_routes(finish_v1_docs(api_router));
+        let app = tower::Layer::layer(
+            &tower::util::MapRequestLayer::new(rewrite_legacy_uri),
+            router,
+        );
+
+        let get = |uri: &'static str| {
+            let app = app.clone();
+            async move {
+                let req = Request::builder()
+                    .uri(uri)
+                    .body(axum::body::Body::empty())
+                    .unwrap();
+                tower::ServiceExt::oneshot(app, req).await.unwrap()
+            }
+        };
+
+        let resp = get("/").await;
+        assert_eq!(resp.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(
+            resp.headers().get(axum::http::header::LOCATION).unwrap(),
+            "/v1"
+        );
+
+        let resp = get("/v1").await;
+        assert_eq!(resp.status(), StatusCode::OK, "/v1 must serve the docs UI");
+
+        let resp = get(routes::v1::OPENAPI_SPEC_ROUTE).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let spec: serde_json::Value =
+            serde_json::from_str(&body_string(resp).await).expect("valid JSON");
+        let paths = spec["paths"].as_object().expect("spec has paths");
+        assert!(paths.contains_key(routes::v1::STATUS_BLOCK_HEIGHT_ROUTE));
+        assert!(
+            !paths.contains_key(routes::v1::LEAF_BY_HEIGHT_ROUTE),
+            "spec must only document the modules this mode mounts"
         );
     }
 }
