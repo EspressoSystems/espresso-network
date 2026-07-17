@@ -73,6 +73,7 @@ where
         + Sync
         + 'static,
 {
+    let listener = bind_api(port).await?;
     let mut router = axum::router_reward(state.clone())
         .merge(axum::router_availability(state.clone()))
         .merge(axum::router_block_state(state.clone()))
@@ -99,7 +100,7 @@ where
         router = router.merge(axum::router_hotshot_events(state.clone()));
     }
     let router = axum::finish_v1_docs(router).merge(axum::create_router_v2(state));
-    serve_router(port, "v1 and v2", router, max_connections).await
+    serve_router(listener, "v1 and v2", router, max_connections).await
 }
 
 /// Which of the optional API modules to serve, for modes that make them conditional
@@ -142,6 +143,7 @@ where
         + Sync
         + 'static,
 {
+    let listener = bind_api(port).await?;
     let mut router = axum::router_status(state.clone())
         .merge(axum::router_availability(state.clone()))
         .merge(axum::router_node(state.clone()))
@@ -157,7 +159,13 @@ where
     if modules.hotshot_events {
         router = router.merge(axum::router_hotshot_events(state));
     }
-    serve_router(port, "fs", axum::finish_v1_docs(router), max_connections).await
+    serve_router(
+        listener,
+        "fs",
+        axum::finish_v1_docs(router),
+        max_connections,
+    )
+    .await
 }
 
 /// Serve the status-only API: no availability/node/token data source is available, so only
@@ -181,11 +189,12 @@ where
         + Sync
         + 'static,
 {
+    let listener = bind_api(port).await?;
     let router =
         axum::router_status(state.clone()).merge(axum::router_state_signature(state.clone()));
     let router = merge_hotshot_modules(router, &state, modules);
     serve_router(
-        port,
+        listener,
         "status",
         axum::finish_v1_docs(router),
         max_connections,
@@ -213,9 +222,16 @@ where
         + Sync
         + 'static,
 {
+    let listener = bind_api(port).await?;
     let router = axum::router_state_signature(state.clone());
     let router = merge_hotshot_modules(router, &state, modules);
-    serve_router(port, "bare", axum::finish_v1_docs(router), max_connections).await
+    serve_router(
+        listener,
+        "bare",
+        axum::finish_v1_docs(router),
+        max_connections,
+    )
+    .await
 }
 
 fn merge_hotshot_modules<S>(
@@ -250,44 +266,47 @@ where
 
 /// Add the reserved top-level routes, apply the optional concurrency limit, rewrite legacy URIs,
 /// and bind/serve the router. Shared by all `serve_axum*` entry points.
-///
-/// `max_connections` matches tide-disco's `RateLimitListener` semantics: at most that many
-/// requests are in flight at once, and excess requests fail immediately with 429 Too Many
-/// Requests instead of queueing. The load-shed layer converts the concurrency limit's "not
-/// ready" into an error, which `HandleErrorLayer` maps to the 429 response.
+/// Bind before composing routers: OpenAPI generation takes ~0.5s in debug builds, and clients
+/// connecting during it should queue in the accept backlog rather than get refused.
+async fn bind_api(port: u16) -> anyhow::Result<tokio::net::TcpListener> {
+    let addr = format!("0.0.0.0:{}", port);
+    tracing::info!("Binding to {}", addr);
+    Ok(tokio::net::TcpListener::bind(&addr).await?)
+}
+
 async fn serve_router(
-    port: u16,
+    listener: tokio::net::TcpListener,
     mode: &str,
     router: ::axum::Router,
     max_connections: Option<usize>,
 ) -> anyhow::Result<()> {
-    tracing::info!("Starting Axum server on port {} ({} mode)", port, mode);
-
     let mut router = axum::with_top_level_routes(router);
     if let Some(limit) = max_connections {
-        router = router.layer(
-            tower::ServiceBuilder::new()
-                .layer(::axum::error_handling::HandleErrorLayer::new(
-                    |_: tower::BoxError| async { ::axum::http::StatusCode::TOO_MANY_REQUESTS },
-                ))
-                .layer(tower::load_shed::LoadShedLayer::new())
-                .layer(tower::limit::GlobalConcurrencyLimitLayer::new(limit)),
-        );
+        router = apply_connection_limit(router, limit);
     }
     // `Router::layer` middleware runs after routing, so it can't rewrite a URI to match a
     // different route. Wrapping the whole router with `MapRequestLayer` instead runs the
     // rewrite before routing, per the axum-documented pattern for this case.
     let router = tower::util::MapRequestLayer::new(axum::rewrite_legacy_uri).layer(router);
-    let addr = format!("0.0.0.0:{}", port);
 
-    tracing::info!("Binding to {}", addr);
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
-
-    tracing::info!("Axum API server listening on {} ({} mode)", addr, mode);
+    tracing::info!(
+        "Axum API server listening on {:?} ({} mode)",
+        listener.local_addr()?,
+        mode
+    );
     ::axum::serve(listener, ::axum::ServiceExt::into_make_service(router)).await?;
 
     tracing::info!("Axum server stopped");
     Ok(())
+}
+
+/// Shared budget: plain requests hold a slot while in flight, streaming sockets for their
+/// lifetime; excess gets 429.
+fn apply_connection_limit(router: ::axum::Router, limit: usize) -> ::axum::Router {
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(limit));
+    router
+        .layer(::axum::middleware::from_fn(axum::limit_plain_requests))
+        .layer(::axum::Extension(axum::StreamLimit(semaphore)))
 }
 
 /// Start Tonic gRPC server
