@@ -1,0 +1,42 @@
+{
+  "components": [
+    {
+      "dependencies": [
+        "cliquenet"
+      ],
+      "description": "V0_6 fast-finality BFT consensus: phase-1/2 votes, quorum and timeout certificates, view changes, epoch transitions, and cutover seeding that hands over from the legacy stack at the decided upgrade boundary.",
+      "headlineProperties": [
+        "Agreement: no two conflicting leaves are ever decided at the same view",
+        "A quorum certificate forms only from votes carrying more than two-thirds of stake",
+        "Committed blocks are never reverted; each view decides at most one block",
+        "Cutover: the new protocol's decided chain extends the legacy-decided chain across the upgrade boundary with no gaps",
+        "Liveness: under an honest quorum, views make progress and blocks are eventually decided"
+      ],
+      "key": "new-protocol-_fast-finality_",
+      "name": "New Protocol (Fast Finality)",
+      "paths": [
+        "crates/hotshot/new-protocol/src/"
+      ],
+      "role": "user",
+      "specHints": "Consensus state machine in consensus.rs (Consensus::apply_pre_cutover_seed, vote/QC/timeout/view-change handling); coordinator/ schedules views and timers; cutover.rs seeds handover from the legacy stack at the decided upgrade boundary; epoch.rs handles epoch transitions; proposal.rs/vote.rs/message.rs define proposals, votes and wire messages; outbox.rs emits messages over the cliquenet transport; storage.rs persists decided actions. Model votes/certificates/views/epochs over an abstract message transport rather than modeling cliquenet's encryption.",
+      "tests": [
+        "crates/hotshot/new-protocol/src/tests/consensus.rs",
+        "crates/hotshot/new-protocol/src/tests/cutover.rs",
+        "crates/hotshot/new-protocol/src/tests/legacy_cutover.rs",
+        "crates/hotshot/new-protocol/src/tests/epoch_change.rs",
+        "crates/hotshot/new-protocol/src/tests/failures.rs",
+        "crates/hotshot/new-protocol/src/tests/restarts.rs",
+        "crates/hotshot/new-protocol/src/tests/stake_table_changes.rs",
+        "crates/hotshot/new-protocol/src/tests/state.rs",
+        "crates/hotshot/new-protocol/src/tests/storage.rs",
+        "crates/hotshot/new-protocol/src/tests/integration.rs"
+      ]
+    }
+  ],
+  "surveyedAt": {
+    "commit": "",
+    "date": "",
+    "dirty": false
+  },
+  "version": 1
+}

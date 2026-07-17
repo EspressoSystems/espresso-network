@@ -8,6 +8,7 @@ pub mod helpers;
 pub mod logging;
 pub mod message;
 pub mod network;
+pub(crate) mod oracle;
 pub mod outbox;
 pub mod state;
 pub mod storage;

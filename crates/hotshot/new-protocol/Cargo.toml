@@ -10,6 +10,9 @@ version = { workspace = true }
 example-upgrade = []
 rewind = []
 stats = []
+# Enables Quint oracle instrumentation (Quint Studio). Off by default so
+# release builds never link the client; the calls are no-ops without it.
+oracle = ["dep:quint-oracle-client"]
 
 [dependencies]
 alloy = { workspace = true }
@@ -28,6 +31,7 @@ hotshot-testing = { workspace = true }
 hotshot-types = { workspace = true }
 hotshot-utils = { workspace = true }
 parking_lot = { workspace = true }
+quint-oracle-client = { path = "../../../quint-specs/oracle-client/rust", optional = true }
 rand = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }
