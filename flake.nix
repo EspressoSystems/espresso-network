@@ -14,11 +14,6 @@
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-  # Use ...foundry.nix/stable for latest stable release
-  # On 1.4 foundry's formatting is a bit strange, so we pin 1.3.6 for now
-  inputs.foundry-nix.url = "github:shazow/foundry.nix/e632b06dc759e381ef04f15ff9541f889eda6013";
-  inputs.foundry-nix.inputs.nixpkgs.follows = "nixpkgs";
-
   inputs.rust-overlay.url = "github:oxalica/rust-overlay";
   inputs.rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
 
@@ -29,6 +24,8 @@
 
   inputs.solc-bin.url = "github:EspressoSystems/nix-solc-bin";
   inputs.solc-bin.inputs.nixpkgs.follows = "nixpkgs";
+
+  inputs.dregs.url = "github:EspressoSystems/dregs";
 
   inputs.flake-compat.url = "github:edolstra/flake-compat";
   inputs.flake-compat.flake = false;
@@ -43,13 +40,13 @@
   outputs =
     { self
     , nixpkgs
-    , foundry-nix
     , rust-overlay
     , nixpkgs-cross-overlay
     , flake-utils
     , git-hooks
     , solc-bin
     , echidna-nixpkgs
+    , dregs
     , ...
     }:
     flake-utils.lib.eachDefaultSystem (system:
@@ -72,10 +69,11 @@
 
       overlays = [
         (import rust-overlay)
-        foundry-nix.overlay
         solc-bin.overlays.default
+        dregs.overlays.default
         (final: prev: {
           solhint = prev.callPackage ./nix/solhint { };
+          pup = prev.callPackage ./nix/pup { };
         })
 
         (final: prev: {
@@ -139,12 +137,13 @@
               types_or = [ "plantuml" ];
               pass_filenames = false;
             };
-            cargo-fmt = {
+            rustfmt = {
               enable = true;
-              description = "Enforce rustfmt";
-              entry = "just fmt";
-              types_or = [ "rust" "toml" ];
-              pass_filenames = false;
+              description = "Run rustfmt on changed files";
+              # cargo-fmt is slower, does not format all files, and doesn't allow passing file arguments
+              entry = "rustfmt";
+              types_or = [ "rust" ];
+              pass_filenames = true;
             };
             cargo-sort = {
               enable = true;
@@ -185,7 +184,7 @@
               enable = true;
               description = "Enforce markdown formatting";
               entry = "prettier -w";
-              types_or = [ "markdown" "ts" ];
+              types_or = [ "markdown" ];
               pass_filenames = true;
             };
             spell-checking = {
@@ -206,7 +205,7 @@
           nightlyToolchain = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.minimal.override {
             extensions = [ "rust-analyzer" "rustfmt" ];
           });
-          solc = pkgs.solc-bin."0.8.28";
+          solc = pkgs.solc-bin."0.8.35";
           pre-commit = self.checks.${system}.pre-commit-check;
         in
         myShell (rustEnvVars // {
@@ -235,6 +234,7 @@
             prek
             prek-as-pre-commit # compat to allow running pre-commit
             entr
+            pup
             process-compose
             lazydocker # a docker compose TUI
             # `postgresql` defaults to an older version (15), so we select the latest version (16)
@@ -247,20 +247,28 @@
             coreutils
 
             # Ethereum contracts, solidity, ...
-            foundry-bin
+            foundry
             solc
-            nodePackages.prettier
+            dregs-unwrapped
+            prettier
             solhint
-            (python3.withPackages (ps: with ps; [ black ]))
             libusb1
-            yarn
             mdbook
+
+            # scripts
+            bc
+            python3
+            uv
+            ruff
+            ty
+            uv
 
             go
             golangci-lint
             # provides abigen
             go-ethereum
-          ] ++ lib.optionals (!stdenv.isDarwin) [ cargo-watch ] # broken on OSX
+          ] ++ lib.optionals stdenv.isDarwin [ darwin.libresolv ]
+          ++ lib.optionals (!stdenv.isDarwin) [ cargo-watch ] # broken on OSX
           ++ pre-commit.enabledPackages;
           shellHook = ''
             ${rustShellHook}
@@ -268,18 +276,30 @@
             # Add the local scripts to the PATH
             export PATH="$my_pwd/scripts:$PATH"
 
-            # Add node binaries to PATH for development
-            export PATH="$my_pwd/node_modules/.bin:$PATH"
-
             # Prevent cargo aliases from using programs in `~/.cargo` to avoid conflicts
             # with rustup installations.
             export CARGO_HOME=$HOME/.cargo-nix
+
+            # Let uv-installed binary wheels (matplotlib/numpy/...) find libstdc++ on NixOS.
+            export LD_LIBRARY_PATH="${lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib pkgs.zlib ]}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
             ${pre-commit.shellHook}
           '';
           RUST_SRC_PATH = "${stableToolchain}/lib/rustlib/src/rust/library";
           FOUNDRY_SOLC = "${solc}/bin/solc";
         });
+      devShells.dockerShell = pkgs.mkShell {
+        inputsFrom = [ self.devShells.${system}.default ];
+        packages = [ pkgs.docker ];
+        shellHook = lib.concatStringsSep "\n" [
+          self.devShells.${system}.default
+
+          ''
+            # Required for demo-native to run with docker-rootless
+            export DOCKER_HOST=unix://$XDG_RUNTIME_DIR/docker.sock
+          ''
+        ];
+      };
       devShells.crossShell =
         crossShell { config = "x86_64-unknown-linux-musl"; };
       devShells.armCrossShell =
@@ -350,7 +370,7 @@
         myShell {
           packages = [
             # Foundry tools
-            foundry-bin
+            foundry
             solc
 
             # Security analysis tools

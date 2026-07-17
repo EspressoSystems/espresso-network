@@ -8,8 +8,7 @@ use std::collections::HashMap;
 
 use hotshot_example_types::{
     node_types::{
-        CombinedImpl, EpochsTestVersions, Libp2pImpl, PushCdnImpl, TestTwoStakeTablesTypes,
-        TestTypes,
+        CombinedImpl, Libp2pImpl, PushCdnImpl, TEST_VERSIONS, TestTwoStakeTablesTypes, TestTypes,
     },
     testable_delay::{DelayConfig, DelayOptions, DelaySettings, SupportedTraitTypesForAsyncDelay},
 };
@@ -20,13 +19,17 @@ cross_tests!(
     TestName: test_success_with_async_delay_with_epochs,
     Impls: [Libp2pImpl, PushCdnImpl, CombinedImpl],
     Types: [TestTypes, TestTwoStakeTablesTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default();
 
         metadata.test_config.epoch_height = 10;
         metadata.overall_safety_properties.num_successful_views = 50;
+        // With injected delays, the first views after each epoch boundary occasionally
+        // time out.
+        metadata.overall_safety_properties.possible_view_failures =
+            vec![11, 12, 21, 22, 31, 32, 41, 42, 51, 52, 61, 62];
         let mut config = DelayConfig::default();
         let delay_settings = DelaySettings {
             delay_option: DelayOptions::Random,
@@ -48,7 +51,7 @@ cross_tests!(
     TestName: test_success_with_one_long_delay_with_epochs,
     Impls: [Libp2pImpl, PushCdnImpl, CombinedImpl],
     Types: [TestTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default();

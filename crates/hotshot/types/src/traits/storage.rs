@@ -9,21 +9,22 @@
 //! This modules provides the [`Storage`] trait.
 //!
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
-use anyhow::{anyhow, ensure, Result};
+use anyhow::{Result, anyhow, ensure};
 use async_trait::async_trait;
 use futures::future::BoxFuture;
+use tokio::time::sleep;
 
 use super::node_implementation::NodeType;
 use crate::{
     data::{
-        DaProposal, DaProposal2, QuorumProposal, QuorumProposal2, QuorumProposalWrapper,
-        VidCommitment, VidDisperseShare,
+        DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposal2,
+        QuorumProposalWrapper, VidCommitment, VidDisperseShare, ViewNumber,
     },
     drb::{DrbInput, DrbResult},
     event::HotShotAction,
-    message::{convert_proposal, Proposal},
+    message::{Proposal, convert_proposal},
     simple_certificate::{
         LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate,
         QuorumCertificate2, UpgradeCertificate,
@@ -72,8 +73,8 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
     /// Record a HotShotAction taken.
     async fn record_action(
         &self,
-        view: TYPES::View,
-        epoch: Option<TYPES::Epoch>,
+        view: ViewNumber,
+        epoch: Option<EpochNumber>,
         action: HotShotAction,
     ) -> Result<()>;
     /// Update the current high QC in storage.
@@ -119,14 +120,14 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
         Ok(())
     }
     /// Add a drb result
-    async fn store_drb_result(&self, epoch: TYPES::Epoch, drb_result: DrbResult) -> Result<()>;
+    async fn store_drb_result(&self, epoch: EpochNumber, drb_result: DrbResult) -> Result<()>;
     /// Add an epoch block header
     async fn store_epoch_root(
         &self,
-        epoch: TYPES::Epoch,
+        epoch: EpochNumber,
         block_header: TYPES::BlockHeader,
     ) -> Result<()>;
-    async fn load_drb_result(&self, epoch: TYPES::Epoch) -> Result<DrbResult> {
+    async fn load_drb_result(&self, epoch: EpochNumber) -> Result<DrbResult> {
         match self.load_drb_input(*epoch).await {
             Ok(drb_input) => {
                 ensure!(drb_input.iteration == drb_input.difficulty_level);
@@ -169,7 +170,21 @@ pub async fn store_drb_input_impl<TYPES: NodeType>(
     storage: impl Storage<TYPES>,
     drb_input: DrbInput,
 ) -> Result<()> {
-    storage.store_drb_input(drb_input).await
+    for attempt in 1..=3 {
+        match storage.store_drb_input(drb_input.clone()).await {
+            Ok(()) => return Ok(()),
+            Err(e) if attempt < 3 => {
+                tracing::warn!("Failed to store DRB input (attempt {attempt}/3): {e}");
+                sleep(Duration::from_millis(300)).await;
+            },
+            Err(e) => {
+                tracing::warn!("Failed to store DRB input (attempt {attempt}/3): {e}");
+                return Err(e);
+            },
+        }
+    }
+
+    Ok(())
 }
 
 pub type StoreDrbProgressFn =
@@ -188,27 +203,39 @@ pub fn null_store_drb_progress_fn() -> StoreDrbProgressFn {
     Arc::new(move |_drb_input| Box::pin(async { Ok(()) }))
 }
 
-pub type StoreDrbResultFn<TYPES> = Arc<
-    Box<
-        dyn Fn(<TYPES as NodeType>::Epoch, DrbResult) -> BoxFuture<'static, Result<()>>
-            + Send
-            + Sync
-            + 'static,
-    >,
+pub type StoreDrbResultFn = Arc<
+    Box<dyn Fn(EpochNumber, DrbResult) -> BoxFuture<'static, Result<()>> + Send + Sync + 'static>,
 >;
 
 async fn store_drb_result_impl<TYPES: NodeType>(
     storage: impl Storage<TYPES>,
-    epoch: TYPES::Epoch,
+    epoch: EpochNumber,
     drb_result: DrbResult,
 ) -> Result<()> {
-    storage.store_drb_result(epoch, drb_result).await
+    for attempt in 1..=3 {
+        match storage.store_drb_result(epoch, drb_result).await {
+            Ok(()) => return Ok(()),
+            Err(e) if attempt < 3 => {
+                tracing::warn!(
+                    "Failed to store DRB result for epoch {epoch} (attempt {attempt}/3): {e}"
+                );
+                sleep(Duration::from_millis(300)).await;
+            },
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to store DRB result for epoch {epoch} (attempt {attempt}/3): {e}"
+                );
+                return Err(e);
+            },
+        }
+    }
+    Ok(())
 }
 
 /// Helper function to create a callback to add a drb result to storage
 pub fn store_drb_result_fn<TYPES: NodeType>(
     storage: impl Storage<TYPES> + 'static,
-) -> StoreDrbResultFn<TYPES> {
+) -> StoreDrbResultFn {
     Arc::new(Box::new(move |epoch, drb_result| {
         let st = storage.clone();
         Box::pin(store_drb_result_impl(st, epoch, drb_result))

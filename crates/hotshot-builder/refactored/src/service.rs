@@ -1,27 +1,27 @@
 use std::{
     fmt::Display,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
 
-pub use async_broadcast::{broadcast, RecvError, TryRecvError};
+pub use async_broadcast::{RecvError, TryRecvError, broadcast};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use committable::Commitment;
 use futures::{
+    Stream, TryStreamExt,
     future::BoxFuture,
     stream::{FuturesOrdered, FuturesUnordered, StreamExt},
-    Stream, TryStreamExt,
 };
 use hotshot::types::Event;
 use hotshot_builder_api::{
     v0_1::{
         block_info::{AvailableBlockData, AvailableBlockInfo},
         builder::{
-            define_api, submit_api, BuildError, Error as BuilderApiError, TransactionStatus,
+            BuildError, Error as BuilderApiError, TransactionStatus, define_api, submit_api,
         },
         data_source::{AcceptsTxnSubmits, BuilderDataSource},
     },
@@ -35,18 +35,18 @@ use hotshot_builder_shared::{
     utils::BuilderKeys,
 };
 use hotshot_types::{
-    data::VidCommitment,
+    data::{VidCommitment, ViewNumber},
     event::EventType,
     traits::{
-        block_contents::{BlockPayload, Transaction},
-        node_implementation::{ConsensusTime, NodeType},
-        signature_key::{BuilderSignatureKey, SignatureKey},
         EncodeBytes,
+        block_contents::{BlockPayload, Transaction},
+        node_implementation::NodeType,
+        signature_key::{BuilderSignatureKey, SignatureKey},
     },
     utils::BuilderCommitment,
 };
 use tagged_base64::TaggedBase64;
-use tide_disco::{app::AppError, method::ReadState, App};
+use tide_disco::{App, app::AppError, method::ReadState};
 use tokio::{
     spawn,
     task::JoinHandle,
@@ -284,7 +284,7 @@ where
 
     async fn wait_for_builder_state(
         &self,
-        state_id: &BuilderStateId<Types>,
+        state_id: &BuilderStateId,
         check_period: Duration,
     ) -> Result<Arc<BuilderState<Types>>, Error<Types>> {
         loop {
@@ -428,7 +428,7 @@ where
     )]
     pub(crate) async fn available_blocks_implementation(
         &self,
-        state_id: BuilderStateId<Types>,
+        state_id: BuilderStateId,
     ) -> Result<Vec<AvailableBlockInfo<Types>>, Error<Types>> {
         let start = Instant::now();
 
@@ -509,7 +509,7 @@ where
     )]
     pub(crate) async fn claim_block_implementation(
         &self,
-        block_id: BlockId<Types>,
+        block_id: BlockId,
     ) -> Result<AvailableBlockData<Types>, Error<Types>> {
         let (block_payload, metadata) = {
             // We store this read lock guard separately to make it explicit
@@ -559,7 +559,7 @@ where
     )]
     pub(crate) async fn claim_block_header_input_implementation(
         &self,
-        block_id: BlockId<Types>,
+        block_id: BlockId,
     ) -> Result<(bool, AvailableBlockHeaderInputV1<Types>), Error<Types>> {
         let metadata;
         let offered_fee;
@@ -630,7 +630,7 @@ where
 
         let state_id = BuilderStateId {
             parent_commitment: *parent_block,
-            parent_view: Types::View::new(parent_view),
+            parent_view: ViewNumber::new(parent_view),
         };
 
         trace!("Requesting available blocks");
@@ -661,7 +661,7 @@ where
 
         let block_id = BlockId {
             hash: block_hash.clone(),
-            view: Types::View::new(view_number),
+            view: ViewNumber::new(view_number),
         };
 
         trace!("Processing claim block request");
@@ -715,7 +715,7 @@ where
 
         let block_id = BlockId {
             hash: block_hash.clone(),
-            view: Types::View::new(view_number),
+            view: ViewNumber::new(view_number),
         };
 
         trace!("Processing claim_block_header_input request");

@@ -7,8 +7,6 @@
 //! Libp2p based/production networking implementation
 //! This module provides a libp2p based networking implementation where each node in the
 //! network forms a tcp or udp connection to a subset of other nodes in the network
-#[cfg(feature = "hotshot-testing")]
-use std::str::FromStr;
 use std::{
     cmp::min,
     collections::{BTreeSet, HashSet},
@@ -16,13 +14,16 @@ use std::{
     net::{IpAddr, ToSocketAddrs},
     num::NonZeroUsize,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
+#[cfg(feature = "hotshot-testing")]
+use std::{collections::HashMap, str::FromStr};
 
-use anyhow::{anyhow, Context};
+use alloy::primitives::U256;
+use anyhow::{Context, anyhow};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use bimap::BiMap;
@@ -32,49 +33,50 @@ use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtN
 pub use hotshot_libp2p_networking::network::{GossipConfig, RequestResponseConfig};
 use hotshot_libp2p_networking::{
     network::{
+        DEFAULT_REPLICATION_FACTOR,
+        NetworkEvent::{self, DirectRequest, DirectResponse, GossipMsg},
+        NetworkNodeConfig, NetworkNodeConfigBuilder, NetworkNodeHandle, NetworkNodeReceiver,
         behaviours::dht::{
             record::{Namespace, RecordKey, RecordValue},
             store::persistent::DhtPersistentStorage,
         },
+        log_summary::LogEvent,
         spawn_network_node,
         transport::construct_auth_message,
-        NetworkEvent::{self, DirectRequest, DirectResponse, GossipMsg},
-        NetworkNodeConfig, NetworkNodeConfigBuilder, NetworkNodeHandle, NetworkNodeReceiver,
-        DEFAULT_REPLICATION_FACTOR,
     },
     reexport::Multiaddr,
 };
-#[cfg(feature = "hotshot-testing")]
-use hotshot_types::traits::network::{
-    AsyncGenerator, NetworkReliability, TestableNetworkingImplementation,
-};
 use hotshot_types::{
-    boxed_sync,
+    BoxSyncFuture, boxed_sync,
     constants::LOOK_AHEAD,
-    data::ViewNumber,
+    data::{EpochNumber, ViewNumber},
     network::NetworkConfig,
     traits::{
         metrics::{Counter, Gauge, Metrics, NoMetrics},
         network::{ConnectedNetwork, NetworkError, Topic},
-        node_implementation::{ConsensusTime, NodeType},
+        node_implementation::NodeType,
         signature_key::{PrivateSignatureKey, SignatureKey},
     },
-    BoxSyncFuture,
+};
+#[cfg(feature = "hotshot-testing")]
+use hotshot_types::{
+    PeerConnectInfo,
+    traits::network::{AsyncGenerator, NetworkReliability, TestableNetworkingImplementation},
 };
 use libp2p_identity::{
-    ed25519::{self, SecretKey},
     Keypair, PeerId,
+    ed25519::{self, SecretKey},
 };
 use serde::Serialize;
 use tokio::{
     select, spawn,
     sync::{
-        mpsc::{channel, error::TrySendError, Receiver, Sender},
         Mutex,
+        mpsc::{Receiver, Sender, channel, error::TrySendError},
     },
     time::sleep,
 };
-use tracing::{error, info, instrument, trace, warn};
+use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{BroadcastDelay, EpochMembershipCoordinator};
 
@@ -206,6 +208,7 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Libp2pNetwork<T> {
         da_committee_size: usize,
         reliability_config: Option<Box<dyn NetworkReliability>>,
         _secondary_network_delay: Duration,
+        _connect_infos: &mut HashMap<T::SignatureKey, PeerConnectInfo>,
     ) -> AsyncGenerator<Arc<Self>> {
         assert!(
             da_committee_size <= expected_node_count,
@@ -224,8 +227,12 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Libp2pNetwork<T> {
                     node_id < num_bootstrap as u64
                 );
 
-                // pick a free, unused UDP port for testing
-                let port = portpicker::pick_unused_port().expect("Could not find an open port");
+                // UDP has no TIME_WAIT, so there's a tiny race before libp2p binds.
+                let port = std::net::UdpSocket::bind("127.0.0.1:0")
+                    .expect("UDP socket should bind")
+                    .local_addr()
+                    .expect("UDP socket should have local addr")
+                    .port();
 
                 let addr =
                     Multiaddr::from_str(&format!("/ip4/127.0.0.1/udp/{port}/quic-v1")).unwrap();
@@ -397,9 +404,12 @@ impl<T: NodeType> Libp2pNetwork<T> {
         gossip_config: GossipConfig,
         request_response_config: RequestResponseConfig,
         bind_address: Multiaddr,
+        announce_addresses: Vec<Multiaddr>,
         pub_key: &T::SignatureKey,
         priv_key: &<T::SignatureKey as SignatureKey>::PrivateKey,
         metrics: Libp2pMetricsValue,
+        network_discriminator: Option<U256>,
+        dht_put_quorum: Option<NonZeroUsize>,
     ) -> anyhow::Result<Self> {
         // Try to take our Libp2p config from our broader network config
         let libp2p_config = config
@@ -448,7 +458,10 @@ impl<T: NodeType> Libp2pNetwork<T> {
         config_builder
             .keypair(keypair)
             .replication_factor(replication_factor)
-            .bind_address(Some(bind_address.clone()));
+            .bind_address(Some(bind_address.clone()))
+            .announce_addresses(announce_addresses)
+            .network_discriminator(network_discriminator)
+            .dht_put_quorum(dht_put_quorum);
 
         // Connect to the provided bootstrap nodes
         config_builder.to_connect_addrs(HashSet::from_iter(libp2p_config.bootstrap_nodes.clone()));
@@ -602,7 +615,8 @@ impl<T: NodeType> Libp2pNetwork<T> {
                 if latest_seen_view.load(Ordering::Relaxed) + THRESHOLD <= *view_number {
                     // look up
                     if let Err(err) = handle.lookup_node(&pk, dht_timeout).await {
-                        warn!("Failed to perform lookup for key {pk}: {err}");
+                        LogEvent::DhtLookupFailure.record();
+                        debug!("Failed to perform lookup for key {pk}: {err}");
                     };
                 }
             }
@@ -786,6 +800,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
     #[instrument(name = "Libp2pNetwork::broadcast_message", skip_all)]
     async fn broadcast_message(
         &self,
+        _: ViewNumber,
         message: Vec<u8>,
         topic: Topic,
         _broadcast_delay: BroadcastDelay,
@@ -810,7 +825,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
         #[cfg(feature = "hotshot-testing")]
         {
             let metrics = self.inner.metrics.clone();
-            if let Some(ref config) = &self.inner.reliability_config {
+            if let Some(config) = &self.inner.reliability_config {
                 let handle = Arc::clone(&self.inner.handle);
 
                 let fut = config.clone().chaos_send_msg(
@@ -843,6 +858,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
     #[instrument(name = "Libp2pNetwork::da_broadcast_message", skip_all)]
     async fn da_broadcast_message(
         &self,
+        view: ViewNumber,
         message: Vec<u8>,
         recipients: Vec<T::SignatureKey>,
         _broadcast_delay: BroadcastDelay,
@@ -864,7 +880,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
 
         let future_results = recipients
             .into_iter()
-            .map(|r| self.direct_message(message.clone(), r));
+            .map(|r| self.direct_message(view, message.clone(), r));
         let results = join_all(future_results).await;
 
         let errors: Vec<_> = results.into_iter().filter_map(|r| r.err()).collect();
@@ -879,6 +895,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
     #[instrument(name = "Libp2pNetwork::direct_message", skip_all)]
     async fn direct_message(
         &self,
+        _: ViewNumber,
         message: Vec<u8>,
         recipient: T::SignatureKey,
     ) -> Result<(), NetworkError> {
@@ -901,7 +918,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
         let pid = match self
             .inner
             .handle
-            .lookup_node(&recipient, self.inner.dht_timeout)
+            .lookup_node(&recipient, Duration::from_secs(2))
             .await
         {
             Ok(pid) => pid,
@@ -916,7 +933,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
         #[cfg(feature = "hotshot-testing")]
         {
             let metrics = self.inner.metrics.clone();
-            if let Some(ref config) = &self.inner.reliability_config {
+            if let Some(config) = &self.inner.reliability_config {
                 let handle = Arc::clone(&self.inner.handle);
 
                 let fut = config.clone().chaos_send_msg(
@@ -988,24 +1005,24 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
     /// So the logic with libp2p is to prefetch upcoming leaders libp2p address to
     /// save time when we later need to direct message the leader our vote. Hence the
     /// use of the future view and leader to queue the lookups.
-    async fn update_view<'a, TYPES>(
-        &'a self,
-        view: u64,
-        epoch: Option<u64>,
+    async fn update_view<TYPES>(
+        &self,
+        view: ViewNumber,
+        epoch: Option<EpochNumber>,
         membership_coordinator: EpochMembershipCoordinator<TYPES>,
     ) where
-        TYPES: NodeType<SignatureKey = T::SignatureKey> + 'a,
+        TYPES: NodeType<SignatureKey = T::SignatureKey>,
     {
-        let future_view = <TYPES as NodeType>::View::new(view) + LOOK_AHEAD;
-        let epoch = epoch.map(<TYPES as NodeType>::Epoch::new);
+        let future_view = ViewNumber::new(*view) + LOOK_AHEAD;
+        let epoch = epoch.map(|e| EpochNumber::new(*e));
 
-        let membership = match membership_coordinator.membership_for_epoch(epoch).await {
+        let membership = match membership_coordinator.membership_for_epoch(epoch) {
             Ok(m) => m,
             Err(e) => {
                 return tracing::warn!(e.message);
             },
         };
-        let future_leader = match membership.leader(future_view).await {
+        let future_leader = match membership.leader(future_view) {
             Ok(l) => l,
             Err(e) => {
                 return tracing::info!("Failed to calculate leader for view {future_view}: {e}");

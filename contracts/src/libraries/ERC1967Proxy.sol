@@ -4,8 +4,9 @@
 pragma solidity ^0.8.20;
 
 import { Proxy } from "../../lib/openzeppelin-contracts/contracts/proxy/Proxy.sol";
-import { ERC1967Utils } from
-    "../../lib/openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Utils.sol";
+import {
+    ERC1967Utils
+} from "../../lib/openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Utils.sol";
 
 /**
  * @dev This contract implements an upgradeable proxy. It is upgradeable because calls are delegated

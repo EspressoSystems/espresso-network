@@ -421,8 +421,11 @@ pub mod explorer;
 pub mod fetching;
 pub mod merklized_state;
 pub mod metrics;
+pub mod migration;
 pub mod node;
 mod resolvable;
+#[cfg(feature = "sqlite-options")]
+pub mod sqlite_options;
 pub mod status;
 pub mod task;
 pub mod testing;
@@ -435,50 +438,18 @@ use derive_more::{Deref, From, Into};
 pub use error::Error;
 use futures::{future::BoxFuture, stream::StreamExt};
 use hotshot::types::SystemContextHandle;
-use hotshot_types::traits::{
-    node_implementation::{NodeImplementation, NodeType, Versions},
-    BlockPayload,
+pub use hotshot_query_service_types::{
+    ErrorSnafu, Header, Leaf2, Metadata, MissingSnafu, NotFoundSnafu, Payload, QueryError,
+    QueryResult, QuorumCertificate, SignatureKey, Transaction,
 };
-pub use hotshot_types::{data::Leaf2, simple_certificate::QuorumCertificate};
+use hotshot_types::{
+    new_protocol::CoordinatorEvent,
+    traits::node_implementation::{NodeImplementation, NodeType},
+};
 pub use resolvable::Resolvable;
-use serde::{Deserialize, Serialize};
-use snafu::Snafu;
 use task::BackgroundTask;
-use tide_disco::{method::ReadState, App, StatusCode};
+use tide_disco::{App, method::ReadState};
 use vbs::version::StaticVersionType;
-
-pub type Payload<Types> = <Types as NodeType>::BlockPayload;
-pub type Header<Types> = <Types as NodeType>::BlockHeader;
-pub type Metadata<Types> = <Payload<Types> as BlockPayload<Types>>::Metadata;
-/// Item within a [`Payload`].
-pub type Transaction<Types> = <Payload<Types> as BlockPayload<Types>>::Transaction;
-pub type SignatureKey<Types> = <Types as NodeType>::SignatureKey;
-
-#[derive(Clone, Debug, Snafu, Deserialize, Serialize)]
-#[snafu(visibility(pub))]
-pub enum QueryError {
-    /// The requested resource does not exist or is not known to this query service.
-    NotFound,
-    /// The requested resource exists but is not currently available.
-    ///
-    /// In most cases a missing resource can be recovered from DA.
-    Missing,
-    /// There was an error while trying to fetch the requested resource.
-    #[snafu(display("Failed to fetch requested resource: {message}"))]
-    #[snafu(context(suffix(ErrorSnafu)))]
-    Error { message: String },
-}
-
-impl QueryError {
-    pub fn status(&self) -> StatusCode {
-        match self {
-            Self::NotFound | Self::Missing => StatusCode::NOT_FOUND,
-            Self::Error { .. } => StatusCode::INTERNAL_SERVER_ERROR,
-        }
-    }
-}
-
-pub type QueryResult<T> = Result<T, QueryError>;
 
 #[derive(Default)]
 pub struct Options {
@@ -510,16 +481,10 @@ impl<D> From<D> for ApiState<D> {
 }
 
 /// Run an instance of the HotShot Query service with no customization.
-pub async fn run_standalone_service<
-    Types: NodeType,
-    I: NodeImplementation<Types>,
-    D,
-    ApiVer,
-    HsVer: Versions,
->(
+pub async fn run_standalone_service<Types: NodeType, I: NodeImplementation<Types>, D, ApiVer>(
     options: Options,
     data_source: D,
-    hotshot: SystemContextHandle<Types, I, HsVer>,
+    hotshot: SystemContextHandle<Types, I>,
     bind_version: ApiVer,
 ) -> Result<(), Error>
 where
@@ -580,6 +545,7 @@ where
         // Update the query data based on this event. It is safe to ignore errors here; the error
         // just returns the failed block height for use in garbage collection, but this simple
         // implementation isn't doing any kind of garbage collection.
+        let event = CoordinatorEvent::LegacyEvent(event);
         data_source.update(&event).await.ok();
     }
 
@@ -595,12 +561,13 @@ mod test {
 
     use async_lock::RwLock;
     use async_trait::async_trait;
-    use atomic_store::{load_store::BincodeLoadStore, AtomicStore, AtomicStoreLoader, RollingLog};
+    use atomic_store::{AtomicStore, AtomicStoreLoader, RollingLog, load_store::BincodeLoadStore};
     use futures::future::FutureExt;
+    use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::{data::VidShare, simple_certificate::QuorumCertificate2};
-    use portpicker::pick_unused_port;
     use surf_disco::Client;
     use tempfile::TempDir;
+    use test_utils::reserve_tcp_port;
     use testing::mocks::MockBase;
     use tide_disco::App;
     use toml::toml;
@@ -614,7 +581,7 @@ mod test {
             VidCommonQueryData,
         },
         metrics::PrometheusMetrics,
-        node::{NodeDataSource, SyncStatus, TimeWindowQueryData, WindowStart},
+        node::{NodeDataSource, SyncStatusQueryData, TimeWindowQueryData, WindowStart},
         status::{HasMetrics, StatusDataSource},
         testing::{
             consensus::MockDataSource,
@@ -787,7 +754,7 @@ mod test {
         }
         async fn count_transactions_in_range(
             &self,
-            range: impl RangeBounds<usize> + Send,
+            range: impl RangeBounds<usize> + Send + Sync + Clone,
             namespace: Option<NamespaceId<MockTypes>>,
         ) -> QueryResult<usize> {
             self.hotshot_qs
@@ -796,7 +763,7 @@ mod test {
         }
         async fn payload_size_in_range(
             &self,
-            range: impl RangeBounds<usize> + Send,
+            range: impl RangeBounds<usize> + Send + Sync + Clone,
             namespace: Option<NamespaceId<MockTypes>>,
         ) -> QueryResult<usize> {
             self.hotshot_qs
@@ -809,7 +776,7 @@ mod test {
         {
             self.hotshot_qs.vid_share(id).await
         }
-        async fn sync_status(&self) -> QueryResult<SyncStatus> {
+        async fn sync_status(&self) -> QueryResult<SyncStatusQueryData> {
             self.hotshot_qs.sync_status().await
         }
         async fn get_header_window(
@@ -837,21 +804,29 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_composition() {
-        use hotshot_example_types::node_types::TestVersions;
-
         let dir = TempDir::with_prefix("test_composition").unwrap();
         let mut loader = AtomicStoreLoader::create(dir.path(), "test_composition").unwrap();
-        let hotshot_qs = MockDataSource::create_with_store(&mut loader, Default::default())
+        let hotshot_qs = MockDataSource::create_builder_with_store(&mut loader, Default::default())
+            .await
+            .unwrap()
+            .with_sync_status_ttl(Duration::ZERO)
+            .build()
             .await
             .unwrap();
 
         // Mock up some data and add a block to the store.
-        let leaf =
-            Leaf2::<MockTypes>::genesis::<TestVersions>(&Default::default(), &Default::default())
-                .await;
-        let qc =
-            QuorumCertificate2::genesis::<TestVersions>(&Default::default(), &Default::default())
-                .await;
+        let leaf = Leaf2::<MockTypes>::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        let qc = QuorumCertificate2::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test,
+        )
+        .await;
         let leaf = LeafQueryData::new(leaf, qc).unwrap();
         let block = BlockQueryData::new(leaf.header().clone(), MockPayload::genesis());
         hotshot_qs
@@ -936,7 +911,7 @@ mod test {
         })
         .unwrap();
 
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let _server = BackgroundTask::spawn(
             "server",
             app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
@@ -958,17 +933,11 @@ mod test {
                 .unwrap(),
             1
         );
-        let sync_status: SyncStatus = client.get("node/sync-status").send().await.unwrap();
-        assert_eq!(
-            sync_status,
-            SyncStatus {
-                missing_blocks: 0,
-                missing_leaves: 0,
-                missing_vid_common: 1,
-                missing_vid_shares: 1,
-                pruned_height: None
-            }
-        );
+        let sync_status: SyncStatusQueryData = client.get("node/sync-status").send().await.unwrap();
+        assert_eq!(sync_status.blocks.missing, 0);
+        assert_eq!(sync_status.leaves.missing, 0);
+        assert_eq!(sync_status.vid_common.missing, 1);
+
         assert_eq!(
             client
                 .get::<MockHeader>("availability/header/0")

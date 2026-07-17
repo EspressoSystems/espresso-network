@@ -10,21 +10,21 @@
 // Documentation module
 #[cfg(feature = "docs")]
 pub mod documentation;
+
 use committable::Committable;
-use futures::future::{select, Either};
+use futures::future::{Either, select};
 use hotshot_types::{
-    drb::{drb_difficulty_selector, DrbResult, INITIAL_DRB_RESULT},
+    drb::{DrbResult, INITIAL_DRB_RESULT, drb_difficulty_selector},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     simple_certificate::{CertificatePair, LightClientStateUpdateCertificateV2},
     traits::{
         block_contents::BlockHeader, election::Membership, network::BroadcastDelay,
-        node_implementation::Versions, signature_key::StateSignatureKey, storage::Storage,
+        signature_key::StateSignatureKey, storage::Storage,
     },
     utils::{epoch_from_block_number, is_ge_epoch_root},
 };
 use rand::Rng;
-use vbs::version::StaticVersionType;
 
 /// Contains traits consumed by [`SystemContext`]
 pub mod traits;
@@ -33,6 +33,7 @@ pub mod types;
 
 pub mod tasks;
 use hotshot_types::data::QuorumProposalWrapper;
+use versions::{EPOCH_VERSION, Upgrade};
 
 /// Contains helper functions for the crate
 pub mod helpers;
@@ -44,7 +45,8 @@ use std::{
     time::Duration,
 };
 
-use async_broadcast::{broadcast, InactiveReceiver, Receiver, Sender};
+use alloy::primitives::U256;
+use async_broadcast::{InactiveReceiver, Receiver, Sender, broadcast};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use futures::join;
@@ -54,30 +56,29 @@ use hotshot_task_impls::{events::HotShotEvent, helpers::broadcast_event};
 /// Reexport error type
 pub use hotshot_types::error::HotShotError;
 use hotshot_types::{
+    HotShotConfig,
     consensus::{
         Consensus, ConsensusMetricsValue, OuterConsensus, PayloadWithMetadata, VidShares, View,
         ViewInner,
     },
     constants::{EVENT_CHANNEL_SIZE, EXTERNAL_EVENT_CHANNEL_SIZE},
-    data::Leaf2,
+    data::{EpochNumber, Leaf2, ViewNumber},
     event::{EventType, LeafInfo},
     message::{DataMessage, Message, MessageKind, Proposal},
     simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
+    stake_table::HSStakeTable,
     storage_metrics::StorageMetricsValue,
     traits::{
-        consensus_api::ConsensusApi,
-        network::ConnectedNetwork,
-        node_implementation::{ConsensusTime, NodeType},
-        signature_key::SignatureKey,
-        states::ValidatedState,
+        consensus_api::ConsensusApi, network::ConnectedNetwork, node_implementation::NodeType,
+        signature_key::SignatureKey, states::ValidatedState,
     },
     utils::{genesis_epoch_from_version, option_epoch_from_block_number},
-    HotShotConfig,
 };
+use hotshot_utils::warn;
 /// Reexport rand crate
 pub use rand;
 use tokio::{spawn, time::sleep};
-use tracing::{debug, instrument, trace};
+use tracing::{Instrument, debug, error_span, info, instrument, trace};
 
 // -- Rexports
 // External
@@ -93,7 +94,7 @@ pub const H_512: usize = 64;
 pub const H_256: usize = 32;
 
 /// Holds the state needed to participate in `HotShot` consensus
-pub struct SystemContext<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> {
+pub struct SystemContext<TYPES: NodeType, I: NodeImplementation<TYPES>> {
     /// The public key of this node
     public_key: TYPES::SignatureKey,
 
@@ -122,10 +123,10 @@ pub struct SystemContext<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versi
     instance_state: Arc<TYPES::InstanceState>,
 
     /// The view to enter when first starting consensus
-    start_view: TYPES::View,
+    start_view: ViewNumber,
 
     /// The epoch to enter when first starting consensus
-    start_epoch: Option<TYPES::Epoch>,
+    start_epoch: Option<EpochNumber>,
 
     /// Access to the output event stream.
     output_event_stream: (Sender<Event<TYPES>>, InactiveReceiver<Event<TYPES>>),
@@ -153,11 +154,9 @@ pub struct SystemContext<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versi
     pub storage_metrics: Arc<StorageMetricsValue>,
 
     /// shared lock for upgrade information
-    pub upgrade_lock: UpgradeLock<TYPES, V>,
+    pub upgrade_lock: UpgradeLock<TYPES>,
 }
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> Clone
-    for SystemContext<TYPES, I, V>
-{
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> Clone for SystemContext<TYPES, I> {
     #![allow(deprecated)]
     fn clone(&self) -> Self {
         Self {
@@ -184,7 +183,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> Clone
     }
 }
 
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<TYPES, I, V> {
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
     #![allow(deprecated)]
     /// Creates a new [`Arc<SystemContext>`] with the given configuration options.
     ///
@@ -203,6 +202,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
         nonce: u64,
         config: HotShotConfig<TYPES>,
+        upgrade: versions::Upgrade,
         memberships: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
@@ -219,6 +219,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             state_private_key,
             nonce,
             config,
+            upgrade,
             memberships,
             network,
             initializer,
@@ -245,7 +246,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
         nonce: u64,
         config: HotShotConfig<TYPES>,
-        mut membership_coordinator: EpochMembershipCoordinator<TYPES>,
+        upgrade: versions::Upgrade,
+        membership_coordinator: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
         consensus_metrics: ConsensusMetricsValue,
@@ -279,43 +281,38 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         // Allow overflow on the external channel, otherwise sending to it may block.
         external_rx.set_overflow(true);
 
-        membership_coordinator
-            .set_external_channel(external_rx.clone())
-            .await;
-
         tracing::warn!(
             "Starting consensus with versions:\n\n Base: {:?}\nUpgrade: {:?}.",
-            V::Base::VERSION,
-            V::Upgrade::VERSION,
+            upgrade.base,
+            upgrade.target
         );
         tracing::warn!(
             "Loading previously decided upgrade certificate from storage: {:?}",
             initializer.decided_upgrade_certificate
         );
 
-        let upgrade_lock =
-            UpgradeLock::<TYPES, V>::from_certificate(&initializer.decided_upgrade_certificate);
+        let upgrade_lock = UpgradeLock::<TYPES>::from_certificate(
+            upgrade,
+            &initializer.decided_upgrade_certificate,
+        );
 
         let current_version = if let Some(cert) = initializer.decided_upgrade_certificate {
             cert.data.new_version
         } else {
-            V::Base::VERSION
+            upgrade.base
         };
 
         debug!("Setting DRB difficulty selector in membership");
-        let drb_difficulty_selector = drb_difficulty_selector::<_, V>(&config);
+        let drb_difficulty_selector = drb_difficulty_selector(&config);
 
-        membership_coordinator
-            .set_drb_difficulty_selector(drb_difficulty_selector)
-            .await;
+        membership_coordinator.set_drb_difficulty_selector(drb_difficulty_selector);
 
         for da_committee in &config.da_committees {
             if current_version >= da_committee.start_version {
-                membership_coordinator
-                    .membership()
-                    .write()
-                    .await
-                    .add_da_committee(da_committee.start_epoch, da_committee.committee.clone());
+                membership_coordinator.membership().add_da_committee(
+                    da_committee.start_epoch.into(),
+                    da_committee.committee.clone(),
+                );
             }
         }
 
@@ -324,7 +321,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         let validated_state = initializer.anchor_state;
 
         load_start_epoch_info(
-            membership_coordinator.membership(),
+            &membership_coordinator,
             &initializer.start_epoch_info,
             config.epoch_height,
             config.epoch_start_block,
@@ -333,7 +330,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
 
         // #3967 REVIEW NOTE: Should this actually be Some()? How do we know?
         let epoch = initializer.high_qc.data.block_number.map(|block_number| {
-            TYPES::Epoch::new(epoch_from_block_number(
+            EpochNumber::new(epoch_from_block_number(
                 block_number + 1,
                 config.epoch_height,
             ))
@@ -371,6 +368,19 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             );
         }
         let high_qc_block_number = initializer.high_qc.data.block_number;
+        let (stake_table, success_threshold) =
+            if let Ok(epoch_membership) = membership_coordinator.stake_table_for_epoch(epoch) {
+                (
+                    HSStakeTable::from_iter(epoch_membership.stake_table()),
+                    epoch_membership.success_threshold(),
+                )
+            } else {
+                tracing::warn!(
+                    "Failed to get stake table for epoch {:?} while creating vote participation",
+                    epoch
+                );
+                (HSStakeTable::default(), U256::MAX)
+            };
 
         let consensus = Consensus::new(
             validated_state_map,
@@ -390,6 +400,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             initializer.state_cert,
             config.drb_difficulty,
             config.drb_upgrade_difficulty,
+            stake_table,
+            success_threshold,
         );
 
         let consensus = Arc::new(RwLock::new(consensus));
@@ -401,29 +413,20 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
                 epoch + 1
             );
             // trigger catchup for the current and next epoch if needed
-            let _ = membership_coordinator
-                .membership_for_epoch(Some(epoch))
-                .await;
-            let _ = membership_coordinator
-                .membership_for_epoch(Some(epoch + 1))
-                .await;
+            let _ = membership_coordinator.membership_for_epoch(Some(epoch));
+            let _ = membership_coordinator.membership_for_epoch(Some(epoch + 1));
             // If we already have an epoch root, we can trigger catchup for the epoch
             // which that root applies to.
-            if let Some(high_qc_block_number) = high_qc_block_number {
-                if is_ge_epoch_root(high_qc_block_number, config.epoch_height) {
-                    let _ = membership_coordinator
-                        .stake_table_for_epoch(Some(epoch + 2))
-                        .await;
-                }
+            if let Some(high_qc_block_number) = high_qc_block_number
+                && is_ge_epoch_root(high_qc_block_number, config.epoch_height)
+            {
+                let _ = membership_coordinator.stake_table_for_epoch(Some(epoch + 2));
             }
 
             if let Ok(drb_result) = storage.load_drb_result(epoch + 1).await {
-                tracing::error!("Writing DRB result for epoch {}", epoch + 1);
-                if let Ok(mem) = membership_coordinator
-                    .stake_table_for_epoch(Some(epoch + 1))
-                    .await
-                {
-                    mem.add_drb_result(drb_result).await;
+                info!(target: "announce::drb", epoch = %(epoch + 1), "writing drb result for epoch");
+                if let Ok(mem) = membership_coordinator.stake_table_for_epoch(Some(epoch + 1)) {
+                    mem.add_drb_result(drb_result);
                 }
             }
         }
@@ -432,7 +435,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         // Our own copy of the receiver is inactive so it doesn't count.
         external_tx.set_await_active(false);
 
-        let inner: Arc<SystemContext<TYPES, I, V>> = Arc::new(SystemContext {
+        let inner: Arc<SystemContext<TYPES, I>> = Arc::new(SystemContext {
             id: nonce,
             consensus: OuterConsensus::new(consensus),
             instance_state: Arc::new(instance_state),
@@ -469,8 +472,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         debug!("Starting Consensus");
         let consensus = self.consensus.read().await;
 
-        let first_epoch = option_epoch_from_block_number::<TYPES>(
-            V::Base::VERSION >= V::Epochs::VERSION,
+        let first_epoch = option_epoch_from_block_number(
+            self.upgrade_lock.upgrade().base >= EPOCH_VERSION,
             self.config.epoch_start_block,
             self.config.epoch_height,
         );
@@ -501,7 +504,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
 
         // Spawn a task that will sleep for the next view timeout and then send a timeout event
         // if not cancelled
-        spawn({
+        spawn(
             async move {
                 sleep(Duration::from_millis(next_view_timeout)).await;
                 broadcast_event(
@@ -510,7 +513,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
                 )
                 .await;
             }
-        });
+            .instrument(error_span!("initial timeout", view = *start_view)),
+        );
         #[allow(clippy::panic)]
         self.internal_event_stream
             .0
@@ -528,13 +532,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         {
             // Some applications seem to expect a leaf decide event for the genesis leaf,
             // which contains only that leaf and nothing else.
-            if self.anchored_leaf.view_number() == TYPES::View::genesis() {
+            if self.anchored_leaf.view_number() == ViewNumber::genesis() {
                 let (validated_state, state_delta) =
                     TYPES::ValidatedState::genesis(&self.instance_state);
 
-                let qc = QuorumCertificate2::genesis::<V>(
+                let qc = QuorumCertificate2::genesis(
                     &validated_state,
                     self.instance_state.as_ref(),
+                    self.upgrade_lock.upgrade(),
                 )
                 .await;
 
@@ -594,11 +599,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             kind: MessageKind::from(message_kind),
         };
 
-        let serialized_message = self.upgrade_lock.serialize(&message).await.map_err(|err| {
+        let serialized_message = self.upgrade_lock.serialize(&message).map_err(|err| {
             HotShotError::FailedToSerialize(format!("failed to serialize transaction: {err}"))
         })?;
 
-        let membership = match api.membership_coordinator.membership_for_epoch(epoch).await {
+        let membership = match api.membership_coordinator.membership_for_epoch(epoch) {
             Ok(m) => m,
             Err(e) => return Err(HotShotError::InvalidState(e.message)),
         };
@@ -606,8 +611,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         spawn(async move {
             let memberships_da_committee_members = membership
                 .da_committee_members(view_number)
-                .await
-                .iter()
                 .cloned()
                 .collect();
 
@@ -621,6 +624,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
                 // constants in NodeType, but that seems to be unavailable in the current Rust.
                 api
                     .network.da_broadcast_message(
+                        view_number.u64().into(),
                         serialized_message,
                         memberships_da_committee_members,
                         BroadcastDelay::None,
@@ -684,7 +688,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
     /// [`decided_state`](Self::decided_state)) or if there is no path for the requested
     /// view to ever be decided.
     #[instrument(skip_all, target = "SystemContext", fields(id = self.id))]
-    pub async fn state(&self, view: TYPES::View) -> Option<Arc<TYPES::ValidatedState>> {
+    pub async fn state(&self, view: ViewNumber) -> Option<Arc<TYPES::ValidatedState>> {
         self.consensus.read().await.state(view).cloned()
     }
 
@@ -708,6 +712,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
         node_id: u64,
         config: HotShotConfig<TYPES>,
+        upgrade: versions::Upgrade,
         memberships: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
@@ -716,7 +721,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
         storage_metrics: StorageMetricsValue,
     ) -> Result<
         (
-            SystemContextHandle<TYPES, I, V>,
+            SystemContextHandle<TYPES, I>,
             Sender<Arc<HotShotEvent<TYPES>>>,
             Receiver<Arc<HotShotEvent<TYPES>>>,
         ),
@@ -728,6 +733,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             state_private_key,
             node_id,
             config,
+            upgrade,
             memberships,
             network,
             initializer,
@@ -748,11 +754,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
     }
 }
 
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<TYPES, I, V> {
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
     /// Spawn all tasks that operate on [`SystemContextHandle`].
     ///
     /// For a list of which tasks are being spawned, see this module's documentation.
-    pub async fn run_tasks(&self) -> SystemContextHandle<TYPES, I, V> {
+    pub async fn run_tasks(&self) -> SystemContextHandle<TYPES, I> {
         let consensus_registry = ConsensusTaskRegistry::new();
         let network_registry = NetworkTaskRegistry::new();
 
@@ -771,8 +777,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
             epoch_height: self.config.epoch_height,
         };
 
-        add_network_tasks::<TYPES, I, V>(&mut handle).await;
-        add_consensus_tasks::<TYPES, I, V>(&mut handle).await;
+        add_network_tasks::<TYPES, I>(&mut handle).await;
+        add_consensus_tasks::<TYPES, I>(&mut handle).await;
 
         handle
     }
@@ -781,14 +787,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> SystemContext<T
 /// An async broadcast channel
 type Channel<S> = (Sender<Arc<S>>, Receiver<Arc<S>>);
 
-#[async_trait]
 /// Trait for handling messages for a node with a twin copy of consensus
-pub trait TwinsHandlerState<TYPES, I, V>
+#[async_trait]
+pub trait TwinsHandlerState<TYPES, I>
 where
     Self: std::fmt::Debug + Send + Sync,
     TYPES: NodeType,
     I: NodeImplementation<TYPES>,
-    V: Versions,
 {
     /// Handle a message sent to the twin from the network task, forwarding it to one of the two twins.
     async fn send_handler(
@@ -873,16 +878,14 @@ where
         state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
         nonce: u64,
         config: HotShotConfig<TYPES>,
+        upgrade: versions::Upgrade,
         memberships: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
         consensus_metrics: ConsensusMetricsValue,
         storage: I::Storage,
         storage_metrics: StorageMetricsValue,
-    ) -> (
-        SystemContextHandle<TYPES, I, V>,
-        SystemContextHandle<TYPES, I, V>,
-    ) {
+    ) -> (SystemContextHandle<TYPES, I>, SystemContextHandle<TYPES, I>) {
         let epoch_height = config.epoch_height;
         let left_system_context = SystemContext::new(
             public_key.clone(),
@@ -890,6 +893,7 @@ where
             state_private_key.clone(),
             nonce,
             config.clone(),
+            upgrade,
             memberships.clone(),
             Arc::clone(&network),
             initializer.clone(),
@@ -904,6 +908,7 @@ where
             state_private_key,
             nonce,
             config,
+            upgrade,
             memberships,
             network,
             initializer,
@@ -944,7 +949,7 @@ where
         );
 
         // create each handle
-        let mut left_handle = SystemContextHandle::<_, I, _> {
+        let mut left_handle = SystemContextHandle::<_, I> {
             consensus_registry: left_consensus_registry,
             network_registry: left_network_registry,
             output_event_stream: left_external_event_stream.clone(),
@@ -956,7 +961,7 @@ where
             epoch_height,
         };
 
-        let mut right_handle = SystemContextHandle::<_, I, _> {
+        let mut right_handle = SystemContextHandle::<_, I> {
             consensus_registry: right_consensus_registry,
             network_registry: right_network_registry,
             output_event_stream: right_external_event_stream.clone(),
@@ -969,8 +974,8 @@ where
         };
 
         // add consensus tasks to each handle, using their individual internal event streams
-        add_consensus_tasks::<TYPES, I, V>(&mut left_handle).await;
-        add_consensus_tasks::<TYPES, I, V>(&mut right_handle).await;
+        add_consensus_tasks::<TYPES, I>(&mut left_handle).await;
+        add_consensus_tasks::<TYPES, I>(&mut right_handle).await;
 
         // fuse the event streams from both handles before initializing the network tasks
         let fused_internal_event_stream = self.fuse_channels(
@@ -985,7 +990,7 @@ where
         );
 
         // add the network tasks to the left handle. note: because the left handle has the fused event stream, the network tasks on the left handle will handle messages from both handles.
-        add_network_tasks::<TYPES, I, V>(&mut left_handle).await;
+        add_network_tasks::<TYPES, I>(&mut left_handle).await;
 
         // revert to the original event stream on the left handle, for any applications that want to listen to it
         left_handle.internal_event_stream = left_internal_event_stream.clone();
@@ -1000,14 +1005,14 @@ where
 pub struct RandomTwinsHandler;
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TwinsHandlerState<TYPES, I, V>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TwinsHandlerState<TYPES, I>
     for RandomTwinsHandler
 {
     async fn send_handler(
         &mut self,
         event: &HotShotEvent<TYPES>,
     ) -> Vec<Either<HotShotEvent<TYPES>, HotShotEvent<TYPES>>> {
-        let random: bool = rand::thread_rng().gen();
+        let random: bool = rand::thread_rng().r#gen();
 
         #[allow(clippy::match_bool)]
         match random {
@@ -1026,13 +1031,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TwinsHandlerSta
     }
 }
 
-#[derive(Debug)]
 /// A `TwinsHandlerState` that forwards each message to both twins,
 /// and returns messages from each of them.
+#[derive(Debug)]
 pub struct DoubleTwinsHandler;
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TwinsHandlerState<TYPES, I, V>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TwinsHandlerState<TYPES, I>
     for DoubleTwinsHandler
 {
     async fn send_handler(
@@ -1053,8 +1058,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TwinsHandlerSta
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusApi<TYPES, I>
-    for SystemContextHandle<TYPES, I, V>
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> ConsensusApi<TYPES, I>
+    for SystemContextHandle<TYPES, I>
 {
     fn total_nodes(&self) -> NonZeroUsize {
         self.hotshot.config.num_nodes_with_stake
@@ -1086,14 +1091,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusApi<TY
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct InitializerEpochInfo<TYPES: NodeType> {
-    pub epoch: TYPES::Epoch,
+    pub epoch: EpochNumber,
     pub drb_result: DrbResult,
     // pub stake_table: Option<StakeTable>, // TODO: Figure out how to connect this up
     pub block_header: Option<TYPES::BlockHeader>,
 }
 
-#[derive(Clone, Debug)]
 /// initializer struct for creating starting block
+#[derive(Clone, Debug)]
 pub struct HotShotInitializer<TYPES: NodeType> {
     /// Instance-level state.
     pub instance_state: TYPES::InstanceState,
@@ -1114,14 +1119,14 @@ pub struct HotShotInitializer<TYPES: NodeType> {
     pub anchor_state_delta: Option<Arc<<TYPES::ValidatedState as ValidatedState<TYPES>>::Delta>>,
 
     /// Starting view number that should be equivalent to the view the node shut down with last.
-    pub start_view: TYPES::View,
+    pub start_view: ViewNumber,
 
     /// The view we last performed an action in.  An action is proposing or voting for
     /// either the quorum or DA.
-    pub last_actioned_view: TYPES::View,
+    pub last_actioned_view: ViewNumber,
 
     /// Starting epoch number that should be equivalent to the epoch the node shut down with last.
-    pub start_epoch: Option<TYPES::Epoch>,
+    pub start_epoch: Option<EpochNumber>,
 
     /// Highest QC that was seen, for genesis it's the genesis QC.  It should be for a view greater
     /// than `inner`s view number for the non genesis case because we must have seen higher QCs
@@ -1132,17 +1137,17 @@ pub struct HotShotInitializer<TYPES: NodeType> {
     pub next_epoch_high_qc: Option<NextEpochQuorumCertificate2<TYPES>>,
 
     /// Proposals we have sent out to provide to others for catchup
-    pub saved_proposals: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
+    pub saved_proposals: BTreeMap<ViewNumber, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
 
     /// Previously decided upgrade certificate; this is necessary if an upgrade has happened and we are not restarting with the new version
     pub decided_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
 
     /// Undecided leaves that were seen, but not yet decided on.  These allow a restarting node
     /// to vote and propose right away if they didn't miss anything while down.
-    pub undecided_leaves: BTreeMap<TYPES::View, Leaf2<TYPES>>,
+    pub undecided_leaves: BTreeMap<ViewNumber, Leaf2<TYPES>>,
 
     /// Not yet decided state
-    pub undecided_state: BTreeMap<TYPES::View, View<TYPES>>,
+    pub undecided_state: BTreeMap<ViewNumber, View<TYPES>>,
 
     /// Saved VID shares
     pub saved_vid_shares: VidShares<TYPES>,
@@ -1158,22 +1163,23 @@ impl<TYPES: NodeType> HotShotInitializer<TYPES> {
     /// initialize from genesis
     /// # Errors
     /// If we are unable to apply the genesis block to the default state
-    pub async fn from_genesis<V: Versions>(
+    pub async fn from_genesis(
         instance_state: TYPES::InstanceState,
         epoch_height: u64,
         epoch_start_block: u64,
         start_epoch_info: Vec<InitializerEpochInfo<TYPES>>,
+        upgrade: Upgrade,
     ) -> Result<Self, HotShotError<TYPES>> {
         let (validated_state, state_delta) = TYPES::ValidatedState::genesis(&instance_state);
-        let high_qc = QuorumCertificate2::genesis::<V>(&validated_state, &instance_state).await;
+        let high_qc = QuorumCertificate2::genesis(&validated_state, &instance_state, upgrade).await;
 
         Ok(Self {
-            anchor_leaf: Leaf2::genesis::<V>(&validated_state, &instance_state).await,
+            anchor_leaf: Leaf2::genesis(&validated_state, &instance_state, upgrade.base).await,
             anchor_state: Arc::new(validated_state),
             anchor_state_delta: Some(Arc::new(state_delta)),
-            start_view: TYPES::View::new(0),
-            start_epoch: genesis_epoch_from_version::<V, TYPES>(),
-            last_actioned_view: TYPES::View::new(0),
+            start_view: ViewNumber::new(0),
+            start_epoch: genesis_epoch_from_version(upgrade.base),
+            last_actioned_view: ViewNumber::new(0),
             saved_proposals: BTreeMap::new(),
             high_qc,
             next_epoch_high_qc: None,
@@ -1240,13 +1246,13 @@ impl<TYPES: NodeType> HotShotInitializer<TYPES> {
         epoch_start_block: u64,
         start_epoch_info: Vec<InitializerEpochInfo<TYPES>>,
         anchor_leaf: Leaf2<TYPES>,
-        (start_view, start_epoch): (TYPES::View, Option<TYPES::Epoch>),
+        (start_view, start_epoch): (ViewNumber, Option<EpochNumber>),
         (high_qc, next_epoch_high_qc): (
             QuorumCertificate2<TYPES>,
             Option<NextEpochQuorumCertificate2<TYPES>>,
         ),
-        last_actioned_view: TYPES::View,
-        saved_proposals: BTreeMap<TYPES::View, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
+        last_actioned_view: ViewNumber,
+        saved_proposals: BTreeMap<ViewNumber, Proposal<TYPES, QuorumProposalWrapper<TYPES>>>,
         saved_vid_shares: VidShares<TYPES>,
         decided_upgrade_certificate: Option<UpgradeCertificate<TYPES>>,
         state_cert: Option<LightClientStateUpdateCertificateV2<TYPES>>,
@@ -1282,19 +1288,17 @@ impl<TYPES: NodeType> HotShotInitializer<TYPES> {
 }
 
 async fn load_start_epoch_info<TYPES: NodeType>(
-    membership: &Arc<RwLock<TYPES::Membership>>,
+    coordinator: &EpochMembershipCoordinator<TYPES>,
     start_epoch_info: &Vec<InitializerEpochInfo<TYPES>>,
     epoch_height: u64,
     epoch_start_block: u64,
 ) {
+    let membership = coordinator.membership();
     let first_epoch_number =
-        TYPES::Epoch::new(epoch_from_block_number(epoch_start_block, epoch_height));
+        EpochNumber::new(epoch_from_block_number(epoch_start_block, epoch_height));
 
     tracing::warn!("Calling set_first_epoch for epoch {first_epoch_number}");
-    membership
-        .write()
-        .await
-        .set_first_epoch(first_epoch_number, INITIAL_DRB_RESULT);
+    membership.set_first_epoch(first_epoch_number, INITIAL_DRB_RESULT);
 
     let mut sorted_epoch_info = start_epoch_info.clone();
     sorted_epoch_info.sort_by_key(|info| info.epoch);
@@ -1302,7 +1306,8 @@ async fn load_start_epoch_info<TYPES: NodeType>(
         if let Some(block_header) = &epoch_info.block_header {
             tracing::warn!("Calling add_epoch_root for epoch {}", epoch_info.epoch);
 
-            Membership::add_epoch_root(Arc::clone(membership), block_header.clone())
+            coordinator
+                .add_epoch_root(block_header.clone())
                 .await
                 .unwrap_or_else(|err| {
                     // REVIEW NOTE: Should we panic here? a failure here seems like it should be fatal
@@ -1316,9 +1321,6 @@ async fn load_start_epoch_info<TYPES: NodeType>(
 
     for epoch_info in start_epoch_info {
         tracing::warn!("Calling add_drb_result for epoch {}", epoch_info.epoch);
-        membership
-            .write()
-            .await
-            .add_drb_result(epoch_info.epoch, epoch_info.drb_result);
+        membership.add_drb_result(epoch_info.epoch, epoch_info.drb_result);
     }
 }

@@ -2,25 +2,28 @@ use std::{collections::HashSet, rc::Rc, sync::Arc, time::Duration};
 
 use async_lock::RwLock;
 use hotshot_example_types::{
-    node_types::{EpochsTestVersions, Libp2pImpl, MemoryImpl, PushCdnImpl, TestVersions},
+    node_types::{Libp2pImpl, MemoryImpl, PushCdnImpl, TEST_VERSIONS},
     state_types::TestTypes,
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
     block_builder::SimpleBuilderImplementation,
     byzantine::byzantine_behaviour::{
-        BadProposalViewDos, DishonestDa, DishonestLeader, DishonestVoter, DishonestVoting,
-        DoubleProposeVote, DishonestViewSyncRelay,
+        BadProposalViewDos, DishonestDa, DishonestLeader, DishonestViewSyncRelay,
+        DishonestViewSyncWrongEpoch, DishonestVoter, DishonestVoting, DoubleProposeVote,
     },
     completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
     overall_safety_task::OverallSafetyPropertiesDescription,
     test_builder::{Behaviour, TestDescription},
+    view_sync_task::ViewSyncTaskDescription,
 };
-use hotshot_testing::byzantine::byzantine_behaviour::DishonestViewSyncWrongEpoch;
-use hotshot_testing::view_sync_task::ViewSyncTaskDescription;
 use hotshot_types::{
     message::{GeneralConsensusMessage, MessageKind, SequencingMessage},
-    traits::{election::Membership, network::TransmitType, node_implementation::NodeType},
+    traits::{
+        election::{Membership, NonEpochMembershipSnapshot},
+        network::TransmitType,
+        node_implementation::NodeType,
+    },
     vote::HasViewNumber,
 };
 
@@ -28,7 +31,7 @@ cross_tests!(
     TestName: double_propose_vote,
     Impls: [MemoryImpl],
     Types: [TestTypes],
-    Versions: [TestVersions],
+    Versions: [TEST_VERSIONS.test],
     Ignore: false,
     Metadata: {
         let behaviour = Rc::new(|node_id| { match node_id {
@@ -51,7 +54,7 @@ cross_tests!(
     TestName: multiple_bad_proposals,
     Impls: [MemoryImpl],
     Types: [TestTypes],
-    Versions: [TestVersions],
+    Versions: [TEST_VERSIONS.test],
     Ignore: false,
     Metadata: {
         let behaviour = Rc::new(|node_id| { match node_id {
@@ -76,7 +79,7 @@ cross_tests!(
     TestName: dishonest_leader,
     Impls: [MemoryImpl],
     Types: [TestTypes],
-    Versions: [TestVersions],
+    Versions: [TEST_VERSIONS.test],
     Ignore: false,
     Metadata: {
         let behaviour = Rc::new(|node_id| {
@@ -110,7 +113,7 @@ cross_tests!(
     TestName: dishonest_da,
     Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl],
     Types: [TestTypes],
-    Versions: [TestVersions],
+    Versions: [TEST_VERSIONS.test],
     Ignore: false,
     Metadata: {
         let behaviour = Rc::new(|node_id| {
@@ -139,7 +142,7 @@ cross_tests!(
     TestName: dishonest_voting,
     Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl],
     Types: [TestTypes],
-    Versions: [TestVersions],
+    Versions: [TEST_VERSIONS.test],
     Ignore: false,
     Metadata: {
         let nodes_count = 10;
@@ -148,7 +151,12 @@ cross_tests!(
                 view_increment: nodes_count,
                 modifier: Arc::new(move |_pk, message_kind, transmit_type: &mut TransmitType<TestTypes>, membership: &<TestTypes as NodeType>::Membership| {
                     if let MessageKind::Consensus(SequencingMessage::General(GeneralConsensusMessage::Vote(vote))) = message_kind {
-                        *transmit_type = TransmitType::Direct(membership.leader(vote.view_number() + 1 - nodes_count, None).unwrap());
+                        *transmit_type = TransmitType::Direct(
+                            membership
+                                .non_epoch_snapshot()
+                                .leader(vote.view_number() + 1 - nodes_count)
+                                .unwrap(),
+                        );
                     } else {
                         {}
                     }
@@ -174,7 +182,7 @@ cross_tests!(
     TestName: coordination_attack,
     Impls: [MemoryImpl],
     Types: [TestTypes],
-    Versions: [TestVersions],
+    Versions: [TEST_VERSIONS.test],
     Ignore: false,
     Metadata: {
         let dishonest_proposal_view_numbers = Arc::new(RwLock::new(HashSet::new()));
@@ -212,7 +220,7 @@ cross_tests!(
     TestName: view_sync_split,
     Impls: [PushCdnImpl],
     Types: [TestTypes],
-    Versions: [TestVersions],
+    Versions: [TEST_VERSIONS.test],
     Ignore: false,
     Metadata: {
         let behaviour = Rc::new(move |node_id| {
@@ -253,7 +261,7 @@ cross_tests!(
     TestName: view_sync_next_epoch,
     Impls: [PushCdnImpl],
     Types: [TestTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
         let behaviour = Rc::new(move |node_id| {
@@ -293,7 +301,7 @@ cross_tests!(
     TestName: view_sync_old_epoch,
     Impls: [PushCdnImpl],
     Types: [TestTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
         let behaviour = Rc::new(move |node_id| {

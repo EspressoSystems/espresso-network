@@ -4,11 +4,11 @@ use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use alloy::{
     network::EthereumWallet,
-    primitives::{utils::format_units, Address, U256},
+    primitives::{Address, U256, utils::format_units},
     providers::{Provider, ProviderBuilder},
     rpc::types::TransactionReceipt,
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use espresso_types::{SeqTypes, StateCertQueryDataV1};
 use futures::FutureExt;
 use hotshot_contract_adapter::{
@@ -22,10 +22,7 @@ use hotshot_types::{
         StateVerKey,
     },
     simple_certificate::LightClientStateUpdateCertificateV1,
-    traits::{
-        node_implementation::{ConsensusTime, NodeType},
-        signature_key::LCV2StateSignatureKey,
-    },
+    traits::signature_key::LCV2StateSignatureKey,
     utils::{
         epoch_from_block_number, is_epoch_root, is_ge_epoch_root, option_epoch_from_block_number,
     },
@@ -33,15 +30,15 @@ use hotshot_types::{
 use jf_pcs::prelude::UnivariateUniversalParams;
 use jf_relation_compat::Circuit as _;
 use surf_disco::Client;
-use tide_disco::{error::ServerError, Api};
+use tide_disco::{Api, error::ServerError};
 use time::ext::InstantExt;
 use tokio::{io, spawn, task::spawn_blocking, time::sleep};
 use url::Url;
 use vbs::version::{StaticVersion, StaticVersionType};
 
 use crate::{
-    v2::snark::{Proof, ProvingKey, PublicInput},
     ProverError, ProverServiceState, StateProverConfig,
+    v2::snark::{Proof, ProvingKey, PublicInput},
 };
 
 pub fn load_proving_key(stake_table_capacity: usize) -> ProvingKey {
@@ -147,7 +144,7 @@ pub async fn submit_state_and_proof(
         tx
     );
     // send the tx
-    let (receipt, included_block) = sequencer_utils::contract_send(&tx)
+    let (receipt, included_block) = espresso_utils::contract_send(&tx)
         .await
         .map_err(ProverError::ContractError)?;
 
@@ -274,8 +271,8 @@ async fn advance_epoch(
     light_client_address: Address,
     mut cur_st_state: StakeTableState,
     proving_key: &ProvingKey,
-    contract_epoch: Option<<SeqTypes as NodeType>::Epoch>,
-    target_epoch: Option<<SeqTypes as NodeType>::Epoch>,
+    contract_epoch: Option<EpochNumber>,
+    target_epoch: Option<EpochNumber>,
 ) -> Result<StakeTableState, ProverError> {
     let Some(target_epoch) = target_epoch else {
         return Err(ProverError::Internal(anyhow!(
@@ -402,7 +399,7 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
         tracing::info!("Successfully synced light client state.");
     } else {
         // After the epoch is enabled
-        let contract_epoch = option_epoch_from_block_number::<SeqTypes>(
+        let contract_epoch = option_epoch_from_block_number(
             contract_state_epoch_enabled,
             contract_state.block_height,
             blocks_per_epoch,
@@ -416,7 +413,7 @@ pub async fn sync_state<ApiVer: StaticVersionType>(
             contract_epoch
         };
 
-        let bundle_epoch = option_epoch_from_block_number::<SeqTypes>(
+        let bundle_epoch = option_epoch_from_block_number(
             epoch_enabled,
             bundle.state.block_height,
             blocks_per_epoch,
@@ -525,10 +522,10 @@ pub async fn run_prover_service<ApiVer: StaticVersionType + 'static>(
     ));
 
     // Start the HTTP server to get a functioning healthcheck before any heavy computations.
-    if let Some(port) = state.config.port {
-        if let Err(err) = start_http_server(port, state.config.light_client_address, bind_version) {
-            tracing::error!("Error starting http server: {}", err);
-        }
+    if let Some(port) = state.config.port
+        && let Err(err) = start_http_server(port, state.config.light_client_address, bind_version)
+    {
+        tracing::error!("Error starting http server: {}", err);
     }
 
     let proving_key =
@@ -585,19 +582,19 @@ mod tests {
 
     use alloy::{
         node_bindings::Anvil,
-        providers::{layers::AnvilProvider, ProviderBuilder},
+        providers::{ProviderBuilder, layers::AnvilProvider},
         sol_types::SolValue,
     };
     use anyhow::Result;
     use espresso_contract_deployer::{
-        deploy_light_client_proxy, upgrade_light_client_v2, Contracts,
+        Contracts, deploy_light_client_proxy, upgrade_light_client_v2,
     };
     use hotshot_contract_adapter::sol_types::LightClientV2Mock;
     use jf_utils::test_rng;
 
     use super::*;
     use crate::v2::mock_ledger::{
-        MockLedger, MockSystemParam, EPOCH_HEIGHT_FOR_TEST, EPOCH_START_BLOCK_FOR_TEST,
+        EPOCH_HEIGHT_FOR_TEST, EPOCH_START_BLOCK_FOR_TEST, MockLedger, MockSystemParam,
         STAKE_TABLE_CAPACITY_FOR_TEST,
     };
 

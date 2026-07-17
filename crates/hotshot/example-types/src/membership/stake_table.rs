@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, fmt::Debug, ops::Bound};
 
 use hotshot_types::{
+    PeerConfig, PeerConnectInfo,
     drb::DrbResult,
     traits::{
         node_implementation::NodeType,
@@ -9,7 +10,6 @@ use hotshot_types::{
             StateSignatureKey,
         },
     },
-    PeerConfig,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -20,6 +20,7 @@ pub struct TestStakeTableEntry<
     pub signature_key: PubKey,
     pub stake_table_entry: <PubKey as SignatureKey>::StakeTableEntry,
     pub state_ver_key: StatePubKey,
+    pub connect_info: Option<PeerConnectInfo>,
 }
 
 impl<TYPES: NodeType> From<PeerConfig<TYPES>>
@@ -30,6 +31,7 @@ impl<TYPES: NodeType> From<PeerConfig<TYPES>>
             signature_key: SignatureKey::public_key(&peer_config.stake_table_entry),
             stake_table_entry: peer_config.stake_table_entry,
             state_ver_key: peer_config.state_ver_key,
+            connect_info: peer_config.connect_info,
         }
     }
 }
@@ -43,21 +45,23 @@ impl<TYPES: NodeType> From<TestStakeTableEntry<TYPES::SignatureKey, TYPES::State
         PeerConfig {
             stake_table_entry: test_stake_table_entry.stake_table_entry,
             state_ver_key: test_stake_table_entry.state_ver_key,
+            connect_info: test_stake_table_entry.connect_info,
         }
     }
 }
 
-// Map from first epoch to DA committee stake table entries
+/// Per-epoch committee schedule: each entry is the committee effective from
+/// its first epoch (inclusive) until the next scheduled change.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct TestDaCommittees<
+pub struct TestCommitteeSchedule<
     PubKey: SignatureKey,
     StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
 >(BTreeMap<u64, Vec<TestStakeTableEntry<PubKey, StatePubKey>>>);
 
 impl<
-        PubKey: SignatureKey,
-        StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
-    > TestDaCommittees<PubKey, StatePubKey>
+    PubKey: SignatureKey,
+    StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
+> TestCommitteeSchedule<PubKey, StatePubKey>
 {
     pub fn new() -> Self {
         Self(BTreeMap::new())
@@ -86,9 +90,9 @@ impl<
 }
 
 impl<
-        PubKey: SignatureKey,
-        StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
-    > Default for TestDaCommittees<PubKey, StatePubKey>
+    PubKey: SignatureKey,
+    StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
+> Default for TestCommitteeSchedule<PubKey, StatePubKey>
 {
     fn default() -> Self {
         Self::new()
@@ -98,7 +102,7 @@ impl<
 pub trait TestStakeTable<
     PubKey: SignatureKey,
     StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
->: Debug + std::marker::Send + std::marker::Sync
+>: Clone + Debug + std::marker::Send + std::marker::Sync
 {
     fn new(
         quorum_members: Vec<TestStakeTableEntry<PubKey, StatePubKey>>,
@@ -154,4 +158,15 @@ pub trait TestStakeTable<
         first_epoch: u64,
         committee: Vec<TestStakeTableEntry<PubKey, StatePubKey>>,
     );
+
+    /// Register a quorum committee effective from `first_epoch` (inclusive).
+    /// Mirrors `add_da_committee`; implementations without per-epoch quorum
+    /// committees keep the panicking default.
+    fn add_quorum_committee(
+        &mut self,
+        _first_epoch: u64,
+        _committee: Vec<TestStakeTableEntry<PubKey, StatePubKey>>,
+    ) {
+        panic!("add_quorum_committee is not supported by this TestStakeTable implementation");
+    }
 }

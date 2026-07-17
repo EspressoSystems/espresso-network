@@ -11,7 +11,7 @@
 //     completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
 //     test_builder::{Behaviour, TestDescription},
 // };
-// use hotshot_types::{data::ViewNumber, traits::node_implementation::ConsensusTime};
+// use hotshot_types::{data::ViewNumber};
 
 // cross_tests!(
 //     TestName: view_delay,

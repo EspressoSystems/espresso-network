@@ -1,12 +1,12 @@
-use anyhow::{anyhow, ensure, Context, Result};
+use anyhow::{Context, Result, anyhow, ensure};
 use espresso_types::{Header, Payload};
 use hotshot_types::{
-    data::{ns_table::parse_ns_table, VidCommitment, VidCommon},
+    data::{VidCommitment, VidCommon, ns_table::parse_ns_table},
     traits::block_contents::EncodeBytes,
     vid::{
-        advz::{advz_scheme, ADVZScheme},
-        avidm::{init_avidm_param, AvidMScheme},
-        avidm_gf2::{init_avidm_gf2_param, AvidmGf2Scheme},
+        advz::{ADVZScheme, advz_scheme},
+        avidm::{AvidMScheme, init_avidm_param},
+        avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
     },
 };
 use jf_advz::VidScheme;

@@ -15,8 +15,9 @@ import { EspTokenV2 } from "../src/EspTokenV2.sol";
 import { SafeExitTimelock } from "../src/SafeExitTimelock.sol";
 import { TimelockController } from "@openzeppelin/contracts/governance/TimelockController.sol";
 import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
-import { OwnableUpgradeable } from
-    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {
+    OwnableUpgradeable
+} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 
 contract EspTokenUpgradabilityTest is Test {
     address public admin;
@@ -111,8 +112,9 @@ contract EspTokenUpgradabilityTest is Test {
         timelock.schedule(
             address(token), 0, transferOwnershipData, bytes32(0), bytes32(0), minDelaySeconds
         );
-        bytes32 operation =
-            timelock.hashOperation(address(token), 0, transferOwnershipData, bytes32(0), bytes32(0));
+        bytes32 operation = timelock.hashOperation(
+            address(token), 0, transferOwnershipData, bytes32(0), bytes32(0)
+        );
         vm.stopPrank();
 
         vm.startPrank(executors[0]);
@@ -304,8 +306,9 @@ contract EspTokenUpgradabilityTest is Test {
         vm.warp(block.timestamp + minDelaySeconds + 100);
 
         // get the operation state of the scheduled operation
-        bytes32 operation =
-            timelock.hashOperation(address(token), 0, transferOwnershipData, bytes32(0), bytes32(0));
+        bytes32 operation = timelock.hashOperation(
+            address(token), 0, transferOwnershipData, bytes32(0), bytes32(0)
+        );
         TimelockController.OperationState operationState = timelock.getOperationState(operation);
         assert(operationState == TimelockController.OperationState.Ready);
 

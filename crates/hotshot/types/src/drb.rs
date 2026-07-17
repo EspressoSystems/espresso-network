@@ -9,14 +9,18 @@ use std::{collections::BTreeMap, sync::Arc, time::Instant};
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use vbs::version::{StaticVersionType, Version};
+use tokio_util::sync::CancellationToken;
+use tracing::{error, info, warn};
+use vbs::version::Version;
+use versions::DRB_AND_HEADER_UPGRADE_VERSION;
 
 use crate::{
+    HotShotConfig,
+    data::EpochNumber,
     traits::{
-        node_implementation::{ConsensusTime, NodeType, Versions},
+        node_implementation::NodeType,
         storage::{LoadDrbProgressFn, StoreDrbProgressFn},
     },
-    HotShotConfig,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -34,14 +38,14 @@ pub struct DrbInput {
 pub type DrbDifficultySelectorFn =
     Arc<dyn Fn(Version) -> BoxFuture<'static, u64> + Send + Sync + 'static>;
 
-pub fn drb_difficulty_selector<TYPES: NodeType, V: Versions>(
+pub fn drb_difficulty_selector<TYPES: NodeType>(
     config: &HotShotConfig<TYPES>,
 ) -> DrbDifficultySelectorFn {
     let base_difficulty = config.drb_difficulty;
     let upgrade_difficulty = config.drb_upgrade_difficulty;
     Arc::new(move |version| {
         Box::pin(async move {
-            if version >= V::DrbAndHeaderUpgrade::VERSION {
+            if version >= DRB_AND_HEADER_UPGRADE_VERSION {
                 upgrade_difficulty
             } else {
                 base_difficulty
@@ -65,6 +69,10 @@ pub const DIFFICULTY_LEVEL: u64 = 10;
 
 /// Interval at which to store the results
 pub const DRB_CHECKPOINT_INTERVAL: u64 = 1_000_000_000;
+
+/// Hashes between cancellation checks. Bounds how long hashing continues after `cancel`
+/// fires; independent of the `DRB_CHECKPOINT_INTERVAL` persistence cadence.
+const DRB_CANCEL_BATCH: u64 = 1_000_000;
 
 /// DRB seed input for epoch 1 and 2.
 pub const INITIAL_DRB_SEED_INPUT: [u8; 32] = [0; 32];
@@ -91,34 +99,57 @@ pub fn difficulty_level() -> u64 {
     unimplemented!("Use an arbitrary `DIFFICULTY_LEVEL` for now before we bench the hash time.");
 }
 
+/// Hash `hash` repeatedly `count` times, checking `cancel` between batches.
+///
+/// Returns `None` if cancelled, `Some(hash)` otherwise.
+fn hash_batches(mut hash: [u8; 32], count: u64, cancel: CancellationToken) -> Option<[u8; 32]> {
+    let mut done = 0u64;
+    while done < count {
+        if cancel.is_cancelled() {
+            return None;
+        }
+        let n = DRB_CANCEL_BATCH.min(count - done);
+        for _ in 0..n {
+            hash = Sha256::digest(hash).into();
+        }
+        done += n;
+    }
+    Some(hash)
+}
+
 /// Compute the DRB result for the leader rotation.
 ///
 /// This is to be started two epochs in advance and spawned in a non-blocking thread.
+/// Returns `None` if the computation was cancelled via `cancel`.
 ///
 /// # Arguments
 /// * `drb_seed_input` - Serialized QC signature.
+/// * `cancel` - Token that stops the hash loop when fired.
 #[must_use]
 pub async fn compute_drb_result(
     drb_input: DrbInput,
     store_drb_progress: StoreDrbProgressFn,
     load_drb_progress: LoadDrbProgressFn,
-) -> DrbResult {
-    tracing::warn!("Beginning DRB calculation with input {:?}", drb_input);
+    cancel: CancellationToken,
+) -> Option<DrbResult> {
+    info!(target: "announce::drb", ?drb_input, "beginning drb calculation");
     let mut drb_input = drb_input;
 
     if let Ok(loaded_drb_input) = load_drb_progress(drb_input.epoch).await {
         if loaded_drb_input.difficulty_level != drb_input.difficulty_level {
-            tracing::error!(
-                "We are calculating the DRB result with input {drb_input:?}, but we had \
-                 previously stored {loaded_drb_input:?} with a different difficulty level for \
-                 this epoch. Discarding the value from storage"
+            error!(
+                ?drb_input,
+                ?loaded_drb_input,
+                "we are calculating the drb result with input that has a different difficulty \
+                 level for this epoch than a previously stored one => discarding the value from \
+                 storage"
             );
         } else if loaded_drb_input.iteration >= drb_input.iteration {
             drb_input = loaded_drb_input;
         }
     }
 
-    let mut hash = drb_input.value.to_vec();
+    let mut hash: [u8; 32] = drb_input.value;
     let mut iteration = drb_input.iteration;
     let remaining_iterations = drb_input
         .difficulty_level
@@ -138,28 +169,17 @@ pub async fn compute_drb_result(
 
     // loop up to, but not including, the `final_checkpoint`
     for _ in 0..final_checkpoint {
-        hash = tokio::task::spawn_blocking(move || {
-            let mut hash_tmp = hash.clone();
-            for _ in 0..DRB_CHECKPOINT_INTERVAL {
-                // TODO: This may be optimized to avoid memcopies after we bench the hash time.
-                // <https://github.com/EspressoSystems/HotShot/issues/3880>
-                hash_tmp = Sha256::digest(&hash_tmp).to_vec();
-            }
-
-            hash_tmp
-        })
-        .await
-        .expect("DRB calculation failed: this should never happen");
-
-        let mut partial_drb_result = [0u8; 32];
-        partial_drb_result.copy_from_slice(&hash);
+        let c = cancel.clone();
+        hash = tokio::task::spawn_blocking(move || hash_batches(hash, DRB_CHECKPOINT_INTERVAL, c))
+            .await
+            .expect("completes")?;
 
         iteration += DRB_CHECKPOINT_INTERVAL;
 
         let updated_drb_input = DrbInput {
             epoch: drb_input.epoch,
             iteration,
-            value: partial_drb_result,
+            value: hash,
             difficulty_level: drb_input.difficulty_level,
         };
 
@@ -167,15 +187,15 @@ pub async fn compute_drb_result(
 
         let store_drb_progress = store_drb_progress.clone();
         tokio::spawn(async move {
-            tracing::warn!(
-                "Storing partial DRB progress: {:?}. Time elapsed since the previous iteration of \
-                 {:?}: {:?}",
-                updated_drb_input,
-                last_iteration,
-                elapsed_time
+            info!(
+                target: "announce::drb",
+                ?updated_drb_input,
+                %last_iteration,
+                %elapsed_time,
+                "storing partial drb progress"
             );
-            if let Err(e) = store_drb_progress(updated_drb_input).await {
-                tracing::warn!("Failed to store DRB progress during calculation: {}", e);
+            if let Err(err) = store_drb_progress(updated_drb_input).await {
+                warn!(%err, "failed to store drb progress during calculation");
             }
         });
 
@@ -184,24 +204,18 @@ pub async fn compute_drb_result(
     }
 
     let final_checkpoint_iteration = iteration;
+    // Holds by construction: `iteration` only ever reaches multiples of the checkpoint
+    // interval not exceeding `difficulty_level`.
+    let remainder = drb_input
+        .difficulty_level
+        .checked_sub(final_checkpoint_iteration)
+        .expect("sufficient iterations");
 
     // perform the remaining iterations
-    hash = tokio::task::spawn_blocking(move || {
-        let mut hash_tmp = hash.clone();
-        for _ in final_checkpoint_iteration..drb_input.difficulty_level {
-            // TODO: This may be optimized to avoid memcopies after we bench the hash time.
-            // <https://github.com/EspressoSystems/HotShot/issues/3880>
-            hash_tmp = Sha256::digest(&hash_tmp).to_vec();
-        }
-
-        hash_tmp
-    })
-    .await
-    .expect("DRB calculation failed: this should never happen");
-
-    // Convert the hash to the DRB result.
-    let mut drb_result = [0u8; 32];
-    drb_result.copy_from_slice(&hash);
+    let c = cancel.clone();
+    let drb_result = tokio::task::spawn_blocking(move || hash_batches(hash, remainder, c))
+        .await
+        .expect("DRB spawn_blocking panicked")?;
 
     let final_drb_input = DrbInput {
         epoch: drb_input.epoch,
@@ -210,43 +224,43 @@ pub async fn compute_drb_result(
         difficulty_level: drb_input.difficulty_level,
     };
 
-    tracing::warn!("Completed DRB calculation. Result: {:?}", final_drb_input);
+    info!(target: "announce::drb", ?final_drb_input, "completed drb calculation");
 
     let store_drb_progress = store_drb_progress.clone();
     tokio::spawn(async move {
-        if let Err(e) = store_drb_progress(final_drb_input).await {
-            tracing::warn!("Failed to store DRB progress during calculation: {}", e);
+        if let Err(err) = store_drb_progress(final_drb_input).await {
+            warn!(%err, "failed to store drb progress during calculation");
         }
     });
 
-    drb_result
+    Some(drb_result)
 }
 
 /// Seeds for DRB computation and computed results.
 #[derive(Clone, Debug)]
-pub struct DrbResults<TYPES: NodeType> {
+pub struct DrbResults {
     /// Stored results from computations
-    pub results: BTreeMap<TYPES::Epoch, DrbResult>,
+    pub results: BTreeMap<EpochNumber, DrbResult>,
 }
 
-impl<TYPES: NodeType> DrbResults<TYPES> {
+impl DrbResults {
     #[must_use]
     /// Constructor with initial values for epochs 1 and 2.
     pub fn new() -> Self {
         Self {
             results: BTreeMap::from([
-                (TYPES::Epoch::new(1), INITIAL_DRB_RESULT),
-                (TYPES::Epoch::new(2), INITIAL_DRB_RESULT),
+                (EpochNumber::new(1), INITIAL_DRB_RESULT),
+                (EpochNumber::new(2), INITIAL_DRB_RESULT),
             ]),
         }
     }
 
-    pub fn store_result(&mut self, epoch: TYPES::Epoch, result: DrbResult) {
+    pub fn store_result(&mut self, epoch: EpochNumber, result: DrbResult) {
         self.results.insert(epoch, result);
     }
 
     /// Garbage collects internal data structures
-    pub fn garbage_collect(&mut self, epoch: TYPES::Epoch) {
+    pub fn garbage_collect(&mut self, epoch: EpochNumber) {
         if epoch.u64() < KEEP_PREVIOUS_RESULT_COUNT {
             return;
         }
@@ -259,7 +273,7 @@ impl<TYPES: NodeType> DrbResults<TYPES> {
     }
 }
 
-impl<TYPES: NodeType> Default for DrbResults<TYPES> {
+impl Default for DrbResults {
     fn default() -> Self {
         Self::new()
     }
@@ -281,7 +295,7 @@ impl<TYPES: NodeType> Default for DrbResults<TYPES> {
 ///   is strictly smaller than the cdf entry
 /// - return the corresponding node as the leader for that view
 pub mod election {
-    use alloy::primitives::{U256, U512};
+    use alloy_primitives::{U256, U512};
     use sha2::{Digest, Sha256, Sha512};
 
     use crate::traits::signature_key::{SignatureKey, StakeTableEntryType};
@@ -394,16 +408,88 @@ pub mod election {
 mod tests {
     use std::collections::HashMap;
 
-    use alloy::primitives::U256;
+    use alloy_primitives::U256;
     use rand::RngCore;
     use sha2::{Digest, Sha256};
+    use tokio_util::sync::CancellationToken;
 
-    use super::election::{generate_stake_cdf, select_randomized_leader};
+    use super::{
+        DRB_CANCEL_BATCH, DRB_CHECKPOINT_INTERVAL, DrbInput, compute_drb_result,
+        election::{generate_stake_cdf, select_randomized_leader},
+        hash_batches,
+    };
     use crate::{
         signature_key::BLSPubKey,
         stake_table::StakeTableEntry,
-        traits::signature_key::{BuilderSignatureKey, StakeTableEntryType},
+        traits::{
+            signature_key::{BuilderSignatureKey, StakeTableEntryType},
+            storage::{null_load_drb_progress_fn, null_store_drb_progress_fn},
+        },
     };
+
+    #[test]
+    fn test_hash_batches_pre_cancelled() {
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        assert_eq!(hash_batches([0u8; 32], 10, cancel), None);
+    }
+
+    #[test]
+    fn test_hash_batches_count_zero() {
+        let input = [42u8; 32];
+        let result = hash_batches(input, 0, CancellationToken::new());
+        assert_eq!(result, Some(input));
+    }
+
+    #[test]
+    fn test_hash_batches_small_count() {
+        let input = [1u8; 32];
+        let count = 5u64;
+        // count < DRB_CANCEL_BATCH, so a single batch completes
+        let mut expected = input;
+        for _ in 0..count {
+            expected = Sha256::digest(expected).into();
+        }
+        let result = hash_batches(input, count, CancellationToken::new());
+        assert_eq!(result, Some(expected));
+    }
+
+    #[test]
+    fn test_hash_batches_cancel_after_first_batch() {
+        // count spans 2 batches; cancel after first batch boundary
+        let count = DRB_CANCEL_BATCH + 1;
+        let cancel = CancellationToken::new();
+
+        // Compute one full batch, then cancel, then try to hash the remainder
+        let intermediate = hash_batches([0u8; 32], DRB_CANCEL_BATCH, CancellationToken::new())
+            .expect("first batch must complete");
+        cancel.cancel();
+        // The remaining 1 iteration sees cancelled token on first check
+        let result = hash_batches(intermediate, count - DRB_CANCEL_BATCH, cancel);
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn test_compute_drb_result_cancelled() {
+        // A pre-cancelled token must abandon a multi-checkpoint computation
+        // immediately rather than running it to completion.
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let drb_input = DrbInput {
+            epoch: 1,
+            iteration: 0,
+            value: [0u8; 32],
+            difficulty_level: DRB_CHECKPOINT_INTERVAL * 5,
+        };
+        let result = compute_drb_result(
+            drb_input,
+            null_store_drb_progress_fn(),
+            null_load_drb_progress_fn(),
+            cancel,
+        )
+        .await;
+        assert_eq!(result, None);
+    }
 
     #[test]
     fn test_randomized_leader() {

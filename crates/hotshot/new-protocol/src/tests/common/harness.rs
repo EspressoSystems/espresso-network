@@ -1,0 +1,244 @@
+use std::{sync::Arc, time::Duration};
+
+use hotshot::types::BLSPubKey;
+use hotshot_example_types::{
+    node_types::{TEST_VERSIONS, TestTypes},
+    state_types::{TestInstanceState, TestValidatedState},
+};
+use hotshot_types::{
+    data::{EpochNumber, Leaf2, ViewNumber},
+    traits::{metrics::NoMetrics, signature_key::SignatureKey},
+};
+
+use super::utils::mock_membership_with_num_nodes;
+use crate::{
+    block::{BlockBuilder, BlockBuilderConfig},
+    consensus::{Consensus, ConsensusInput, ConsensusOutput},
+    coordinator::{error::Severity, timer::Timer},
+    epoch::EpochManager,
+    helpers::test_upgrade_lock,
+    logging::KeyPrefix,
+    message::Message,
+    network::Cliquenet,
+    outbox::Outbox,
+    proposal::{ProposalValidator, VidShareValidator},
+    state::StateManager,
+    tests::common::mock::MockCoordinator,
+    vid::{VidDisperser, VidReconstructor},
+    vote::VoteCollector,
+};
+
+const HARNESS_NUM_NODES: usize = 10;
+const HARNESS_EPOCH_HEIGHT: u64 = 10;
+
+/// Test harness that spawns consensus + mock coordinator and provides
+/// helpers to send events and collect results.
+pub(crate) struct TestHarness {
+    coordinator: MockCoordinator,
+    outputs: Outbox<ConsensusOutput<TestTypes>>,
+}
+
+impl TestHarness {
+    pub async fn new(node_index: u64) -> Self {
+        // Default timer must be long enough to not fire during tests even
+        // under heavy CPU load (e.g. full test suite running in parallel)
+        // and through multi-epoch scenarios where catchup walks through
+        // several epoch roots.
+        Self::new_with_timer(node_index, Duration::from_secs(30)).await
+    }
+
+    pub async fn new_with_timer(node_index: u64, timer_duration: Duration) -> Self {
+        let epoch_height = 10;
+        crate::logging::init_test_logging();
+        let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
+        let state_key_pair = hotshot_types::light_client::StateKeyPair::generate_from_seed_indexed(
+            [0u8; 32], node_index,
+        );
+        let state_private_key = state_key_pair.sign_key_ref().clone();
+        let instance = Arc::new(TestInstanceState::default());
+        let (membership, storage, client) =
+            mock_membership_with_num_nodes(HARNESS_NUM_NODES, HARNESS_EPOCH_HEIGHT, public_key);
+        let upgrade_lock = test_upgrade_lock();
+
+        let epoch_manager = EpochManager::new(10, membership.clone());
+
+        let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+        let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+        let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+        let timeout_one_honest_collector =
+            VoteCollector::new(membership.clone(), upgrade_lock.clone());
+        let epoch_root_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+
+        let genesis_state = TestValidatedState::default();
+        // Use the same version as `TestViewGenerator` (vid2) so the genesis
+        // leaf commitment matches the `parent_commitment` carried by the
+        // first proposal from `TestData`.
+        let genesis_leaf =
+            Leaf2::<TestTypes>::genesis(&genesis_state, &instance, TEST_VERSIONS.vid2.base).await;
+
+        let consensus = Consensus::new(
+            membership.clone(),
+            public_key,
+            private_key.clone(),
+            state_private_key,
+            10,
+            upgrade_lock.clone(),
+            genesis_leaf.clone(),
+            epoch_height,
+        );
+
+        let vid_reconstruction_task = VidReconstructor::new();
+
+        let block_config = BlockBuilderConfig::default();
+        let block_builder = BlockBuilder::new(
+            instance.clone(),
+            membership.clone(),
+            block_config,
+            upgrade_lock.clone(),
+        );
+
+        let mut state_manager = StateManager::new(instance.clone(), upgrade_lock.clone());
+        state_manager.seed_state(ViewNumber::genesis(), Arc::new(genesis_state), genesis_leaf);
+
+        let proposal_validator =
+            ProposalValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
+        let share_validator =
+            VidShareValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
+
+        let keypair = hotshot_types::x25519::Keypair::derive_from::<BLSPubKey>(&private_key)
+            .expect("keypair derivation should succeed");
+        let port =
+            test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let addr = hotshot_types::addr::NetAddr::Inet(std::net::Ipv4Addr::LOCALHOST.into(), port);
+        let network = Cliquenet::create(
+            "test-harness",
+            public_key,
+            keypair,
+            addr,
+            vec![],
+            upgrade_lock.clone(),
+            Box::new(NoMetrics),
+        )
+        .await
+        .expect("cliquenet creation should succeed");
+
+        let vid_disperse_task = VidDisperser::new(
+            membership.clone(),
+            network.sender().clone(),
+            public_key,
+            private_key.clone(),
+        );
+
+        let coordinator = MockCoordinator::builder()
+            .consensus(consensus)
+            .network(network)
+            .state_manager(state_manager)
+            .vote1_collector(vote1_collector)
+            .vote2_collector(vote2_collector)
+            .timeout_collector(timeout_collector)
+            .timeout_one_honest_collector(timeout_one_honest_collector)
+            .epoch_root_collector(epoch_root_collector)
+            .vid_disperser(vid_disperse_task)
+            .vid_reconstructor(vid_reconstruction_task)
+            .epoch_manager(epoch_manager)
+            .block_builder(block_builder)
+            .proposal_validator(proposal_validator)
+            .share_validator(share_validator)
+            .storage(crate::storage::Storage::new(storage, private_key))
+            .client(client)
+            .membership_coordinator(membership)
+            .outbox(Outbox::new())
+            .timer(Timer::new(
+                timer_duration,
+                ViewNumber::genesis(),
+                EpochNumber::genesis(),
+            ))
+            .public_key(public_key)
+            .node_id(KeyPrefix::from(&public_key))
+            .build();
+        Self {
+            coordinator,
+            outputs: Outbox::new(),
+        }
+    }
+
+    pub fn message<S>(&mut self, m: Message<TestTypes, S>) {
+        if let Some(input) = self.coordinator.on_network_message(m.into_unchecked()) {
+            self.apply_and_process(input);
+        }
+    }
+
+    pub fn apply_and_process(&mut self, input: ConsensusInput<TestTypes>) {
+        self.coordinator.apply_consensus(input);
+        self.outputs
+            .extend(self.coordinator.outbox().iter().cloned());
+        for out in self.coordinator.outbox_mut().take() {
+            if let Err(err) = self.coordinator.process_consensus_output(out) {
+                panic!("unexpected error: {err}")
+            }
+        }
+    }
+
+    /// Process events from the coordinator until `predicate` is satisfied.
+    ///
+    /// Each event is immediately applied and appended to the collected list.
+    /// The predicate is checked after every event; once it returns `true`
+    /// the collected inputs are returned.
+    ///
+    /// This avoids any assumption about the order or number of events
+    /// produced by asynchronous coordinator subsystems (proposal validator,
+    /// VID reconstructor, vote collectors, state manager, timer).
+    pub async fn process_until<P>(&mut self, pred: P) -> Vec<ConsensusInput<TestTypes>>
+    where
+        P: Fn(&[ConsensusInput<TestTypes>]) -> bool,
+    {
+        let mut inputs = Vec::new();
+        while !pred(&inputs) {
+            match self.coordinator.next_consensus_input().await {
+                Ok(input) => {
+                    self.apply_and_process(input.clone());
+                    inputs.push(input);
+                },
+                Err(err) if err.severity == Severity::Critical => {
+                    panic!("Critical coordinator error: {err}")
+                },
+                Err(_err) => {
+                    // Non-critical errors (e.g., epoch root computation failures
+                    // in the test environment) are expected and skipped.
+                },
+            }
+        }
+        inputs
+    }
+
+    /// Process events from the coordinator until the collected outputs
+    /// satisfy `predicate`. Use for outputs that are gated on storage
+    /// confirmations (votes, proposals) and thus need extra loop turns
+    /// after their triggering input has been observed.
+    pub async fn process_until_output<P>(&mut self, pred: P)
+    where
+        P: Fn(&Outbox<ConsensusOutput<TestTypes>>) -> bool,
+    {
+        while !pred(&self.outputs) {
+            match self.coordinator.next_consensus_input().await {
+                Ok(input) => self.apply_and_process(input),
+                Err(err) if err.severity == Severity::Critical => {
+                    panic!("Critical coordinator error: {err}")
+                },
+                Err(_err) => {},
+            }
+        }
+    }
+
+    pub fn outputs(&self) -> &Outbox<ConsensusOutput<TestTypes>> {
+        &self.outputs
+    }
+
+    pub fn current_view(&self) -> hotshot_types::data::ViewNumber {
+        self.coordinator.current_view()
+    }
+
+    pub fn coordinator(&self) -> &MockCoordinator {
+        &self.coordinator
+    }
+}

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "./EspToken.sol";
+import { EspToken } from "./EspToken.sol";
 
 /// @title EspTokenV2
 /// @notice Upgrades EspToken to allow minting by the RewardClaim contract

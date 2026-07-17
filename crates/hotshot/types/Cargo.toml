@@ -1,7 +1,7 @@
 [package]
 authors = ["Espresso Systems <hello@espressosys.com>"]
 description = "Types and traits for the HotShot consesus module"
-edition = "2021"
+edition.workspace = true
 name = "hotshot-types"
 version = "0.1.11"
 license = "MIT"
@@ -12,16 +12,17 @@ path = "bin/mnemonic.rs"
 
 [features]
 gpu-vid = ["jf-advz/gpu-vid"]
+rlp = ["alloy-primitives/rlp", "alloy-rlp"]
 test-srs = ["jf-advz/test-srs"]
 
 [dependencies]
-alloy = { workspace = true }
+alloy-primitives.workspace = true
+alloy-rlp = { workspace = true, optional = true }
 anyhow = { workspace = true }
 ark-bn254 = { workspace = true }
 ark-ed-on-bn254 = { workspace = true }
 ark-ff = { workspace = true }
 ark-serialize = { workspace = true }
-ark-srs = { workspace = true }
 ark-std = { workspace = true }
 async-broadcast = { workspace = true }
 async-lock = { workspace = true }
@@ -29,27 +30,30 @@ async-trait = { workspace = true }
 bincode = { workspace = true }
 bitvec = { workspace = true }
 blake3 = { workspace = true }
+bs58 = { workspace = true }
 clap = { workspace = true }
+cliquenet-types = { workspace = true }
 committable = { workspace = true }
-derive_more = { workspace = true, features = ["debug"] }
-digest = { workspace = true, features = ["rand_core"] }
-displaydoc = { version = "0.2.5", default-features = false }
-dyn-clone = "1.0.17"
+derive_more = { workspace = true }
+digest = { workspace = true }
+displaydoc = { workspace = true }
+dyn-clone = { workspace = true }
 either = { workspace = true }
-futures = { workspace = true, features = ["alloc"] }
-generic-array = "1"
+futures = { workspace = true }
+generic-array = { workspace = true }
 hotshot-utils = { workspace = true }
 jf-advz = { workspace = true }
 jf-crhf = { workspace = true }
 jf-pcs = { workspace = true }
 jf-rescue = { workspace = true }
-jf-signature = { workspace = true, features = ["bls", "schnorr"] }
+jf-signature = { workspace = true }
 jf-utils = { workspace = true }
 lazy_static = { workspace = true }
 libp2p-identity = { workspace = true }
 memoize = { workspace = true }
-mnemonic = "1"
+mnemonic = { workspace = true }
 multiaddr = { workspace = true }
+parking_lot = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
 serde = { workspace = true }
@@ -58,16 +62,30 @@ serde_bytes = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 tagged-base64 = { workspace = true }
+test-utils = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
 typenum = { workspace = true }
 url = { workspace = true }
 vbs = { workspace = true }
 vec1 = { workspace = true }
+versions = { workspace = true }
 vid = { workspace = true }
+
+[build-dependencies]
+ark-bn254 = { workspace = true }
+ark-serialize = { workspace = true }
+ark-srs = { workspace = true }
+jf-pcs = { workspace = true }
+
+[dev-dependencies]
+quickcheck.workspace = true
+test-log.workspace = true
+zeroize.workspace = true
 
 [lints]
 workspace = true

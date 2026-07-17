@@ -14,10 +14,11 @@
 
 use std::{
     collections::{
-        hash_map::{Entry, HashMap},
         BTreeMap,
+        hash_map::{Entry, HashMap},
     },
     hash::Hash,
+    iter,
     ops::{Bound, Deref, RangeBounds},
     path::Path,
 };
@@ -32,36 +33,36 @@ use hotshot_types::{
     simple_certificate::CertificatePair,
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
 };
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use snafu::OptionExt;
 
 use super::{
+    Aggregate, AggregatesStorage, AvailabilityStorage, NodeStorage, PayloadMetadata,
+    SerializableRetry, UpdateAggregatesStorage, UpdateAvailabilityStorage, VidCommonMetadata,
     ledger_log::{Iter, LedgerLog},
     pruning::{PruneStorage, PrunedHeightStorage, PrunerConfig},
-    sql::MigrateTypes,
-    Aggregate, AggregatesStorage, AvailabilityStorage, NodeStorage, PayloadMetadata,
-    UpdateAggregatesStorage, UpdateAvailabilityStorage, VidCommonMetadata,
 };
 use crate::{
+    Header, MissingSnafu, NotFoundSnafu, Payload, QueryError, QueryResult,
     availability::{
+        Certificate2, NamespaceId,
         data_source::{BlockId, LeafId},
         query_data::{
             BlockHash, BlockQueryData, LeafHash, LeafQueryData, PayloadQueryData, QueryableHeader,
             QueryablePayload, TransactionHash, VidCommonQueryData,
         },
-        NamespaceId,
     },
-    data_source::{update, VersionedDataSource},
+    data_source::{VersionedDataSource, update},
     metrics::PrometheusMetrics,
-    node::{SyncStatus, TimeWindowQueryData, WindowStart},
+    node::{SyncStatusQueryData, TimeWindowQueryData, WindowStart},
     status::HasMetrics,
     types::HeightIndexed,
-    Header, MissingSnafu, NotFoundSnafu, Payload, QueryError, QueryResult,
 };
 
 const CACHED_LEAVES_COUNT: usize = 100;
 const CACHED_BLOCKS_COUNT: usize = 100;
 const CACHED_VID_COMMON_COUNT: usize = 100;
+const CACHED_CERT2_COUNT: usize = 100;
 
 #[derive(custom_debug::Debug)]
 pub struct FileSystemStorageInner<Types>
@@ -83,6 +84,7 @@ where
     block_storage: LedgerLog<BlockQueryData<Types>>,
     vid_storage: LedgerLog<(VidCommonQueryData<Types>, Option<VidShare>)>,
     latest_qc_chain: Option<[CertificatePair<Types>; 2]>,
+    cert2_storage: LedgerLog<Certificate2<Types>>,
 }
 
 impl<Types> FileSystemStorageInner<Types>
@@ -145,18 +147,7 @@ where
     Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
-    type Pruner = ();
-}
-
-#[async_trait]
-impl<Types: NodeType> MigrateTypes<Types> for FileSystemStorage<Types>
-where
-    Header<Types>: QueryableHeader<Types>,
-    Payload<Types>: QueryablePayload<Types>,
-{
-    async fn migrate_types(&self, _batch_size: u64) -> anyhow::Result<()> {
-        Ok(())
-    }
+    type Pruner<'a> = ();
 }
 
 impl<Types: NodeType> FileSystemStorage<Types>
@@ -214,6 +205,7 @@ where
                 leaf_storage: LedgerLog::create(loader, "leaves", CACHED_LEAVES_COUNT)?,
                 block_storage: LedgerLog::create(loader, "blocks", CACHED_BLOCKS_COUNT)?,
                 vid_storage: LedgerLog::create(loader, "vid_common", CACHED_VID_COMMON_COUNT)?,
+                cert2_storage: LedgerLog::create(loader, "cert2", CACHED_CERT2_COUNT)?,
                 latest_qc_chain: None,
             }),
             metrics: Default::default(),
@@ -238,6 +230,8 @@ where
             "vid_common",
             CACHED_VID_COMMON_COUNT,
         )?;
+        let cert2_storage =
+            LedgerLog::<Certificate2<Types>>::open(loader, "cert2", CACHED_CERT2_COUNT)?;
 
         let mut index_by_block_hash = HashMap::new();
         let mut index_by_payload_hash = HashMap::new();
@@ -285,6 +279,7 @@ where
                 leaf_storage,
                 block_storage,
                 vid_storage,
+                cert2_storage,
                 top_storage: None,
                 latest_qc_chain: None,
             }),
@@ -298,6 +293,7 @@ where
         inner.leaf_storage.skip_version()?;
         inner.block_storage.skip_version()?;
         inner.vid_storage.skip_version()?;
+        inner.cert2_storage.skip_version()?;
         if let Some(store) = &mut inner.top_storage {
             store.commit_version()?;
         }
@@ -352,6 +348,7 @@ where
         self.leaf_storage.revert_version().unwrap();
         self.block_storage.revert_version().unwrap();
         self.vid_storage.revert_version().unwrap();
+        self.cert2_storage.revert_version().unwrap();
     }
 }
 
@@ -386,6 +383,7 @@ where
         self.inner.leaf_storage.commit_version().await?;
         self.inner.block_storage.commit_version().await?;
         self.inner.vid_storage.commit_version().await?;
+        self.inner.cert2_storage.commit_version().await?;
         if let Some(store) = &mut self.inner.top_storage {
             store.commit_version()?;
         }
@@ -441,6 +439,26 @@ where
         })
     }
 }
+
+#[async_trait]
+impl<Types: NodeType> SerializableRetry for FileSystemStorage<Types>
+where
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+{
+    /// The file system backend has no serializable isolation and so cannot produce serialization
+    /// conflicts; this simply runs `f` once.
+    async fn serializable_retry<T, E, F, Fut>(&self, _op: &'static str, f: F) -> Result<T, E>
+    where
+        T: Send,
+        E: std::fmt::Display + Send,
+        F: Fn() -> Fut + Send + Sync,
+        Fut: Future<Output = Result<T, E>> + Send,
+    {
+        f().await
+    }
+}
+
 fn range_iter<T>(
     mut iter: Iter<'_, T>,
     range: impl RangeBounds<usize>,
@@ -452,7 +470,7 @@ where
     let end = range.end_bound().cloned();
 
     // Advance the underlying iterator to the start of the range.
-    let pos = match start {
+    let mut pos = match start {
         Bound::Included(n) => {
             if n > 0 {
                 iter.nth(n - 1);
@@ -466,7 +484,7 @@ where
         Bound::Unbounded => 0,
     };
 
-    itertools::unfold((iter, end, pos), |(iter, end, pos)| {
+    iter::from_fn(move || {
         // Check if we have reached the end of the range.
         let reached_end = match end {
             Bound::Included(n) => pos > n,
@@ -477,7 +495,7 @@ where
             return None;
         }
         let opt = iter.next()?;
-        *pos += 1;
+        pos += 1;
         Some(opt.context(MissingSnafu))
     })
 }
@@ -626,13 +644,6 @@ where
             .context(NotFoundSnafu)?;
         self.inner.get_block((*height as usize).into())
     }
-
-    async fn first_available_leaf(&mut self, from: u64) -> QueryResult<LeafQueryData<Types>> {
-        // The file system backend doesn't index by whether a leaf is present, so we can't
-        // efficiently seek to the first leaf with height >= `from`. Our best effort is to return
-        // `from` itself if we can, or fail.
-        self.get_leaf((from as usize).into()).await
-    }
 }
 
 impl<Types: NodeType> UpdateAvailabilityStorage<Types>
@@ -641,42 +652,20 @@ where
     Payload<Types>: QueryablePayload<Types>,
     Header<Types>: QueryableHeader<Types>,
 {
-    async fn insert_leaf_with_qc_chain(
+    async fn insert_qc_chain(
         &mut self,
-        leaf: LeafQueryData<Types>,
+        height: u64,
         qc_chain: Option<[CertificatePair<Types>; 2]>,
     ) -> anyhow::Result<()> {
-        self.inner
-            .leaf_storage
-            .insert(leaf.height() as usize, leaf.clone())?;
-        self.inner
-            .index_by_leaf_hash
-            .insert(leaf.hash(), leaf.height());
-        update_index_by_hash(
-            &mut self.inner.index_by_block_hash,
-            leaf.block_hash(),
-            leaf.height(),
-        );
-        update_index_by_hash(
-            &mut self.inner.index_by_payload_hash,
-            leaf.payload_hash(),
-            leaf.height(),
-        );
-        self.inner
-            .index_by_time
-            .entry(leaf.header().timestamp())
-            .or_default()
-            .push(leaf.height());
-
-        if leaf.height() + 1 >= (self.inner.leaf_storage.iter().len() as u64) {
-            // If this is the latest leaf we know about, also store it's QC chain so that we can
-            // prove to clients that this leaf is finalized. (If it is not the latest leaf, this
-            // is unnecessary, since we can prove it is an ancestor of some later, finalized
+        if height + 1 >= (self.inner.leaf_storage.iter().len() as u64) {
+            // If this QC chain is for the latest leaf we know about, store it so that we can prove
+            // to clients that the corresponding leaf is finalized. (If it is not the latest leaf,
+            // this is unnecessary, since we can prove it is an ancestor of some later, finalized
             // leaf.)
             if let Some(qc_chain) = qc_chain {
                 self.inner.latest_qc_chain = Some(qc_chain);
             } else {
-                // Since we have a new latest leaf, we have to updated latest QC chain even if we
+                // Since we have a new latest leaf, we have to update latest QC chain even if we
                 // don't actually have a QC chain to store.
                 self.inner.latest_qc_chain = None;
             }
@@ -685,35 +674,90 @@ where
         Ok(())
     }
 
-    async fn insert_block(&mut self, block: BlockQueryData<Types>) -> anyhow::Result<()> {
-        if !self
-            .inner
-            .block_storage
-            .insert(block.height() as usize, block.clone())?
-        {
-            // The block was already present.
-            return Ok(());
-        }
-        self.inner.num_transactions += block.len();
-        self.inner.payload_size += block.size() as usize;
-        for (_, txn) in block.enumerate() {
+    async fn insert_cert2(
+        &mut self,
+        height: u64,
+        cert2: Certificate2<Types>,
+    ) -> anyhow::Result<()> {
+        self.inner.cert2_storage.insert(height as usize, cert2)?;
+        Ok(())
+    }
+
+    async fn insert_leaf_range<'a>(
+        &mut self,
+        leaves: impl Send + IntoIterator<Item = &'a LeafQueryData<Types>>,
+    ) -> anyhow::Result<()> {
+        for leaf in leaves {
+            if !self
+                .inner
+                .leaf_storage
+                .insert(leaf.height() as usize, leaf.clone())?
+            {
+                // The leaf was already present.
+                continue;
+            }
+            self.inner
+                .index_by_leaf_hash
+                .insert(leaf.hash(), leaf.height());
             update_index_by_hash(
-                &mut self.inner.index_by_txn_hash,
-                txn.commit(),
-                block.height(),
+                &mut self.inner.index_by_block_hash,
+                leaf.block_hash(),
+                leaf.height(),
             );
+            update_index_by_hash(
+                &mut self.inner.index_by_payload_hash,
+                leaf.payload_hash(),
+                leaf.height(),
+            );
+            self.inner
+                .index_by_time
+                .entry(leaf.header().timestamp())
+                .or_default()
+                .push(leaf.height());
+        }
+
+        Ok(())
+    }
+
+    async fn insert_block_range<'a>(
+        &mut self,
+        blocks: impl Send + IntoIterator<IntoIter: Send, Item = &'a BlockQueryData<Types>>,
+    ) -> anyhow::Result<()> {
+        for block in blocks {
+            if !self
+                .inner
+                .block_storage
+                .insert(block.height() as usize, block.clone())?
+            {
+                // The block was already present.
+                continue;
+            }
+            self.inner.num_transactions += block.len();
+            self.inner.payload_size += block.size() as usize;
+            for (_, txn) in block.enumerate() {
+                update_index_by_hash(
+                    &mut self.inner.index_by_txn_hash,
+                    txn.commit(),
+                    block.height(),
+                );
+            }
         }
         Ok(())
     }
 
-    async fn insert_vid(
+    async fn insert_vid_range<'a>(
         &mut self,
-        common: VidCommonQueryData<Types>,
-        share: Option<VidShare>,
+        vid: impl Send
+        + IntoIterator<
+            IntoIter: Send,
+            Item = (&'a VidCommonQueryData<Types>, Option<&'a VidShare>),
+        >,
     ) -> anyhow::Result<()> {
-        self.inner
-            .vid_storage
-            .insert(common.height() as usize, (common, share))?;
+        for (common, share) in vid {
+            self.inner
+                .vid_storage
+                .insert(common.height() as usize, (common.clone(), share.cloned()))?;
+        }
         Ok(())
     }
 }
@@ -806,25 +850,15 @@ where
             .context(MissingSnafu)
     }
 
-    async fn sync_status(&mut self) -> QueryResult<SyncStatus> {
-        let height = self.inner.leaf_storage.iter().len();
-
-        // The number of missing VID common is just the number of completely missing VID
-        // entries, since every entry we have is guaranteed to have the common data.
-        let missing_vid = self.inner.vid_storage.missing(height);
-        // Missing shares includes the completely missing VID entries, plus any entry which
-        // is _not_ messing but which has a null share.
-        let null_vid_shares: usize = self
-            .inner
-            .vid_storage
-            .iter()
-            .map(|res| if matches!(res, Some((_, None))) { 1 } else { 0 })
-            .sum();
-        Ok(SyncStatus {
-            missing_blocks: self.inner.block_storage.missing(height),
-            missing_leaves: self.inner.leaf_storage.missing(height),
-            missing_vid_common: missing_vid,
-            missing_vid_shares: missing_vid + null_vid_shares,
+    async fn sync_status_for_range(
+        &mut self,
+        start: usize,
+        end: usize,
+    ) -> QueryResult<SyncStatusQueryData> {
+        Ok(SyncStatusQueryData {
+            leaves: self.inner.leaf_storage.sync_status(start, end),
+            blocks: self.inner.block_storage.sync_status(start, end),
+            vid_common: self.inner.vid_storage.sync_status(start, end),
             pruned_height: None,
         })
     }
@@ -882,6 +916,28 @@ where
 
     async fn latest_qc_chain(&mut self) -> QueryResult<Option<[CertificatePair<Types>; 2]>> {
         Ok(self.inner.latest_qc_chain.clone())
+    }
+
+    async fn load_cert2(&mut self, height: u64) -> QueryResult<Option<Certificate2<Types>>> {
+        Ok(self
+            .inner
+            .cert2_storage
+            .iter()
+            .nth(height as usize)
+            .flatten())
+    }
+
+    async fn load_earliest_cert2(
+        &mut self,
+        height: u64,
+    ) -> QueryResult<Option<Certificate2<Types>>> {
+        Ok(self
+            .inner
+            .cert2_storage
+            .iter()
+            .skip(height as usize)
+            .flatten()
+            .next())
     }
 }
 

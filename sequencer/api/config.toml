@@ -1,9 +1,0 @@
-[route.hotshot]
-PATH = ["/hotshot"]
-METHOD = "GET"
-DOC = "Get the Hotshot configuration for the current node."
-
-[route.env]
-PATH = ["/env"]
-METHOD = "GET"
-DOC = "Get all ESPRESSO environment variables set for the current node."

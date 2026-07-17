@@ -15,8 +15,9 @@ contract UpgradeLightClientScript is Script {
         external
         returns (address)
     {
-        address proxy =
-            upgradeLightClient(admin, mostRecentlyDeployedProxy, address(new LCV3()), newField);
+        address proxy = upgradeLightClient(
+            admin, mostRecentlyDeployedProxy, address(new LCV3()), newField
+        );
         return proxy;
     }
 
@@ -37,8 +38,8 @@ contract UpgradeLightClientScript is Script {
         LCV2 proxy = LCV2(proxyAddress); //make the function call on the previous implementation
 
         proxy.upgradeToAndCall(newLightClient, abi.encodeCall(LCV3.initializeV3, newField)); //proxy
-            // address now points to the new
-            // implementation
+        // address now points to the new
+        // implementation
         vm.stopBroadcast();
         return address(proxy);
     }

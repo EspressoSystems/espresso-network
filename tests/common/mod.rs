@@ -9,18 +9,18 @@ use std::{
 
 use alloy::{
     primitives::{Address, U256},
-    providers::ProviderBuilder,
+    providers::{Provider, ProviderBuilder},
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use client::SequencerClient;
 use espresso_contract_deployer::build_signer;
+use espresso_node::Genesis;
 use espresso_types::FeeAmount;
 use futures::{
-    future::{join_all, BoxFuture},
     FutureExt,
+    future::{BoxFuture, join_all},
 };
-use hotshot_contract_adapter::sol_types::{EspTokenV2, LightClientV3, RewardClaim, StakeTableV2};
-use sequencer::Genesis;
+use hotshot_contract_adapter::sol_types::{EspTokenV2, LightClientV3, RewardClaim, StakeTableV3};
 use surf_disco::Url;
 use tokio::time::{sleep, timeout};
 
@@ -69,8 +69,17 @@ pub struct TestRequirements {
     /// Panic if no block seen for this interval, we will panic fail relatively quickly.
     pub block_timeout: Duration,
     pub max_consecutive_blocks_without_tx: u64,
-    /// Block height at which to check rewards have been claimed (if Some)
-    pub reward_claim_deadline_block_height: Option<u64>,
+    /// If Some, wait until rewards_claimed > 0 before exiting. Value used for diagnostic logging.
+    pub first_reward_block: Option<u64>,
+    /// If Some, the test requires observing a reward claim that is provably from the new regime:
+    /// wait until LC finalizes this block, snapshot claimed_rewards at that point, then wait for
+    /// claimed_rewards to increase. This avoids exiting early on a claim made against an older
+    /// LC state (before the new reward scheme was active).
+    pub claim_after_lc_block: Option<u64>,
+    /// Whether the network under test runs an external builder. The new protocol does not use a
+    /// builder, so tests on `NEW_PROTOCOL_VERSION` set this to false to skip waiting on the
+    /// builder healthcheck and skip builder-fee balance conservation checks.
+    pub requires_builder: bool,
 }
 
 impl Default for TestRequirements {
@@ -83,7 +92,9 @@ impl Default for TestRequirements {
             // timeouts which lead to occasional drop in block times.
             block_timeout: Duration::from_secs(60),
             max_consecutive_blocks_without_tx: 10,
-            reward_claim_deadline_block_height: None,
+            first_reward_block: None,
+            claim_after_lc_block: None,
+            requires_builder: true,
         }
     }
 }
@@ -135,11 +146,11 @@ impl TestConfig {
         let load_generator_url =
             url_from_port(dotenvy::var("ESPRESSO_SUBMIT_TRANSACTIONS_PRIVATE_PORT")?)?;
 
-        let l1_provider_url = url_from_port(dotenvy::var("ESPRESSO_SEQUENCER_L1_PORT")?)?;
-        let sequencer_api_url = url_from_port(dotenvy::var("ESPRESSO_SEQUENCER1_API_PORT")?)?;
+        let l1_provider_url = url_from_port(dotenvy::var("ESPRESSO_L1_PORT")?)?;
+        let sequencer_api_url = url_from_port(dotenvy::var("ESPRESSO_NODE_1_API_PORT")?)?;
         let sequencer_clients = [
-            dotenvy::var("ESPRESSO_SEQUENCER0_API_PORT")?,
-            dotenvy::var("ESPRESSO_SEQUENCER1_API_PORT")?,
+            dotenvy::var("ESPRESSO_NODE_0_API_PORT")?,
+            dotenvy::var("ESPRESSO_NODE_1_API_PORT")?,
         ]
         .iter()
         .map(|port| url_from_port(port.clone()).unwrap())
@@ -151,9 +162,9 @@ impl TestConfig {
         let prover_url = url_from_port(dotenvy::var("ESPRESSO_PROVER_SERVICE_PORT")?)?;
 
         let light_client_address =
-            dotenvy::var("ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS")?.parse::<Address>()?;
+            dotenvy::var("ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS")?.parse::<Address>()?;
         let stake_table_address: Address =
-            dotenvy::var("ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS")?.parse()?;
+            dotenvy::var("ESPRESSO_STAKE_TABLE_PROXY_ADDRESS")?.parse()?;
 
         Ok(Self {
             load_generator_url,
@@ -179,34 +190,45 @@ impl TestConfig {
 
     /// Get the validator0 address (ACCOUNT_INDEX=20)
     pub fn validator0_address() -> Address {
-        let mnemonic = dotenvy::var("ESPRESSO_SEQUENCER_ETH_MNEMONIC")
-            .expect("ESPRESSO_SEQUENCER_ETH_MNEMONIC not set");
+        let mnemonic =
+            dotenvy::var("ESPRESSO_ETH_MNEMONIC").expect("ESPRESSO_ETH_MNEMONIC not set");
         let signer = build_signer(&mnemonic, VALIDATOR0_ACCOUNT_INDEX);
         signer.address()
     }
 }
 
 impl TestRuntime {
-    pub async fn initialize(config: TestConfig, timeout_duration: Duration) -> Result<Self> {
-        let builder_url = {
+    pub async fn initialize(config: TestConfig) -> Result<Self> {
+        let builder_address = if config.requirements.requires_builder {
             let url = url_from_port(dotenvy::var("ESPRESSO_BUILDER_SERVER_PORT")?)?;
             let url = Url::from_str(&url)?;
-            wait_for_service(url.clone(), 1000, 200).await?;
-            url.join("block_info/builderaddress")?
+            wait_for_service(
+                url.clone(),
+                Duration::from_secs(1),
+                Duration::from_secs(300),
+            )
+            .await?;
+            let builder_url = url.join("block_info/builderaddress")?;
+            get_builder_address(builder_url).await
+        } else {
+            Address::ZERO
         };
-
-        let builder_address = get_builder_address(builder_url).await;
 
         let client = SequencerClient::new(config.sequencer_api_url.clone());
 
-        let (initial_height, initial_txns) = timeout(timeout_duration, async {
+        let (initial_height, initial_txns) = timeout(Duration::from_secs(120), async {
             loop {
                 match (
                     client.get_height().await,
                     client.get_transaction_count().await,
                 ) {
                     (Ok(height), Ok(txns)) => return (height, txns),
-                    _ => {
+                    (height_res, txn_res) => {
+                        tracing::debug!(
+                            "sequencer not ready yet: height={:?} txn_count={:?}",
+                            height_res.as_ref().err(),
+                            txn_res.as_ref().err(),
+                        );
                         sleep(Duration::from_millis(500)).await;
                     },
                 }
@@ -217,7 +239,7 @@ impl TestRuntime {
 
         let provider = ProviderBuilder::new().connect_http(config.l1_endpoint.clone());
         let reward_claim_address = async {
-            let stake_table = StakeTableV2::new(config.stake_table_address, &provider);
+            let stake_table = StakeTableV3::new(config.stake_table_address, &provider);
             let token_address = stake_table.token().call().await.ok()?;
 
             let esp_token = EspTokenV2::new(token_address, &provider);
@@ -231,17 +253,52 @@ impl TestRuntime {
         }
         .await;
 
-        let mut futures: Vec<BoxFuture<Result<String>>> =
-            vec![wait_for_service(Url::from_str(&config.load_generator_url)?, 1000, 600).boxed()];
+        let mut futures: Vec<BoxFuture<Result<String>>> = Vec::new();
+        if config.requirements.requires_builder {
+            // The load generator (submit-transactions-private) depends on the builder, so it
+            // only exists when the network has a builder.
+            futures.push(
+                wait_for_service(
+                    Url::from_str(&config.load_generator_url)?,
+                    Duration::from_secs(1),
+                    Duration::from_secs(90),
+                )
+                .boxed(),
+            );
+        }
 
         for client in &config.sequencer_clients {
-            futures.push(wait_for_sequencer_client(client.clone(), 500, 30).boxed());
+            futures.push(
+                wait_for_sequencer_client(
+                    client.clone(),
+                    Duration::from_millis(500),
+                    Duration::from_secs(30),
+                )
+                .boxed(),
+            );
         }
 
         join_all(futures)
             .await
             .into_iter()
             .collect::<Result<Vec<_>>>()?;
+
+        // Wait for the LightClient proxy to be deployed before any caller
+        // (e.g. `test_state()`) reads it. The contract deployer runs
+        // independently of sequencer startup, so for tests that don't gate
+        // on a builder this can otherwise race the first read and panic
+        // with `ZeroData("finalizedState", SolTypes(Overrun))` when the
+        // call returns empty bytes.
+        timeout(Duration::from_secs(300), async {
+            loop {
+                match provider.get_code_at(config.light_client_address).await {
+                    Ok(code) if !code.is_empty() => return,
+                    _ => sleep(Duration::from_millis(500)).await,
+                }
+            }
+        })
+        .await
+        .context("timed out waiting for LightClient proxy to be deployed")?;
 
         Ok(Self {
             config,
@@ -254,25 +311,30 @@ impl TestRuntime {
 
     pub async fn from_requirements(requirements: TestRequirements) -> Result<Self> {
         let config = TestConfig::from_env(requirements)?;
-        Self::initialize(config, Duration::from_secs(30)).await
+        Self::initialize(config).await
     }
 
     /// Update the reward claim address from the contract
     /// Call this after the reward claim contract has been deployed
     pub async fn update_reward_claim_address(&mut self) -> Result<()> {
         let provider = ProviderBuilder::new().connect_http(self.config.l1_endpoint.clone());
-        let stake_table = StakeTableV2::new(self.config.stake_table_address, &provider);
+        let stake_table = StakeTableV3::new(self.config.stake_table_address, &provider);
         let token_address = stake_table.token().call().await?;
 
         let esp_token = EspTokenV2::new(token_address, &provider);
         let reward_claim_addr = esp_token.rewardClaim().call().await?;
 
-        self.reward_claim_address = if reward_claim_addr == Address::ZERO {
+        let new = if reward_claim_addr == Address::ZERO {
             None
         } else {
-            println!("Updated reward claim address: {reward_claim_addr}");
             Some(reward_claim_addr)
         };
+        if new != self.reward_claim_address {
+            if let Some(addr) = &new {
+                println!("Updated reward claim address: {addr}");
+            }
+            self.reward_claim_address = new;
+        }
 
         Ok(())
     }
@@ -299,10 +361,14 @@ impl TestRuntime {
         let block_height = client.get_height().await.ok();
         let txn_count = client.get_transaction_count().await.unwrap();
 
-        let builder_balance = client
-            .get_espresso_balance(self.builder_address, block_height)
-            .await
-            .unwrap();
+        let builder_balance = if self.builder_address == Address::ZERO {
+            FeeAmount::default()
+        } else {
+            client
+                .get_espresso_balance(self.builder_address, block_height)
+                .await
+                .unwrap()
+        };
         let recipient_balance = client
             .get_espresso_balance(self.config.recipient_address, block_height)
             .await
@@ -364,24 +430,28 @@ pub async fn get_builder_address(url: Url) -> Address {
 ///
 /// > Note: This function only waits for a single health check pass before
 /// > returning an [Ok] result.
-async fn wait_for_service(url: Url, interval: u64, timeout_duration: u64) -> Result<String> {
+async fn wait_for_service(
+    url: Url,
+    interval: Duration,
+    timeout_duration: Duration,
+) -> Result<String> {
     // utilize the correct path for the health check
     let Ok(url) = url.join("/healthcheck") else {
         return Err(anyhow!("Wait for service, could not join url: {}", url));
     };
 
-    timeout(Duration::from_secs(timeout_duration), async {
+    timeout(timeout_duration, async {
         loop {
             // Ensure that we get a response from the server
             let Ok(response) = reqwest::get(url.clone()).await else {
-                sleep(Duration::from_millis(interval)).await;
+                sleep(interval).await;
                 continue;
             };
 
             // Check the status code of the response
             if !response.status().is_success() {
                 // The server did not return a success
-                sleep(Duration::from_millis(interval)).await;
+                sleep(interval).await;
                 continue;
             }
 
@@ -400,15 +470,15 @@ async fn wait_for_service(url: Url, interval: u64, timeout_duration: u64) -> Res
 
 async fn wait_for_sequencer_client(
     client: SequencerClient,
-    interval: u64,
-    timeout_duration: u64,
+    interval: Duration,
+    timeout_duration: Duration,
 ) -> Result<String> {
-    timeout(Duration::from_secs(timeout_duration), async {
+    timeout(timeout_duration, async {
         loop {
             if client.get_height().await.is_ok() {
                 return Ok("sequencer ready".to_string());
             }
-            sleep(Duration::from_millis(interval)).await;
+            sleep(interval).await;
         }
     })
     .await

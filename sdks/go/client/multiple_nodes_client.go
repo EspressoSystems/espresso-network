@@ -106,7 +106,7 @@ func (c *MultipleNodesClient) getWithMajority(ctx context.Context, out any, form
 	}
 	err = json.Unmarshal(body, out)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrPermanent, err)
+		return fmt.Errorf("%w: %v", ErrEphemeral, err)
 	}
 	return nil
 }

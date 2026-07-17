@@ -26,9 +26,8 @@
 //! chain which is tabulated by this specific node and not subject to full consensus agreement, try
 //! the [node](crate::node) API.
 
-use std::{fmt::Display, path::PathBuf, time::Duration};
+use std::{path::PathBuf, time::Duration};
 
-use derive_more::From;
 use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt};
 use hotshot_types::{
     data::{Leaf, Leaf2, QuorumProposal, VidCommitment, VidCommon},
@@ -36,17 +35,18 @@ use hotshot_types::{
     traits::node_implementation::NodeType,
 };
 use serde::{Deserialize, Serialize};
-use snafu::{OptionExt, Snafu};
-use tide_disco::{api::ApiError, method::ReadState, Api, RequestError, RequestParams, StatusCode};
+use snafu::OptionExt;
+use tide_disco::{Api, RequestParams, StatusCode, api::ApiError, method::ReadState};
 use vbs::version::StaticVersionType;
 
-use crate::{api::load_api, types::HeightIndexed, Header, Payload, QueryError};
+use crate::{Header, Payload, api::load_api, types::HeightIndexed};
 
 pub(crate) mod data_source;
 mod fetch;
 pub(crate) mod query_data;
 pub use data_source::*;
 pub use fetch::Fetch;
+pub use hotshot_query_service_types::availability::Error;
 pub use query_data::*;
 
 #[derive(Debug)]
@@ -93,83 +93,6 @@ impl Default for Options {
             extensions: vec![],
             large_object_range_limit: 100,
             small_object_range_limit: 500,
-        }
-    }
-}
-
-#[derive(Clone, Debug, From, Snafu, Deserialize, Serialize)]
-#[snafu(visibility(pub))]
-pub enum Error {
-    Request {
-        source: RequestError,
-    },
-    #[snafu(display("leaf {resource} missing or not available"))]
-    #[from(ignore)]
-    FetchLeaf {
-        resource: String,
-    },
-    #[snafu(display("block {resource} missing or not available"))]
-    #[from(ignore)]
-    FetchBlock {
-        resource: String,
-    },
-    #[snafu(display("header {resource} missing or not available"))]
-    #[from(ignore)]
-    FetchHeader {
-        resource: String,
-    },
-    #[snafu(display("transaction {resource} missing or not available"))]
-    #[from(ignore)]
-    FetchTransaction {
-        resource: String,
-    },
-    #[snafu(display("transaction index {index} out of range for block {height}"))]
-    #[from(ignore)]
-    InvalidTransactionIndex {
-        height: u64,
-        index: u64,
-    },
-    #[snafu(display("request for range {from}..{until} exceeds limit {limit}"))]
-    #[from(ignore)]
-    RangeLimit {
-        from: usize,
-        until: usize,
-        limit: usize,
-    },
-    #[snafu(display("{source}"))]
-    Query {
-        source: QueryError,
-    },
-    #[snafu(display("State cert for epoch {epoch} not found"))]
-    #[from(ignore)]
-    FetchStateCert {
-        epoch: u64,
-    },
-    #[snafu(display("error {status}: {message}"))]
-    Custom {
-        message: String,
-        status: StatusCode,
-    },
-}
-
-impl Error {
-    pub fn internal<M: Display>(message: M) -> Self {
-        Self::Custom {
-            message: message.to_string(),
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-        }
-    }
-
-    pub fn status(&self) -> StatusCode {
-        match self {
-            Self::Request { .. } | Self::RangeLimit { .. } => StatusCode::BAD_REQUEST,
-            Self::FetchLeaf { .. }
-            | Self::FetchBlock { .. }
-            | Self::FetchTransaction { .. }
-            | Self::FetchHeader { .. }
-            | Self::FetchStateCert { .. } => StatusCode::NOT_FOUND,
-            Self::InvalidTransactionIndex { .. } | Self::Query { .. } => StatusCode::NOT_FOUND,
-            Self::Custom { status, .. } => *status,
         }
     }
 }
@@ -320,6 +243,36 @@ where
     })
 }
 
+async fn get_vid_common_range_handler<Types, State>(
+    req: tide_disco::RequestParams,
+    state: &State,
+    limit: usize,
+    timeout: Duration,
+) -> Result<Vec<VidCommonQueryData<Types>>, Error>
+where
+    State: 'static + Send + Sync + ReadState,
+    <State as ReadState>::State: Send + Sync + AvailabilityDataSource<Types>,
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+{
+    let from = req.integer_param("from")?;
+    let until = req.integer_param("until")?;
+    enforce_range_limit(from, until, limit)?;
+
+    let vid = state
+        .read(|state| state.get_vid_common_range(from..until).boxed())
+        .await;
+    vid.enumerate()
+        .then(|(index, fetch)| async move {
+            fetch.with_timeout(timeout).await.context(FetchBlockSnafu {
+                resource: (index + from).to_string(),
+            })
+        })
+        .try_collect::<Vec<_>>()
+        .await
+}
+
 pub fn define_api<State, Types: NodeType, Ver: StaticVersionType + 'static>(
     options: &Options,
     _: Ver,
@@ -423,6 +376,21 @@ where
                 })
                 .boxed()
         })?
+        .at("get_vid_common_range", move |req, state| {
+            get_vid_common_range_handler(req, state, small_object_range_limit, timeout)
+                .map(|r| match r {
+                    Ok(data) => data
+                        .into_iter()
+                        .map(downgrade_vid_common_query_data)
+                        .collect::<Option<Vec<_>>>()
+                        .ok_or(Error::Custom {
+                            message: "Incompatible VID version.".to_string(),
+                            status: StatusCode::BAD_REQUEST,
+                        }),
+                    Err(e) => Err(e),
+                })
+                .boxed()
+        })?
         .stream("stream_vid_common", move |req, state| {
             async move {
                 let height = req.integer_param("height")?;
@@ -446,6 +414,11 @@ where
     } else {
         api.at("get_vid_common", move |req, state| {
             get_vid_common_handler(req, state, timeout).boxed().boxed()
+        })?
+        .at("get_vid_common_range", move |req, state| {
+            get_vid_common_range_handler(req, state, small_object_range_limit, timeout)
+                .boxed()
+                .boxed()
         })?
         .stream("stream_vid_common", move |req, state| {
             async move {
@@ -734,6 +707,13 @@ where
             })
         }
         .boxed()
+    })?
+    .get("get_cert2", |req, state| {
+        async move {
+            let height: u64 = req.integer_param("height")?;
+            state.get_cert2(height).await.map_err(|err| err.into())
+        }
+        .boxed()
     })?;
     Ok(api)
 }
@@ -800,26 +780,26 @@ mod test {
     use async_lock::RwLock;
     use committable::Committable;
     use futures::future::FutureExt;
-    use hotshot_example_types::node_types::EpochsTestVersions;
+    use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::{data::Leaf2, simple_certificate::QuorumCertificate2};
-    use portpicker::pick_unused_port;
     use serde::de::DeserializeOwned;
     use surf_disco::{Client, Error as _};
     use tempfile::TempDir;
+    use test_utils::reserve_tcp_port;
     use tide_disco::App;
     use toml::toml;
 
     use super::*;
     use crate::{
-        data_source::{storage::AvailabilityStorage, ExtensibleDataSource, VersionedDataSource},
+        ApiState, Error, Header,
+        data_source::{ExtensibleDataSource, VersionedDataSource, storage::AvailabilityStorage},
         status::StatusDataSource,
         task::BackgroundTask,
         testing::{
             consensus::{MockDataSource, MockNetwork, MockSqlDataSource},
-            mocks::{mock_transaction, MockBase, MockHeader, MockPayload, MockTypes, MockVersions},
+            mocks::{MOCK_UPGRADE, MockBase, MockHeader, MockPayload, MockTypes, mock_transaction},
         },
         types::HeightIndexed,
-        ApiState, Error, Header,
     };
 
     /// Get the current ledger height and a list of non-empty leaf/block pairs.
@@ -861,7 +841,7 @@ mod test {
         // Check the consistency of every block/leaf pair.
         for i in 0..height {
             // Limit the number of blocks we validate in order to
-            // speeed up the tests.
+            // speed up the tests.
             if ![0, 1, height / 2, height - 1].contains(&i) {
                 continue;
             }
@@ -1098,6 +1078,14 @@ mod test {
 
             assert_eq!(payload_range.len() as u64, i);
 
+            let vid_common_range: Vec<VidCommonQueryData<MockTypes>> = client
+                .get(&format!("vid/common/{}/{}", 0, i))
+                .send()
+                .await
+                .unwrap();
+
+            assert_eq!(vid_common_range.len() as u64, i);
+
             let header_range: Vec<Header<MockTypes>> = client
                 .get(&format!("header/{}/{}", 0, i))
                 .send()
@@ -1111,11 +1099,11 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_api() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
         network.start().await;
 
         // Start the web server.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         let options = Options {
             small_object_range_limit: 500,
@@ -1206,7 +1194,7 @@ mod test {
         // Check the consistency of every block/leaf pair.
         for i in 0..height {
             // Limit the number of blocks we validate in order to
-            // speeed up the tests.
+            // speed up the tests.
             if ![0, 1, height / 2, height - 1].contains(&i) {
                 continue;
             }
@@ -1442,6 +1430,14 @@ mod test {
 
             assert_eq!(payload_range.len() as u64, i);
 
+            let vid_common_range: Vec<ADVZCommonQueryData<MockTypes>> = client
+                .get(&format!("vid/common/{}/{}", 0, i))
+                .send()
+                .await
+                .unwrap();
+
+            assert_eq!(vid_common_range.len() as u64, i);
+
             let header_range: Vec<Header<MockTypes>> = client
                 .get(&format!("header/{}/{}", 0, i))
                 .send()
@@ -1455,12 +1451,12 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_api_epochs() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, EpochsTestVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
         let epoch_height = network.epoch_height();
         network.start().await;
 
         // Start the web server.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",
@@ -1509,11 +1505,11 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_old_api() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
         network.start().await;
 
         // Start the web server.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
 
         let options = Options {
             small_object_range_limit: 500,
@@ -1603,8 +1599,6 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_extensions() {
-        use hotshot_example_types::node_types::TestVersions;
-
         let dir = TempDir::with_prefix("test_availability_extensions").unwrap();
         let data_source = ExtensibleDataSource::new(
             MockDataSource::create(dir.path(), Default::default())
@@ -1614,12 +1608,18 @@ mod test {
         );
 
         // mock up some consensus data.
-        let leaf =
-            Leaf2::<MockTypes>::genesis::<MockVersions>(&Default::default(), &Default::default())
-                .await;
-        let qc =
-            QuorumCertificate2::genesis::<TestVersions>(&Default::default(), &Default::default())
-                .await;
+        let leaf = Leaf2::<MockTypes>::genesis(
+            &Default::default(),
+            &Default::default(),
+            MOCK_UPGRADE.base,
+        )
+        .await;
+        let qc = QuorumCertificate2::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test,
+        )
+        .await;
         let leaf = LeafQueryData::new(leaf, qc).unwrap();
         let block = BlockQueryData::new(leaf.header().clone(), MockPayload::genesis());
         data_source
@@ -1674,7 +1674,7 @@ mod test {
         let mut app = App::<_, Error>::with_state(RwLock::new(data_source));
         app.register_module("availability", api).unwrap();
 
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let _server = BackgroundTask::spawn(
             "server",
             app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
@@ -1709,11 +1709,11 @@ mod test {
         let small_object_range_limit = 3;
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
         network.start().await;
 
         // Start the web server.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",
@@ -1799,11 +1799,11 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_header_endpoint() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockSqlDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockSqlDataSource>::init().await;
         network.start().await;
 
         // Start the web server.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",
@@ -1839,11 +1839,11 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_leaf_only_ds() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockSqlDataSource, MockVersions>::init_with_leaf_ds().await;
+        let mut network = MockNetwork::<MockSqlDataSource>::init_with_leaf_ds().await;
         network.start().await;
 
         // Start the web server.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",

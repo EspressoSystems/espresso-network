@@ -1,42 +1,54 @@
-use std::{
-    collections::{BTreeMap, HashSet},
-    path::Path,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
 
 use alloy::{
     network::EthereumWallet,
     node_bindings::Anvil,
     primitives::{Address, U256},
     providers::{
+        Provider, ProviderBuilder, RootProvider,
         ext::AnvilApi,
         fillers::{BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller},
         layers::AnvilProvider,
-        Provider, ProviderBuilder, RootProvider,
     },
     signers::local::LocalSigner,
 };
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use async_lock::RwLock;
 use cdn_broker::{
-    reexports::{crypto::signature::KeyPair, def::hook::NoMessageHook},
     Broker, Config as BrokerConfig,
+    reexports::{crypto::signature::KeyPair, def::hook::NoMessageHook},
 };
 use cdn_marshal::{Config as MarshalConfig, Marshal};
 use clap::Parser;
 use committable::{Commitment, Committable};
 use derivative::Derivative;
 use espresso_contract_deployer::{
-    builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table, Contract,
-    Contracts,
+    Contract, Contracts, builder::DeployerArgsBuilder,
+    network_config::light_client_genesis_from_stake_table,
+};
+use espresso_node::{
+    SequencerApiVersion,
+    api::{
+        self, data_source::testing::TestableSequencerDataSource, options::Query,
+        test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
+    },
+    context::SequencerContext,
+    genesis::{Genesis, L1Finalized, StakeTableConfig},
+    keyset::KeySet,
+    network::{
+        self,
+        cdn::{TestingDef, WrappedSignatureKey},
+    },
+    options::{Modules, Options, PublicNodeConfig},
+    run::init_with_storage,
+    testing::{staking_priv_keys, wait_for_decide_on_handle},
 };
 use espresso_types::{
-    eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig, EpochVersion,
-    FeeAccount, L1Client, Leaf2, PrivKey, PubKey, SeqTypes, SequencerVersions, Transaction, V0_0,
+    FeeAccount, L1Client, Leaf2, PrivKey, PubKey, SeqTypes, Transaction,
+    eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig,
 };
 use futures::{
-    future::{join_all, try_join_all, BoxFuture, FutureExt},
+    future::{BoxFuture, FutureExt, join_all, try_join_all},
     stream::{BoxStream, StreamExt},
 };
 use hotshot::traits::implementations::derive_libp2p_peer_id;
@@ -47,44 +59,62 @@ use hotshot_testing::{
     test_builder::BuilderChange,
 };
 use hotshot_types::{
+    PeerConfig,
     data::EpochNumber,
-    event::{Event, EventType},
+    event::{Event, EventType, LeafInfo},
     light_client::StateKeyPair,
     network::{Libp2pConfig, NetworkConfig},
+    new_protocol::CoordinatorEvent,
     signature_key::{BLSPrivKey, BLSPubKey},
-    traits::{node_implementation::ConsensusTime, signature_key::SignatureKey},
-    PeerConfig,
+    simple_vote::HasEpoch,
+    traits::signature_key::SignatureKey,
+    x25519,
 };
 use itertools::Itertools;
-use portpicker::pick_unused_port;
-use sequencer::{
-    api::{
-        self, data_source::testing::TestableSequencerDataSource, options::Query,
-        test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
-    },
-    context::SequencerContext,
-    genesis::{Genesis, L1Finalized, StakeTableConfig},
-    network::{
-        self,
-        cdn::{TestingDef, WrappedSignatureKey},
-    },
-    options::{Modules, Options},
-    run::init_with_storage,
-    testing::{staking_priv_keys, wait_for_decide_on_handle},
-    SequencerApiVersion,
-};
-use staking_cli::demo::{DelegationConfig, StakingTransactions};
-use surf_disco::{error::ClientError, Url};
+use staking_cli::demo::{DelegationConfig, StakingKeySet, StakingTransactions};
+use surf_disco::{Url, error::ClientError};
+use tagged_base64::TaggedBase64;
 use tempfile::TempDir;
+use test_utils::reserve_tcp_port;
 use tokio::{
-    task::{spawn, JoinHandle},
+    task::{JoinHandle, spawn},
     time::{sleep, timeout},
 };
 use vbs::version::Version;
 use vec1::vec1;
-type MockSequencerVersions = SequencerVersions<EpochVersion, V0_0>;
-async fn test_restart_helper(network: (usize, usize), restart: (usize, usize), cdn: bool) {
-    let mut network = TestNetwork::new(network.0, network.1, cdn).await;
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION};
+
+/// Extract the decided leaf chain from a consensus event, or `None` if it isn't a decide.
+fn decided_leaves(event: &CoordinatorEvent<SeqTypes>) -> Option<&[LeafInfo<SeqTypes>]> {
+    match event {
+        CoordinatorEvent::LegacyEvent(Event {
+            event: EventType::Decide { leaf_chain, .. },
+            ..
+        }) => Some(leaf_chain),
+        CoordinatorEvent::NewDecide { leaf_infos, .. } => Some(leaf_infos),
+        _ => None,
+    }
+}
+
+/// Epoch of the certificate committing a decide event, or `None` if it isn't a decide.
+fn decided_epoch(event: &CoordinatorEvent<SeqTypes>) -> Option<EpochNumber> {
+    match event {
+        CoordinatorEvent::LegacyEvent(Event {
+            event: EventType::Decide { committing_qc, .. },
+            ..
+        }) => committing_qc.epoch(),
+        CoordinatorEvent::NewDecide { cert1, .. } => cert1.epoch(),
+        _ => None,
+    }
+}
+
+async fn test_restart_helper(
+    network: (usize, usize),
+    restart: (usize, usize),
+    cdn: bool,
+    version: Version,
+) {
+    let mut network = TestNetwork::new(network.0, network.1, cdn, version).await;
 
     // Let the network get going.
     network.check_progress().await;
@@ -96,110 +126,154 @@ async fn test_restart_helper(network: (usize, usize), restart: (usize, usize), c
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_1_da_with_cdn() {
-    test_restart_helper((2, 3), (1, 0), true).await;
+    test_restart_helper((2, 3), (1, 0), true, EPOCH_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_1_regular_with_cdn() {
-    test_restart_helper((2, 3), (0, 1), true).await;
+    test_restart_helper((2, 3), (0, 1), true, EPOCH_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_f_with_cdn() {
-    test_restart_helper((4, 6), (1, 2), true).await;
+    test_restart_helper((4, 6), (1, 2), true, EPOCH_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_f_minus_1_with_cdn() {
-    test_restart_helper((4, 6), (1, 1), true).await;
+    test_restart_helper((4, 6), (1, 1), true, EPOCH_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_f_plus_1_with_cdn() {
-    test_restart_helper((4, 6), (1, 3), true).await;
+    test_restart_helper((4, 6), (1, 3), true, EPOCH_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_2f_with_cdn() {
-    test_restart_helper((4, 6), (1, 5), true).await;
+    test_restart_helper((4, 6), (1, 5), true, EPOCH_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_2f_minus_1_with_cdn() {
-    test_restart_helper((4, 6), (1, 4), true).await;
+    test_restart_helper((4, 6), (1, 4), true, EPOCH_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_2f_plus_1_with_cdn() {
-    test_restart_helper((4, 6), (2, 5), true).await;
+    test_restart_helper((4, 6), (2, 5), true, EPOCH_VERSION).await;
 }
 
 #[ignore]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_all_with_cdn() {
-    test_restart_helper((2, 8), (2, 8), true).await;
+    test_restart_helper((2, 8), (2, 8), true, EPOCH_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_all_da_with_cdn() {
-    test_restart_helper((2, 8), (2, 0), true).await;
+    test_restart_helper((2, 8), (2, 0), true, EPOCH_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_1_da_without_cdn() {
-    test_restart_helper((2, 3), (1, 0), false).await;
+    test_restart_helper((2, 3), (1, 0), false, EPOCH_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_1_regular_without_cdn() {
-    test_restart_helper((2, 3), (0, 1), false).await;
+    test_restart_helper((2, 3), (0, 1), false, EPOCH_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_f_without_cdn() {
-    test_restart_helper((4, 6), (1, 2), false).await;
+    test_restart_helper((4, 6), (1, 2), false, EPOCH_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_f_minus_1_without_cdn() {
-    test_restart_helper((4, 6), (1, 1), false).await;
+    test_restart_helper((4, 6), (1, 1), false, EPOCH_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_f_plus_1_without_cdn() {
-    test_restart_helper((4, 6), (1, 3), false).await;
+    test_restart_helper((4, 6), (1, 3), false, EPOCH_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_2f_without_cdn() {
-    test_restart_helper((4, 6), (1, 5), false).await;
+    test_restart_helper((4, 6), (1, 5), false, EPOCH_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_2f_minus_1_without_cdn() {
-    test_restart_helper((4, 6), (1, 4), false).await;
+    test_restart_helper((4, 6), (1, 4), false, EPOCH_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_2f_plus_1_without_cdn() {
-    test_restart_helper((4, 6), (2, 5), false).await;
+    test_restart_helper((4, 6), (2, 5), false, EPOCH_VERSION).await;
 }
 
 #[ignore]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_all_without_cdn() {
-    test_restart_helper((2, 8), (2, 8), false).await;
+    test_restart_helper((2, 8), (2, 8), false, EPOCH_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_all_da_without_cdn() {
-    test_restart_helper((2, 8), (2, 0), false).await;
+    test_restart_helper((2, 8), (2, 0), false, EPOCH_VERSION).await;
+}
+
+// New protocol (V6) restart tests. These run the network based on
+// `NEW_PROTOCOL_VERSION` from genesis
+// The CDN is not used as cliquenet replaces CDN + libp2p
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn slow_test_restart_new_protocol_1_of_5() {
+    test_restart_helper((2, 3), (1, 0), false, NEW_PROTOCOL_VERSION).await;
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn slow_test_restart_new_protocol_2_of_10() {
+    test_restart_helper((4, 6), (1, 1), false, NEW_PROTOCOL_VERSION).await;
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn slow_test_restart_new_protocol_3_of_10() {
+    test_restart_helper((4, 6), (1, 2), false, NEW_PROTOCOL_VERSION).await;
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn slow_test_restart_new_protocol_4_of_10() {
+    test_restart_helper((4, 6), (1, 3), false, NEW_PROTOCOL_VERSION).await;
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn slow_test_restart_new_protocol_5_of_10() {
+    test_restart_helper((4, 6), (1, 4), false, NEW_PROTOCOL_VERSION).await;
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn slow_test_restart_new_protocol_6_of_10() {
+    test_restart_helper((4, 6), (1, 5), false, NEW_PROTOCOL_VERSION).await;
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn slow_test_restart_new_protocol_7_of_10() {
+    test_restart_helper((4, 6), (2, 5), false, NEW_PROTOCOL_VERSION).await;
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn slow_test_restart_new_protocol_10_of_10() {
+    test_restart_helper((2, 8), (2, 8), false, NEW_PROTOCOL_VERSION).await;
 }
 
 #[ignore]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_staggered() {
-    let mut network = TestNetwork::new(4, 6, false).await;
+    let mut network = TestNetwork::new(4, 6, false, EPOCH_VERSION).await;
 
     // Check that the builder works at the beginning.
     network.check_builder().await;
@@ -236,20 +310,31 @@ struct NetworkParams<'a> {
 struct NodeParams {
     api_port: u16,
     libp2p_port: u16,
+    cliquenet_port: u16,
     staking_key: PrivKey,
     state_key: StateKeyPair,
+    x25519_key: x25519::Keypair,
     is_da: bool,
 }
 
 impl NodeParams {
-    fn new(ports: &mut PortPicker, i: u64, is_da: bool) -> Self {
-        Self {
-            api_port: ports.pick(),
-            libp2p_port: ports.pick(),
+    fn new(i: u64, is_da: bool) -> anyhow::Result<Self> {
+        Ok(Self {
+            api_port: reserve_tcp_port()?,
+            libp2p_port: reserve_tcp_port()?,
+            cliquenet_port: reserve_tcp_port()?,
             staking_key: PubKey::generated_from_seed_indexed([0; 32], i).1,
             state_key: StateKeyPair::generate_from_seed_indexed([0; 32], i),
+            x25519_key: x25519::Keypair::generated_from_seed_indexed([0; 32], i)?,
             is_da,
-        }
+        })
+    }
+
+    /// The address other nodes use to reach this node's cliquenet coordinator
+    /// network. Must match `--cliquenet-advertise-address` and the connect info
+    /// registered on-chain so the new protocol can dial peers.
+    fn cliquenet_advertise_addr(&self) -> String {
+        format!("127.0.0.1:{}", self.cliquenet_port)
     }
 }
 
@@ -257,11 +342,7 @@ impl NodeParams {
 struct TestNode<S: TestableSequencerDataSource> {
     storage: S::Storage,
     context: Option<
-        SequencerContext<
-            network::Production,
-            <S::Options as PersistenceOptions>::Persistence,
-            MockSequencerVersions,
-        >,
+        SequencerContext<network::Production, <S::Options as PersistenceOptions>::Persistence>,
     >,
     modules: Modules,
     opt: Options,
@@ -285,6 +366,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             query: Some(Default::default()),
             storage_fs: opt.storage_fs,
             storage_sql: opt.storage_sql,
+            light_client: Some(Default::default()),
             ..Default::default()
         };
         if node.is_da {
@@ -294,6 +376,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                     .iter()
                     .map(|port| format!("http://127.0.0.1:{port}").parse().unwrap())
                     .collect(),
+                ..Default::default()
             });
         }
 
@@ -312,6 +395,10 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                 .to_tagged_base64()
                 .expect("valid tagged-base64")
                 .to_string(),
+            "--private-x25519-key",
+            &TaggedBase64::try_from(node.x25519_key.secret_key())
+                .expect("valid key")
+                .to_string(),
             "--genesis-file",
             &network.genesis_file.display().to_string(),
             "--orchestrator-url",
@@ -320,6 +407,10 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             &format!("0.0.0.0:{}", node.libp2p_port),
             "--libp2p-advertise-address",
             &format!("127.0.0.1:{}", node.libp2p_port),
+            "--cliquenet-bind-address",
+            &format!("0.0.0.0:{}", node.cliquenet_port),
+            "--cliquenet-advertise-address",
+            &node.cliquenet_advertise_addr(),
             "--cdn-endpoint",
             &format!("127.0.0.1:{}", network.cdn_port),
             "--state-peers",
@@ -332,6 +423,8 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             network.l1_provider,
             "--l1-polling-interval",
             "1s",
+            "--bootstrap-epoch-catchup-timeout",
+            "2s",
         ]);
         opt.is_da = node.is_da;
         Self {
@@ -368,14 +461,14 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             // with a backoff.
             let mut retries = 5;
             let mut delay = Duration::from_secs(1);
-            let genesis = Genesis::from_file(&self.opt.genesis_file).unwrap();
+            let genesis = Genesis::load(&self.opt.genesis_file).await.unwrap();
             let ctx = loop {
                 match init_with_storage(
                     genesis.clone(),
                     self.modules.clone(),
                     self.opt.clone(),
                     S::persistence_options(&self.storage),
-                    MockSequencerVersions::new(),
+                    PublicNodeConfig::new(&self.opt, &self.modules, &genesis),
                 )
                 .await
                 {
@@ -400,9 +493,9 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         .boxed()
     }
 
-    async fn event_stream(&self) -> Option<BoxStream<'_, Event<SeqTypes>>> {
+    async fn event_stream(&self) -> Option<BoxStream<'_, CoordinatorEvent<SeqTypes>>> {
         if let Some(ctx) = &self.context {
-            Some(ctx.event_stream().await.boxed())
+            Some(ctx.event_stream().boxed())
         } else {
             None
         }
@@ -424,7 +517,8 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             let node_id = context.node_id();
             let next_view_timeout = {
                 context
-                    .consensus()
+                    .consensus_handle()
+                    .legacy_consensus()
                     .read()
                     .await
                     .hotshot
@@ -452,7 +546,8 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
 
         let num_nodes = {
             context
-                .consensus()
+                .consensus_handle()
+                .legacy_consensus()
                 .read()
                 .await
                 .hotshot
@@ -463,10 +558,11 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         tracing::info!(node_id, num_nodes, "waiting for progress from node");
 
         // Wait for a block proposed by this node. This proves that the node is tracking consensus
-        // (getting Decide events) and participating (able to propose).
-        let mut events = context.event_stream().await;
+        // (getting Decide events) and participating (able to propose). Works for both legacy and
+        // new-protocol (V6) decides.
+        let mut events = context.event_stream();
         while let Some(event) = events.next().await {
-            let EventType::Decide { leaf_chain, .. } = event.event else {
+            let Some(leaf_chain) = decided_leaves(&event) else {
                 continue;
             };
 
@@ -502,12 +598,12 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         let node_id = context.node_id();
         tracing::info!(node_id, "verifying state of node");
 
-        let mut events = context.event_stream().await;
+        let mut events = context.event_stream();
         let mut collected_leaves = 0;
         let mut state_write = self.reference_state.write().await;
 
         while let Some(event) = events.next().await {
-            let EventType::Decide { leaf_chain, .. } = event.event else {
+            let Some(leaf_chain) = decided_leaves(&event) else {
                 continue;
             };
 
@@ -535,7 +631,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
 
         // Configure the builder to shut down in 50 views, so we don't leak resources or ports.
         let ctx = self.context.as_ref().unwrap();
-        let down_view = ctx.consensus().read().await.cur_view().await + 50;
+        let down_view = ctx.consensus_handle().current_view().await + 50;
 
         // Start a builder.
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
@@ -548,7 +644,12 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                 .collect(),
         )
         .await;
-        task.start(Box::new(ctx.event_stream().await));
+        task.start(Box::new(ctx.event_stream().filter_map(|event| {
+            futures::future::ready(match event {
+                CoordinatorEvent::LegacyEvent(e) => Some(e),
+                _ => None,
+            })
+        })));
 
         // Wait for the API to start serving.
         let client = surf_disco::Client::<ClientError, SequencerApiVersion>::new(url);
@@ -558,7 +659,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         );
 
         // Submit a transaction and wait for it to be sequenced.
-        let mut events = ctx.event_stream().await;
+        let mut events = ctx.event_stream();
         let tx = Transaction::random(&mut rand::thread_rng());
         ctx.submit_transaction(tx.clone()).await.unwrap();
         let (block, _) = timeout(
@@ -570,7 +671,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         tracing::info!(block, "transaction sequenced");
 
         // Wait until the builder is cleaned up.
-        while ctx.consensus().read().await.cur_view().await <= down_view {
+        while ctx.consensus_handle().current_view().await <= down_view {
             sleep(Duration::from_secs(1)).await;
         }
     }
@@ -585,18 +686,15 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
 
         let node_id = context.node_id();
         tracing::info!(node_id, "waiting for epoch: {epoch:?}");
-        let mut events = context.event_stream().await;
+        let mut events = context.event_stream();
 
-        let timeout_duration = Duration::from_secs(60);
+        let timeout_duration = Duration::from_secs(240);
         timeout(timeout_duration, async {
             while let Some(event) = events.next().await {
-                let EventType::Decide {
-                    committing_qc: qc, ..
-                } = event.event
-                else {
+                let Some(decided_epoch) = decided_epoch(&event) else {
                     continue;
                 };
-                if qc.epoch() >= Some(epoch) {
+                if Some(decided_epoch) >= Some(epoch) {
                     tracing::info!(node_id, "reached epoch: {epoch:?}");
                     break;
                 }
@@ -646,9 +744,7 @@ impl Drop for TestNetwork {
 }
 
 impl TestNetwork {
-    async fn new(da_nodes: usize, regular_nodes: usize, cdn: bool) -> Self {
-        let mut ports = PortPicker::default();
-
+    async fn new(da_nodes: usize, regular_nodes: usize, cdn: bool, version: Version) -> Self {
         let tmp = TempDir::new().unwrap();
         let genesis_file_path = tmp.path().join("genesis.toml");
 
@@ -661,28 +757,36 @@ impl TestNetwork {
             l1_finalized: L1Finalized::Number { number: 20 },
             header: Default::default(),
             upgrades: Default::default(),
-            base_version: Version { major: 0, minor: 3 },
-            upgrade_version: Version { major: 0, minor: 3 },
+            // Run the network at `version` from genesis. For the new protocol
+            // (V6) this routes consensus through the cliquenet coordinator; for
+            // that to work each node's cliquenet connect info must be registered
+            // on-chain (see `deploy`) and advertised via the node CLI.
+            base_version: version,
+            upgrade_version: version,
             epoch_height: Some(15),
-            drb_difficulty: None,
+            // From V0_4 (DRB_AND_HEADER_UPGRADE_VERSION) on, genesis validation
+            // requires the DRB difficulties to be set. Keep them unset for older
+            // versions to preserve the existing tests' behavior.
+            drb_difficulty: (version >= DRB_AND_HEADER_UPGRADE_VERSION).then_some(10),
             epoch_start_block: Some(1),
             // TODO we apparently have two `capacity` configurations
             stake_table_capacity: Some(STAKE_TABLE_CAPACITY_FOR_TEST),
-            drb_upgrade_difficulty: None,
+            drb_upgrade_difficulty: (version >= DRB_AND_HEADER_UPGRADE_VERSION).then_some(20),
             // Start with a funded account, so we can test catchup after restart.
             accounts: [(builder_account(), 1000000000.into())]
                 .into_iter()
                 .collect(),
-            genesis_version: Version { major: 0, minor: 3 },
+            genesis_version: version,
             da_committees: None,
         };
 
         let node_params = (0..da_nodes + regular_nodes)
-            .map(|i| NodeParams::new(&mut ports, i as u64, i < da_nodes))
-            .collect::<Vec<_>>();
+            .map(|i| NodeParams::new(i as u64, i < da_nodes))
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
 
-        let orchestrator_port = ports.pick();
-        let builder_port = ports.pick();
+        let orchestrator_port = reserve_tcp_port().unwrap();
+        let builder_port = reserve_tcp_port().unwrap();
         let orchestrator_task = Some(start_orchestrator(
             orchestrator_port,
             &node_params,
@@ -690,9 +794,9 @@ impl TestNetwork {
         ));
 
         let cdn_dir = tmp.path().join("cdn");
-        let cdn_port = ports.pick();
+        let cdn_port = reserve_tcp_port().unwrap();
         let broker_task = if cdn {
-            Some(start_broker(&mut ports, &cdn_dir).await)
+            Some(start_broker(&cdn_dir).await)
         } else {
             None
         };
@@ -702,7 +806,7 @@ impl TestNetwork {
             None
         };
 
-        let anvil_port = ports.pick();
+        let anvil_port = reserve_tcp_port().unwrap();
         let anvil = Anvil::new()
             .args(["--slots-in-an-epoch", "1"])
             .port(anvil_port)
@@ -749,7 +853,7 @@ impl TestNetwork {
         };
 
         // Deploy stake contracts and delegate.
-        let stake_table_address = network.deploy(&genesis).await.unwrap();
+        let stake_table_address = network.deploy(&genesis, &node_params).await.unwrap();
 
         // Add contract address to `ChainConfig`.
         let chain_config = ChainConfig {
@@ -791,8 +895,12 @@ impl TestNetwork {
     }
 
     /// Deploy stake contracts and delegate.
-    async fn deploy(&self, genesis: &Genesis) -> anyhow::Result<Address> {
-        let stake_table_version = StakeTableContractVersion::V2;
+    async fn deploy(
+        &self,
+        genesis: &Genesis,
+        node_params: &[NodeParams],
+    ) -> anyhow::Result<Address> {
+        let stake_table_version = StakeTableContractVersion::V3;
         let delegation_config = DelegationConfig::EqualAmounts;
 
         let anvil_instance = &self.anvil.anvil();
@@ -813,20 +921,39 @@ impl TestNetwork {
             .iter()
             .chain(self.regular_nodes.iter())
             .map(|node| {
-                let keys = node.opt.private_keys().unwrap();
-                (keys.0, StateKeyPair::from_sign_key(keys.1))
+                let keys = KeySet::try_from(node.opt.key_set.clone()).unwrap();
+                (keys.staking, StateKeyPair::from_sign_key(keys.state))
             })
             .collect();
 
         let (bls, state): (Vec<BLSPrivKey>, Vec<StateKeyPair>) =
             staking_keys.clone().into_iter().unzip();
-        let staking_priv_keys = staking_priv_keys(&bls, &state, staking_keys.len());
+        // Start from the base staking sets (eth signer / BLS / state keys), then
+        // override each node's cliquenet connect info with the *actual* x25519
+        // key and advertise address the node process binds. Registering the real
+        // values on-chain is what lets the new protocol's coordinator resolve and
+        // dial peers; the `&[]` default would register placeholder addresses that
+        // don't match any running node.
+        let staking_priv_keys: Vec<StakingKeySet> =
+            staking_priv_keys(&bls, &state, &[], staking_keys.len())
+                .into_iter()
+                .zip(node_params)
+                .map(|(mut key_set, node)| {
+                    key_set.x25519 = node.x25519_key.clone();
+                    key_set.p2p_addr = node
+                        .cliquenet_advertise_addr()
+                        .parse()
+                        .expect("valid cliquenet advertise address");
+                    key_set
+                })
+                .collect();
 
         let hss_staking: Vec<PeerConfig<SeqTypes>> = staking_keys
             .iter()
             .map(|(bls, state)| PeerConfig {
                 stake_table_entry: BLSPubKey::from_private(bls).stake_table_entry(U256::from(1)),
                 state_ver_key: state.ver_key(),
+                connect_info: None,
             })
             .collect();
 
@@ -862,7 +989,8 @@ impl TestNetwork {
 
         match stake_table_version {
             StakeTableContractVersion::V1 => args.deploy_to_stake_table_v1(&mut contracts).await,
-            StakeTableContractVersion::V2 => args.deploy_all(&mut contracts).await,
+            StakeTableContractVersion::V2 => args.deploy_to_stake_table_v2(&mut contracts).await,
+            StakeTableContractVersion::V3 => args.deploy_to_stake_table_v3(&mut contracts).await,
         }
         .context("failed to deploy contracts")?;
 
@@ -1009,7 +1137,7 @@ impl TestNetwork {
                     .next()
                     .await
                     .expect("event stream terminated unexpectedly");
-                let EventType::Decide { leaf_chain, .. } = event.event else {
+                let Some(leaf_chain) = decided_leaves(&event) else {
                     continue;
                 };
                 tracing::info!(?leaf_chain, "got decide, chain is progressing");
@@ -1080,7 +1208,7 @@ impl TestNetwork {
                             .next()
                             .await
                             .expect("event stream terminated unexpectedly");
-                        let EventType::Decide { leaf_chain, .. } = event.event else {
+                        let Some(leaf_chain) = decided_leaves(&event) else {
                             continue;
                         };
                         tracing::info!(?leaf_chain, "got decide, chain is progressing");
@@ -1176,10 +1304,10 @@ fn start_orchestrator(port: u16, nodes: &[NodeParams], builder_port: u16) -> Joi
     })
 }
 
-async fn start_broker(ports: &mut PortPicker, dir: &Path) -> JoinHandle<()> {
+async fn start_broker(dir: &Path) -> JoinHandle<()> {
     let (public_key, private_key) = PubKey::generated_from_seed_indexed([0; 32], 1337);
-    let public_port = ports.pick();
-    let private_port = ports.pick();
+    let public_port = reserve_tcp_port().unwrap();
+    let private_port = reserve_tcp_port().unwrap();
     let broker_config: BrokerConfig<TestingDef<SeqTypes>> = BrokerConfig {
         public_advertise_endpoint: format!("127.0.0.1:{public_port}"),
         public_bind_endpoint: format!("127.0.0.1:{public_port}"),
@@ -1230,38 +1358,6 @@ async fn start_marshal(dir: &Path, port: u16) -> JoinHandle<()> {
             Err(err) => tracing::error!("marshal failed: {err:#}"),
         }
     })
-}
-
-/// Allocator for unused ports.
-///
-/// While portpicker is able to pick ports that are currently unused by the OS, its allocation is
-/// random, and it may return the same port twice if that port is still unused by the OS the second
-/// time. This test suite allocates many ports, and it is often convenient to allocate many in a
-/// batch, before starting the services that listen on them, so that the first port selected is not
-/// "in use" when we select later ports in the same batch.
-///
-/// This object keeps track not only of ports in use by the OS, but also ports it has already given
-/// out, for which there may not yet be any listener. Thus, it is safe to use this to allocate many
-/// ports at once, without a collision.
-#[derive(Debug, Default)]
-struct PortPicker {
-    allocated: HashSet<u16>,
-}
-
-impl PortPicker {
-    fn pick(&mut self) -> u16 {
-        loop {
-            let port = pick_unused_port().unwrap();
-            if self.allocated.insert(port) {
-                break port;
-            }
-            tracing::warn!(
-                port,
-                "picked port which is already allocated, will try again. If this error persists, \
-                 try reducing the number of ports being used."
-            );
-        }
-    }
 }
 
 fn builder_key_pair() -> EthKeyPair {

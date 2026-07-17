@@ -1,45 +1,72 @@
 use alloy::{
     eips::BlockId,
     network::EthereumWallet,
-    primitives::{utils::parse_ether, Address, U256},
-    signers::local::{coins_bip39::English, MnemonicBuilder, PrivateKeySigner},
+    primitives::{Address, U256, utils::parse_ether},
+    signers::local::{MnemonicBuilder, PrivateKeySigner, coins_bip39::English},
 };
-use anyhow::{bail, Result};
-use clap::{ArgAction, Args as ClapArgs, Parser, Subcommand};
+use anyhow::Result;
+use clap::{ArgAction, Parser, Subcommand};
 use clap_serde_derive::ClapSerde;
-use demo::DelegationConfig;
 use espresso_contract_deployer::provider::connect_ledger;
-pub(crate) use hotshot_types::{light_client::StateSignKey, signature_key::BLSPrivKey};
+use espresso_utils::logging;
+pub(crate) use hotshot_types::{
+    addr::NetAddr,
+    light_client::StateSignKey,
+    signature_key::{BLSPrivKey, BLSPubKey},
+    x25519,
+};
 pub(crate) use jf_signature::bls_over_bn254::KeyPair as BLSKeyPair;
-use metadata::MetadataUri;
-use parse::Commission;
-use sequencer_utils::logging;
+use metadata::MetadataUriArgs;
 use serde::{Deserialize, Serialize};
 use signature::OutputArgs;
+use thiserror::Error;
 use url::Url;
 
 pub(crate) mod claim;
 mod cli;
+pub(crate) mod concurrent;
 pub(crate) mod delegation;
 /// Used by sequencer, espresso-dev-node, staking-ui-service tests.
 pub mod demo;
 pub(crate) mod info;
 pub(crate) mod l1;
 pub(crate) mod metadata;
+// TODO: Replace with imports from staking-ui-service once version compatibility is resolved
+pub(crate) mod metadata_types;
+// TODO: Replace with imports from staking-ui-service once version compatibility is resolved
+pub(crate) mod openmetrics;
 pub(crate) mod output;
 pub(crate) mod parse;
 pub(crate) mod receipt;
-/// Used by sequencer tests (fetch_commission, update_commission).
-pub mod registration;
-/// Used by staking-cli integration tests (NodeSignatures).
-pub mod signature;
+pub(crate) mod registration;
+pub(crate) mod signature;
 pub(crate) mod transaction;
+pub(crate) mod tx_log;
 
 /// Used by staking-cli integration tests.
 #[cfg(feature = "testing")]
 pub mod deploy;
 
 pub use cli::run;
+// Used by staking-cli integration tests.
+pub use metadata::fetch_metadata;
+// Used by staking-cli integration tests.
+pub use parse::Commission;
+// Used by sequencer tests.
+pub use registration::{fetch_commission, update_commission, update_network_config};
+// Used by staking-cli integration tests.
+pub use signature::NodeSignatures;
+// Used by staking-cli integration tests.
+pub use transaction::Transaction;
+// Used by staking-cli integration tests.
+pub use tx_log::TxLog;
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub(crate) enum Network {
+    Mainnet,
+    Decaf,
+    Local,
+}
 
 /// Used by staking-ui-service, sequencer tests, staking-cli integration tests.
 pub const DEV_MNEMONIC: &str = "test test test test test test test test test test test junk";
@@ -49,12 +76,13 @@ pub const DEV_MNEMONIC: &str = "test test test test test test test test test tes
 pub const DEV_PRIVATE_KEY: &str =
     "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 
+/// Mnemonic account index where demo validators start (indices 0-19 reserved for other uses).
+pub const DEMO_VALIDATOR_START_INDEX: u32 = 20;
+
 /// CLI to interact with the Espresso stake table contract.
-///
-/// Used by staking-cli integration tests.
 #[derive(ClapSerde, Clone, Debug, Deserialize, Serialize)]
-#[command(version, about, long_about = None)]
-pub struct Config {
+#[command(version, long_version = espresso_utils::build_info!().clap_version(), about, long_about = None)]
+pub(crate) struct Config {
     /// L1 Ethereum RPC.
     #[clap(long, env = "L1_PROVIDER")]
     #[default(Url::parse("http://localhost:8545").unwrap())]
@@ -63,7 +91,7 @@ pub struct Config {
     /// [DEPRECATED] Deployed ESP token contract address.
     ///
     /// [DEPRECATED] This is fetched from the stake table contract now.
-    #[clap(long, env = "ESP_TOKEN_ADDRESS")]
+    #[clap(long, env = "ESP_TOKEN_CONTRACT_ADDRESS")]
     pub token_address: Option<Address>,
 
     /// Deployed stake table contract address.
@@ -75,6 +103,8 @@ pub struct Config {
     pub espresso_url: Option<Url>,
 
     #[clap(flatten)]
+    #[serde(default)]
+    #[clap_serde]
     pub signer: SignerConfig,
 
     /// Export calldata for multisig wallets instead of sending transaction.
@@ -111,13 +141,13 @@ pub struct Config {
 }
 
 #[derive(ClapSerde, Parser, Clone, Debug, Deserialize, Serialize)]
-pub struct SignerConfig {
+pub(crate) struct SignerConfig {
     /// The mnemonic to use when deriving the key.
-    #[clap(long, env = "MNEMONIC")]
+    #[clap(long, env = "MNEMONIC", conflicts_with_all = ["private_key", "ledger"])]
     pub mnemonic: Option<String>,
 
     /// Raw private key (hex-encoded with or without 0x prefix).
-    #[clap(long, env = "PRIVATE_KEY")]
+    #[clap(long, env = "PRIVATE_KEY", conflicts_with_all = ["mnemonic", "ledger"])]
     pub private_key: Option<String>,
 
     /// The mnemonic account index to use when deriving the key.
@@ -129,12 +159,27 @@ pub struct SignerConfig {
     ///
     /// NOTE: ledger must be unlocked, Ethereum app open and blind signing must be enabled in the
     /// Ethereum app settings.
-    #[clap(long, env = "USE_LEDGER")]
+    #[clap(long, env = "USE_LEDGER", conflicts_with_all = ["mnemonic", "private_key"])]
     pub ledger: bool,
 }
 
+#[derive(Debug, Error)]
+pub(crate) enum SignerConfigError {
+    #[error(
+        "Multiple signers provided: {provided}. Only one of --mnemonic, --private-key, or \
+         --ledger can be specified."
+    )]
+    MultipleSigners { provided: String },
+
+    #[error("--account-index is required when using --{signer}")]
+    MissingAccountIndex { signer: &'static str },
+
+    #[error("Either --mnemonic, --private-key, or --ledger flag must be provided")]
+    NoSigner,
+}
+
 #[derive(Clone, Debug)]
-pub enum ValidSignerConfig {
+pub(crate) enum ValidSignerConfig {
     Mnemonic {
         mnemonic: String,
         account_index: u32,
@@ -148,25 +193,43 @@ pub enum ValidSignerConfig {
 }
 
 impl TryFrom<SignerConfig> for ValidSignerConfig {
-    type Error = anyhow::Error;
+    type Error = SignerConfigError;
 
-    fn try_from(config: SignerConfig) -> Result<Self> {
-        let account_index = config
-            .account_index
-            .ok_or_else(|| anyhow::anyhow!("Account index must be provided"))?;
+    fn try_from(config: SignerConfig) -> std::result::Result<Self, SignerConfigError> {
+        let signers: Vec<&str> = [
+            config.ledger.then_some("--ledger"),
+            config.private_key.as_ref().map(|_| "--private-key"),
+            config.mnemonic.as_ref().map(|_| "--mnemonic"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+
+        if signers.len() > 1 {
+            return Err(SignerConfigError::MultipleSigners {
+                provided: signers.join(", "),
+            });
+        }
+
         if config.ledger {
+            let account_index = config
+                .account_index
+                .ok_or(SignerConfigError::MissingAccountIndex { signer: "ledger" })?;
             Ok(ValidSignerConfig::Ledger {
                 account_index: account_index as usize,
             })
         } else if let Some(private_key) = config.private_key {
             Ok(ValidSignerConfig::PrivateKey { private_key })
         } else if let Some(mnemonic) = config.mnemonic {
+            let account_index = config
+                .account_index
+                .ok_or(SignerConfigError::MissingAccountIndex { signer: "mnemonic" })?;
             Ok(ValidSignerConfig::Mnemonic {
                 mnemonic,
                 account_index,
             })
         } else {
-            bail!("Either --mnemonic, --private-key, or --ledger flag must be provided")
+            Err(SignerConfigError::NoSigner)
         }
     }
 }
@@ -196,30 +259,6 @@ impl ValidSignerConfig {
     }
 }
 
-#[derive(ClapArgs, Debug, Clone)]
-#[group(required = true, multiple = false)]
-pub struct MetadataUriArgs {
-    #[clap(long, env = "METADATA_URI")]
-    metadata_uri: Option<String>,
-
-    #[clap(long, env = "NO_METADATA_URI")]
-    no_metadata_uri: bool,
-}
-
-impl TryFrom<MetadataUriArgs> for MetadataUri {
-    type Error = anyhow::Error;
-
-    fn try_from(args: MetadataUriArgs) -> Result<Self> {
-        if args.no_metadata_uri {
-            Ok(MetadataUri::empty())
-        } else if let Some(uri_str) = args.metadata_uri {
-            uri_str.parse()
-        } else {
-            bail!("Either --metadata-uri or --no-metadata-uri must be provided")
-        }
-    }
-}
-
 impl Default for Commands {
     fn default() -> Self {
         Commands::StakeTable {
@@ -245,7 +284,7 @@ impl Config {
     pub fn apply_env_var_overrides(self) -> Result<Self> {
         let mut config = self.clone();
         if self.stake_table_address == Address::ZERO {
-            let stake_table_env_var = "ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS";
+            let stake_table_env_var = "ESPRESSO_STAKE_TABLE_PROXY_ADDRESS";
             if let Ok(stake_table_address) = std::env::var(stake_table_env_var) {
                 config.stake_table_address = stake_table_address.parse()?;
                 tracing::info!(
@@ -259,7 +298,7 @@ impl Config {
 }
 
 #[derive(Subcommand, Debug, Clone)]
-pub enum Commands {
+pub(crate) enum Commands {
     /// Display version information of the staking-cli.
     Version,
     /// Display the current configuration
@@ -281,6 +320,10 @@ pub enum Commands {
         /// Use a ledger hardware wallet.
         #[clap(long, env = "LEDGER_INDEX", required_unless_present_any = ["mnemonic", "private_key"])]
         ledger: bool,
+
+        /// Network to configure (mainnet, decaf, or local).
+        #[clap(long, value_enum, env = "NETWORK")]
+        network: Network,
     },
     /// Remove the config file.
     Purge {
@@ -313,6 +356,14 @@ pub enum Commands {
 
         #[clap(flatten)]
         metadata_uri_args: MetadataUriArgs,
+
+        /// x25519 public key (tagged base64, output by keygen). Required for V3 stake tables.
+        #[clap(long, value_parser = parse::parse_x25519_key, env = "X25519_KEY")]
+        x25519_key: Option<x25519::PublicKey>,
+
+        /// p2p address in host:port format. Required for V3 stake tables.
+        #[clap(long, value_parser = parse::parse_net_addr, env = "P2P_ADDR")]
+        p2p_addr: Option<NetAddr>,
     },
     /// Update a validators Espresso consensus signing keys.
     UpdateConsensusKeys {
@@ -331,6 +382,37 @@ pub enum Commands {
     UpdateMetadataUri {
         #[clap(flatten)]
         metadata_uri_args: MetadataUriArgs,
+
+        /// The consensus public key for metadata validation.
+        ///
+        /// Required for metadata validation unless --skip-metadata-validation is set.
+        #[clap(long, value_parser = parse::parse_bls_pub_key, env = "CONSENSUS_PUBLIC_KEY")]
+        consensus_public_key: Option<BLSPubKey>,
+    },
+    /// Set x25519 key and p2p address for a validator.
+    ///
+    /// Primary use: initial configuration for validators registered before V3.
+    /// Also usable to rotate the x25519 key.
+    UpdateNetworkConfig {
+        /// The x25519 public key (tagged base64, output by keygen)
+        #[clap(long, value_parser = parse::parse_x25519_key, env = "X25519_KEY")]
+        x25519_key: x25519::PublicKey,
+
+        /// The p2p address in host:port format
+        #[clap(long, value_parser = parse::parse_net_addr, env = "P2P_ADDR")]
+        p2p_addr: NetAddr,
+    },
+    /// Set x25519 encryption key for a validator.
+    UpdateX25519Key {
+        /// The x25519 public key (tagged base64, output by keygen)
+        #[clap(long, value_parser = parse::parse_x25519_key, env = "X25519_KEY")]
+        x25519_key: x25519::PublicKey,
+    },
+    /// Update p2p address for a validator.
+    UpdateP2pAddr {
+        /// The p2p address in host:port format
+        #[clap(long, value_parser = parse::parse_net_addr, env = "P2P_ADDR")]
+        p2p_addr: NetAddr,
     },
     /// Approve stake table contract to move tokens
     Approve {
@@ -393,23 +475,25 @@ pub enum Commands {
         #[clap(long, value_parser = parse_ether)]
         amount: U256,
     },
-    /// Register the validators and delegates for the local demo.
+    /// Demo commands for testing and development
+    Demo(demo::Demo),
+    /// [DEPRECATED] Use `demo stake` instead. Register validators and create delegators for demo.
+    #[clap(hide = true)]
     StakeForDemo {
         /// The number of validators to register.
-        ///
-        /// The default (5) works for the local native and docker demos.
         #[clap(long, default_value_t = 5)]
         num_validators: u16,
 
         /// The number of delegators to create per validator.
-        ///
-        /// If not specified, a random number (2-5) of delegators is created per validator.
-        /// Must be <= 100,000.
         #[clap(long, env = "NUM_DELEGATORS_PER_VALIDATOR", value_parser = clap::value_parser!(u64).range(..=100000))]
         num_delegators_per_validator: Option<u64>,
 
-        #[arg(long, value_enum, env = "DELEGATION_CONFIG", default_value_t = DelegationConfig::default())]
-        delegation_config: DelegationConfig,
+        #[clap(long, value_enum, env = "DELEGATION_CONFIG", default_value_t = demo::DelegationConfig::default())]
+        delegation_config: demo::DelegationConfig,
+
+        /// Number of concurrent transaction submissions
+        #[clap(long, default_value_t = tx_log::DEFAULT_CONCURRENCY)]
+        concurrency: usize,
     },
     /// Export validator node signatures for address validation.
     ExportNodeSignatures {
@@ -428,4 +512,155 @@ pub enum Commands {
         #[clap(flatten)]
         output_args: signature::OutputArgs,
     },
+    /// Preview metadata from a URL without registering.
+    ///
+    /// Fetches and displays validator metadata from a URL. Useful for verifying
+    /// your metadata endpoint before registration.
+    PreviewMetadata {
+        /// URL where validator metadata is hosted (JSON or OpenMetrics format).
+        #[clap(long, env = "METADATA_URI")]
+        metadata_uri: String,
+    },
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_matches;
+
+    use super::*;
+
+    const EMPTY: SignerConfig = SignerConfig {
+        private_key: None,
+        mnemonic: None,
+        ledger: false,
+        account_index: None,
+    };
+
+    #[test]
+    fn test_private_key_without_account_index() {
+        let config = SignerConfig {
+            private_key: Some(DEV_PRIVATE_KEY.into()),
+            ..EMPTY
+        };
+        let valid = ValidSignerConfig::try_from(config).unwrap();
+        assert_matches!(valid, ValidSignerConfig::PrivateKey { .. });
+    }
+
+    #[test]
+    fn test_private_key_with_account_index() {
+        let config = SignerConfig {
+            private_key: Some(DEV_PRIVATE_KEY.into()),
+            account_index: Some(0),
+            ..EMPTY
+        };
+        let valid = ValidSignerConfig::try_from(config).unwrap();
+        assert_matches!(valid, ValidSignerConfig::PrivateKey { .. });
+    }
+
+    #[test]
+    fn test_mnemonic_without_account_index() {
+        let config = SignerConfig {
+            mnemonic: Some(DEV_MNEMONIC.into()),
+            ..EMPTY
+        };
+        let err = ValidSignerConfig::try_from(config).unwrap_err();
+        assert_matches!(
+            err,
+            SignerConfigError::MissingAccountIndex { signer: "mnemonic" }
+        );
+    }
+
+    #[test]
+    fn test_mnemonic_with_account_index() {
+        let config = SignerConfig {
+            mnemonic: Some(DEV_MNEMONIC.into()),
+            account_index: Some(5),
+            ..EMPTY
+        };
+        let valid = ValidSignerConfig::try_from(config).unwrap();
+        assert_matches!(
+            valid,
+            ValidSignerConfig::Mnemonic {
+                account_index: 5,
+                ..
+            }
+        );
+    }
+
+    #[test]
+    fn test_ledger_without_account_index() {
+        let config = SignerConfig {
+            ledger: true,
+            ..EMPTY
+        };
+        let err = ValidSignerConfig::try_from(config).unwrap_err();
+        assert_matches!(
+            err,
+            SignerConfigError::MissingAccountIndex { signer: "ledger" }
+        );
+    }
+
+    #[test]
+    fn test_ledger_with_account_index() {
+        let config = SignerConfig {
+            ledger: true,
+            account_index: Some(2),
+            ..EMPTY
+        };
+        let valid = ValidSignerConfig::try_from(config).unwrap();
+        assert_matches!(valid, ValidSignerConfig::Ledger { account_index: 2 });
+    }
+
+    #[test]
+    fn test_no_signer_provided() {
+        let err = ValidSignerConfig::try_from(EMPTY).unwrap_err();
+        assert_matches!(err, SignerConfigError::NoSigner);
+    }
+
+    #[test]
+    fn test_multiple_signers_mnemonic_and_private_key() {
+        let config = SignerConfig {
+            mnemonic: Some(DEV_MNEMONIC.into()),
+            private_key: Some(DEV_PRIVATE_KEY.into()),
+            account_index: Some(0),
+            ..EMPTY
+        };
+        let err = ValidSignerConfig::try_from(config).unwrap_err();
+        assert_matches!(err, SignerConfigError::MultipleSigners { .. });
+    }
+
+    #[test]
+    fn test_multiple_signers_ledger_and_private_key() {
+        let config = SignerConfig {
+            private_key: Some(DEV_PRIVATE_KEY.into()),
+            ledger: true,
+            ..EMPTY
+        };
+        let err = ValidSignerConfig::try_from(config).unwrap_err();
+        assert_matches!(err, SignerConfigError::MultipleSigners { .. });
+    }
+
+    #[test]
+    fn test_multiple_signers_ledger_and_mnemonic() {
+        let config = SignerConfig {
+            mnemonic: Some(DEV_MNEMONIC.into()),
+            ledger: true,
+            account_index: Some(0),
+            ..EMPTY
+        };
+        let err = ValidSignerConfig::try_from(config).unwrap_err();
+        assert_matches!(err, SignerConfigError::MultipleSigners { .. });
+    }
+
+    #[test]
+    fn test_multiple_signers_all_three() {
+        let config = SignerConfig {
+            mnemonic: Some(DEV_MNEMONIC.into()),
+            private_key: Some(DEV_PRIVATE_KEY.into()),
+            ledger: true,
+            account_index: Some(0),
+        };
+        let err = ValidSignerConfig::try_from(config).unwrap_err();
+        assert_matches!(err, SignerConfigError::MultipleSigners { .. });
+    }
 }

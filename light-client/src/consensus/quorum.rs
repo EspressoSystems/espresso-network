@@ -1,21 +1,19 @@
 use std::{future::Future, sync::Arc};
 
 use alloy::primitives::U256;
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use committable::Committable;
-use espresso_types::{
-    EpochVersion, Leaf2, MaxSupportedVersion, PubKey, SeqTypes, SequencerVersions,
-};
+use espresso_types::{Certificate2, Leaf2, PubKey, SeqTypes};
 use hotshot_types::{
     epoch_membership::EpochMembership,
     message::UpgradeLock,
     simple_certificate::CertificatePair,
-    stake_table::{supermajority_threshold, HSStakeTable, StakeTableEntries, StakeTableEntry},
+    stake_table::{HSStakeTable, StakeTableEntries, StakeTableEntry, supermajority_threshold},
     vote::{self, HasViewNumber},
 };
-use static_assertions::assert_type_eq_all;
 use tracing::Instrument;
 use vbs::version::{StaticVersion, StaticVersionType, Version};
+use versions::{EPOCH_VERSION, MAX_SUPPORTED_VERSION, Upgrade, version};
 
 pub type Certificate = CertificatePair<SeqTypes>;
 
@@ -33,9 +31,12 @@ pub trait Quorum: Sync {
                 (0, 3) => self.verify_static::<StaticVersion<0, 3>>(cert).await,
                 (0, 4) => self.verify_static::<StaticVersion<0, 4>>(cert).await,
                 (0, 5) => self.verify_static::<StaticVersion<0, 5>>(cert).await,
+                (0, 6) => self.verify_static::<StaticVersion<0, 6>>(cert).await,
                 _ => {
-                    // Compile-time check that we aren't missing a case for a supported version.
-                    assert_type_eq_all!(MaxSupportedVersion, StaticVersion<0, 5>);
+                    const {
+                        assert!(MAX_SUPPORTED_VERSION.major == 0);
+                        assert!(MAX_SUPPORTED_VERSION.minor == 6);
+                    }
                     bail!("unsupported version {version}");
                 },
             }
@@ -46,6 +47,37 @@ pub trait Quorum: Sync {
     fn verify_static<V: StaticVersionType + 'static>(
         &self,
         qc: &Certificate,
+    ) -> impl Send + Future<Output = Result<()>>;
+
+    /// Verify a new protocol Certificate2 threshold signature.
+    fn verify_cert2(
+        &self,
+        cert2: &Certificate2<SeqTypes>,
+        version: Version,
+    ) -> impl Send + Future<Output = Result<()>> {
+        async move {
+            match (version.major, version.minor) {
+                (0, 1) => self.verify_cert2_static::<StaticVersion<0, 1>>(cert2).await,
+                (0, 2) => self.verify_cert2_static::<StaticVersion<0, 2>>(cert2).await,
+                (0, 3) => self.verify_cert2_static::<StaticVersion<0, 3>>(cert2).await,
+                (0, 4) => self.verify_cert2_static::<StaticVersion<0, 4>>(cert2).await,
+                (0, 5) => self.verify_cert2_static::<StaticVersion<0, 5>>(cert2).await,
+                (0, 6) => self.verify_cert2_static::<StaticVersion<0, 6>>(cert2).await,
+                _ => {
+                    const {
+                        assert!(MAX_SUPPORTED_VERSION.major == 0);
+                        assert!(MAX_SUPPORTED_VERSION.minor == 6);
+                    }
+                    bail!("unsupported version {version}");
+                },
+            }
+        }
+    }
+
+    /// Same as [`verify_cert2`](Self::verify_cert2), but with the version as a type-level parameter.
+    fn verify_cert2_static<V: StaticVersionType + 'static>(
+        &self,
+        cert2: &Certificate2<SeqTypes>,
     ) -> impl Send + Future<Output = Result<()>>;
 
     /// Verify that QCs are signed, form a chain starting from `leaf`, with a particular protocol
@@ -78,9 +110,9 @@ pub trait Quorum: Sync {
             // Enforce that this version of the software supports these protocol versions. If we see
             // a version from the future, we must fail because we don't necessarily know how to
             // treat objects with this version.
-            ensure!(version <= MaxSupportedVersion::version());
+            ensure!(version <= MAX_SUPPORTED_VERSION);
             if let Some(cert) = &upgrade {
-                ensure!(cert.data.new_version <= MaxSupportedVersion::version());
+                ensure!(cert.data.new_version <= MAX_SUPPORTED_VERSION);
             }
             tracing::debug!(
                 %version,
@@ -172,7 +204,7 @@ impl FromIterator<StakeTableEntry<PubKey>> for StakeTable {
 impl StakeTable {
     /// Get a stake table from a particular epoch's quorum membership.
     pub async fn from_membership(membership: &EpochMembership<SeqTypes>) -> Self {
-        membership.stake_table().await.into()
+        HSStakeTable::from_iter(membership.stake_table()).into()
     }
 
     /// Verify that a certificate is signed by a quorum of this stake table.
@@ -180,13 +212,9 @@ impl StakeTable {
     where
         V: StaticVersionType + 'static,
     {
-        cert.is_valid_cert::<SequencerVersions<V, V>>(
-            &self.entries,
-            self.threshold,
-            &UpgradeLock::new(),
-        )
-        .await
-        .context("invalid threshold signature")
+        let upgrade = Upgrade::trivial(version(V::MAJOR, V::MINOR));
+        cert.is_valid_cert(&self.entries, self.threshold, &UpgradeLock::new(upgrade))
+            .context("invalid threshold signature")
     }
 }
 
@@ -209,7 +237,7 @@ impl StakeTablePair for EpochMembership<SeqTypes> {
     }
 
     async fn next_epoch_stake_table(&self) -> Result<Arc<StakeTable>> {
-        let membership = self.next_epoch_stake_table().await?;
+        let membership = self.next_epoch_stake_table()?;
         Ok(Arc::new(StakeTable::from_membership(&membership).await))
     }
 }
@@ -255,7 +283,7 @@ where
             .await
             .context("verifying QC")?;
 
-        if V::version() >= EpochVersion::version() {
+        if version(V::MAJOR, V::MINOR) >= EPOCH_VERSION {
             // If this certificate is part of an epoch change, also check that the next epoch's
             // quorum has signed.
             if let Some(next_epoch_qc) = cert.verify_next_epoch_qc(self.epoch_height)? {
@@ -269,23 +297,33 @@ where
 
         Ok(())
     }
+
+    async fn verify_cert2_static<V: StaticVersionType + 'static>(
+        &self,
+        cert2: &Certificate2<SeqTypes>,
+    ) -> Result<()> {
+        let stake_table = self.membership.stake_table().await?;
+        stake_table
+            .verify_cert::<V, _>(cert2)
+            .await
+            .context("verifying cert2")
+    }
 }
 
 #[cfg(test)]
 mod test {
-    use espresso_types::EpochVersion;
     use pretty_assertions::assert_eq;
 
     use super::*;
     use crate::testing::{
-        custom_epoch_change_leaf_chain, custom_leaf_chain_with_upgrade, epoch_change_leaf_chain,
-        leaf_chain, leaf_chain_with_upgrade, qc_chain_from_leaf_chain, AlwaysFalseQuorum,
-        AlwaysTrueQuorum, EnableEpochs, EpochChangeQuorum, LegacyVersion, VersionCheckQuorum,
+        AlwaysFalseQuorum, AlwaysTrueQuorum, ENABLE_EPOCHS, EpochChangeQuorum, LEGACY_VERSION,
+        VersionCheckQuorum, custom_epoch_change_leaf_chain, custom_leaf_chain_with_upgrade,
+        epoch_change_leaf_chain, leaf_chain, leaf_chain_with_upgrade, qc_chain_from_leaf_chain,
     };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_valid_chain() {
-        let leaves = leaf_chain::<EpochVersion>(1..=3).await;
+        let leaves = leaf_chain(1..=3, EPOCH_VERSION).await;
         let version = AlwaysTrueQuorum
             .verify_qc_chain_and_get_version(
                 leaves[0].leaf(),
@@ -298,7 +336,7 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_wrong_leaf() {
-        let leaves = leaf_chain::<EpochVersion>(1..=3).await;
+        let leaves = leaf_chain(1..=3, EPOCH_VERSION).await;
         AlwaysTrueQuorum
             .verify_qc_chain_and_get_version(
                 leaves[2].leaf(),
@@ -310,7 +348,7 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_invalid_qc() {
-        let leaves = leaf_chain::<EpochVersion>(1..=2).await;
+        let leaves = leaf_chain(1..=2, EPOCH_VERSION).await;
         AlwaysFalseQuorum
             .verify_qc_chain_and_get_version(
                 leaves[0].leaf(),
@@ -322,7 +360,7 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_non_consecutive() {
-        let leaves = leaf_chain::<EpochVersion>(1..=4).await;
+        let leaves = leaf_chain(1..=4, EPOCH_VERSION).await;
         AlwaysTrueQuorum
             .verify_qc_chain_and_get_version(
                 leaves[0].leaf(),
@@ -334,7 +372,7 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_upgrade() {
-        let leaves = leaf_chain_with_upgrade::<EnableEpochs>(1..=3, 2).await;
+        let leaves = leaf_chain_with_upgrade(1..=3, 2, ENABLE_EPOCHS).await;
         let version = VersionCheckQuorum::new(leaves.iter().map(|leaf| leaf.leaf().clone()))
             .verify_qc_chain_and_get_version(
                 leaves[0].leaf(),
@@ -347,7 +385,7 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_illegal_upgrade() {
-        let leaves = custom_leaf_chain_with_upgrade::<EnableEpochs>(1..=3, 2, |proposal| {
+        let leaves = custom_leaf_chain_with_upgrade(1..=3, 2, ENABLE_EPOCHS, |proposal| {
             // Don't attach an upgrade certificate, so that the version change that happens within
             // the QC change is actually malicious.
             proposal.upgrade_certificate = None;
@@ -364,7 +402,7 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_epoch_change() {
-        let leaves = epoch_change_leaf_chain::<EpochVersion>(1..=5, 5).await;
+        let leaves = epoch_change_leaf_chain(1..=5, 5, EPOCH_VERSION).await;
         let version = EpochChangeQuorum::new(5)
             .verify_qc_chain_and_get_version(
                 leaves[0].leaf(),
@@ -377,7 +415,7 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_epoch_change_missing_eqc() {
-        let leaves = custom_epoch_change_leaf_chain::<EpochVersion>(1..=5, 5, |proposal| {
+        let leaves = custom_epoch_change_leaf_chain(1..=5, 5, EPOCH_VERSION, |proposal| {
             // Delete the next epoch justify QC, making this an invalid epoch change QC.
             proposal.next_epoch_justify_qc = None;
         })
@@ -393,7 +431,7 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_epoch_change_inconsistent_eqc_view_number() {
-        let leaves = custom_epoch_change_leaf_chain::<EpochVersion>(1..=5, 5, |proposal| {
+        let leaves = custom_epoch_change_leaf_chain(1..=5, 5, EPOCH_VERSION, |proposal| {
             // Tamper with the next epoch justify QC, making this an invalid epoch change QC.
             if let Some(next_epoch_justify_qc) = &mut proposal.next_epoch_justify_qc {
                 next_epoch_justify_qc.view_number += 1;
@@ -411,7 +449,7 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_epoch_change_inconsistent_eqc_data() {
-        let leaves = custom_epoch_change_leaf_chain::<EpochVersion>(1..=5, 5, |proposal| {
+        let leaves = custom_epoch_change_leaf_chain(1..=5, 5, EPOCH_VERSION, |proposal| {
             // Tamper with the next epoch justify QC, making this an invalid epoch change QC.
             if let Some(next_epoch_justify_qc) = &mut proposal.next_epoch_justify_qc {
                 *next_epoch_justify_qc.data.block_number.as_mut().unwrap() += 1;
@@ -429,7 +467,7 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_epoch_change_absent_eqc_before_upgrade() {
-        let leaves = custom_epoch_change_leaf_chain::<LegacyVersion>(1..=5, 5, |proposal| {
+        let leaves = custom_epoch_change_leaf_chain(1..=5, 5, LEGACY_VERSION, |proposal| {
             // Delete the next epoch justify QC; this is allowed since epochs are not enabled yet.
             proposal.next_epoch_justify_qc = None;
         })

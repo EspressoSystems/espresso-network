@@ -1,8 +1,19 @@
 # Espresso staking CLI
 
-WARNING: This CLI is intended for use in testnet purposes only.
+WARNING: This CLI is intended for testing as well as validator registrations purposes only. Stakers should use the
+staking UI:
+
+- decaf testnet staking UI: https://staking.decaf.testnet.espresso.network/
+- mainnet staking UI: not yet available
 
 This CLI helps users interact with the Espresso staking contract, either as a delegator or a node operator.
+
+Contracts:
+
+- Decaf stake table (on Sepolia):
+  [0x40304fbe94d5e7d1492dd90c53a2d63e8506a037](https://sepolia.etherscan.io/address/0x40304fbe94d5e7d1492dd90c53a2d63e8506a037)
+- Mainnet stake table:
+  [0xCeF474D372B5b09dEfe2aF187bf17338Dc704451](https://etherscan.io/address/0xcef474d372b5b09defe2af187bf17338dc704451)
 
 <!-- markdown-toc start - Don't edit this section. Run M-x markdown-toc-refresh-toc -->
 
@@ -10,12 +21,14 @@ This CLI helps users interact with the Espresso staking contract, either as a de
 
 - [Espresso staking CLI](#espresso-staking-cli)
   - [Getting Started](#getting-started)
-    - [Getting Help](#getting-help)
+    - [Overview](#overview)
     - [Choose your type of wallet (mnemonic, private key, or Ledger)](#choose-your-type-of-wallet-mnemonic-private-key-or-ledger)
-    - [Initialize the configuration file](#initialize-the-configuration-file)
+    - [Initialize the configuration file (optional)](#initialize-the-configuration-file-optional)
+    - [Managing multiple network configurations](#managing-multiple-network-configurations)
     - [Inspect the configuration](#inspect-the-configuration)
     - [View the stake table](#view-the-stake-table)
   - [Calldata Export (for Multisig Wallets)](#calldata-export-for-multisig-wallets)
+    - [Calldata Simulation](#calldata-simulation)
   - [Delegators (or stakers)](#delegators-or-stakers)
     - [Delegating](#delegating)
     - [Undelegating](#undelegating)
@@ -23,24 +36,37 @@ This CLI helps users interact with the Espresso staking contract, either as a de
     - [Claiming staking rewards](#claiming-staking-rewards)
   - [Node operators](#node-operators)
     - [Registering a validator](#registering-a-validator)
+      - [Validator Metadata](#validator-metadata)
+      - [Registration Command](#registration-command)
     - [Updating your commission](#updating-your-commission)
     - [Updating your metadata URL](#updating-your-metadata-url)
+      - [Metadata JSON Schema (for custom hosting)](#metadata-json-schema-for-custom-hosting)
     - [De-registering your validator](#de-registering-your-validator)
     - [Rotating your consensus keys](#rotating-your-consensus-keys)
+    - [Configuring networking (x25519 key and p2p address)](#configuring-networking-x25519-key-and-p2p-address)
+    - [Exporting Node Signatures](#exporting-node-signatures)
+    - [Demo Commands](#demo-commands)
 
 <!-- markdown-toc end -->
 
-TODO: provide prebuilt binaries
+To run the staking-cli using Docker:
 
-To build and run the staking-cli
+```bash
+docker run -it ghcr.io/espressosystems/espresso-network/staking-cli:main staking-cli --help
+```
 
-    cargo run --bin staking-cli -p staking-cli -- --help
+To build and run from source:
 
-For brevity what follows assumes the `staking-cli` binary is in the `PATH`.
+```bash
+cargo run --bin staking-cli -p staking-cli -- --help
+```
+
+For brevity what follows assumes the `staking-cli` binary is in the `PATH` (or aliased to the Docker command).
 
 To show help for a command run `staking-cli COMMAND --help`, for example `staking-cli delegate --help`.
 
-If you run into any problems please open an issue on https://github.com/EspressoSystems/espresso-network.
+If you run into any problems please open an issue on https://github.com/EspressoSystems/espresso-network and include the
+full output of `staking-cli version` in your report.
 
 To build tools that interact with the stake table contract the ABI can be found at
 [../contracts/artifacts/abi/StakeTable.json](../contracts/artifacts/abi/StakeTable.json).
@@ -51,114 +77,124 @@ To build tools that interact with the stake table contract the ABI can be found 
 
 You can get help for the CLI by running:
 
-    staking-cli --help
+```bash
+staking-cli --help
+```
 
 Which will show all the available commands and options shared by commands:
 
-```
-    A CLI to interact with the Espresso stake table contract
+```text
+A CLI to interact with the Espresso stake table contract
 
 Usage: staking-cli [OPTIONS] [COMMAND]
 
 Commands:
-    version                Display version information of the staking-cli
-    config                 Display the current configuration
-    init                   Initialize the config file with deployment and wallet info
-    purge                  Remove the config file
-    stake-table            Show the stake table in the Espresso stake table contract
-    account                Print the signer account address
-    register-validator     Register to become a validator
-    update-commission      Update a validator's commission rate
-    update-metadata-uri    Update a validator's metadata URL
-    update-consensus-keys  Update a validators Espresso consensus signing keys
-    deregister-validator   Deregister a validator
-    approve                Approve stake table contract to move tokens
-    delegate               Delegate funds to a validator
-    undelegate             Initiate a withdrawal of delegated funds from a validator
-    claim-withdrawal       Claim withdrawal after an undelegation
-    claim-validator-exit   Claim withdrawal after validator exit
-    claim-rewards          Claim staking rewards
-    unclaimed-rewards      Check unclaimed staking rewards
-    token-balance          Check ESP token balance
-    token-allowance        Check ESP token allowance of stake table contract
-    transfer               Transfer ESP tokens
-    export-node-signatures       Export validator node signatures for address validation
-    stake-for-demo         Register the validators and delegates for the local demo
-    help                   Print this message or the help of the given subcommand(s)
+  version                 Display version information of the staking-cli
+  config                  Display the current configuration
+  init                    Initialize the config file with deployment and wallet info
+  purge                   Remove the config file
+  stake-table             Show the stake table in the Espresso stake table contract
+  account                 Print the signer account address
+  register-validator      Register to become a validator
+  update-consensus-keys   Update a validators Espresso consensus signing keys
+  deregister-validator    Deregister a validator
+  update-commission       Update validator commission rate
+  update-metadata-uri     Update validator metadata URL
+  update-network-config   Set x25519 key and p2p address for a validator
+  update-x25519-key       Set x25519 encryption key for a validator
+  update-p2p-addr         Update p2p address for a validator
+  approve                 Approve stake table contract to move tokens
+  delegate                Delegate funds to a validator
+  undelegate              Initiate a withdrawal of delegated funds from a validator
+  claim-withdrawal        Claim withdrawal after an undelegation
+  claim-validator-exit    Claim withdrawal after validator exit
+  claim-rewards           Claim staking rewards
+  unclaimed-rewards       Check unclaimed staking rewards
+  token-balance           Check ESP token balance
+  token-allowance         Check ESP token allowance of stake table contract
+  transfer                Transfer ESP tokens
+  export-node-signatures  Export validator node signatures for address validation
+  preview-metadata        Preview metadata from a URL without registering
+  demo                    Demo commands for testing (stake, delegate, undelegate, churn)
+  help                    Print this message or the help of the given subcommand(s)
 
 Options:
-    -c, --config <CONFIG_PATH>
-            Config file
+  -c, --config <CONFIG_PATH>
+          Config file
 
-        --rpc-url <RPC_URL>
-            L1 Ethereum RPC
+      --rpc-url <RPC_URL>
+          L1 Ethereum RPC
 
-            [env: L1_PROVIDER=]
+          [env: L1_PROVIDER=]
 
-        --stake-table-address <STAKE_TABLE_ADDRESS>
-            Deployed stake table contract address
+      --stake-table-address <STAKE_TABLE_ADDRESS>
+          Deployed stake table contract address
 
-            [env: STAKE_TABLE_ADDRESS=]
+          [env: STAKE_TABLE_ADDRESS=]
 
-        --espresso-url [<ESPRESSO_URL>]
-            Espresso sequencer API URL for reward claims
+      --espresso-url [<ESPRESSO_URL>]
+          Espresso sequencer API URL for reward claims
 
-            [env: ESPRESSO_URL=]
+          [env: ESPRESSO_URL=]
 
-        --mnemonic <MNEMONIC>
-            The mnemonic to use when deriving the key
+      --mnemonic <MNEMONIC>
+          The mnemonic to use when deriving the key
 
-            [env: MNEMONIC=]
+          [env: MNEMONIC=]
 
-        --account-index <ACCOUNT_INDEX>
-            The mnemonic account index to use when deriving the key
+      --private-key <PRIVATE_KEY>
+          Raw private key (hex-encoded with or without 0x prefix)
 
-            [env: ACCOUNT_INDEX=]
+          [env: PRIVATE_KEY=]
 
-        --ledger
-            Use a ledger device to sign transactions.
+      --account-index <ACCOUNT_INDEX>
+          The mnemonic account index to use when deriving the key
 
-            NOTE: ledger must be unlocked, Ethereum app open and blind signing must be enabled in the Ethereum app settings.
+          [env: ACCOUNT_INDEX=]
 
-            [env: USE_LEDGER=]
+      --ledger
+          Use a ledger device to sign transactions.
 
-        --private-key <PRIVATE_KEY>
-            Raw private key (hex-encoded with or without 0x prefix)
+          NOTE: ledger must be unlocked, Ethereum app open and blind signing must be enabled in the Ethereum app settings.
 
-            [env: PRIVATE_KEY=]
+          [env: USE_LEDGER=]
 
-        --export-calldata
-            Export calldata for multisig wallets instead of sending transaction
+      --export-calldata
+          Export calldata for multisig wallets instead of sending transaction
 
-            [env: EXPORT_CALLDATA=]
+          [env: EXPORT_CALLDATA=]
 
-        --sender-address <SENDER_ADDRESS>
-            Sender address for calldata export (required for simulation)
+      --sender-address [<SENDER_ADDRESS>]
+          Sender address for calldata export (required for simulation)
 
-            [env: SENDER_ADDRESS=]
+          [env: SENDER_ADDRESS=]
 
-        --skip-simulation
-            Skip eth_call validation when exporting calldata
+      --skip-simulation
+          Skip eth_call validation when exporting calldata
 
-            [env: SKIP_SIMULATION=]
+          [env: SKIP_SIMULATION=]
 
-        --output <OUTPUT>
-            Output file path. If not specified, outputs to stdout
+      --output <OUTPUT>
+          Output file path. If not specified, outputs to stdout
 
-        --format <FORMAT>
-            Output format for calldata export
+      --format <FORMAT>
+          Output format
 
-            [possible values: json, toml]
+          [possible values: safe, json, toml]
 
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
 or by passing `--help` to a command, for example `delegate`:
 
-        staking-cli delegate --help
+```bash
+staking-cli delegate --help
+```
 
 which will show the options specific to the command:
 
-```
+```text
 Delegate funds to a validator
 
 Usage: staking-cli delegate --validator-address <VALIDATOR_ADDRESS> --amount <AMOUNT>
@@ -219,28 +255,68 @@ Note that for ledger signing to work
 
 Once you've identified your desired account index (here 2), initialize a configuration file:
 
-    staking-cli init --mnemonic MNEMONIC --account-index 2
-    # or
-    staking-cli init --ledger --account-index 2
-    # or
-    staking-cli init --private-key 0x1234...abcd
+```bash
+# For mainnet
+staking-cli init --network mainnet --mnemonic MNEMONIC --account-index 2
+# For decaf testnet
+staking-cli init --network decaf --mnemonic MNEMONIC --account-index 2
+# For local development
+staking-cli init --network local --mnemonic MNEMONIC --account-index 2
 
-This creates a TOML config file with the contracts of our decaf Testnet, deployed on Sepolia. With the config file you
-don't need to provide the configuration values every time you run the CLI.
+# With ledger
+staking-cli init --network mainnet --ledger --account-index 2
+# With private key
+staking-cli init --network mainnet --private-key 0x1234...abcd
+```
 
-NOTE: only for this `init` command the wallet flags are specified _after_ the command.
+The `--network` parameter is **required** and accepts:
+
+- `mainnet` - Espresso mainnet on Ethereum mainnet
+- `decaf` - Decaf testnet on Sepolia
+- `local` - Local development (localhost RPC)
+
+This creates a TOML config file with the appropriate contract addresses and RPC endpoints. With the config file you
+don't need to provide the configuration values every time you run the CLI. If no config file exists, all values must be
+provided via command-line arguments or environment variables.
+
+You can also set the network via environment variable: `NETWORK=mainnet staking-cli init --mnemonic MNEMONIC`
+
+NOTE: For this `init` command, wallet flags are specified _after_ the command. The `-c` flag (config path) goes before.
+
+### Managing multiple network configurations
+
+To work with multiple networks (e.g., both mainnet and decaf), use the `-c` flag to specify different config files:
+
+```bash
+# Create mainnet config with mnemonic from env var
+MNEMONIC='your mnemonic' staking-cli -c mainnet.toml init --network mainnet --account-index 0
+
+# Create decaf config with ledger
+staking-cli -c decaf.toml init --network decaf --ledger --account-index 0
+
+# Use specific config for commands
+staking-cli -c mainnet.toml stake-table
+staking-cli -c decaf.toml delegate --validator-address 0x... --amount 100
+```
+
+When no `-c` flag is provided, the CLI uses a platform-specific default path (e.g.,
+`~/.config/espresso/espresso-staking-cli/config.toml` on Linux).
 
 ### Inspect the configuration
 
 You can inspect the configuration file by running:
 
-    staking-cli config
+```bash
+staking-cli config
+```
 
 ### View the stake table
 
 You can use the following command to display the current L1 stake table:
 
-    staking-cli stake-table
+```bash
+staking-cli stake-table
+```
 
 ## Calldata Export (for Multisig Wallets)
 
@@ -251,28 +327,65 @@ through your multisig's interface.
 To export calldata for any command, add the `--export-calldata` flag:
 
 ```bash
-# Export delegate calldata as JSON (default)
+# Export delegate calldata in Safe TX Builder format (default)
 staking-cli --export-calldata delegate --validator-address 0x12...34 --amount 100
+
+# Export as legacy JSON
+staking-cli --export-calldata --format json delegate --validator-address 0x12...34 --amount 100
 
 # Export as TOML
 staking-cli --export-calldata --format toml delegate --validator-address 0x12...34 --amount 100
 
 # Save to file
-staking-cli --export-calldata --format json --output delegate.json delegate --validator-address 0x12...34 --amount 100
+staking-cli --export-calldata --output delegate.json delegate --validator-address 0x12...34 --amount 100
 ```
 
-The output includes the target contract address and the encoded calldata:
+The default output is [Safe Transaction Builder](https://help.safe.global/en/articles/40795-transaction-builder) JSON,
+which can be imported directly into the Safe UI with decoded function calls:
+
+```json
+{
+  "version": "1.0",
+  "chainId": "1",
+  "transactions": [
+    {
+      "to": "0x...",
+      "value": "0",
+      "data": null,
+      "contractMethod": {
+        "inputs": [
+          { "internalType": "address", "name": "validator", "type": "address" },
+          { "internalType": "uint256", "name": "amount", "type": "uint256" }
+        ],
+        "name": "delegate",
+        "payable": false
+      },
+      "contractInputsValues": {
+        "validator": "0x...",
+        "amount": "100000000000000000000"
+      }
+    }
+  ]
+}
+```
+
+For operations with complex arguments (e.g., `register-validator`, `update-consensus-keys`), the Safe output falls back
+to raw hex calldata since the struct arguments cannot be represented in the Safe TX Builder format.
+
+Use `--format json` or `--format toml` for the legacy flat format:
 
 ```json
 {
   "to": "0x...",
-  "data": "0x..."
+  "data": "0x...",
+  "value": "0"
 }
 ```
 
 This works with all state-changing commands: `approve`, `delegate`, `undelegate`, `claim-withdrawal`,
 `claim-validator-exit`, `claim-rewards`, `register-validator`, `update-commission`, `update-metadata-uri`,
-`update-consensus-keys`, `deregister-validator`, and `transfer`.
+`update-consensus-keys`, `update-network-config`, `update-x25519-key`, `update-p2p-addr`, `deregister-validator`, and
+`transfer`.
 
 Note: When using `--export-calldata`, no wallet/signer is required since the transaction is not sent.
 
@@ -307,32 +420,44 @@ This section covers commands for stakers/delegators.
 1.  Obtain ESP tokens for staking.
 1.  Find the Ethereum address of a validator to delegate to.
 
-        staking-cli stake-table
+    ```bash
+    staking-cli stake-table
+    ```
 
 1.  Use the `approve` command to allow the stake table to spend your tokens.
 
-        staking-cli approve --amount 123
+    ```bash
+    staking-cli approve --amount 123
+    ```
 
 1.  Use the `delegate` command to delegate your tokens to a validator.
 
-        staking-cli delegate --validator-address 0x12...34 --amount 123
+    ```bash
+    staking-cli delegate --validator-address 0x12...34 --amount 123
+    ```
 
 ### Undelegating
 
 1.  If you would like to undelegate your tokens, use the `undelegate` command.
 
-        staking-cli undelegate --validator-address 0x12...34 --amount 123
+    ```bash
+    staking-cli undelegate --validator-address 0x12...34 --amount 123
+    ```
 
 1.  Wait for the exit escrow period to end (currently 1 week), then withdraw to your wallet.
 
-        staking-cli claim-withdrawal --validator-address 0x12...34
+    ```bash
+    staking-cli claim-withdrawal --validator-address 0x12...34
+    ```
 
 ### Recovering funds after a validator exit
 
 1.  Wait for the exit escrow period to elapse after the validator deregistered itself (currently 1 week), then withdraw
     to your wallet by running
 
-         staking-cli claim-validator-exit --validator-address 0x12...34
+    ```bash
+    staking-cli claim-validator-exit --validator-address 0x12...34
+    ```
 
 ### Claiming staking rewards
 
@@ -340,13 +465,17 @@ Delegators and validators can earn staking rewards. To check and claim your rewa
 
 1.  Check your unclaimed rewards:
 
-        staking-cli unclaimed-rewards
+    ```bash
+    staking-cli unclaimed-rewards
+    ```
 
     This will display the amount of unclaimed rewards in ESP tokens.
 
 2.  Claim your rewards:
 
-        staking-cli claim-rewards
+    ```bash
+    staking-cli claim-rewards
+    ```
 
     This will transfer your unclaimed rewards to your wallet.
 
@@ -358,40 +487,80 @@ This section covers commands for node operators.
 
 ### Registering a validator
 
-1.  Obtain your validator's BLS and state private keys, choose your commission in percent (with 2 decimals), and prepare
-    a metadata URL.
-1.  Use the `register-validator` command to register your validator.
+#### Validator Metadata
 
-        staking-cli register-validator --consensus-private-key <BLS_KEY> --state-private-key <STATE_KEY> --commission 4.99 --metadata-uri https://example.com/validator-metadata.json
+Metadata is optional and provides information displayed in the staking UI (name, description, icon, etc.).
 
-    To avoid specifying the the keys on the command line they can be set via env vars
+Options for `--metadata-uri`:
 
-    ```
-    CONSENSUS_PRIVATE_KEY=BLS_SIGNING_KEY~...
-    STATE_PRIVATE_KEY=SCHNORR_SIGNING_KEY~...
-    METADATA_URL=https://example.com/validator-metadata.json
-    ```
+1. **Node `/status/metrics` endpoint (recommended):**
 
-    Alternatively, you can use pre-signed signatures:
+- `--metadata-uri https://my-validator.example.com/status/metrics`
+- Existing nodes already expose this.
 
-        staking-cli register-validator --node-signatures signatures.json --commission 4.99 --metadata-uri https://example.com/validator-metadata.json
+2. **Custom JSON file:**
 
-    You can specify the format for parsing node signatures from stdin or files:
+- `--metadata-uri https://example.com/metadata.json`
+- See [JSON schema](#metadata-json-schema-for-custom-hosting).
 
-        staking-cli register-validator --node-signatures signatures.toml --format toml --commission 4.99 --metadata-uri https://example.com/validator-metadata.json
+3. **No metadata:** `--no-metadata-uri`
 
-    To register without a metadata URL (leaving it empty):
+**Skipping validation:** If your metadata endpoint isn't ready yet, use `--skip-metadata-validation` after the
+`--metadata-uri` argument:
 
-        staking-cli register-validator --consensus-private-key <BLS_KEY> --state-private-key <STATE_KEY> --commission 4.99 --no-metadata-uri
+```bash
+staking-cli register-validator \
+    --consensus-private-key BLS_SIGNING_KEY~... \
+    --state-private-key SCHNORR_SIGNING_KEY~... \
+    --commission 4.99 \
+    --metadata-uri https://my-validator.example.com/status/metrics \
+    --skip-metadata-validation
+```
 
-- Each Ethereum account used must have enough gas funds on the L1 to call the registration method of the contract. The
-  register transaction consumes about 300k gas.
-- Each BLS (Espresso) and key can be registered only once.
-- The commission can be updated later using the `update-commission` command, subject to rate limits.
-- The metadata URL can be updated at any time using the `update-metadata-uri` command.
-- The metadata URL must be a valid URL (unless using --no-metadata-uri flag) and cannot exceed 2048 bytes.
-- Each Ethereum account can only be used to register a single validator. For multiple validators, at a minimum,
-  different account indices (or mnemonics) must be used.
+URL cannot exceed 2048 bytes.
+
+The CLI automatically detects the format (JSON or OpenMetrics) by examining the content. This works with any hosting
+service, including GitHub raw URLs.
+
+Preview what will be extracted before registering:
+
+```bash
+staking-cli preview-metadata --metadata-uri https://my-validator.example.com/status/metrics
+```
+
+#### Registration Command
+
+```bash
+staking-cli register-validator \
+    --consensus-private-key BLS_SIGNING_KEY~... \
+    --state-private-key SCHNORR_SIGNING_KEY~... \
+    --commission 4.99 \
+    --metadata-uri https://my-validator.example.com/status/metrics \
+    --x25519-key X25519_PUB_KEY~... \
+    --p2p-addr validator.example.com:9000
+```
+
+The `--x25519-key` and `--p2p-addr` arguments configure cliquenet peer discovery and are **required** on V3 stake
+tables. See [Configuring networking](#configuring-networking-x25519-key-and-p2p-address) for how to generate the x25519
+key and the accepted address format.
+
+To avoid keys on the command line, use env vars (`CONSENSUS_PRIVATE_KEY`, `STATE_PRIVATE_KEY`, `X25519_KEY`, `P2P_ADDR`)
+or pre-signed signatures (see [Exporting Node Signatures](#exporting-node-signatures)):
+
+```bash
+staking-cli register-validator --node-signatures signatures.json --commission 4.99 \
+    --metadata-uri https://my-validator.example.com/status/metrics \
+    --x25519-key X25519_PUB_KEY~... --p2p-addr validator.example.com:9000
+```
+
+Notes:
+
+- Each Ethereum account needs gas funds (~300k gas for registration)
+- Each BLS key can only be registered once
+- Each Ethereum account can only register one validator
+- Commission can be updated later via `update-commission` (subject to rate limits)
+- Metadata URL can be updated anytime via `update-metadata-uri`
+- x25519 key and p2p address can be updated later via `update-x25519-key`, `update-p2p-addr`, or `update-network-config`
 
 ### Updating your commission
 
@@ -403,7 +572,9 @@ Validators can update their commission rate, subject to the following rate limit
 
 To update your commission:
 
-    staking-cli update-commission --new-commission 7.5
+```bash
+staking-cli update-commission --new-commission 7.5
+```
 
 The commission value is in percent with up to 2 decimal points: from 0.00 to 100.00.
 
@@ -411,61 +582,130 @@ Note: The minimum time interval and maximum increase are contract parameters tha
 
 ### Updating your metadata URL
 
-Validators can update their metadata URL at any time. The metadata URL is used to provide additional information about
-your validator but the official schema is yet to be decided.
+```bash
+staking-cli update-metadata-uri --metadata-uri https://my-validator.example.com/status/metrics \
+    --consensus-public-key BLS_VER_KEY~...
+```
 
-To update your metadata URL:
+To skip validation (if endpoint isn't ready):
 
-    staking-cli update-metadata-uri --metadata-uri https://example.com/updated-metadata.json
+```bash
+staking-cli update-metadata-uri --metadata-uri https://my-validator.example.com/status/metrics \
+    --skip-metadata-validation
+```
 
-To clear your metadata URL (set it to empty):
+See [Validator Metadata](#validator-metadata) for format options. Use `--no-metadata-uri` to clear.
 
-    staking-cli update-metadata-uri --no-metadata-uri
+#### Metadata JSON Schema (for custom hosting)
 
-The metadata URL:
+If hosting a custom JSON file instead of using your node's metrics endpoint:
 
-- Must be a valid URL (e.g., starting with `https://`) unless using --no-metadata-uri flag
-- Can be empty when using --no-metadata-uri flag
-- Cannot exceed 2048 bytes
+```json
+{
+  "pub_key": "BLS_VER_KEY~...",
+  "name": "My Validator",
+  "description": "Description",
+  "company_name": "Acme Inc.",
+  "company_website": "https://acme.com/",
+  "client_version": "v1.0.0",
+  "icon": {
+    "14x14": { "@1x": "https://example.com/icon-14.png", "@2x": "...", "@3x": "..." },
+    "24x24": { "@1x": "https://example.com/icon-24.png", "@2x": "...", "@3x": "..." }
+  }
+}
+```
 
-Note: The metadata URL is emitted in events only. Off-chain indexers track the current URL by listening to registration
-and update events.
+Only `pub_key` is required (must match your registered key to prevent impersonation). All other fields are optional.
 
 ### De-registering your validator
 
 WARNING: running this command will remove your validator from the stake table and undelegate all the funds delegated to
 it.
 
-    staking-cli deregister-validator
+```bash
+staking-cli deregister-validator
+```
 
 ### Rotating your consensus keys
 
 1.  Obtain your validator's new BLS and state private keys.
 1.  Run
 
-        staking-cli update-consensus-keys --consensus-private-key BLS_KEY --state-private-key STATE_KEY
+    ```bash
+    staking-cli update-consensus-keys --consensus-private-key BLS_KEY --state-private-key STATE_KEY
+    ```
 
     The new keys will become active in the 3rd epoch after the command is run.
 
     To avoid specifying the the keys on the command line they can be set via env vars
 
-    ```
+    ```text
     CONSENSUS_PRIVATE_KEY=BLS_SIGNING_KEY~...
     STATE_PRIVATE_KEY=SCHNORR_SIGNING_KEY~...
     ```
 
     Alternatively, you can use pre-signed signatures:
 
-        staking-cli update-consensus-keys --node-signatures signatures.json
-        staking-cli update-consensus-keys --node-signatures signatures.toml --format toml
+    ```bash
+    staking-cli update-consensus-keys --node-signatures signatures.json
+    staking-cli update-consensus-keys --node-signatures signatures.toml --format toml
+    ```
+
+### Configuring networking (x25519 key and p2p address)
+
+Validators connect over cliquenet, a fully-connected, x25519-encrypted mesh that replaces the CDN and libp2p networking.
+Each validator publishes two networking values in the stake table contract so peers can discover and connect to it:
+
+- **x25519 public key**: identifies the validator for encrypted peer connections
+- **p2p address**: the `host:port` other validators dial (IP or hostname, e.g. `10.0.0.1:9000` or
+  `validator.example.com:9000`)
+
+Generate the x25519 keypair with the node `keygen` utility:
+
+```bash
+keygen --scheme x25519
+```
+
+which prints:
+
+```text
+ESPRESSO_NODE_PUBLIC_X25519_KEY=X25519_PUB_KEY~...
+ESPRESSO_NODE_PRIVATE_X25519_KEY=X25519_PRIV_KEY~...
+```
+
+The private key configures the node; the public key is registered on-chain with the commands below.
+
+New validators provide both values at registration (see [Registration Command](#registration-command)). Validators
+registered before the V3 stake table set both values once with `update-network-config`:
+
+```bash
+staking-cli update-network-config \
+    --x25519-key X25519_PUB_KEY~... \
+    --p2p-addr validator.example.com:9000
+```
+
+To change only one value later:
+
+```bash
+# Rotate the x25519 key
+staking-cli update-x25519-key --x25519-key X25519_PUB_KEY~...
+
+# Change the p2p address
+staking-cli update-p2p-addr --p2p-addr validator.example.com:9000
+```
+
+All three commands accept the env vars `X25519_KEY` and `P2P_ADDR`, and support `--export-calldata` for multisig
+wallets.
 
 ### Exporting Node Signatures
 
 To avoid mixing Espresso and Ethereum keys on a single host we can pre-sign the validator address for registration and
 key updates. The exported payload can later be used to build the Ethereum transaction on another host.
 
-    staking-cli export-node-signatures --address 0x12...34 \
-        --consensus-private-key <BLS_KEY> --state-private-key <STATE_KEY>
+```bash
+staking-cli export-node-signatures --address 0x12...34 \
+    --consensus-private-key <BLS_KEY> --state-private-key <STATE_KEY>
+```
 
 Output formats:
 
@@ -487,8 +727,10 @@ schnorr_signature = "SCHNORR_SIG~..."
 
 The exported signatures can then be used in validator operations:
 
-    staking-cli register-validator --node-signatures signatures.json --commission 4.99
-    staking-cli update-consensus-keys --node-signatures signatures.json
+```bash
+staking-cli register-validator --node-signatures signatures.json --commission 4.99
+staking-cli update-consensus-keys --node-signatures signatures.json
+```
 
 Format handling:
 
@@ -497,31 +739,7 @@ Format handling:
 - Explicit format for stdin:
   `cat signatures.toml | staking-cli register-validator --node-signatures - --format toml --commission 4.99`
 
-### Native Demo Staking
+### Demo Commands
 
-The `stake-for-demo` command is used to set up validators and delegators for testing purposes.
-
-    staking-cli stake-for-demo --num-validators 5
-
-Configuration options:
-
-- `--num-validators`: Number of validators to register (default: 5)
-- `--num-delegators-per-validator`: Number of delegators per validator (default: random 2-5, max: 100,000)
-- `--delegation-config`: Delegation configuration mode (default: variable-amounts)
-  - `equal-amounts`: All validators have equal delegation amounts
-  - `variable-amounts`: Variable delegation amounts per validator
-  - `multiple-delegators`: Multiple delegators per validator
-  - `no-self-delegation`: Validators do not self-delegate
-
-Environment variables:
-
-- `NUM_DELEGATORS_PER_VALIDATOR`: Set the number of delegators per validator
-- `DELEGATION_CONFIG`: Set the delegation configuration mode
-
-Example usage:
-
-    # Create 10 validators with 50 delegators each
-    staking-cli stake-for-demo --num-validators 10 --num-delegators-per-validator 50
-
-    # Using environment variables with native demo
-    env NUM_DELEGATORS_PER_VALIDATOR=1000 DELEGATION_CONFIG=no-self-delegation just demo-native-drb-header
+The `demo` subcommand provides tools for testing and demonstration purposes. See [DEVELOPER_DOCS.md](DEVELOPER_DOCS.md)
+for details.

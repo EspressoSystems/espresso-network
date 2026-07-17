@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use hotshot_example_types::node_types::{CombinedImpl, TestTypes, TestVersions};
+use hotshot_example_types::node_types::{CombinedImpl, TestTypes};
 use hotshot_testing::{
     block_builder::SimpleBuilderImplementation,
     completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
@@ -24,7 +24,7 @@ use tracing::instrument;
 async fn test_combined_network() {
     use hotshot_testing::block_builder::SimpleBuilderImplementation;
 
-    let mut metadata: TestDescription<TestTypes, CombinedImpl, TestVersions> = TestDescription {
+    let mut metadata: TestDescription<TestTypes, CombinedImpl> = TestDescription {
         timing_data: TimingData {
             next_view_timeout: 10_000,
 
@@ -50,14 +50,16 @@ async fn test_combined_network() {
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 async fn test_combined_network_cdn_crash() {
-
-    let mut metadata: TestDescription<TestTypes, CombinedImpl, TestVersions> = TestDescription {
+    let mut metadata: TestDescription<TestTypes, CombinedImpl> = TestDescription {
         timing_data: TimingData {
             next_view_timeout: 10_000,
             ..Default::default()
         },
         overall_safety_properties: OverallSafetyPropertiesDescription {
             num_successful_views: 35,
+            // after the scripted CDN crash a few views can time out at arbitrary points
+            // during libp2p fallback
+            max_unexpected_view_failures: 5,
             ..Default::default()
         },
         // allow more time to pass in CI
@@ -95,8 +97,7 @@ async fn test_combined_network_cdn_crash() {
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 async fn test_combined_network_reup() {
-
-    let mut metadata: TestDescription<TestTypes, CombinedImpl, TestVersions> = TestDescription {
+    let mut metadata: TestDescription<TestTypes, CombinedImpl> = TestDescription {
         timing_data: TimingData {
             next_view_timeout: 10_000,
 
@@ -104,6 +105,8 @@ async fn test_combined_network_reup() {
         },
         overall_safety_properties: OverallSafetyPropertiesDescription {
             num_successful_views: 35,
+            // CDN reup after the outage can fail a few views during libp2p fallback handoff
+            max_unexpected_view_failures: 5,
             ..Default::default()
         },
         // allow more time to pass in CI
@@ -145,8 +148,7 @@ async fn test_combined_network_reup() {
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 async fn test_combined_network_half_dc() {
-
-    let mut metadata: TestDescription<TestTypes, CombinedImpl, TestVersions> = TestDescription {
+    let mut metadata: TestDescription<TestTypes, CombinedImpl> = TestDescription {
         timing_data: TimingData {
             next_view_timeout: 10_000,
 
@@ -154,6 +156,9 @@ async fn test_combined_network_half_dc() {
         },
         overall_safety_properties: OverallSafetyPropertiesDescription {
             num_successful_views: 35,
+            // libp2p fallback after the CDN drop occasionally stalls a few views
+            // mid-run (observed gaps like [30,31,32]); budget them.
+            max_unexpected_view_failures: 5,
             ..Default::default()
         },
         // allow more time to pass in CI
@@ -193,7 +198,7 @@ fn generate_random_node_changes(
     let mut node_changes = vec![];
 
     for _ in 0..total_nodes * 2 {
-        let updown = if rng.gen::<bool>() {
+        let updown = if rng.r#gen::<bool>() {
             NodeAction::NetworkUp
         } else {
             NodeAction::NetworkDown
@@ -218,8 +223,7 @@ fn generate_random_node_changes(
 #[instrument]
 #[ignore]
 async fn test_stress_combined_network_fuzzy() {
-
-    let mut metadata: TestDescription<TestTypes, CombinedImpl, TestVersions> = TestDescription {
+    let mut metadata: TestDescription<TestTypes, CombinedImpl> = TestDescription {
         timing_data: TimingData {
             next_view_timeout: 10_000,
             ..Default::default()

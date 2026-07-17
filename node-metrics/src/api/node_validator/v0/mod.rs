@@ -4,21 +4,22 @@ use std::{fmt, future::Future, pin::Pin, str::FromStr, time::Duration};
 
 use alloy::primitives::Address;
 use anyhow::Context;
-use espresso_types::{v0_3::Validator, BackoffParams, SeqTypes};
+use espresso_types::{BackoffParams, SeqTypes, v0_3::AuthenticatedValidator};
 use futures::{
+    FutureExt, Sink, SinkExt, Stream, StreamExt,
     channel::mpsc::{self, SendError, Sender},
     future::{BoxFuture, Either},
-    pin_mut, FutureExt, Sink, SinkExt, Stream, StreamExt,
+    pin_mut,
 };
 use hotshot_query_service::{
     availability::{BlockQueryData, Leaf1QueryData},
     types::HeightIndexed,
 };
-use hotshot_types::{signature_key::BLSPubKey, PeerConfig};
+use hotshot_types::{PeerConfig, signature_key::BLSPubKey};
 use indexmap::IndexMap;
 use prometheus_parse::{Sample, Scrape};
 use serde::{Deserialize, Serialize};
-use tide_disco::{api::ApiError, socket::Connection, Api};
+use tide_disco::{Api, api::ApiError, socket::Connection};
 use tokio::{spawn, task::JoinHandle, time::timeout};
 use url::Url;
 use vbs::version::{StaticVersion, StaticVersionType, Version};
@@ -351,7 +352,7 @@ pub async fn get_node_stake_table_from_sequencer(
 pub async fn get_node_validators_from_sequencer(
     client: surf_disco::Client<hotshot_query_service::Error, Version01>,
     epoch: u64,
-) -> Result<IndexMap<Address, Validator<BLSPubKey>>, hotshot_query_service::Error> {
+) -> Result<IndexMap<Address, AuthenticatedValidator<BLSPubKey>>, hotshot_query_service::Error> {
     let path = format!("node/validators/{epoch}");
     // Let's figure out our epoch height
     let request = client
@@ -361,13 +362,14 @@ pub async fn get_node_validators_from_sequencer(
         // deserialize the response.
         .header("Accept", "application/json");
 
-    let validators: IndexMap<Address, Validator<BLSPubKey>> = match request.send().await {
-        Ok(validators) => validators,
-        Err(err) => {
-            tracing::info!("retrieve validators request failed: {}", err);
-            return Err(err);
-        },
-    };
+    let validators: IndexMap<Address, AuthenticatedValidator<BLSPubKey>> =
+        match request.send().await {
+            Ok(validators) => validators,
+            Err(err) => {
+                tracing::info!("retrieve validators request failed: {}", err);
+                return Err(err);
+            },
+        };
 
     Ok(validators)
 }
@@ -616,7 +618,6 @@ where
 
         // Next, do we already have a connection?
         if let Some(connection_mut) = &mut self_mut.connection {
-            // Alright, then we'll want to retrieve the next entry
             pin_mut!(connection_mut);
 
             return match connection_mut.poll_next(cx) {

@@ -9,16 +9,16 @@ use std::{
     num::NonZeroUsize,
     ops::Deref,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
 
-use async_broadcast::{broadcast, Sender};
+use async_broadcast::{Sender, broadcast};
 use async_lock::RwLock;
 use async_trait::async_trait;
-use futures::{future::BoxFuture, Stream, StreamExt};
+use futures::{Stream, StreamExt, future::BoxFuture};
 use hotshot::types::{Event, EventType, SignatureKey};
 use hotshot_builder_api::{
     v0_1::{
@@ -36,12 +36,12 @@ use hotshot_types::{
     utils::BuilderCommitment,
 };
 use lru::LruCache;
-use rand::{rngs::SmallRng, Rng, RngCore, SeedableRng};
-use tide_disco::{method::ReadState, Url};
+use rand::{Rng, RngCore, SeedableRng, rngs::SmallRng};
+use tide_disco::{Url, method::ReadState};
 use tokio::{spawn, time::sleep};
 
 use super::{
-    build_block, run_builder_source_0_1, BlockEntry, BuilderTask, TestBuilderImplementation,
+    BlockEntry, BuilderTask, TestBuilderImplementation, build_block, run_builder_source_0_1,
 };
 use crate::test_builder::BuilderChange;
 
@@ -180,28 +180,28 @@ where
                         break;
                     },
                     Some(evt) => {
-                        if let EventType::ViewFinished { view_number } = evt.event {
-                            if let Some(change) = self.changes.remove(&view_number) {
-                                match change {
-                                    BuilderChange::Up => {
-                                        if task.is_none() {
-                                            task = Some(spawn(Self::build_blocks(
-                                                self.config.clone(),
-                                                self.pub_key.clone(),
-                                                self.priv_key.clone(),
-                                                self.blocks.clone(),
-                                            )))
-                                        }
-                                    },
-                                    BuilderChange::Down => {
-                                        if let Some(handle) = task.take() {
-                                            handle.abort();
-                                        }
-                                    },
-                                    BuilderChange::FailClaims(_) => {},
-                                }
-                                let _ = self.change_sender.broadcast(change).await;
+                        if let EventType::ViewFinished { view_number } = evt.event
+                            && let Some(change) = self.changes.remove(&view_number)
+                        {
+                            match change {
+                                BuilderChange::Up => {
+                                    if task.is_none() {
+                                        task = Some(spawn(Self::build_blocks(
+                                            self.config.clone(),
+                                            self.pub_key.clone(),
+                                            self.priv_key.clone(),
+                                            self.blocks.clone(),
+                                        )))
+                                    }
+                                },
+                                BuilderChange::Down => {
+                                    if let Some(handle) = task.take() {
+                                        handle.abort();
+                                    }
+                                },
+                                BuilderChange::FailClaims(_) => {},
                             }
+                            let _ = self.change_sender.broadcast(change).await;
                         }
                     },
                 }

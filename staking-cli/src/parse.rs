@@ -1,8 +1,13 @@
 use std::{fmt::Display, str::FromStr as _};
 
 use derive_more::{Add, From};
-use hotshot_types::{light_client::StateSignKey, signature_key::BLSPrivKey};
-use rust_decimal::{prelude::ToPrimitive as _, Decimal};
+use hotshot_types::{
+    addr::NetAddr,
+    light_client::StateSignKey,
+    signature_key::{BLSPrivKey, BLSPubKey},
+    x25519,
+};
+use rust_decimal::{Decimal, prelude::ToPrimitive as _};
 use tagged_base64::{TaggedBase64, Tb64Error};
 use thiserror::Error;
 
@@ -10,8 +15,27 @@ pub fn parse_bls_priv_key(s: &str) -> Result<BLSPrivKey, Tb64Error> {
     TaggedBase64::parse(s)?.try_into()
 }
 
+pub fn parse_bls_pub_key(s: &str) -> Result<BLSPubKey, Tb64Error> {
+    TaggedBase64::parse(s)?.try_into()
+}
+
 pub fn parse_state_priv_key(s: &str) -> Result<StateSignKey, Tb64Error> {
     TaggedBase64::parse(s)?.try_into()
+}
+
+pub fn parse_x25519_key(s: &str) -> Result<x25519::PublicKey, String> {
+    TaggedBase64::parse(s)
+        .map_err(|e| e.to_string())
+        .and_then(|tb| x25519::PublicKey::try_from(tb).map_err(|e| e.to_string()))
+}
+
+pub fn parse_x25519_priv_key(s: &str) -> Result<x25519::SecretKey, Tb64Error> {
+    TaggedBase64::parse(s)?.try_into()
+}
+
+pub fn parse_net_addr(s: &str) -> Result<NetAddr, String> {
+    s.parse()
+        .map_err(|e| format!("Invalid network address (expected host:port): {e}"))
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Add)]

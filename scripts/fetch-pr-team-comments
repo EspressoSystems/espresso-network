@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Security Model
+# ──────────────
+# This script pre-fetches PR review comments for use by AI code reviewers
+# (Claude, etc.). Only comments from team members (MEMBER, OWNER,
+# COLLABORATOR) and trusted bots (claude, gemini-code-assist)
+# are included.
+#
+# This mitigates prompt injection: external contributors' comments are
+# excluded. Team members are trusted because they already have the same
+# GitHub permissions as the AI reviewer.
+#
+# The AI reviewer reads the saved file instead of fetching comments
+# directly, so it cannot access excluded comments.
+#
+# Claude is not used for PR approval, only review, limiting the blast
+# radius of any injection.
+
+readonly SCRIPT_NAME="${0##*/}"
+
+usage() {
+  cat <<EOF
+Usage: ${SCRIPT_NAME} <org> <repo> <pr-number>
+
+Fetch PR review thread comments from team members and trusted bots.
+JSON is written to stdout, log messages to stderr.
+EOF
+}
+
+err() {
+  echo "${SCRIPT_NAME}: $*" >&2
+}
+
+main() {
+  case "${1-}" in
+    -h | --help)
+      usage
+      exit 0
+      ;;
+  esac
+
+  if [[ $# -ne 3 ]]; then
+    err "expected 3 arguments, got $#"
+    usage >&2
+    exit 1
+  fi
+
+  local org="$1"
+  local repo="$2"
+  local pr="$3"
+
+  local raw
+  raw="$(gh api graphql \
+    -F owner="$org" \
+    -F repo="$repo" \
+    -F pr="$pr" \
+    -f query='
+query($owner: String!, $repo: String!, $pr: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $pr) {
+      comments(first: 100) {
+        pageInfo { hasNextPage }
+        nodes {
+          author { login }
+          authorAssociation
+          body
+        }
+      }
+      reviewThreads(first: 100) {
+        pageInfo { hasNextPage }
+        nodes {
+          id isResolved path line
+          comments(first: 100) {
+            nodes {
+              author { login }
+              authorAssociation
+              body
+            }
+          }
+        }
+      }
+    }
+  }
+}')"
+
+  local pr_data
+  pr_data="$(echo "${raw}" | jq '.data.repository.pullRequest')"
+
+  if echo "${pr_data}" | jq -e '.comments.pageInfo.hasNextPage or .reviewThreads.pageInfo.hasNextPage' > /dev/null; then
+    err "WARNING: results truncated at 100 items, some comments may be missing"
+  fi
+
+  local result
+  result="$(echo "${pr_data}" | jq '
+    def trusted:
+      (.authorAssociation | IN("MEMBER","OWNER","COLLABORATOR"))
+      or (.author.login | IN("claude","gemini-code-assist"));
+    {
+      comments: [.comments.nodes[] | select(trusted)],
+      reviewThreads: [.reviewThreads.nodes[]
+        | .comments.nodes |= [.[] | select(trusted)]
+        | select(.comments.nodes | length > 0)],
+      stats: {
+        all_comments: (.comments.nodes | length),
+        all_threads: (.reviewThreads.nodes | length)
+      }
+    }
+    | .stats as $s
+    | del(.stats)
+    | . + {_stats: {
+        comments: "\(.comments | length)/\($s.all_comments)",
+        threads: "\(.reviewThreads | length)/\($s.all_threads)"
+      }}
+  ')"
+
+  local stats
+  stats="$(echo "${result}" | jq -r '._stats | "\(.comments) PR comments + \(.threads) review threads"')"
+  err "Fetched ${stats} (filtered untrusted)"
+
+  echo "${result}" | jq 'del(._stats)'
+}
+
+main "$@"

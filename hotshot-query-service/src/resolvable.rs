@@ -10,39 +10,4 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-use committable::{Commitment, Committable};
-use either::Either;
-
-/// A reference to a `T` which can be resolved into a whole `T`.
-pub trait Resolvable<T: Committable>: Sized {
-    /// Get the underlying object if it is available without blocking.
-    fn try_resolve(self) -> Result<T, Self>;
-    /// Get a commitment to the underlying object.
-    fn commitment(&self) -> Commitment<T>;
-}
-
-impl<T: Committable> Resolvable<T> for T {
-    fn try_resolve(self) -> Result<T, Self> {
-        Ok(self)
-    }
-
-    fn commitment(&self) -> Commitment<T> {
-        self.commit()
-    }
-}
-
-impl<T: Committable> Resolvable<T> for Either<T, Commitment<T>> {
-    fn try_resolve(self) -> Result<T, Self> {
-        match self {
-            Either::Left(t) => Ok(t),
-            Either::Right(c) => Err(Either::Right(c)),
-        }
-    }
-
-    fn commitment(&self) -> Commitment<T> {
-        match self {
-            Either::Left(t) => t.commit(),
-            Either::Right(c) => *c,
-        }
-    }
-}
+pub use hotshot_query_service_types::resolvable::*;

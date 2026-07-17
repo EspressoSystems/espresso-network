@@ -8,9 +8,20 @@ CREATE TABLE leaf (
 );
 CREATE INDEX leaf_payload_hash_height ON leaf (payload_hash, height);
 
--- This table just keeps track of which epochs we have a stake table for.
+-- This table just keeps track of which epochs we have a stake table for, and two protocol
+-- versions:
+--
+--   * `epoch_root_protocol_version` is the version of the epoch root header in epoch `e-2`,
+--     under whose rules this epoch's active validator set was selected. Storing it lets cache
+--     hits apply the correct active-set selection rules without re-fetching the root.
+--
+--   * `next_epoch_root_protocol_version` is the version of the epoch root header in epoch
+--     `e-1`, which is the snapshot for `e+1`. Storing it lets a catchup that starts from this
+--     row seed iter 1's filter version without re-fetching that root.
 CREATE TABLE stake_table_epoch (
-    epoch BIGINT PRIMARY KEY
+    epoch                            BIGINT PRIMARY KEY,
+    epoch_root_protocol_version      TEXT   NOT NULL,
+    next_epoch_root_protocol_version TEXT   NOT NULL
 );
 
 -- This table holds the actual entries for each stake table.
@@ -41,6 +52,16 @@ CREATE TABLE stake_table_schnorr_key (
     epoch BIGINT NOT NULL
 );
 CREATE INDEX stake_table_schnorr_key_epoch ON stake_table_schnorr_key (epoch);
+
+-- This table tracks used x25519 keys for each stake table.
+--
+-- It is cumulative, meaning each key is only added once, with the epoch number where it is first
+-- used, but it belongs to the `used_x25519_keys` set in each stake table after that epoch as well.
+CREATE TABLE stake_table_x25519_key (
+    key   TEXT   PRIMARY KEY,
+    epoch BIGINT NOT NULL
+);
+CREATE INDEX stake_table_x25519_key_epoch ON stake_table_x25519_key (epoch);
 
 -- This table tracks exiting validators for each stake table.
 --

@@ -7,35 +7,36 @@ use std::{
 };
 
 use alloy::primitives::{Address, U256};
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use async_lock::Mutex;
 use bitvec::vec::BitVec;
 use committable::{Commitment, Committable};
 use derivative::Derivative;
 use espresso_types::{
-    v0_3::{StakeTableEvent, Validator},
-    BlockMerkleTree, DrbAndHeaderUpgradeVersion, EpochVersion, FeeVersion, Leaf2, NamespaceId,
-    NodeState, NsProof, Payload, PrivKey, PubKey, SeqTypes, SequencerVersions, StakeTableHash,
-    StakeTableState, Transaction, ValidatorMap, BLOCK_MERKLE_TREE_HEIGHT,
+    BLOCK_MERKLE_TREE_HEIGHT, BlockMerkleTree, Certificate2, EpochVersion, Leaf2, NamespaceId,
+    NodeState, NsProof, Payload, PrivKey, PubKey, RegisteredValidatorMap, SeqTypes, StakeTableHash,
+    StakeTableState, Transaction,
+    v0_3::{AuthenticatedValidator, RegisteredValidator, StakeTableEvent},
 };
-use hotshot_contract_adapter::sol_types::StakeTableV2::{Delegated, ValidatorRegistered};
-use hotshot_query_service::{
+use hotshot_contract_adapter::sol_types::StakeTableV3::{Delegated, ValidatorRegistered};
+use hotshot_query_service_types::{
     availability::{LeafHash, LeafId, LeafQueryData},
     node::{BlockHash, BlockId},
 };
 use hotshot_types::{
     data::{
-        vid_commitment, EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment,
-        VidCommon, ViewNumber,
+        EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment, VidCommon, ViewNumber,
+        vid_commitment,
     },
     message::UpgradeLock,
     signature_key::SchnorrPubKey,
     simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
-    simple_vote::{NextEpochQuorumData2, QuorumData2, UpgradeProposalData, VersionedVoteData},
-    stake_table::{supermajority_threshold, StakeTableEntry},
+    simple_vote::{
+        NextEpochQuorumData2, QuorumData2, UpgradeProposalData, VersionedVoteData, Vote2Data,
+    },
+    stake_table::{StakeTableEntry, supermajority_threshold},
     traits::{
         block_contents::EncodeBytes,
-        node_implementation::{ConsensusTime, Versions},
         signature_key::{SignatureKey, StateSignatureKey},
     },
     utils::{epoch_from_block_number, is_epoch_transition, is_ge_epoch_root},
@@ -43,10 +44,14 @@ use hotshot_types::{
     vote::Certificate as _,
 };
 use jf_merkle_tree_compat::{
-    prelude::SHA3MerkleTree, AppendableMerkleTreeScheme, MerkleTreeScheme,
+    AppendableMerkleTreeScheme, MerkleTreeScheme, prelude::SHA3MerkleTree,
 };
 use rand::RngCore;
-use vbs::version::StaticVersionType;
+use vbs::version::{StaticVersionType, Version};
+use versions::{
+    DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, FEE_VERSION, NEW_PROTOCOL_VERSION, Upgrade,
+    version,
+};
 
 use crate::{
     client::Client,
@@ -61,11 +66,9 @@ use crate::{
     storage::LeafRequest,
 };
 
-/// Upgrade to epochs during testing.
-pub type EnableEpochs = SequencerVersions<LegacyVersion, DrbAndHeaderUpgradeVersion>;
+pub const ENABLE_EPOCHS: Upgrade = Upgrade::new(FEE_VERSION, DRB_AND_HEADER_UPGRADE_VERSION);
 
-/// Test without epochs and with legacy HotStuff.
-pub type LegacyVersion = FeeVersion;
+pub const LEGACY_VERSION: Version = FEE_VERSION;
 
 /// Extract a chain of QCs from a chain of leaves.
 ///
@@ -81,40 +84,44 @@ pub fn qc_chain_from_leaf_chain<'a>(
 }
 
 /// Construct a valid leaf chain for the given height range.
-pub async fn leaf_chain<V: StaticVersionType + 'static>(
+pub async fn leaf_chain(
     range: impl IntoIterator<Item = u64>,
+    base: Version,
 ) -> Vec<LeafQueryData<SeqTypes>> {
-    custom_leaf_chain::<SequencerVersions<V, V>>(range, |_| {}).await
+    custom_leaf_chain(Upgrade::trivial(base), range, |_| {}).await
 }
 
 /// Construct a valid leaf chain for the given height range.
 ///
-/// The chain will upgrade from `V::Base` to `V::Upgrade` at height `upgrade_height`.
-pub async fn leaf_chain_with_upgrade<V: Versions>(
+/// The chain will upgrade from `base` to `upgrade` at height `upgrade_height`.
+pub async fn leaf_chain_with_upgrade(
     range: impl IntoIterator<Item = u64>,
     upgrade_height: u64,
+    upgrade: Upgrade,
 ) -> Vec<LeafQueryData<SeqTypes>> {
-    custom_leaf_chain_with_upgrade::<V>(range, upgrade_height, |_| {}).await
+    custom_leaf_chain_with_upgrade(range, upgrade_height, upgrade, |_| {}).await
 }
 
 /// Construct a customized leaf chain for the given height range.
 ///
-/// The chain will upgrade from `V::Base` to `V::Upgrade` at height `upgrade_height`.
-pub async fn custom_leaf_chain_with_upgrade<V: Versions>(
+/// The chain will upgrade from `base` to `upgrade` at height `upgrade_height`.
+pub async fn custom_leaf_chain_with_upgrade(
     range: impl IntoIterator<Item = u64>,
     upgrade_height: u64,
+    upgrade: Upgrade,
     map: impl Fn(&mut QuorumProposal2<SeqTypes>),
 ) -> Vec<LeafQueryData<SeqTypes>> {
-    let upgrade_leaf: Leaf2 = Leaf2::genesis::<V>(
+    let upgrade_leaf: Leaf2 = Leaf2::genesis(
         &Default::default(),
         &NodeState::mock()
-            .with_genesis_version(V::Upgrade::version())
-            .with_current_version(V::Upgrade::version()),
+            .with_genesis_version(upgrade.target)
+            .with_current_version(upgrade.target),
+        upgrade.base,
     )
     .await;
     let upgrade_data = UpgradeProposalData {
-        old_version: V::Base::version(),
-        new_version: V::Upgrade::version(),
+        old_version: upgrade.base,
+        new_version: upgrade.target,
         new_version_hash: Default::default(),
         old_version_last_view: ViewNumber::new(upgrade_height - 1),
         new_version_first_view: ViewNumber::new(upgrade_height),
@@ -129,7 +136,7 @@ pub async fn custom_leaf_chain_with_upgrade<V: Versions>(
         Default::default(),
     );
 
-    custom_leaf_chain::<V>(range, |proposal| {
+    custom_leaf_chain(upgrade, range, |proposal| {
         let height = proposal.block_header.height();
         if height < upgrade_height {
             // All views leading up to the upgrade get a certificate indicating the coming upgrade.
@@ -147,17 +154,18 @@ pub async fn custom_leaf_chain_with_upgrade<V: Versions>(
 }
 
 /// Construct a customized leaf chain for the given height range.
-pub async fn custom_leaf_chain<V: Versions>(
+pub async fn custom_leaf_chain(
+    upgrade: Upgrade,
     range: impl IntoIterator<Item = u64>,
     map: impl Fn(&mut QuorumProposal2<SeqTypes>),
 ) -> Vec<LeafQueryData<SeqTypes>> {
     let node_state = NodeState::mock()
-        .with_genesis_version(V::Base::version())
-        .with_current_version(V::Base::version());
-    let genesis_leaf: Leaf2 = Leaf2::genesis::<V>(&Default::default(), &node_state).await;
+        .with_genesis_version(upgrade.base)
+        .with_current_version(upgrade.base);
+    let genesis_leaf: Leaf2 = Leaf2::genesis(&Default::default(), &node_state, upgrade.base).await;
     tracing::info!(?genesis_leaf, "leaf chain");
 
-    let mut qc = QuorumCertificate2::genesis::<V>(&Default::default(), &node_state).await;
+    let mut qc = QuorumCertificate2::genesis(&Default::default(), &node_state, upgrade).await;
     let mut quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
         proposal: QuorumProposal2::<SeqTypes> {
             epoch: None,
@@ -186,7 +194,7 @@ pub async fn custom_leaf_chain<V: Versions>(
 
         qc.view_number = ViewNumber::new(height);
         qc.data.leaf_commit = Committable::commit(&leaf);
-        if leaf.block_header().version() >= EpochVersion::version() {
+        if leaf.block_header().version() >= EPOCH_VERSION {
             qc.data.block_number = Some(height);
         }
 
@@ -201,22 +209,24 @@ pub async fn custom_leaf_chain<V: Versions>(
 }
 
 /// Construct a valid leaf chain during which the epoch advances.
-pub async fn epoch_change_leaf_chain<V: StaticVersionType + 'static>(
+pub async fn epoch_change_leaf_chain(
     range: impl IntoIterator<Item = u64>,
     epoch_height: u64,
+    version: Version,
 ) -> Vec<LeafQueryData<SeqTypes>> {
-    custom_epoch_change_leaf_chain::<V>(range, epoch_height, |_| {}).await
+    custom_epoch_change_leaf_chain(range, epoch_height, version, |_| {}).await
 }
 
 /// Construct a customized leaf chain during which the epoch advances.
-pub async fn custom_epoch_change_leaf_chain<V: StaticVersionType + 'static>(
+pub async fn custom_epoch_change_leaf_chain(
     range: impl IntoIterator<Item = u64>,
     epoch_height: u64,
+    version: Version,
     map: impl Fn(&mut QuorumProposal2<SeqTypes>),
 ) -> Vec<LeafQueryData<SeqTypes>> {
-    custom_leaf_chain::<SequencerVersions<V, V>>(range, |proposal| {
+    custom_leaf_chain(Upgrade::trivial(version), range, |proposal| {
         if is_epoch_transition(proposal.block_header.height(), epoch_height) {
-            let data: NextEpochQuorumData2<SeqTypes> = proposal.justify_qc.data.clone().into();
+            let data: NextEpochQuorumData2<SeqTypes> = proposal.justify_qc.data.into();
             let commit = data.commit();
             proposal.next_epoch_justify_qc = Some(NextEpochQuorumCertificate2::new(
                 data,
@@ -238,6 +248,13 @@ impl Quorum for AlwaysTrueQuorum {
     async fn verify_static<V: StaticVersionType + 'static>(&self, _: &Certificate) -> Result<()> {
         Ok(())
     }
+
+    async fn verify_cert2_static<V: StaticVersionType + 'static>(
+        &self,
+        _: &Certificate2<SeqTypes>,
+    ) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -245,6 +262,13 @@ pub struct AlwaysFalseQuorum;
 
 impl Quorum for AlwaysFalseQuorum {
     async fn verify_static<V: StaticVersionType + 'static>(&self, _: &Certificate) -> Result<()> {
+        bail!("always false quorum");
+    }
+
+    async fn verify_cert2_static<V: StaticVersionType + 'static>(
+        &self,
+        _: &Certificate2<SeqTypes>,
+    ) -> Result<()> {
         bail!("always false quorum");
     }
 }
@@ -277,11 +301,18 @@ impl Quorum for VersionCheckQuorum {
             .get(&cert.leaf_commit())
             .context(format!("unknown leaf {}", cert.leaf_commit()))?;
         ensure!(
-            leaf.block_header().version() == V::version(),
+            leaf.block_header().version() == version(V::MAJOR, V::MINOR),
             "version mismatch: leaf has version {}, but verifier is using version {}",
             leaf.block_header().version(),
             V::version()
         );
+        Ok(())
+    }
+
+    async fn verify_cert2_static<V: StaticVersionType + 'static>(
+        &self,
+        _: &Certificate2<SeqTypes>,
+    ) -> Result<()> {
         Ok(())
     }
 }
@@ -306,6 +337,13 @@ impl Quorum for EpochChangeQuorum {
         if V::version() >= EpochVersion::version() {
             cert.verify_next_epoch_qc(self.epoch_height)?;
         }
+        Ok(())
+    }
+
+    async fn verify_cert2_static<V: StaticVersionType + 'static>(
+        &self,
+        _: &Certificate2<SeqTypes>,
+    ) -> Result<()> {
         Ok(())
     }
 }
@@ -340,16 +378,30 @@ struct InnerTestClient {
     invalid_proofs: HashSet<usize>,
     swapped_leaves: HashMap<usize, usize>,
     invalid_payloads: HashSet<usize>,
-    quorum: Vec<(PrivKey, Validator<PubKey>)>,
+    quorum: Vec<(PrivKey, AuthenticatedValidator<PubKey>)>,
     #[derivative(Default(value = "3"))]
     first_epoch_with_dynamic_stake_table: u64,
     missing_quorums: HashSet<u64>,
     invalid_quorums: HashSet<u64>,
     mock_block_height: Option<u64>,
+    view_gaps: HashSet<usize>,
+    corrupt_next_epoch_qc: bool,
+    /// `(height, target)`: leaves at heights `>= height` use `target`; earlier use
+    /// `DRB_AND_HEADER_UPGRADE_VERSION`.
+    upgrade: Option<(u64, Version)>,
+    /// `Certificate2` finality proofs for new-protocol leaves, by height.
+    cert2s: HashMap<usize, Certificate2<SeqTypes>>,
 }
 
 impl InnerTestClient {
-    fn quorum_for_epoch(&mut self, epoch: u64) -> &[(PrivKey, Validator<PubKey>)] {
+    fn version_at(&self, height: u64) -> Version {
+        match self.upgrade {
+            Some((h, target)) if height >= h => target,
+            _ => DRB_AND_HEADER_UPGRADE_VERSION,
+        }
+    }
+
+    fn quorum_for_epoch(&mut self, epoch: u64) -> &[(PrivKey, AuthenticatedValidator<PubKey>)] {
         // For testing purposes, we will say that one new node joins the quorum each epoch. The
         // static stake table used before the first epoch with dynamic stake is the same as the
         // stake table used in that epoch.
@@ -363,14 +415,19 @@ impl InnerTestClient {
                 self.quorum.len() as u64,
             );
             let stake = U256::from(self.quorum.len() + 1) * U256::from(1_000_000_000u128);
-            let validator = Validator {
+            let validator: AuthenticatedValidator<PubKey> = RegisteredValidator {
                 account: Address::random(),
-                stake_table_key,
-                state_ver_key,
+                stake_table_key: Some(stake_table_key),
+                state_ver_key: Some(state_ver_key),
                 stake,
                 commission: 1,
                 delegators: [(Address::random(), stake)].into_iter().collect(),
-            };
+                authenticated: true,
+                x25519_key: None,
+                p2p_addr: None,
+            }
+            .try_into()
+            .expect("authenticated validator");
             self.quorum.push((priv_key, validator));
         }
 
@@ -379,13 +436,13 @@ impl InnerTestClient {
 
     fn stake_table_hash(&mut self, epoch: u64) -> StakeTableHash {
         let quorum = self.quorum_for_epoch(epoch);
-        let mut validators = ValidatorMap::default();
+        let mut validators = RegisteredValidatorMap::default();
         let mut used_bls_keys = HashSet::default();
         let mut used_schnorr_keys = HashSet::default();
         for (_, validator) in quorum {
-            validators.insert(validator.account, validator.clone());
-            used_bls_keys.insert(validator.stake_table_key);
-            used_schnorr_keys.insert(validator.state_ver_key.clone());
+            validators.insert(validator.account, validator.clone().into());
+            used_bls_keys.insert(*validator.stake_table_key());
+            used_schnorr_keys.insert(validator.state_ver_key().clone());
         }
 
         let state = StakeTableState::new(
@@ -393,6 +450,7 @@ impl InnerTestClient {
             Default::default(),
             used_bls_keys,
             used_schnorr_keys,
+            HashSet::default(),
         );
         state.commit()
     }
@@ -405,7 +463,7 @@ impl InnerTestClient {
         let mut total_stake = U256::ZERO;
         for validator in &stake_table {
             stake_entries.push(StakeTableEntry {
-                stake_key: validator.stake_table_key,
+                stake_key: *validator.stake_table_key(),
                 stake_amount: validator.stake,
             });
             total_stake += validator.stake;
@@ -415,16 +473,14 @@ impl InnerTestClient {
 
         for i in self.leaves.len()..=height {
             let epoch = EpochNumber::new(epoch_from_block_number(i as u64, epoch_height));
-            let view_number = ViewNumber::new(i as u64);
+            let view_offset = self.view_gaps.iter().filter(|&&g| g < i).count() as u64;
+            let view_number = ViewNumber::new(i as u64 + view_offset);
 
-            let version = DrbAndHeaderUpgradeVersion::version();
-            let node_state = NodeState::mock_v3().with_genesis_version(version);
+            let upgrade = Upgrade::trivial(self.version_at(i as u64));
+            let node_state = NodeState::mock_v3().with_genesis_version(upgrade.base);
             let (justify_qc, mt) = if i == 0 {
                 (
-                    QuorumCertificate2::genesis::<
-                        SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>,
-                    >(&Default::default(), &node_state)
-                    .await,
+                    QuorumCertificate2::genesis(&Default::default(), &node_state, upgrade).await,
                     SHA3MerkleTree::new(BLOCK_MERKLE_TREE_HEIGHT),
                 )
             } else {
@@ -437,17 +493,17 @@ impl InnerTestClient {
             let transactions = vec![Transaction::random(&mut rand::thread_rng())];
             let (payload, ns_table) =
                 Payload::from_transactions_sync(transactions, node_state.chain_config).unwrap();
-            let payload_comm =
-                vid_commitment::<
-                    SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>,
-                >(&payload.encode(), &ns_table.encode(), quorum.len(), version);
+            let payload_comm = vid_commitment(
+                &payload.encode(),
+                &ns_table.encode(),
+                quorum.len(),
+                upgrade.base,
+            );
 
-            let mut block_header = Leaf2::genesis::<
-                SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>,
-            >(&Default::default(), &node_state)
-            .await
-            .block_header()
-            .clone();
+            let mut block_header = Leaf2::genesis(&Default::default(), &node_state, upgrade.base)
+                .await
+                .block_header()
+                .clone();
             *block_header.height_mut() = i as u64;
             *block_header.block_merkle_tree_root_mut() = mt.commitment();
             *block_header.payload_commitment_mut() = payload_comm;
@@ -457,6 +513,55 @@ impl InnerTestClient {
             {
                 assert!(block_header.set_next_stake_table_hash(self.stake_table_hash(*epoch + 1)));
             }
+            let next_epoch_justify_qc = if i > 0 && is_epoch_transition(i as u64, epoch_height) {
+                let parent_qc = self.leaves[i - 1].qc().clone();
+                let data: NextEpochQuorumData2<SeqTypes> = parent_qc.data.into();
+                let versioned_commit = VersionedVoteData::new_infallible(
+                    data.clone(),
+                    parent_qc.view_number,
+                    &UpgradeLock::<SeqTypes>::new(upgrade),
+                )
+                .commit();
+                let commit_bytes: [u8; 32] = versioned_commit.into();
+
+                let (next_keys, next_validators): (Vec<_>, Vec<_>) =
+                    self.quorum_for_epoch(*epoch + 1).iter().cloned().unzip();
+                let mut next_entries = vec![];
+                let mut next_total = U256::ZERO;
+                for validator in &next_validators {
+                    next_entries.push(StakeTableEntry {
+                        stake_key: *validator.stake_table_key(),
+                        stake_amount: validator.stake,
+                    });
+                    next_total += validator.stake;
+                }
+                let next_pp =
+                    PubKey::public_parameter(&next_entries, supermajority_threshold(next_total));
+                let sign_bytes: [u8; 32] = if self.corrupt_next_epoch_qc {
+                    [0xCC; 32]
+                } else {
+                    *versioned_commit.as_ref()
+                };
+                let next_sigs = next_keys
+                    .iter()
+                    .map(|key| PubKey::sign(key, &sign_bytes).unwrap())
+                    .collect::<Vec<_>>();
+                let next_signature = PubKey::assemble(
+                    &next_pp,
+                    &std::iter::repeat_n(true, next_keys.len()).collect::<BitVec>(),
+                    &next_sigs,
+                );
+
+                Some(NextEpochQuorumCertificate2::new(
+                    data,
+                    Commitment::from_raw(commit_bytes),
+                    parent_qc.view_number,
+                    Some(next_signature),
+                    Default::default(),
+                ))
+            } else {
+                None
+            };
             let quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
                 proposal: QuorumProposal2::<SeqTypes> {
                     epoch: Some(epoch),
@@ -466,7 +571,7 @@ impl InnerTestClient {
                     upgrade_certificate: None,
                     view_change_evidence: None,
                     next_drb_result: None,
-                    next_epoch_justify_qc: None,
+                    next_epoch_justify_qc,
                     state_cert: None,
                 },
             };
@@ -477,14 +582,10 @@ impl InnerTestClient {
                 block_number: Some(i as u64),
             };
             let quorum_data_comm = VersionedVoteData::new_infallible(
-                quorum_data.clone(),
+                quorum_data,
                 view_number,
-                &UpgradeLock::<
-                    SeqTypes,
-                    SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>,
-                >::new(),
+                &UpgradeLock::<SeqTypes>::new(upgrade),
             )
-            .await
             .commit();
             let signatures = quorum
                 .iter()
@@ -501,6 +602,39 @@ impl InnerTestClient {
                 assembled,
                 view_number,
             );
+
+            // New-protocol finality uses a `Certificate2` over `Vote2Data` instead of a
+            // HotStuff2 2-chain.
+            if upgrade.base >= NEW_PROTOCOL_VERSION {
+                let vote2_data = Vote2Data {
+                    leaf_commit: leaf.commit(),
+                    epoch,
+                    block_number: i as u64,
+                };
+                let vote2_data_comm = VersionedVoteData::new_infallible(
+                    vote2_data.clone(),
+                    view_number,
+                    &UpgradeLock::<SeqTypes>::new(upgrade),
+                )
+                .commit();
+                let cert2_sigs = quorum
+                    .iter()
+                    .map(|key| PubKey::sign(key, vote2_data_comm.as_ref()).unwrap())
+                    .collect::<Vec<_>>();
+                let cert2_assembled = PubKey::assemble(
+                    &pp,
+                    &std::iter::repeat_n(true, quorum.len()).collect::<BitVec>(),
+                    &cert2_sigs,
+                );
+                let cert2 = Certificate2::<SeqTypes>::create_signed_certificate(
+                    vote2_data_comm,
+                    vote2_data,
+                    cert2_assembled,
+                    view_number,
+                );
+                self.cert2s.insert(i, cert2);
+            }
+
             let leaf = LeafQueryData::new(leaf, qc).unwrap();
             self.leaf_hashes.insert(leaf.hash(), i);
             self.block_hashes.insert(leaf.block_hash(), i);
@@ -542,6 +676,27 @@ impl InnerTestClient {
 }
 
 impl TestClient {
+    pub fn with_epoch_height(epoch_height: u64) -> Self {
+        Self {
+            inner: Default::default(),
+            epoch_height,
+        }
+    }
+
+    pub async fn add_view_gap_after(&self, height: usize) {
+        self.inner.lock().await.view_gaps.insert(height);
+    }
+
+    pub async fn corrupt_next_epoch_qc(&self) {
+        self.inner.lock().await.corrupt_next_epoch_qc = true;
+    }
+
+    /// Upgrade leaves at `height` and above to `target`. Must be set before those leaves are
+    /// generated.
+    pub async fn set_upgrade(&self, height: u64, target: Version) {
+        self.inner.lock().await.upgrade = Some((height, target));
+    }
+
     pub async fn genesis(&self) -> Genesis {
         let mut inner = self.inner.lock().await;
         Genesis {
@@ -550,16 +705,14 @@ impl TestClient {
                 .quorum_for_epoch(1)
                 .iter()
                 .map(|(_, validator)| StakeTableEntry {
-                    stake_key: validator.stake_table_key,
+                    stake_key: *validator.stake_table_key(),
                     stake_amount: validator.stake,
                 })
                 .collect(),
             first_epoch_with_dynamic_stake_table: EpochNumber::new(
                 inner.first_epoch_with_dynamic_stake_table,
             ),
-
-            #[cfg(feature = "decaf")]
-            decaf_first_pos_epoch: None,
+            chain_id: NodeState::mock_v3().chain_config.chain_id,
         }
     }
 
@@ -609,7 +762,7 @@ impl TestClient {
             .quorum_for_epoch(*epoch)
             .iter()
             .map(|(_, validator)| StakeTableEntry {
-                stake_key: validator.stake_table_key,
+                stake_key: *validator.stake_table_key(),
                 stake_amount: validator.stake,
             })
             .collect()
@@ -673,7 +826,7 @@ impl Client for TestClient {
         let leaf = inner.leaf(height, self.epoch_height).await;
 
         let mut proof = LeafProof::default();
-        proof.push(leaf);
+        proof.push(leaf.clone());
         if let Some(finalized) = finalized {
             ensure!(
                 finalized > (height as u64),
@@ -689,8 +842,31 @@ impl Client for TestClient {
             }
         }
 
-        proof.push(inner.leaf(height + 1, self.epoch_height).await);
-        assert!(proof.push(inner.leaf(height + 2, self.epoch_height).await));
+        // For new-protocol leaves, finality is a single `Certificate2` rather than a QC chain.
+        if leaf.leaf().block_header().version() >= NEW_PROTOCOL_VERSION {
+            let cert2 = inner
+                .cert2s
+                .get(&height)
+                .with_context(|| format!("missing cert2 for new-protocol leaf {height}"))?
+                .clone();
+            proof.add_certificate(Arc::new(cert2), leaf.qc().clone());
+            return Ok(proof);
+        }
+
+        const MAX_PROOF_LEAVES: usize = 16;
+        let mut next = height + 1;
+        loop {
+            let leaf = inner.leaf(next, self.epoch_height).await;
+            next += 1;
+            if proof.push(leaf) {
+                break;
+            }
+            ensure!(
+                next < height + MAX_PROOF_LEAVES,
+                "could not assemble finality proof for leaf {height} within {MAX_PROOF_LEAVES} \
+                 leaves; add a higher bound or fewer view gaps"
+            );
+        }
 
         Ok(proof)
     }
@@ -799,6 +975,14 @@ impl Client for TestClient {
         Ok(PayloadProof::new(payload, vid_common))
     }
 
+    async fn payload_proofs_in_range(&self, start: u64, end: u64) -> Result<Vec<PayloadProof>> {
+        let mut proofs = vec![];
+        for i in start..end {
+            proofs.push(self.payload_proof(i).await?);
+        }
+        Ok(proofs)
+    }
+
     async fn namespace_proof(
         &self,
         height: u64,
@@ -852,13 +1036,47 @@ impl Client for TestClient {
         }
         Ok(proofs)
     }
+
+    async fn namespaces_proofs_in_range(
+        &self,
+        start: u64,
+        end: u64,
+        namespaces: &[NamespaceId],
+    ) -> Result<Vec<HashMap<NamespaceId, NamespaceProof>>> {
+        let mut proofs = vec![];
+        for i in start..end {
+            // Mirror the server: only include namespaces actually present in the block.
+            let present: Vec<_> = {
+                let inner = self.inner.lock().await;
+                let ns_table = inner.leaves[i as usize].header().ns_table().clone();
+                namespaces
+                    .iter()
+                    .copied()
+                    .filter(|ns| ns_table.find_ns_id(ns).is_some())
+                    .collect()
+            };
+            let mut block_proofs = HashMap::new();
+            for ns in present {
+                block_proofs.insert(ns, self.namespace_proof(i, ns).await?);
+            }
+            proofs.push(block_proofs);
+        }
+        Ok(proofs)
+    }
+
+    async fn cert2(&self, _height: u64) -> Result<Option<Certificate2<SeqTypes>>> {
+        Ok(None)
+    }
 }
 
-fn register_validator_events(events: &mut Vec<StakeTableEvent>, validator: &Validator<PubKey>) {
+fn register_validator_events(
+    events: &mut Vec<StakeTableEvent>,
+    validator: &AuthenticatedValidator<PubKey>,
+) {
     events.push(StakeTableEvent::Register(ValidatorRegistered {
         account: validator.account,
-        blsVk: validator.stake_table_key.into(),
-        schnorrVk: validator.state_ver_key.clone().into(),
+        blsVk: (*validator.stake_table_key()).into(),
+        schnorrVk: validator.state_ver_key().clone().into(),
         commission: validator.commission,
     }));
     for (&delegator, &amount) in &validator.delegators {
@@ -870,17 +1088,22 @@ fn register_validator_events(events: &mut Vec<StakeTableEvent>, validator: &Vali
     }
 }
 
-pub fn random_validator() -> Validator<PubKey> {
+pub fn random_validator() -> AuthenticatedValidator<PubKey> {
     let account = Address::random();
     let mut seed = [0; 32];
     rand::thread_rng().fill_bytes(&mut seed);
     let stake = U256::from(rand::thread_rng().next_u64());
-    Validator {
+    RegisteredValidator {
         account,
-        stake_table_key: PubKey::generated_from_seed_indexed(seed, 0).0,
-        state_ver_key: SchnorrPubKey::generated_from_seed_indexed(seed, 0).0,
+        stake_table_key: Some(PubKey::generated_from_seed_indexed(seed, 0).0),
+        state_ver_key: Some(SchnorrPubKey::generated_from_seed_indexed(seed, 0).0),
         stake,
         commission: 1,
         delegators: [(Address::random(), stake)].into_iter().collect(),
+        authenticated: true,
+        x25519_key: None,
+        p2p_addr: None,
     }
+    .try_into()
+    .expect("authenticated validator")
 }

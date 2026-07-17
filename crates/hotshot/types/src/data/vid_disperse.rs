@@ -15,9 +15,12 @@
 //! 3. `AvidmGf2*`: VID V2, almost the same as VID V1 but we have a much more efficient recovery
 //!    implementation.
 
-use std::{collections::BTreeMap, fmt::Debug, hash::Hash, marker::PhantomData, time::Duration};
+use std::{
+    collections::BTreeMap, fmt::Debug, hash::Hash, marker::PhantomData, ops::Range, sync::Arc,
+    time::Duration,
+};
 
-use alloy::primitives::U256;
+use alloy_primitives::U256;
 use hotshot_utils::anytrace::*;
 use jf_advz::{VidDisperse as JfVidDisperse, VidScheme};
 use serde::{Deserialize, Serialize};
@@ -25,44 +28,67 @@ use tokio::{task::spawn_blocking, time::Instant};
 
 use super::ns_table::parse_ns_table;
 use crate::{
+    PeerConfig,
+    data::{EpochNumber, ViewNumber},
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
-    impl_has_epoch, impl_has_none_epoch,
     message::Proposal,
     simple_vote::HasEpoch,
-    stake_table::HSStakeTable,
     traits::{
+        BlockPayload,
         block_contents::EncodeBytes,
         node_implementation::NodeType,
         signature_key::{SignatureKey, StakeTableEntryType},
-        BlockPayload,
     },
     vid::{
-        advz::{advz_scheme, ADVZCommitment, ADVZCommon, ADVZScheme, ADVZShare},
-        avidm::{init_avidm_param, AvidMCommitment, AvidMCommon, AvidMScheme, AvidMShare},
+        advz::{ADVZCommitment, ADVZCommon, ADVZScheme, ADVZShare, advz_scheme},
+        avidm::{AvidMCommitment, AvidMCommon, AvidMScheme, AvidMShare, init_avidm_param},
         avidm_gf2::{
-            init_avidm_gf2_param, AvidmGf2Commitment, AvidmGf2Common, AvidmGf2Scheme, AvidmGf2Share,
+            AvidmGf2Commitment, AvidmGf2Common, AvidmGf2Param, AvidmGf2Scheme, AvidmGf2Share,
+            init_avidm_gf2_param,
         },
     },
     vote::HasViewNumber,
 };
 
-impl_has_epoch!(
-    ADVZDisperse<TYPES>,
-    AvidMDisperse<TYPES>,
-    AvidMDisperseShare<TYPES>,
-    AvidmGf2Disperse<TYPES>,
-    AvidmGf2DisperseShare<TYPES>
-);
+impl<NODE: NodeType> HasEpoch for ADVZDisperse<NODE> {
+    fn epoch(&self) -> Option<EpochNumber> {
+        self.epoch
+    }
+}
+
+impl<NODE: NodeType> HasEpoch for AvidMDisperse<NODE> {
+    fn epoch(&self) -> Option<EpochNumber> {
+        self.epoch
+    }
+}
+
+impl<NODE: NodeType> HasEpoch for AvidMDisperseShare<NODE> {
+    fn epoch(&self) -> Option<EpochNumber> {
+        self.epoch
+    }
+}
+
+impl<NODE: NodeType> HasEpoch for AvidmGf2Disperse<NODE> {
+    fn epoch(&self) -> Option<EpochNumber> {
+        self.epoch
+    }
+}
+
+impl<NODE: NodeType> HasEpoch for AvidmGf2DisperseShare<NODE> {
+    fn epoch(&self) -> Option<EpochNumber> {
+        self.epoch
+    }
+}
 
 /// ADVZ dispersal data
 #[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
 pub struct ADVZDisperse<TYPES: NodeType> {
     /// The view number for which this VID data is intended
-    pub view_number: TYPES::View,
+    pub view_number: ViewNumber,
     /// Epoch the data of this proposal belongs to
-    pub epoch: Option<TYPES::Epoch>,
+    pub epoch: Option<EpochNumber>,
     /// Epoch to which the recipients of this VID belong to
-    pub target_epoch: Option<TYPES::Epoch>,
+    pub target_epoch: Option<EpochNumber>,
     /// VidCommitment calculated based on the number of nodes in `target_epoch`.
     pub payload_commitment: ADVZCommitment,
     /// A storage node's key and its corresponding VID share
@@ -71,8 +97,8 @@ pub struct ADVZDisperse<TYPES: NodeType> {
     pub common: ADVZCommon,
 }
 
-impl<TYPES: NodeType> HasViewNumber<TYPES> for ADVZDisperse<TYPES> {
-    fn view_number(&self) -> TYPES::View {
+impl<TYPES: NodeType> HasViewNumber for ADVZDisperse<TYPES> {
+    fn view_number(&self) -> ViewNumber {
         self.view_number
     }
 }
@@ -82,18 +108,15 @@ impl<TYPES: NodeType> ADVZDisperse<TYPES> {
     /// Uses the specified function to calculate share dispersal
     /// Allows for more complex stake table functionality
     async fn from_membership(
-        view_number: TYPES::View,
+        view_number: ViewNumber,
         mut vid_disperse: JfVidDisperse<ADVZScheme>,
         membership: &EpochMembershipCoordinator<TYPES>,
-        target_epoch: Option<TYPES::Epoch>,
-        data_epoch: Option<TYPES::Epoch>,
+        target_epoch: Option<EpochNumber>,
+        data_epoch: Option<EpochNumber>,
     ) -> Result<Self> {
         let shares = membership
-            .stake_table_for_epoch(target_epoch)
-            .await?
+            .stake_table_for_epoch(target_epoch)?
             .stake_table()
-            .await
-            .iter()
             .map(|entry| entry.stake_table_entry.public_key())
             .map(|node| (node.clone(), vid_disperse.shares.remove(0)))
             .collect();
@@ -117,15 +140,13 @@ impl<TYPES: NodeType> ADVZDisperse<TYPES> {
     pub async fn calculate_vid_disperse(
         payload: &TYPES::BlockPayload,
         membership: &EpochMembershipCoordinator<TYPES>,
-        view: TYPES::View,
-        target_epoch: Option<TYPES::Epoch>,
-        data_epoch: Option<TYPES::Epoch>,
+        view: ViewNumber,
+        target_epoch: Option<EpochNumber>,
+        data_epoch: Option<EpochNumber>,
     ) -> Result<(Self, Duration)> {
         let num_nodes = membership
-            .stake_table_for_epoch(target_epoch)
-            .await?
-            .total_nodes()
-            .await;
+            .stake_table_for_epoch(target_epoch)?
+            .total_nodes();
 
         let txns = payload.encode();
 
@@ -189,7 +210,7 @@ impl<TYPES: NodeType> ADVZDisperse<TYPES> {
 /// ADVZ share and associated metadata for a single node
 pub struct ADVZDisperseShare<TYPES: NodeType> {
     /// The view number for which this VID data is intended
-    pub view_number: TYPES::View,
+    pub view_number: ViewNumber,
     /// Block payload commitment
     pub payload_commitment: ADVZCommitment,
     /// A storage node's key and its corresponding VID share
@@ -200,10 +221,14 @@ pub struct ADVZDisperseShare<TYPES: NodeType> {
     pub recipient_key: TYPES::SignatureKey,
 }
 
-impl_has_none_epoch!(ADVZDisperseShare<TYPES>);
+impl<NODE: NodeType> HasEpoch for ADVZDisperseShare<NODE> {
+    fn epoch(&self) -> Option<EpochNumber> {
+        None
+    }
+}
 
-impl<TYPES: NodeType> HasViewNumber<TYPES> for ADVZDisperseShare<TYPES> {
-    fn view_number(&self) -> TYPES::View {
+impl<TYPES: NodeType> HasViewNumber for ADVZDisperseShare<TYPES> {
+    fn view_number(&self) -> ViewNumber {
         self.view_number
     }
 }
@@ -246,20 +271,32 @@ impl<TYPES: NodeType> ADVZDisperseShare<TYPES> {
             common: first_vid_disperse_share.common,
             shares: share_map,
         };
-        let _ = it.map(|vid_disperse_share| {
+        it.for_each(|vid_disperse_share| {
             vid_disperse.shares.insert(
                 vid_disperse_share.recipient_key.clone(),
                 vid_disperse_share.share.clone(),
-            )
+            );
         });
         Some(vid_disperse)
     }
 
-    /// Internally verify the share given necessary information
-    pub fn verify(&self, total_weight: usize) -> bool {
+    /// Check if vid common is consistent with the commitment.
+    pub fn is_consistent(&self) -> bool {
+        ADVZScheme::is_consistent(&self.payload_commitment, &self.common).is_ok()
+    }
+
+    /// Verify share assuming common data is already verified consistent.
+    /// Caller MUST call `is_consistent()` first.
+    pub fn verify_with_verified_common(&self) -> bool {
+        let total_weight = ADVZScheme::get_num_storage_nodes(&self.common) as usize;
         advz_scheme(total_weight)
             .verify_share(&self.share, &self.common, &self.payload_commitment)
             .is_ok_and(|r| r.is_ok())
+    }
+
+    /// Internally verify the share given necessary information
+    pub fn verify(&self, _total_weight: usize) -> bool {
+        self.is_consistent() && self.verify_with_verified_common()
     }
 
     /// Returns the payload length in bytes.
@@ -272,11 +309,11 @@ impl<TYPES: NodeType> ADVZDisperseShare<TYPES> {
 #[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
 pub struct AvidMDisperse<TYPES: NodeType> {
     /// The view number for which this VID data is intended
-    pub view_number: TYPES::View,
+    pub view_number: ViewNumber,
     /// Epoch the data of this proposal belongs to
-    pub epoch: Option<TYPES::Epoch>,
+    pub epoch: Option<EpochNumber>,
     /// Epoch to which the recipients of this VID belong to
-    pub target_epoch: Option<TYPES::Epoch>,
+    pub target_epoch: Option<EpochNumber>,
     /// VidCommitment calculated based on the number of nodes in `target_epoch`.
     pub payload_commitment: AvidMCommitment,
     /// A storage node's key and its corresponding VID share
@@ -287,8 +324,8 @@ pub struct AvidMDisperse<TYPES: NodeType> {
     pub common: AvidMCommon,
 }
 
-impl<TYPES: NodeType> HasViewNumber<TYPES> for AvidMDisperse<TYPES> {
-    fn view_number(&self) -> TYPES::View {
+impl<TYPES: NodeType> HasViewNumber for AvidMDisperse<TYPES> {
+    fn view_number(&self) -> ViewNumber {
         self.view_number
     }
 }
@@ -305,23 +342,24 @@ struct Weights {
     total_weight: usize,
 }
 
-pub fn vid_total_weight<TYPES: NodeType>(
-    stake_table: &HSStakeTable<TYPES>,
-    epoch: Option<TYPES::Epoch>,
-) -> usize {
+pub fn vid_total_weight<'a, T, I>(stake_table: I, epoch: Option<EpochNumber>) -> usize
+where
+    T: NodeType,
+    I: Iterator<Item = &'a PeerConfig<T>>,
+{
     if epoch.is_none() {
         stake_table
-            .iter()
             .fold(U256::ZERO, |acc, entry| {
                 acc + entry.stake_table_entry.stake()
             })
             .to::<usize>()
     } else {
-        approximate_weights(stake_table).total_weight
+        let stake_table = stake_table.cloned().collect::<Vec<_>>();
+        approximate_weights(&stake_table[..]).total_weight
     }
 }
 
-fn approximate_weights<TYPES: NodeType>(stake_table: &HSStakeTable<TYPES>) -> Weights {
+fn approximate_weights<TYPES: NodeType>(stake_table: &[PeerConfig<TYPES>]) -> Weights {
     let total_stake = stake_table.iter().fold(U256::ZERO, |acc, entry| {
         acc + entry.stake_table_entry.stake()
     });
@@ -372,22 +410,19 @@ impl<TYPES: NodeType> AvidMDisperse<TYPES> {
     /// Uses the specified function to calculate share dispersal
     /// Allows for more complex stake table functionality
     async fn from_membership(
-        view_number: TYPES::View,
+        view_number: ViewNumber,
         commit: AvidMCommitment,
         shares: &[AvidMShare],
         common: AvidMCommon,
         membership: &EpochMembership<TYPES>,
-        target_epoch: Option<TYPES::Epoch>,
-        data_epoch: Option<TYPES::Epoch>,
+        target_epoch: Option<EpochNumber>,
+        data_epoch: Option<EpochNumber>,
     ) -> Result<Self> {
         let payload_byte_len = shares[0].payload_byte_len();
         let shares = membership
             .coordinator
-            .stake_table_for_epoch(target_epoch)
-            .await?
+            .stake_table_for_epoch(target_epoch)?
             .stake_table()
-            .await
-            .iter()
             .map(|entry| entry.stake_table_entry.public_key())
             .zip(shares)
             .map(|(node, share)| (node.clone(), share.clone()))
@@ -414,13 +449,13 @@ impl<TYPES: NodeType> AvidMDisperse<TYPES> {
     pub async fn calculate_vid_disperse(
         payload: &TYPES::BlockPayload,
         membership: &EpochMembershipCoordinator<TYPES>,
-        view: TYPES::View,
-        target_epoch: Option<TYPES::Epoch>,
-        data_epoch: Option<TYPES::Epoch>,
+        view: ViewNumber,
+        target_epoch: Option<EpochNumber>,
+        data_epoch: Option<EpochNumber>,
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     ) -> Result<(Self, Duration)> {
-        let target_mem = membership.stake_table_for_epoch(target_epoch).await?;
-        let stake_table = target_mem.stake_table().await;
+        let target_mem = membership.stake_table_for_epoch(target_epoch)?;
+        let stake_table: Vec<_> = target_mem.stake_table().cloned().collect();
         let approximate_weights = approximate_weights(&stake_table);
 
         let txns = payload.encode();
@@ -523,11 +558,11 @@ impl<TYPES: NodeType> AvidMDisperse<TYPES> {
             payload_byte_len,
             common: first_vid_disperse_share.common,
         };
-        let _ = it.map(|vid_disperse_share| {
+        it.for_each(|vid_disperse_share| {
             vid_disperse.shares.insert(
                 vid_disperse_share.recipient_key.clone(),
                 vid_disperse_share.share.clone(),
-            )
+            );
         });
         Some(vid_disperse)
     }
@@ -542,11 +577,11 @@ impl<TYPES: NodeType> AvidMDisperse<TYPES> {
 /// VID share and associated metadata for a single node
 pub struct AvidMDisperseShare<TYPES: NodeType> {
     /// The view number for which this VID data is intended
-    pub view_number: TYPES::View,
+    pub view_number: ViewNumber,
     /// The epoch number for which this VID data belongs to
-    pub epoch: Option<TYPES::Epoch>,
+    pub epoch: Option<EpochNumber>,
     /// The epoch number to which the recipient of this VID belongs to
-    pub target_epoch: Option<TYPES::Epoch>,
+    pub target_epoch: Option<EpochNumber>,
     /// Block payload commitment
     pub payload_commitment: AvidMCommitment,
     /// A storage node's key and its corresponding VID share
@@ -557,8 +592,8 @@ pub struct AvidMDisperseShare<TYPES: NodeType> {
     pub common: AvidMCommon,
 }
 
-impl<TYPES: NodeType> HasViewNumber<TYPES> for AvidMDisperseShare<TYPES> {
-    fn view_number(&self) -> TYPES::View {
+impl<TYPES: NodeType> HasViewNumber for AvidMDisperseShare<TYPES> {
+    fn view_number(&self) -> ViewNumber {
         self.view_number
     }
 }
@@ -587,10 +622,23 @@ impl<TYPES: NodeType> AvidMDisperseShare<TYPES> {
         self.share.payload_byte_len() as u32
     }
 
-    /// Internally verify the share given necessary information
-    pub fn verify(&self, _total_weight: usize) -> bool {
+    /// Check if vid common is consistent with the commitment.
+    /// For AvidM, ns_commits is inside the share, so there's no separate consistency check.
+    pub fn is_consistent(&self) -> bool {
+        true
+    }
+
+    /// Verify share assuming common data is already verified consistent.
+    /// For AvidM, this is equivalent to the full verify since there's
+    /// no separate consistency check (ns_commits is inside the share).
+    pub fn verify_with_verified_common(&self) -> bool {
         AvidMScheme::verify_share(&self.common, &self.payload_commitment, &self.share)
             .is_ok_and(|r| r.is_ok())
+    }
+
+    /// Internally verify the share given necessary information
+    pub fn verify(&self, _total_weight: usize) -> bool {
+        self.is_consistent() && self.verify_with_verified_common()
     }
 }
 
@@ -598,11 +646,11 @@ impl<TYPES: NodeType> AvidMDisperseShare<TYPES> {
 #[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
 pub struct AvidmGf2Disperse<TYPES: NodeType> {
     /// The view number for which this VID data is intended
-    pub view_number: TYPES::View,
+    pub view_number: ViewNumber,
     /// Epoch the data of this proposal belongs to
-    pub epoch: Option<TYPES::Epoch>,
+    pub epoch: Option<EpochNumber>,
     /// Epoch to which the recipients of this VID belong to
-    pub target_epoch: Option<TYPES::Epoch>,
+    pub target_epoch: Option<EpochNumber>,
     /// VidCommitment calculated based on the number of nodes in `target_epoch`.
     pub payload_commitment: AvidmGf2Commitment,
     /// A storage node's key and its corresponding VID share
@@ -613,8 +661,8 @@ pub struct AvidmGf2Disperse<TYPES: NodeType> {
     pub common: AvidmGf2Common,
 }
 
-impl<TYPES: NodeType> HasViewNumber<TYPES> for AvidmGf2Disperse<TYPES> {
-    fn view_number(&self) -> TYPES::View {
+impl<TYPES: NodeType> HasViewNumber for AvidmGf2Disperse<TYPES> {
+    fn view_number(&self) -> ViewNumber {
         self.view_number
     }
 }
@@ -623,23 +671,20 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
     /// Create VID dispersal from a specified membership for the target epoch.
     /// Uses the specified function to calculate share dispersal
     /// Allows for more complex stake table functionality
-    async fn from_membership(
-        view_number: TYPES::View,
+    fn from_membership(
+        view_number: ViewNumber,
         commit: AvidmGf2Commitment,
         shares: &[AvidmGf2Share],
         common: AvidmGf2Common,
         membership: &EpochMembership<TYPES>,
-        target_epoch: Option<TYPES::Epoch>,
-        data_epoch: Option<TYPES::Epoch>,
+        target_epoch: Option<EpochNumber>,
+        data_epoch: Option<EpochNumber>,
     ) -> Result<Self> {
         let payload_byte_len = common.payload_byte_len();
         let shares = membership
             .coordinator
-            .stake_table_for_epoch(target_epoch)
-            .await?
+            .stake_table_for_epoch(target_epoch)?
             .stake_table()
-            .await
-            .iter()
             .map(|entry| entry.stake_table_entry.public_key())
             .zip(shares)
             .map(|(node, share)| (node.clone(), share.clone()))
@@ -664,13 +709,13 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
     pub async fn calculate_vid_disperse(
         payload: &TYPES::BlockPayload,
         membership: &EpochMembershipCoordinator<TYPES>,
-        view: TYPES::View,
-        target_epoch: Option<TYPES::Epoch>,
-        data_epoch: Option<TYPES::Epoch>,
+        view: ViewNumber,
+        target_epoch: Option<EpochNumber>,
+        data_epoch: Option<EpochNumber>,
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     ) -> Result<(Self, Duration)> {
-        let target_mem = membership.stake_table_for_epoch(target_epoch).await?;
-        let stake_table = target_mem.stake_table().await;
+        let target_mem = membership.stake_table_for_epoch(target_epoch)?;
+        let stake_table: Vec<_> = target_mem.stake_table().cloned().collect();
         let approximate_weights = approximate_weights(&stake_table);
 
         let txns = payload.encode();
@@ -706,8 +751,7 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
                 &target_mem,
                 target_epoch,
                 data_epoch,
-            )
-            .await?,
+            )?,
             ns_disperse_duration,
         ))
     }
@@ -772,11 +816,11 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
             payload_byte_len,
             common: first_vid_disperse_share.common,
         };
-        let _ = it.map(|vid_disperse_share| {
+        it.for_each(|vid_disperse_share| {
             vid_disperse.shares.insert(
                 vid_disperse_share.recipient_key.clone(),
                 vid_disperse_share.share.clone(),
-            )
+            );
         });
         Some(vid_disperse)
     }
@@ -785,17 +829,51 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
     pub fn payload_byte_len(&self) -> u32 {
         self.payload_byte_len as u32
     }
+
+    /// Resolve the inputs needed to disperse `payload` to `target_epoch`'s
+    /// committee one namespace at a time.
+    ///
+    /// Mirrors the setup in [`Self::calculate_vid_disperse`] but returns the
+    /// owned parameters instead of performing the dispersal, leaving the (heavy,
+    /// per-namespace) computation to the caller.
+    pub fn disperse_params(
+        payload: &TYPES::BlockPayload,
+        membership: &EpochMembershipCoordinator<TYPES>,
+        target_epoch: Option<EpochNumber>,
+        metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+    ) -> Result<AvidmGf2DisperseParams<TYPES>> {
+        let target_mem = membership.stake_table_for_epoch(target_epoch)?;
+        let stake_table: Vec<_> = target_mem.stake_table().cloned().collect();
+        let Weights {
+            weights,
+            total_weight,
+        } = approximate_weights(&stake_table);
+        let recipients = stake_table
+            .iter()
+            .map(|entry| entry.stake_table_entry.public_key())
+            .collect();
+        let payload = payload.encode();
+        let ns_table = parse_ns_table(payload.len(), &metadata.encode());
+        let param = init_avidm_gf2_param(total_weight)?;
+        Ok(AvidmGf2DisperseParams {
+            param,
+            weights,
+            recipients,
+            ns_table,
+            payload,
+        })
+    }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
 /// VID share and associated metadata for a single node
+#[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
 pub struct AvidmGf2DisperseShare<TYPES: NodeType> {
     /// The view number for which this VID data is intended
-    pub view_number: TYPES::View,
+    pub view_number: ViewNumber,
     /// The epoch number for which this VID data belongs to
-    pub epoch: Option<TYPES::Epoch>,
+    pub epoch: Option<EpochNumber>,
     /// The epoch number to which the recipient of this VID belongs to
-    pub target_epoch: Option<TYPES::Epoch>,
+    pub target_epoch: Option<EpochNumber>,
     /// Block payload commitment
     pub payload_commitment: AvidmGf2Commitment,
     /// A storage node's key and its corresponding VID share
@@ -806,8 +884,8 @@ pub struct AvidmGf2DisperseShare<TYPES: NodeType> {
     pub common: AvidmGf2Common,
 }
 
-impl<TYPES: NodeType> HasViewNumber<TYPES> for AvidmGf2DisperseShare<TYPES> {
-    fn view_number(&self) -> TYPES::View {
+impl<TYPES: NodeType> HasViewNumber for AvidmGf2DisperseShare<TYPES> {
+    fn view_number(&self) -> ViewNumber {
         self.view_number
     }
 }
@@ -834,9 +912,96 @@ impl<TYPES: NodeType> AvidmGf2DisperseShare<TYPES> {
     pub fn payload_byte_len(&self) -> u32 {
         self.common.payload_byte_len() as u32
     }
-    /// Internally verify the share given necessary information
-    pub fn verify(&self, _total_weight: usize) -> bool {
-        AvidmGf2Scheme::verify_share(&self.payload_commitment, &self.common, &self.share)
+    /// Check if vid common is consistent with the commitment.
+    pub fn is_consistent(&self) -> bool {
+        AvidmGf2Scheme::is_consistent(&self.payload_commitment, &self.common)
+    }
+
+    /// Verify share assuming common data is already verified consistent.
+    /// Caller MUST call `is_consistent()` first.
+    pub fn verify_with_verified_common(&self) -> bool {
+        AvidmGf2Scheme::verify_share_with_verified_common(&self.common, &self.share)
             .is_ok_and(|r| r.is_ok())
     }
+
+    /// Internally verify the share given necessary information
+    pub fn verify(&self, total_weight: usize) -> bool {
+        // A share's commitment hash-binds its `ns_commits` (via `is_consistent`)
+        // but not its `param`, so check `param` against the committee-derived
+        // expectation; otherwise a forged param would pass verification.
+        init_avidm_gf2_param(total_weight).is_ok_and(|expected| self.common.param == expected)
+            && self.is_consistent()
+            && self.verify_with_verified_common()
+    }
+}
+
+/// VID shares consist of fragments as the unit of transmission.
+#[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
+pub struct AvidmGf2DisperseShareFragment<T: NodeType> {
+    /// The view number for which this VID data is intended.
+    pub view_number: ViewNumber,
+    /// The epoch number for which this VID data belongs to.
+    pub epoch: Option<EpochNumber>,
+    /// The epoch number to which the recipient of this VID belongs to.
+    pub target_epoch: Option<EpochNumber>,
+    /// Block payload commitment (the aggregate over all namespaces).
+    pub payload_commitment: AvidmGf2Commitment,
+    /// A public key of the share recipient.
+    pub recipient_key: T::SignatureKey,
+    /// VID erasure parameters; identical across a view's fragments.
+    pub param: AvidmGf2Param,
+    /// Total number of namespaces in the block.
+    pub num_namespaces: usize,
+    /// Namespace share fragment pieces.
+    pub namespaces: Vec<AvidmGf2NamespacePiece>,
+}
+
+impl<T: NodeType> HasViewNumber for AvidmGf2DisperseShareFragment<T> {
+    fn view_number(&self) -> ViewNumber {
+        self.view_number
+    }
+}
+
+impl<T: NodeType> HasEpoch for AvidmGf2DisperseShareFragment<T> {
+    fn epoch(&self) -> Option<EpochNumber> {
+        self.epoch
+    }
+}
+
+/// VID share fragments hold pieces.
+///
+/// A piece is the smallest unit. Fragments group multiple pieces together,
+/// depending on the cumulative length of their payload lengths.
+#[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
+pub struct AvidmGf2NamespacePiece {
+    /// This namespace's index in the namespace table, in `0..num_namespaces`.
+    pub ns_index: usize,
+    /// Byte length of this namespace's slice of the payload.
+    pub ns_payload_byte_len: usize,
+    /// Commitment to this namespace's shards.
+    pub ns_commit: vid::avidm_gf2::AvidmGf2Commit,
+    /// This recipient's share of this namespace.
+    pub ns_share: vid::avidm_gf2::AvidmGf2Share,
+}
+
+/// Parameters for a per-namespace AvidmGf2 dispersal.
+///
+/// [`AvidmGf2Disperse::disperse_params`] resolves the VID parameters and
+/// recipient ordering up front so a caller can send each namespace's
+/// fragments as they are produced.
+///
+/// `recipients[i]` is the storage node whose weight is `weights[i]` and
+/// whose share is the `i`th entry of each namespace's dispersal.
+#[non_exhaustive]
+pub struct AvidmGf2DisperseParams<T: NodeType> {
+    /// VID erasure parameters.
+    pub param: AvidmGf2Param,
+    /// Per-node weights, in stake-table order.
+    pub weights: Vec<u32>,
+    /// Recipients, in the same order as `weights`.
+    pub recipients: Vec<T::SignatureKey>,
+    /// Namespace byte ranges over the encoded payload.
+    pub ns_table: Vec<Range<usize>>,
+    /// The encoded payload.
+    pub payload: Arc<[u8]>,
 }

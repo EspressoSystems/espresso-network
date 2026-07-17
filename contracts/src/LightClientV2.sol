@@ -142,13 +142,7 @@ contract LightClientV2 is LightClient {
         emit NewState(newState.viewNum, newState.blockHeight, newState.blockCommRoot);
     }
 
-    function _getVk()
-        public
-        pure
-        virtual
-        override
-        returns (IPlonkVerifier.VerifyingKey memory vk)
-    {
+    function _getVk() public pure virtual override returns (IPlonkVerifier.VerifyingKey memory vk) {
         vk = VkLib.getVk();
     }
 
@@ -239,8 +233,9 @@ contract LightClientV2 is LightClient {
             return false;
         } else {
             // it's safe to assume -5 won't underflow in practice
-            return blockHeight % blocksPerEpoch == 0
-                || blockHeight % blocksPerEpoch > blocksPerEpoch - 5;
+            return
+                blockHeight % blocksPerEpoch == 0
+                    || blockHeight % blocksPerEpoch > blocksPerEpoch - 5;
         }
     }
 }

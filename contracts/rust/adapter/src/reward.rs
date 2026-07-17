@@ -1,5 +1,5 @@
 use alloy::{
-    primitives::{Bytes, B256, U256},
+    primitives::{B256, Bytes, U256},
     sol_types::SolValue,
 };
 use derive_more::{From, Into};

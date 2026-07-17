@@ -13,6 +13,7 @@ import (
 	types "github.com/EspressoSystems/espresso-network/sdks/go/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 var errs []error
@@ -155,29 +156,15 @@ func TestFetchWithMajority(t *testing.T) {
 }
 
 func TestApiWithSingleEspressoDevNode(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	dir, err := os.MkdirTemp("", "espresso-dev-node")
-	if err != nil {
-		panic(err)
-	}
-	defer os.RemoveAll(dir)
-	cleanup := runDevNode(ctx, dir)
-	defer cleanup()
-
-	err = waitForEspressoNode(ctx)
-	if err != nil {
-		t.Fatal("failed to start espresso dev node", err)
-	}
+	ctx, info := setupDevNode(t)
 
 	// Test constructing the client with a single url to ensure that it requires more than one.
-	_, err = NewMultipleNodesClient([]string{"http://localhost:21000"})
+	_, err := NewMultipleNodesClient([]string{info.nodeURL})
 	if err == nil {
 		t.Fatal("Constructing the client with 1 url should result in an error")
 	}
 
-	client, err := NewMultipleNodesClient([]string{"http://localhost:21000", "http://localhost:21000"})
+	client, err := NewMultipleNodesClient([]string{info.nodeURL, info.nodeURL})
 	if err != nil {
 		t.Fatal("Constructing the client with more than 1 url should succeed")
 	}
@@ -212,44 +199,10 @@ func TestApiWithSingleEspressoDevNode(t *testing.T) {
 }
 
 func TestNamespaceTransactionsInRangeForMultiClient(t *testing.T) {
-	ctx := context.Background()
-	hotshotURLs := []string{"https://query-0.decaf.testnet.espresso.network", "https://query-1.decaf.testnet.espresso.network"}
-	client, err := NewMultipleNodesClient(hotshotURLs)
-	if err != nil {
-		t.Fatal("failed to create multiple nodes client", err)
-	}
-	namespace := uint64(22266222)
-	startHeight := uint64(6386698)
-	endHeight := uint64(6386700)
-
-	blocksWithNamespaceTransactions, err := client.FetchNamespaceTransactionsInRange(ctx, startHeight, endHeight, namespace)
-	if err != nil {
-		t.Fatal("failed to fetch namespace transactions in range", err)
-	}
-
-	if len(blocksWithNamespaceTransactions) != 2 {
-		t.Fatalf("expected 2 blocks with namespace transactions, got %d", len(blocksWithNamespaceTransactions))
-	}
-
-	for _, blocks := range blocksWithNamespaceTransactions {
-		for _, tx := range blocks.Transactions {
-			if tx.Namespace != namespace {
-				t.Fatalf("expected namespace %d, got %d", namespace, tx.Namespace)
-			}
-			if len(tx.Payload) == 0 {
-				t.Fatal("transaction payload is empty")
-			}
-		}
-	}
-
-	startHeight = uint64(6386698)
-	endHeight = uint64(6389700)
-
-	// test if startHeight and endHeight are greater than 100 (which is the limit) then it throws an error
-	_, err = client.FetchNamespaceTransactionsInRange(ctx, startHeight, endHeight, namespace)
-	if err == nil {
-		t.Fatal("expected error for large range, but got none")
-	}
+	ctx, info := setupDevNode(t)
+	client, err := NewMultipleNodesClient([]string{info.nodeURL, info.nodeURL})
+	require.NoError(t, err)
+	testNamespaceTransactionsInRange(t, ctx, client, "multi-client namespace test")
 }
 
 func getHeaderFromTestFile(path string, t *testing.T) types.HeaderInterface {

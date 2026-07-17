@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import "../interfaces/IRewardClaim.sol";
-
 /* solhint-disable no-inline-assembly */
 
 /**

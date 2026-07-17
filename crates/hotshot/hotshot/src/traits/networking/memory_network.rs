@@ -11,10 +11,11 @@
 
 use core::time::Duration;
 use std::{
+    collections::HashMap,
     fmt::Debug,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
@@ -22,7 +23,8 @@ use async_lock::{Mutex, RwLock};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use hotshot_types::{
-    boxed_sync,
+    BoxSyncFuture, PeerConnectInfo, boxed_sync,
+    data::ViewNumber,
     traits::{
         network::{
             AsyncGenerator, BroadcastDelay, ConnectedNetwork, TestableNetworkingImplementation,
@@ -31,13 +33,12 @@ use hotshot_types::{
         node_implementation::NodeType,
         signature_key::SignatureKey,
     },
-    BoxSyncFuture,
 };
 use tokio::{
     spawn,
-    sync::mpsc::{channel, error::SendError, Receiver, Sender},
+    sync::mpsc::{Receiver, Sender, channel, error::SendError},
 };
-use tracing::{debug, error, info, info_span, instrument, trace, warn, Instrument};
+use tracing::{Instrument, debug, error, info, info_span, instrument, trace, warn};
 
 use super::{NetworkError, NetworkReliability};
 
@@ -185,6 +186,7 @@ impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES>
         da_committee_size: usize,
         reliability_config: Option<Box<dyn NetworkReliability>>,
         _secondary_network_delay: Duration,
+        _connect_infos: &mut HashMap<TYPES::SignatureKey, PeerConnectInfo>,
     ) -> AsyncGenerator<Arc<Self>> {
         let master: Arc<_> = MasterMap::new();
         // We assign known_nodes' public key and stake value rather than read from config file since it's a test
@@ -245,48 +247,52 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for MemoryNetwork<K> {
     #[instrument(name = "MemoryNetwork::broadcast_message")]
     async fn broadcast_message(
         &self,
+        _: ViewNumber,
         message: Vec<u8>,
         topic: Topic,
         _broadcast_delay: BroadcastDelay,
     ) -> Result<(), NetworkError> {
         trace!(?message, "Broadcasting message");
-        for node in self
+        // Snapshot the recipient list and release the DashMap shard write
+        // lock before awaiting. Holding the lock across `.await` serializes
+        // every broadcast on this topic and, under a small tokio runtime
+        // (e.g. CI with a 4-core CPU quota), can deadlock all worker threads
+        // while waiting on a full recipient channel.
+        let nodes: Vec<(K, MemoryNetwork<K>)> = self
             .inner
             .master_map
             .subscribed_map
-            .entry(topic)
-            .or_default()
-            .iter()
-        {
-            // TODO delay/drop etc here
-            let (key, node) = node;
+            .get(&topic)
+            .map(|entry| entry.value().clone())
+            .unwrap_or_default();
+        // Spawn per-recipient sends so a slow/full recipient channel does
+        // not backpressure the rest of the broadcast. When a node restarts
+        // its new coordinator starts draining its input channel from
+        // scratch; an awaited sequential send could block the sender on a
+        // full 128-slot channel, stalling consensus for other peers.
+        for (key, node) in nodes {
             trace!(?key, "Sending message to node");
-            if let Some(ref config) = &self.inner.reliability_config {
-                {
-                    let node2 = node.clone();
-                    let fut = config.chaos_send_msg(
-                        message.clone(),
-                        Arc::new(move |msg: Vec<u8>| {
-                            let node3 = (node2).clone();
-                            boxed_sync(async move {
-                                let _res = node3.input(msg).await;
-                                // NOTE we're dropping metrics here but this is only for testing
-                                // purposes. I think that should be okay
-                            })
-                        }),
-                    );
-                    spawn(fut);
-                }
+            if let Some(config) = &self.inner.reliability_config {
+                let node2 = node.clone();
+                let fut = config.chaos_send_msg(
+                    message.clone(),
+                    Arc::new(move |msg: Vec<u8>| {
+                        let node3 = (node2).clone();
+                        boxed_sync(async move {
+                            let _res = node3.input(msg).await;
+                            // NOTE we're dropping metrics here but this is only for testing
+                            // purposes. I think that should be okay
+                        })
+                    }),
+                );
+                spawn(fut);
             } else {
-                let res = node.input(message.clone()).await;
-                match res {
-                    Ok(()) => {
-                        trace!(?key, "Delivered message to remote");
-                    },
-                    Err(e) => {
+                let msg = message.clone();
+                spawn(async move {
+                    if let Err(e) = node.input(msg).await {
                         warn!(?e, ?key, "Error sending broadcast message to node");
-                    },
-                }
+                    }
+                });
             }
         }
         Ok(())
@@ -295,65 +301,75 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for MemoryNetwork<K> {
     #[instrument(name = "MemoryNetwork::da_broadcast_message")]
     async fn da_broadcast_message(
         &self,
+        _: ViewNumber,
         message: Vec<u8>,
         recipients: Vec<K>,
         _broadcast_delay: BroadcastDelay,
     ) -> Result<(), NetworkError> {
         trace!(?message, "Broadcasting message to DA");
-        for node in self
+        // See `broadcast_message`: clone the recipient list out of DashMap
+        // so the shard lock is not held across the awaits below.
+        let nodes: Vec<(K, MemoryNetwork<K>)> = self
             .inner
             .master_map
             .subscribed_map
-            .entry(Topic::Da)
-            .or_default()
-            .iter()
-        {
-            if !recipients.contains(&node.0) {
-                tracing::trace!("Skipping node because not in recipient list: {:?}", node.0);
+            .get(&Topic::Da)
+            .map(|entry| entry.value().clone())
+            .unwrap_or_default();
+        // Spawn per-recipient sends so a slow/full recipient channel does
+        // not backpressure the rest of the broadcast (see `broadcast_message`).
+        for (key, node) in nodes {
+            if !recipients.contains(&key) {
+                tracing::trace!("Skipping node because not in recipient list: {:?}", key);
                 continue;
             }
-            // TODO delay/drop etc here
-            let (key, node) = node;
             trace!(?key, "Sending message to node");
-            if let Some(ref config) = &self.inner.reliability_config {
-                {
-                    let node2 = node.clone();
-                    let fut = config.chaos_send_msg(
-                        message.clone(),
-                        Arc::new(move |msg: Vec<u8>| {
-                            let node3 = (node2).clone();
-                            boxed_sync(async move {
-                                let _res = node3.input(msg).await;
-                                // NOTE we're dropping metrics here but this is only for testing
-                                // purposes. I think that should be okay
-                            })
-                        }),
-                    );
-                    spawn(fut);
-                }
+            if let Some(config) = &self.inner.reliability_config {
+                let node2 = node.clone();
+                let fut = config.chaos_send_msg(
+                    message.clone(),
+                    Arc::new(move |msg: Vec<u8>| {
+                        let node3 = (node2).clone();
+                        boxed_sync(async move {
+                            let _res = node3.input(msg).await;
+                            // NOTE we're dropping metrics here but this is only for testing
+                            // purposes. I think that should be okay
+                        })
+                    }),
+                );
+                spawn(fut);
             } else {
-                let res = node.input(message.clone()).await;
-                match res {
-                    Ok(()) => {
-                        trace!(?key, "Delivered message to remote");
-                    },
-                    Err(e) => {
+                let msg = message.clone();
+                spawn(async move {
+                    if let Err(e) = node.input(msg).await {
                         warn!(?e, ?key, "Error sending broadcast message to node");
-                    },
-                }
+                    }
+                });
             }
         }
         Ok(())
     }
 
     #[instrument(name = "MemoryNetwork::direct_message")]
-    async fn direct_message(&self, message: Vec<u8>, recipient: K) -> Result<(), NetworkError> {
+    async fn direct_message(
+        &self,
+        _: ViewNumber,
+        message: Vec<u8>,
+        recipient: K,
+    ) -> Result<(), NetworkError> {
         // debug!(?message, ?recipient, "Sending direct message");
         // Bincode the message
         trace!("Message bincoded, finding recipient");
-        if let Some(node) = self.inner.master_map.map.get(&recipient) {
-            let node = node.value().clone();
-            if let Some(ref config) = &self.inner.reliability_config {
+        // Clone the target network and drop the DashMap read guard before
+        // awaiting, matching the rationale in `broadcast_message`.
+        let node = self
+            .inner
+            .master_map
+            .map
+            .get(&recipient)
+            .map(|entry| entry.value().clone());
+        if let Some(node) = node {
+            if let Some(config) = &self.inner.reliability_config {
                 {
                     let fut = config.chaos_send_msg(
                         message.clone(),

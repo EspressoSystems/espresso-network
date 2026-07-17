@@ -11,7 +11,7 @@ use std::{sync::Arc, time::Duration};
 use futures::StreamExt;
 use hotshot::tasks::task_state::CreateTaskState;
 use hotshot_example_types::{
-    node_types::{MemoryImpl, TestTypes, TestVersions},
+    node_types::{MemoryImpl, TEST_VERSIONS, TestTypes},
     state_types::TestValidatedState,
 };
 use hotshot_macros::{run_test, test_scripts};
@@ -22,10 +22,7 @@ use hotshot_testing::{
     random,
     script::{Expectations, InputOrder, TaskScript},
 };
-use hotshot_types::{
-    data::{Leaf2, ViewNumber},
-    traits::node_implementation::ConsensusTime,
-};
+use hotshot_types::data::{Leaf2, ViewNumber};
 
 const TIMEOUT: Duration = Duration::from_millis(35);
 
@@ -39,12 +36,11 @@ async fn test_quorum_vote_task_success() {
         view_generator::TestViewGenerator,
     };
 
-    let (handle, _, _, node_key_map) =
-        build_system_handle::<TestTypes, MemoryImpl, TestVersions>(2).await;
+    let (handle, _, _, node_key_map) = build_system_handle::<TestTypes, MemoryImpl>(2).await;
 
     let membership = handle.hotshot.membership_coordinator.clone();
 
-    let mut generator = TestViewGenerator::<TestVersions>::generate(membership, node_key_map);
+    let mut generator = TestViewGenerator::generate(membership, node_key_map, TEST_VERSIONS.test);
 
     let mut proposals = Vec::new();
     let mut leaves = Vec::new();
@@ -85,7 +81,7 @@ async fn test_quorum_vote_task_success() {
     ])];
 
     let quorum_vote_state =
-        QuorumVoteTaskState::<TestTypes, MemoryImpl, TestVersions>::create_from(&handle).await;
+        QuorumVoteTaskState::<TestTypes, MemoryImpl>::create_from(&handle).await;
 
     let mut script = TaskScript {
         timeout: TIMEOUT,
@@ -103,12 +99,11 @@ async fn test_quorum_vote_task_miss_dependency() {
         helpers::build_system_handle, predicates::event::exact, view_generator::TestViewGenerator,
     };
 
-    let (handle, _, _, node_key_map) =
-        build_system_handle::<TestTypes, MemoryImpl, TestVersions>(2).await;
+    let (handle, _, _, node_key_map) = build_system_handle::<TestTypes, MemoryImpl>(2).await;
 
     let membership = handle.hotshot.membership_coordinator.clone();
 
-    let mut generator = TestViewGenerator::<TestVersions>::generate(membership, node_key_map);
+    let mut generator = TestViewGenerator::generate(membership, node_key_map, TEST_VERSIONS.test);
 
     let mut proposals = Vec::new();
     let mut leaders = Vec::new();
@@ -166,7 +161,7 @@ async fn test_quorum_vote_task_miss_dependency() {
     ];
 
     let quorum_vote_state =
-        QuorumVoteTaskState::<TestTypes, MemoryImpl, TestVersions>::create_from(&handle).await;
+        QuorumVoteTaskState::<TestTypes, MemoryImpl>::create_from(&handle).await;
 
     let mut script = TaskScript {
         timeout: TIMEOUT,
@@ -184,12 +179,11 @@ async fn test_quorum_vote_task_incorrect_dependency() {
         helpers::build_system_handle, predicates::event::exact, view_generator::TestViewGenerator,
     };
 
-    let (handle, _, _, node_key_map) =
-        build_system_handle::<TestTypes, MemoryImpl, TestVersions>(2).await;
+    let (handle, _, _, node_key_map) = build_system_handle::<TestTypes, MemoryImpl>(2).await;
 
     let membership = handle.hotshot.membership_coordinator.clone();
 
-    let mut generator = TestViewGenerator::<TestVersions>::generate(membership, node_key_map);
+    let mut generator = TestViewGenerator::generate(membership, node_key_map, TEST_VERSIONS.test);
 
     let mut proposals = Vec::new();
     let mut leaves = Vec::new();
@@ -217,7 +211,7 @@ async fn test_quorum_vote_task_incorrect_dependency() {
     ])];
 
     let quorum_vote_state =
-        QuorumVoteTaskState::<TestTypes, MemoryImpl, TestVersions>::create_from(&handle).await;
+        QuorumVoteTaskState::<TestTypes, MemoryImpl>::create_from(&handle).await;
 
     let mut script = TaskScript {
         timeout: TIMEOUT,

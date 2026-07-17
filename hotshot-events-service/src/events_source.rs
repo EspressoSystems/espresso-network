@@ -1,15 +1,15 @@
 use std::{marker::PhantomData, sync::Arc};
 
-use async_broadcast::{broadcast, InactiveReceiver, Sender as BroadcastSender};
+use async_broadcast::{InactiveReceiver, Sender as BroadcastSender, broadcast};
 use async_trait::async_trait;
 use futures::{
     future::BoxFuture,
     stream::{BoxStream, Stream, StreamExt},
 };
 use hotshot_types::{
+    PeerConfig,
     event::{Event, EventType, LegacyEvent},
     traits::node_implementation::NodeType,
-    PeerConfig,
 };
 use serde::{Deserialize, Serialize};
 use tide_disco::method::ReadState;
@@ -63,6 +63,13 @@ impl<Types: NodeType> EventsStreamer<Types> {
 
     pub fn non_staked_node_count(&self) -> usize {
         self.non_staked_node_count
+    }
+
+    /// Number of currently registered event subscribers. Subscribers are registered
+    /// asynchronously after a client's subscribe call returns; events broadcast before
+    /// registration are not replayed. Lets callers wait for registration before publishing.
+    pub fn subscriber_count(&self) -> usize {
+        self.subscriber_send_channel.receiver_count()
     }
 }
 

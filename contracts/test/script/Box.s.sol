@@ -20,8 +20,8 @@ contract DeployBoxScript is Script {
         vm.startBroadcast(admin);
 
         DemoBoxV1 box = new DemoBoxV1(); //Our implementation(logic).Proxy will point here to
-            // delegate
-            // call/borrow the functions
+        // delegate
+        // call/borrow the functions
 
         // Encode the initializer function call
         bytes memory data = abi.encodeWithSelector(

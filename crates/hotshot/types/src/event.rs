@@ -14,12 +14,16 @@ use serde::{Deserialize, Serialize};
 use crate::{
     data::{
         DaProposal, DaProposal2, Leaf, Leaf2, QuorumProposal, QuorumProposalWrapper,
-        UpgradeProposal, VidDisperseShare, VidDisperseShare0,
+        UpgradeProposal, VidDisperseShare, VidDisperseShare0, ViewNumber,
     },
     error::HotShotError,
-    message::{convert_proposal, Proposal},
-    simple_certificate::{CertificatePair, LightClientStateUpdateCertificateV2, QuorumCertificate},
-    traits::{node_implementation::NodeType, ValidatedState},
+    message::{Proposal, convert_proposal},
+    simple_certificate::{
+        CertificatePair, LightClientStateUpdateCertificateV2, QuorumCertificate, QuorumCertificate2,
+    },
+    simple_vote::TimeoutVote2,
+    traits::{ValidatedState, node_implementation::NodeType},
+    vote::HasViewNumber,
 };
 
 /// A status event emitted by a `HotShot` instance
@@ -30,7 +34,7 @@ use crate::{
 #[serde(bound(deserialize = "TYPES: NodeType"))]
 pub struct Event<TYPES: NodeType> {
     /// The view number that this event originates from
-    pub view_number: TYPES::View,
+    pub view_number: ViewNumber,
     /// The underlying event
     pub event: EventType<TYPES>,
 }
@@ -49,7 +53,7 @@ impl<TYPES: NodeType> Event<TYPES> {
 #[serde(bound(deserialize = "TYPES: NodeType"))]
 pub struct LegacyEvent<TYPES: NodeType> {
     /// The view number that this event originates from
-    pub view_number: TYPES::View,
+    pub view_number: ViewNumber,
     /// The underlying event
     pub event: LegacyEventType<TYPES>,
 }
@@ -211,17 +215,17 @@ pub enum EventType<TYPES: NodeType> {
     /// A replica task was canceled by a timeout interrupt
     ReplicaViewTimeout {
         /// The view that timed out
-        view_number: TYPES::View,
+        view_number: ViewNumber,
     },
     /// The view has finished.  If values were decided on, a `Decide` event will also be emitted.
     ViewFinished {
         /// The view number that has just finished
-        view_number: TYPES::View,
+        view_number: ViewNumber,
     },
     /// The view timed out
     ViewTimeout {
         /// The view that timed out
-        view_number: TYPES::View,
+        view_number: ViewNumber,
     },
     /// New transactions were received from the network
     /// or submitted to the network by us
@@ -249,7 +253,7 @@ pub enum EventType<TYPES: NodeType> {
     /// or submitted to the network by us
     UpgradeProposal {
         /// Contents of the proposal
-        proposal: Proposal<TYPES, UpgradeProposal<TYPES>>,
+        proposal: Proposal<TYPES, UpgradeProposal>,
         /// Public key of the leader submitting the proposal
         sender: TYPES::SignatureKey,
     },
@@ -261,6 +265,87 @@ pub enum EventType<TYPES: NodeType> {
         /// Serialized data of the message
         data: Vec<u8>,
     },
+
+    /// Emitted by the legacy consensus task whenever it signs and broadcasts a
+    /// `TimeoutVote2`. Used at the legacy → new-protocol upgrade boundary so
+    /// the espresso bridge can forward the same vote into the new-protocol
+    /// coordinator's vote collectors. The wire-level protocols differ but the
+    /// underlying `TimeoutVote2` type and its version-tagged signature
+    /// commitment are shared, so the same vote is valid in both systems.
+    LegacyTimeoutVoteEmitted {
+        /// The vote that was signed and broadcast on the legacy wire.
+        vote: TimeoutVote2<TYPES>,
+    },
+
+    /// QC for the last legacy view, formed by the cutover-view leader at the
+    /// legacy -> new-protocol boundary. Lets the espresso bridge forward it to the
+    /// new-protocol coordinator if the cutover seed was snapshotted before this QC
+    /// finished assembling.
+    LegacyHighQcFormed {
+        /// The QC for the last legacy view (`cutover_view - 1`).
+        qc: QuorumCertificate2<TYPES>,
+    },
+}
+
+impl<TYPES: NodeType> std::fmt::Display for Event<TYPES> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} (view {})", self.event, self.view_number)
+    }
+}
+
+impl<TYPES: NodeType> std::fmt::Display for EventType<TYPES> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Error { error } => write!(f, "Error: {error}"),
+            Self::Decide { leaf_chain, .. } => {
+                let newest = leaf_chain.first().map(|l| l.leaf.view_number());
+                let oldest = leaf_chain.last().map(|l| l.leaf.view_number());
+                write!(
+                    f,
+                    "Decide: leaves={} oldest={:?} newest={:?}",
+                    leaf_chain.len(),
+                    oldest,
+                    newest,
+                )
+            },
+            Self::ReplicaViewTimeout { view_number } => {
+                write!(f, "ReplicaViewTimeout: view={view_number}")
+            },
+            Self::ViewFinished { view_number } => {
+                write!(f, "ViewFinished: view={view_number}")
+            },
+            Self::ViewTimeout { view_number } => {
+                write!(f, "ViewTimeout: view={view_number}")
+            },
+            Self::Transactions { transactions } => {
+                write!(f, "Transactions: count={}", transactions.len())
+            },
+            Self::DaProposal { proposal, .. } => {
+                write!(f, "DaProposal: view={}", proposal.data.view_number())
+            },
+            Self::QuorumProposal { proposal, .. } => {
+                write!(f, "QuorumProposal: view={}", proposal.data.view_number())
+            },
+            Self::UpgradeProposal { proposal, .. } => {
+                write!(
+                    f,
+                    "UpgradeProposal: view={} old_version={} new_version={}",
+                    proposal.data.view_number,
+                    proposal.data.upgrade_proposal.old_version,
+                    proposal.data.upgrade_proposal.new_version,
+                )
+            },
+            Self::ExternalMessageReceived { .. } => {
+                write!(f, "ExternalMessageReceived")
+            },
+            Self::LegacyTimeoutVoteEmitted { vote } => {
+                write!(f, "LegacyTimeoutVoteEmitted: view={}", vote.view_number())
+            },
+            Self::LegacyHighQcFormed { qc } => {
+                write!(f, "LegacyHighQcFormed: view={}", qc.view_number())
+            },
+        }
+    }
 }
 
 impl<TYPES: NodeType> EventType<TYPES> {
@@ -307,6 +392,20 @@ impl<TYPES: NodeType> EventType<TYPES> {
             EventType::ExternalMessageReceived { sender, data } => {
                 LegacyEventType::ExternalMessageReceived { sender, data }
             },
+            // Upgrade-bridging event: doesn't exist in the pre-epoch event
+            // surface. Convert to a no-op equivalent (drop) since legacy
+            // consumers wouldn't know what to do with it.
+            EventType::LegacyTimeoutVoteEmitted { .. } => {
+                anyhow::bail!(
+                    "LegacyTimeoutVoteEmitted is upgrade-bridging only and has no legacy \
+                     equivalent"
+                )
+            },
+            EventType::LegacyHighQcFormed { .. } => {
+                anyhow::bail!(
+                    "LegacyHighQcFormed is upgrade-bridging only and has no legacy equivalent"
+                )
+            },
         })
     }
 }
@@ -344,17 +443,17 @@ pub enum LegacyEventType<TYPES: NodeType> {
     /// A replica task was canceled by a timeout interrupt
     ReplicaViewTimeout {
         /// The view that timed out
-        view_number: TYPES::View,
+        view_number: ViewNumber,
     },
     /// The view has finished.  If values were decided on, a `Decide` event will also be emitted.
     ViewFinished {
         /// The view number that has just finished
-        view_number: TYPES::View,
+        view_number: ViewNumber,
     },
     /// The view timed out
     ViewTimeout {
         /// The view that timed out
-        view_number: TYPES::View,
+        view_number: ViewNumber,
     },
     /// New transactions were received from the network
     /// or submitted to the network by us
@@ -382,7 +481,7 @@ pub enum LegacyEventType<TYPES: NodeType> {
     /// or submitted to the network by us
     UpgradeProposal {
         /// Contents of the proposal
-        proposal: Proposal<TYPES, UpgradeProposal<TYPES>>,
+        proposal: Proposal<TYPES, UpgradeProposal>,
         /// Public key of the leader submitting the proposal
         sender: TYPES::SignatureKey,
     },
@@ -396,7 +495,7 @@ pub enum LegacyEventType<TYPES: NodeType> {
     },
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
 /// A list of actions that we track for nodes
 pub enum HotShotAction {
     /// A quorum vote was sent

@@ -1,0 +1,102 @@
+# fetched at block 11278487 (2026-07-15T14:53:12Z)
+network = "decaf"
+
+[multisigs.espresso_labs]
+address = "0xb76834e371b666feee48e5d7d9a97ca08b5a0620"
+version = "1.4.1"
+owners = [
+    "0x74560e14de4426d1aa461801edc782ad653d9847",
+    "0x3f3662e0b1d652cb6ddcd2dc31dfe5d762bbd3f2",
+    "0x1584f9d22ba5c56ac0bb6496c447a95a721eb709",
+    "0xf4b7676d9ec86d2011ab87855424219a97deb40c",
+]
+threshold = 2
+
+[ops_timelock]
+status = "deployed"
+address = "0x8e3b6563d683b87964104a2c3a4bf542bb70767f"
+min_delay = "5m"
+
+[[ops_timelock.proposers]]
+address = "0xb76834e371b666feee48e5d7d9a97ca08b5a0620"
+name = "espresso_labs"
+
+[[ops_timelock.executors]]
+address = "0xb76834e371b666feee48e5d7d9a97ca08b5a0620"
+name = "espresso_labs"
+
+[[ops_timelock.cancellers]]
+address = "0xb76834e371b666feee48e5d7d9a97ca08b5a0620"
+name = "espresso_labs"
+
+[[ops_timelock.default_admins]]
+address = "0x8e3b6563d683b87964104a2c3a4bf542bb70767f"
+name = "ops_timelock"
+
+[[ops_timelock.default_admins]]
+address = "0xb76834e371b666feee48e5d7d9a97ca08b5a0620"
+name = "espresso_labs"
+
+[safe_exit_timelock]
+status = "deployed"
+address = "0x0eb0ef3b5a46a444c38da452055bddb273550d5c"
+min_delay = "10m"
+
+[[safe_exit_timelock.proposers]]
+address = "0xb76834e371b666feee48e5d7d9a97ca08b5a0620"
+name = "espresso_labs"
+
+[[safe_exit_timelock.executors]]
+address = "0xb76834e371b666feee48e5d7d9a97ca08b5a0620"
+name = "espresso_labs"
+
+[[safe_exit_timelock.cancellers]]
+address = "0xb76834e371b666feee48e5d7d9a97ca08b5a0620"
+name = "espresso_labs"
+
+[[safe_exit_timelock.default_admins]]
+address = "0x0eb0ef3b5a46a444c38da452055bddb273550d5c"
+name = "safe_exit_timelock"
+
+[[safe_exit_timelock.default_admins]]
+address = "0xb76834e371b666feee48e5d7d9a97ca08b5a0620"
+name = "espresso_labs"
+
+[esp_token]
+status = "deployed"
+address = "0xb3e655a030e2e34a18b72757b40be086a8f43f3b"
+owner_address = "0x0eb0ef3b5a46a444c38da452055bddb273550d5c"
+owner_name = "safe_exit_timelock"
+version = "2.0.0"
+
+[fee_contract]
+status = "deployed"
+address = "0x42835083fd1d3fc5d799b5f6815ae4bf2623e6d0"
+owner_address = "0x8e3b6563d683b87964104a2c3a4bf542bb70767f"
+owner_name = "ops_timelock"
+version = "1.0.0"
+
+[light_client]
+status = "deployed"
+address = "0x303872bb82a191771321d4828888920100d0b3e4"
+owner_address = "0x8e3b6563d683b87964104a2c3a4bf542bb70767f"
+owner_name = "ops_timelock"
+version = "3.0.0"
+
+[reward_claim]
+status = "deployed"
+address = "0xe81908e34dbb4ba01f27f8769264199727be50c8"
+default_admin_address = "0x0eb0ef3b5a46a444c38da452055bddb273550d5c"
+default_admin_name = "safe_exit_timelock"
+version = "1.0.0"
+pauser_address = "0xb76834e371b666feee48e5d7d9a97ca08b5a0620"
+pauser_name = "espresso_labs"
+
+[stake_table]
+status = "deployed"
+address = "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037"
+default_admin_address = "0x8e3b6563d683b87964104a2c3a4bf542bb70767f"
+default_admin_name = "ops_timelock"
+version = "3.0.0"
+pauser_address = "0xb76834e371b666feee48e5d7d9a97ca08b5a0620"
+pauser_name = "espresso_labs"

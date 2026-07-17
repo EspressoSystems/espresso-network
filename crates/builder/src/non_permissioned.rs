@@ -3,31 +3,28 @@ use std::{collections::VecDeque, num::NonZeroUsize, sync::Arc, time::Duration};
 use anyhow::Context;
 use async_broadcast::broadcast;
 use async_lock::{Mutex, RwLock};
+use espresso_node::{L1Params, SequencerApiVersion, catchup::StatePeers};
 use espresso_types::{
-    eth_signature_key::EthKeyPair, v0_1::NoStorage, v0_3::Fetcher, EpochCommittees, FeeAmount,
-    NodeState, Payload, SeqTypes, ValidatedState,
+    EpochCommittees, FeeAmount, NodeState, Payload, SeqTypes, ValidatedState,
+    eth_signature_key::EthKeyPair, v0_1::NoStorage, v0_3::Fetcher,
 };
 use hotshot::traits::BlockPayload;
 use hotshot_builder_legacy::{
     builder_state::{BuilderState, MessageType},
     service::{
-        run_non_permissioned_standalone_builder_service, GlobalState, ProxyGlobalState,
-        ReceivedTransaction,
+        GlobalState, ProxyGlobalState, ReceivedTransaction,
+        run_non_permissioned_standalone_builder_service,
     },
 };
 use hotshot_builder_shared::{block::ParentBlockReferences, utils::EventServiceStream};
 use hotshot_types::{
-    data::{fake_commitment, vid_commitment, ViewNumber},
+    data::{ViewNumber, fake_commitment, vid_commitment},
     epoch_membership::EpochMembershipCoordinator,
-    traits::{
-        block_contents::GENESIS_VID_NUM_STORAGE_NODES, metrics::NoMetrics,
-        node_implementation::Versions, EncodeBytes,
-    },
+    traits::{EncodeBytes, block_contents::GENESIS_VID_NUM_STORAGE_NODES, metrics::NoMetrics},
 };
-use sequencer::{catchup::StatePeers, L1Params, SequencerApiVersion};
 use tide_disco::Url;
 use tokio::spawn;
-use vbs::version::StaticVersionType;
+use vbs::version::Version;
 
 use crate::run_builder_api_service;
 
@@ -38,8 +35,8 @@ pub struct BuilderConfig {
     pub hotshot_builder_apis_url: Url,
 }
 
-pub fn build_instance_state<V: Versions>(
-    genesis: sequencer::Genesis,
+pub fn build_instance_state(
+    genesis: espresso_node::Genesis,
     l1_params: L1Params,
     state_peers: Vec<Url>,
 ) -> NodeState {
@@ -53,6 +50,7 @@ pub fn build_instance_state<V: Versions>(
     let peers = Arc::new(StatePeers::<SequencerApiVersion>::from_urls(
         state_peers,
         Default::default(),
+        Duration::from_secs(2),
         &NoMetrics,
     ));
 
@@ -64,15 +62,15 @@ pub fn build_instance_state<V: Versions>(
     );
 
     let coordinator = EpochMembershipCoordinator::new(
-        Arc::new(RwLock::new(EpochCommittees::new_stake(
+        EpochCommittees::new_stake(
             vec![],
             Default::default(),
             None,
             fetcher,
             genesis.epoch_height.unwrap_or_default(),
-        ))),
+        ),
         genesis.epoch_height.unwrap_or_default(),
-        &Arc::new(sequencer::persistence::no_storage::NoStorage),
+        &Arc::new(espresso_node::persistence::no_storage::NoStorage),
     );
 
     NodeState::new(
@@ -80,7 +78,7 @@ pub fn build_instance_state<V: Versions>(
         chain_config,
         l1_client,
         peers,
-        V::Base::version(),
+        genesis.base_version,
         coordinator,
         genesis_version,
     )
@@ -88,7 +86,7 @@ pub fn build_instance_state<V: Versions>(
 
 impl BuilderConfig {
     #[allow(clippy::too_many_arguments)]
-    pub async fn init<V: Versions>(
+    pub async fn init(
         builder_key_pair: EthKeyPair,
         bootstrapped_view: ViewNumber,
         tx_channel_capacity: NonZeroUsize,
@@ -103,6 +101,7 @@ impl BuilderConfig {
         maximize_txns_count_timeout_duration: Duration,
         base_fee: FeeAmount,
         tx_status_cache_size: usize,
+        base: Version,
     ) -> anyhow::Result<Self> {
         tracing::info!(
             address = %builder_key_pair.fee_account(),
@@ -145,11 +144,11 @@ impl BuilderConfig {
 
         let vid_commitment = {
             let payload_bytes = genesis_payload.encode();
-            vid_commitment::<V>(
+            vid_commitment(
                 &payload_bytes,
                 &genesis_ns_table.encode(),
                 GENESIS_VID_NUM_STORAGE_NODES,
-                V::Base::VERSION,
+                base,
             )
         };
 
@@ -169,7 +168,7 @@ impl BuilderConfig {
         let global_state = Arc::new(RwLock::new(global_state));
         let global_state_clone = global_state.clone();
 
-        let builder_state = BuilderState::<SeqTypes, V>::new(
+        let builder_state = BuilderState::<SeqTypes>::new(
             ParentBlockReferences {
                 view_number: bootstrapped_view,
                 vid_commitment,
@@ -244,34 +243,35 @@ impl BuilderConfig {
 
 #[cfg(test)]
 mod test {
-    use espresso_types::MockSequencerVersions;
-    use futures::StreamExt;
-    use portpicker::pick_unused_port;
-    use sequencer::{
+    use espresso_node::{
         api::{
+            Options,
             options::HotshotEvents,
             test_helpers::{TestNetwork, TestNetworkConfigBuilder},
-            Options,
         },
         persistence,
         testing::TestConfigBuilder,
     };
+    use espresso_types::MOCK_SEQUENCER_VERSIONS;
+    use futures::StreamExt;
     use surf_disco::Client;
     use tempfile::TempDir;
 
     use super::*;
-    use crate::testing::{test_builder_impl, NonPermissionedBuilderTestConfig};
+    use crate::testing::{NonPermissionedBuilderTestConfig, test_builder_impl};
 
     /// Test the non-permissioned builder core
     /// It creates a memory hotshot network and launches the hotshot event streaming api
     /// Builder subscrived to this api, and server the hotshot client request and the private mempool tx submission
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_non_permissioned_builder() {
-        let query_port = pick_unused_port().expect("No ports free");
+        let query_port =
+            test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let event_service_url: Url = format!("http://localhost:{query_port}").parse().unwrap();
 
-        let builder_port = pick_unused_port().expect("No ports free");
+        let builder_port =
+            test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
         let builder_api_url: Url = format!("http://localhost:{builder_port}").parse().unwrap();
 
         let network_config = TestConfigBuilder::default().build();
@@ -290,14 +290,13 @@ mod test {
             )
             .network_config(network_config)
             .build();
-        let network = TestNetwork::new(config, MockSequencerVersions::new()).await;
+        let network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
 
-        let builder_config = NonPermissionedBuilderTestConfig::init_non_permissioned_builder::<
-            MockSequencerVersions,
-        >(
+        let builder_config = NonPermissionedBuilderTestConfig::init_non_permissioned_builder(
             event_service_url.clone(),
             builder_api_url.clone(),
             network.cfg.num_nodes(),
+            MOCK_SEQUENCER_VERSIONS.base,
         )
         .await;
 

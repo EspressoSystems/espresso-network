@@ -9,8 +9,9 @@ import { StakeTableV2 } from "../src/StakeTableV2.sol";
 import { StakeTableUpgradeV2Test } from "./StakeTable.t.sol";
 import { BN254 } from "bn254/BN254.sol";
 import { EdOnBN254 } from "../src/libraries/EdOnBn254.sol";
-import { PausableUpgradeable } from
-    "openzeppelin-contracts-upgradeable/contracts/utils/PausableUpgradeable.sol";
+import {
+    PausableUpgradeable
+} from "openzeppelin-contracts-upgradeable/contracts/utils/PausableUpgradeable.sol";
 import { StakeTable as S } from "../src/StakeTable.sol";
 
 contract StakeTableMetadataUriTest is Test {

@@ -9,10 +9,7 @@ use std::{sync::Arc, time::Duration};
 use async_broadcast::Receiver;
 use async_lock::RwLock;
 use hotshot::traits::TestableNodeImplementation;
-use hotshot_types::{
-    error::HotShotError,
-    traits::node_implementation::{NodeType, Versions},
-};
+use hotshot_types::{error::HotShotError, traits::node_implementation::NodeType};
 use rand::thread_rng;
 use tokio::{spawn, task::JoinHandle, time::sleep};
 
@@ -22,10 +19,10 @@ use crate::{test_runner::Node, test_task::TestEvent};
 // the stream construction can definitely be fancier but that's the baseline idea
 
 /// state of task that decides when things are completed
-pub struct TxnTask<TYPES: NodeType, I: TestableNodeImplementation<TYPES>, V: Versions> {
+pub struct TxnTask<TYPES: NodeType, I: TestableNodeImplementation<TYPES>> {
     // TODO should this be in a rwlock? Or maybe a similar abstraction to the registry is in order
     /// Handles for all nodes.
-    pub handles: Arc<RwLock<Vec<Node<TYPES, I, V>>>>,
+    pub handles: Arc<RwLock<Vec<Node<TYPES, I>>>>,
     /// Optional index of the next node.
     pub next_node_idx: Option<usize>,
     /// time to wait between txns
@@ -34,7 +31,7 @@ pub struct TxnTask<TYPES: NodeType, I: TestableNodeImplementation<TYPES>, V: Ver
     pub shutdown_chan: Receiver<TestEvent>,
 }
 
-impl<TYPES: NodeType, I: TestableNodeImplementation<TYPES>, V: Versions> TxnTask<TYPES, I, V> {
+impl<TYPES: NodeType, I: TestableNodeImplementation<TYPES>> TxnTask<TYPES, I> {
     pub fn run(mut self) -> JoinHandle<()> {
         spawn(async move {
             loop {
@@ -65,12 +62,11 @@ impl<TYPES: NodeType, I: TestableNodeImplementation<TYPES>, V: Versions> TxnTask
                     let txn = I::leaf_create_random_transaction(&leaf, &mut thread_rng(), 0);
 
                     let res = node.handle.submit_transaction(txn.clone()).await;
-                    if let Err(HotShotError::InvalidState(e)) = res.as_ref() {
-                        if e.contains("Catchup already in progress")
-                            || e.contains("Starting catchup")
-                        {
-                            return;
-                        }
+                    if let Err(HotShotError::InvalidState(e)) = res.as_ref()
+                        && (e.contains("Catchup already in progress")
+                            || e.contains("Starting catchup"))
+                    {
+                        return;
                     }
                     res.expect("Could not send transaction");
                 },

@@ -10,42 +10,48 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
+use std::fmt::Debug;
+
+use anyhow::{Context, ensure};
 use async_trait::async_trait;
-use committable::Committable;
-use hotshot_types::{
-    data::{ns_table, VidCommitment, VidCommon},
-    traits::{block_contents::BlockHeader, node_implementation::NodeType, EncodeBytes},
-    vid::{
-        advz::{advz_scheme, ADVZScheme},
-        avidm::{init_avidm_param, AvidMScheme},
-        avidm_gf2::AvidmGf2Scheme,
-    },
-};
-use jf_advz::VidScheme;
+use futures::{TryFutureExt, future::try_join_all};
+use hotshot_types::{data::VidCommon, traits::node_implementation::NodeType};
 use surf_disco::{Client, Url};
-use vbs::{version::StaticVersionType, BinarySerializer};
+use vbs::version::StaticVersionType;
 
 use super::Provider;
 use crate::{
-    availability::{
-        ADVZCommonQueryData, ADVZPayloadQueryData, LeafQueryData, LeafQueryDataLegacy,
-        PayloadQueryData, VidCommonQueryData,
+    Error, Payload,
+    availability::{BlockQueryData, Certificate2, LeafQueryData, VidCommonQueryData},
+    fetching::{
+        NonEmptyRange,
+        request::{
+            BlockRangeRequest, Certificate2Request, LeafRangeRequest, LeafRequest, PayloadRequest,
+            VidCommonRangeRequest, VidCommonRequest,
+        },
     },
-    fetching::request::{LeafRequest, PayloadRequest, VidCommonRequest},
     types::HeightIndexed,
-    Error, Header, Payload,
 };
 
 /// Data availability provider backed by another instance of this query service.
 ///
 /// This fetcher implements the [`Provider`] interface by querying the REST API provided by another
 /// instance of this query service to try and retrieve missing objects.
+///
+/// This provider trusts the external query service is connected to: it does not verify the
+/// responses it receives. Instantiating this provider adds a trust assumption not only on the
+/// external service, but on the correctness of this node's local TLS configuration, etc.: anything
+/// needed to ensure that the HTTP client is connected to the intended, trusted server.
+///
+/// To avoid adding additional trust dependencies, do not use this provider; instead, use a provider
+/// implementation that verifies the data it receives, for example using a light client for the
+/// protocol.
 #[derive(Clone, Debug)]
-pub struct QueryServiceProvider<Ver: StaticVersionType> {
+pub struct TrustedQueryServiceProvider<Ver: StaticVersionType> {
     client: Client<Error, Ver>,
 }
 
-impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
+impl<Ver: StaticVersionType> TrustedQueryServiceProvider<Ver> {
     pub fn new(url: Url, _: Ver) -> Self {
         Self {
             client: Client::new(url),
@@ -53,149 +59,50 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
     }
 }
 
-impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
-    async fn deserialize_legacy_payload<Types: NodeType>(
+impl<Ver: StaticVersionType> TrustedQueryServiceProvider<Ver> {
+    pub async fn fetch_payload<Types: NodeType>(
         &self,
-        payload_bytes: Vec<u8>,
-        common_bytes: Vec<u8>,
         req: PayloadRequest,
-    ) -> Option<Payload<Types>> {
-        let client_url = self.client.base_url();
+    ) -> anyhow::Result<Payload<Types>> {
+        let block = self
+            .client
+            .get::<BlockQueryData<Types>>(&format!("availability/block/payload-hash/{}", req.0))
+            .send()
+            .await
+            .context("fetching block")?;
 
-        let PayloadRequest(VidCommitment::V0(advz_commit)) = req else {
-            return None;
-        };
-
-        let payload = match vbs::Serializer::<Ver>::deserialize::<ADVZPayloadQueryData<Types>>(
-            &payload_bytes,
-        ) {
-            Ok(payload) => payload,
-            Err(err) => {
-                tracing::warn!(%err, ?req, "failed to deserialize ADVZPayloadQueryData");
-                return None;
-            },
-        };
-
-        let common = match vbs::Serializer::<Ver>::deserialize::<ADVZCommonQueryData<Types>>(
-            &common_bytes,
-        ) {
-            Ok(common) => common,
-            Err(err) => {
-                tracing::warn!(%err, ?req, "failed to deserialize ADVZPayloadQueryData");
-                return None;
-            },
-        };
-
-        let num_storage_nodes = ADVZScheme::get_num_storage_nodes(common.common()) as usize;
-        let bytes = payload.data.encode();
-
-        let commit = advz_scheme(num_storage_nodes)
-            .commit_only(bytes)
-            .inspect_err(|err| {
-                tracing::error!(%err, ?req, "failed to compute legacy VID commitment");
-            })
-            .ok()?;
-
-        if commit != advz_commit {
-            tracing::error!(
-                ?req,
-                expected_commit=%advz_commit,
-                actual_commit=%commit,
-                %client_url,
-                "received inconsistent legacy payload"
-            );
-            return None;
-        }
-
-        Some(payload.data)
+        Ok(block.payload)
     }
 
-    async fn deserialize_legacy_vid_common<Types: NodeType>(
+    pub async fn fetch_payload_range<Types: NodeType>(
         &self,
-        bytes: Vec<u8>,
-        req: VidCommonRequest,
-    ) -> Option<VidCommon> {
-        let client_url = self.client.base_url();
-        let VidCommonRequest(VidCommitment::V0(advz_commit)) = req else {
-            return None;
-        };
+        req: BlockRangeRequest,
+    ) -> anyhow::Result<NonEmptyRange<BlockQueryData<Types>>> {
+        let blocks = self
+            .client
+            .get::<NonEmptyRange<BlockQueryData<Types>>>(&format!(
+                "availability/block/{}/{}",
+                req.start, req.end
+            ))
+            .send()
+            .await
+            .context("fetching blocks")?;
 
-        match vbs::Serializer::<Ver>::deserialize::<ADVZCommonQueryData<Types>>(&bytes) {
-            Ok(res) => {
-                if ADVZScheme::is_consistent(&advz_commit, &res.common).is_ok() {
-                    Some(VidCommon::V0(res.common))
-                } else {
-                    tracing::error!(%client_url, ?req, ?res.common, "fetched inconsistent VID common data");
-                    None
-                }
-            },
-            Err(err) => {
-                tracing::warn!(
-                    %client_url,
-                    ?req,
-                    %err,
-                    "failed to deserialize ADVZCommonQueryData"
-                );
-                None
-            },
-        }
+        ensure!(
+            blocks.start() == req.start && blocks.end() == req.end,
+            "wrong block range ({}..{})",
+            blocks.start(),
+            blocks.end()
+        );
+
+        Ok(blocks)
     }
-    async fn deserialize_legacy_leaf<Types: NodeType>(
-        &self,
-        bytes: Vec<u8>,
-        req: LeafRequest<Types>,
-    ) -> Option<LeafQueryData<Types>> {
-        let client_url = self.client.base_url();
 
-        match vbs::Serializer::<Ver>::deserialize::<LeafQueryDataLegacy<Types>>(&bytes) {
-            Ok(mut leaf) => {
-                if leaf.height() != req.height {
-                    tracing::error!(
-                        %client_url, ?req,
-                        expected_height = req.height,
-                        actual_height = leaf.height(),
-                        "received leaf with the wrong height"
-                    );
-                    return None;
-                }
-
-                let expected_leaf_commit: [u8; 32] = req.expected_leaf.into();
-                let actual_leaf_commit: [u8; 32] = leaf.hash().into();
-                if actual_leaf_commit != expected_leaf_commit {
-                    tracing::error!(
-                        %client_url, ?req,
-                        expected_leaf = %req.expected_leaf,
-                        actual_leaf = %leaf.hash(),
-                        "received leaf with the wrong hash"
-                    );
-                    return None;
-                }
-
-                let expected_qc_commit: [u8; 32] = req.expected_qc.into();
-                let actual_qc_commit: [u8; 32] = leaf.qc().commit().into();
-                if actual_qc_commit != expected_qc_commit {
-                    tracing::error!(
-                        %client_url, ?req,
-                        expected_qc = %req.expected_qc,
-                        actual_qc = %leaf.qc().commit(),
-                        "received leaf with the wrong QC"
-                    );
-                    return None;
-                }
-
-                // There is a potential DOS attack where the peer sends us a leaf with the full
-                // payload in it, which uses redundant resources in the database, since we fetch and
-                // store payloads separately. We can defend ourselves by simply dropping the payload
-                // if present.
-                leaf.leaf.unfill_block_payload();
-
-                Some(leaf.into())
-            },
+    fn handle_result<R: Debug, T>(&self, req: R, res: anyhow::Result<T>) -> Option<T> {
+        match res {
+            Ok(res) => Some(res),
             Err(err) => {
-                tracing::warn!(
-                    %client_url, ?req, %err,
-                    "failed to deserialize legacy LeafQueryData"
-                );
+                tracing::warn!(upstream = %self.client.base_url(), ?req, "failed to fetch: {err:#}");
                 None
             },
         }
@@ -203,332 +110,218 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
 }
 
 #[async_trait]
-impl<Types, Ver: StaticVersionType> Provider<Types, PayloadRequest> for QueryServiceProvider<Ver>
+impl<Types, Ver: StaticVersionType> Provider<Types, PayloadRequest>
+    for TrustedQueryServiceProvider<Ver>
 where
     Types: NodeType,
 {
-    /// Fetches the `Payload` for a given request.
-    ///
-    /// Attempts to fetch and deserialize the requested data using the new type first.
-    /// If deserialization into the new type fails (e.g., because the provider is still returning
-    /// legacy data), it falls back to attempt deserialization using an older, legacy type instead.
-    /// This fallback ensures compatibility with older nodes or providers that have not yet upgraded.
-    ///
     async fn fetch(&self, req: PayloadRequest) -> Option<Payload<Types>> {
-        let client_url = self.client.base_url();
-        let req_hash = req.0;
-        // Fetch the payload and the VID common data. We need the common data to recompute the VID
-        // commitment, to ensure the payload we received is consistent with the commitment we
-        // requested.
-        let payload_bytes = self
-            .client
-            .get::<()>(&format!("availability/payload/hash/{}", req.0))
-            .bytes()
-            .await
-            .inspect_err(|err| {
-                tracing::info!(%err, %req_hash, %client_url, "failed to fetch payload bytes");
-            })
-            .ok()?;
-
-        let common_bytes = self
-            .client
-            .get::<()>(&format!("availability/vid/common/payload-hash/{}", req.0))
-            .bytes()
-            .await
-            .inspect_err(|err| {
-                tracing::info!(%err, %req_hash, %client_url, "failed to fetch VID common bytes");
-            })
-            .ok()?;
-
-        let payload =
-            vbs::Serializer::<Ver>::deserialize::<PayloadQueryData<Types>>(&payload_bytes)
-                .inspect_err(|err| {
-                    tracing::info!(%err, %req_hash, "failed to deserialize PayloadQueryData");
-                })
-                .ok();
-
-        let common =
-            vbs::Serializer::<Ver>::deserialize::<VidCommonQueryData<Types>>(&common_bytes)
-                .inspect_err(|err| {
-                    tracing::info!(%err, %req_hash,
-                        "error deserializing VidCommonQueryData",
-                    );
-                })
-                .ok();
-
-        let (payload, common) = match (payload, common) {
-            (Some(payload), Some(common)) => (payload, common),
-            _ => {
-                tracing::info!(%req_hash, "falling back to legacy payload deserialization");
-
-                // fallback deserialization
-                return self
-                    .deserialize_legacy_payload::<Types>(payload_bytes, common_bytes, req)
-                    .await;
-            },
-        };
-
-        match common.common() {
-            VidCommon::V0(common) => {
-                let num_storage_nodes = ADVZScheme::get_num_storage_nodes(common) as usize;
-                let bytes = payload.data().encode();
-
-                let commit = advz_scheme(num_storage_nodes)
-                    .commit_only(bytes)
-                    .map(VidCommitment::V0)
-                    .inspect_err(|err| {
-                        tracing::error!(%err, %req_hash,  %num_storage_nodes, "failed to compute VID commitment (V0)");
-                    })
-                    .ok()?;
-
-                if commit != req.0 {
-                    tracing::error!(
-                        expected = %req_hash,
-                        actual = ?commit,
-                        %client_url,
-                        "VID commitment mismatch (V0)"
-                    );
-
-                    return None;
-                }
-            },
-            VidCommon::V1(common) => {
-                let bytes = payload.data().encode();
-
-                let avidm_param = init_avidm_param(common.total_weights)
-                    .inspect_err(|err| {
-                        tracing::error!(%err, %req_hash, "failed to initialize AVIDM params. total_weight={}", common.total_weights);
-                    })
-                    .ok()?;
-
-                let header = self
-                    .client
-                    .get::<Header<Types>>(&format!("availability/header/{}", payload.height()))
-                    .send()
-                    .await
-                    .inspect_err(|err| {
-                        tracing::warn!(%client_url, %err, "failed to fetch header for payload. height={}", payload.height());
-                    })
-                    .ok()?;
-
-                if header.payload_commitment() != req.0 {
-                    tracing::error!(
-                        expected = %req_hash,
-                        actual = %header.payload_commitment(),
-                        %client_url,
-                        "header payload commitment mismatch (V1, AvidM)"
-                    );
-                    return None;
-                }
-
-                let metadata = header.metadata().encode();
-                let commit = AvidMScheme::commit(
-                    &avidm_param,
-                    &bytes,
-                    ns_table::parse_ns_table(bytes.len(), &metadata),
-                )
-                .map(VidCommitment::V1)
-                .inspect_err(|err| {
-                    tracing::error!(%err, %req_hash, "failed to compute AVIDM commitment");
-                })
-                .ok()?;
-
-                // Compare calculated commitment with requested commitment
-                if commit != req.0 {
-                    tracing::warn!(
-                        expected = %req_hash,
-                        actual = %commit,
-                        %client_url,
-                        "commitment type mismatch for AVIDM check"
-                    );
-                    return None;
-                }
-            },
-            VidCommon::V2(common) => {
-                let bytes = payload.data().encode();
-
-                let header = self
-                    .client
-                    .get::<Header<Types>>(&format!("availability/header/{}", payload.height()))
-                    .send()
-                    .await
-                    .inspect_err(|err| {
-                        tracing::warn!(%client_url, %err, "failed to fetch header for payload. height={}", payload.height());
-                    })
-                    .ok()?;
-
-                if header.payload_commitment() != req.0 {
-                    tracing::error!(
-                        expected = %req_hash,
-                        actual = %header.payload_commitment(),
-                        %client_url,
-                        "header payload commitment mismatch (V2, AvidmGf2)"
-                    );
-                    return None;
-                }
-
-                let metadata = header.metadata().encode();
-                let commit = AvidmGf2Scheme::commit(
-                    &common.param,
-                    &bytes,
-                    ns_table::parse_ns_table(bytes.len(), &metadata),
-                )
-                .map(|(commit, _)| VidCommitment::V2(commit))
-                .inspect_err(|err| {
-                    tracing::error!(%err, %req_hash, "failed to compute AvidmGf2 commitment");
-                })
-                .ok()?;
-
-                // Compare calculated commitment with requested commitment
-                if commit != req.0 {
-                    tracing::warn!(
-                        expected = %req_hash,
-                        actual = %commit,
-                        %client_url,
-                        "commitment type mismatch for AvidmGf2 check"
-                    );
-                    return None;
-                }
-            },
-        }
-
-        Some(payload.data)
+        self.handle_result(req, self.fetch_payload::<Types>(req).await)
     }
 }
 
 #[async_trait]
-impl<Types, Ver: StaticVersionType> Provider<Types, LeafRequest<Types>>
-    for QueryServiceProvider<Ver>
+impl<Types, Ver: StaticVersionType> Provider<Types, BlockRangeRequest>
+    for TrustedQueryServiceProvider<Ver>
 where
     Types: NodeType,
 {
-    /// Fetches the `Leaf` for a given request.
-    ///
-    /// Attempts to fetch and deserialize the requested data using the new type first.
-    /// If deserialization into the new type fails (e.g., because the provider is still returning
-    /// legacy data), it falls back to attempt deserialization using an older, legacy type instead.
-    /// This fallback ensures compatibility with older nodes or providers that have not yet upgraded.
-    ///
-    async fn fetch(&self, req: LeafRequest<Types>) -> Option<LeafQueryData<Types>> {
-        let client_url = self.client.base_url();
+    async fn fetch(&self, req: BlockRangeRequest) -> Option<NonEmptyRange<BlockQueryData<Types>>> {
+        self.handle_result(req, self.fetch_payload_range::<Types>(req).await)
+    }
+}
 
-        let bytes = self
+impl<Ver: StaticVersionType> TrustedQueryServiceProvider<Ver> {
+    pub async fn fetch_leaf<Types: NodeType>(
+        &self,
+        req: LeafRequest,
+    ) -> anyhow::Result<LeafQueryData<Types>> {
+        let leaf = self
             .client
-            .get::<()>(&format!("availability/leaf/{}", req.height))
-            .bytes()
+            .get::<LeafQueryData<Types>>(&format!("availability/leaf/{}", req.height))
+            .send()
+            .await
+            .context("fetching leaf")?;
+
+        ensure!(
+            leaf.height() == req.height,
+            "received leaf with the wrong height ({})",
+            leaf.height(),
+        );
+
+        Ok(leaf)
+    }
+
+    pub async fn fetch_leaf_range<Types: NodeType>(
+        &self,
+        req: LeafRangeRequest,
+    ) -> anyhow::Result<NonEmptyRange<LeafQueryData<Types>>> {
+        let leaves = self
+            .client
+            .get::<NonEmptyRange<LeafQueryData<Types>>>(&format!(
+                "availability/leaf/{}/{}",
+                req.start, req.end
+            ))
+            .send()
+            .await
+            .context("fetching leaf chain")?;
+
+        ensure!(
+            leaves.start() == req.start && leaves.end() == req.end,
+            "server returned wrong range of leaves ({}..{})",
+            leaves.start(),
+            leaves.end()
+        );
+
+        Ok(leaves)
+    }
+}
+
+#[async_trait]
+impl<Types, Ver: StaticVersionType> Provider<Types, LeafRequest>
+    for TrustedQueryServiceProvider<Ver>
+where
+    Types: NodeType,
+{
+    async fn fetch(&self, req: LeafRequest) -> Option<LeafQueryData<Types>> {
+        self.handle_result(req, self.fetch_leaf(req).await)
+    }
+}
+
+#[async_trait]
+impl<Types, Ver: StaticVersionType> Provider<Types, LeafRangeRequest>
+    for TrustedQueryServiceProvider<Ver>
+where
+    Types: NodeType,
+{
+    async fn fetch(&self, req: LeafRangeRequest) -> Option<NonEmptyRange<LeafQueryData<Types>>> {
+        self.handle_result(req, self.fetch_leaf_range(req).await)
+    }
+}
+
+impl<Ver: StaticVersionType> TrustedQueryServiceProvider<Ver> {
+    /// Fetch a cert2 from a peer at the given height.
+    pub async fn fetch_cert2<Types: NodeType>(
+        &self,
+        height: u64,
+    ) -> anyhow::Result<Option<Certificate2<Types>>> {
+        self.client
+            .get(&format!("availability/cert2/{height}"))
+            .send()
+            .await
+            .context("fetching cert2")
+    }
+}
+
+#[async_trait]
+impl<Types, Ver: StaticVersionType> Provider<Types, Certificate2Request>
+    for TrustedQueryServiceProvider<Ver>
+where
+    Types: NodeType,
+{
+    async fn fetch(&self, req: Certificate2Request) -> Option<Option<Certificate2<Types>>> {
+        self.handle_result(req, self.fetch_cert2(req.height).await)
+    }
+}
+
+impl<Ver: StaticVersionType> TrustedQueryServiceProvider<Ver> {
+    pub async fn fetch_vid_common<Types: NodeType>(
+        &self,
+        req: VidCommonRequest,
+    ) -> anyhow::Result<VidCommon> {
+        let res = self
+            .client
+            .get::<VidCommonQueryData<Types>>(&format!(
+                "availability/vid/common/payload-hash/{}",
+                req.0
+            ))
+            .send()
+            .await
+            .context("fetching VID common")?;
+
+        Ok(res.common)
+    }
+
+    async fn fetch_vid_common_range_with_fallback<Types: NodeType>(
+        &self,
+        start: u64,
+        end: u64,
+    ) -> anyhow::Result<NonEmptyRange<VidCommonQueryData<Types>>> {
+        let res = self
+            .client
+            .get::<NonEmptyRange<VidCommonQueryData<Types>>>(&format!(
+                "availability/vid/common/{start}/{end}",
+            ))
+            .send()
             .await;
-        let bytes = match bytes {
-            Ok(bytes) => bytes,
-            Err(err) => {
-                tracing::info!(%client_url, ?req, %err, "failed to fetch bytes for leaf");
-
-                return None;
-            },
-        };
-
-        // Attempt to deserialize using the new type
-
-        match vbs::Serializer::<Ver>::deserialize::<LeafQueryData<Types>>(&bytes) {
-            Ok(mut leaf) => {
-                if leaf.height() != req.height {
-                    tracing::error!(
-                        %client_url, ?req, ?leaf,
-                        expected_height = req.height,
-                        actual_height = leaf.height(),
-                        "received leaf with the wrong height"
-                    );
-                    return None;
-                }
-                if leaf.hash() != req.expected_leaf {
-                    tracing::error!(
-                        %client_url, ?req, ?leaf,
-                        expected_hash = %req.expected_leaf,
-                        actual_hash = %leaf.hash(),
-                        "received leaf with the wrong hash"
-                    );
-                    return None;
-                }
-                if leaf.qc().commit() != req.expected_qc {
-                    tracing::error!(
-                        %client_url, ?req, ?leaf,
-                        expected_qc = %req.expected_qc,
-                        actual_qc = %leaf.qc().commit(),
-                        "received leaf with the wrong QC"
-                    );
-                    return None;
-                }
-
-                // There is a potential DOS attack where the peer sends us a leaf with the full
-                // payload in it, which uses redundant resources in the database, since we fetch and
-                // store payloads separately. We can defend ourselves by simply dropping the payload
-                // if present.
-                leaf.leaf.unfill_block_payload();
-
-                Some(leaf)
-            },
-            Err(err) => {
+        match res {
+            Ok(common) => Ok(common),
+            Err(Error::Custom { message, .. }) if message.contains("No route matches") => {
+                // Old versions of the upstream query service do not support the ranged VID common
+                // endpoint. Fall back to fetching each object individually.
                 tracing::info!(
-                    ?req, %err,
-                    "failed to deserialize LeafQueryData, falling back to legacy deserialization"
+                    start,
+                    end,
+                    "server does not support ranged VID fetching, falling back to individual \
+                     fetches"
                 );
-                // Fallback deserialization
-                self.deserialize_legacy_leaf(bytes, req).await
+                let common = try_join_all((start..end).map(|i| {
+                    self.client
+                        .get::<VidCommonQueryData<Types>>(&format!("availability/vid/common/{i}"))
+                        .send()
+                        .map_err(move |err| {
+                            anyhow::Error::new(err).context(format!("fetching VID common {i}"))
+                        })
+                }))
+                .await?;
+                NonEmptyRange::new(common)
+                    .context("converting individually fetched VID common into range")
             },
+            Err(err) => Err(err).context("fetching VID common range"),
         }
+    }
+
+    pub async fn fetch_vid_common_range<Types: NodeType>(
+        &self,
+        req: VidCommonRangeRequest,
+    ) -> anyhow::Result<NonEmptyRange<VidCommonQueryData<Types>>> {
+        let common = self
+            .fetch_vid_common_range_with_fallback(req.start, req.end)
+            .await?;
+
+        ensure!(
+            common.start() == req.start && common.end() == req.end,
+            "server returned wrong VID common ({}..{})",
+            common.start(),
+            common.end()
+        );
+
+        Ok(common)
     }
 }
 
 #[async_trait]
-impl<Types, Ver: StaticVersionType> Provider<Types, VidCommonRequest> for QueryServiceProvider<Ver>
+impl<Types, Ver: StaticVersionType> Provider<Types, VidCommonRequest>
+    for TrustedQueryServiceProvider<Ver>
 where
     Types: NodeType,
 {
-    /// Fetches the `VidCommon` for a given request.
-    ///
-    /// Attempts to fetch and deserialize the requested data using the new type first.
-    /// If deserialization into the new type fails (e.g., because the provider is still returning
-    /// legacy data), it falls back to attempt deserialization using an older, legacy type instead.
-    /// This fallback ensures compatibility with older nodes or providers that have not yet upgraded.
-    ///
     async fn fetch(&self, req: VidCommonRequest) -> Option<VidCommon> {
-        let client_url = self.client.base_url();
-        let bytes = self
-            .client
-            .get::<()>(&format!("availability/vid/common/payload-hash/{}", req.0))
-            .bytes()
-            .await;
-        let bytes = match bytes {
-            Ok(bytes) => bytes,
-            Err(err) => {
-                tracing::info!(
-                    %client_url, ?req, %err,
-                    "failed to fetch VID common bytes"
-                );
-                return None;
-            },
-        };
+        self.handle_result(req, self.fetch_vid_common::<Types>(req).await)
+    }
+}
 
-        match vbs::Serializer::<Ver>::deserialize::<VidCommonQueryData<Types>>(&bytes) {
-            Ok(res) => {
-                if !res.common().is_consistent(&req.0) {
-                    tracing::error!(
-                        %client_url, ?req, ?res.common,
-                        "fetched inconsistent VID common data"
-                    );
-                    return None;
-                }
-                Some(res.common)
-            },
-            Err(err) => {
-                tracing::info!(
-                    %client_url, ?req, %err,
-                    "failed to deserialize as V1 VID common data, trying legacy fallback"
-                );
-                // Fallback deserialization
-                self.deserialize_legacy_vid_common::<Types>(bytes, req)
-                    .await
-            },
-        }
+#[async_trait]
+impl<Types, Ver: StaticVersionType> Provider<Types, VidCommonRangeRequest>
+    for TrustedQueryServiceProvider<Ver>
+where
+    Types: NodeType,
+{
+    async fn fetch(
+        &self,
+        req: VidCommonRangeRequest,
+    ) -> Option<NonEmptyRange<VidCommonQueryData<Types>>> {
+        self.handle_result(req, self.fetch_vid_common_range::<Types>(req).await)
     }
 }
 
@@ -539,51 +332,45 @@ mod test {
 
     use committable::Committable;
     use futures::{
-        future::{join, FutureExt},
+        future::{FutureExt, join},
         stream::StreamExt,
     };
-    // generic-array 0.14.x is deprecated, but VidCommitment requires this version
-    // for From<Output<H>> impl in jf-merkle-tree
-    #[allow(deprecated)]
-    use generic_array::GenericArray;
-    use hotshot_example_types::node_types::{EpochsTestVersions, TestVersions};
-    use hotshot_types::traits::node_implementation::Versions;
-    use portpicker::pick_unused_port;
-    use rand::RngCore;
-    use tide_disco::{error::ServerError, App};
+    use hotshot_example_types::node_types::{EpochVersion, TEST_VERSIONS};
+    use test_utils::reserve_tcp_port;
+    use tide_disco::{Api, App};
+    use toml::toml;
     use vbs::version::StaticVersion;
 
     use super::*;
     use crate::{
-        api::load_api,
+        ApiState,
         availability::{
-            define_api, AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData,
-            BlockWithTransaction, Fetch, UpdateAvailabilityData,
+            self, AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction,
+            Fetch, UpdateAvailabilityData, define_api,
         },
         data_source::{
+            AvailabilityProvider, FetchingDataSource, Transaction, VersionedDataSource,
             sql::{self, SqlDataSource},
             storage::{
+                AvailabilityStorage, SqlStorage, StorageConnectionType, UpdateAvailabilityStorage,
                 fail_storage::{FailStorage, FailableAction},
                 pruning::{PrunedHeightStorage, PrunerCfg},
                 sql::testing::TmpDb,
-                AvailabilityStorage, SqlStorage, StorageConnectionType, UpdateAvailabilityStorage,
             },
-            AvailabilityProvider, FetchingDataSource, Transaction, VersionedDataSource,
         },
         fetching::provider::{NoFetching, Provider as ProviderTrait, TestProvider},
-        node::{data_source::NodeDataSource, SyncStatus},
+        node::data_source::NodeDataSource,
         task::BackgroundTask,
         testing::{
             consensus::{MockDataSource, MockNetwork},
-            mocks::{mock_transaction, MockBase, MockTypes, MockVersions},
+            mocks::{MockBase, MockTypes, mock_transaction},
             sleep,
         },
         types::HeightIndexed,
-        ApiState,
     };
 
-    type Provider = TestProvider<QueryServiceProvider<MockBase>>;
-    type EpochProvider = TestProvider<QueryServiceProvider<<EpochsTestVersions as Versions>::Base>>;
+    type Provider = TestProvider<TrustedQueryServiceProvider<MockBase>>;
+    type EpochProvider = TestProvider<TrustedQueryServiceProvider<EpochVersion>>;
 
     fn ignore<T>(_: T) {}
 
@@ -612,10 +399,10 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_on_request() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",
@@ -634,7 +421,7 @@ mod test {
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let db = TmpDb::init().await;
-        let provider = Provider::new(QueryServiceProvider::new(
+        let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
@@ -842,16 +629,16 @@ mod test {
         tracing::info!("Starting test_fetch_on_request_epoch_version");
 
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, EpochsTestVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",
             define_api(
                 &Default::default(),
-                <EpochsTestVersions as Versions>::Base::instance(),
+                EpochVersion::instance(),
                 "1.0.0".parse().unwrap(),
             )
             .unwrap(),
@@ -859,18 +646,15 @@ mod test {
         .unwrap();
         network.spawn(
             "server",
-            app.serve(
-                format!("0.0.0.0:{port}"),
-                <EpochsTestVersions as Versions>::Base::instance(),
-            ),
+            app.serve(format!("0.0.0.0:{port}"), EpochVersion::instance()),
         );
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         // Use our special test provider that handles epoch version transitions
         let db = TmpDb::init().await;
-        let provider = EpochProvider::new(QueryServiceProvider::new(
+        let provider = EpochProvider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            <EpochsTestVersions as Versions>::Base::instance(),
+            EpochVersion::instance(),
         ));
         let data_source = data_source(&db, &provider).await;
 
@@ -1071,10 +855,10 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_block_and_leaf_concurrently() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",
@@ -1093,7 +877,7 @@ mod test {
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let db = TmpDb::init().await;
-        let provider = Provider::new(QueryServiceProvider::new(
+        let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
@@ -1132,10 +916,10 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_different_blocks_same_payload() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",
@@ -1154,7 +938,7 @@ mod test {
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let db = TmpDb::init().await;
-        let provider = Provider::new(QueryServiceProvider::new(
+        let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
@@ -1197,10 +981,10 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_stream() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",
@@ -1219,7 +1003,7 @@ mod test {
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let db = TmpDb::init().await;
-        let provider = Provider::new(QueryServiceProvider::new(
+        let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
@@ -1259,10 +1043,10 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_range_start() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",
@@ -1281,7 +1065,7 @@ mod test {
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let db = TmpDb::init().await;
-        let provider = Provider::new(QueryServiceProvider::new(
+        let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
@@ -1298,8 +1082,8 @@ mod test {
         // height) and one in the middle of the range, to test what happens when data is missing
         // from the beginning of the range but other data is available.
         let mut tx = data_source.write().await.unwrap();
-        tx.insert_leaf(finalized_leaves[2].clone()).await.unwrap();
-        tx.insert_leaf(finalized_leaves[4].clone()).await.unwrap();
+        tx.insert_leaf(&finalized_leaves[2]).await.unwrap();
+        tx.insert_leaf(&finalized_leaves[4]).await.unwrap();
         tx.commit().await.unwrap();
 
         // Get the whole range of leaves.
@@ -1318,10 +1102,10 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn fetch_transaction() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",
@@ -1397,10 +1181,10 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_retry() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",
@@ -1419,7 +1203,7 @@ mod test {
 
         // Start a data source which is not receiving events from consensus.
         let db = TmpDb::init().await;
-        let provider = Provider::new(QueryServiceProvider::new(
+        let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
@@ -1468,87 +1252,13 @@ mod test {
         );
     }
 
-    // Uses deprecated generic-array 0.14.x via digest, required for VidCommitment compatibility
-    #[allow(deprecated)]
-    fn random_vid_commit() -> VidCommitment {
-        let mut bytes = [0; 32];
-        rand::thread_rng().fill_bytes(&mut bytes);
-        VidCommitment::V0(GenericArray::from(bytes).into())
-    }
-
-    async fn malicious_server(port: u16) {
-        let mut api = load_api::<(), ServerError, MockBase>(
-            None::<std::path::PathBuf>,
-            include_str!("../../../api/availability.toml"),
-            vec![],
-        )
-        .unwrap();
-
-        api.get("get_payload", move |_, _| {
-            async move {
-                // No matter what data we are asked for, always respond with dummy data.
-                Ok(PayloadQueryData::<MockTypes>::genesis::<TestVersions>(
-                    &Default::default(),
-                    &Default::default(),
-                )
-                .await)
-            }
-            .boxed()
-        })
-        .unwrap()
-        .get("get_vid_common", move |_, _| {
-            async move {
-                // No matter what data we are asked for, always respond with dummy data.
-                Ok(VidCommonQueryData::<MockTypes>::genesis::<TestVersions>(
-                    &Default::default(),
-                    &Default::default(),
-                )
-                .await)
-            }
-            .boxed()
-        })
-        .unwrap();
-
-        let mut app = App::<(), ServerError>::with_state(());
-        app.register_module("availability", api).unwrap();
-        app.serve(format!("0.0.0.0:{port}"), MockBase::instance())
-            .await
-            .ok();
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_from_malicious_server() {
-        let port = pick_unused_port().unwrap();
-        let _server = BackgroundTask::spawn("malicious server", malicious_server(port));
-
-        let provider = QueryServiceProvider::new(
-            format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
-        );
-        provider.client.connect(None).await;
-
-        // Query for a random payload, the server will respond with a different payload, and we
-        // should detect the error.
-        let res =
-            ProviderTrait::<MockTypes, _>::fetch(&provider, PayloadRequest(random_vid_commit()))
-                .await;
-        assert_eq!(res, None);
-
-        // Query for a random VID common, the server will respond with a different one, and we
-        // should detect the error.
-        let res =
-            ProviderTrait::<MockTypes, _>::fetch(&provider, VidCommonRequest(random_vid_commit()))
-                .await;
-        assert_eq!(res, None);
-    }
-
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_archive_recovery() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",
@@ -1568,7 +1278,7 @@ mod test {
         // Start a data source which is not receiving events from consensus, only from a peer. The
         // data source is at first configured to aggressively prune data.
         let db = TmpDb::init().await;
-        let provider = Provider::new(QueryServiceProvider::new(
+        let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
@@ -1654,8 +1364,8 @@ mod test {
             .builder(provider.clone())
             .await
             .unwrap()
-            .with_minor_scan_interval(Duration::from_secs(1))
-            .with_major_scan_interval(1)
+            .with_proactive_interval(Duration::from_secs(1))
+            .with_sync_status_ttl(Duration::from_secs(1))
             .build()
             .await
             .unwrap();
@@ -1678,16 +1388,7 @@ mod test {
         // Wait for the data to be restored. It should be restored by the next major scan.
         loop {
             let sync_status = data_source.sync_status().await.unwrap();
-
-            // VID shares are unique to a node and will never be fetched from a peer; this is
-            // acceptable since there is redundancy built into the VID scheme. Ignore missing VID
-            // shares in the `is_fully_synced` check.
-            if (SyncStatus {
-                missing_vid_shares: 0,
-                ..sync_status
-            })
-            .is_fully_synced()
-            {
+            if sync_status.is_fully_synced() {
                 break;
             }
             tracing::info!(?sync_status, "waiting for node to sync");
@@ -1697,14 +1398,7 @@ mod test {
         // The node remains fully synced even after some time; no pruning.
         sleep(Duration::from_secs(3)).await;
         let sync_status = data_source.sync_status().await.unwrap();
-        assert!(
-            (SyncStatus {
-                missing_vid_shares: 0,
-                ..sync_status
-            })
-            .is_fully_synced(),
-            "{sync_status:?}"
-        );
+        assert!(sync_status.is_fully_synced(), "{sync_status:#?}");
     }
 
     #[derive(Clone, Copy, Debug)]
@@ -1716,10 +1410,10 @@ mod test {
 
     async fn test_fetch_storage_failure_helper(failure: FailureType) {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",
@@ -1737,7 +1431,7 @@ mod test {
         );
 
         // Start a data source which is not receiving events from consensus, only from a peer.
-        let provider = Provider::new(QueryServiceProvider::new(
+        let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
@@ -1766,7 +1460,7 @@ mod test {
         // Send the last leaf to the disconnected data source so it learns about the height.
         let last_leaf = leaves.last().unwrap();
         let mut tx = data_source.write().await.unwrap();
-        tx.insert_leaf(last_leaf.clone()).await.unwrap();
+        tx.insert_leaf(last_leaf).await.unwrap();
         tx.commit().await.unwrap();
 
         // Trigger a fetch of the first leaf; it should resolve even if we fail to store the leaf.
@@ -1822,10 +1516,10 @@ mod test {
 
     async fn test_fetch_storage_failure_retry_helper(failure: FailureType) {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",
@@ -1843,7 +1537,7 @@ mod test {
         );
 
         // Start a data source which is not receiving events from consensus, only from a peer.
-        let provider = Provider::new(QueryServiceProvider::new(
+        let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
@@ -1871,7 +1565,7 @@ mod test {
         // Send the last leaf to the disconnected data source so it learns about the height.
         let last_leaf = leaves.last().unwrap();
         let mut tx = data_source.write().await.unwrap();
-        tx.insert_leaf(last_leaf.clone()).await.unwrap();
+        tx.insert_leaf(last_leaf).await.unwrap();
         tx.commit().await.unwrap();
 
         // Trigger a fetch of the first leaf; it should retry until it successfully stores the leaf.
@@ -1921,10 +1615,10 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_on_decide() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",
@@ -1943,7 +1637,7 @@ mod test {
 
         // Start a data source which is not receiving events from consensus.
         let db = TmpDb::init().await;
-        let provider = Provider::new(QueryServiceProvider::new(
+        let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
@@ -1967,10 +1661,12 @@ mod test {
             .unwrap();
 
         // Give the node a decide containing the leaf but no additional information.
+        tracing::info!("send decide event");
         data_source.append(leaf.clone().into()).await.unwrap();
 
         // We will eventually retrieve the corresponding block and VID common, triggered by seeing
         // the leaf.
+        tracing::info!("wait");
         sleep(Duration::from_secs(5)).await;
 
         // Read the missing data directly from storage (via a database transaction), rather than
@@ -1988,10 +1684,10 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_begin_failure() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",
@@ -2009,7 +1705,7 @@ mod test {
         );
 
         // Start a data source which is not receiving events from consensus, only from a peer.
-        let provider = Provider::new(QueryServiceProvider::new(
+        let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
@@ -2037,7 +1733,7 @@ mod test {
         // Send the last leaf to the disconnected data source so it learns about the height.
         let last_leaf = leaves.last().unwrap();
         let mut tx = data_source.write().await.unwrap();
-        tx.insert_leaf(last_leaf.clone()).await.unwrap();
+        tx.insert_leaf(last_leaf).await.unwrap();
         tx.commit().await.unwrap();
 
         // Trigger a fetch of the first leaf; it should retry until it is able to determine
@@ -2053,10 +1749,10 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_load_failure_block() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",
@@ -2074,7 +1770,7 @@ mod test {
         );
 
         // Start a data source which is not receiving events from consensus, only from a peer.
-        let provider = Provider::new(QueryServiceProvider::new(
+        let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
@@ -2102,7 +1798,7 @@ mod test {
         // Send the leaf to the disconnected data source, so the corresponding block becomes
         // fetchable.
         let mut tx = data_source.write().await.unwrap();
-        tx.insert_leaf(leaf.clone()).await.unwrap();
+        tx.insert_leaf(&leaf).await.unwrap();
         tx.commit().await.unwrap();
 
         // Trigger a fetch of the block by hash; it should retry until it is able to determine the
@@ -2136,10 +1832,10 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_load_failure_tx() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",
@@ -2157,7 +1853,7 @@ mod test {
         );
 
         // Start a data source which is not receiving events from consensus, only from a peer.
-        let provider = Provider::new(QueryServiceProvider::new(
+        let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
@@ -2200,8 +1896,8 @@ mod test {
                 .await
                 .await;
             let mut tx = data_source.write().await.unwrap();
-            tx.insert_leaf(leaf.clone()).await.unwrap();
-            tx.insert_block(block.clone()).await.unwrap();
+            tx.insert_leaf(&leaf).await.unwrap();
+            tx.insert_block(&block).await.unwrap();
             tx.commit().await.unwrap();
         }
 
@@ -2241,10 +1937,10 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_stream_begin_failure() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",
@@ -2262,7 +1958,7 @@ mod test {
         );
 
         // Start a data source which is not receiving events from consensus, only from a peer.
-        let provider = Provider::new(QueryServiceProvider::new(
+        let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
@@ -2291,7 +1987,7 @@ mod test {
         // Send the last leaf to the disconnected data source so it learns about the height.
         let last_leaf = leaves.last().unwrap();
         let mut tx = data_source.write().await.unwrap();
-        tx.insert_leaf(last_leaf.clone()).await.unwrap();
+        tx.insert_leaf(last_leaf).await.unwrap();
         tx.commit().await.unwrap();
 
         // Stream the leaves; it should retry until it is able to determine each leaf is fetchable
@@ -2315,10 +2011,10 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_stream_load_failure() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",
@@ -2336,7 +2032,7 @@ mod test {
         );
 
         // Start a data source which is not receiving events from consensus, only from a peer.
-        let provider = Provider::new(QueryServiceProvider::new(
+        let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
@@ -2365,7 +2061,7 @@ mod test {
         // Send the last leaf to the disconnected data source, so the blocks becomes fetchable.
         let last_leaf = leaves.last().unwrap();
         let mut tx = data_source.write().await.unwrap();
-        tx.insert_leaf(last_leaf.clone()).await.unwrap();
+        tx.insert_leaf(last_leaf).await.unwrap();
         tx.commit().await.unwrap();
 
         // Stream the blocks with a period of database failures.
@@ -2394,10 +2090,10 @@ mod test {
 
     async fn test_metadata_stream_begin_failure_helper(stream: MetadataType) {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",
@@ -2415,7 +2111,7 @@ mod test {
         );
 
         // Start a data source which is not receiving events from consensus, only from a peer.
-        let provider = Provider::new(QueryServiceProvider::new(
+        let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
@@ -2444,7 +2140,7 @@ mod test {
         // Send the last leaf to the disconnected data source, so the blocks becomes fetchable.
         let last_leaf = leaves.last().unwrap();
         let mut tx = data_source.write().await.unwrap();
-        tx.insert_leaf(last_leaf.clone()).await.unwrap();
+        tx.insert_leaf(last_leaf).await.unwrap();
         tx.commit().await.unwrap();
 
         // Send the first object to the disconnected data source, so we hit all the cases:
@@ -2505,199 +2201,146 @@ mod test {
         test_metadata_stream_begin_failure_helper(MetadataType::Vid).await
     }
 
-    // This helper function starts up a mock network
-    // with v0 and v1 availability query modules,
-    // trigger fetches for a datasource from the provider,
-    // and asserts that the fetched data is correct
-    async fn run_fallback_deserialization_test_helper<V: Versions>(port: u16, version: &str) {
-        let mut network = MockNetwork::<MockDataSource, V>::init().await;
+    #[tokio::test(flavor = "multi_thread")]
+    #[test_log::test]
+    async fn test_ranged_fetch() {
+        // Create the consensus network.
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
+        // Start a web server that the non-consensus node can use to fetch blocks.
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-
-        // Register availability APIs for two versions: v0 and v1
         app.register_module(
             "availability",
             define_api(
                 &Default::default(),
-                StaticVersion::<0, 1> {},
-                "0.0.1".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                StaticVersion::<0, 1> {},
+                MockBase::instance(),
                 "1.0.0".parse().unwrap(),
             )
             .unwrap(),
         )
         .unwrap();
-
         network.spawn(
             "server",
-            app.serve(format!("0.0.0.0:{port}"), StaticVersion::<0, 1> {}),
+            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
         );
 
-        let db = TmpDb::init().await;
-
-        let provider_url = format!("http://localhost:{port}/{version}")
-            .parse()
-            .expect("Invalid URL");
-
-        let provider = Provider::new(QueryServiceProvider::new(
-            provider_url,
-            StaticVersion::<0, 1> {},
-        ));
-
-        let ds = data_source(&db, &provider).await;
+        // Start consensus.
         network.start().await;
 
-        let leaves = network.data_source().subscribe_leaves(1).await;
-        let leaves = leaves.take(5).collect::<Vec<_>>().await;
-        let test_leaf = &leaves[0];
-        let test_payload = &leaves[2];
-        let test_common = &leaves[3];
+        // Wait for a few blocks to be produced.
+        let leaves = network
+            .data_source()
+            .subscribe_leaves(0)
+            .await
+            .take(5)
+            .collect::<Vec<_>>()
+            .await;
+        let blocks = network
+            .data_source()
+            .subscribe_blocks(0)
+            .await
+            .take(5)
+            .collect::<Vec<_>>()
+            .await;
+        let vid = network
+            .data_source()
+            .subscribe_vid_common(0)
+            .await
+            .take(5)
+            .collect::<Vec<_>>()
+            .await;
 
-        let mut fetches = vec![];
-        // Issue requests for missing data (these should initially remain unresolved):
-        fetches.push(ds.get_leaf(test_leaf.height() as usize).await.map(ignore));
-        fetches.push(ds.get_payload(test_payload.block_hash()).await.map(ignore));
-        fetches.push(
-            ds.get_vid_common(test_common.block_hash())
-                .await
-                .map(ignore),
+        // Connect a fetching provider.
+        let provider = TrustedQueryServiceProvider::new(
+            format!("http://localhost:{port}").parse().unwrap(),
+            MockBase::instance(),
         );
 
-        // Even if we give data extra time to propagate, these requests will not resolve, since we
-        // didn't trigger any active fetches.
-        sleep(Duration::from_secs(1)).await;
-        for (i, fetch) in fetches.into_iter().enumerate() {
-            tracing::info!("checking fetch {i} is unresolved");
-            fetch.try_resolve().unwrap_err();
-        }
-
-        // Append the latest known leaf to the local store
-        // This would trigger fetches for the corresponding missing data
-        // such as header, vid and payload
-        // This would also trigger fetches for the parent data
-        ds.append(leaves.last().cloned().unwrap().into())
-            .await
-            .unwrap();
-
-        // check that the data has been fetches and matches the network data source
-        {
-            let leaf = ds.get_leaf(test_leaf.height() as usize).await;
-            let payload = ds.get_payload(test_payload.height() as usize).await;
-            let common = ds.get_vid_common(test_common.height() as usize).await;
-
-            let truth = network.data_source();
-            assert_eq!(
-                leaf.await,
-                truth.get_leaf(test_leaf.height() as usize).await.await
-            );
-            assert_eq!(
-                payload.await,
-                truth
-                    .get_payload(test_payload.height() as usize)
-                    .await
-                    .await
-            );
-            assert_eq!(
-                common.await,
-                truth
-                    .get_vid_common(test_common.height() as usize)
-                    .await
-                    .await
-            );
-        }
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fallback_deserialization_for_fetch_requests_v0() {
-        let port = pick_unused_port().unwrap();
-
-        // This run will call v0 availalbilty api for fetch requests.
-        // The fetch initially attempts deserialization with new types,
-        // which fails because the v0 provider returns legacy types.
-        // It then falls back to deserializing as legacy types,
-        // and the fetch passes
-        run_fallback_deserialization_test_helper::<MockVersions>(port, "v0").await;
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fallback_deserialization_for_fetch_requests_v1() {
-        let port = pick_unused_port().unwrap();
-
-        // Fetch from the v1 availability API using MockVersions.
-        // this one fetches from the v1 provider.
-        // which would correctly deserialize the bytes in the first attempt, so no fallback deserialization is needed
-        run_fallback_deserialization_test_helper::<MockVersions>(port, "v1").await;
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fallback_deserialization_for_fetch_requests_pos() {
-        let port = pick_unused_port().unwrap();
-
-        // Fetch Proof of Stake (PoS) data using the v1 availability API
-        // with proof of stake version
-        run_fallback_deserialization_test_helper::<EpochsTestVersions>(port, "v1").await;
-    }
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fallback_deserialization_for_fetch_requests_v0_pos() {
-        // Run with the PoS version against a v0 provider.
-        // Fetch requests are expected to fail because PoS commitments differ from the legacy commitments
-        // returned by the v0 provider.
-        // For example: a PoS Leaf2 commitment will not match the downgraded commitment from a legacy Leaf1.
-
-        let mut network = MockNetwork::<MockDataSource, EpochsTestVersions>::init().await;
-
-        let port = pick_unused_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                StaticVersion::<0, 1> {},
-                "0.0.1".parse().unwrap(),
+        // Make ranged requests.
+        tracing::info!("fetch leaf range");
+        assert_eq!(
+            provider
+                .fetch(LeafRangeRequest { start: 0, end: 5 })
+                .await
+                .unwrap(),
+            leaves
+        );
+        tracing::info!("fetch block range");
+        assert_eq!(
+            ProviderTrait::<MockTypes, _>::fetch(&provider, BlockRangeRequest { start: 0, end: 5 })
+                .await
+                .unwrap(),
+            blocks
+        );
+        tracing::info!("fetch VID common range");
+        assert_eq!(
+            ProviderTrait::<MockTypes, _>::fetch(
+                &provider,
+                VidCommonRangeRequest { start: 0, end: 5 }
             )
+            .await
             .unwrap(),
-        )
+            vid
+        );
+    }
+
+    /// A test server which does not support ranged VID common requests.
+    async fn old_server(port: u16) {
+        let mut api = Api::<(), availability::Error, StaticVersion<1, 0>>::new(toml! {
+            [route.get_vid_common]
+            PATH = ["vid/common/:height"]
+            ":height" = "Integer"
+        })
         .unwrap();
 
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), StaticVersion::<0, 1> {}),
+        api.get("get_vid_common", move |req, _| {
+            async move {
+                let mut common = VidCommonQueryData::<MockTypes>::genesis(
+                    &Default::default(),
+                    &Default::default(),
+                    TEST_VERSIONS.test.base,
+                )
+                .await;
+                common.height = req.integer_param("height")?;
+                Ok(common)
+            }
+            .boxed()
+        })
+        .unwrap();
+
+        let mut app = App::<(), Error>::with_state(());
+        app.register_module("availability", api).unwrap();
+        app.serve(format!("0.0.0.0:{port}"), MockBase::instance())
+            .await
+            .ok();
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_vid_common_fallback() {
+        let port = reserve_tcp_port().unwrap();
+        let _server = BackgroundTask::spawn("old server", old_server(port));
+        let provider = TrustedQueryServiceProvider::new(
+            format!("http://localhost:{port}").parse().unwrap(),
+            StaticVersion::<1, 0>::instance(),
         );
 
-        let db = TmpDb::init().await;
-        let provider = Provider::new(QueryServiceProvider::new(
-            format!("http://localhost:{port}/v0").parse().unwrap(),
-            StaticVersion::<0, 1> {},
-        ));
-        let ds = data_source(&db, &provider).await;
+        // First fetch a range of VID common one by one, to get a ground truth.
+        let common = try_join_all((0..5).map(|i| {
+            provider
+                .client
+                .get::<VidCommonQueryData<MockTypes>>(&format!("availability/vid/common/{i}"))
+                .send()
+        }))
+        .await
+        .unwrap();
 
-        network.start().await;
-
-        let leaves = network.data_source().subscribe_leaves(1).await;
-        let leaves = leaves.take(5).collect::<Vec<_>>().await;
-        let test_leaf = &leaves[0];
-        let test_payload = &leaves[2];
-        let test_common = &leaves[3];
-
-        let leaf = ds.get_leaf(test_leaf.height() as usize).await;
-        let payload = ds.get_payload(test_payload.height() as usize).await;
-        let common = ds.get_vid_common(test_common.height() as usize).await;
-
-        sleep(Duration::from_secs(3)).await;
-
-        // fetches fail because of different commitments
-        leaf.try_resolve().unwrap_err();
-        payload.try_resolve().unwrap_err();
-        common.try_resolve().unwrap_err();
+        // Now fetch the whole thing as a range.
+        let req = VidCommonRangeRequest { start: 0, end: 5 };
+        assert_eq!(
+            common.as_slice(),
+            provider.fetch_vid_common_range(req).await.unwrap().as_ref()
+        );
     }
 }

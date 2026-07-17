@@ -1,14 +1,14 @@
-use std::time::Duration;
+use std::{io::Write as _, path::PathBuf, time::Duration};
 
 use alloy::{
     network::{Ethereum, EthereumWallet, TransactionBuilder as _},
-    primitives::{utils::parse_ether, Address, B256, U256},
+    node_bindings::Anvil,
+    primitives::{Address, B256, Bytes, U256, utils::parse_ether},
     providers::{
-        ext::AnvilApi as _,
-        fillers::{FillProvider, JoinFill, WalletFiller},
-        layers::AnvilProvider,
-        utils::JoinedRecommendedFillers,
         Provider, ProviderBuilder, RootProvider, WalletProvider,
+        ext::AnvilApi,
+        fillers::{FillProvider, JoinFill, WalletFiller},
+        utils::JoinedRecommendedFillers,
     },
     rpc::types::TransactionRequest,
     signers::local::PrivateKeySigner,
@@ -16,9 +16,8 @@ use alloy::{
 };
 use anyhow::Result;
 use espresso_contract_deployer::{
-    build_signer, builder::DeployerArgsBuilder,
-    network_config::light_client_genesis_from_stake_table, Contract, Contracts,
-    DEFAULT_EXIT_ESCROW_PERIOD_SECONDS,
+    Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS, build_provider, build_signer,
+    builder::DeployerArgsBuilder, network_config::light_client_genesis_from_stake_table,
 };
 use espresso_types::{
     v0::v0_4::{
@@ -30,31 +29,175 @@ use espresso_types::{
 use hotshot_contract_adapter::{
     sol_types::{
         EspToken::{self, EspTokenInstance},
-        LightClientV3Mock, StakeTableV2,
+        LightClientV3Mock, StakeTableV3,
     },
     stake_table::StakeTableContractVersion,
 };
 use hotshot_state_prover::v3::mock_ledger::STAKE_TABLE_CAPACITY_FOR_TEST;
-use hotshot_types::light_client::StateKeyPair;
+use hotshot_types::{light_client::StateKeyPair, x25519};
 use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme, UniversalMerkleTreeScheme};
-use rand::{rngs::StdRng, CryptoRng, Rng as _, RngCore, SeedableRng as _};
+use rand::{CryptoRng, Rng as _, RngCore, SeedableRng as _, rngs::StdRng};
+use tokio::net::TcpListener;
 use url::Url;
-use warp::{http::StatusCode, Filter};
+use warp::{Filter, http::StatusCode};
 
 use crate::{
-    parse::Commission, receipt::ReceiptExt as _, registration::fetch_commission,
-    signature::NodeSignatures, transaction::Transaction, BLSKeyPair, DEV_MNEMONIC,
+    BLSKeyPair, DEV_MNEMONIC, demo::StakingKeySet, parse::Commission, receipt::ReceiptExt as _,
+    registration::fetch_commission, signature::NodeSignatures, transaction::Transaction,
 };
 
-type TestProvider = FillProvider<
+/// Spawn a warp server on a random available port and return the port number.
+pub async fn serve_on_random_port(
+    filter: impl Filter<Extract = impl warp::Reply> + Clone + Send + Sync + 'static,
+) -> u16 {
+    let listener = TcpListener::bind(std::net::SocketAddr::from(([127, 0, 0, 1], 0u16)))
+        .await
+        .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(warp::serve(filter).incoming(listener).run());
+    port
+}
+
+#[derive(Debug, Clone)]
+pub struct DeployedContracts {
+    pub token: Address,
+    pub stake_table: Address,
+    pub reward_claim: Option<Address>,
+}
+
+impl DeployedContracts {
+    pub fn write_env(&self, path: &PathBuf) -> Result<()> {
+        let mut file = std::fs::File::create(path)?;
+        writeln!(file, "# Deployed contract addresses")?;
+        writeln!(
+            file,
+            "ESPRESSO_STAKE_TABLE_PROXY_ADDRESS={}",
+            self.stake_table
+        )?;
+        writeln!(file, "ESP_TOKEN_PROXY_ADDRESS={}", self.token)?;
+        if let Some(reward_claim) = self.reward_claim {
+            writeln!(file, "ESPRESSO_REWARD_CLAIM_PROXY_ADDRESS={}", reward_claim)?;
+        }
+        Ok(())
+    }
+}
+
+pub async fn deploy_to_rpc<P>(
+    provider: P,
+    rpc_url: Url,
+    stake_table_contract_version: StakeTableContractVersion,
+    exit_escrow_period: Duration,
+) -> Result<DeployedContracts>
+where
+    P: WalletProvider + Provider + Clone,
+{
+    let deployer_address = provider.default_signer_address();
+
+    let blocks_per_epoch = 100;
+    let epoch_start_block = 1;
+    let (genesis_state, genesis_stake) =
+        light_client_genesis_from_stake_table(&Default::default(), STAKE_TABLE_CAPACITY_FOR_TEST)
+            .map_err(|e| anyhow::anyhow!("failed to create genesis state: {e}"))?;
+
+    let mut contracts = Contracts::new();
+    let args = DeployerArgsBuilder::default()
+        .deployer(provider.clone())
+        .rpc_url(rpc_url)
+        .mock_light_client(true)
+        .genesis_lc_state(genesis_state)
+        .genesis_st_state(genesis_stake)
+        .blocks_per_epoch(blocks_per_epoch)
+        .epoch_start_block(epoch_start_block)
+        .multisig_pauser(deployer_address)
+        .exit_escrow_period(U256::from(exit_escrow_period.as_secs()))
+        .token_name("Espresso".to_string())
+        .token_symbol("ESP".to_string())
+        .initial_token_supply(U256::from(3590000000u64))
+        .ops_timelock_delay(U256::from(0))
+        .ops_timelock_admin(deployer_address)
+        .ops_timelock_proposers(vec![deployer_address])
+        .ops_timelock_executors(vec![deployer_address])
+        .safe_exit_timelock_delay(U256::from(10))
+        .safe_exit_timelock_admin(deployer_address)
+        .safe_exit_timelock_proposers(vec![deployer_address])
+        .safe_exit_timelock_executors(vec![deployer_address])
+        .use_timelock_owner(false)
+        .build()
+        .map_err(|e| anyhow::anyhow!("failed to build deployer args: {e}"))?;
+
+    match stake_table_contract_version {
+        StakeTableContractVersion::V1 => args.deploy_to_stake_table_v1(&mut contracts).await?,
+        StakeTableContractVersion::V2 => args.deploy_to_stake_table_v2(&mut contracts).await?,
+        StakeTableContractVersion::V3 => args.deploy_to_stake_table_v3(&mut contracts).await?,
+    };
+
+    let stake_table = contracts
+        .address(Contract::StakeTableProxy)
+        .ok_or_else(|| anyhow::anyhow!("StakeTableProxy not deployed"))?;
+    let token = contracts
+        .address(Contract::EspTokenProxy)
+        .ok_or_else(|| anyhow::anyhow!("EspTokenProxy not deployed"))?;
+    let reward_claim = match stake_table_contract_version {
+        StakeTableContractVersion::V1 => None,
+        StakeTableContractVersion::V2 | StakeTableContractVersion::V3 => {
+            contracts.address(Contract::RewardClaimProxy)
+        },
+    };
+
+    Ok(DeployedContracts {
+        token,
+        stake_table,
+        reward_claim,
+    })
+}
+
+pub async fn deploy_contracts_for_testing(
+    rpc_url: Url,
+    mnemonic: String,
+    account_index: u32,
+    output: PathBuf,
+) -> Result<DeployedContracts> {
+    tracing::info!("deploying staking contracts for testing");
+
+    let provider = build_provider(mnemonic, account_index, rpc_url.clone(), None);
+    tracing::info!("deployer address: {}", provider.default_signer_address());
+
+    let exit_escrow_period = Duration::from_secs(300);
+    let contracts = deploy_to_rpc(
+        provider,
+        rpc_url,
+        StakeTableContractVersion::V3,
+        exit_escrow_period,
+    )
+    .await?;
+
+    tracing::info!("stake table deployed: {}", contracts.stake_table);
+    tracing::info!("ESP token deployed: {}", contracts.token);
+
+    contracts.write_env(&output)?;
+    tracing::info!("contract addresses written to {}", output.display());
+
+    println!("STAKE_TABLE_ADDRESS={}", contracts.stake_table);
+    println!("ESP_TOKEN_CONTRACT_ADDRESS={}", contracts.token);
+
+    Ok(contracts)
+}
+
+/// Provider type for Anvil-based testing (with Anvil-specific API support).
+///
+/// This type can be used with both local Anvil instances and external RPC endpoints
+/// (like Reth) that expose the Anvil API. The `AnvilApi` trait is implemented for
+/// any `Provider`, so anvil methods will work as long as the RPC endpoint supports them.
+pub type AnvilTestProvider = FillProvider<
     JoinFill<JoinedRecommendedFillers, WalletFiller<EthereumWallet>>,
-    AnvilProvider<RootProvider>,
+    RootProvider,
     Ethereum,
 >;
 
-#[derive(Debug, Clone)]
+/// Test system for deploying and interacting with staking contracts.
+#[derive(Debug)]
 pub struct TestSystem {
-    pub provider: TestProvider,
+    pub provider: AnvilTestProvider,
     pub signer: PrivateKeySigner,
     pub deployer_address: Address,
     pub token: Address,
@@ -62,143 +205,30 @@ pub struct TestSystem {
     pub reward_claim: Option<Address>,
     pub exit_escrow_period: Duration,
     pub rpc_url: Url,
+    /// Port for the local node. `None` for external providers.
+    pub port: Option<u16>,
     pub bls_key_pair: BLSKeyPair,
     pub state_key_pair: StateKeyPair,
+    pub x25519_keypair: x25519::Keypair,
     pub commission: Commission,
     pub approval_amount: U256,
     pub version: StakeTableContractVersion,
+    /// Anvil instance for local testing. Kept alive to prevent process termination.
+    /// `None` for external providers.
+    #[allow(dead_code)]
+    anvil_instance: Option<std::sync::Arc<alloy::node_bindings::AnvilInstance>>,
 }
 
 impl TestSystem {
-    pub async fn deploy() -> Result<Self> {
-        Self::deploy_version(StakeTableContractVersion::V2).await
-    }
-
-    pub async fn deploy_version(
-        stake_table_contract_version: StakeTableContractVersion,
-    ) -> Result<Self> {
-        let exit_escrow_period = Duration::from_secs(DEFAULT_EXIT_ESCROW_PERIOD_SECONDS);
-        // Sporadically the provider builder fails with a timeout inside alloy.
-        // Retry a few times.
-        let mut attempts = 0;
-        let (port, provider) = loop {
-            let port = portpicker::pick_unused_port().unwrap();
-            match ProviderBuilder::new().connect_anvil_with_wallet_and_config(|anvil| {
-                anvil.port(port).arg("--accounts").arg("20")
-            }) {
-                Ok(provider) => break (port, provider),
-                Err(e) => {
-                    attempts += 1;
-                    if attempts >= 5 {
-                        anyhow::bail!("Failed to spawn anvil after 5 attempts: {e}");
-                    }
-                    tracing::warn!("Anvil spawn failed, retrying: {e}");
-                },
-            }
-        };
-
-        let rpc_url: Url = format!("http://localhost:{port}").parse()?;
-        let deployer_address = provider.default_signer_address();
-        // I don't know how to get the signer out of the provider, by default anvil uses the dev
-        // mnemonic and the default signer is the first account.
-        let signer = build_signer(DEV_MNEMONIC, 0);
-        assert_eq!(
-            signer.address(),
-            deployer_address,
-            "Signer address mismatch"
-        );
-
-        // Create a fake stake table to create a genesis state. This is fine because we don't
-        // currently use the light client contract. Will need to be updated once we implement
-        // slashing and call the light client contract from the stake table contract.
-        let blocks_per_epoch = 100;
-        let epoch_start_block = 1;
-        let (genesis_state, genesis_stake) = light_client_genesis_from_stake_table(
-            &Default::default(),
-            STAKE_TABLE_CAPACITY_FOR_TEST,
-        )
-        .unwrap();
-
-        let mut contracts = Contracts::new();
-        let args = DeployerArgsBuilder::default()
-            .deployer(provider.clone())
-            .rpc_url(rpc_url.clone())
-            .mock_light_client(true)
-            .genesis_lc_state(genesis_state)
-            .genesis_st_state(genesis_stake)
-            .blocks_per_epoch(blocks_per_epoch)
-            .epoch_start_block(epoch_start_block)
-            .multisig_pauser(deployer_address)
-            .exit_escrow_period(U256::from(exit_escrow_period.as_secs()))
-            .token_name("Espresso".to_string())
-            .token_symbol("ESP".to_string())
-            .initial_token_supply(U256::from(3590000000u64))
-            .ops_timelock_delay(U256::from(0))
-            .ops_timelock_admin(signer.address())
-            .ops_timelock_proposers(vec![signer.address()])
-            .ops_timelock_executors(vec![signer.address()])
-            .safe_exit_timelock_delay(U256::from(10))
-            .safe_exit_timelock_admin(signer.address())
-            .safe_exit_timelock_proposers(vec![signer.address()])
-            .safe_exit_timelock_executors(vec![signer.address()])
-            .use_timelock_owner(false)
-            .build()
-            .unwrap();
-
-        match stake_table_contract_version {
-            StakeTableContractVersion::V1 => args.deploy_to_stake_table_v1(&mut contracts).await?,
-            StakeTableContractVersion::V2 => args.deploy_all(&mut contracts).await?,
-        };
-
-        let stake_table = contracts
-            .address(Contract::StakeTableProxy)
-            .expect("StakeTableProxy deployed");
-        let token = contracts
-            .address(Contract::EspTokenProxy)
-            .expect("EspTokenProxy deployed");
-        let reward_claim = match stake_table_contract_version {
-            StakeTableContractVersion::V1 => None,
-            StakeTableContractVersion::V2 => contracts.address(Contract::RewardClaimProxy),
-        };
-
-        let approval_amount = parse_ether("1000000")?;
-        // Approve the stake table contract so it can transfer tokens to itself
-        EspTokenInstance::new(token, &provider)
-            .approve(stake_table, approval_amount)
-            .send()
-            .await?
-            .assert_success()
-            .await?;
-
-        let mut rng = StdRng::from_seed([42u8; 32]);
-        let (_, bls_key_pair, state_key_pair) = Self::gen_keys(&mut rng);
-
-        Ok(Self {
-            provider,
-            signer,
-            deployer_address,
-            token,
-            stake_table,
-            reward_claim,
-            exit_escrow_period,
-            rpc_url,
-            bls_key_pair,
-            state_key_pair,
-            commission: Commission::try_from("12.34")?,
-            approval_amount,
-            version: stake_table_contract_version,
-        })
-    }
-
-    /// Note: Generates random keys, the Ethereum key won't match the deployer key.
-    pub fn gen_keys(
-        rng: &mut (impl RngCore + CryptoRng),
-    ) -> (PrivateKeySigner, BLSKeyPair, StateKeyPair) {
-        (
-            PrivateKeySigner::random_with(rng),
-            BLSKeyPair::generate(rng),
-            StateKeyPair::generate_from_seed(rng.gen()),
-        )
+    /// Generate a random key set. The Ethereum key won't match any deployer key.
+    pub fn gen_keys(rng: &mut (impl RngCore + CryptoRng)) -> StakingKeySet {
+        StakingKeySet {
+            signer: PrivateKeySigner::random_with(rng),
+            bls: BLSKeyPair::generate(rng),
+            state: StateKeyPair::generate_from_seed(rng.r#gen()),
+            x25519: x25519::Keypair::generated_from_seed_indexed(rng.r#gen(), 0).unwrap(),
+            p2p_addr: "127.0.0.1:8080".parse().unwrap(),
+        }
     }
 
     pub async fn register_validator(&self) -> Result<()> {
@@ -208,12 +238,21 @@ impl TestSystem {
             &self.state_key_pair.clone(),
         );
         let metadata_uri = "https://example.com/metadata".parse()?;
+        let (x25519_key, p2p_addr) = match self.version {
+            StakeTableContractVersion::V3 => (
+                Some(self.x25519_keypair.public_key()),
+                Some("127.0.0.1:8080".parse().unwrap()),
+            ),
+            _ => (None, None),
+        };
         Transaction::RegisterValidator {
             stake_table: self.stake_table,
             commission: self.commission,
             metadata_uri,
             payload,
             version: self.version,
+            x25519_key,
+            p2p_addr,
         }
         .send(&self.provider)
         .await?
@@ -282,22 +321,8 @@ impl TestSystem {
         Ok(())
     }
 
-    pub async fn warp_to_unlock_time(&self) -> Result<()> {
-        self.provider
-            .anvil_increase_time(self.exit_escrow_period.as_secs())
-            .await?;
-        Ok(())
-    }
-
-    pub async fn anvil_increase_time(&self, seconds: U256) -> Result<()> {
-        self.provider
-            .anvil_increase_time(seconds.to::<u64>())
-            .await?;
-        Ok(())
-    }
-
     pub async fn get_min_commission_increase_interval(&self) -> Result<U256> {
-        let stake_table = StakeTableV2::new(self.stake_table, &self.provider);
+        let stake_table = StakeTableV3::new(self.stake_table, &self.provider);
         let interval = stake_table.minCommissionIncreaseInterval().call().await?;
         Ok(interval)
     }
@@ -331,7 +356,7 @@ impl TestSystem {
     }
 
     pub async fn set_min_delegate_amount(&self, amount: U256) -> Result<()> {
-        let stake_table = StakeTableV2::new(self.stake_table, &self.provider);
+        let stake_table = StakeTableV3::new(self.stake_table, &self.provider);
         stake_table
             .setMinDelegateAmount(amount)
             .send()
@@ -342,7 +367,7 @@ impl TestSystem {
     }
 
     pub async fn setup_reward_claim_mock(&self, balance: U256) -> Result<Url> {
-        let stake_table = StakeTableV2::new(self.stake_table, &self.provider);
+        let stake_table = StakeTableV3::new(self.stake_table, &self.provider);
         let light_client_addr = stake_table.lightClient().call().await?;
         let light_client = LightClientV3Mock::new(light_client_addr, &self.provider);
 
@@ -380,26 +405,185 @@ impl TestSystem {
         let claim_input = query_data.to_reward_claim_input()?;
         let claim_input = std::sync::Arc::new(claim_input);
 
-        let port = portpicker::pick_unused_port().expect("No ports available");
-
         let route = warp::path!("reward-state-v2" / "reward-claim-input" / u64 / String).map(
             move |_block_height: u64, _address: String| warp::reply::json(&*claim_input.clone()),
         );
 
-        tokio::spawn(warp::serve(route).run(([127, 0, 0, 1], port)));
-
-        Ok(format!("http://localhost:{}/", port).parse()?)
+        let port = serve_on_random_port(route).await;
+        Ok(format!("http://127.0.0.1:{}/", port).parse()?)
     }
 
-    pub fn setup_reward_claim_not_found_mock(&self) -> Url {
-        let port = portpicker::pick_unused_port().expect("No ports available");
-
+    pub async fn setup_reward_claim_not_found_mock(&self) -> Url {
         let route = warp::path!("reward-state-v2" / "reward-claim-input" / u64 / String)
             .map(|_, _| warp::reply::with_status(warp::reply(), StatusCode::NOT_FOUND));
 
-        tokio::spawn(warp::serve(route).run(([127, 0, 0, 1], port)));
+        let port = serve_on_random_port(route).await;
+        format!("http://127.0.0.1:{}/", port).parse().unwrap()
+    }
 
-        format!("http://localhost:{}/", port).parse().unwrap()
+    pub async fn warp_to_unlock_time(&self) -> Result<()> {
+        self.provider
+            .anvil_increase_time(self.exit_escrow_period.as_secs())
+            .await?;
+        Ok(())
+    }
+
+    pub async fn anvil_increase_time(&self, seconds: U256) -> Result<()> {
+        self.provider
+            .anvil_increase_time(seconds.to::<u64>())
+            .await?;
+        Ok(())
+    }
+
+    pub async fn dump_state(&self) -> Result<Bytes> {
+        Ok(self.provider.anvil_dump_state().await?)
+    }
+
+    pub async fn load_state(&self, state: Bytes) -> Result<()> {
+        self.provider.anvil_load_state(state).await?;
+        Ok(())
+    }
+
+    pub async fn deploy() -> Result<Self> {
+        Self::deploy_version(StakeTableContractVersion::V3).await
+    }
+
+    pub async fn deploy_version(
+        stake_table_contract_version: StakeTableContractVersion,
+    ) -> Result<Self> {
+        let exit_escrow_period = Duration::from_secs(DEFAULT_EXIT_ESCROW_PERIOD_SECONDS);
+        // Sporadically the provider builder fails with a timeout inside alloy.
+        // Retry a few times.
+        let mut attempts = 0;
+        let (port, anvil_instance) = loop {
+            let port = test_utils::reserve_tcp_port().unwrap();
+            match Anvil::new()
+                .port(port)
+                .arg("--accounts")
+                .arg("20")
+                .try_spawn()
+            {
+                Ok(anvil) => break (port, anvil),
+                Err(e) => {
+                    attempts += 1;
+                    if attempts >= 5 {
+                        anyhow::bail!("Failed to spawn anvil after 5 attempts: {e}");
+                    }
+                    tracing::warn!("Anvil spawn failed, retrying: {e}");
+                },
+            }
+        };
+
+        let rpc_url: Url = format!("http://127.0.0.1:{port}").parse()?;
+        // By default anvil uses the dev mnemonic and the default signer is the first account.
+        let signer = build_signer(DEV_MNEMONIC, 0);
+        let provider = ProviderBuilder::new()
+            .wallet(EthereumWallet::from(signer.clone()))
+            .connect_http(rpc_url.clone());
+        let deployer_address = provider.default_signer_address();
+        assert_eq!(
+            signer.address(),
+            deployer_address,
+            "Signer address mismatch"
+        );
+
+        let contracts = deploy_to_rpc(
+            provider.clone(),
+            rpc_url.clone(),
+            stake_table_contract_version,
+            exit_escrow_period,
+        )
+        .await?;
+        let token = contracts.token;
+        let stake_table = contracts.stake_table;
+        let reward_claim = contracts.reward_claim;
+
+        let approval_amount = parse_ether("1000000")?;
+        // Approve the stake table contract so it can transfer tokens to itself
+        EspTokenInstance::new(token, &provider)
+            .approve(stake_table, approval_amount)
+            .send()
+            .await?
+            .assert_success()
+            .await?;
+
+        let mut rng = StdRng::from_seed([42u8; 32]);
+        let keys = Self::gen_keys(&mut rng);
+
+        Ok(Self {
+            provider,
+            signer,
+            deployer_address,
+            token,
+            stake_table,
+            reward_claim,
+            exit_escrow_period,
+            rpc_url,
+            port: Some(port),
+            bls_key_pair: keys.bls,
+            state_key_pair: keys.state,
+            x25519_keypair: keys.x25519,
+            commission: Commission::try_from("12.34")?,
+            approval_amount,
+            version: stake_table_contract_version,
+            anvil_instance: Some(std::sync::Arc::new(anvil_instance)),
+        })
+    }
+
+    /// Deploy contracts to an external RPC endpoint.
+    ///
+    /// Uses the dev mnemonic account 0 for deployment and initial funding.
+    /// The external RPC (e.g., Reth with `--http.api=anvil`) must expose the Anvil API
+    /// for time manipulation methods to work.
+    pub async fn deploy_to_external(rpc_url: Url) -> Result<Self> {
+        let exit_escrow_period = Duration::from_secs(DEFAULT_EXIT_ESCROW_PERIOD_SECONDS);
+        let signer = build_signer(DEV_MNEMONIC, 0);
+        let provider = ProviderBuilder::new()
+            .wallet(EthereumWallet::from(signer.clone()))
+            .connect_http(rpc_url.clone());
+        let deployer_address = provider.default_signer_address();
+
+        let contracts = deploy_to_rpc(
+            provider.clone(),
+            rpc_url.clone(),
+            StakeTableContractVersion::V3,
+            exit_escrow_period,
+        )
+        .await?;
+        let token = contracts.token;
+        let stake_table = contracts.stake_table;
+        let reward_claim = contracts.reward_claim;
+
+        let approval_amount = parse_ether("1000000")?;
+        // Approve the stake table contract so it can transfer tokens to itself
+        EspTokenInstance::new(token, &provider)
+            .approve(stake_table, approval_amount)
+            .send()
+            .await?
+            .assert_success()
+            .await?;
+
+        let mut rng = StdRng::from_seed([42u8; 32]);
+        let keys = Self::gen_keys(&mut rng);
+
+        Ok(Self {
+            provider,
+            signer,
+            deployer_address,
+            token,
+            stake_table,
+            reward_claim,
+            exit_escrow_period,
+            rpc_url,
+            port: None,
+            bls_key_pair: keys.bls,
+            state_key_pair: keys.state,
+            x25519_keypair: keys.x25519,
+            commission: Commission::try_from("12.34")?,
+            approval_amount,
+            version: StakeTableContractVersion::V3,
+            anvil_instance: None,
+        })
     }
 }
 
@@ -410,7 +594,7 @@ mod test {
     #[tokio::test]
     async fn test_deploy() -> Result<()> {
         let system = TestSystem::deploy().await?;
-        let stake_table = StakeTableV2::new(system.stake_table, &system.provider);
+        let stake_table = StakeTableV3::new(system.stake_table, &system.provider);
         // sanity check that we can fetch the exit escrow period
         assert_eq!(
             stake_table.exitEscrowPeriod().call().await?,

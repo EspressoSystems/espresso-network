@@ -1,0 +1,30 @@
+[package]
+name        = "cliquenet"
+version     = "0.1.0"
+edition     = "2024"
+description = "A fully connected mesh network"
+
+[features]
+serde = ["cliquenet-types/serde"]
+
+[dependencies]
+bon             = { workspace = true }
+bytes           = { workspace = true }
+cliquenet-types = { workspace = true }
+parking_lot     = { workspace = true }
+rand            = "0.10.0"
+snow            = { workspace = true }
+socket2         = { workspace = true }
+thiserror       = { workspace = true }
+tokio           = { workspace = true, features = ["io-util", "macros", "net", "rt", "time"] }
+tokio-util      = { workspace = true, features = ["join-map"] }
+tracing         = { workspace = true }
+
+[dev-dependencies]
+criterion  = { workspace = true }
+quickcheck = { workspace = true }
+tokio      = { workspace = true, features = ["test-util"] }
+
+[[bench]]
+name = "bench1"
+harness = false

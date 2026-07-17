@@ -22,24 +22,24 @@ use hotshot_types::{
 };
 
 use super::{
-    pruning::{PruneStorage, PrunedHeightStorage, PrunerCfg, PrunerConfig},
-    sql::MigrateTypes,
     Aggregate, AggregatesStorage, AvailabilityStorage, NodeStorage, UpdateAggregatesStorage,
     UpdateAvailabilityStorage,
+    pruning::{PruneStorage, PrunedHeightStorage, PrunerCfg, PrunerConfig},
 };
 use crate::{
+    Header, Payload, QueryError, QueryResult,
     availability::{
-        BlockId, BlockQueryData, LeafId, LeafQueryData, NamespaceId, PayloadQueryData,
-        QueryableHeader, QueryablePayload, TransactionHash, VidCommonQueryData,
+        BlockId, BlockQueryData, Certificate2, LeafId, LeafQueryData, NamespaceId,
+        PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash, VidCommonQueryData,
     },
     data_source::{
+        VersionedDataSource,
         storage::{PayloadMetadata, VidCommonMetadata},
-        update, VersionedDataSource,
+        update,
     },
     metrics::PrometheusMetrics,
-    node::{SyncStatus, TimeWindowQueryData, WindowStart},
+    node::{SyncStatusQueryData, TimeWindowQueryData, WindowStart},
     status::HasMetrics,
-    Header, Payload, QueryError, QueryResult,
 };
 
 /// A specific action that can be targeted to inject an error.
@@ -259,27 +259,16 @@ where
 }
 
 #[async_trait]
-impl<S, Types: NodeType> MigrateTypes<Types> for FailStorage<S>
-where
-    S: MigrateTypes<Types> + Sync,
-{
-    async fn migrate_types(&self, _batch_size: u64) -> anyhow::Result<()> {
-        Ok(())
-    }
-}
-
-#[async_trait]
 impl<S> PruneStorage for FailStorage<S>
 where
     S: PruneStorage + Sync,
 {
-    type Pruner = S::Pruner;
+    type Pruner<'a>
+        = S::Pruner<'a>
+    where
+        S: 'a;
 
-    async fn get_disk_usage(&self) -> anyhow::Result<u64> {
-        self.inner.get_disk_usage().await
-    }
-
-    async fn prune(&self, pruner: &mut Self::Pruner) -> anyhow::Result<Option<u64>> {
+    async fn prune<'a>(&'a self, pruner: &mut Self::Pruner<'a>) -> anyhow::Result<Option<u64>> {
         self.inner.prune(pruner).await
     }
 }
@@ -458,12 +447,6 @@ where
         self.maybe_fail_read(FailableAction::GetTransaction).await?;
         self.inner.get_block_with_transaction(hash).await
     }
-
-    async fn first_available_leaf(&mut self, from: u64) -> QueryResult<LeafQueryData<Types>> {
-        self.maybe_fail_read(FailableAction::FirstAvailableLeaf)
-            .await?;
-        self.inner.first_available_leaf(from).await
-    }
 }
 
 impl<Types, T> UpdateAvailabilityStorage<Types> for Transaction<T>
@@ -473,27 +456,50 @@ where
     Payload<Types>: QueryablePayload<Types>,
     T: UpdateAvailabilityStorage<Types> + Send + Sync,
 {
-    async fn insert_leaf_with_qc_chain(
+    async fn insert_qc_chain(
         &mut self,
-        leaf: LeafQueryData<Types>,
+        height: u64,
         qc_chain: Option<[CertificatePair<Types>; 2]>,
     ) -> anyhow::Result<()> {
         self.maybe_fail_write(FailableAction::Any).await?;
-        self.inner.insert_leaf_with_qc_chain(leaf, qc_chain).await
+        self.inner.insert_qc_chain(height, qc_chain).await
     }
 
-    async fn insert_block(&mut self, block: BlockQueryData<Types>) -> anyhow::Result<()> {
-        self.maybe_fail_write(FailableAction::Any).await?;
-        self.inner.insert_block(block).await
-    }
-
-    async fn insert_vid(
+    async fn insert_cert2(
         &mut self,
-        common: VidCommonQueryData<Types>,
-        share: Option<VidShare>,
+        height: u64,
+        cert2: Certificate2<Types>,
     ) -> anyhow::Result<()> {
         self.maybe_fail_write(FailableAction::Any).await?;
-        self.inner.insert_vid(common, share).await
+        self.inner.insert_cert2(height, cert2).await
+    }
+
+    async fn insert_leaf_range<'a>(
+        &mut self,
+        leaves: impl Send + IntoIterator<IntoIter: Send, Item = &'a LeafQueryData<Types>>,
+    ) -> anyhow::Result<()> {
+        self.maybe_fail_write(FailableAction::Any).await?;
+        self.inner.insert_leaf_range(leaves).await
+    }
+
+    async fn insert_block_range<'a>(
+        &mut self,
+        blocks: impl Send + IntoIterator<IntoIter: Send, Item = &'a BlockQueryData<Types>>,
+    ) -> anyhow::Result<()> {
+        self.maybe_fail_write(FailableAction::Any).await?;
+        self.inner.insert_block_range(blocks).await
+    }
+
+    async fn insert_vid_range<'a>(
+        &mut self,
+        vid: impl Send
+        + IntoIterator<
+            IntoIter: Send,
+            Item = (&'a VidCommonQueryData<Types>, Option<&'a VidShare>),
+        >,
+    ) -> anyhow::Result<()> {
+        self.maybe_fail_write(FailableAction::Any).await?;
+        self.inner.insert_vid_range(vid).await
     }
 }
 
@@ -505,6 +511,11 @@ where
     async fn load_pruned_height(&mut self) -> anyhow::Result<Option<u64>> {
         self.maybe_fail_read(FailableAction::Any).await?;
         self.inner.load_pruned_height().await
+    }
+
+    async fn load_state_pruned_height(&mut self) -> anyhow::Result<Option<u64>> {
+        self.maybe_fail_read(FailableAction::Any).await?;
+        self.inner.load_state_pruned_height().await
     }
 }
 
@@ -548,9 +559,13 @@ where
         self.inner.vid_share(id).await
     }
 
-    async fn sync_status(&mut self) -> QueryResult<SyncStatus> {
+    async fn sync_status_for_range(
+        &mut self,
+        start: usize,
+        end: usize,
+    ) -> QueryResult<SyncStatusQueryData> {
         self.maybe_fail_read(FailableAction::Any).await?;
-        self.inner.sync_status().await
+        self.inner.sync_status_for_range(start, end).await
     }
 
     async fn get_header_window(
@@ -566,6 +581,19 @@ where
     async fn latest_qc_chain(&mut self) -> QueryResult<Option<[CertificatePair<Types>; 2]>> {
         self.maybe_fail_read(FailableAction::Any).await?;
         self.inner.latest_qc_chain().await
+    }
+
+    async fn load_cert2(&mut self, height: u64) -> QueryResult<Option<Certificate2<Types>>> {
+        self.maybe_fail_read(FailableAction::Any).await?;
+        self.inner.load_cert2(height).await
+    }
+
+    async fn load_earliest_cert2(
+        &mut self,
+        height: u64,
+    ) -> QueryResult<Option<Certificate2<Types>>> {
+        self.maybe_fail_read(FailableAction::Any).await?;
+        self.inner.load_earliest_cert2(height).await
     }
 }
 

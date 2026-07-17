@@ -25,7 +25,7 @@ use hotshot_types::{
         signature_key::BuilderSignatureKey,
     },
 };
-use tide_disco::{method::ReadState, App, Url};
+use tide_disco::{App, Url, method::ReadState};
 use tokio::spawn;
 use vbs::version::StaticVersionType;
 

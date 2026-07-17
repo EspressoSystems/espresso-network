@@ -7,12 +7,12 @@ use jf_utils::canonical;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    VerificationResult, VidError, VidResult, VidScheme,
     avidm::{
+        AvidMCommit, AvidMParam, AvidMScheme, AvidMShare, Config, F, MerkleProof, MerkleTree,
         config::AvidMConfig,
         namespaced::{NsAvidMCommit, NsAvidMScheme, NsAvidMShare},
-        AvidMCommit, AvidMParam, AvidMScheme, AvidMShare, Config, MerkleProof, MerkleTree, F,
     },
-    VerificationResult, VidError, VidResult, VidScheme,
 };
 
 /// A proof of incorrect encoding.
@@ -72,7 +72,7 @@ impl AvidMScheme {
                 .clone()
                 .zip(share.content.mt_proofs.iter())
             {
-                if index > param.total_weights {
+                if index >= param.total_weights {
                     return Err(VidError::InvalidShare);
                 }
                 if visited_indices.contains(&index) {
@@ -297,18 +297,18 @@ impl NsAvidMScheme {
 mod tests {
     use ark_poly::EvaluationDomain;
     use jf_merkle_tree::MerkleTreeScheme;
-    use rand::{seq::SliceRandom, Rng};
+    use rand::{Rng, seq::SliceRandom};
 
     use crate::{
+        VidScheme,
         avidm::{
+            AvidMCommit, AvidMScheme, AvidMShare, Config, F, MerkleTree, RawAvidMShare,
             config::AvidMConfig,
             namespaced::{NsAvidMCommit, NsAvidMScheme, NsAvidMShare},
             proofs::AvidMBadEncodingProof,
-            radix2_domain, AvidMCommit, AvidMScheme, AvidMShare, Config, MerkleTree, RawAvidMShare,
-            F,
+            radix2_domain,
         },
         utils::bytes_to_field,
-        VidScheme,
     };
 
     #[test]
@@ -499,14 +499,43 @@ mod tests {
 
         // Good namespaces
         for ns_index in [0, 2, 3, 4] {
-            assert!(NsAvidMScheme::proof_of_incorrect_encoding_for_namespace(
-                &param, ns_index, &commit, &shares
-            )
-            .is_err());
+            assert!(
+                NsAvidMScheme::proof_of_incorrect_encoding_for_namespace(
+                    &param, ns_index, &commit, &shares
+                )
+                .is_err()
+            );
         }
 
         let proof = NsAvidMScheme::proof_of_incorrect_encoding(&param, &commit, &shares).unwrap();
         assert_eq!(proof.ns_index, 1);
         assert!(proof.verify(&param, &commit).unwrap().is_ok());
+    }
+
+    #[test]
+    fn test_bad_encoding_proof_rejects_boundary_index() {
+        // Regression test: proof_of_incorrect_encoding must reject shares with
+        // index == total_weights (off-by-one, previously used `>` instead of `>=`).
+        let param = AvidMScheme::setup(3usize, 6usize).unwrap();
+        let payload = [1u8; 50];
+        let weights = [1u32; 6];
+        let (commit, shares) = AvidMScheme::disperse(&param, &weights, &payload).unwrap();
+
+        // Construct a share whose range.end == total_weights (last valid share).
+        // This should succeed since range 5..6 means index 5 which is < 6.
+        let last_share = &shares[5];
+        assert_eq!(last_share.content.range.end, param.total_weights);
+        assert!(
+            AvidMScheme::verify_internal(&param, &commit, &last_share.content)
+                .is_ok_and(|r| r.is_ok())
+        );
+
+        // Construct a fake share with range.end > total_weights. This must be rejected.
+        let mut bad_share = shares[5].clone();
+        bad_share.content.range = param.total_weights..param.total_weights + 1;
+        assert!(
+            AvidMScheme::proof_of_incorrect_encoding(&param, &commit, &[bad_share]).is_err(),
+            "proof_of_incorrect_encoding must reject share with index >= total_weights"
+        );
     }
 }

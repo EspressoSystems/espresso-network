@@ -9,7 +9,7 @@
 async fn test_timeout() {
     use std::time::Duration;
 
-    use hotshot_example_types::node_types::{MemoryImpl, TestTypes, TestVersions};
+    use hotshot_example_types::node_types::{MemoryImpl, TestTypes};
     use hotshot_testing::{
         block_builder::SimpleBuilderImplementation,
         completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
@@ -23,7 +23,7 @@ async fn test_timeout() {
         ..Default::default()
     };
 
-    let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> = TestDescription {
+    let mut metadata: TestDescription<TestTypes, MemoryImpl> = TestDescription {
         ..Default::default()
     }
     .set_num_nodes(10, 10);
@@ -63,7 +63,7 @@ async fn test_timeout() {
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[ignore]
 async fn test_timeout_libp2p() {
-    use hotshot_example_types::node_types::{Libp2pImpl, TestTypes, TestVersions};
+    use hotshot_example_types::node_types::{Libp2pImpl, TestTypes};
     use hotshot_testing::{
         block_builder::SimpleBuilderImplementation,
         overall_safety_task::OverallSafetyPropertiesDescription,
@@ -76,7 +76,7 @@ async fn test_timeout_libp2p() {
         ..Default::default()
     };
 
-    let mut metadata: TestDescription<TestTypes, Libp2pImpl, TestVersions> = TestDescription {
+    let mut metadata: TestDescription<TestTypes, Libp2pImpl> = TestDescription {
         ..Default::default()
     }
     .set_num_nodes(10, 10);

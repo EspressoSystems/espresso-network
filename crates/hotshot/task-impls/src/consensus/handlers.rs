@@ -9,36 +9,32 @@ use std::{sync::Arc, time::Duration};
 use async_broadcast::Sender;
 use chrono::Utc;
 use hotshot_types::{
+    data::{EpochNumber, ViewNumber},
     event::{Event, EventType},
-    simple_certificate::EpochRootQuorumCertificateV2,
+    simple_certificate::{EpochRootQuorumCertificateV2, check_qc_state_cert_correspondence},
     simple_vote::{EpochRootQuorumVote2, HasEpoch, QuorumVote2, TimeoutData2, TimeoutVote2},
-    traits::node_implementation::{ConsensusTime, NodeImplementation, NodeType},
-    utils::{is_epoch_root, is_epoch_transition, is_last_block, EpochTransitionIndicator},
+    traits::node_implementation::{NodeImplementation, NodeType},
+    utils::{EpochTransitionIndicator, is_epoch_root, is_epoch_transition, is_last_block},
     vote::{HasViewNumber, Vote},
 };
 use hotshot_utils::anytrace::*;
 use tokio::{spawn, time::sleep};
-use tracing::instrument;
-use vbs::version::StaticVersionType;
+use tracing::{Instrument, error_span, instrument};
+use versions::EPOCH_VERSION;
 
 use super::ConsensusTaskState;
 use crate::{
-    consensus::Versions,
     events::HotShotEvent,
-    helpers::{broadcast_event, check_qc_state_cert_correspondence},
+    helpers::broadcast_event,
     vote_collection::{handle_epoch_root_vote, handle_vote},
 };
 
 /// Handle a `QuorumVoteRecv` event.
-pub(crate) async fn handle_quorum_vote_recv<
-    TYPES: NodeType,
-    I: NodeImplementation<TYPES>,
-    V: Versions,
->(
+pub(crate) async fn handle_quorum_vote_recv<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     vote: &QuorumVote2<TYPES>,
     event: Arc<HotShotEvent<TYPES>>,
     sender: &Sender<Arc<HotShotEvent<TYPES>>>,
-    task_state: &mut ConsensusTaskState<TYPES, I, V>,
+    task_state: &mut ConsensusTaskState<TYPES, I>,
 ) -> Result<()> {
     let in_transition = task_state
         .consensus
@@ -48,11 +44,9 @@ pub(crate) async fn handle_quorum_vote_recv<
     let epoch_membership = task_state
         .membership_coordinator
         .membership_for_epoch(vote.data.epoch)
-        .await
         .context(warn!("No stake table for epoch"))?;
 
-    let we_are_leader =
-        epoch_membership.leader(vote.view_number() + 1).await? == task_state.public_key;
+    let we_are_leader = epoch_membership.leader(vote.view_number() + 1)? == task_state.public_key;
     ensure!(
         in_transition || we_are_leader,
         info!(
@@ -87,10 +81,8 @@ pub(crate) async fn handle_quorum_vote_recv<
     {
         // If the vote sender belongs to the next epoch, collect it separately to form the second QC
         let has_stake = epoch_membership
-            .next_epoch_stake_table()
-            .await?
-            .has_stake(&vote.signing_key())
-            .await;
+            .next_epoch_stake_table()?
+            .has_stake(&vote.signing_key());
         if has_stake {
             handle_vote(
                 &mut task_state.next_epoch_vote_collectors,
@@ -100,7 +92,7 @@ pub(crate) async fn handle_quorum_vote_recv<
                 // so we must request the full randomized stake table.
                 //
                 // I'm not sure this is really necessary, but I've opted not to modify the logic.
-                &epoch_membership.next_epoch().await?.clone(),
+                &epoch_membership.next_epoch()?.clone(),
                 task_state.id,
                 &event,
                 sender,
@@ -118,12 +110,11 @@ pub(crate) async fn handle_quorum_vote_recv<
 pub(crate) async fn handle_epoch_root_quorum_vote_recv<
     TYPES: NodeType,
     I: NodeImplementation<TYPES>,
-    V: Versions,
 >(
     vote: &EpochRootQuorumVote2<TYPES>,
     event: Arc<HotShotEvent<TYPES>>,
     sender: &Sender<Arc<HotShotEvent<TYPES>>>,
-    task_state: &mut ConsensusTaskState<TYPES, I, V>,
+    task_state: &mut ConsensusTaskState<TYPES, I>,
 ) -> Result<()> {
     ensure!(
         vote.vote
@@ -136,11 +127,9 @@ pub(crate) async fn handle_epoch_root_quorum_vote_recv<
     let epoch_membership = task_state
         .membership_coordinator
         .membership_for_epoch(vote.vote.data.epoch)
-        .await
         .context(warn!("No stake table for epoch"))?;
 
-    let we_are_leader =
-        epoch_membership.leader(vote.view_number() + 1).await? == task_state.public_key;
+    let we_are_leader = epoch_membership.leader(vote.view_number() + 1)? == task_state.public_key;
     ensure!(
         we_are_leader,
         info!("We are not the leader for view {}", vote.view_number() + 1)
@@ -162,24 +151,19 @@ pub(crate) async fn handle_epoch_root_quorum_vote_recv<
 }
 
 /// Handle a `TimeoutVoteRecv` event.
-pub(crate) async fn handle_timeout_vote_recv<
-    TYPES: NodeType,
-    I: NodeImplementation<TYPES>,
-    V: Versions,
->(
+pub(crate) async fn handle_timeout_vote_recv<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     vote: &TimeoutVote2<TYPES>,
     event: Arc<HotShotEvent<TYPES>>,
     sender: &Sender<Arc<HotShotEvent<TYPES>>>,
-    task_state: &mut ConsensusTaskState<TYPES, I, V>,
+    task_state: &mut ConsensusTaskState<TYPES, I>,
 ) -> Result<()> {
     let epoch_membership = task_state
         .membership_coordinator
         .membership_for_epoch(task_state.cur_epoch)
-        .await
         .context(warn!("No stake table for epoch"))?;
     // Are we the leader for this view?
     ensure!(
-        epoch_membership.leader(vote.view_number() + 1).await? == task_state.public_key,
+        epoch_membership.leader(vote.view_number() + 1)? == task_state.public_key,
         info!("We are not the leader for view {}", vote.view_number() + 1)
     );
 
@@ -189,8 +173,7 @@ pub(crate) async fn handle_timeout_vote_recv<
         task_state.public_key.clone(),
         &task_state
             .membership_coordinator
-            .membership_for_epoch(vote.data.epoch)
-            .await?,
+            .membership_for_epoch(vote.data.epoch)?,
         task_state.id,
         &event,
         sender,
@@ -208,14 +191,14 @@ pub(crate) async fn handle_timeout_vote_recv<
 /// #Errors
 /// Returns and error if we can't get the version or the version doesn't
 /// yet support HS 2
-pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TYPES>>(
-    new_view_number: TYPES::View,
+pub async fn send_high_qc<TYPES: NodeType, I: NodeImplementation<TYPES>>(
+    new_view_number: ViewNumber,
     sender: &Sender<Arc<HotShotEvent<TYPES>>>,
-    task_state: &mut ConsensusTaskState<TYPES, I, V>,
+    task_state: &mut ConsensusTaskState<TYPES, I>,
 ) -> Result<()> {
-    let version = task_state.upgrade_lock.version(new_view_number).await?;
+    let version = task_state.upgrade_lock.version(new_view_number)?;
     ensure!(
-        version >= V::Epochs::VERSION,
+        version >= EPOCH_VERSION,
         debug!("HotStuff 2 upgrade not yet in effect")
     );
 
@@ -268,10 +251,8 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
     } else {
         let leader = task_state
             .membership_coordinator
-            .membership_for_epoch(task_state.cur_epoch)
-            .await?
-            .leader(new_view_number)
-            .await?;
+            .membership_for_epoch(task_state.cur_epoch)?
+            .leader(new_view_number)?;
 
         let (high_qc, maybe_next_epoch_qc) = if high_qc
             .data
@@ -345,15 +326,11 @@ pub async fn send_high_qc<TYPES: NodeType, V: Versions, I: NodeImplementation<TY
 
 /// Handle a `ViewChange` event.
 #[instrument(skip_all)]
-pub(crate) async fn handle_view_change<
-    TYPES: NodeType,
-    I: NodeImplementation<TYPES>,
-    V: Versions,
->(
-    new_view_number: TYPES::View,
-    epoch_number: Option<TYPES::Epoch>,
+pub(crate) async fn handle_view_change<TYPES: NodeType, I: NodeImplementation<TYPES>>(
+    new_view_number: ViewNumber,
+    epoch_number: Option<EpochNumber>,
     sender: &Sender<Arc<HotShotEvent<TYPES>>>,
-    task_state: &mut ConsensusTaskState<TYPES, I, V>,
+    task_state: &mut ConsensusTaskState<TYPES, I>,
 ) -> Result<()> {
     if epoch_number > task_state.cur_epoch {
         task_state.cur_epoch = epoch_number;
@@ -392,16 +369,10 @@ pub(crate) async fn handle_view_change<
         .update_view(new_view_number)?;
 
     // If we have a decided upgrade certificate, the protocol version may also have been upgraded.
-    let decided_upgrade_certificate_read = task_state
-        .upgrade_lock
-        .decided_upgrade_certificate
-        .read()
-        .await
-        .clone();
-    if let Some(cert) = decided_upgrade_certificate_read {
-        if new_view_number == cert.data.new_version_first_view {
-            tracing::error!("Version upgraded based on a decided upgrade cert: {cert:?}");
-        }
+    if let Some(cert) = task_state.upgrade_lock.decided_upgrade_cert()
+        && new_view_number == cert.data.new_version_first_view
+    {
+        tracing::error!("Version upgraded based on a decided upgrade cert: {cert:?}");
     }
 
     // Spawn a timeout task if we did actually update view
@@ -413,13 +384,14 @@ pub(crate) async fn handle_view_change<
             sleep(Duration::from_millis(timeout)).await;
             broadcast_event(
                 Arc::new(HotShotEvent::Timeout(
-                    TYPES::View::new(*view_number),
+                    ViewNumber::new(*view_number),
                     epoch_number,
                 )),
                 &stream,
             )
             .await;
         }
+        .instrument(error_span!("view timeout", view = *view_number))
     });
 
     // Cancel the old timeout task
@@ -428,10 +400,8 @@ pub(crate) async fn handle_view_change<
     let old_view_leader_key = task_state
         .membership_coordinator
         .membership_for_epoch(task_state.cur_epoch)
-        .await
         .context(warn!("No stake table for epoch"))?
-        .leader(old_view_number)
-        .await?;
+        .leader(old_view_number)?;
 
     let consensus_reader = task_state.consensus.read().await;
     consensus_reader
@@ -477,11 +447,11 @@ pub(crate) async fn handle_view_change<
 
 /// Handle a `Timeout` event.
 #[instrument(skip_all)]
-pub(crate) async fn handle_timeout<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
-    view_number: TYPES::View,
-    epoch: Option<TYPES::Epoch>,
+pub(crate) async fn handle_timeout<TYPES: NodeType, I: NodeImplementation<TYPES>>(
+    view_number: ViewNumber,
+    epoch: Option<EpochNumber>,
     sender: &Sender<Arc<HotShotEvent<TYPES>>>,
-    task_state: &mut ConsensusTaskState<TYPES, I, V>,
+    task_state: &mut ConsensusTaskState<TYPES, I>,
 ) -> Result<()> {
     ensure!(
         task_state.cur_view <= view_number,
@@ -492,15 +462,13 @@ pub(crate) async fn handle_timeout<TYPES: NodeType, I: NodeImplementation<TYPES>
         task_state
             .membership_coordinator
             .stake_table_for_epoch(epoch)
-            .await
             .context(warn!("No stake table for epoch"))?
-            .has_stake(&task_state.public_key)
-            .await,
+            .has_stake(&task_state.public_key),
         debug!("We were not chosen for the consensus committee for view {view_number}",)
     );
 
     let vote = TimeoutVote2::create_signed_vote(
-        TimeoutData2::<TYPES> {
+        TimeoutData2 {
             view: view_number,
             epoch,
         },
@@ -509,11 +477,36 @@ pub(crate) async fn handle_timeout<TYPES: NodeType, I: NodeImplementation<TYPES>
         &task_state.private_key,
         &task_state.upgrade_lock,
     )
-    .await
     .wrap()
     .context(error!("Failed to sign TimeoutData"))?;
 
-    broadcast_event(Arc::new(HotShotEvent::TimeoutVoteSend(vote)), sender).await;
+    broadcast_event(
+        Arc::new(HotShotEvent::TimeoutVoteSend(vote.clone())),
+        sender,
+    )
+    .await;
+
+    // Forward the same vote to any external listener so the espresso bridge
+    // can submit it to the new-protocol coordinator at the legacy → 0.8
+    // upgrade boundary. Only emit when a target upgrade is decided (i.e.
+    // we know a cutover is coming) and the view is not past the cutover,
+    // to avoid spurious events in normal operation. The check is cheap;
+    // the event payload is small.
+    if task_state
+        .upgrade_lock
+        .decided_upgrade_cert()
+        .is_some_and(|cert| view_number <= cert.data.new_version_first_view)
+    {
+        broadcast_event(
+            Event {
+                view_number,
+                event: EventType::LegacyTimeoutVoteEmitted { vote: vote.clone() },
+            },
+            &task_state.output_event_stream,
+        )
+        .await;
+    }
+
     broadcast_event(
         Event {
             view_number,
@@ -540,10 +533,8 @@ pub(crate) async fn handle_timeout<TYPES: NodeType, I: NodeImplementation<TYPES>
     let leader = task_state
         .membership_coordinator
         .membership_for_epoch(task_state.cur_epoch)
-        .await
         .context(warn!("No stake table for epoch"))?
-        .leader(view_number)
-        .await;
+        .leader(view_number);
 
     let consensus_reader = task_state.consensus.read().await;
     consensus_reader.metrics.number_of_timeouts.add(1);

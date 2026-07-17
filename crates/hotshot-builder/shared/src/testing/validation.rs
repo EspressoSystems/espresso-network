@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use anyhow::{bail, Error};
+use anyhow::{Error, bail};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use chrono::{DateTime, Local};
@@ -13,10 +13,7 @@ use hotshot_testing::{
     test_runner::Node,
     test_task::{AnyTestTaskState, TestResult, TestTaskState, TestTaskStateSeed},
 };
-use hotshot_types::traits::{
-    block_contents::BlockHeader,
-    node_implementation::{NodeType, Versions},
-};
+use hotshot_types::traits::{block_contents::BlockHeader, node_implementation::NodeType};
 
 use super::TransactionPayload;
 
@@ -33,15 +30,14 @@ pub struct BuilderValidationConfig {
 }
 
 #[async_trait]
-impl<Types, I, V> TestTaskStateSeed<Types, I, V> for BuilderValidationConfig
+impl<Types, I> TestTaskStateSeed<Types, I> for BuilderValidationConfig
 where
     Types: NodeType<Transaction = TestTransaction>,
     I: TestableNodeImplementation<Types>,
-    V: Versions,
 {
     async fn into_state(
         self: Box<Self>,
-        handles: Arc<RwLock<Vec<Node<Types, I, V>>>>,
+        handles: Arc<RwLock<Vec<Node<Types, I>>>>,
     ) -> AnyTestTaskState<Types> {
         Box::new(BuilderValidationTask {
             config: *self,
@@ -52,24 +48,22 @@ where
     }
 }
 
-pub struct BuilderValidationTask<Types, I, V>
+pub struct BuilderValidationTask<Types, I>
 where
     Types: NodeType,
     I: TestableNodeImplementation<Types>,
-    V: Versions,
 {
-    pub(crate) _handles: Arc<RwLock<Vec<Node<Types, I, V>>>>,
+    pub(crate) _handles: Arc<RwLock<Vec<Node<Types, I>>>>,
     pub(crate) config: BuilderValidationConfig,
     pub(crate) txn_history: Vec<IncludedTransaction>,
     pub(crate) alien_transactions: Vec<TestTransaction>,
 }
 
 #[async_trait]
-impl<Types, I, V> TestTaskState for BuilderValidationTask<Types, I, V>
+impl<Types, I> TestTaskState for BuilderValidationTask<Types, I>
 where
     Types: NodeType<Transaction = TestTransaction>,
     I: TestableNodeImplementation<Types>,
-    V: Versions,
 {
     type Event = Event<Types>;
     type Error = Error;

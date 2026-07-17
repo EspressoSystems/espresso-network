@@ -13,25 +13,26 @@ use std::{
 use alloy::primitives::FixedBytes;
 use async_trait::async_trait;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
+use derive_more::Display;
 use hotshot_types::{
-    data::{vid_commitment, BlockError, Leaf2, VidCommitment},
+    data::{BlockError, Leaf2, VidCommitment, ViewNumber, vid_commitment},
     light_client::LightClientState,
     traits::{
-        block_contents::{
-            BlockHeader, BuilderFee, EncodeBytes, TestableBlock, Transaction,
-            GENESIS_VID_NUM_STORAGE_NODES,
-        },
-        node_implementation::{ConsensusTime, NodeType, Versions},
         BlockPayload, ValidatedState,
+        block_contents::{
+            BlockHeader, BuilderFee, EncodeBytes, GENESIS_VID_NUM_STORAGE_NODES, TestableBlock,
+            Transaction,
+        },
+        node_implementation::NodeType,
     },
     utils::BuilderCommitment,
 };
-use rand::{thread_rng, Rng};
+use rand::{Rng, thread_rng};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 use thiserror::Error;
 use time::OffsetDateTime;
-use vbs::version::{StaticVersionType, Version};
+use vbs::version::Version;
 
 use crate::{
     node_types::TestTypes,
@@ -168,7 +169,10 @@ impl<TYPES: NodeType> TestableBlock<TYPES> for TestBlockPayload {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Debug, Display, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash,
+)]
+#[display("{{num_transactions:{num_transactions}}}")]
 pub struct TestMetadata {
     pub num_transactions: u64,
 }
@@ -322,12 +326,12 @@ impl TestBlockHeader {
 }
 
 impl<
-        TYPES: NodeType<
+    TYPES: NodeType<
             BlockHeader = Self,
             BlockPayload = TestBlockPayload,
             InstanceState = TestInstanceState,
         >,
-    > BlockHeader<TYPES> for TestBlockHeader
+> BlockHeader<TYPES> for TestBlockHeader
 {
     type Error = std::convert::Infallible;
 
@@ -352,21 +356,21 @@ impl<
         ))
     }
 
-    fn genesis<V: Versions>(
+    fn genesis(
         _instance_state: &<TYPES::ValidatedState as ValidatedState<TYPES>>::Instance,
         payload: TYPES::BlockPayload,
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+        version: Version,
     ) -> Self {
         let builder_commitment =
             <TestBlockPayload as BlockPayload<TYPES>>::builder_commitment(&payload, metadata);
 
         let payload_bytes = payload.encode();
-        let genesis_version = V::Base::version();
-        let payload_commitment = vid_commitment::<V>(
+        let payload_commitment = vid_commitment(
             &payload_bytes,
             &metadata.encode(),
             GENESIS_VID_NUM_STORAGE_NODES,
-            genesis_version,
+            version,
         );
 
         Self {
@@ -377,7 +381,7 @@ impl<
             timestamp: 0,
             timestamp_millis: 0,
             random: 0,
-            version: genesis_version,
+            version,
         }
     }
 
@@ -401,7 +405,7 @@ impl<
         self.version
     }
 
-    fn get_light_client_state(&self, view: TYPES::View) -> anyhow::Result<LightClientState> {
+    fn get_light_client_state(&self, view: ViewNumber) -> anyhow::Result<LightClientState> {
         LightClientState::new(
             view.u64(),
             self.block_number,

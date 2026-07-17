@@ -45,7 +45,7 @@ done
 if $docker; then
     echo "Using docker to run deploy"
     cmd="docker run --rm -e RUST_LOG=info --network=host -v /dev/bus/usb:/dev/bus/usb --privileged \
-        -it ghcr.io/espressosystems/espresso-sequencer/deploy:main \
+        -it ghcr.io/espressosystems/espresso-network/deploy:main \
         deploy --rpc-url http://host.docker.internal:8545"
 else
     echo "Using native deploy binary"

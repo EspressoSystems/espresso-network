@@ -1,9 +1,9 @@
+use espresso_node::SequencerApiVersion;
 use espresso_types::SeqTypes;
 use hotshot_builder_api::v0_1::builder::{
     Error as BuilderApiError, Options as HotshotBuilderApiOptions,
 };
 use hotshot_builder_legacy::service::ProxyGlobalState;
-use sequencer::SequencerApiVersion;
 use tide_disco::{App, Url};
 use tokio::spawn;
 use vbs::version::{StaticVersion, StaticVersionType};
@@ -52,9 +52,10 @@ pub mod testing {
     };
     use async_lock::RwLock;
     use committable::Committable;
+    use espresso_node::{SequencerApiVersion, context::Consensus, network};
     use espresso_types::{
-        traits::SequencerPersistence, v0_3::ChainConfig, Event, FeeAccount, NamespaceId, NodeState,
-        PrivKey, PubKey, Transaction, ValidatedState,
+        Event, FeeAccount, NamespaceId, NodeState, PrivKey, PubKey, Transaction, ValidatedState,
+        traits::SequencerPersistence, v0_3::ChainConfig,
     };
     use futures::stream::{Stream, StreamExt};
     use hotshot::{
@@ -73,19 +74,18 @@ pub mod testing {
         events_source::{EventConsumer, EventsStreamer},
     };
     use hotshot_types::{
+        HotShotConfig, PeerConfig, ValidatorConfig,
         data::{Leaf2, ViewNumber},
         event::LeafInfo,
         light_client::StateKeyPair,
         traits::{
-            block_contents::BlockHeader,
-            node_implementation::{ConsensusTime, NodeType, Versions},
+            block_contents::BlockHeader, node_implementation::NodeType,
             signature_key::BuilderSignatureKey as _,
         },
-        HotShotConfig, PeerConfig, ValidatorConfig,
     };
-    use sequencer::{context::Consensus, network, SequencerApiVersion};
     use surf_disco::Client;
-    use vbs::version::StaticVersion;
+    use tokio::time::sleep;
+    use vbs::version::{StaticVersion, Version};
 
     use super::*;
     use crate::non_permissioned::BuilderConfig;
@@ -186,6 +186,7 @@ pub mod testing {
             .map(|(pub_key, state_key_pair)| PeerConfig::<SeqTypes> {
                 stake_table_entry: pub_key.stake_table_entry(U256::from(stake_value)),
                 state_ver_key: state_key_pair.ver_key(),
+                connect_info: None,
             })
             .collect::<Vec<_>>();
 
@@ -224,6 +225,8 @@ pub mod testing {
                     state_public_key: self.staking_nodes_state_key_pairs[i].ver_key(),
                     state_private_key: self.staking_nodes_state_key_pairs[i].sign_key(),
                     is_da: true,
+                    x25519_keypair: None,
+                    p2p_addr: None,
                 }
             } else {
                 ValidatorConfig {
@@ -235,20 +238,10 @@ pub mod testing {
                     state_public_key: self.non_staking_nodes_state_key_pairs[i].ver_key(),
                     state_private_key: self.non_staking_nodes_state_key_pairs[i].sign_key(),
                     is_da: true,
+                    x25519_keypair: None,
+                    p2p_addr: None,
                 }
             }
-        }
-
-        // url for the hotshot event streaming api
-        pub fn hotshot_event_streaming_api_url() -> Url {
-            // spawn the event streaming api
-            let port = portpicker::pick_unused_port()
-                .expect("Could not find an open port for hotshot event streaming api");
-
-            let hotshot_events_streaming_api_url =
-                Url::parse(format!("http://localhost:{port}").as_str()).unwrap();
-
-            hotshot_events_streaming_api_url
         }
 
         // start the server for the hotshot event streaming api
@@ -287,11 +280,11 @@ pub mod testing {
             tokio::spawn(app.serve(url, SequencerApiVersion::instance()));
         }
         // enable hotshot event streaming
-        pub fn enable_hotshot_node_event_streaming<P: SequencerPersistence, V: Versions>(
+        pub fn enable_hotshot_node_event_streaming<P: SequencerPersistence>(
             sequencer_api_url: Url,
             known_nodes_with_stake: Vec<PeerConfig<SeqTypes>>,
             num_non_staking_nodes: usize,
-            hotshot_context_handle: Arc<Consensus<network::Memory, P, V>>,
+            hotshot_context_handle: Arc<Consensus<network::Memory, P>>,
         ) {
             // create a event streamer
             let events_streamer = Arc::new(RwLock::new(EventsStreamer::new(
@@ -359,10 +352,11 @@ pub mod testing {
     impl NonPermissionedBuilderTestConfig {
         pub const SUBSCRIBED_DA_NODE_ID: usize = 5;
 
-        pub async fn init_non_permissioned_builder<V: Versions>(
+        pub async fn init_non_permissioned_builder(
             hotshot_events_streaming_api_url: Url,
             hotshot_builder_api_url: Url,
             num_nodes: usize,
+            base: Version,
         ) -> Self {
             // generate builder keys
             let seed = [201_u8; 32];
@@ -377,13 +371,13 @@ pub mod testing {
 
             let node_count = NonZeroUsize::new(num_nodes).unwrap();
 
-            let builder_config = BuilderConfig::init::<V>(
+            let builder_config = BuilderConfig::init(
                 key_pair,
                 bootstrapped_view,
                 tx_channel_capacity,
                 event_channel_capacity,
                 node_count,
-                NodeState::default().with_current_version(V::Base::VERSION),
+                NodeState::default().with_current_version(base),
                 ValidatedState::default(),
                 hotshot_events_streaming_api_url,
                 hotshot_builder_api_url,
@@ -392,6 +386,7 @@ pub mod testing {
                 Duration::from_millis(500),
                 ChainConfig::default().base_fee,
                 819200,
+                base,
             )
             .await
             .unwrap();
@@ -406,12 +401,9 @@ pub mod testing {
     pub fn hotshot_builder_url() -> Url {
         // spawn the builder api
         let port =
-            portpicker::pick_unused_port().expect("Could not find an open port for builder api");
+            test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
 
-        let hotshot_builder_api_url =
-            Url::parse(format!("http://localhost:{port}").as_str()).unwrap();
-
-        hotshot_builder_api_url
+        Url::parse(format!("http://localhost:{port}").as_str()).unwrap()
     }
 
     pub async fn test_builder_impl(
@@ -450,9 +442,9 @@ pub mod testing {
             <BLSPubKey as SignatureKey>::generated_from_seed_indexed(seed, 2011_u64);
 
         let start = Instant::now();
-        let (available_block_info, view_num) = loop {
-            if start.elapsed() > Duration::from_secs(10) {
-                panic!("Didn't get a quorum proposal in 10 seconds");
+        let (available_block_info, view_num) = 'proposals: loop {
+            if start.elapsed() > Duration::from_secs(120) {
+                panic!("No available blocks from any quorum proposal after 120s");
             }
 
             let event = subscribed_events.next().await.unwrap();
@@ -466,16 +458,31 @@ pub mod testing {
                     parent_commitment.as_ref(),
                 )
                 .expect("Claim block signing failed");
-                let available_blocks = builder_client
-                    .get::<Vec<AvailableBlockInfo<SeqTypes>>>(&format!(
-                        "block_info/availableblocks/{parent_commitment}/{parent_view_number}/\
-                         {hotshot_client_pub_key}/{encoded_signature}"
-                    ))
-                    .send()
-                    .await
-                    .expect("Error getting available blocks");
-                assert!(!available_blocks.is_empty());
-                break (available_blocks, parent_view_number);
+                // The builder may not have a block for this parent yet, or may never build
+                // one (view abandoned): retry briefly, then move on to the next proposal.
+                // The "No blocks available" message comes from the availableblocks handler
+                // in hotshot-builder/legacy/src/service.rs.
+                let retry_start = Instant::now();
+                while retry_start.elapsed() < Duration::from_secs(3) {
+                    match builder_client
+                        .get::<Vec<AvailableBlockInfo<SeqTypes>>>(&format!(
+                            "block_info/availableblocks/{parent_commitment}/{parent_view_number}/\
+                             {hotshot_client_pub_key}/{encoded_signature}"
+                        ))
+                        .send()
+                        .await
+                    {
+                        Ok(blocks) if !blocks.is_empty() => {
+                            break 'proposals (blocks, parent_view_number);
+                        },
+                        Ok(_) => tracing::warn!("Builder returned no blocks yet"),
+                        Err(e) if format!("{e:?}").contains("No blocks available") => {
+                            tracing::warn!("Builder has no blocks yet: {e:?}");
+                        },
+                        Err(e) => panic!("Error getting available blocks {e:?}"),
+                    }
+                    sleep(Duration::from_millis(500)).await;
+                }
             }
         };
 

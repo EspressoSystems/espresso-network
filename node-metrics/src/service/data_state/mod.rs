@@ -7,18 +7,18 @@ use alloy::primitives::Address;
 use async_lock::RwLock;
 use bitvec::vec::BitVec;
 use circular_buffer::CircularBuffer;
-use espresso_types::{v0_3::Validator, Header, Payload, SeqTypes};
-use futures::{channel::mpsc::SendError, Sink, SinkExt, Stream, StreamExt};
+use espresso_types::{Header, Payload, SeqTypes, v0_3::AuthenticatedValidator};
+use futures::{Sink, SinkExt, Stream, StreamExt, channel::mpsc::SendError};
 use hotshot_query_service::{
+    Resolvable,
     availability::{BlockQueryData, Leaf1QueryData},
     explorer::{BlockDetail, ExplorerHeader, Timestamp},
-    Resolvable,
 };
 use hotshot_types::{
-    signature_key::BLSPubKey,
-    traits::{block_contents::BlockHeader, BlockPayload, EncodeBytes},
-    utils::epoch_from_block_number,
     PeerConfig,
+    signature_key::BLSPubKey,
+    traits::{BlockPayload, EncodeBytes, block_contents::BlockHeader},
+    utils::epoch_from_block_number,
 };
 use indexmap::IndexMap;
 pub use location_details::LocationDetails;
@@ -27,8 +27,8 @@ use time::OffsetDateTime;
 use tokio::{spawn, task::JoinHandle};
 
 use crate::api::node_validator::v0::{
-    get_node_stake_table_from_sequencer, get_node_validators_from_sequencer, LeafAndBlock,
-    PublicHotShotConfig, Version01,
+    LeafAndBlock, PublicHotShotConfig, Version01, get_node_stake_table_from_sequencer,
+    get_node_validators_from_sequencer,
 };
 
 /// MAX_HISTORY represents the last N records that are stored within the
@@ -48,7 +48,7 @@ pub struct DataState {
     stake_table: Vec<PeerConfig<SeqTypes>>,
     // Do we need any other data at the moment?
     node_identity: Vec<NodeIdentity>,
-    validators: IndexMap<Address, Validator<BLSPubKey>>,
+    validators: IndexMap<Address, AuthenticatedValidator<BLSPubKey>>,
 }
 
 impl DataState {
@@ -56,7 +56,7 @@ impl DataState {
         latest_blocks: CircularBuffer<MAX_HISTORY, BlockDetail<SeqTypes>>,
         latest_voters: CircularBuffer<MAX_VOTERS_HISTORY, BitVec<u16>>,
         stake_table: Vec<PeerConfig<SeqTypes>>,
-        validators: IndexMap<Address, Validator<BLSPubKey>>,
+        validators: IndexMap<Address, AuthenticatedValidator<BLSPubKey>>,
     ) -> Self {
         let node_identity: Vec<_> = stake_table
             .iter()
@@ -92,7 +92,7 @@ impl DataState {
         self.node_identity.iter()
     }
 
-    pub fn validators(&self) -> impl Iterator<Item = &Validator<BLSPubKey>> {
+    pub fn validators(&self) -> impl Iterator<Item = &AuthenticatedValidator<BLSPubKey>> {
         self.validators.values()
     }
 
@@ -174,7 +174,10 @@ impl DataState {
             .extend(missing_node_identity_entries.map(NodeIdentity::from_public_key));
     }
 
-    pub fn report_validator_map(&mut self, validators: IndexMap<Address, Validator<BLSPubKey>>) {
+    pub fn report_validator_map(
+        &mut self,
+        validators: IndexMap<Address, AuthenticatedValidator<BLSPubKey>>,
+    ) {
         // We want to copy all of the incoming validators into our list of
         // validators
 
@@ -266,6 +269,12 @@ impl std::error::Error for ProcessLeafError {
     }
 }
 
+/// NANOS_PER_MILLI represents the conversion between the milli prefix and
+/// the nano prefix.
+///
+/// This is referenced as a local constant for convenience.
+const NANOS_PER_MILLI: i128 = 1_000_000;
+
 /// create_block_detail_from_block is a helper function that will create a
 /// [BlockDetail] from a [BlockQueryData].
 pub fn create_block_detail_from_block(block: &BlockQueryData<SeqTypes>) -> BlockDetail<SeqTypes> {
@@ -279,8 +288,10 @@ pub fn create_block_detail_from_block(block: &BlockQueryData<SeqTypes>) -> Block
         hash: block_header.commitment(),
         height: block_header.height(),
         time: Timestamp(
-            OffsetDateTime::from_unix_timestamp(block_header.timestamp() as i64)
-                .unwrap_or(OffsetDateTime::UNIX_EPOCH),
+            OffsetDateTime::from_unix_timestamp_nanos(
+                block_header.timestamp_millis() as i128 * NANOS_PER_MILLI,
+            )
+            .unwrap_or(OffsetDateTime::UNIX_EPOCH),
         ),
         proposer_id: block_header.proposer_id(),
         num_transactions,
@@ -319,7 +330,7 @@ async fn perform_stake_table_epoch_check_and_update<STSink, EVSink>(
 ) -> Result<(), ProcessLeafError>
 where
     STSink: Sink<Vec<PeerConfig<SeqTypes>>, Error = SendError> + Unpin,
-    EVSink: Sink<Validator<BLSPubKey>, Error = SendError> + Unpin,
+    EVSink: Sink<AuthenticatedValidator<BLSPubKey>, Error = SendError> + Unpin,
 {
     // Are we in a new epoch?
     // Do we need to replace our stake table?
@@ -422,7 +433,7 @@ where
     BDSink: Sink<BlockDetail<SeqTypes>, Error = SendError> + Unpin,
     BVSink: Sink<BitVec<u16>, Error = SendError> + Unpin,
     STSink: Sink<Vec<PeerConfig<SeqTypes>>, Error = SendError> + Unpin,
-    EVSink: Sink<Validator<BLSPubKey>, Error = SendError> + Unpin,
+    EVSink: Sink<AuthenticatedValidator<BLSPubKey>, Error = SendError> + Unpin,
 {
     let (mut block_sender, mut voters_sender, stake_table_sender, epoch_validators_sender) =
         senders;
@@ -552,7 +563,12 @@ impl ProcessLeafAndBlockPairStreamTask {
             + Sync
             + Unpin
             + 'static,
-        K4: Sink<Validator<BLSPubKey>, Error = SendError> + Clone + Send + Sync + Unpin + 'static,
+        K4: Sink<AuthenticatedValidator<BLSPubKey>, Error = SendError>
+            + Clone
+            + Send
+            + Sync
+            + Unpin
+            + 'static,
     {
         let task_handle = spawn(Self::process_leaf_stream(
             leaf_receiver,
@@ -582,7 +598,7 @@ impl ProcessLeafAndBlockPairStreamTask {
         BDSink: Sink<BlockDetail<SeqTypes>, Error = SendError> + Clone + Unpin,
         BVSink: Sink<BitVec<u16>, Error = SendError> + Clone + Unpin,
         STSink: Sink<Vec<PeerConfig<SeqTypes>>, Error = SendError> + Clone + Unpin,
-        EVSink: Sink<Validator<BLSPubKey>, Error = SendError> + Clone + Unpin,
+        EVSink: Sink<AuthenticatedValidator<BLSPubKey>, Error = SendError> + Clone + Unpin,
     {
         let (block_sender, voters_senders, stake_table_sender, epoch_validators_sender) = senders;
         loop {
@@ -816,15 +832,15 @@ mod tests {
 
     use async_lock::RwLock;
     use espresso_types::{
+        BlockMerkleTree, FeeMerkleTree, NodeState, ValidatedState,
         v0_3::{ChainConfig, RewardMerkleTreeV1},
         v0_4::RewardMerkleTreeV2,
-        BlockMerkleTree, FeeMerkleTree, NodeState, ValidatedState,
     };
-    use futures::{channel::mpsc, SinkExt, StreamExt};
-    use hotshot_example_types::node_types::TestVersions;
+    use futures::{SinkExt, StreamExt, channel::mpsc};
+    use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_query_service::{
         availability::{BlockQueryData, Leaf1QueryData},
-        testing::mocks::MockVersions,
+        testing::mocks::MOCK_UPGRADE,
     };
     use hotshot_types::{
         data::Leaf2, signature_key::BLSPubKey, traits::signature_key::SignatureKey,
@@ -903,9 +919,10 @@ mod tests {
         };
         let instance_state = NodeState::mock();
 
-        let sample_leaf = Leaf2::genesis::<TestVersions>(&validated_state, &instance_state).await;
+        let sample_leaf =
+            Leaf2::genesis(&validated_state, &instance_state, TEST_VERSIONS.test.base).await;
         let sample_block_query_data =
-            BlockQueryData::genesis::<MockVersions>(&validated_state, &instance_state).await;
+            BlockQueryData::genesis(&validated_state, &instance_state, MOCK_UPGRADE.base).await;
 
         let mut leaf_sender = leaf_sender;
         // We should be able to send a leaf without issue
@@ -945,12 +962,14 @@ mod tests {
         drop(block_receiver);
         drop(leaf_sender);
 
-        assert!(timeout(
-            Duration::from_millis(200),
-            process_leaf_stream_task_handle.task_handle.take().unwrap()
-        )
-        .await
-        .is_ok());
+        assert!(
+            timeout(
+                Duration::from_millis(200),
+                process_leaf_stream_task_handle.task_handle.take().unwrap()
+            )
+            .await
+            .is_ok()
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

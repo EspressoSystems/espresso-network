@@ -8,7 +8,10 @@ use hotshot_builder_shared::{
     error::Error,
     utils::BuilderKeys,
 };
-use hotshot_types::traits::{node_implementation::NodeType, signature_key::BuilderSignatureKey};
+use hotshot_types::{
+    data::ViewNumber,
+    traits::{node_implementation::NodeType, signature_key::BuilderSignatureKey},
+};
 
 // It holds all the necessary information for a block
 #[derive(Debug, Clone)]
@@ -47,8 +50,8 @@ impl<Types: NodeType> BlockInfo<Types> {
 
 #[derive(Default)]
 pub struct BlockStore<Types: NodeType> {
-    pub(crate) blocks: TieredViewMap<BlockId<Types>, BlockInfo<Types>>,
-    pub(crate) block_cache: TieredViewMap<BuilderStateId<Types>, BlockId<Types>>,
+    pub(crate) blocks: TieredViewMap<BlockId, BlockInfo<Types>>,
+    pub(crate) block_cache: TieredViewMap<BuilderStateId, BlockId>,
 }
 
 impl<Types: NodeType> BlockStore<Types> {
@@ -58,24 +61,24 @@ impl<Types: NodeType> BlockStore<Types> {
 
     pub fn update(
         &mut self,
-        built_by: BuilderStateId<Types>,
-        block_id: BlockId<Types>,
+        built_by: BuilderStateId,
+        block_id: BlockId,
         block_info: BlockInfo<Types>,
     ) {
         self.blocks.insert(block_id.clone(), block_info);
         self.block_cache.insert(built_by, block_id);
     }
 
-    pub fn get_cached(&self, builder_id: &BuilderStateId<Types>) -> Option<&BlockInfo<Types>> {
+    pub fn get_cached(&self, builder_id: &BuilderStateId) -> Option<&BlockInfo<Types>> {
         let block_id = self.block_cache.get(builder_id)?;
         self.blocks.get(block_id)
     }
 
-    pub fn get_block(&self, block_id: &BlockId<Types>) -> Option<&BlockInfo<Types>> {
+    pub fn get_block(&self, block_id: &BlockId) -> Option<&BlockInfo<Types>> {
         self.blocks.get(block_id)
     }
 
-    pub fn prune(&mut self, cutoff: Types::View) {
+    pub fn prune(&mut self, cutoff: ViewNumber) {
         self.blocks.prune(cutoff);
         self.block_cache.prune(cutoff);
     }

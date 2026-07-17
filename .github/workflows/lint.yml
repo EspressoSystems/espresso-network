@@ -21,43 +21,64 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
-  cargo-fmt:
-    name: cargo fmt
+  cargo-sort:
+    name: cargo sort
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-sort
+
+      - name: Check workspace Cargo.toml sort order
+        run: cargo sort --check --grouped --workspace
+
+  rustfmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly
           components: rustfmt
+      - uses: taiki-e/install-action@just
 
       - name: Check formatting
-        run: cargo +nightly fmt -- --check
+        run: just fmt && git diff --exit-code
 
   clippy-postgres:
     name: clippy (postgres)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+
+      - name: Install Protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
       - uses: Swatinem/rust-cache@v2
         with:
-          save-if: ${{ github.ref == 'refs/heads/main'  }}
-          shared-key: cargo-clippy
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
 
       - name: Run clippy
         run: |
-          cargo clippy --features testing --all-targets --keep-going -- -D warnings
+          cargo clippy --workspace --exclude espresso-node-sqlite --exclude espresso-dev-node --features testing --all-targets --keep-going -- -D warnings
 
   clippy-embedded:
-      name: clippy (embedded-db)
-      runs-on: ubuntu-latest
-      steps:
-        - uses: actions/checkout@v4
-        - uses: Swatinem/rust-cache@v2
-          with:
-            save-if: false
-            shared-key: cargo-clippy
+    name: clippy (embedded-db)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
 
-        - name: Run clippy
-          run: |
-            cargo clippy --workspace --features "embedded-db testing" --all-targets --keep-going -- -D warnings
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
+
+      - name: Run clippy
+        run: |
+          cargo clippy --workspace --features "embedded-db testing" --all-targets --keep-going -- -D warnings

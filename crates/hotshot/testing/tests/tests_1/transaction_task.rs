@@ -1,28 +1,22 @@
 use hotshot::tasks::task_state::CreateTaskState;
 use hotshot_example_types::{
     block_types::TestMetadata,
-    node_types::{MemoryImpl, TestConsecutiveLeaderTypes, TestVersions},
+    node_types::{MemoryImpl, TEST_VERSIONS, TestConsecutiveLeaderTypes},
 };
 use hotshot_task_impls::{
     events::HotShotEvent, harness::run_harness, transactions::TransactionTaskState,
 };
 use hotshot_testing::helpers::build_system_handle;
-use hotshot_types::{
-    data::{null_block, EpochNumber, PackedBundle, ViewNumber},
-    traits::node_implementation::{ConsensusTime, Versions},
-};
-use vbs::version::StaticVersionType;
+use hotshot_types::data::{EpochNumber, PackedBundle, ViewNumber, null_block};
 
 #[cfg(test)]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_transaction_task_leader_two_views_in_a_row() {
-
     // Build the API for node 2.
     let node_id = 2;
-    let handle =
-        build_system_handle::<TestConsecutiveLeaderTypes, MemoryImpl, TestVersions>(node_id)
-            .await
-            .0;
+    let handle = build_system_handle::<TestConsecutiveLeaderTypes, MemoryImpl>(node_id)
+        .await
+        .0;
 
     let mut input = Vec::new();
     let mut output = Vec::new();
@@ -42,10 +36,8 @@ async fn test_transaction_task_leader_two_views_in_a_row() {
     let num_storage_nodes = handle
         .membership_coordinator
         .membership_for_epoch(Some(EpochNumber::new(1)))
-        .await
         .unwrap()
-        .total_nodes()
-        .await;
+        .total_nodes();
     let mut exp_packed_bundle = PackedBundle::new(
         vec![].into(),
         TestMetadata {
@@ -54,13 +46,12 @@ async fn test_transaction_task_leader_two_views_in_a_row() {
         current_view,
         Some(EpochNumber::new(1)),
         vec1::vec1![
-            null_block::builder_fee::<TestConsecutiveLeaderTypes, TestVersions>(
+            null_block::builder_fee::<TestConsecutiveLeaderTypes>(
                 num_storage_nodes,
-                <TestVersions as Versions>::Base::VERSION,
+                TEST_VERSIONS.test.base
             )
             .unwrap()
         ],
-        
     );
     output.push(HotShotEvent::BlockRecv(exp_packed_bundle.clone()));
 
@@ -69,9 +60,6 @@ async fn test_transaction_task_leader_two_views_in_a_row() {
     output.push(HotShotEvent::BlockRecv(exp_packed_bundle));
 
     let transaction_state =
-        TransactionTaskState::<TestConsecutiveLeaderTypes, TestVersions>::create_from(
-            &handle,
-        )
-        .await;
+        TransactionTaskState::<TestConsecutiveLeaderTypes>::create_from(&handle).await;
     run_harness(input, output, transaction_state, false).await;
 }

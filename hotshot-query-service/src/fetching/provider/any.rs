@@ -18,10 +18,16 @@ use hotshot_types::{data::VidCommon, traits::node_implementation::NodeType};
 
 use super::{Provider, Request};
 use crate::{
-    availability::LeafQueryData,
-    data_source::AvailabilityProvider,
-    fetching::request::{LeafRequest, PayloadRequest, VidCommonRequest},
     Payload,
+    availability::{BlockQueryData, Certificate2, LeafQueryData, VidCommonQueryData},
+    data_source::AvailabilityProvider,
+    fetching::{
+        NonEmptyRange,
+        request::{
+            BlockRangeRequest, Certificate2Request, LeafRangeRequest, LeafRequest, PayloadRequest,
+            VidCommonRangeRequest, VidCommonRequest,
+        },
+    },
 };
 
 /// Blanket trait combining [`Debug`] and [`Provider`].
@@ -45,8 +51,12 @@ where
 }
 
 type PayloadProvider<Types> = Arc<dyn DebugProvider<Types, PayloadRequest>>;
-type LeafProvider<Types> = Arc<dyn DebugProvider<Types, LeafRequest<Types>>>;
+type PayloadRangeProvider<Types> = Arc<dyn DebugProvider<Types, BlockRangeRequest>>;
+type LeafProvider<Types> = Arc<dyn DebugProvider<Types, LeafRequest>>;
+type LeafRangeProvider<Types> = Arc<dyn DebugProvider<Types, LeafRangeRequest>>;
 type VidCommonProvider<Types> = Arc<dyn DebugProvider<Types, VidCommonRequest>>;
+type VidCommonRangeProvider<Types> = Arc<dyn DebugProvider<Types, VidCommonRangeRequest>>;
+type Cert2Provider<Types> = Arc<dyn DebugProvider<Types, Certificate2Request>>;
 
 /// Adaptor combining multiple data availability providers.
 ///
@@ -55,12 +65,12 @@ type VidCommonProvider<Types> = Arc<dyn DebugProvider<Types, VidCommonRequest>>;
 /// have the object, the request will eventually succeed.
 ///
 /// This can be used to combine multiple instances of the same kind of provider, like using
-/// [`QueryServiceProvider`](super::QueryServiceProvider) to request objects from a number of
-/// different query services. It can also be used to search different kinds of data providers for
-/// the same object, like searching for a block both in another instance of the query service and in
-/// the HotShot DA committee. Finally, [`AnyProvider`] can be used to combine a provider which only
-/// provides blocks and one which only provides leaves into a provider which provides both, and thus
-/// can be used as a provider for the availability API module.
+/// [`TrustedQueryServiceProvider`](super::TrustedQueryServiceProvider) to request objects from a
+/// number of different query services. It can also be used to search different kinds of data
+/// providers for the same object, like searching for a block both in another instance of the query
+/// service and in the HotShot DA committee. Finally, [`AnyProvider`] can be used to combine a
+/// provider which only provides blocks and one which only provides leaves into a provider which
+/// provides both, and thus can be used as a provider for the availability API module.
 ///
 /// # Examples
 ///
@@ -74,12 +84,12 @@ type VidCommonProvider<Types> = Arc<dyn DebugProvider<Types, VidCommonRequest>>;
 /// #   Types: NodeType,
 /// # {
 /// use hotshot_query_service::{
-///     fetching::provider::{AnyProvider, QueryServiceProvider},
+///     fetching::provider::{AnyProvider, TrustedQueryServiceProvider},
 ///     testing::mocks::MockBase,
 /// };
 ///
-/// let qs1 = QueryServiceProvider::new("https://backup.query-service.1".parse()?, MockBase::instance());
-/// let qs2 = QueryServiceProvider::new("https://backup.query-service.2".parse()?, MockBase::instance());
+/// let qs1 = TrustedQueryServiceProvider::new("https://backup.query-service.1".parse()?, MockBase::instance());
+/// let qs2 = TrustedQueryServiceProvider::new("https://backup.query-service.2".parse()?, MockBase::instance());
 /// let provider = AnyProvider::<Types>::default()
 ///     .with_provider(qs1)
 ///     .with_provider(qs2);
@@ -93,8 +103,12 @@ where
     Types: NodeType,
 {
     payload_providers: Vec<PayloadProvider<Types>>,
+    payload_range_providers: Vec<PayloadRangeProvider<Types>>,
     leaf_providers: Vec<LeafProvider<Types>>,
+    leaf_range_providers: Vec<LeafRangeProvider<Types>>,
     vid_common_providers: Vec<VidCommonProvider<Types>>,
+    vid_common_range_providers: Vec<VidCommonRangeProvider<Types>>,
+    cert2_providers: Vec<Cert2Provider<Types>>,
 }
 
 #[async_trait]
@@ -108,12 +122,32 @@ where
 }
 
 #[async_trait]
-impl<Types> Provider<Types, LeafRequest<Types>> for AnyProvider<Types>
+impl<Types> Provider<Types, BlockRangeRequest> for AnyProvider<Types>
 where
     Types: NodeType,
 {
-    async fn fetch(&self, req: LeafRequest<Types>) -> Option<LeafQueryData<Types>> {
+    async fn fetch(&self, req: BlockRangeRequest) -> Option<NonEmptyRange<BlockQueryData<Types>>> {
+        any_fetch(&self.payload_range_providers, req).await
+    }
+}
+
+#[async_trait]
+impl<Types> Provider<Types, LeafRequest> for AnyProvider<Types>
+where
+    Types: NodeType,
+{
+    async fn fetch(&self, req: LeafRequest) -> Option<LeafQueryData<Types>> {
         any_fetch(&self.leaf_providers, req).await
+    }
+}
+
+#[async_trait]
+impl<Types> Provider<Types, LeafRangeRequest> for AnyProvider<Types>
+where
+    Types: NodeType,
+{
+    async fn fetch(&self, req: LeafRangeRequest) -> Option<NonEmptyRange<LeafQueryData<Types>>> {
+        any_fetch(&self.leaf_range_providers, req).await
     }
 }
 
@@ -124,6 +158,29 @@ where
 {
     async fn fetch(&self, req: VidCommonRequest) -> Option<VidCommon> {
         any_fetch(&self.vid_common_providers, req).await
+    }
+}
+
+#[async_trait]
+impl<Types> Provider<Types, VidCommonRangeRequest> for AnyProvider<Types>
+where
+    Types: NodeType,
+{
+    async fn fetch(
+        &self,
+        req: VidCommonRangeRequest,
+    ) -> Option<NonEmptyRange<VidCommonQueryData<Types>>> {
+        any_fetch(&self.vid_common_range_providers, req).await
+    }
+}
+
+#[async_trait]
+impl<Types> Provider<Types, Certificate2Request> for AnyProvider<Types>
+where
+    Types: NodeType,
+{
+    async fn fetch(&self, req: Certificate2Request) -> Option<Option<Certificate2<Types>>> {
+        any_fetch(&self.cert2_providers, req).await
     }
 }
 
@@ -138,8 +195,12 @@ where
     {
         let provider = Arc::new(provider);
         self.payload_providers.push(provider.clone());
+        self.payload_range_providers.push(provider.clone());
         self.leaf_providers.push(provider.clone());
-        self.vid_common_providers.push(provider);
+        self.leaf_range_providers.push(provider.clone());
+        self.vid_common_providers.push(provider.clone());
+        self.vid_common_range_providers.push(provider.clone());
+        self.cert2_providers.push(provider);
         self
     }
 
@@ -152,12 +213,30 @@ where
         self
     }
 
+    /// Add a sub-provider which fetches block ranges.
+    pub fn with_block_range_provider<P>(mut self, provider: P) -> Self
+    where
+        P: Provider<Types, BlockRangeRequest> + Debug + 'static,
+    {
+        self.payload_range_providers.push(Arc::new(provider));
+        self
+    }
+
     /// Add a sub-provider which fetches leaves.
     pub fn with_leaf_provider<P>(mut self, provider: P) -> Self
     where
-        P: Provider<Types, LeafRequest<Types>> + Debug + 'static,
+        P: Provider<Types, LeafRequest> + Debug + 'static,
     {
         self.leaf_providers.push(Arc::new(provider));
+        self
+    }
+
+    /// Add a sub-provider which fetches leaf ranges.
+    pub fn with_leaf_range_provider<P>(mut self, provider: P) -> Self
+    where
+        P: Provider<Types, LeafRangeRequest> + Debug + 'static,
+    {
+        self.leaf_range_providers.push(Arc::new(provider));
         self
     }
 
@@ -167,6 +246,15 @@ where
         P: Provider<Types, VidCommonRequest> + Debug + 'static,
     {
         self.vid_common_providers.push(Arc::new(provider));
+        self
+    }
+
+    /// Add a sub-provider which fetches VID common ranges.
+    pub fn with_vid_common_range_provider<P>(mut self, provider: P) -> Self
+    where
+        P: Provider<Types, VidCommonRangeRequest> + Debug + 'static,
+    {
+        self.vid_common_range_providers.push(Arc::new(provider));
         self
     }
 }
@@ -208,22 +296,22 @@ where
 #[cfg(all(test, not(target_os = "windows")))]
 mod test {
     use futures::stream::StreamExt;
-    use portpicker::pick_unused_port;
+    use test_utils::reserve_tcp_port;
     use tide_disco::App;
     use vbs::version::StaticVersionType;
 
     use super::*;
     use crate::{
-        availability::{define_api, AvailabilityDataSource, UpdateAvailabilityData},
+        ApiState, Error,
+        availability::{AvailabilityDataSource, UpdateAvailabilityData, define_api},
         data_source::storage::sql::testing::TmpDb,
-        fetching::provider::{NoFetching, QueryServiceProvider},
+        fetching::provider::{NoFetching, TrustedQueryServiceProvider},
         task::BackgroundTask,
         testing::{
             consensus::{MockDataSource, MockNetwork},
-            mocks::{MockBase, MockTypes, MockVersions},
+            mocks::{MockBase, MockTypes},
         },
         types::HeightIndexed,
-        ApiState, Error,
     };
 
     type Provider = AnyProvider<MockTypes>;
@@ -231,10 +319,10 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_first_provider_fails() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "availability",
@@ -253,13 +341,12 @@ mod test {
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let db = TmpDb::init().await;
-        let provider =
-            Provider::default()
-                .with_provider(NoFetching)
-                .with_provider(QueryServiceProvider::new(
-                    format!("http://localhost:{port}").parse().unwrap(),
-                    MockBase::instance(),
-                ));
+        let provider = Provider::default().with_provider(NoFetching).with_provider(
+            TrustedQueryServiceProvider::new(
+                format!("http://localhost:{port}").parse().unwrap(),
+                MockBase::instance(),
+            ),
+        );
         let data_source = db.config().connect(provider.clone()).await.unwrap();
 
         // Start consensus.

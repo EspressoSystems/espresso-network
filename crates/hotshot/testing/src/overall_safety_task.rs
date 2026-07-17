@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use hotshot_types::traits::node_implementation::NodeType;
+use hotshot_types::data::ViewNumber;
 use thiserror::Error;
 
 /// convenience type alias for state and block
@@ -17,20 +17,20 @@ pub type StateAndBlock<S, B> = (Vec<S>, Vec<B>);
 
 /// the status of a view
 #[derive(Debug, Clone)]
-pub enum ViewStatus<TYPES: NodeType> {
+pub enum ViewStatus {
     /// success
     Ok,
     /// failure
     Failed,
     /// safety violation
-    Err(OverallSafetyTaskErr<TYPES>),
+    Err(OverallSafetyTaskErr),
     /// in progress
     InProgress,
 }
 
 /// possible errors
 #[derive(Error, Debug, Clone)]
-pub enum OverallSafetyTaskErr<TYPES: NodeType> {
+pub enum OverallSafetyTaskErr {
     #[error("Mismatched leaf")]
     MismatchedLeaf,
 
@@ -44,19 +44,17 @@ pub enum OverallSafetyTaskErr<TYPES: NodeType> {
     NotEnoughDecides { got: usize, expected: usize },
 
     #[error("Too many view failures: {0:?}")]
-    TooManyFailures(HashSet<TYPES::View>),
+    TooManyFailures(HashSet<ViewNumber>),
 
     #[error(
         "Inconsistent failed views: expected: {expected_failed_views:?}, actual: \
          {actual_failed_views:?}"
     )]
     InconsistentFailedViews {
-        expected_failed_views: Vec<TYPES::View>,
-        actual_failed_views: HashSet<TYPES::View>,
+        expected_failed_views: Vec<ViewNumber>,
+        actual_failed_views: HashSet<ViewNumber>,
     },
-    #[error(
-        "Not enough round results: results_count: {results_count}, views_count: {views_count}"
-    )]
+    #[error("Not enough round results: results_count: {results_count}, views_count: {views_count}")]
     NotEnoughRoundResults {
         results_count: usize,
         views_count: usize,
@@ -86,6 +84,9 @@ pub struct OverallSafetyPropertiesDescription {
     pub expected_view_failures: Vec<u64>,
     /// pass in the views that may or may not fail.
     pub possible_view_failures: Vec<u64>,
+    /// maximum number of unexpected failed views tolerated across the whole run
+    /// before the test fails.
+    pub max_unexpected_view_failures: usize,
     /// how long to wait between external events before timing out the test
     pub decide_timeout: Duration,
 }
@@ -99,6 +100,7 @@ impl Default for OverallSafetyPropertiesDescription {
             transaction_threshold: 0,
             expected_view_failures: vec![],
             possible_view_failures: vec![],
+            max_unexpected_view_failures: 0,
             decide_timeout: Duration::from_secs(60),
         }
     }

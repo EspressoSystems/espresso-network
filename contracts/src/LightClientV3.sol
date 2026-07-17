@@ -95,13 +95,7 @@ contract LightClientV3 is LightClientV2 {
         emit NewState(newState.viewNum, newState.blockHeight, newState.blockCommRoot);
     }
 
-    function _getVk()
-        public
-        pure
-        virtual
-        override
-        returns (IPlonkVerifier.VerifyingKey memory vk)
-    {
+    function _getVk() public pure virtual override returns (IPlonkVerifier.VerifyingKey memory vk) {
         vk = VkLib.getVk();
     }
 

@@ -34,10 +34,7 @@ library Transcript {
         }
     }
 
-    function appendCommitment(TranscriptData memory self, BN254.G1Point memory comm)
-        internal
-        pure
-    {
+    function appendCommitment(TranscriptData memory self, BN254.G1Point memory comm) internal pure {
         self.transcript = abi.encodePacked(self.transcript, comm.x, comm.y);
     }
 

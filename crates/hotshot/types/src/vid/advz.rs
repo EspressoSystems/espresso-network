@@ -9,23 +9,22 @@
 use std::{fmt::Debug, ops::Range};
 
 use ark_bn254::Bn254;
+use ark_serialize::CanonicalDeserialize;
 use jf_advz::{
+    VidDisperse, VidResult, VidScheme,
     advz::{
         self,
         payload_prover::{LargeRangeProof, SmallRangeProof},
     },
     payload_prover::{PayloadProver, Statement},
-    VidDisperse, VidResult, VidScheme,
 };
 use jf_pcs::{
-    prelude::{UnivariateKzgPCS, UnivariateUniversalParams},
     PolynomialCommitmentScheme,
+    prelude::{UnivariateKzgPCS, UnivariateUniversalParams},
 };
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-
-use crate::constants::SRS_DEGREE;
 
 /// VID scheme constructor.
 ///
@@ -124,14 +123,12 @@ pub struct SmallRangeProofType(
 lazy_static! {
     /// SRS comment
     static ref KZG_SRS: UnivariateUniversalParams<E> = {
-        let srs = ark_srs::kzg10::aztec20::setup(SRS_DEGREE)
-            .expect("Aztec SRS failed to load");
-        UnivariateUniversalParams {
-            powers_of_g: srs.powers_of_g,
-            h: srs.h,
-            beta_h: srs.beta_h,
-            powers_of_h: vec![srs.h, srs.beta_h],
-        }
+        // `build.rs` fetches the Aztec SRS at build time and stores it in `$OUT_DIR/kzg_srs.bin`.
+        // Here we embed that binary file directly into the compiled library, and deserialize it
+        // into the `UnivariateUniversalParams` struct at runtime.
+        let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/kzg_srs.bin"));
+        UnivariateUniversalParams::deserialize_compressed(bytes.as_slice())
+            .expect("failed to deserialize generated SRS")
     };
 }
 

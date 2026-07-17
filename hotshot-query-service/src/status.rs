@@ -23,13 +23,10 @@
 //! * snapshots of the state right now, with no way to query historical snapshots
 //! * summary statistics
 
-use std::{borrow::Cow, fmt::Display, path::PathBuf};
+use std::{borrow::Cow, path::PathBuf};
 
-use derive_more::From;
 use futures::FutureExt;
-use serde::{Deserialize, Serialize};
-use snafu::Snafu;
-use tide_disco::{api::ApiError, method::ReadState, Api, RequestError, StatusCode};
+use tide_disco::{Api, api::ApiError, method::ReadState};
 use vbs::version::StaticVersionType;
 
 use crate::api::load_api;
@@ -37,6 +34,7 @@ use crate::api::load_api;
 pub(crate) mod data_source;
 
 pub use data_source::*;
+pub use hotshot_query_service_types::status::Error;
 
 #[derive(Default)]
 pub struct Options {
@@ -47,27 +45,6 @@ pub struct Options {
     /// These optional files may contain route definitions for application-specific routes that have
     /// been added as extensions to the basic status API.
     pub extensions: Vec<toml::Value>,
-}
-
-#[derive(Clone, Debug, From, Snafu, Deserialize, Serialize)]
-pub enum Error {
-    Request { source: RequestError },
-    Internal { reason: String },
-}
-
-impl Error {
-    pub fn status(&self) -> StatusCode {
-        match self {
-            Self::Request { .. } => StatusCode::BAD_REQUEST,
-            Self::Internal { .. } => StatusCode::INTERNAL_SERVER_ERROR,
-        }
-    }
-}
-
-fn internal<M: Display>(msg: M) -> Error {
-    Error::Internal {
-        reason: msg.to_string(),
-    }
 }
 
 pub fn define_api<State, Ver: StaticVersionType + 'static>(
@@ -86,17 +63,17 @@ where
     )?;
     api.with_version(api_ver)
         .get("block_height", |_, state| {
-            async { state.block_height().await.map_err(internal) }.boxed()
+            async { state.block_height().await.map_err(Error::internal) }.boxed()
         })?
         .get("success_rate", |_, state| {
-            async { state.success_rate().await.map_err(internal) }.boxed()
+            async { state.success_rate().await.map_err(Error::internal) }.boxed()
         })?
         .get("time_since_last_decide", |_, state| {
             async {
                 state
                     .elapsed_time_since_last_decide()
                     .await
-                    .map_err(internal)
+                    .map_err(Error::internal)
             }
             .boxed()
         })?
@@ -112,32 +89,32 @@ mod test {
 
     use async_lock::RwLock;
     use futures::FutureExt;
-    use portpicker::pick_unused_port;
     use reqwest::redirect::Policy;
     use surf_disco::Client;
     use tempfile::TempDir;
-    use tide_disco::{App, Url};
+    use test_utils::reserve_tcp_port;
+    use tide_disco::{App, StatusCode, Url};
     use toml::toml;
 
     use super::*;
     use crate::{
+        ApiState, Error,
         data_source::ExtensibleDataSource,
         task::BackgroundTask,
         testing::{
             consensus::{MockDataSource, MockNetwork},
-            mocks::{MockBase, MockVersions},
+            mocks::MockBase,
             sleep,
         },
-        ApiState, Error,
     };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_api() {
         // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource, MockVersions>::init().await;
+        let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start the web server.
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
         app.register_module(
             "status",
@@ -251,7 +228,7 @@ mod test {
         let mut app = App::<_, Error>::with_state(RwLock::new(data_source));
         app.register_module("status", api).unwrap();
 
-        let port = pick_unused_port().unwrap();
+        let port = reserve_tcp_port().unwrap();
         let _server = BackgroundTask::spawn(
             "server",
             app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),

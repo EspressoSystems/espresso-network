@@ -21,8 +21,9 @@ use hotshot_types::{
 };
 
 use crate::{
-    availability::{LeafHash, LeafQueryData, QcHash},
     Payload,
+    availability::{BlockQueryData, Certificate2, LeafQueryData, VidCommonQueryData},
+    fetching::NonEmptyRange,
 };
 
 /// A request for a resource.
@@ -39,6 +40,17 @@ impl<Types: NodeType> Request<Types> for PayloadRequest {
     type Response = Payload<Types>;
 }
 
+/// A request for a consecutive range of blocks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, From, Into)]
+pub struct BlockRangeRequest {
+    pub start: u64,
+    pub end: u64,
+}
+
+impl<Types: NodeType> Request<Types> for BlockRangeRequest {
+    type Response = NonEmptyRange<BlockQueryData<Types>>;
+}
+
 /// A request for VID common data.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct VidCommonRequest(pub VidCommitment);
@@ -47,27 +59,55 @@ impl<Types: NodeType> Request<Types> for VidCommonRequest {
     type Response = VidCommon;
 }
 
-/// A request for a leaf with a given height.
-///
-/// The expected hash and QC hash are also provided, so that the request can be verified against a
-/// response from an untrusted provider.
+/// A request for a consecutive range of VID common.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, From, Into)]
-pub struct LeafRequest<Types: NodeType> {
-    pub height: u64,
-    pub expected_leaf: LeafHash<Types>,
-    pub expected_qc: QcHash<Types>,
+pub struct VidCommonRangeRequest {
+    pub start: u64,
+    pub end: u64,
 }
 
-impl<Types: NodeType> LeafRequest<Types> {
-    pub fn new(height: u64, expected_leaf: LeafHash<Types>, expected_qc: QcHash<Types>) -> Self {
-        Self {
-            height,
-            expected_leaf,
-            expected_qc,
-        }
+impl<Types: NodeType> Request<Types> for VidCommonRangeRequest {
+    type Response = NonEmptyRange<VidCommonQueryData<Types>>;
+}
+
+/// A request for a leaf with a given height.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, From, Into)]
+pub struct LeafRequest {
+    pub height: u64,
+}
+
+impl LeafRequest {
+    pub fn new(height: u64) -> Self {
+        Self { height }
     }
 }
 
-impl<Types: NodeType> Request<Types> for LeafRequest<Types> {
+impl<Types: NodeType> Request<Types> for LeafRequest {
     type Response = LeafQueryData<Types>;
+}
+
+/// A request for a consecutive range of leaves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct LeafRangeRequest {
+    /// The first block in the requested range.
+    pub start: u64,
+
+    /// The first block after the requested range.
+    pub end: u64,
+}
+
+impl<Types: NodeType> Request<Types> for LeafRangeRequest {
+    type Response = NonEmptyRange<LeafQueryData<Types>>;
+}
+
+/// A request for a cert2 at a given height.
+///
+/// The response is `Option<Certificate2>` since not every height has a cert2.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Certificate2Request {
+    pub height: u64,
+}
+
+impl<Types: NodeType> Request<Types> for Certificate2Request {
+    type Response = Option<Certificate2<Types>>;
 }

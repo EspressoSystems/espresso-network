@@ -1,0 +1,13 @@
+# Recipes for the binary upgrade test. Invoke via `just binary-upgrade-tests::<recipe>`.
+
+run *args:
+    ./run.py {{args}}
+
+fmt *args:
+    ruff format run.py {{args}}
+
+lint *args:
+    ruff check run.py {{args}}
+
+check *args:
+    ty check run.py {{args}}

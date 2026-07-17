@@ -25,8 +25,8 @@ use super::{
     traits::{ExplorerHeader, ExplorerTransaction},
 };
 use crate::{
-    availability::{QueryableHeader, QueryablePayload},
     Header, Payload, Transaction,
+    availability::{QueryableHeader, QueryablePayload},
 };
 
 /// An interface for querying Data and Statistics from the HotShot Blockchain.
@@ -82,7 +82,7 @@ where
     /// the blockchain.  This is useful for displaying information that
     /// indicates the overall status of the block chain.
     async fn get_explorer_summary(&self)
-        -> Result<ExplorerSummary<Types>, GetExplorerSummaryError>;
+    -> Result<ExplorerSummary<Types>, GetExplorerSummaryError>;
 
     /// `get_search_results` is a method that retrieves the results of a search
     /// query against the blockchain.  The results are generated from the given

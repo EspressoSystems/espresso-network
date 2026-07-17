@@ -127,6 +127,13 @@ contract RewardClaimRateLimitTest is RewardClaimMockTest {
         rewardClaim.claimRewards(amount, "");
     }
 
+    function test_Claim_DayTrackingPersistsWithinDay() public {
+        vm.warp(100 * 1 days);
+
+        claim(DAILY_LIMIT);
+        checkLimitEnforced(claimer, DAILY_LIMIT + 1);
+    }
+
     function test_BpsDenominator() public view {
         assertEq(rewardClaim.BPS_DENOMINATOR(), 10000);
     }

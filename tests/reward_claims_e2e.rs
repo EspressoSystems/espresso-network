@@ -3,40 +3,39 @@ use std::{collections::HashMap, time::Duration};
 use alloy::{
     network::EthereumWallet,
     node_bindings::Anvil,
-    primitives::U256,
+    primitives::{U256, utils::parse_ether},
     providers::{Provider, ProviderBuilder, WalletProvider},
     rpc::client::RpcClient,
 };
-use espresso_contract_deployer::{build_signer, Contract};
-use espresso_types::{DrbAndHeaderUpgradeVersion, L1ClientOptions, SeqTypes, SequencerVersions};
+use espresso_contract_deployer::{Contract, build_signer};
+use espresso_node::{
+    SequencerApiVersion,
+    api::{
+        data_source::testing::TestableSequencerDataSource,
+        options,
+        test_helpers::{STAKE_TABLE_CAPACITY_FOR_TEST, TestNetwork, TestNetworkConfigBuilder},
+    },
+    state_signature::relay_server::{StateRelayServerState, run_relay_server_with_state},
+    testing::{TestConfigBuilder, wait_for_epochs},
+};
+use espresso_types::{L1ClientOptions, SeqTypes};
 use hotshot_contract_adapter::{
     reward::RewardClaimInput,
     sol_types::{EspTokenV2, LightClientV3, RewardClaim},
     stake_table::StakeTableContractVersion,
 };
 use hotshot_query_service::data_source::SqlDataSource;
-use hotshot_state_prover::{v3::service::run_prover_once, StateProverConfig};
+use hotshot_state_prover::{StateProverConfig, v3::service::run_prover_once};
 use hotshot_types::{
-    stake_table::{one_honest_threshold, HSStakeTable},
+    stake_table::{HSStakeTable, one_honest_threshold},
     utils::epoch_from_block_number,
 };
-use portpicker::pick_unused_port;
-use sequencer::{
-    api::{
-        data_source::testing::TestableSequencerDataSource,
-        options,
-        test_helpers::{TestNetwork, TestNetworkConfigBuilder, STAKE_TABLE_CAPACITY_FOR_TEST},
-    },
-    state_signature::relay_server::{run_relay_server_with_state, StateRelayServerState},
-    testing::{wait_for_epochs, TestConfigBuilder},
-    SequencerApiVersion,
-};
 use staking_cli::demo::DelegationConfig;
+use test_utils::reserve_tcp_port;
 use tokio::spawn;
 use url::Url;
 use vbs::version::StaticVersionType;
-
-type ConsensusVersion = SequencerVersions<DrbAndHeaderUpgradeVersion, DrbAndHeaderUpgradeVersion>;
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, Upgrade};
 
 const TEST_MNEMONIC: &str = "test test test test test test test test test test test junk";
 const BLOCKS_PER_EPOCH: u64 = 7;
@@ -49,11 +48,11 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     let anvil = Anvil::new().args(["--slots-in-an-epoch", "0"]).spawn();
     let l1_url = anvil.endpoint_url();
 
-    let relay_server_port = pick_unused_port().unwrap();
+    let relay_server_port = reserve_tcp_port().unwrap();
     let relay_server_url: Url = format!("http://localhost:{relay_server_port}")
         .parse()
         .unwrap();
-    let sequencer_api_port = pick_unused_port().unwrap();
+    let sequencer_api_port = reserve_tcp_port().unwrap();
 
     let network_config = TestConfigBuilder::default()
         .epoch_height(BLOCKS_PER_EPOCH)
@@ -88,12 +87,16 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
         .api_config(SqlDataSource::options(&storage[0], api_options))
         .network_config(network_config)
         .persistences(persistence.clone())
-        .pos_hook::<ConsensusVersion>(DelegationConfig::default(), StakeTableContractVersion::V2)
+        .pos_hook(
+            DelegationConfig::default(),
+            StakeTableContractVersion::V3,
+            Upgrade::trivial(DRB_AND_HEADER_UPGRADE_VERSION),
+        )
         .await?
         .build();
 
     println!("Starting Espresso TestNetwork with {} nodes...", NUM_NODES);
-    let network = TestNetwork::new(config, ConsensusVersion::new()).await;
+    let network = TestNetwork::new(config, Upgrade::trivial(DRB_AND_HEADER_UPGRADE_VERSION)).await;
     println!("TestNetwork started successfully");
 
     let contracts = network.contracts.unwrap();
@@ -150,7 +153,7 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     };
 
     println!("Waiting for 3 epochs to elapse to ensure rewards accrue...");
-    let mut events = network.peers[0].event_stream().await;
+    let mut events = network.peers[0].event_stream();
     wait_for_epochs(&mut events, BLOCKS_PER_EPOCH, 3).await;
 
     // Now run the prover once to generate and submit a proof for the current state
@@ -161,7 +164,7 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     // Create claimer wallet and provider for claiming rewards
     let claimer_provider = ProviderBuilder::new()
         .wallet(EthereumWallet::from(
-            network.cfg.staking_priv_keys()[0].0.clone(),
+            network.cfg.staking_priv_keys()[0].signer.clone(),
         ))
         .connect_http(l1_url.clone());
     let claimer_address = claimer_provider.default_signer_address();
@@ -290,6 +293,46 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
         balance_before + claim_input.lifetime_rewards,
         "ESP token balance did not increase correctly"
     );
+
+    // Verify circulating supply API endpoints reflect minted rewards.
+    let initial_supply = parse_ether("100000").unwrap();
+
+    let minted: String = http_client
+        .get(format!("{sequencer_url}token/total-minted-supply"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let minted = parse_ether(&minted).unwrap();
+    assert_eq!(minted, initial_supply + claim_input.lifetime_rewards);
+
+    // Non-mainnet: locked=0, so circulating-supply-ethereum = total-minted-supply.
+    let circulating_ethereum: String = http_client
+        .get(format!("{sequencer_url}token/circulating-supply-ethereum"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let circulating_ethereum = parse_ether(&circulating_ethereum).unwrap();
+    assert_eq!(
+        circulating_ethereum,
+        initial_supply + claim_input.lifetime_rewards
+    );
+
+    let circulating: String = http_client
+        .get(format!("{sequencer_url}token/circulating-supply"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let circulating = parse_ether(&circulating).unwrap();
+    // An exact assertion isn't possible: the endpoint combines the Espresso decided
+    // header (reward_distributed) with the L1 contract (totalSupply), and we can't
+    // get a consistent snapshot across both from outside the node.
+    assert!(circulating >= circulating_ethereum);
 
     println!("Attempting to double-claim rewards");
     let double_claim_result = reward_claim_contract

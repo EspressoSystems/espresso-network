@@ -4,22 +4,26 @@ use std::{ops::Range, vec};
 
 use anyhow::anyhow;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use jf_merkle_tree::{hasher::HasherNode, MerkleTreeScheme};
-use jf_utils::canonical;
+use jf_merkle_tree::{MerkleTreeScheme, append_only::MerkleTree as JfMerkleTree};
+use p3_maybe_rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use sha2::Digest;
 use tagged_base64::tagged;
 
-use crate::{VidError, VidResult, VidScheme};
+use crate::{
+    VidError, VidResult, VidScheme,
+    utils::blake3::{Blake3DigestAlgorithm, Blake3Node},
+};
 
 /// Namespaced AvidmGf2 scheme
 pub mod namespaced;
 /// Namespace proofs for AvidmGf2 scheme
 pub mod proofs;
 
-/// Merkle tree scheme used in the VID
-pub(crate) type MerkleTree =
-    jf_merkle_tree::hasher::HasherMerkleTree<sha3::Keccak256, HasherNode<sha3::Keccak256>>;
+/// Merkle tree scheme used in the VID. Uses BLAKE3 directly via
+/// [`Blake3DigestAlgorithm`] rather than going through the
+/// `jf_merkle_tree::hasher::HasherDigest` blanket impl, which would pin
+/// `blake3` to a `digest 0.10`-compatible release line.
+pub(crate) type MerkleTree = JfMerkleTree<Blake3Node, Blake3DigestAlgorithm, u64, 4, Blake3Node>;
 type MerkleProof = <MerkleTree as MerkleTreeScheme>::MembershipProof;
 type MerkleCommit = <MerkleTree as MerkleTreeScheme>::Commitment;
 
@@ -54,17 +58,46 @@ pub struct AvidmGf2Share {
     /// Range of this share in the encoded payload.
     range: Range<usize>,
     /// Actual share content.
-    #[serde(with = "canonical")]
+    #[serde(with = "nested_bytes")]
     payload: Vec<Vec<u8>>,
     /// Merkle proof of the content.
-    #[serde(with = "canonical")]
     mt_proofs: Vec<MerkleProof>,
+}
+
+/// Optimised serialisation of a sequence of `Vec<u8>`s using `serde_bytes`.
+mod nested_bytes {
+    use serde::{Deserialize, Deserializer, Serializer, ser::SerializeSeq};
+    use serde_bytes::{ByteBuf, Bytes};
+
+    pub fn serialize<S>(v: &[Vec<u8>], s: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut seq = s.serialize_seq(Some(v.len()))?;
+        for inner in v {
+            seq.serialize_element(Bytes::new(inner))?;
+        }
+        seq.end()
+    }
+
+    pub fn deserialize<'de, D>(d: D) -> Result<Vec<Vec<u8>>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let v: Vec<ByteBuf> = Deserialize::deserialize(d)?;
+        Ok(v.into_iter().map(ByteBuf::into_vec).collect())
+    }
 }
 
 impl AvidmGf2Share {
     /// Get the weight of this share
     pub fn weight(&self) -> usize {
         self.range.len()
+    }
+
+    /// Range of this share in the encoded payload.
+    pub fn range(&self) -> &Range<usize> {
+        &self.range
     }
 
     /// Validate the share structure.
@@ -114,16 +147,43 @@ impl AvidmGf2Scheme {
         AvidmGf2Param::new(recovery_threshold, total_weights)
     }
 
-    fn bit_padding(payload: &[u8], payload_len: usize) -> VidResult<Vec<u8>> {
-        if payload_len < payload.len() + 1 {
+    /// Build the `original_count` original shards directly from `payload`,
+    /// applying the AvidM-GF2 bit padding (one `0x01` byte at
+    /// `payload.len()` followed by zeros to fill the final shard).
+    ///
+    /// Writing the chunks straight out avoids allocating an intermediate
+    /// `shard_bytes * original_count`-byte buffer just to re-chunk it.
+    fn chunk_and_pad(
+        payload: &[u8],
+        shard_bytes: usize,
+        original_count: usize,
+    ) -> VidResult<Vec<Vec<u8>>> {
+        let padded_len = shard_bytes * original_count;
+        if padded_len < payload.len() + 1 {
             return Err(VidError::Argument(
                 "Payload length is too large to fit in the given payload length".to_string(),
             ));
         }
-        let mut padded = vec![0u8; payload_len];
-        padded[..payload.len()].copy_from_slice(payload);
-        padded[payload.len()] = 1u8;
-        Ok(padded)
+        let mut original: Vec<Vec<u8>> = Vec::with_capacity(original_count);
+        for i in 0..original_count {
+            let start = i * shard_bytes;
+            let mut chunk = vec![0u8; shard_bytes];
+            if start < payload.len() {
+                let end = ((i + 1) * shard_bytes).min(payload.len());
+                let take = end - start;
+                chunk[..take].copy_from_slice(&payload[start..end]);
+                if take < shard_bytes {
+                    // Pad byte falls inside this chunk.
+                    chunk[take] = 1u8;
+                }
+            } else if start == payload.len() {
+                // Payload ended exactly on a chunk boundary — pad byte is the
+                // first byte of this all-zero chunk.
+                chunk[0] = 1u8;
+            }
+            original.push(chunk);
+        }
+        Ok(original)
     }
 
     fn raw_disperse(
@@ -132,16 +192,11 @@ impl AvidmGf2Scheme {
     ) -> VidResult<(MerkleTree, Vec<Vec<u8>>)> {
         let original_count = param.recovery_threshold;
         let recovery_count = param.total_weights - param.recovery_threshold;
-        // Bit padding, we append an 1u8 to the end of the payload.
         let mut shard_bytes = (payload.len() + 1).div_ceil(original_count);
         if shard_bytes % 2 == 1 {
             shard_bytes += 1;
         }
-        let payload = Self::bit_padding(payload, shard_bytes * original_count)?;
-        let original = payload
-            .chunks(shard_bytes)
-            .map(|chunk| chunk.to_owned())
-            .collect::<Vec<_>>();
+        let original = Self::chunk_and_pad(payload, shard_bytes, original_count)?;
         let recovery = if recovery_count == 0 {
             vec![]
         } else {
@@ -149,12 +204,93 @@ impl AvidmGf2Scheme {
         };
 
         let shares = [original, recovery].concat();
-        let share_digests: Vec<_> = shares
-            .iter()
-            .map(|share| HasherNode::from(sha3::Keccak256::digest(share)))
+        let share_digests: Vec<Blake3Node> = shares
+            .par_iter()
+            .map(|share| Blake3Node::from(blake3::hash(share)))
             .collect();
         let mt = MerkleTree::from_elems(None, &share_digests)?;
         Ok((mt, shares))
+    }
+
+    /// Test-only: disperse `payload` but corrupt the erasure-coded (recovery)
+    /// shards, so the committed shard set is **not** a valid codeword. Every
+    /// returned share still verifies against the returned commitment — its
+    /// merkle proofs are genuine — yet recovering from any threshold-covering
+    /// subset and re-committing yields a *different* commitment. This models a
+    /// Byzantine disperser that commits to a non-codeword, exercising the
+    /// unrecoverable reconstruction path.
+    ///
+    /// Requires `recovery_threshold < total_weights` so recovery shards exist
+    /// to corrupt.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn disperse_non_codeword(
+        param: &AvidmGf2Param,
+        distribution: &[u32],
+        payload: &[u8],
+    ) -> VidResult<(AvidmGf2Commit, Vec<AvidmGf2Share>)> {
+        let total_weights = distribution.iter().map(|&w| w as usize).sum::<usize>();
+        if total_weights != param.total_weights {
+            return Err(VidError::Argument(
+                "Weight distribution is inconsistent with the given param".to_string(),
+            ));
+        }
+        if distribution.contains(&0u32) {
+            return Err(VidError::Argument("Weight cannot be zero".to_string()));
+        }
+        let original_count = param.recovery_threshold;
+        let (_, mut shards) = Self::raw_disperse(param, payload)?;
+        if shards.len() <= original_count {
+            return Err(VidError::Argument(
+                "Payload has no recovery shards to corrupt".to_string(),
+            ));
+        }
+        // Flip a byte in every recovery shard. The original shards are
+        // untouched, so each shard still verifies against the rebuilt tree, but
+        // the recovery shards no longer match the Reed-Solomon encoding of the
+        // originals: the committed set is not a codeword and cannot re-commit.
+        for shard in &mut shards[original_count..] {
+            shard[0] ^= 0xff;
+        }
+        let share_digests: Vec<Blake3Node> = shards
+            .iter()
+            .map(|shard| Blake3Node::from(blake3::hash(shard)))
+            .collect();
+        let mt = MerkleTree::from_elems(None, &share_digests)?;
+        let commit = AvidmGf2Commit {
+            commit: mt.commitment(),
+        };
+        let ranges: Vec<_> = distribution
+            .iter()
+            .scan(0usize, |sum, w| {
+                let prefix_sum = *sum;
+                *sum += *w as usize;
+                Some(prefix_sum..*sum)
+            })
+            .collect();
+        let mut shards_iter = shards.into_iter();
+        let payloads: Vec<Vec<Vec<u8>>> = ranges
+            .iter()
+            .map(|range| shards_iter.by_ref().take(range.len()).collect())
+            .collect();
+        let mut proofs_iter = mt
+            .collect_leaves_with_proofs()
+            .into_iter()
+            .map(|(_, _, proof)| proof);
+        let proof_groups: Vec<Vec<MerkleProof>> = ranges
+            .iter()
+            .map(|range| proofs_iter.by_ref().take(range.len()).collect())
+            .collect();
+        let shares: Vec<_> = ranges
+            .into_iter()
+            .zip(payloads)
+            .zip(proof_groups)
+            .map(|((range, payload), mt_proofs)| AvidmGf2Share {
+                range,
+                payload,
+                mt_proofs,
+            })
+            .collect();
+        Ok((commit, shares))
     }
 }
 
@@ -175,60 +311,96 @@ impl VidScheme for AvidmGf2Scheme {
         distribution: &[u32],
         payload: &[u8],
     ) -> VidResult<(Self::Commit, Vec<Self::Share>)> {
+        let total_weights = distribution.iter().map(|&w| w as usize).sum::<usize>();
+        if total_weights != param.total_weights {
+            return Err(VidError::Argument(
+                "Weight distribution is inconsistent with the given param".to_string(),
+            ));
+        }
+        if distribution.contains(&0u32) {
+            return Err(VidError::Argument("Weight cannot be zero".to_string()));
+        }
         let (mt, shares) = Self::raw_disperse(param, payload)?;
         let commit = AvidmGf2Commit {
             commit: mt.commitment(),
         };
+
         let ranges: Vec<_> = distribution
             .iter()
-            .scan(0, |sum, w| {
+            .scan(0usize, |sum, w| {
                 let prefix_sum = *sum;
-                *sum += w;
-                Some(prefix_sum as usize..*sum as usize)
+                *sum += *w as usize;
+                Some(prefix_sum..*sum)
             })
             .collect();
+        // Ranges partition `shares` and `proofs` in order. Consume both via
+        // owning iterators instead of `shares[range].to_vec()` /
+        // `proofs[range].to_vec()`, which would heap-clone every Vec<u8>
+        // payload and every per-leaf proof at high num_ns × total_weights.
+        //
+        // `mt.collect_leaves_with_proofs()` returns leaves in ascending
+        // position order (DFS over children 0..ARITY), so we can drain the
+        // iterator directly without an indexed placeholder Vec.
+        let mut shares_iter = shares.into_iter();
+        let payloads: Vec<Vec<Vec<u8>>> = ranges
+            .iter()
+            .map(|range| shares_iter.by_ref().take(range.len()).collect())
+            .collect();
+        let mut proofs_iter = mt
+            .collect_leaves_with_proofs()
+            .into_iter()
+            .map(|(_, _, proof)| proof);
+        let proof_groups: Vec<Vec<MerkleProof>> = ranges
+            .iter()
+            .map(|range| proofs_iter.by_ref().take(range.len()).collect())
+            .collect();
+        // The map body is just a struct construction over already-prepared
+        // owned components — sub-µs per item, smaller than rayon's
+        // per-item scheduling overhead. Stay sequential.
         let shares: Vec<_> = ranges
             .into_iter()
-            .map(|range| AvidmGf2Share {
-                range: range.clone(),
-                payload: shares[range.clone()].to_vec(),
-                // TODO(Chengyu): switch to batch proof generation
-                mt_proofs: range
-                    .map(|k| {
-                        mt.lookup(k as u64)
-                            .expect_ok()
-                            .expect("MT lookup shouldn't fail")
-                            .1
-                    })
-                    .collect::<Vec<_>>(),
+            .zip(payloads)
+            .zip(proof_groups)
+            .map(|((range, payload), mt_proofs)| AvidmGf2Share {
+                range,
+                payload,
+                mt_proofs,
             })
             .collect();
         Ok((commit, shares))
     }
 
     fn verify_share(
-        _param: &Self::Param,
+        param: &Self::Param,
         commit: &Self::Commit,
         share: &Self::Share,
     ) -> VidResult<crate::VerificationResult> {
-        if !share.validate() {
+        if !share.validate() || share.range.is_empty() || share.range.end > param.total_weights {
             return Err(VidError::InvalidShare);
         }
-        for (i, index) in share.range.clone().enumerate() {
-            let payload_digest = HasherNode::from(sha3::Keccak256::digest(&share.payload[i]));
-            // TODO(Chengyu): switch to batch verification
-            if MerkleTree::verify(
-                commit.commit,
-                index as u64,
-                payload_digest,
-                &share.mt_proofs[i],
-            )?
-            .is_err()
-            {
-                return Ok(Err(()));
-            }
+        // Each (i, leaf, proof) triple is independent. `find_any` short-
+        // circuits on the first failing position and avoids allocating any
+        // intermediate collection.
+        let start = share.range.start;
+        let len = share.range.end - start;
+        match (0..len)
+            .into_par_iter()
+            .map(|i| -> VidResult<crate::VerificationResult> {
+                let payload_digest = Blake3Node::from(blake3::hash(&share.payload[i]));
+                MerkleTree::verify(
+                    commit.commit,
+                    (start + i) as u64,
+                    payload_digest,
+                    &share.mt_proofs[i],
+                )
+                .map_err(VidError::from)
+            })
+            .find_any(|r| !matches!(r, Ok(Ok(()))))
+        {
+            None => Ok(Ok(())),
+            Some(Ok(v)) => Ok(v),
+            Some(Err(e)) => Err(e),
         }
-        Ok(Ok(()))
     }
 
     fn recover(
@@ -244,18 +416,30 @@ impl VidScheme for AvidmGf2Scheme {
         };
         let shard_bytes = first_share.payload[0].len();
 
-        let mut original_shares: Vec<Option<Vec<u8>>> = vec![None; original_count];
+        // Track references to input original shards; avoids the per-shard
+        // `.clone()` the previous version did to populate a
+        // `Vec<Option<Vec<u8>>>`. Reconstructed shards come from the decoder
+        // and are copied directly into the output buffer below.
+        let mut input_orig: Vec<Option<&[u8]>> = vec![None; original_count];
+
+        let mut recovered: Vec<u8> = Vec::with_capacity(original_count * shard_bytes);
         if recovery_count == 0 {
-            // Edge case where there are no recovery shares
+            // Edge case where there are no recovery shares: every original must
+            // be supplied as input.
             for share in shares {
                 if !share.validate() || share.payload.iter().any(|p| p.len() != shard_bytes) {
                     return Err(VidError::InvalidShare);
                 }
                 for (i, index) in share.range.clone().enumerate() {
                     if index < original_count {
-                        original_shares[index] = Some(share.payload[i].clone());
+                        input_orig[index] = Some(&share.payload[i]);
                     }
                 }
+            }
+            for slot in &input_orig {
+                let shard = slot
+                    .ok_or_else(|| VidError::Internal(anyhow!("Failed to recover the payload.")))?;
+                recovered.extend_from_slice(shard);
             }
         } else {
             let mut decoder = reed_solomon_simd::ReedSolomonDecoder::new(
@@ -268,34 +452,27 @@ impl VidScheme for AvidmGf2Scheme {
                     return Err(VidError::InvalidShare);
                 }
                 for (i, index) in share.range.clone().enumerate() {
+                    let shard = &share.payload[i];
                     if index < original_count {
-                        original_shares[index] = Some(share.payload[i].clone());
-                        decoder.add_original_shard(index, &share.payload[i])?;
+                        input_orig[index] = Some(shard);
+                        decoder.add_original_shard(index, shard)?;
                     } else {
-                        decoder.add_recovery_shard(index - original_count, &share.payload[i])?;
+                        decoder.add_recovery_shard(index - original_count, shard)?;
                     }
                 }
             }
 
             let result = decoder.decode()?;
-            original_shares
-                .iter_mut()
-                .enumerate()
-                .for_each(|(i, share)| {
-                    if share.is_none() {
-                        *share = result.restored_original(i).map(|s| s.to_vec());
-                    }
-                });
+            for (i, shard) in input_orig.iter().enumerate().take(original_count) {
+                let shard: &[u8] = match shard {
+                    Some(data) => data,
+                    None => result.restored_original(i).ok_or_else(|| {
+                        VidError::Internal(anyhow!("Failed to recover the payload."))
+                    })?,
+                };
+                recovered.extend_from_slice(shard);
+            }
         }
-        if original_shares.iter().any(|share| share.is_none()) {
-            return Err(VidError::Internal(anyhow!(
-                "Failed to recover the payload."
-            )));
-        }
-        let mut recovered: Vec<_> = original_shares
-            .into_iter()
-            .flat_map(|share| share.unwrap())
-            .collect();
         match recovered.iter().rposition(|&b| b != 0) {
             Some(pad_index) if recovered[pad_index] == 1u8 => {
                 recovered.truncate(pad_index);
@@ -311,7 +488,7 @@ impl VidScheme for AvidmGf2Scheme {
 /// Unit tests
 #[cfg(test)]
 pub mod tests {
-    use rand::{seq::SliceRandom, RngCore};
+    use rand::{RngCore, seq::SliceRandom};
 
     use super::AvidmGf2Scheme;
     use crate::VidScheme;
@@ -348,8 +525,10 @@ pub mod tests {
 
                 // verify shares
                 shares.iter().for_each(|share| {
-                    assert!(AvidmGf2Scheme::verify_share(&params, &commit, share)
-                        .is_ok_and(|r| r.is_ok()))
+                    assert!(
+                        AvidmGf2Scheme::verify_share(&params, &commit, share)
+                            .is_ok_and(|r| r.is_ok())
+                    )
                 });
 
                 // test payload recovery on a random subset of shares
@@ -399,8 +578,10 @@ pub mod tests {
 
                 // verify shares
                 shares.iter().for_each(|share| {
-                    assert!(AvidmGf2Scheme::verify_share(&params, &commit, share)
-                        .is_ok_and(|r| r.is_ok()))
+                    assert!(
+                        AvidmGf2Scheme::verify_share(&params, &commit, share)
+                            .is_ok_and(|r| r.is_ok())
+                    )
                 });
 
                 // test payload recovery on a random subset of shares
@@ -410,5 +591,55 @@ pub mod tests {
                 assert_eq!(payload_recovered, payload);
             }
         }
+    }
+
+    #[test]
+    fn disperse_rejects_inconsistent_distribution() {
+        let total_weights = 10usize;
+        let recovery_threshold = 4;
+        let params = AvidmGf2Scheme::setup(recovery_threshold, total_weights).unwrap();
+        let payload = vec![1u8; 100];
+
+        // distribution sums to 12, but param says total_weights=10
+        let bad_weights = vec![3u32; 4];
+        assert!(
+            AvidmGf2Scheme::disperse(&params, &bad_weights, &payload).is_err(),
+            "disperse should reject distribution that doesn't sum to total_weights"
+        );
+
+        // distribution contains a zero weight
+        let zero_weight = vec![0u32, 5, 5];
+        assert!(
+            AvidmGf2Scheme::disperse(&params, &zero_weight, &payload).is_err(),
+            "disperse should reject zero-weight entries"
+        );
+
+        // correct distribution should succeed
+        let good_weights = vec![2u32; 5];
+        assert!(AvidmGf2Scheme::disperse(&params, &good_weights, &payload).is_ok());
+    }
+
+    #[test]
+    fn verify_share_rejects_out_of_range() {
+        let total_weights = 10usize;
+        let recovery_threshold = 4;
+        let params = AvidmGf2Scheme::setup(recovery_threshold, total_weights).unwrap();
+        let payload = vec![1u8; 100];
+        let weights = vec![2u32; 5];
+
+        let (commit, shares) = AvidmGf2Scheme::disperse(&params, &weights, &payload).unwrap();
+
+        // valid shares pass
+        for share in &shares {
+            assert!(AvidmGf2Scheme::verify_share(&params, &commit, share).is_ok_and(|r| r.is_ok()));
+        }
+
+        // a share verified against a smaller param should be rejected
+        let smaller_params = AvidmGf2Scheme::setup(2, 5).unwrap();
+        let last_share = shares.last().unwrap();
+        assert!(
+            AvidmGf2Scheme::verify_share(&smaller_params, &commit, last_share).is_err(),
+            "verify_share should reject share with range.end > param.total_weights"
+        );
     }
 }

@@ -8,10 +8,9 @@ use std::fmt::Debug;
 
 use hotshot::traits::implementations::Libp2pNetwork;
 use hotshot_example_types::{state_types::TestTypes, storage_types::TestStorage};
+use hotshot_examples::infra::Libp2pDaRun;
 use hotshot_types::traits::node_implementation::NodeImplementation;
 use serde::{Deserialize, Serialize};
-
-use crate::infra::Libp2pDaRun;
 
 /// dummy struct so we can choose types
 #[derive(Clone, Debug, Deserialize, Serialize, Hash, PartialEq, Eq)]

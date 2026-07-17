@@ -1,6 +1,5 @@
 epoch_height = 3000
-first_epoch_with_dynamic_stake_table = 1744
-decaf_first_pos_epoch = 1056
+first_epoch_with_dynamic_stake_table = 1056
 
 [[stake_table]]
 stake_key = "BLS_VER_KEY~VbTfoVdZmeJUiHebyyBezOApsjmmta0UoL9zu11P1RNC3ULFX3lz7q-xDa0E9o0Ree0a1gRp0No4jP_W8Bg6BDN6eupTvYJB1OENCql8w_MIIEzMuTh8dVND1-kfyucenqbrO8Gk39DTvKUqY7-cENpGJ7112L2tutALjttJRADF"

@@ -25,11 +25,12 @@ use tagged_base64::TaggedBase64;
 
 use super::VersionedDataSource;
 use crate::{
+    Header, Payload, QueryResult, Transaction,
     availability::{
-        AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction, Fetch,
-        FetchStream, LeafId, LeafQueryData, NamespaceId, PayloadMetadata, PayloadQueryData,
-        QueryableHeader, QueryablePayload, TransactionHash, UpdateAvailabilityData,
-        VidCommonMetadata, VidCommonQueryData,
+        AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction,
+        Certificate2, Fetch, FetchStream, LeafId, LeafQueryData, NamespaceId, PayloadMetadata,
+        PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash,
+        UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
     },
     data_source::storage::pruning::PrunedHeightDataSource,
     explorer::{self, ExplorerDataSource, ExplorerHeader, ExplorerTransaction},
@@ -38,9 +39,8 @@ use crate::{
         UpdateStateData,
     },
     metrics::PrometheusMetrics,
-    node::{NodeDataSource, SyncStatus, TimeWindowQueryData, WindowStart},
+    node::{NodeDataSource, SyncStatusQueryData, TimeWindowQueryData, WindowStart},
     status::{HasMetrics, StatusDataSource},
-    Header, Payload, QueryResult, Transaction,
 };
 /// Wrapper to add extensibility to an existing data source.
 ///
@@ -155,6 +155,10 @@ where
 {
     async fn load_pruned_height(&self) -> anyhow::Result<Option<u64>> {
         self.data_source.load_pruned_height().await
+    }
+
+    async fn load_state_pruned_height(&self) -> anyhow::Result<Option<u64>> {
+        self.data_source.load_state_pruned_height().await
     }
 }
 
@@ -310,6 +314,10 @@ where
     ) -> Fetch<BlockWithTransaction<Types>> {
         self.data_source.get_block_containing_transaction(h).await
     }
+
+    async fn get_cert2(&self, height: u64) -> QueryResult<Option<Certificate2<Types>>> {
+        self.data_source.get_cert2(height).await
+    }
 }
 
 impl<D, U, Types> UpdateAvailabilityData<Types> for ExtensibleDataSource<D, U>
@@ -320,6 +328,10 @@ where
 {
     async fn append(&self, info: BlockInfo<Types>) -> anyhow::Result<()> {
         self.data_source.append(info).await
+    }
+
+    async fn append_payload(&self, block: BlockQueryData<Types>) -> anyhow::Result<()> {
+        self.data_source.append_payload(block).await
     }
 }
 
@@ -336,7 +348,7 @@ where
     }
     async fn count_transactions_in_range(
         &self,
-        range: impl RangeBounds<usize> + Send,
+        range: impl RangeBounds<usize> + Send + Sync + Clone,
         namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize> {
         self.data_source
@@ -345,7 +357,7 @@ where
     }
     async fn payload_size_in_range(
         &self,
-        range: impl RangeBounds<usize> + Send,
+        range: impl RangeBounds<usize> + Send + Sync + Clone,
         namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize> {
         self.data_source
@@ -358,7 +370,7 @@ where
     {
         self.data_source.vid_share(id).await
     }
-    async fn sync_status(&self) -> QueryResult<SyncStatus> {
+    async fn sync_status(&self) -> QueryResult<SyncStatusQueryData> {
         self.data_source.sync_status().await
     }
     async fn get_header_window(
@@ -557,10 +569,11 @@ where
 #[cfg(any(test, feature = "testing"))]
 mod impl_testable_data_source {
     use hotshot::types::Event;
+    use hotshot_types::new_protocol::CoordinatorEvent;
 
     use super::*;
     use crate::{
-        data_source::UpdateDataSource,
+        data_source::{UpdateDataSource, fetching::Builder},
         testing::{
             consensus::{DataSourceLifeCycle, TestableDataSource},
             mocks::MockTypes,
@@ -574,13 +587,21 @@ mod impl_testable_data_source {
         U: Clone + Default + Send + Sync + 'static,
     {
         type Storage = D::Storage;
+        type S = D::S;
+        type P = D::P;
 
         async fn create(node_id: usize) -> Self::Storage {
             D::create(node_id).await
         }
 
-        async fn connect(storage: &Self::Storage) -> Self {
-            Self::new(D::connect(storage).await, Default::default())
+        async fn build(
+            storage: &Self::Storage,
+            opt: impl Send
+            + FnOnce(
+                Builder<MockTypes, Self::S, Self::P>,
+            ) -> Builder<MockTypes, Self::S, Self::P>,
+        ) -> Self {
+            Self::new(D::build(storage, opt).await, Default::default())
         }
 
         async fn reset(storage: &Self::Storage) -> Self {
@@ -588,7 +609,8 @@ mod impl_testable_data_source {
         }
 
         async fn handle_event(&self, event: &Event<MockTypes>) {
-            self.update(event).await.unwrap();
+            let event = CoordinatorEvent::LegacyEvent(event.clone());
+            self.update(&event).await.unwrap();
         }
     }
 }

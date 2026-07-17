@@ -17,8 +17,9 @@ pragma solidity ^0.8.0;
 import "forge-std/Test.sol";
 import { BN254 } from "bn254/BN254.sol";
 import { IPlonkVerifier } from "../src/interfaces/IPlonkVerifier.sol";
-import { LightClientStateUpdateVKV3 as VkLib } from
-    "../src/libraries/LightClientStateUpdateVKV3.sol";
+import {
+    LightClientStateUpdateVKV3 as VkLib
+} from "../src/libraries/LightClientStateUpdateVKV3.sol";
 import { PolynomialEvalV3 as Poly } from "../src/libraries/PolynomialEvalV3.sol";
 
 // Target contract

@@ -6,7 +6,7 @@
 
 use std::time::{Duration, Instant};
 
-use hotshot_example_types::node_types::{Libp2pImpl, TestTypes, TestVersions};
+use hotshot_example_types::node_types::{Libp2pImpl, TestTypes};
 use hotshot_testing::{
     block_builder::SimpleBuilderImplementation,
     completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
@@ -21,8 +21,7 @@ use tracing::instrument;
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 async fn libp2p_network_sync() {
-
-    let mut metadata: TestDescription<TestTypes, Libp2pImpl, TestVersions> = TestDescription {
+    let mut metadata: TestDescription<TestTypes, Libp2pImpl> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
             check_leaf: true,
             ..Default::default()
@@ -59,7 +58,7 @@ async fn test_memory_network_sync() {
         test_builder::TestDescription,
     };
 
-    let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> = TestDescription {
+    let mut metadata: TestDescription<TestTypes, MemoryImpl> = TestDescription {
         // allow more time to pass in CI
         completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
             TimeBasedCompletionTaskDescription {
@@ -86,8 +85,7 @@ async fn test_memory_network_sync() {
 #[ignore]
 #[instrument]
 async fn libp2p_network_async() {
-
-    let mut metadata: TestDescription<TestTypes, Libp2pImpl, TestVersions> = TestDescription {
+    let mut metadata: TestDescription<TestTypes, Libp2pImpl> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
             check_leaf: true,
             ..Default::default()
@@ -99,8 +97,7 @@ async fn libp2p_network_async() {
         ),
         timing_data: TimingData {
             next_view_timeout: 25000,
-            ..TestDescription::<TestTypes, Libp2pImpl, TestVersions>::default_multiple_rounds()
-                .timing_data
+            ..TestDescription::<TestTypes, Libp2pImpl>::default_multiple_rounds().timing_data
         },
         unreliable_network: Some(Box::new(AsynchronousNetwork {
             keep_numerator: 9,
@@ -132,7 +129,7 @@ async fn test_memory_network_async() {
         test_builder::TestDescription,
     };
 
-    let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> = TestDescription {
+    let mut metadata: TestDescription<TestTypes, MemoryImpl> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
             check_leaf: true,
             ..Default::default()
@@ -145,8 +142,7 @@ async fn test_memory_network_async() {
         ),
         timing_data: TimingData {
             next_view_timeout: 1000,
-            ..TestDescription::<TestTypes, MemoryImpl, TestVersions>::default_multiple_rounds()
-                .timing_data
+            ..TestDescription::<TestTypes, MemoryImpl>::default_multiple_rounds().timing_data
         },
         unreliable_network: Some(Box::new(AsynchronousNetwork {
             keep_numerator: 95,
@@ -177,7 +173,7 @@ async fn test_memory_network_partially_sync() {
         test_builder::TestDescription,
     };
 
-    let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> = TestDescription {
+    let mut metadata: TestDescription<TestTypes, MemoryImpl> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
             ..Default::default()
         },
@@ -220,8 +216,7 @@ async fn test_memory_network_partially_sync() {
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 async fn libp2p_network_partially_sync() {
-
-    let mut metadata: TestDescription<TestTypes, Libp2pImpl, TestVersions> = TestDescription {
+    let mut metadata: TestDescription<TestTypes, Libp2pImpl> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
             ..Default::default()
         },
@@ -268,7 +263,7 @@ async fn test_memory_network_chaos() {
         test_builder::TestDescription,
     };
 
-    let mut metadata: TestDescription<TestTypes, MemoryImpl, TestVersions> = TestDescription {
+    let mut metadata: TestDescription<TestTypes, MemoryImpl> = TestDescription {
         // allow more time to pass in CI
         completion_task_description: CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
             TimeBasedCompletionTaskDescription {
@@ -299,8 +294,7 @@ async fn test_memory_network_chaos() {
 #[ignore]
 #[instrument]
 async fn libp2p_network_chaos() {
-
-    let mut metadata: TestDescription<TestTypes, Libp2pImpl, TestVersions> = TestDescription {
+    let mut metadata: TestDescription<TestTypes, Libp2pImpl> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
             check_leaf: true,
             ..Default::default()

@@ -19,7 +19,7 @@ use std::{
 
 use async_trait::async_trait;
 use dyn_clone::DynClone;
-use futures::{future::join_all, Future};
+use futures::{Future, future::join_all};
 use rand::{
     distributions::{Bernoulli, Uniform},
     prelude::Distribution,
@@ -30,8 +30,10 @@ use tokio::{sync::mpsc::error::TrySendError, time::sleep};
 
 use super::{node_implementation::NodeType, signature_key::SignatureKey};
 use crate::{
-    data::ViewNumber, epoch_membership::EpochMembershipCoordinator, message::SequencingMessage,
-    BoxSyncFuture,
+    BoxSyncFuture, PeerConnectInfo,
+    data::{EpochNumber, ViewNumber},
+    epoch_membership::EpochMembershipCoordinator,
+    message::SequencingMessage,
 };
 
 /// Centralized server specific errors
@@ -119,7 +121,7 @@ pub trait Id: Eq + PartialEq + Hash {}
 /// a message
 pub trait ViewMessage<TYPES: NodeType> {
     /// get the view out of the message
-    fn view_number(&self) -> TYPES::View;
+    fn view_number(&self) -> ViewNumber;
 }
 
 /// A request for some data that the consensus layer is asking for.
@@ -129,7 +131,7 @@ pub struct DataRequest<TYPES: NodeType> {
     /// Request
     pub request: RequestKind<TYPES>,
     /// View this message is for
-    pub view: TYPES::View,
+    pub view: ViewNumber,
     /// signature of the Sha256 hash of the data so outsiders can't use know
     /// public keys with stake.
     pub signature: <TYPES::SignatureKey as SignatureKey>::PureAssembledSignatureType,
@@ -139,11 +141,11 @@ pub struct DataRequest<TYPES: NodeType> {
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 pub enum RequestKind<TYPES: NodeType> {
     /// Request VID data by our key and the VID commitment
-    Vid(TYPES::View, TYPES::SignatureKey),
+    Vid(ViewNumber, TYPES::SignatureKey),
     /// Request a DA proposal for a certain view
-    DaProposal(TYPES::View),
+    DaProposal(ViewNumber),
     /// Request for quorum proposal for a view
-    Proposal(TYPES::View),
+    Proposal(ViewNumber),
 }
 
 impl<TYPES: NodeType> std::fmt::Debug for RequestKind<TYPES> {
@@ -171,10 +173,10 @@ pub enum ResponseMessage<TYPES: NodeType> {
     Denied,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
 /// When a message should be broadcast to the network.
 ///
 /// Network implementations may or may not respect this, at their discretion.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BroadcastDelay {
     /// Broadcast the message immediately
     None,
@@ -182,11 +184,11 @@ pub enum BroadcastDelay {
     View(u64),
 }
 
-#[async_trait]
 /// represents a networking implmentration
 /// exposes low level API for interacting with a network
 /// intended to be implemented for libp2p, the centralized server,
 /// and memory network
+#[async_trait]
 pub trait ConnectedNetwork<K: SignatureKey + 'static>: Clone + Send + Sync + 'static {
     /// Pauses the underlying network
     fn pause(&self);
@@ -207,6 +209,7 @@ pub trait ConnectedNetwork<K: SignatureKey + 'static>: Clone + Send + Sync + 'st
     /// blocking
     async fn broadcast_message(
         &self,
+        view: ViewNumber,
         message: Vec<u8>,
         topic: Topic,
         broadcast_delay: BroadcastDelay,
@@ -216,6 +219,7 @@ pub trait ConnectedNetwork<K: SignatureKey + 'static>: Clone + Send + Sync + 'st
     /// blocking
     async fn da_broadcast_message(
         &self,
+        view: ViewNumber,
         message: Vec<u8>,
         recipients: Vec<K>,
         broadcast_delay: BroadcastDelay,
@@ -225,11 +229,11 @@ pub trait ConnectedNetwork<K: SignatureKey + 'static>: Clone + Send + Sync + 'st
     /// blocking
     async fn vid_broadcast_message(
         &self,
-        messages: HashMap<K, Vec<u8>>,
+        messages: HashMap<K, (ViewNumber, Vec<u8>)>,
     ) -> Result<(), NetworkError> {
         let future_results = messages
             .into_iter()
-            .map(|(recipient_key, message)| self.direct_message(message, recipient_key));
+            .map(|(recipient_key, (v, m))| self.direct_message(v, m, recipient_key));
         let results = join_all(future_results).await;
 
         let errors: Vec<_> = results.into_iter().filter_map(|r| r.err()).collect();
@@ -243,7 +247,12 @@ pub trait ConnectedNetwork<K: SignatureKey + 'static>: Clone + Send + Sync + 'st
 
     /// Sends a direct message to a specific node
     /// blocking
-    async fn direct_message(&self, message: Vec<u8>, recipient: K) -> Result<(), NetworkError>;
+    async fn direct_message(
+        &self,
+        view: ViewNumber,
+        message: Vec<u8>,
+        recipient: K,
+    ) -> Result<(), NetworkError>;
 
     /// Receive one or many messages from the underlying network.
     ///
@@ -257,21 +266,21 @@ pub trait ConnectedNetwork<K: SignatureKey + 'static>: Clone + Send + Sync + 'st
     /// Does not error.
     fn queue_node_lookup(
         &self,
-        _view_number: ViewNumber,
-        _pk: K,
+        _: ViewNumber,
+        _: K,
     ) -> Result<(), TrySendError<Option<(ViewNumber, K)>>> {
         Ok(())
     }
 
     /// Update view can be used for any reason, but mostly it's for canceling tasks,
     /// and looking up the address of the leader of a future view.
-    async fn update_view<'a, TYPES>(
-        &'a self,
-        _view: u64,
-        _epoch: Option<u64>,
-        _membership_coordinator: EpochMembershipCoordinator<TYPES>,
+    async fn update_view<TYPES>(
+        &self,
+        _: ViewNumber,
+        _: Option<EpochNumber>,
+        _: EpochMembershipCoordinator<TYPES>,
     ) where
-        TYPES: NodeType<SignatureKey = K> + 'a,
+        TYPES: NodeType<SignatureKey = K>,
     {
     }
 
@@ -299,6 +308,7 @@ where
         da_committee_size: usize,
         reliability_config: Option<Box<dyn NetworkReliability>>,
         secondary_network_delay: Duration,
+        connect_infos: &mut HashMap<TYPES::SignatureKey, PeerConnectInfo>,
     ) -> AsyncGenerator<Arc<Self>>;
 
     /// Get the number of messages in-flight.

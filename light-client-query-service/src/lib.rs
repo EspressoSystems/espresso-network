@@ -1,6 +1,6 @@
 use clap::ValueEnum;
 use log_panics::BacktraceMode;
-use tracing_subscriber::{fmt::format::FmtSpan, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan};
 
 /// Controls how logs are displayed and how backtraces are logged on panic.
 ///

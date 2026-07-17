@@ -3,7 +3,9 @@
 pragma solidity ^0.8.0;
 
 import { MockStakeTableV2 } from "./MockStakeTableV2.sol";
+import { MockStakeTableV3 } from "./MockStakeTableV3.sol";
 import { StakeTable } from "../src/StakeTable.sol";
+import { StakeTableV3 } from "../src/StakeTableV3.sol";
 import { ERC20 } from "solmate/tokens/ERC20.sol";
 import { BN254 } from "bn254/BN254.sol";
 import { EdOnBN254 } from "../src/libraries/EdOnBn254.sol";
@@ -52,6 +54,7 @@ contract FunctionCallTracking {
         FuncStats createActor;
         FuncStats createValidator;
         FuncStats advanceTime;
+        FuncStats updateX25519Key;
     }
 
     struct CallStatsAny {
@@ -60,6 +63,7 @@ contract FunctionCallTracking {
         FuncStats undelegate;
         FuncStats deregisterValidator;
         FuncStats claimValidatorExit;
+        FuncStats updateX25519Key;
     }
 
     struct CallStats {
@@ -113,7 +117,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         mapping(address validator => EnumerableSet.AddressSet actors) pendingWithdrawals;
     }
 
-    MockStakeTableV2 public stakeTable;
+    MockStakeTableV3 public stakeTable;
     MockERC20 public token;
     MockLightClient public lightClient;
     IVM public ivm = IVM(0x7109709ECfa91a80626fF3989D68f67F5b1DD12D);
@@ -126,6 +130,10 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
     Delegators internal delegators;
     TestState public testState;
     Actors internal actors;
+
+    // Ghost state for x25519 keys
+    mapping(bytes32 key => bool used) internal usedX25519Keys;
+    uint256 internal x25519KeyCounter;
 
     // For current validator and actor modifiers
     address internal validator;
@@ -201,19 +209,30 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
 
         // Upgrade to V2
         MockStakeTableV2.InitialCommission[] memory emptyCommissions;
-        StakeTable(payable(address(proxy))).upgradeToAndCall(
-            address(stakeTableV2Impl),
-            abi.encodeWithSignature(
-                "initializeV2(address,address,uint256,(address,uint16)[])",
-                admin,
-                admin,
-                0,
-                emptyCommissions
-            )
-        );
+        StakeTable(payable(address(proxy)))
+            .upgradeToAndCall(
+                address(stakeTableV2Impl),
+                abi.encodeWithSignature(
+                    "initializeV2(address,address,uint256,(address,uint16)[])",
+                    admin,
+                    admin,
+                    0,
+                    emptyCommissions
+                )
+            );
 
-        // Cast to V2 interface
-        stakeTable = MockStakeTableV2(payable(address(proxy)));
+        // Deploy V3 implementation contract
+        MockStakeTableV3 stakeTableV3Impl = new MockStakeTableV3();
+
+        // Upgrade to V3
+        MockStakeTableV2(payable(address(proxy)))
+            .upgradeToAndCall(
+                address(stakeTableV3Impl),
+                abi.encodeWithSelector(StakeTableV3.initializeV3.selector)
+            );
+
+        // Cast to V3 interface
+        stakeTable = MockStakeTableV3(payable(address(proxy)));
     }
 
     function genDummyValidatorKeys(address _validator)
@@ -234,8 +253,11 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         });
 
         schnorrVK = EdOnBN254.EdOnBN254Point({
-            x: uint256(keccak256(abi.encode(_validator, "schnorr_x"))),
-            y: uint256(keccak256(abi.encode(_validator, "schnorr_y")))
+            // Keep Schnorr coordinates canonical for StakeTable validation:
+            // x in [1, P_MOD-1], y in [0, P_MOD-1].
+            x: (uint256(keccak256(abi.encode(_validator, "schnorr_x"))) % (EdOnBN254.P_MOD - 1))
+                + 1,
+            y: uint256(keccak256(abi.encode(_validator, "schnorr_y"))) % EdOnBN254.P_MOD
         });
 
         blsSig = BN254.G1Point({
@@ -266,8 +288,14 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
             bytes memory schnorrSig
         ) = genDummyValidatorKeys(actor);
 
-        try stakeTable.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 1000, "") {
+        x25519KeyCounter++;
+        bytes32 x25519Key = keccak256(abi.encode("x25519-any", actor, x25519KeyCounter));
+
+        try stakeTable.registerValidatorV3(
+            blsVK, schnorrVK, blsSig, schnorrSig, 1000, "", x25519Key, "10.0.0.1:8080"
+        ) {
             trackRegisterValidator(actor);
+            usedX25519Keys[x25519Key] = true;
             stats.any.registerValidator.ok++;
         } catch {
             // Registration failed - this is acceptable for the Any function
@@ -343,8 +371,13 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
             bytes memory schnorrSig
         ) = genDummyValidatorKeys(val);
 
+        bytes32 x25519Key = keccak256(abi.encode("validator-x25519", val));
+
         ivm.prank(val);
-        stakeTable.registerValidatorV2(blsVK, schnorrVK, blsSig, schnorrSig, 1000, "");
+        stakeTable.registerValidatorV3(
+            blsVK, schnorrVK, blsSig, schnorrSig, 1000, "", x25519Key, "10.0.0.1:8080"
+        );
+        usedX25519Keys[x25519Key] = true;
         trackRegisterValidator(val);
         stats.ok.createValidator.ok++;
 
@@ -540,9 +573,8 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         if (validators.withPendingWithdrawals.length() == 0) return;
 
         // Pick a validator with pending withdrawals
-        address val = validators.withPendingWithdrawals.at(
-            withdrawalIndex % validators.withPendingWithdrawals.length()
-        );
+        address val = validators.withPendingWithdrawals
+            .at(withdrawalIndex % validators.withPendingWithdrawals.length());
 
         // Pick an actor with pending withdrawal for this validator
         EnumerableSet.AddressSet storage pendingActors = delegators.pendingWithdrawals[val];
@@ -617,12 +649,14 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         total += stats.ok.createActor.ok;
         total += stats.ok.createValidator.ok;
         total += stats.ok.advanceTime.ok;
+        total += stats.ok.updateX25519Key.ok;
         // Any functions
         total += stats.any.registerValidator.ok;
         total += stats.any.delegate.ok;
         total += stats.any.undelegate.ok;
         total += stats.any.deregisterValidator.ok;
         total += stats.any.claimValidatorExit.ok;
+        total += stats.any.updateX25519Key.ok;
         return total;
     }
 
@@ -633,6 +667,7 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         total += stats.any.undelegate.reverts;
         total += stats.any.deregisterValidator.reverts;
         total += stats.any.claimValidatorExit.reverts;
+        total += stats.any.updateX25519Key.reverts;
         return total;
     }
 
@@ -696,6 +731,38 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
             stats.any.claimValidatorExit.ok++;
         } catch {
             stats.any.claimValidatorExit.reverts++;
+        }
+    }
+
+    /// @dev Map a seed to a canonical x25519 key: little-endian value in [1, CURVE25519_P - 1].
+    /// StakeTableV3.updateX25519Key rejects non-canonical encodings, so keccak output cannot be
+    /// used directly for the `Ok` path.
+    function canonicalX25519Key(bytes32 seed) internal pure returns (bytes32) {
+        uint256 v = uint256(seed) % (((uint256(1) << 255) - 19) - 1) + 1;
+        uint256 be = 0;
+        for (uint256 i = 0; i < 32; i++) {
+            be |= uint256(uint8(v >> (8 * i))) << (8 * (31 - i));
+        }
+        return bytes32(be);
+    }
+
+    function updateX25519KeyOk(uint256 actorIndex) public withActiveValidator(actorIndex) {
+        x25519KeyCounter++;
+        bytes32 x25519Key =
+            canonicalX25519Key(keccak256(abi.encode("x25519-setkey", x25519KeyCounter)));
+
+        ivm.prank(validator);
+        stakeTable.updateX25519Key(x25519Key);
+        usedX25519Keys[x25519Key] = true;
+        stats.ok.updateX25519Key.ok++;
+    }
+
+    function updateX25519KeyAny(uint256 actorIndex, bytes32 x25519Key) public useActor(actorIndex) {
+        try stakeTable.updateX25519Key(x25519Key) {
+            usedX25519Keys[x25519Key] = true;
+            stats.any.updateX25519Key.ok++;
+        } catch {
+            stats.any.updateX25519Key.reverts++;
         }
     }
 

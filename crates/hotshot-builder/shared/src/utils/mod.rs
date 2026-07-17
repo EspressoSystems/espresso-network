@@ -2,7 +2,7 @@ use std::hash::Hash;
 
 use hotshot::traits::BlockPayload;
 use hotshot_types::{
-    data::{DaProposal2, QuorumProposalWrapper},
+    data::{DaProposal2, QuorumProposalWrapper, ViewNumber},
     traits::{
         block_contents::BlockHeader, node_implementation::NodeType,
         signature_key::BuilderSignatureKey,
@@ -24,26 +24,20 @@ pub type BuilderKeys<Types> = (
 );
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct ProposalId<Types>
-where
-    Types: NodeType,
-{
-    view_number: Types::View,
+pub struct ProposalId {
+    view_number: ViewNumber,
     builder_commitment: BuilderCommitment,
 }
 
-impl<Types> ProposalId<Types>
-where
-    Types: NodeType,
-{
-    pub fn from_quorum_proposal(proposal: &QuorumProposalWrapper<Types>) -> Self {
+impl ProposalId {
+    pub fn from_quorum_proposal<Types: NodeType>(proposal: &QuorumProposalWrapper<Types>) -> Self {
         Self {
             builder_commitment: proposal.block_header().builder_commitment(),
             view_number: proposal.view_number(),
         }
     }
 
-    pub fn from_da_proposal(proposal: &DaProposal2<Types>) -> Self {
+    pub fn from_da_proposal<Types: NodeType>(proposal: &DaProposal2<Types>) -> Self {
         let builder_commitment = <Types::BlockPayload as BlockPayload<Types>>::from_bytes(
             &proposal.encoded_transactions,
             &proposal.metadata,
@@ -56,7 +50,7 @@ where
         }
     }
 
-    pub fn view_number(&self) -> <Types as NodeType>::View {
+    pub fn view_number(&self) -> ViewNumber {
         self.view_number
     }
 

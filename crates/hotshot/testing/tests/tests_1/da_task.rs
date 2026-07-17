@@ -4,13 +4,16 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{sync::{Arc, atomic::Ordering}, time::Duration};
+use std::{
+    sync::{Arc, atomic::Ordering},
+    time::Duration,
+};
 
 use futures::StreamExt;
 use hotshot::tasks::task_state::CreateTaskState;
 use hotshot_example_types::{
     block_types::{TestMetadata, TestTransaction},
-    node_types::{MemoryImpl, TestTypes, TestVersions},
+    node_types::{MemoryImpl, TEST_VERSIONS, TestTypes},
 };
 use hotshot_macros::{run_test, test_scripts};
 use hotshot_task_impls::{da::DaTaskState, events::HotShotEvent::*};
@@ -22,40 +25,32 @@ use hotshot_testing::{
     view_generator::TestViewGenerator,
 };
 use hotshot_types::{
-    data::{null_block, PackedBundle, ViewNumber},
+    data::{PackedBundle, ViewNumber, null_block},
     simple_vote::DaData2,
-    traits::node_implementation::{ConsensusTime, Versions},
 };
-use vbs::version::{StaticVersionType, Version};
+use versions::VERSION_0_0;
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_da_task() {
-
-    let (handle, _, _, node_key_map) =
-        build_system_handle::<TestTypes, MemoryImpl, TestVersions>(2).await;
+    let (handle, _, _, node_key_map) = build_system_handle::<TestTypes, MemoryImpl>(2).await;
 
     let membership = handle.hotshot.membership_coordinator.clone();
-    let default_version = Version { major: 0, minor: 0 };
+    let default_version = VERSION_0_0;
 
     // Make some empty encoded transactions, we just care about having a commitment handy for the
     // later calls. We need the VID commitment to be able to propose later.
     let transactions = vec![TestTransaction::new(vec![0])];
     let encoded_transactions: Arc<[u8]> = Arc::from(TestTransaction::encode(&transactions));
-    let num_storage_node = membership
-        .membership_for_epoch(None)
-        .await
-        .unwrap()
-        .total_nodes()
-        .await;
-    let payload_commit = hotshot_types::data::vid_commitment::<TestVersions>(
+    let num_storage_node = membership.membership_for_epoch(None).unwrap().total_nodes();
+    let payload_commit = hotshot_types::data::vid_commitment(
         &encoded_transactions,
         &[],
         num_storage_node,
-        default_version, 
+        default_version,
     );
 
     let mut generator =
-        TestViewGenerator::<TestVersions>::generate(membership.clone(), node_key_map);
+        TestViewGenerator::generate(membership.clone(), node_key_map, TEST_VERSIONS.test);
 
     let mut proposals = Vec::new();
     let mut leaders = Vec::new();
@@ -112,19 +107,16 @@ async fn test_da_task() {
                 },
                 ViewNumber::new(2),
                 None,
-                vec1::vec1![null_block::builder_fee::<TestTypes, TestVersions>(
-                    num_storage_node,
-                    <TestVersions as Versions>::Base::VERSION,
-                    
-                )
-                .unwrap()],
-                
+                vec1::vec1![
+                    null_block::builder_fee::<TestTypes>(num_storage_node, TEST_VERSIONS.test.base)
+                        .unwrap()
+                ],
             )),
         ],
         serial![DaProposalRecv(proposals[1].clone(), leaders[1])],
     ];
 
-    let da_state = DaTaskState::<TestTypes, MemoryImpl, TestVersions>::create_from(&handle).await;
+    let da_state = DaTaskState::<TestTypes, MemoryImpl>::create_from(&handle).await;
     let mut da_script = TaskScript {
         timeout: Duration::from_millis(35),
         state: da_state,
@@ -145,34 +137,30 @@ async fn test_da_task() {
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_da_task_storage_failure() {
-
-    let (handle, _, _, node_key_map) =
-        build_system_handle::<TestTypes, MemoryImpl, TestVersions>(2).await;
+    let (handle, _, _, node_key_map) = build_system_handle::<TestTypes, MemoryImpl>(2).await;
 
     // Set the error flag here for the system handle. This causes it to emit an error on append.
-    handle.storage().should_return_err.store( true, Ordering::Relaxed);
+    handle
+        .storage()
+        .should_return_err
+        .store(true, Ordering::Relaxed);
     let membership = handle.hotshot.membership_coordinator.clone();
-    let default_version = Version { major: 0, minor: 0 };
+    let default_version = VERSION_0_0;
 
     // Make some empty encoded transactions, we just care about having a commitment handy for the
     // later calls. We need the VID commitment to be able to propose later.
     let transactions = vec![TestTransaction::new(vec![0])];
     let encoded_transactions: Arc<[u8]> = Arc::from(TestTransaction::encode(&transactions));
-    let num_storage_node = membership
-        .membership_for_epoch(None)
-        .await
-        .unwrap()
-        .total_nodes()
-        .await;
-    let payload_commit = hotshot_types::data::vid_commitment::<TestVersions>(
+    let num_storage_node = membership.membership_for_epoch(None).unwrap().total_nodes();
+    let payload_commit = hotshot_types::data::vid_commitment(
         &encoded_transactions,
         &[],
         num_storage_node,
-        default_version, 
+        default_version,
     );
 
     let mut generator =
-        TestViewGenerator::<TestVersions>::generate(membership.clone(), node_key_map);
+        TestViewGenerator::generate(membership.clone(), node_key_map, TEST_VERSIONS.test);
 
     let mut dacs = Vec::new();
     let mut vids = Vec::new();
@@ -229,12 +217,10 @@ async fn test_da_task_storage_failure() {
                 },
                 ViewNumber::new(2),
                 None,
-                vec1::vec1![null_block::builder_fee::<TestTypes, TestVersions>(
-                    num_storage_node,
-                    <TestVersions as Versions>::Base::VERSION,
-                )
-                .unwrap()],
-                
+                vec1::vec1![
+                    null_block::builder_fee::<TestTypes>(num_storage_node, TEST_VERSIONS.test.base)
+                        .unwrap()
+                ],
             ),)
         ],
         serial![DaProposalRecv(proposals[1].clone(), leaders[1])],
@@ -252,7 +238,7 @@ async fn test_da_task_storage_failure() {
         Expectations::from_outputs(vec![]),
     ];
 
-    let da_state = DaTaskState::<TestTypes, MemoryImpl, TestVersions>::create_from(&handle).await;
+    let da_state = DaTaskState::<TestTypes, MemoryImpl>::create_from(&handle).await;
     let mut da_script = TaskScript {
         timeout: Duration::from_millis(35),
         state: da_state,

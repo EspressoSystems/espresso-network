@@ -1,0 +1,53 @@
+[package]
+name = "hotshot-new-protocol"
+description = "Implementation of Fast Finality Protocol"
+license = "MIT"
+authors = { workspace = true }
+edition = { workspace = true }
+version = { workspace = true }
+
+[features]
+example-upgrade = []
+rewind = []
+stats = []
+
+[dependencies]
+alloy = { workspace = true }
+anyhow = { workspace = true }
+async-broadcast = { workspace = true }
+async-lock = { workspace = true }
+async-trait = { workspace = true }
+bon = { workspace = true }
+cliquenet = { workspace = true }
+committable = { workspace = true }
+futures = { workspace = true }
+hotshot = { workspace = true }
+hotshot-contract-adapter = { workspace = true }
+hotshot-example-types = { workspace = true }
+hotshot-testing = { workspace = true }
+hotshot-types = { workspace = true }
+hotshot-utils = { workspace = true }
+parking_lot = { workspace = true }
+rand = { workspace = true }
+rayon = { workspace = true }
+serde = { workspace = true }
+serde_bytes = { workspace = true }
+test-utils = { workspace = true }
+thiserror = { workspace = true }
+time = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+url = { workspace = true }
+vec1 = { workspace = true }
+versions = { workspace = true }
+
+[dev-dependencies]
+quickcheck = { workspace = true }
+# Enables `vid/testing` for tests only: constructs non-codeword dispersals to
+# exercise the unrecoverable VID reconstruction path.
+vid = { workspace = true, features = ["testing"] }
+
+[lints]
+workspace = true

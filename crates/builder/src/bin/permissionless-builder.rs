@@ -1,26 +1,19 @@
-use std::{num::NonZeroUsize, path::PathBuf, time::Duration};
+use std::{num::NonZeroUsize, time::Duration};
 
-use builder::non_permissioned::{build_instance_state, BuilderConfig};
+use builder::non_permissioned::{BuilderConfig, build_instance_state};
 use clap::Parser;
-use espresso_types::{
-    eth_signature_key::EthKeyPair, parse_duration, FeeVersion, SequencerVersions,
-};
-use futures::future::pending;
+use espresso_node::{Genesis, GenesisSource, L1Params};
+use espresso_types::{eth_signature_key::EthKeyPair, parse_duration};
+use espresso_utils::logging;
 use hotshot::traits::ValidatedState;
-use hotshot_types::{
-    data::ViewNumber,
-    traits::node_implementation::{ConsensusTime, Versions},
-};
-use sequencer::{Genesis, L1Params};
-use sequencer_utils::logging;
+use hotshot_types::data::ViewNumber;
 use url::Url;
-use vbs::version::StaticVersionType;
 
 #[derive(Parser, Clone, Debug)]
 struct NonPermissionedBuilderOptions {
     /// URL of hotshot events API running on Espresso Sequencer DA committee node
     /// The builder will subscribe to this server to receive hotshot events
-    #[clap(long, env = "ESPRESSO_SEQUENCER_URL")]
+    #[clap(long, env = "ESPRESSO_API_NODE_URL")]
     sequencer_api_url: Url,
 
     /// Mnemonic phrase for builder account.
@@ -44,7 +37,7 @@ struct NonPermissionedBuilderOptions {
     l1_provider_url: Vec<Url>,
 
     /// Peer nodes use to fetch missing state
-    #[clap(long, env = "ESPRESSO_SEQUENCER_STATE_PEERS", value_delimiter = ',')]
+    #[clap(long, env = "ESPRESSO_NODE_STATE_PEERS", value_delimiter = ',')]
     state_peers: Vec<Url>,
 
     /// Port to run the builder server on.
@@ -95,121 +88,31 @@ struct NonPermissionedBuilderOptions {
     )]
     tx_status_cache_size: usize,
 
-    /// Path to TOML file containing genesis state.
+    /// Location of the TOML file containing genesis state.
+    ///
+    /// Accepts a plain filesystem path or an `http(s)://` URL.
     #[clap(long, name = "GENESIS_FILE", env = "ESPRESSO_BUILDER_GENESIS_FILE")]
-    genesis_file: PathBuf,
+    genesis_file: GenesisSource,
 
     #[clap(flatten)]
     logging: logging::Config,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let opt = NonPermissionedBuilderOptions::parse();
-    opt.logging.init();
-
-    let genesis = Genesis::from_file(&opt.genesis_file)?;
-    tracing::info!(?genesis, "genesis");
-
-    let base = genesis.base_version;
-    let upgrade = genesis.upgrade_version;
-
-    match (base, upgrade) {
-        #[cfg(all(feature = "fee", feature = "da-upgrade"))]
-        (espresso_types::FeeVersion::VERSION, espresso_types::DaUpgradeVersion::VERSION) => {
-            run::<SequencerVersions<espresso_types::FeeVersion, espresso_types::DaUpgradeVersion>>(
-                genesis, opt,
-            )
-            .await
-        },
-        #[cfg(all(feature = "drb-and-header", feature = "da-upgrade"))]
-        (
-            espresso_types::DrbAndHeaderUpgradeVersion::VERSION,
-            espresso_types::DaUpgradeVersion::VERSION,
-        ) => {
-            run::<
-                SequencerVersions<
-                    espresso_types::DrbAndHeaderUpgradeVersion,
-                    espresso_types::DaUpgradeVersion,
-                >,
-            >(genesis, opt)
-            .await
-        },
-        #[cfg(feature = "da-upgrade")]
-        (espresso_types::DaUpgradeVersion::VERSION, espresso_types::DaUpgradeVersion::VERSION) => {
-            run::<
-                SequencerVersions<
-                    espresso_types::DaUpgradeVersion,
-                    espresso_types::DaUpgradeVersion,
-                >,
-            >(genesis, opt)
-            .await
-        },
-        #[cfg(all(feature = "pos", feature = "drb-and-header"))]
-        (
-            espresso_types::EpochVersion::VERSION,
-            espresso_types::DrbAndHeaderUpgradeVersion::VERSION,
-        ) => {
-            run::<SequencerVersions<espresso_types::FeeVersion, espresso_types::EpochVersion>>(
-                genesis, opt,
-            )
-            .await
-        },
-        #[cfg(all(feature = "fee", feature = "drb-and-header"))]
-        (
-            espresso_types::FeeVersion::VERSION,
-            espresso_types::DrbAndHeaderUpgradeVersion::VERSION,
-        ) => {
-            run::<
-                SequencerVersions<
-                    espresso_types::FeeVersion,
-                    espresso_types::DrbAndHeaderUpgradeVersion,
-                >,
-            >(genesis, opt)
-            .await
-        },
-        #[cfg(feature = "drb-and-header")]
-        (espresso_types::DrbAndHeaderUpgradeVersion::VERSION, _) => {
-            run::<
-                SequencerVersions<
-                    espresso_types::DrbAndHeaderUpgradeVersion,
-                    espresso_types::DrbAndHeaderUpgradeVersion,
-                >,
-            >(genesis, opt)
-            .await
-        },
-        #[cfg(all(feature = "fee", feature = "pos"))]
-        (FeeVersion::VERSION, espresso_types::EpochVersion::VERSION) => {
-            run::<SequencerVersions<espresso_types::FeeVersion, espresso_types::EpochVersion>>(
-                genesis, opt,
-            )
-            .await
-        },
-        #[cfg(feature = "pos")]
-        (espresso_types::EpochVersion::VERSION, espresso_types::EpochVersion::VERSION) => {
-            run::<SequencerVersions<espresso_types::EpochVersion, espresso_types::EpochVersion>>(
-                genesis, opt,
-                // Specifying V0_0 disables upgrades
-            )
-            .await
-        },
-        #[cfg(feature = "fee")]
-        (FeeVersion::VERSION, espresso_types::FeeVersion::VERSION) => {
-            run::<SequencerVersions<espresso_types::FeeVersion, espresso_types::FeeVersion>>(
-                genesis, opt,
-            )
-            .await
-        },
-        _ => panic!(
-            "Invalid base ({base}) and upgrade ({upgrade}) versions specified in the toml file."
-        ),
-    }
+fn main() -> anyhow::Result<()> {
+    let migrated_envs = espresso_utils::env_compat::migrate_legacy_env_vars();
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(async_main(migrated_envs))
 }
 
-async fn run<V: Versions>(
-    genesis: Genesis,
-    opt: NonPermissionedBuilderOptions,
-) -> anyhow::Result<()> {
+async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
+    let opt = NonPermissionedBuilderOptions::parse();
+    opt.logging.init();
+    espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
+
+    let genesis = Genesis::load(&opt.genesis_file).await?;
+    tracing::info!(?genesis, "genesis");
+
     let l1_params = L1Params {
         urls: opt.l1_provider_url,
         options: Default::default(),
@@ -220,7 +123,7 @@ async fn run<V: Versions>(
 
     let builder_server_url: Url = format!("http://0.0.0.0:{}", opt.port).parse().unwrap();
 
-    let instance_state = build_instance_state::<V>(genesis.clone(), l1_params, opt.state_peers);
+    let instance_state = build_instance_state(genesis.clone(), l1_params, opt.state_peers);
 
     let base_fee = genesis.max_base_fee();
     tracing::info!(?base_fee, "base_fee");
@@ -232,7 +135,7 @@ async fn run<V: Versions>(
     // make the txn timeout as 1/4 of the api_response_timeout_duration
     let txn_timeout_duration = api_response_timeout_duration / 4;
 
-    let _builder_config = BuilderConfig::init::<V>(
+    let _builder_config = BuilderConfig::init(
         builder_key_pair,
         bootstrapped_view,
         opt.tx_channel_capacity,
@@ -247,11 +150,11 @@ async fn run<V: Versions>(
         txn_timeout_duration,
         base_fee,
         opt.tx_status_cache_size,
+        genesis.base_version,
     )
     .await?;
 
-    // Sleep forever
-    pending::<()>().await;
+    espresso_utils::shutdown::wait_for_shutdown_signal().await;
 
     Ok(())
 }

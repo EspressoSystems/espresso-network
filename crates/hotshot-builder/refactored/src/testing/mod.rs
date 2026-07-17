@@ -7,7 +7,7 @@ use std::{cell::LazyCell, sync::Arc, time::Duration};
 use async_broadcast::Sender;
 use committable::Commitment;
 use hotshot::{
-    rand::{thread_rng, Rng},
+    rand::{Rng, thread_rng},
     types::{BLSPubKey, Event, EventType, SignatureKey},
 };
 use hotshot_builder_api::v0_1::{
@@ -22,10 +22,7 @@ use hotshot_builder_shared::{
 };
 use hotshot_example_types::{block_types::TestTransaction, node_types::TestTypes};
 use hotshot_task_impls::builder::v0_1::BuilderClient;
-use hotshot_types::{
-    data::ViewNumber,
-    traits::node_implementation::{ConsensusTime, NodeType},
-};
+use hotshot_types::{data::ViewNumber, traits::node_implementation::NodeType};
 use tokio::spawn;
 use url::Url;
 use vbs::version::StaticVersion;
@@ -73,7 +70,7 @@ impl TestServiceWrapper {
         global_state: Arc<GlobalState<TestTypes>>,
         event_stream_sender: Sender<Event<TestTypes>>,
     ) -> Self {
-        let port = portpicker::pick_unused_port().unwrap();
+        let port = test_utils::reserve_tcp_port().unwrap();
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
         let app = Arc::clone(&global_state).into_app().unwrap();
         spawn(app.serve(url.clone(), StaticVersion::<0, 1> {}));
@@ -92,7 +89,7 @@ impl TestServiceWrapper {
     /// taking care of signing
     pub(crate) async fn get_available_blocks(
         &self,
-        state_id: &BuilderStateId<TestTypes>,
+        state_id: &BuilderStateId,
     ) -> Result<Vec<AvailableBlockInfo<TestTypes>>, BuildError> {
         self.proxy_global_state
             .available_blocks(
@@ -108,7 +105,7 @@ impl TestServiceWrapper {
     /// taking care of signing
     pub(crate) async fn claim_block_header_input(
         &self,
-        block_id: &BlockId<TestTypes>,
+        block_id: &BlockId,
     ) -> Result<AvailableBlockHeaderInputV1<TestTypes>, BuildError> {
         self.proxy_global_state
             .claim_block_header_input(
@@ -127,10 +124,7 @@ impl TestServiceWrapper {
     ///
     /// Requests are routed through HotShot's HTTP API client to check
     /// compatibility
-    pub(crate) async fn get_transactions(
-        &self,
-        state_id: &BuilderStateId<TestTypes>,
-    ) -> Vec<TestTransaction> {
+    pub(crate) async fn get_transactions(&self, state_id: &BuilderStateId) -> Vec<TestTransaction> {
         let mut available_states = self
             .client
             .available_blocks(
@@ -183,7 +177,7 @@ impl TestServiceWrapper {
 
     /// Submits transactions randomly either through public or private mempool
     pub(crate) async fn submit_transactions(&self, transactions: Vec<TestTransaction>) {
-        if thread_rng().gen() {
+        if thread_rng().r#gen() {
             self.submit_transactions_public(transactions).await
         } else {
             self.submit_transactions_private(transactions)

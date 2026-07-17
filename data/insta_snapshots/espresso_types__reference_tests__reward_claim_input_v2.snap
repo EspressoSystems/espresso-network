@@ -1,5 +1,5 @@
 ---
-source: types/src/reference_tests.rs
+source: crates/espresso/types/src/reference_tests.rs
 expression: reward_claim_input
 ---
 lifetime_rewards: "0x7b"

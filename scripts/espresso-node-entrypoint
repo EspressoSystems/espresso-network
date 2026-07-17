@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -eEu -o pipefail
+
+# Backward compat: ESPRESSO_SEQUENCER_EMBEDDED_DB -> ESPRESSO_NODE_EMBEDDED_DB
+if [ -z "${ESPRESSO_NODE_EMBEDDED_DB:-}" ] && [ -n "${ESPRESSO_SEQUENCER_EMBEDDED_DB:-}" ]; then
+    echo "ERROR: ESPRESSO_SEQUENCER_EMBEDDED_DB is deprecated, use ESPRESSO_NODE_EMBEDDED_DB instead" >&2
+    ESPRESSO_NODE_EMBEDDED_DB="$ESPRESSO_SEQUENCER_EMBEDDED_DB"
+fi
+export ESPRESSO_NODE_EMBEDDED_DB=${ESPRESSO_NODE_EMBEDDED_DB:-false}
+
+# `exec` the node so it replaces this shell as the entrypoint process and
+# receives SIGTERM/SIGINT directly. The node handles these for graceful shutdown
+# without `exec` the signal would go to this shell instead 
+# and the node would be force killed on `docker stop`.
+if [ "$ESPRESSO_NODE_EMBEDDED_DB" = "true" ]; then
+    echo "Starting Espresso node with sqlite..."
+    exec /bin/espresso-node-sqlite -- storage-sql "$@"
+else
+    echo "Starting Espresso node..."
+    exec /bin/espresso-node-postgres "$@"
+fi

@@ -2,8 +2,8 @@ use alloy::{
     network::{Network, TransactionBuilder},
     primitives::Address,
     providers::{
-        fillers::{FillerControlFlow, TxFiller},
         Provider, SendableTx,
+        fillers::{FillerControlFlow, TxFiller},
     },
     transports::TransportResult,
 };

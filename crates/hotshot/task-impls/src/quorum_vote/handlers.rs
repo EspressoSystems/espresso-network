@@ -9,45 +9,46 @@ use std::{sync::Arc, time::Instant};
 use async_broadcast::{InactiveReceiver, Sender};
 use chrono::Utc;
 use committable::Committable;
+use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_types::{
     consensus::OuterConsensus,
-    data::{Leaf2, QuorumProposalWrapper, VidDisperseShare},
+    data::{EpochNumber, Leaf2, QuorumProposalWrapper, VidDisperseShare, ViewNumber},
     drb::INITIAL_DRB_RESULT,
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     event::{Event, EventType},
     message::{Proposal, UpgradeLock},
     simple_vote::{EpochRootQuorumVote2, LightClientStateUpdateVote2, QuorumData2, QuorumVote2},
+    stake_table::HSStakeTable,
     storage_metrics::StorageMetricsValue,
     traits::{
+        ValidatedState,
         block_contents::BlockHeader,
         election::Membership,
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
+        node_implementation::{NodeImplementation, NodeType},
         signature_key::{
             LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey, StateSignatureKey,
         },
         storage::Storage,
-        ValidatedState,
     },
     utils::{epoch_from_block_number, is_epoch_transition, is_last_block, is_transition_block},
     vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::*;
 use tracing::instrument;
-use vbs::version::StaticVersionType;
+use versions::EPOCH_VERSION;
 
 use super::QuorumVoteTaskState;
 use crate::{
     events::HotShotEvent,
     helpers::{
-        broadcast_event, decide_from_proposal, decide_from_proposal_2, derive_signed_state_digest,
-        fetch_proposal, handle_drb_result, LeafChainTraversalOutcome,
+        LeafChainTraversalOutcome, broadcast_event, decide_from_proposal, decide_from_proposal_2,
+        fetch_proposal, handle_drb_result,
     },
-    quorum_vote::Versions,
 };
 
 /// Store the DRB result for the next epoch if we received it in a decided leaf.
-async fn store_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
-    task_state: &mut QuorumVoteTaskState<TYPES, I, V>,
+async fn store_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>>(
+    task_state: &mut QuorumVoteTaskState<TYPES, I>,
     decided_leaf: &Leaf2<TYPES>,
 ) -> Result<()> {
     if task_state.epoch_height == 0 {
@@ -56,7 +57,7 @@ async fn store_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Vers
     }
 
     let decided_block_number = decided_leaf.block_header().block_number();
-    let current_epoch_number = TYPES::Epoch::new(epoch_from_block_number(
+    let current_epoch_number = EpochNumber::new(epoch_from_block_number(
         decided_block_number,
         task_state.epoch_height,
     ));
@@ -84,16 +85,12 @@ async fn store_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Vers
 pub(crate) async fn handle_quorum_proposal_validated<
     TYPES: NodeType,
     I: NodeImplementation<TYPES>,
-    V: Versions,
 >(
     proposal: &QuorumProposalWrapper<TYPES>,
-    task_state: &mut QuorumVoteTaskState<TYPES, I, V>,
+    task_state: &mut QuorumVoteTaskState<TYPES, I>,
     event_sender: &Sender<Arc<HotShotEvent<TYPES>>>,
 ) -> Result<()> {
-    let version = task_state
-        .upgrade_lock
-        .version(proposal.view_number())
-        .await?;
+    let version = task_state.upgrade_lock.version(proposal.view_number())?;
 
     let LeafChainTraversalOutcome {
         new_locked_view_number,
@@ -103,7 +100,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
         leaf_views,
         included_txns,
         decided_upgrade_cert,
-    } = if version >= V::Epochs::VERSION {
+    } = if version >= EPOCH_VERSION {
         // Skip the decide rule for the last block of the epoch.  This is so
         // that we do not decide the block with epoch_height -2 before we enter the new epoch
         if !is_last_block(
@@ -113,9 +110,9 @@ pub(crate) async fn handle_quorum_proposal_validated<
             decide_from_proposal_2::<TYPES, I>(
                 proposal,
                 OuterConsensus::new(Arc::clone(&task_state.consensus.inner_consensus)),
-                Arc::clone(&task_state.upgrade_lock.decided_upgrade_certificate),
+                &task_state.upgrade_lock,
                 &task_state.public_key,
-                version >= V::Epochs::VERSION,
+                version >= EPOCH_VERSION,
                 &task_state.membership,
                 &task_state.storage,
             )
@@ -127,9 +124,9 @@ pub(crate) async fn handle_quorum_proposal_validated<
         decide_from_proposal::<TYPES, I>(
             proposal,
             OuterConsensus::new(Arc::clone(&task_state.consensus.inner_consensus)),
-            Arc::clone(&task_state.upgrade_lock.decided_upgrade_certificate),
+            &task_state.upgrade_lock,
             &task_state.public_key,
-            version >= V::Epochs::VERSION,
+            version >= EPOCH_VERSION,
             &task_state.membership,
             &task_state.storage,
             task_state.epoch_height,
@@ -138,16 +135,14 @@ pub(crate) async fn handle_quorum_proposal_validated<
     };
 
     if let (Some(cert), Some(_)) = (decided_upgrade_cert.clone(), new_decided_view_number) {
-        let mut decided_certificate_lock = task_state
+        task_state
             .upgrade_lock
-            .decided_upgrade_certificate
-            .write()
-            .await;
-        *decided_certificate_lock = Some(cert.clone());
-        drop(decided_certificate_lock);
-        if cert.data.new_version >= V::Epochs::VERSION && V::Base::VERSION < V::Epochs::VERSION {
+            .set_decided_upgrade_cert(cert.clone());
+        if cert.data.new_version >= EPOCH_VERSION
+            && task_state.upgrade_lock.upgrade().base < EPOCH_VERSION
+        {
             let epoch_height = task_state.consensus.read().await.epoch_height;
-            let first_epoch_number = TYPES::Epoch::new(epoch_from_block_number(
+            let first_epoch_number = EpochNumber::new(epoch_from_block_number(
                 proposal.block_header().block_number(),
                 epoch_height,
             ));
@@ -156,8 +151,6 @@ pub(crate) async fn handle_quorum_proposal_validated<
             task_state
                 .membership
                 .membership()
-                .write()
-                .await
                 .set_first_epoch(first_epoch_number, INITIAL_DRB_RESULT);
 
             broadcast_event(
@@ -172,12 +165,10 @@ pub(crate) async fn handle_quorum_proposal_validated<
 
         for da_committee in &task_state.da_committees {
             if cert.data.new_version >= da_committee.start_version {
-                task_state
-                    .membership
-                    .membership()
-                    .write()
-                    .await
-                    .add_da_committee(da_committee.start_epoch, da_committee.committee.clone());
+                task_state.membership.membership().add_da_committee(
+                    da_committee.start_epoch.into(),
+                    da_committee.committee.clone(),
+                );
             }
         }
 
@@ -221,6 +212,10 @@ pub(crate) async fn handle_quorum_proposal_validated<
             .metrics
             .number_of_views_per_decide_event
             .add_point(cur_number_of_views_per_decide_event as f64);
+        for leaf in leaf_views.iter().rev() {
+            consensus_writer
+                .update_participation_from_qc(&leaf.leaf.justify_qc(), &task_state.membership)?;
+        }
 
         // We don't need to hold this while we broadcast
         drop(consensus_writer);
@@ -268,7 +263,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
             committing_qc.view_number()
         );
 
-        if version >= V::Epochs::VERSION {
+        if version >= EPOCH_VERSION {
             for leaf_view in leaf_views {
                 store_drb_result(task_state, &leaf_view.leaf).await?;
             }
@@ -281,19 +276,19 @@ pub(crate) async fn handle_quorum_proposal_validated<
 /// Updates the shared consensus state with the new voting data.
 #[instrument(skip_all, target = "VoteDependencyHandle", fields(view = *view_number))]
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn update_shared_state<TYPES: NodeType, V: Versions>(
+pub(crate) async fn update_shared_state<TYPES: NodeType>(
     consensus: OuterConsensus<TYPES>,
     sender: Sender<Arc<HotShotEvent<TYPES>>>,
     receiver: InactiveReceiver<Arc<HotShotEvent<TYPES>>>,
     membership: EpochMembershipCoordinator<TYPES>,
     public_key: TYPES::SignatureKey,
     private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
-    upgrade_lock: UpgradeLock<TYPES, V>,
-    view_number: TYPES::View,
+    upgrade_lock: UpgradeLock<TYPES>,
+    view_number: ViewNumber,
     instance_state: Arc<TYPES::InstanceState>,
     proposed_leaf: &Leaf2<TYPES>,
     vid_share: &Proposal<TYPES, VidDisperseShare<TYPES>>,
-    parent_view_number: Option<TYPES::View>,
+    parent_view_number: Option<ViewNumber>,
     epoch_height: u64,
 ) -> Result<()> {
     let justify_qc = &proposed_leaf.justify_qc();
@@ -356,7 +351,7 @@ pub(crate) async fn update_shared_state<TYPES: NodeType, V: Versions>(
         bail!("Parent state not found! Consensus internally inconsistent");
     };
 
-    let version = upgrade_lock.version(view_number).await?;
+    let version = upgrade_lock.version(view_number)?;
 
     let now = Instant::now();
     let (validated_state, state_delta) = parent_state
@@ -404,13 +399,13 @@ pub(crate) async fn update_shared_state<TYPES: NodeType, V: Versions>(
 /// Submits the `QuorumVoteSend` event if all the dependencies are met.
 #[instrument(skip_all, fields(name = "Submit quorum vote", level = "error"))]
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions>(
+pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     sender: Sender<Arc<HotShotEvent<TYPES>>>,
     membership: EpochMembership<TYPES>,
     public_key: TYPES::SignatureKey,
     private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
-    upgrade_lock: UpgradeLock<TYPES, V>,
-    view_number: TYPES::View,
+    upgrade_lock: UpgradeLock<TYPES>,
+    view_number: ViewNumber,
     storage: I::Storage,
     storage_metrics: Arc<StorageMetricsValue>,
     leaf: Leaf2<TYPES>,
@@ -421,16 +416,12 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
     state_private_key: &<TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
     stake_table_capacity: usize,
 ) -> Result<()> {
-    let committee_member_in_current_epoch = membership.has_stake(&public_key).await;
+    let committee_member_in_current_epoch = membership.has_stake(&public_key);
     // If the proposed leaf is for the last block in the epoch and the node is part of the quorum committee
     // in the next epoch, the node should vote to achieve the double quorum.
     let committee_member_in_next_epoch = leaf.with_epoch
         && is_epoch_transition(leaf.height(), epoch_height)
-        && membership
-            .next_epoch_stake_table()
-            .await?
-            .has_stake(&public_key)
-            .await;
+        && membership.next_epoch_stake_table()?.has_stake(&public_key);
 
     ensure!(
         committee_member_in_current_epoch || committee_member_in_next_epoch,
@@ -455,7 +446,6 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
         &private_key,
         &upgrade_lock,
     )
-    .await
     .wrap()
     .context(error!("Failed to sign vote. This should never happen."))?;
     let now = Instant::now();
@@ -473,7 +463,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
 
     // Make epoch root vote
 
-    let epoch_enabled = upgrade_lock.epochs_enabled(view_number).await;
+    let epoch_enabled = upgrade_lock.epochs_enabled(view_number);
     if extended_vote && epoch_enabled {
         tracing::debug!("sending extended vote to everybody",);
         broadcast_event(
@@ -491,11 +481,8 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
             .get_light_client_state(view_number)
             .wrap()
             .context(error!("Failed to generate light client state"))?;
-        let next_stake_table = membership
-            .next_epoch_stake_table()
-            .await?
-            .stake_table()
-            .await;
+        let next_stake_table =
+            HSStakeTable::from_iter(membership.next_epoch_stake_table()?.stake_table());
         let next_stake_table_state = next_stake_table
             .commitment(stake_table_capacity)
             .wrap()
@@ -524,7 +511,7 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>, V
         .wrap()
         .context(error!("Failed to sign the light client state"))?;
         let state_vote = LightClientStateUpdateVote2 {
-            epoch: TYPES::Epoch::new(epoch_from_block_number(leaf.height(), epoch_height)),
+            epoch: EpochNumber::new(epoch_from_block_number(leaf.height(), epoch_height)),
             light_client_state,
             next_stake_table_state,
             signature,

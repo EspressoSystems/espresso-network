@@ -13,7 +13,7 @@ use committable::Committable;
 use futures::StreamExt;
 use hotshot::tasks::task_state::CreateTaskState;
 use hotshot_example_types::{
-    node_types::{MemoryImpl, TestTypes, TestVersions},
+    node_types::{MemoryImpl, TEST_VERSIONS, TestTypes, TestVersions},
     state_types::TestValidatedState,
 };
 use hotshot_macros::{run_test, test_scripts};
@@ -31,11 +31,8 @@ use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
     request_response::ProposalRequestPayload,
     traits::{
-        consensus_api::ConsensusApi,
-        election::Membership,
-        node_implementation::{ConsensusTime, NodeType},
-        signature_key::SignatureKey,
-        ValidatedState,
+        ValidatedState, consensus_api::ConsensusApi, election::Membership,
+        node_implementation::NodeType, signature_key::SignatureKey,
     },
 };
 
@@ -49,13 +46,12 @@ async fn test_quorum_proposal_recv_task() {
         script::{Expectations, TaskScript},
     };
 
-    let (handle, _, _, node_key_map) =
-        build_system_handle::<TestTypes, MemoryImpl, TestVersions>(2).await;
+    let (handle, _, _, node_key_map) = build_system_handle::<TestTypes, MemoryImpl>(2).await;
     let membership = handle.hotshot.membership_coordinator.clone();
     let consensus = handle.hotshot.consensus();
     let mut consensus_writer = consensus.write().await;
 
-    let mut generator = TestViewGenerator::<TestVersions>::generate(membership, node_key_map);
+    let mut generator = TestViewGenerator::generate(membership, node_key_map, TEST_VERSIONS.test);
     let mut proposals = Vec::new();
     let mut leaders = Vec::new();
     let mut votes = Vec::new();
@@ -96,9 +92,7 @@ async fn test_quorum_proposal_recv_task() {
         exact(ViewChange(ViewNumber::new(2), None)),
     ])];
 
-    let state =
-        QuorumProposalRecvTaskState::<TestTypes, MemoryImpl, TestVersions>::create_from(&handle)
-            .await;
+    let state = QuorumProposalRecvTaskState::<TestTypes, MemoryImpl>::create_from(&handle).await;
     let mut script = TaskScript {
         timeout: Duration::from_millis(35),
         state,
@@ -121,13 +115,12 @@ async fn test_quorum_proposal_recv_task_liveness_check() {
     };
     use hotshot_types::{data::Leaf2, vote::HasViewNumber};
 
-    let (handle, _, _, node_key_map) =
-        build_system_handle::<TestTypes, MemoryImpl, TestVersions>(4).await;
+    let (handle, _, _, node_key_map) = build_system_handle::<TestTypes, MemoryImpl>(4).await;
     let membership = handle.hotshot.membership_coordinator.clone();
     let consensus = handle.hotshot.consensus();
     let mut consensus_writer = consensus.write().await;
 
-    let mut generator = TestViewGenerator::<TestVersions>::generate(membership, node_key_map);
+    let mut generator = TestViewGenerator::generate(membership, node_key_map, TEST_VERSIONS.test);
     let mut proposals = Vec::new();
     let mut leaders = Vec::new();
     let mut votes = Vec::new();
@@ -187,9 +180,7 @@ async fn test_quorum_proposal_recv_task_liveness_check() {
         exact(QuorumProposalRequestSend(req, signature)),
     ])];
 
-    let state =
-        QuorumProposalRecvTaskState::<TestTypes, MemoryImpl, TestVersions>::create_from(&handle)
-            .await;
+    let state = QuorumProposalRecvTaskState::<TestTypes, MemoryImpl>::create_from(&handle).await;
     let mut script = TaskScript {
         timeout: Duration::from_millis(35),
         state,

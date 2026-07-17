@@ -12,13 +12,14 @@ use handlers::handle_epoch_root_quorum_vote_recv;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::OuterConsensus,
+    data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
-    event::Event,
+    event::{Event, EventType},
     message::UpgradeLock,
     simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, TimeoutCertificate2},
     simple_vote::{HasEpoch, NextEpochQuorumVote2, QuorumVote2, TimeoutVote2},
     traits::{
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType, Versions},
+        node_implementation::{NodeImplementation, NodeType},
         signature_key::SignatureKey,
         storage::Storage,
     },
@@ -34,7 +35,7 @@ use self::handlers::{
 };
 use crate::{
     events::HotShotEvent,
-    helpers::{broadcast_view_change, validate_qc_and_next_epoch_qc},
+    helpers::{broadcast_event, broadcast_view_change, validate_qc_and_next_epoch_qc},
     vote_collection::{EpochRootVoteCollectorsMap, VoteCollectorsMap},
 };
 
@@ -42,7 +43,7 @@ use crate::{
 mod handlers;
 
 /// Task state for the Consensus task.
-pub struct ConsensusTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> {
+pub struct ConsensusTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>> {
     /// Our public key
     pub public_key: TYPES::SignatureKey,
 
@@ -59,31 +60,27 @@ pub struct ConsensusTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: 
     pub membership_coordinator: EpochMembershipCoordinator<TYPES>,
 
     /// A map of `QuorumVote` collector tasks.
-    pub vote_collectors: VoteCollectorsMap<TYPES, QuorumVote2<TYPES>, QuorumCertificate2<TYPES>, V>,
+    pub vote_collectors: VoteCollectorsMap<TYPES, QuorumVote2<TYPES>, QuorumCertificate2<TYPES>>,
 
     /// A map of `EpochRootQuorumVote` collector tasks.
-    pub epoch_root_vote_collectors: EpochRootVoteCollectorsMap<TYPES, V>,
+    pub epoch_root_vote_collectors: EpochRootVoteCollectorsMap<TYPES>,
 
     /// A map of `QuorumVote` collector tasks. They collect votes from the nodes in the next epoch.
-    pub next_epoch_vote_collectors: VoteCollectorsMap<
-        TYPES,
-        NextEpochQuorumVote2<TYPES>,
-        NextEpochQuorumCertificate2<TYPES>,
-        V,
-    >,
+    pub next_epoch_vote_collectors:
+        VoteCollectorsMap<TYPES, NextEpochQuorumVote2<TYPES>, NextEpochQuorumCertificate2<TYPES>>,
 
     /// A map of `TimeoutVote` collector tasks.
     pub timeout_vote_collectors:
-        VoteCollectorsMap<TYPES, TimeoutVote2<TYPES>, TimeoutCertificate2<TYPES>, V>,
+        VoteCollectorsMap<TYPES, TimeoutVote2<TYPES>, TimeoutCertificate2<TYPES>>,
 
     /// The view number that this node is currently executing in.
-    pub cur_view: TYPES::View,
+    pub cur_view: ViewNumber,
 
     /// Timestamp this view starts at.
     pub cur_view_time: i64,
 
     /// The epoch number that this node is currently executing in.
-    pub cur_epoch: Option<TYPES::Epoch>,
+    pub cur_epoch: Option<EpochNumber>,
 
     /// Output events to application
     pub output_event_stream: async_broadcast::Sender<Event<TYPES>>,
@@ -104,7 +101,7 @@ pub struct ConsensusTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: 
     pub id: u64,
 
     /// Lock for a decided upgrade
-    pub upgrade_lock: UpgradeLock<TYPES, V>,
+    pub upgrade_lock: UpgradeLock<TYPES>,
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
@@ -113,10 +110,10 @@ pub struct ConsensusTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>, V: 
     pub view_start_time: Instant,
 
     /// First view in which epoch version takes effect
-    pub first_epoch: Option<(TYPES::View, TYPES::Epoch)>,
+    pub first_epoch: Option<(ViewNumber, EpochNumber)>,
 }
 
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskState<TYPES, I, V> {
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> ConsensusTaskState<TYPES, I> {
     /// Handles a consensus event received on the event stream
     #[instrument(skip_all, fields(id = self.id, cur_view = *self.cur_view, cur_epoch = self.cur_epoch.map(|x| *x)), name = "Consensus replica task", level = "error", target = "ConsensusTaskState")]
     pub async fn handle(
@@ -125,14 +122,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
         sender: Sender<Arc<HotShotEvent<TYPES>>>,
     ) -> Result<()> {
         match event.as_ref() {
-            HotShotEvent::QuorumVoteRecv(ref vote) => {
+            HotShotEvent::QuorumVoteRecv(vote) => {
                 if let Err(e) =
                     handle_quorum_vote_recv(vote, Arc::clone(&event), &sender, self).await
                 {
                     tracing::debug!("Failed to handle QuorumVoteRecv event; error = {e}");
                 }
             },
-            HotShotEvent::EpochRootQuorumVoteRecv(ref vote) => {
+            HotShotEvent::EpochRootQuorumVoteRecv(vote) => {
                 if let Err(e) =
                     handle_epoch_root_quorum_vote_recv(vote, Arc::clone(&event), &sender, self)
                         .await
@@ -140,7 +137,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                     tracing::debug!("Failed to handle EpochRootQuorumVoteRecv event; error = {e}");
                 }
             },
-            HotShotEvent::TimeoutVoteRecv(ref vote) => {
+            HotShotEvent::TimeoutVoteRecv(vote) => {
                 if let Err(e) =
                     handle_timeout_vote_recv(vote, Arc::clone(&event), &sender, self).await
                 {
@@ -153,10 +150,15 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
             HotShotEvent::ViewChange(new_view_number, epoch_number) => {
                 // Request the randomized stake table for the subsequent epoch,
                 // to trigger catchup and the DRB calculation if it happens to be missing.
-                let _ = self
-                    .membership_coordinator
-                    .membership_for_epoch(epoch_number.map(|e| e + 1))
-                    .await;
+                //
+                // the frequency is dynamic, depending on the epoch height. if the epoch height is low
+                // (e.g. like it is in tests), we do this every view
+                let frequency = (self.epoch_height / 30).clamp(1, 100);
+                if **new_view_number % frequency == 0 {
+                    let _ = self
+                        .membership_coordinator
+                        .membership_for_epoch(epoch_number.map(|e| e + 1));
+                }
 
                 if let Err(e) =
                     handle_view_change(*new_view_number, *epoch_number, &sender, self).await
@@ -179,7 +181,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                 let cert_epoch = epoch_from_block_number(cert_block_number, self.epoch_height);
                 tracing::error!("Formed Extended QC for view {cert_view} and epoch {cert_epoch}.");
                 // Transition to the new epoch by sending ViewChange
-                let next_epoch = TYPES::Epoch::new(cert_epoch + 1);
+                let next_epoch = EpochNumber::new(cert_epoch + 1);
                 broadcast_view_change(&sender, cert_view + 1, Some(next_epoch), self.first_epoch)
                     .await;
                 tracing::info!("Entering new epoch: {next_epoch}");
@@ -187,10 +189,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                     "Stake table for epoch {}:\n\n{:?}",
                     next_epoch,
                     self.membership_coordinator
-                        .stake_table_for_epoch(Some(next_epoch))
-                        .await?
+                        .stake_table_for_epoch(Some(next_epoch))?
                         .stake_table()
-                        .await
+                        .cloned()
+                        .collect::<Vec<_>>()
                 );
             },
             HotShotEvent::ExtendedQcRecv(high_qc, next_epoch_high_qc, _) => {
@@ -259,6 +261,32 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
                     .await;
                 }
             },
+            HotShotEvent::Qc2Formed(either::Left(qc))
+                if self.upgrade_lock.new_protocol_active(self.cur_view)
+                    && !self.upgrade_lock.new_protocol_active(qc.view_number()) =>
+            {
+                // Cutover boundary only: the gated proposal path won't land this
+                // last-legacy QC in `high_qc`, so capture it here for
+                // `extract_pre_cutover_seed` to carry across. `update_high_qc` is
+                // monotone, so this is a no-op outside the cutover window.
+                let mut consensus_writer = self.consensus.write().await;
+                let _ = consensus_writer.update_high_qc(qc.clone());
+                drop(consensus_writer);
+                if let Err(e) = self.storage.update_high_qc2(qc.clone()).await {
+                    tracing::warn!("Failed to persist boundary high QC: {e}");
+                }
+                // Forward to the espresso bridge -> new-protocol coordinator, in case the
+                // cutover seed was snapshotted before this QC finished assembling. Only the
+                // cutover-view leader reaches this arm, so it lands exactly where needed.
+                broadcast_event(
+                    Event {
+                        view_number: qc.view_number(),
+                        event: EventType::LegacyHighQcFormed { qc: qc.clone() },
+                    },
+                    &self.output_event_stream,
+                )
+                .await;
+            },
             _ => {},
         }
 
@@ -267,9 +295,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> ConsensusTaskSt
 }
 
 #[async_trait]
-impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TaskState
-    for ConsensusTaskState<TYPES, I, V>
-{
+impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for ConsensusTaskState<TYPES, I> {
     type Event = HotShotEvent<TYPES>;
 
     async fn handle_event(
@@ -278,6 +304,26 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>, V: Versions> TaskState
         sender: &Sender<Arc<Self::Event>>,
         _receiver: &Receiver<Arc<Self::Event>>,
     ) -> Result<()> {
+        if self.upgrade_lock.new_protocol_active(self.cur_view) {
+            // Past cutover: still admit votes/QCs for strictly-pre-cutover views so
+            // the cutover leader can finish the last legacy QC; everything else
+            // (proposing, voting, view changes) stays shut down.
+            let admit = match event.as_ref() {
+                HotShotEvent::QuorumVoteRecv(vote) => {
+                    !self.upgrade_lock.new_protocol_active(vote.view_number())
+                },
+                HotShotEvent::EpochRootQuorumVoteRecv(vote) => {
+                    !self.upgrade_lock.new_protocol_active(vote.view_number())
+                },
+                HotShotEvent::Qc2Formed(either::Left(qc)) => {
+                    !self.upgrade_lock.new_protocol_active(qc.view_number())
+                },
+                _ => false,
+            };
+            if !admit {
+                return Ok(());
+            }
+        }
         self.handle(event, sender.clone()).await
     }
 

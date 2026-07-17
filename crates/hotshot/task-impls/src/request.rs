@@ -7,8 +7,8 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
@@ -18,6 +18,7 @@ use async_trait::async_trait;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::OuterConsensus,
+    data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     simple_vote::HasEpoch,
     traits::{
@@ -54,7 +55,7 @@ pub struct NetworkRequestState<TYPES: NodeType, I: NodeImplementation<TYPES>> {
     pub consensus: OuterConsensus<TYPES>,
 
     /// Last seen view, we won't request for proposals before older than this view
-    pub view: TYPES::View,
+    pub view: ViewNumber,
 
     /// Delay before requesting peers
     pub delay: Duration,
@@ -75,7 +76,7 @@ pub struct NetworkRequestState<TYPES: NodeType, I: NodeImplementation<TYPES>> {
     pub shutdown_flag: Arc<AtomicBool>,
 
     /// A flag indicating that `HotShotEvent::Shutdown` has been received
-    pub spawned_tasks: BTreeMap<TYPES::View, Vec<JoinHandle<()>>>,
+    pub spawned_tasks: BTreeMap<ViewNumber, Vec<JoinHandle<()>>>,
 
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
@@ -112,20 +113,17 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for NetworkRequest
                 // 2. we are part of the next epoch and this is a proposal for in transition.
                 let membership = self
                     .membership_coordinator
-                    .stake_table_for_epoch(prop_epoch)
-                    .await?;
+                    .stake_table_for_epoch(prop_epoch)?;
                 let mut target_epochs = BTreeSet::new();
-                if membership.has_stake(&self.public_key).await {
+                if membership.has_stake(&self.public_key) {
                     target_epochs.insert(prop_epoch);
                 }
                 if is_epoch_transition(
                     proposal.data.block_header().block_number(),
                     self.epoch_height,
                 ) && membership
-                    .next_epoch_stake_table()
-                    .await?
+                    .next_epoch_stake_table()?
                     .has_stake(&self.public_key)
-                    .await
                 {
                     target_epochs.insert(prop_epoch.map(|e| e + 1));
                 }
@@ -159,12 +157,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for NetworkRequest
                 let epoch = vid_proposal.data.epoch();
 
                 // Get the committee members for the view and the leader, if applicable
-                let membership_reader = self
-                    .membership_coordinator
-                    .membership_for_epoch(epoch)
-                    .await?;
-                let mut da_committee_for_view = membership_reader.da_committee_members(view).await;
-                if let Ok(leader) = membership_reader.leader(view).await {
+                let membership_reader = self.membership_coordinator.membership_for_epoch(epoch)?;
+                let mut da_committee_for_view: BTreeSet<_> = membership_reader
+                    .da_committee_members(view)
+                    .cloned()
+                    .collect();
+                if let Ok(leader) = membership_reader.leader(view) {
                     da_committee_for_view.insert(leader);
                 }
                 drop(membership_reader);
@@ -236,10 +234,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
     /// Creates and signs the payload, then will create a request task
     async fn spawn_requests(
         &mut self,
-        view: TYPES::View,
-        prop_epoch: Option<TYPES::Epoch>,
+        view: ViewNumber,
+        prop_epoch: Option<EpochNumber>,
         sender: &Sender<Arc<HotShotEvent<TYPES>>>,
-        target_epochs: BTreeSet<Option<TYPES::Epoch>>,
+        target_epochs: BTreeSet<Option<EpochNumber>>,
     ) {
         let request = RequestKind::Vid(view, self.public_key.clone());
 
@@ -264,9 +262,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
         request: RequestKind<TYPES>,
         signature: Signature<TYPES>,
         sender: Sender<Arc<HotShotEvent<TYPES>>>,
-        view: TYPES::View,
-        prop_epoch: Option<TYPES::Epoch>,
-        mut target_epochs: BTreeSet<Option<TYPES::Epoch>>,
+        view: ViewNumber,
+        prop_epoch: Option<EpochNumber>,
+        mut target_epochs: BTreeSet<Option<EpochNumber>>,
     ) {
         let consensus = OuterConsensus::new(Arc::clone(&self.consensus.inner_consensus));
         let network = Arc::clone(&self.network);
@@ -275,11 +273,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
         let public_key = self.public_key.clone();
 
         // Get the committee members for the view and the leader, if applicable
-        let membership_reader = match self
-            .membership_coordinator
-            .membership_for_epoch(prop_epoch)
-            .await
-        {
+        let membership_reader = match self.membership_coordinator.membership_for_epoch(prop_epoch) {
             Ok(m) => m,
             Err(e) => {
                 tracing::warn!(e.message);
@@ -289,8 +283,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
         // Get committee members for view
         let mut recipients: Vec<TYPES::SignatureKey> = membership_reader
             .da_committee_members(view)
-            .await
-            .into_iter()
+            .cloned()
             .collect();
 
         // Randomize the recipients so all replicas don't overload the same 1 recipients
@@ -360,10 +353,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
     async fn cancel_vid_request_task(
         consensus: &OuterConsensus<TYPES>,
         public_key: &<TYPES as NodeType>::SignatureKey,
-        view: &TYPES::View,
+        view: &ViewNumber,
         shutdown_flag: &Arc<AtomicBool>,
         id: u64,
-        target_epochs: &mut BTreeSet<Option<TYPES::Epoch>>,
+        target_epochs: &mut BTreeSet<Option<EpochNumber>>,
     ) -> bool {
         let consensus_reader = consensus.read().await;
 

@@ -8,6 +8,7 @@
 pub mod block_contents;
 pub mod consensus_api;
 pub mod election;
+pub mod leaf_fetcher_network;
 pub mod metrics;
 pub mod network;
 pub mod node_implementation;

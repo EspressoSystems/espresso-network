@@ -32,7 +32,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -42,6 +42,16 @@ jobs:
 
       - name: Add Rust target
         run: rustup target add ${{ matrix.target }}
+
+      - name: Install Protoc
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - name: Install Protoc
+        if: runner.os == 'macOS'
+        run: brew install protobuf
 
       - name: Set Environment
         # Install tools and set environment variables like this example
@@ -72,16 +82,18 @@ jobs:
           fi
 
       - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: libespresso_crypto_helper-${{ matrix.target }}.${{ contains(matrix.target, 'apple-darwin') && 'dylib' || 'so' }}
+          retention-days: 1
           path: |
             target/lib/libespresso_crypto_helper-${{ matrix.target }}.${{ contains(matrix.target, 'apple-darwin') && 'dylib' || 'so' }}
 
       - name: Upload sha256 files
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: libespresso_crypto_helper-${{ matrix.target }}.${{ contains(matrix.target, 'apple-darwin') && 'dylib' || 'so' }}.sha256
+          retention-days: 1
           path: |
             target/lib/libespresso_crypto_helper-${{ matrix.target }}.${{ contains(matrix.target, 'apple-darwin') && 'dylib' || 'so' }}.sha256
 
@@ -92,10 +104,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download all Artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: target/lib
 

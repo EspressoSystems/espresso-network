@@ -7,14 +7,11 @@
 //! what to do with them (as opposed to having some sort of filtering mechanism). So for
 //! [`Receiver`] I've done a blanket implementation for channels that send [`Vec<u8>`]s.
 
-use std::{ops::Deref, sync::Arc};
+use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
-use hotshot_types::traits::{
-    network::{BroadcastDelay, ConnectedNetwork, Topic},
-    signature_key::SignatureKey,
-};
+use hotshot_types::traits::signature_key::SignatureKey;
 use tokio::sync::mpsc;
 
 /// A type alias for a shareable byte array
@@ -36,28 +33,6 @@ pub trait Sender<K: SignatureKey + 'static>: Send + Sync + 'static + Clone {
 pub trait Receiver: Send + Sync + 'static {
     /// Receive a message. Returning an error here means the receiver will _NEVER_ receive any more messages
     async fn receive_message(&mut self) -> Result<Bytes>;
-}
-
-/// A blanket implementation of the [`Sender`] trait for all types that dereference to [`ConnectedNetwork`]
-#[async_trait]
-impl<T, K> Sender<K> for T
-where
-    T: Deref<Target: ConnectedNetwork<K>> + Send + Sync + 'static + Clone,
-    K: SignatureKey + 'static,
-{
-    async fn send_direct_message(&self, message: &Bytes, recipient: K) -> Result<()> {
-        // Send the message to the specified recipient
-        self.direct_message(message.to_vec(), recipient)
-            .await
-            .with_context(|| "failed to send message")
-    }
-
-    async fn send_broadcast_message(&self, message: &Bytes) -> Result<()> {
-        // Send the message to all recipients
-        self.broadcast_message(message.to_vec(), Topic::Global, BroadcastDelay::None)
-            .await
-            .with_context(|| "failed to send message")
-    }
 }
 
 /// An implementation of the [`Receiver`] trait for the [`mpsc::Receiver`] type. Allows us to send messages

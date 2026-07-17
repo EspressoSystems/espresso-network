@@ -68,8 +68,9 @@ use jf_merkle_tree_compat::prelude::MerkleProof;
 use tagged_base64::TaggedBase64;
 
 use crate::{
+    Header, Payload, QueryResult, Transaction,
     availability::{
-        BlockId, BlockQueryData, LeafId, LeafQueryData, NamespaceId, PayloadMetadata,
+        BlockId, BlockQueryData, Certificate2, LeafId, LeafQueryData, NamespaceId, PayloadMetadata,
         PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash, VidCommonMetadata,
         VidCommonQueryData,
     },
@@ -84,9 +85,63 @@ use crate::{
         traits::{ExplorerHeader, ExplorerTransaction},
     },
     merklized_state::{MerklizedState, Snapshot},
-    node::{SyncStatus, TimeWindowQueryData, WindowStart},
-    Header, Payload, QueryResult, Transaction,
+    node::{SyncStatusQueryData, TimeWindowQueryData, WindowStart},
+    types::HeightIndexed,
 };
+
+/// Retry a fallible storage operation whenever it fails due to a transient serialization conflict.
+///
+/// Under PostgreSQL `SERIALIZABLE` isolation, concurrent transactions can abort with SQLSTATE
+/// `40001` ("could not serialize access"). These aborts are expected and safe to retry from
+/// scratch, so every read or write should run inside this harness rather than calling
+/// [`read`](VersionedDataSource::read) / [`write`](VersionedDataSource::write) directly.
+///
+/// `f` is re-invoked from scratch on each attempt, so it must (re)open its own transaction.
+/// Backends that cannot produce serialization conflicts (e.g. the file system) implement this as a
+/// single pass-through call.
+///
+/// The operation is generic over its error type `E` (e.g. [`QueryError`], `anyhow::Error`, or an
+/// explorer error); conflicts are detected from the error's [`Display`](std::fmt::Display) output.
+#[async_trait]
+pub trait SerializableRetry {
+    /// Run `f`, retrying on serialization conflicts according to the backend's retry policy.
+    ///
+    /// `op` is a short, static label for the operation (used in diagnostic logging); the
+    /// [`serializable_retry!`](crate::serializable_retry) macro fills it in automatically with the
+    /// name of the enclosing function.
+    async fn serializable_retry<T, E, F, Fut>(&self, op: &'static str, f: F) -> Result<T, E>
+    where
+        T: Send,
+        E: std::fmt::Display + Send,
+        F: Fn() -> Fut + Send + Sync,
+        Fut: Future<Output = Result<T, E>> + Send;
+}
+
+/// Expands to the unqualified name of the enclosing function/method as a `&'static str`.
+#[macro_export]
+macro_rules! function_name {
+    () => {{
+        fn __f() {}
+        fn type_name_of<T>(_: T) -> &'static str {
+            ::std::any::type_name::<T>()
+        }
+        let full: &'static str = type_name_of(__f);
+        let trimmed: &'static str = full.strip_suffix("::__f").unwrap_or(full);
+        trimmed
+            .rsplit("::")
+            .find(|segment| *segment != "{{closure}}")
+            .unwrap_or(trimmed)
+    }};
+}
+
+/// Calls [`SerializableRetry::serializable_retry`] with `op` set to the unqualified name of the
+/// enclosing function via [`function_name!`](crate::function_name).
+#[macro_export]
+macro_rules! serializable_retry {
+    ($self:expr, $f:expr) => {
+        $self.serializable_retry($crate::function_name!(), $f)
+    };
+}
 
 pub mod fail_storage;
 pub mod fs;
@@ -194,35 +249,73 @@ where
         &mut self,
         hash: TransactionHash<Types>,
     ) -> QueryResult<BlockQueryData<Types>>;
-
-    /// Get the first leaf which is available in the database with height >= `from`.
-    async fn first_available_leaf(&mut self, from: u64) -> QueryResult<LeafQueryData<Types>>;
 }
 
-pub trait UpdateAvailabilityStorage<Types>
+pub trait UpdateAvailabilityStorage<Types>: Send
 where
     Types: NodeType,
 {
     fn insert_leaf(
         &mut self,
-        leaf: LeafQueryData<Types>,
+        leaf: &LeafQueryData<Types>,
     ) -> impl Send + Future<Output = anyhow::Result<()>> {
-        self.insert_leaf_with_qc_chain(leaf, None)
+        self.insert_leaf_range([leaf])
     }
 
     fn insert_leaf_with_qc_chain(
         &mut self,
-        leaf: LeafQueryData<Types>,
+        leaf: &LeafQueryData<Types>,
         qc_chain: Option<[CertificatePair<Types>; 2]>,
-    ) -> impl Send + Future<Output = anyhow::Result<()>>;
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move {
+            self.insert_leaf(leaf).await?;
+            self.insert_qc_chain(leaf.height(), qc_chain).await?;
+            Ok(())
+        }
+    }
+
     fn insert_block(
         &mut self,
-        block: BlockQueryData<Types>,
-    ) -> impl Send + Future<Output = anyhow::Result<()>>;
-    fn insert_vid(
+        block: &BlockQueryData<Types>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        self.insert_block_range([block])
+    }
+
+    fn insert_vid<'a>(
         &mut self,
-        common: VidCommonQueryData<Types>,
-        share: Option<VidShare>,
+        common: &'a VidCommonQueryData<Types>,
+        share: Option<&'a VidShare>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        self.insert_vid_range([(common, share)])
+    }
+
+    fn insert_qc_chain(
+        &mut self,
+        height: u64,
+        qc_chain: Option<[CertificatePair<Types>; 2]>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>>;
+
+    fn insert_cert2(
+        &mut self,
+        height: u64,
+        cert2: Certificate2<Types>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>>;
+
+    fn insert_leaf_range<'a>(
+        &mut self,
+        leaves: impl Send + IntoIterator<IntoIter: Send, Item = &'a LeafQueryData<Types>>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>>;
+    fn insert_block_range<'a>(
+        &mut self,
+        blocks: impl Send + IntoIterator<IntoIter: Send, Item = &'a BlockQueryData<Types>>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>>;
+    fn insert_vid_range<'a>(
+        &mut self,
+        vid: impl Send
+        + IntoIterator<
+            IntoIter: Send,
+            Item = (&'a VidCommonQueryData<Types>, Option<&'a VidShare>),
+        >,
     ) -> impl Send + Future<Output = anyhow::Result<()>>;
 }
 
@@ -255,8 +348,23 @@ where
 
     async fn latest_qc_chain(&mut self) -> QueryResult<Option<[CertificatePair<Types>; 2]>>;
 
-    /// Search the database for missing objects and generate a report.
-    async fn sync_status(&mut self) -> QueryResult<SyncStatus>;
+    async fn load_cert2(&mut self, height: u64) -> QueryResult<Option<Certificate2<Types>>>;
+
+    /// Load the earliest cert2 whose finalized block height is at or above `height`.
+    ///
+    /// "Earliest" means the cert2 with the smallest finalized block height that is still greater
+    /// than or equal to the requested `height`.
+    async fn load_earliest_cert2(
+        &mut self,
+        height: u64,
+    ) -> QueryResult<Option<Certificate2<Types>>>;
+
+    /// Search the given range of the database for missing objects.
+    async fn sync_status_for_range(
+        &mut self,
+        from: usize,
+        to: usize,
+    ) -> QueryResult<SyncStatusQueryData>;
 }
 
 #[derive(Clone, Debug, Default)]

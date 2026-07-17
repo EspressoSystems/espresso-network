@@ -1,12 +1,12 @@
 //! Benchmark of VID dispersal
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use rand::RngCore;
-use vid::{avidm_gf2::AvidmGf2Scheme, VidScheme};
+use vid::{VidScheme, avidm_gf2::AvidmGf2Scheme};
 
 fn avidm_gf2_benchmark(c: &mut Criterion) {
-    let param_list = [(34, 100)];
-    let payload_bytes_len_list = [1, 5]; // in MB
-    let mut payload = vec![0u8; 5 * 1024 * 1024];
+    let param_list = [(340, 1000)];
+    let payload_bytes_len_list = [10]; // in MB
+    let mut payload = vec![0u8; 10 * 1024 * 1024];
     let distribution = [1u32; 1000];
     jf_utils::test_rng().fill_bytes(&mut payload);
 

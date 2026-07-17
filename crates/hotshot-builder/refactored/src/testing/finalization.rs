@@ -9,7 +9,7 @@ use hotshot_example_types::{block_types::TestTransaction, state_types::TestInsta
 use tracing_test::traced_test;
 
 use crate::{
-    service::{BuilderConfig, GlobalState, ALLOW_EMPTY_BLOCK_PERIOD},
+    service::{ALLOW_EMPTY_BLOCK_PERIOD, BuilderConfig, GlobalState},
     testing::TestServiceWrapper,
 };
 

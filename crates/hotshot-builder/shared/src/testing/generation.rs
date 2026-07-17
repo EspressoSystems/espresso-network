@@ -17,8 +17,8 @@ use hotshot_testing::{
     test_runner::Node,
     test_task::{AnyTestTaskState, TestResult, TestTaskState, TestTaskStateSeed},
 };
-use hotshot_types::traits::node_implementation::{NodeType, Versions};
-use rand::{seq::SliceRandom, thread_rng, Rng};
+use hotshot_types::traits::node_implementation::NodeType;
+use rand::{Rng, seq::SliceRandom, thread_rng};
 use surf_disco::Client;
 use url::Url;
 use vec1::Vec1;
@@ -79,15 +79,14 @@ pub struct TransactionGenerationConfig {
 }
 
 #[async_trait]
-impl<Types, I, V> TestTaskStateSeed<Types, I, V> for TransactionGenerationConfig
+impl<Types, I> TestTaskStateSeed<Types, I> for TransactionGenerationConfig
 where
     Types: NodeType<Transaction = TestTransaction>,
     I: TestableNodeImplementation<Types>,
-    V: Versions,
 {
     async fn into_state(
         self: Box<Self>,
-        handles: Arc<RwLock<Vec<Node<Types, I, V>>>>,
+        handles: Arc<RwLock<Vec<Node<Types, I>>>>,
     ) -> AnyTestTaskState<Types> {
         let builder_urls = handles.read_arc().await[0]
             .handle
@@ -105,24 +104,22 @@ where
     }
 }
 
-pub struct TransactionGenerationTask<Types, I, V>
+pub struct TransactionGenerationTask<Types, I>
 where
     Types: NodeType,
     I: TestableNodeImplementation<Types>,
-    V: Versions,
 {
     pub(crate) builder_urls: Vec1<Url>,
     pub(crate) config: TransactionGenerationConfig,
-    pub(crate) handles: Arc<RwLock<Vec<Node<Types, I, V>>>>,
+    pub(crate) handles: Arc<RwLock<Vec<Node<Types, I>>>>,
     pub(crate) txn_nonce: usize,
     pub(crate) txn_queue: VecDeque<TestTransaction>,
 }
 
-impl<Types, I, V> TransactionGenerationTask<Types, I, V>
+impl<Types, I> TransactionGenerationTask<Types, I>
 where
     Types: NodeType<Transaction = TestTransaction>,
     I: TestableNodeImplementation<Types>,
-    V: Versions,
 {
     /// Fill queue of transactions to submit for `view_number` based on generation strategy
     fn fill_queue(&mut self, view_number: u64) {
@@ -194,11 +191,10 @@ where
 }
 
 #[async_trait]
-impl<Types, I, V> TestTaskState for TransactionGenerationTask<Types, I, V>
+impl<Types, I> TestTaskState for TransactionGenerationTask<Types, I>
 where
     Types: NodeType<Transaction = TestTransaction>,
     I: TestableNodeImplementation<Types>,
-    V: Versions,
 {
     type Event = Event<Types>;
     type Error = Error;

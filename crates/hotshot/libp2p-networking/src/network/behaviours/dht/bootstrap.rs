@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use futures::{channel::mpsc, StreamExt};
+use futures::{StreamExt, channel::mpsc};
 use tokio::{spawn, sync::mpsc::UnboundedSender, time::timeout};
 
 use crate::network::ClientRequest;
@@ -56,7 +56,7 @@ impl DHTBootstrapTask {
                         break;
                     },
                     Some(InputEvent::StartBootstrap) => {
-                        tracing::warn!("Trying to start bootstrap that's already in progress");
+                        tracing::debug!("Trying to start bootstrap that's already in progress");
                         continue;
                     },
                     None => {

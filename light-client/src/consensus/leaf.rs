@@ -1,12 +1,15 @@
 use std::sync::Arc;
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use committable::Committable;
-use espresso_types::{EpochVersion, Leaf2, SeqTypes};
-use hotshot_query_service::availability::LeafQueryData;
-use hotshot_types::{data::EpochNumber, epoch_membership::EpochMembership, vote::HasViewNumber};
+use espresso_types::{Certificate2, Leaf2, SeqTypes};
+use hotshot_query_service_types::availability::LeafQueryData;
+use hotshot_types::{
+    data::EpochNumber, epoch_membership::EpochMembership, simple_certificate::QuorumCertificate2,
+    traits::block_contents::BlockHeader, utils::epoch_from_block_number, vote::HasViewNumber,
+};
 use serde::{Deserialize, Serialize};
-use vbs::version::StaticVersionType;
+use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION};
 
 use super::quorum::{Certificate, Quorum};
 use crate::consensus::quorum::StakeTableQuorum;
@@ -34,6 +37,15 @@ pub enum FinalityProof {
         deciding_qc: Arc<Certificate>,
     },
 
+    /// The finality follows from a Certificate2 in the new protocol.
+    ///
+    /// Certificate2 proves finality. The QC is needed to reconstruct the returned
+    /// [`LeafQueryData`] when the proof contains only the leaf committed by cert2.
+    NewProtocol {
+        cert2: Arc<Certificate2<SeqTypes>>,
+        leaf_qc: Box<QuorumCertificate2<SeqTypes>>,
+    },
+
     /// The finality follows from a 3-chain of QCs using the original HotStuff commit rule.
     ///
     /// The requirements for checking finality of a leaf via the 3-chain rule are similar to the
@@ -44,22 +56,6 @@ pub enum FinalityProof {
         deciding_qc: Arc<Certificate>,
     },
 }
-
-impl FinalityProof {
-    /// The epoch number whose quorum is needed to verify this proof.
-    ///
-    /// This determines the kind of [`LeafProofHint`] needed to verify the proof. If [`Some`], then
-    /// a [`LeafProofHint::Quorum`] is needed with a quorum from this epoch. If [`None`], then a
-    /// [`LeafProofHint::Assumption`] is needed.
-    pub fn epoch(&self) -> Option<EpochNumber> {
-        match self {
-            Self::Assumption => None,
-            Self::HotStuff2 { committing_qc, .. } => committing_qc.epoch(),
-            Self::HotStuff { precommit_qc, .. } => precommit_qc.epoch(),
-        }
-    }
-}
-
 /// A hint that allows a verifier to verify a proof.
 ///
 /// The hint should be supplied by the verifier (e.g. the light client). It represents the root of
@@ -157,7 +153,7 @@ impl LeafProof {
 
                 // Check that HotStuff2 is the appropriate commit rule to use. HotStuff2 commit rule
                 // was introduced with the epochs version of HotShot.
-                ensure!(version >= EpochVersion::version());
+                ensure!(version >= EPOCH_VERSION);
 
                 committing_qc.qc().clone()
             },
@@ -180,14 +176,43 @@ impl LeafProof {
 
                 // Check that HotStuff is the appropriate commit rule to use. HotStuff commit rule
                 // was deprecated with the epochs version of HotShot.
-                ensure!(version < EpochVersion::version());
+                ensure!(version < EPOCH_VERSION);
 
                 precommit_qc.qc().clone()
+            },
+            (FinalityProof::NewProtocol { cert2, leaf_qc }, LeafProofHint::Quorum(quorum)) => {
+                // Certificate2 proves finality for `curr`.
+                let version = curr.block_header().version();
+                ensure!(
+                    version >= NEW_PROTOCOL_VERSION,
+                    "new protocol finality proof used for pre-new-protocol leaf"
+                );
+                ensure!(
+                    cert2.data.leaf_commit == curr.commit(),
+                    "cert2 leaf commitment does not match leaf"
+                );
+                ensure!(
+                    cert2.view_number() == curr.view_number(),
+                    "cert2 view number does not match leaf"
+                );
+                ensure!(
+                    cert2.data.block_number == curr.block_header().block_number(),
+                    "cert2 block number does not match leaf"
+                );
+
+                quorum
+                    .verify_cert2(cert2, version)
+                    .await
+                    .context("verifying cert2 signature")?;
+
+                leaf_qc.as_ref().clone()
             },
             (proof, hint) => {
                 let required = match proof {
                     FinalityProof::Assumption => "finalized leaf",
-                    FinalityProof::HotStuff { .. } | FinalityProof::HotStuff2 { .. } => "quorum",
+                    FinalityProof::HotStuff { .. }
+                    | FinalityProof::HotStuff2 { .. }
+                    | FinalityProof::NewProtocol { .. } => "quorum",
                 };
                 let supplied = match hint {
                     LeafProofHint::Assumption(..) => "finalized leaf",
@@ -217,7 +242,10 @@ impl LeafProof {
 
         // Check if the new leaf plus the last saved leaf contain justifying QCs that form a
         // HotStuff2 QC chain for the leaf before.
-        if len >= 2 && self.leaves[len - 2].block_header().version() >= EpochVersion::version() {
+        if len >= 2
+            && self.leaves[len - 2].block_header().version() >= EPOCH_VERSION
+            && self.leaves[len - 2].block_header().version() < NEW_PROTOCOL_VERSION
+        {
             let committing_qc = Certificate::for_parent(&self.leaves[len - 1]);
             let deciding_qc = Certificate::for_parent(new_leaf.leaf());
             if committing_qc.view_number() == self.leaves[len - 2].view_number()
@@ -243,7 +271,7 @@ impl LeafProof {
 
         // Check if the new leaf plus the last saved leaf contain QCs that form a legacy HotStuff
         // QC chain for the leaf before.
-        if len >= 3 && self.leaves[len - 3].block_header().version() < EpochVersion::version() {
+        if len >= 3 && self.leaves[len - 3].block_header().version() < EPOCH_VERSION {
             let precommit_qc = Certificate::for_parent(&self.leaves[len - 2]);
             let committing_qc = Certificate::for_parent(&self.leaves[len - 1]);
             let deciding_qc = Certificate::for_parent(new_leaf.leaf());
@@ -295,9 +323,38 @@ impl LeafProof {
         };
     }
 
+    /// Complete a finality proof using the new protocol Certificate2.
+    pub fn add_certificate(
+        &mut self,
+        cert2: Arc<Certificate2<SeqTypes>>,
+        leaf_qc: QuorumCertificate2<SeqTypes>,
+    ) {
+        debug_assert!(cert2.data.leaf_commit == self.leaves[self.leaves.len() - 1].commit());
+
+        self.proof = FinalityProof::NewProtocol {
+            cert2,
+            leaf_qc: Box::new(leaf_qc),
+        };
+    }
+
     /// Inspect the raw finality proof within the larger proof.
     pub fn proof(&self) -> &FinalityProof {
         &self.proof
+    }
+
+    /// The epoch number whose quorum is needed to verify this proof.
+    ///
+    /// This determines the kind of [`LeafProofHint`] needed to verify the proof. If [`Some`], then
+    /// a [`LeafProofHint::Quorum`] is needed with a quorum from this epoch. If [`None`], then a
+    /// [`LeafProofHint::Assumption`] is needed.
+    pub fn epoch(&self, epoch_height: u64) -> Result<Option<EpochNumber>> {
+        if matches!(self.proof, FinalityProof::Assumption) {
+            Ok(None)
+        } else {
+            let height = self.leaves.last().context("empty leaf chain")?.height();
+            let epoch = epoch_from_block_number(height, epoch_height);
+            Ok(Some(epoch.into()))
+        }
     }
 }
 
@@ -306,14 +363,14 @@ mod test {
     use pretty_assertions::assert_eq;
 
     use super::*;
-    use crate::testing::{leaf_chain, AlwaysFalseQuorum, AlwaysTrueQuorum, LegacyVersion};
+    use crate::testing::{AlwaysFalseQuorum, AlwaysTrueQuorum, LEGACY_VERSION, leaf_chain};
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_hotstuff2() {
         let mut proof = LeafProof::default();
 
         // Insert some leaves, forming a chain.
-        let leaves = leaf_chain::<EpochVersion>(1..=3).await;
+        let leaves = leaf_chain(1..=3, EPOCH_VERSION).await;
         assert!(!proof.push(leaves[0].clone()));
         assert!(!proof.push(leaves[1].clone()));
         assert!(proof.push(leaves[2].clone()));
@@ -331,7 +388,7 @@ mod test {
         let mut proof = LeafProof::default();
 
         // Insert some leaves, forming a chain.
-        let leaves = leaf_chain::<EpochVersion>(1..=3).await;
+        let leaves = leaf_chain(1..=3, EPOCH_VERSION).await;
         assert!(!proof.push(leaves[0].clone()));
         assert!(!proof.push(leaves[1].clone()));
         assert!(proof.push(leaves[2].clone()));
@@ -357,7 +414,7 @@ mod test {
 
         // Insert a single leaf. We will not be able to provide proofs ending in a leaf chain, but
         // we can return a leaf if the leaf after it is already known to be finalized.
-        let leaves = leaf_chain::<EpochVersion>(1..=2).await;
+        let leaves = leaf_chain(1..=2, EPOCH_VERSION).await;
         assert!(!proof.push(leaves[0].clone()));
         assert_eq!(
             proof
@@ -374,7 +431,7 @@ mod test {
 
         // Insert multiple leaves that don't chain. We will not be able to prove these are
         // finalized.
-        let leaves = leaf_chain::<EpochVersion>(1..=4).await;
+        let leaves = leaf_chain(1..=4, EPOCH_VERSION).await;
         assert!(!proof.push(leaves[0].clone()));
         assert!(!proof.push(leaves[2].clone()));
 
@@ -392,7 +449,7 @@ mod test {
         let mut proof = LeafProof::default();
 
         // Insert a single leaf, plus an extra QC chain proving it finalized.
-        let leaves = leaf_chain::<EpochVersion>(1..=3).await;
+        let leaves = leaf_chain(1..=3, EPOCH_VERSION).await;
         assert!(!proof.push(leaves[0].clone()));
         proof.add_qc_chain(
             Arc::new(Certificate::for_parent(leaves[1].leaf())),
@@ -412,7 +469,7 @@ mod test {
         let mut proof = LeafProof::default();
 
         // Insert some leaves, forming a chain.
-        let leaves = leaf_chain::<LegacyVersion>(1..=4).await;
+        let leaves = leaf_chain(1..=4, LEGACY_VERSION).await;
         assert!(!proof.push(leaves[0].clone()));
         assert!(!proof.push(leaves[1].clone()));
         assert!(!proof.push(leaves[2].clone()));
@@ -432,7 +489,7 @@ mod test {
 
         // Insert some leaves, forming a 2-chain but not the 3-chain required to decide in legacy
         // HotStuff.
-        let leaves = leaf_chain::<LegacyVersion>(1..=3).await;
+        let leaves = leaf_chain(1..=3, LEGACY_VERSION).await;
         assert!(!proof.push(leaves[0].clone()));
         assert!(!proof.push(leaves[1].clone()));
         assert!(!proof.push(leaves[2].clone()));

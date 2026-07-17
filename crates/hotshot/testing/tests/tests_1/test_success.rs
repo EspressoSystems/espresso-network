@@ -8,15 +8,14 @@ use std::collections::HashMap;
 
 use hotshot_example_types::{
     node_types::{
-        Libp2pImpl, MemoryImpl, PushCdnImpl, TestConsecutiveLeaderTypes, TestTypes,
-        TestTypesRandomizedLeader, TestVersions,
+        Libp2pImpl, MemoryImpl, PushCdnImpl, TEST_VERSIONS, TestConsecutiveLeaderTypes, TestTypes,
+        TestTypesRandomizedLeader,
     },
     testable_delay::{DelayConfig, DelayOptions, DelaySettings, SupportedTraitTypesForAsyncDelay},
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
-    block_builder::SimpleBuilderImplementation,
-    test_builder::TestDescription,
+    block_builder::SimpleBuilderImplementation, test_builder::TestDescription,
     view_sync_task::ViewSyncTaskDescription,
 };
 
@@ -24,7 +23,7 @@ cross_tests!(
     TestName: test_success,
     Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl],
     Types: [TestTypes, TestTypesRandomizedLeader],
-    Versions: [TestVersions],
+    Versions: [TEST_VERSIONS.test],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default();
@@ -39,7 +38,7 @@ cross_tests!(
     TestName: test_success_with_async_delay,
     Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl],
     Types: [TestTypes],
-    Versions: [TestVersions],
+    Versions: [TEST_VERSIONS.test],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default();
@@ -67,7 +66,7 @@ cross_tests!(
     TestName: test_success_with_async_delay_2,
     Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl],
     Types: [TestTypes],
-    Versions: [TestVersions],
+    Versions: [TEST_VERSIONS.test],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default();
@@ -103,7 +102,7 @@ cross_tests!(
     TestName: test_with_double_leader_no_failures,
     Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl],
     Types: [TestConsecutiveLeaderTypes],
-    Versions: [TestVersions],
+    Versions: [TEST_VERSIONS.test],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default_more_nodes().set_num_nodes(12,12);

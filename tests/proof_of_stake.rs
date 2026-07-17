@@ -1,13 +1,14 @@
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use espresso_node::api::data_source::StakeTableWithEpochNumber;
 use espresso_types::SeqTypes;
-use hotshot_types::PeerConfig;
-use sequencer::api::data_source::StakeTableWithEpochNumber;
+use hotshot_types::{PeerConfig, utils::epoch_from_block_number};
 use url::Url;
+use versions::NEW_PROTOCOL_VERSION;
 
 use crate::{
-    common::{load_genesis_file, NativeDemo, TestRequirements},
+    common::{NativeDemo, TestRequirements, load_genesis_file},
     smoke::assert_native_demo_works,
 };
 
@@ -20,7 +21,7 @@ async fn test_native_demo_pos_base() -> Result<()> {
     let _child = NativeDemo::run(
         None,
         Some(vec![(
-            "ESPRESSO_SEQUENCER_GENESIS_FILE".to_string(),
+            "ESPRESSO_NODE_GENESIS_FILE".to_string(),
             // process compose runs from the root of the repo
             genesis_path.to_string(),
         )]),
@@ -54,7 +55,7 @@ async fn test_native_demo_drb_header_base() -> Result<()> {
     let _child = NativeDemo::run(
         None,
         Some(vec![(
-            "ESPRESSO_SEQUENCER_GENESIS_FILE".to_string(),
+            "ESPRESSO_NODE_GENESIS_FILE".to_string(),
             // process compose runs from the root of the repo
             genesis_path.to_string(),
         )]),
@@ -64,30 +65,54 @@ async fn test_native_demo_drb_header_base() -> Result<()> {
     assert_native_demo_works(Default::default()).await?;
 
     let epoch_length = genesis.epoch_height.expect("epoch_height set in genesis");
+    let epoch_start_block = genesis.epoch_start_block.unwrap_or(1);
 
-    // Version 0.4 supports rewards - currently don't have a good way to know how long we expect it
-    // to take until the prover has finalized the state on L1. These limits are somewhat arbitrary.
-    //
-    // The prover needs to at least have enough time to send a proof for a block in epoch 3 because
-    // no rewards are distributed until the end of epoch 2.
-    //
-    // TODO: monitor the prover making progress on L1 and adjust the test accordingly.
-    let reward_claim_deadline_block_height = (epoch_length * 3 + 10).max(500);
+    let first_epoch = epoch_from_block_number(epoch_start_block, epoch_length);
+    let first_reward_block = (first_epoch + 1) * epoch_length + 1;
 
-    // Run for a least 3 epochs plus a few blocks to confirm we can make progress once
-    // we are using the stake table from the contract.
-    // Ensure we run long enough to check rewards
-    let expected_block_height = (epoch_length * 3 + 10).max(reward_claim_deadline_block_height);
+    let expected_block_height = epoch_length * 3 + 10;
 
     let progress_requirements = TestRequirements {
         block_height_increment: expected_block_height,
         txn_count_increment: 2 * expected_block_height,
-        global_timeout: Duration::from_secs(expected_block_height as u64 * 3),
-        reward_claim_deadline_block_height: Some(reward_claim_deadline_block_height),
+        // The light client stalls for one or two prover cycles during the LCv2 -> v3
+        // switchover (fresh one-shot prover run, proving-key reload, per-epoch catchup),
+        // and reward claims are gated on the LC finalized height. Give the prover
+        // enough headroom on slow CI runners.
+        global_timeout: Duration::from_secs(expected_block_height as u64 * 6),
+        first_reward_block: Some(first_reward_block),
         ..Default::default()
     };
 
     assert_native_demo_works(progress_requirements).await?;
+
+    Ok(())
+}
+
+/// Checks if the native demo works when started directly on the new protocol version.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_native_demo_ff_base() -> Result<()> {
+    let genesis_path = "data/genesis/demo-ff.toml";
+    let genesis = load_genesis_file(genesis_path)?;
+
+    assert_eq!(genesis.base_version, NEW_PROTOCOL_VERSION);
+    assert_eq!(genesis.upgrade_version, NEW_PROTOCOL_VERSION);
+    assert_eq!(genesis.genesis_version, NEW_PROTOCOL_VERSION);
+
+    let _child = NativeDemo::run(
+        None,
+        Some(vec![(
+            "ESPRESSO_NODE_GENESIS_FILE".to_string(),
+            // process compose runs from the root of the repo
+            genesis_path.to_string(),
+        )]),
+    );
+
+    let requirements = TestRequirements {
+        requires_builder: genesis.base_version < NEW_PROTOCOL_VERSION,
+        ..Default::default()
+    };
+    assert_native_demo_works(requirements).await?;
 
     Ok(())
 }
@@ -101,7 +126,7 @@ async fn test_native_demo_da_committee() -> Result<()> {
     let _child = NativeDemo::run(
         None,
         Some(vec![(
-            "ESPRESSO_SEQUENCER_GENESIS_FILE".to_string(),
+            "ESPRESSO_NODE_GENESIS_FILE".to_string(),
             // process compose runs from the root of the repo
             genesis_path.to_string(),
         )]),
@@ -138,7 +163,7 @@ async fn assert_da_stake_table(
     entries: &[&PeerConfig<SeqTypes>],
 ) -> Result<()> {
     let start = Instant::now();
-    let sequencer_api_port = dotenvy::var("ESPRESSO_SEQUENCER1_API_PORT")?;
+    let sequencer_api_port = dotenvy::var("ESPRESSO_NODE_1_API_PORT")?;
     let sequencer_url: Url = format!("http://localhost:{sequencer_api_port}").parse()?;
     let da_stake_table_url = format!("{sequencer_url}v1/node/da-stake-table/current");
     println!("Fetching da stake table from: {}", da_stake_table_url);

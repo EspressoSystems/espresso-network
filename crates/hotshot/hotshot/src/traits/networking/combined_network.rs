@@ -11,40 +11,40 @@ use std::{
     future::Future,
     num::NonZeroUsize,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
 
-use async_broadcast::{broadcast, InactiveReceiver, Sender};
+use async_broadcast::{InactiveReceiver, Sender, broadcast};
 use async_lock::RwLock;
 use async_trait::async_trait;
-use futures::{join, select, FutureExt};
-#[cfg(feature = "hotshot-testing")]
-use hotshot_types::traits::network::{
-    AsyncGenerator, NetworkReliability, TestableNetworkingImplementation,
-};
+use futures::{FutureExt, join, select};
 use hotshot_types::{
-    boxed_sync,
+    BoxSyncFuture, boxed_sync,
     constants::{
         COMBINED_NETWORK_CACHE_SIZE, COMBINED_NETWORK_DELAY_DURATION,
         COMBINED_NETWORK_MIN_PRIMARY_FAILURES, COMBINED_NETWORK_PRIMARY_CHECK_INTERVAL,
     },
-    data::ViewNumber,
+    data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     traits::{
         network::{BroadcastDelay, ConnectedNetwork, Topic},
         node_implementation::NodeType,
     },
-    BoxSyncFuture,
+};
+#[cfg(feature = "hotshot-testing")]
+use hotshot_types::{
+    PeerConnectInfo,
+    traits::network::{AsyncGenerator, NetworkReliability, TestableNetworkingImplementation},
 };
 use lru::LruCache;
 use parking_lot::RwLock as PlRwLock;
 use tokio::{spawn, sync::mpsc::error::TrySendError, time::sleep};
 use tracing::{debug, info, warn};
 
-use super::{push_cdn_network::PushCdnNetwork, NetworkError};
+use super::{NetworkError, push_cdn_network::PushCdnNetwork};
 use crate::traits::implementations::Libp2pNetwork;
 
 /// Thread-safe ref counted lock to a map of channels to the delayed tasks
@@ -232,7 +232,9 @@ impl<TYPES: NodeType> CombinedNetworks<TYPES> {
                 }
             }
             // Send the message
-            secondary_future.await
+            tokio::time::timeout(Duration::from_secs(2), secondary_future)
+                .await
+                .map_err(|e| NetworkError::Timeout(e.to_string()))?
         }
     }
 }
@@ -255,6 +257,7 @@ impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES> for CombinedNetwor
         da_committee_size: usize,
         reliability_config: Option<Box<dyn NetworkReliability>>,
         secondary_network_delay: Duration,
+        connect_infos: &mut HashMap<TYPES::SignatureKey, PeerConnectInfo>,
     ) -> AsyncGenerator<Arc<Self>> {
         let generators = (
             <PushCdnNetwork<TYPES::SignatureKey> as TestableNetworkingImplementation<TYPES>>::generator(
@@ -264,6 +267,7 @@ impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES> for CombinedNetwor
                 da_committee_size,
                 None,
                 Duration::default(),
+                connect_infos
             ),
             <Libp2pNetwork<TYPES> as TestableNetworkingImplementation<TYPES>>::generator(
                 expected_node_count,
@@ -272,6 +276,7 @@ impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES> for CombinedNetwor
                 da_committee_size,
                 reliability_config,
                 Duration::default(),
+                connect_infos
             )
         );
         Box::pin(move |node_id| {
@@ -350,6 +355,7 @@ impl<TYPES: NodeType> ConnectedNetwork<TYPES::SignatureKey> for CombinedNetworks
 
     async fn broadcast_message(
         &self,
+        view: ViewNumber,
         message: Vec<u8>,
         topic: Topic,
         broadcast_delay: BroadcastDelay,
@@ -362,12 +368,12 @@ impl<TYPES: NodeType> ConnectedNetwork<TYPES::SignatureKey> for CombinedNetworks
             message,
             async move {
                 primary
-                    .broadcast_message(primary_message, topic, BroadcastDelay::None)
+                    .broadcast_message(view, primary_message, topic, BroadcastDelay::None)
                     .await
             },
             async move {
                 secondary
-                    .broadcast_message(secondary_message, topic, BroadcastDelay::None)
+                    .broadcast_message(view, secondary_message, topic, BroadcastDelay::None)
                     .await
             },
             broadcast_delay,
@@ -377,6 +383,7 @@ impl<TYPES: NodeType> ConnectedNetwork<TYPES::SignatureKey> for CombinedNetworks
 
     async fn da_broadcast_message(
         &self,
+        view: ViewNumber,
         message: Vec<u8>,
         recipients: Vec<TYPES::SignatureKey>,
         broadcast_delay: BroadcastDelay,
@@ -390,12 +397,17 @@ impl<TYPES: NodeType> ConnectedNetwork<TYPES::SignatureKey> for CombinedNetworks
             message,
             async move {
                 primary
-                    .da_broadcast_message(primary_message, primary_recipients, BroadcastDelay::None)
+                    .da_broadcast_message(
+                        view,
+                        primary_message,
+                        primary_recipients,
+                        BroadcastDelay::None,
+                    )
                     .await
             },
             async move {
                 secondary
-                    .da_broadcast_message(secondary_message, recipients, BroadcastDelay::None)
+                    .da_broadcast_message(view, secondary_message, recipients, BroadcastDelay::None)
                     .await
             },
             broadcast_delay,
@@ -405,6 +417,7 @@ impl<TYPES: NodeType> ConnectedNetwork<TYPES::SignatureKey> for CombinedNetworks
 
     async fn direct_message(
         &self,
+        view: ViewNumber,
         message: Vec<u8>,
         recipient: TYPES::SignatureKey,
     ) -> Result<(), NetworkError> {
@@ -417,10 +430,14 @@ impl<TYPES: NodeType> ConnectedNetwork<TYPES::SignatureKey> for CombinedNetworks
             message,
             async move {
                 primary
-                    .direct_message(primary_message, primary_recipient)
+                    .direct_message(view, primary_message, primary_recipient)
                     .await
             },
-            async move { secondary.direct_message(secondary_message, recipient).await },
+            async move {
+                secondary
+                    .direct_message(view, secondary_message, recipient)
+                    .await
+            },
             BroadcastDelay::None,
         )
         .await
@@ -428,7 +445,7 @@ impl<TYPES: NodeType> ConnectedNetwork<TYPES::SignatureKey> for CombinedNetworks
 
     async fn vid_broadcast_message(
         &self,
-        messages: HashMap<TYPES::SignatureKey, Vec<u8>>,
+        messages: HashMap<TYPES::SignatureKey, (ViewNumber, Vec<u8>)>,
     ) -> Result<(), NetworkError> {
         self.networks.0.vid_broadcast_message(messages).await
     }
@@ -469,20 +486,20 @@ impl<TYPES: NodeType> ConnectedNetwork<TYPES::SignatureKey> for CombinedNetworks
         self.secondary().queue_node_lookup(view_number, pk)
     }
 
-    async fn update_view<'a, T>(
-        &'a self,
-        view: u64,
-        epoch: Option<u64>,
+    async fn update_view<T>(
+        &self,
+        view: ViewNumber,
+        epoch: Option<EpochNumber>,
         membership: EpochMembershipCoordinator<T>,
     ) where
-        T: NodeType<SignatureKey = TYPES::SignatureKey> + 'a,
+        T: NodeType<SignatureKey = TYPES::SignatureKey>,
     {
         let delayed_tasks_channels = Arc::clone(&self.delayed_tasks_channels);
         spawn(async move {
             let mut map_lock = delayed_tasks_channels.write().await;
             while let Some((first_view, _)) = map_lock.first_key_value() {
                 // Broadcast a cancelling signal to all the tasks related to each view older than the new one
-                if *first_view < view {
+                if *first_view < *view {
                     if let Some((_, (sender, _))) = map_lock.pop_first() {
                         let _ = sender.try_broadcast(());
                     } else {

@@ -1,0 +1,351 @@
+use std::sync::Arc;
+
+use committable::Committable;
+use hotshot::types::SignatureKey;
+use hotshot_contract_adapter::light_client::validate_light_client_state_update_certificate;
+use hotshot_types::{
+    data::{EpochNumber, Leaf2, VidDisperseShare2, ViewNumber, vid_disperse::vid_total_weight},
+    epoch_membership::{EpochMembership, EpochMembershipCoordinator},
+    message::{Proposal as SignedProposal, UpgradeLock},
+    simple_certificate::check_qc_state_cert_correspondence,
+    simple_vote::HasEpoch,
+    stake_table::StakeTableEntries,
+    traits::node_implementation::NodeType,
+    utils::is_epoch_root,
+    vote::{Certificate, HasViewNumber},
+};
+use hotshot_utils::anytrace;
+use tokio::task::JoinSet;
+use tracing::error;
+
+use crate::message::{Proposal, ProposalMessage, Unchecked, Validated, VidShareMessage};
+
+type Result<T> = std::result::Result<T, ValidationError>;
+
+/// A validated proposal.
+pub struct ValidatedProposal<T: NodeType> {
+    pub sender: T::SignatureKey,
+    pub message: ProposalMessage<T, Validated>,
+    /// True if this proposal was fetched from a peer
+    pub fetched: bool,
+}
+
+/// A proposal validator checks proposal signature and integrity.
+pub struct ProposalValidator<T: NodeType> {
+    /// Validation tasks.
+    tasks: JoinSet<Result<ValidatedProposal<T>>>,
+
+    /// The actual validation logic.
+    validator: Arc<Validator<T>>,
+}
+
+/// A validator dedicated to VID share messages.
+///
+/// Lives as a separate field on `Coordinator` so that its `next()` and
+/// `ProposalValidator::next()` can be polled in the same `tokio::select!`
+/// without conflicting `&mut self` borrows on a single field.
+pub struct VidShareValidator<T: NodeType> {
+    /// VID share validation tasks.
+    tasks: JoinSet<Result<VidDisperseShare2<T>>>,
+
+    /// Shared validation logic (same shape as `ProposalValidator`'s).
+    validator: Arc<Validator<T>>,
+}
+
+struct Validator<T: NodeType> {
+    membership_coordinator: EpochMembershipCoordinator<T>,
+    epoch_height: u64,
+    upgrade_lock: UpgradeLock<T>,
+}
+
+impl<T: NodeType> ProposalValidator<T> {
+    pub fn new(
+        c: EpochMembershipCoordinator<T>,
+        epoch_height: u64,
+        upgrade_lock: UpgradeLock<T>,
+    ) -> Self {
+        Self {
+            tasks: JoinSet::new(),
+            validator: Arc::new(Validator {
+                membership_coordinator: c,
+                epoch_height,
+                upgrade_lock,
+            }),
+        }
+    }
+
+    pub fn validate(&mut self, p: ProposalMessage<T, Unchecked>) {
+        self.spawn_validation(p, false)
+    }
+
+    /// Validate a proposal fetched from a peer.
+    /// The coordinator routes it into the decide
+    /// backfill path instead of the vote path.
+    pub fn validate_fetched(&mut self, p: ProposalMessage<T, Unchecked>) {
+        self.spawn_validation(p, true)
+    }
+
+    fn spawn_validation(&mut self, p: ProposalMessage<T, Unchecked>, fetched: bool) {
+        let v = self.validator.clone();
+        self.tasks.spawn(async move {
+            let sender = v.signature(&p.proposal).await?;
+            v.justify_qc(&p.proposal.data).await?;
+            v.view_change_evidence(&p.proposal.data).await?;
+            v.state_cert(&p.proposal.data).await?;
+            let validated_proposal = ValidatedProposal {
+                sender,
+                message: ProposalMessage::validated(p.proposal),
+                fetched,
+            };
+            Ok(validated_proposal)
+        });
+    }
+
+    pub async fn next(&mut self) -> Option<Result<ValidatedProposal<T>>> {
+        loop {
+            match self.tasks.join_next().await {
+                Some(Ok(prop)) => return Some(prop),
+                Some(Err(err)) => {
+                    error!(%err, "proposal validation task panic");
+                },
+                None => return None,
+            }
+        }
+    }
+}
+
+impl<T: NodeType> VidShareValidator<T> {
+    pub fn new(
+        c: EpochMembershipCoordinator<T>,
+        epoch_height: u64,
+        upgrade_lock: UpgradeLock<T>,
+    ) -> Self {
+        Self {
+            tasks: JoinSet::new(),
+            validator: Arc::new(Validator {
+                membership_coordinator: c,
+                epoch_height,
+                upgrade_lock,
+            }),
+        }
+    }
+
+    pub fn validate(&mut self, share: VidShareMessage<T>) {
+        let v = self.validator.clone();
+        self.tasks.spawn(async move {
+            v.vid_share_proposal(&share).await?;
+            Ok(share.data)
+        });
+    }
+
+    pub async fn next(&mut self) -> Option<Result<VidDisperseShare2<T>>> {
+        loop {
+            match self.tasks.join_next().await {
+                Some(Ok(share)) => return Some(share),
+                Some(Err(err)) => {
+                    error!(%err, "vid share validation task panic");
+                },
+                None => return None,
+            }
+        }
+    }
+}
+
+impl<T: NodeType> Validator<T> {
+    /// Verify the proposal signature and return the leader
+    async fn signature(
+        &self,
+        proposal: &SignedProposal<T, Proposal<T>>,
+    ) -> Result<T::SignatureKey> {
+        let view = proposal.data.view_number();
+        let epoch = proposal.data.epoch;
+        let membership = self.membership(epoch).await?;
+        let leader = match membership.leader(view) {
+            Ok(leader) => leader,
+            Err(err) => return Err(ValidationError::NoLeader(view, epoch, err)),
+        };
+        let leaf: Leaf2<T> = proposal.data.clone().into();
+        if leader.validate(&proposal.signature, leaf.commit().as_ref()) {
+            Ok(leader)
+        } else {
+            Err(ValidationError::InvalidProposalSignature)
+        }
+    }
+
+    async fn vid_share_proposal(
+        &self,
+        vid_proposal: &SignedProposal<T, VidDisperseShare2<T>>,
+    ) -> Result<()> {
+        let view = vid_proposal.data.view_number();
+        let epoch = vid_proposal
+            .data
+            .epoch
+            .ok_or(ValidationError::MissingEpoch(view, "vid share"))?;
+        let membership = self.membership(epoch).await?;
+        let stake_table = membership.stake_table();
+        let leader = match membership.leader(view) {
+            Ok(leader) => leader,
+            Err(err) => return Err(ValidationError::NoLeader(view, epoch, err)),
+        };
+        // TODO(Chengyu): this also check the consistency of vid common and vid commitment.
+        let total_weight = vid_total_weight(stake_table, Some(epoch));
+        if !leader.validate(
+            &vid_proposal.signature,
+            vid_proposal.data.payload_commitment.as_ref(),
+        ) {
+            return Err(ValidationError::InvalidVidShareProposalSignature);
+        }
+        if vid_proposal.data.verify(total_weight) {
+            Ok(())
+        } else {
+            Err(ValidationError::VidShareNotVerified)
+        }
+    }
+
+    /// Verify the QC of the proposal
+    async fn justify_qc(&self, proposal: &Proposal<T>) -> Result<()> {
+        let Some(epoch) = proposal.justify_qc.epoch() else {
+            return Err(ValidationError::MissingEpoch(
+                proposal.view_number,
+                "justify_qc",
+            ));
+        };
+        let membership = self.membership(epoch).await?;
+        let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
+        let threshold = membership.success_threshold();
+        match proposal
+            .justify_qc
+            .is_valid_cert(&entries, threshold, &self.upgrade_lock)
+        {
+            Ok(()) => Ok(()),
+            Err(e) => Err(ValidationError::InvalidJustifyQc(e)),
+        }
+    }
+
+    /// Validate the proposal's view-change evidence (timeout certificate).
+    async fn view_change_evidence(&self, proposal: &Proposal<T>) -> Result<()> {
+        let view = proposal.view_number();
+
+        // If proposal chains directly off the immediately preceding view, no evidence is required.
+        if proposal.justify_qc.view_number() + 1 == view {
+            return Ok(());
+        }
+
+        let Some(tc) = proposal.view_change_evidence.as_ref() else {
+            return Err(ValidationError::MissingViewChangeEvidence(view));
+        };
+
+        // The timeout certificate must certify the immediately preceding view.
+        if tc.data().view + 1 != view {
+            return Err(ValidationError::ViewChangeEvidenceWrongView {
+                proposal_view: view,
+                evidence_view: tc.data().view,
+            });
+        }
+
+        let Some(tc_epoch) = tc.epoch() else {
+            return Err(ValidationError::MissingEpoch(view, "view_change_evidence"));
+        };
+        let membership = self.membership(tc_epoch).await?;
+        let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
+        let threshold = membership.success_threshold();
+        tc.is_valid_cert(&entries, threshold, &self.upgrade_lock)
+            .map_err(ValidationError::InvalidViewChangeEvidence)
+    }
+
+    /// Validate the state_cert on an epoch-root proposal.
+    ///
+    /// If the justify_qc points at an epoch-root block, the proposal MUST
+    /// carry a matching `LightClientStateUpdateCertificateV2`.
+    async fn state_cert(&self, proposal: &Proposal<T>) -> Result<()> {
+        let Some(qc_block_number) = proposal.justify_qc.data.block_number else {
+            return Ok(());
+        };
+        if !is_epoch_root(qc_block_number, self.epoch_height) {
+            // Non-epoch-root parent → no state_cert required.
+            return Ok(());
+        }
+        let Some(state_cert) = proposal.state_cert.as_ref() else {
+            return Err(ValidationError::MissingStateCert);
+        };
+        if !check_qc_state_cert_correspondence(&proposal.justify_qc, state_cert, self.epoch_height)
+        {
+            return Err(ValidationError::StateCertCorrespondence);
+        }
+        validate_light_client_state_update_certificate(
+            state_cert,
+            &self.membership_coordinator,
+            &self.upgrade_lock,
+        )
+        .await
+        .map_err(ValidationError::InvalidStateCert)
+    }
+
+    async fn membership(&self, epoch: EpochNumber) -> Result<EpochMembership<T>> {
+        match self
+            .membership_coordinator
+            .membership_for_epoch(Some(epoch))
+        {
+            Ok(m) => Ok(m),
+            Err(_) => self
+                .membership_coordinator
+                .wait_for_catchup(epoch) // TODO: timeout?
+                .await
+                .map_err(|e| ValidationError::NoMembershipForEpoch(epoch, e)),
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ValidationError {
+    #[error("invalid proposal signature")]
+    InvalidProposalSignature,
+
+    #[error("invalid proposal justify qc: {0}")]
+    InvalidJustifyQc(#[source] anytrace::Error),
+
+    #[error("vid share does not match proposal")]
+    VidCommitmentDoesNotMatchProposal,
+
+    #[error("failed to verify vid share")]
+    VidShareNotVerified,
+
+    #[error("vid commitment not v2")]
+    InvalidVidCommitmentVersion,
+
+    #[error("missing epoch number in view {0} ({1})")]
+    MissingEpoch(ViewNumber, &'static str),
+
+    #[error("failed to get membership for epoch {0}: {1}")]
+    NoMembershipForEpoch(EpochNumber, #[source] anytrace::Error),
+
+    #[error("failed to get leader for view {0}, epoch {1}: {2}")]
+    NoLeader(ViewNumber, EpochNumber, #[source] anytrace::Error),
+
+    #[error("proposal justify_qc is epoch-root but state_cert is missing")]
+    MissingStateCert,
+
+    #[error("state_cert does not correspond to justify_qc")]
+    StateCertCorrespondence,
+
+    #[error("state_cert signature validation failed: {0}")]
+    InvalidStateCert(#[source] anytrace::Error),
+
+    #[error("invalid vid share proposal signature")]
+    InvalidVidShareProposalSignature,
+
+    #[error("proposal at view {0} skips views but carries no view-change evidence")]
+    MissingViewChangeEvidence(ViewNumber),
+
+    #[error(
+        "view-change evidence for proposal view {proposal_view} certifies view {evidence_view}, \
+         not the immediately preceding view"
+    )]
+    ViewChangeEvidenceWrongView {
+        proposal_view: ViewNumber,
+        evidence_view: ViewNumber,
+    },
+
+    #[error("view-change evidence (timeout certificate) is invalid: {0}")]
+    InvalidViewChangeEvidence(#[source] anytrace::Error),
+}

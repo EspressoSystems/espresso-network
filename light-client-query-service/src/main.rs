@@ -1,26 +1,27 @@
-use std::{cmp::max, fs, path::PathBuf, process::ExitCode, time::Duration};
+use std::{cmp::max, fs, path::PathBuf, process::ExitCode, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use espresso_node::{
+    SequencerApiVersion,
+    api::{data_source::SequencerDataSource, sql::DataSource},
+    persistence::sql,
+};
 use espresso_types::parse_duration;
 use hotshot_query_service::{
+    ApiState,
     availability::{self, BlockInfo, LeafId, UpdateAvailabilityData},
-    fetching::provider::{AnyProvider, QueryServiceProvider},
-    node, ApiState,
+    fetching::provider::AnyProvider,
+    node,
 };
 use light_client::{
+    LightClient,
     client::{Client, QueryServiceClient},
     state,
     storage::{LightClientSqliteOptions, Storage},
-    LightClient,
 };
-use light_client_query_service::{init_logging, LogFormat};
+use light_client_query_service::{LogFormat, init_logging};
 use semver::Version;
-use sequencer::{
-    api::{data_source::SequencerDataSource, sql::DataSource},
-    persistence::sql,
-    SequencerApiVersion,
-};
 use tide_disco::{App, Url};
 use tokio::{spawn, time::sleep};
 use tracing::instrument;
@@ -79,7 +80,7 @@ struct PollingOptions {
 }
 
 #[instrument(skip(lc, ds))]
-async fn update<P, S>(lc: LightClient<P, S>, ds: DataSource, poll_opt: PollingOptions)
+async fn update<P, S>(lc: Arc<LightClient<P, S>>, ds: DataSource, poll_opt: PollingOptions)
 where
     P: Storage,
     S: Client,
@@ -173,11 +174,12 @@ async fn run() -> Result<()> {
     let lc_genesis =
         toml::from_str(str::from_utf8(&lc_genesis_bytes).context("malformed genesis file")?)
             .context("malformed genesis file")?;
-    let lc = LightClient::from_genesis_with_options(lc_db, lc_server, lc_genesis, opt.lc_opt);
+    let lc = Arc::new(LightClient::from_genesis_with_options(
+        lc_db, lc_server, lc_genesis, opt.lc_opt,
+    ));
 
     // Initialize query service.
-    let provider = QueryServiceProvider::new(opt.espresso_url, SequencerApiVersion::instance());
-    let provider = AnyProvider::default().with_provider(provider);
+    let provider = AnyProvider::default().with_provider(lc.clone());
     let ds = DataSource::create(opt.ds_opt, provider, false)
         .await
         .context("connecting to API data source")?;

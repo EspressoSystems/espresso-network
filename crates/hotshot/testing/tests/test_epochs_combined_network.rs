@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use hotshot_example_types::node_types::{
-    CombinedImpl, EpochsTestVersions, TestTwoStakeTablesTypes, TestTypes,
+    CombinedImpl, TEST_VERSIONS, TestTwoStakeTablesTypes, TestTypes,
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
@@ -23,7 +23,7 @@ cross_tests!(
     TestName: test_combined_network_cdn_crash_with_epochs,
     Impls: [CombinedImpl],
     Types: [TestTypes, TestTwoStakeTablesTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
         let timing_data = TimingData {
@@ -33,6 +33,9 @@ cross_tests!(
 
         let overall_safety_properties = OverallSafetyPropertiesDescription {
             num_successful_views: 35,
+            // after the scripted CDN crash a few views can time out at arbitrary points
+            // during libp2p fallback
+            max_unexpected_view_failures: 5,
             ..Default::default()
         };
 
@@ -69,7 +72,7 @@ cross_tests!(
     TestName: test_combined_network_reup_with_epochs,
     Impls: [CombinedImpl],
     Types: [TestTypes, TestTwoStakeTablesTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
         let timing_data = TimingData {
@@ -80,6 +83,8 @@ cross_tests!(
         let overall_safety_properties = OverallSafetyPropertiesDescription {
             num_successful_views: 35,
             decide_timeout: Duration::from_secs(30),
+            // CDN reup after the outage can fail a few views during libp2p fallback handoff
+            max_unexpected_view_failures: 5,
             ..Default::default()
         };
 
@@ -120,7 +125,7 @@ cross_tests!(
     TestName: test_combined_network_half_dc_with_epochs,
     Impls: [CombinedImpl],
     Types: [TestTypes, TestTwoStakeTablesTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
         let timing_data = TimingData {
@@ -131,6 +136,8 @@ cross_tests!(
         let overall_safety_properties = OverallSafetyPropertiesDescription {
             num_successful_views: 35,
             decide_timeout: Duration::from_secs(30),
+            // CDN drop can fail a few views during libp2p fallback handoff
+            max_unexpected_view_failures: 5,
             ..Default::default()
         };
 

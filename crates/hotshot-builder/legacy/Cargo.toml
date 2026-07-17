@@ -10,19 +10,19 @@ anyhow = { workspace = true }
 async-broadcast = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
-atomic = "0.6"
+atomic = { workspace = true }
 bincode = { workspace = true }
-bytemuck = { version = "1.19", features = ["derive"] }
-coarsetime = "0.1.34"
+bytemuck = { workspace = true }
+coarsetime = { workspace = true }
 committable = { workspace = true }
-derive_more = { workspace = true, features = ["deref", "deref_mut", "debug"] }
+derive_more = { workspace = true }
 futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-builder-api = { workspace = true }
 hotshot-builder-shared = { workspace = true }
 hotshot-types = { workspace = true }
 lru = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
+serde = { workspace = true }
 sha2 = { workspace = true }
 tagged-base64 = { workspace = true }
 tide-disco = { workspace = true }
@@ -37,7 +37,7 @@ hotshot-macros = { workspace = true }
 hotshot-task-impls = { workspace = true }
 hotshot-testing = { workspace = true }
 num_cpus = { workspace = true }
-portpicker = { workspace = true }
+test-utils = { workspace = true }
 tracing-test = { workspace = true }
 url = { workspace = true }
 

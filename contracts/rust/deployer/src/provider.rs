@@ -1,5 +1,5 @@
 use alloy::signers::ledger::{HDPath, LedgerError, LedgerSigner};
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 /// Try to obtain a ledger signer
 ///

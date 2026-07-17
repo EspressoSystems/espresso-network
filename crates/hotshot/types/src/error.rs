@@ -13,7 +13,10 @@ use committable::Commitment;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{data::Leaf2, traits::node_implementation::NodeType};
+use crate::{
+    data::{Leaf2, ViewNumber},
+    traits::node_implementation::NodeType,
+};
 
 /// Error type for `HotShot`
 #[derive(Debug, Error)]
@@ -39,7 +42,7 @@ pub enum HotShotError<TYPES: NodeType> {
     #[error("View {view_number} timed out: {state:?}")]
     ViewTimedOut {
         /// The view number that timed out
-        view_number: TYPES::View,
+        view_number: ViewNumber,
         /// The state that the round was in when it timed out
         state: RoundTimedoutState,
     },

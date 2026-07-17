@@ -16,8 +16,8 @@ composable blockchains, providing a high trust, fast, and verifiable way to proc
 confirmations in return.
 
 - [Official Documentation](https://docs.espressosys.com/network/)
-- [Rust Documentation](https://sequencer.docs.espressosys.com/sequencer/)
-- [Smart Contract Documentation](https://sequencer.docs.espressosys.com/contracts/)
+- [Rust Documentation](https://espresso-network.docs.espressosys.com/espresso_node/)
+- [Smart Contract Documentation](https://espresso-network.docs.espressosys.com/contracts/)
 
 ### Architecture
 
@@ -31,84 +31,43 @@ The diagram below shows how the Espresso Confirmation Layer fits into the rollup
 In order for ZK rollups to rely on blocks produced by Espresso as a source of transactions, it is required to adjust the
 circuit that encodes the state update logic. See [zk-rollups integration](doc/zk-integration.md) for more details.
 
-# Running the demo
-
-Refer to [sequencer-example-l2](https://github.com/EspressoSystems/sequencer-example-l2) for instructions on how to run
-a dockerized Espresso Sequencer network with an example Layer 2 rollup application.
-
 # Development
 
 - Obtain code: `git clone git@github.com:EspressoSystems/espresso-network`.
 - Make sure [nix](https://nixos.org/download.html) is installed.
-- Activate the environment with `nix-shell`, or `nix develop`, or `direnv allow` if using [direnv](https://direnv.net/).
+- Activate the environment with `nix-shell`, or `nix develop`. If using [direnv](https://direnv.net/), copy
+  `.envrc.example` to `.envrc.local` (or create your own `.envrc.local` file) and run `direnv allow`.
 - For installation without nix please see [ubuntu.md](./doc/ubuntu.md).
+- The rust code documentation can be found at
+  [espresso-network.docs.espressosys.com](https://espresso-network.docs.espressosys.com). Please note the disclaimer
+  about API stability at the end of the readme.
 
-## Documentation
+## Development commands
 
-The rust code documentation can be found at [sequencer.docs.espressosys.com](https://sequencer.docs.espressosys.com).
-Please note the disclaimer about API stability at the end of the readme.
-
-To generate the documentation locally and view it in the browser, run
-
-    just doc --open
-
-## Run the tests
-
-    just pull # to pull docker images
-    just test
-
-## Building figures
-
-    make doc
-
-## Building and running
-
-Docker images and the [docker-compose-demo.yaml](docker-compose-demo.yaml) file are provided for convenience. The
-Docker-based demo fetches the images from the `ghcr` repository, where they are updated with every push to `main` on
-GitHub. For testing uncommitted changes, you can also run the binaries by manually building and running the services.
-
-Build all executables with `cargo build --release`. You may then start an Espresso network. First, start an
-orchestrator. Choose a port `$PORT` to run it on and decide how many Espresso nodes `$N` you will use, then run
-`target/release/orchestrator -p $PORT -n $N`.
-
-The Espresso Network will distribute a HotShot configuration to all the nodes which connect to it, which specifies
-consensus parameters like view timers. There is a default config, but you can override any parameters you want by
-passing additional options to the `orchestrator` executable. Run `target/release/orchestrator --help` to see a list of
-available options.
-
-Next, you must launch a `cdn` instance, which is necessary to facilitate consensus.
-
-```bash
-just dev-cdn -- -p 1738
+```sh
+just # see available commands
+just doc --open
+just build
+just test --package espresso-types # gate by package to avoid long runtime
 ```
 
-In this case, we run it on port 1738.
+## Running a local network
 
-Once you have started the orchestrator and the CDN, you must connect `$N` Espresso nodes to them, after which the
-network will start up automatically. To start one node, run
+A full local network is run two ways:
 
-```bash
-target/release/sequencer \
-    --orchestrator-url http://localhost:$PORT \
-    --cdn-endpoint "127.0.0.1:1738"  \
-    -- http --port 8083 -- query --storage-path storage -- submit
+```sh
+just demo         # Docker Compose, images from ghcr (updated on every push to main)
+just demo-native  # process-compose, building and running the binaries locally
 ```
 
-A useful Bash snippet for running `$N` nodes simultaneously in the background of your shell is:
+- `just demo-native` builds the binaries first, so it picks up uncommitted changes.
+- Genesis and process variants are available as additional just recipes.
 
-```bash
-for i in `seq $N`; do
-    target/release/sequencer \
-        --orchestrator-url http://localhost:$PORT \
-        --cdn-endpoint "127.0.0.1:1738"  \
-done
-```
+See [process-compose.yaml](process-compose.yaml) and [docker-compose.yaml](docker-compose.yaml) for more information.
 
-For running a full demo natively run `just demo-native`.
+# Contracts
 
-### Contracts
-
-#### Development
+## Development
 
 A foundry project for the contracts specific to HotShot can be found in the directory `contracts`.
 
@@ -116,88 +75,23 @@ To compile
 
 ```shell
 forge build
+just contracts-test-forge
+just gen-bindings # update rust contract bindings
+forge doc # build docs
 ```
 
-To run the tests
+## Deployment
 
-```shell
-just sol-test
-```
-
-In order to avoid constant warnings about checksum mismatches with [svm-rs](https://github.com/roynalnaruto/svm-rs)
-managed `solc` we set `FOUNDRY_SRC` to solc installed via flake.nix.
-
-- To use the contracts from rust generate the rust contracts bindings: `just gen-bindings`.
-- Bindings are only generated for contracts in the `contracts/src` folder
-
-To generate documentation in `./docs` for solidity code run
-
-```shell
-forge doc
-```
-
-#### Deployment via Foundry
-
-To deploy the contracts to a local testnet, first run a dev chain (e.g. `anvil`), then run
-
-    forge script DeployHotShot --broadcast --rpc-url local
-
-To deploy to sepolia set `SEPOLIA_RPC_URL` and `MNEMONIC` env vars and run
-
-    forge script DeployHotShot --broadcast --rpc-url sepolia
-
-To additionally verify the contract on etherscan set the `ETHERSCAN_API_KEY` env var and run
-
-    forge script DeployHotShot --broadcast --rpc-url sepolia --verify
-
-Running the script will save a file with details about the deployment in `contracts/broadcast/$CHAIN_ID`.
-
-#### Deployment via Rust
-
-**Build and Run**
-
-```bash
-cargo run --bin deploy -- [FLAGS/OPTIONS]
-```
-
-Or, for help
+The deploy binary is used for contract deployment.
 
 ```bash
 cargo run --bin deploy -- --help
+ghcr.io/espressosystems/espresso-network/deploy:$DOCKER_TAG deploy --help
 ```
 
-**Configuration**
+See [process-compose.yaml](process-compose.yaml) and [docker-compose.yaml](docker-compose.yaml) for example invocations.
 
-You can configure the deployer using CLI flags or environment variables. Most options can be set via environment
-variables (see the code for the full list `sequencer/src/bin/deploy.rs`). Common environment variables:
-
-- `ESPRESSO_SEQUENCER_L1_PROVIDER` — L1 JSON-RPC endpoint
-- `ESPRESSO_SEQUENCER_ETH_MNEMONIC` — Mnemonic for the deployer wallet
-- `ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS` — Multisig admin address
-- `ESPRESSO_DEPLOYER_ACCOUNT_INDEX` — Account index in the wallet
-- `ESPRESSO_SEQUENCER_URL` — Sequencer node URL for HotShot config
-
-You can use a `.env` file and load it with:
-
-```bash
-set -a
-source .env
-set +a
-```
-
-#### Deployment via Docker
-
-You can run the deployer in a container but you need to stand up all services via docker compose
-
-```bash
-just pull
-just demo deploy-prover-contracts
-```
-
-If making dev changes locally run, `./scripts/build-docker-images-native --image $IMAGE_TO_BE_REBUILT` instead of
-`just pull`.
-
-#### Dry run upgrades via Docker
+### Dry run upgrades via Docker
 
 You can only run a dry run for multisig upgrades but you need to stand up all services via docker compose Example:
 
@@ -220,29 +114,16 @@ RUST_LOG=info cargo run --bin deploy -- [FLAGS]
 RUST_LOG=debug cargo run --bin deploy -- [FLAGS]
 ```
 
-For Docker:
-
-```bash
-docker run --env-file .env.docker -e RUST_LOG=debug ...
-```
-
-(see .env.docker.example for the vars required for .env.docker)
-
-### Folder Structure Rationale
-
-- code for demo purposes goes into the `contracts/demo` folder
-- code that eventually ends up in production goes into the `contracts/src` folder
-
 ### Benchmarking and profiling
 
 The gas consumption for verifying a plonk proof as well as updating the state of the light client contract can be seen
 by running:
 
-```
-> just gas-benchmarks
-> cat gas-benchmarks.txt
-[PASS] test_verify_succeeds() (gas: 507774)
-[PASS] testCorrectUpdateBench() (gas: 594533)
+```sh
+just gas-benchmarks
+cat gas-benchmarks.txt
+# [PASS] test_verify_succeeds() (gas: 507774)
+# [PASS] testCorrectUpdateBench() (gas: 594533)
 ```
 
 In order to profile the gas consumption of the light client contract do the following:
@@ -257,7 +138,7 @@ In order to profile the gas consumption of the light client contract do the foll
 
 ## Copyright
 
-**(c) 2022 Espresso Systems** `espresso-sequencer` was developed by Espresso Systems. While we plan to adopt an open
+**(c) 2022 Espresso Systems** `espresso-network` was developed by Espresso Systems. While we plan to adopt an open
 source license, we have not yet selected one. As such, all rights are reserved for the time being. Please reach out to
 us if you have thoughts on licensing.
 

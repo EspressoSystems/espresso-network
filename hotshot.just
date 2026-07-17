@@ -1,13 +1,11 @@
 # Excluding packages with `--exclude` instead of the filterset prevents nextest from compiling them.
-# We should find a better way to handle this for example by having consistent crate names.
 test-ci-rest *args:
   echo Running unit tests
   RUST_LOG=error cargo nextest run \
   --exclude "marketplace-*" \
-  --exclude "sequencer*" \
+  --exclude "espresso-*" \
   --exclude builder \
   --exclude client \
-  --exclude espresso-* \
   --exclude hotshot-builder-refactored \
   --exclude hotshot-query-service \
   --exclude hotshot-state-prover \

@@ -8,17 +8,18 @@
 use std::marker::PhantomData;
 
 use committable::Committable;
-use hotshot_example_types::node_types::TestTypes;
+use hotshot_example_types::node_types::{TEST_VERSIONS, TestTypes};
 use hotshot_types::{
+    data::ViewNumber,
     message::{GeneralConsensusMessage, Message, MessageKind, SequencingMessage},
     signature_key::BLSPubKey,
-    simple_certificate::SimpleCertificate,
+    simple_certificate::{SimpleCertificate, ViewSyncCommitCertificate2},
     simple_vote::ViewSyncCommitData2,
-    traits::{node_implementation::ConsensusTime, signature_key::SignatureKey},
+    traits::signature_key::SignatureKey,
 };
 use vbs::{
-    version::{StaticVersion, Version},
     BinarySerializer, Serializer,
+    version::{StaticVersion, Version},
 };
 
 #[test]
@@ -26,7 +27,7 @@ use vbs::{
 // correctly appears at the start of a serialized messaged.
 fn version_number_at_start_of_serialization() {
     let sender = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0;
-    let view_number = ConsensusTime::new(17);
+    let view_number = ViewNumber::new(17);
     let epoch = None;
     // The version we set for the message
     const MAJOR: u16 = 37;
@@ -38,12 +39,12 @@ fn version_number_at_start_of_serialization() {
     type TestVersion = StaticVersion<MAJOR, MINOR>;
     // The specific data we attach to our message shouldn't affect the serialization,
     // we're using ViewSyncCommitData for simplicity.
-    let data: ViewSyncCommitData2<TestTypes> = ViewSyncCommitData2 {
+    let data: ViewSyncCommitData2 = ViewSyncCommitData2 {
         relay: 37,
         round: view_number,
         epoch,
     };
-    let simple_certificate =
+    let simple_certificate: ViewSyncCommitCertificate2<TestTypes> =
         SimpleCertificate::new(data.clone(), data.commit(), view_number, None, PhantomData);
     let message = Message {
         sender,
@@ -64,7 +65,7 @@ fn version_number_at_start_of_serialization() {
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_certificate2_validity() {
     use futures::StreamExt;
-    use hotshot_example_types::node_types::{MemoryImpl, TestTypes, TestVersions};
+    use hotshot_example_types::node_types::{MemoryImpl, TestTypes};
     use hotshot_testing::{helpers::build_system_handle, view_generator::TestViewGenerator};
     use hotshot_types::{
         data::{Leaf, Leaf2},
@@ -74,12 +75,11 @@ async fn test_certificate2_validity() {
 
     let node_id = 1;
 
-    let (handle, _, _, node_key_map) =
-        build_system_handle::<TestTypes, MemoryImpl, TestVersions>(node_id).await;
+    let (handle, _, _, node_key_map) = build_system_handle::<TestTypes, MemoryImpl>(node_id).await;
     let membership = handle.hotshot.membership_coordinator.clone();
 
     let mut generator =
-        TestViewGenerator::<TestVersions>::generate(membership.clone(), node_key_map);
+        TestViewGenerator::generate(membership.clone(), node_key_map, TEST_VERSIONS.test);
 
     let mut proposals = Vec::new();
     let mut leaders = Vec::new();
@@ -102,27 +102,27 @@ async fn test_certificate2_validity() {
     let qc2 = proposal.data.justify_qc().clone();
     let qc = qc2.clone().to_qc();
 
-    let epoch_mem = membership.membership_for_epoch(None).await.unwrap();
-    let membership_stake_table = StakeTableEntries::from(epoch_mem.stake_table().await).0;
-    let membership_success_threshold = epoch_mem.success_threshold().await;
+    let epoch_mem = membership.membership_for_epoch(None).unwrap();
+    let membership_stake_table = StakeTableEntries::from_iter(epoch_mem.stake_table()).0;
+    let membership_success_threshold = epoch_mem.success_threshold();
 
-    assert!(qc
-        .is_valid_cert(
+    assert!(
+        qc.is_valid_cert(
             &membership_stake_table,
             membership_success_threshold,
             &handle.hotshot.upgrade_lock
         )
-        .await
-        .is_ok());
+        .is_ok()
+    );
 
-    assert!(qc2
-        .is_valid_cert(
+    assert!(
+        qc2.is_valid_cert(
             &membership_stake_table,
             membership_success_threshold,
             &handle.hotshot.upgrade_lock
         )
-        .await
-        .is_ok());
+        .is_ok()
+    );
 
     // ensure that we don't break the leaf commitment chain
     let leaf2 = Leaf2::from_quorum_proposal(&proposal.data);
@@ -131,7 +131,7 @@ async fn test_certificate2_validity() {
     let leaf = Leaf::from_quorum_proposal(&proposal.data.into());
     let parent_leaf = Leaf::from_quorum_proposal(&parent_proposal.data.into());
 
-    assert!(leaf.parent_commitment() == parent_leaf.commit(&handle.hotshot.upgrade_lock).await);
+    assert!(leaf.parent_commitment() == parent_leaf.commit(&handle.hotshot.upgrade_lock));
 
     assert!(leaf2.parent_commitment() == parent_leaf2.commit());
 }

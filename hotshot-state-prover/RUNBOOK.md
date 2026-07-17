@@ -13,27 +13,27 @@ environment variables:
 - `relay_server` (URL): The relay server endpoint for validators' signatures.
   - `--relay-server <URL>`
   - `ESPRESSO_STATE_RELAY_SERVER_URL`
-- `sequencer_url` (URL): The sequencer endpoint for fetching consensus related states.
+- `sequencer_url` (URL): The Espresso node endpoint for fetching consensus related states.
   - `--sequencer-url <URL>`
-  - `ESPRESSO_SEQUENCER_URL`
+  - `ESPRESSO_API_NODE_URL`
 - `l1_provider_url` (Vec<Url>): RPC endpoint to interact with the L1 network.
   - `--l1-provider-url <URL>`
-  - `ESPRESSO_SEQUENCER_L1_PROVIDER`
+  - `ESPRESSO_L1_PROVIDER`
 - `light_client_address` (Address): The deployed Light Client contract address.
   - `--light-client-address <ADDRESS>`
-  - `ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS`
+  - `ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS`
 - `eth_mnemonic` (String): Mnemonic phrase for a funded Ethereum wallet.
   - `--eth-mnemonic <MNEMONIC>`
-  - `ESPRESSO_SEQUENCER_ETH_MNEMONIC`
+  - `ESPRESSO_ETH_MNEMONIC`
 - `eth_account_index` (u32): Index of a funded account derived from `eth_mnemonic`.
   - `--eth-account-index <INDEX>`
-  - `ESPRESSO_SEQUENCER_STATE_PROVER_ACCOUNT_INDEX`
+  - `ESPRESSO_STATE_PROVER_ACCOUNT_INDEX`
 - `port` (Option<u16>): Port for the HTTP server.
   - `--port <PORT>`
   - `ESPRESSO_PROVER_SERVICE_PORT`
 - `stake_table_capacity` (usize): Stake table capacity for the prover circuit.
   - `--stake-table-capacity <CAPACITY>`
-  - `ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY`
+  - `ESPRESSO_STAKE_TABLE_CAPACITY`
 - `max_gas_price` (Option<String>): Max acceptable gas price in Gwei.
   - `--max-gas-price <PRICE>`
   - `ESPRESSO_STATE_PROVER_MAX_GAS_PRICE_IN_GWEI`
@@ -80,7 +80,7 @@ This will invoke `run_prover_once` and call `sync_state` once.
 A Docker image is available for the state prover. You can run it using the following command:
 
 ```bash
-docker run --env-file .env.docker ghcr.io/espressosystems/espresso-sequencer-prover-service:<TAG> [FLAGS/OPTIONS]
+docker run --env-file .env.docker ghcr.io/espressosystems/espresso-network/prover-service:<TAG> [FLAGS/OPTIONS]
 ```
 
 Make sure to replace `<TAG>` with the desired version.
@@ -106,7 +106,7 @@ version and runs the appropriate service. The legacy service implementation can 
 ## Troubleshooting
 
 - **Invalid State or Signatures:** Check logs for `ProverError::InvalidState`. Check if the stake table and
-  `stake_table_capacity` are configured correctly across the sequencers, relay server, and the prover.
+  `stake_table_capacity` are configured correctly across the Espresso nodes, relay server, and the prover.
 - **Contract Error:** Check logs for `ProverError::ContractError`. Ensure the provider urls are valid and the contract
   address is correct. If there's an error code, search it in the
   [bindings](../contracts/rust/adapter/src/bindings/lightclientv3.rs) for further debugging information.

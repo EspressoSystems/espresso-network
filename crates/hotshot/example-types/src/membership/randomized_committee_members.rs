@@ -16,12 +16,12 @@ use hotshot_types::{
         StateSignatureKey,
     },
 };
-use rand::{rngs::StdRng, Rng};
+use rand::{Rng, rngs::StdRng};
 use tracing::error;
 
 use crate::membership::{
     helpers::QuorumFilterConfig,
-    stake_table::{TestDaCommittees, TestStakeTable, TestStakeTableEntry},
+    stake_table::{TestCommitteeSchedule, TestStakeTable, TestStakeTableEntry},
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -41,7 +41,7 @@ pub struct RandomizedCommitteeMembers<
 
     drb_results: BTreeMap<u64, DrbResult>,
 
-    da_committees: TestDaCommittees<PubKey, StatePubKey>,
+    da_committees: TestCommitteeSchedule<PubKey, StatePubKey>,
 
     _quorum_pd: PhantomData<QuorumConfig>,
 
@@ -49,11 +49,11 @@ pub struct RandomizedCommitteeMembers<
 }
 
 impl<
-        PubKey: SignatureKey,
-        StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
-        QuorumConfig: QuorumFilterConfig,
-        DaConfig: QuorumFilterConfig,
-    > RandomizedCommitteeMembers<PubKey, StatePubKey, QuorumConfig, DaConfig>
+    PubKey: SignatureKey,
+    StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
+    QuorumConfig: QuorumFilterConfig,
+    DaConfig: QuorumFilterConfig,
+> RandomizedCommitteeMembers<PubKey, StatePubKey, QuorumConfig, DaConfig>
 {
     /// Creates a set of indices into the stake_table which reference the nodes selected for this epoch's committee
     fn make_quorum_filter(&self, epoch: u64) -> BTreeSet<usize> {
@@ -91,11 +91,11 @@ impl<
 }
 
 impl<
-        PubKey: SignatureKey,
-        StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
-        QuorumConfig: QuorumFilterConfig,
-        DaConfig: QuorumFilterConfig,
-    > TestStakeTable<PubKey, StatePubKey>
+    PubKey: SignatureKey,
+    StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
+    QuorumConfig: QuorumFilterConfig,
+    DaConfig: QuorumFilterConfig,
+> TestStakeTable<PubKey, StatePubKey>
     for RandomizedCommitteeMembers<PubKey, StatePubKey, QuorumConfig, DaConfig>
 {
     fn new(
@@ -108,7 +108,7 @@ impl<
             first_epoch: None,
             epochs: BTreeSet::new(),
             drb_results: BTreeMap::new(),
-            da_committees: TestDaCommittees::new(),
+            da_committees: TestCommitteeSchedule::new(),
             _quorum_pd: PhantomData,
             _da_pd: PhantomData,
         };

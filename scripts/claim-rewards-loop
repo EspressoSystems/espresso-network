@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Used by process-compose for the local demo only.
 set -euo pipefail
 
 SLEEP_INTERVAL="${1:-10}"
@@ -6,10 +7,10 @@ SLEEP_INTERVAL="${1:-10}"
 echo "Starting reward claiming loop (checking every ${SLEEP_INTERVAL}s)..."
 
 while true; do
-  unclaimed=$(staking-cli unclaimed-rewards)
+  unclaimed=$(staking-cli --no-config unclaimed-rewards)
   if [ "$unclaimed" != "0 ESP" ]; then
     echo "Claiming $unclaimed..."
-    staking-cli claim-rewards
+    staking-cli --no-config claim-rewards
     echo "Successfully claimed rewards"
   else
     echo "No rewards to claim yet ($unclaimed)"

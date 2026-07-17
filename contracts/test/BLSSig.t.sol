@@ -52,7 +52,7 @@ contract BLSSig_Test is Test {
 
     // This is due to a current limitation/bug of foundry. See
     // https://github.com/foundry-rs/foundry/issues/4405
-    // See https://github.com/EspressoSystems/espresso-sequencer/issues/847
+    // See https://github.com/EspressoSystems/espresso-network/issues/847
     function wrapVerifyBlsSig(
         bytes memory message,
         BN254.G1Point memory sig,
@@ -63,6 +63,8 @@ contract BLSSig_Test is Test {
 
     function testFuzz_RevertWhen_SignatureIsInvalid(uint256 exp) external {
         bytes memory message = "Hi";
+        // exp == 0 mod r yields the infinity point, rejected earlier with BLSSigIsInfinity
+        exp = bound(exp, 1, BN254.R_MOD - 1);
         BN254.ScalarField expScalar = BN254.ScalarField.wrap(exp);
 
         BN254.G1Point memory badSig = BN254.P1();
@@ -90,6 +92,44 @@ contract BLSSig_Test is Test {
 
         vm.expectRevert(BLSSig.BLSSigVerificationFailed.selector);
         this.wrapVerifyBlsSig(message, sig, badVK);
+    }
+
+    /// @dev Regression: the pairing precompile treats the all-zero G2 point as infinity, so
+    /// pk=(0,0,0,0) with sig=(0,0) satisfies e(hash, O) * e(O, P2) = 1 and must be rejected
+    /// explicitly.
+    function test_RevertWhen_PubKeyAndSignatureAreZero() external {
+        bytes memory message = "Hi";
+        BN254.G1Point memory zeroSig =
+            BN254.G1Point(BN254.BaseField.wrap(0), BN254.BaseField.wrap(0));
+        BN254.G2Point memory zeroVK = BN254.G2Point(
+            BN254.BaseField.wrap(0),
+            BN254.BaseField.wrap(0),
+            BN254.BaseField.wrap(0),
+            BN254.BaseField.wrap(0)
+        );
+        vm.expectRevert(BLSSig.BLSSigIsInfinity.selector);
+        this.wrapVerifyBlsSig(message, zeroSig, zeroVK);
+    }
+
+    function test_RevertWhen_SignatureIsZero() external {
+        bytes memory message = "Hi";
+        BN254.G1Point memory zeroSig =
+            BN254.G1Point(BN254.BaseField.wrap(0), BN254.BaseField.wrap(0));
+        // P2 generator is a valid public key (pk = 1 * P2)
+        vm.expectRevert(BLSSig.BLSSigIsInfinity.selector);
+        this.wrapVerifyBlsSig(message, zeroSig, BN254.P2());
+    }
+
+    function test_RevertWhen_PubKeyIsZero() external {
+        bytes memory message = "Hi";
+        BN254.G2Point memory zeroVK = BN254.G2Point(
+            BN254.BaseField.wrap(0),
+            BN254.BaseField.wrap(0),
+            BN254.BaseField.wrap(0),
+            BN254.BaseField.wrap(0)
+        );
+        vm.expectRevert(BLSSig.BLSVKIsInfinity.selector);
+        this.wrapVerifyBlsSig(message, BN254.P1(), zeroVK);
     }
 
     /// @dev Ensure the verification can detect invalid points provided as signature. Note: checking

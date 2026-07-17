@@ -108,11 +108,11 @@ where
 #[cfg(test)]
 mod tests {
     use ark_bn254::Bn254;
-    use ark_ec::{pairing::Pairing, AffineRepr, ScalarMul};
+    use ark_ec::{AffineRepr, ScalarMul, pairing::Pairing};
     use ark_ed_on_bn254::EdwardsConfig as Config;
     use ark_std::{
-        rand::{CryptoRng, RngCore},
         One, UniformRand,
+        rand::{CryptoRng, RngCore},
     };
     use hotshot_types::{
         light_client::LightClientState, signature_key::SchnorrPubKey,
@@ -126,7 +126,7 @@ mod tests {
     use jf_signature::schnorr::Signature;
     use jf_utils::test_rng;
 
-    use super::{generate_state_update_proof, preprocess, CircuitField, UniversalSrs};
+    use super::{CircuitField, UniversalSrs, generate_state_update_proof, preprocess};
     use crate::{
         test_utils::{key_pairs_for_testing, stake_table_for_testing},
         v1::circuit::build_for_preprocessing,
@@ -144,7 +144,7 @@ mod tests {
         R: RngCore + CryptoRng,
     {
         use ark_ec::CurveGroup;
-        use ark_std::{end_timer, start_timer, UniformRand};
+        use ark_std::{UniformRand, end_timer, start_timer};
 
         let setup_time = start_timer!(|| format!("KZG10::Setup with degree {max_degree}"));
         let beta = <Bn254 as Pairing>::ScalarField::rand(rng);
@@ -259,13 +259,15 @@ mod tests {
         assert!(result.is_ok());
 
         let (proof, public_inputs) = result.unwrap();
-        assert!(PlonkKzgSnark::<Bn254>::verify::<SolidityTranscript>(
-            &vk,
-            &public_inputs.to_vec(),
-            &proof,
-            None
-        )
-        .is_ok());
+        assert!(
+            PlonkKzgSnark::<Bn254>::verify::<SolidityTranscript>(
+                &vk,
+                &public_inputs.to_vec(),
+                &proof,
+                None
+            )
+            .is_ok()
+        );
 
         // minimum bad path, other bad cases are checked inside `circuit.rs`
         let mut bad_st_state = st_state;

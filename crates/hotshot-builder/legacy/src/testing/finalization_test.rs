@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use async_broadcast::{broadcast, Sender};
+use async_broadcast::{Sender, broadcast};
 use async_lock::RwLock;
 use committable::Commitment;
 use hotshot::{
@@ -22,26 +22,21 @@ use hotshot_builder_shared::{
 };
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
-    node_types::{TestTypes, TestVersions},
+    node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
 };
 use hotshot_types::{
-    data::{vid_commitment, DaProposal2, QuorumProposal2, QuorumProposalWrapper, ViewNumber},
+    data::{DaProposal2, QuorumProposal2, QuorumProposalWrapper, ViewNumber, vid_commitment},
     message::Proposal,
     simple_certificate::QuorumCertificate2,
-    traits::{
-        block_contents::BlockHeader,
-        node_implementation::{ConsensusTime, Versions},
-        EncodeBytes,
-    },
+    traits::{EncodeBytes, block_contents::BlockHeader},
     utils::{BuilderCommitment, EpochTransitionIndicator},
 };
 use sha2::{Digest, Sha256};
-use vbs::version::StaticVersionType;
 
 use super::basic_test::{BuilderState, MessageType};
 use crate::{
-    builder_state::{DaProposalMessage, QuorumProposalMessage, ALLOW_EMPTY_BLOCK_PERIOD},
+    builder_state::{ALLOW_EMPTY_BLOCK_PERIOD, DaProposalMessage, QuorumProposalMessage},
     service::{GlobalState, ProxyGlobalState, ReceivedTransaction},
 };
 
@@ -60,13 +55,13 @@ pub fn setup_builder_for_test() -> TestSetup {
     let (req_sender, req_receiver) = broadcast(TEST_CHANNEL_BUFFER_SIZE);
     let (tx_sender, tx_receiver) = broadcast(TEST_CHANNEL_BUFFER_SIZE);
 
-    let parent_commitment = vid_commitment::<TestVersions>(
+    let parent_commitment = vid_commitment(
         &[],
         &[],
         TEST_NUM_NODES_IN_VID_COMPUTATION,
-        <TestVersions as Versions>::Base::VERSION,
+        TEST_VERSIONS.test.base,
     );
-    let bootstrap_builder_state_id = BuilderStateId::<TestTypes> {
+    let bootstrap_builder_state_id = BuilderStateId {
         parent_commitment,
         parent_view: ViewNumber::genesis(),
     };
@@ -94,7 +89,7 @@ pub fn setup_builder_for_test() -> TestSetup {
     let (decide_sender, decide_receiver) = broadcast(TEST_CHANNEL_BUFFER_SIZE);
     let (da_proposal_sender, da_proposal_receiver) = broadcast(TEST_CHANNEL_BUFFER_SIZE);
     let (quorum_proposal_sender, quorum_proposal_receiver) = broadcast(TEST_CHANNEL_BUFFER_SIZE);
-    let bootstrap_builder_state = BuilderState::<TestTypes, TestVersions>::new(
+    let bootstrap_builder_state = BuilderState::<TestTypes>::new(
         ParentBlockReferences {
             vid_commitment: parent_commitment,
             view_number: ViewNumber::genesis(),
@@ -137,7 +132,7 @@ pub fn setup_builder_for_test() -> TestSetup {
 /// Builder.
 pub async fn process_available_blocks_round(
     proxy_global_state: &ProxyGlobalState<TestTypes>,
-    builder_state_id: BuilderStateId<TestTypes>,
+    builder_state_id: BuilderStateId,
     round: u64,
 ) -> (
     usize,
@@ -187,11 +182,11 @@ pub async fn process_available_blocks_round(
 pub async fn progress_round_with_available_block_info(
     proxy_global_state: &ProxyGlobalState<TestTypes>,
     available_block_info: AvailableBlockInfo<TestTypes>,
-    builder_state_id: BuilderStateId<TestTypes>,
+    builder_state_id: BuilderStateId,
     round: u64,
     da_proposal_sender: &Sender<MessageType<TestTypes>>,
     quorum_proposal_sender: &Sender<MessageType<TestTypes>>,
-) -> BuilderStateId<TestTypes> {
+) -> BuilderStateId {
     let (leader_pub, leader_priv) = BLSPubKey::generated_from_seed_indexed([0; 32], round);
 
     let signed_parent_commitment =
@@ -235,11 +230,11 @@ pub async fn progress_round_with_available_block_info(
 /// propose, and consensus must continue to progress without a block built by
 /// any builder.
 pub async fn progress_round_without_available_block_info(
-    builder_state_id: BuilderStateId<TestTypes>,
+    builder_state_id: BuilderStateId,
     round: u64,
     da_proposal_sender: &Sender<MessageType<TestTypes>>,
     quorum_proposal_sender: &Sender<MessageType<TestTypes>>,
-) -> BuilderStateId<TestTypes> {
+) -> BuilderStateId {
     progress_round_with_transactions(
         builder_state_id,
         vec![],
@@ -257,12 +252,12 @@ pub async fn progress_round_without_available_block_info(
 /// by [`progress_round_with_available_block_info`] to progress the round with
 /// the given transactions.
 async fn progress_round_with_transactions(
-    builder_state_id: BuilderStateId<TestTypes>,
+    builder_state_id: BuilderStateId,
     transactions: Vec<TestTransaction>,
     round: u64,
     da_proposal_sender: &Sender<MessageType<TestTypes>>,
     quorum_proposal_sender: &Sender<MessageType<TestTypes>>,
-) -> BuilderStateId<TestTypes> {
+) -> BuilderStateId {
     let (leader_pub, leader_priv) = BLSPubKey::generated_from_seed_indexed([0; 32], round);
     let encoded_transactions = TestTransaction::encode(&transactions);
     let next_view = builder_state_id.parent_view + 1;
@@ -299,11 +294,11 @@ async fn progress_round_with_transactions(
             .await
             .expect("should broadcast DA Proposal successfully");
 
-        let payload_commitment = vid_commitment::<TestVersions>(
+        let payload_commitment = vid_commitment(
             &encoded_transactions,
             &metadata.encode(),
             TEST_NUM_NODES_IN_VID_COMPUTATION,
-            <TestVersions as Versions>::Base::VERSION,
+            TEST_VERSIONS.test.base,
         );
 
         let (block_payload, metadata) =
@@ -328,16 +323,17 @@ async fn progress_round_with_transactions(
             timestamp_millis: round * 1_000,
             metadata,
             random: 0,
-            version: <TestVersions as Versions>::Base::VERSION,
+            version: TEST_VERSIONS.test.base,
         };
 
         let qc_proposal = QuorumProposalWrapper::<TestTypes> {
             proposal: QuorumProposal2::<TestTypes> {
                 block_header,
                 view_number: next_view,
-                justify_qc: QuorumCertificate2::<TestTypes>::genesis::<TestVersions>(
+                justify_qc: QuorumCertificate2::<TestTypes>::genesis(
                     &TestValidatedState::default(),
                     &TestInstanceState::default(),
+                    TEST_VERSIONS.test,
                 )
                 .await,
                 upgrade_certificate: None,
@@ -393,12 +389,12 @@ async fn test_empty_block_rate() {
     let (proxy_global_state, _, da_proposal_sender, quorum_proposal_sender, _) =
         setup_builder_for_test();
 
-    let mut current_builder_state_id = BuilderStateId::<TestTypes> {
-        parent_commitment: vid_commitment::<TestVersions>(
+    let mut current_builder_state_id = BuilderStateId {
+        parent_commitment: vid_commitment(
             &[],
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
-            <TestVersions as Versions>::Base::VERSION,
+            TEST_VERSIONS.test.base,
         ),
         parent_view: ViewNumber::genesis(),
     };
@@ -449,12 +445,12 @@ async fn test_eager_block_rate() {
     let (proxy_global_state, _, da_proposal_sender, quorum_proposal_sender, _) =
         setup_builder_for_test();
 
-    let mut current_builder_state_id = BuilderStateId::<TestTypes> {
-        parent_commitment: vid_commitment::<TestVersions>(
+    let mut current_builder_state_id = BuilderStateId {
+        parent_commitment: vid_commitment(
             &[],
             &[],
             TEST_NUM_NODES_IN_VID_COMPUTATION,
-            <TestVersions as Versions>::Base::VERSION,
+            TEST_VERSIONS.test.base,
         ),
         parent_view: ViewNumber::genesis(),
     };

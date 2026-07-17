@@ -13,10 +13,10 @@ An upgrade consists of two parts:
 
 - **Version Bump:** The version bump initiates a change in the protocol, which can involve logic updates and type
   changes. Logic updates typically involve adding or modifying the criteria or consequences of block execution. This new
-  behavior will be enabled at runtime if sequencer version is greater than or equal to the version behind which they are
+  behavior will be enabled at runtime if the node version is greater than or equal to the version behind which they are
   gated. In addition, an upgrade may change the shape of a type. A field of `BlockHeader` might become a `u64` where it
   was before a `u8`. A field may be added to `ChainConfig`. In such cases a new version of these types is added and a
-  version of the sequencer designated to incorporate them.
+  version of the node designated to incorporate them.
 - **Migration:** Migration involves updating existing data to align with the new version, such as updating `ChainConfig`
   values. Since these values are immutable in normal operation, an upgrade is required to modify them. Note that the
   only currently supported upgrade of this kind is the migration of `ChainConfig`.
@@ -77,8 +77,8 @@ Time based:
 The window between `start_proposing_view/time` and `stop_proposing_view/time` should provide sufficient time for nodes
 to continue proposing the upgrade until successful.
 
-Ensure that the `ESPRESSO_SEQUENCER_GENESIS_FILE` environment variable is defined to point to the path of the genesis
-TOML file. For an example with upgrades enabled, refer to [`data/genesis/demo.toml`](../data/genesis/demo.toml).
+Ensure that the `ESPRESSO_NODE_GENESIS_FILE` environment variable is defined to point to the path of the genesis TOML
+file. For an example with upgrades enabled, refer to [`data/genesis/demo.toml`](../data/genesis/demo.toml).
 
 ### Example TOML Configuration
 
@@ -118,7 +118,7 @@ example, to enable protocol fees or modify other parameters.
 ## Fee upgrade
 
 A successful Hotshot upgrade results in a new version, which allows us to update the `ChainConfig` and execute the
-upgrade if there exists any. `Chainconfig` includes the fee parameters. The sequencer node has two states: `NodeState`
+upgrade if there exists any. `Chainconfig` includes the fee parameters. The Espresso node has two states: `NodeState`
 and `ValidatedState`. `NodeState` is an immutable state that contains `ResolvableChainConfig` (Enum of `ChainConfig`'s
 commitment and full `ChainConfig`), whereas `ValidatedState` is a mutable state. To make updates to the chain config
 post-upgrade possible, `ResolvableChainConfig` is also added to `ValidatedState`.

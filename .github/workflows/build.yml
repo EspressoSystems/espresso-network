@@ -43,45 +43,46 @@ jobs:
     name: Build ${{ matrix.binary }} AMD
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - binary: sequencer
-            shared-key: postgres
-            save-cache: false
-
+          - binary: espresso-node
           - binary: other
-            shared-key: postgres
-            save-cache: true
-
-          - binary: sequencer-sqlite
-            # uses it's own lock file
-            shared-key: sequencer-embedded
-            save-cache: true
-
+          - binary: espresso-node-sqlite
           - binary: espresso-dev-node
-            # uses different features testing,emdbedded-db
-            shared-key: espresso-dev-node
-            save-cache: true
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: rui314/setup-mold@v1
+
+      - name: Install Protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v3-rust
-          shared-key: ${{ matrix.shared-key }}
+          shared-key: build-${{ matrix.binary }}
           save-if: >
-            ${{ matrix.save-cache && (
-            github.ref == 'refs/heads/main'
+            ${{ github.ref == 'refs/heads/main'
             || startsWith(github.ref, 'refs/heads/release-')
-            || github.event_name == 'workflow_dispatch' ) }}
-          cache-provider: github
+            || github.event_name == 'workflow_dispatch' }}
 
       - name: Build ${{ matrix.binary }}
         run: |
           scripts/ci-build-binary ${{ matrix.binary }}
+
+      - name: Upload cargo timings
+        uses: actions/upload-artifact@v7
+        with:
+          name: cargo-timings-build-amd-${{ matrix.binary }}
+          path: target/cargo-timings/cargo-timing.html
+          retention-days: 1
+
+      - name: Cargo timing summary
+        run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
 
       - name: Move binaries to upload directory
         shell: bash
@@ -95,9 +96,10 @@ jobs:
           done
 
       - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: amd-${{ matrix.binary }}
+          retention-days: 1
           path: |
             upload/${{ matrix.binary == 'other' && '*' || matrix.binary }}
 
@@ -106,44 +108,46 @@ jobs:
     runs-on: ubuntu-24.04-arm
     if: ${{ github.event_name != 'pull_request' }}
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - binary: sequencer
-            shared-key: postgres
-            save-cache: false
-
+          - binary: espresso-node
           - binary: other
-            shared-key: postgres
-            save-cache: true
-
-          - binary: sequencer-sqlite
-            # uses it's own lock file
-            shared-key: sequencer-embedded
-            save-cache: true
-
+          - binary: espresso-node-sqlite
           - binary: espresso-dev-node
-            # uses different features testing,emdbedded-db
-            shared-key: espresso-dev-node
-            save-cache: true
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: rui314/setup-mold@v1
+
+      - name: Install Protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v3-rust
-          shared-key: ${{ matrix.shared-key }}
+          shared-key: build-${{ matrix.binary }}
           save-if: >
-            ${{ matrix.save-cache && (
-            github.ref == 'refs/heads/main'
+            ${{ github.ref == 'refs/heads/main'
             || startsWith(github.ref, 'refs/heads/release-')
-            || github.event_name == 'workflow_dispatch' ) }}
+            || github.event_name == 'workflow_dispatch' }}
 
       - name: Build ${{ matrix.binary }}
         run: |
           scripts/ci-build-binary ${{ matrix.binary }}
+
+      - name: Upload cargo timings
+        uses: actions/upload-artifact@v7
+        with:
+          name: cargo-timings-build-arm-${{ matrix.binary }}
+          path: target/cargo-timings/cargo-timing.html
+          retention-days: 1
+
+      - name: Cargo timing summary
+        run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
 
       - name: Move binaries to upload directory
         run: |
@@ -156,9 +160,10 @@ jobs:
           done
 
       - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: arm-${{ matrix.binary }}
+          retention-days: 1
           path: |
             upload/${{ matrix.binary == 'other' && '*' || matrix.binary }}
 
@@ -166,6 +171,7 @@ jobs:
     needs: build-amd
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         service:
           - bridge
@@ -175,42 +181,52 @@ jobs:
           - cdn-whitelist
           - deploy
           - espresso-dev-node
+          - light-client-query-service
           - nasty-client
+          - new-protocol-bench-node
           - node-validator
           - orchestrator
           - prover-service
-          - sequencer
+          - espresso-node
           - staking-cli
           - state-relay-server
           - submit-transactions
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download executables AMD
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: amd-*
           path: target/amd64/release
           merge-multiple: true
 
       - name: Setup Docker BuildKit (buildx)
-        uses: docker/setup-buildx-action@v3
+        uses: Wandalen/wretry.action@v3.8.0
+        with:
+          action: docker/setup-buildx-action@v3
+          attempt_limit: 3
+          attempt_delay: 10000
 
       - name: Login to Github Container Repo
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        uses: Wandalen/wretry.action@v3.8.0
         with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          action: docker/login-action@v3
+          attempt_limit: 3
+          attempt_delay: 10000
+          with: |
+            registry: ghcr.io
+            username: ${{ github.repository_owner }}
+            password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Generate ${{ matrix.service }} docker metadata
         uses: docker/metadata-action@v5
         id: metadata
         with:
-          images: ghcr.io/espressosystems/espresso-sequencer/${{matrix.service}}
+          images: ghcr.io/espressosystems/espresso-network/${{matrix.service}}
 
       # There is no straightforward way to import a multiplatform image from a tar file with
       # docker.
@@ -218,35 +234,46 @@ jobs:
       #   - On main: push to the registry and fetch from the registry to run the demo test.
       - name: Build docker image and export to file (on PRs)
         if: github.event_name == 'pull_request'
-        uses: docker/build-push-action@v6
+        uses: nick-fields/retry@v4
+        env:
+          LABELS: ${{ steps.metadata.outputs.labels }}
+          TAGS: ${{ steps.metadata.outputs.tags }}
         with:
-          context: .
-          file: ./docker/${{ matrix.service }}.Dockerfile
-          labels: ${{ steps.metadata.outputs.labels  }}
-          # Note the tag is used later to run the demo test
-          tags: ${{ steps.metadata.outputs.tags }}
-          platforms: linux/amd64
-          outputs: type=docker,dest=${{ runner.temp }}/${{ matrix.service }}.tar
+          timeout_minutes: 30
+          max_attempts: 3
+          retry_wait_seconds: 10
+          command: |
+            scripts/ci-docker-buildx \
+              --file ./docker/${{ matrix.service }}.Dockerfile \
+              --platform linux/amd64 \
+              --output type=docker,dest=${{ runner.temp }}/${{ matrix.service }}.tar \
+              .
 
       - name: Upload docker image artifact (on PRs)
         if: github.event_name == 'pull_request'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.service }}-docker-image
           path: ${{ runner.temp }}/${{ matrix.service }}.tar
           if-no-files-found: error
+          retention-days: 1
 
       - name: Build and push docker (non-PR)
         if: github.event_name != 'pull_request'
-        uses: docker/build-push-action@v5
-        id: build
+        uses: nick-fields/retry@v4
+        env:
+          LABELS: ${{ steps.metadata.outputs.labels }}
         with:
-          context: .
-          file: ./docker/${{ matrix.service }}.Dockerfile
-          labels: ${{ steps.metadata.outputs.labels  }}
-          # Note: the final multiarch image will receive the tag
-          platforms: linux/amd64
-          outputs: type=image,name=ghcr.io/espressosystems/espresso-sequencer/${{ matrix.service }},push-by-digest=true,name-canonical=true,push=true
+          timeout_minutes: 30
+          max_attempts: 3
+          retry_wait_seconds: 10
+          command: |
+            scripts/ci-docker-buildx \
+              --file ./docker/${{ matrix.service }}.Dockerfile \
+              --platform linux/amd64 \
+              --output type=image,name=ghcr.io/espressosystems/espresso-network/${{ matrix.service }},push-by-digest=true,name-canonical=true,push=true \
+              --metadata-file ${{ runner.temp }}/metadata.json \
+              .
 
       - name: Export docker image digest
         if: github.event_name != 'pull_request'
@@ -255,13 +282,13 @@ jobs:
           set -x
           digest_dir="${{ runner.temp }}/digests"
           mkdir -p "${digest_dir}"
-          digest="${{ steps.build.outputs.digest }}"
+          digest=$(jq -r '."containerimage.digest"' "${{ runner.temp }}/metadata.json")
           touch "${digest_dir}/${digest#sha256:}"
           ls -lah "${digest_dir}"
 
       - name: Upload digest
         if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: "digests-${{ matrix.service }}-amd64"
           path: "${{ runner.temp }}/digests/*"
@@ -274,6 +301,7 @@ jobs:
     needs: build-arm
     runs-on: ubuntu-24.04-arm
     strategy:
+      fail-fast: false
       matrix:
         service:
           - bridge
@@ -283,53 +311,67 @@ jobs:
           - cdn-whitelist
           - deploy
           - espresso-dev-node
+          - light-client-query-service
           - nasty-client
+          - new-protocol-bench-node
           - node-validator
           - orchestrator
           - prover-service
-          - sequencer
+          - espresso-node
           - staking-cli
           - state-relay-server
           - submit-transactions
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download executables ARM
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: arm-*
           path: target/arm64/release
           merge-multiple: true
 
       - name: Setup Docker BuildKit (buildx)
-        uses: docker/setup-buildx-action@v3
+        uses: Wandalen/wretry.action@v3.8.0
+        with:
+          action: docker/setup-buildx-action@v3
+          attempt_limit: 3
+          attempt_delay: 10000
 
       - name: Login to Github Container Repo
-        uses: docker/login-action@v3
+        uses: Wandalen/wretry.action@v3.8.0
         with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          action: docker/login-action@v3
+          attempt_limit: 3
+          attempt_delay: 10000
+          with: |
+            registry: ghcr.io
+            username: ${{ github.repository_owner }}
+            password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Generate ${{ matrix.service }} docker metadata
         uses: docker/metadata-action@v5
         id: metadata
         with:
-          images: ghcr.io/espressosystems/espresso-sequencer/${{ matrix.service }}
+          images: ghcr.io/espressosystems/espresso-network/${{ matrix.service }}
 
       - name: Build and push docker
-        uses: docker/build-push-action@v6
-        id: build
+        uses: nick-fields/retry@v4
+        env:
+          LABELS: ${{ steps.metadata.outputs.labels }}
         with:
-          context: .
-          file: ./docker/${{ matrix.service }}.Dockerfile
-          labels: ${{ steps.metadata.outputs.labels  }}
-          # Note: the final multiarch image will receive the tag
-          platforms: linux/arm64
-          outputs: type=image,name=ghcr.io/espressosystems/espresso-sequencer/${{  matrix.service }},push-by-digest=true,name-canonical=true,push=true
-
+          timeout_minutes: 30
+          max_attempts: 3
+          retry_wait_seconds: 10
+          command: |
+            scripts/ci-docker-buildx \
+              --file ./docker/${{ matrix.service }}.Dockerfile \
+              --platform linux/arm64 \
+              --output type=image,name=ghcr.io/espressosystems/espresso-network/${{ matrix.service }},push-by-digest=true,name-canonical=true,push=true \
+              --metadata-file ${{ runner.temp }}/metadata.json \
+              .
 
       - name: Export docker image digest
         shell: bash
@@ -337,12 +379,12 @@ jobs:
           set -x
           digest_dir="${{ runner.temp }}/digests"
           mkdir -p "${digest_dir}"
-          digest="${{ steps.build.outputs.digest }}"
+          digest=$(jq -r '."containerimage.digest"' "${{ runner.temp }}/metadata.json")
           touch "${digest_dir}/${digest#sha256:}"
           ls -lah "${digest_dir}"
 
       - name: Upload digest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: "digests-${{ matrix.service }}-arm64"
           path: "${{ runner.temp }}/digests/*"
@@ -358,6 +400,7 @@ jobs:
     needs: [build-dockers-amd, build-dockers-arm]
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         service:
           - bridge
@@ -367,28 +410,41 @@ jobs:
           - cdn-whitelist
           - deploy
           - espresso-dev-node
+          - light-client-query-service
           - nasty-client
+          - new-protocol-bench-node
           - node-validator
           - orchestrator
           - prover-service
-          - sequencer
+          - espresso-node
           - staking-cli
           - state-relay-server
           - submit-transactions
 
     steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: Wandalen/wretry.action@v3.8.0
+        with:
+          action: docker/setup-buildx-action@v3
+          attempt_limit: 3
+          attempt_delay: 10000
 
       - name: Login to Github Container Repo
-        uses: docker/login-action@v3
+        uses: Wandalen/wretry.action@v3.8.0
         with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner  }}
-          password: ${{ secrets.GITHUB_TOKEN  }}
+          action: docker/login-action@v3
+          attempt_limit: 3
+          attempt_delay: 10000
+          with: |
+            registry: ghcr.io
+            username: ${{ github.repository_owner }}
+            password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: "digests-${{ matrix.service }}-*"
           path: "${{ runner.temp }}/digests"
@@ -398,7 +454,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/espressosystems/espresso-sequencer/${{ matrix.service }}
+          images: ghcr.io/espressosystems/espresso-network/${{ matrix.service }}
 
       - name: Create manifest list and push
         working-directory: "${{ runner.temp }}/digests"
@@ -413,22 +469,53 @@ jobs:
           fi
 
           docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf 'ghcr.io/espressosystems/espresso-sequencer/${{ matrix.service }}@sha256:%s ' *)
+            $(printf 'ghcr.io/espressosystems/espresso-network/${{ matrix.service }}@sha256:%s ' *)
 
       - name: Inspect image
         run: |
-          docker buildx imagetools inspect ghcr.io/espressosystems/espresso-sequencer/${{ matrix.service }}:${{ steps.meta.outputs.version }}
+          docker buildx imagetools inspect ghcr.io/espressosystems/espresso-network/${{ matrix.service }}:${{ steps.meta.outputs.version }}
+
+      # DEPRECATED: Push copies to the old espresso-sequencer registry for backward compatibility.
+      # These legacy images will be removed in a future release. Consumers should migrate to
+      # ghcr.io/espressosystems/espresso-network/<service>.
+      - name: Copy image to legacy espresso-sequencer registry
+        if: matrix.service != 'espresso-node'
+        run: |
+          for tag in $(jq -cr '.tags[]' <<< "$DOCKER_METADATA_OUTPUT_JSON"); do
+            legacy_tag="${tag/espresso-network/espresso-sequencer}"
+            docker buildx imagetools create -t "$legacy_tag" "$tag"
+          done
+
+      # DEPRECATED: Push a legacy image with old binary names (sequencer, sequencer-postgres,
+      # sequencer-sqlite) as symlinks to the new names. This will be removed in a future release.
+      # Consumers should migrate to ghcr.io/espressosystems/espresso-network/espresso-node.
+      - name: Build and push legacy sequencer image with old binary names
+        if: matrix.service == 'espresso-node'
+        uses: nick-fields/retry@v4
+        env:
+          TAGS: ghcr.io/espressosystems/espresso-sequencer/sequencer:${{ steps.meta.outputs.version }}
+        with:
+          timeout_minutes: 30
+          max_attempts: 3
+          retry_wait_seconds: 10
+          command: |
+            scripts/ci-docker-buildx \
+              --file ./docker/espresso-node-legacy.Dockerfile \
+              --build-arg BASE_IMAGE=ghcr.io/espressosystems/espresso-network/espresso-node:${{ steps.meta.outputs.version }} \
+              --platform linux/amd64,linux/arm64 \
+              --push \
+              .
 
   test-demo-pr:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     needs: [build-dockers-amd]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: taiki-e/install-action@just
 
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: ${{ runner.temp }}/docker-images
           pattern: "*-docker-image"
@@ -465,7 +552,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-dockers-amd, create-multiplatform-docker-image]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: taiki-e/install-action@just
 
       - name: Set docker image tag for compose
@@ -505,3 +592,250 @@ jobs:
             echo "No jobs passed. Failing."
             exit 1
           fi
+
+  binary-upgrade-test-pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    needs: [build-dockers-amd]
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - vanilla
+          - new-from-old-fs
+          - new-from-old-pg
+          - old-from-new-fs
+          - old-from-new-pg
+    name: binary-upgrade-test-pr (${{ matrix.scenario }})
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-tags: true
+      - uses: taiki-e/install-action@just
+      - uses: astral-sh/setup-uv@v8.1.0
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: ${{ runner.temp }}/docker-images
+          pattern: "*-docker-image"
+
+      - name: Load docker images
+        run: |
+          for file in $(find ${{ runner.temp }}/docker-images -name "*.tar"); do
+            docker load --input $file
+          done
+
+      - name: Set upgrade tag
+        run: |
+          echo "UPGRADE_TAG=pr-${{ github.event.pull_request.number }}" >> $GITHUB_ENV
+
+      - name: Pull docker images
+        run: |
+          set -o pipefail
+          ./binary-upgrade-tests/run.py --pull-only | sed -e 's/^/binary-upgrade: /;'
+
+      - name: Run binary upgrade test
+        run: |
+          set -o pipefail
+          timeout -v 2400 ./binary-upgrade-tests/run.py --scenario ${{ matrix.scenario }} \
+            | sed -e "s/^/binary-upgrade(${{ matrix.scenario }}): /;"
+
+      - name: Upload compose logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: compose-logs-${{ github.job }}-${{ matrix.scenario }}
+          path: tmp/compose-logs/
+          retention-days: 1
+          if-no-files-found: ignore
+
+  binary-upgrade-test-non-pr:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    needs: [build-dockers-amd, create-multiplatform-docker-image]
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - vanilla
+          - new-from-old-fs
+          - new-from-old-pg
+          - old-from-new-fs
+          - old-from-new-pg
+    name: binary-upgrade-test-non-pr (${{ matrix.scenario }})
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-tags: true
+      - uses: taiki-e/install-action@just
+      - uses: astral-sh/setup-uv@v8.1.0
+
+      - name: Set upgrade tag
+        run: |
+          UPGRADE_TAG=$(echo "${{ github.ref_name }}" | tr '/' '-')
+          echo "UPGRADE_TAG=$UPGRADE_TAG" >> $GITHUB_ENV
+          echo "UPGRADE_PULL=1" >> $GITHUB_ENV
+
+      - name: Pull docker images
+        run: |
+          set -o pipefail
+          ./binary-upgrade-tests/run.py --pull-only | sed -e 's/^/binary-upgrade: /;'
+
+      - name: Run binary upgrade test
+        run: |
+          set -o pipefail
+          timeout -v 2400 ./binary-upgrade-tests/run.py --scenario ${{ matrix.scenario }} \
+            | sed -e "s/^/binary-upgrade(${{ matrix.scenario }}): /;"
+
+      - name: Upload compose logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: compose-logs-${{ github.job }}-${{ matrix.scenario }}
+          path: tmp/compose-logs/
+          retention-days: 1
+          if-no-files-found: ignore
+
+  binary-upgrade-test:
+    needs: [binary-upgrade-test-pr, binary-upgrade-test-non-pr]
+    runs-on: ubuntu-latest
+    if: ${{ always() && !cancelled() }}
+    steps:
+      - name: Aggregate binary upgrade test results
+        run: |
+          echo "All results: ${{ toJson(needs) }}"
+          if ${{ contains(needs.*.result, 'success') }}; then
+            echo "At least one job passed. Ok."
+          else
+            echo "No jobs passed. Failing."
+            exit 1
+          fi
+
+  # The soak test takes ~1h; on PRs only run it when the scripts driving it change.
+  memory-soak-changes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      soak: ${{ steps.filter.outputs.soak }}
+    steps:
+      - id: filter
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
+            --paginate --jq '.[].filename' | grep -q '^crates/process-metrics/scripts/'; then
+            echo "soak=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "soak=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  memory-soak-pr:
+    if: github.event_name == 'pull_request' && needs.memory-soak-changes.outputs.soak == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    needs: [build-dockers-amd, memory-soak-changes]
+    strategy:
+      fail-fast: false
+      matrix:
+        genesis: [demo-drb-header, demo-epoch-reward]
+    env:
+      DOCKER_TAG: pr-${{ github.event.pull_request.number }}
+      ESPRESSO_NODE_GENESIS_FILE: genesis/${{ matrix.genesis }}.toml
+      DURATION_SECONDS: 3600
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.1.0
+      - uses: taiki-e/install-action@just
+
+      - name: Download docker image artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: ${{ runner.temp }}/docker-images
+          pattern: "*-docker-image"
+
+      - name: Load docker images
+        run: |
+          for file in $(find ${{ runner.temp }}/docker-images -name "*.tar"); do
+            docker load --input $file
+          done
+
+      - name: Start demo + smoke test
+        run: just soak::up
+
+      - name: Sample
+        run: just soak::sample
+
+      - name: Render summary + chart
+        if: always()
+        run: just soak::render
+
+      - name: Dump compose logs
+        if: always()
+        run: just soak::logs
+
+      - name: Upload soak samples
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: memory-soak-${{ matrix.genesis }}
+          path: ./soak-samples
+          retention-days: 90
+
+      - name: Upload soak logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: memory-soak-${{ matrix.genesis }}-logs
+          path: ./soak-logs
+          retention-days: 1
+
+  memory-soak-non-pr:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    needs: [build-dockers-amd, create-multiplatform-docker-image]
+    strategy:
+      fail-fast: false
+      matrix:
+        genesis: [demo-drb-header, demo-epoch-reward]
+    env:
+      ESPRESSO_NODE_GENESIS_FILE: genesis/${{ matrix.genesis }}.toml
+      DURATION_SECONDS: 3600
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.1.0
+      - uses: taiki-e/install-action@just
+
+      - name: Set docker tag
+        run: echo "DOCKER_TAG=$(echo '${{ github.ref_name }}' | tr '/' '-')" >> $GITHUB_ENV
+
+      - name: Start demo + smoke test
+        run: just soak::up
+
+      - name: Sample
+        run: just soak::sample
+
+      - name: Render summary + chart
+        if: always()
+        run: just soak::render
+
+      - name: Dump compose logs
+        if: always()
+        run: just soak::logs
+
+      - name: Upload soak samples
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: memory-soak-${{ matrix.genesis }}
+          path: ./soak-samples
+          retention-days: 90
+
+      - name: Upload soak logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: memory-soak-${{ matrix.genesis }}-logs
+          path: ./soak-logs
+          retention-days: 1

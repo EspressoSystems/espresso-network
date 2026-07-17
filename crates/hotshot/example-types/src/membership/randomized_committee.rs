@@ -9,8 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::Context;
 use hotshot_types::{
     drb::{
-        election::{generate_stake_cdf, select_randomized_leader, RandomizedCommittee},
         DrbResult,
+        election::{RandomizedCommittee, generate_stake_cdf, select_randomized_leader},
     },
     traits::signature_key::{
         LCV1StateSignatureKey, LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey,
@@ -18,7 +18,7 @@ use hotshot_types::{
     },
 };
 
-use crate::membership::stake_table::{TestDaCommittees, TestStakeTable, TestStakeTableEntry};
+use crate::membership::stake_table::{TestCommitteeSchedule, TestStakeTable, TestStakeTableEntry};
 
 #[derive(Clone, Debug)]
 
@@ -40,7 +40,7 @@ pub struct RandomizedStakeTable<
     /// Stake tables randomized with the DRB, used (only) for leader election
     randomized_committee: RandomizedCommittee<<PubKey as SignatureKey>::StakeTableEntry>,
 
-    da_committees: TestDaCommittees<PubKey, StatePubKey>,
+    da_committees: TestCommitteeSchedule<PubKey, StatePubKey>,
 }
 
 impl<PubKey, StatePubKey> TestStakeTable<PubKey, StatePubKey>
@@ -71,7 +71,7 @@ where
             randomized_committee,
             epochs: BTreeSet::new(),
             drb_results: BTreeMap::new(),
-            da_committees: TestDaCommittees::new(),
+            da_committees: TestCommitteeSchedule::new(),
         }
     }
 

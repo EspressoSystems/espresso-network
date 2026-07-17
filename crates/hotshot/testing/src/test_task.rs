@@ -17,10 +17,7 @@ use hotshot::{
 use hotshot_task_impls::{events::HotShotEvent, network::NetworkMessageTaskState};
 use hotshot_types::{
     message::UpgradeLock,
-    traits::{
-        network::ConnectedNetwork,
-        node_implementation::{NodeType, Versions},
-    },
+    traits::{network::ConnectedNetwork, node_implementation::NodeType},
 };
 use tokio::{
     spawn,
@@ -92,15 +89,14 @@ impl<TYPES: NodeType> TestTaskState for AnyTestTaskState<TYPES> {
 }
 
 #[async_trait]
-pub trait TestTaskStateSeed<TYPES, I, V>: Send
+pub trait TestTaskStateSeed<TYPES, I>: Send
 where
     TYPES: NodeType,
     I: TestableNodeImplementation<TYPES>,
-    V: Versions,
 {
     async fn into_state(
         self: Box<Self>,
-        handles: Arc<RwLock<Vec<Node<TYPES, I, V>>>>,
+        handles: Arc<RwLock<Vec<Node<TYPES, I>>>>,
     ) -> AnyTestTaskState<TYPES>;
 }
 
@@ -123,6 +119,14 @@ pub struct TestTask<S: TestTaskState> {
 #[derive(Clone, Debug)]
 pub enum TestEvent {
     Shutdown,
+}
+
+impl std::fmt::Display for TestEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TestEvent::Shutdown => write!(f, "Shutdown"),
+        }
+    }
 }
 
 impl<S: TestTaskState + Send + 'static> TestTask<S> {
@@ -150,6 +154,13 @@ impl<S: TestTaskState + Send + 'static> TestTask<S> {
 
                 self.receivers.retain(|receiver| !receiver.is_closed());
 
+                // All-node restart closes every receiver at once; `select_all` panics on
+                // an empty set. Receivers are never re-subscribed, so idle until shutdown.
+                if self.receivers.is_empty() {
+                    sleep(Duration::from_millis(500)).await;
+                    continue;
+                }
+
                 let mut messages = Vec::new();
 
                 for receiver in &mut self.receivers {
@@ -176,18 +187,17 @@ impl<S: TestTaskState + Send + 'static> TestTask<S> {
 /// Add the network task to handle messages and publish events.
 pub async fn add_network_message_test_task<
     TYPES: NodeType,
-    V: Versions,
     NET: ConnectedNetwork<TYPES::SignatureKey>,
 >(
     internal_event_stream: Sender<Arc<HotShotEvent<TYPES>>>,
     external_event_stream: Sender<Event<TYPES>>,
-    upgrade_lock: UpgradeLock<TYPES, V>,
+    upgrade_lock: UpgradeLock<TYPES>,
     channel: Arc<NET>,
     public_key: TYPES::SignatureKey,
     id: u64,
 ) -> JoinHandle<()> {
     let net = Arc::clone(&channel);
-    let network_state: NetworkMessageTaskState<_, _> = NetworkMessageTaskState {
+    let network_state: NetworkMessageTaskState<_> = NetworkMessageTaskState {
         internal_event_stream: internal_event_stream.clone(),
         external_event_stream: external_event_stream.clone(),
         public_key,
@@ -210,14 +220,13 @@ pub async fn add_network_message_test_task<
             };
 
             // Deserialize the message
-            let deserialized_message: Message<TYPES> =
-                match upgrade_lock.deserialize(&message).await {
-                    Ok((message, _)) => message,
-                    Err(e) => {
-                        tracing::error!("Failed to deserialize message: {e:?}");
-                        continue;
-                    },
-                };
+            let deserialized_message: Message<TYPES> = match upgrade_lock.deserialize(&message) {
+                Ok((message, _)) => message,
+                Err(e) => {
+                    tracing::error!("Failed to deserialize message: {e:?}");
+                    continue;
+                },
+            };
 
             // Handle the message
             state.handle_message(deserialized_message).await;

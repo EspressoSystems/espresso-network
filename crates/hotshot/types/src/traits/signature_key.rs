@@ -14,12 +14,12 @@ use std::{
     hash::Hash,
 };
 
-use alloy::primitives::U256;
+use alloy_primitives::U256;
 use ark_serialize::SerializationError;
 use bitvec::prelude::*;
 use committable::Committable;
 use jf_signature::SignatureError;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tagged_base64::{TaggedBase64, Tb64Error};
 
 use super::EncodeBytes;
@@ -90,6 +90,16 @@ pub trait SignatureKey:
         + Eq
         + Serialize
         + for<'a> Deserialize<'a>;
+    /// The verification key type
+    type VerificationKeyType: Debug
+        + Hash
+        + Clone
+        + Send
+        + Sync
+        + for<'a> Deserialize<'a>
+        + Serialize
+        + PartialEq
+        + Eq;
     /// The type of the quorum certificate parameters used for assembled signature
     type QcParams<'a>: Send + Sync + Sized + Clone + Debug + Hash;
     /// The type of the assembled signature, without `BitVec`
@@ -168,6 +178,15 @@ pub trait SignatureKey:
         qc: &Self::QcType,
     ) -> Result<(), SignatureError>;
 
+    /// Get the list of signers given a qc.
+    ///
+    /// # Errors
+    /// Returns an error if the inputs mismatch (e.g. wrong verifier parameter or original message).
+    fn signers(
+        real_qc_pp: &Self::QcParams<'_>,
+        qc: &Self::QcType,
+    ) -> Result<Vec<Self::VerificationKeyType>, SignatureError>;
+
     /// get the assembled signature and the `BitVec` separately from the assembled signature
     fn sig_proof(signature: &Self::QcType) -> (Self::PureAssembledSignatureType, BitVec);
 
@@ -181,6 +200,9 @@ pub trait SignatureKey:
     /// generates the genesis public key. Meant to be dummy/filler
     #[must_use]
     fn genesis_proposer_pk() -> Self;
+
+    /// convert the public key to verification key
+    fn to_verification_key(&self) -> Self::VerificationKeyType;
 }
 
 /// Builder Signature Key trait with minimal requirements

@@ -6,28 +6,30 @@
 
 use alloy::{
     network::Ethereum,
-    primitives::{Address, Bytes, U256},
+    primitives::{Address, Bytes, FixedBytes, U256},
     providers::{PendingTransactionBuilder, Provider},
     rpc::types::{TransactionInput, TransactionRequest},
     sol_types::SolCall,
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
+use espresso_safe_tx_builder::FunctionInfo;
 use hotshot_contract_adapter::{
     evm::DecodeRevert,
     sol_types::{
-        EdOnBN254PointSol,
-        EspToken::{approveCall, transferCall, EspTokenErrors},
-        G1PointSol, G2PointSol,
-        RewardClaim::{claimRewardsCall, RewardClaimErrors},
-        StakeTableV2::{
-            claimValidatorExitCall, claimWithdrawalCall, delegateCall, deregisterValidatorCall,
-            registerValidatorCall, registerValidatorV2Call, undelegateCall, updateCommissionCall,
-            updateConsensusKeysCall, updateConsensusKeysV2Call, updateMetadataUriCall,
-            StakeTableV2Errors,
+        EspToken::{EspTokenErrors, approveCall, transferCall},
+        G1PointSol,
+        RewardClaim::{RewardClaimErrors, claimRewardsCall},
+        StakeTableV3::{
+            StakeTableV3Errors, claimValidatorExitCall, claimWithdrawalCall, delegateCall,
+            deregisterValidatorCall, registerValidatorCall, registerValidatorV2Call,
+            registerValidatorV3Call, undelegateCall, updateCommissionCall, updateConsensusKeysCall,
+            updateConsensusKeysV2Call, updateMetadataUriCall, updateNetworkConfigCall,
+            updateP2pAddrCall, updateX25519KeyCall,
         },
     },
     stake_table::{StakeTableContractVersion, StateSignatureSol},
 };
+use hotshot_types::{addr::NetAddr, x25519};
 
 use crate::{
     metadata::MetadataUri, output::format_esp, parse::Commission, signature::NodeSignatures,
@@ -69,6 +71,10 @@ pub enum Transaction {
         metadata_uri: MetadataUri,
         payload: NodeSignatures,
         version: StakeTableContractVersion,
+        /// Required for V3 registration.
+        x25519_key: Option<x25519::PublicKey>,
+        /// Required for V3 registration.
+        p2p_addr: Option<NetAddr>,
     },
     UpdateConsensusKeys {
         stake_table: Address,
@@ -86,6 +92,19 @@ pub enum Transaction {
         stake_table: Address,
         metadata_uri: MetadataUri,
     },
+    UpdateNetworkConfig {
+        stake_table: Address,
+        x25519_key: x25519::PublicKey,
+        p2p_addr: NetAddr,
+    },
+    UpdateX25519Key {
+        stake_table: Address,
+        x25519_key: x25519::PublicKey,
+    },
+    UpdateP2pAddr {
+        stake_table: Address,
+        p2p_addr: NetAddr,
+    },
     Transfer {
         token: Address,
         to: Address,
@@ -94,9 +113,11 @@ pub enum Transaction {
 }
 
 impl Transaction {
-    /// Returns the contract address and encoded calldata for this state change.
-    pub fn calldata(self) -> (Address, Bytes) {
-        match self {
+    /// Returns the contract address, encoded calldata, and optional function info for this state
+    /// change. Function info is `None` for calls with struct arguments that cannot be represented
+    /// as simple string values for Safe TX Builder.
+    pub fn calldata(self) -> Result<(Address, Bytes, Option<FunctionInfo>)> {
+        Ok(match self {
             Self::Approve {
                 token,
                 spender,
@@ -109,6 +130,10 @@ impl Transaction {
                 }
                 .abi_encode()
                 .into(),
+                Some(FunctionInfo {
+                    signature: "approve(address spender, uint256 value)".to_string(),
+                    args: vec![spender.to_string(), amount.to_string()],
+                }),
             ),
             Self::Delegate {
                 stake_table,
@@ -117,6 +142,10 @@ impl Transaction {
             } => (
                 stake_table,
                 delegateCall { validator, amount }.abi_encode().into(),
+                Some(FunctionInfo {
+                    signature: "delegate(address validator, uint256 amount)".to_string(),
+                    args: vec![validator.to_string(), amount.to_string()],
+                }),
             ),
             Self::Undelegate {
                 stake_table,
@@ -125,6 +154,10 @@ impl Transaction {
             } => (
                 stake_table,
                 undelegateCall { validator, amount }.abi_encode().into(),
+                Some(FunctionInfo {
+                    signature: "undelegate(address validator, uint256 amount)".to_string(),
+                    args: vec![validator.to_string(), amount.to_string()],
+                }),
             ),
             Self::ClaimWithdrawal {
                 stake_table,
@@ -132,6 +165,10 @@ impl Transaction {
             } => (
                 stake_table,
                 claimWithdrawalCall { validator }.abi_encode().into(),
+                Some(FunctionInfo {
+                    signature: "claimWithdrawal(address validator)".to_string(),
+                    args: vec![validator.to_string()],
+                }),
             ),
             Self::ClaimValidatorExit {
                 stake_table,
@@ -139,6 +176,10 @@ impl Transaction {
             } => (
                 stake_table,
                 claimValidatorExitCall { validator }.abi_encode().into(),
+                Some(FunctionInfo {
+                    signature: "claimValidatorExit(address validator)".to_string(),
+                    args: vec![validator.to_string()],
+                }),
             ),
             Self::ClaimRewards {
                 reward_claim,
@@ -148,41 +189,89 @@ impl Transaction {
                 reward_claim,
                 claimRewardsCall {
                     lifetimeRewards: lifetime_rewards,
-                    authData: auth_data,
+                    authData: auth_data.clone(),
                 }
                 .abi_encode()
                 .into(),
+                Some(FunctionInfo {
+                    signature: "claimRewards(uint256 lifetimeRewards, bytes authData)".to_string(),
+                    args: vec![lifetime_rewards.to_string(), auth_data.to_string()],
+                }),
             ),
+            // RegisterValidator and UpdateConsensusKeys use complex struct args (BLS/Schnorr keys)
+            // that cannot be represented as simple strings for Safe TX Builder.
             Self::RegisterValidator {
                 stake_table,
                 commission,
                 metadata_uri,
                 payload,
                 version,
+                x25519_key,
+                p2p_addr,
             } => match version {
-                StakeTableContractVersion::V1 => (
+                StakeTableContractVersion::V1 => {
+                    if x25519_key.is_some() || p2p_addr.is_some() {
+                        bail!(
+                            "--x25519-key and --p2p-addr are only supported on StakeTable V3; the \
+                             deployed contract is V1"
+                        );
+                    }
+                    (
+                        stake_table,
+                        registerValidatorCall::from((
+                            payload.bls_vk.into(),
+                            payload.schnorr_vk.into(),
+                            G1PointSol::from(payload.bls_signature).into(),
+                            commission.to_evm(),
+                        ))
+                        .abi_encode()
+                        .into(),
+                        None,
+                    )
+                },
+                StakeTableContractVersion::V2 => {
+                    if x25519_key.is_some() || p2p_addr.is_some() {
+                        bail!(
+                            "--x25519-key and --p2p-addr are only supported on StakeTable V3; the \
+                             deployed contract is V2"
+                        );
+                    }
+                    (
+                        stake_table,
+                        registerValidatorV2Call::from((
+                            payload.bls_vk.into(),
+                            payload.schnorr_vk.into(),
+                            G1PointSol::from(payload.bls_signature).into(),
+                            StateSignatureSol::from(payload.schnorr_signature).into(),
+                            commission.to_evm(),
+                            metadata_uri.to_string(),
+                        ))
+                        .abi_encode()
+                        .into(),
+                        None,
+                    )
+                },
+                StakeTableContractVersion::V3 => (
                     stake_table,
-                    registerValidatorCall::from((
-                        G2PointSol::from(payload.bls_vk),
-                        EdOnBN254PointSol::from(payload.schnorr_vk),
-                        G1PointSol::from(payload.bls_signature).into(),
-                        commission.to_evm(),
-                    ))
+                    registerValidatorV3Call {
+                        blsVK: payload.bls_vk.into(),
+                        schnorrVK: payload.schnorr_vk.into(),
+                        blsSig: G1PointSol::from(payload.bls_signature).into(),
+                        schnorrSig: StateSignatureSol::from(payload.schnorr_signature).into(),
+                        commission: commission.to_evm(),
+                        metadataUri: metadata_uri.to_string(),
+                        x25519Key: FixedBytes(
+                            x25519_key
+                                .context("V3 registration requires --x25519-key")?
+                                .as_bytes(),
+                        ),
+                        p2pAddr: p2p_addr
+                            .context("V3 registration requires --p2p-addr")?
+                            .to_string(),
+                    }
                     .abi_encode()
                     .into(),
-                ),
-                StakeTableContractVersion::V2 => (
-                    stake_table,
-                    registerValidatorV2Call::from((
-                        G2PointSol::from(payload.bls_vk),
-                        EdOnBN254PointSol::from(payload.schnorr_vk),
-                        G1PointSol::from(payload.bls_signature).into(),
-                        StateSignatureSol::from(payload.schnorr_signature).into(),
-                        commission.to_evm(),
-                        metadata_uri.to_string(),
-                    ))
-                    .abi_encode()
-                    .into(),
+                    None,
                 ),
             },
             Self::UpdateConsensusKeys {
@@ -193,28 +282,35 @@ impl Transaction {
                 StakeTableContractVersion::V1 => (
                     stake_table,
                     updateConsensusKeysCall::from((
-                        G2PointSol::from(payload.bls_vk),
-                        EdOnBN254PointSol::from(payload.schnorr_vk),
+                        payload.bls_vk.into(),
+                        payload.schnorr_vk.into(),
                         G1PointSol::from(payload.bls_signature).into(),
                     ))
                     .abi_encode()
                     .into(),
+                    None,
                 ),
-                StakeTableContractVersion::V2 => (
+                StakeTableContractVersion::V2 | StakeTableContractVersion::V3 => (
                     stake_table,
                     updateConsensusKeysV2Call::from((
-                        G2PointSol::from(payload.bls_vk),
-                        EdOnBN254PointSol::from(payload.schnorr_vk),
+                        payload.bls_vk.into(),
+                        payload.schnorr_vk.into(),
                         G1PointSol::from(payload.bls_signature).into(),
                         StateSignatureSol::from(payload.schnorr_signature).into(),
                     ))
                     .abi_encode()
                     .into(),
+                    None,
                 ),
             },
-            Self::DeregisterValidator { stake_table } => {
-                (stake_table, deregisterValidatorCall {}.abi_encode().into())
-            },
+            Self::DeregisterValidator { stake_table } => (
+                stake_table,
+                deregisterValidatorCall {}.abi_encode().into(),
+                Some(FunctionInfo {
+                    signature: deregisterValidatorCall::SIGNATURE.to_string(),
+                    args: vec![],
+                }),
+            ),
             Self::UpdateCommission {
                 stake_table,
                 new_commission,
@@ -225,6 +321,10 @@ impl Transaction {
                 }
                 .abi_encode()
                 .into(),
+                Some(FunctionInfo {
+                    signature: "updateCommission(uint16 newCommission)".to_string(),
+                    args: vec![new_commission.to_evm().to_string()],
+                }),
             ),
             Self::UpdateMetadataUri {
                 stake_table,
@@ -236,19 +336,144 @@ impl Transaction {
                 }
                 .abi_encode()
                 .into(),
+                Some(FunctionInfo {
+                    signature: "updateMetadataUri(string metadataUri)".to_string(),
+                    args: vec![metadata_uri.to_string()],
+                }),
             ),
+            Self::UpdateNetworkConfig {
+                stake_table,
+                x25519_key,
+                p2p_addr,
+            } => {
+                let x25519_bytes = FixedBytes(x25519_key.as_bytes());
+                let p2p_addr_str = p2p_addr.to_string();
+                (
+                    stake_table,
+                    updateNetworkConfigCall {
+                        x25519Key: x25519_bytes,
+                        p2pAddr: p2p_addr_str.clone(),
+                    }
+                    .abi_encode()
+                    .into(),
+                    Some(FunctionInfo {
+                        signature: "updateNetworkConfig(bytes32 x25519Key, string p2pAddr)"
+                            .to_string(),
+                        args: vec![x25519_bytes.to_string(), p2p_addr_str],
+                    }),
+                )
+            },
+            Self::UpdateX25519Key {
+                stake_table,
+                x25519_key,
+            } => {
+                let x25519_bytes = FixedBytes(x25519_key.as_bytes());
+                (
+                    stake_table,
+                    updateX25519KeyCall {
+                        x25519Key: x25519_bytes,
+                    }
+                    .abi_encode()
+                    .into(),
+                    Some(FunctionInfo {
+                        signature: "updateX25519Key(bytes32 x25519Key)".to_string(),
+                        args: vec![x25519_bytes.to_string()],
+                    }),
+                )
+            },
+            Self::UpdateP2pAddr {
+                stake_table,
+                p2p_addr,
+            } => {
+                let p2p_addr_str = p2p_addr.to_string();
+                (
+                    stake_table,
+                    updateP2pAddrCall {
+                        p2pAddr: p2p_addr_str.clone(),
+                    }
+                    .abi_encode()
+                    .into(),
+                    Some(FunctionInfo {
+                        signature: "updateP2pAddr(string p2pAddr)".to_string(),
+                        args: vec![p2p_addr_str],
+                    }),
+                )
+            },
             Self::Transfer { token, to, amount } => (
                 token,
                 transferCall { to, value: amount }.abi_encode().into(),
+                Some(FunctionInfo {
+                    signature: "transfer(address to, uint256 value)".to_string(),
+                    args: vec![to.to_string(), amount.to_string()],
+                }),
             ),
+        })
+    }
+
+    pub fn description(&self) -> String {
+        match self {
+            Self::Approve {
+                spender, amount, ..
+            } => format!("Approve {} ESP for {}", format_esp(*amount), spender),
+            Self::Delegate {
+                validator, amount, ..
+            } => format!(
+                "Delegate {} ESP to validator {}",
+                format_esp(*amount),
+                validator
+            ),
+            Self::Undelegate {
+                validator, amount, ..
+            } => format!(
+                "Undelegate {} ESP from validator {}",
+                format_esp(*amount),
+                validator
+            ),
+            Self::ClaimWithdrawal { validator, .. } => {
+                format!("Claim withdrawal for validator {}", validator)
+            },
+            Self::ClaimValidatorExit { validator, .. } => {
+                format!("Claim validator exit for {}", validator)
+            },
+            Self::ClaimRewards { reward_claim, .. } => {
+                format!("Claim rewards from {}", reward_claim)
+            },
+            Self::RegisterValidator {
+                payload,
+                commission,
+                ..
+            } => format!(
+                "Register validator {} with {} commission",
+                payload.address, commission
+            ),
+            Self::UpdateConsensusKeys { payload, .. } => {
+                format!("Update consensus keys for {}", payload.address)
+            },
+            Self::DeregisterValidator { .. } => "Deregister validator".to_string(),
+            Self::UpdateCommission { new_commission, .. } => {
+                format!("Update commission to {}", new_commission)
+            },
+            Self::UpdateMetadataUri { .. } => "Update metadata URI".to_string(),
+            Self::UpdateNetworkConfig { .. } => {
+                "Set network config (x25519 key and p2p address)".to_string()
+            },
+            Self::UpdateX25519Key { x25519_key, .. } => {
+                format!("Set x25519 key to {}", x25519_key)
+            },
+            Self::UpdateP2pAddr { p2p_addr, .. } => {
+                format!("Set p2p address to {}", p2p_addr)
+            },
+            Self::Transfer { to, amount, .. } => {
+                format!("Transfer {} ESP to {}", format_esp(*amount), to)
+            },
         }
     }
 
-    fn to_transaction_request(&self) -> TransactionRequest {
-        let (to, data) = self.clone().calldata();
-        TransactionRequest::default()
+    fn to_transaction_request(&self) -> Result<TransactionRequest> {
+        let (to, data, _) = self.clone().calldata()?;
+        Ok(TransactionRequest::default()
             .to(to)
-            .input(TransactionInput::new(data))
+            .input(TransactionInput::new(data)))
     }
 
     /// Validates the delegate amount against the minimum required by the contract.
@@ -261,10 +486,13 @@ impl Transaction {
             ..
         } = self
         {
-            use hotshot_contract_adapter::sol_types::StakeTableV2;
-            let st = StakeTableV2::new(*stake_table, provider);
+            use hotshot_contract_adapter::sol_types::StakeTableV3;
+            let st = StakeTableV3::new(*stake_table, provider);
             let version: StakeTableContractVersion = st.getVersion().call().await?.try_into()?;
-            if let StakeTableContractVersion::V2 = version {
+            if matches!(
+                version,
+                StakeTableContractVersion::V2 | StakeTableContractVersion::V3
+            ) {
                 let min_amount = st.minDelegateAmount().call().await?;
                 if amount < &min_amount {
                     bail!(
@@ -292,12 +520,15 @@ impl Transaction {
             | Self::UpdateConsensusKeys { .. }
             | Self::DeregisterValidator { .. }
             | Self::UpdateCommission { .. }
-            | Self::UpdateMetadataUri { .. } => result.maybe_decode_revert::<StakeTableV2Errors>(),
+            | Self::UpdateMetadataUri { .. }
+            | Self::UpdateNetworkConfig { .. }
+            | Self::UpdateX25519Key { .. }
+            | Self::UpdateP2pAddr { .. } => result.maybe_decode_revert::<StakeTableV3Errors>(),
         }
     }
 
     pub async fn simulate(&self, provider: &impl Provider, from: Address) -> Result<()> {
-        let tx = self.to_transaction_request().from(from);
+        let tx = self.to_transaction_request()?.from(from);
         let result = provider.call(tx).await;
         self.decode_revert(result)
             .context("Transaction simulation failed")?;
@@ -305,58 +536,7 @@ impl Transaction {
     }
 
     fn log_intent(&self) {
-        match self {
-            Self::Approve {
-                spender, amount, ..
-            } => {
-                tracing::info!("approve {} for {}", format_esp(*amount), spender);
-            },
-            Self::Delegate {
-                validator, amount, ..
-            } => {
-                tracing::info!("delegate {} to {}", format_esp(*amount), validator);
-            },
-            Self::Undelegate {
-                validator, amount, ..
-            } => {
-                tracing::info!("undelegate {} from {}", format_esp(*amount), validator);
-            },
-            Self::ClaimWithdrawal { validator, .. } => {
-                tracing::info!("claiming withdrawal for {}", validator);
-            },
-            Self::ClaimValidatorExit { validator, .. } => {
-                tracing::info!("claiming validator exit for {}", validator);
-            },
-            Self::ClaimRewards { reward_claim, .. } => {
-                tracing::info!("claiming rewards from {}", reward_claim);
-            },
-            Self::RegisterValidator {
-                payload,
-                commission,
-                ..
-            } => {
-                tracing::info!(
-                    "register validator {} with commission {}",
-                    payload.address,
-                    commission
-                );
-            },
-            Self::UpdateConsensusKeys { payload, .. } => {
-                tracing::info!("updating consensus keys for {}", payload.address);
-            },
-            Self::DeregisterValidator { .. } => {
-                tracing::info!("deregistering validator");
-            },
-            Self::UpdateCommission { new_commission, .. } => {
-                tracing::info!("updating commission to {}", new_commission);
-            },
-            Self::UpdateMetadataUri { .. } => {
-                tracing::info!("updating metadata URI");
-            },
-            Self::Transfer { to, amount, .. } => {
-                tracing::info!("transferring {} to {}", format_esp(*amount), to);
-            },
-        }
+        tracing::info!("{}", self.description());
     }
 
     pub async fn send(
@@ -364,8 +544,78 @@ impl Transaction {
         provider: impl Provider,
     ) -> Result<PendingTransactionBuilder<Ethereum>> {
         self.log_intent();
-        let tx = self.to_transaction_request();
+        let tx = self.to_transaction_request()?;
         let pending = provider.send_transaction(tx).await;
         self.decode_revert(pending)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy::{json_abi::Function, sol_types::SolCall};
+
+    use super::*;
+
+    /// Verify hand-written named signatures produce the same 4-byte selector as alloy's
+    /// `SIGNATURE` const. Catches typos or drift if the Solidity ABI changes.
+    #[test]
+    fn named_signatures_match_selectors() {
+        let cases: &[(&str, [u8; 4])] = &[
+            (
+                "approve(address spender, uint256 value)",
+                approveCall::SELECTOR,
+            ),
+            (
+                "delegate(address validator, uint256 amount)",
+                delegateCall::SELECTOR,
+            ),
+            (
+                "undelegate(address validator, uint256 amount)",
+                undelegateCall::SELECTOR,
+            ),
+            (
+                "claimWithdrawal(address validator)",
+                claimWithdrawalCall::SELECTOR,
+            ),
+            (
+                "claimValidatorExit(address validator)",
+                claimValidatorExitCall::SELECTOR,
+            ),
+            (
+                "claimRewards(uint256 lifetimeRewards, bytes authData)",
+                claimRewardsCall::SELECTOR,
+            ),
+            (
+                "updateCommission(uint16 newCommission)",
+                updateCommissionCall::SELECTOR,
+            ),
+            (
+                "updateMetadataUri(string metadataUri)",
+                updateMetadataUriCall::SELECTOR,
+            ),
+            (
+                "transfer(address to, uint256 value)",
+                transferCall::SELECTOR,
+            ),
+            (
+                "updateNetworkConfig(bytes32 x25519Key, string p2pAddr)",
+                updateNetworkConfigCall::SELECTOR,
+            ),
+            (
+                "updateX25519Key(bytes32 x25519Key)",
+                updateX25519KeyCall::SELECTOR,
+            ),
+            ("updateP2pAddr(string p2pAddr)", updateP2pAddrCall::SELECTOR),
+        ];
+
+        for (named_sig, expected_selector) in cases {
+            let func = Function::parse(named_sig)
+                .unwrap_or_else(|e| panic!("failed to parse '{named_sig}': {e}"));
+            assert_eq!(
+                func.selector().as_slice(),
+                expected_selector,
+                "selector mismatch for '{named_sig}'"
+            );
+        }
     }
 }

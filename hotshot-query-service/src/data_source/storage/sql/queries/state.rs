@@ -24,23 +24,24 @@ use async_trait::async_trait;
 use futures::stream::TryStreamExt;
 use hotshot_types::traits::node_implementation::NodeType;
 use jf_merkle_tree_compat::{
-    prelude::{MerkleNode, MerkleProof},
     DigestAlgorithm, MerkleCommitment, ToTraversalPath,
+    prelude::{MerkleNode, MerkleProof},
 };
 use sqlx::types::{BitVec, JsonValue};
 
 use super::{
-    super::transaction::{query_as, Transaction, TransactionMode, Write},
+    super::transaction::{Transaction, TransactionMode, Write, query_as},
     DecodeError, QueryBuilder,
 };
+#[cfg(feature = "embedded-db")]
+use crate::data_source::storage::sql::build_where_in;
 use crate::{
+    QueryError, QueryResult,
     data_source::storage::{
-        pruning::PrunedHeightStorage,
-        sql::{build_where_in, sqlx::Row},
-        MerklizedStateHeightStorage, MerklizedStateStorage,
+        MerklizedStateHeightStorage, MerklizedStateStorage, pruning::PrunedHeightStorage,
+        sql::sqlx::Row,
     },
     merklized_state::{MerklizedState, Snapshot},
-    QueryError, QueryResult,
 };
 
 #[async_trait]
@@ -71,15 +72,64 @@ where
 
         let nodes: Vec<Node> = rows.into_iter().map(|r| r.into()).collect();
 
+        // On postgres, the backfill moves Merkle rows from the legacy table into the `*_bigint`
+        // table by `created` (block height), low heights first. Mid-migration a single path's
+        // versions are split across both tables, so the latest version <= `created` for a path may
+        // live in either one. Query the legacy table for every path and keep, per path, the row
+        // with the greatest `created` across both tables. (Once the contract phase drops the legacy
+        // table and renames `*_bigint`, `state_type` no longer ends in `_bigint` and this is skipped.)
+        #[cfg(not(feature = "embedded-db"))]
+        let nodes = if let Some(legacy_table) = state_type.strip_suffix("_bigint") {
+            let mut query = QueryBuilder::default();
+            let paths_param = query.bind(traversal_path_values(&traversal_path, tree_height))?;
+            let created_param = query.bind(created)?;
+            let sql = format!(
+                "SELECT n.path, n.created, n.hash_id::BIGINT AS hash_id, n.children, \
+                 n.children_bitvec, n.idx, n.entry FROM unnest({paths_param}::jsonb[]) AS \
+                 p(path), LATERAL (SELECT * FROM {legacy_table} WHERE {legacy_table}.path = \
+                 p.path AND {legacy_table}.created <= {created_param} ORDER BY \
+                 {legacy_table}.path DESC, {legacy_table}.created DESC LIMIT 1) AS n"
+            );
+            let legacy_rows = query
+                .query(&sql)
+                .fetch_all(self.as_mut())
+                .await
+                .map_err(|e| QueryError::Error {
+                    message: format!("merkle path fallback lookup failed: {e}"),
+                })?;
+
+            let mut latest: HashMap<String, Node> = HashMap::new();
+            for node in nodes
+                .into_iter()
+                .chain(legacy_rows.into_iter().map(Node::from))
+            {
+                let key = node.path.to_string();
+                if latest
+                    .get(&key)
+                    .is_none_or(|cur| node.created > cur.created)
+                {
+                    latest.insert(key, node);
+                }
+            }
+            let mut nodes: Vec<Node> = latest.into_values().collect();
+            // Sort leaf-first (longer paths first) for proof reconstruction.
+            nodes.sort_by_key(|n| {
+                std::cmp::Reverse(n.path.as_array().map(|v| v.len()).unwrap_or(0))
+            });
+            nodes
+        } else {
+            nodes
+        };
+
         // insert all the hash ids to a hashset which is used to query later
         // HashSet is used to avoid duplicates
         let mut hash_ids = HashSet::new();
         for node in nodes.iter() {
             hash_ids.insert(node.hash_id);
             if let Some(children) = &node.children {
-                let children: Vec<i32> =
+                let children: Vec<i64> =
                     serde_json::from_value(children.clone()).map_err(|e| QueryError::Error {
-                        message: format!("Error deserializing 'children' into Vec<i32>: {e}"),
+                        message: format!("Error deserializing 'children' into Vec<i64>: {e}"),
                     })?;
                 hash_ids.extend(children);
             }
@@ -87,13 +137,53 @@ where
 
         // Find all the hash values and create a hashmap
         // Hashmap will be used to get the hash value of the nodes children and the node itself.
-        let hashes = if !hash_ids.is_empty() {
-            let (query, sql) = build_where_in("SELECT id, value FROM hash", "id", hash_ids)?;
-            query
-                .query_as(&sql)
-                .fetch(self.as_mut())
-                .try_collect::<HashMap<i32, Vec<u8>>>()
-                .await?
+        let hashes: HashMap<i64, Vec<u8>> = if !hash_ids.is_empty() {
+            #[cfg(not(feature = "embedded-db"))]
+            {
+                let hash_ids_arr: Vec<i64> = hash_ids.iter().copied().collect();
+                let mut result: HashMap<i64, Vec<u8>> = sqlx::query_as(
+                    "SELECT id::BIGINT, value FROM hash_bigint WHERE id = ANY($1::BIGINT[])",
+                )
+                .bind(&hash_ids_arr)
+                .fetch_all(self.as_mut())
+                .await
+                .map_err(|e| QueryError::Error {
+                    message: format!("hash lookup failed: {e}"),
+                })?
+                .into_iter()
+                .collect();
+
+                let missing: Vec<i64> = hash_ids
+                    .iter()
+                    .filter(|id| !result.contains_key(id))
+                    .copied()
+                    .collect();
+
+                if !missing.is_empty() {
+                    let rows: Vec<(i64, Vec<u8>)> = sqlx::query_as(
+                        "SELECT id::BIGINT, value FROM hash WHERE id = ANY($1::BIGINT[])",
+                    )
+                    .bind(&missing)
+                    .fetch_all(self.as_mut())
+                    .await
+                    .map_err(|e| QueryError::Error {
+                        message: format!("hash fallback lookup failed: {e}"),
+                    })?;
+                    result.extend(rows);
+                }
+                result
+            }
+
+            #[cfg(feature = "embedded-db")]
+            {
+                let (query, sql) =
+                    build_where_in("SELECT id, value FROM hash_bigint", "id", hash_ids)?;
+                query
+                    .query_as(&sql)
+                    .fetch(self.as_mut())
+                    .try_collect::<HashMap<i64, Vec<u8>>>()
+                    .await?
+            }
         } else {
             HashMap::new()
         };
@@ -116,11 +206,11 @@ where
                 match (children, children_bitvec, idx, entry) {
                     // If the row has children then its a branch
                     (Some(children), Some(children_bitvec), None, None) => {
-                        let children: Vec<i32> =
+                        let children: Vec<i64> =
                             serde_json::from_value(children.clone()).map_err(|e| {
                                 QueryError::Error {
                                     message: format!(
-                                        "Error deserializing 'children' into Vec<i32>: {e}"
+                                        "Error deserializing 'children' into Vec<i64>: {e}"
                                     ),
                                 }
                             })?;
@@ -327,14 +417,14 @@ impl<Mode: TransactionMode> Transaction<Mode> {
             return Err(QueryError::NotFound);
         }
 
-        let pruned_height = self
-            .load_pruned_height()
-            .await
-            .map_err(|e| QueryError::Error {
-                message: format!("failed to load pruned height: {e}"),
-            })?;
+        let pruned_height =
+            self.load_state_pruned_height()
+                .await
+                .map_err(|e| QueryError::Error {
+                    message: format!("failed to load pruned height: {e}"),
+                })?;
 
-        if pruned_height.is_some_and(|h| height <= h as usize) {
+        if pruned_height.is_some_and(|h| created <= h as i64) {
             return Err(QueryError::NotFound);
         }
 
@@ -353,7 +443,7 @@ pub(crate) fn build_hash_batch_insert(
         .map(|hash| Ok(format!("({})", query.bind(hash)?)))
         .collect::<QueryResult<Vec<String>>>()?;
     let sql = format!(
-        "INSERT INTO hash(value) values {} ON CONFLICT (value) DO UPDATE SET value = \
+        "INSERT INTO hash_bigint(value) values {} ON CONFLICT (value) DO UPDATE SET value = \
          EXCLUDED.value returning value, id",
         params.join(",")
     );
@@ -366,16 +456,17 @@ pub(crate) fn build_hash_batch_insert(
 pub(crate) async fn batch_insert_hashes(
     hashes: Vec<Vec<u8>>,
     tx: &mut Transaction<Write>,
-) -> QueryResult<HashMap<Vec<u8>, i32>> {
+) -> QueryResult<HashMap<Vec<u8>, i64>> {
     if hashes.is_empty() {
         return Ok(HashMap::new());
     }
 
-    // Use UNNEST-based batch insert (more efficient and avoids parameter limits)
-    let sql = "INSERT INTO hash(value) SELECT * FROM UNNEST($1::bytea[]) ON CONFLICT (value) DO \
-               UPDATE SET value = EXCLUDED.value RETURNING value, id";
+    // Use UNNEST-based batch insert (more efficient and avoids parameter limits).
+    // Cast id to BIGINT in RETURNING so the result maps directly to i64.
+    let sql = "INSERT INTO hash_bigint(value) SELECT * FROM UNNEST($1::bytea[]) ON CONFLICT \
+               (value) DO UPDATE SET value = EXCLUDED.value RETURNING value, id::BIGINT";
 
-    let result: HashMap<Vec<u8>, i32> = sqlx::query_as(sql)
+    let result: HashMap<Vec<u8>, i64> = sqlx::query_as(sql)
         .bind(&hashes)
         .fetch(tx.as_mut())
         .try_collect()
@@ -524,7 +615,7 @@ where
 pub(crate) struct Node {
     pub(crate) path: JsonValue,
     pub(crate) created: i64,
-    pub(crate) hash_id: i32,
+    pub(crate) hash_id: i64,
     pub(crate) children: Option<JsonValue>,
     pub(crate) children_bitvec: Option<BitVec>,
     pub(crate) idx: Option<JsonValue>,
@@ -662,7 +753,7 @@ impl Node {
         let sql = format!(
             r#"
             INSERT INTO "{name}" (path, created, hash_id, children, children_bitvec, idx, entry)
-            SELECT * FROM UNNEST($1::jsonb[], $2::bigint[], $3::int[], $4::jsonb[], $5::bit varying[], $6::jsonb[], $7::jsonb[])
+            SELECT * FROM UNNEST($1::jsonb[], $2::bigint[], $3::bigint[], $4::jsonb[], $5::bit varying[], $6::jsonb[], $7::jsonb[])
             ON CONFLICT (path, created) DO UPDATE SET
                 hash_id = EXCLUDED.hash_id,
                 children = EXCLUDED.children,
@@ -688,45 +779,61 @@ impl Node {
     }
 }
 
+/// Compute the full set of path JSON values for a traversal path (leaf to root).
+///
+/// Each element is the path prefix used as a row key in a Merkle-tree table.
+fn traversal_path_values(traversal_path: &[usize], tree_height: usize) -> Vec<serde_json::Value> {
+    let len = tree_height;
+    let mut result = Vec::with_capacity(len + 1);
+    let mut trav = traversal_path.iter().map(|x| *x as i32);
+    for _ in 0..=len {
+        let path: Vec<i32> = trav.clone().rev().collect();
+        result.push(serde_json::Value::from(path));
+        trav.next();
+    }
+    result
+}
+
 fn build_get_path_query<'q>(
     table: &'static str,
     traversal_path: Vec<usize>,
     created: i64,
 ) -> QueryResult<(QueryBuilder<'q>, String)> {
     let mut query = QueryBuilder::default();
-    let mut traversal_path = traversal_path.into_iter().map(|x| x as i32);
+    let paths = traversal_path_values(&traversal_path, traversal_path.len());
 
-    // We iterate through the path vector skipping the first element after each iteration
-    let len = traversal_path.len();
-    let mut sub_queries = Vec::new();
+    #[cfg(not(feature = "embedded-db"))]
+    let sql = {
+        let paths_param = query.bind(paths)?;
+        let created_param = query.bind(created)?;
+        // One LATERAL point-lookup per path in the array, instead of N UNION'd subqueries.
+        // Postgres plans the inner subquery once and reuses it, collapsing N independent
+        // planner decisions into one.
+        format!(
+            "SELECT n.* FROM unnest({paths_param}::jsonb[]) AS p(path), LATERAL (SELECT * FROM \
+             {table} WHERE {table}.path = p.path AND {table}.created <= {created_param} ORDER BY \
+             {table}.path DESC, {table}.created DESC LIMIT 1) AS n ORDER BY n.path DESC"
+        )
+    };
 
-    query.bind(created)?;
-
-    for _ in 0..=len {
-        let path = traversal_path.clone().rev().collect::<Vec<_>>();
-        let path: serde_json::Value = path.into();
-        let node_path = query.bind(path)?;
-
-        let sub_query = format!(
-            "SELECT * FROM (SELECT * FROM {table} WHERE path = {node_path} AND created <= $1 \
-             ORDER BY created DESC LIMIT 1)",
-        );
-
-        sub_queries.push(sub_query);
-        traversal_path.next();
-    }
-
-    let mut sql: String = sub_queries.join(" UNION ");
-
-    sql = format!("SELECT * FROM ({sql}) as t ");
-
-    // PostgreSQL already orders JSON arrays by length, so no additional function is needed
-    // For SQLite, `length()` is used to sort by length.
-    if cfg!(feature = "embedded-db") {
-        sql.push_str("ORDER BY length(t.path) DESC");
-    } else {
-        sql.push_str("ORDER BY t.path DESC");
-    }
+    #[cfg(feature = "embedded-db")]
+    let sql = {
+        // SQLite has no native array binding, so we keep the UNION form. Each subquery
+        // is a point lookup by the composite (path, created) primary key.
+        let created_param = query.bind(created)?;
+        let mut sub_queries = Vec::with_capacity(paths.len());
+        for path in paths {
+            let node_path = query.bind(path)?;
+            sub_queries.push(format!(
+                "SELECT * FROM (SELECT * FROM {table} WHERE path = {node_path} AND created <= \
+                 {created_param} ORDER BY path DESC, created DESC LIMIT 1) AS latest_node",
+            ));
+        }
+        format!(
+            "SELECT * FROM ({}) as t ORDER BY length(t.path) DESC",
+            sub_queries.join(" UNION ")
+        )
+    };
 
     Ok((query, sql))
 }
@@ -735,16 +842,16 @@ fn build_get_path_query<'q>(
 mod test {
     use futures::stream::StreamExt;
     use jf_merkle_tree_compat::{
-        universal_merkle_tree::UniversalMerkleTree, LookupResult, MerkleTreeScheme,
-        UniversalMerkleTreeScheme,
+        LookupResult, MerkleTreeScheme, UniversalMerkleTreeScheme,
+        universal_merkle_tree::UniversalMerkleTree,
     };
-    use rand::{seq::IteratorRandom, RngCore};
+    use rand::{RngCore, seq::IteratorRandom};
 
     use super::*;
     use crate::{
         data_source::{
-            storage::sql::{testing::TmpDb, *},
             VersionedDataSource,
+            storage::sql::{testing::TmpDb, *},
         },
         merklized_state::UpdateStateData,
         testing::mocks::{MockMerkleTree, MockTypes},
@@ -775,13 +882,21 @@ mod test {
             let test_data = serde_json::json!({ MockMerkleTree::header_state_commitment_field() : serde_json::to_value(test_tree.commitment()).unwrap()});
             tx.upsert(
                 "header",
-                ["height", "hash", "payload_hash", "timestamp", "data"],
+                [
+                    "height",
+                    "hash",
+                    "payload_hash",
+                    "timestamp",
+                    "ns_table",
+                    "data",
+                ],
                 ["height"],
                 [(
                     block_height as i64,
                     format!("randomHash{i}"),
                     "t".to_string(),
                     0,
+                    "ns_table".to_string(),
                     test_data,
                 )],
             )
@@ -841,7 +956,14 @@ mod test {
         let test_data = serde_json::json!({ MockMerkleTree::header_state_commitment_field() : serde_json::to_value(test_tree.commitment()).unwrap()});
         tx.upsert(
             "header",
-            ["height", "hash", "payload_hash", "timestamp", "data"],
+            [
+                "height",
+                "hash",
+                "payload_hash",
+                "timestamp",
+                "data",
+                "ns_table",
+            ],
             ["height"],
             [(
                 2i64,
@@ -849,6 +971,7 @@ mod test {
                 "t".to_string(),
                 0,
                 test_data,
+                "ns_table".to_string(),
             )],
         )
         .await
@@ -939,7 +1062,14 @@ mod test {
         let mut tx = storage.write().await.unwrap();
         tx.upsert(
             "header",
-            ["height", "hash", "payload_hash", "timestamp", "data"],
+            [
+                "height",
+                "hash",
+                "payload_hash",
+                "timestamp",
+                "data",
+                "ns_table",
+            ],
             ["height"],
             [(
                 block_height as i64,
@@ -947,6 +1077,7 @@ mod test {
                 "t".to_string(),
                 0,
                 test_data,
+                "ns_table".to_string(),
             )],
         )
         .await
@@ -1008,7 +1139,7 @@ mod test {
         // Insert the new header
         tx.upsert(
                 "header",
-                ["height", "hash", "payload_hash", "timestamp", "data"],
+                ["height", "hash", "payload_hash", "timestamp", "data", "ns_table"],
                 ["height"],
                 [(
                     2i64,
@@ -1016,6 +1147,7 @@ mod test {
                     "t".to_string(),
                     0,
                     serde_json::json!({ MockMerkleTree::header_state_commitment_field() : serde_json::to_value(test_tree.commitment()).unwrap()}),
+                    "ns_table".to_string(),
                 )],
             )
             .await
@@ -1072,14 +1204,15 @@ mod test {
             // Insert a dummy header
             tx.upsert(
                 "header",
-                ["height", "hash", "payload_hash", "timestamp", "data"],
+                ["height", "hash", "payload_hash", "timestamp", "data", "ns_table"],
                 ["height"],
                 [(
                     i as i64,
                     format!("hash{i}"),
                     "t".to_string(),
                     0,
-                    serde_json::json!({ MockMerkleTree::header_state_commitment_field() : serde_json::to_value(test_tree.commitment()).unwrap()})
+                    serde_json::json!({ MockMerkleTree::header_state_commitment_field() : serde_json::to_value(test_tree.commitment()).unwrap()}),
+                    "ns_table".to_string(),
                 )],
             )
             .await
@@ -1145,7 +1278,14 @@ mod test {
         let mut tx = storage.write().await.unwrap();
         tx.upsert(
             "header",
-            ["height", "hash", "payload_hash", "timestamp", "data"],
+            [
+                "height",
+                "hash",
+                "payload_hash",
+                "timestamp",
+                "data",
+                "ns_table",
+            ],
             ["height"],
             [(
                 block_height as i64,
@@ -1153,6 +1293,7 @@ mod test {
                 "t".to_string(),
                 0,
                 test_data,
+                "ns_table".to_string(),
             )],
         )
         .await
@@ -1215,7 +1356,14 @@ mod test {
             // insert the header with merkle commitment
             tx.upsert(
                 "header",
-                ["height", "hash", "payload_hash", "timestamp", "data"],
+                [
+                    "height",
+                    "hash",
+                    "payload_hash",
+                    "timestamp",
+                    "data",
+                    "ns_table",
+                ],
                 ["height"],
                 [(
                     block_height as i64,
@@ -1223,6 +1371,7 @@ mod test {
                     "t".to_string(),
                     0,
                     test_data,
+                    "ns_table".to_string(),
                 )],
             )
             .await
@@ -1280,7 +1429,14 @@ mod test {
         let mut tx = storage.write().await.unwrap();
         tx.upsert(
             "header",
-            ["height", "hash", "payload_hash", "timestamp", "data"],
+            [
+                "height",
+                "hash",
+                "payload_hash",
+                "timestamp",
+                "data",
+                "ns_table",
+            ],
             ["height"],
             [(
                 block_height as i64,
@@ -1288,6 +1444,7 @@ mod test {
                 "t".to_string(),
                 0,
                 test_data,
+                "ns_table".to_string(),
             )],
         )
         .await
@@ -1317,7 +1474,14 @@ mod test {
         let mut tx = storage.write().await.unwrap();
         tx.upsert(
             "header",
-            ["height", "hash", "payload_hash", "timestamp", "data"],
+            [
+                "height",
+                "hash",
+                "payload_hash",
+                "timestamp",
+                "data",
+                "ns_table",
+            ],
             ["height"],
             [(
                 2i64,
@@ -1325,6 +1489,7 @@ mod test {
                 "t".to_string(),
                 0,
                 test_data,
+                "ns_table".to_string(),
             )],
         )
         .await
@@ -1442,13 +1607,14 @@ mod test {
             }
             // insert the header with merkle commitment
             tx
-            .upsert("header", ["height", "hash", "payload_hash", "timestamp", "data"], ["height"],
+            .upsert("header", ["height", "hash", "payload_hash", "timestamp", "data", "ns_table"], ["height"],
                 [(
                     block_height as i64,
                     format!("hash{block_height}"),
                     "hash".to_string(),
                     0i64,
                     serde_json::json!({ MockMerkleTree::header_state_commitment_field() : serde_json::to_value(tree.commitment()).unwrap()}),
+                    "ns_table".to_string(),
                 )],
             )
             .await
@@ -1572,7 +1738,7 @@ mod test {
             // Insert a header with the tree commitment.
             tx.upsert(
                 "header",
-                ["height", "hash", "payload_hash", "timestamp", "data"],
+                ["height", "hash", "payload_hash", "timestamp", "data", "ns_table"],
                 ["height"],
                 [(
                     0i64,
@@ -1580,6 +1746,7 @@ mod test {
                     "hash".to_string(),
                     0,
                     serde_json::json!({ MockMerkleTree::header_state_commitment_field() : serde_json::to_value(test_tree.commitment()).unwrap()}),
+                    "ns_table".to_string(),
                 )],
             )
             .await

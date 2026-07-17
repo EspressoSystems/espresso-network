@@ -16,7 +16,6 @@ use tracing::instrument;
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 async fn broken_3_chain() {
-
     let mut metadata: TestDescription<TestTypes, PushCdnImpl> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
             check_leaf: true,

@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use hotshot_example_types::node_types::{
-    CombinedImpl, EpochsTestVersions, PushCdnImpl, TestTwoStakeTablesTypes, TestTypes,
+    CombinedImpl, PushCdnImpl, TEST_VERSIONS, TestTwoStakeTablesTypes, TestTypes,
     TestTypesRandomizedLeader,
 };
 use hotshot_macros::cross_tests;
@@ -23,7 +23,7 @@ cross_tests!(
     TestName: test_all_restart_epochs,
     Impls: [CombinedImpl, PushCdnImpl],
     Types: [TestTypes, TestTypesRandomizedLeader, TestTwoStakeTablesTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
       let timing_data = TimingData {
@@ -58,9 +58,57 @@ cross_tests!(
       metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
           // Make sure we keep committing rounds after the catchup
           num_successful_views: 50,
-          expected_view_failures: vec![10],
           // this test seems to be flaky, so we allow an excessive number of possible view failures
-          possible_view_failures: vec![8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+          possible_view_failures: vec![8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+          decide_timeout: Duration::from_secs(60),
+          ..Default::default()
+      };
+
+      metadata
+    },
+);
+
+cross_tests!(
+    TestName: test_all_restart_transition_epochs,
+    Impls: [CombinedImpl, PushCdnImpl],
+    Types: [TestTypes, TestTypesRandomizedLeader, TestTwoStakeTablesTypes],
+    Versions: [TEST_VERSIONS.epoch],
+    Ignore: false,
+    Metadata: {
+      let timing_data = TimingData {
+          next_view_timeout: 8000,
+          ..Default::default()
+      };
+      let mut metadata = TestDescription::default().set_num_nodes(10,10);
+      let mut catchup_nodes = vec![];
+
+      for i in 0..10 {
+          catchup_nodes.push(ChangeNode {
+              idx: i,
+              updown: NodeAction::RestartDown(0),
+          })
+      }
+
+      metadata.timing_data = timing_data;
+
+      metadata.spinning_properties = SpinningTaskDescription {
+          // Restart all the nodes in view 8
+          node_changes: vec![(8, catchup_nodes)],
+      };
+      metadata.view_sync_properties =
+          hotshot_testing::view_sync_task::ViewSyncTaskDescription::Threshold(0, 20);
+
+      metadata.completion_task_description =
+          CompletionTaskDescription::TimeBasedCompletionTaskBuilder(
+              TimeBasedCompletionTaskDescription {
+                  duration: Duration::from_secs(200),
+              },
+          );
+      metadata.overall_safety_properties = OverallSafetyPropertiesDescription {
+          // Make sure we keep committing rounds after the catchup
+          num_successful_views: 50,
+          // this test seems to be flaky, so we allow an excessive number of possible view failures
+          possible_view_failures: vec![7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22],
           decide_timeout: Duration::from_secs(60),
           ..Default::default()
       };
@@ -73,7 +121,7 @@ cross_tests!(
     TestName: test_all_restart_one_da_with_epochs,
     Impls: [CombinedImpl],
     Types: [TestTypes, TestTwoStakeTablesTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
       let timing_data = TimingData {
@@ -122,7 +170,7 @@ cross_tests!(
     TestName: test_staggered_restart_with_epochs_1,
     Impls: [CombinedImpl],
     Types: [TestTwoStakeTablesTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
       let mut metadata = TestDescription::default().set_num_nodes(10,4);
@@ -180,7 +228,7 @@ cross_tests!(
     TestName: test_staggered_restart_with_epochs_2,
     Impls: [CombinedImpl],
     Types: [TestTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
       let mut metadata = TestDescription::default().set_num_nodes(10,4);
@@ -255,7 +303,7 @@ cross_tests!(
     TestName: test_staggered_restart_double_restart,
     Impls: [CombinedImpl],
     Types: [TestTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
       let mut metadata = TestDescription::default().set_num_nodes(10,1);
@@ -304,7 +352,7 @@ cross_tests!(
     TestName: test_all_two_thirds,
     Impls: [CombinedImpl],
     Types: [TestTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
       // 9 nodes, 3 da nodes

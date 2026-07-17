@@ -10,8 +10,9 @@ import { StakeTableV2 } from "../src/StakeTableV2.sol";
 import { StakeTableUpgradeV2Test } from "./StakeTable.t.sol";
 import { BN254 } from "bn254/BN254.sol";
 import { EdOnBN254 } from "../src/libraries/EdOnBn254.sol";
-import { PausableUpgradeable } from
-    "openzeppelin-contracts-upgradeable/contracts/utils/PausableUpgradeable.sol";
+import {
+    PausableUpgradeable
+} from "openzeppelin-contracts-upgradeable/contracts/utils/PausableUpgradeable.sol";
 import { EspToken } from "../src/EspToken.sol";
 
 contract StakeTableV2UndelegationTest is Test {

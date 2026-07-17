@@ -22,7 +22,12 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
+
+      - name: Install Protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
 
       - uses: taiki-e/install-action@just
 
@@ -30,22 +35,23 @@ jobs:
         run: just doc
 
       - name: Upload Rust Docs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rust-docs
           path: target/doc
           if-no-files-found: error
+          retention-days: 1
 
   doc-contracts:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: recursive
 
       - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
+        uses: ./.github/actions/install-foundry
 
       - uses: taiki-e/install-action@just
       - uses: taiki-e/install-action@mdbook
@@ -54,30 +60,31 @@ jobs:
         run: just doc-contracts
 
       - name: Upload Contract Docs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: contract-docs
           path: docs/book
           if-no-files-found: error
+          retention-days: 1
 
   deploy:
     needs: [doc-rust, doc-contracts]
     runs-on: ubuntu-24.04
     steps:
       - name: Download Rust Docs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: rust-docs
           path: public
 
       - name: Download Contract Docs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: contract-docs
           path: public/contracts
 
       - name: Create Index
-        run: echo '<meta http-equiv="refresh" content="0; url=sequencer">' > public/index.html
+        run: echo '<meta http-equiv="refresh" content="0; url=espresso_node">' > public/index.html
 
       - name: Deploy
         if: ${{ github.ref == 'refs/heads/main' }}
@@ -85,4 +92,4 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./public
-          cname: sequencer.docs.espressosys.com
+          cname: espresso-network.docs.espressosys.com

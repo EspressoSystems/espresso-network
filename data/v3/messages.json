@@ -34,7 +34,7 @@
                   "ns_table": {
                     "bytes": "AAAAAA=="
                   },
-                  "payload_commitment": "HASH~AazstQer_ho1SqgGT0r10_Gs0BnjfbPBHJdSO3HHbp29",
+                  "payload_commitment": "AvidMCommit~8JNU_HGmIatiu1NdaEgDp-VIdiHrlYRz49Cq6TE3kzZf",
                   "reward_merkle_tree_root": "MERKLE_COMM~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAUAAAAAAAAAAAAAAAAAAAAKA",
                   "timestamp": 0
                 },
@@ -48,11 +48,11 @@
               "justify_qc": {
                 "_pd": null,
                 "data": {
-                  "leaf_commit": "COMMIT~OUewM-hz-K-l-DFmcV6z0nMfdXOSmDWnTJkwh84nJrbm"
+                  "leaf_commit": "COMMIT~ok2s9ZzBbGa1SSOKT1BaHJndob4pRxsNyax3gK5z5Ire"
                 },
                 "signatures": null,
                 "view_number": 0,
-                "vote_commitment": "COMMIT~fUGx5alsxH5Ea5KWp3I8HE5fv9CZJ9JfOGD7eaHMsuQp"
+                "vote_commitment": "COMMIT~pvAnIMtMdM5_HSU6cyCOlP0C8qqL8WqJjdeWiCpEPnLO"
               },
               "proposal_certificate": {
                 "Timeout": {
@@ -100,7 +100,7 @@
         "General": {
           "Vote": {
             "data": {
-              "leaf_commit": "COMMIT~OUewM-hz-K-l-DFmcV6z0nMfdXOSmDWnTJkwh84nJrbm"
+              "leaf_commit": "COMMIT~ok2s9ZzBbGa1SSOKT1BaHJndob4pRxsNyax3gK5z5Ire"
             },
             "signature": [
               "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U",
@@ -347,7 +347,7 @@
         "Da": {
           "DaVote": {
             "data": {
-              "payload_commit": "HASH~AazstQer_ho1SqgGT0r10_Gs0BnjfbPBHJdSO3HHbp29"
+              "payload_commit": "AvidMCommit~8JNU_HGmIatiu1NdaEgDp-VIdiHrlYRz49Cq6TE3kzZf"
             },
             "signature": [
               "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U",
@@ -367,11 +367,11 @@
           "DaCertificate": {
             "_pd": null,
             "data": {
-              "payload_commit": "HASH~AazstQer_ho1SqgGT0r10_Gs0BnjfbPBHJdSO3HHbp29"
+              "payload_commit": "AvidMCommit~8JNU_HGmIatiu1NdaEgDp-VIdiHrlYRz49Cq6TE3kzZf"
             },
             "signatures": null,
             "view_number": 0,
-            "vote_commitment": "COMMIT~5E3F3rC4E9DBhMBqOTmjZ9tjX4VFaV5gqrZJl0y6V05D"
+            "vote_commitment": "COMMIT~4qkiRH2C08kWy9Xa9AY0-2wjtDeQLalsADG0ZlzAu66R"
           }
         }
       }

@@ -16,7 +16,8 @@ extend-exclude = [
   "light-client-query-service/genesis/*.toml",
   "staking-cli/tests/cli.rs",
   "sdks/go/types/common/consts.go",
-  "sequencer/src/genesis.rs",
+  "crates/espresso/node/src/genesis.rs",
+  "*.snap",
   "data/insta_snapshots",
   "data/initial_stake_table.toml",
   "data/initial_staging_stake_table.toml",
@@ -29,5 +30,13 @@ extend-exclude = [
 
 [default.extend-words]
 Forgetten = "Forgetten"
+# Serialized network config field name; renaming would break the wire format
+bootrap = "bootrap"
 # Common "spelling" of "type" in Rust/go
 typ = "typ"
+# Token Generation Event
+tge = "tge"
+# Rust crate name
+bimap = "bimap"
+# espresso-utils serialization module
+ser = "ser"

@@ -10,94 +10,28 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-use std::{
-    cmp::Ordering,
-    ops::{Bound, RangeBounds},
-};
+use std::ops::{Bound, RangeBounds};
 
 use async_trait::async_trait;
-use derivative::Derivative;
-use derive_more::{Display, From};
 use futures::{
     future::Future,
     stream::{BoxStream, StreamExt},
 };
+pub use hotshot_new_protocol::message::Certificate2;
+pub use hotshot_query_service_types::availability::{BlockId, LeafId};
 use hotshot_types::{
-    data::{VidCommitment, VidShare},
-    simple_certificate::CertificatePair,
-    traits::node_implementation::NodeType,
+    data::VidShare, simple_certificate::CertificatePair, traits::node_implementation::NodeType,
 };
 
 use super::{
+    BlockWithTransaction,
     fetch::Fetch,
     query_data::{
-        BlockHash, BlockQueryData, LeafHash, LeafQueryData, PayloadMetadata, PayloadQueryData,
-        QueryableHeader, QueryablePayload, TransactionHash, VidCommonMetadata, VidCommonQueryData,
+        BlockQueryData, LeafQueryData, PayloadMetadata, PayloadQueryData, QueryableHeader,
+        QueryablePayload, TransactionHash, VidCommonMetadata, VidCommonQueryData,
     },
-    BlockWithTransaction,
 };
-use crate::{types::HeightIndexed, Header, Payload};
-
-#[derive(Derivative, From, Display)]
-#[derivative(Ord = "feature_allow_slow_enum")]
-#[derivative(
-    Copy(bound = ""),
-    Debug(bound = ""),
-    PartialEq(bound = ""),
-    Eq(bound = ""),
-    Ord(bound = ""),
-    Hash(bound = "")
-)]
-pub enum LeafId<Types: NodeType> {
-    #[display("{_0}")]
-    Number(usize),
-    #[display("{_0}")]
-    Hash(LeafHash<Types>),
-}
-
-impl<Types: NodeType> Clone for LeafId<Types> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<Types: NodeType> PartialOrd for LeafId<Types> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-#[derive(Derivative, From, Display)]
-#[derivative(Ord = "feature_allow_slow_enum")]
-#[derivative(
-    Copy(bound = ""),
-    Debug(bound = ""),
-    PartialEq(bound = ""),
-    Eq(bound = ""),
-    Ord(bound = ""),
-    Hash(bound = "")
-)]
-pub enum BlockId<Types: NodeType> {
-    #[display("{_0}")]
-    Number(usize),
-    #[display("{_0}")]
-    Hash(BlockHash<Types>),
-    #[display("{_0}")]
-    #[from(ignore)]
-    PayloadHash(VidCommitment),
-}
-
-impl<Types: NodeType> Clone for BlockId<Types> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<Types: NodeType> PartialOrd for BlockId<Types> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
+use crate::{Header, Payload, QueryResult, types::HeightIndexed};
 
 pub type FetchStream<T> = BoxStream<'static, Fetch<T>>;
 
@@ -291,6 +225,10 @@ where
             .then(Fetch::resolve)
             .boxed()
     }
+
+    async fn get_cert2(&self, _height: u64) -> QueryResult<Option<Certificate2<Types>>> {
+        Ok(None)
+    }
 }
 
 /// Information about a block.
@@ -308,6 +246,8 @@ pub struct BlockInfo<Types: NodeType> {
     pub vid_common: Option<VidCommonQueryData<Types>>,
     pub vid_share: Option<VidShare>,
     pub qc_chain: Option<[CertificatePair<Types>; 2]>,
+    /// New protocol finality certificate, present at heights finalized by cert2.
+    pub cert2: Option<Certificate2<Types>>,
 }
 
 impl<Types: NodeType> From<LeafQueryData<Types>> for BlockInfo<Types> {
@@ -335,6 +275,7 @@ impl<Types: NodeType> BlockInfo<Types> {
             vid_common,
             vid_share,
             qc_chain: None,
+            cert2: None,
         }
     }
 
@@ -342,9 +283,31 @@ impl<Types: NodeType> BlockInfo<Types> {
         self.qc_chain = Some(qc_chain);
         self
     }
+
+    pub fn with_cert2(mut self, cert2: Certificate2<Types>) -> Self {
+        self.cert2 = Some(cert2);
+        self
+    }
 }
 
 pub trait UpdateAvailabilityData<Types: NodeType> {
     /// Append information about a new block to the database.
     fn append(&self, info: BlockInfo<Types>) -> impl Send + Future<Output = anyhow::Result<()>>;
+
+    /// Append a payload for a block whose leaf was already decided without one.
+    ///
+    /// Decide events in the new protocol may arrive before VID reconstruction has produced the
+    /// block payload. When the payload eventually becomes available the data source uses this
+    /// method to fill it in, notifying any pending fetchers. Implementations that don't track
+    /// blocks (e.g. metrics-only) may leave the default no-op.
+    ///
+    /// The block comes from a reconstruction event for a view that may never be decided, so
+    /// implementations must verify that it matches the decided leaf at the same height before
+    /// storing it.
+    fn append_payload(
+        &self,
+        _block: BlockQueryData<Types>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async { Ok(()) }
+    }
 }

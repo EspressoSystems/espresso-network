@@ -10,8 +10,8 @@ use std::{collections::HashMap, time::Duration};
 
 use hotshot_example_types::{
     node_types::{
-        CombinedImpl, EpochsTestVersions, Libp2pImpl, MemoryImpl, PushCdnImpl,
-        TestConsecutiveLeaderTypes, TestTwoStakeTablesTypes, TestVersions,
+        CombinedImpl, Libp2pImpl, MemoryImpl, PushCdnImpl, TEST_VERSIONS,
+        TestConsecutiveLeaderTypes, TestTwoStakeTablesTypes,
     },
     state_types::TestTypes,
 };
@@ -25,11 +25,7 @@ use hotshot_testing::{
 use hotshot_types::{
     data::ViewNumber,
     message::{GeneralConsensusMessage, MessageKind, SequencingMessage},
-    traits::{
-        election::Membership,
-        network::TransmitType,
-        node_implementation::{ConsensusTime, NodeType},
-    },
+    traits::{election::Membership, network::TransmitType, node_implementation::NodeType},
     vote::HasViewNumber,
 };
 
@@ -38,7 +34,7 @@ cross_tests!(
     TestName: test_with_failures_2,
     Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl],
     Types: [TestTypes],
-    Versions: [TestVersions],
+    Versions: [TEST_VERSIONS.test],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default_more_nodes().set_num_nodes(12,12);
@@ -75,7 +71,7 @@ cross_tests!(
     TestName: test_with_double_leader_failures,
     Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl],
     Types: [TestConsecutiveLeaderTypes],
-    Versions: [TestVersions],
+    Versions: [TEST_VERSIONS.test],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default_more_nodes().set_num_nodes(12, 12);

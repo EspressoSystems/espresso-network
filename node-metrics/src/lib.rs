@@ -102,8 +102,8 @@ pub mod service;
 use api::node_validator::v0::SurfDiscoAvailabilityAPIStream;
 use clap::Parser;
 use futures::{
-    channel::mpsc::{self, Sender},
     StreamExt,
+    channel::mpsc::{self, Sender},
 };
 use service::data_state::MAX_VOTERS_HISTORY;
 use tide_disco::App;
@@ -112,8 +112,8 @@ use url::Url;
 
 use crate::{
     api::node_validator::v0::{
-        create_node_validator_api::{create_node_validator_processing, NodeValidatorConfig},
-        BridgeLeafAndBlockStreamToSenderTask, StateClientMessageSender, STATIC_VER_0_1,
+        BridgeLeafAndBlockStreamToSenderTask, STATIC_VER_0_1, StateClientMessageSender,
+        create_node_validator_api::{NodeValidatorConfig, create_node_validator_processing},
     },
     service::{client_message::InternalClientMessage, server_message::ServerMessage},
 };

@@ -1,24 +1,27 @@
 //! Client-side state used to implement light client fetching and verification.
 
-use std::{collections::BTreeMap, future::Future, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    future::Future,
+    sync::Arc,
+};
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use async_lock::RwLock;
 use committable::Committable;
 use espresso_types::{
-    select_active_validator_set, Header, Leaf2, NamespaceId, PubKey, SeqTypes, StakeTableState,
-    Transaction,
+    Certificate2, ChainId, DECAF_CHAIN_ID, DrbAndHeaderUpgradeVersion, Header, Leaf2, NamespaceId,
+    PubKey, SeqTypes, StakeTableState, Transaction, ValidatorSet,
 };
-use hotshot_query_service::{
+use futures::future::try_join;
+use hotshot_query_service_types::{
+    HeightIndexed,
     availability::{BlockQueryData, LeafId, LeafQueryData, PayloadQueryData, VidCommonQueryData},
     node::BlockId,
-    types::HeightIndexed,
 };
-use hotshot_types::{
-    data::EpochNumber, stake_table::StakeTableEntry, traits::node_implementation::ConsensusTime,
-    utils::root_block_in_epoch,
-};
+use hotshot_types::{data::EpochNumber, stake_table::StakeTableEntry, utils::root_block_in_epoch};
 use serde::{Deserialize, Serialize};
+use vbs::version::{StaticVersionType, Version};
 
 use crate::{
     client::Client,
@@ -36,7 +39,11 @@ use crate::{
 /// transitions to subsequent stake tables. Thus, this genesis must be configured correctly (i.e.
 /// matching the genesis state of honest HotShot nodes) or else the light client may not operate
 /// correctly.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(
+    feature = "rlp",
+    derive(alloy_rlp::RlpEncodable, alloy_rlp::RlpDecodable)
+)]
 pub struct Genesis {
     /// The number of blocks in an epoch.
     pub epoch_height: u64,
@@ -48,19 +55,11 @@ pub struct Genesis {
     /// The fixed stake table used before epochs begin.
     pub stake_table: Vec<StakeTableEntry<PubKey>>,
 
-    /// Enable special cases for Decaf testnet.
-    ///
-    /// On Decaf, `first_epoch_with_dynamic_stake_table` is not actually the first epoch of PoS, but
-    /// the first Epoch after the upgrade to version 0.4 (version 0.3 is completely unsupported
-    /// since it will never be deployed on Mainnet). Thus, when we perform stake table catchup on
-    /// Decaf, we need to replay all events from epochs between the upgrade to proof-of-stake (this
-    /// number) and the upgrade to version 0.4.
-    #[cfg(feature = "decaf")]
-    #[serde(default)]
-    pub decaf_first_pos_epoch: Option<EpochNumber>,
+    /// Genesis chain id, used to derive Decaf-specific behavior.
+    pub chain_id: ChainId,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "clap", derive(clap::Parser))]
 pub struct LightClientOptions {
     /// Maximum number of stake tables to cache in memory at any given time.
@@ -96,12 +95,10 @@ pub struct LightClient<P, S> {
     server: S,
     opt: LightClientOptions,
 
+    chain_id: ChainId,
     epoch_height: u64,
     first_epoch_with_dynamic_stake_table: EpochNumber,
     genesis_stake_table: Arc<StakeTable>,
-
-    #[cfg(feature = "decaf")]
-    decaf_first_pos_epoch: Option<EpochNumber>,
 
     // We cache stake tables in memory since they are large and expensive to load from the database.
     stake_tables: RwLock<BTreeMap<EpochNumber, Arc<StakeTable>>>,
@@ -138,13 +135,11 @@ where
             db,
             server,
             opt,
+            chain_id: genesis.chain_id,
             epoch_height: genesis.epoch_height,
             genesis_stake_table: Arc::new(genesis.stake_table.into()),
             first_epoch_with_dynamic_stake_table: genesis.first_epoch_with_dynamic_stake_table,
             stake_tables: Default::default(),
-
-            #[cfg(feature = "decaf")]
-            decaf_first_pos_epoch: genesis.decaf_first_pos_epoch,
         }
     }
 
@@ -264,6 +259,34 @@ where
             .into_iter()
             .map(|leaf| leaf.header().clone())
             .collect())
+    }
+
+    /// Fetch and verify the [`Certificate2`] at the given block height.
+    ///
+    /// Returns `Ok(None)` if the server reports that no cert2 exists at this height
+    pub async fn fetch_certificate2(&self, height: u64) -> Result<Option<Certificate2<SeqTypes>>> {
+        let Some(cert2) = self.server.cert2(height).await? else {
+            return Ok(None);
+        };
+
+        ensure!(
+            cert2.data.block_number == height,
+            "cert2 block number {} does not match requested height {height}",
+            cert2.data.block_number,
+        );
+
+        let header = self
+            .fetch_header(BlockId::Number(height as usize))
+            .await
+            .context("fetching header to determine cert2 version")?;
+
+        let quorum = StakeTableQuorum::new((cert2.data.epoch, self), self.epoch_height);
+        quorum
+            .verify_cert2(&cert2, header.version())
+            .await
+            .context("verifying cert2 signature")?;
+
+        Ok(Some(cert2))
     }
 
     /// Fetches leaves from the server in range [start_height, end_height) and verifies them by
@@ -392,6 +415,22 @@ where
         Ok(self.fetch_block_and_vid_common_for_header(header).await?.0)
     }
 
+    /// Fetch and verify the VID common data for the requested block.
+    pub async fn fetch_vid_common(
+        &self,
+        id: BlockId<SeqTypes>,
+    ) -> Result<VidCommonQueryData<SeqTypes>> {
+        Ok(self.fetch_block_and_vid_common(id).await?.1)
+    }
+
+    /// Fetch and verify the VID common data for the requested header.
+    pub async fn fetch_vid_common_for_header(
+        &self,
+        header: Header,
+    ) -> Result<VidCommonQueryData<SeqTypes>> {
+        Ok(self.fetch_block_and_vid_common_for_header(header).await?.1)
+    }
+
     /// Fetch and verify the requested payload and the associated VID common data.
     pub async fn fetch_block_and_vid_common(
         &self,
@@ -412,6 +451,60 @@ where
             BlockQueryData::new(header.clone(), payload),
             VidCommonQueryData::new(header, vid_common),
         ))
+    }
+
+    /// Fetch and verify the blocks in the height range `[start, end)`.
+    pub async fn fetch_blocks_in_range(
+        &self,
+        start: usize,
+        end: usize,
+    ) -> Result<Vec<BlockQueryData<SeqTypes>>> {
+        let res = self
+            .fetch_blocks_and_vid_common_in_range(start, end)
+            .await?;
+        Ok(res.into_iter().map(|(block, _)| block).collect())
+    }
+
+    /// Fetch and verify the VID common data for blocks in the height range `[start, end)`.
+    pub async fn fetch_vid_common_in_range(
+        &self,
+        start: usize,
+        end: usize,
+    ) -> Result<Vec<VidCommonQueryData<SeqTypes>>> {
+        let res = self
+            .fetch_blocks_and_vid_common_in_range(start, end)
+            .await?;
+        Ok(res.into_iter().map(|(_, vid)| vid).collect())
+    }
+
+    /// Fetch and verify the blocks and VID common data in the height range `[start, end)`.
+    pub async fn fetch_blocks_and_vid_common_in_range(
+        &self,
+        start: usize,
+        end: usize,
+    ) -> Result<Vec<(BlockQueryData<SeqTypes>, VidCommonQueryData<SeqTypes>)>> {
+        let (headers, proofs) = try_join(
+            self.fetch_headers_in_range(start, end),
+            self.server
+                .payload_proofs_in_range(start as u64, end as u64),
+        )
+        .await?;
+        ensure!(
+            headers.len() == proofs.len(),
+            "server returned wrong number of payload proofs for range {start}..{end} ({})",
+            proofs.len(),
+        );
+        headers
+            .into_iter()
+            .zip(proofs)
+            .map(|(header, proof)| {
+                let (payload, vid_common) = proof.verify_with_vid_common(&header)?;
+                Ok((
+                    BlockQueryData::new(header.clone(), payload),
+                    VidCommonQueryData::new(header, vid_common),
+                ))
+            })
+            .collect()
     }
 
     /// Fetch and verify the transactions in the given namespace of the requested block.
@@ -465,6 +558,42 @@ where
             .collect()
     }
 
+    /// Fetch and verify the transactions in the given namespaces of blocks in the range
+    /// `[start_height, end_height)`.
+    ///
+    /// For each block, the result maps a namespace ID to its verified transactions, including only
+    /// those requested namespaces that are actually present in that block.
+    pub async fn fetch_all_namespaces_in_range(
+        &self,
+        start_height: usize,
+        end_height: usize,
+        namespaces: &[NamespaceId],
+    ) -> Result<Vec<HashMap<NamespaceId, Vec<Transaction>>>> {
+        let headers = self
+            .fetch_headers_in_range(start_height, end_height)
+            .await?;
+        let proofs = self
+            .server
+            .namespaces_proofs_in_range(start_height as u64, end_height as u64, namespaces)
+            .await?;
+        ensure!(
+            proofs.len() == headers.len(),
+            "server returned wrong number of namespace proofs (expected {}, got {})",
+            headers.len(),
+            proofs.len()
+        );
+        proofs
+            .into_iter()
+            .zip(&headers)
+            .map(|(proofs, header)| {
+                proofs
+                    .into_iter()
+                    .map(|(namespace, proof)| Ok((namespace, proof.verify(header, namespace)?)))
+                    .collect()
+            })
+            .collect()
+    }
+
     /// Fetch and verify the stake table for the requested epoch.
     pub async fn quorum_for_epoch(&self, epoch: EpochNumber) -> Result<Arc<StakeTable>> {
         if epoch < self.first_epoch_with_dynamic_stake_table {
@@ -480,64 +609,58 @@ where
             }
         }
 
-        // If we didn't find the exact stake table we are looking for in cache, look for it in our
-        // local database, or an earlier one we can catch up from.
-        let (lower_bound, mut stake_table, mut prev_quorum) =
-            if let Some((lower_bound, stake_table)) = self.db.stake_table_lower_bound(epoch).await?
+        // Look up an earlier stake table we can catch up from, in cache or DB.
+        //
+        // `epoch_root_protocol_version` is the version of the snapshot root header (root in epoch
+        // `k-2` for the epoch `k` we are computing). On DB load we seed it from the stored
+        // `next_snapshot_version` of `lower_bound`, which is the snapshot for `lower_bound + 1`
+        // (= iter 1's target). On genesis we fetch the root at `first_dynamic - 2` (signed by
+        // the genesis stake table) and use its version.
+        let (lower_bound, mut stake_table, mut prev_quorum, mut epoch_root_protocol_version) =
+            if let Some((lower_bound, stake_table, stored_version, next_stored_version)) =
+                self.db.stake_table_lower_bound(epoch).await?
             {
                 if lower_bound == epoch {
-                    // We have the exact quorum we requested already in our database. Add it to cache
-                    // and return it.
                     tracing::debug!(%epoch, "found stake table in database");
-                    let quorum = stake_table_state_to_quorum(stake_table)?;
+                    let quorum = stake_table_state_to_quorum(&stake_table, stored_version)?;
                     return Ok(self.cache_stake_table(epoch, Arc::new(quorum)).await);
                 }
 
+                let quorum = stake_table_state_to_quorum(&stake_table, stored_version)?;
                 (
                     lower_bound,
-                    stake_table.clone(),
-                    Arc::new(stake_table_state_to_quorum(stake_table)?),
+                    stake_table,
+                    Arc::new(quorum),
+                    next_stored_version,
                 )
             } else {
                 // We don't have any stake table earlier than `epoch` as a starting point, so we must
                 // start from the genesis state.
+                let bootstrap_epoch = (*self.first_epoch_with_dynamic_stake_table)
+                    .checked_sub(2)
+                    .context(
+                        "first_epoch_with_dynamic_stake_table must be >= 2 for genesis catchup",
+                    )?;
+                let bootstrap_height = root_block_in_epoch(bootstrap_epoch, self.epoch_height);
+                let bootstrap_quorum = (
+                    self.genesis_stake_table.clone(),
+                    self.genesis_stake_table.clone(),
+                );
+                let bootstrap_root = self
+                    .fetch_header_with_quorum(
+                        BlockId::Number(bootstrap_height as usize),
+                        move |_epoch| StakeTableQuorum::new(bootstrap_quorum, self.epoch_height),
+                    )
+                    .await
+                    .context("fetching snapshot root header for genesis catchup")?;
                 (
                     self.first_epoch_with_dynamic_stake_table - 1,
                     StakeTableState::default(),
                     self.genesis_stake_table.clone(),
+                    bootstrap_root.version(),
                 )
             };
         tracing::info!(from = %lower_bound, to = %epoch, "performing stake table catchup");
-
-        // On decaf, replay the events from epochs on version 0.3 without checking stake table
-        // hashes (since these were only added in version 0.4). We will effectively check all this
-        // work at once when we check the stake table hash after the first epoch of version 0.4
-        #[cfg(feature = "decaf")]
-        if lower_bound < self.first_epoch_with_dynamic_stake_table {
-            if let Some(first_pos_epoch) = self.decaf_first_pos_epoch {
-                tracing::info!(
-                    %first_pos_epoch,
-                    to = %lower_bound,
-                    "performing Decaf catchup through version 0.3",
-                );
-                for epoch in *first_pos_epoch..=*lower_bound {
-                    let events = self
-                        .server
-                        .stake_table_events(EpochNumber::new(epoch))
-                        .await?;
-                    tracing::debug!(epoch, num_events = events.len(), "reconstruct stake table");
-                    for event in events {
-                        tracing::debug!(epoch, ?event, "replay event");
-                        if let Err(err) =
-                            stake_table.apply_event(event).context("applying event")?
-                        {
-                            tracing::warn!("allowed error in event: {err:#}");
-                        }
-                    }
-                }
-                prev_quorum = Arc::new(stake_table_state_to_quorum(stake_table.clone())?);
-            }
-        }
 
         // Replay one epoch at a time from the lower bound stake table to the requested epoch.
         for epoch in *lower_bound + 1..=*epoch {
@@ -552,32 +675,59 @@ where
                     tracing::warn!("allowed error in event: {err:#}");
                 }
             }
-            let next_quorum = Arc::new(stake_table_state_to_quorum(stake_table.clone())?);
 
-            // Since we are reconstructing based on events from an untrusted server, we need to
-            // compare the hash of the stake table after each epoch to the hash recorded in the
-            // epoch root header, which is certified by the previous stake table.
+            let next_quorum = Arc::new(stake_table_state_to_quorum(
+                &stake_table,
+                epoch_root_protocol_version,
+            )?);
+
             let root_height = root_block_in_epoch(epoch - 1, self.epoch_height);
-            let root = self
-                .fetch_header_with_quorum(BlockId::Number(root_height as usize), |_| {
-                    StakeTableQuorum::new((prev_quorum, next_quorum.clone()), self.epoch_height)
-                })
+            let root = {
+                let prev_quorum = prev_quorum.clone();
+                let next_quorum = next_quorum.clone();
+                self.fetch_header_with_quorum(
+                    BlockId::Number(root_height as usize),
+                    move |_epoch| {
+                        StakeTableQuorum::new((prev_quorum, next_quorum), self.epoch_height)
+                    },
+                )
                 .await
-                .context("fetching epoch root for {epoch}")?;
-            let hash = root.next_stake_table_hash().context(format!(
-                "epoch {epoch} root {root_height} does not have next stake table hash"
-            ))?;
-            ensure!(
-                hash == stake_table.commit(),
-                "epoch {epoch} root {root_height} stake table hash {hash} does not match \
-                 reconstructed hash {}",
-                stake_table.commit(),
-            );
+                .context(format!("fetching epoch root for {epoch}"))?
+            };
+            if let Some(hash) = root.next_stake_table_hash() {
+                ensure!(
+                    hash == stake_table.commit(),
+                    "epoch {epoch} root {root_height} stake table hash {hash} does not match \
+                     reconstructed hash {}",
+                    stake_table.commit(),
+                );
+            } else if self.decaf() && root.version() < DrbAndHeaderUpgradeVersion::VERSION {
+                // Decaf briefly ran a version of PoS where epoch root headers did not contain the
+                // hash of the expected stake table, and so we can not verify that we computed the
+                // correct stake table. Since this applies only to Decaf, which is a testnet, it is
+                // acceptable to trust that the server supplied the correct events in this case.
+                tracing::debug!(
+                    ?epoch,
+                    root_height,
+                    computed_hash = %stake_table.commit(),
+                    "trusting stake table prior to DRB upgrade on Decaf",
+                );
+            } else {
+                bail!("epoch {epoch} root {root_height} does not have next stake table hash");
+            }
 
-            // Cache the reconstructed stake table in the database.
+            // Cache the reconstructed stake table in the database. We store
+            // `epoch_root_protocol_version` (snapshot for this epoch, used by cache hits) and
+            // `root.version()` (snapshot for `epoch + 1`, used to seed iter 1 of a future
+            // catchup that resumes from this row).
             if let Err(err) = self
                 .db
-                .insert_stake_table(EpochNumber::new(epoch), &stake_table)
+                .insert_stake_table(
+                    EpochNumber::new(epoch),
+                    &stake_table,
+                    epoch_root_protocol_version,
+                    root.version(),
+                )
                 .await
             {
                 // If this fails, we can continue with the stake table that we have in memory right
@@ -585,7 +735,9 @@ where
                 tracing::warn!(epoch, "failed to cache stake table: {err:#}");
             }
 
+            tracing::info!(epoch, "finished stake table catchup for epoch");
             prev_quorum = next_quorum;
+            epoch_root_protocol_version = root.version();
         }
 
         Ok(self.cache_stake_table(epoch, prev_quorum).await)
@@ -608,7 +760,7 @@ where
                 .leaf_proof(id, known_finalized.map(Leaf2::height))
                 .await?;
             let quorum;
-            let hint = match proof.proof().epoch() {
+            let hint = match proof.epoch(self.epoch_height)? {
                 Some(epoch) => {
                     quorum = make_quorum(epoch);
                     LeafProofHint::Quorum(&quorum)
@@ -664,15 +816,22 @@ where
 
         cache.entry(epoch).insert_entry(stake_table).get().clone()
     }
+
+    fn decaf(&self) -> bool {
+        self.chain_id == DECAF_CHAIN_ID
+    }
 }
 
-fn stake_table_state_to_quorum(state: StakeTableState) -> Result<StakeTable> {
-    let validators = state.into_validators();
-    let active_validators = select_active_validator_set(&validators)?;
-    Ok(active_validators
-        .into_values()
+fn stake_table_state_to_quorum(
+    state: &StakeTableState,
+    protocol_version: Version,
+) -> Result<StakeTable> {
+    let vs = ValidatorSet::from_state(state, protocol_version)?;
+    Ok(vs
+        .active_validators()
+        .values()
         .map(|validator| StakeTableEntry {
-            stake_key: validator.stake_table_key,
+            stake_key: *validator.stake_table_key(),
             stake_amount: validator.stake,
         })
         .collect())
@@ -713,14 +872,21 @@ fn header_matches_id(header: &Header, id: BlockId<SeqTypes>) -> bool {
 
 #[cfg(test)]
 mod test {
-    use espresso_types::{DrbAndHeaderUpgradeVersion, NsIndex};
-    use hotshot_query_service::availability::TransactionIndex;
+    use std::collections::HashSet;
+
+    use espresso_types::{
+        NsIndex, RegisteredValidatorMap, StakeTableState, ValidatorSet, v0_3::RegisteredValidator,
+    };
+    use hotshot_query_service_types::availability::TransactionIndex;
+    use hotshot_types::{addr::NetAddr, x25519};
+    use itertools::izip;
     use pretty_assertions::assert_eq;
+    use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION};
 
     use super::*;
     use crate::{
         storage::SqliteStorage,
-        testing::{leaf_chain, TestClient},
+        testing::{TestClient, leaf_chain, random_validator},
     };
 
     #[tokio::test]
@@ -735,7 +901,7 @@ mod test {
         assert_eq!(lc.block_height().await.unwrap(), 0);
 
         // Local block height greater than server.
-        let leaf = leaf_chain::<DrbAndHeaderUpgradeVersion>(1..2)
+        let leaf = leaf_chain(1..2, DRB_AND_HEADER_UPGRADE_VERSION)
             .await
             .remove(0);
         db.insert_leaf(leaf).await.unwrap();
@@ -1156,6 +1322,265 @@ mod test {
         );
     }
 
+    /// Regression: epoch-root leaf proofs must locate a 2-chain when views immediately after
+    /// the root are non-contiguous. Alternates failed view (gap) and ok view past the root.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_stake_table_catchup_with_view_gaps_after_root() {
+        let client = TestClient::with_epoch_height(10);
+        let genesis = client.genesis().await;
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            genesis.clone(),
+        );
+
+        let target_epoch = genesis.first_epoch_with_dynamic_stake_table + 1;
+        let root_height = root_block_in_epoch(*target_epoch - 1, 10) as usize;
+        for i in [0, 2, 4] {
+            client.add_view_gap_after(root_height + i).await;
+        }
+
+        let expected = client.quorum_for_epoch(target_epoch).await.into();
+        assert_eq!(*lc.quorum_for_epoch(target_epoch).await.unwrap(), expected);
+    }
+
+    /// Regression: epoch-transition QC verification must actually check `next_epoch_qc`
+    /// against the next epoch's quorum.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_stake_table_catchup_rejects_tampered_next_epoch_qc() {
+        let client = TestClient::with_epoch_height(10);
+        let genesis = client.genesis().await;
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            genesis.clone(),
+        );
+
+        let target_epoch = genesis.first_epoch_with_dynamic_stake_table + 1;
+        let root_height = root_block_in_epoch(*target_epoch - 1, 10) as usize;
+        client.add_view_gap_after(root_height).await;
+        client.corrupt_next_epoch_qc().await;
+
+        let err = lc.quorum_for_epoch(target_epoch).await.unwrap_err();
+        assert!(
+            err.to_string().contains("verifying next epoch QC")
+                || err
+                    .chain()
+                    .any(|e| e.to_string().contains("verifying next epoch QC")),
+            "{err:#}"
+        );
+    }
+
+    /// Regression: from-genesis catchup must seed the snapshot version by fetching the root at
+    /// `first_dynamic - 2` (verified by the genesis stake table), not by reusing the version of
+    /// the root in epoch `first_dynamic - 1`. Upgrades the root at `first_dynamic - 1` to
+    /// CLIQUENET so it differs from the bootstrap root at `first_dynamic - 2`.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_stake_table_catchup_genesis_bootstrap_version() {
+        let client = TestClient::with_epoch_height(10);
+        let genesis = client.genesis().await;
+        let db = SqliteStorage::default().await.unwrap();
+        let lc = LightClient::from_genesis(db.clone(), client.clone(), genesis.clone());
+
+        let epoch = genesis.first_epoch_with_dynamic_stake_table;
+        let root_height = root_block_in_epoch(*epoch - 1, 10);
+        client.set_upgrade(root_height, NEW_PROTOCOL_VERSION).await;
+
+        lc.quorum_for_epoch(epoch).await.unwrap();
+
+        let (cached_epoch, _, cached_version, _) =
+            db.stake_table_lower_bound(epoch).await.unwrap().unwrap();
+        assert_eq!(cached_epoch, epoch);
+        assert_eq!(cached_version, DRB_AND_HEADER_UPGRADE_VERSION);
+    }
+
+    /// Regression: iter 1 of DB-load catchup must seed from `next_stored_version`, not
+    /// `stored_version`.
+    ///
+    /// - insert stake table for `lower_bound_epoch` with `stored_version` = V4 and
+    ///   `next_stored_version` = CLIQUENET
+    /// - activate the upgrade at `target_epoch_root`
+    /// - request quorum for `target_epoch`
+    /// - fix: seed = `next_stored_version` = CLIQUENET, filter drops all validators, errors
+    /// - previous bug: seed = `stored_version` = V4, no filter, catchup wrongly succeeds
+    ///
+    /// Brittle: asserts that an error happens, not the filter version. Avoids x25519/p2p
+    /// plumbing in the shared test client.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_stake_table_catchup_db_load_advances_snapshot_version() {
+        use crate::client::Client;
+
+        let client = TestClient::with_epoch_height(10);
+        let genesis = client.genesis().await;
+        let db = SqliteStorage::default().await.unwrap();
+        let lc = LightClient::from_genesis(db.clone(), client.clone(), genesis.clone());
+
+        let lower_bound_epoch = genesis.first_epoch_with_dynamic_stake_table;
+        let target_epoch = lower_bound_epoch + 1;
+        let target_epoch_root = root_block_in_epoch(*target_epoch - 2, 10);
+
+        let mut prev_state = StakeTableState::default();
+        for event in client.stake_table_events(lower_bound_epoch).await.unwrap() {
+            prev_state.apply_event(event).unwrap().unwrap();
+        }
+        db.insert_stake_table(
+            lower_bound_epoch,
+            &prev_state,
+            DRB_AND_HEADER_UPGRADE_VERSION,
+            NEW_PROTOCOL_VERSION,
+        )
+        .await
+        .unwrap();
+
+        client
+            .set_upgrade(target_epoch_root, NEW_PROTOCOL_VERSION)
+            .await;
+
+        let err = lc.quorum_for_epoch(target_epoch).await.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("No validators met the minimum criteria")
+                || err.chain().any(|e| e
+                    .to_string()
+                    .contains("No validators met the minimum criteria")),
+            "{err:#}"
+        );
+    }
+
+    /// Regression: catchup filtered the candidate active set at `root.version()` (root in
+    /// epoch `e-1`) instead of the snapshot root's version (epoch `e-2`). When those versions
+    /// differ across CLIQUENET, the LC diverges from the espresso node.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_stake_table_catchup_uses_snapshot_root_version() {
+        use crate::client::Client;
+
+        let client = TestClient::with_epoch_height(10);
+        let genesis = client.genesis().await;
+        let db = SqliteStorage::default().await.unwrap();
+        let lc = LightClient::from_genesis(db.clone(), client.clone(), genesis.clone());
+
+        let prev_epoch = genesis.first_epoch_with_dynamic_stake_table;
+        let target_epoch = prev_epoch + 1;
+        let root_height = root_block_in_epoch(*target_epoch - 1, 10);
+
+        let mut prev_state = StakeTableState::default();
+        for event in client.stake_table_events(prev_epoch).await.unwrap() {
+            prev_state.apply_event(event).unwrap().unwrap();
+        }
+        db.insert_stake_table(
+            prev_epoch,
+            &prev_state,
+            DRB_AND_HEADER_UPGRADE_VERSION,
+            DRB_AND_HEADER_UPGRADE_VERSION,
+        )
+        .await
+        .unwrap();
+
+        client.set_upgrade(root_height, NEW_PROTOCOL_VERSION).await;
+
+        let expected = client.quorum_for_epoch(target_epoch).await.into();
+        assert_eq!(*lc.quorum_for_epoch(target_epoch).await.unwrap(), expected);
+    }
+
+    /// Regression: CLIQUENET active-set filter must run on the cache-hit path using the stored
+    /// version, dropping validators missing x25519/p2p.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_stake_table_cliquenet_filter() {
+        let db = SqliteStorage::default().await.unwrap();
+        let client = TestClient::default();
+        let genesis = client.genesis().await;
+        let lc = LightClient::from_genesis(db.clone(), client.clone(), genesis.clone());
+
+        let mut complete: RegisteredValidator<PubKey> = random_validator().into();
+        complete.x25519_key = Some(x25519::PublicKey::try_from([42u8; 32].as_slice()).unwrap());
+        complete.p2p_addr = Some("127.0.0.1:9000".parse::<NetAddr>().unwrap());
+
+        let incomplete: RegisteredValidator<PubKey> = random_validator().into();
+        assert!(incomplete.x25519_key.is_none());
+        assert!(incomplete.p2p_addr.is_none());
+
+        let mut validators = RegisteredValidatorMap::default();
+        validators.insert(complete.account, complete.clone());
+        validators.insert(incomplete.account, incomplete.clone());
+
+        let complete_bls = complete.stake_table_key.expect("authenticated validator");
+        let incomplete_bls = incomplete.stake_table_key.expect("authenticated validator");
+        let mut used_bls = HashSet::default();
+        used_bls.insert(complete_bls);
+        used_bls.insert(incomplete_bls);
+
+        let mut used_schnorr = HashSet::default();
+        used_schnorr.insert(
+            complete
+                .state_ver_key
+                .clone()
+                .expect("random_validator has valid schnorr key"),
+        );
+        used_schnorr.insert(
+            incomplete
+                .state_ver_key
+                .clone()
+                .expect("random_validator has valid schnorr key"),
+        );
+
+        let mut used_x25519 = HashSet::default();
+        used_x25519.insert(complete.x25519_key.unwrap());
+
+        let state = StakeTableState::new(
+            validators,
+            Default::default(),
+            used_bls,
+            used_schnorr,
+            used_x25519,
+        );
+
+        let epoch = genesis.first_epoch_with_dynamic_stake_table + 1;
+        db.insert_stake_table(epoch, &state, NEW_PROTOCOL_VERSION, NEW_PROTOCOL_VERSION)
+            .await
+            .unwrap();
+
+        let quorum = lc.quorum_for_epoch(epoch).await.unwrap();
+        let expected: StakeTable = vec![StakeTableEntry {
+            stake_key: complete_bls,
+            stake_amount: complete.stake,
+        }]
+        .into();
+        assert_eq!(*quorum, expected);
+
+        // Cross-check: the same state under EPOCH_VERSION (pre-cliquenet) keeps both. This
+        // guards against the filter being unconditionally on.
+        let pre_cliquenet = ValidatorSet::from_state(&state, EPOCH_VERSION).unwrap();
+        assert_eq!(pre_cliquenet.active_validators().len(), 2);
+    }
+
+    /// Regression: catchup must thread the snapshot version end-to-end through reconstruction
+    /// and cache it with each replayed epoch.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_stake_table_cliquenet_filter_reconstruction() {
+        let db = SqliteStorage::default().await.unwrap();
+        let client = TestClient::default();
+        let genesis = client.genesis().await;
+        let lc = LightClient::from_genesis(db.clone(), client.clone(), genesis.clone());
+
+        let epoch = genesis.first_epoch_with_dynamic_stake_table + 2;
+        assert!(db.stake_table_lower_bound(epoch).await.unwrap().is_none());
+
+        let expected = client.quorum_for_epoch(epoch).await.into();
+        assert_eq!(*lc.quorum_for_epoch(epoch).await.unwrap(), expected);
+
+        let (cached_epoch, _, cached_version, _) =
+            db.stake_table_lower_bound(epoch).await.unwrap().unwrap();
+        assert_eq!(cached_epoch, epoch);
+        assert_eq!(cached_version, DRB_AND_HEADER_UPGRADE_VERSION);
+    }
+
     #[tokio::test]
     #[test_log::test]
     async fn test_fetch_payload() {
@@ -1166,6 +1591,7 @@ mod test {
             client.genesis().await,
         );
 
+        let mut hashes = vec![];
         for i in 1..10 {
             let payload = client.payload(i).await;
             let res = lc.fetch_payload(BlockId::Number(i)).await.unwrap();
@@ -1173,6 +1599,19 @@ mod test {
             assert_eq!(res.height(), i as u64);
             assert_eq!(res.block_hash(), client.leaf(i).await.block_hash());
             assert_eq!(res.hash(), client.leaf(i).await.payload_hash());
+            hashes.push(res.hash());
+        }
+
+        // Test ranged fetching.
+        let blocks = lc.fetch_blocks_in_range(1, 10).await.unwrap();
+        let vid = lc.fetch_vid_common_in_range(1, 10).await.unwrap();
+        assert_eq!(blocks.len(), 9);
+        assert_eq!(vid.len(), 9);
+        for (i, (hash, block, vid)) in izip!(hashes, blocks, vid).enumerate() {
+            assert_eq!(block.height() as usize, i + 1);
+            assert_eq!(vid.height() as usize, i + 1);
+            assert_eq!(block.payload_hash(), hash);
+            assert_eq!(vid.payload_hash(), hash);
         }
     }
 
@@ -1250,6 +1689,64 @@ mod test {
 
     #[tokio::test]
     #[test_log::test]
+    async fn test_fetch_all_namespaces_in_range() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+
+        // Request the namespaces from the first few blocks (which may differ per block), plus one
+        // that is absent everywhere.
+        let mut requested = vec![];
+        for height in 1..4 {
+            requested.push(
+                client
+                    .payload(height)
+                    .await
+                    .transaction(&TransactionIndex {
+                        ns_index: 0.into(),
+                        position: 0,
+                    })
+                    .unwrap()
+                    .namespace(),
+            );
+        }
+        let absent =
+            NamespaceId::from(requested.iter().map(|ns| u64::from(*ns)).max().unwrap() + 1);
+        requested.push(absent);
+
+        let (start, end) = (1, 10);
+        let blocks = lc
+            .fetch_all_namespaces_in_range(start, end, &requested)
+            .await
+            .unwrap();
+        assert_eq!(blocks.len(), end - start);
+
+        for (i, block) in blocks.iter().enumerate() {
+            let height = i + 1;
+            let header = client.leaf(height).await.header().clone();
+
+            // The map contains exactly the requested namespaces present in this block, and the
+            // absent namespace is never included.
+            assert!(!block.contains_key(&absent), "block {height}");
+            for &ns in &requested {
+                let expected = lc
+                    .fetch_namespace(BlockId::Number(height), ns)
+                    .await
+                    .unwrap();
+                if header.ns_table().find_ns_id(&ns).is_some() {
+                    assert_eq!(block.get(&ns), Some(&expected), "block {height}, ns {ns}");
+                } else {
+                    assert!(!block.contains_key(&ns), "block {height}, ns {ns}");
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[test_log::test]
     async fn test_fetch_namespace_invalid() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(
@@ -1276,5 +1773,38 @@ mod test {
             err.to_string().contains("invalid namespace proof"),
             "{err:#}"
         );
+    }
+}
+
+#[cfg(all(test, feature = "rlp"))]
+mod rlp_test {
+    use alloy::primitives::U256;
+    use alloy_rlp::{Decodable, Encodable};
+    use hotshot_types::traits::signature_key::SignatureKey;
+
+    use super::*;
+
+    #[test_log::test]
+    fn rlp_genesis_round_trip() {
+        let genesis = Genesis {
+            epoch_height: 1000,
+            first_epoch_with_dynamic_stake_table: EpochNumber::new(3),
+            stake_table: vec![StakeTableEntry {
+                stake_key: PubKey::generated_from_seed_indexed(
+                    Default::default(),
+                    Default::default(),
+                )
+                .0,
+                stake_amount: U256::MAX,
+            }],
+            chain_id: DECAF_CHAIN_ID,
+        };
+
+        let mut buf = vec![];
+        genesis.encode(&mut buf);
+
+        let mut buf = buf.as_slice();
+        assert_eq!(genesis, Genesis::decode(&mut buf).unwrap());
+        assert!(buf.is_empty());
     }
 }

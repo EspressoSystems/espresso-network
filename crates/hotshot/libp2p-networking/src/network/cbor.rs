@@ -4,10 +4,10 @@ use async_trait::async_trait;
 use cbor4ii::core::error::DecodeError;
 use futures::prelude::*;
 use libp2p::{
-    request_response::{self, Codec},
     StreamProtocol,
+    request_response::{self, Codec},
 };
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 
 /// `Behaviour` type alias for the `Cbor` codec
 pub type Behaviour<Req, Resp> = request_response::Behaviour<Cbor<Req, Resp>>;

@@ -5,7 +5,7 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 use hotshot_example_types::node_types::{
-    CombinedImpl, EpochsTestVersions, Libp2pImpl, PushCdnImpl, TestTwoStakeTablesTypes, TestTypes,
+    CombinedImpl, Libp2pImpl, PushCdnImpl, TEST_VERSIONS, TestTwoStakeTablesTypes, TestTypes,
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
@@ -19,7 +19,7 @@ cross_tests!(
     TestName: test_shorter_decide,
     Impls: [Libp2pImpl, PushCdnImpl, CombinedImpl],
     Types: [TestTypes, TestTwoStakeTablesTypes],
-    Versions: [EpochsTestVersions],
+    Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
     Metadata: {
         let mut metadata = TestDescription::default();

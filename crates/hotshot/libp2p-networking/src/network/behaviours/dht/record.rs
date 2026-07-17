@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use hotshot_types::traits::signature_key::SignatureKey;
 use libp2p::kad::Record;
 use serde::{Deserialize, Serialize};
@@ -9,10 +9,13 @@ use tracing::warn;
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 pub enum RecordValue<K: SignatureKey + 'static> {
     /// A signed record value
-    Signed(Vec<u8>, K::PureAssembledSignatureType),
+    Signed(
+        #[serde(with = "serde_bytes")] Vec<u8>,
+        K::PureAssembledSignatureType,
+    ),
 
     /// An unsigned record value
-    Unsigned(Vec<u8>),
+    Unsigned(#[serde(with = "serde_bytes")] Vec<u8>),
 }
 
 /// The namespace of a record. This is included with the key

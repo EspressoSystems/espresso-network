@@ -1,21 +1,53 @@
 use std::time::Duration;
 
-use alloy::primitives::{
-    utils::{format_ether, parse_ether},
-    Address, U256,
+use alloy::{
+    primitives::{
+        Address, U256,
+        utils::{format_ether, parse_ether},
+    },
+    providers::Provider as _,
+    signers::local::coins_bip39::{English, Mnemonic},
 };
 use anyhow::Result;
-use common::{base_cmd, Signer, TestSystemExt};
+use common::{MetadataCommand, Signer, TestSystemExt, base_cmd};
+use espresso_contract_deployer::build_signer;
+use espresso_types::{L1Client, v0_3::Fetcher};
 use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
-use predicates::str;
-use rand::{rngs::StdRng, SeedableRng as _};
+use hotshot_types::{addr::NetAddr, signature_key::BLSPubKey, x25519};
+use predicates::{prelude::PredicateBooleanExt, str};
+use rand::{SeedableRng as _, rngs::StdRng};
+use serde::Deserialize;
 use staking_cli::{
+    DEMO_VALIDATOR_START_INDEX, DEV_MNEMONIC,
     demo::DelegationConfig,
-    deploy::{self},
-    Config,
+    deploy::{self, TestSystem},
+    fetch_metadata,
 };
+use url::Url;
+use warp::Filter as _;
 
-use crate::deploy::TestSystem;
+#[derive(Deserialize)]
+struct TestConfig {
+    rpc_url: Url,
+    stake_table_address: Address,
+    espresso_url: Option<Url>,
+    signer: TestSignerConfig,
+}
+
+#[derive(Deserialize)]
+struct TestSignerConfig {
+    mnemonic: Option<String>,
+    private_key: Option<String>,
+    account_index: Option<u32>,
+    #[serde(default)]
+    ledger: bool,
+}
+
+fn random_mnemonic() -> String {
+    Mnemonic::<English>::new(&mut rand::thread_rng())
+        .to_phrase()
+        .to_string()
+}
 
 mod common;
 
@@ -23,10 +55,10 @@ mod common;
 #[rstest::rstest]
 #[case::v1(StakeTableContractVersion::V1)]
 #[case::v2(StakeTableContractVersion::V2)]
+#[case::v3(StakeTableContractVersion::V3)]
 #[tokio::test(flavor = "multi_thread")]
 async fn stake_table_versions(#[case] _version: StakeTableContractVersion) {}
 
-const TEST_MNEMONIC: &str = "wool upset allow cheap purity craft hat cute below useful reject door";
 const TEST_PRIVATE_KEY: &str = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
 
 #[test_log::test]
@@ -35,10 +67,71 @@ fn test_cli_version() -> Result<()> {
     Ok(())
 }
 
+#[rstest::rstest]
+#[case::account(&["account"])]
+#[case::register_validator(&["register-validator", "--node-signatures", "/dev/null", "--commission", "10", "--metadata-uri", "http://x", "--skip-metadata-validation"])]
+#[case::update_consensus_keys(&["update-consensus-keys", "--node-signatures", "/dev/null"])]
+#[case::deregister_validator(&["deregister-validator"])]
+#[case::update_commission(&["update-commission", "--new-commission", "10"])]
+#[case::update_metadata_uri(&["update-metadata-uri", "--metadata-uri", "http://x", "--skip-metadata-validation"])]
+#[case::approve(&["approve", "--amount", "100"])]
+#[case::delegate(&["delegate", "--validator-address", "0x1111111111111111111111111111111111111111", "--amount", "100"])]
+#[case::undelegate(&["undelegate", "--validator-address", "0x1111111111111111111111111111111111111111", "--amount", "100"])]
+#[case::claim_withdrawal(&["claim-withdrawal", "--validator-address", "0x1111111111111111111111111111111111111111"])]
+#[case::claim_validator_exit(&["claim-validator-exit", "--validator-address", "0x1111111111111111111111111111111111111111"])]
+#[case::claim_rewards(&["--espresso-url", "http://localhost:1", "claim-rewards"])]
+#[case::transfer(&["transfer", "--amount", "100", "--to", "0x1111111111111111111111111111111111111111"])]
+#[case::update_network_config(&["update-network-config", "--x25519-key", "X25519_PK~01L0Noh7twqDRjw9QTuv3HOjsUMB_5HaV9nCSlbzEyXL", "--p2p-addr", "127.0.0.1:8080"])]
+#[case::update_x25519_key(&["update-x25519-key", "--x25519-key", "X25519_PK~01L0Noh7twqDRjw9QTuv3HOjsUMB_5HaV9nCSlbzEyXL"])]
+#[case::update_p2p_addr(&["update-p2p-addr", "--p2p-addr", "127.0.0.1:8080"])]
+#[test_log::test(tokio::test)]
+async fn test_cli_missing_signer_error(#[case] args: &[&str]) -> Result<()> {
+    let system = deploy::TestSystem::deploy_version(StakeTableContractVersion::V2).await?;
+    let tmpdir = tempfile::tempdir()?;
+    let config_path = tmpdir.path().join("config.toml");
+
+    base_cmd()
+        .arg("-c")
+        .arg(&config_path)
+        .arg("--rpc-url")
+        .arg(system.rpc_url.to_string())
+        .arg("--stake-table-address")
+        .arg(system.stake_table.to_string())
+        .args(args)
+        .assert()
+        .failure()
+        .stderr(str::contains("--mnemonic, --private-key, or --ledger"));
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_cli_private_key_without_account_index() -> Result<()> {
+    let system = deploy::TestSystem::deploy().await?;
+    let tmpdir = tempfile::tempdir()?;
+    let config_path = tmpdir.path().join("config.toml");
+
+    base_cmd()
+        .arg("-c")
+        .arg(&config_path)
+        .arg("--rpc-url")
+        .arg(system.rpc_url.to_string())
+        .arg("--stake-table-address")
+        .arg(system.stake_table.to_string())
+        .arg("--private-key")
+        .arg(TEST_PRIVATE_KEY)
+        .arg("account")
+        .assert()
+        .success();
+
+    Ok(())
+}
+
 #[test_log::test]
 fn test_cli_create_and_remove_config_file_mnemonic() -> anyhow::Result<()> {
     let tmpdir = tempfile::tempdir()?;
     let config_path = tmpdir.path().join("config.toml");
+    let mnemonic = random_mnemonic();
 
     assert!(!config_path.exists());
 
@@ -46,15 +139,16 @@ fn test_cli_create_and_remove_config_file_mnemonic() -> anyhow::Result<()> {
         .arg("-c")
         .arg(&config_path)
         .arg("init")
-        .args(["--mnemonic", TEST_MNEMONIC])
+        .args(["--network", "decaf"])
+        .args(["--mnemonic", &mnemonic])
         .args(["--account-index", "123"])
         .assert()
         .success();
 
     assert!(config_path.exists());
 
-    let config: Config = toml::de::from_str(&std::fs::read_to_string(&config_path)?)?;
-    assert_eq!(config.signer.mnemonic, Some(TEST_MNEMONIC.to_string()));
+    let config: TestConfig = toml::from_str(&std::fs::read_to_string(&config_path)?)?;
+    assert_eq!(config.signer.mnemonic.as_deref(), Some(mnemonic.as_str()));
     assert_eq!(config.signer.account_index, Some(123));
     assert!(!config.signer.ledger);
 
@@ -82,6 +176,7 @@ fn test_cli_create_file_ledger() -> anyhow::Result<()> {
         .arg("-c")
         .arg(&config_path)
         .arg("init")
+        .args(["--network", "decaf"])
         .arg("--ledger")
         .args(["--account-index", "42"])
         .assert()
@@ -89,9 +184,54 @@ fn test_cli_create_file_ledger() -> anyhow::Result<()> {
 
     assert!(config_path.exists());
 
-    let config: Config = toml::de::from_str(&std::fs::read_to_string(&config_path)?)?;
+    let config: TestConfig = toml::from_str(&std::fs::read_to_string(&config_path)?)?;
     assert!(config.signer.ledger);
     assert_eq!(config.signer.account_index, Some(42));
+
+    Ok(())
+}
+
+/// --no-config takes precedence over -c: config file mnemonic is not loaded
+#[test_log::test]
+fn test_no_config_skips_config_file() -> anyhow::Result<()> {
+    let tmpdir = tempfile::tempdir()?;
+    let config_path = tmpdir.path().join("config.toml");
+    std::fs::write(
+        &config_path,
+        format!(
+            r#"
+rpc_url = "http://localhost:8545"
+stake_table_address = "0x0000000000000000000000000000000000000001"
+
+[signer]
+mnemonic = "{}"
+account_index = 0
+ledger = false
+"#,
+            staking_cli::DEV_MNEMONIC,
+        ),
+    )?;
+
+    // With -c, the config is loaded and `account` prints the derived address
+    base_cmd()
+        .arg("-c")
+        .arg(&config_path)
+        .arg("account")
+        .assert()
+        .success()
+        .stdout(str::contains("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"));
+
+    // With --no-config, the mnemonic from the config file is not loaded
+    base_cmd()
+        .arg("--no-config")
+        .arg("-c")
+        .arg(&config_path)
+        .arg("--stake-table-address")
+        .arg("0x0000000000000000000000000000000000000001")
+        .arg("account")
+        .assert()
+        .failure()
+        .stderr(str::contains("--mnemonic, --private-key, or --ledger"));
 
     Ok(())
 }
@@ -109,7 +249,7 @@ enum ExecutionMode {
 async fn test_cli_transfer_error_decoding(#[case] mode: ExecutionMode) -> Result<()> {
     let system = TestSystem::deploy().await?;
 
-    let mut cmd = match mode {
+    let cmd = match mode {
         ExecutionMode::Simulate => system.export_calldata_cmd(),
         ExecutionMode::Execute => system.cmd(Signer::Mnemonic),
     };
@@ -132,7 +272,7 @@ async fn test_cli_transfer_error_decoding(#[case] mode: ExecutionMode) -> Result
 async fn test_cli_delegate_error_decoding(#[case] mode: ExecutionMode) -> Result<()> {
     let system = TestSystem::deploy().await?;
 
-    let mut cmd = match mode {
+    let cmd = match mode {
         ExecutionMode::Simulate => system.export_calldata_cmd(),
         ExecutionMode::Execute => system.cmd(Signer::Mnemonic),
     };
@@ -151,38 +291,33 @@ async fn test_cli_delegate_error_decoding(#[case] mode: ExecutionMode) -> Result
 #[test_log::test(rstest::rstest)]
 #[tokio::test]
 async fn test_cli_register_validator(
-    #[values(StakeTableContractVersion::V1, StakeTableContractVersion::V2)]
+    #[values(
+        StakeTableContractVersion::V1,
+        StakeTableContractVersion::V2,
+        StakeTableContractVersion::V3
+    )]
     version: StakeTableContractVersion,
     #[values(Signer::Mnemonic, Signer::BrokeMnemonic)] signer: Signer,
 ) -> Result<()> {
     let system = TestSystem::deploy_version(version).await?;
-    let mut cmd = system.cmd(signer);
+    let cmd = system
+        .cmd(signer)
+        .arg("register-validator")
+        .with_keys()
+        .arg("--commission")
+        .arg("12.34")
+        .arg("--metadata-uri")
+        .arg("https://example.com/metadata")
+        .arg("--skip-metadata-validation");
+
     match signer {
         Signer::Mnemonic => {
-            cmd.arg("register-validator")
-                .arg("--consensus-private-key")
-                .arg(system.bls_private_key_str()?)
-                .arg("--state-private-key")
-                .arg(system.state_private_key_str()?)
-                .arg("--commission")
-                .arg("12.34")
-                .arg("--metadata-uri")
-                .arg("https://example.com/metadata")
-                .assert()
+            cmd.assert()
                 .success()
                 .stdout(str::contains("ValidatorRegistered"));
         },
         Signer::BrokeMnemonic => {
-            cmd.arg("register-validator")
-                .arg("--consensus-private-key")
-                .arg(system.bls_private_key_str()?)
-                .arg("--state-private-key")
-                .arg(system.state_private_key_str()?)
-                .arg("--commission")
-                .arg("12.34")
-                .arg("--metadata-uri")
-                .arg("https://example.com/metadata")
-                .assert()
+            cmd.assert()
                 .failure()
                 .stderr(str::contains("zero Ethereum balance"));
         },
@@ -199,10 +334,7 @@ async fn test_cli_register_validator_with_no_metadata_uri() -> Result<()> {
     system
         .cmd(Signer::Mnemonic)
         .arg("register-validator")
-        .arg("--consensus-private-key")
-        .arg(system.bls_private_key_str()?)
-        .arg("--state-private-key")
-        .arg(system.state_private_key_str()?)
+        .with_keys()
         .arg("--commission")
         .arg("12.34")
         .arg("--no-metadata-uri")
@@ -226,10 +358,7 @@ async fn test_cli_register_validator_metadata_uri_validation(
     system
         .cmd(Signer::Mnemonic)
         .arg("register-validator")
-        .arg("--consensus-private-key")
-        .arg(system.bls_private_key_str()?)
-        .arg("--state-private-key")
-        .arg(system.state_private_key_str()?)
+        .with_keys()
         .arg("--commission")
         .arg("12.34")
         .arg("--metadata-uri")
@@ -241,20 +370,264 @@ async fn test_cli_register_validator_metadata_uri_validation(
     Ok(())
 }
 
+// Metadata format for parametrized tests
+#[derive(Clone, Copy, Debug)]
+enum MetadataFormat {
+    Json,
+    OpenMetrics,
+}
+
+// Content-Type header values for testing wrong content-type scenarios
+#[derive(Clone, Copy, Debug)]
+enum ContentType {
+    Json,       // application/json (correct for JSON)
+    Text,       // text/plain (GitHub raw, wrong for JSON)
+    Empty,      // empty string
+    Unexpected, // completely unexpected/unusual content-type
+}
+
+impl ContentType {
+    fn as_str(&self) -> &'static str {
+        match self {
+            ContentType::Json => "application/json",
+            ContentType::Text => "text/plain",
+            ContentType::Empty => "",
+            ContentType::Unexpected => "application/x-unexpected-type; charset=unknown",
+        }
+    }
+}
+
+struct MetadataServer {
+    port: u16,
+}
+
+impl MetadataServer {
+    fn url(&self) -> String {
+        format!("http://127.0.0.1:{}/metadata", self.port)
+    }
+}
+
+struct MetadataServerBuilder {
+    pub_key: BLSPubKey,
+    format: MetadataFormat,
+    content_type: Option<ContentType>,
+    name: String,
+}
+
+impl MetadataServerBuilder {
+    fn new(pub_key: BLSPubKey) -> Self {
+        Self {
+            pub_key,
+            format: MetadataFormat::Json,
+            content_type: None,
+            name: "Test Validator".to_string(),
+        }
+    }
+
+    fn format(mut self, format: MetadataFormat) -> Self {
+        self.format = format;
+        self
+    }
+
+    fn content_type(mut self, content_type: ContentType) -> Self {
+        self.content_type = Some(content_type);
+        self
+    }
+
+    #[allow(dead_code)]
+    fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        self
+    }
+
+    async fn start(self) -> MetadataServer {
+        let content_type = self.content_type.unwrap_or(match self.format {
+            MetadataFormat::Json => ContentType::Json,
+            MetadataFormat::OpenMetrics => ContentType::Text,
+        });
+
+        let port = match self.format {
+            MetadataFormat::Json => {
+                let metadata_json = serde_json::json!({
+                    "pub_key": self.pub_key.to_string(),
+                    "name": self.name
+                });
+                let json_body = serde_json::to_string(&metadata_json).unwrap();
+
+                let route = warp::path("metadata").map(move || {
+                    warp::reply::with_header(
+                        json_body.clone(),
+                        "content-type",
+                        content_type.as_str(),
+                    )
+                });
+
+                deploy::serve_on_random_port(route).await
+            },
+            MetadataFormat::OpenMetrics => {
+                let metrics_body = format!(
+                    r#"# HELP consensus_node node
+# TYPE consensus_node gauge
+consensus_node{{key="{}"}} 1
+# HELP consensus_node_identity_general node_identity_general
+# TYPE consensus_node_identity_general gauge
+consensus_node_identity_general{{name="{}"}} 1
+"#,
+                    self.pub_key, self.name
+                );
+
+                let route = warp::path("metadata").map(move || {
+                    warp::reply::with_header(
+                        metrics_body.clone(),
+                        "content-type",
+                        content_type.as_str(),
+                    )
+                });
+
+                deploy::serve_on_random_port(route).await
+            },
+        };
+
+        MetadataServer { port }
+    }
+}
+
+#[test_log::test(rstest::rstest)]
+#[case::json(MetadataFormat::Json)]
+#[case::openmetrics(MetadataFormat::OpenMetrics)]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cli_register_validator_metadata_validation_success(
+    #[case] format: MetadataFormat,
+) -> Result<()> {
+    let system = TestSystem::deploy().await?;
+    let bls_vk = BLSPubKey::from(system.bls_key_pair.ver_key());
+    let server = MetadataServerBuilder::new(bls_vk)
+        .format(format)
+        .start()
+        .await;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("register-validator")
+        .with_keys()
+        .arg("--commission")
+        .arg("5.00")
+        .arg("--metadata-uri")
+        .arg(server.url())
+        .assert()
+        .success()
+        .stdout(str::contains("ValidatorRegistered"));
+
+    Ok(())
+}
+
+#[test_log::test(rstest::rstest)]
+#[case::json(MetadataFormat::Json)]
+#[case::openmetrics(MetadataFormat::OpenMetrics)]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cli_register_validator_metadata_validation_wrong_pub_key(
+    #[case] format: MetadataFormat,
+) -> Result<()> {
+    let system = TestSystem::deploy().await?;
+
+    let mut rng = StdRng::from_seed([99u8; 32]);
+    let different_keys = TestSystem::gen_keys(&mut rng);
+    let different_bls_vk = BLSPubKey::from(different_keys.bls.ver_key());
+    let server = MetadataServerBuilder::new(different_bls_vk)
+        .format(format)
+        .start()
+        .await;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("register-validator")
+        .with_keys()
+        .arg("--commission")
+        .arg("5.00")
+        .arg("--metadata-uri")
+        .arg(server.url())
+        .assert()
+        .failure()
+        .stderr(str::contains("pub_key mismatch"));
+
+    Ok(())
+}
+
+/// Integration test against real mainnet node.
+/// Ignored by default since it requires network access.
+/// Run with: cargo test -p staking-cli --features testing test_real_mainnet_node_metadata -- --ignored
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+#[ignore]
+async fn test_real_mainnet_node_metadata() -> Result<()> {
+    let metrics_url = "https://query-0.main.net.espresso.network/status/metrics";
+    let parsed_url = Url::parse(metrics_url)?;
+
+    // Fetch and parse the metrics to get the pub_key
+    let metadata = fetch_metadata(&parsed_url).await?;
+    let pub_key = metadata.pub_key.to_string();
+
+    // Now test that update-metadata-uri validation works with this real endpoint
+    let system = TestSystem::deploy().await?;
+    system.register_validator().await?;
+
+    // Validation should succeed: the pub_key from the metrics matches what we provide
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("update-metadata-uri")
+        .arg("--metadata-uri")
+        .arg(metrics_url)
+        .arg("--consensus-public-key")
+        .arg(&pub_key)
+        .assert()
+        .success()
+        .stdout(str::contains("MetadataUriUpdated"));
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_register_validator_skip_metadata_validation() -> Result<()> {
+    let system = TestSystem::deploy().await?;
+
+    let mut rng = StdRng::from_seed([99u8; 32]);
+    let different_keys = TestSystem::gen_keys(&mut rng);
+    let different_bls_vk = BLSPubKey::from(different_keys.bls.ver_key());
+    let server = MetadataServerBuilder::new(different_bls_vk).start().await;
+
+    let metadata_uri = server.url();
+
+    // With --skip-metadata-validation, should succeed even with wrong pub_key
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("register-validator")
+        .with_keys()
+        .arg("--commission")
+        .arg("5.00")
+        .arg("--metadata-uri")
+        .arg(&metadata_uri)
+        .arg("--skip-metadata-validation")
+        .assert()
+        .success()
+        .stdout(str::contains("ValidatorRegistered"));
+
+    Ok(())
+}
+
 #[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_update_consensus_keys(#[case] version: StakeTableContractVersion) -> Result<()> {
     let system = TestSystem::deploy_version(version).await?;
     system.register_validator().await?;
 
     let mut rng = StdRng::from_seed([43u8; 32]);
-    let (_, new_bls, new_state) = TestSystem::gen_keys(&mut rng);
+    let new_keys = TestSystem::gen_keys(&mut rng);
 
-    let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg("update-consensus-keys")
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("update-consensus-keys")
         .arg("--consensus-private-key")
-        .arg(new_bls.sign_key_ref().to_tagged_base64()?.to_string())
+        .arg(new_keys.bls.sign_key_ref().to_tagged_base64()?.to_string())
         .arg("--state-private-key")
-        .arg(new_state.sign_key().to_tagged_base64()?.to_string())
+        .arg(new_keys.state.sign_key().to_tagged_base64()?.to_string())
         .assert()
         .success()
         .stdout(str::contains("ConsensusKeysUpdated"));
@@ -283,10 +656,15 @@ async fn test_cli_update_commission() -> Result<()> {
     Ok(())
 }
 
+#[rstest::rstest]
+#[case(StakeTableContractVersion::V2)]
+#[case(StakeTableContractVersion::V3)]
 #[test_log::test(tokio::test)]
-async fn test_cli_increase_commission_too_soon() -> Result<()> {
-    // Only test on V2 since V1 doesn't support commission updates
-    let system = TestSystem::deploy_version(StakeTableContractVersion::V2).await?;
+async fn test_cli_increase_commission_too_soon(
+    #[case] version: StakeTableContractVersion,
+) -> Result<()> {
+    // V1 doesn't support commission updates, so it is not covered here.
+    let system = TestSystem::deploy_version(version).await?;
     system.register_validator().await?;
 
     let old_commission = system.fetch_commission().await?;
@@ -336,8 +714,9 @@ async fn test_cli_delegate(#[case] version: StakeTableContractVersion) -> Result
     let system = TestSystem::deploy_version(version).await?;
     system.register_validator().await?;
 
-    let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg("delegate")
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("delegate")
         .arg("--validator-address")
         .arg(system.deployer_address.to_string())
         .arg("--amount")
@@ -353,8 +732,9 @@ async fn test_cli_deregister_validator(#[case] version: StakeTableContractVersio
     let system = TestSystem::deploy_version(version).await?;
     system.register_validator().await?;
 
-    let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg("deregister-validator")
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("deregister-validator")
         .assert()
         .success()
         .stdout(str::contains("ValidatorExit"));
@@ -368,8 +748,9 @@ async fn test_cli_undelegate(#[case] version: StakeTableContractVersion) -> Resu
     let amount = "123";
     system.delegate(parse_ether(amount)?).await?;
 
-    let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg("undelegate")
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("undelegate")
         .arg("--validator-address")
         .arg(system.deployer_address.to_string())
         .arg("--amount")
@@ -389,12 +770,13 @@ async fn test_cli_claim_withdrawal(#[case] version: StakeTableContractVersion) -
     system.undelegate(amount).await?;
     system.warp_to_unlock_time().await?;
 
-    let mut cmd = system.cmd(Signer::Mnemonic);
     let expected_event = match version {
         StakeTableContractVersion::V1 => "Withdrawal",
-        StakeTableContractVersion::V2 => "WithdrawalClaimed",
+        StakeTableContractVersion::V2 | StakeTableContractVersion::V3 => "WithdrawalClaimed",
     };
-    cmd.arg("claim-withdrawal")
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("claim-withdrawal")
         .arg("--validator-address")
         .arg(system.deployer_address.to_string())
         .assert()
@@ -412,12 +794,13 @@ async fn test_cli_claim_validator_exit(#[case] version: StakeTableContractVersio
     system.deregister_validator().await?;
     system.warp_to_unlock_time().await?;
 
-    let mut cmd = system.cmd(Signer::Mnemonic);
     let expected_event = match version {
         StakeTableContractVersion::V1 => "Withdrawal",
-        StakeTableContractVersion::V2 => "ValidatorExitClaimed",
+        StakeTableContractVersion::V2 | StakeTableContractVersion::V3 => "ValidatorExitClaimed",
     };
-    cmd.arg("claim-validator-exit")
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("claim-validator-exit")
         .arg("--validator-address")
         .arg(system.deployer_address.to_string())
         .assert()
@@ -432,8 +815,12 @@ async fn test_cli_stake_for_demo_default_num_validators(
 ) -> Result<()> {
     let system = TestSystem::deploy_version(version).await?;
 
-    let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg("stake-for-demo").assert().success();
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("demo")
+        .arg("stake")
+        .assert()
+        .success();
     Ok(())
 }
 
@@ -443,8 +830,10 @@ async fn test_cli_stake_for_demo_three_validators(
 ) -> Result<()> {
     let system = TestSystem::deploy_version(version).await?;
 
-    let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg("stake-for-demo")
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("demo")
+        .arg("stake")
         .arg("--num-validators")
         .arg("3")
         .assert()
@@ -452,10 +841,83 @@ async fn test_cli_stake_for_demo_three_validators(
     Ok(())
 }
 
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
+async fn test_cli_stake_for_demo_with_mnemonic_env(
+    #[case] version: StakeTableContractVersion,
+) -> Result<()> {
+    let system = TestSystem::deploy_version(version).await?;
+
+    let mut cmd = system.cmd(Signer::Mnemonic).into_inner();
+    cmd.env("ESPRESSO_NODE_KEY_MNEMONIC", DEV_MNEMONIC)
+        .env_remove("ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_0")
+        .env_remove("ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_0")
+        .env_remove("ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_0")
+        .arg("demo")
+        .arg("stake")
+        .arg("--num-validators")
+        .arg("1")
+        .assert()
+        .success();
+    Ok(())
+}
+
+/// `ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_HOSTNAME` + `..._BASE_PORT` should let the demo register
+/// any number of validators without per-index `ADVERTISE_ADDRESS_N` env vars. Six validators
+/// exceeds the five hardcoded per-index addresses in `.env`, so this would fail without the new
+/// hostname/base-port feature. Only V3 stake table records p2p addresses.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_stake_for_demo_with_advertise_hostname_and_base_port() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+
+    let hostname = "127.0.0.1";
+    let base_port: u16 = 47829;
+    let num_validators: u16 = 6;
+
+    let mut cmd = system.cmd(Signer::Mnemonic).into_inner();
+    cmd.env("ESPRESSO_NODE_KEY_MNEMONIC", DEV_MNEMONIC)
+        .env("ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_HOSTNAME", hostname)
+        .env(
+            "ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_BASE_PORT",
+            base_port.to_string(),
+        )
+        .arg("demo")
+        .arg("stake")
+        .arg("--num-validators")
+        .arg(num_validators.to_string())
+        .assert()
+        .success();
+
+    let l1 = L1Client::new(vec![system.rpc_url.clone()])?;
+    let block = system.provider.get_block_number().await?;
+    let (validators, _) =
+        Fetcher::fetch_all_validators_from_contract(l1, system.stake_table, block).await?;
+    assert_eq!(validators.len(), num_validators as usize);
+    for i in 0..num_validators {
+        let signer = build_signer(DEV_MNEMONIC, DEMO_VALIDATOR_START_INDEX + i as u32);
+        let validator = validators.get(&signer.address()).unwrap_or_else(|| {
+            panic!(
+                "validator at index {i} ({}) not registered",
+                signer.address()
+            )
+        });
+        let expected: NetAddr = format!("{hostname}:{}", base_port + i).parse()?;
+        assert_eq!(
+            validator.p2p_addr,
+            Some(expected),
+            "p2p_addr mismatch for validator {i}"
+        );
+    }
+    Ok(())
+}
+
 #[test_log::test(rstest::rstest)]
 #[tokio::test]
 async fn stake_for_demo_delegation_config_helper(
-    #[values(StakeTableContractVersion::V1, StakeTableContractVersion::V2)]
+    #[values(
+        StakeTableContractVersion::V1,
+        StakeTableContractVersion::V2,
+        StakeTableContractVersion::V3
+    )]
     version: StakeTableContractVersion,
     #[values(
         DelegationConfig::EqualAmounts,
@@ -466,10 +928,44 @@ async fn stake_for_demo_delegation_config_helper(
 ) -> Result<()> {
     let system = TestSystem::deploy_version(version).await?;
 
-    let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg("stake-for-demo")
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("demo")
+        .arg("stake")
         .arg("--delegation-config")
         .arg(config.to_string())
+        .assert()
+        .success();
+    Ok(())
+}
+
+// Tests for deprecated `stake-for-demo` command.
+// These can be removed when the deprecated command is removed.
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
+async fn test_cli_deprecated_stake_for_demo_default(
+    #[case] version: StakeTableContractVersion,
+) -> Result<()> {
+    let system = TestSystem::deploy_version(version).await?;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("stake-for-demo")
+        .assert()
+        .success();
+    Ok(())
+}
+
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
+async fn test_cli_deprecated_stake_for_demo_three_validators(
+    #[case] version: StakeTableContractVersion,
+) -> Result<()> {
+    let system = TestSystem::deploy_version(version).await?;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("stake-for-demo")
+        .arg("--num-validators")
+        .arg("3")
         .assert()
         .success();
     Ok(())
@@ -480,8 +976,9 @@ async fn test_cli_approve(#[case] version: StakeTableContractVersion) -> Result<
     let system = TestSystem::deploy_version(version).await?;
     let amount = "123";
 
-    let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg("approve")
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("approve")
         .arg("--amount")
         .arg(amount)
         .assert()
@@ -498,8 +995,9 @@ async fn test_cli_balance(#[case] version: StakeTableContractVersion) -> Result<
     let system = TestSystem::deploy_version(version).await?;
 
     // Check balance of account owner
-    let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg("token-balance")
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("token-balance")
         .assert()
         .success()
         .stdout(str::contains(system.deployer_address.to_string()))
@@ -507,8 +1005,9 @@ async fn test_cli_balance(#[case] version: StakeTableContractVersion) -> Result<
 
     // Check balance of other address
     let addr = "0x1111111111111111111111111111111111111111";
-    let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg("token-balance")
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("token-balance")
         .arg("--address")
         .arg(addr)
         .assert()
@@ -524,10 +1023,14 @@ async fn test_cli_balance(#[case] version: StakeTableContractVersion) -> Result<
 async fn test_deprecated_token_address_cli_arg() -> Result<()> {
     let system = TestSystem::deploy().await?;
 
-    let mut cmd = system.cmd(Signer::Mnemonic);
     // Add the deprecated --token_address argument
-    cmd.arg("--token-address").arg(system.token.to_string());
-    cmd.arg("token-balance").assert().success();
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("--token-address")
+        .arg(system.token.to_string())
+        .arg("token-balance")
+        .assert()
+        .success();
     Ok(())
 }
 
@@ -536,8 +1039,9 @@ async fn test_cli_allowance(#[case] version: StakeTableContractVersion) -> Resul
     let system = TestSystem::deploy_version(version).await?;
 
     // Check allowance of account owner
-    let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg("token-allowance")
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("token-allowance")
         .assert()
         .success()
         .stdout(str::contains(system.deployer_address.to_string()))
@@ -545,8 +1049,9 @@ async fn test_cli_allowance(#[case] version: StakeTableContractVersion) -> Resul
 
     // Check allowance of other address
     let addr = "0x1111111111111111111111111111111111111111".to_string();
-    let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg("token-allowance")
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("token-allowance")
         .arg("--owner")
         .arg(&addr)
         .assert()
@@ -562,8 +1067,9 @@ async fn test_cli_transfer(#[case] version: StakeTableContractVersion) -> Result
     let system = TestSystem::deploy_version(version).await?;
     let addr = "0x1111111111111111111111111111111111111111".parse::<Address>()?;
     let amount = parse_ether("1.123")?;
-    let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg("transfer")
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("transfer")
         .arg("--to")
         .arg(addr.to_string())
         .arg("--amount")
@@ -581,20 +1087,25 @@ async fn test_cli_transfer(#[case] version: StakeTableContractVersion) -> Result
 #[case::no_balance(None)]
 #[case::with_balance(Some(U256::from(1)))]
 #[tokio::test(flavor = "multi_thread")]
-async fn test_cli_claim_rewards(#[case] reward_balance: Option<U256>) -> Result<()> {
-    let system = TestSystem::deploy_version(StakeTableContractVersion::V2).await?;
+async fn test_cli_claim_rewards(
+    #[case] reward_balance: Option<U256>,
+    #[values(StakeTableContractVersion::V2, StakeTableContractVersion::V3)]
+    version: StakeTableContractVersion,
+) -> Result<()> {
+    let system = TestSystem::deploy_version(version).await?;
 
     let balance_before = system.balance(system.deployer_address).await?;
 
     let espresso_url = match reward_balance {
         Some(balance) => system.setup_reward_claim_mock(balance).await?,
-        None => system.setup_reward_claim_not_found_mock(),
+        None => system.setup_reward_claim_not_found_mock().await,
     };
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg("--espresso-url")
+    let cmd = system
+        .cmd(Signer::Mnemonic)
+        .arg("--espresso-url")
         .arg(espresso_url.to_string())
         .arg("claim-rewards");
 
@@ -623,18 +1134,21 @@ async fn test_cli_claim_rewards(#[case] reward_balance: Option<U256>) -> Result<
 async fn test_cli_unclaimed_rewards(
     #[case] reward_balance: Option<U256>,
     #[case] expected_output: &str,
+    #[values(StakeTableContractVersion::V2, StakeTableContractVersion::V3)]
+    version: StakeTableContractVersion,
 ) -> Result<()> {
-    let system = TestSystem::deploy_version(StakeTableContractVersion::V2).await?;
+    let system = TestSystem::deploy_version(version).await?;
 
     let espresso_url = match reward_balance {
         Some(balance) => system.setup_reward_claim_mock(balance).await?,
-        None => system.setup_reward_claim_not_found_mock(),
+        None => system.setup_reward_claim_not_found_mock().await,
     };
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg("--espresso-url")
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("--espresso-url")
         .arg(espresso_url.to_string())
         .arg("unclaimed-rewards")
         .assert()
@@ -652,12 +1166,24 @@ async fn test_cli_stake_table_full(#[case] version: StakeTableContractVersion) -
     let amount = parse_ether("1.123")?;
     system.delegate(amount).await?;
 
-    let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg("stake-table")
+    let mut assertion = system
+        .cmd(Signer::Mnemonic)
+        .arg("stake-table")
         .assert()
         .success()
         .stdout(str::contains("BLS_VER_KEY~ksjrqSN9jEvKOeCNNySv9Gcg7UjZvROpOm99zHov8SgxfzhLyno8IUfE1nxOBhGnajBmeTbchVI94ZUg5VLgAT2DBKXBnIC6bY9y2FBaK1wPpIQVgx99-fAzWqbweMsiXKFYwiT-0yQjJBXkWyhtCuTHT4l3CRok68mkobI09q0c comm=12.34 % stake=1.123000000000000000 ESP"))
         .stdout(str::contains(" - Delegator 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266: stake=1.123000000000000000 ESP"));
+
+    if matches!(version, StakeTableContractVersion::V3) {
+        assertion = assertion
+            .stdout(str::contains(
+                " - X25519_PK~dhmbHhcLwJ8d83fT0i85vp9HMFY_AiOg3YlvTFBlhlft",
+            ))
+            .stdout(str::contains(" - p2p_addr=127.0.0.1:8080"));
+    }
+
+    let stdout = assertion.get_output().stdout.clone();
+    println!("{}", String::from_utf8_lossy(&stdout));
 
     Ok(())
 }
@@ -670,8 +1196,9 @@ async fn test_cli_stake_table_compact(#[case] version: StakeTableContractVersion
     let amount = parse_ether("1.123")?;
     system.delegate(amount).await?;
 
-    let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg("stake-table")
+    let mut assertion = system
+        .cmd(Signer::Mnemonic)
+        .arg("stake-table")
         .arg("--compact")
         .assert()
         .success()
@@ -683,6 +1210,17 @@ async fn test_cli_stake_table_compact(#[case] version: StakeTableContractVersion
             " - Delegator 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266: stake=1.123000000000000000 \
              ESP",
         ));
+
+    if matches!(version, StakeTableContractVersion::V3) {
+        assertion = assertion
+            .stdout(str::contains(
+                " - X25519_PK~dhmbHhcLwJ8d83fT0i85vp9HMFY_Ai..",
+            ))
+            .stdout(str::contains(" - p2p_addr=127.0.0.1:8080"));
+    }
+
+    let stdout = assertion.get_output().stdout.clone();
+    println!("{}", String::from_utf8_lossy(&stdout));
 
     Ok(())
 }
@@ -719,8 +1257,9 @@ async fn test_cli_transfer_ledger() -> Result<()> {
     system.transfer(address, amount).await?;
 
     // Assume the ledger is unlocked and the Ethereum app remains open
-    let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg("transfer")
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("transfer")
         .arg("--to")
         .arg(address.to_string())
         .arg("--amount")
@@ -732,8 +1271,9 @@ async fn test_cli_transfer_ledger() -> Result<()> {
     // Make a token transfer with the ledger
     println!("Sign the transaction in the ledger");
     let addr = "0x1111111111111111111111111111111111111111".parse::<Address>()?;
-    let mut cmd = system.cmd(Signer::Ledger);
-    cmd.arg("transfer")
+    system
+        .cmd(Signer::Ledger)
+        .arg("transfer")
         .arg("--to")
         .arg(addr.to_string())
         .arg("--amount")
@@ -762,8 +1302,9 @@ async fn test_cli_delegate_ledger() -> Result<()> {
 
     // Assume the ledger is unlocked and the Ethereum app remains open
     println!("Sign the transaction in the ledger");
-    let mut cmd = system.cmd(Signer::Ledger);
-    cmd.arg("approve")
+    system
+        .cmd(Signer::Ledger)
+        .arg("approve")
         .arg("--amount")
         .arg(format_ether(amount))
         .assert()
@@ -771,8 +1312,9 @@ async fn test_cli_delegate_ledger() -> Result<()> {
         .stdout(str::contains("Approval"));
 
     println!("Sign the transaction in the ledger (again)");
-    let mut cmd = system.cmd(Signer::Ledger);
-    cmd.arg("delegate")
+    system
+        .cmd(Signer::Ledger)
+        .arg("delegate")
         .arg("--validator-address")
         .arg(system.deployer_address.to_string())
         .arg("--amount")
@@ -818,6 +1360,7 @@ async fn test_cli_update_metadata_uri() -> Result<()> {
         .arg("update-metadata-uri")
         .arg("--metadata-uri")
         .arg(updated_uri)
+        .arg("--skip-metadata-validation")
         .assert()
         .success()
         .stdout(str::contains("MetadataUriUpdated"))
@@ -843,6 +1386,200 @@ async fn test_cli_update_metadata_uri_with_no_metadata_uri() -> Result<()> {
     Ok(())
 }
 
+#[test_log::test(rstest::rstest)]
+#[case::json(MetadataFormat::Json)]
+#[case::openmetrics(MetadataFormat::OpenMetrics)]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cli_update_metadata_uri_validation_success(
+    #[case] format: MetadataFormat,
+) -> Result<()> {
+    let system = TestSystem::deploy().await?;
+    system.register_validator().await?;
+
+    let bls_vk = BLSPubKey::from(system.bls_key_pair.ver_key());
+    let server = MetadataServerBuilder::new(bls_vk)
+        .format(format)
+        .start()
+        .await;
+    let bls_pub_key = system.bls_public_key_str();
+
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("update-metadata-uri")
+        .arg("--metadata-uri")
+        .arg(server.url())
+        .arg("--consensus-public-key")
+        .arg(&bls_pub_key)
+        .assert()
+        .success()
+        .stdout(str::contains("MetadataUriUpdated"));
+
+    Ok(())
+}
+
+#[test_log::test(rstest::rstest)]
+#[case::json(MetadataFormat::Json)]
+#[case::openmetrics(MetadataFormat::OpenMetrics)]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cli_update_metadata_uri_validation_wrong_pub_key(
+    #[case] format: MetadataFormat,
+) -> Result<()> {
+    let system = TestSystem::deploy().await?;
+    system.register_validator().await?;
+
+    let mut rng = StdRng::from_seed([99u8; 32]);
+    let different_keys = TestSystem::gen_keys(&mut rng);
+    let different_bls_vk = BLSPubKey::from(different_keys.bls.ver_key());
+    let server = MetadataServerBuilder::new(different_bls_vk)
+        .format(format)
+        .start()
+        .await;
+    let bls_pub_key = system.bls_public_key_str();
+
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("update-metadata-uri")
+        .arg("--metadata-uri")
+        .arg(server.url())
+        .arg("--consensus-public-key")
+        .arg(&bls_pub_key)
+        .assert()
+        .failure()
+        .stderr(str::contains("pub_key mismatch"))
+        .stderr(str::contains("--skip-metadata-validation"));
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_cli_update_metadata_uri_requires_consensus_public_key() -> Result<()> {
+    let system = TestSystem::deploy().await?;
+    system.register_validator().await?;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("update-metadata-uri")
+        .arg("--metadata-uri")
+        .arg("https://example.com/metadata.json")
+        .assert()
+        .failure()
+        .stderr(str::contains("--consensus-public-key is required"))
+        .stderr(str::contains("--skip-metadata-validation"));
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_update_metadata_uri_skip_validation() -> Result<()> {
+    let system = TestSystem::deploy().await?;
+    system.register_validator().await?;
+
+    let mut rng = StdRng::from_seed([99u8; 32]);
+    let different_keys = TestSystem::gen_keys(&mut rng);
+    let different_bls_vk = BLSPubKey::from(different_keys.bls.ver_key());
+    let server = MetadataServerBuilder::new(different_bls_vk).start().await;
+    let metadata_uri = server.url();
+
+    // With --skip-metadata-validation, should succeed even without --consensus-public-key
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("update-metadata-uri")
+        .arg("--metadata-uri")
+        .arg(&metadata_uri)
+        .arg("--skip-metadata-validation")
+        .assert()
+        .success()
+        .stdout(str::contains("MetadataUriUpdated"));
+
+    Ok(())
+}
+
+#[rstest::rstest]
+#[case::register(MetadataCommand::RegisterValidator)]
+#[case::update(MetadataCommand::UpdateMetadataUri)]
+#[test_log::test(tokio::test)]
+async fn test_cli_skip_metadata_validation_conflicts_with_no_metadata(
+    #[case] command: MetadataCommand,
+) -> Result<()> {
+    // --skip-metadata-validation requires --metadata-uri, so using it with --no-metadata-uri should fail
+    TestSystem::deploy()
+        .await?
+        .setup_metadata_cmd(command, Signer::Mnemonic)
+        .await?
+        .arg("--no-metadata-uri")
+        .arg("--skip-metadata-validation")
+        .assert()
+        .failure()
+        .stderr(
+            str::contains("cannot be used with")
+                .and(str::contains("--skip-metadata-validation"))
+                .and(str::contains("--no-metadata-uri")),
+        );
+
+    Ok(())
+}
+
+#[rstest::rstest]
+#[case::register(MetadataCommand::RegisterValidator)]
+#[case::update(MetadataCommand::UpdateMetadataUri)]
+#[test_log::test(tokio::test)]
+async fn test_cli_metadata_uri_required(#[case] command: MetadataCommand) -> Result<()> {
+    TestSystem::deploy()
+        .await?
+        .setup_metadata_cmd(command, Signer::Mnemonic)
+        .await?
+        .assert()
+        .failure()
+        .stderr(str::contains("required").and(str::contains("--metadata-uri")));
+
+    Ok(())
+}
+
+#[rstest::rstest]
+#[case::register(MetadataCommand::RegisterValidator)]
+#[case::update(MetadataCommand::UpdateMetadataUri)]
+#[test_log::test(tokio::test)]
+async fn test_cli_metadata_uri_conflicts_with_no_metadata_uri(
+    #[case] command: MetadataCommand,
+) -> Result<()> {
+    TestSystem::deploy()
+        .await?
+        .setup_metadata_cmd(command, Signer::Mnemonic)
+        .await?
+        .arg("--metadata-uri")
+        .arg("https://example.com/metadata")
+        .arg("--no-metadata-uri")
+        .assert()
+        .failure()
+        .stderr(
+            str::contains("cannot be used with")
+                .and(str::contains("--metadata-uri"))
+                .and(str::contains("--no-metadata-uri")),
+        );
+
+    Ok(())
+}
+
+#[rstest::rstest]
+#[case::register(MetadataCommand::RegisterValidator)]
+#[case::update(MetadataCommand::UpdateMetadataUri)]
+#[test_log::test(tokio::test)]
+async fn test_cli_skip_metadata_validation_requires_metadata_uri(
+    #[case] command: MetadataCommand,
+) -> Result<()> {
+    // --skip-metadata-validation without --metadata-uri should fail (requires it)
+    TestSystem::deploy()
+        .await?
+        .setup_metadata_cmd(command, Signer::Mnemonic)
+        .await?
+        .arg("--skip-metadata-validation")
+        .assert()
+        .failure()
+        .stderr(str::contains("required").and(str::contains("--metadata-uri")));
+
+    Ok(())
+}
+
 #[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_all_operations_manual_inspect(
     #[case] version: StakeTableContractVersion,
@@ -863,14 +1600,12 @@ async fn test_cli_all_operations_manual_inspect(
     let output = system
         .cmd(Signer::Mnemonic)
         .arg("register-validator")
-        .arg("--consensus-private-key")
-        .arg(system.bls_private_key_str()?)
-        .arg("--state-private-key")
-        .arg(system.state_private_key_str()?)
+        .with_keys()
         .arg("--commission")
         .arg("12.34")
         .arg("--metadata-uri")
         .arg("https://example.com/metadata")
+        .arg("--skip-metadata-validation")
         .assert()
         .success()
         .get_output()
@@ -937,6 +1672,50 @@ async fn test_cli_all_operations_manual_inspect(
             .arg("update-metadata-uri")
             .arg("--metadata-uri")
             .arg("https://example.com/updated-metadata")
+            .arg("--skip-metadata-validation")
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        println!("{}", String::from_utf8_lossy(&output));
+    }
+
+    if matches!(version, StakeTableContractVersion::V3) {
+        let key = x25519::Keypair::generate().unwrap().public_key();
+
+        let output = system
+            .cmd(Signer::Mnemonic)
+            .arg("update-network-config")
+            .arg("--x25519-key")
+            .arg(key.to_string())
+            .arg("--p2p-addr")
+            .arg("10.0.0.1:9090")
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        println!("{}", String::from_utf8_lossy(&output));
+
+        let new_key = x25519::Keypair::generate().unwrap().public_key();
+        let output = system
+            .cmd(Signer::Mnemonic)
+            .arg("update-x25519-key")
+            .arg("--x25519-key")
+            .arg(new_key.to_string())
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        println!("{}", String::from_utf8_lossy(&output));
+
+        let output = system
+            .cmd(Signer::Mnemonic)
+            .arg("update-p2p-addr")
+            .arg("--p2p-addr")
+            .arg("192.168.1.1:7070")
             .assert()
             .success()
             .get_output()
@@ -946,14 +1725,14 @@ async fn test_cli_all_operations_manual_inspect(
     }
 
     let mut rng = StdRng::from_seed([99u8; 32]);
-    let (_, new_bls, new_state) = TestSystem::gen_keys(&mut rng);
+    let new_keys = TestSystem::gen_keys(&mut rng);
     let output = system
         .cmd(Signer::Mnemonic)
         .arg("update-consensus-keys")
         .arg("--consensus-private-key")
-        .arg(new_bls.sign_key_ref().to_tagged_base64()?.to_string())
+        .arg(new_keys.bls.sign_key_ref().to_tagged_base64()?.to_string())
         .arg("--state-private-key")
-        .arg(new_state.sign_key().to_tagged_base64()?.to_string())
+        .arg(new_keys.state.sign_key().to_tagged_base64()?.to_string())
         .assert()
         .success()
         .get_output()
@@ -1110,17 +1889,15 @@ fn test_cli_create_config_file_private_key() -> anyhow::Result<()> {
         .arg("-c")
         .arg(&config_path)
         .arg("init")
+        .args(["--network", "decaf"])
         .args(["--private-key", TEST_PRIVATE_KEY])
         .assert()
         .success();
 
     assert!(config_path.exists());
 
-    let config: Config = toml::de::from_str(&std::fs::read_to_string(&config_path)?)?;
-    assert_eq!(
-        config.signer.private_key,
-        Some(TEST_PRIVATE_KEY.to_string())
-    );
+    let config: TestConfig = toml::from_str(&std::fs::read_to_string(&config_path)?)?;
+    assert_eq!(config.signer.private_key.as_deref(), Some(TEST_PRIVATE_KEY));
     assert!(config.signer.mnemonic.is_none());
     assert!(!config.signer.ledger);
 
@@ -1134,14 +1911,12 @@ async fn test_cli_register_validator_private_key() -> Result<()> {
     system
         .cmd(Signer::PrivateKey)
         .arg("register-validator")
-        .arg("--consensus-private-key")
-        .arg(system.bls_private_key_str()?)
-        .arg("--state-private-key")
-        .arg(system.state_private_key_str()?)
+        .with_keys()
         .arg("--commission")
         .arg("12.34")
         .arg("--metadata-uri")
         .arg("https://example.com/metadata")
+        .arg("--skip-metadata-validation")
         .assert()
         .success()
         .stdout(str::contains("ValidatorRegistered"));
@@ -1163,9 +1938,9 @@ async fn test_cli_export_calldata_delegate() -> Result<()> {
         .arg("100")
         .assert()
         .success()
-        .stdout(str::contains("Target:"))
-        .stdout(str::contains("Calldata:"))
-        .stdout(str::contains("Value: 0"));
+        .stdout(str::contains("transactions"))
+        .stdout(str::contains("contractMethod"))
+        .stdout(str::contains("\"value\": \"0\""));
 
     Ok(())
 }
@@ -1236,7 +2011,7 @@ async fn test_cli_export_calldata_roundtrip() -> Result<()> {
         rpc::types::{TransactionInput, TransactionRequest},
         sol_types::SolEventInterface,
     };
-    use hotshot_contract_adapter::sol_types::StakeTableV2::StakeTableV2Events;
+    use hotshot_contract_adapter::sol_types::StakeTableV3::StakeTableV3Events;
 
     let system = TestSystem::deploy().await?;
     system.register_validator().await?;
@@ -1281,10 +2056,10 @@ async fn test_cli_export_calldata_roundtrip() -> Result<()> {
         .logs()
         .iter()
         .find_map(|log| {
-            StakeTableV2Events::decode_log(log.inner.as_ref())
+            StakeTableV3Events::decode_log(log.inner.as_ref())
                 .ok()
                 .and_then(|e| match e.data {
-                    StakeTableV2Events::Delegated(d) => Some(d),
+                    StakeTableV3Events::Delegated(d) => Some(d),
                     _ => None,
                 })
         })
@@ -1306,8 +2081,8 @@ async fn test_cli_export_calldata_no_signer() -> Result<()> {
         .arg("1000")
         .assert()
         .success()
-        .stdout(str::contains("Target:"))
-        .stdout(str::contains("Calldata:"));
+        .stdout(str::contains("transactions"))
+        .stdout(str::contains("contractMethod"));
 
     Ok(())
 }
@@ -1320,17 +2095,16 @@ async fn test_cli_export_calldata_register_validator_direct_keys() -> Result<()>
     system
         .export_calldata_cmd()
         .arg("register-validator")
-        .arg("--consensus-private-key")
-        .arg(system.bls_private_key_str()?)
-        .arg("--state-private-key")
-        .arg(system.state_private_key_str()?)
+        .with_keys()
         .arg("--commission")
         .arg("12.34")
         .arg("--no-metadata-uri")
         .assert()
         .success()
-        .stdout(str::contains("Target:"))
-        .stdout(str::contains("Calldata:"));
+        .stdout(str::contains("transactions"))
+        .stdout(str::contains("\"contractMethod\": null"))
+        .stdout(str::contains("\"data\": \"0x"))
+        .stdout(str::contains("\"description\": \"Register validator"));
 
     Ok(())
 }
@@ -1342,19 +2116,23 @@ async fn test_cli_export_calldata_update_consensus_keys_direct_keys() -> Result<
     system.register_validator().await?;
 
     let mut rng = StdRng::from_seed([43u8; 32]);
-    let (_, new_bls, new_state) = TestSystem::gen_keys(&mut rng);
+    let new_keys = TestSystem::gen_keys(&mut rng);
 
     system
         .export_calldata_cmd()
         .arg("update-consensus-keys")
         .arg("--consensus-private-key")
-        .arg(new_bls.sign_key_ref().to_tagged_base64()?.to_string())
+        .arg(new_keys.bls.sign_key_ref().to_tagged_base64()?.to_string())
         .arg("--state-private-key")
-        .arg(new_state.sign_key().to_tagged_base64()?.to_string())
+        .arg(new_keys.state.sign_key().to_tagged_base64()?.to_string())
         .assert()
         .success()
-        .stdout(str::contains("Target:"))
-        .stdout(str::contains("Calldata:"));
+        .stdout(str::contains("transactions"))
+        .stdout(str::contains("\"contractMethod\": null"))
+        .stdout(str::contains("\"data\": \"0x"))
+        .stdout(str::contains(
+            "\"description\": \"Update consensus keys for",
+        ));
 
     Ok(())
 }
@@ -1402,7 +2180,7 @@ async fn test_cli_skip_simulation_does_not_require_sender_address() -> Result<()
         .arg("1")
         .assert()
         .success()
-        .stdout(str::contains("Calldata:"));
+        .stdout(str::contains("contractMethod"));
 
     Ok(())
 }
@@ -1442,8 +2220,8 @@ async fn test_cli_export_calldata_claim_rewards() -> Result<()> {
         .arg("claim-rewards")
         .assert()
         .success()
-        .stdout(str::contains("Target:"))
-        .stdout(str::contains("Calldata:"));
+        .stdout(str::contains("transactions"))
+        .stdout(str::contains("contractMethod"));
 
     Ok(())
 }
@@ -1463,8 +2241,8 @@ async fn test_cli_export_calldata_validation_succeeds() -> Result<()> {
         .arg("100")
         .assert()
         .success()
-        .stdout(str::contains("Target:"))
-        .stdout(str::contains("Calldata:"));
+        .stdout(str::contains("transactions"))
+        .stdout(str::contains("contractMethod"));
 
     Ok(())
 }
@@ -1474,6 +2252,7 @@ async fn test_cli_export_calldata_validation_succeeds() -> Result<()> {
 /// for visual verification - there are no automated assertions on the output.
 /// Note: V1 export is not supported (deprecated), so this test only runs on V2.
 #[tokio::test(flavor = "multi_thread")]
+#[ignore = "manual inspection only"]
 async fn test_cli_export_calldata_all_operations_manual_inspect() -> Result<()> {
     let system = TestSystem::deploy().await?;
 
@@ -1504,6 +2283,11 @@ async fn test_cli_export_calldata_all_operations_manual_inspect() -> Result<()> 
         .arg("12.34")
         .arg("--metadata-uri")
         .arg("https://example.com/metadata")
+        .arg("--skip-metadata-validation")
+        .arg("--x25519-key")
+        .arg(system.x25519_public_key_str())
+        .arg("--p2p-addr")
+        .arg("127.0.0.1:8080")
         .assert()
         .success()
         .get_output()
@@ -1578,6 +2362,7 @@ async fn test_cli_export_calldata_all_operations_manual_inspect() -> Result<()> 
         .arg("update-metadata-uri")
         .arg("--metadata-uri")
         .arg("https://example.com/updated-metadata")
+        .arg("--skip-metadata-validation")
         .assert()
         .success()
         .get_output()
@@ -1588,16 +2373,16 @@ async fn test_cli_export_calldata_all_operations_manual_inspect() -> Result<()> 
     println!("\n=== update-consensus-keys ===");
     // Export new signatures for update-consensus-keys
     let mut rng = StdRng::from_seed([99u8; 32]);
-    let (_, new_bls, new_state) = TestSystem::gen_keys(&mut rng);
+    let new_keys = TestSystem::gen_keys(&mut rng);
     let new_signatures_path = tmpdir.path().join("new_signatures.json");
     base_cmd()
         .arg("export-node-signatures")
         .arg("--address")
         .arg(system.deployer_address.to_string())
         .arg("--consensus-private-key")
-        .arg(new_bls.sign_key_ref().to_tagged_base64()?.to_string())
+        .arg(new_keys.bls.sign_key_ref().to_tagged_base64()?.to_string())
         .arg("--state-private-key")
-        .arg(new_state.sign_key().to_tagged_base64()?.to_string())
+        .arg(new_keys.state.sign_key().to_tagged_base64()?.to_string())
         .arg("--output")
         .arg(&new_signatures_path)
         .assert()
@@ -1685,6 +2470,517 @@ async fn test_cli_export_calldata_all_operations_manual_inspect() -> Result<()> 
         .stdout
         .clone();
     println!("{}", String::from_utf8_lossy(&output));
+
+    Ok(())
+}
+
+#[test_log::test]
+fn test_cli_init_network_mainnet() -> anyhow::Result<()> {
+    let tmpdir = tempfile::tempdir()?;
+    let config_path = tmpdir.path().join("config.toml");
+    let mnemonic = random_mnemonic();
+
+    base_cmd()
+        .arg("-c")
+        .arg(&config_path)
+        .arg("init")
+        .args(["--network", "mainnet"])
+        .args(["--mnemonic", &mnemonic])
+        .assert()
+        .success();
+
+    let config: TestConfig = toml::from_str(&std::fs::read_to_string(&config_path)?)?;
+    assert_eq!(
+        config.stake_table_address.to_string().to_lowercase(),
+        "0xcef474d372b5b09defe2af187bf17338dc704451"
+    );
+    assert_eq!(
+        config.espresso_url.as_ref().map(|u| u.as_str()),
+        Some("https://query.main.net.espresso.network/")
+    );
+    assert_eq!(
+        config.rpc_url.as_str(),
+        "https://ethereum-rpc.publicnode.com/"
+    );
+    assert_eq!(config.signer.mnemonic.as_deref(), Some(mnemonic.as_str()));
+
+    Ok(())
+}
+
+#[test_log::test]
+fn test_cli_init_network_decaf() -> anyhow::Result<()> {
+    let tmpdir = tempfile::tempdir()?;
+    let config_path = tmpdir.path().join("config.toml");
+    let mnemonic = random_mnemonic();
+
+    base_cmd()
+        .arg("-c")
+        .arg(&config_path)
+        .arg("init")
+        .args(["--network", "decaf"])
+        .args(["--mnemonic", &mnemonic])
+        .assert()
+        .success();
+
+    let config: TestConfig = toml::from_str(&std::fs::read_to_string(&config_path)?)?;
+    assert_eq!(
+        config.stake_table_address.to_string().to_lowercase(),
+        "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037"
+    );
+    assert_eq!(
+        config.espresso_url.as_ref().map(|u| u.as_str()),
+        Some("https://query.decaf.testnet.espresso.network/")
+    );
+    assert_eq!(
+        config.rpc_url.as_str(),
+        "https://ethereum-sepolia-rpc.publicnode.com/"
+    );
+    assert_eq!(config.signer.mnemonic.as_deref(), Some(mnemonic.as_str()));
+
+    Ok(())
+}
+
+#[test_log::test]
+fn test_cli_init_network_required() -> anyhow::Result<()> {
+    let tmpdir = tempfile::tempdir()?;
+    let config_path = tmpdir.path().join("config.toml");
+    let mnemonic = random_mnemonic();
+
+    base_cmd()
+        .arg("-c")
+        .arg(&config_path)
+        .arg("init")
+        .args(["--mnemonic", &mnemonic])
+        .assert()
+        .failure()
+        .stderr(str::contains("--network"));
+
+    Ok(())
+}
+
+#[test_log::test]
+fn test_cli_init_network_invalid() -> anyhow::Result<()> {
+    let mnemonic = random_mnemonic();
+
+    base_cmd()
+        .arg("init")
+        .args(["--network", "invalid"])
+        .args(["--mnemonic", &mnemonic])
+        .assert()
+        .failure()
+        .stderr(str::contains("possible values"));
+
+    Ok(())
+}
+
+#[test_log::test]
+fn test_cli_init_network_local() -> anyhow::Result<()> {
+    let tmpdir = tempfile::tempdir()?;
+    let config_path = tmpdir.path().join("config.toml");
+    let mnemonic = random_mnemonic();
+
+    base_cmd()
+        .arg("-c")
+        .arg(&config_path)
+        .arg("init")
+        .args(["--network", "local"])
+        .args(["--mnemonic", &mnemonic])
+        .assert()
+        .success();
+
+    let config: TestConfig = toml::from_str(&std::fs::read_to_string(&config_path)?)?;
+    assert_eq!(config.rpc_url.as_str(), "http://127.0.0.1:8545/");
+    assert_eq!(
+        config.espresso_url.as_ref().map(|u| u.as_str()),
+        Some("http://localhost:24000/")
+    );
+    assert_eq!(config.signer.mnemonic.as_deref(), Some(mnemonic.as_str()));
+
+    Ok(())
+}
+
+#[test_log::test]
+fn test_cli_init_network_env_var() -> anyhow::Result<()> {
+    let tmpdir = tempfile::tempdir()?;
+    let config_path = tmpdir.path().join("config.toml");
+    let mnemonic = random_mnemonic();
+
+    base_cmd()
+        .env("NETWORK", "mainnet")
+        .arg("-c")
+        .arg(&config_path)
+        .arg("init")
+        .args(["--mnemonic", &mnemonic])
+        .assert()
+        .success();
+
+    let config: TestConfig = toml::from_str(&std::fs::read_to_string(&config_path)?)?;
+    assert_eq!(
+        config.stake_table_address.to_string().to_lowercase(),
+        "0xcef474d372b5b09defe2af187bf17338dc704451"
+    );
+    assert_eq!(config.signer.mnemonic.as_deref(), Some(mnemonic.as_str()));
+
+    Ok(())
+}
+
+#[test_log::test(rstest::rstest)]
+#[case::json(MetadataFormat::Json)]
+#[case::openmetrics(MetadataFormat::OpenMetrics)]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cli_preview_metadata(#[case] format: MetadataFormat) -> Result<()> {
+    let mut rng = StdRng::from_seed([42u8; 32]);
+    let keys = TestSystem::gen_keys(&mut rng);
+    let bls_vk = BLSPubKey::from(keys.bls.ver_key());
+
+    let server = MetadataServerBuilder::new(bls_vk)
+        .format(format)
+        .start()
+        .await;
+
+    base_cmd()
+        .arg("preview-metadata")
+        .arg("--metadata-uri")
+        .arg(server.url())
+        .assert()
+        .success()
+        .stdout(str::contains(format!("\"pub_key\": \"{}\"", bls_vk)))
+        .stdout(str::contains("\"name\": \"Test Validator\""));
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_preview_metadata_invalid_url() -> Result<()> {
+    base_cmd()
+        .arg("preview-metadata")
+        .arg("--metadata-uri")
+        .arg("not-a-valid-url")
+        .assert()
+        .failure()
+        .stderr(str::contains("Invalid URL"));
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_preview_metadata_connection_refused() -> Result<()> {
+    base_cmd()
+        .arg("preview-metadata")
+        .arg("--metadata-uri")
+        .arg("http://127.0.0.1:59999/metadata")
+        .assert()
+        .failure()
+        .stderr(str::contains("failed to fetch metadata"));
+
+    Ok(())
+}
+
+#[test_log::test(rstest::rstest)]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cli_register_validator_metadata_with_wrong_content_type(
+    #[values(MetadataFormat::Json, MetadataFormat::OpenMetrics)] format: MetadataFormat,
+    #[values(
+        ContentType::Text,
+        ContentType::Empty,
+        ContentType::Json,
+        ContentType::Unexpected
+    )]
+    content_type: ContentType,
+) -> Result<()> {
+    let system = TestSystem::deploy().await?;
+    let bls_vk = BLSPubKey::from(system.bls_key_pair.ver_key());
+
+    let server = MetadataServerBuilder::new(bls_vk)
+        .format(format)
+        .content_type(content_type)
+        .start()
+        .await;
+
+    let metadata_uri = format!("http://127.0.0.1:{}/metadata", server.port);
+
+    // Should succeed despite wrong content-type (content-based detection)
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("register-validator")
+        .with_keys()
+        .arg("--commission")
+        .arg("5.00")
+        .arg("--metadata-uri")
+        .arg(&metadata_uri)
+        .assert()
+        .success()
+        .stdout(str::contains("ValidatorRegistered"));
+
+    Ok(())
+}
+
+#[test_log::test(rstest::rstest)]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cli_preview_metadata_with_wrong_content_type(
+    #[values(MetadataFormat::Json, MetadataFormat::OpenMetrics)] format: MetadataFormat,
+    #[values(
+        ContentType::Text,
+        ContentType::Empty,
+        ContentType::Json,
+        ContentType::Unexpected
+    )]
+    content_type: ContentType,
+) -> Result<()> {
+    let mut rng = StdRng::from_seed([42u8; 32]);
+    let keys = TestSystem::gen_keys(&mut rng);
+    let bls_vk = BLSPubKey::from(keys.bls.ver_key());
+
+    let server = MetadataServerBuilder::new(bls_vk)
+        .format(format)
+        .content_type(content_type)
+        .start()
+        .await;
+
+    let metadata_uri = format!("http://127.0.0.1:{}/metadata", server.port);
+
+    base_cmd()
+        .arg("preview-metadata")
+        .arg("--metadata-uri")
+        .arg(&metadata_uri)
+        .assert()
+        .success()
+        .stdout(str::contains(format!("\"pub_key\": \"{}\"", bls_vk)))
+        .stdout(str::contains("Test Validator"));
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_preview_metadata_invalid_both_formats_shows_both_errors() -> Result<()> {
+    // Serve content that's neither valid JSON nor valid OpenMetrics
+    let route = warp::path("metadata")
+        .map(|| warp::reply::with_header("<html>Not metadata</html>", "content-type", "text/html"));
+
+    let port = deploy::serve_on_random_port(route).await;
+
+    base_cmd()
+        .arg("preview-metadata")
+        .arg("--metadata-uri")
+        .arg(format!("http://127.0.0.1:{}/metadata", port))
+        .assert()
+        .failure()
+        .stderr(str::contains("JSON"))
+        .stderr(str::contains("OpenMetrics"));
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_preview_metadata_valid_json_wrong_schema() -> Result<()> {
+    let invalid_json = r#"{"name": "Some Service", "version": "1.0"}"#;
+
+    let route = warp::path("metadata")
+        .map(move || warp::reply::with_header(invalid_json, "content-type", "application/json"));
+
+    let port = deploy::serve_on_random_port(route).await;
+    let url = format!("http://127.0.0.1:{}/metadata", port);
+
+    base_cmd()
+        .arg("preview-metadata")
+        .arg("--metadata-uri")
+        .arg(&url)
+        .assert()
+        .failure()
+        .stderr(str::contains(&url))
+        .stderr(str::contains("valid JSON but incorrect schema"))
+        .stderr(str::contains("missing field"))
+        .stderr(str::contains("pub_key"))
+        .stderr(str::contains("OpenMetrics").not());
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_preview_metadata_invalid_both_formats_shows_url() -> Result<()> {
+    let invalid_content = "<html>Not JSON or OpenMetrics</html>";
+
+    let route = warp::path("metadata")
+        .map(move || warp::reply::with_header(invalid_content, "content-type", "text/html"));
+
+    let port = deploy::serve_on_random_port(route).await;
+    let url = format!("http://127.0.0.1:{}/metadata", port);
+
+    base_cmd()
+        .arg("preview-metadata")
+        .arg("--metadata-uri")
+        .arg(&url)
+        .assert()
+        .failure()
+        .stderr(str::contains(&url))
+        .stderr(str::contains("failed to parse as JSON"))
+        .stderr(str::contains("OpenMetrics"));
+
+    Ok(())
+}
+
+#[test_log::test]
+fn test_cli_conflicting_signers() {
+    base_cmd()
+        .arg("--stake-table-address")
+        .arg("0x1111111111111111111111111111111111111111")
+        .arg("--mnemonic")
+        .arg("test test test test test test test test test test test junk")
+        .arg("--private-key")
+        .arg("0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80")
+        .arg("account")
+        .assert()
+        .failure()
+        .stderr(str::contains("cannot be used with"));
+}
+
+#[test_log::test]
+fn test_cli_config_file_conflicting_signers() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let config_path = tmpdir.path().join("config.toml");
+    let config_content = format!(
+        r#"
+rpc_url = "http://localhost:8545"
+stake_table_address = "0x1111111111111111111111111111111111111111"
+
+[signer]
+mnemonic = "{}"
+private_key = "{}"
+ledger = false
+"#,
+        staking_cli::DEV_MNEMONIC,
+        staking_cli::DEV_PRIVATE_KEY,
+    );
+    std::fs::write(&config_path, config_content).unwrap();
+
+    base_cmd()
+        .arg("-c")
+        .arg(&config_path)
+        .arg("account")
+        .assert()
+        .failure()
+        .stderr(str::contains("Multiple signers"));
+}
+
+#[test_log::test(tokio::test)]
+async fn test_cli_update_network_config() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+    system.register_validator().await?;
+
+    let key = x25519::Keypair::generate().unwrap().public_key();
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("update-network-config")
+        .arg("--x25519-key")
+        .arg(key.to_string())
+        .arg("--p2p-addr")
+        .arg("10.0.0.1:9090")
+        .assert()
+        .success();
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_cli_update_x25519_key() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+    system.register_validator().await?;
+
+    let key = x25519::Keypair::generate().unwrap().public_key();
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("update-x25519-key")
+        .arg("--x25519-key")
+        .arg(key.to_string())
+        .assert()
+        .success();
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_cli_update_p2p_addr() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+    system.register_validator().await?;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("update-p2p-addr")
+        .arg("--p2p-addr")
+        .arg("192.168.1.1:7070")
+        .assert()
+        .success();
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_cli_register_v2_rejects_v3_flags() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V2).await?;
+
+    let key = x25519::Keypair::generate().unwrap().public_key();
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("register-validator")
+        .arg("--consensus-private-key")
+        .arg(system.bls_private_key_str()?)
+        .arg("--state-private-key")
+        .arg(system.state_private_key_str()?)
+        .arg("--commission")
+        .arg("12.34")
+        .arg("--no-metadata-uri")
+        .arg("--x25519-key")
+        .arg(key.to_string())
+        .assert()
+        .failure()
+        .stderr(str::contains("V3"));
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_cli_register_v3_missing_x25519_key() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("register-validator")
+        .arg("--consensus-private-key")
+        .arg(system.bls_private_key_str()?)
+        .arg("--state-private-key")
+        .arg(system.state_private_key_str()?)
+        .arg("--commission")
+        .arg("12.34")
+        .arg("--no-metadata-uri")
+        .arg("--p2p-addr")
+        .arg("127.0.0.1:8080")
+        .assert()
+        .failure()
+        .stderr(str::contains("--x25519-key"));
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_cli_register_v3_missing_p2p_addr() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+
+    let key = x25519::Keypair::generate().unwrap().public_key();
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("register-validator")
+        .arg("--consensus-private-key")
+        .arg(system.bls_private_key_str()?)
+        .arg("--state-private-key")
+        .arg(system.state_private_key_str()?)
+        .arg("--commission")
+        .arg("12.34")
+        .arg("--no-metadata-uri")
+        .arg("--x25519-key")
+        .arg(key.to_string())
+        .assert()
+        .failure()
+        .stderr(str::contains("--p2p-addr"));
 
     Ok(())
 }

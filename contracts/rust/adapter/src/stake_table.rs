@@ -7,7 +7,7 @@ use ark_ec::{AffineRepr, CurveGroup as _};
 use ark_ed_on_bn254::EdwardsConfig;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use hotshot_types::{
-    light_client::{hash_bytes_to_field, StateKeyPair, StateSignature, StateVerKey},
+    light_client::{StateKeyPair, StateSignature, StateVerKey, hash_bytes_to_field},
     signature_key::{BLSKeyPair, BLSPubKey, BLSSignature},
     traits::signature_key::SignatureKey,
 };
@@ -17,9 +17,10 @@ use jf_signature::{
     schnorr,
 };
 
-use crate::sol_types::{
-    StakeTableV2::{getVersionReturn, ConsensusKeysUpdatedV2, ValidatorRegisteredV2},
-    *,
+use crate::{
+    field_to_u256,
+    sol_types::{StakeTableV3, *},
+    u256_to_field,
 };
 
 // Allows us to implement From on existing Bytes type
@@ -29,31 +30,44 @@ pub struct StateSignatureSol(pub Bytes);
 #[derive(Debug, Clone, Copy, Default)]
 pub enum StakeTableContractVersion {
     V1,
-    #[default]
     V2,
+    #[default]
+    V3,
 }
 
-impl TryFrom<getVersionReturn> for StakeTableContractVersion {
-    type Error = anyhow::Error;
-
-    fn try_from(value: getVersionReturn) -> anyhow::Result<Self> {
-        match value.majorVersion {
-            1 => Ok(StakeTableContractVersion::V1),
-            2 => Ok(StakeTableContractVersion::V2),
-            _ => anyhow::bail!("Unsupported stake table contract version: {:?}", value),
-        }
+fn version_from_major(major: u8) -> anyhow::Result<StakeTableContractVersion> {
+    match major {
+        1 => Ok(StakeTableContractVersion::V1),
+        2 => Ok(StakeTableContractVersion::V2),
+        3 => Ok(StakeTableContractVersion::V3),
+        _ => anyhow::bail!("Unsupported stake table contract version: {major}"),
     }
 }
 
-impl From<G2PointSol> for BLSPubKey {
-    fn from(value: G2PointSol) -> Self {
+impl TryFrom<StakeTableV3::getVersionReturn> for StakeTableContractVersion {
+    type Error = anyhow::Error;
+
+    fn try_from(value: StakeTableV3::getVersionReturn) -> anyhow::Result<Self> {
+        version_from_major(value.majorVersion)
+    }
+}
+
+/// Fallible because Solidity accepts the all-zero G2 point `(0,0,0,0)` as
+/// the identity and emits it in stake-table events, but arkworks'
+/// `deserialize_uncompressed` runs an on-curve + subgroup check
+/// (`ark-ec` `short_weierstrass::Affine::check`) that rejects it as not on
+/// the curve. Callers must skip the offending L1 event rather than panic.
+impl TryFrom<G2PointSol> for BLSPubKey {
+    type Error = StakeTableSolError;
+
+    fn try_from(value: G2PointSol) -> Result<Self, Self::Error> {
         let point: G2Affine = value.into();
         let mut bytes = vec![];
         point
             .into_group()
             .serialize_uncompressed(&mut bytes)
             .unwrap();
-        Self::deserialize_uncompressed(&bytes[..]).unwrap()
+        Self::deserialize_uncompressed(&bytes[..]).map_err(|_| StakeTableSolError::InvalidBlsKey)
     }
 }
 
@@ -63,10 +77,26 @@ impl From<BLSPubKey> for G2PointSol {
     }
 }
 
-impl From<EdOnBN254PointSol> for StateVerKey {
-    fn from(value: EdOnBN254PointSol) -> Self {
-        let point: ark_ed_on_bn254::EdwardsAffine = value.into();
-        Self::from(point)
+impl TryFrom<EdOnBN254PointSol> for StateVerKey {
+    type Error = StakeTableSolError;
+
+    fn try_from(value: EdOnBN254PointSol) -> Result<Self, Self::Error> {
+        // 1) Coordinates must be canonical field elements. `u256_to_field` silently
+        // reduces mod p, so reject anything that isn't already its own reduced form.
+        let x: ark_ed_on_bn254::Fq = u256_to_field(value.x);
+        let y: ark_ed_on_bn254::Fq = u256_to_field(value.y);
+        if field_to_u256(x) != value.x || field_to_u256(y) != value.y {
+            return Err(StakeTableSolError::InvalidSchnorrKey);
+        }
+        // 2) on curve, 3) in the prime-order subgroup, 4) not the identity.
+        let point = ark_ed_on_bn254::EdwardsAffine::new_unchecked(x, y);
+        if point.is_zero()
+            || !point.is_on_curve()
+            || !point.is_in_correct_subgroup_assuming_on_curve()
+        {
+            return Err(StakeTableSolError::InvalidSchnorrKey);
+        }
+        Ok(Self::from(point))
     }
 }
 
@@ -135,17 +165,8 @@ fn authenticate_stake_table_validator_event(
     schnorr_vk: EdOnBN254PointSol,
     bls_sig: G1PointSol,
     schnorr_sig: &[u8],
-) -> Result<(), StakeTableSolError> {
-    // TODO(alex): simplify this once jellyfish has `VerKey::from_affine()`
-    let bls_vk = {
-        let bls_vk_inner: ark_bn254::G2Affine = bls_vk.into();
-        let bls_vk_inner = bls_vk_inner.into_group();
-
-        // the two unwrap are safe since it's BLSPubKey is just a wrapper around G2Projective
-        let mut ser_bytes: Vec<u8> = Vec::new();
-        bls_vk_inner.serialize_uncompressed(&mut ser_bytes).unwrap();
-        BLSPubKey::deserialize_uncompressed(&ser_bytes[..]).unwrap()
-    };
+) -> Result<(BLSPubKey, StateVerKey), StakeTableSolError> {
+    let bls_vk = BLSPubKey::try_from(bls_vk)?;
     let bls_sig_jellyfish = {
         let sigma_affine: ark_bn254::G1Affine = bls_sig.into();
         BLSSignature {
@@ -154,11 +175,11 @@ fn authenticate_stake_table_validator_event(
     };
     authenticate_bls_sig(&bls_vk, account, &bls_sig_jellyfish)?;
 
-    let schnorr_vk: StateVerKey = schnorr_vk.into();
+    let schnorr_vk = StateVerKey::try_from(schnorr_vk)?;
     let schnorr_sig_jellyfish =
         schnorr::Signature::<EdwardsConfig>::deserialize_compressed(schnorr_sig)?;
     authenticate_schnorr_sig(&schnorr_vk, account, &schnorr_sig_jellyfish)?;
-    Ok(())
+    Ok((bls_vk, schnorr_vk))
 }
 
 /// Errors encountered when processing stake table events
@@ -170,62 +191,68 @@ pub enum StakeTableSolError {
     InvalidBlsSignature,
     #[error("Schnorr signature invalid")]
     InvalidSchnorrSignature(#[from] jf_signature::SignatureError),
+    #[error("Invalid BLS key")]
+    InvalidBlsKey,
+    #[error("Invalid Schnorr key")]
+    InvalidSchnorrKey,
 }
 
-impl ValidatorRegisteredV2 {
-    /// verified the BLS and Schnorr signatures in the event
-    pub fn authenticate(&self) -> Result<(), StakeTableSolError> {
+impl StakeTableV3::ValidatorRegisteredV3 {
+    /// Verify the BLS and Schnorr signatures in the event and return the parsed keys.
+    pub fn authenticate(&self) -> Result<(BLSPubKey, StateVerKey), StakeTableSolError> {
         authenticate_stake_table_validator_event(
             self.account,
             self.blsVK,
             self.schnorrVK,
             self.blsSig.into(),
             &self.schnorrSig,
-        )?;
-        Ok(())
+        )
     }
 }
 
-impl ConsensusKeysUpdatedV2 {
-    /// verified the BLS and Schnorr signatures in the event
-    pub fn authenticate(&self) -> Result<(), StakeTableSolError> {
+impl StakeTableV3::ValidatorRegisteredV2 {
+    /// Verify the BLS and Schnorr signatures in the event and return the parsed keys.
+    pub fn authenticate(&self) -> Result<(BLSPubKey, StateVerKey), StakeTableSolError> {
         authenticate_stake_table_validator_event(
             self.account,
             self.blsVK,
             self.schnorrVK,
             self.blsSig.into(),
             &self.schnorrSig,
-        )?;
-        Ok(())
+        )
     }
 }
 
-impl From<StakeTable::ValidatorRegistered> for StakeTableV2::InitialCommission {
-    fn from(value: StakeTable::ValidatorRegistered) -> Self {
-        Self {
-            validator: value.account,
-            commission: value.commission,
-        }
+impl StakeTableV3::ConsensusKeysUpdatedV2 {
+    /// Verify the BLS and Schnorr signatures in the event and return the parsed keys.
+    pub fn authenticate(&self) -> Result<(BLSPubKey, StateVerKey), StakeTableSolError> {
+        authenticate_stake_table_validator_event(
+            self.account,
+            self.blsVK,
+            self.schnorrVK,
+            self.blsSig.into(),
+            &self.schnorrSig,
+        )
     }
 }
 
 #[cfg(test)]
 mod test {
-    use alloy::primitives::Address;
+    use alloy::primitives::{Address, U256};
     use hotshot_types::{
-        light_client::StateKeyPair,
+        light_client::{StateKeyPair, StateVerKey},
         signature_key::{BLSKeyPair, BLSPrivKey, BLSPubKey},
     };
 
-    use super::{sign_address_bls, sign_address_schnorr, StateSignatureSol};
+    use super::{StateSignatureSol, sign_address_bls, sign_address_schnorr};
     use crate::sol_types::{
-        G1PointSol, G2PointSol,
-        StakeTableV2::{ConsensusKeysUpdatedV2, ValidatorRegisteredV2},
+        EdOnBN254PointSol, G1PointSol, G2PointSol,
+        StakeTableV3::{ConsensusKeysUpdatedV2, ValidatorRegisteredV2},
     };
 
     fn check_round_trip(pk: BLSPubKey) {
         let g2 = G2PointSol::from(pk);
-        let pk2 = BLSPubKey::from(g2);
+        let pk2 = BLSPubKey::try_from(g2).expect("valid BLS key roundtrip");
         assert_eq!(pk2, pk, "Failed to roundtrip G2PointSol to BLSPubKey: {pk}");
     }
 
@@ -281,6 +308,39 @@ mod test {
     }
 
     #[test]
+    fn test_zero_g2_bls_pubkey_conversion_is_err() {
+        let zero_g2 = G2PointSol {
+            x0: U256::ZERO,
+            x1: U256::ZERO,
+            y0: U256::ZERO,
+            y1: U256::ZERO,
+        };
+        assert!(BLSPubKey::try_from(zero_g2).is_err());
+    }
+
+    #[test]
+    fn test_zero_g2_authenticate_returns_err_not_panic() {
+        use alloy::primitives::Bytes;
+        let event = ConsensusKeysUpdatedV2 {
+            account: Address::random(),
+            blsVK: G2PointSol {
+                x0: U256::ZERO,
+                x1: U256::ZERO,
+                y0: U256::ZERO,
+                y1: U256::ZERO,
+            },
+            schnorrVK: StateKeyPair::generate().ver_key().into(),
+            blsSig: G1PointSol {
+                x: U256::ZERO,
+                y: U256::ZERO,
+            }
+            .into(),
+            schnorrSig: Bytes::from(vec![0u8; 64]),
+        };
+        assert!(event.authenticate().is_err());
+    }
+
+    #[test]
     fn test_consensus_keys_updated_event_authentication() {
         for _ in 0..10 {
             let bls_key_pair = BLSKeyPair::generate(&mut rand::thread_rng());
@@ -297,7 +357,9 @@ mod test {
                 blsSig: G1PointSol::from(bls_sig.clone()).into(),
                 schnorrSig: StateSignatureSol::from(schnorr_sig.clone()).into(),
             };
-            assert!(valid_event.authenticate().is_ok());
+            let (bls, schnorr) = valid_event.authenticate().expect("valid keys parse");
+            assert_eq!(bls, bls_key_pair.ver_key());
+            assert_eq!(schnorr, schnorr_key_pair.ver_key());
 
             let wrong_bls_sig =
                 sign_address_bls(&BLSKeyPair::generate(&mut rand::thread_rng()), address);
@@ -310,5 +372,172 @@ mod test {
             bad_schnorr_event.schnorrSig = StateSignatureSol::from(wrong_schnorr_sig).into();
             assert!(bad_schnorr_event.authenticate().is_err());
         }
+    }
+
+    #[test]
+    fn test_zero_schnorr_verkey_conversion_is_err() {
+        let zero_ed = EdOnBN254PointSol {
+            x: U256::ZERO,
+            y: U256::ZERO,
+        };
+        assert!(StateVerKey::try_from(zero_ed).is_err());
+    }
+
+    #[test]
+    fn test_zero_schnorr_authenticate_returns_err_not_panic() {
+        use alloy::primitives::Bytes;
+        let bls_key_pair = BLSKeyPair::generate(&mut rand::thread_rng());
+        let address = Address::random();
+        let bls_sig = sign_address_bls(&bls_key_pair, address);
+        let event = ValidatorRegisteredV2 {
+            account: address,
+            blsVK: bls_key_pair.ver_key().into(),
+            schnorrVK: EdOnBN254PointSol {
+                x: U256::ZERO,
+                y: U256::ZERO,
+            },
+            commission: 0,
+            blsSig: G1PointSol::from(bls_sig).into(),
+            schnorrSig: Bytes::from(vec![0u8; 64]),
+            metadataUri: String::new(),
+        };
+        assert!(event.authenticate().is_err());
+    }
+
+    /// Coordinates outside the base field must be rejected; `u256_to_field`
+    /// would otherwise silently reduce them mod p.
+    #[test]
+    fn test_schnorr_verkey_out_of_range_is_err() {
+        let out_of_range = EdOnBN254PointSol {
+            x: U256::MAX,
+            y: U256::from(1),
+        };
+        assert!(StateVerKey::try_from(out_of_range).is_err());
+    }
+
+    /// The twisted Edwards identity (0, 1) is on-curve and in the prime-order
+    /// subgroup but is not a valid verification key and must be rejected.
+    #[test]
+    fn test_schnorr_identity_point_is_err() {
+        let identity = EdOnBN254PointSol {
+            x: U256::ZERO,
+            y: U256::from(1),
+        };
+        let point: ark_ed_on_bn254::EdwardsAffine = identity.into();
+        assert!(point.is_on_curve());
+        assert!(point.is_in_correct_subgroup_assuming_on_curve());
+        assert!(StateVerKey::try_from(identity).is_err());
+    }
+
+    /// A validly generated Schnorr key must round-trip through the conversion.
+    #[test]
+    fn test_valid_schnorr_verkey_roundtrips() {
+        let vk = StateKeyPair::generate().ver_key();
+        let sol: EdOnBN254PointSol = vk.clone().into();
+        assert_eq!(StateVerKey::try_from(sol).expect("valid key"), vk);
+    }
+}
+
+// Solidity `validateP2pAddr` and Rust `NetAddr::from_str` both parse `host:port` strings.
+// If Solidity accepts an address that Rust rejects, the validator's p2p address is silently
+// dropped and they become unreachable for cliquenet. This proptest deploys StakeTableV3
+// on anvil and fuzzes the property: Solidity accepts => Rust accepts.
+#[cfg(test)]
+mod proptest_p2p_addr {
+    use alloy::providers::ProviderBuilder;
+    use hotshot_types::addr::NetAddr;
+    use proptest::{
+        prelude::*,
+        test_runner::{Config as ProptestConfig, TestRunner},
+    };
+
+    use crate::sol_types::StakeTableV3;
+
+    fn p2p_addr_strategy() -> impl Strategy<Value = String> {
+        prop_oneof![
+            // Valid IPv4:port
+            (1..255u8, 1..255u8, 1..255u8, 1..255u8, 1..65535u16)
+                .prop_map(|(a, b, c, d, p)| format!("{a}.{b}.{c}.{d}:{p}")),
+            // Valid hostname:port
+            ("[a-z][a-z0-9.-]{0,20}", 1..65535u16).prop_map(|(h, p)| format!("{h}:{p}")),
+            // Edge: missing port
+            "[a-z][a-z0-9.-]{0,20}".prop_map(|h| h.to_string()),
+            // Edge: empty string
+            Just("".to_string()),
+            // Edge: port 0
+            "[a-z]{1,10}".prop_map(|h| format!("{h}:0")),
+            // Edge: leading zero port
+            "[a-z]{1,10}".prop_map(|h| format!("{h}:08080")),
+            // Edge: port too large
+            "[a-z]{1,10}".prop_map(|h| format!("{h}:99999")),
+            // Edge: non-digit port
+            ("[a-z]{1,10}", "[a-z]{1,5}").prop_map(|(h, p)| format!("{h}:{p}")),
+            // Edge: just a colon
+            Just(":".to_string()),
+            // Edge: colon at start
+            (1..65535u16).prop_map(|p| format!(":{p}")),
+            // Multiple colons (IPv6-like)
+            (1..65535u16).prop_map(|p| format!("::1:{p}")),
+            // Bracketed IPv6
+            (1..65535u16).prop_map(|p| format!("[::1]:{p}")),
+            // Two valid addresses concatenated
+            (1..255u8, 1..255u8, 1..65535u16, 1..65535u16)
+                .prop_map(|(a, b, p1, p2)| format!("{a}.{b}.0.1:{p1},{a}.{b}.0.2:{p2}")),
+            // Host with special chars
+            ("[a-z]{1,5}", 1..65535u16).prop_map(|(h, p)| format!("{h}_name:{p}")),
+            // Whitespace in host or port
+            ("[a-z]{1,5}", 1..65535u16).prop_map(|(h, p)| format!(" {h}:{p} ")),
+            // Double colon before port
+            "[a-z]{1,5}".prop_map(|h| format!("{h}::8080")),
+            // Long host (around Solidity 512 byte boundary)
+            (400..600usize, 1..65535u16).prop_map(|(len, p)| format!("{}:{p}", "a".repeat(len))),
+            // Random bytes (UTF-8 lossy, up to Solidity max of 512)
+            prop::collection::vec(any::<u8>(), 0..512)
+                .prop_map(|v| String::from_utf8_lossy(&v).to_string()),
+        ]
+    }
+
+    #[test]
+    fn solidity_rust_p2p_validation_equivalence() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
+        let contract_addr = rt.block_on(async {
+            let contract = StakeTableV3::deploy(&provider).await.unwrap();
+            *contract.address()
+        });
+        let contract = StakeTableV3::new(contract_addr, &provider);
+
+        let cases = std::env::var("PROPTEST_CASES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(512);
+        let mut runner = TestRunner::new(ProptestConfig {
+            cases,
+            ..ProptestConfig::default()
+        });
+
+        runner
+            .run(&p2p_addr_strategy(), |addr_str| {
+                let (sol_valid, rust_valid) = rt.block_on(async {
+                    let sol_valid = contract
+                        .validateP2pAddr(addr_str.clone())
+                        .call()
+                        .await
+                        .is_ok();
+                    let rust_valid = addr_str.parse::<NetAddr>().is_ok();
+                    (sol_valid, rust_valid)
+                });
+
+                if sol_valid {
+                    prop_assert!(
+                        rust_valid,
+                        "Solidity accepted '{}' but Rust rejected it",
+                        addr_str
+                    );
+                }
+                Ok(())
+            })
+            .unwrap();
     }
 }

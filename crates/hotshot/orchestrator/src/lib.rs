@@ -21,30 +21,30 @@ use alloy::primitives::U256;
 use async_lock::RwLock;
 use client::{BenchResults, BenchResultsDownloadConfig};
 use csv::Writer;
-use futures::{stream::FuturesUnordered, FutureExt, StreamExt};
+use futures::{FutureExt, StreamExt, stream::FuturesUnordered};
 use hotshot_types::{
+    PeerConfig,
     network::{BuilderType, NetworkConfig, PublicKeysFile},
     traits::{
         node_implementation::NodeType,
         signature_key::{SignatureKey, StakeTableEntryType},
     },
-    PeerConfig,
 };
 use libp2p_identity::{
-    ed25519::{Keypair as EdKeypair, SecretKey},
     Keypair, PeerId,
+    ed25519::{Keypair as EdKeypair, SecretKey},
 };
 use multiaddr::Multiaddr;
 use surf_disco::Url;
 use tide_disco::{
+    Api, App, RequestError,
     api::ApiError,
     error::ServerError,
     method::{ReadState, WriteState},
-    Api, App, RequestError,
 };
 use vbs::{
-    version::{StaticVersion, StaticVersionType},
     BinarySerializer,
+    version::{StaticVersion, StaticVersionType},
 };
 
 /// Orchestrator is not, strictly speaking, bound to the network; it can have its own versioning.
@@ -301,18 +301,17 @@ where
 
         // If the orchestrator is set up for libp2p and we have supplied the proper
         // Libp2p data, add our node to the list of bootstrap nodes.
-        if self.config.libp2p_config.clone().is_some() {
-            if let (Some(libp2p_public_key), Some(libp2p_address)) =
+        if self.config.libp2p_config.clone().is_some()
+            && let (Some(libp2p_public_key), Some(libp2p_address)) =
                 (libp2p_public_key, libp2p_address)
-            {
-                // Push to our bootstrap nodes
-                self.config
-                    .libp2p_config
-                    .as_mut()
-                    .unwrap()
-                    .bootstrap_nodes
-                    .push((libp2p_public_key, libp2p_address));
-            }
+        {
+            // Push to our bootstrap nodes
+            self.config
+                .libp2p_config
+                .as_mut()
+                .unwrap()
+                .bootstrap_nodes
+                .push((libp2p_public_key, libp2p_address));
         }
 
         tracing::error!("Posted public key for node_index {node_index}");
@@ -373,18 +372,17 @@ where
 
         // If the orchestrator is set up for libp2p and we have supplied the proper
         // Libp2p data, add our node to the list of bootstrap nodes.
-        if self.config.libp2p_config.clone().is_some() {
-            if let (Some(libp2p_public_key), Some(libp2p_address)) =
+        if self.config.libp2p_config.clone().is_some()
+            && let (Some(libp2p_public_key), Some(libp2p_address)) =
                 (libp2p_public_key, libp2p_address)
-            {
-                // Push to our bootstrap nodes
-                self.config
-                    .libp2p_config
-                    .as_mut()
-                    .unwrap()
-                    .bootstrap_nodes
-                    .push((libp2p_public_key, libp2p_address));
-            }
+        {
+            // Push to our bootstrap nodes
+            self.config
+                .libp2p_config
+                .as_mut()
+                .unwrap()
+                .bootstrap_nodes
+                .push((libp2p_public_key, libp2p_address));
         }
 
         tracing::error!("Node {node_index} has registered.");
@@ -418,18 +416,17 @@ where
 
         // If the orchestrator is set up for libp2p and we have supplied the proper
         // Libp2p data, add our node to the list of bootstrap nodes.
-        if self.config.libp2p_config.clone().is_some() {
-            if let (Some(libp2p_public_key), Some(libp2p_address)) =
+        if self.config.libp2p_config.clone().is_some()
+            && let (Some(libp2p_public_key), Some(libp2p_address)) =
                 (libp2p_public_key, libp2p_address)
-            {
-                // Push to our bootstrap nodes
-                self.config
-                    .libp2p_config
-                    .as_mut()
-                    .unwrap()
-                    .bootstrap_nodes
-                    .push((libp2p_public_key, libp2p_address));
-            }
+        {
+            // Push to our bootstrap nodes
+            self.config
+                .libp2p_config
+                .as_mut()
+                .unwrap()
+                .bootstrap_nodes
+                .push((libp2p_public_key, libp2p_address));
         }
         Ok(node_index)
     }
@@ -455,7 +452,6 @@ where
         Ok(tmp_node_index)
     }
 
-    #[allow(clippy::cast_possible_truncation)]
     fn register_public_key(
         &mut self,
         pubkey: &mut Vec<u8>,
@@ -879,6 +875,7 @@ where
                 .stake_table_key
                 .stake_table_entry(U256::from(keys.stake)),
             state_ver_key: keys.state_ver_key.clone(),
+            connect_info: keys.connect_info.clone(),
         })
         .collect();
 
@@ -891,6 +888,7 @@ where
                 .stake_table_key
                 .stake_table_entry(U256::from(keys.stake)),
             state_ver_key: keys.state_ver_key.clone(),
+            connect_info: keys.connect_info.clone(),
         })
         .collect();
 

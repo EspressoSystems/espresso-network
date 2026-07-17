@@ -136,11 +136,14 @@ contract PolynomialEval_evalDataGen_Test is PolynomialEvalTest {
 
         // L_0(g^0) = 1
         assertEq(
-            BN254.ScalarField.unwrap(
-                Poly.evaluateLagrangeOne(
-                    domain, BN254.ScalarField.wrap(elements[0]), BN254.ScalarField.wrap(vanishEval)
-                )
-            ),
+            BN254.ScalarField
+                .unwrap(
+                    Poly.evaluateLagrangeOne(
+                        domain,
+                        BN254.ScalarField.wrap(elements[0]),
+                        BN254.ScalarField.wrap(vanishEval)
+                    )
+                ),
             1
         );
 
@@ -148,13 +151,14 @@ contract PolynomialEval_evalDataGen_Test is PolynomialEvalTest {
         for (uint256 i = 1; i < size; i++) {
             vanishEval = Poly.evaluateVanishingPoly(domain, elements[i]);
             assertEq(
-                BN254.ScalarField.unwrap(
-                    Poly.evaluateLagrangeOne(
-                        domain,
-                        BN254.ScalarField.wrap(elements[i]),
-                        BN254.ScalarField.wrap(vanishEval)
-                    )
-                ),
+                BN254.ScalarField
+                    .unwrap(
+                        Poly.evaluateLagrangeOne(
+                            domain,
+                            BN254.ScalarField.wrap(elements[i]),
+                            BN254.ScalarField.wrap(vanishEval)
+                        )
+                    ),
                 0
             );
         }

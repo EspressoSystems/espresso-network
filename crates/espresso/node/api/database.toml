@@ -1,0 +1,19 @@
+[route.get_migration_status]
+PATH = ["migration-status"]
+METHOD = "GET"
+DOC = """
+Get the status of all deferred background migrations.
+
+Returns a list of migrations with their name, when they started, when they completed (if done),
+and the last processed offset (useful for estimating progress).
+"""
+
+[route.get_table_sizes]
+PATH = ["table-sizes"]
+METHOD = "GET"
+DOC = """
+Get the sizes of all database tables.
+
+Returns a list of table size information, including row counts (estimated for PostgreSQL) and disk usage.
+Works with both PostgreSQL and SQLite backends (via embedded-db feature; disk usage currently PostgreSQL only).
+"""

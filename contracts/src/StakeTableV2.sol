@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import { PausableUpgradeable } from
-    "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
-import { AccessControlUpgradeable } from
-    "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
-import { OwnableUpgradeable } from
-    "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {
+    PausableUpgradeable
+} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import {
+    AccessControlUpgradeable
+} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import {
+    OwnableUpgradeable
+} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { StakeTable } from "./StakeTable.sol";
 import { EdOnBN254 } from "./libraries/EdOnBn254.sol";
 import { BN254 } from "bn254/BN254.sol";
@@ -940,6 +943,7 @@ contract StakeTableV2 is StakeTable, PausableUpgradeable, AccessControlUpgradeab
         virtual
         override
         onlyRole(DEFAULT_ADMIN_ROLE)
-    // solhint-disable-next-line no-empty-blocks
+        // solhint-disable-next-line no-empty-blocks
+
     { }
 }
