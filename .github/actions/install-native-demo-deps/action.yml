@@ -19,11 +19,9 @@ runs:
 
         # KeyDB: the CDN's broker heartbeat uses KeyDB's EXPIREMEMBER command, which
         # plain redis/valkey do not implement. There is no KeyDB apt repo for the
-        # runner's ubuntu, so extract the prebuilt keydb-server and supply its runtime
-        # libs (t64 packages provide the same SONAMEs on newer ubuntu; fall back to the
-        # pre-t64 names for older runners).
-        sudo apt-get install -y libsnappy1v5 libzstd1 libuuid1 libcurl4t64 libssl3t64 \
-          || sudo apt-get install -y libsnappy1v5 libzstd1 libuuid1 libcurl4 libssl3
+        # runner's ubuntu (24.04), so extract the prebuilt keydb-server and supply its
+        # runtime libs (the t64 packages provide the SONAMEs the jammy binary needs).
+        sudo apt-get install -y libsnappy1v5 libzstd1 libuuid1 libcurl4t64 libssl3t64
         curl -fsSL "https://download.keydb.dev/pkg/open_source/deb/ubuntu22.04_jammy/amd64/keydb-latest/keydb-tools_6.3.4-1~jammy1_amd64.deb" -o /tmp/keydb-tools.deb
         dpkg-deb -x /tmp/keydb-tools.deb /tmp/keydb
         echo "/tmp/keydb/usr/bin" >> "$GITHUB_PATH"
