@@ -1,0 +1,18 @@
+name: Install native demo deps
+description: Install anvil (foundry), redis-server, and the postgres server for the native demo
+
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/install-foundry
+    - shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install -y redis-server postgresql
+        # apt starts these on install; stop them so process-compose can bind the
+        # demo's own redis (6379) and postgres (5432/5433) ports.
+        sudo systemctl stop redis-server postgresql || true
+        # Debian keeps the postgres server binaries (initdb, postgres) off PATH;
+        # only the client wrappers (psql, pg_isready, createdb) are symlinked.
+        echo "$(ls -d /usr/lib/postgresql/*/bin | sort -V | tail -1)" >> "$GITHUB_PATH"
