@@ -323,6 +323,11 @@ pub mod v1 {
     pub const DATABASE_TABLE_SIZES_ROUTE: &str = "/v1/database/table-sizes";
     pub const DATABASE_MIGRATION_STATUS_ROUTE: &str = "/v1/database/migration-status";
 
+    // API docs
+    pub const OPENAPI_SPEC_ROUTE: &str = "/v1/docs/openapi.json";
+    pub const SWAGGER_ROUTE: &str = "/v1";
+    pub const SCALAR_ROUTE: &str = "/v1/scalar";
+
     // ---------------------------------------------------------------------
     // Path builders
     //

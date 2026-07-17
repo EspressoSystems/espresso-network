@@ -125,6 +125,7 @@ edition = "2024"
 aide = { version = "0.15.1", features = [
     "axum",
     "axum-json",
+    "axum-ws",
     "scalar",
     "swagger",
     "redoc",
