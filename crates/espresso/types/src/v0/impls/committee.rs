@@ -185,24 +185,26 @@ impl EpochCommittees {
         self.inner.read().fixed_block_reward
     }
 
-    /// Find the most recent stake-table entry for `key`.
-    ///
-    /// Scanns loaded epochs from highest to lowest and falling back to the
-    /// genesis bootstrap committee.
-    pub fn latest_peer_config(&self, key: &PubKey) -> Option<PeerConfig<SeqTypes>> {
+    /// All stake-table entries for `key`, highest epoch first, with the
+    /// genesis bootstrap entry last.
+    pub fn peer_configs(&self, key: &PubKey) -> Vec<PeerConfig<SeqTypes>> {
         let inner = self.inner.read();
-        for snap in inner.snapshots.values().rev() {
-            if let Some(cfg) = snap.inner.committee.stake_table.get(key) {
-                return Some(cfg.clone());
-            }
-        }
-        inner
-            .non_epoch_snapshot
-            .inner
-            .committee
-            .indexed_stake_table
-            .get(key)
-            .cloned()
+        let mut configs: Vec<_> = inner
+            .snapshots
+            .values()
+            .rev()
+            .filter_map(|snap| snap.inner.committee.stake_table.get(key).cloned())
+            .collect();
+        configs.extend(
+            inner
+                .non_epoch_snapshot
+                .inner
+                .committee
+                .indexed_stake_table
+                .get(key)
+                .cloned(),
+        );
+        configs
     }
 
     /// Fetch the fixed block reward and update it if its None.
