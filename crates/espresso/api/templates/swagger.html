@@ -12,7 +12,7 @@
     <script>
       window.onload = () => {
         window.ui = SwaggerUIBundle({
-          url: '/v2/docs/openapi.json',
+          url: '{{OPENAPI_SPEC_ROUTE}}',
           dom_id: '#swagger-ui',
           docExpansion: 'none',
           defaultModelsExpandDepth: 1,
