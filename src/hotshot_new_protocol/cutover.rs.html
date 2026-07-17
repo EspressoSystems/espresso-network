@@ -8,7 +8,7 @@
 <a href=#8 id=8 data-nosnippet>8</a>//!   client API so the new protocol can form TC2s and propose at the
 <a href=#9 id=9 data-nosnippet>9</a>//!   boundary.
 <a href=#10 id=10 data-nosnippet>10</a>
-<a href=#11 id=11 data-nosnippet>11</a></span><span class="kw">use </span>std::collections::BTreeMap;
+<a href=#11 id=11 data-nosnippet>11</a></span><span class="kw">use </span>std::{collections::BTreeMap, sync::Arc};
 <a href=#12 id=12 data-nosnippet>12</a>
 <a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span>async_broadcast::InactiveReceiver;
 <a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span>futures::StreamExt;
@@ -17,7 +17,7 @@
 <a href=#17 id=17 data-nosnippet>17</a>    data::Leaf2,
 <a href=#18 id=18 data-nosnippet>18</a>    event::{Event, EventType},
 <a href=#19 id=19 data-nosnippet>19</a>    message::UpgradeLock,
-<a href=#20 id=20 data-nosnippet>20</a>    traits::node_implementation::NodeType,
+<a href=#20 id=20 data-nosnippet>20</a>    traits::{metrics::Gauge, node_implementation::NodeType},
 <a href=#21 id=21 data-nosnippet>21</a>};
 <a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span>versions::NEW_PROTOCOL_VERSION;
 <a href=#23 id=23 data-nosnippet>23</a>
@@ -97,34 +97,38 @@
 <a href=#97 id=97 data-nosnippet>97</a>    legacy_event_rx: InactiveReceiver&lt;Event&lt;T&gt;&gt;,
 <a href=#98 id=98 data-nosnippet>98</a>    client_api: ClientApi&lt;T&gt;,
 <a href=#99 id=99 data-nosnippet>99</a>    upgrade_lock: UpgradeLock&lt;T&gt;,
-<a href=#100 id=100 data-nosnippet>100</a>) {
-<a href=#101 id=101 data-nosnippet>101</a>    <span class="kw">let </span><span class="kw-2">mut </span>rx = legacy_event_rx.activate_cloned();
-<a href=#102 id=102 data-nosnippet>102</a>    <span class="kw">while let </span><span class="prelude-val">Some</span>(event) = rx.next().<span class="kw">await </span>{
-<a href=#103 id=103 data-nosnippet>103</a>        <span class="kw">if let </span>EventType::LegacyTimeoutVoteEmitted { vote } = event.event
-<a href=#104 id=104 data-nosnippet>104</a>            &amp;&amp; cutover_decided(<span class="kw-2">&amp;</span>upgrade_lock)
-<a href=#105 id=105 data-nosnippet>105</a>            &amp;&amp; <span class="kw">let </span><span class="prelude-val">Err</span>(err) = client_api.try_submit_legacy_timeout_vote(vote)
-<a href=#106 id=106 data-nosnippet>106</a>        {
-<a href=#107 id=107 data-nosnippet>107</a>            <span class="macro">tracing::warn!</span>(%err, <span class="string">"failed to forward legacy TimeoutVote2 to new-protocol coordinator"</span>);
-<a href=#108 id=108 data-nosnippet>108</a>        }
-<a href=#109 id=109 data-nosnippet>109</a>    }
-<a href=#110 id=110 data-nosnippet>110</a>}
-<a href=#111 id=111 data-nosnippet>111</a>
-<a href=#112 id=112 data-nosnippet>112</a><span class="doccomment">/// Forward the last legacy view's QC into the coordinator, so the cutover-view
-<a href=#113 id=113 data-nosnippet>113</a>/// leader can propose on it instead of waiting out a timeout when the cutover
-<a href=#114 id=114 data-nosnippet>114</a>/// seed was snapshotted before the QC formed.
-<a href=#115 id=115 data-nosnippet>115</a></span><span class="kw">pub async fn </span>forward_legacy_high_qc&lt;T: NodeType&gt;(
-<a href=#116 id=116 data-nosnippet>116</a>    legacy_event_rx: InactiveReceiver&lt;Event&lt;T&gt;&gt;,
-<a href=#117 id=117 data-nosnippet>117</a>    client_api: ClientApi&lt;T&gt;,
-<a href=#118 id=118 data-nosnippet>118</a>    upgrade_lock: UpgradeLock&lt;T&gt;,
-<a href=#119 id=119 data-nosnippet>119</a>) {
-<a href=#120 id=120 data-nosnippet>120</a>    <span class="kw">let </span><span class="kw-2">mut </span>rx = legacy_event_rx.activate_cloned();
-<a href=#121 id=121 data-nosnippet>121</a>    <span class="kw">while let </span><span class="prelude-val">Some</span>(event) = rx.next().<span class="kw">await </span>{
-<a href=#122 id=122 data-nosnippet>122</a>        <span class="kw">if let </span>EventType::LegacyHighQcFormed { qc } = event.event
-<a href=#123 id=123 data-nosnippet>123</a>            &amp;&amp; cutover_decided(<span class="kw-2">&amp;</span>upgrade_lock)
-<a href=#124 id=124 data-nosnippet>124</a>            &amp;&amp; <span class="kw">let </span><span class="prelude-val">Err</span>(err) = client_api.try_submit_legacy_high_qc(qc)
-<a href=#125 id=125 data-nosnippet>125</a>        {
-<a href=#126 id=126 data-nosnippet>126</a>            <span class="macro">tracing::warn!</span>(%err, <span class="string">"failed to forward legacy high QC to new-protocol coordinator"</span>);
-<a href=#127 id=127 data-nosnippet>127</a>        }
-<a href=#128 id=128 data-nosnippet>128</a>    }
-<a href=#129 id=129 data-nosnippet>129</a>}
+<a href=#100 id=100 data-nosnippet>100</a>    queue_len: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Gauge&gt;&gt;,
+<a href=#101 id=101 data-nosnippet>101</a>) {
+<a href=#102 id=102 data-nosnippet>102</a>    <span class="kw">let </span><span class="kw-2">mut </span>rx = legacy_event_rx.activate_cloned();
+<a href=#103 id=103 data-nosnippet>103</a>    <span class="kw">while let </span><span class="prelude-val">Some</span>(event) = rx.next().<span class="kw">await </span>{
+<a href=#104 id=104 data-nosnippet>104</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(m) = <span class="kw-2">&amp;</span>queue_len {
+<a href=#105 id=105 data-nosnippet>105</a>            m.set(rx.len())
+<a href=#106 id=106 data-nosnippet>106</a>        }
+<a href=#107 id=107 data-nosnippet>107</a>        <span class="kw">if let </span>EventType::LegacyTimeoutVoteEmitted { vote } = event.event
+<a href=#108 id=108 data-nosnippet>108</a>            &amp;&amp; cutover_decided(<span class="kw-2">&amp;</span>upgrade_lock)
+<a href=#109 id=109 data-nosnippet>109</a>            &amp;&amp; <span class="kw">let </span><span class="prelude-val">Err</span>(err) = client_api.try_submit_legacy_timeout_vote(vote)
+<a href=#110 id=110 data-nosnippet>110</a>        {
+<a href=#111 id=111 data-nosnippet>111</a>            <span class="macro">tracing::warn!</span>(%err, <span class="string">"failed to forward legacy TimeoutVote2 to new-protocol coordinator"</span>);
+<a href=#112 id=112 data-nosnippet>112</a>        }
+<a href=#113 id=113 data-nosnippet>113</a>    }
+<a href=#114 id=114 data-nosnippet>114</a>}
+<a href=#115 id=115 data-nosnippet>115</a>
+<a href=#116 id=116 data-nosnippet>116</a><span class="doccomment">/// Forward the last legacy view's QC into the coordinator, so the cutover-view
+<a href=#117 id=117 data-nosnippet>117</a>/// leader can propose on it instead of waiting out a timeout when the cutover
+<a href=#118 id=118 data-nosnippet>118</a>/// seed was snapshotted before the QC formed.
+<a href=#119 id=119 data-nosnippet>119</a></span><span class="kw">pub async fn </span>forward_legacy_high_qc&lt;T: NodeType&gt;(
+<a href=#120 id=120 data-nosnippet>120</a>    legacy_event_rx: InactiveReceiver&lt;Event&lt;T&gt;&gt;,
+<a href=#121 id=121 data-nosnippet>121</a>    client_api: ClientApi&lt;T&gt;,
+<a href=#122 id=122 data-nosnippet>122</a>    upgrade_lock: UpgradeLock&lt;T&gt;,
+<a href=#123 id=123 data-nosnippet>123</a>) {
+<a href=#124 id=124 data-nosnippet>124</a>    <span class="kw">let </span><span class="kw-2">mut </span>rx = legacy_event_rx.activate_cloned();
+<a href=#125 id=125 data-nosnippet>125</a>    <span class="kw">while let </span><span class="prelude-val">Some</span>(event) = rx.next().<span class="kw">await </span>{
+<a href=#126 id=126 data-nosnippet>126</a>        <span class="kw">if let </span>EventType::LegacyHighQcFormed { qc } = event.event
+<a href=#127 id=127 data-nosnippet>127</a>            &amp;&amp; cutover_decided(<span class="kw-2">&amp;</span>upgrade_lock)
+<a href=#128 id=128 data-nosnippet>128</a>            &amp;&amp; <span class="kw">let </span><span class="prelude-val">Err</span>(err) = client_api.try_submit_legacy_high_qc(qc)
+<a href=#129 id=129 data-nosnippet>129</a>        {
+<a href=#130 id=130 data-nosnippet>130</a>            <span class="macro">tracing::warn!</span>(%err, <span class="string">"failed to forward legacy high QC to new-protocol coordinator"</span>);
+<a href=#131 id=131 data-nosnippet>131</a>        }
+<a href=#132 id=132 data-nosnippet>132</a>    }
+<a href=#133 id=133 data-nosnippet>133</a>}
 </code></pre></div></section></main></body></html>
