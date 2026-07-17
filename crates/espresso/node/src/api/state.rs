@@ -7,6 +7,7 @@ use std::{ops::Bound, time::Duration};
 
 use alloy::primitives::U256;
 use async_trait::async_trait;
+use committable::Committable as _;
 use disco_types::{error::Error as _, status::StatusCode};
 use espresso_api::{error::AvailabilityError, v1::HotShotAvailabilityApi};
 use espresso_types::{
@@ -32,7 +33,6 @@ use hotshot_query_service::{
         QueryablePayload as _, TransactionQueryData, TransactionWithProofQueryData,
         VidCommonQueryData,
     },
-    status::HasMetrics as _,
     explorer::{
         BlockIdentifier, BlockRange, ExplorerDataSource as _, GetBlockSummariesRequest,
         GetTransactionSummariesRequest, TransactionIdentifier, TransactionRange,
@@ -42,7 +42,7 @@ use hotshot_query_service::{
         MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot as HsSnapshot,
     },
     node::{NodeDataSource as _, WindowStart},
-    status::HasMetrics,
+    status::HasMetrics as _,
     types::HeightIndexed as _,
 };
 use hotshot_types::{
@@ -62,8 +62,6 @@ use serialization_api::v2::{
     reward_merkle_proof_v2::ProofType,
 };
 use tagged_base64::TaggedBase64;
-use committable::Committable as _;
-use tide_disco::{Error as _, StatusCode, metrics::Metrics as _};
 
 use super::{
     RewardMerkleTreeDataSource, RewardMerkleTreeV2Data as InternalRewardTreeData,
