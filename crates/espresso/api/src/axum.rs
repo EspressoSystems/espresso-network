@@ -3534,6 +3534,7 @@ pub fn finish_v1_docs(router: ApiRouter) -> Router {
     let router = router.finish_api(&mut api);
 
     declare_path_template_parameters(&mut api);
+    tag_operations_by_module(&mut api);
 
     // Transform examples (array) to example (singular) for OpenAPI 3.0/Swagger compatibility,
     // matching create_router_v2 (a no-op unless a future v1 route adds a JsonSchema body/query).
@@ -3572,6 +3573,47 @@ pub fn finish_v1_docs(router: ApiRouter) -> Router {
 ///
 /// Parameter types come from [`path_parameter_schema`]; the handlers parse the raw segment
 /// either way, so a wrong entry there affects only documentation, not behavior.
+/// Group operations by API module: the first path segment after `/v1/` (`availability`,
+/// `status`, `catchup`, ...) becomes the operation's tag, and the tag list is registered sorted
+/// so Swagger renders one collapsible section per module in a stable order.
+fn tag_operations_by_module(api: &mut OpenApi) {
+    let Some(ref mut paths) = api.paths else {
+        return;
+    };
+    let mut modules = std::collections::BTreeSet::new();
+    for (path, path_item_ref) in paths.paths.iter_mut() {
+        let ReferenceOr::Item(path_item) = path_item_ref else {
+            continue;
+        };
+        let Some(module) = path
+            .strip_prefix("/v1/")
+            .and_then(|rest| rest.split('/').next())
+        else {
+            continue;
+        };
+        modules.insert(module.to_string());
+        for operation in [
+            &mut path_item.get,
+            &mut path_item.post,
+            &mut path_item.put,
+            &mut path_item.delete,
+            &mut path_item.patch,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            operation.tags = vec![module.to_string()];
+        }
+    }
+    api.tags = modules
+        .into_iter()
+        .map(|name| aide::openapi::Tag {
+            name,
+            ..Default::default()
+        })
+        .collect();
+}
+
 /// OpenAPI schema for a v1 path template parameter, by segment name.
 ///
 /// The names form a closed set and each type was read off the handler's `Path<T>` extractor:
@@ -4841,5 +4883,18 @@ mod tests {
         assert_eq!(key_path[0]["schema"]["type"], "integer");
         assert_eq!(key_path[1]["name"], "key");
         assert_eq!(key_path[1]["schema"]["type"], "string");
+
+        // Operations are grouped by module tag.
+        assert_eq!(
+            paths[routes::v1::LEAF_BY_HEIGHT_ROUTE]["get"]["tags"][0],
+            "availability"
+        );
+        assert!(
+            spec["tags"]
+                .as_array()
+                .expect("spec has tags")
+                .iter()
+                .any(|t| t["name"] == "status")
+        );
     }
 }
