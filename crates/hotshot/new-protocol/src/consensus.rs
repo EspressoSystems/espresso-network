@@ -107,6 +107,7 @@ pub enum ConsensusInput<T: NodeType> {
         ProposalMessage<T, Validated>,
         VidDisperseShare2<T>,
     ),
+    FetchedProposal(ProposalMessage<T, Validated>),
     StateValidated(StateResponse<T>),
     StateValidationFailed(StateResponse<T>),
     Stored(StorageOutput<T>),
@@ -159,6 +160,10 @@ pub enum ConsensusOutput<T: NodeType> {
         proposal: SignedProposal<T, Proposal<T>>,
         sender: T::SignatureKey,
     },
+    RequestMissingProposal {
+        view: ViewNumber,
+        leaf_commit: Commitment<Leaf2<T>>,
+    },
     /// Emitted when a node has reconstructed a block payload from VID shares.
     /// Notifies downstream consumers (e.g. the query service) so they can store
     /// the payload even if the corresponding view has already been decided
@@ -201,6 +206,7 @@ pub struct Consensus<T: NodeType> {
     /// `decided_views` is not persisted, so a replayed certificate pair could
     /// otherwise re-decide pre-anchor views.
     decide_floor_view: ViewNumber,
+    invalid_certs: u64,
     last_decided_view: ViewNumber,
     last_decided_leaf: Leaf2<T>,
     drb_results: BTreeMap<EpochNumber, DrbResult>,
@@ -331,6 +337,7 @@ impl<T: NodeType> Consensus<T> {
             leaves: BTreeMap::new(),
             decided_views: BTreeSet::from([last_decided_view]),
             decide_floor_view: ViewNumber::genesis(),
+            invalid_certs: 0,
             last_decided_view,
             last_decided_leaf: genesis_leaf,
             headers: BTreeMap::new(),
@@ -620,10 +627,14 @@ impl<T: NodeType> Consensus<T> {
         self.locked_cert.as_ref().map(|c| c.view_number())
     }
 
+    pub(crate) fn invalid_certs(&self) -> u64 {
+        self.invalid_certs
+    }
+
     /// Newest view that can no longer be decided (and below which decide
     /// inputs are dropped): slides [`DECIDE_BUFFER`] behind the watermark,
     /// pinned at the restart/cutover anchor.
-    fn decide_floor(&self) -> ViewNumber {
+    pub(crate) fn decide_floor(&self) -> ViewNumber {
         max(
             self.last_decided_view.saturating_sub(DECIDE_BUFFER).into(),
             self.decide_floor_view,
@@ -656,6 +667,30 @@ impl<T: NodeType> Consensus<T> {
                     "apply: proposal+vid share"
                 );
                 self.handle_proposal_with_vid_share(sender, proposal, vid_share, outbox)
+            },
+            ConsensusInput::FetchedProposal(message) => {
+                debug!(
+                    view = %message.proposal.data.view_number,
+                    "apply: fetched proposal"
+                );
+                self.handle_fetched_proposal(message, outbox);
+                // The fetched proposal itself may now be decidable (e.g. cert2
+                // arrived first and triggered the fetch).
+                self.maybe_decide(view, outbox);
+                // Views extending the fetched one may be blocked on it
+                let views_extending_fetched: Vec<ViewNumber> = self
+                    .proposals
+                    .range(view + 1..)
+                    .filter(|(_, proposal)| proposal.justify_qc.view_number() == view)
+                    .map(|(extending_view, _)| *extending_view)
+                    .collect();
+                for extending_view in views_extending_fetched {
+                    self.maybe_vote_1(extending_view, outbox);
+                    self.maybe_vote_2_and_update_lock(extending_view, outbox);
+                    self.maybe_decide(extending_view, outbox);
+                }
+                self.maybe_propose(view + 1, outbox);
+                return;
             },
             ConsensusInput::Certificate1(certificate) => {
                 debug!(
@@ -707,6 +742,8 @@ impl<T: NodeType> Consensus<T> {
             ConsensusInput::BlockReconstructed(view, vid_commitment) => {
                 debug!(%view, "apply: block reconstructed");
                 self.blocks_reconstructed.insert((view, vid_commitment));
+                // Retry the child whose vote1 is gated on this parent reconstruction.
+                self.maybe_vote_1(view + 1, outbox);
                 Protocol::Continue
             },
             ConsensusInput::StateValidated(state_response) => {
@@ -1050,6 +1087,8 @@ impl<T: NodeType> Consensus<T> {
         self.leaves.insert(view, proposal.clone().into());
         self.vid_shares.insert(view, vid_share);
 
+        self.request_parent_proposal_if_missing(&proposal, outbox);
+
         if let Some(state_cert) = &proposal.state_cert {
             self.state_certs
                 .entry(state_cert.epoch)
@@ -1114,6 +1153,47 @@ impl<T: NodeType> Consensus<T> {
         }
 
         Protocol::Continue
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    fn handle_fetched_proposal(
+        &mut self,
+        message: ProposalMessage<T, Validated>,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) {
+        let signed_proposal = message.proposal;
+        let proposal = signed_proposal.data.clone();
+        let view = proposal.view_number;
+        if view <= self.last_decided_view {
+            debug!(%view, "fetched proposal at or below decided view; discarding");
+            return;
+        }
+        if self.proposals.contains_key(&view) {
+            debug!(%view, "fetched proposal already present; discarding");
+            return;
+        }
+        self.leaves.insert(view, proposal.clone().into());
+        self.signed_proposals.insert(view, signed_proposal);
+        self.request_parent_proposal_if_missing(&proposal, outbox);
+        self.proposals.insert(view, proposal);
+    }
+    fn request_parent_proposal_if_missing(
+        &self,
+        proposal: &Proposal<T>,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) {
+        let parent_view = proposal.justify_qc.view_number();
+        if parent_view > self.last_decided_view && !self.proposals.contains_key(&parent_view) {
+            warn!(
+                view = %proposal.view_number,
+                %parent_view,
+                "parent proposal missing; requesting fetch"
+            );
+            outbox.push_back(ConsensusOutput::RequestMissingProposal {
+                view: parent_view,
+                leaf_commit: proposal.justify_qc.data().leaf_commit,
+            });
+        }
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -1192,6 +1272,13 @@ impl<T: NodeType> Consensus<T> {
         // cannot ping-pong between nodes forever.
         if !self.decided_views.contains(&view) {
             outbox.push_back(ConsensusOutput::SendCertificate2(certificate.clone()));
+        }
+        if view > self.last_decided_view && !self.proposals.contains_key(&view) {
+            warn!(%view, "have certificate2 but no proposal; requesting fetch");
+            outbox.push_back(ConsensusOutput::RequestMissingProposal {
+                view,
+                leaf_commit: certificate.data.leaf_commit,
+            });
         }
         self.certs2.insert(view, certificate);
         Protocol::Continue
@@ -1578,6 +1665,26 @@ impl<T: NodeType> Consensus<T> {
             parent_cert.data.leaf_commit
         };
         let Some(header) = self.headers.get(&(view, parent_commitment)) else {
+            // The header request issued on the TC targeted the lock held at
+            // that moment; if the lock moved since (bridged legacy QC at
+            // cutover), re-request. The block builder dedups by (view, parent).
+            if view_change_evidence.is_some() {
+                let request_epoch =
+                    if is_last_block(proposal.block_header.block_number(), *self.epoch_height) {
+                        proposal.epoch + 1
+                    } else {
+                        proposal.epoch
+                    };
+                if self.is_leader(view, request_epoch) {
+                    outbox.push_back(ConsensusOutput::RequestBlockAndHeader(
+                        BlockAndHeaderRequest {
+                            view,
+                            epoch: request_epoch,
+                            parent_proposal: proposal.clone(),
+                        },
+                    ));
+                }
+            }
             debug!("no block header");
             return;
         };
@@ -2304,7 +2411,7 @@ impl<T: NodeType> Consensus<T> {
     /// Try to verify a certificate, distinguishing between "epoch not available"
     /// and "cryptographically invalid".
     #[instrument(level = "trace", skip_all)]
-    fn try_verify_cert<A, C>(&self, cert: &C, epoch: EpochNumber) -> CertVerification
+    fn try_verify_cert<A, C>(&mut self, cert: &C, epoch: EpochNumber) -> CertVerification
     where
         C: vote::Certificate<T, A>,
     {
@@ -2319,6 +2426,7 @@ impl<T: NodeType> Consensus<T> {
                     Ok(()) => CertVerification::Valid,
                     Err(err) => {
                         warn!(%epoch, %err, "invalid threshold signature");
+                        self.invalid_certs += 1;
                         CertVerification::Invalid
                     },
                 }
@@ -2538,6 +2646,7 @@ impl<T: NodeType> ConsensusInput<T> {
             ConsensusInput::EpochRootCertificates { cert1, .. } => cert1.view_number(),
             ConsensusInput::HeaderCreated(view, ..) => *view,
             ConsensusInput::ProposalWithVidShare(_, prop, _) => prop.view_number(),
+            ConsensusInput::FetchedProposal(prop) => prop.view_number(),
             ConsensusInput::StateValidated(response) => response.view,
             ConsensusInput::StateValidationFailed(request) => request.view,
             ConsensusInput::Stored(stored) => stored.view_number(),

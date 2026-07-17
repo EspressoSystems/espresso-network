@@ -166,6 +166,8 @@ where
             stake_table.0,
             0,
         )));
+        let consensus_metrics = ConsensusMetricsValue::new(metrics);
+
         let handle = SystemContext::init(
             validator_config.public_key,
             validator_config.private_key.clone(),
@@ -176,7 +178,7 @@ where
             membership_coordinator.clone(),
             network.clone(),
             initializer,
-            ConsensusMetricsValue::new(metrics),
+            consensus_metrics.clone(),
             Arc::clone(&persistence),
             StorageMetricsValue::new(metrics),
         )
@@ -232,18 +234,25 @@ where
             .timeout_duration(Duration::from_secs(10))
             .storage(Arc::clone(&persistence))
             .metrics(metrics)
+            .consensus_metrics(consensus_metrics)
             .maybe_locked_qc(locked_qc)
             .make();
 
         let legacy_event_rx = handle.event_stream_known_impl().deactivate();
         let hotshot_handle = Arc::new(RwLock::new(handle));
-        let consensus_handle = Arc::new(ConsensusHandle::new(
-            hotshot_handle.clone(),
-            coordinator,
-            epoch_height,
-            legacy_event_rx,
-            EXTERNAL_EVENT_CHANNEL_SIZE,
-        ));
+
+        let consensus_handle = {
+            let handle = ConsensusHandle::new(
+                hotshot_handle.clone(),
+                coordinator,
+                epoch_height.into(),
+                legacy_event_rx,
+                EXTERNAL_EVENT_CHANNEL_SIZE,
+                metrics,
+            )
+            .await;
+            Arc::new(handle)
+        };
 
         let mut state_signer = StateSigner::new(
             validator_config.state_private_key.clone(),
@@ -629,8 +638,7 @@ async fn handle_events<N, P, C>(
                 {
                     tracing::warn!(%err, "Failed to handle legacy external message");
                 }
-                // Check if we're ready to start the new protocol
-                consensus_handle.cutover_active().await;
+                consensus_handle.activate().await;
             },
             CoordinatorEvent::ExternalMessageReceived { data, .. } => {
                 if let Err(err) = external_event_handler.handle_event(data).await {

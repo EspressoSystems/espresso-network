@@ -29,7 +29,7 @@ cdn-marshal = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
 espresso-node = { workspace = true, default-features = false }
-espresso-types = { workspace = true }
+espresso-types = { workspace = true, features = ["node"] }
 futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-example-types = { workspace = true }

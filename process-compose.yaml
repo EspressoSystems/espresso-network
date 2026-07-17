@@ -206,7 +206,12 @@ processes:
   telemetry-collector:
     command: docker compose up vector --force-recreate --renew-anon-volumes
     log_location: logs/vector.log
-    availability: *run-forever
+    # Telemetry is not load-bearing: a failure (e.g. Docker Hub pull timeout in CI)
+    # must not tear down the whole demo like *run-forever would.
+    availability:
+      restart: on_failure
+      backoff_seconds: 5
+      max_restarts: 5
 
   prover-one-shot:
     # "nice" this compute heavy process to reduce load
