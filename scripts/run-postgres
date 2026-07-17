@@ -6,8 +6,8 @@
 # the cluster, starts postgres bound to 127.0.0.1, creates the "espresso"
 # database, and then blocks in the foreground so process-compose can manage
 # it as one long-lived service. SIGTERM/SIGINT are forwarded to postgres so
-# process-compose can stop it cleanly. The data directory is expected to
-# live under a caller-managed temp path; it is not created or removed here.
+# process-compose can stop it cleanly. initdb creates the data directory
+# itself (the parent must exist); nothing is removed here.
 #
 set -euo pipefail
 
@@ -23,7 +23,7 @@ and an "espresso" database.
 
 ARGUMENTS:
   PORT      TCP port for postgres to listen on
-  DATADIR   Existing empty data directory to initialize and use
+  DATADIR   Data directory to initialize (created if missing; must be empty if it exists)
 
 OPTIONS:
   -h, --help   Show this help
@@ -57,14 +57,20 @@ main() {
 
   # SIGINT triggers postgres "fast shutdown" (rolls back and disconnects clients
   # immediately). SIGTERM would be a "smart shutdown" that blocks until every client
-  # disconnects, hanging until process-compose force-kills on teardown.
-  trap 'kill -INT "${pg_pid}" 2>/dev/null' TERM INT
+  # disconnects, hanging until process-compose force-kills on teardown. The flag lets
+  # the readiness loop bail out if a signal lands before postgres is ready (otherwise
+  # pg_isready never succeeds against a shutting-down server and the loop spins).
+  local shutting_down=0
+  trap 'shutting_down=1; kill -INT "${pg_pid}" 2>/dev/null' TERM INT
 
   until pg_isready -h 127.0.0.1 -p "${port}" >/dev/null 2>&1; do
+    [[ "${shutting_down}" -eq 1 ]] && break
     sleep 0.5
   done
 
-  createdb -h 127.0.0.1 -p "${port}" -U root espresso
+  if [[ "${shutting_down}" -eq 0 ]]; then
+    createdb -h 127.0.0.1 -p "${port}" -U root espresso
+  fi
 
   # Double wait: the first returns as soon as the trap fires; the second blocks until
   # postgres has actually exited so it is never left orphaned (see scripts/demo-native).
