@@ -57,7 +57,7 @@ NATIVE_PROCESSES=(
 	staking-cli
 	anvil
 	postgres
-	redis-server
+	keydb-server
 )
 
 # Helper function to safely kill processes only if they're running from this project

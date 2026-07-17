@@ -1,5 +1,5 @@
 name: Install native demo deps
-description: Install anvil (foundry), redis-server, and the postgres server for the native demo
+description: Install anvil (foundry), KeyDB, and the postgres server for the native demo
 
 runs:
   using: composite
@@ -9,10 +9,22 @@ runs:
       run: |
         set -euo pipefail
         sudo apt-get update
-        sudo apt-get install -y redis-server postgresql
-        # apt starts these on install; stop them so process-compose can bind the
-        # demo's own redis (6379) and postgres (5432/5433) ports.
-        sudo systemctl stop redis-server postgresql || true
+        sudo apt-get install -y postgresql
+        # apt starts postgres on install; stop it so process-compose can bind the
+        # demo's own postgres ports (5432/5433).
+        sudo systemctl stop postgresql || true
         # Debian keeps the postgres server binaries (initdb, postgres) off PATH;
         # only the client wrappers (psql, pg_isready, createdb) are symlinked.
         echo "$(ls -d /usr/lib/postgresql/*/bin | sort -V | tail -1)" >> "$GITHUB_PATH"
+
+        # KeyDB: the CDN's broker heartbeat uses KeyDB's EXPIREMEMBER command, which
+        # plain redis/valkey do not implement. There is no KeyDB apt repo for the
+        # runner's ubuntu, so extract the prebuilt keydb-server and supply its runtime
+        # libs (t64 packages provide the same SONAMEs on newer ubuntu; fall back to the
+        # pre-t64 names for older runners).
+        sudo apt-get install -y libsnappy1v5 libzstd1 libuuid1 libcurl4t64 libssl3t64 \
+          || sudo apt-get install -y libsnappy1v5 libzstd1 libuuid1 libcurl4 libssl3
+        curl -fsSL "https://download.keydb.dev/pkg/open_source/deb/ubuntu22.04_jammy/amd64/keydb-latest/keydb-tools_6.3.4-1~jammy1_amd64.deb" -o /tmp/keydb-tools.deb
+        dpkg-deb -x /tmp/keydb-tools.deb /tmp/keydb
+        echo "/tmp/keydb/usr/bin" >> "$GITHUB_PATH"
+        /tmp/keydb/usr/bin/keydb-server --version

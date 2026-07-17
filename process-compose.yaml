@@ -555,9 +555,10 @@ processes:
       failure_threshold: 100
     availability: *run-forever
 
-  # Redis backs CDN discovery (shared state between marshal and brokers).
+  # KeyDB backs CDN discovery (shared state between marshal and brokers). The CDN
+  # requires KeyDB's EXPIREMEMBER command for broker heartbeats; plain redis lacks it.
   keydb:
-    command: redis-server --bind 127.0.0.1 --port 6379 --requirepass 'changeme!'
+    command: keydb-server --bind 127.0.0.1 --port 6379 --requirepass 'changeme!'
     readiness_probe:
       exec:
         command: nc -zv localhost 6379

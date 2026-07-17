@@ -97,6 +97,7 @@
         })
       ];
       pkgs = import nixpkgs { inherit system overlays; };
+      keydb = pkgs.callPackage ./nix/keydb.nix { };
       myShell = pkgs.mkShellNoCC.override (pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
         # The mold linker is around 50% faster on Linux than the default linker.
         stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.clangStdenv;
@@ -199,6 +200,8 @@
           };
         };
       };
+      packages.keydb = keydb;
+
       devShells.default =
         let
           stableToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
@@ -237,7 +240,7 @@
             pup
             process-compose
             lazydocker # a docker compose TUI
-            redis # keydb
+            keydb # CDN discovery store for the native demo (prebuilt; see nix/keydb.nix)
             postgresql_18
 
             # Figures
