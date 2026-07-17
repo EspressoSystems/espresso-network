@@ -82,8 +82,7 @@ where
         .merge(axum::router_catchup(state.clone()))
         .merge(axum::router_state_signature(state.clone()))
         .merge(axum::router_token(state.clone()))
-        .merge(axum::router_database(state.clone()))
-        .merge(axum::create_router_v2(state.clone()));
+        .merge(axum::router_database(state.clone()));
     if modules.submit {
         router = router.merge(axum::router_submit(state.clone()));
     }
@@ -97,9 +96,10 @@ where
         router = router.merge(axum::router_light_client(state.clone()));
     }
     if modules.hotshot_events {
-        router = router.merge(axum::router_hotshot_events(state));
+        router = router.merge(axum::router_hotshot_events(state.clone()));
     }
-    serve_router(port, "v1 and v2", router.into(), max_connections).await
+    let router = axum::finish_v1_docs(router).merge(axum::create_router_v2(state));
+    serve_router(port, "v1 and v2", router, max_connections).await
 }
 
 /// Which of the optional API modules to serve, for modes that make them conditional
@@ -157,7 +157,7 @@ where
     if modules.hotshot_events {
         router = router.merge(axum::router_hotshot_events(state));
     }
-    serve_router(port, "fs", router.into(), max_connections).await
+    serve_router(port, "fs", axum::finish_v1_docs(router), max_connections).await
 }
 
 /// Serve the status-only API: no availability/node/token data source is available, so only
@@ -183,8 +183,14 @@ where
 {
     let router =
         axum::router_status(state.clone()).merge(axum::router_state_signature(state.clone()));
-    let router = merge_hotshot_modules(router.into(), &state, modules);
-    serve_router(port, "status", router, max_connections).await
+    let router = merge_hotshot_modules(router, &state, modules);
+    serve_router(
+        port,
+        "status",
+        axum::finish_v1_docs(router),
+        max_connections,
+    )
+    .await
 }
 
 /// Serve the bare API (no query or status module): only the HotShot modules are available,
@@ -208,15 +214,15 @@ where
         + 'static,
 {
     let router = axum::router_state_signature(state.clone());
-    let router = merge_hotshot_modules(router.into(), &state, modules);
-    serve_router(port, "bare", router, max_connections).await
+    let router = merge_hotshot_modules(router, &state, modules);
+    serve_router(port, "bare", axum::finish_v1_docs(router), max_connections).await
 }
 
 fn merge_hotshot_modules<S>(
-    mut router: ::axum::Router,
+    mut router: aide::axum::ApiRouter,
     state: &S,
     modules: OptionalModules,
-) -> ::axum::Router
+) -> aide::axum::ApiRouter
 where
     S: v1::SubmitApi
         + v1::CatchupApi
