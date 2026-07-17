@@ -18,6 +18,10 @@
 , openssl
 , snappy
 , zstd
+, bzip2
+, lz4
+, zlib
+, systemd
 , curl
 , util-linux
 , darwin
@@ -63,14 +67,22 @@ stdenv.mkDerivation {
     ++ lib.optionals stdenv.isDarwin [ darwin.autoSignDarwinBinariesHook ];
 
   buildInputs =
+    # keydb-server DT_NEEDED on Linux: libcrypto/libssl (openssl), libbz2 (bzip2),
+    # libzstd, liblz4, libsnappy, libz (zlib), libuuid (util-linux), libcurl,
+    # libsystemd, libstdc++/libgcc_s (cc), libm/libc (glibc, provided by stdenv).
     lib.optionals stdenv.isLinux [
       (lib.getLib stdenv.cc.cc)
       openssl
       snappy
       zstd
+      bzip2
+      lz4
+      zlib
+      (lib.getLib systemd)
       curl
       (lib.getLib util-linux)
     ]
+    # macOS bottle only links openssl@3 outside system libs (libz is /usr/lib).
     ++ lib.optionals stdenv.isDarwin [ openssl ];
 
   unpackPhase =
