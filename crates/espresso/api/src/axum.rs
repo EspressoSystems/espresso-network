@@ -9,7 +9,10 @@ use aide::{
         ApiRouter,
         routing::{get_with, post_with},
     },
-    openapi::{Info, OpenApi},
+    openapi::{
+        Info, OpenApi, Parameter, ParameterData, ParameterSchemaOrContent, PathStyle, ReferenceOr,
+        SchemaObject,
+    },
     operation::OperationOutput,
     redoc::Redoc,
     scalar::Scalar,
@@ -3530,6 +3533,8 @@ pub fn finish_v1_docs(router: ApiRouter) -> Router {
 
     let router = router.finish_api(&mut api);
 
+    declare_path_template_parameters(&mut api);
+
     // Transform examples (array) to example (singular) for OpenAPI 3.0/Swagger compatibility,
     // matching create_router_v2 (a no-op unless a future v1 route adds a JsonSchema body/query).
     if let Some(ref mut components) = api.components {
@@ -3557,6 +3562,79 @@ pub fn finish_v1_docs(router: ApiRouter) -> Router {
         )
         .layer(Extension(OpenApiV1(api)))
 }
+
+/// Declare a path parameter for every `{name}` template segment of every operation.
+///
+/// aide only derives path parameters from `Path<T>` extractors whose `T` is a named-field
+/// struct; the v1 handlers all use primitives and tuples (`Path<u64>`, `Path<(u64, String)>`),
+/// so nothing is derived and Swagger's try-it-out cannot fill the URL templates. The template
+/// itself names every parameter, so declare them from it (as strings; the handlers parse).
+fn declare_path_template_parameters(api: &mut OpenApi) {
+    let Some(ref mut paths) = api.paths else {
+        return;
+    };
+    for (path, path_item_ref) in paths.paths.iter_mut() {
+        let ReferenceOr::Item(path_item) = path_item_ref else {
+            continue;
+        };
+        let names: Vec<&str> = path
+            .split('/')
+            .filter_map(|seg| seg.strip_prefix('{').and_then(|s| s.strip_suffix('}')))
+            .collect();
+        if names.is_empty() {
+            continue;
+        }
+        // v1 only registers GET and POST routes; the other methods are covered so a future PUT,
+        // DELETE, or PATCH route keeps its parameters. head/options/trace are not used by axum
+        // routers here.
+        for operation in [
+            &mut path_item.get,
+            &mut path_item.post,
+            &mut path_item.put,
+            &mut path_item.delete,
+            &mut path_item.patch,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            for name in &names {
+                let already_declared = operation.parameters.iter().any(|p| {
+                    matches!(
+                        p,
+                        ReferenceOr::Item(Parameter::Path {
+                            parameter_data,
+                            ..
+                        }) if parameter_data.name == *name
+                    )
+                });
+                if already_declared {
+                    continue;
+                }
+                operation
+                    .parameters
+                    .push(ReferenceOr::Item(Parameter::Path {
+                        parameter_data: ParameterData {
+                            name: (*name).to_string(),
+                            description: None,
+                            required: true,
+                            deprecated: None,
+                            format: ParameterSchemaOrContent::Schema(SchemaObject {
+                                json_schema: schemars::json_schema!({"type": "string"}),
+                                external_docs: None,
+                                example: None,
+                            }),
+                            example: None,
+                            examples: Default::default(),
+                            explode: None,
+                            extensions: Default::default(),
+                        },
+                        style: PathStyle::Simple,
+                    }));
+            }
+        }
+    }
+}
+
 /// Create v2 router with OpenAPI documentation (proto types)
 pub fn create_router_v2<S>(state: S) -> Router
 where
@@ -4690,5 +4768,51 @@ mod tests {
             !paths.contains_key(routes::v1::LEAF_BY_HEIGHT_ROUTE),
             "spec must only document the modules this mode mounts"
         );
+
+        // Every `{name}` template segment must be declared as a path parameter, or Swagger's
+        // try-it-out cannot fill the URL.
+        let params = &paths[routes::v1::STATE_SIGNATURE_BLOCK_ROUTE]["get"]["parameters"];
+        assert_eq!(
+            params[0]["name"], "height",
+            "template parameters must be declared: {params}"
+        );
+        assert_eq!(params[0]["in"], "path");
+        assert_eq!(params[0]["required"], true);
+        assert_eq!(params[0]["schema"]["type"], "string");
+    }
+
+    /// Multi-segment templates declare one parameter per `{name}`, in template order.
+    #[tokio::test]
+    async fn v1_spec_declares_all_template_parameters() {
+        let router = create_router_v1(MockState);
+        let req = Request::builder()
+            .uri(routes::v1::OPENAPI_SPEC_ROUTE)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router, req).await.unwrap();
+        let spec: serde_json::Value =
+            serde_json::from_str(&body_string(resp).await).expect("valid JSON");
+        let paths = spec["paths"].as_object().expect("spec has paths");
+        for (path, item) in paths {
+            let names: Vec<&str> = path
+                .split('/')
+                .filter_map(|s| s.strip_prefix('{').and_then(|s| s.strip_suffix('}')))
+                .collect();
+            for op in item.as_object().unwrap().values() {
+                let declared: Vec<&str> = op["parameters"]
+                    .as_array()
+                    .map(|ps| {
+                        ps.iter()
+                            .filter(|p| p["in"] == "path")
+                            .map(|p| p["name"].as_str().unwrap())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                assert_eq!(
+                    declared, names,
+                    "path {path} must declare its template params"
+                );
+            }
+        }
     }
 }
