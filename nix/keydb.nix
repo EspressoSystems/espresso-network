@@ -1,15 +1,4 @@
-# KeyDB is not packaged in nixpkgs and has no clean macOS build, so the native
-# demo needs it provided out-of-band. The CDN (marshal/broker) uses KeyDB's
-# EXPIREMEMBER command for broker heartbeats; plain redis/valkey do not implement
-# it, so a real KeyDB is required.
-#
-# Rather than build from source (KeyDB vendors jemalloc/lua and its macOS build
-# is fragile) this repackages prebuilt binaries:
-#   - Linux: the official keydb-tools .deb, relocated onto nixpkgs libs via
-#     autoPatchelfHook (the binary is a dynamically-linked PIE).
-#   - macOS (aarch64): the Homebrew bottle, whose keydb-server only links
-#     openssl@3 outside the system libs; repoint it at nixpkgs openssl and
-#     re-sign (install_name_tool invalidates the ad-hoc signature).
+# Prebuilt KeyDB (not in nixpkgs): Linux keydb-tools .deb, macOS Homebrew bottle.
 { lib
 , stdenv
 , fetchurl
@@ -31,7 +20,6 @@ let
   version = "6.3.4";
   debBase = "https://download.keydb.dev/pkg/open_source/deb/ubuntu22.04_jammy";
 
-  # Linux: official keydb-tools debs (contain keydb-server).
   linuxSrcs = {
     x86_64-linux = fetchurl {
       url = "${debBase}/amd64/keydb-latest/keydb-tools_${version}-1~jammy1_amd64.deb";
@@ -43,8 +31,7 @@ let
     };
   };
 
-  # macOS aarch64: Homebrew bottle (oldest arm64 build for broad OS compat).
-  # The sha256 is the ghcr blob digest, which is also the file content hash.
+  # sha256 == ghcr blob digest.
   darwinBottleSha = "eefed6df2c14cfbab28ac8ce65f888d011bed8a1edec7095b891ba2b418ea733";
   darwinSrc = fetchurl {
     url = "https://ghcr.io/v2/homebrew/core/keydb/blobs/sha256:${darwinBottleSha}";
@@ -67,9 +54,6 @@ stdenv.mkDerivation {
     ++ lib.optionals stdenv.isDarwin [ darwin.autoSignDarwinBinariesHook ];
 
   buildInputs =
-    # keydb-server DT_NEEDED on Linux: libcrypto/libssl (openssl), libbz2 (bzip2),
-    # libzstd, liblz4, libsnappy, libz (zlib), libuuid (util-linux), libcurl,
-    # libsystemd, libstdc++/libgcc_s (cc), libm/libc (glibc, provided by stdenv).
     lib.optionals stdenv.isLinux [
       (lib.getLib stdenv.cc.cc)
       openssl
@@ -82,7 +66,6 @@ stdenv.mkDerivation {
       curl
       (lib.getLib util-linux)
     ]
-    # macOS bottle only links openssl@3 outside system libs (libz is /usr/lib).
     ++ lib.optionals stdenv.isDarwin [ openssl ];
 
   unpackPhase =
@@ -108,7 +91,7 @@ stdenv.mkDerivation {
   '';
 
   meta = {
-    description = "KeyDB (Redis fork) server, prebuilt, for the native demo CDN discovery store";
+    description = "KeyDB server, prebuilt, for the native demo CDN discovery store";
     homepage = "https://keydb.dev";
     platforms = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
     mainProgram = "keydb-server";

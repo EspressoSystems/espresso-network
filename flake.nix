@@ -240,7 +240,7 @@
             pup
             process-compose
             lazydocker # a docker compose TUI
-            keydb # CDN discovery store for the native demo (prebuilt; see nix/keydb.nix)
+            keydb
             postgresql_18
 
             # Figures

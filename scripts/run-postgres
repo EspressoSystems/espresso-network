@@ -1,14 +1,5 @@
 #!/usr/bin/env bash
-#
-# Start a single native PostgreSQL instance for the process-compose demo.
-#
-# The caller provides a port and a data directory; this script initializes
-# the cluster, starts postgres bound to 127.0.0.1, creates the "espresso"
-# database, and then blocks in the foreground so process-compose can manage
-# it as one long-lived service. SIGTERM/SIGINT are forwarded to postgres so
-# process-compose can stop it cleanly. initdb creates the data directory
-# itself (the parent must exist); nothing is removed here.
-#
+# Native postgres for the demo: initdb, create the espresso db, run in foreground.
 set -euo pipefail
 
 readonly SCRIPT_NAME="${0##*/}"
@@ -55,11 +46,8 @@ main() {
   postgres -D "${datadir}" -p "${port}" -k "${datadir}" -h 127.0.0.1 &
   pg_pid=$!
 
-  # SIGINT triggers postgres "fast shutdown" (rolls back and disconnects clients
-  # immediately). SIGTERM would be a "smart shutdown" that blocks until every client
-  # disconnects, hanging until process-compose force-kills on teardown. The flag lets
-  # the readiness loop bail out if a signal lands before postgres is ready (otherwise
-  # pg_isready never succeeds against a shutting-down server and the loop spins).
+  # SIGINT = fast shutdown (SIGTERM waits for clients). Flag lets the readiness
+  # loop exit if signalled before postgres is ready.
   local shutting_down=0
   trap 'shutting_down=1; kill -INT "${pg_pid}" 2>/dev/null' TERM INT
 
@@ -72,8 +60,7 @@ main() {
     createdb -h 127.0.0.1 -p "${port}" -U root espresso
   fi
 
-  # Double wait: the first returns as soon as the trap fires; the second blocks until
-  # postgres has actually exited so it is never left orphaned (see scripts/demo-native).
+  # first wait returns on trap; second blocks until postgres actually exits.
   wait "${pg_pid}" || true
   wait "${pg_pid}" 2>/dev/null || true
 }

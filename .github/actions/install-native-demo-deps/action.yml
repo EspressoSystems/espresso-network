@@ -10,17 +10,12 @@ runs:
         set -euo pipefail
         sudo apt-get update
         sudo apt-get install -y postgresql
-        # apt starts postgres on install; stop it so process-compose can bind the
-        # demo's own postgres ports (5432/5433).
+        # stop the auto-started cluster so the demo can bind 5432/5433
         sudo systemctl stop postgresql || true
-        # Debian keeps the postgres server binaries (initdb, postgres) off PATH;
-        # only the client wrappers (psql, pg_isready, createdb) are symlinked.
+        # postgres server binaries (initdb, postgres) are not on PATH on Debian
         echo "$(ls -d /usr/lib/postgresql/*/bin | sort -V | tail -1)" >> "$GITHUB_PATH"
 
-        # KeyDB: the CDN's broker heartbeat uses KeyDB's EXPIREMEMBER command, which
-        # plain redis/valkey do not implement. There is no KeyDB apt repo for the
-        # runner's ubuntu (24.04), so extract the prebuilt keydb-server and supply its
-        # runtime libs (the t64 packages provide the SONAMEs the jammy binary needs).
+        # keydb: extract the prebuilt server (no apt repo for 24.04) + its runtime libs
         sudo apt-get install -y libsnappy1v5 libzstd1 libuuid1 libcurl4t64 libssl3t64
         curl -fsSL "https://download.keydb.dev/pkg/open_source/deb/ubuntu22.04_jammy/amd64/keydb-latest/keydb-tools_6.3.4-1~jammy1_amd64.deb" -o /tmp/keydb-tools.deb
         dpkg-deb -x /tmp/keydb-tools.deb /tmp/keydb
