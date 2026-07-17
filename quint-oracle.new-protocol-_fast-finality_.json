@@ -1,0 +1,47 @@
+{
+  "components": {
+    "new-protocol-_fast-finality_": {
+      "name": "New Protocol (Fast Finality)",
+      "observations": [
+        "cutover_seeded",
+        "vote1_cast",
+        "qc1_formed",
+        "qc2_formed",
+        "lock_advanced",
+        "leaf_decided",
+        "chain_extends_legacy",
+        "view_timed_out",
+        "timeout_recovered",
+        "epoch_changed",
+        "conflicting_proposals"
+      ]
+    }
+  },
+  "eventScope": "new-protocol-_fast-finality_",
+  "format": "quint-oracle-config",
+  "main": "fastFinality",
+  "observations": [
+    "cutover_seeded",
+    "vote1_cast",
+    "qc1_formed",
+    "qc2_formed",
+    "lock_advanced",
+    "leaf_decided",
+    "chain_extends_legacy",
+    "view_timed_out",
+    "timeout_recovered",
+    "epoch_changed",
+    "conflicting_proposals"
+  ],
+  "reportDir": "mc-out-new-protocol-_fast-finality_",
+  "spec": "quint-specs/new-protocol-_fast-finality_.qnt",
+  "stepReplayBudget": 50,
+  "studio": {
+    "model": "quint-specs/new-protocol-_fast-finality_.qnt",
+    "system": "New Protocol (Fast Finality)",
+    "broadTestCommand": ["nix", "develop", "--command", "cargo", "nextest", "run", "-p", "hotshot-new-protocol", "--features", "oracle", "--profile", "new-protocol", "--test-threads", "1", "-E", "test(consensus::) | test(cutover::apply_pre_cutover_seed)"]
+  },
+  "testCommand": ["nix", "develop", "--command", "cargo", "nextest", "run", "-p", "hotshot-new-protocol", "--features", "oracle", "--profile", "new-protocol", "--test-threads", "1", "-E", "test(consensus::) | test(cutover::apply_pre_cutover_seed)"],
+  "unguidedStepBudget": 10,
+  "version": 1
+}

@@ -1,0 +1,8 @@
+[package]
+name = "quint-oracle-client"
+version = "0.1.0"
+edition = "2021"
+description = "Minimal, zero-dependency client for the Quint oracle daemon. Import it and call start_test plus a component-scoped logger at your spec's transition sites; it reports over the oracle REST protocol (POST /test, PUT /log) when QUINT_ORACLE_URL is set, and is a no-op otherwise — so normal runs are unaffected."
+license = "Apache-2.0"
+
+[dependencies]

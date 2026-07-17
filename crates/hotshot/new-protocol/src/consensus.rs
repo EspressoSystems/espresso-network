@@ -480,6 +480,7 @@ impl<T: NodeType> Consensus<T> {
     /// Idempotent: calling with the same seed twice (or with an older
     /// seed) does not regress decided/locked state.
     pub fn apply_pre_cutover_seed(&mut self, seed: PreCutoverSeed<T>) {
+        crate::oracle::bare("apply_cutover_seed");
         let view = seed.decided_anchor.view_number();
         if view > self.last_decided_view {
             self.last_decided_view = view;
@@ -1230,6 +1231,7 @@ impl<T: NodeType> Consensus<T> {
                 return Protocol::Continue;
             },
         }
+        crate::oracle::view_block("form_qc1", *view);
         self.certs.insert(view, certificate);
         Protocol::Continue
     }
@@ -1280,6 +1282,7 @@ impl<T: NodeType> Consensus<T> {
                 leaf_commit: certificate.data.leaf_commit,
             });
         }
+        crate::oracle::view_block("form_qc2", *view);
         self.certs2.insert(view, certificate);
         Protocol::Continue
     }
@@ -1435,6 +1438,7 @@ impl<T: NodeType> Consensus<T> {
                 return Protocol::Abort;
             },
         };
+        crate::oracle::view("timeout", *view);
         outbox.push_back(ConsensusOutput::SendTimeoutVote(
             vote,
             self.catchup_evidence(),
@@ -1480,9 +1484,11 @@ impl<T: NodeType> Consensus<T> {
                 return Protocol::Continue;
             },
         }
+        crate::oracle::view("form_tc", *certificate.view_number());
         self.timeout_certs.insert(view, certificate.clone());
         self.current_view = self.current_view.max(view);
         self.current_epoch = Some(epoch);
+        crate::oracle::view("advance_on_tc", *certificate.view_number());
         outbox.push_back(ConsensusOutput::ViewChanged(view, epoch));
         outbox.push_back(ConsensusOutput::ViewTimedOut(certificate.view_number()));
         outbox.push_back(ConsensusOutput::SendTimeoutCertificate(
@@ -1588,6 +1594,7 @@ impl<T: NodeType> Consensus<T> {
         }
         let next_view = cert2.view_number() + 1;
         let next_epoch = cert2.data.epoch + 1;
+        crate::oracle::bare("advance_epoch");
         // Change view to the first view of the next epoch
         self.current_view = self.current_view.max(next_view);
         self.current_epoch = Some(next_epoch);
@@ -1888,6 +1895,7 @@ impl<T: NodeType> Consensus<T> {
             self.last_decided_view = view;
             self.last_decided_leaf = decided[0].clone();
         }
+        crate::oracle::view_block("decide", *view);
         outbox.push_back(ConsensusOutput::LeafDecided {
             leaves: decided,
             cert1,
@@ -1994,6 +2002,7 @@ impl<T: NodeType> Consensus<T> {
             return;
         }
         let vid_share = self.vid_shares.get(&view).cloned();
+        crate::oracle::view_block("vote1", *view);
         outbox.push_back(ConsensusOutput::SendVote1(vote1));
         if let Some(vid_share) = vid_share {
             outbox.push_back(ConsensusOutput::BroadcastVidShare(vid_share));
@@ -2015,6 +2024,7 @@ impl<T: NodeType> Consensus<T> {
             return;
         }
         let (vote2, _) = self.pending_vote2.remove(&view).expect("checked above");
+        crate::oracle::view_block("vote2_and_lock", *view);
         outbox.push_back(ConsensusOutput::SendVote2(vote2));
     }
 
@@ -2037,6 +2047,7 @@ impl<T: NodeType> Consensus<T> {
             return;
         }
         let message = self.pending_proposal.remove(&view).expect("checked above");
+        crate::oracle::view_block("propose", *view);
         outbox.push_back(ConsensusOutput::SendProposal(message));
     }
 
@@ -2216,6 +2227,7 @@ impl<T: NodeType> Consensus<T> {
         let vid_share = can_send.then(|| vid_share.clone());
         self.voted_1_views.insert(view);
         if let Some(vid_share) = vid_share {
+            crate::oracle::view_block("vote1", *view);
             outbox.push_back(ConsensusOutput::SendVote1(vote));
             outbox.push_back(ConsensusOutput::BroadcastVidShare(vid_share));
         } else {
@@ -2330,6 +2342,7 @@ impl<T: NodeType> Consensus<T> {
             .locked_view()
             .expect("locked_cert is set before voting in phase 2");
         if self.vote2_persisted(view) && self.high_qc_persisted(required) {
+            crate::oracle::view_block("vote2_and_lock", *view);
             outbox.push_back(ConsensusOutput::SendVote2(vote));
         } else {
             if view > self.restart_barred_view {

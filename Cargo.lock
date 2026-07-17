@@ -6501,6 +6501,7 @@ dependencies = [
  "hotshot-utils",
  "parking_lot",
  "quickcheck",
+ "quint-oracle-client",
  "rand 0.8.6",
  "rayon",
  "serde",
@@ -10693,6 +10694,10 @@ dependencies = [
  "tracing",
  "windows-sys 0.60.2",
 ]
+
+[[package]]
+name = "quint-oracle-client"
+version = "0.1.0"
 
 [[package]]
 name = "quote"

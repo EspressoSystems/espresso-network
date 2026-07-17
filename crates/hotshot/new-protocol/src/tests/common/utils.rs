@@ -976,6 +976,14 @@ pub(crate) struct ConsensusHarness {
     pub consensus: Consensus<TestTypes>,
     pub membership_coordinator: EpochMembershipCoordinator<TestTypes>,
     pub collected: Outbox<ConsensusOutput<TestTypes>>,
+    /// Quint oracle per-test boundary; held for the harness (test) scope so the
+    /// buffered trace flushes on drop. No-op unless the `oracle` feature is on.
+    _oracle_guard: crate::oracle::TestGuard,
+}
+
+/// Start a Quint oracle test trace named after the current test thread.
+fn oracle_test_guard() -> crate::oracle::TestGuard {
+    crate::oracle::start_test(std::thread::current().name().unwrap_or("consensus_harness"))
 }
 
 impl ConsensusHarness {
@@ -1011,6 +1019,7 @@ impl ConsensusHarness {
             consensus,
             membership_coordinator: membership,
             collected: Outbox::new(),
+            _oracle_guard: oracle_test_guard(),
         }
     }
 
@@ -1060,6 +1069,7 @@ impl ConsensusHarness {
             consensus,
             membership_coordinator: membership,
             collected: Outbox::new(),
+            _oracle_guard: oracle_test_guard(),
         }
     }
 
