@@ -102,11 +102,12 @@ pub enum ConsensusInput<T: NodeType> {
     },
     EpochChange(EpochChangeMessage<T>),
     HeaderCreated(ViewNumber, Commitment<Leaf2<T>>, T::BlockHeader),
-    ProposalWithVidShare(
-        T::SignatureKey,
-        ProposalMessage<T, Validated>,
-        VidDisperseShare2<T>,
-    ),
+    /// A validated proposal. Consensus parks it until this node's VID share
+    /// for the same payload arrives ([`ConsensusInput::VidShare`]) and only
+    /// processes the two together.
+    Proposal(T::SignatureKey, ProposalMessage<T, Validated>),
+    /// This node's validated VID share.
+    VidShare(VidDisperseShare2<T>),
     FetchedProposal(ProposalMessage<T, Validated>),
     StateValidated(StateResponse<T>),
     StateValidationFailed(StateResponse<T>),
@@ -156,6 +157,11 @@ pub enum ConsensusOutput<T: NodeType> {
     ViewChanged(ViewNumber, EpochNumber),
     /// A view timed out with a timeout certificate.
     ViewTimedOut(ViewNumber),
+    /// A validated proposal met this node's VID share.
+    ProposalPaired {
+        proposal: SignedProposal<T, Proposal<T>>,
+        vid_share: VidDisperseShare2<T>,
+    },
     ProposalValidated {
         proposal: SignedProposal<T, Proposal<T>>,
         sender: T::SignatureKey,
@@ -178,6 +184,13 @@ pub enum ConsensusOutput<T: NodeType> {
     BroadcastVidShare(VidDisperseShare2<T>),
 }
 
+type UnpairedProposals<T> = BTreeMap<
+    (ViewNumber, VidCommitment2),
+    (<T as NodeType>::SignatureKey, ProposalMessage<T, Validated>),
+>;
+
+type UnpairedVidShares<T> = BTreeMap<(ViewNumber, VidCommitment2), VidDisperseShare2<T>>;
+
 /// Views to retain decide inputs (`proposals`, `certs`, `certs2`) behind the
 /// decided view, letting a late-broadcast Cert2 decide an older gap view.
 pub(crate) const DECIDE_BUFFER: u64 = 20;
@@ -190,6 +203,8 @@ pub struct Consensus<T: NodeType> {
     signed_proposals: BTreeMap<ViewNumber, SignedProposal<T, Proposal<T>>>,
     proposed_views: BTreeSet<ViewNumber>,
     vid_shares: BTreeMap<ViewNumber, VidDisperseShare2<T>>,
+    unpaired_proposals: UnpairedProposals<T>,
+    unpaired_vid_shares: UnpairedVidShares<T>,
     states_verified: BTreeMap<ViewNumber, Commitment<Leaf2<T>>>,
     blocks_reconstructed: BTreeSet<(ViewNumber, VidCommitment2)>,
     blocks: BTreeMap<(ViewNumber, VidCommitment2), T::BlockPayload>,
@@ -369,6 +384,8 @@ impl<T: NodeType> Consensus<T> {
             state_certs: BTreeMap::new(),
             upgrade_lock,
             vid_shares: BTreeMap::new(),
+            unpaired_proposals: BTreeMap::new(),
+            unpaired_vid_shares: BTreeMap::new(),
             epoch_height: epoch_height.into(),
         }
     }
@@ -659,14 +676,18 @@ impl<T: NodeType> Consensus<T> {
             input.view_number()
         };
         let proto = match input {
-            ConsensusInput::ProposalWithVidShare(sender, proposal, vid_share) => {
+            ConsensusInput::Proposal(sender, proposal) => {
                 debug!(
                     sender = %KeyPrefix::from(&sender),
                     block = %proposal.proposal.data.block_header.block_number(),
                     epoch = %proposal.proposal.data.epoch,
-                    "apply: proposal+vid share"
+                    "apply: proposal"
                 );
-                self.handle_proposal_with_vid_share(sender, proposal, vid_share, outbox)
+                self.pair_proposal(sender, proposal, outbox)
+            },
+            ConsensusInput::VidShare(vid_share) => {
+                debug!("apply: vid share");
+                self.pair_vid_share(vid_share, outbox)
             },
             ConsensusInput::FetchedProposal(message) => {
                 debug!(
@@ -946,7 +967,10 @@ impl<T: NodeType> Consensus<T> {
         match scope {
             GcScope::Local(view) => {
                 let c = Commitment::default_commitment_no_preimage();
+                let vc = VidCommitment2::default();
                 self.headers = self.headers.split_off(&(view, c));
+                self.unpaired_proposals = self.unpaired_proposals.split_off(&(view, vc));
+                self.unpaired_vid_shares = self.unpaired_vid_shares.split_off(&(view, vc));
                 self.proposed_views = self.proposed_views.split_off(&view);
                 self.states_verified = self.states_verified.split_off(&view);
                 self.timeout_certs = self.timeout_certs.split_off(&view);
@@ -1007,6 +1031,64 @@ impl<T: NodeType> Consensus<T> {
     #[cfg(test)]
     pub(crate) fn force_set_proposal(&mut self, view: ViewNumber, proposal: Proposal<T>) {
         self.proposals.insert(view, proposal);
+    }
+
+    /// Pair a validated proposal with this node's VID share for the same payload.
+    ///
+    /// The half arriving first is parked, keyed by (view, payload commitment).
+    fn pair_proposal(
+        &mut self,
+        sender: T::SignatureKey,
+        proposal: ProposalMessage<T, Validated>,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) -> Protocol {
+        let view = proposal.view_number();
+        let VidCommitment::V2(commit) = proposal.proposal.data.block_header.payload_commitment()
+        else {
+            warn!(%view, "proposal payload commitment is not V2, discarding");
+            return Protocol::Abort;
+        };
+        let Some(vid_share) = self.unpaired_vid_shares.remove(&(view, commit)) else {
+            self.unpaired_proposals
+                .insert((view, commit), (sender, proposal));
+            return Protocol::Abort;
+        };
+        self.on_proposal_paired(sender, proposal, vid_share, outbox)
+    }
+
+    /// Pair this node's VID share with a validated proposal for the same payload.
+    ///
+    /// The half arriving first is parked, keyed by (view, payload commitment).
+    fn pair_vid_share(
+        &mut self,
+        vid_share: VidDisperseShare2<T>,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) -> Protocol {
+        let key = (vid_share.view_number(), vid_share.payload_commitment);
+        let Some((sender, proposal)) = self.unpaired_proposals.remove(&key) else {
+            self.unpaired_vid_shares.insert(key, vid_share);
+            return Protocol::Abort;
+        };
+        self.on_proposal_paired(sender, proposal, vid_share, outbox)
+    }
+
+    fn on_proposal_paired(
+        &mut self,
+        sender: T::SignatureKey,
+        proposal: ProposalMessage<T, Validated>,
+        vid_share: VidDisperseShare2<T>,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) -> Protocol {
+        // Parked halves for this and older views can no longer pair.
+        let view = proposal.view_number();
+        let vc = VidCommitment2::default();
+        self.unpaired_proposals = self.unpaired_proposals.split_off(&(view + 1, vc));
+        self.unpaired_vid_shares = self.unpaired_vid_shares.split_off(&(view + 1, vc));
+        outbox.push_back(ConsensusOutput::ProposalPaired {
+            proposal: proposal.proposal.clone(),
+            vid_share: vid_share.clone(),
+        });
+        self.handle_proposal_with_vid_share(sender, proposal, vid_share, outbox)
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -2645,7 +2727,8 @@ impl<T: NodeType> ConsensusInput<T> {
             ConsensusInput::AdvanceView(cert) => cert.view_number() + 1,
             ConsensusInput::EpochRootCertificates { cert1, .. } => cert1.view_number(),
             ConsensusInput::HeaderCreated(view, ..) => *view,
-            ConsensusInput::ProposalWithVidShare(_, prop, _) => prop.view_number(),
+            ConsensusInput::Proposal(_, prop) => prop.view_number(),
+            ConsensusInput::VidShare(share) => share.view_number(),
             ConsensusInput::FetchedProposal(prop) => prop.view_number(),
             ConsensusInput::StateValidated(response) => response.view,
             ConsensusInput::StateValidationFailed(request) => request.view,
