@@ -19,15 +19,15 @@ anyhow = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }
 espresso-node = { workspace = true, default-features = false }
-espresso-types = { workspace = true }
+espresso-types = { workspace = true, features = ["node"] }
 futures = { workspace = true }
 hotshot-query-service = { workspace = true }
 hotshot-types = { workspace = true }
-light-client = { workspace = true }
+http-client = { workspace = true }
+light-client = { workspace = true, features = ["client", "rlp"] }
 log-panics = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-surf-disco = { workspace = true }
 tide-disco = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }

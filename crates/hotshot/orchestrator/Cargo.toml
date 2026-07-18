@@ -14,14 +14,13 @@ clap = { workspace = true }
 csv = { workspace = true }
 futures = { workspace = true }
 hotshot-types = { workspace = true }
+http-client = { workspace = true }
 libp2p-identity = { workspace = true }
 multiaddr = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-# Only used for its `error::ServerError` wire-error type and `Error` trait: `surf_disco::Client`
-# is generic over `E: tide_disco::Error`, so `OrchestratorClient` and the builder-pinging client
-# in `post_builder` both still name it. The HTTP server itself is axum.
-surf-disco = { workspace = true }
+# Only used for its `error::ServerError` wire-error type: the `OrchestratorApi` trait's handler
+# methods are still expressed in terms of it. The HTTP server itself is axum.
 tide-disco = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }

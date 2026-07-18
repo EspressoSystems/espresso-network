@@ -15,10 +15,9 @@ use espresso_node::{
 use espresso_types::{FeeAccount, FeeAmount, Header, SeqTypes};
 use futures::{StreamExt, TryStreamExt};
 use hotshot_query_service::{availability::BlockQueryData, types::HeightIndexed};
+use http_client::{Client, error::ClientErr};
 use jf_merkle_tree_compat::prelude::{MerkleProof, Sha3Node};
-use surf_disco::Client;
 use test_utils::reserve_tcp_port;
-use tide_disco::error::ServerError;
 use tokio::time::sleep;
 use versions::{EPOCH_VERSION, Upgrade};
 
@@ -37,7 +36,7 @@ async fn slow_test_merklized_state_api() {
         .build();
     let mut network = TestNetwork::new(config, Upgrade::trivial(EPOCH_VERSION)).await;
     let url = format!("http://localhost:{port}").parse().unwrap();
-    let client: Client<ServerError, SequencerApiVersion> = Client::new(url);
+    let client: Client<ClientErr, SequencerApiVersion> = Client::new(url);
 
     client.connect(Some(Duration::from_secs(15))).await;
 

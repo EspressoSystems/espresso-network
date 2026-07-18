@@ -412,7 +412,6 @@ staking-cli = { path = "staking-cli" }
 static_assertions = "1.1"
 strum = { version = "0.26", features = ["derive"] }
 surf = "2.3.2"
-surf-disco = "0.9"
 syn = { version = "2", features = ["full", "extra-traits"] }
 sysinfo = "0.33.1"
 tagged-base64 = "0.4.1"

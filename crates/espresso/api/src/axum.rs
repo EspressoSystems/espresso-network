@@ -26,6 +26,7 @@ use axum::{
     routing::get,
 };
 use futures::{StreamExt, stream::BoxStream};
+use http_client::healthcheck::{AppHealth, HealthStatus};
 use schemars::transform::Transform;
 use serde::Serialize;
 use serialization_api::v2::{
@@ -394,29 +395,11 @@ pub(crate) fn with_top_level_routes(router: Router) -> Router {
         .route("/version", get(version))
 }
 
-/// Health status of an application.
-///
-/// Wire-compatible with `tide_disco::healthcheck::HealthStatus` 0.9.6: `Available` is its first
-/// variant, so JSON emits the same name and vbs/bincode the same ordinal. The server only ever
-/// reports `Available`; the remaining tide variants are omitted until a client-side type exists.
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum HealthStatus {
-    Available,
-}
-
-/// Wire-compatible with `tide_disco::app::AppHealth`: JSON keys, variant casing, and the
-/// vbs/bincode field order (status ordinal, then modules map) must not change.
-#[derive(Serialize)]
-struct AppHealth {
-    status: HealthStatus,
-    // Tide populated this with each module's versioned health status; the axum modules don't
-    // report individual health, so it stays empty.
-    modules: BTreeMap<String, BTreeMap<u64, u16>>,
-}
-
 /// Top-level healthcheck, matching tide-disco's app-level `AppHealth` response for multi-module
 /// apps, in JSON or vbs binary depending on `Accept`.
+///
+/// Tide populated `modules` with each module's versioned health status; the axum modules don't
+/// report individual health, so it stays empty.
 async fn healthcheck(headers: HeaderMap) -> Result<Response, ApiError> {
     encode_response(
         &headers,
@@ -447,7 +430,7 @@ async fn module_healthcheck(headers: HeaderMap) -> Response {
 }
 
 /// Tide-disco-compatible version response. Tide emits the binary's clap version; we emit the
-/// crate version so `surf_disco::Client::connect` and similar polling helpers succeed.
+/// crate version so `http_client::Client::connect` and similar polling helpers succeed.
 async fn version() -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),

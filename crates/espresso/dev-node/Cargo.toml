@@ -39,12 +39,11 @@ versions = { workspace = true }
 committable = { workspace = true }
 escargot = { workspace = true }
 hotshot-query-service = { workspace = true }
+http-client = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
 rand = { workspace = true }
 rstest = { workspace = true }
-surf-disco = { workspace = true }
 test-log = { workspace = true }
-tide-disco = { workspace = true }
 tokio = { workspace = true }
 
 [lints]
