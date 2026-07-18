@@ -1,49 +1,43 @@
 //! Sequencer-specific API options and initialization.
 
-use std::sync::Arc;
+use std::{
+    collections::{BTreeSet, HashMap},
+    env,
+    sync::Arc,
+};
 
 use ::light_client::{state::LightClientOptions, storage::LightClientSqliteOptions};
 use anyhow::{Context, bail};
 use clap::Parser;
 use espresso_telemetry as telemetry;
 use espresso_types::{
-    BlockMerkleTree, PubKey, SeqTypes,
+    PubKey,
     v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, SequencerPersistence},
-    v0_3::RewardMerkleTreeV1,
-    v0_4::RewardMerkleTreeV2,
 };
-use futures::{
-    channel::oneshot,
-    future::{BoxFuture, Future},
-};
+use futures::{channel::oneshot, future::BoxFuture};
 use hotshot_query_service::{
-    ApiState as AppState, Error,
     data_source::{ExtensibleDataSource, MetricsDataSource},
-    status::{self, HasMetrics, UpdateStatusData},
+    status::{HasMetrics, UpdateStatusData},
 };
 use hotshot_types::traits::{
     metrics::{Metrics, NoMetrics},
     network::ConnectedNetwork,
 };
-use jf_merkle_tree_compat::MerkleTreeScheme;
 use process_metrics::ProcessMetrics;
-use tide_disco::{Api, App, Url, listener::RateLimitListener, method::ReadState};
-use vbs::version::StaticVersionType;
+use serde::de::Error as _;
+use url::Url;
 
 use super::{
     ApiState, StorageState,
     data_source::{
-        CatchupDataSource, HotShotConfigDataSource, NodeStateDataSource, Provider,
-        PruningDataSource, SequencerDataSource, StateSignatureDataSource, SubmitDataSource,
-        provider,
+        NodeStateDataSource, Provider, PruningDataSource, SequencerDataSource, provider,
     },
-    endpoints, fs, light_client, sql,
+    fs, sql,
     state::NodeApiStateImpl,
     update::ApiEventConsumer,
 };
 use crate::{
-    SequencerApiVersion,
-    api::{LightClientProvider, endpoints::RewardMerkleTreeVersion},
+    api::LightClientProvider,
     catchup::CatchupStorage,
     context::{SequencerContext, TaskList},
     options::PublicNodeConfig,
@@ -197,23 +191,11 @@ impl Options {
             Option<RequestResponseStorage>,
         ) = if let Some(query_opt) = self.query.take() {
             if let Some(opt) = self.storage_sql.take() {
-                self.init_with_query_module_sql(
-                    query_opt,
-                    opt,
-                    state,
-                    &mut tasks,
-                    SequencerApiVersion::instance(),
-                )
-                .await?
+                self.init_with_query_module_sql(query_opt, opt, state, &mut tasks)
+                    .await?
             } else if let Some(opt) = self.storage_fs.take() {
-                self.init_with_query_module_fs(
-                    query_opt,
-                    opt,
-                    state,
-                    &mut tasks,
-                    SequencerApiVersion::instance(),
-                )
-                .await?
+                self.init_with_query_module_fs(query_opt, opt, state, &mut tasks)
+                    .await?
             } else {
                 bail!("query module requested but not storage provided");
             }
@@ -225,28 +207,10 @@ impl Options {
             let metrics = ds.populate_metrics();
             telemetry::set_registry(Arc::new(ds.metrics().registry().clone()));
             tasks.spawn("process_metrics", ProcessMetrics::new(ds.metrics()).run());
-            let axum_ds = Arc::new(ExtensibleDataSource::new(ds.clone(), state.clone()));
-            let mut app = App::<_, Error>::with_state(AppState::from(ExtensibleDataSource::new(
-                ds,
-                state.clone(),
-            )));
-
-            // Initialize v0 and v1 status API.
-            register_api("status", &mut app, move |ver| {
-                status::define_api(&Default::default(), SequencerApiVersion::instance(), ver)
-                    .context("failed to define status api")
-            })?;
-
-            self.init_hotshot_modules(&mut app)?;
-
-            // Initialize hotshot events API if enabled
-            if self.hotshot_events.is_some() {
-                self.init_hotshot_events_module(&mut app)?;
-            }
-            drop(app);
+            let axum_ds = Arc::new(ExtensibleDataSource::new(ds, state.clone()));
 
             let port = self.http.port;
-            let env_vars = endpoints::get_public_env_vars().unwrap_or_default();
+            let env_vars = get_public_env_vars().unwrap_or_default();
             let node_cfg = self.public_node_config.as_deref().cloned();
             let modules = espresso_api::OptionalModules {
                 submit: self.submit.is_some(),
@@ -280,18 +244,8 @@ impl Options {
             //
             // If we have no availability API, we cannot load a saved leaf from local storage,
             // so we better have been provided the leaf ahead of time if we want it at all.
-            let mut app = App::<_, Error>::with_state(AppState::from(state.clone()));
-
-            self.init_hotshot_modules(&mut app)?;
-
-            // Initialize hotshot events API if enabled
-            if self.hotshot_events.is_some() {
-                self.init_hotshot_events_module(&mut app)?;
-            }
-            drop(app);
-
             let port = self.http.port;
-            let env_vars = endpoints::get_public_env_vars().unwrap_or_default();
+            let env_vars = get_public_env_vars().unwrap_or_default();
             let node_cfg = self.public_node_config.as_deref().cloned();
             let modules = espresso_api::OptionalModules {
                 submit: self.submit.is_some(),
@@ -325,89 +279,12 @@ impl Options {
         Ok(ctx.with_task_list(tasks))
     }
 
-    async fn init_app_modules<N, P, D>(
-        &self,
-        ds: D,
-        state: ApiState<N, P>,
-        bind_version: SequencerApiVersion,
-    ) -> anyhow::Result<(
-        Box<dyn Metrics>,
-        Arc<StorageState<N, P, D>>,
-        App<AppState<StorageState<N, P, D>>, Error>,
-    )>
-    where
-        N: ConnectedNetwork<PubKey>,
-        P: SequencerPersistence,
-        D: SequencerDataSource + CatchupStorage + PruningDataSource + Send + Sync + 'static,
-    {
-        let metrics = ds.populate_metrics();
-        // Deposit the underlying prometheus::Registry for the in-process
-        // telemetry push task. Idempotent; safe to call multiple times.
-        telemetry::set_registry(Arc::new(ds.metrics().registry().clone()));
-        let ds = Arc::new(ExtensibleDataSource::new(ds, state.clone()));
-        let api_state: endpoints::AvailState<N, P, D> = ds.clone().into();
-        let mut app = App::<_, Error>::with_state(api_state);
-
-        // Initialize v0 and v1 status API.
-        register_api("status", &mut app, move |ver| {
-            status::define_api(&Default::default(), SequencerApiVersion::instance(), ver)
-                .context("failed to define status api")
-        })?;
-
-        // Initialize availability and node APIs (these both use the same data source).
-
-        // Note: We initialize two versions of the availability module: `availability/v0` and `availability/v1`.
-        // - `availability/v0/leaf/0` returns the old `Leaf1` type for backward compatibility.
-        // - `availability/v1/leaf/0` returns the new `Leaf2` type
-
-        register_api("availability", &mut app, move |ver| {
-            endpoints::availability(ver).context("failed to define availability api")
-        })?;
-
-        register_api("node", &mut app, move |ver| {
-            endpoints::node(ver).context("failed to define node api")
-        })?;
-
-        register_api("token", &mut app, move |ver| {
-            endpoints::token(ver).context("failed to define token api")
-        })?;
-
-        // Initialize submit API
-        if self.submit.is_some() {
-            register_api("submit", &mut app, move |ver| {
-                endpoints::submit::<_, _, _, SequencerApiVersion>(ver)
-                    .context("failed to define submit api")
-            })?;
-        }
-
-        tracing::info!("initializing catchup API");
-
-        register_api("catchup", &mut app, move |ver| {
-            endpoints::catchup(bind_version, ver).context("failed to define catchup api")
-        })?;
-
-        register_api("state-signature", &mut app, move |ver| {
-            endpoints::state_signature(bind_version, ver)
-                .context("failed to define state signature api")
-        })?;
-
-        if self.config.is_some() {
-            let node_cfg = self.public_node_config.as_deref().cloned();
-            register_api("config", &mut app, move |ver| {
-                endpoints::config(bind_version, ver, node_cfg.clone())
-                    .context("failed to define config api")
-            })?;
-        }
-        Ok((metrics, ds, app))
-    }
-
     async fn init_with_query_module_fs<N, P>(
         &self,
         query_opt: Query,
         mod_opt: persistence::fs::Options,
         state: ApiState<N, P>,
         tasks: &mut TaskList,
-        bind_version: SequencerApiVersion,
     ) -> anyhow::Result<(
         Box<dyn Metrics>,
         Box<dyn EventConsumer>,
@@ -435,19 +312,11 @@ impl Options {
 
         tasks.spawn("process_metrics", ProcessMetrics::new(ds.metrics()).run());
 
-        let (metrics, ds, mut app) = self
-            .init_app_modules(ds, state.clone(), bind_version)
-            .await?;
-
-        // Initialize hotshot events API if enabled
-        if self.hotshot_events.is_some() {
-            self.init_hotshot_events_module(&mut app)?;
-        }
-        drop(app);
+        let (metrics, ds) = init_query_data_source(ds, state.clone());
 
         let port = self.http.port;
         let ds_for_axum = ds.clone();
-        let env_vars = endpoints::get_public_env_vars().unwrap_or_default();
+        let env_vars = get_public_env_vars().unwrap_or_default();
         let node_cfg = self.public_node_config.as_deref().cloned();
         let modules = espresso_api::OptionalModules {
             submit: self.submit.is_some(),
@@ -484,7 +353,6 @@ impl Options {
         mod_opt: persistence::sql::Options,
         state: ApiState<N, P>,
         tasks: &mut TaskList,
-        bind_version: SequencerApiVersion,
     ) -> anyhow::Result<(
         Box<dyn Metrics>,
         Box<dyn EventConsumer>,
@@ -516,55 +384,7 @@ impl Options {
         let ds = sql::DataSource::create(mod_opt.clone(), provider, false).await?;
         let inner_storage = ds.inner();
         tasks.spawn("process_metrics", ProcessMetrics::new(ds.metrics()).run());
-        let (metrics, ds, mut app) = self
-            .init_app_modules(ds, state.clone(), bind_version)
-            .await?;
-
-        if self.explorer.is_some() {
-            register_api("explorer", &mut app, move |ver| {
-                endpoints::explorer(ver).context("failed to define explorer api")
-            })?;
-        }
-
-        // Initialize database metadata API (SQL-only)
-        register_api("database", &mut app, move |ver| {
-            endpoints::database::<_, SequencerApiVersion>(ver)
-                .context("failed to define database api")
-        })?;
-
-        // Initialize merklized state module for block merkle tree
-
-        register_api("block-state", &mut app, move |ver| {
-            endpoints::merklized_state::<N, P, _, BlockMerkleTree, 3>(ver)
-                .context("failed to define block-state api")
-        })?;
-
-        // Initialize merklized state module for fee merkle tree
-
-        register_api("fee-state", &mut app, move |ver| {
-            endpoints::fee::<_, SequencerApiVersion>(ver).context("failed to define fee-state api")
-        })?;
-
-        register_api("reward-state", &mut app, move |ver| {
-            endpoints::reward::<
-                _,
-                SequencerApiVersion,
-                RewardMerkleTreeV1,
-                { RewardMerkleTreeV1::ARITY },
-            >(ver, RewardMerkleTreeVersion::V1)
-            .context("failed to define reward-state api")
-        })?;
-
-        // register new api for new reward merkle tree
-        register_api("reward-state-v2", &mut app, move |ver| {
-            endpoints::reward::<
-                _,
-                SequencerApiVersion,
-                RewardMerkleTreeV2,
-                { RewardMerkleTreeV2::ARITY },
-            >(ver, RewardMerkleTreeVersion::V2)
-            .context("failed to define reward-state api")
-        })?;
+        let (metrics, ds) = init_query_data_source(ds, state.clone());
 
         let get_node_state = {
             let state = state.clone();
@@ -575,28 +395,9 @@ impl Options {
             update_state_storage_loop(ds.clone(), get_node_state),
         );
 
-        // Initialize hotshot events API if enabled
-        if self.hotshot_events.is_some() {
-            self.init_hotshot_events_module(&mut app)?;
-        }
-
-        // Initialize light client API if enabled.
-        if self.light_client.is_some() {
-            register_api("light-client", &mut app, move |ver| {
-                light_client::define_api::<_, SequencerApiVersion>(Default::default(), ver)
-                    .context("failed to define light client api")
-            })?;
-        }
-
-        // Drop the tide-disco app — SQL mode is fully served by Axum. The unused `app` here
-        // is kept above only so the registrations exercise the tide-disco module definitions
-        // (which still compile against `App::register_module`) until all callers are off
-        // tide-disco. TODO: stop building `app` once the unused tide-disco branches are gone.
-        drop(app);
-
         let port = self.http.port;
         let ds_for_axum = ds.clone();
-        let env_vars = endpoints::get_public_env_vars().unwrap_or_default();
+        let env_vars = get_public_env_vars().unwrap_or_default();
         let node_cfg = self.public_node_config.as_deref().cloned();
         let modules = espresso_api::OptionalModules {
             submit: self.submit.is_some(),
@@ -632,105 +433,6 @@ impl Options {
             Box::new(ApiEventConsumer::from(ds)),
             Some(RequestResponseStorage::Sql(inner_storage)),
         ))
-    }
-
-    /// Initialize the modules for interacting with HotShot.
-    ///
-    /// This function adds the `submit`, `state`, and `state_signature` API modules to the given
-    /// app. These modules only require a HotShot handle as state, and thus they work with any data
-    /// source, so initialization is the same no matter what mode the service is running in.
-    fn init_hotshot_modules<N, P, S>(&self, app: &mut App<S, Error>) -> anyhow::Result<()>
-    where
-        S: 'static + Send + Sync + ReadState,
-        P: SequencerPersistence,
-        S::State: Send
-            + Sync
-            + SubmitDataSource<N, P>
-            + StateSignatureDataSource<N>
-            + NodeStateDataSource
-            + CatchupDataSource
-            + HotShotConfigDataSource,
-        N: ConnectedNetwork<PubKey>,
-    {
-        let bind_version = SequencerApiVersion::instance();
-        // Initialize submit API
-        if self.submit.is_some() {
-            register_api("submit", app, move |ver| {
-                endpoints::submit::<_, _, _, SequencerApiVersion>(ver)
-                    .context("failed to define submit api")
-            })?;
-        }
-
-        // Initialize state API.
-        if self.catchup.is_some() {
-            tracing::info!("initializing state API");
-
-            register_api("catchup", app, move |ver| {
-                endpoints::catchup(bind_version, ver).context("failed to define catchup api")
-            })?;
-        }
-
-        register_api("state-signature", app, move |ver| {
-            endpoints::state_signature(bind_version, ver)
-                .context("failed to define state signature api")
-        })?;
-
-        if self.config.is_some() {
-            let node_cfg = self.public_node_config.as_deref().cloned();
-            register_api("config", app, move |ver| {
-                endpoints::config(bind_version, ver, node_cfg.clone())
-                    .context("failed to define config api")
-            })?;
-        }
-
-        Ok(())
-    }
-
-    /// Initialize the hotshot events API module if enabled.
-    ///
-    /// This function adds the hotshot events API module to the given app if the hotshot_events
-    /// option is enabled. This module requires the app state to implement EventsSource.
-    fn init_hotshot_events_module<S>(&self, app: &mut App<S, Error>) -> anyhow::Result<()>
-    where
-        S: 'static + Send + Sync + ReadState,
-        S::State: Send + Sync + hotshot_events_service::events_source::EventsSource<SeqTypes>,
-    {
-        tracing::info!("Initializing HotShot events API at /hotshot-events");
-        register_api("hotshot-events", app, move |ver| {
-            hotshot_events_service::events::define_api::<_, _, SequencerApiVersion>(
-                &hotshot_events_service::events::Options::default(),
-                ver,
-            )
-            .with_context(|| "failed to define the HotShot events API")
-        })?;
-
-        Ok(())
-    }
-
-    // Kept until tide-disco removal; no longer called since the axum cutover.
-    #[allow(dead_code)]
-    fn listen<S, E, ApiVer>(
-        &self,
-        port: u16,
-        app: App<S, E>,
-        bind_version: ApiVer,
-    ) -> impl Future<Output = anyhow::Result<()>> + use<S, E, ApiVer>
-    where
-        S: Send + Sync + 'static,
-        E: Send + Sync + tide_disco::Error,
-        ApiVer: StaticVersionType + 'static,
-    {
-        let max_connections = self.http.max_connections;
-
-        async move {
-            if let Some(limit) = max_connections {
-                app.serve(RateLimitListener::with_port(port, limit), bind_version)
-                    .await?;
-            } else {
-                app.serve(format!("0.0.0.0:{port}"), bind_version).await?;
-            }
-            Ok(())
-        }
     }
 }
 
@@ -823,26 +525,43 @@ pub struct Explorer;
 #[derive(Parser, Clone, Copy, Debug, Default)]
 pub struct LightClient;
 
-/// Registers two versions (v0 and v1) of the same API module under the given path.
-fn register_api<E, S, F, ModuleError, ModuleVersion>(
-    path: &'static str,
-    app: &mut App<S, E>,
-    f: F,
-) -> anyhow::Result<()>
+/// Metrics handle plus the wrapped query data source shared by the axum server and update loops.
+type QueryModuleState<N, P, D> = (Box<dyn Metrics>, Arc<StorageState<N, P, D>>);
+
+/// Populate consensus metrics on `ds`, deposit its prometheus registry for the in-process
+/// telemetry push task (idempotent), and wrap it with the API state.
+fn init_query_data_source<N, P, D>(ds: D, state: ApiState<N, P>) -> QueryModuleState<N, P, D>
 where
-    S: 'static + Send + Sync,
-    E: Send + Sync + 'static + tide_disco::Error + From<ModuleError>,
-    ModuleError: Send + Sync + 'static,
-    ModuleVersion: StaticVersionType + 'static,
-    F: Fn(semver::Version) -> anyhow::Result<Api<S, ModuleError, ModuleVersion>>,
+    N: ConnectedNetwork<PubKey>,
+    P: SequencerPersistence,
+    D: SequencerDataSource + CatchupStorage + PruningDataSource + Send + Sync + 'static,
 {
-    let v0 = "0.0.1".parse().unwrap();
-    let v1 = "1.1.0".parse().unwrap();
-    let result1 = f(v0)?;
-    let result2 = f(v1)?;
+    let metrics = ds.populate_metrics();
+    telemetry::set_registry(Arc::new(ds.metrics().registry().clone()));
+    let ds = Arc::new(ExtensibleDataSource::new(ds, state));
+    (metrics, ds)
+}
 
-    app.register_module(path, result1)?;
-    app.register_module(path, result2)?;
+/// The environment variables listed in `api/public-env-vars.toml`, as `KEY=value` strings.
+fn get_public_env_vars() -> anyhow::Result<Vec<String>> {
+    let toml: toml::Value = toml::from_str(include_str!("../../api/public-env-vars.toml"))?;
 
-    Ok(())
+    let keys = toml
+        .get("variables")
+        .ok_or_else(|| toml::de::Error::custom("variables not found"))?
+        .as_array()
+        .ok_or_else(|| toml::de::Error::custom("variables is not an array"))?
+        .clone()
+        .into_iter()
+        .map(|v| v.try_into())
+        .collect::<Result<BTreeSet<String>, toml::de::Error>>()?;
+
+    let hashmap: HashMap<String, String> = env::vars().collect();
+    let mut public_env_vars: Vec<String> = Vec::new();
+    for key in keys {
+        let value = hashmap.get(&key).cloned().unwrap_or_default();
+        public_env_vars.push(format!("{key}={value}"));
+    }
+
+    Ok(public_env_vars)
 }

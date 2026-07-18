@@ -8,6 +8,7 @@ use std::{ops::Bound, time::Duration};
 use alloy::primitives::U256;
 use async_trait::async_trait;
 use committable::Committable as _;
+use disco_types::{error::Error as _, status::StatusCode};
 use espresso_api::{error::AvailabilityError, v1::HotShotAvailabilityApi};
 use espresso_types::{
     NamespaceId, NamespaceProofQueryData, NsProof, SeqTypes,
@@ -41,7 +42,7 @@ use hotshot_query_service::{
         MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot as HsSnapshot,
     },
     node::{NodeDataSource as _, WindowStart},
-    status::HasMetrics,
+    status::HasMetrics as _,
     types::HeightIndexed as _,
 };
 use hotshot_types::{
@@ -53,6 +54,7 @@ use jf_merkle_tree_compat::prelude::{
     MerkleNode as InternalMerkleNode, MerkleProof as InternalMerkleProof,
     MerkleProof as JfMerkleProof,
 };
+use prometheus::Encoder as _;
 use serde_json;
 use serialization_api::v2::{
     self, RewardAccountProofV2, RewardAccountQueryDataV2, RewardBalance, RewardBalances,
@@ -60,7 +62,6 @@ use serialization_api::v2::{
     reward_merkle_proof_v2::ProofType,
 };
 use tagged_base64::TaggedBase64;
-use tide_disco::{Error as _, StatusCode, metrics::Metrics as _};
 
 use super::{
     RewardMerkleTreeDataSource, RewardMerkleTreeV2Data as InternalRewardTreeData,
@@ -2308,7 +2309,10 @@ where
 
     async fn metrics(&self) -> anyhow::Result<String> {
         let ds = &*self.data_source;
-        ds.metrics().export().map_err(|e| anyhow::anyhow!("{e}"))
+        // Same text exposition tide-disco's `Metrics::export` produced for this registry.
+        let mut buffer = Vec::new();
+        prometheus::TextEncoder::new().encode(&ds.metrics().registry().gather(), &mut buffer)?;
+        Ok(String::from_utf8(buffer)?)
     }
 }
 

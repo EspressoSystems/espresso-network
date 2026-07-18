@@ -18,6 +18,7 @@ genesis = []
 anyhow = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }
+disco-types = { workspace = true }
 espresso-node = { workspace = true, default-features = false }
 espresso-types = { workspace = true, features = ["node"] }
 futures = { workspace = true }
@@ -28,7 +29,6 @@ light-client = { workspace = true, features = ["client", "rlp"] }
 log-panics = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-tide-disco = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }

@@ -35,7 +35,7 @@ use hotshot_types::{
 use indexmap::IndexMap;
 use light_client::{state::LightClientOptions, storage::LightClientSqliteOptions};
 use serde::{Deserialize, Serialize};
-use tide_disco::Url;
+use url::Url;
 
 use super::{
     AccountQueryData, BlocksFrontier, fs,

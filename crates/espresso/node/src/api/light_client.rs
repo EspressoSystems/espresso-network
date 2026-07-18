@@ -2,37 +2,24 @@ use std::{collections::HashMap, fmt::Display, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use committable::Committable;
+use disco_types::status::StatusCode;
 use espresso_types::{BlockMerkleTree, Header, NsIndex, NsProof, SeqTypes};
-use futures::{
-    TryStreamExt,
-    future::{FutureExt, join, try_join},
-    stream::StreamExt,
-};
+use futures::{TryStreamExt, future::try_join, stream::StreamExt};
 use hotshot_query_service::{
     Error,
-    availability::{
-        self, AvailabilityDataSource, LeafId, LeafQueryData, PayloadQueryData, VidCommonQueryData,
-    },
+    availability::{AvailabilityDataSource, LeafQueryData, PayloadQueryData, VidCommonQueryData},
     data_source::{VersionedDataSource, storage::NodeStorage},
     merklized_state::{MerklizedStateDataSource, Snapshot},
     node::BlockId,
     types::HeightIndexed,
 };
-use hotshot_types::utils::{epoch_from_block_number, root_block_in_epoch};
 use itertools::izip;
 use jf_merkle_tree_compat::MerkleTreeScheme;
 use light_client::{
     client::NAMESPACES_PARAM_TAG,
-    consensus::{
-        header::HeaderProof, leaf::LeafProof, namespace::NamespaceProof, payload::PayloadProof,
-    },
+    consensus::{header::HeaderProof, leaf::LeafProof, namespace::NamespaceProof},
 };
 use tagged_base64::TaggedBase64;
-use tide_disco::{Api, RequestParams, StatusCode, method::ReadState};
-use vbs::version::StaticVersionType;
-use versions::NEW_PROTOCOL_VERSION;
-
-use crate::api::data_source::{NodeStateDataSource, StakeTableDataSource};
 
 pub(crate) async fn get_leaf_proof_with_qc_chain<State>(
     state: &State,
@@ -398,16 +385,6 @@ pub(crate) fn parse_namespaces_str(encoded: &str) -> anyhow::Result<Vec<u64>> {
         .map_err(|err| anyhow::anyhow!("invalid namespaces parameter: {err}"))
 }
 
-fn parse_namespaces_param(req: &RequestParams) -> Result<Vec<u64>, Error> {
-    let encoded = req
-        .tagged_base64_param("namespaces")
-        .map_err(bad_param("namespaces"))?;
-    parse_namespaces_str(&encoded.to_string()).map_err(|err| Error::Custom {
-        message: err.to_string(),
-        status: StatusCode::BAD_REQUEST,
-    })
-}
-
 /// Construct a [`NamespaceProof`] for the namespace at `ns_index` of the given block.
 fn build_namespace_proof(
     payload: &PayloadQueryData<SeqTypes>,
@@ -422,396 +399,6 @@ fn build_namespace_proof(
             }
         })?;
     Ok(NamespaceProof::new(ns_proof, vid_common.common().clone()))
-}
-
-#[derive(Debug)]
-pub(super) struct Options {
-    /// Timeout for failing requests due to missing data.
-    ///
-    /// If data needed to respond to a request is missing, it can (in some cases) be fetched from an
-    /// external provider. This parameter controls how long the request handler will wait for
-    /// missing data to be fetched before giving up and failing the request.
-    pub fetch_timeout: Duration,
-
-    /// The maximum number of large objects which can be loaded in a single range query.
-    ///
-    /// Large objects include anything that _might_ contain a full payload or an object proportional
-    /// in size to a payload. Note that this limit applies to the entire class of objects: we do not
-    /// check the size of objects while loading to determine which limit to apply. If an object
-    /// belongs to a class which might contain a large payload, the large object limit always
-    /// applies.
-    pub large_object_range_limit: usize,
-}
-
-impl Default for Options {
-    fn default() -> Self {
-        Self {
-            fetch_timeout: Duration::from_millis(500),
-            large_object_range_limit: availability::Options::default().large_object_range_limit,
-        }
-    }
-}
-
-pub(super) fn define_api<S, ApiVer: StaticVersionType + 'static>(
-    opt: Options,
-    api_ver: semver::Version,
-) -> Result<Api<S, Error, ApiVer>>
-where
-    S: ReadState + Send + Sync + 'static,
-    S::State: AvailabilityDataSource<SeqTypes>
-        + MerklizedStateDataSource<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>
-        + NodeStateDataSource
-        + StakeTableDataSource<SeqTypes>
-        + VersionedDataSource,
-    for<'a> <S::State as VersionedDataSource>::ReadOnly<'a>: NodeStorage<SeqTypes>,
-{
-    let toml = toml::from_str::<toml::Value>(include_str!("../../api/light-client.toml"))?;
-    let mut api = Api::<S, Error, ApiVer>::new(toml)?;
-    api.with_version(api_ver);
-
-    let Options {
-        fetch_timeout,
-        large_object_range_limit,
-    } = opt;
-
-    api.get("leaf", move |req, state| {
-        async move {
-            let requested_leaf = leaf_from_req(&req, state, fetch_timeout).await?;
-            let finalized = req
-                .opt_integer_param("finalized")
-                .map_err(bad_param("finalized"))?;
-
-            if let Some(finalized) = finalized {
-                get_leaf_proof_with_finalized_assumption(
-                    state,
-                    requested_leaf,
-                    finalized,
-                    fetch_timeout,
-                )
-                .await
-            } else if requested_leaf.header().version() >= NEW_PROTOCOL_VERSION {
-                get_leaf_proof_with_cert2(state, requested_leaf, fetch_timeout).await
-            } else {
-                get_leaf_proof_with_qc_chain(state, requested_leaf, fetch_timeout).await
-            }
-        }
-        .boxed()
-    })?
-    .get("header", move |req, state| {
-        async move {
-            let root = req.integer_param("root").map_err(bad_param("root"))?;
-            let requested = block_id_from_req(&req)?;
-            get_header_proof(state, root, requested, fetch_timeout).await
-        }
-        .boxed()
-    })?
-    .get("stake_table", move |req, state| {
-        async move {
-            let epoch: u64 = req.integer_param("epoch").map_err(bad_param("epoch"))?;
-
-            let node_state = state.node_state().await;
-            let epoch_height = node_state.epoch_height.ok_or_else(|| Error::Custom {
-                message: "epoch state not set".into(),
-                status: StatusCode::INTERNAL_SERVER_ERROR,
-            })?;
-            let first_epoch = epoch_from_block_number(node_state.epoch_start_block, epoch_height);
-
-            if epoch < first_epoch + 2 {
-                return Err(Error::Custom {
-                    message: format!("epoch must be at least {}", first_epoch + 2),
-                    status: StatusCode::BAD_REQUEST,
-                });
-            }
-
-            // Find the range of L1 block containing events for this epoch. This is determined by
-            // the `l1_finalized` field of the epoch root (from two epochs prior) and the previous
-            // epoch's epoch root.
-            let epoch_root_height = root_block_in_epoch(epoch - 2, epoch_height) as usize;
-            let epoch_root = state
-                .get_header(epoch_root_height)
-                .await
-                .with_timeout(fetch_timeout)
-                .await
-                .ok_or_else(|| {
-                    not_found(format!("missing epoch root header {epoch_root_height}"))
-                })?;
-            let to_l1_block = epoch_root
-                .l1_finalized()
-                .ok_or_else(|| Error::Custom {
-                    message: "epoch root header is missing L1 finalized block".into(),
-                    status: StatusCode::INTERNAL_SERVER_ERROR,
-                })?
-                .number();
-
-            let from_l1_block = if epoch >= first_epoch + 3 {
-                let prev_epoch_root_height = root_block_in_epoch(epoch - 3, epoch_height) as usize;
-                let prev_epoch_root = state
-                    .get_header(prev_epoch_root_height)
-                    .await
-                    .with_timeout(fetch_timeout)
-                    .await
-                    .ok_or_else(|| {
-                        not_found(format!(
-                            "missing previous epoch root header {prev_epoch_root_height}"
-                        ))
-                    })?;
-                prev_epoch_root
-                    .l1_finalized()
-                    .ok_or_else(|| Error::Custom {
-                        message: "previous epoch root header is missing L1 finalized block".into(),
-                        status: StatusCode::INTERNAL_SERVER_ERROR,
-                    })?
-                    .number()
-                    + 1
-            } else {
-                0
-            };
-
-            state
-                .stake_table_events(from_l1_block, to_l1_block)
-                .await
-                .map_err(|err| Error::Custom {
-                    message: format!("failed to load stake table events: {err:#}"),
-                    status: StatusCode::INTERNAL_SERVER_ERROR,
-                })
-        }
-        .boxed()
-    })?
-    .get("payload", move |req, state| {
-        async move {
-            let height: usize = req.integer_param("height").map_err(bad_param("height"))?;
-            let fetch_payload = async move {
-                state
-                    .get_payload(height)
-                    .await
-                    .with_timeout(fetch_timeout)
-                    .await
-                    .ok_or_else(|| Error::Custom {
-                        message: format!("missing payload {height}"),
-                        status: StatusCode::NOT_FOUND,
-                    })
-            };
-            let fetch_vid_common = async move {
-                state
-                    .get_vid_common(height)
-                    .await
-                    .with_timeout(fetch_timeout)
-                    .await
-                    .ok_or_else(|| Error::Custom {
-                        message: format!("missing VID common {height}"),
-                        status: StatusCode::NOT_FOUND,
-                    })
-            };
-            let (payload, vid_common) = try_join(fetch_payload, fetch_vid_common).await?;
-            Ok(PayloadProof::new(
-                payload.data().clone(),
-                vid_common.common().clone(),
-            ))
-        }
-        .boxed()
-    })?
-    .get("payload_range", move |req, state| {
-        async move {
-            let start: usize = req.integer_param("start").map_err(bad_param("start"))?;
-            let end: usize = req.integer_param("end").map_err(bad_param("end"))?;
-            let fetch_payloads = async move {
-                state.get_payload_range(start..end).await.enumerate().then(
-                    move |(i, fetch)| async move {
-                        fetch
-                            .with_timeout(fetch_timeout)
-                            .await
-                            .ok_or_else(|| Error::Custom {
-                                message: format!("missing payload {}", start + i),
-                                status: StatusCode::NOT_FOUND,
-                            })
-                    },
-                )
-            };
-            let fetch_vid_commons = async move {
-                state
-                    .get_vid_common_range(start..end)
-                    .await
-                    .enumerate()
-                    .then(move |(i, fetch)| async move {
-                        fetch
-                            .with_timeout(fetch_timeout)
-                            .await
-                            .ok_or_else(|| Error::Custom {
-                                message: format!("missing VID common {}", start + i),
-                                status: StatusCode::NOT_FOUND,
-                            })
-                    })
-            };
-            let (payloads, vid_commons) = join(fetch_payloads, fetch_vid_commons).await;
-            payloads
-                .zip(vid_commons)
-                .map(|(payload, vid_common)| {
-                    Ok(PayloadProof::new(
-                        payload?.data().clone(),
-                        vid_common?.common().clone(),
-                    ))
-                })
-                .try_collect::<Vec<_>>()
-                .await
-        }
-        .boxed()
-    })?
-    .get("namespace", move |req, state| {
-        async move {
-            let height = req.integer_param("height").map_err(bad_param("height"))?;
-            let namespace = req
-                .integer_param("namespace")
-                .map_err(bad_param("namespace"))?;
-            let mut proofs = get_namespace_proof_range(
-                state,
-                height,
-                height + 1,
-                namespace,
-                fetch_timeout,
-                large_object_range_limit,
-            )
-            .await?;
-            if proofs.len() != 1 {
-                tracing::error!(
-                    height,
-                    namespace,
-                    ?proofs,
-                    "get_namespace_proof_range should have returned exactly one proof"
-                );
-                return Err(Error::Custom {
-                    message: "internal consistency error".into(),
-                    status: StatusCode::INTERNAL_SERVER_ERROR,
-                });
-            }
-            Ok(proofs.remove(0))
-        }
-        .boxed()
-    })?
-    .get("namespace_range", move |req, state| {
-        async move {
-            let start = req.integer_param("start").map_err(bad_param("start"))?;
-            let end = req.integer_param("end").map_err(bad_param("end"))?;
-            let namespace = req
-                .integer_param("namespace")
-                .map_err(bad_param("namespace"))?;
-            get_namespace_proof_range(
-                state,
-                start,
-                end,
-                namespace,
-                fetch_timeout,
-                large_object_range_limit,
-            )
-            .await
-        }
-        .boxed()
-    })?
-    .get("namespaces_range", move |req, state| {
-        async move {
-            let start = req.integer_param("start").map_err(bad_param("start"))?;
-            let end = req.integer_param("end").map_err(bad_param("end"))?;
-            let namespaces = parse_namespaces_param(&req)?;
-            get_namespaces_proof_range(
-                state,
-                start,
-                end,
-                &namespaces,
-                fetch_timeout,
-                large_object_range_limit,
-            )
-            .await
-        }
-        .boxed()
-    })?;
-
-    Ok(api)
-}
-
-async fn leaf_from_req<S>(
-    req: &RequestParams,
-    state: &S,
-    fetch_timeout: Duration,
-) -> Result<LeafQueryData<SeqTypes>, Error>
-where
-    S: AvailabilityDataSource<SeqTypes>,
-{
-    let requested = if let Some(height) = req
-        .opt_integer_param::<_, usize>("height")
-        .map_err(bad_param("height"))?
-    {
-        LeafId::Number(height)
-    } else if let Some(hash) = req.opt_blob_param("hash").map_err(bad_param("hash"))? {
-        LeafId::Hash(hash)
-    } else if let Some(hash) = req
-        .opt_blob_param("block-hash")
-        .map_err(bad_param("block-hash"))?
-    {
-        let header = state
-            .get_header(BlockId::Hash(hash))
-            .await
-            .with_timeout(fetch_timeout)
-            .await
-            .ok_or_else(|| not_found(format!("unknown block hash {hash}")))?;
-        LeafId::Number(header.height() as usize)
-    } else if let Some(hash) = req
-        .opt_blob_param("payload-hash")
-        .map_err(bad_param("payload-hash"))?
-    {
-        let header = state
-            .get_header(BlockId::PayloadHash(hash))
-            .await
-            .with_timeout(fetch_timeout)
-            .await
-            .ok_or_else(|| not_found(format!("unknown payload hash {hash}")))?;
-        LeafId::Number(header.height() as usize)
-    } else {
-        return Err(Error::Custom {
-            message: "missing parameter: requested leaf must be identified by height, hash, block \
-                      hash, or payload hash"
-                .into(),
-            status: StatusCode::BAD_REQUEST,
-        });
-    };
-
-    state
-        .get_leaf(requested)
-        .await
-        .with_timeout(fetch_timeout)
-        .await
-        .ok_or_else(|| not_found(format!("unknown leaf {requested}")))
-}
-
-fn block_id_from_req(req: &RequestParams) -> Result<BlockId<SeqTypes>, Error> {
-    if let Some(height) = req
-        .opt_integer_param("height")
-        .map_err(bad_param("height"))?
-    {
-        Ok(BlockId::Number(height))
-    } else if let Some(hash) = req.opt_blob_param("hash").map_err(bad_param("hash"))? {
-        Ok(BlockId::Hash(hash))
-    } else if let Some(hash) = req
-        .opt_blob_param("payload-hash")
-        .map_err(bad_param("payload-hash"))?
-    {
-        Ok(BlockId::PayloadHash(hash))
-    } else {
-        Err(Error::Custom {
-            message: "missing parameter: requested header must be identified by height, hash, or \
-                      payload hash"
-                .into(),
-            status: StatusCode::BAD_REQUEST,
-        })
-    }
-}
-
-fn bad_param<E>(name: &'static str) -> impl FnOnce(E) -> Error
-where
-    E: Display,
-{
-    move |err| Error::Custom {
-        message: format!("{name}: {err:#}"),
-        status: StatusCode::BAD_REQUEST,
-    }
 }
 
 fn internal(err: impl Display) -> Error {
@@ -833,6 +420,7 @@ mod test {
     use std::marker::PhantomData;
 
     use committable::Committable;
+    use disco_types::error::Error;
     use espresso_types::BLOCK_MERKLE_TREE_HEIGHT;
     use futures::future::join_all;
     use hotshot_query_service::{
@@ -849,7 +437,6 @@ mod test {
             leaf_chain, leaf_chain_with_upgrade,
         },
     };
-    use tide_disco::Error;
     use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION};
 
     use super::*;
