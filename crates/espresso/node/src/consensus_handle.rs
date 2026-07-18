@@ -491,6 +491,12 @@ where
     pub async fn start_consensus(&self) {
         self.activate().await;
         if self.is_new_proto_running() {
+            // With a base version at or past the cutover, no peer can ever
+            // need the legacy stack: tear it down instead of starting it.
+            if self.upgrade_lock.upgrade().base >= versions::NEW_PROTOCOL_VERSION {
+                tracing::info!("base version starts at the cutover, shutting down legacy stack");
+                self.shut_down_legacy().await;
+            }
             return;
         }
         self.legacy_handle

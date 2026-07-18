@@ -5186,11 +5186,13 @@ mod test {
         Ok(())
     }
 
-    /// Tear down the legacy consensus stack (tasks + network) on every node
-    /// mid-run — what the decide-count trigger in `handle_events` does after
-    /// `LEGACY_SHUTDOWN_DECIDE_COUNT` new-protocol decides — and verify the
-    /// network keeps deciding across epoch boundaries: DRB computations on
-    /// the shared membership coordinator must survive the teardown.
+    /// Run entirely without the legacy consensus stack: with base version
+    /// `NEW_PROTOCOL_VERSION` it is torn down at startup, and the explicit
+    /// mid-run `shut_down_legacy` calls below — what the decide-count trigger
+    /// in `handle_events` does after `LEGACY_SHUTDOWN_DECIDE_COUNT` decides
+    /// on an upgraded network — must be harmless to repeat. The network has
+    /// to keep deciding across epoch boundaries: DRB computations on the
+    /// shared membership coordinator must survive the teardown.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_new_protocol_survives_legacy_shutdown() -> anyhow::Result<()> {
         const EPOCH_HEIGHT: u64 = 20;
