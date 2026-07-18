@@ -70,7 +70,7 @@
 <a href=#70 id=70 data-nosnippet>70</a>                <span class="self">self</span>.view_mut(v).vid_disperse_ns = <span class="prelude-val">Some</span>(ts);
 <a href=#71 id=71 data-nosnippet>71</a>            },
 <a href=#72 id=72 data-nosnippet>72</a>            <span class="comment">// Replica: proposal processing
-<a href=#73 id=73 data-nosnippet>73</a>            </span>ConsensusInput::ProposalWithVidShare(_sender, p, <span class="kw">_</span>) =&gt; {
+<a href=#73 id=73 data-nosnippet>73</a>            </span>ConsensusInput::Proposal(_sender, p) =&gt; {
 <a href=#74 id=74 data-nosnippet>74</a>                <span class="kw">let </span>v = <span class="kw-2">*</span>p.view_number();
 <a href=#75 id=75 data-nosnippet>75</a>                <span class="self">self</span>.view_mut(v).proposal_recv_ns = <span class="prelude-val">Some</span>(ts);
 <a href=#76 id=76 data-nosnippet>76</a>            },
