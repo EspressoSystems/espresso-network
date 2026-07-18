@@ -305,8 +305,8 @@ async fn serve_router(
 fn apply_connection_limit(router: ::axum::Router, limit: usize) -> ::axum::Router {
     let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(limit));
     router
-        .layer(::axum::middleware::from_fn(axum::limit_plain_requests))
-        .layer(::axum::Extension(axum::StreamLimit(semaphore)))
+        .layer(::axum::middleware::from_fn(axum::limit_requests))
+        .layer(::axum::Extension(axum::RequestLimit(semaphore)))
 }
 
 /// Start Tonic gRPC server

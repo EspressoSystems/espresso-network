@@ -33,7 +33,7 @@ use serialization_api::v2::{
     GetRewardBalanceRequest, GetRewardBalancesRequest, GetRewardClaimInputRequest,
     GetRewardMerkleTreeRequest, GetStakeTableRequest, GetStateCertificateRequest,
 };
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::Semaphore;
 use vbs::{BinarySerializer, Serializer, version::StaticVersion};
 
 use crate::{
@@ -178,39 +178,21 @@ async fn serve_openapi_spec(Extension(api): Extension<OpenApi>) -> Json<OpenApi>
     Json(api)
 }
 
-/// Lifetime slots for streaming sockets; tower's permit is released at the 101 upgrade.
+/// In-flight request slots for `max_connections`.
 #[derive(Clone)]
-pub(crate) struct StreamLimit(pub(crate) Arc<Semaphore>);
+pub(crate) struct RequestLimit(pub(crate) Arc<Semaphore>);
 
-/// Websocket upgrades skip the request slot (the socket takes a lifetime slot in its handler);
-/// everything else holds a slot for the request duration.
-pub(crate) async fn limit_plain_requests(
-    Extension(StreamLimit(semaphore)): Extension<StreamLimit>,
+/// Each request holds a slot while in flight; excess gets 429. A websocket's slot is released
+/// at the 101 upgrade: long-lived streams are deliberately unbounded here, since demo workloads
+/// (nasty-client holds hundreds of streams by design) dwarf the request budget of 25.
+pub(crate) async fn limit_requests(
+    Extension(RequestLimit(semaphore)): Extension<RequestLimit>,
     req: Request,
     next: axum::middleware::Next,
 ) -> Response {
-    let is_upgrade = req
-        .headers()
-        .get(header::UPGRADE)
-        .is_some_and(|v| v.as_bytes().eq_ignore_ascii_case(b"websocket"));
-    if is_upgrade {
-        return next.run(req).await;
-    }
     match semaphore.try_acquire_owned() {
         Ok(_permit) => next.run(req).await,
         Err(_) => StatusCode::TOO_MANY_REQUESTS.into_response(),
-    }
-}
-
-fn acquire_stream_permit(
-    limit: Option<Extension<StreamLimit>>,
-) -> Result<Option<OwnedSemaphorePermit>, StatusCode> {
-    match limit {
-        None => Ok(None),
-        Some(Extension(StreamLimit(semaphore))) => match semaphore.try_acquire_owned() {
-            Ok(permit) => Ok(Some(permit)),
-            Err(_) => Err(StatusCode::TOO_MANY_REQUESTS),
-        },
     }
 }
 
@@ -1043,15 +1025,9 @@ where
     let stream_leaves = |ws: WebSocketUpgrade,
                          State(state): State<S>,
                          headers: HeaderMap,
-                         Path(height): Path<usize>,
-                         limit: Option<Extension<StreamLimit>>| async move {
+                         Path(height): Path<usize>| async move {
         let format = ws_format(&headers);
-        let permit = match acquire_stream_permit(limit) {
-            Ok(permit) => permit,
-            Err(status) => return status.into_response(),
-        };
         ws.on_upgrade(move |socket| async move {
-            let _permit = permit;
             match state.stream_leaves(height).await {
                 Ok(stream) => drive_ws_stream(socket, stream, format).await,
                 Err(e) => tracing::warn!("stream_leaves: {e}"),
@@ -1062,15 +1038,9 @@ where
     let stream_headers = |ws: WebSocketUpgrade,
                           State(state): State<S>,
                           headers: HeaderMap,
-                          Path(height): Path<usize>,
-                          limit: Option<Extension<StreamLimit>>| async move {
+                          Path(height): Path<usize>| async move {
         let format = ws_format(&headers);
-        let permit = match acquire_stream_permit(limit) {
-            Ok(permit) => permit,
-            Err(status) => return status.into_response(),
-        };
         ws.on_upgrade(move |socket| async move {
-            let _permit = permit;
             match state.stream_headers(height).await {
                 Ok(stream) => drive_ws_stream(socket, stream, format).await,
                 Err(e) => tracing::warn!("stream_headers: {e}"),
@@ -1081,15 +1051,9 @@ where
     let stream_blocks = |ws: WebSocketUpgrade,
                          State(state): State<S>,
                          headers: HeaderMap,
-                         Path(height): Path<usize>,
-                         limit: Option<Extension<StreamLimit>>| async move {
+                         Path(height): Path<usize>| async move {
         let format = ws_format(&headers);
-        let permit = match acquire_stream_permit(limit) {
-            Ok(permit) => permit,
-            Err(status) => return status.into_response(),
-        };
         ws.on_upgrade(move |socket| async move {
-            let _permit = permit;
             match state.stream_blocks(height).await {
                 Ok(stream) => drive_ws_stream(socket, stream, format).await,
                 Err(e) => tracing::warn!("stream_blocks: {e}"),
@@ -1100,15 +1064,9 @@ where
     let stream_payloads = |ws: WebSocketUpgrade,
                            State(state): State<S>,
                            headers: HeaderMap,
-                           Path(height): Path<usize>,
-                           limit: Option<Extension<StreamLimit>>| async move {
+                           Path(height): Path<usize>| async move {
         let format = ws_format(&headers);
-        let permit = match acquire_stream_permit(limit) {
-            Ok(permit) => permit,
-            Err(status) => return status.into_response(),
-        };
         ws.on_upgrade(move |socket| async move {
-            let _permit = permit;
             match state.stream_payloads(height).await {
                 Ok(stream) => drive_ws_stream(socket, stream, format).await,
                 Err(e) => tracing::warn!("stream_payloads: {e}"),
@@ -1119,15 +1077,9 @@ where
     let stream_vid_common = |ws: WebSocketUpgrade,
                              State(state): State<S>,
                              headers: HeaderMap,
-                             Path(height): Path<usize>,
-                             limit: Option<Extension<StreamLimit>>| async move {
+                             Path(height): Path<usize>| async move {
         let format = ws_format(&headers);
-        let permit = match acquire_stream_permit(limit) {
-            Ok(permit) => permit,
-            Err(status) => return status.into_response(),
-        };
         ws.on_upgrade(move |socket| async move {
-            let _permit = permit;
             match state.stream_vid_common(height).await {
                 Ok(stream) => drive_ws_stream(socket, stream, format).await,
                 Err(e) => tracing::warn!("stream_vid_common: {e}"),
@@ -1135,39 +1087,26 @@ where
         })
     };
 
-    let stream_transactions =
-        |ws: WebSocketUpgrade,
-         State(state): State<S>,
-         headers: HeaderMap,
-         Path(height): Path<usize>,
-         limit: Option<Extension<StreamLimit>>| async move {
-            let format = ws_format(&headers);
-            let permit = match acquire_stream_permit(limit) {
-                Ok(permit) => permit,
-                Err(status) => return status.into_response(),
-            };
-            ws.on_upgrade(move |socket| async move {
-                let _permit = permit;
-                match state.stream_transactions(height, None).await {
-                    Ok(stream) => drive_ws_stream(socket, stream, format).await,
-                    Err(e) => tracing::warn!("stream_transactions: {e}"),
-                }
-            })
-        };
+    let stream_transactions = |ws: WebSocketUpgrade,
+                               State(state): State<S>,
+                               headers: HeaderMap,
+                               Path(height): Path<usize>| async move {
+        let format = ws_format(&headers);
+        ws.on_upgrade(move |socket| async move {
+            match state.stream_transactions(height, None).await {
+                Ok(stream) => drive_ws_stream(socket, stream, format).await,
+                Err(e) => tracing::warn!("stream_transactions: {e}"),
+            }
+        })
+    };
 
     let stream_transactions_ns =
         |ws: WebSocketUpgrade,
          State(state): State<S>,
          headers: HeaderMap,
-         Path((height, namespace)): Path<(usize, u32)>,
-         limit: Option<Extension<StreamLimit>>| async move {
+         Path((height, namespace)): Path<(usize, u32)>| async move {
             let format = ws_format(&headers);
-            let permit = match acquire_stream_permit(limit) {
-                Ok(permit) => permit,
-                Err(status) => return status.into_response(),
-            };
             ws.on_upgrade(move |socket| async move {
-                let _permit = permit;
                 match state.stream_transactions(height, Some(namespace)).await {
                     Ok(stream) => drive_ws_stream(socket, stream, format).await,
                     Err(e) => tracing::warn!("stream_transactions_ns: {e}"),
@@ -1179,15 +1118,9 @@ where
         |ws: WebSocketUpgrade,
          State(state): State<S>,
          headers: HeaderMap,
-         Path((height, namespace)): Path<(usize, u32)>,
-         limit: Option<Extension<StreamLimit>>| async move {
+         Path((height, namespace)): Path<(usize, u32)>| async move {
             let format = ws_format(&headers);
-            let permit = match acquire_stream_permit(limit) {
-                Ok(permit) => permit,
-                Err(status) => return status.into_response(),
-            };
             ws.on_upgrade(move |socket| async move {
-                let _permit = permit;
                 match state.stream_namespace_proofs(height, namespace).await {
                     Ok(stream) => drive_ws_stream(socket, stream, format).await,
                     Err(e) => tracing::warn!("stream_namespace_proofs: {e}"),
@@ -2747,18 +2680,10 @@ where
     };
 
     let hotshot_events_stream =
-        |State(state): State<S>,
-         headers: HeaderMap,
-         ws: WebSocketUpgrade,
-         limit: Option<Extension<StreamLimit>>| async move {
+        |State(state): State<S>, headers: HeaderMap, ws: WebSocketUpgrade| async move {
             let format = ws_format(&headers);
-            let permit = match acquire_stream_permit(limit) {
-                Ok(permit) => permit,
-                Err(status) => return status.into_response(),
-            };
             match <S as v1::HotShotEventsApi>::events(&state).await {
                 Ok(stream) => ws.on_upgrade(move |socket| async move {
-                    let _permit = permit;
                     drive_ws_stream(socket, stream, format).await
                 }),
                 Err(err) => ApiError::Internal(err).into_response(),
@@ -4876,21 +4801,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn max_connections_bounds_streaming_sockets() {
-        let ws_route = |ws: WebSocketUpgrade, limit: Option<Extension<StreamLimit>>| async move {
-            let permit = match acquire_stream_permit(limit) {
-                Ok(permit) => permit,
-                Err(status) => return status.into_response(),
-            };
-            ws.on_upgrade(move |socket| async move {
-                let _permit = permit;
-                // Never yields: slot release on disconnect must come from polling the client
-                // side, not from a failed send.
-                let stream: BoxStream<'static, u64> = Box::pin(futures::stream::pending());
-                drive_ws_stream(socket, stream, WsFormat::Json).await
-            })
-        };
-        let router = Router::new().route("/ws", get(ws_route));
+    async fn max_connections_limits_in_flight_requests() {
+        let router = Router::new().route(
+            "/slow",
+            get(|| async {
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                "ok"
+            }),
+        );
         let router = crate::apply_connection_limit(router, 2);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -4898,50 +4816,33 @@ mod tests {
             axum::serve(listener, router).await.unwrap();
         });
 
-        async fn upgrade(addr: std::net::SocketAddr) -> (tokio::net::TcpStream, String) {
+        async fn get_slow(addr: std::net::SocketAddr) -> (tokio::net::TcpStream, String) {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
             let mut sock = tokio::net::TcpStream::connect(addr).await.unwrap();
-            sock.write_all(
-                b"GET /ws HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\n\
-                  Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\n\
-                  Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n",
-            )
+            sock.write_all(b"GET /slow HTTP/1.1\r\nHost: localhost\r\n\r\n")
+                .await
+                .unwrap();
+            let mut buf = [0u8; 32];
+            let n = sock.read(&mut buf).await.unwrap();
+            (sock, String::from_utf8_lossy(&buf[..n]).to_string())
+        }
+
+        use tokio::io::AsyncWriteExt;
+        let mut s1 = tokio::net::TcpStream::connect(addr).await.unwrap();
+        s1.write_all(b"GET /slow HTTP/1.1\r\nHost: localhost\r\n\r\n")
             .await
             .unwrap();
-            let mut buf = [0u8; 64];
-            let n = sock.read(&mut buf).await.unwrap();
-            let status = String::from_utf8_lossy(&buf[..n])
-                .lines()
-                .next()
-                .unwrap_or_default()
-                .to_string();
-            (sock, status)
-        }
-
-        let (_s1, status) = upgrade(addr).await;
-        assert!(status.contains("101"), "first socket: {status}");
-        let (_s2, status) = upgrade(addr).await;
-        assert!(status.contains("101"), "second socket: {status}");
-        let (_s3, status) = upgrade(addr).await;
+        let mut s2 = tokio::net::TcpStream::connect(addr).await.unwrap();
+        s2.write_all(b"GET /slow HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .unwrap();
+        // Both requests in flight (each sleeps 2s); the third must be shed.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        let (_s3, status) = get_slow(addr).await;
         assert!(
             status.contains("429"),
-            "third socket must be limited: {status}"
+            "third request must be limited: {status}"
         );
-
-        // Closing a socket frees its slot once the server notices on the next send.
-        drop(_s1);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        loop {
-            let (_s4, status) = upgrade(addr).await;
-            if status.contains("101") {
-                break;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "slot was not released after socket close: {status}"
-            );
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        }
     }
 
     /// Regression test: the docs routes must exist in the app a serve mode actually builds, not
