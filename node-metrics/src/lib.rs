@@ -100,19 +100,19 @@ pub mod api;
 pub mod service;
 
 use api::node_validator::v0::SurfDiscoAvailabilityAPIStream;
+use axum::Router;
 use clap::Parser;
 use futures::{
     StreamExt,
     channel::mpsc::{self, Sender},
 };
 use service::data_state::MAX_VOTERS_HISTORY;
-use tide_disco::App;
-use tokio::spawn;
+use tokio::{net::TcpListener, spawn};
 use url::Url;
 
 use crate::{
     api::node_validator::v0::{
-        BridgeLeafAndBlockStreamToSenderTask, STATIC_VER_0_1, StateClientMessageSender,
+        BridgeLeafAndBlockStreamToSenderTask, StateClientMessageSender,
         create_node_validator_api::{NodeValidatorConfig, create_node_validator_processing},
     },
     service::{client_message::InternalClientMessage, server_message::ServerMessage},
@@ -192,8 +192,8 @@ impl Options {
     }
 }
 
-/// MainState represents the State of the application this is available to
-/// tide_disco.
+/// MainState represents the State of the application, shared with every axum handler.
+#[derive(Clone)]
 struct MainState {
     internal_client_message_sender: Sender<InternalClientMessage<Sender<ServerMessage>>>,
 }
@@ -215,20 +215,18 @@ pub async fn run_standalone_service(options: Options) {
         internal_client_message_sender,
     };
 
-    let mut app: App<_, api::node_validator::v0::Error> = App::with_state(state);
-    let node_validator_api =
-        api::node_validator::v0::define_api().expect("error defining node validator api");
-
-    match app.register_module("node-validator", node_validator_api) {
-        Ok(_) => {},
-        Err(err) => {
-            panic!("error registering node validator api: {err:?}");
-        },
-    }
+    // tide-disco served `details` both directly (e.g. `node-validator/details`) and under a
+    // major-version prefix (`v0/node-validator/details`), redirecting the former to the latter;
+    // we serve both forms directly instead.
+    let node_validator_api = api::node_validator::v0::router::<MainState>();
+    let app = Router::new()
+        .nest("/node-validator", node_validator_api.clone())
+        .nest("/v0/node-validator", node_validator_api)
+        .with_state(state);
 
     let (leaf_and_block_pair_sender, leaf_and_block_pair_receiver) = mpsc::channel(10);
 
-    let client = surf_disco::Client::new(options.leaf_stream_base_url().clone());
+    let client = http_client::Client::new(options.leaf_stream_base_url().clone());
 
     // Let's get the current starting block height.
     let block_height = {
@@ -293,7 +291,14 @@ pub async fn run_standalone_service(options: Options) {
     let port = options.port();
     // We would like to wait until being signaled
     let app_serve_handle = spawn(async move {
-        let app_serve_result = app.serve(format!("0.0.0.0:{port}"), STATIC_VER_0_1).await;
+        let listener = match TcpListener::bind(("0.0.0.0", port)).await {
+            Ok(listener) => listener,
+            Err(err) => {
+                tracing::error!("failed to bind node-validator server: {err}");
+                return;
+            },
+        };
+        let app_serve_result = axum::serve(listener, app).await;
         tracing::info!("app serve result: {:?}", app_serve_result);
     });
 

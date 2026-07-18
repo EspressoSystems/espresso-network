@@ -12,26 +12,28 @@ required-features = ["genesis"]
 
 [features]
 default = ["genesis"]
-genesis = ["hotshot-types", "surf-disco"]
+genesis = []
 
 [dependencies]
 anyhow = { workspace = true }
+axum = { workspace = true }
 clap = { workspace = true }
+disco-types = { workspace = true }
 espresso-node = { workspace = true, default-features = false }
 espresso-types = { workspace = true, features = ["node"] }
+futures = { workspace = true }
 hotshot-query-service = { workspace = true }
-
-# Optional dependencies for genesis utility.
-hotshot-types = { workspace = true, optional = true }
+hotshot-types = { workspace = true }
+http-client = { workspace = true }
 light-client = { workspace = true, features = ["client", "rlp"] }
 log-panics = { workspace = true }
-semver = { workspace = true }
-surf-disco = { workspace = true, optional = true }
-tide-disco = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+url = { workspace = true }
 vbs = { workspace = true }
 
 [lints]

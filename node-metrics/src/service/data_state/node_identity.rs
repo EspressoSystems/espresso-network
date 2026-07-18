@@ -1,6 +1,6 @@
 use hotshot_types::signature_key::BLSPubKey;
 use serde::{Deserialize, Serialize};
-use surf_disco::Url;
+use url::Url;
 
 use super::LocationDetails;
 

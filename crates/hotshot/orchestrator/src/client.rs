@@ -13,10 +13,9 @@ use hotshot_types::{
     network::{NetworkConfig, NetworkConfigSource},
     traits::node_implementation::NodeType,
 };
+use http_client::{Client, Url, error::ClientErr};
 use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
-use surf_disco::{Client, error::ClientError};
-use tide_disco::Url;
 use tokio::time::sleep;
 use tracing::{info, instrument};
 use vbs::BinarySerializer;
@@ -26,7 +25,7 @@ use crate::OrchestratorVersion;
 /// Holds the client connection to the orchestrator
 pub struct OrchestratorClient {
     /// the client
-    pub client: surf_disco::Client<ClientError, OrchestratorVersion>,
+    pub client: Client<ClientErr, OrchestratorVersion>,
 }
 
 /// Struct describing a benchmark result
@@ -238,7 +237,7 @@ impl OrchestratorClient {
     /// Creates the client that will connect to the orchestrator
     #[must_use]
     pub fn new(url: Url) -> Self {
-        let client = surf_disco::Client::<ClientError, OrchestratorVersion>::new(url);
+        let client = Client::<ClientErr, OrchestratorVersion>::new(url);
         // TODO ED: Add healthcheck wait here
         OrchestratorClient { client }
     }
@@ -265,11 +264,11 @@ impl OrchestratorClient {
             libp2p_public_key,
         ))?;
 
-        let identity = |client: Client<ClientError, OrchestratorVersion>| {
+        let identity = |client: Client<ClientErr, OrchestratorVersion>| {
             // We need to clone here to move it into the closure
             let request_body = request_body.clone();
             async move {
-                let node_index: Result<u16, ClientError> = client
+                let node_index: Result<u16, ClientErr> = client
                     .post("api/identity")
                     .body_binary(&request_body)
                     .expect("failed to set request body")
@@ -283,9 +282,9 @@ impl OrchestratorClient {
         let node_index = self.wait_for_fn_from_orchestrator(identity).await;
 
         // get the corresponding config
-        let f = |client: Client<ClientError, OrchestratorVersion>| {
+        let f = |client: Client<ClientErr, OrchestratorVersion>| {
             async move {
-                let config: Result<NetworkConfig<TYPES>, ClientError> = client
+                let config: Result<NetworkConfig<TYPES>, ClientErr> = client
                     .post(&format!("api/config/{node_index}"))
                     .send()
                     .await;
@@ -306,9 +305,9 @@ impl OrchestratorClient {
     /// if unable to post
     #[instrument(skip_all, name = "orchestrator node index for validator config")]
     pub async fn get_node_index_for_init_validator_config(&self) -> u16 {
-        let cur_node_index = |client: Client<ClientError, OrchestratorVersion>| {
+        let cur_node_index = |client: Client<ClientErr, OrchestratorVersion>| {
             async move {
-                let cur_node_index: Result<u16, ClientError> = client
+                let cur_node_index: Result<u16, ClientErr> = client
                     .post("api/get_tmp_node_index")
                     .send()
                     .await
@@ -328,7 +327,7 @@ impl OrchestratorClient {
     #[instrument(skip_all, name = "orchestrator config")]
     pub async fn get_config_after_collection<TYPES: NodeType>(&self) -> NetworkConfig<TYPES> {
         // Define the request for post-register configurations
-        let get_config_after_collection = |client: Client<ClientError, OrchestratorVersion>| {
+        let get_config_after_collection = |client: Client<ClientErr, OrchestratorVersion>| {
             async move {
                 let result = client
                     .post("api/post_config_after_peer_collected")
@@ -354,12 +353,12 @@ impl OrchestratorClient {
     /// # Panics
     /// if unable to serialize `address`
     pub async fn post_builder_addresses(&self, addresses: Vec<Url>) {
-        let send_builder_f = |client: Client<ClientError, OrchestratorVersion>| {
+        let send_builder_f = |client: Client<ClientErr, OrchestratorVersion>| {
             let request_body = vbs::Serializer::<OrchestratorVersion>::serialize(&addresses)
                 .expect("Failed to serialize request");
 
             async move {
-                let result: Result<_, ClientError> = client
+                let result: Result<_, ClientErr> = client
                     .post("api/builder")
                     .body_binary(&request_body)
                     .unwrap()
@@ -377,7 +376,7 @@ impl OrchestratorClient {
     /// Requests a builder URL from orchestrator
     pub async fn get_builder_addresses(&self) -> Vec<Url> {
         // Define the request for post-register configurations
-        let get_builder = |client: Client<ClientError, OrchestratorVersion>| {
+        let get_builder = |client: Client<ClientErr, OrchestratorVersion>| {
             async move {
                 let result = client.get("api/builders").send().await;
 
@@ -439,7 +438,7 @@ impl OrchestratorClient {
         validator_config.is_da = is_da;
 
         // wait for all nodes' public keys
-        let wait_for_all_nodes_pub_key = |client: Client<ClientError, OrchestratorVersion>| {
+        let wait_for_all_nodes_pub_key = |client: Client<ClientErr, OrchestratorVersion>| {
             async move {
                 client
                     .get("api/peer_pub_ready")
@@ -465,10 +464,10 @@ impl OrchestratorClient {
     /// Panics if unable to post.
     #[instrument(skip(self), name = "orchestrator ready signal")]
     pub async fn wait_for_all_nodes_ready(&self, peer_config: Vec<u8>) -> bool {
-        let send_ready_f = |client: Client<ClientError, OrchestratorVersion>| {
+        let send_ready_f = |client: Client<ClientErr, OrchestratorVersion>| {
             let pk = peer_config.clone();
             async move {
-                let result: Result<_, ClientError> = client
+                let result: Result<_, ClientErr> = client
                     .post("api/ready")
                     .body_binary(&pk)
                     .unwrap()
@@ -482,7 +481,7 @@ impl OrchestratorClient {
         self.wait_for_fn_from_orchestrator::<_, _, ()>(send_ready_f)
             .await;
 
-        let wait_for_all_nodes_ready_f = |client: Client<ClientError, OrchestratorVersion>| {
+        let wait_for_all_nodes_ready_f = |client: Client<ClientErr, OrchestratorVersion>| {
             async move { client.get("api/start").send().await }.boxed()
         };
         self.wait_for_fn_from_orchestrator(wait_for_all_nodes_ready_f)
@@ -494,7 +493,7 @@ impl OrchestratorClient {
     /// Panics if unable to post
     #[instrument(skip_all, name = "orchestrator metrics")]
     pub async fn post_bench_results(&self, bench_results: BenchResults) {
-        let _send_metrics_f: Result<(), ClientError> = self
+        let _send_metrics_f: Result<(), ClientErr> = self
             .client
             .post("api/results")
             .body_json(&bench_results)
@@ -509,8 +508,8 @@ impl OrchestratorClient {
     #[instrument(skip_all, name = "waiting for orchestrator")]
     async fn wait_for_fn_from_orchestrator<F, Fut, GEN>(&self, f: F) -> GEN
     where
-        F: Fn(Client<ClientError, OrchestratorVersion>) -> Fut,
-        Fut: Future<Output = Result<GEN, ClientError>>,
+        F: Fn(Client<ClientErr, OrchestratorVersion>) -> Fut,
+        Fut: Future<Output = Result<GEN, ClientErr>>,
     {
         loop {
             let client = self.client.clone();

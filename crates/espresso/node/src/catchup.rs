@@ -10,6 +10,7 @@ use anyhow::{Context, anyhow, bail, ensure};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
+use espresso_api::routes::v1 as paths;
 use espresso_types::{
     BackoffParams, BlockMerkleTree, Certificate2, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
     FeeMerkleTree, Leaf2, NodeState, SeqTypes, ValidatedState,
@@ -43,13 +44,12 @@ use hotshot_types::{
     },
     utils::{epoch_from_block_number, verify_leaf_chain},
 };
+use http_client::{Request, error::ClientErr};
 use itertools::Itertools;
 use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme, prelude::MerkleNode};
 use parking_lot::Mutex;
 use priority_queue::PriorityQueue;
 use serde::de::DeserializeOwned;
-use surf_disco::Request;
-use tide_disco::error::ServerError;
 use tokio::time::timeout;
 use tokio_util::task::AbortOnDropHandle;
 use url::Url;
@@ -64,28 +64,28 @@ use crate::{
 // This newtype is probably not worth having. It's only used to be able to log
 // URLs before doing requests.
 #[derive(Debug, Clone)]
-struct Client<ServerError, ApiVer: StaticVersionType> {
-    inner: surf_disco::Client<ServerError, ApiVer>,
+struct Client<ApiVer: StaticVersionType> {
+    inner: http_client::Client<ClientErr, ApiVer>,
     url: Url,
     requests: Arc<Box<dyn Counter>>,
     failures: Arc<Box<dyn Counter>>,
 }
 
-impl<ApiVer: StaticVersionType> Client<ServerError, ApiVer> {
+impl<ApiVer: StaticVersionType> Client<ApiVer> {
     pub fn new(
         url: Url,
         requests: &(impl CounterFamily + ?Sized),
         failures: &(impl CounterFamily + ?Sized),
     ) -> Self {
         Self {
-            inner: surf_disco::Client::new(url.clone()),
+            inner: http_client::Client::new(url.clone()),
             requests: Arc::new(requests.create(vec![url.to_string()])),
             failures: Arc::new(failures.create(vec![url.to_string()])),
             url,
         }
     }
 
-    pub fn get<T: DeserializeOwned>(&self, route: &str) -> Request<T, ServerError, ApiVer> {
+    pub fn get<T: DeserializeOwned>(&self, route: &str) -> Request<T, ClientErr, ApiVer> {
         self.inner.get(route)
     }
 }
@@ -132,7 +132,7 @@ impl Eq for PeerScore {}
 pub struct StatePeers<ApiVer: StaticVersionType> {
     // Peer IDs, ordered by reliability score. Each ID is an index into `clients`.
     scores: Arc<RwLock<PriorityQueue<usize, PeerScore>>>,
-    clients: Vec<Client<ServerError, ApiVer>>,
+    clients: Vec<Client<ApiVer>>,
     backoff: BackoffParams,
     /// Base timeout for per peer catchup request
     base_timeout: Duration,
@@ -142,7 +142,7 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
     async fn fetch<Fut>(
         &self,
         retry: usize,
-        f: impl Fn(Client<ServerError, ApiVer>) -> Fut,
+        f: impl Fn(Client<ApiVer>) -> Fut,
     ) -> anyhow::Result<Fut::Ok>
     where
         Fut: TryFuture<Error: Display>,
@@ -262,7 +262,7 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
                 async move {
                     let cfg: PublicNetworkConfig = provider
                         .fetch(retry, |client| {
-                            let url = client.url.join("config/hotshot").unwrap();
+                            let url = client.url.join(&paths::config_hotshot()).unwrap();
 
                             reqwest::get(url.clone())
                         })
@@ -316,7 +316,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         self.fetch(retry, |client| async move {
             let tree = client
                 .inner
-                .post::<FeeMerkleTree>(&format!("catchup/{height}/{}/accounts", view.u64()))
+                .post::<FeeMerkleTree>(&paths::catchup_accounts(height, view.u64()))
                 .body_binary(&accounts.to_vec())?
                 .send()
                 .await?;
@@ -351,7 +351,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
                 let mut mt = mt.clone();
                 async move {
                     let frontier = client
-                        .get::<BlocksFrontier>(&format!("catchup/{height}/{}/blocks", view.u64()))
+                        .get::<BlocksFrontier>(&paths::catchup_blocks(height, view.u64()))
                         .send()
                         .await?;
                     let elem = frontier
@@ -373,7 +373,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
     ) -> anyhow::Result<ChainConfig> {
         self.fetch(retry, |client| async move {
             let cf = client
-                .get::<ChainConfig>(&format!("catchup/chain-config/{commitment}"))
+                .get::<ChainConfig>(&paths::catchup_chainconfig(commitment))
                 .send()
                 .await?;
             ensure!(
@@ -398,7 +398,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         let leaf_chain = self
             .fetch(retry, |client| async move {
                 let chain = client
-                    .get::<Vec<Leaf2>>(&format!("catchup/{height}/leafchain"))
+                    .get::<Vec<Leaf2>>(&paths::catchup_leafchain(height))
                     .send()
                     .await?;
                 anyhow::Ok(chain)
@@ -423,7 +423,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
             let cert2 = self
                 .fetch(retry, |client| async move {
                     let cert2 = client
-                        .get::<Certificate2<SeqTypes>>(&format!("catchup/{cert2_height}/cert2"))
+                        .get::<Certificate2<SeqTypes>>(&paths::catchup_cert2(cert2_height))
                         .send()
                         .await?;
                     anyhow::Ok(cert2)
@@ -456,7 +456,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
                 // the reward-state-v2 endpoint which returns from storage decided state
                 let tree_bytes = match client
                     .inner
-                    .get::<Vec<u8>>(&format!("catchup/reward-merkle-tree-v2/{height}/{}", *view))
+                    .get::<Vec<u8>>(&paths::catchup_reward_merkle_tree_v2(height, *view))
                     .send()
                     .await
                 {
@@ -467,9 +467,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
                         );
                         client
                             .inner
-                            .get::<Vec<u8>>(&format!(
-                                "reward-state-v2/reward-merkle-tree-v2/{height}"
-                            ))
+                            .get::<Vec<u8>>(&paths::reward_merkle_tree_v2(height))
                             .send()
                             .await?
                     },
@@ -508,10 +506,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         self.fetch(retry, |client| async move {
             let tree = client
                 .inner
-                .post::<RewardMerkleTreeV1>(&format!(
-                    "catchup/{height}/{}/reward-accounts",
-                    view.u64()
-                ))
+                .post::<RewardMerkleTreeV1>(&paths::catchup_reward_accounts(height, view.u64()))
                 .body_binary(&accounts.to_vec())?
                 .send()
                 .await?;
@@ -540,8 +535,8 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
     ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
         self.fetch(retry, |client| async move {
             client
-                .get::<LightClientStateUpdateCertificateV2<SeqTypes>>(&format!(
-                    "catchup/{epoch}/state-cert"
+                .get::<LightClientStateUpdateCertificateV2<SeqTypes>>(&paths::catchup_state_cert(
+                    epoch,
                 ))
                 .send()
                 .await

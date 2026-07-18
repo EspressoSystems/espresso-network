@@ -8,16 +8,20 @@ license = "MIT"
 alloy = { workspace = true }
 anyhow = { workspace = true }
 async-lock = { workspace = true }
+axum = { workspace = true }
 blake3 = { workspace = true }
 clap = { workspace = true }
 csv = { workspace = true }
+# Only used for its `error::ServerError` wire-error type: the `OrchestratorApi` trait's handler
+# methods are still expressed in terms of it. The HTTP server itself is axum.
+disco-types = { workspace = true }
 futures = { workspace = true }
 hotshot-types = { workspace = true }
+http-client = { workspace = true }
 libp2p-identity = { workspace = true }
 multiaddr = { workspace = true }
 serde = { workspace = true }
-surf-disco = { workspace = true }
-tide-disco = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }

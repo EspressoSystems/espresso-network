@@ -16,7 +16,7 @@ use anyhow::{Context, ensure};
 use async_trait::async_trait;
 use futures::{TryFutureExt, future::try_join_all};
 use hotshot_types::{data::VidCommon, traits::node_implementation::NodeType};
-use surf_disco::{Client, Url};
+use http_client::{Client, Url};
 use vbs::version::StaticVersionType;
 
 use super::Provider;

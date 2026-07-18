@@ -90,7 +90,6 @@ use crate::{
 };
 
 pub mod data_source;
-pub mod endpoints;
 pub mod fs;
 pub mod light_client;
 pub mod options;
@@ -1883,26 +1882,21 @@ pub mod test_helpers {
         MOCK_SEQUENCER_VERSIONS, NamespaceId, ValidatedState,
         v0::traits::{NullEventConsumer, PersistenceOptions, StateCatchup},
     };
-    use futures::{
-        future::{FutureExt, join_all},
-        stream::StreamExt,
-    };
+    use futures::{future::join_all, stream::StreamExt};
     use hotshot::types::{Event, EventType};
     use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
     use hotshot_types::{
         event::LeafInfo, light_client::LCV3StateSignatureRequestBody,
         new_protocol::CoordinatorEvent, traits::metrics::NoMetrics,
     };
+    use http_client::{Client, error::ClientErr};
     use itertools::izip;
     use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme};
     use staking_cli::demo::{DelegationConfig, StakingTransactions};
-    use surf_disco::Client;
     use tempfile::TempDir;
     use test_utils::reserve_tcp_port;
-    use tide_disco::{Api, App, Error, StatusCode, error::ServerError};
-    use tokio::{spawn, task::JoinHandle, time::sleep};
-    use url::Url;
-    use vbs::version::{StaticVersion, StaticVersionType};
+    use tokio::time::sleep;
+    use vbs::version::StaticVersion;
     use versions::{EPOCH_VERSION, Upgrade};
 
     use super::*;
@@ -2328,7 +2322,7 @@ pub mod test_helpers {
     pub async fn status_test_helper(opt: impl FnOnce(Options) -> Options) {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url = format!("http://localhost:{port}").parse().unwrap();
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
 
         let options = opt(Options::with_port(port));
         let network_config = TestConfigBuilder::default().build();
@@ -2376,7 +2370,7 @@ pub mod test_helpers {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let url = format!("http://localhost:{port}").parse().unwrap();
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
 
         let options = opt(Options::with_port(port).submit(Default::default()));
         let network_config = TestConfigBuilder::default().build();
@@ -2408,7 +2402,7 @@ pub mod test_helpers {
 
         let url = format!("http://localhost:{port}").parse().unwrap();
 
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
 
         let options = opt(Options::with_port(port));
         let network_config = TestConfigBuilder::default().build();
@@ -2446,7 +2440,7 @@ pub mod test_helpers {
     pub async fn catchup_test_helper(opt: impl FnOnce(Options) -> Options) {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url = format!("http://localhost:{port}").parse().unwrap();
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
 
         let options = opt(Options::with_port(port));
         let network_config = TestConfigBuilder::default().build();
@@ -2524,70 +2518,6 @@ pub mod test_helpers {
             .unwrap()
             .unwrap();
     }
-
-    pub async fn spawn_dishonest_peer_catchup_api() -> anyhow::Result<(Url, JoinHandle<()>)> {
-        let toml = toml::from_str::<toml::Value>(include_str!("../api/catchup.toml")).unwrap();
-        let mut api =
-            Api::<(), hotshot_query_service::Error, SequencerApiVersion>::new(toml).unwrap();
-
-        api.get("account", |_req, _state: &()| {
-            async move {
-                Result::<AccountQueryData, _>::Err(hotshot_query_service::Error::catch_all(
-                    StatusCode::BAD_REQUEST,
-                    "no account found".to_string(),
-                ))
-            }
-            .boxed()
-        })?
-        .get("blocks", |_req, _state| {
-            async move {
-                Result::<BlocksFrontier, _>::Err(hotshot_query_service::Error::catch_all(
-                    StatusCode::BAD_REQUEST,
-                    "no block found".to_string(),
-                ))
-            }
-            .boxed()
-        })?
-        .get("chainconfig", |_req, _state| {
-            async move {
-                Result::<ChainConfig, _>::Ok(ChainConfig {
-                    max_block_size: 300.into(),
-                    base_fee: 1.into(),
-                    fee_recipient: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
-                        .parse()
-                        .unwrap(),
-                    ..Default::default()
-                })
-            }
-            .boxed()
-        })?
-        .get("leafchain", |_req, _state| {
-            async move {
-                Result::<Vec<Leaf2>, _>::Err(hotshot_query_service::Error::catch_all(
-                    StatusCode::BAD_REQUEST,
-                    "No leafchain found".to_string(),
-                ))
-            }
-            .boxed()
-        })?;
-
-        let mut app = App::<_, hotshot_query_service::Error>::with_state(());
-        app.with_version(env!("CARGO_PKG_VERSION").parse().unwrap());
-
-        app.register_module::<_, _>("catchup", api).unwrap();
-
-        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
-        let url: Url = Url::parse(&format!("http://localhost:{port}")).unwrap();
-
-        let handle = spawn({
-            let url = url.clone();
-            async move {
-                let _ = app.serve(url, SequencerApiVersion::instance()).await;
-            }
-        });
-
-        Ok((url, handle))
-    }
 }
 
 #[cfg(test)]
@@ -2618,13 +2548,12 @@ mod api_tests {
         utils::EpochTransitionIndicator,
         vid::avidm::{AvidMScheme, init_avidm_param},
     };
-    use surf_disco::Client;
+    use http_client::{Client, error::ClientErr};
     use test_helpers::{
         TestNetwork, TestNetworkConfigBuilder, catchup_test_helper, state_signature_test_helper,
         status_test_helper, submit_test_helper,
     };
     use test_utils::reserve_tcp_port;
-    use tide_disco::error::ServerError;
     use vbs::version::StaticVersion;
 
     use super::{update::ApiEventConsumer, *};
@@ -2686,7 +2615,7 @@ mod api_tests {
         let mut events = network.server.event_stream();
 
         // Connect client.
-        let client: Client<ServerError, StaticVersion<0, 1>> =
+        let client: Client<ClientErr, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{port}").parse().unwrap());
         client.connect(None).await;
 
@@ -3199,10 +3128,10 @@ mod test {
         upgrade_stake_table_v3,
     };
     use espresso_types::{
-        ADVZNamespaceProofQueryData, FeeAmount, Header, L1Client, L1ClientOptions,
-        MOCK_SEQUENCER_VERSIONS, NamespaceId, NamespaceProofQueryData, NsProof,
-        RegisteredValidatorMap, RewardDistributor, StakeTableState, StateCertQueryDataV1,
-        StateCertQueryDataV2, ValidatedState, ValidatorLeaderCounts,
+        FeeAmount, Header, L1Client, L1ClientOptions, MOCK_SEQUENCER_VERSIONS, NamespaceId,
+        NamespaceProofQueryData, NsProof, RegisteredValidatorMap, RewardDistributor,
+        StakeTableState, StateCertQueryDataV1, StateCertQueryDataV2, ValidatedState,
+        ValidatorLeaderCounts,
         config::PublicHotShotConfig,
         traits::{MembershipPersistence, NullEventConsumer, PersistenceOptions},
         v0_3::{COMMISSION_BASIS_POINTS, Fetcher, RewardAmount, RewardMerkleProofV1},
@@ -3243,6 +3172,11 @@ mod test {
         utils::epoch_from_block_number,
         x25519,
     };
+    use http_client::{
+        Client, StatusCode,
+        error::ClientErr,
+        healthcheck::{AppHealth, HealthStatus},
+    };
     use jf_merkle_tree_compat::{
         MerkleTreeScheme,
         prelude::{MerkleProof, Sha3Node},
@@ -3254,15 +3188,11 @@ mod test {
         Transaction as StakingTransaction, demo::DelegationConfig, fetch_commission,
         update_commission, update_network_config,
     };
-    use surf_disco::Client;
     use test_helpers::{
         TestNetwork, TestNetworkConfigBuilder, catchup_test_helper, state_signature_test_helper,
         status_test_helper, submit_test_helper,
     };
     use test_utils::reserve_tcp_port;
-    use tide_disco::{
-        Error, StatusCode, Url, app::AppHealth, error::ServerError, healthcheck::HealthStatus,
-    };
     use tokio::time::sleep;
     use vbs::version::StaticVersion;
     use versions::{
@@ -3277,7 +3207,7 @@ mod test {
     use super::*;
 
     async fn wait_until_block_height(
-        client: &Client<ServerError, StaticVersion<0, 1>>,
+        client: &Client<ClientErr, StaticVersion<0, 1>>,
         endpoint: &str,
         height: u64,
     ) {
@@ -3313,7 +3243,7 @@ mod test {
     async fn test_healthcheck() {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url = format!("http://localhost:{port}").parse().unwrap();
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
         let options = Options::with_port(port);
         let network_config = TestConfigBuilder::default().build();
         let config = TestNetworkConfigBuilder::<5, _, NullStateCatchup>::default()
@@ -3362,7 +3292,7 @@ mod test {
             .build();
         let _network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
         let url = format!("http://localhost:{port}").parse().unwrap();
-        let client: Client<ServerError, SequencerApiVersion> = Client::new(url);
+        let client: Client<ClientErr, SequencerApiVersion> = Client::new(url);
 
         tracing::info!("waiting for blocks");
         client.connect(Some(Duration::from_secs(15))).await;
@@ -3432,6 +3362,40 @@ mod test {
             .send()
             .await
             .unwrap_err();
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_database_metadata_endpoints() {
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+
+        let storage = SqlDataSource::create_storage().await;
+        let options = SqlDataSource::options(&storage, Options::with_port(port));
+
+        let network_config = TestConfigBuilder::default().build();
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(options)
+            .network_config(network_config)
+            .build();
+        let _network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
+        let url = format!("http://localhost:{port}").parse().unwrap();
+        let client: Client<ClientErr, SequencerApiVersion> = Client::new(url);
+        client.connect(Some(Duration::from_secs(15))).await;
+
+        let table_sizes = client
+            .get::<Vec<data_source::TableSize>>("database/table-sizes")
+            .send()
+            .await
+            .unwrap();
+        assert!(!table_sizes.is_empty());
+
+        // Deferred backfill migrations register tracking rows at node startup, so the list may
+        // be non-empty; just check the entries are well-formed.
+        let migration_status = client
+            .get::<Vec<data_source::MigrationStatus>>("database/migration-status")
+            .send()
+            .await
+            .unwrap();
+        assert!(migration_status.iter().all(|m| !m.name.is_empty()));
     }
 
     async fn run_catchup_test(url_suffix: &str) {
@@ -3872,7 +3836,6 @@ mod test {
             .api_config(Options::from(options::Http {
                 port,
                 max_connections: None,
-                axum_port: None,
                 tonic_port: None,
             }))
             .states(states)
@@ -4096,7 +4059,7 @@ mod test {
         let mut network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
 
         // Connect client.
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{port}").parse().unwrap());
         client.connect(None).await;
         tracing::info!(port, "server running");
@@ -4166,7 +4129,7 @@ mod test {
             .network_config(TestConfigBuilder::default().build())
             .build();
         let _network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
-        let client: Client<ServerError, StaticVersion<0, 1>> =
+        let client: Client<ClientErr, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{port}").parse().unwrap());
         client.connect(None).await;
         tracing::info!(port, "server running");
@@ -4204,8 +4167,8 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_config() {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
-        let url: surf_disco::Url = format!("http://localhost:{port}").parse().unwrap();
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url.clone());
+        let url: Url = format!("http://localhost:{port}").parse().unwrap();
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url.clone());
 
         let options = Options::with_port(port).config(Default::default());
         let network_config = TestConfigBuilder::default().build();
@@ -4252,7 +4215,7 @@ mod test {
             .parse()
             .unwrap();
 
-        let client: Client<ServerError, SequencerApiVersion> = Client::new(url);
+        let client: Client<ClientErr, SequencerApiVersion> = Client::new(url);
 
         let options = Options::with_port(query_service_port).hotshot_events(HotshotEvents);
 
@@ -4317,7 +4280,7 @@ mod test {
             .parse()
             .unwrap();
 
-        let client: Client<ServerError, SequencerApiVersion> = Client::new(hotshot_url);
+        let client: Client<ClientErr, SequencerApiVersion> = Client::new(hotshot_url);
         let options = Options::with_port(query_service_port).hotshot_events(HotshotEvents);
 
         let config = TestNetworkConfigBuilder::default()
@@ -4434,7 +4397,7 @@ mod test {
             .build();
 
         let network = TestNetwork::new(config, POS_V4).await;
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         // first two epochs will be 1 and 2
@@ -4533,7 +4496,7 @@ mod test {
 
         let network = TestNetwork::new(config, POS_V4).await;
         let node_state = network.server.node_state();
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         // wait for atleast 75 blocks
@@ -4668,7 +4631,7 @@ mod test {
             .connect(vec![l1_url])
             .expect("failed to connect to l1");
 
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         let mut headers = client
@@ -4776,7 +4739,7 @@ mod test {
             .build();
 
         let network = TestNetwork::new(config, POS_V4).await;
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         // Wait for the chain to progress beyond epoch 3 so rewards start being distributed.
@@ -5038,11 +5001,11 @@ mod test {
             .build();
 
         let _network = TestNetwork::new(config, V5).await;
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         // Wait for chain to reach epoch 5
-        let height_client: Client<ServerError, StaticVersion<0, 1>> =
+        let height_client: Client<ClientErr, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         wait_until_block_height(&height_client, "node/block-height", EPOCH_HEIGHT * 5).await;
 
@@ -5148,7 +5111,7 @@ mod test {
 
         let _network = TestNetwork::new(config, NEW_PROTOCOL).await;
 
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         client.connect(Some(Duration::from_secs(30))).await;
 
@@ -5260,7 +5223,7 @@ mod test {
             .pop()
             .expect("at least one validator");
 
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         client.connect(Some(Duration::from_secs(30))).await;
 
@@ -5372,10 +5335,10 @@ mod test {
             .build();
 
         let _network = TestNetwork::new(config, V5).await;
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
-        let height_client: Client<ServerError, StaticVersion<0, 1>> =
+        let height_client: Client<ClientErr, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         wait_until_block_height(&height_client, "node/block-height", EPOCH_HEIGHT * 5).await;
 
@@ -5489,7 +5452,7 @@ mod test {
             .build();
 
         let network = TestNetwork::new(config, V5).await;
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         let node_state = network.server.node_state();
@@ -5588,7 +5551,7 @@ mod test {
             .build();
 
         let network = TestNetwork::new(config, V5).await;
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         let node_state = network.server.node_state();
@@ -5718,7 +5681,7 @@ mod test {
 
         let _network = TestNetwork::new(config, upgrade).await;
 
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         // wait for atleast 2 epochs
@@ -6215,7 +6178,7 @@ mod test {
             .await
             .unwrap();
 
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{node_0_port}").parse().unwrap());
         client.connect(None).await;
 
@@ -6448,7 +6411,7 @@ mod test {
             _ => panic!("invalid version"),
         };
 
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{node_0_port}").parse().unwrap());
         client.connect(Some(Duration::from_secs(10))).await;
 
@@ -6679,7 +6642,7 @@ mod test {
             .build();
 
         let _network = TestNetwork::new(config, upgrade).await;
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         let _blocks = client
@@ -6779,7 +6742,7 @@ mod test {
             .build();
 
         let _network = TestNetwork::new(config, upgrade).await;
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         let _blocks = client
@@ -6960,7 +6923,7 @@ mod test {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let url = format!("http://localhost:{port}").parse().unwrap();
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
 
         let storage = SqlDataSource::create_storage().await;
         let network_config = TestConfigBuilder::default().build();
@@ -7041,7 +7004,7 @@ mod test {
 
         let url = format!("http://localhost:{port}").parse().unwrap();
         tracing::info!("Sequencer URL = {url}");
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
 
         let options = Options::with_port(port).submit(Default::default());
         const NUM_NODES: usize = 2;
@@ -7243,7 +7206,7 @@ mod test {
 
         let url = format!("http://localhost:{port}").parse().unwrap();
         tracing::info!("Sequencer URL = {url}");
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
 
         let options = Options::with_port(port).submit(Default::default());
         const NUM_NODES: usize = 2;
@@ -7512,7 +7475,7 @@ mod test {
         }
 
         // Connect client.
-        let client: Client<ServerError, StaticVersion<0, 1>> =
+        let client: Client<ClientErr, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         client.connect(Some(Duration::from_secs(10))).await;
 
@@ -7679,7 +7642,7 @@ mod test {
         // Wait until at least 5 epochs have passed
         wait_for_epochs(&mut events, EPOCH_HEIGHT, 5).await;
 
-        let client: Client<ServerError, StaticVersion<0, 1>> =
+        let client: Client<ClientErr, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{node_0_port}").parse().unwrap());
         client.connect(Some(Duration::from_secs(60))).await;
 
@@ -7791,7 +7754,7 @@ mod test {
         wait_for_epochs(&mut events, EPOCH_HEIGHT, target_epoch).await;
 
         // the last epoch with the old commissions
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         let validators = client
             .get::<AuthenticatedValidatorMap>(&format!("node/validators/{}", target_epoch - 1))
@@ -7804,7 +7767,7 @@ mod test {
         }
 
         // the first epoch with the new commissions
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         let validators = client
             .get::<AuthenticatedValidatorMap>(&format!("node/validators/{target_epoch}"))
@@ -7922,7 +7885,7 @@ mod test {
         let mut events = network.peers[0].event_stream();
         wait_for_epochs(&mut events, EPOCH_HEIGHT, target_epoch).await;
 
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         let validators = client
             .get::<AuthenticatedValidatorMap>(&format!("node/validators/{target_epoch}"))
@@ -8053,7 +8016,7 @@ mod test {
     /// POST a VBS-binary body to both servers and assert their responses are byte-equal.
     ///
     /// VBS (Versioned Binary Serialization) is what production peer-catchup and
-    /// `submit-transactions` clients use via `surf-disco::Request::body_binary`. This helper
+    /// `submit-transactions` clients use via `http_client::Request::body_binary`. This helper
     /// catches regressions where the axum handler accepts only JSON.
     async fn compare_post_binary<B: serde::Serialize>(
         http: &reqwest::Client,
@@ -8142,7 +8105,7 @@ mod test {
     }
 
     /// Same as `compare_ws_endpoints` but exercises the binary (`Accept: application/octet-stream`)
-    /// path that surf-disco clients use by default. Asserts both servers send `Message::Binary`
+    /// path that our clients use by default. Asserts both servers send `Message::Binary`
     /// frames carrying VBS-encoded payloads.
     async fn compare_ws_endpoints_binary(
         api_port: u16,
@@ -8208,9 +8171,11 @@ mod test {
                 .build();
 
             let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
-            let axum_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+            // After the tide-disco cutover the single `port` field serves the Axum API.
+            // The parity-test helpers still accept two ports — wire both to the same Axum
+            // server so the existing call sites remain unchanged.
+            let axum_port = api_port;
             println!("API PORT = {api_port}");
-            println!("AXUM PORT = {axum_port}");
 
             let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
             let persistence: [_; NUM_NODES] = storage
@@ -8220,14 +8185,12 @@ mod test {
                 .try_into()
                 .unwrap();
 
-            let mut api_opts = Options::with_port(api_port)
+            let api_opts = Options::with_port(api_port)
                 .catchup(Default::default())
                 .config(Default::default())
-                .submit(Default::default())
                 .explorer(Default::default())
                 .light_client(Default::default())
-                .hotshot_events(HotshotEvents);
-            api_opts.http.axum_port = Some(axum_port);
+                .hotshot_events(Default::default());
 
             let config = TestNetworkConfigBuilder::with_num_nodes()
                 .api_config(SqlDataSource::options(&storage[0], api_opts))
@@ -8257,7 +8220,7 @@ mod test {
             wait_for_epochs(&mut events, EPOCH_HEIGHT, 4).await;
 
             let url = format!("http://localhost:{api_port}").parse().unwrap();
-            let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+            let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
 
             let validated_state = network.server.decided_state().await.unwrap();
             let decided_leaf = network.server.decided_leaf().await;
@@ -8401,6 +8364,26 @@ mod test {
 
                     assert_eq!(reward_claim_input, res.to_reward_claim_input()?);
 
+                    // Tide contract relied on by scripts/claim-rewards-loop: an account with no
+                    // rewards yields 404; any other error status makes the claim loop exit and
+                    // process-compose tear down the whole demo.
+                    let absent = alloy::primitives::Address::with_last_byte(0xaa);
+                    assert!(
+                        validated_state
+                            .reward_merkle_tree_v2
+                            .iter()
+                            .all(|(addr, _)| addr.0 != absent),
+                        "sentinel address unexpectedly present in reward tree"
+                    );
+                    let err = client
+                        .get::<RewardClaimInput>(&format!(
+                            "reward-state-v2/reward-claim-input/{height}/{absent}"
+                        ))
+                        .send()
+                        .await
+                        .unwrap_err();
+                    assert_matches!(err, ClientErr { status, .. } if status == StatusCode::NOT_FOUND);
+
                     // Both servers share the same underlying SQL data source; compare responses
                     // for each per-address endpoint under reward-state-v2.
                     compare_endpoints(
@@ -8438,6 +8421,24 @@ mod test {
                         &format!("reward-state-v2/reward-balance/latest/{address}"),
                     )
                     .await?;
+
+                    // Tide-disco registered the same reward.toml handlers on both the
+                    // reward-state and reward-state-v2 mounts, so these two routes hit the
+                    // same v2-tree-backed handlers as the pair above, just under reward-state.
+                    compare_endpoints(
+                        &http,
+                        api_port,
+                        axum_port,
+                        &format!("reward-state/proof/latest/{address}"),
+                    )
+                    .await?;
+                    compare_endpoints(
+                        &http,
+                        api_port,
+                        axum_port,
+                        &format!("reward-state/reward-balance/latest/{address}"),
+                    )
+                    .await?;
                 }
 
                 compare_endpoints(
@@ -8454,6 +8455,60 @@ mod test {
                     &format!("reward-state-v2/reward-merkle-tree-v2/{height}"),
                 )
                 .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("reward-state/reward-amounts/{height}/0/1000"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("reward-state/reward-merkle-tree-v2/{height}"),
+                )
+                .await?;
+
+                // Merklized-state `get_path` routes, inherited by both reward mounts from
+                // `hotshot-query-service`'s base `state.toml` (mirrors the block-state /
+                // fee-state checks below). Nothing in this codebase populates the generic
+                // merklized-state tables for the reward trees today; the reward-state modules
+                // persist snapshots via the separate `persist_tree`/`load_tree` bincode-blob
+                // mechanism instead, so these routes 404 in practice. We only assert that both
+                // mounts, in both height and commit form, return well-formed (and identical
+                // between the two "servers") JSON.
+                let reward_address = validated_state
+                    .reward_merkle_tree_v2
+                    .iter()
+                    .next()
+                    .map(|(addr, _)| *addr)
+                    .expect("reward tree should have at least one account");
+                let reward_header: Header = client
+                    .get(&format!("availability/header/{height}"))
+                    .send()
+                    .await
+                    .unwrap();
+                let reward_mt_commit = match reward_header.reward_merkle_tree_root() {
+                    either::Either::Left(commit) => commit.to_string(),
+                    either::Either::Right(commit) => commit.to_string(),
+                };
+                for mount in ["reward-state", "reward-state-v2"] {
+                    compare_endpoints(
+                        &http,
+                        api_port,
+                        axum_port,
+                        &format!("{mount}/{height}/{reward_address}"),
+                    )
+                    .await?;
+                    compare_endpoints(
+                        &http,
+                        api_port,
+                        axum_port,
+                        &format!("{mount}/commit/{reward_mt_commit}/{reward_address}"),
+                    )
+                    .await?;
+                }
 
                 // Availability v1 parity: verify the axum v1 routes return the same JSON as tide.
 
@@ -8799,9 +8854,9 @@ mod test {
                 )
                 .await?;
 
-                // surf-disco clients default to `Accept: application/octet-stream`, so the
-                // server must emit `Message::Binary` (VBS-encoded) frames on that path.
-                // Verify both servers do so on a representative stream.
+                // Our clients default to `Accept: application/octet-stream`, so the server must
+                // emit `Message::Binary` (VBS-encoded) frames on that path. Verify both servers
+                // do so on a representative stream.
                 compare_ws_endpoints_binary(
                     api_port,
                     axum_port,
@@ -9093,7 +9148,7 @@ mod test {
                 )
                 .await?;
 
-                // Production peer-catchup posts VBS-binary bodies via surf-disco.
+                // Production peer-catchup posts VBS-binary bodies via http-client.
                 // Exercise the bulk-account POST endpoints in that exact wire format so any
                 // regression to "JSON-only body" is caught here.
                 // Reuse the account sampled above; `validated_state.fee_merkle_tree` was
@@ -9229,6 +9284,24 @@ mod test {
                 )
                 .await?;
 
+                // Regression: an oversized range on the plural namespaces route must return
+                // 400 Bad Request (the status carried by the query-service error), not 500.
+                let encoded_ns = tagged_base64::TaggedBase64::new(
+                    ::light_client::client::NAMESPACES_PARAM_TAG,
+                    &serde_json::to_vec(&vec![u64::from(avail_ns)])?,
+                )?;
+                compare_error_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!(
+                        "light-client/namespaces/{avail_block}/{}/{encoded_ns}",
+                        avail_block + 200
+                    ),
+                    400,
+                )
+                .await?;
+
                 // hotshot-events startup info: both must return matching JSON.
                 compare_endpoints(&http, api_port, axum_port, "hotshot-events/startup_info")
                     .await?;
@@ -9354,7 +9427,7 @@ mod test {
             .build();
 
         let network = TestNetwork::new(config, POS_V4).await;
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         let err = client
@@ -9364,7 +9437,7 @@ mod test {
             .await
             .unwrap_err();
 
-        assert_matches!(err, ServerError { status, message} if
+        assert_matches!(err, ClientErr { status, message} if
                 status == StatusCode::BAD_REQUEST
                 && message.contains("Limit cannot be greater than 1000")
         );
@@ -9448,7 +9521,7 @@ mod test {
 
         let mut network = TestNetwork::new(config, POS_V4).await;
 
-        let client: Client<ServerError, StaticVersion<0, 1>> =
+        let client: Client<ClientErr, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         client.connect(None).await;
@@ -9468,7 +9541,7 @@ mod test {
             .await
             .unwrap_err();
 
-        assert_matches!(err, ServerError { status, .. } if
+        assert_matches!(err, ClientErr { status, .. } if
             status == StatusCode::BAD_REQUEST
 
         );
@@ -9525,7 +9598,6 @@ mod test {
             .api_config(Options::from(options::Http {
                 port,
                 max_connections: None,
-                axum_port: None,
                 tonic_port: None,
             }))
             .catchups(std::array::from_fn(|_| {
@@ -9549,7 +9621,7 @@ mod test {
         let block = wait_for_decide_on_handle(&mut events, &tx).await.0;
 
         // Check namespace proof queries.
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
         client.connect(None).await;
 
         let (header, common): (Header, VidCommonQueryData<SeqTypes>) = try_join!(
@@ -9634,87 +9706,6 @@ mod test {
             }
         }
 
-        // The legacy version of the API only works for old VID.
-        tracing::info!("test namespace API version: v0");
-        if version < EPOCH_VERSION {
-            let ns_proof: ADVZNamespaceProofQueryData = client
-                .get(&format!("v0/availability/block/{block}/namespace/{ns}"))
-                .send()
-                .await
-                .unwrap();
-            let proof = ns_proof.proof.as_ref().unwrap();
-            let VidCommon::V0(common) = common.common() else {
-                panic!("wrong VID common version");
-            };
-            let (txs, ns_from_proof) = proof
-                .verify(header.ns_table(), &header.payload_commitment(), common)
-                .unwrap();
-            assert_eq!(ns_from_proof, ns);
-            assert_eq!(txs, ns_proof.transactions);
-            assert_eq!(&txs, std::slice::from_ref(&tx));
-
-            // Test range endpoint.
-            let ns_proofs: Vec<ADVZNamespaceProofQueryData> = client
-                .get(&format!(
-                    "v0/availability/block/{}/{}/namespace/{ns}",
-                    block,
-                    block + 1
-                ))
-                .send()
-                .await
-                .unwrap();
-            assert_eq!(&ns_proofs, std::slice::from_ref(&ns_proof));
-        } else {
-            // It will fail if we ask for a proof for a block using new VID.
-            client
-                .get::<ADVZNamespaceProofQueryData>(&format!(
-                    "v0/availability/block/{block}/namespace/{ns}"
-                ))
-                .send()
-                .await
-                .unwrap_err();
-        }
-
-        // Any API version can correctly tell us that the namespace does not exist.
-        let ns_proof: ADVZNamespaceProofQueryData = client
-            .get(&format!(
-                "v0/availability/block/{}/namespace/{ns}",
-                block - 1
-            ))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(ns_proof.proof, None);
-        assert_eq!(ns_proof.transactions, vec![]);
-
-        // Use the legacy API to stream namespace proofs until we get to a non-trivial proof or a
-        // VID version we can't deal with.
-        let mut proofs = client
-            .socket(&format!("v0/availability/stream/blocks/0/namespace/{ns}"))
-            .subscribe()
-            .await
-            .unwrap();
-        for i in 0.. {
-            tracing::info!(i, "stream proof");
-            let proof: ADVZNamespaceProofQueryData = match proofs.next().await {
-                Some(proof) => proof.unwrap(),
-                None => {
-                    // Steam not expected to end on legacy consensus version.
-                    assert!(
-                        version >= EPOCH_VERSION,
-                        "legacy steam ended while still on legacy consensus"
-                    );
-                    break;
-                },
-            };
-            if proof.proof.is_none() {
-                tracing::info!("waiting for non-trivial proof from stream");
-                continue;
-            }
-            assert_eq!(&proof.transactions, std::slice::from_ref(&tx));
-            break;
-        }
-
         network.server.shut_down().await;
     }
 
@@ -9763,7 +9754,7 @@ mod test {
             .build();
 
         let mut network = TestNetwork::new(config, upgrade).await;
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
         client.connect(None).await;
 
         // Get a leaf stream so that we can wait for various events. Also keep track of each leaf
@@ -9955,7 +9946,7 @@ mod test {
             .send()
             .await
             .unwrap_err();
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
     }
 
     /// Test that `fetch_leaf` returns a leaf with exactly the requested block height.
@@ -10007,7 +9998,7 @@ mod test {
         let network = TestNetwork::new(config, POS_V4).await;
 
         // Wait for chain to advance past our target height
-        let height_client: Client<ServerError, StaticVersion<0, 1>> =
+        let height_client: Client<ClientErr, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{port}").parse().unwrap());
         wait_until_block_height(&height_client, "node/block-height", TARGET_HEIGHT + 5).await;
 

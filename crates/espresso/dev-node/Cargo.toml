@@ -12,8 +12,9 @@ path = "src/main.rs"
 
 alloy = { workspace = true }
 anyhow = { workspace = true }
-async-trait = { workspace = true }
+axum = { workspace = true }
 clap = { workspace = true }
+espresso-api = { workspace = true }
 espresso-contract-deployer = { workspace = true }
 espresso-node = { path = "../node", features = ["testing", "embedded-db"] }
 espresso-types = { workspace = true, features = ["node"] }
@@ -28,9 +29,7 @@ serde_json = { workspace = true }
 staking-cli = { workspace = true }
 tempfile = { workspace = true }
 test-utils = { workspace = true }
-tide-disco = { workspace = true }
 tokio = { workspace = true }
-toml = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 vbs = { workspace = true }
@@ -40,10 +39,10 @@ versions = { workspace = true }
 committable = { workspace = true }
 escargot = { workspace = true }
 hotshot-query-service = { workspace = true }
+http-client = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
 rand = { workspace = true }
 rstest = { workspace = true }
-surf-disco = { workspace = true }
 test-log = { workspace = true }
 tokio = { workspace = true }
 
