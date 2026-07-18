@@ -18,7 +18,10 @@ use hotshot_query_service::{
     node::BlockId,
     types::HeightIndexed,
 };
-use hotshot_types::utils::{epoch_from_block_number, root_block_in_epoch};
+use hotshot_types::{
+    simple_certificate::QuorumCertificate2,
+    utils::{epoch_from_block_number, root_block_in_epoch},
+};
 use itertools::izip;
 use jf_merkle_tree_compat::MerkleTreeScheme;
 use light_client::{
@@ -33,10 +36,47 @@ use versions::NEW_PROTOCOL_VERSION;
 
 use crate::api::data_source::{NodeStateDataSource, StakeTableDataSource};
 
+/// Construct a proof that the requested leaf is finalized.
+///
+/// A nearby `finalized` hint yields the cheapest proof: a short leaf chain the client can verify
+/// against its known-finalized leaf without any signature checks. A distant hint (or none) would
+/// require an unboundedly long chain, so instead finality is proven directly, in a way appropriate
+/// to the leaf's protocol version, and the client verifies the proof against a quorum.
+pub(crate) async fn get_leaf_proof<State>(
+    state: &State,
+    requested_leaf: LeafQueryData<SeqTypes>,
+    finalized: Option<usize>,
+    fetch_timeout: Duration,
+    chain_limit: usize,
+) -> Result<LeafProof, Error>
+where
+    State: AvailabilityDataSource<SeqTypes> + VersionedDataSource,
+    for<'a> State::ReadOnly<'a>: NodeStorage<SeqTypes>,
+{
+    let requested = requested_leaf.height() as usize;
+    match finalized {
+        Some(finalized) if finalized.saturating_sub(requested) <= chain_limit => {
+            get_leaf_proof_with_finalized_assumption(
+                state,
+                requested_leaf,
+                finalized,
+                fetch_timeout,
+                chain_limit,
+            )
+            .await
+        },
+        _ if requested_leaf.header().version() >= NEW_PROTOCOL_VERSION => {
+            get_leaf_proof_with_cert2(state, requested_leaf, fetch_timeout, chain_limit).await
+        },
+        _ => get_leaf_proof_with_qc_chain(state, requested_leaf, fetch_timeout, chain_limit).await,
+    }
+}
+
 pub(crate) async fn get_leaf_proof_with_qc_chain<State>(
     state: &State,
     requested_leaf: LeafQueryData<SeqTypes>,
     fetch_timeout: Duration,
+    chain_limit: usize,
 ) -> Result<LeafProof, Error>
 where
     State: AvailabilityDataSource<SeqTypes> + VersionedDataSource,
@@ -53,13 +93,34 @@ where
 
     let mut leaves = state.get_leaf_range(requested + 1..latest_height).await;
     let mut proof = LeafProof::default();
+    let requested_leaf_qc = requested_leaf.qc().clone();
     proof.push(requested_leaf);
 
+    let mut remaining = chain_limit;
     while let Some(leaf) = leaves.next().await {
         let leaf = leaf
             .with_timeout(fetch_timeout)
             .await
             .ok_or_else(|| not_found("missing leaves"))?;
+
+        remaining = remaining
+            .checked_sub(1)
+            .ok_or_else(|| chain_too_long(requested, chain_limit))?;
+
+        // Once the chain crosses into the new protocol, the HotStuff commit rules can no longer
+        // terminate it; cert2 is the finality mechanism from there on.
+        if leaf.header().version() >= NEW_PROTOCOL_VERSION {
+            complete_proof_with_cert2(
+                state,
+                &mut proof,
+                leaf,
+                requested_leaf_qc.clone(),
+                fetch_timeout,
+                remaining,
+            )
+            .await?;
+            return Ok(proof);
+        }
 
         if proof.push(leaf) {
             return Ok(proof);
@@ -88,47 +149,90 @@ pub(crate) async fn get_leaf_proof_with_cert2<State>(
     state: &State,
     requested_leaf: LeafQueryData<SeqTypes>,
     fetch_timeout: Duration,
+    chain_limit: usize,
 ) -> Result<LeafProof, Error>
 where
     State: AvailabilityDataSource<SeqTypes> + VersionedDataSource,
     for<'a> State::ReadOnly<'a>: NodeStorage<SeqTypes>,
 {
-    let requested_height = requested_leaf.height();
+    let mut proof = LeafProof::default();
+    let requested_leaf_qc = requested_leaf.qc().clone();
+    complete_proof_with_cert2(
+        state,
+        &mut proof,
+        requested_leaf,
+        requested_leaf_qc,
+        fetch_timeout,
+        chain_limit,
+    )
+    .await?;
+    Ok(proof)
+}
+
+/// Complete a leaf proof using new protocol certificate2 finality.
+///
+/// `leaf` is the next leaf to add to the proof's chain: either the requested leaf itself (when the
+/// chain is empty) or the first new-protocol leaf encountered while extending a chain that started
+/// before the protocol cutover. The chain is extended from `leaf` to the leaf directly committed by
+/// the earliest stored cert2, which is then attached to complete the proof. At most `chain_limit`
+/// leaves are added past `leaf`, bounding the memory needed to construct the proof.
+async fn complete_proof_with_cert2<State>(
+    state: &State,
+    proof: &mut LeafProof,
+    leaf: LeafQueryData<SeqTypes>,
+    requested_leaf_qc: QuorumCertificate2<SeqTypes>,
+    fetch_timeout: Duration,
+    chain_limit: usize,
+) -> Result<(), Error>
+where
+    State: AvailabilityDataSource<SeqTypes> + VersionedDataSource,
+    for<'a> State::ReadOnly<'a>: NodeStorage<SeqTypes>,
+{
+    let start_height = leaf.height();
+    let start_commit = leaf.leaf().commit();
+
+    // The new leaf may already complete a HotStuff chain among the leaves in the proof (possible
+    // when the chain started shortly before the protocol cutover).
+    if proof.push(leaf) {
+        return Ok(());
+    }
+
     let cert2 = state
         .read()
         .await
         .map_err(internal)?
-        .load_earliest_cert2(requested_height)
+        .load_earliest_cert2(start_height)
         .await
         .map_err(internal)?
         .ok_or_else(|| {
             not_found(format!(
-                "no cert2 finality proof available at or after height {requested_height}"
+                "no cert2 finality proof available at or after height {start_height}"
             ))
         })?;
 
     let cert2_height = cert2.data.block_number;
-    if cert2_height < requested_height {
+    if cert2_height < start_height {
         return Err(not_found(
             "cert2 finality proof is older than requested leaf",
         ));
     }
-
-    let mut proof = LeafProof::default();
-    let requested_leaf_qc = requested_leaf.qc().clone();
-
-    if cert2_height == requested_height {
-        if requested_leaf.leaf().commit() != cert2.data.leaf_commit {
-            return Err(internal("stored cert2 does not finalize the expected leaf"));
-        }
-        proof.push(requested_leaf);
-        proof.add_certificate(Arc::new(cert2), requested_leaf_qc);
-        return Ok(proof);
+    if cert2_height - start_height > chain_limit as u64 {
+        return Err(not_found(format!(
+            "earliest cert2 finality proof (height {cert2_height}) is more than {chain_limit} \
+             leaves past height {start_height}"
+        )));
     }
 
-    proof.push(requested_leaf);
+    if cert2_height == start_height {
+        if start_commit != cert2.data.leaf_commit {
+            return Err(internal("stored cert2 does not finalize the expected leaf"));
+        }
+        proof.add_certificate(Arc::new(cert2), requested_leaf_qc);
+        return Ok(());
+    }
+
     let mut leaves = state
-        .get_leaf_range(requested_height as usize + 1..cert2_height as usize + 1)
+        .get_leaf_range(start_height as usize + 1..cert2_height as usize + 1)
         .await;
     // Extend the proof chain until we reach the leaf directly committed by cert2. Once that leaf is
     // present and matches cert2's commitment, the requested leaf is finalized by the indirect
@@ -143,11 +247,14 @@ where
             if leaf.leaf().commit() != cert2.data.leaf_commit {
                 return Err(internal("stored cert2 does not finalize the expected leaf"));
             }
-            proof.push(leaf);
-            proof.add_certificate(Arc::new(cert2), requested_leaf_qc);
-            return Ok(proof);
+            if !proof.push(leaf) {
+                proof.add_certificate(Arc::new(cert2), requested_leaf_qc);
+            }
+            return Ok(());
         }
-        proof.push(leaf);
+        if proof.push(leaf) {
+            return Ok(());
+        }
     }
 
     Err(not_found("missing cert2 leaf"))
@@ -158,6 +265,7 @@ pub(crate) async fn get_leaf_proof_with_finalized_assumption<State>(
     requested_leaf: LeafQueryData<SeqTypes>,
     finalized: usize,
     fetch_timeout: Duration,
+    chain_limit: usize,
 ) -> Result<LeafProof, Error>
 where
     State: AvailabilityDataSource<SeqTypes>,
@@ -170,6 +278,18 @@ where
         return Err(Error::Custom {
             message: format!(
                 "finalized leaf height ({finalized}) must be greater than requested ({requested})"
+            ),
+            status: StatusCode::BAD_REQUEST,
+        });
+    }
+    // The proof may need to span every leaf from the requested one to the finalized one, so a
+    // distant hint would require materializing an arbitrarily long chain.
+    if finalized - requested > chain_limit {
+        return Err(Error::Custom {
+            message: format!(
+                "finalized leaf height ({finalized}) is more than {chain_limit} blocks past the \
+                 requested leaf ({requested}); request a proof without the finalized parameter \
+                 instead"
             ),
             status: StatusCode::BAD_REQUEST,
         });
@@ -433,6 +553,14 @@ pub(super) struct Options {
     /// belongs to a class which might contain a large payload, the large object limit always
     /// applies.
     pub large_object_range_limit: usize,
+
+    /// The maximum number of leaves included in a single leaf proof.
+    ///
+    /// Proving an old leaf finalized requires constructing a chain of leaves from the requested
+    /// leaf to one whose finality can be established directly. This limit bounds the length of
+    /// that chain -- and thus the memory needed to construct and serialize it -- regardless of
+    /// what the client requests.
+    pub leaf_proof_chain_limit: usize,
 }
 
 impl Default for Options {
@@ -440,6 +568,7 @@ impl Default for Options {
         Self {
             fetch_timeout: Duration::from_millis(500),
             large_object_range_limit: availability::Options::default().large_object_range_limit,
+            leaf_proof_chain_limit: availability::Options::default().small_object_range_limit,
         }
     }
 }
@@ -464,6 +593,7 @@ where
     let Options {
         fetch_timeout,
         large_object_range_limit,
+        leaf_proof_chain_limit,
     } = opt;
 
     api.get("leaf", move |req, state| {
@@ -473,19 +603,14 @@ where
                 .opt_integer_param("finalized")
                 .map_err(bad_param("finalized"))?;
 
-            if let Some(finalized) = finalized {
-                get_leaf_proof_with_finalized_assumption(
-                    state,
-                    requested_leaf,
-                    finalized,
-                    fetch_timeout,
-                )
-                .await
-            } else if requested_leaf.header().version() >= NEW_PROTOCOL_VERSION {
-                get_leaf_proof_with_cert2(state, requested_leaf, fetch_timeout).await
-            } else {
-                get_leaf_proof_with_qc_chain(state, requested_leaf, fetch_timeout).await
-            }
+            get_leaf_proof(
+                state,
+                requested_leaf,
+                finalized,
+                fetch_timeout,
+                leaf_proof_chain_limit,
+            )
+            .await
         }
         .boxed()
     })?
@@ -820,6 +945,12 @@ fn not_found(msg: impl Into<String>) -> Error {
     }
 }
 
+fn chain_too_long(requested: usize, chain_limit: usize) -> Error {
+    not_found(format!(
+        "no finality proof found within {chain_limit} leaves of requested leaf {requested}"
+    ))
+}
+
 #[cfg(test)]
 mod test {
     use std::marker::PhantomData;
@@ -832,23 +963,43 @@ mod test {
         data_source::{Transaction, storage::UpdateAvailabilityStorage},
         merklized_state::UpdateStateData,
     };
-    use hotshot_types::{simple_certificate::CertificatePair, simple_vote::Vote2Data};
+    use hotshot_types::{
+        data::ViewNumber, simple_certificate::CertificatePair, simple_vote::Vote2Data,
+    };
     use jf_merkle_tree_compat::{AppendableMerkleTreeScheme, ToTraversalPath};
     use light_client::{
         consensus::leaf::{FinalityProof, LeafProofHint},
         testing::{
             AlwaysTrueQuorum, ENABLE_EPOCHS, LEGACY_VERSION, TestClient, VersionCheckQuorum,
-            leaf_chain, leaf_chain_with_upgrade,
+            custom_leaf_chain_with_upgrade, leaf_chain, leaf_chain_with_upgrade,
         },
     };
     use tide_disco::Error;
-    use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION};
+    use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION, Upgrade};
 
     use super::*;
     use crate::api::{
         data_source::{SequencerDataSource, testing::TestableSequencerDataSource},
         sql::DataSource,
     };
+
+    const CHAIN_LIMIT: usize = 500;
+
+    /// Construct a cert2 which directly commits `leaf`.
+    fn cert2_for_leaf(leaf: &LeafQueryData<SeqTypes>) -> espresso_types::Certificate2<SeqTypes> {
+        let data = Vote2Data {
+            leaf_commit: leaf.leaf().commit(),
+            epoch: leaf.qc().data.epoch.unwrap(),
+            block_number: leaf.height(),
+        };
+        espresso_types::Certificate2::new(
+            data.clone(),
+            data.commit(),
+            leaf.leaf().view_number(),
+            None,
+            PhantomData,
+        )
+    }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_two_chain() {
@@ -872,9 +1023,10 @@ mod test {
         }
 
         // Ask for the first leaf; it is proved finalized by the chain formed along with the second.
-        let proof = get_leaf_proof_with_qc_chain(&ds, leaves[0].clone(), Duration::MAX)
-            .await
-            .unwrap();
+        let proof =
+            get_leaf_proof_with_qc_chain(&ds, leaves[0].clone(), Duration::MAX, CHAIN_LIMIT)
+                .await
+                .unwrap();
         assert_eq!(
             proof
                 .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
@@ -904,10 +1056,15 @@ mod test {
             tx.commit().await.unwrap();
         }
 
-        let proof =
-            get_leaf_proof_with_finalized_assumption(&ds, leaves[0].clone(), 2, Duration::MAX)
-                .await
-                .unwrap();
+        let proof = get_leaf_proof_with_finalized_assumption(
+            &ds,
+            leaves[0].clone(),
+            2,
+            Duration::MAX,
+            CHAIN_LIMIT,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             proof
                 .verify(LeafProofHint::assumption(leaves[1].leaf()))
@@ -935,10 +1092,15 @@ mod test {
             tx.commit().await.unwrap();
         }
 
-        let proof =
-            get_leaf_proof_with_finalized_assumption(&ds, leaves[0].clone(), 2, Duration::MAX)
-                .await
-                .unwrap();
+        let proof = get_leaf_proof_with_finalized_assumption(
+            &ds,
+            leaves[0].clone(),
+            2,
+            Duration::MAX,
+            CHAIN_LIMIT,
+        )
+        .await
+        .unwrap();
         assert!(matches!(proof.proof(), FinalityProof::Assumption));
         assert_eq!(
             proof
@@ -962,18 +1124,7 @@ mod test {
 
         let leaves = leaf_chain(1..=2, NEW_PROTOCOL_VERSION).await;
         let cert2_leaf = &leaves[1];
-        let cert2_data = Vote2Data {
-            leaf_commit: cert2_leaf.leaf().commit(),
-            epoch: cert2_leaf.qc().data.epoch.unwrap(),
-            block_number: cert2_leaf.height(),
-        };
-        let cert2 = espresso_types::Certificate2::new(
-            cert2_data.clone(),
-            cert2_data.commit(),
-            cert2_leaf.leaf().view_number(),
-            None,
-            PhantomData,
-        );
+        let cert2 = cert2_for_leaf(cert2_leaf);
 
         {
             let mut tx = ds.write().await.unwrap();
@@ -983,9 +1134,180 @@ mod test {
             tx.commit().await.unwrap();
         }
 
-        let proof = get_leaf_proof_with_cert2(&ds, leaves[0].clone(), Duration::MAX)
+        let proof = get_leaf_proof_with_cert2(&ds, leaves[0].clone(), Duration::MAX, CHAIN_LIMIT)
             .await
             .unwrap();
+        assert!(matches!(proof.proof(), FinalityProof::NewProtocol { .. }));
+        assert_eq!(
+            proof
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .await
+                .unwrap(),
+            leaves[0]
+        );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_new_protocol_cert2_chain_limit() {
+        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
+        let ds = DataSource::create(
+            DataSource::persistence_options(&storage),
+            Default::default(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        // New protocol leaves never form a HotStuff QC chain, so a proof for the first leaf must
+        // extend all the way to the nearest cert2.
+        let leaves = leaf_chain(1..=4, NEW_PROTOCOL_VERSION).await;
+        let cert2_leaf = &leaves[3];
+        let cert2 = cert2_for_leaf(cert2_leaf);
+
+        {
+            let mut tx = ds.write().await.unwrap();
+            for leaf in &leaves {
+                tx.insert_leaf(leaf).await.unwrap();
+            }
+            tx.insert_cert2(cert2_leaf.height(), cert2).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        // If the nearest cert2 is further away than the chain limit, the proof is refused rather
+        // than materializing an unbounded chain.
+        let err = get_leaf_proof_with_cert2(&ds, leaves[0].clone(), Duration::MAX, 2)
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), StatusCode::NOT_FOUND);
+
+        // Within the limit, the proof includes the full chain up to the cert2 leaf.
+        let proof = get_leaf_proof_with_cert2(&ds, leaves[0].clone(), Duration::MAX, 3)
+            .await
+            .unwrap();
+        assert!(matches!(proof.proof(), FinalityProof::NewProtocol { .. }));
+        assert_eq!(
+            proof
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .await
+                .unwrap(),
+            leaves[0]
+        );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_qc_chain_chain_limit() {
+        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
+        let ds = DataSource::create(
+            DataSource::persistence_options(&storage),
+            Default::default(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        // Insert some leaves, forming a chain. Proving the first leaf finalized requires walking
+        // the two subsequent leaves.
+        let leaves = leaf_chain(1..=3, EPOCH_VERSION).await;
+        {
+            let mut tx = ds.write().await.unwrap();
+            for leaf in &leaves {
+                tx.insert_leaf(leaf).await.unwrap();
+            }
+            tx.commit().await.unwrap();
+        }
+
+        // A limit too small to reach the QC chain fails rather than walking further.
+        let err = get_leaf_proof_with_qc_chain(&ds, leaves[0].clone(), Duration::MAX, 1)
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), StatusCode::NOT_FOUND);
+
+        // A sufficient limit succeeds.
+        let proof = get_leaf_proof_with_qc_chain(&ds, leaves[0].clone(), Duration::MAX, 2)
+            .await
+            .unwrap();
+        assert_eq!(
+            proof
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .await
+                .unwrap(),
+            leaves[0]
+        );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_finalized_hint_too_far() {
+        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
+        let ds = DataSource::create(
+            DataSource::persistence_options(&storage),
+            Default::default(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        let leaves = leaf_chain(1..=2, EPOCH_VERSION).await;
+        {
+            let mut tx = ds.write().await.unwrap();
+            tx.insert_leaf(&leaves[0]).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        // A finalized hint further from the requested leaf than the chain limit is rejected: the
+        // proof chain could span the entire distance.
+        let err = get_leaf_proof_with_finalized_assumption(
+            &ds,
+            leaves[0].clone(),
+            1000,
+            Duration::MAX,
+            10,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_qc_chain_new_protocol_cutover() {
+        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
+        let ds = DataSource::create(
+            DataSource::persistence_options(&storage),
+            Default::default(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        // Upgrade to the new protocol in the middle of the chain, and skew the leaf view numbers
+        // so that no HotStuff 2-chain ever forms. Proving the first (pre-upgrade) leaf finalized
+        // must then fall through to cert2 finality instead of walking the chain indefinitely.
+        let leaves = custom_leaf_chain_with_upgrade(
+            1..=4,
+            2,
+            Upgrade::new(DRB_AND_HEADER_UPGRADE_VERSION, NEW_PROTOCOL_VERSION),
+            |proposal| {
+                proposal.view_number = ViewNumber::new(proposal.block_header.height() * 2);
+            },
+        )
+        .await;
+        assert_eq!(leaves[0].header().version(), DRB_AND_HEADER_UPGRADE_VERSION);
+        assert_eq!(leaves[1].header().version(), NEW_PROTOCOL_VERSION);
+        let cert2_leaf = &leaves[3];
+        let cert2 = cert2_for_leaf(cert2_leaf);
+
+        {
+            let mut tx = ds.write().await.unwrap();
+            for leaf in &leaves {
+                tx.insert_leaf(leaf).await.unwrap();
+            }
+            tx.insert_cert2(cert2_leaf.height(), cert2).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        let proof =
+            get_leaf_proof_with_qc_chain(&ds, leaves[0].clone(), Duration::MAX, CHAIN_LIMIT)
+                .await
+                .unwrap();
         assert!(matches!(proof.proof(), FinalityProof::NewProtocol { .. }));
         assert_eq!(
             proof
@@ -1016,10 +1338,15 @@ mod test {
             tx.commit().await.unwrap();
         }
 
-        let err =
-            get_leaf_proof_with_finalized_assumption(&ds, leaves[0].clone(), 0, Duration::MAX)
-                .await
-                .unwrap_err();
+        let err = get_leaf_proof_with_finalized_assumption(
+            &ds,
+            leaves[0].clone(),
+            0,
+            Duration::MAX,
+            CHAIN_LIMIT,
+        )
+        .await
+        .unwrap_err();
         assert_eq!(err.status(), StatusCode::BAD_REQUEST);
     }
 
@@ -1045,9 +1372,14 @@ mod test {
             tx.commit().await.unwrap();
         }
 
-        let err = get_leaf_proof_with_qc_chain(&ds, leaves[0].clone(), Duration::from_secs(1))
-            .await
-            .unwrap_err();
+        let err = get_leaf_proof_with_qc_chain(
+            &ds,
+            leaves[0].clone(),
+            Duration::from_secs(1),
+            CHAIN_LIMIT,
+        )
+        .await
+        .unwrap_err();
         assert_eq!(err.status(), StatusCode::NOT_FOUND);
 
         // Even if we start from a finalized leave that extends one of the leaves we do have (4,
@@ -1058,6 +1390,7 @@ mod test {
             leaves[0].clone(),
             4,
             Duration::from_secs(1),
+            CHAIN_LIMIT,
         )
         .await
         .unwrap_err();
@@ -1089,9 +1422,10 @@ mod test {
             tx.commit().await.unwrap();
         }
 
-        let proof = get_leaf_proof_with_qc_chain(&ds, leaves[0].clone(), Duration::MAX)
-            .await
-            .unwrap();
+        let proof =
+            get_leaf_proof_with_qc_chain(&ds, leaves[0].clone(), Duration::MAX, CHAIN_LIMIT)
+                .await
+                .unwrap();
         assert_eq!(
             proof
                 .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
@@ -1131,9 +1465,10 @@ mod test {
             tx.commit().await.unwrap();
         }
 
-        let proof = get_leaf_proof_with_qc_chain(&ds, leaves[0].clone(), Duration::MAX)
-            .await
-            .unwrap();
+        let proof =
+            get_leaf_proof_with_qc_chain(&ds, leaves[0].clone(), Duration::MAX, CHAIN_LIMIT)
+                .await
+                .unwrap();
         assert_eq!(
             proof
                 .verify(LeafProofHint::Quorum(&VersionCheckQuorum::new(
