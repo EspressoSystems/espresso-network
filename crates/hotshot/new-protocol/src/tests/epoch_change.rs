@@ -49,7 +49,7 @@ async fn run_views_full(
 
     for i in range {
         harness
-            .apply(test_data.views[i].proposal_input_consensus(node_key))
+            .apply_pair(test_data.views[i].proposal_input_consensus(node_key))
             .await;
         harness
             .apply(test_data.views[i].block_reconstructed_input())
@@ -430,10 +430,12 @@ async fn test_epoch_change_votes() {
         .clone();
 
     harness
-        .apply(ConsensusInput::ProposalWithVidShare(
-            first_view.leader_public_key,
-            ProposalMessage::validated(signed_proposal),
-            vid_share,
+        .apply_pair((
+            ConsensusInput::Proposal(
+                first_view.leader_public_key,
+                ProposalMessage::validated(signed_proposal),
+            ),
+            ConsensusInput::VidShare(vid_share),
         ))
         .await;
 
@@ -460,7 +462,7 @@ async fn test_first_epoch_leader_proposes_without_drb() {
     // should propose — but maybe_propose also needs to skip the DRB check.
     for i in 0..7 {
         harness
-            .apply(test_data.views[i].proposal_input_consensus(&node_key))
+            .apply_pair(test_data.views[i].proposal_input_consensus(&node_key))
             .await;
         harness
             .apply(test_data.views[i].block_reconstructed_input())
@@ -529,10 +531,12 @@ async fn test_second_epoch_leader_proposes_without_drb() {
         .expect("VID share not found")
         .clone();
     harness
-        .apply(ConsensusInput::ProposalWithVidShare(
-            first_e2_view.leader_public_key,
-            ProposalMessage::validated(signed),
-            vid_share,
+        .apply_pair((
+            ConsensusInput::Proposal(
+                first_e2_view.leader_public_key,
+                ProposalMessage::validated(signed),
+            ),
+            ConsensusInput::VidShare(vid_share),
         ))
         .await;
     harness
@@ -544,7 +548,7 @@ async fn test_second_epoch_leader_proposes_without_drb() {
     // ---- Epoch 2 views 12-16 (blocks 12-16, before transition window) ----
     for i in 11..16 {
         harness
-            .apply(test_data.views[i].proposal_input_consensus(&node_key))
+            .apply_pair(test_data.views[i].proposal_input_consensus(&node_key))
             .await;
         harness
             .apply(test_data.views[i].block_reconstructed_input())
@@ -558,7 +562,7 @@ async fn test_second_epoch_leader_proposes_without_drb() {
     // Process view 17 (block 17, first block in transition window).
     // After cert1 for view 17, the leader for view 18 should propose.
     harness
-        .apply(test_data.views[16].proposal_input_consensus(&node_key))
+        .apply_pair(test_data.views[16].proposal_input_consensus(&node_key))
         .await;
     harness
         .apply(test_data.views[16].block_reconstructed_input())
@@ -617,10 +621,12 @@ async fn test_epoch3_transition_requests_drb_for_future_epoch() {
         .expect("VID share not found")
         .clone();
     harness
-        .apply(ConsensusInput::ProposalWithVidShare(
-            first_e2_view.leader_public_key,
-            ProposalMessage::validated(signed),
-            vid_share,
+        .apply_pair((
+            ConsensusInput::Proposal(
+                first_e2_view.leader_public_key,
+                ProposalMessage::validated(signed),
+            ),
+            ConsensusInput::VidShare(vid_share),
         ))
         .await;
     harness
@@ -632,7 +638,7 @@ async fn test_epoch3_transition_requests_drb_for_future_epoch() {
     // ---- Epoch 2 views 12-16 (before transition window) ----
     for i in 11..16 {
         harness
-            .apply(test_data.views[i].proposal_input_consensus(&node_key))
+            .apply_pair(test_data.views[i].proposal_input_consensus(&node_key))
             .await;
         harness
             .apply(test_data.views[i].block_reconstructed_input())
@@ -662,10 +668,9 @@ async fn test_epoch3_transition_requests_drb_for_future_epoch() {
         .expect("VID share not found")
         .clone();
     harness
-        .apply(ConsensusInput::ProposalWithVidShare(
-            v17.leader_public_key,
-            ProposalMessage::validated(signed),
-            vid_share,
+        .apply_pair((
+            ConsensusInput::Proposal(v17.leader_public_key, ProposalMessage::validated(signed)),
+            ConsensusInput::VidShare(vid_share),
         ))
         .await;
 
