@@ -1,0 +1,26 @@
+[package]
+name = "http-client"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+description = "Reqwest-based HTTP/WebSocket client for tide-disco-shaped APIs."
+
+[dependencies]
+futures = { workspace = true }
+hex = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true, features = ["rustls-tls-webpki-roots"] }
+tracing = { workspace = true }
+url = { workspace = true }
+vbs = { workspace = true }
+
+[dev-dependencies]
+axum = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+
+[lints]
+workspace = true
