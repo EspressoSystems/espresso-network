@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
+use either::Either;
 use espresso_types::{PubKey, SeqTypes, v0::traits::SequencerPersistence};
 use hotshot::types::Message;
 use hotshot_new_protocol::client::ClientApi;
@@ -105,19 +106,24 @@ impl ExternalEventHandler {
         N: ConnectedNetwork<PubKey>,
         P: SequencerPersistence,
     {
-        let mut network = Some(network);
+        let mut network = Either::Left(network);
 
         while let Some(message) = receiver.recv().await {
             // Once the coordinator is running it owns the only live network;
             // route external messages through it. The coordinator never
-            // stops once started, so drop the legacy network for good.
-            if let Some(client_api) = consensus_handle.client_api().await {
-                network = None;
-                Self::send_via_coordinator(&client_api, message, public_key).await;
-                continue;
+            // stops once started, so swap the legacy network out for its
+            // client API for good.
+            if network.is_left()
+                && let Some(client_api) = consensus_handle.client_api().await
+            {
+                network = Either::Right(client_api);
             }
-            let Some(network) = &network else {
-                continue;
+            let network = match &network {
+                Either::Right(client_api) => {
+                    Self::send_via_coordinator(client_api, message, public_key).await;
+                    continue;
+                },
+                Either::Left(network) => network,
             };
 
             // Match the message type

@@ -291,13 +291,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static> SystemContextHandl
             .await
             .inspect_err(|err| tracing::error!("Failed to send shutdown event: {err}"));
 
-        tracing::info!("Shutting down the network!");
+        tracing::info!(target: "announce", "Shutting down the network!");
         self.hotshot.network.shut_down().await;
 
-        tracing::info!("Shutting down network tasks!");
+        tracing::info!(target: "announce", "Shutting down network tasks!");
         self.network_registry.shutdown().await;
 
-        tracing::info!("Shutting down consensus!");
+        tracing::info!(target: "announce", "Shutting down consensus!");
         self.consensus_registry.shutdown().await;
     }
 
