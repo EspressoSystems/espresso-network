@@ -11,7 +11,8 @@ use hotshot_types::{
         OneHonestThreshold, SimpleCertificate, SuccessThreshold, TimeoutCertificate2,
     },
     simple_vote::{
-        LightClientStateUpdateVote2, QuorumVote2, SimpleVote, TimeoutData2, TimeoutVote2, Vote2Data,
+        HasEpoch, LightClientStateUpdateVote2, QuorumVote2, SimpleVote, TimeoutData2, TimeoutVote2,
+        Vote2Data,
     },
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
     vote::HasViewNumber,
@@ -142,11 +143,65 @@ impl<T: NodeType> HasViewNumber for CatchupEvidence<T> {
 /// We include the proposal because the new leader in the next epoch
 /// will need it to build a header for the first block of the next epoch.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
-#[serde(bound(deserialize = ""))]
-pub struct EpochChangeMessage<T: NodeType> {
+#[serde(bound(deserialize = "S: Deserialize<'de>"))]
+pub struct EpochChangeMessage<T: NodeType, S> {
     pub cert1: Certificate1<T>,
     pub cert2: Certificate2<T>,
     pub proposal: Proposal<T>,
+    #[serde(skip)]
+    _marker: PhantomData<fn() -> S>,
+}
+
+impl<T: NodeType> EpochChangeMessage<T, Validated> {
+    /// Wrap certificates this node has verified (or formed itself).
+    pub fn validated(
+        cert1: Certificate1<T>,
+        cert2: Certificate2<T>,
+        proposal: Proposal<T>,
+    ) -> Self {
+        Self {
+            cert1,
+            cert2,
+            proposal,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<T: NodeType> EpochChangeMessage<T, Unchecked> {
+    /// Mark this message's certificates as verified.
+    pub(crate) fn into_validated(self) -> EpochChangeMessage<T, Validated> {
+        EpochChangeMessage {
+            cert1: self.cert1,
+            cert2: self.cert2,
+            proposal: self.proposal,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<T: NodeType, S> EpochChangeMessage<T, S> {
+    #[cfg(test)]
+    pub fn into_unchecked(self) -> EpochChangeMessage<T, Unchecked> {
+        EpochChangeMessage {
+            cert1: self.cert1,
+            cert2: self.cert2,
+            proposal: self.proposal,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<T: NodeType, S> HasViewNumber for EpochChangeMessage<T, S> {
+    fn view_number(&self) -> ViewNumber {
+        self.cert1.view_number()
+    }
+}
+
+impl<T: NodeType, S> HasEpoch for EpochChangeMessage<T, S> {
+    fn epoch(&self) -> Option<EpochNumber> {
+        self.cert1.epoch()
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
@@ -193,7 +248,7 @@ pub enum ConsensusMessage<T: NodeType, S> {
     Certificate2(Certificate2<T>, T::SignatureKey),
     TimeoutVote(TimeoutVoteMessage<T>),
     TimeoutCertificate(TimeoutCertificate2<T>),
-    EpochChange(EpochChangeMessage<T>),
+    EpochChange(EpochChangeMessage<T, S>),
     /// The leader's unicast of a per-namespace VID share fragment.
     VidShareFragment(VidShareFragmentMessage<T>),
     /// A node's own VID share, broadcast independently of Vote1.
@@ -212,7 +267,7 @@ impl<T: NodeType, S> ConsensusMessage<T, S> {
             Self::Certificate2(c, k) => ConsensusMessage::Certificate2(c, k),
             Self::TimeoutVote(v) => ConsensusMessage::TimeoutVote(v),
             Self::TimeoutCertificate(c) => ConsensusMessage::TimeoutCertificate(c),
-            Self::EpochChange(c) => ConsensusMessage::EpochChange(c),
+            Self::EpochChange(c) => ConsensusMessage::EpochChange(c.into_unchecked()),
             Self::VidShareFragment(v) => ConsensusMessage::VidShareFragment(v),
             Self::VidShareBroadcast(v) => ConsensusMessage::VidShareBroadcast(v),
             Self::HighQc(c) => ConsensusMessage::HighQc(c),

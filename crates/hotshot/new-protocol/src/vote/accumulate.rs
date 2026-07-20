@@ -5,7 +5,7 @@ use hotshot::types::SignatureKey;
 use hotshot_types::{
     epoch_membership::EpochMembership,
     message::UpgradeLock,
-    simple_vote::VersionedVoteData,
+    simple_vote::{HasEpoch, VersionedVoteData},
     stake_table::StakeTableEntries,
     traits::node_implementation::NodeType,
     vote::{Certificate, Vote, VoteAccumulator},
@@ -23,7 +23,7 @@ pub struct CheckedAccumulator<T, V, C>
 where
     T: NodeType,
     V: Vote<T>,
-    C: Certificate<T, V::Commitment, Voteable = V::Commitment>,
+    C: Certificate<T, V::Commitment, Voteable = V::Commitment> + HasEpoch,
 {
     accumulator: VoteAccumulator<T, V, C>,
 
@@ -44,7 +44,7 @@ impl<T, V, C> CheckedAccumulator<T, V, C>
 where
     T: NodeType,
     V: Vote<T>,
-    C: Certificate<T, V::Commitment, Voteable = V::Commitment>,
+    C: Certificate<T, V::Commitment, Voteable = V::Commitment> + HasEpoch,
 {
     pub fn new(membership: EpochMembership<T>, lock: UpgradeLock<T>) -> Self {
         Self {
