@@ -1491,14 +1491,13 @@ pub mod testing {
     #![allow(unused_imports)]
     use std::{
         env,
-        process::{Command, Stdio},
-        str::{self, FromStr},
+        process::{Child, Command, Stdio},
         time::Duration,
     };
 
     use refinery::Migration;
     use test_utils::reserve_tcp_port;
-    use tokio::{net::TcpStream, time::timeout};
+    use tokio::time::timeout;
 
     use super::Config;
     use crate::testing::sleep;
@@ -1509,7 +1508,9 @@ pub mod testing {
         #[cfg(not(feature = "embedded-db"))]
         port: u16,
         #[cfg(not(feature = "embedded-db"))]
-        container_id: String,
+        data_dir: std::path::PathBuf,
+        #[cfg(not(feature = "embedded-db"))]
+        postgres: Option<Child>,
         #[cfg(feature = "embedded-db")]
         db_path: std::path::PathBuf,
         #[allow(dead_code)]
@@ -1549,44 +1550,35 @@ pub mod testing {
 
         #[cfg(not(feature = "embedded-db"))]
         async fn init_postgres(persistent: bool) -> Self {
-            let docker_hostname = env::var("DOCKER_HOSTNAME");
-            // This picks an unused port on the current system.  If docker is
-            // configured to run on a different host then this may not find a
-            // "free" port on that system.
-            // We *might* be able to get away with this as any remote docker
-            // host should hopefully be pretty open with it's port space.
             let port = reserve_tcp_port().unwrap();
-            let host = docker_hostname.unwrap_or("localhost".to_string());
+            let host = "127.0.0.1".to_string();
 
-            let mut cmd = Command::new("docker");
-            cmd.arg("run")
-                .arg("-d")
-                .args(["-p", &format!("{port}:5432")])
-                .args(["-e", "POSTGRES_PASSWORD=password"]);
+            // initdb requires an empty target; clear any dir left by a crashed run
+            // that reused this (recycled) ephemeral port.
+            let data_dir = env::temp_dir().join(format!("espresso-tmpdb-{port}"));
+            let _ = std::fs::remove_dir_all(&data_dir);
 
-            if !persistent {
-                cmd.arg("--rm");
-            }
+            let output = Command::new("initdb")
+                .arg("-D")
+                .arg(&data_dir)
+                .args(["-U", "postgres", "--auth=trust"])
+                .output()
+                .expect("initdb failed to run; is postgres installed and on PATH?");
+            assert!(
+                output.status.success(),
+                "initdb failed for {data_dir:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
 
-            let output = cmd.arg("postgres").output().unwrap();
-            let stdout = str::from_utf8(&output.stdout).unwrap();
-            let stderr = str::from_utf8(&output.stderr).unwrap();
-            if !output.status.success() {
-                panic!("failed to start postgres docker: {stderr}");
-            }
-
-            // Create the TmpDb object immediately after starting the Docker container, so if
-            // anything panics after this `drop` will be called and we will clean up.
-            let container_id = stdout.trim().to_owned();
-            tracing::info!("launched postgres docker {container_id}");
-            let db = Self {
+            let mut db = Self {
                 host,
                 port,
-                container_id: container_id.clone(),
+                data_dir,
+                postgres: None,
                 persistent,
             };
 
-            db.wait_for_ready().await;
+            db.start_postgres().await;
             db
         }
 
@@ -1629,32 +1621,44 @@ pub mod testing {
 
         #[cfg(not(feature = "embedded-db"))]
         pub fn stop_postgres(&mut self) {
-            tracing::info!(container = self.container_id, "stopping postgres");
-            let output = Command::new("docker")
-                .args(["stop", self.container_id.as_str()])
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "error killing postgres docker {}: {}",
-                self.container_id,
-                str::from_utf8(&output.stderr).unwrap()
-            );
+            let Some(mut postgres) = self.postgres.take() else {
+                return;
+            };
+            tracing::info!(port = self.port, "stopping postgres");
+            // Fast shutdown (SIGINT to the postmaster) releases the datadir before
+            // Drop removes it; fall back to SIGKILL if pg_ctl is unavailable.
+            let stopped = Command::new("pg_ctl")
+                .arg("-D")
+                .arg(&self.data_dir)
+                .args(["stop", "-m", "fast", "-w"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map(|status| status.success())
+                .unwrap_or(false);
+            if !stopped {
+                let _ = postgres.kill();
+            }
+            let _ = postgres.wait();
         }
 
         #[cfg(not(feature = "embedded-db"))]
         pub async fn start_postgres(&mut self) {
-            tracing::info!(container = self.container_id, "resuming postgres");
-            let output = Command::new("docker")
-                .args(["start", self.container_id.as_str()])
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "error starting postgres docker {}: {}",
-                self.container_id,
-                str::from_utf8(&output.stderr).unwrap()
-            );
+            self.stop_postgres();
+            tracing::info!(port = self.port, "starting postgres");
+            let postgres = Command::new("postgres")
+                .arg("-D")
+                .arg(&self.data_dir)
+                .args(["-p", &self.port.to_string()])
+                .args(["-h", &self.host])
+                // Keep the unix socket inside the data dir instead of a shared /tmp.
+                .arg("-k")
+                .arg(&self.data_dir)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("failed to start postgres; is it installed and on PATH?");
+            self.postgres = Some(postgres);
 
             self.wait_for_ready().await;
         }
@@ -1669,49 +1673,18 @@ pub mod testing {
             );
 
             if let Err(err) = timeout(timeout_duration, async {
-                while Command::new("docker")
-                    .args([
-                        "exec",
-                        &self.container_id,
-                        "pg_isready",
-                        "-h",
-                        "localhost",
-                        "-U",
-                        "postgres",
-                    ])
-                    .env("PGPASSWORD", "password")
-                    // Null input so the command terminates as soon as it manages to connect.
-                    .stdin(Stdio::null())
-                    // Discard command output.
+                while !Command::new("pg_isready")
+                    .args(["-h", &self.host])
+                    .args(["-p", &self.port.to_string()])
+                    .args(["-U", "postgres"])
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
                     .status()
-                    // We should ensure the exit status. A simple `unwrap`
-                    // would panic on unrelated errors (such as network
-                    // connection failures)
-                    .and_then(|status| {
-                        status
-                            .success()
-                            .then_some(true)
-                            // Any ol' Error will do
-                            .ok_or(std::io::Error::from_raw_os_error(666))
-                    })
-                    .is_err()
+                    .map(|status| status.success())
+                    .unwrap_or(false)
                 {
                     tracing::warn!("database is not ready");
                     sleep(Duration::from_secs(1)).await;
-                }
-
-                // The above command ensures the database is ready inside the Docker container.
-                // However, on some systems, there is a slight delay before the port is exposed via
-                // host networking. We don't need to check again that the database is ready on the
-                // host (and maybe can't, because the host might not have pg_isready installed), but
-                // we can ensure the port is open by just establishing a TCP connection.
-                while let Err(err) =
-                    TcpStream::connect(format!("{}:{}", self.host, self.port)).await
-                {
-                    tracing::warn!("database is ready, but port is not available to host: {err:#}");
-                    sleep(Duration::from_millis(100)).await;
                 }
             })
             .await
@@ -1729,6 +1702,9 @@ pub mod testing {
     impl Drop for TmpDb {
         fn drop(&mut self) {
             self.stop_postgres();
+            if !self.persistent {
+                let _ = std::fs::remove_dir_all(&self.data_dir);
+            }
         }
     }
 
