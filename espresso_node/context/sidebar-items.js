@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["PROCESS_RETRY_INTERVAL"],"fn":["handle_events","process_decided_events_task"],"macro":[["spawn_with_log_level",1]],"struct":["DecideProcessorMetrics","SequencerContext","TaskList"],"type":["Consensus","ConsensusNode","DecideSignal"]};
+window.SIDEBAR_ITEMS = {"constant":["LEGACY_SHUTDOWN_DECIDE_COUNT","PROCESS_RETRY_INTERVAL"],"fn":["handle_events","process_decided_events_task"],"macro":[["spawn_with_log_level",1]],"struct":["DecideProcessorMetrics","SequencerContext","TaskList"],"type":["Consensus","ConsensusNode","DecideSignal"]};
