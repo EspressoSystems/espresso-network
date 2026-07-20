@@ -610,7 +610,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> RequestResponseDataSo
                 duration,
                 request_response_protocol.request_indefinitely::<_, _, _>(
                     Request::VidShare(block_number, request_id),
-                    RequestType::Broadcast,
+                    RequestType::Batched,
                     move |_request, response| {
                         let avidm_param = avidm_param.clone();
                         let received_shares = received_shares_clone.clone();
