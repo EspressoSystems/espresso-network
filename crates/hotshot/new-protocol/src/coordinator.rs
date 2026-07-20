@@ -504,6 +504,7 @@ where
                     return Ok(ConsensusInput::Certificate2(cert2))
                 }
                 Some(tc) = self.cert_verifiers.timeout.next() => {
+                    self.timeout_collector.mark_completed(tc.view_number());
                     return Ok(ConsensusInput::TimeoutCertificate(tc))
                 }
                 Some(cert1) = self.cert_verifiers.advance.next() => {

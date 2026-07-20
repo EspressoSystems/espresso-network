@@ -313,14 +313,20 @@ impl<T: NodeType, C: Verifiable<T> + Send + 'static> CertVerifier<T, C> {
     }
 }
 
+type VerifyOutcome<O> = (ViewNumber, Option<ValidCert<O>>);
+
 /// Verifies certificates off the main coordinator thread.
 ///
 /// Unlike [`CertVerifier`], these certificates are keyed by sender key
 /// instead of view/epoch, helping a lagging node jump to the frontier. While a
 /// certificate is verified, subsequent requests are dropped which bounds each
-/// peer to one verification at a time.
+/// peer to one verification at a time. Only one verification runs per view:
+/// copies of an in-flight view's certificate from other senders are parked
+/// and tried in turn only if the in-flight one proves invalid.
 pub struct CertBySenderVerifier<T: NodeType, C: Verifiable<T>> {
-    tasks: JoinMap<T::SignatureKey, Option<ValidCert<C::Output>>>,
+    tasks: JoinMap<T::SignatureKey, VerifyOutcome<C::Output>>,
+    in_flight: BTreeMap<ViewNumber, T::SignatureKey>,
+    parked: BTreeMap<ViewNumber, HashMap<T::SignatureKey, C>>,
     pending: HashMap<T::SignatureKey, C>,
     completed: BTreeSet<ViewNumber>,
     lower_bound: ViewNumber,
@@ -336,6 +342,8 @@ where
     pub fn new(membership: EpochMembershipCoordinator<T>, upgrade_lock: UpgradeLock<T>) -> Self {
         Self {
             tasks: JoinMap::new(),
+            in_flight: BTreeMap::new(),
+            parked: BTreeMap::new(),
             pending: HashMap::new(),
             completed: BTreeSet::new(),
             lower_bound: ViewNumber::genesis(),
@@ -347,16 +355,25 @@ where
 
     /// Submit an item received from `sender` for verification.
     ///
-    /// Dropped if the sender's previous submission is still being verified. If
+    /// Dropped if the sender's previous submission is still being verified;
+    /// parked if the view is already being verified for another sender. If
     /// the epoch's membership isn't ready the item is held and its epoch
     /// returned so the caller can drive that epoch's catchup.
     pub fn verify(&mut self, sender: T::SignatureKey, cert: C) -> Option<EpochNumber> {
         let view = cert.view_number();
 
-        if view < self.lower_bound
-            || self.completed.contains(&view)
-            || self.tasks.contains_key(&sender)
-        {
+        if view < self.lower_bound || self.completed.contains(&view) {
+            return None;
+        }
+
+        if let Some(in_flight_sender) = self.in_flight.get(&view) {
+            if *in_flight_sender != sender {
+                self.parked.entry(view).or_default().insert(sender, cert);
+            }
+            return None;
+        }
+
+        if self.tasks.contains_key(&sender) {
             return None;
         }
 
@@ -372,14 +389,15 @@ where
 
         let lock = self.upgrade_lock.clone();
 
+        self.in_flight.insert(view, sender.clone());
         self.tasks.spawn_blocking(sender, move || {
             let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
             let threshold = membership.success_threshold();
             match cert.check(&entries, threshold, &lock) {
-                Ok(valid) => Some(ValidCert::new(valid, epoch)),
+                Ok(valid) => (view, Some(ValidCert::new(valid, epoch))),
                 Err(err) => {
                     warn!(%view, %epoch, %err, cert = type_name::<C>(), "invalid certificate");
-                    None
+                    (view, None)
                 },
             }
         });
@@ -396,6 +414,10 @@ where
         }
         self.completed.insert(view);
         self.pending.retain(|_, c| c.view_number() != view);
+        self.parked.remove(&view);
+        if let Some(sender) = self.in_flight.remove(&view) {
+            self.tasks.abort(&sender);
+        }
     }
 
     /// Re-attempt any items deferred because their epoch stake table wasn't
@@ -411,18 +433,30 @@ where
     pub async fn next(&mut self) -> Option<ValidCert<C::Output>> {
         loop {
             match self.tasks.join_next().await? {
-                (_, Ok(Some(cert))) => {
-                    let view = cert.view_number();
+                (_, Ok((view, Some(cert)))) => {
+                    self.in_flight.remove(&view);
+                    self.parked.remove(&view);
                     if view >= self.lower_bound && self.completed.insert(view) {
                         return Some(cert);
                     }
                 },
-                (_, Ok(None)) => {
+                (_, Ok((view, None))) => {
                     self.invalid_certs += 1;
+                    self.in_flight.remove(&view);
+                    self.promote_parked(view);
                 },
                 (sender, Err(err)) => {
                     if err.is_panic() {
                         error!(?sender, %err, cert = type_name::<C>(), "cert verification task panic");
+                    }
+                    // Don't strand parked copies of the failed sender's view.
+                    let view = self
+                        .in_flight
+                        .iter()
+                        .find_map(|(view, s)| (*s == sender).then_some(*view));
+                    if let Some(view) = view {
+                        self.in_flight.remove(&view);
+                        self.promote_parked(view);
                     }
                 },
             }
@@ -431,12 +465,42 @@ where
 
     pub fn gc(&mut self, view: ViewNumber) {
         self.completed = self.completed.split_off(&view);
+        self.parked = self.parked.split_off(&view);
         self.pending.retain(|_, c| c.view_number() >= view);
+        let live = self.in_flight.split_off(&view);
+        for sender in self.in_flight.values() {
+            self.tasks.abort(sender);
+        }
+        self.in_flight = live;
         self.lower_bound = view;
     }
 
     pub fn num_invalid_certs(&self) -> u64 {
         self.invalid_certs
+    }
+
+    /// Try `view`'s parked copies until one spawns.
+    fn promote_parked(&mut self, view: ViewNumber) {
+        if view < self.lower_bound || self.completed.contains(&view) {
+            self.parked.remove(&view);
+            return;
+        }
+        while let Some((sender, cert)) = self.next_parked_sender(view) {
+            self.verify(sender, cert);
+            if self.in_flight.contains_key(&view) {
+                return;
+            }
+        }
+    }
+
+    fn next_parked_sender(&mut self, view: ViewNumber) -> Option<(T::SignatureKey, C)> {
+        let map = self.parked.get_mut(&view)?;
+        let sender = map.keys().next().cloned()?;
+        let cert = map.remove(&sender)?;
+        if map.is_empty() {
+            self.parked.remove(&view);
+        }
+        Some((sender, cert))
     }
 }
 
@@ -496,5 +560,123 @@ impl<T: NodeType> CertVerifiers<T> {
             .saturating_add(self.timeout.num_invalid_certs())
             .saturating_add(self.advance.num_invalid_certs())
             .saturating_add(self.epoch_change.num_invalid_certs())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use hotshot::types::BLSPubKey;
+    use hotshot_example_types::node_types::TestTypes;
+    use hotshot_types::{
+        data::{EpochNumber, ViewNumber},
+        simple_certificate::TimeoutCertificate2,
+        traits::signature_key::SignatureKey,
+        vote::HasViewNumber,
+    };
+
+    use super::CertBySenderVerifier;
+    use crate::{
+        helpers::test_upgrade_lock,
+        tests::common::utils::{build_timeout_cert, mock_membership},
+    };
+
+    fn sender(i: u64) -> BLSPubKey {
+        BLSPubKey::generated_from_seed_indexed([0u8; 32], i).0
+    }
+
+    fn verifier() -> CertBySenderVerifier<TestTypes, TimeoutCertificate2<TestTypes>> {
+        CertBySenderVerifier::new(mock_membership(), test_upgrade_lock())
+    }
+
+    fn valid_tc(view: u64) -> TimeoutCertificate2<TestTypes> {
+        let epoch = EpochNumber::genesis();
+        let membership = mock_membership().membership_for_epoch(Some(epoch)).unwrap();
+        let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
+        build_timeout_cert(
+            ViewNumber::new(view),
+            epoch,
+            &membership,
+            &pub_key,
+            &priv_key,
+        )
+    }
+
+    /// A certificate whose aggregate signature doesn't match its data.
+    fn invalid_tc(view: u64) -> TimeoutCertificate2<TestTypes> {
+        let mut tc = valid_tc(view);
+        tc.signatures = valid_tc(view + 1).signatures;
+        tc
+    }
+
+    /// Same-view copies park instead of spawning redundant tasks.
+    #[tokio::test]
+    async fn test_same_view_copies_are_parked() {
+        let mut verifier = verifier();
+        let view = ViewNumber::new(1);
+        let tc = valid_tc(1);
+
+        verifier.verify(sender(1), tc.clone());
+        verifier.verify(sender(2), tc.clone());
+        verifier.verify(sender(3), tc);
+        assert_eq!(verifier.tasks.len(), 1);
+        assert_eq!(verifier.parked.get(&view).unwrap().len(), 2);
+
+        let cert = verifier.next().await.expect("certificate should verify");
+        assert_eq!(cert.view_number(), view);
+        assert!(verifier.parked.is_empty());
+        assert!(verifier.in_flight.is_empty());
+        assert!(verifier.next().await.is_none());
+    }
+
+    /// A parked copy is verified when the in-flight one proves invalid.
+    #[tokio::test]
+    async fn test_parked_copy_promoted_after_invalid() {
+        let mut verifier = verifier();
+        let view = ViewNumber::new(1);
+
+        verifier.verify(sender(1), invalid_tc(1));
+        verifier.verify(sender(2), valid_tc(1));
+        assert_eq!(verifier.tasks.len(), 1);
+
+        let cert = verifier
+            .next()
+            .await
+            .expect("parked copy should be verified");
+        assert_eq!(cert.view_number(), view);
+        assert_eq!(verifier.num_invalid_certs(), 1);
+    }
+
+    /// Certificates for distinct views still verify concurrently.
+    #[tokio::test]
+    async fn test_distinct_views_verify_concurrently() {
+        let mut verifier = verifier();
+
+        verifier.verify(sender(1), valid_tc(1));
+        verifier.verify(sender(2), valid_tc(2));
+        assert_eq!(verifier.tasks.len(), 2);
+
+        let mut views = vec![
+            verifier.next().await.unwrap().view_number(),
+            verifier.next().await.unwrap().view_number(),
+        ];
+        views.sort();
+        assert_eq!(views, vec![ViewNumber::new(1), ViewNumber::new(2)]);
+    }
+
+    /// `mark_completed` drops parked copies, the in-flight result and new
+    /// submissions for the view.
+    #[tokio::test]
+    async fn test_mark_completed_clears_view() {
+        let mut verifier = verifier();
+        let view = ViewNumber::new(1);
+
+        verifier.verify(sender(1), valid_tc(1));
+        verifier.verify(sender(2), valid_tc(1));
+        verifier.mark_completed(view);
+        assert!(verifier.parked.is_empty());
+        assert!(verifier.next().await.is_none());
+
+        verifier.verify(sender(3), valid_tc(1));
+        assert!(verifier.tasks.is_empty());
     }
 }
