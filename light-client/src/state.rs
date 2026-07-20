@@ -59,11 +59,8 @@ pub struct Genesis {
     pub chain_id: ChainId,
 }
 
-/// Maximum distance between a requested leaf and the known-finalized leaf sent to the server as a
-/// `finalized` hint.
-///
-/// The proof for a hint may span every leaf between the two heights, so servers reject or ignore
-/// distant hints. Beyond this distance we omit the hint and verify a quorum-based proof instead.
+/// Maximum distance between a requested leaf and the `finalized` hint sent to the server. Servers
+/// reject or ignore distant hints; beyond this we omit the hint and verify against a quorum.
 const MAX_FINALIZED_HINT_DISTANCE: u64 = 500;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -211,8 +208,7 @@ where
             LeafId::Number(n) => {
                 anchor.height().saturating_sub(n as u64) <= MAX_FINALIZED_HINT_DISTANCE
             },
-            // Hash lookups in the database only ever return the requested leaf itself, which is
-            // handled above.
+            // Hash lookups only ever return the requested leaf itself, handled above.
             LeafId::Hash(_) => true,
         });
         let known_finalized = known_finalized.as_ref().map(LeafQueryData::leaf);
@@ -973,12 +969,10 @@ mod test {
     #[test_log::test]
     async fn test_fetch_leaf_distant_upper_bound() {
         let client = TestClient::default();
-        // Simulate a server which refuses to build long proof chains for distant finalized hints.
         client.reject_distant_finalized_hints(16).await;
 
-        // Cache a leaf far above the requested one (e.g. the chain tip, as after a fresh sync). It
-        // must not be sent to the server as the finalized hint; the fetch should instead use a
-        // quorum-verified proof.
+        // A cached leaf far above the requested one must not be sent as the finalized hint; the
+        // fetch should use a quorum-verified proof instead.
         let distant = MAX_FINALIZED_HINT_DISTANCE + 2;
         let distant_leaf = leaf_chain(distant..=distant, DRB_AND_HEADER_UPGRADE_VERSION)
             .await

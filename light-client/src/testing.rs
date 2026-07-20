@@ -391,8 +391,7 @@ struct InnerTestClient {
     upgrade: Option<(u64, Version)>,
     /// `Certificate2` finality proofs for new-protocol leaves, by height.
     cert2s: HashMap<usize, Certificate2<SeqTypes>>,
-    /// If set, fail leaf proof requests whose `finalized` hint is more than this many blocks past
-    /// the requested leaf.
+    /// If set, fail leaf proof requests whose `finalized` hint exceeds this distance.
     max_finalized_hint_distance: Option<u64>,
 }
 
@@ -797,7 +796,7 @@ impl TestClient {
     }
 
     /// Fail leaf proof requests whose `finalized` hint is more than `max_distance` past the
-    /// requested leaf, like a real server which bounds the proofs it constructs.
+    /// requested leaf.
     pub async fn reject_distant_finalized_hints(&self, max_distance: u64) {
         let mut inner = self.inner.lock().await;
         inner.max_finalized_hint_distance = Some(max_distance);
