@@ -31,7 +31,9 @@ pub enum FinalityProof {
     /// * `committing_qc.leaf_commit() == leaf.commit()`
     /// * `committing_qc.view_number() == leaf.view_number()`
     /// * `deciding_qc.view_number() == committing_qc.view_number() + 1`
-    /// * Both QCs have a valid threshold signature given a stake table
+    /// * Both QCs have a valid threshold signature given a stake table. When the leaf is the last
+    ///   leaf of an epoch, the deciding QC is produced in the subsequent epoch and is checked
+    ///   against the next epoch's stake table.
     HotStuff2 {
         committing_qc: Arc<Certificate>,
         deciding_qc: Arc<Certificate>,
