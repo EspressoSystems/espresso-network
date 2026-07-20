@@ -1267,6 +1267,76 @@ mod test {
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_distant_hint_falls_through() {
+        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
+        let ds = DataSource::create(
+            DataSource::persistence_options(&storage),
+            Default::default(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        // Legacy leaves 1-3 upgrade to the new protocol at height 4, with a cert2 at height 5, so
+        // both fall-through paths have a bounded proof available.
+        let leaves = leaf_chain_with_upgrade(
+            1..=5,
+            4,
+            Upgrade::new(DRB_AND_HEADER_UPGRADE_VERSION, NEW_PROTOCOL_VERSION),
+        )
+        .await;
+        let cert2_leaf = &leaves[4];
+        let cert2 = cert2_for_leaf(cert2_leaf);
+
+        {
+            let mut tx = ds.write().await.unwrap();
+            for leaf in &leaves {
+                tx.insert_leaf(leaf).await.unwrap();
+            }
+            tx.insert_cert2(cert2_leaf.height(), cert2).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        // A hint more than `chain_limit` past a legacy leaf is ignored in favor of a QC chain.
+        let proof = get_leaf_proof(
+            &ds,
+            leaves[0].clone(),
+            Some(1000),
+            Duration::MAX,
+            CHAIN_LIMIT,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(proof.proof(), FinalityProof::HotStuff2 { .. }));
+        assert_eq!(
+            proof
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .await
+                .unwrap(),
+            leaves[0]
+        );
+
+        // A hint more than `chain_limit` past a new-protocol leaf is ignored in favor of cert2.
+        let proof = get_leaf_proof(
+            &ds,
+            leaves[3].clone(),
+            Some(1000),
+            Duration::MAX,
+            CHAIN_LIMIT,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(proof.proof(), FinalityProof::NewProtocol { .. }));
+        assert_eq!(
+            proof
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .await
+                .unwrap(),
+            leaves[3]
+        );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_qc_chain_chain_limit() {
         let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
         let ds = DataSource::create(
