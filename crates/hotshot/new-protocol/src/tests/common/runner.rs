@@ -14,7 +14,9 @@ use hotshot_types::{
     PeerConnectInfo,
     addr::NetAddr,
     data::ViewNumber,
+    epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
+    simple_certificate::TimeoutCertificate2,
     traits::{metrics::NoMetrics, signature_key::SignatureKey},
     vote::HasViewNumber,
     x25519::Keypair,
@@ -31,12 +33,17 @@ use tokio::{
 use tracing::{debug, info};
 
 use crate::{
-    consensus::{ConsensusOutput, PreCutoverSeed},
+    client::CoordinatorClient,
+    consensus::{ConsensusInput, ConsensusOutput, PreCutoverSeed},
     coordinator::{Coordinator, error::Severity},
     helpers::test_upgrade_lock,
     network::Cliquenet,
     tests::common::{
-        coordinator_builder::build_test_coordinator, utils::mock_membership_with_client,
+        coordinator_builder::build_test_coordinator,
+        utils::{
+            StakeTableSchedule, mock_membership_with_client,
+            mock_membership_with_client_and_schedule,
+        },
     },
 };
 
@@ -116,11 +123,29 @@ pub struct TestRunner {
     #[builder(default)]
     down_nodes: BTreeSet<usize>,
 
+    /// Per-epoch stake table schedule shared by all nodes.  When unset, all
+    /// `num_nodes` are members of every epoch.  Incompatible with
+    /// `down_nodes`: failed-view prediction assumes the full committee leads.
+    stake_table_schedule: Option<StakeTableSchedule>,
+
+    /// Per-node overrides of `target_decisions` for the completion check.
+    /// A validator removed from the stake table stops deciding once its
+    /// membership ends and only needs to reach its smaller target.
+    #[builder(default)]
+    node_decision_targets: BTreeMap<usize, usize>,
+
     /// View-triggered node changes.  Each entry is `(view, changes)`.
     /// Changes are applied when any node first decides a leaf at or past
     /// the specified view.
     #[builder(default)]
     node_changes: Vec<(u64, Vec<NodeChange>)>,
+
+    /// Timeout certificates applied to specific nodes' coordinators before
+    /// they start, advancing their view past the rest of the network.
+    /// Simulates certificates that formed while other nodes were down (the
+    /// certs are not forwarded, so only the seeded nodes know them).
+    #[builder(default)]
+    initial_timeout_certs: BTreeMap<usize, Vec<TimeoutCertificate2<TestTypes>>>,
 
     pre_cutover_seed: Option<PreCutoverSeed<TestTypes>>,
 
@@ -244,8 +269,48 @@ impl TestRunner {
         &self.node_storages
     }
 
+    fn target_for(&self, idx: usize) -> usize {
+        self.node_decision_targets
+            .get(&idx)
+            .copied()
+            .unwrap_or(self.target_decisions)
+    }
+
+    /// Build a node's membership, honoring the stake table schedule if set.
+    fn make_membership(
+        &self,
+        public_key: BLSPubKey,
+        storage: TestStorage<TestTypes>,
+        connect_infos: &[PeerConnectInfo],
+    ) -> (
+        EpochMembershipCoordinator<TestTypes>,
+        TestStorage<TestTypes>,
+        CoordinatorClient<TestTypes>,
+        Sender<Event<TestTypes>>,
+    ) {
+        match &self.stake_table_schedule {
+            Some(schedule) => mock_membership_with_client_and_schedule(
+                self.num_nodes,
+                self.epoch_height,
+                public_key,
+                storage,
+                schedule,
+                connect_infos,
+            ),
+            None => {
+                mock_membership_with_client(self.num_nodes, self.epoch_height, public_key, storage)
+            },
+        }
+    }
+
     pub async fn run(&mut self) -> Result<(), TestError> {
         crate::logging::init_test_logging();
+
+        assert!(
+            self.stake_table_schedule.is_none() || self.down_nodes.is_empty(),
+            "stake table schedules are incompatible with down_nodes: failed_views_from_down_nodes \
+             assumes the full committee leads"
+        );
 
         self.node_storages = (0..self.num_nodes)
             .map(|_| TestStorage::default())
@@ -270,20 +335,30 @@ impl TestRunner {
                 (keypair, public_key, addr)
             })
             .collect::<Vec<_>>();
+        let connect_infos: Vec<PeerConnectInfo> = parties
+            .iter()
+            .map(|(kp, _, addr)| PeerConnectInfo {
+                x25519_key: kp.public_key(),
+                p2p_addr: addr.clone(),
+            })
+            .collect();
 
         // Spawn one coordinator task per live node.  Each node gets its
         // own membership instance so they don't share internal state.
         for (i, (_, public_key, _)) in parties.iter().enumerate() {
+            // Down nodes get their network when `NodeAction::Start` fires. Binding
+            // the port here would leave it held until the discarded instance's server
+            // task exits (release is asynchronous), racing the later rebind.
+            if currently_down.contains(&i) {
+                node_handles.push(None);
+                continue;
+            }
             let network = create_network(i, &parties, &self.upgrade_lock).await;
 
-            let (membership, storage, client, external_events_tx) = mock_membership_with_client(
-                self.num_nodes,
-                self.epoch_height,
-                *public_key,
-                self.node_storages[i].clone(),
-            );
+            let (membership, storage, client, external_events_tx) =
+                self.make_membership(*public_key, self.node_storages[i].clone(), &connect_infos);
 
-            let coord = build_test_coordinator(
+            let mut coord = build_test_coordinator(
                 i as u64,
                 network,
                 membership,
@@ -295,36 +370,46 @@ impl TestRunner {
             )
             .await;
 
-            let tx = event_tx.clone();
-            let generation = generations[i];
-            node_handles.push(if currently_down.contains(&i) {
-                None
-            } else {
-                let (cancel_tx, cancel_rx) = oneshot::channel();
-                cancels.insert(i, cancel_tx);
-                let mut initial_commits: BTreeMap<ViewNumber, [u8; 32]> = BTreeMap::new();
-                if let Some(seed) = &self.pre_cutover_seed {
-                    let anchor_view = seed.decided_anchor.view_number();
-                    let anchor_commit: [u8; 32] = seed.decided_anchor.commit().into();
-                    for v in 1..*anchor_view {
-                        initial_commits.insert(ViewNumber::new(v), anchor_commit);
-                    }
-                    initial_commits.insert(anchor_view, anchor_commit);
-                    for leaf in &seed.undecided {
-                        initial_commits.insert(leaf.view_number(), leaf.commit().into());
+            if let Some(certs) = self.initial_timeout_certs.get(&i) {
+                for tc in certs {
+                    coord.apply_consensus(ConsensusInput::TimeoutCertificate(tc.clone()));
+                    for output in coord.outbox_mut().take() {
+                        // Keep the seeded certs local to this node; the
+                        // real network never delivered them to the others.
+                        if matches!(output, ConsensusOutput::SendTimeoutCertificate(..)) {
+                            continue;
+                        }
+                        let _ = coord.process_consensus_output(output);
                     }
                 }
-                Some(tokio::spawn(run_node(
-                    coord,
-                    self.node_storages[i].clone(),
-                    tx,
-                    i,
-                    generation,
-                    external_events_tx,
-                    cancel_rx,
-                    initial_commits,
-                )))
-            });
+            }
+
+            let tx = event_tx.clone();
+            let generation = generations[i];
+            let (cancel_tx, cancel_rx) = oneshot::channel();
+            cancels.insert(i, cancel_tx);
+            let mut initial_commits: BTreeMap<ViewNumber, [u8; 32]> = BTreeMap::new();
+            if let Some(seed) = &self.pre_cutover_seed {
+                let anchor_view = seed.decided_anchor.view_number();
+                let anchor_commit: [u8; 32] = seed.decided_anchor.commit().into();
+                for v in 1..*anchor_view {
+                    initial_commits.insert(ViewNumber::new(v), anchor_commit);
+                }
+                initial_commits.insert(anchor_view, anchor_commit);
+                for leaf in &seed.undecided {
+                    initial_commits.insert(leaf.view_number(), leaf.commit().into());
+                }
+            }
+            node_handles.push(Some(tokio::spawn(run_node(
+                coord,
+                self.node_storages[i].clone(),
+                tx,
+                i,
+                generation,
+                external_events_tx,
+                cancel_rx,
+                initial_commits,
+            ))));
         }
 
         // Build pending changes sorted by view.
@@ -363,7 +448,7 @@ impl TestRunner {
         while node_commits
             .iter()
             .enumerate()
-            .any(|(i, s)| !currently_down.contains(&i) && s.len() < self.target_decisions)
+            .any(|(i, s)| !currently_down.contains(&i) && s.len() < self.target_for(i))
         {
             let remaining = deadline
                 .checked_duration_since(Instant::now())
@@ -405,15 +490,12 @@ impl TestRunner {
                                 if !self.persistent_storage {
                                     self.node_storages[change.idx] = TestStorage::default();
                                 }
-                                let (membership, storage, client, external_events_tx) = {
-                                    let k = parties[change.idx].1;
-                                    mock_membership_with_client(
-                                        self.num_nodes,
-                                        self.epoch_height,
-                                        k,
+                                let (membership, storage, client, external_events_tx) = self
+                                    .make_membership(
+                                        parties[change.idx].1,
                                         self.node_storages[change.idx].clone(),
-                                    )
-                                };
+                                        &connect_infos,
+                                    );
                                 let coord = build_test_coordinator(
                                     change.idx as u64,
                                     net,
@@ -470,7 +552,7 @@ impl TestRunner {
             if tagged.generation != generations[tagged.idx] {
                 continue;
             }
-            if node_commits[tagged.idx].len() >= self.target_decisions {
+            if node_commits[tagged.idx].len() >= self.target_for(tagged.idx) {
                 continue;
             }
             match tagged.event {
@@ -675,7 +757,7 @@ async fn run_node(
                     }
                 }
                 send(NodeEvent::Decided(commits.clone()));
-            } else if let ConsensusOutput::SendTimeoutVote(vote, _) = &output {
+            } else if let ConsensusOutput::SendTimeoutVote(vote, ..) = &output {
                 let view = vote.view_number();
                 debug!(node = %coord.node_id(), %view, "timeout vote");
                 send(NodeEvent::TimedOut(view));

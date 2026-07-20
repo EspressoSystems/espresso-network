@@ -227,4 +227,12 @@ impl TestHarness {
     pub fn outputs(&self) -> &Outbox<ConsensusOutput<TestTypes>> {
         &self.outputs
     }
+
+    pub fn current_view(&self) -> hotshot_types::data::ViewNumber {
+        self.coordinator.current_view()
+    }
+
+    pub fn coordinator(&self) -> &MockCoordinator {
+        &self.coordinator
+    }
 }

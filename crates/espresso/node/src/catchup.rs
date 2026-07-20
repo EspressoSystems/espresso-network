@@ -29,7 +29,7 @@ use futures::{
     future::{Future, FutureExt, TryFuture, TryFutureExt},
     stream::FuturesUnordered,
 };
-use hotshot_new_protocol::utils::verify_new_protocol_leaf_chain;
+use hotshot_new_protocol::{storage::NewProtocolStorage, utils::verify_new_protocol_leaf_chain};
 use hotshot_types::{
     ValidatorConfig,
     data::{EpochNumber, ViewNumber},
@@ -1745,7 +1745,10 @@ pub async fn add_fee_accounts_to_state<I: hotshot::traits::NodeImplementation<Se
     accounts: &[FeeAccount],
     tree: &FeeMerkleTree,
     leaf: Leaf2,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<()>
+where
+    I::Storage: NewProtocolStorage<SeqTypes>,
+{
     let (existing_state, delta) = consensus_handle.state_and_delta(*view).await;
     let (state, delta) = match existing_state {
         Some(existing) => {
@@ -1792,7 +1795,10 @@ pub async fn add_v2_reward_accounts_to_state<I: hotshot::traits::NodeImplementat
     accounts: &[RewardAccountV2],
     tree: &RewardMerkleTreeV2,
     leaf: Leaf2,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<()>
+where
+    I::Storage: NewProtocolStorage<SeqTypes>,
+{
     let (existing_state, delta) = consensus_handle.state_and_delta(*view).await;
     let (state, delta) = match existing_state {
         Some(existing) => {
@@ -1839,7 +1845,10 @@ pub async fn add_v1_reward_accounts_to_state<I: hotshot::traits::NodeImplementat
     accounts: &[RewardAccountV1],
     tree: &RewardMerkleTreeV1,
     leaf: Leaf2,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<()>
+where
+    I::Storage: NewProtocolStorage<SeqTypes>,
+{
     let (existing_state, delta) = consensus_handle.state_and_delta(*view).await;
     let (state, delta) = match existing_state {
         Some(existing) => {

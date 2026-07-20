@@ -1819,31 +1819,38 @@ pub mod testing {
 
     /// Waits until a node has reached the given target epoch (exclusive).
     /// The function returns once the first event indicates an epoch higher than `target_epoch`.
+    /// Panics if the event stream ends before reaching `target_epoch`.
     pub async fn wait_for_epochs(
         events: &mut (impl futures::Stream<Item = CoordinatorEvent<SeqTypes>> + std::marker::Unpin),
         epoch_height: u64,
         target_epoch: u64,
     ) {
         tracing::info!(target_epoch, "waiting for epoch");
+        let mut last_seen = None;
         while let Some(event) = events.next().await {
-            if let CoordinatorEvent::LegacyEvent(Event {
-                event: EventType::Decide { leaf_chain, .. },
-                ..
-            }) = event
-            {
-                let leaf = leaf_chain[0].leaf.clone();
-                let epoch = leaf.epoch(epoch_height);
-                tracing::debug!(
-                    "Node decided at height: {}, epoch: {epoch:?}",
-                    leaf.height(),
-                );
+            // Decides arrive as `LegacyEvent` before the new protocol and as
+            // `NewDecide` after; both carry the most recent leaf first.
+            let leaf = match event {
+                CoordinatorEvent::LegacyEvent(Event {
+                    event: EventType::Decide { leaf_chain, .. },
+                    ..
+                }) => leaf_chain[0].leaf.clone(),
+                CoordinatorEvent::NewDecide { leaf_infos, .. } => leaf_infos[0].leaf.clone(),
+                _ => continue,
+            };
+            let epoch = leaf.epoch(epoch_height);
+            tracing::debug!(
+                "Node decided at height: {}, epoch: {epoch:?}",
+                leaf.height(),
+            );
 
-                if epoch > Some(EpochNumber::new(target_epoch)) {
-                    break;
-                }
+            if epoch > Some(EpochNumber::new(target_epoch)) {
+                tracing::info!(target_epoch, "epoch started");
+                return;
             }
+            last_seen = Some((leaf.height(), epoch));
         }
-        tracing::info!(target_epoch, "epoch started");
+        panic!("event stream ended before target epoch {target_epoch}, last decide: {last_seen:?}");
     }
 }
 

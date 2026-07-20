@@ -1,7 +1,6 @@
 use std::marker::PhantomData;
 
 use committable::{Commitment, Committable};
-pub use hotshot_types::new_protocol::Proposal;
 use hotshot_types::{
     data::{
         EpochNumber, VidDisperseShare2, ViewNumber, vid_disperse::AvidmGf2DisperseShareFragment,
@@ -12,17 +11,18 @@ use hotshot_types::{
         OneHonestThreshold, SimpleCertificate, SuccessThreshold, TimeoutCertificate2,
     },
     simple_vote::{
-        LightClientStateUpdateVote2, QuorumData2, QuorumVote2, SimpleVote, TimeoutData2,
-        TimeoutVote2, Vote2Data,
+        LightClientStateUpdateVote2, QuorumVote2, SimpleVote, TimeoutData2, TimeoutVote2, Vote2Data,
     },
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
     vote::HasViewNumber,
 };
+pub use hotshot_types::{
+    new_protocol::Proposal,
+    simple_certificate::{Certificate1, Certificate2},
+};
 use serde::{Deserialize, Serialize};
 
 pub type Vote2<T> = SimpleVote<T, Vote2Data<T>>;
-pub type Certificate1<T> = SimpleCertificate<T, QuorumData2<T>, SuccessThreshold>;
-pub type Certificate2<T> = SimpleCertificate<T, Vote2Data<T>, SuccessThreshold>;
 pub type TimeoutCertificate<T> = SimpleCertificate<T, TimeoutData2, SuccessThreshold>;
 pub type TimeoutOneHonest<T> = SimpleCertificate<T, TimeoutData2, OneHonestThreshold>;
 
@@ -102,12 +102,32 @@ impl<T: NodeType> HasViewNumber for Vote1<T> {
 #[serde(bound(deserialize = ""))]
 pub struct TimeoutVoteMessage<T: NodeType> {
     pub vote: TimeoutVote2<T>,
-    pub lock: Option<Certificate1<T>>,
+    pub evidence: Option<CatchupEvidence<T>>,
 }
 
 impl<T: NodeType> HasViewNumber for TimeoutVoteMessage<T> {
     fn view_number(&self) -> ViewNumber {
         self.vote.view_number()
+    }
+}
+
+/// The highest certificate a node holds: its locked QC or its latest timeout
+/// certificate, whichever has the higher view. Attached to timeout votes and
+/// sent to peers stuck on stale views, so divergent nodes re-converge on the
+/// highest justified view.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = ""))]
+pub enum CatchupEvidence<T: NodeType> {
+    Qc(Certificate1<T>),
+    Tc(TimeoutCertificate2<T>),
+}
+
+impl<T: NodeType> HasViewNumber for CatchupEvidence<T> {
+    fn view_number(&self) -> ViewNumber {
+        match self {
+            Self::Qc(qc) => qc.view_number(),
+            Self::Tc(tc) => tc.view_number(),
+        }
     }
 }
 
@@ -178,6 +198,7 @@ pub enum ConsensusMessage<T: NodeType, S> {
     VidShareFragment(VidShareFragmentMessage<T>),
     /// A node's own VID share, broadcast independently of Vote1.
     VidShareBroadcast(VidDisperseShare2<T>),
+    HighQc(Certificate1<T>),
 }
 
 impl<T: NodeType, S> ConsensusMessage<T, S> {
@@ -194,6 +215,7 @@ impl<T: NodeType, S> ConsensusMessage<T, S> {
             Self::EpochChange(c) => ConsensusMessage::EpochChange(c),
             Self::VidShareFragment(v) => ConsensusMessage::VidShareFragment(v),
             Self::VidShareBroadcast(v) => ConsensusMessage::VidShareBroadcast(v),
+            Self::HighQc(c) => ConsensusMessage::HighQc(c),
         }
     }
 }
@@ -211,6 +233,7 @@ impl<T: NodeType, S> HasViewNumber for ConsensusMessage<T, S> {
             Self::EpochChange(epoch_change) => epoch_change.cert1.view_number(),
             Self::VidShareFragment(fragment) => fragment.data.view_number(),
             Self::VidShareBroadcast(vid_share) => vid_share.view_number(),
+            Self::HighQc(certificate) => certificate.view_number(),
         }
     }
 }

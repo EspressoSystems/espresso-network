@@ -250,6 +250,7 @@ struct ChainInfo {
 }
 
 fn main() -> anyhow::Result<()> {
+    espresso_types::assert_node_feature();
     let migrated_envs = espresso_utils::env_compat::migrate_legacy_env_vars();
     tokio::runtime::Runtime::new()
         .unwrap()

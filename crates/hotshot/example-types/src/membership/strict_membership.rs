@@ -100,6 +100,33 @@ where
     }
 }
 
+impl<T, S> StrictMembership<T, S>
+where
+    T: NodeType,
+    S: TestStakeTable<T::SignatureKey, T::StateSignatureKey>,
+{
+    /// Register a quorum committee effective from `first_epoch` (inclusive).
+    /// Test setup only — production membership derives quorum changes from
+    /// epoch roots.
+    pub fn add_quorum_committee(&self, first_epoch: EpochNumber, committee: Vec<PeerConfig<T>>) {
+        self.inner.write().table.add_quorum_committee(
+            *first_epoch,
+            committee.into_iter().map(Into::into).collect(),
+        );
+    }
+
+    /// Mark `epoch` as having a stake table and DRB result, bypassing the
+    /// epoch-root/DRB pipeline. For tests that need an epoch snapshot without
+    /// driving consensus to the epoch root.
+    pub fn register_epoch(&self, epoch: EpochNumber, drb: DrbResult) {
+        let mut inner = self.inner.write();
+        inner.epochs.insert(epoch);
+        inner.drbs.insert(epoch);
+        inner.table.add_epoch_root(*epoch);
+        inner.table.add_drb_result(*epoch, drb);
+    }
+}
+
 impl<T: NodeType, S> Inner<T, S> {
     fn assert_has_stake_table(&self, epoch: Option<EpochNumber>) {
         let Some(epoch) = epoch else {

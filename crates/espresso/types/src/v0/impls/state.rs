@@ -29,8 +29,10 @@ use versions::{
     DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION,
 };
 
+#[cfg(feature = "node")]
+use super::L1Client;
 use super::{
-    BlockMerkleCommitment, BlockSize, FeeMerkleCommitment, L1Client, fee_info::FeeError,
+    BlockMerkleCommitment, BlockSize, FeeMerkleCommitment, fee_info::FeeError,
     instance_state::NodeState, v0_1::IterableFeeInfo,
 };
 use crate::{
@@ -444,12 +446,14 @@ impl ValidatedState {
     }
 }
 /// Block Proposal to be verified and applied.
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
 #[derive(Debug)]
 pub(crate) struct Proposal<'a> {
     header: &'a Header,
     block_size: u32,
 }
 
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
 impl<'a> Proposal<'a> {
     pub(crate) fn new(header: &'a Header, block_size: u32) -> Self {
         Self { header, block_size }
@@ -547,6 +551,7 @@ impl<'a> Proposal<'a> {
 /// Type to hold cloned validated state and provide validation methods.
 ///
 /// The [Self::validate] method must be called to validate the proposal.
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
 #[derive(Debug)]
 pub(crate) struct ValidatedTransition<'a> {
     state: ValidatedState,
@@ -560,6 +565,7 @@ pub(crate) struct ValidatedTransition<'a> {
     leader_index: Option<usize>,
 }
 
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
 impl<'a> ValidatedTransition<'a> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
@@ -646,6 +652,7 @@ impl<'a> ValidatedTransition<'a> {
     ///
     /// The finalized [L1BlockInfo](super::L1BlockInfo) in the proposal must match the one fetched
     /// from L1.
+    #[cfg(feature = "node")]
     async fn wait_for_l1(self, l1_client: &L1Client) -> Result<Self, ProposalValidationError> {
         self.wait_for_l1_head(l1_client).await;
         self.wait_for_finalized_block(l1_client).await?;
@@ -654,6 +661,7 @@ impl<'a> ValidatedTransition<'a> {
 
     /// Wait for our view of the latest L1 block number to catch up to the
     /// proposal.
+    #[cfg(feature = "node")]
     async fn wait_for_l1_head(&self, l1_client: &L1Client) {
         let _ = l1_client
             .wait_for_block(self.proposal.header.l1_head())
@@ -661,6 +669,7 @@ impl<'a> ValidatedTransition<'a> {
     }
     /// Wait for our view of the finalized L1 block number to catch up to the
     /// proposal.
+    #[cfg(feature = "node")]
     async fn wait_for_finalized_block(
         &self,
         l1_client: &L1Client,
@@ -934,6 +943,7 @@ impl From<MerkleTreeError> for FeeError {
 
 /// Validate builder accounts by verifying signatures. All fees are
 /// verified against signature by index.
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
 fn validate_builder_fee(
     proposed_header: &Header,
     version: Version,
@@ -1196,6 +1206,7 @@ impl ValidatedState {
     }
 }
 
+#[cfg(feature = "node")]
 pub async fn get_l1_deposits(
     instance: &NodeState,
     header: &Header,
@@ -1219,6 +1230,24 @@ pub async fn get_l1_deposits(
     }
 }
 
+/// Twin of the `node` variant so callers compile unchanged. Only the actual
+/// fetch requires the node feature; chains without a fee contract or without a
+/// finalized L1 block behave identically in both cfgs.
+#[cfg(not(feature = "node"))]
+pub async fn get_l1_deposits(
+    _instance: &NodeState,
+    header: &Header,
+    _parent_leaf: &Leaf2,
+    fee_contract_address: Option<Address>,
+) -> Vec<FeeInfo> {
+    if fee_contract_address.is_some() && header.l1_finalized().is_some() {
+        unimplemented!("fetching L1 deposits requires the node feature")
+    } else {
+        vec![]
+    }
+}
+
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
 async fn validate_next_stake_table_hash(
     instance: &NodeState,
     proposed_header: &Header,
@@ -1279,6 +1308,7 @@ impl HotShotState<SeqTypes> for ValidatedState {
             height = parent_leaf.height(),
         ),
     )]
+    #[cfg_attr(not(feature = "node"), allow(unused_variables))]
     async fn validate_and_apply_header(
         &self,
         instance: &Self::Instance,
@@ -1288,56 +1318,65 @@ impl HotShotState<SeqTypes> for ValidatedState {
         version: Version,
         view_number: u64,
     ) -> Result<(Self, Self::Delta), Self::Error> {
-        // Preferably we would do all validation that does not require catchup first, but this would
-        // require some refactoring of the header validation code that is out of scope for now.
-        // Record the time when validation started to later use it to validate the timestamp drift.
-        let validation_start_time = OffsetDateTime::now_utc();
-
-        let (validated_state, delta, total_rewards_distributed) = self
-            // TODO We can add this logic to `ValidatedTransition` or do something similar to that here.
-            .apply_header(
-                instance,
-                &instance.state_catchup,
-                parent_leaf,
-                proposed_header,
-                version,
-                ViewNumber::new(view_number),
-            )
-            .await
-            .map_err(|e| BlockError::FailedHeaderApply(e.to_string()))?;
-
-        if version >= DRB_AND_HEADER_UPGRADE_VERSION {
-            validate_next_stake_table_hash(instance, proposed_header).await?;
+        // The L1 deposit fetch and the wait for the proposal's L1 blocks require an L1 client.
+        #[cfg(not(feature = "node"))]
+        {
+            unimplemented!("validate_and_apply_header requires the node feature");
         }
+        #[cfg(feature = "node")]
+        {
+            // Preferably we would do all validation that does not require catchup first, but this
+            // would require some refactoring of the header validation code that is out of scope for
+            // now. Record the time when validation started to later use it to validate the
+            // timestamp drift.
+            let validation_start_time = OffsetDateTime::now_utc();
 
-        // Get leader index for V6+ validation
-        let leader_index =
-            Header::get_leader_index(version, proposed_header.height(), view_number, instance)
+            let (validated_state, delta, total_rewards_distributed) = self
+                // TODO We can add this logic to `ValidatedTransition` or do something similar to that here.
+                .apply_header(
+                    instance,
+                    &instance.state_catchup,
+                    parent_leaf,
+                    proposed_header,
+                    version,
+                    ViewNumber::new(view_number),
+                )
                 .await
-                .map_err(|e| BlockError::InvalidBlockHeader(e.to_string()))?;
+                .map_err(|e| BlockError::FailedHeaderApply(e.to_string()))?;
 
-        // Validate the proposal.
-        let validated_state = ValidatedTransition::new(
-            validated_state,
-            parent_leaf.block_header(),
-            Proposal::new(proposed_header, payload_byte_len),
-            total_rewards_distributed,
-            version,
-            validation_start_time,
-            instance.epoch_height,
-            leader_index,
-        )
-        .validate()?
-        .wait_for_l1(&instance.l1_client)
-        .await?
-        .state;
+            if version >= DRB_AND_HEADER_UPGRADE_VERSION {
+                validate_next_stake_table_hash(instance, proposed_header).await?;
+            }
 
-        // log successful progress about once in 10 - 20 seconds,
-        // TODO: we may want to make this configurable
-        if parent_leaf.view_number().u64().is_multiple_of(10) {
-            tracing::info!("validated and applied new header");
+            // Get leader index for V6+ validation
+            let leader_index =
+                Header::get_leader_index(version, proposed_header.height(), view_number, instance)
+                    .await
+                    .map_err(|e| BlockError::InvalidBlockHeader(e.to_string()))?;
+
+            // Validate the proposal.
+            let validated_state = ValidatedTransition::new(
+                validated_state,
+                parent_leaf.block_header(),
+                Proposal::new(proposed_header, payload_byte_len),
+                total_rewards_distributed,
+                version,
+                validation_start_time,
+                instance.epoch_height,
+                leader_index,
+            )
+            .validate()?
+            .wait_for_l1(&instance.l1_client)
+            .await?
+            .state;
+
+            // log successful progress about once in 10 - 20 seconds,
+            // TODO: we may want to make this configurable
+            if parent_leaf.view_number().u64().is_multiple_of(10) {
+                tracing::info!("validated and applied new header");
+            }
+            Ok((validated_state, delta))
         }
-        Ok((validated_state, delta))
     }
     /// Construct the state with the given block header.
     ///

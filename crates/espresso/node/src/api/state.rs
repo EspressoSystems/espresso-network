@@ -2961,26 +2961,15 @@ where
             .await
             .ok_or_else(|| not_found(format!("unknown leaf {requested}")))?;
 
-        let proof_result = if let Some(finalized) = finalized {
-            crate::api::light_client::get_leaf_proof_with_finalized_assumption(
-                ds,
-                requested_leaf,
-                finalized as usize,
-                fetch_timeout,
-            )
-            .await
-        } else if requested_leaf.header().version() >= versions::NEW_PROTOCOL_VERSION {
-            crate::api::light_client::get_leaf_proof_with_cert2(ds, requested_leaf, fetch_timeout)
-                .await
-        } else {
-            crate::api::light_client::get_leaf_proof_with_qc_chain(
-                ds,
-                requested_leaf,
-                fetch_timeout,
-            )
-            .await
-        };
-        proof_result.map_err(|err| anyhow::anyhow!("{err}"))
+        crate::api::light_client::get_leaf_proof(
+            ds,
+            requested_leaf,
+            finalized.map(|f| f as usize),
+            fetch_timeout,
+            lc_leaf_proof_chain_limit(),
+        )
+        .await
+        .map_err(|err| anyhow::anyhow!("{err}"))
     }
 
     async fn get_header_proof(
@@ -3176,6 +3165,10 @@ fn lc_fetch_timeout() -> std::time::Duration {
 
 fn lc_large_object_range_limit() -> usize {
     hotshot_query_service::availability::Options::default().large_object_range_limit
+}
+
+fn lc_leaf_proof_chain_limit() -> usize {
+    crate::api::light_client::Options::default().leaf_proof_chain_limit
 }
 
 // ============================================================================
