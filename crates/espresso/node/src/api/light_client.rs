@@ -38,10 +38,10 @@ use crate::api::data_source::{NodeStateDataSource, StakeTableDataSource};
 
 /// Construct a proof that the requested leaf is finalized.
 ///
-/// A nearby `finalized` hint yields the cheapest proof: a short leaf chain the client can verify
-/// against its known-finalized leaf without any signature checks. A distant hint (or none) would
-/// require an unboundedly long chain, so instead finality is proven directly, in a way appropriate
-/// to the leaf's protocol version, and the client verifies the proof against a quorum.
+/// A usable `finalized` hint yields a leaf chain the client can verify against its known-finalized
+/// leaf without signature checks. The hint is ignored if the chain connecting to it could exceed
+/// `chain_limit`, or if a cert2 near the requested leaf yields a shorter proof; finality is then
+/// proven directly, for the client to verify against a quorum.
 pub(crate) async fn get_leaf_proof<State>(
     state: &State,
     requested_leaf: LeafQueryData<SeqTypes>,
@@ -54,22 +54,53 @@ where
     for<'a> State::ReadOnly<'a>: NodeStorage<SeqTypes>,
 {
     let requested = requested_leaf.height() as usize;
-    match finalized {
-        Some(finalized) if finalized.saturating_sub(requested) <= chain_limit => {
-            get_leaf_proof_with_finalized_assumption(
-                state,
-                requested_leaf,
-                finalized,
-                fetch_timeout,
-                chain_limit,
-            )
-            .await
-        },
-        _ if requested_leaf.header().version() >= NEW_PROTOCOL_VERSION => {
-            get_leaf_proof_with_cert2(state, requested_leaf, fetch_timeout, chain_limit).await
-        },
-        _ => get_leaf_proof_with_qc_chain(state, requested_leaf, fetch_timeout, chain_limit).await,
+    let new_protocol = requested_leaf.header().version() >= NEW_PROTOCOL_VERSION;
+
+    let mut hint = finalized.filter(|finalized| finalized.saturating_sub(requested) <= chain_limit);
+
+    // A chain of new-protocol leaves can only end at the hint itself, spanning every leaf in
+    // between, so drop the hint when a nearby cert2 yields a strictly shorter proof.
+    if let Some(finalized) = hint
+        && new_protocol
+        && let Some(cert2_height) = earliest_cert2_height(state, requested as u64).await
+        && cert2_height + 1 < finalized as u64
+    {
+        hint = None;
     }
+
+    if let Some(finalized) = hint {
+        get_leaf_proof_with_finalized_assumption(
+            state,
+            requested_leaf,
+            finalized,
+            fetch_timeout,
+            chain_limit,
+        )
+        .await
+    } else if new_protocol {
+        get_leaf_proof_with_cert2(state, requested_leaf, fetch_timeout, chain_limit).await
+    } else {
+        get_leaf_proof_with_qc_chain(state, requested_leaf, fetch_timeout, chain_limit).await
+    }
+}
+
+/// The height of the earliest stored cert2 at or after `height`, if one is available.
+///
+/// Storage errors are treated as no cert2 available: this only chooses between proof strategies,
+/// and the chosen path will surface any persistent error.
+async fn earliest_cert2_height<State>(state: &State, height: u64) -> Option<u64>
+where
+    State: VersionedDataSource,
+    for<'a> State::ReadOnly<'a>: NodeStorage<SeqTypes>,
+{
+    let cert2 = state
+        .read()
+        .await
+        .ok()?
+        .load_earliest_cert2(height)
+        .await
+        .ok()??;
+    Some(cert2.data.block_number)
 }
 
 pub(crate) async fn get_leaf_proof_with_qc_chain<State>(
@@ -107,8 +138,7 @@ where
             .checked_sub(1)
             .ok_or_else(|| chain_too_long(requested, chain_limit))?;
 
-        // Once the chain crosses into the new protocol, the HotStuff commit rules can no longer
-        // terminate it; cert2 is the finality mechanism from there on.
+        // HotStuff commit rules cannot terminate a chain of new-protocol leaves; switch to cert2.
         if leaf.header().version() >= NEW_PROTOCOL_VERSION {
             complete_proof_with_cert2(
                 state,
@@ -171,11 +201,9 @@ where
 
 /// Complete a leaf proof using new protocol certificate2 finality.
 ///
-/// `leaf` is the next leaf to add to the proof's chain: either the requested leaf itself (when the
-/// chain is empty) or the first new-protocol leaf encountered while extending a chain that started
-/// before the protocol cutover. The chain is extended from `leaf` to the leaf directly committed by
-/// the earliest stored cert2, which is then attached to complete the proof. At most `chain_limit`
-/// leaves are added past `leaf`, bounding the memory needed to construct the proof.
+/// Extends the proof's chain from `leaf` (the requested leaf, or the first new-protocol leaf in a
+/// chain begun before the cutover) to the leaf directly committed by the earliest stored cert2,
+/// adding at most `chain_limit` leaves.
 async fn complete_proof_with_cert2<State>(
     state: &State,
     proof: &mut LeafProof,
@@ -191,8 +219,7 @@ where
     let start_height = leaf.height();
     let start_commit = leaf.leaf().commit();
 
-    // The new leaf may already complete a HotStuff chain among the leaves in the proof (possible
-    // when the chain started shortly before the protocol cutover).
+    // The new leaf may already complete a HotStuff chain begun before the protocol cutover.
     if proof.push(leaf) {
         return Ok(());
     }
@@ -282,8 +309,6 @@ where
             status: StatusCode::BAD_REQUEST,
         });
     }
-    // The proof may need to span every leaf from the requested one to the finalized one, so a
-    // distant hint would require materializing an arbitrarily long chain.
     if finalized - requested > chain_limit {
         return Err(Error::Custom {
             message: format!(
@@ -556,10 +581,8 @@ pub(super) struct Options {
 
     /// The maximum number of leaves included in a single leaf proof.
     ///
-    /// Proving an old leaf finalized requires constructing a chain of leaves from the requested
-    /// leaf to one whose finality can be established directly. This limit bounds the length of
-    /// that chain -- and thus the memory needed to construct and serialize it -- regardless of
-    /// what the client requests.
+    /// Bounds the memory needed to construct and serialize a proof, regardless of what the client
+    /// requests.
     pub leaf_proof_chain_limit: usize,
 }
 
@@ -1191,6 +1214,72 @@ mod test {
                 .await
                 .unwrap(),
             leaves[0]
+        );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_new_protocol_hint_vs_cert2() {
+        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
+        let ds = DataSource::create(
+            DataSource::persistence_options(&storage),
+            Default::default(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        let leaves = leaf_chain(1..=5, NEW_PROTOCOL_VERSION).await;
+        let cert2_leaf = &leaves[1];
+        let cert2 = cert2_for_leaf(cert2_leaf);
+
+        {
+            let mut tx = ds.write().await.unwrap();
+            for leaf in &leaves {
+                tx.insert_leaf(leaf).await.unwrap();
+            }
+            tx.insert_cert2(cert2_leaf.height(), cert2).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        // The cert2 at height 2 yields a shorter proof than the chain to the finalized hint at
+        // height 5, so the hint is ignored.
+        let proof = get_leaf_proof(&ds, leaves[0].clone(), Some(5), Duration::MAX, CHAIN_LIMIT)
+            .await
+            .unwrap();
+        assert!(matches!(proof.proof(), FinalityProof::NewProtocol { .. }));
+        assert_eq!(
+            proof
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .await
+                .unwrap(),
+            leaves[0]
+        );
+
+        // With the hint at height 3, the cert2 proof is no shorter, so the hint wins and the
+        // client can verify without signature checks.
+        let proof = get_leaf_proof(&ds, leaves[0].clone(), Some(3), Duration::MAX, CHAIN_LIMIT)
+            .await
+            .unwrap();
+        assert!(matches!(proof.proof(), FinalityProof::Assumption));
+        assert_eq!(
+            proof
+                .verify(LeafProofHint::assumption(leaves[2].leaf()))
+                .await
+                .unwrap(),
+            leaves[0]
+        );
+
+        // With no cert2 at or after the requested height, the hint is honored.
+        let proof = get_leaf_proof(&ds, leaves[2].clone(), Some(5), Duration::MAX, CHAIN_LIMIT)
+            .await
+            .unwrap();
+        assert!(matches!(proof.proof(), FinalityProof::Assumption));
+        assert_eq!(
+            proof
+                .verify(LeafProofHint::assumption(leaves[4].leaf()))
+                .await
+                .unwrap(),
+            leaves[2]
         );
     }
 

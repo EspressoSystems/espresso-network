@@ -62,12 +62,8 @@ pub struct Genesis {
 /// Maximum distance between a requested leaf and the known-finalized leaf sent to the server as a
 /// `finalized` hint.
 ///
-/// A nearby hint gives the cheapest possible proof: a short leaf chain verified by parent
-/// commitments alone. But the chain may span every leaf between the requested and finalized
-/// heights, so a distant hint would ask the server to materialize an arbitrarily long chain
-/// (servers bound the proofs they are willing to construct, and reject or ignore distant hints).
-/// Beyond this distance we omit the hint; the server then chooses a bounded finality proof which
-/// we verify against a quorum.
+/// The proof for a hint may span every leaf between the two heights, so servers reject or ignore
+/// distant hints. Beyond this distance we omit the hint and verify a quorum-based proof instead.
 const MAX_FINALIZED_HINT_DISTANCE: u64 = 500;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -211,10 +207,6 @@ where
         } else {
             None
         };
-        // Only use the upper bound as a finalized hint if it is close to the requested leaf. The
-        // proof chain the server constructs for a finalized hint may span every leaf between the
-        // requested and finalized heights, so servers refuse distant hints; without the hint, the
-        // server picks a bounded finality proof which we verify against a quorum instead.
         let known_finalized = known_finalized.filter(|anchor| match id {
             LeafId::Number(n) => {
                 anchor.height().saturating_sub(n as u64) <= MAX_FINALIZED_HINT_DISTANCE

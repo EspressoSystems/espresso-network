@@ -30,9 +30,10 @@ either
 * a certificate directly committing the last leaf in the chain (HotShot >= 0.6)
 * the assumed `:finalized` leaf
 
-The server bounds the number of leaves it will include in a single proof. If `:finalized` is too
-far past the requested leaf for a bounded proof, the hint is ignored and the proof instead ends in
-a QC chain or certificate, which the client must verify against the appropriate quorum.
+The server bounds the number of leaves it will include in a single proof. The `:finalized` hint is
+ignored if it is too far past the requested leaf for a bounded proof, or if a finality certificate
+nearer the requested leaf yields a shorter proof; the proof instead ends in a QC chain or
+certificate, which the client must verify against the appropriate quorum.
 
 Returns
 ```json
