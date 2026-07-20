@@ -259,10 +259,14 @@ impl LeafProof {
         let len = self.leaves.len();
 
         // Check if the new leaf plus the last saved leaf contain justifying QCs that form a
-        // HotStuff2 QC chain for the leaf before.
+        // HotStuff2 QC chain for the leaf before. The deciding QC signs `leaves[len - 1]`, so if
+        // that leaf is a new-protocol leaf the QC is a post-cutover phase-1 certificate which does
+        // not imply finality, and the verifier rejects the chain; fall through to a cert2 proof
+        // instead. This bound also covers the proven leaf `leaves[len - 2]`, since versions are
+        // non-decreasing along the chain.
         if len >= 2
             && self.leaves[len - 2].block_header().version() >= EPOCH_VERSION
-            && self.leaves[len - 2].block_header().version() < NEW_PROTOCOL_VERSION
+            && self.leaves[len - 1].block_header().version() < NEW_PROTOCOL_VERSION
         {
             let committing_qc = Certificate::for_parent(&self.leaves[len - 1]);
             let deciding_qc = Certificate::for_parent(new_leaf.leaf());
@@ -563,10 +567,19 @@ mod test {
         assert_eq!(leaves[0].header().version(), DRB_AND_HEADER_UPGRADE_VERSION);
         assert_eq!(leaves[1].header().version(), NEW_PROTOCOL_VERSION);
 
+        // The prover never completes a 2-chain whose deciding QC postdates the cutover.
         let mut proof = LeafProof::default();
         assert!(!proof.push(leaves[0].clone()));
         assert!(!proof.push(leaves[1].clone()));
-        assert!(proof.push(leaves[2].clone()));
+        assert!(!proof.push(leaves[2].clone()));
+
+        // A hand-crafted spanning 2-chain, with real QCs from consecutive views, fails to verify.
+        let mut proof = LeafProof::default();
+        assert!(!proof.push(leaves[0].clone()));
+        proof.add_qc_chain(
+            Arc::new(Certificate::for_parent(leaves[1].leaf())),
+            Arc::new(Certificate::for_parent(leaves[2].leaf())),
+        );
         assert!(matches!(proof.proof(), FinalityProof::HotStuff2 { .. }));
         let err = proof
             .verify(LeafProofHint::Quorum(&VersionCheckQuorum::new(

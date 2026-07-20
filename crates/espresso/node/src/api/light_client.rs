@@ -1502,6 +1502,58 @@ mod test {
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_qc_chain_last_legacy_leaf_uses_cert2() {
+        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
+        let ds = DataSource::create(
+            DataSource::persistence_options(&storage),
+            Default::default(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        // Upgrade at height 2: leaf 1 is the last legacy leaf, so any 2-chain proving it has a
+        // deciding QC formed at the cutover, which the verifier rejects. The prover must fall
+        // through to the cert2 (here at height 3, past the first new-protocol leaf) instead of
+        // completing the spanning 2-chain.
+        let leaves = leaf_chain_with_upgrade(
+            1..=4,
+            2,
+            Upgrade::new(DRB_AND_HEADER_UPGRADE_VERSION, NEW_PROTOCOL_VERSION),
+        )
+        .await;
+        assert_eq!(leaves[0].header().version(), DRB_AND_HEADER_UPGRADE_VERSION);
+        assert_eq!(leaves[1].header().version(), NEW_PROTOCOL_VERSION);
+
+        let cert2_leaf = &leaves[2];
+        let cert2 = cert2_for_leaf(cert2_leaf);
+
+        {
+            let mut tx = ds.write().await.unwrap();
+            for leaf in &leaves {
+                tx.insert_leaf(leaf).await.unwrap();
+            }
+            tx.insert_cert2(cert2_leaf.height(), cert2).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        let proof =
+            get_leaf_proof_with_qc_chain(&ds, leaves[0].clone(), Duration::MAX, CHAIN_LIMIT)
+                .await
+                .unwrap();
+        assert!(matches!(proof.proof(), FinalityProof::NewProtocol { .. }));
+        assert_eq!(
+            proof
+                .verify(LeafProofHint::Quorum(&VersionCheckQuorum::new(
+                    leaves.iter().map(|leaf| leaf.leaf().clone())
+                )))
+                .await
+                .unwrap(),
+            leaves[0]
+        );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_bad_finalized() {
         let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
         let ds = DataSource::create(
