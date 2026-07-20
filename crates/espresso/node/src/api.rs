@@ -10157,30 +10157,37 @@ mod test {
         )
         .await;
 
-        // every V5 leaf up to the last one before the cutover is
-        // still proven by a HotStuff2 QC chain
-        for h in upgrade_height - 3..=upgrade_height - 1 {
-            let proof = client
-                .get::<LeafProof>(&format!("light-client/leaf/{h}"))
+        let client = &client;
+        let finality_proof = |height: u64| async move {
+            client
+                .get::<LeafProof>(&format!("light-client/leaf/{height}"))
                 .send()
                 .await
-                .unwrap();
+                .unwrap()
+        };
+        // Everything up to the last two pre cutover leaves is old protocol
+        for height in upgrade_height - 10..=upgrade_height - 3 {
+            let proof = finality_proof(height).await;
             assert!(
                 matches!(proof.proof(), FinalityProof::HotStuff2 { .. }),
-                "pre-upgrade leaf {h} should be proven by a HotStuff2 QC chain, got {:?}",
+                "leaf {height} should be proven by a HotStuff2 QC chain, got {:?}",
                 proof.proof(),
             );
         }
-        let v6_proof = client
-            .get::<LeafProof>(&format!("light-client/leaf/{epoch_change_height}"))
-            .send()
-            .await
-            .unwrap();
-        assert!(
-            matches!(v6_proof.proof(), FinalityProof::NewProtocol { .. }),
-            "post upgrade leaf should be proven by a new protocol certificate, got {:?}",
-            v6_proof.proof(),
-        );
+
+        // A post cutover leaf is proven by a new protocol certificate. The last
+        // two pre cutover leaves will be finalized by new protocol
+        // e.g cutover at 347 the old protocol decides up to 344 (HotStuff2), and the
+        // new protocol's first Cert2 directly commits 347 and finalizes
+        // 345 and 346 with it via the indirect commit rule.
+        for height in [upgrade_height - 2, upgrade_height - 1, epoch_change_height] {
+            let proof = finality_proof(height).await;
+            assert!(
+                matches!(proof.proof(), FinalityProof::NewProtocol { .. }),
+                "leaf {height} should be proven by a new protocol certificate, got {:?}",
+                proof.proof(),
+            );
+        }
 
         // Epochs run from genesis, so `first_epoch` is 1 and the endpoint is
         // queryable from epoch 3, which the chain has long passed.
