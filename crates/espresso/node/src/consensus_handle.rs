@@ -16,30 +16,29 @@ use hotshot_new_protocol::{
         Coordinator,
         error::{CoordinatorError, Severity},
     },
-    cutover::{
-        extract_pre_cutover_seed, forward_legacy_epoch_changes, forward_legacy_high_qc,
-        forward_legacy_timeout_votes,
-    },
+    cutover::{extract_pre_cutover_seed, forward_legacy_high_qc, forward_legacy_timeout_votes},
     state::UpdateLeaf,
     storage::NewProtocolStorage,
 };
 use hotshot_types::{
     data::{BlockNumber, EpochNumber, Leaf2, QuorumProposalWrapper, VidDisperseShare, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
-    event::{Event, LeafInfo},
+    event::{Event, EventType, LeafInfo},
     message::{Proposal as SignedProposal, UpgradeLock, convert_proposal},
     new_protocol::CoordinatorEvent,
-    traits::{ValidatedState, node_implementation::NodeType, signature_key::SignatureKey},
-    utils::StateAndDelta,
+    traits::{
+        ValidatedState,
+        block_contents::BlockHeader,
+        metrics::{Gauge, Metrics},
+        node_implementation::NodeType,
+        signature_key::SignatureKey,
+    },
+    utils::{StateAndDelta, epoch_from_block_number},
 };
 use parking_lot::RwLock;
 use tokio::{select, spawn};
 use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 use tracing::{error, warn};
-
-type StartFn<T> = Box<
-    dyn FnOnce(Option<PreCutoverSeed<T>>, CancellationToken) -> AbortOnDropHandle<()> + Send + Sync,
->;
 
 pub struct ConsensusHandle<T: NodeType, I: NodeImplementation<T>> {
     legacy_handle: Arc<AsyncRwLock<SystemContextHandle<T, I>>>,
@@ -47,15 +46,17 @@ pub struct ConsensusHandle<T: NodeType, I: NodeImplementation<T>> {
     legacy_event_rx: InactiveReceiver<Event<T>>,
     event_rx: InactiveReceiver<CoordinatorEvent<T>>,
     upgrade_lock: UpgradeLock<T>,
-    new_proto: RwLock<NewProtocol<T>>,
+    new_proto: Arc<RwLock<NewProtocol<T, I::Storage>>>,
     tasks: Vec<AbortOnDropHandle<()>>,
 }
 
-enum NewProtocol<T: NodeType> {
+#[allow(clippy::large_enum_variant)]
+enum NewProtocol<T: NodeType, S> {
     Empty,
     Init {
-        client_api: ClientApi<T>,
-        start: StartFn<T>,
+        coordinator: Coordinator<T, S>,
+        event_tx: Sender<CoordinatorEvent<T>>,
+        queue_len: Option<Arc<dyn Gauge>>,
     },
     Running {
         coordinator: AbortOnDropHandle<()>,
@@ -64,7 +65,7 @@ enum NewProtocol<T: NodeType> {
     },
 }
 
-impl<T: NodeType> NewProtocol<T> {
+impl<T: NodeType, S> NewProtocol<T, S> {
     fn take(&mut self) -> Self {
         mem::replace(self, Self::Empty)
     }
@@ -74,6 +75,7 @@ impl<T, I> ConsensusHandle<T, I>
 where
     T: NodeType,
     I: NodeImplementation<T>,
+    I::Storage: NewProtocolStorage<T>,
 {
     pub async fn new(
         ctx: Arc<AsyncRwLock<SystemContextHandle<T, I>>>,
@@ -81,30 +83,48 @@ where
         epoch_height: BlockNumber,
         rx: InactiveReceiver<Event<T>>,
         event_channel_capacity: usize,
-    ) -> Self
-    where
-        I::Storage: NewProtocolStorage<T>,
-    {
+        metrics: &dyn Metrics,
+    ) -> Self {
         let (mut event_tx, mut event_rx) = broadcast(event_channel_capacity);
         event_tx.set_await_active(false);
         event_rx.set_overflow(true);
 
+        let coordinator_event_queue_len = metrics.is_recording().then(|| {
+            metrics
+                .create_gauge("coordinator_event_queue_len".into(), None)
+                .into()
+        });
+        let external_event_queue_len = metrics.is_recording().then(|| {
+            metrics
+                .create_gauge("external_event_queue_len".into(), None)
+                .into()
+        });
+
         let upgrade_lock = ctx.read().await.hotshot.upgrade_lock.clone();
 
-        let client_api = coordinator.client_api();
+        let client_api = coordinator.client_api().clone();
+
+        let new_proto = Arc::new(RwLock::new(NewProtocol::Init {
+            coordinator,
+            event_tx,
+            queue_len: coordinator_event_queue_len,
+        }));
 
         let tasks = vec![
             AbortOnDropHandle::new(spawn(forward_legacy_timeout_votes(
                 rx.clone(),
                 client_api.clone(),
+                upgrade_lock.clone(),
+                external_event_queue_len,
             ))),
             AbortOnDropHandle::new(spawn(forward_legacy_high_qc(
                 rx.clone(),
-                client_api.clone(),
+                client_api,
+                upgrade_lock.clone(),
             ))),
             AbortOnDropHandle::new(spawn(forward_legacy_epoch_changes(
                 rx.clone(),
-                client_api.clone(),
+                new_proto.clone(),
                 epoch_height.into(),
             ))),
         ];
@@ -115,17 +135,7 @@ where
             epoch_height,
             legacy_event_rx: rx,
             event_rx: event_rx.deactivate(),
-            new_proto: RwLock::new(NewProtocol::Init {
-                client_api: coordinator.client_api().clone(),
-                start: Box::new(move |seed, shutdown| {
-                    AbortOnDropHandle::new(spawn(run_coordinator(
-                        coordinator,
-                        event_tx,
-                        seed,
-                        shutdown,
-                    )))
-                }),
-            }),
+            new_proto,
             tasks,
         }
     }
@@ -153,10 +163,21 @@ where
         let mut new_proto = self.new_proto.write();
 
         match new_proto.take() {
-            NewProtocol::Init { client_api, start } => {
+            NewProtocol::Init {
+                coordinator,
+                event_tx,
+                queue_len,
+            } => {
+                let client_api = coordinator.client_api().clone();
                 let shutdown = CancellationToken::new();
                 *new_proto = NewProtocol::Running {
-                    coordinator: start(seed, shutdown.clone()),
+                    coordinator: AbortOnDropHandle::new(spawn(run_coordinator(
+                        coordinator,
+                        event_tx,
+                        queue_len,
+                        seed,
+                        shutdown.clone(),
+                    ))),
                     client_api,
                     shutdown,
                 };
@@ -517,6 +538,7 @@ where
 async fn run_coordinator<T, S>(
     mut coord: Coordinator<T, S>,
     tx: Sender<CoordinatorEvent<T>>,
+    queue_len: Option<Arc<dyn Gauge>>,
     seed: Option<PreCutoverSeed<T>>,
     shutdown: CancellationToken,
 ) where
@@ -532,6 +554,9 @@ async fn run_coordinator<T, S>(
                 if let Err(err) = apply_input(&mut coord, &tx, it).await {
                     error!(%err, "coordinator: critical error");
                     break;
+                }
+                if let Some(m) = &queue_len {
+                    m.set(tx.len())
                 }
             }
         }
@@ -658,5 +683,45 @@ where
         Err(err) => {
             warn!(%err, "failed to broadcast consensus event");
         },
+    }
+}
+
+/// Forward legacy epoch transitions into the coordinator so cliquenet keeps
+/// dialing the current validator set before cutover.
+///
+/// The parked coordinator's event loop is not running yet, so its network is
+/// bumped directly under the state lock. Once the coordinator runs, it
+/// refreshes peers itself whenever a proposal validates, so this task ends.
+/// `epoch_height == 0` disables forwarding.
+async fn forward_legacy_epoch_changes<T, S>(
+    legacy_event_rx: InactiveReceiver<Event<T>>,
+    new_proto: Arc<RwLock<NewProtocol<T, S>>>,
+    epoch_height: u64,
+) where
+    T: NodeType,
+    S: NewProtocolStorage<T>,
+{
+    if epoch_height == 0 {
+        return;
+    }
+    let mut rx = legacy_event_rx.activate_cloned();
+    let mut last_forwarded: Option<EpochNumber> = None;
+    while let Some(event) = rx.next().await {
+        let EventType::Decide { leaf_chain, .. } = &event.event else {
+            continue;
+        };
+        let Some(newest) = leaf_chain.first() else {
+            continue;
+        };
+        let block_number = newest.leaf.block_header().block_number();
+        let epoch = EpochNumber::new(epoch_from_block_number(block_number, epoch_height));
+        if last_forwarded.is_some_and(|prev| epoch <= prev) {
+            continue;
+        }
+        match &mut *new_proto.write() {
+            NewProtocol::Init { coordinator, .. } => coordinator.bump_network_epoch(epoch),
+            _ => return,
+        }
+        last_forwarded = Some(epoch);
     }
 }

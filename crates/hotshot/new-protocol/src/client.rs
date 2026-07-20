@@ -13,7 +13,7 @@ use hotshot_types::{
     },
     utils::StateAndDelta,
 };
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, mpsc::error::TrySendError, oneshot};
 
 use crate::{coordinator::error::CoordinatorError, message::Proposal, state::UpdateLeaf};
 
@@ -137,25 +137,23 @@ impl<T: NodeType> ClientApi<T> {
     }
 
     /// Forward a legacy `TimeoutVote2` into the new-protocol timeout collectors.
-    pub async fn submit_timeout_vote(&self, vote: TimeoutVote2<T>) -> Result<(), QueryError> {
-        let (respond, rx) = oneshot::channel();
-        self.call(ClientRequest::SubmitTimeoutVote { vote, respond }, rx)
-            .await
+    pub fn try_submit_legacy_timeout_vote(&self, vote: TimeoutVote2<T>) -> Result<(), QueryError> {
+        self.try_send(ClientRequest::SubmitTimeoutVote { vote })
     }
 
     /// Forward the last legacy view's QC so the first new-protocol leader can
     /// propose on it even if the cutover seed was snapshotted before it formed.
-    pub async fn submit_legacy_high_qc(&self, qc: QuorumCertificate2<T>) -> Result<(), QueryError> {
-        let (respond, rx) = oneshot::channel();
-        self.call(ClientRequest::SubmitLegacyHighQc { qc, respond }, rx)
-            .await
+    pub fn try_submit_legacy_high_qc(&self, qc: QuorumCertificate2<T>) -> Result<(), QueryError> {
+        self.try_send(ClientRequest::SubmitLegacyHighQc { qc })
     }
 
-    /// Refresh the coordinator network's peer set for `epoch`.
-    pub async fn bump_network_epoch(&self, epoch: EpochNumber) -> Result<(), QueryError> {
-        let (respond, rx) = oneshot::channel();
-        self.call(ClientRequest::BumpNetworkEpoch { epoch, respond }, rx)
-            .await
+    /// Bridge sends must never block on a coordinator that hasn't started:
+    /// requests queue in the bounded channel and are dropped when it is full.
+    fn try_send(&self, request: ClientRequest<T>) -> Result<(), QueryError> {
+        self.tx.try_send(request).map_err(|err| match err {
+            TrySendError::Closed(_) => QueryError::ChannelClosed,
+            TrySendError::Full(_) => QueryError::ChannelFull,
+        })
     }
 
     async fn call<A>(
@@ -248,15 +246,9 @@ pub(crate) enum ClientRequest<T: NodeType> {
     },
     SubmitTimeoutVote {
         vote: TimeoutVote2<T>,
-        respond: oneshot::Sender<()>,
     },
     SubmitLegacyHighQc {
         qc: QuorumCertificate2<T>,
-        respond: oneshot::Sender<()>,
-    },
-    BumpNetworkEpoch {
-        epoch: EpochNumber,
-        respond: oneshot::Sender<()>,
     },
 }
 
@@ -268,6 +260,9 @@ pub enum QueryError {
 
     #[error("coordinator dropped the response")]
     ResponseDropped,
+
+    #[error("request dropped: coordinator request queue is full")]
+    ChannelFull,
 
     #[error("coordinator error: {0}")]
     Coordinator(#[from] CoordinatorError),

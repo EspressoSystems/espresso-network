@@ -97,6 +97,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
         consensus_handle: &ConsensusHandle<SeqTypes, I>,
     ) where
         I: hotshot::traits::NodeImplementation<SeqTypes>,
+        I::Storage: hotshot_new_protocol::storage::NewProtocolStorage<SeqTypes>,
     {
         let leaf: &Leaf2<SeqTypes> = match event {
             CoordinatorEvent::LegacyEvent(Event {

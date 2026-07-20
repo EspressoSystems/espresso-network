@@ -14,7 +14,7 @@ use hotshot::{HotShotInitializer, traits::BlockPayload, types::SignatureKey};
 use hotshot_types::{
     consensus::{ConsensusMetricsValue, ParticipationTracker},
     data::{
-        EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperseShare2, ViewNumber,
+        EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewNumber,
         vid_disperse::vid_total_weight,
     },
     epoch_membership::EpochMembershipCoordinator,
@@ -52,7 +52,7 @@ use crate::{
     },
     network::Cliquenet,
     outbox::Outbox,
-    proposal::{ProposalValidator, ValidatedProposal, VidShareValidator},
+    proposal::{ProposalValidator, VidShareValidator},
     state::{HeaderRequest, StateEntry, StateManager, StateManagerOutput},
     storage::{NewProtocolStorage, Storage},
     vid::{VidDisperseRequest, VidDisperser, VidFragmentAccumulator, VidReconstructor},
@@ -122,10 +122,6 @@ pub struct Coordinator<T: NodeType, S> {
     pending_proposal_fetches: PendingProposalFetches<T>,
     #[builder(skip)]
     requested_missing_proposals: HashSet<ProposalFetchKey<T>>,
-    #[builder(default)]
-    cached_validated_proposals: BTreeMap<(ViewNumber, VidCommitment2), ValidatedProposal<T>>,
-    #[builder(default)]
-    cached_vid_shares: BTreeMap<(ViewNumber, VidCommitment2), VidDisperseShare2<T>>,
     #[builder(skip)]
     da_payloads: BTreeMap<(ViewNumber, VidCommitment2), PendingDa<T>>,
     metrics: Option<metrics::Metrics>,
@@ -133,6 +129,11 @@ pub struct Coordinator<T: NodeType, S> {
     participation: ParticipationTracker<T>,
     #[builder(skip)]
     voted_view: Option<ViewNumber>,
+    /// View of the last timer fire that counted towards participation and
+    /// timeout metrics, so a re-fire for the same (stuck) view doesn't
+    /// double-count it.
+    #[builder(skip)]
+    last_timeout_view: Option<ViewNumber>,
     #[builder(skip)]
     view_started: Option<(ViewNumber, EpochNumber, Instant)>,
     #[builder(skip)]
@@ -434,6 +435,11 @@ where
                 () = &mut self.timer => {
                     let view = self.timer.view();
                     let epoch = self.timer.epoch();
+                    // Re-arm for the same view: a node stuck exactly at TC2
+                    // threshold can lose its only timeout-vote broadcast, so
+                    // the vote is re-sent every timeout period until the
+                    // view advances.
+                    self.timer.reset();
                     if let Some(stats) = self.vote1_collector.stats(view, epoch) {
                         warn!(
                             %view, %epoch,
@@ -445,14 +451,17 @@ where
                         warn!(%view, %epoch, "timeout: no vote1 received for this view");
                     }
                     let input = ConsensusInput::Timeout(view, epoch);
-                    let leader = self.leader(view, epoch);
-                    if let Some(leader) = leader.clone() {
-                        self.participation.leader_missed(leader, epoch);
-                    }
-                    if let Some(m) = &self.metrics {
-                        m.consensus.number_of_timeouts.add(1);
-                        if leader.as_ref() == Some(&self.public_key) {
-                            m.consensus.number_of_timeouts_as_leader.add(1);
+                    if self.last_timeout_view != Some(view) {
+                        self.last_timeout_view = Some(view);
+                        let leader = self.leader(view, epoch);
+                        if let Some(leader) = leader.clone() {
+                            self.participation.leader_missed(leader, epoch);
+                        }
+                        if let Some(m) = &self.metrics {
+                            m.consensus.number_of_timeouts.add(1);
+                            if leader.as_ref() == Some(&self.public_key) {
+                                m.consensus.number_of_timeouts_as_leader.add(1);
+                            }
                         }
                     }
                     return Ok(input)
@@ -511,14 +520,7 @@ where
                 }
                 Some(item) = self.share_validator.next() => match item {
                     Ok(vid_share) => {
-                        let view = vid_share.view_number();
-                        let key = (view, vid_share.payload_commitment);
-                        let Some(validated) = self.cached_validated_proposals.remove(&key) else {
-                            // Wait for the proposal
-                            self.cached_vid_shares.insert(key, vid_share);
-                            continue;
-                        };
-                        return self.on_proposal_and_vid_share(validated, vid_share)
+                        return Ok(ConsensusInput::VidShare(vid_share))
                     },
                     Err(e) => {
                         return Err(CoordinatorError::regular(e).context("vid share validation"))
@@ -531,27 +533,8 @@ where
                     Ok(validated) => {
                         // Refresh the network's peer set when a proposal is validated.
                         let epoch = validated.message.proposal.data.epoch;
-                        if let Err(err) = self
-                            .network
-                            .apply_epoch(epoch, &self.membership_coordinator)
-                        {
-                            error!(%epoch, %err, "network apply_epoch failed");
-                        }
-
-                        let view = validated.message.proposal.data.view_number();
-                        let VidCommitment::V2(commit) =
-                            validated.message.proposal.data.block_header.payload_commitment()
-                        else {
-                            warn!(%view, "proposal payload commitment is not V2, discarding");
-                            continue;
-                        };
-                        let key = (view, commit);
-                        let Some(vid_share) = self.cached_vid_shares.remove(&key) else {
-                            // Wait for the vid share describing this payload.
-                            self.cached_validated_proposals.insert(key, validated);
-                            continue;
-                        };
-                        return self.on_proposal_and_vid_share(validated, vid_share)
+                        self.bump_network_epoch(epoch);
+                        return Ok(ConsensusInput::Proposal(validated.sender, validated.message))
                     }
                     Err(e) => {
                         return Err(CoordinatorError::regular(e).context("proposal validation"))
@@ -786,6 +769,31 @@ where
                     }
                 }
             },
+            ConsensusOutput::ProposalPaired {
+                proposal,
+                vid_share,
+            } => {
+                let view = proposal.data.view_number;
+                debug!(%node, %view, "proposal paired with vid share");
+                self.storage.append_vid(vid_share.clone());
+                self.storage.append_proposal(proposal.data.clone());
+                if let Some(state_cert) = &proposal.data.state_cert {
+                    self.storage.append_state_cert(
+                        ViewNumber::new(state_cert.light_client_state.view_number),
+                        state_cert.clone(),
+                    );
+                }
+                let expected_param = self.expected_vid_param(vid_share.target_epoch);
+                self.vid_reconstructor.handle_proposal(
+                    view,
+                    vid_share.payload_commitment,
+                    proposal.data.block_header.metadata().clone(),
+                    proposal.data.epoch,
+                    expected_param,
+                );
+                self.vid_reconstructor
+                    .handle_vid_share(self.public_key.clone(), vid_share);
+            },
             ConsensusOutput::SendProposal(proposal) => {
                 let view = proposal.data.view_number;
                 let epoch = proposal.data.epoch;
@@ -1004,6 +1012,20 @@ where
 
     pub fn client_api(&self) -> &ClientApi<T> {
         self.client.handle()
+    }
+
+    /// Refresh the network's peer window for `epoch`.
+    ///
+    /// The coordinator does this itself whenever a proposal validates, but
+    /// before its event loop is started callers can trigger this explicitly
+    /// to keep the network up to date.
+    pub fn bump_network_epoch(&mut self, epoch: EpochNumber) {
+        if let Err(err) = self
+            .network
+            .apply_epoch(epoch, &self.membership_coordinator)
+        {
+            error!(%epoch, %err, "network apply_epoch failed");
+        }
     }
 
     pub(crate) fn on_network_message(
@@ -1398,52 +1420,6 @@ where
         init_avidm_gf2_param(total_weight).ok()
     }
 
-    fn on_proposal_and_vid_share(
-        &mut self,
-        validated: ValidatedProposal<T>,
-        vid_share: VidDisperseShare2<T>,
-    ) -> Result<ConsensusInput<T>, CoordinatorError> {
-        self.storage.append_vid(vid_share.clone());
-        self.storage
-            .append_proposal(validated.message.proposal.data.clone());
-
-        if let Some(state_cert) = &validated.message.proposal.data.state_cert {
-            self.storage.append_state_cert(
-                ViewNumber::new(state_cert.light_client_state.view_number),
-                state_cert.clone(),
-            );
-        }
-
-        let expected_param = self.expected_vid_param(vid_share.target_epoch);
-        let proposal = &validated.message.proposal.data;
-        self.vid_reconstructor.handle_proposal(
-            proposal.view_number(),
-            vid_share.payload_commitment,
-            proposal.block_header.metadata().clone(),
-            proposal.epoch,
-            expected_param,
-        );
-        // This is our own share, addressed to us by the leader and already
-        // verified by the share validator.
-        self.vid_reconstructor
-            .handle_vid_share(self.public_key.clone(), vid_share.clone());
-
-        // GC for the cache
-        let view = validated.message.proposal.data.view_number();
-        self.cached_vid_shares = self
-            .cached_vid_shares
-            .split_off(&(view + 1, VidCommitment2::default()));
-        self.cached_validated_proposals = self
-            .cached_validated_proposals
-            .split_off(&(view + 1, VidCommitment2::default()));
-
-        Ok(ConsensusInput::ProposalWithVidShare(
-            validated.sender,
-            validated.message,
-            vid_share,
-        ))
-    }
-
     fn broadcast(
         &self,
         message_type: ConsensusMessage<T, Validated>,
@@ -1574,7 +1550,7 @@ where
                     });
                 let _ = respond.send(result);
             },
-            ClientRequest::SubmitTimeoutVote { vote, respond } => {
+            ClientRequest::SubmitTimeoutVote { vote } => {
                 let view = vote.view_number();
                 let current_view = self.consensus.current_view();
                 if view < current_view {
@@ -1582,7 +1558,6 @@ where
                         %view, %current_view,
                         "ignoring bridged timeout vote for stale view"
                     );
-                    let _ = respond.send(());
                     return Ok(());
                 }
                 self.timeout_collector.accumulate_vote(vote.clone());
@@ -1605,9 +1580,8 @@ where
                 {
                     warn!(%err, "failed to rebroadcast bridged timeout vote");
                 }
-                let _ = respond.send(());
             },
-            ClientRequest::SubmitLegacyHighQc { qc, respond } => {
+            ClientRequest::SubmitLegacyHighQc { qc } => {
                 // QC certifies the last legacy view; cutover view is the next.
                 // Register idempotently so the smooth-start precondition holds
                 // regardless of arrival order vs. the cutover seed.
@@ -1640,16 +1614,6 @@ where
                         }
                     }
                 }
-                let _ = respond.send(());
-            },
-            ClientRequest::BumpNetworkEpoch { epoch, respond } => {
-                if let Err(err) = self
-                    .network
-                    .apply_epoch(epoch, &self.membership_coordinator)
-                {
-                    warn!(%epoch, %err, "network on_epoch_change failed");
-                }
-                let _ = respond.send(());
             },
         }
 
@@ -1807,11 +1771,7 @@ where
         self.consensus.gc(scope);
         match scope {
             GcScope::Local(view) => {
-                let vc = VidCommitment2::default();
                 self.block_builder.gc(view);
-                self.cached_validated_proposals =
-                    self.cached_validated_proposals.split_off(&(view, vc));
-                self.cached_vid_shares = self.cached_vid_shares.split_off(&(view, vc));
                 self.vid_disperser.gc(view);
                 self.vid_fragment_accumulator.gc(view);
                 // When we enter a new view, we do not want to GC certain data

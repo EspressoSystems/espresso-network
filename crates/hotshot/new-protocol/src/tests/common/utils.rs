@@ -148,11 +148,17 @@ impl TestView {
             )),
         }
     }
-    pub fn proposal_input_consensus(&self, recipient_key: &BLSPubKey) -> ConsensusInput<TestTypes> {
-        ConsensusInput::ProposalWithVidShare(
-            self.leader_public_key,
-            self.proposal_message(),
-            self.vid_share_for(recipient_key),
+    /// Build the proposal and VID share inputs a node receives for this view.
+    ///
+    /// Consensus pairs the two internally, so both must be applied
+    /// (cf. [`ConsensusHarness::apply_pair`]).
+    pub fn proposal_input_consensus(
+        &self,
+        recipient_key: &BLSPubKey,
+    ) -> (ConsensusInput<TestTypes>, ConsensusInput<TestTypes>) {
+        (
+            ConsensusInput::Proposal(self.leader_public_key, self.proposal_message()),
+            ConsensusInput::VidShare(self.vid_share_for(recipient_key)),
         )
     }
 
@@ -1070,22 +1076,18 @@ impl ConsensusHarness {
     /// actions that consensus expects feedback for.
     pub async fn apply(&mut self, input: ConsensusInput<TestTypes>) {
         let mut outbox = Outbox::new();
-        // The coordinator persists incoming proposals and VID shares before
-        // consensus sees them; simulate those storage confirmations.
-        if let ConsensusInput::ProposalWithVidShare(_, msg, vid_share) = &input {
-            let view = msg.proposal.data.view_number;
-            let commitment = proposal_commitment(&msg.proposal.data);
-            self.consensus.apply(
-                ConsensusInput::Stored(StorageOutput::Proposal(view, commitment)),
-                &mut outbox,
-            );
-            self.consensus.apply(
-                ConsensusInput::Stored(StorageOutput::Vid(vid_share.view_number)),
-                &mut outbox,
-            );
-        }
         self.consensus.apply(input, &mut outbox);
         self.drain_outbox(&mut outbox).await;
+    }
+
+    /// Apply a proposal/VID-share input pair
+    /// (cf. `TestView::proposal_input_consensus`).
+    pub async fn apply_pair(
+        &mut self,
+        (proposal, vid_share): (ConsensusInput<TestTypes>, ConsensusInput<TestTypes>),
+    ) {
+        self.apply(proposal).await;
+        self.apply(vid_share).await;
     }
 
     async fn drain_outbox(&mut self, outbox: &mut Outbox<ConsensusOutput<TestTypes>>) {
@@ -1122,6 +1124,23 @@ impl ConsensusHarness {
                 let commitment = proposal_commitment(&proposal.data);
                 self.consensus.apply(
                     ConsensusInput::Stored(StorageOutput::Proposal(view, commitment)),
+                    outbox,
+                );
+            },
+            // The coordinator persists a paired proposal and VID share;
+            // simulate the storage confirmations.
+            ConsensusOutput::ProposalPaired {
+                proposal,
+                vid_share,
+            } => {
+                let view = proposal.data.view_number;
+                let commitment = proposal_commitment(&proposal.data);
+                self.consensus.apply(
+                    ConsensusInput::Stored(StorageOutput::Proposal(view, commitment)),
+                    outbox,
+                );
+                self.consensus.apply(
+                    ConsensusInput::Stored(StorageOutput::Vid(vid_share.view_number)),
                     outbox,
                 );
             },
