@@ -912,7 +912,8 @@ where
                 self.timer.reset_with_epoch(view, epoch);
                 self.gc(epoch, GcScope::Local(view))?;
                 let txns = self.block_builder.on_view_changed(view);
-                self.participation.on_view_changed(epoch);
+                self.participation
+                    .on_view_changed(epoch, &self.membership_coordinator);
                 self.on_view_changed_metrics(view, epoch);
                 if !txns.is_empty() {
                     let next_view = view + 1;

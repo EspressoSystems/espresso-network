@@ -302,7 +302,7 @@ impl<TYPES: NodeType> Default for ParticipationTracker<TYPES> {
     fn default() -> Self {
         let (stake_table, success_threshold) = VoteParticipation::unresolved_stake_table();
         Self {
-            validator: ValidatorParticipation::new(),
+            validator: ValidatorParticipation::new(stake_table.clone()),
             vote: VoteParticipation::new(stake_table, success_threshold, None),
         }
     }
@@ -313,7 +313,7 @@ impl<TYPES: NodeType> ParticipationTracker<TYPES> {
         let (stake_table, success_threshold) =
             resolve_participation_stake_table(membership, Some(epoch));
         Self {
-            validator: ValidatorParticipation::new_in_epoch(epoch),
+            validator: ValidatorParticipation::new_in_epoch(stake_table.clone(), epoch),
             vote: VoteParticipation::new(stake_table, success_threshold, Some(epoch)),
         }
     }
@@ -326,8 +326,14 @@ impl<TYPES: NodeType> ParticipationTracker<TYPES> {
         self.validator.update_participation(leader, epoch, false);
     }
 
-    pub fn on_view_changed(&mut self, epoch: EpochNumber) {
-        self.validator.update_participation_epoch(epoch);
+    pub fn on_view_changed(
+        &mut self,
+        epoch: EpochNumber,
+        membership: &EpochMembershipCoordinator<TYPES>,
+    ) {
+        let (stake_table, _) = resolve_participation_stake_table(membership, Some(epoch));
+        self.validator
+            .update_participation_epoch(stake_table, epoch);
     }
 
     pub fn on_leaf_decided(
@@ -370,6 +376,7 @@ impl<TYPES: NodeType> ParticipationTracker<TYPES> {
 #[derive(Debug, Clone)]
 struct ValidatorParticipation<TYPES: NodeType> {
     epoch: EpochNumber,
+    stake_table: HSStakeTable<TYPES>,
     /// Current epoch participation by key maps key -> (num leader, num times proposed)
     current_epoch_participation: ValidatorParticipationMap<TYPES>,
 
@@ -378,16 +385,26 @@ struct ValidatorParticipation<TYPES: NodeType> {
 }
 
 impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
-    fn new() -> Self {
-        Self::new_in_epoch(EpochNumber::genesis())
+    fn new(stake_table: HSStakeTable<TYPES>) -> Self {
+        Self::new_in_epoch(stake_table, EpochNumber::genesis())
     }
 
-    fn new_in_epoch(epoch: EpochNumber) -> Self {
+    fn new_in_epoch(stake_table: HSStakeTable<TYPES>, epoch: EpochNumber) -> Self {
         Self {
             epoch,
-            current_epoch_participation: HashMap::new(),
+            current_epoch_participation: Self::seed_from_stake_table(&stake_table),
+            stake_table,
             previous_epoch_participation: BTreeMap::new(),
         }
+    }
+
+    fn seed_from_stake_table(
+        stake_table: &HSStakeTable<TYPES>,
+    ) -> ValidatorParticipationMap<TYPES> {
+        stake_table
+            .iter()
+            .map(|peer_config| (peer_config.stake_table_entry.public_key(), (0, 0)))
+            .collect()
     }
 
     fn update_participation(
@@ -398,7 +415,7 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
     ) {
         let participation = match epoch.cmp(&self.epoch) {
             std::cmp::Ordering::Greater => {
-                self.update_participation_epoch(epoch);
+                self.update_participation_epoch(self.stake_table.clone(), epoch);
                 &mut self.current_epoch_participation
             },
             std::cmp::Ordering::Equal => &mut self.current_epoch_participation,
@@ -416,7 +433,7 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
         entry.0 += 1;
     }
 
-    fn update_participation_epoch(&mut self, epoch: EpochNumber) {
+    fn update_participation_epoch(&mut self, stake_table: HSStakeTable<TYPES>, epoch: EpochNumber) {
         if epoch <= self.epoch {
             return;
         }
@@ -430,7 +447,8 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
                 ));
 
         self.epoch = epoch;
-        self.current_epoch_participation = HashMap::new();
+        self.current_epoch_participation = Self::seed_from_stake_table(&stake_table);
+        self.stake_table = stake_table;
     }
 
     fn current_proposal_participation(&self) -> HashMap<TYPES::SignatureKey, f64> {
@@ -440,7 +458,7 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
                 (
                     key.clone(),
                     if *leader == 0 {
-                        0.0
+                        1.0
                     } else {
                         *proposed as f64 / *leader as f64
                     },
@@ -464,7 +482,7 @@ impl<TYPES: NodeType> ValidatorParticipation<TYPES> {
                 (
                     key.clone(),
                     if *leader == 0 {
-                        0.0
+                        1.0
                     } else {
                         *proposed as f64 / *leader as f64
                     },
@@ -723,7 +741,7 @@ impl<TYPES: NodeType> VoteParticipation<TYPES> {
     }
 }
 
-fn resolve_participation_stake_table<TYPES: NodeType>(
+pub fn resolve_participation_stake_table<TYPES: NodeType>(
     membership: &EpochMembershipCoordinator<TYPES>,
     epoch: Option<EpochNumber>,
 ) -> (HSStakeTable<TYPES>, U256) {
@@ -749,7 +767,8 @@ fn track_decided_qc_participation<TYPES: NodeType>(
     if let Some(epoch) = qc_epoch
         && epoch > validator.current_epoch()
     {
-        validator.update_participation_epoch(epoch);
+        let (stake_table, _) = resolve_participation_stake_table(membership, Some(epoch));
+        validator.update_participation_epoch(stake_table, epoch);
     }
     if qc_epoch > vote.current_epoch() {
         let (stake_table, success_threshold) =
@@ -1025,7 +1044,10 @@ impl<TYPES: NodeType> Consensus<TYPES> {
             highest_block: 0,
             state_cert,
             drb_difficulty,
-            validator_participation: ValidatorParticipation::new(),
+            validator_participation: ValidatorParticipation::new_in_epoch(
+                stake_table.clone(),
+                cur_epoch.unwrap_or(EpochNumber::genesis()),
+            ),
             vote_participation: VoteParticipation::new(stake_table, success_threshold, cur_epoch),
             drb_upgrade_difficulty,
         }
@@ -1171,9 +1193,13 @@ impl<TYPES: NodeType> Consensus<TYPES> {
     }
 
     /// Update the validator participation epoch
-    pub fn update_validator_participation_epoch(&mut self, epoch: EpochNumber) {
+    pub fn update_validator_participation_epoch(
+        &mut self,
+        stake_table: HSStakeTable<TYPES>,
+        epoch: EpochNumber,
+    ) {
         self.validator_participation
-            .update_participation_epoch(epoch);
+            .update_participation_epoch(stake_table, epoch);
     }
 
     /// Get the current proposal participation

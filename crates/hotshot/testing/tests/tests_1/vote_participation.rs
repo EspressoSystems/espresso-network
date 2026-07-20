@@ -369,4 +369,62 @@ mod tests {
             "previous participation should be empty before any epoch change"
         );
     }
+
+    #[test]
+    fn test_proposal_initial_full_participation() {
+        let (stake_table, threshold) = make_stake_table(5);
+        let consensus = make_test_consensus(stake_table, threshold, Some(EpochNumber::genesis()));
+
+        let participation = consensus.current_proposal_participation();
+        assert_eq!(participation.len(), 5);
+        for ratio in participation.values() {
+            assert_eq!(*ratio, 1.0);
+        }
+    }
+
+    // Regression test for the empty `/participation/proposal/current` response: rolling over to a
+    // new epoch must reseed from the new stake table, never resetting to an empty map.
+    #[test]
+    fn test_proposal_rollover_keeps_full_set() {
+        let (stake_table, threshold) = make_stake_table(5);
+        let mut consensus =
+            make_test_consensus(stake_table, threshold, Some(EpochNumber::genesis()));
+
+        let (next_stake_table, _) = make_stake_table(5);
+        consensus.update_validator_participation_epoch(next_stake_table, EpochNumber::new(1));
+
+        let participation = consensus.current_proposal_participation();
+        assert_eq!(participation.len(), 5);
+        for ratio in participation.values() {
+            assert_eq!(*ratio, 1.0);
+        }
+    }
+
+    #[test]
+    fn test_proposal_count_ratio() {
+        let (stake_table, threshold) = make_stake_table(5);
+        let mut consensus =
+            make_test_consensus(stake_table, threshold, Some(EpochNumber::genesis()));
+
+        let (_, leader_key) = key_pair_for_id::<TestTypes>(0);
+        consensus.update_validator_participation(leader_key.clone(), EpochNumber::genesis(), false);
+
+        let participation = consensus.current_proposal_participation();
+        assert_eq!(participation.len(), 5);
+        assert_eq!(participation[&leader_key], 0.0);
+        for (key, ratio) in &participation {
+            if *key != leader_key {
+                assert_eq!(*ratio, 1.0);
+            }
+        }
+    }
+
+    #[test]
+    fn test_proposal_none_epoch_full() {
+        let (stake_table, threshold) = make_stake_table(5);
+        let consensus = make_test_consensus(stake_table, threshold, None);
+
+        let participation = consensus.current_proposal_participation();
+        assert_eq!(participation.len(), 5);
+    }
 }

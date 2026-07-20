@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use handlers::handle_epoch_root_quorum_vote_recv;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
-    consensus::OuterConsensus,
+    consensus::{OuterConsensus, resolve_participation_stake_table},
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType},
@@ -226,7 +226,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> ConsensusTaskState<TYPES, I>
                     .update_next_epoch_high_qc(next_epoch_high_qc.clone())
                     .is_ok();
                 if let Some(next_epoch) = next_epoch {
-                    consensus_writer.update_validator_participation_epoch(next_epoch);
+                    let (stake_table, _) = resolve_participation_stake_table(
+                        &self.membership_coordinator,
+                        Some(next_epoch),
+                    );
+                    consensus_writer.update_validator_participation_epoch(stake_table, next_epoch);
                 }
                 drop(consensus_writer);
 
