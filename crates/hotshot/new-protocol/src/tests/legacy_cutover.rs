@@ -7,7 +7,10 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     net::Ipv4Addr,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -332,6 +335,7 @@ async fn run_cutover_node(
     decision_tx: UnboundedSender<DecisionEvent>,
     external_events_tx: async_broadcast::Sender<Event<TestTypes>>,
     legacy: Arc<RwLock<SystemContextHandle<TestTypes, MemoryImpl>>>,
+    new_proto_view: Arc<AtomicU64>,
 ) {
     // Mirror production (`ConsensusHandle::activate`): the coordinator
     // stays parked until legacy crosses the upgrade boundary; only then
@@ -350,6 +354,7 @@ async fn run_cutover_node(
         tracing::warn!("seed extraction returned None; coordinator will not be seeded");
     }
     coord.start(seed);
+    new_proto_view.store(*coord.current_view(), Ordering::Relaxed);
 
     loop {
         match coord.next_consensus_input().await {
@@ -360,6 +365,9 @@ async fn run_cutover_node(
             },
             Err(err) => tracing::warn!(%err, "cutover coord: non-critical error"),
         }
+        // Publish progress for the silencers, which key node shutdowns off
+        // the fastest live node's view (legacy or new-protocol).
+        new_proto_view.store(*coord.current_view(), Ordering::Relaxed);
 
         while let Some(output) = coord.outbox_mut().pop_front() {
             if let ConsensusOutput::LeafDecided { leaves, .. } = &output {
@@ -427,6 +435,7 @@ async fn spawn_node(
             legacy_event_rx.clone(),
             client_api.clone(),
             legacy_upgrade_lock.clone(),
+            None,
         ))
         .abort_handle(),
     );
@@ -440,42 +449,42 @@ async fn spawn_node(
     );
 
     let (decision_tx, decision_rx) = mpsc::unbounded_channel::<DecisionEvent>();
+    let new_proto_view = Arc::new(AtomicU64::new(0));
     let runner_abort = tokio::spawn(run_cutover_node(
         coord,
         decision_tx,
         external_events_tx,
         legacy,
+        new_proto_view.clone(),
     ))
     .abort_handle();
 
     NodeState {
         decision_rx,
         runner_abort,
+        new_proto_view,
     }
 }
 
 struct NodeState {
     decision_rx: mpsc::UnboundedReceiver<DecisionEvent>,
     runner_abort: AbortHandle,
+    /// Latest view this node's new-protocol coordinator has entered
+    /// (0 while parked pre-cutover).
+    new_proto_view: Arc<AtomicU64>,
 }
 
 struct SilentNode {
     idx: usize,
-    /// Shut down once any other node's `cur_view` reaches this view.
+    /// Shut down once any other node's legacy or new-protocol view
+    /// reaches this view.
     at_view: ViewNumber,
 }
 
-/// Verify every live node decides `target_decisions` views with no
-/// gap outside `expected_failed_views`.
-///
-/// When `loose` is `false`, the assertion is exact: every view in
-/// `expected_failed_views` that falls inside the decided range must
-/// actually be a gap. When `loose` is `true`, `expected_failed_views`
-/// is interpreted as a permitted-failures superset — gaps must lie
-/// inside it, but predicted views that ended up being decided do not
-/// trip the assertion. The loose variant is used by the permutation
-/// sweep below, where the exact post-cutover failure pattern is hard
-/// to predict precisely.
+/// Verify every live node decides `target_decisions` views and that the
+/// gaps inside each node's decided range are exactly
+/// `expected_failed_views`: every gap must be listed, and every listed
+/// view that falls inside the range must actually be a gap.
 async fn run_cutover_test(
     num_nodes: usize,
     target_decisions: usize,
@@ -483,7 +492,6 @@ async fn run_cutover_test(
     deadline: Duration,
     view_timeout: Duration,
     silent_nodes: Vec<SilentNode>,
-    loose: bool,
 ) {
     crate::logging::init_test_logging();
 
@@ -513,9 +521,14 @@ async fn run_cutover_test(
         );
     }
 
+    let new_proto_views: Vec<Arc<AtomicU64>> = node_state
+        .iter()
+        .map(|ns| ns.new_proto_view.clone())
+        .collect();
     for silent in &silent_nodes {
         bg_handles.push(spawn_silence_at_view(
             &legacy_arcs,
+            &new_proto_views,
             silent,
             node_state[silent.idx].runner_abort.clone(),
         ));
@@ -580,7 +593,7 @@ async fn run_cutover_test(
                         .collect::<Vec<_>>(),
                 );
             }
-            if !loose && in_chain && expected_fail {
+            if in_chain && expected_fail {
                 panic!(
                     "live node {i} committed view {v} but it was listed in \
                      expected_failed_views={:?}",
@@ -631,17 +644,29 @@ async fn run_cutover_test(
     }
 }
 
-async fn await_legacy_view(
-    watch: &[Arc<RwLock<SystemContextHandle<TestTypes, MemoryImpl>>>],
+/// Wait until any watched node's view — legacy `cur_view` or new-protocol
+/// coordinator view — reaches `target_view`. Watching both sides is what
+/// makes post-cutover silencing punctual: legacy parks at the cutover view
+/// and only creeps past it via timeouts, long after the new protocol has
+/// raced ahead.
+async fn await_node_at_view(
+    legacy: &[Arc<RwLock<SystemContextHandle<TestTypes, MemoryImpl>>>],
+    new_proto: &[Arc<AtomicU64>],
     target_view: ViewNumber,
     timeout: Duration,
 ) {
     let deadline = Instant::now() + timeout;
     loop {
         if Instant::now() > deadline {
-            panic!("watcher did not observe cur_view >= {target_view} in time");
+            panic!("watcher did not observe any view >= {target_view} in time");
         }
-        for legacy in watch {
+        if new_proto
+            .iter()
+            .any(|v| v.load(Ordering::Relaxed) >= *target_view)
+        {
+            return;
+        }
+        for legacy in legacy {
             if legacy.read().await.cur_view().await >= target_view {
                 return;
             }
@@ -652,6 +677,7 @@ async fn await_legacy_view(
 
 fn spawn_silence_at_view(
     legacy_arcs: &[Arc<RwLock<SystemContextHandle<TestTypes, MemoryImpl>>>],
+    new_proto_views: &[Arc<AtomicU64>],
     silent: &SilentNode,
     runner_abort: AbortHandle,
 ) -> AbortHandle {
@@ -661,11 +687,17 @@ fn spawn_silence_at_view(
         .filter(|(i, _)| *i != silent.idx)
         .map(|(_, l)| l.clone())
         .collect();
+    let np_watch: Vec<_> = new_proto_views
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != silent.idx)
+        .map(|(_, v)| v.clone())
+        .collect();
     let target = silent.idx;
     let target_view = silent.at_view;
     let target_legacy = legacy_arcs[silent.idx].clone();
     tokio::spawn(async move {
-        await_legacy_view(&watch, target_view, Duration::from_secs(120)).await;
+        await_node_at_view(&watch, &np_watch, target_view, Duration::from_secs(120)).await;
         runner_abort.abort();
         target_legacy.write().await.shut_down().await;
         tracing::info!(node = target, at_view = *target_view, "took node offline");
@@ -676,27 +708,22 @@ fn spawn_silence_at_view(
 /// `upgrade_view + TEST_UPGRADE_CONSTANTS.finish_offset`.
 const PREDICTED_CUTOVER_VIEW: u64 = UPGRADE_VIEW + 20;
 
-/// Last legacy view — naturally TC2-skipped at cutover. Used as the
-/// anchor for the permutation sweep below: each test silences some
-/// subset of `{V-2, V-1, V, V+1, V+2}`.
+/// Last legacy view. Anchor for the permutation sweep below: each test
+/// silences some subset of `{V-2, V-1, V, V+1, V+2}`.
 const V: u64 = PREDICTED_CUTOVER_VIEW - 1;
 
-/// Happy path. The QC for `cutover_view - 1` forms in the legacy protocol and
-/// rides into the new protocol via the cutover seed's `high_qc`, so the first
-/// leader proposes directly on it (no TC2 skip, no timer wait) and every view
-/// is decided. Under start-time skew, the cutover seed can be snapshotted
-/// before that QC lands, so the boundary views (`V`, `PREDICTED_CUTOVER_VIEW`)
-/// may be TC2-skipped instead; these are permitted (loose check).
+/// Happy path. The QC for `cutover_view - 1` reaches the new protocol via
+/// the cutover seed's `high_qc` or the `LegacyHighQcFormed` bridge, and the
+/// first leader proposes on it. No view may fail: every leader is online.
 #[tokio::test(flavor = "multi_thread")]
 async fn legacy_runs_upgrade_then_new_protocol_takes_over() {
     run_cutover_test(
         4,
         6,
-        views([V, PREDICTED_CUTOVER_VIEW]),
+        BTreeSet::new(),
         Duration::from_secs(180),
         DEFAULT_NEW_PROTO_VIEW_TIMEOUT,
         Vec::new(),
-        true,
     )
     .await;
 }
@@ -717,7 +744,6 @@ async fn legacy_last_view_times_out_then_new_protocol_takes_over() {
             idx: silent_idx,
             at_view: ViewNumber::new(PREDICTED_CUTOVER_VIEW - 2),
         }],
-        false,
     )
     .await;
 }
@@ -751,7 +777,6 @@ async fn legacy_two_views_view_sync_then_new_protocol_takes_over() {
                 at_view: trigger,
             },
         ],
-        false,
     )
     .await;
 }
@@ -771,7 +796,6 @@ async fn new_protocol_first_leader_offline_then_recovers() {
             idx: silent_idx,
             at_view: ViewNumber::new(PREDICTED_CUTOVER_VIEW),
         }],
-        false,
     )
     .await;
 }
@@ -779,11 +803,8 @@ async fn new_protocol_first_leader_offline_then_recovers() {
 /// Non-terminal legacy timeout: silence a pre-cutover leader several
 /// views before cutover. Views 22 and 23 can never commit (votes for 22
 /// die with the silenced leader of 23), and the dead node's post-cutover
-/// slots (27, 31) time out. Whether the boundary views 21 and 24 appear
-/// in the new protocol's decide stream depends on when the seed was
-/// snapshotted relative to QC formation, so the check must be loose:
-/// deciding them via the seeded `justify_qc` chain walk is the behavior
-/// this test guards, not a failure.
+/// slots (27, 31) time out. Every other view, including the boundary,
+/// must be decided.
 #[tokio::test(flavor = "multi_thread")]
 async fn legacy_view_before_last_times_out_then_new_protocol_takes_over() {
     const NUM_NODES: usize = 4;
@@ -791,14 +812,13 @@ async fn legacy_view_before_last_times_out_then_new_protocol_takes_over() {
     run_cutover_test(
         NUM_NODES,
         6,
-        views([22, 23, 24, 27, 31]),
+        views([22, 23, 27, 31]),
         Duration::from_secs(240),
         DEFAULT_NEW_PROTO_VIEW_TIMEOUT,
         vec![SilentNode {
             idx: silent_idx,
             at_view: ViewNumber::new(PREDICTED_CUTOVER_VIEW - 3),
         }],
-        true,
     )
     .await;
 }
@@ -832,44 +852,42 @@ fn perm_deadline(n_silent: usize) -> Duration {
     }
 }
 
-/// Build a `SilentNode` that takes out the leader of `view`. For
-/// pre-cutover views we trip the silencer at `view - 1` so the node is
-/// gone before its leader slot; post-cutover, legacy doesn't reliably
-/// advance far past `PREDICTED_CUTOVER_VIEW`, so use `view` itself
-/// (matching `new_protocol_first_leader_offline_then_recovers`).
+/// Build a `SilentNode` that takes out the leader of `view`: the silencer
+/// trips at `view - 1`, so the ~50ms kill lands well before the leader's
+/// proposal for `view` (which needs at least a full round of cert
+/// aggregation plus a block build). The silencer watches legacy and
+/// new-protocol progress, so this holds on both sides of the cutover.
 fn silent_for_view(view: u64, num_nodes: usize) -> SilentNode {
-    let silent_idx = view as usize % num_nodes;
-    let at_view = if view < PREDICTED_CUTOVER_VIEW {
-        view - 1
-    } else {
-        view
-    };
     SilentNode {
-        idx: silent_idx,
-        at_view: ViewNumber::new(at_view),
+        idx: view as usize % num_nodes,
+        at_view: ViewNumber::new(view - 1),
     }
 }
 
-/// Build a permissive failed-views superset for the loose check.
-/// Includes the natural TC2 skip, the first post-cutover view (nodes
-/// detect the cutover and start their coordinators at slightly
-/// different times, so it can time out before enough of them are up),
-/// each silencer's `at_view` (boundary effect when the silent node
-/// disconnects mid-view), and every downstream view where the silent
-/// node would be leader. `max_view` is a conservative ceiling on the
-/// highest view a live node will decide before the loop exits.
-fn permitted_failures(
+/// The exact set of views that fail when the leaders of `views_to_silence`
+/// are taken down. Every failure is attributable to a silenced leader:
+/// - the silenced view itself (its leader never proposes),
+/// - for silenced views at or before the cutover, the preceding view too
+///   (legacy vote1s are unicast to the next leader, so they die with it;
+///   post-cutover, vote1s are aggregated by the same view's leader, so
+///   there is no such spillover), and
+/// - every later leader slot of the silent node (dead from `at_view` on).
+///
+/// `max_view` bounds the slot enumeration; it only needs to exceed the
+/// highest view a live node decides before the collection loop exits.
+fn expected_failures(
     num_nodes: usize,
-    silent_nodes: &[SilentNode],
+    views_to_silence: &[u64],
     max_view: u64,
 ) -> BTreeSet<ViewNumber> {
     let mut failed = BTreeSet::new();
-    failed.insert(ViewNumber::new(PREDICTED_CUTOVER_VIEW - 1));
-    failed.insert(ViewNumber::new(PREDICTED_CUTOVER_VIEW));
-    for s in silent_nodes {
-        let at_view = *s.at_view;
-        failed.insert(ViewNumber::new(at_view));
-        for v in at_view..=max_view {
+    for &view in views_to_silence {
+        let s = silent_for_view(view, num_nodes);
+        failed.insert(ViewNumber::new(view));
+        if view <= PREDICTED_CUTOVER_VIEW {
+            failed.insert(ViewNumber::new(view - 1));
+        }
+        for v in *s.at_view..=max_view {
             if (v as usize) % num_nodes == s.idx {
                 failed.insert(ViewNumber::new(v));
             }
@@ -879,25 +897,23 @@ fn permitted_failures(
 }
 
 /// Run a single permutation: silence the leader of every view in
-/// `views_to_silence`, then assert liveness with a permissive
-/// failed-views set (gaps must lie inside the predicted set, but
-/// predicted views that actually decided don't trip the assertion).
+/// `views_to_silence` and assert that exactly the attributable views
+/// fail.
 async fn run_perm_test(views_to_silence: Vec<u64>) {
     let n_silent = views_to_silence.len();
     let num_nodes = perm_num_nodes(n_silent);
+    let expected = expected_failures(num_nodes, &views_to_silence, 50);
     let silent_nodes: Vec<SilentNode> = views_to_silence
         .iter()
         .map(|&v| silent_for_view(v, num_nodes))
         .collect();
-    let permitted = permitted_failures(num_nodes, &silent_nodes, 50);
     run_cutover_test(
         num_nodes,
         6,
-        permitted,
+        expected,
         perm_deadline(n_silent),
         DEFAULT_NEW_PROTO_VIEW_TIMEOUT,
         silent_nodes,
-        true,
     )
     .await;
 }
