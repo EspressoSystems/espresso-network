@@ -280,10 +280,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static> SystemContextHandl
     /// leave shared state alone: in-flight DRB computations on the membership
     /// coordinator keep running, and the in-memory consensus state stays
     /// readable.
-    ///
-    /// This is the teardown used at the new-protocol cutover, where the
-    /// `EpochMembershipCoordinator` is shared with the new-protocol
-    /// coordinator and must survive the legacy stack.
     pub async fn shut_down_tasks_and_network(&mut self) {
         // this is required because `SystemContextHandle` holds an inactive receiver and
         // `broadcast_direct` below can wait indefinitely

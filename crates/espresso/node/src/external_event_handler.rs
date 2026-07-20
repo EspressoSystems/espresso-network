@@ -105,14 +105,12 @@ impl ExternalEventHandler {
         N: ConnectedNetwork<PubKey>,
         P: SequencerPersistence,
     {
-        // Dropped as soon as the coordinator takes over, so the legacy
-        // network can be freed after the cutover.
         let mut network = Some(network);
 
         while let Some(message) = receiver.recv().await {
             // Once the coordinator is running it owns the only live network;
             // route external messages through it. The coordinator never
-            // stops once started, so this switch is permanent.
+            // stops once started, so drop the legacy network for good.
             if let Some(client_api) = consensus_handle.client_api().await {
                 network = None;
                 Self::send_via_coordinator(&client_api, message, public_key).await;
@@ -215,9 +213,9 @@ impl ExternalEventHandler {
                     tracing::warn!(%err, "failed to send external message via coordinator");
                 }
             },
-            // Nothing sends these today: all catchup requests are batched
-            // direct messages, and the coordinator's network has no broadcast
-            // topic for external messages.
+            // All request-response traffic uses batched direct messages; the
+            // coordinator's network has no broadcast topic for external
+            // messages.
             other => {
                 tracing::warn!(
                     message = ?other,

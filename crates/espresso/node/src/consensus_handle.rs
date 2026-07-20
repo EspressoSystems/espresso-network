@@ -491,8 +491,6 @@ where
     pub async fn start_consensus(&self) {
         self.activate().await;
         if self.is_new_proto_running() {
-            // With a base version at or past the cutover, no peer can ever
-            // need the legacy stack: tear it down instead of starting it.
             if self.upgrade_lock.upgrade().base >= versions::NEW_PROTOCOL_VERSION {
                 tracing::info!("base version starts at the cutover, shutting down legacy stack");
                 self.shut_down_legacy().await;
@@ -524,9 +522,8 @@ where
         let _ = coordinator.await;
     }
 
-    /// Permanently tear down the legacy consensus stack — its tasks and the
-    /// legacy network — once the new protocol has decided enough leaves that
-    /// nothing can still depend on it.
+    /// Permanently tear down the legacy consensus stack: its tasks and the
+    /// legacy network.
     ///
     /// The in-memory legacy consensus state stays readable for pre-cutover
     /// queries, and in-flight DRB computations on the shared membership
@@ -547,8 +544,6 @@ where
         matches!(*self.new_proto.read(), NewProtocol::Running { .. })
     }
 
-    /// The coordinator's client API, if the new protocol is running (trying
-    /// to activate it first if it isn't yet).
     pub(crate) async fn client_api(&self) -> Option<ClientApi<T>> {
         if let NewProtocol::Running { client_api, .. } = &*self.new_proto.read() {
             return Some(client_api.clone());
