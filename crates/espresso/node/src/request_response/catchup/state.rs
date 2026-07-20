@@ -14,7 +14,7 @@ use espresso_types::{
     },
 };
 use hotshot::traits::NodeImplementation;
-use hotshot_new_protocol::utils::verify_new_protocol_leaf_chain;
+use hotshot_new_protocol::{storage::NewProtocolStorage, utils::verify_new_protocol_leaf_chain};
 use hotshot_types::{
     data::ViewNumber, epoch_membership::EpochMembershipCoordinator, message::UpgradeLock,
     simple_certificate::LightClientStateUpdateCertificateV2, traits::network::ConnectedNetwork,
@@ -36,6 +36,8 @@ use crate::{
 #[async_trait]
 impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerPersistence>
     StateCatchup for RequestResponseProtocol<I, N, P>
+where
+    I::Storage: NewProtocolStorage<SeqTypes>,
 {
     async fn try_fetch_leaf(
         &self,
