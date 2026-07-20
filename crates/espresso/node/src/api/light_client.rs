@@ -211,10 +211,9 @@ where
     let start_height = leaf.height();
     let start_commit = leaf.leaf().commit();
 
-    // The new leaf may already complete a HotStuff chain begun before the protocol cutover.
-    if proof.push(leaf) {
-        return Ok(());
-    }
+    // HotStuff commit rules cannot terminate a chain of new protocol leaves
+    // cert2 proves finality.
+    proof.append(leaf);
 
     let cert2 = state
         .read()
@@ -266,14 +265,11 @@ where
             if leaf.leaf().commit() != cert2.data.leaf_commit {
                 return Err(internal("stored cert2 does not finalize the expected leaf"));
             }
-            if !proof.push(leaf) {
-                proof.add_certificate(Arc::new(cert2), requested_leaf_qc);
-            }
+            proof.append(leaf);
+            proof.add_certificate(Arc::new(cert2), requested_leaf_qc);
             return Ok(());
         }
-        if proof.push(leaf) {
-            return Ok(());
-        }
+        proof.append(leaf);
     }
 
     Err(not_found("missing cert2 leaf"))
@@ -1402,6 +1398,73 @@ mod test {
         .await
         .unwrap_err();
         assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// Upgrade mid chain with consecutive views, mirroring a clean cutover
+    ///  the justify QCs of the first two new protocol leaves form a 2-chain over the last two pre-upgrade leaves,
+    /// but those leaves are finalized by the first cert2 (indirect commit rule) and must serve
+    /// NewProtocol proofs. Only leaves whose 2-chain completes within pre upgrade leaves keep
+    /// HotStuff2 proofs.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_last_pre_cutover_leaves_use_cert2() {
+        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
+        let ds = DataSource::create(
+            DataSource::persistence_options(&storage),
+            Default::default(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        let leaves = leaf_chain_with_upgrade(
+            1..=5,
+            4,
+            Upgrade::new(DRB_AND_HEADER_UPGRADE_VERSION, NEW_PROTOCOL_VERSION),
+        )
+        .await;
+        assert_eq!(leaves[2].header().version(), DRB_AND_HEADER_UPGRADE_VERSION);
+        assert_eq!(leaves[3].header().version(), NEW_PROTOCOL_VERSION);
+        let cert2_leaf = &leaves[3];
+        let cert2 = cert2_for_leaf(cert2_leaf);
+
+        {
+            let mut tx = ds.write().await.unwrap();
+            for leaf in &leaves {
+                tx.insert_leaf(leaf).await.unwrap();
+            }
+            tx.insert_cert2(cert2_leaf.height(), cert2).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        // The upgrade leaf is at height 4, so heights 2 and 3 are the last pre-cutover leaves.
+        for requested in [&leaves[1], &leaves[2]] {
+            let proof =
+                get_leaf_proof_with_qc_chain(&ds, requested.clone(), Duration::MAX, CHAIN_LIMIT)
+                    .await
+                    .unwrap();
+            assert!(matches!(proof.proof(), FinalityProof::NewProtocol { .. }));
+            assert_eq!(
+                proof
+                    .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                    .await
+                    .unwrap(),
+                *requested
+            );
+        }
+
+        // Height 1 completes its 2-chain within pre-upgrade leaves and keeps a HotStuff2 proof.
+        let proof =
+            get_leaf_proof_with_qc_chain(&ds, leaves[0].clone(), Duration::MAX, CHAIN_LIMIT)
+                .await
+                .unwrap();
+        assert!(matches!(proof.proof(), FinalityProof::HotStuff2 { .. }));
+        assert_eq!(
+            proof
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .await
+                .unwrap(),
+            leaves[0]
+        );
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
