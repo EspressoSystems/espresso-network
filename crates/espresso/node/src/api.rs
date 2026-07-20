@@ -610,7 +610,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> RequestResponseDataSo
                 duration,
                 request_response_protocol.request_indefinitely::<_, _, _>(
                     Request::VidShare(block_number, request_id),
-                    RequestType::Broadcast,
+                    RequestType::Batched,
                     move |_request, response| {
                         let avidm_param = avidm_param.clone();
                         let received_shares = received_shares_clone.clone();
@@ -5182,6 +5182,104 @@ mod test {
             "expected at least {TARGET_BLOCK_HEIGHT} blocks, got {height} (leaf stream ended \
              early)",
         );
+
+        Ok(())
+    }
+
+    /// Run entirely without the legacy consensus stack: with base version
+    /// `NEW_PROTOCOL_VERSION` it is torn down at startup, and the explicit
+    /// mid-run `shut_down_legacy` calls below — what the decide-count trigger
+    /// in `handle_events` does after `LEGACY_SHUTDOWN_DECIDE_COUNT` decides
+    /// on an upgraded network — must be harmless to repeat. The network has
+    /// to keep deciding across epoch boundaries: DRB computations on the
+    /// shared membership coordinator must survive the teardown.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_new_protocol_survives_legacy_shutdown() -> anyhow::Result<()> {
+        const EPOCH_HEIGHT: u64 = 20;
+        const NUM_NODES: usize = 5;
+        const SHUTDOWN_HEIGHT: u64 = 10;
+        const TARGET_BLOCK_HEIGHT: u64 = 50;
+
+        const NEW_PROTOCOL: Upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .epoch_start_block(0)
+            .build();
+
+        let api_port = reserve_tcp_port().expect("No ports free for query service");
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence)
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<SequencerApiVersion>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    Duration::from_secs(2),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                StakeTableContractVersion::V3,
+                NEW_PROTOCOL,
+            )
+            .await
+            .unwrap()
+            .build();
+
+        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
+
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+        client.connect(Some(Duration::from_secs(30))).await;
+
+        let mut leaves = client
+            .socket("availability/stream/leaves/0")
+            .subscribe::<LeafQueryData<SeqTypes>>()
+            .await
+            .expect("subscribe to leaf stream");
+
+        // Let the new protocol decide a few blocks first.
+        let mut height = 0;
+        while height < SHUTDOWN_HEIGHT {
+            let leaf = leaves
+                .next()
+                .await
+                .expect("leaf stream ended early")
+                .expect("leaf stream yielded an error");
+            height = leaf.header().height();
+        }
+
+        // Tear down the legacy stack on every node.
+        network.server.consensus_handle().shut_down_legacy().await;
+        for peer in &network.peers {
+            peer.consensus_handle().shut_down_legacy().await;
+        }
+
+        // The chain must keep growing across the epoch boundaries at 20 and
+        // 40 purely on the new protocol.
+        while height < TARGET_BLOCK_HEIGHT {
+            let leaf = leaves
+                .next()
+                .await
+                .expect("leaf stream ended early")
+                .expect("leaf stream yielded an error");
+            height = leaf.header().height();
+        }
 
         Ok(())
     }

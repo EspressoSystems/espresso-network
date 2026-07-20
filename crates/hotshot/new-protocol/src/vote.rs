@@ -12,6 +12,7 @@
 mod accumulate;
 
 use std::{
+    any::{type_name, type_name_of_val},
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     marker::PhantomData,
     mem,
@@ -30,9 +31,9 @@ use hotshot_types::{
     vote::{Certificate, HasViewNumber, LightClientStateUpdateVoteAccumulator, Vote},
 };
 use tokio_util::task::JoinMap;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
-use crate::message::Vote1;
+use crate::{cert_verifier::ValidCert, message::Vote1};
 
 /// Information about a vote.
 ///
@@ -102,16 +103,21 @@ impl<T, V, C> Tally<T> for SimpleTally<T, V, C>
 where
     T: NodeType,
     V: Vote<T> + Send + 'static,
-    C: Certificate<T, V::Commitment, Voteable = V::Commitment> + Send + 'static,
+    C: Certificate<T, V::Commitment, Voteable = V::Commitment> + HasEpoch + Send + 'static,
 {
     type Vote = V;
-    type Output = C;
+    type Output = ValidCert<C>;
 
     fn tally(r: Receiver<V>, m: EpochMembership<T>, l: UpgradeLock<T>) -> Option<Self::Output> {
-        let mut a = CheckedAccumulator::new(m, l);
+        let mut a = CheckedAccumulator::<T, V, C>::new(m, l);
         while let Ok(v) = r.recv() {
             if let Some(c) = a.add(v) {
-                return Some(c);
+                if let Some(e) = c.epoch() {
+                    return Some(ValidCert::new(c, e));
+                } else {
+                    warn!(cert = type_name::<C>(), "certificate has no epoch number");
+                    break;
+                }
             }
         }
         None
@@ -120,7 +126,7 @@ where
 
 /// The quorum and light-client state certificates formed at an epoch-root view.
 pub type EpochRootCerts<T> = (
-    QuorumCertificate2<T>,
+    ValidCert<QuorumCertificate2<T>>,
     LightClientStateUpdateCertificateV2<T>,
 );
 
@@ -169,7 +175,15 @@ impl<T: NodeType> Tally<T> for EpochRootTally<T> {
 
             if let (Some(q), Some(s)) = (&quorum_cert, &state_cert) {
                 info!(view = %q.view_number(), epoch = %s.epoch, "epoch-root certificates formed");
-                return Some((q.clone(), s.clone()));
+                if let Some(e) = q.epoch() {
+                    return Some((ValidCert::new(q.clone(), e), s.clone()));
+                } else {
+                    warn!(
+                        cert = type_name_of_val(q),
+                        "certificate has no epoch number"
+                    );
+                    break;
+                }
             }
         }
 
@@ -308,7 +322,7 @@ impl<T, V, C> VoteCollector<T, SimpleTally<T, V, C>>
 where
     T: NodeType,
     V: Vote<T> + Send + 'static,
-    C: Certificate<T, V::Commitment, Voteable = V::Commitment> + Send + 'static,
+    C: Certificate<T, V::Commitment, Voteable = V::Commitment> + HasEpoch + Send + 'static,
 {
     /// Compute the accumulated stake.
     ///
@@ -460,7 +474,11 @@ mod tests {
             + Send
             + Sync
             + 'static,
-        C: Certificate<TestTypes, V::Commitment, Voteable = V::Commitment> + Send + Sync + 'static,
+        C: Certificate<TestTypes, V::Commitment, Voteable = V::Commitment>
+            + HasEpoch
+            + Send
+            + Sync
+            + 'static,
     >() -> VoteCollector<TestTypes, SimpleTally<TestTypes, V, C>> {
         let membership = mock_membership();
         VoteCollector::new(membership, test_upgrade_lock())
@@ -491,6 +509,7 @@ mod tests {
             + Sync
             + 'static,
         C: Certificate<TestTypes, V::Commitment, Voteable = V::Commitment>
+            + HasEpoch
             + Debug
             + Send
             + Sync
@@ -554,7 +573,7 @@ mod tests {
 
         let membership = mock_membership();
         let epoch_membership = membership.membership_for_epoch(Some(epoch)).unwrap();
-        verify_cert(&cert, &expected_data, &epoch_membership);
+        verify_cert(cert.cert(), &expected_data, &epoch_membership);
     }
 
     /// Sending votes for multiple views produces a valid certificate for each view,
@@ -595,7 +614,7 @@ mod tests {
         let membership = mock_membership();
         let epoch_membership = membership.membership_for_epoch(Some(epoch)).unwrap();
         for cert in &certs {
-            verify_cert(cert, &expected_data, &epoch_membership);
+            verify_cert(cert.cert(), &expected_data, &epoch_membership);
         }
     }
 
@@ -619,7 +638,7 @@ mod tests {
 
         let membership = mock_membership();
         let epoch_membership = membership.membership_for_epoch(Some(epoch)).unwrap();
-        verify_cert(&cert, &expected_data, &epoch_membership);
+        verify_cert(cert.cert(), &expected_data, &epoch_membership);
     }
 
     /// Sending votes for multiple views in parallel produces valid certificates for each,
@@ -654,7 +673,7 @@ mod tests {
         let membership = mock_membership();
         let epoch_membership = membership.membership_for_epoch(Some(epoch)).unwrap();
         for cert in &certs {
-            verify_cert(cert, &expected_data, &epoch_membership);
+            verify_cert(cert.cert(), &expected_data, &epoch_membership);
         }
     }
 
@@ -767,7 +786,7 @@ mod tests {
         assert_no_certs(&mut task).await;
         let membership = mock_membership();
         let epoch_membership = membership.membership_for_epoch(Some(epoch)).unwrap();
-        verify_cert(&cert, &vote_2_data(), &epoch_membership);
+        verify_cert(cert.cert(), &vote_2_data(), &epoch_membership);
     }
 
     /// Channel closed before threshold means no certificate is produced.
