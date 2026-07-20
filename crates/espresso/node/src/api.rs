@@ -3204,7 +3204,7 @@ mod test {
         RegisteredValidatorMap, RewardDistributor, StakeTableState, StateCertQueryDataV1,
         StateCertQueryDataV2, ValidatedState, ValidatorLeaderCounts,
         config::PublicHotShotConfig,
-        traits::{MembershipPersistence, NullEventConsumer, PersistenceOptions},
+        traits::{NullEventConsumer, PersistenceOptions},
         v0_3::{COMMISSION_BASIS_POINTS, Fetcher, RewardAmount, RewardMerkleProofV1},
         v0_4::{RewardAccountV2, RewardMerkleProofV2},
         validators_from_l1_events,
@@ -10290,7 +10290,7 @@ mod test {
         // Epochs run from genesis, so `first_epoch` is 1 and the endpoint is
         // queryable from epoch 3, which the chain has long passed.
         let first_epoch = EpochNumber::new(epoch_from_block_number(0, EPOCH_HEIGHT));
-        check_light_client_stake_table(&client, &network.server, first_epoch).await;
+        check_light_client_stake_table(client, &network.server, first_epoch).await;
     }
 
     /// Test that `fetch_leaf` returns a leaf with exactly the requested block height.
