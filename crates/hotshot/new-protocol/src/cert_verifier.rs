@@ -1,6 +1,8 @@
 use std::{
     any::type_name,
     collections::{BTreeMap, BTreeSet, HashMap},
+    fmt::Display,
+    hash::Hash,
     mem,
     ops::Deref,
 };
@@ -63,7 +65,12 @@ impl<C: HasViewNumber> HasViewNumber for ValidCert<C> {
 }
 
 pub trait Verifiable<T: NodeType>: HasViewNumber + HasEpoch + Sized {
+    /// Identifies the `Verifiable`, e.g. `ViewNumber` or `EpochNumber`.
+    type Key: Copy + Ord + Hash + Display + Send + Sync + 'static;
+
     type Output: Send + 'static;
+
+    fn key(&self) -> Option<Self::Key>;
 
     fn check(
         self,
@@ -80,7 +87,12 @@ where
     V: Threshold<T>,
     Self: Certificate<T, D> + Send + 'static,
 {
+    type Key = ViewNumber;
     type Output = Self;
+
+    fn key(&self) -> Option<ViewNumber> {
+        Some(self.view_number())
+    }
 
     fn check(
         self,
@@ -94,7 +106,12 @@ where
 }
 
 impl<T: NodeType> Verifiable<T> for EpochChangeMessage<T, Unchecked> {
+    type Key = EpochNumber;
     type Output = EpochChangeMessage<T, Validated>;
+
+    fn key(&self) -> Option<EpochNumber> {
+        self.epoch()
+    }
 
     fn check(
         self,
@@ -115,28 +132,33 @@ impl<T: NodeType> Verifiable<T> for EpochChangeMessage<T, Unchecked> {
 /// The threshold-signature check is slow (> 1ms), so running it inline would
 /// stall the consensus loop. Each item's check runs in a `spawn_blocking`
 /// task; `next()` yields only those that pass. An item whose epoch
-/// membership isn't known yet is held in `pending` and retried on
-/// [`Self::retry_pending`]. One verifier handles one [`Verifiable`] type,
-/// keyed by view so duplicates are dropped.
-pub struct CertByViewVerifier<T: NodeType, C: Verifiable<T>> {
-    tasks: JoinMap<ViewNumber, Option<ValidCert<C::Output>>>,
-    pending_task: BTreeMap<ViewNumber, HashMap<T::SignatureKey, C>>,
-    pending_membership: BTreeMap<ViewNumber, HashMap<T::SignatureKey, C>>,
-    completed: BTreeSet<ViewNumber>,
-    lower_bound: ViewNumber,
+/// membership isn't known yet is held in `pending_membership` and retried on
+/// [`Self::retry_pending`].
+///
+/// Items are deduplicated per ([`Verifiable::Key`], sender) and verified one
+/// at a time per key, trying the next sender's item if one proves invalid; a
+/// faulty sender can neither shadow a key nor hold more than one slot per
+/// key. Since intake bounds the key space, memory is bounded by (admissible
+/// keys * committee size).
+pub struct CertVerifier<T: NodeType, C: Verifiable<T>> {
+    tasks: JoinMap<C::Key, Option<ValidCert<C::Output>>>,
+    pending_task: BTreeMap<C::Key, HashMap<T::SignatureKey, C>>,
+    pending_membership: BTreeMap<C::Key, HashMap<T::SignatureKey, C>>,
+    completed: BTreeSet<C::Key>,
+    lower_bound: Option<C::Key>,
     membership: EpochMembershipCoordinator<T>,
     upgrade_lock: UpgradeLock<T>,
     invalid_certs: u64,
 }
 
-impl<T: NodeType, C: Verifiable<T> + Send + 'static> CertByViewVerifier<T, C> {
+impl<T: NodeType, C: Verifiable<T> + Send + 'static> CertVerifier<T, C> {
     pub fn new(membership: EpochMembershipCoordinator<T>, upgrade_lock: UpgradeLock<T>) -> Self {
         Self {
             tasks: JoinMap::new(),
             pending_task: BTreeMap::new(),
             pending_membership: BTreeMap::new(),
             completed: BTreeSet::new(),
-            lower_bound: ViewNumber::genesis(),
+            lower_bound: None,
             membership,
             upgrade_lock,
             invalid_certs: 0,
@@ -147,32 +169,35 @@ impl<T: NodeType, C: Verifiable<T> + Send + 'static> CertByViewVerifier<T, C> {
     /// epoch's membership isn't ready the item is held and its epoch returned
     /// so the caller can drive that epoch's catchup. Duplicates are dropped.
     pub fn verify(&mut self, sender: T::SignatureKey, cert: C) -> Option<EpochNumber> {
-        let view = cert.view_number();
-
-        let Some(epoch) = cert.epoch() else {
-            warn!(%view, cert = type_name::<C>(), "received certificate has no epoch number");
+        let Some(key) = cert.key() else {
+            warn!(cert = type_name::<C>(), "certificate has no key");
             return None;
         };
 
-        if view < self.lower_bound || self.completed.contains(&view) {
+        let Some(epoch) = cert.epoch() else {
+            warn!(%key, cert = type_name::<C>(), "certificate has no epoch number");
+            return None;
+        };
+
+        if self.is_stale(key) || self.completed.contains(&key) {
             return None;
         }
 
-        if let Some(senders) = self.pending_task.get(&view)
+        if let Some(senders) = self.pending_task.get(&key)
             && senders.contains_key(&sender)
         {
             return None;
         }
 
-        if let Some(senders) = self.pending_membership.get(&view)
+        if let Some(senders) = self.pending_membership.get(&key)
             && senders.contains_key(&sender)
         {
             return None;
         }
 
-        if self.tasks.contains_key(&view) {
+        if self.tasks.contains_key(&key) {
             self.pending_task
-                .entry(view)
+                .entry(key)
                 .or_default()
                 .insert(sender, cert);
             return None;
@@ -180,7 +205,7 @@ impl<T: NodeType, C: Verifiable<T> + Send + 'static> CertByViewVerifier<T, C> {
 
         let Ok(membership) = self.membership.membership_for_epoch(Some(epoch)) else {
             self.pending_membership
-                .entry(view)
+                .entry(key)
                 .or_default()
                 .insert(sender, cert);
             return Some(epoch);
@@ -188,13 +213,13 @@ impl<T: NodeType, C: Verifiable<T> + Send + 'static> CertByViewVerifier<T, C> {
 
         let lock = self.upgrade_lock.clone();
 
-        self.tasks.spawn_blocking(view, move || {
+        self.tasks.spawn_blocking(key, move || {
             let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
             let threshold = membership.success_threshold();
             match cert.check(&entries, threshold, &lock) {
                 Ok(valid) => Some(ValidCert::new(valid, epoch)),
                 Err(err) => {
-                    warn!(%view, %epoch, %err, cert = type_name::<C>(), "invalid certificate");
+                    warn!(%key, %epoch, %err, cert = type_name::<C>(), "invalid certificate");
                     None
                 },
             }
@@ -203,17 +228,17 @@ impl<T: NodeType, C: Verifiable<T> + Send + 'static> CertByViewVerifier<T, C> {
         None
     }
 
-    /// Record that this view's item was completed by other means.
+    /// Record that this key's item was completed by other means.
     ///
     /// This can happen locally from votes for example.
-    pub fn mark_completed(&mut self, view: ViewNumber) {
-        if view < self.lower_bound {
+    pub fn mark_completed(&mut self, key: C::Key) {
+        if self.is_stale(key) {
             return;
         }
-        self.completed.insert(view);
-        self.pending_task.remove(&view);
-        self.pending_membership.remove(&view);
-        self.tasks.abort(&view);
+        self.completed.insert(key);
+        self.pending_task.remove(&key);
+        self.pending_membership.remove(&key);
+        self.tasks.abort(&key);
     }
 
     /// Re-attempt any items deferred because their epoch stake table wasn't
@@ -231,55 +256,67 @@ impl<T: NodeType, C: Verifiable<T> + Send + 'static> CertByViewVerifier<T, C> {
     pub async fn next(&mut self) -> Option<ValidCert<C::Output>> {
         loop {
             match self.tasks.join_next().await? {
-                (view, Ok(Some(cert))) => {
-                    if view >= self.lower_bound {
-                        self.completed.insert(view);
-                        self.pending_task.remove(&view);
-                        self.pending_membership.remove(&view);
+                (key, Ok(Some(cert))) => {
+                    if !self.is_stale(key) {
+                        self.completed.insert(key);
+                        self.pending_task.remove(&key);
+                        self.pending_membership.remove(&key);
                         return Some(cert);
                     }
                 },
-                (view, Ok(None)) => {
+                (key, Ok(None)) => {
                     self.invalid_certs += 1;
-                    if view >= self.lower_bound
-                        && let Some((sender, cert)) = self.next_pending_sender(view)
+                    if !self.is_stale(key)
+                        && let Some((sender, cert)) = self.next_pending_sender(key)
                     {
                         self.verify(sender, cert);
                     }
                 },
-                (view, Err(err)) => {
+                (key, Err(err)) => {
                     if err.is_panic() {
-                        error!(%view, %err, cert = type_name::<C>(), "cert verification task panic");
+                        error!(%key, %err, cert = type_name::<C>(), "cert verification task panic");
+                    }
+                    if !self.is_stale(key)
+                        && let Some((sender, cert)) = self.next_pending_sender(key)
+                    {
+                        self.verify(sender, cert);
                     }
                 },
             }
         }
     }
 
-    pub fn gc(&mut self, view: ViewNumber) {
-        self.completed = self.completed.split_off(&view);
-        self.pending_task = self.pending_task.split_off(&view);
-        self.pending_membership = self.pending_membership.split_off(&view);
-        self.lower_bound = view;
-        self.tasks.abort_matching(|v| *v < view);
+    pub fn gc(&mut self, key: C::Key) {
+        self.completed = self.completed.split_off(&key);
+        self.pending_task = self.pending_task.split_off(&key);
+        self.pending_membership = self.pending_membership.split_off(&key);
+        self.lower_bound = Some(key);
+        self.tasks.abort_matching(|k| *k < key);
     }
 
     pub fn num_invalid_certs(&self) -> u64 {
         self.invalid_certs
     }
 
-    fn next_pending_sender(&mut self, v: ViewNumber) -> Option<(T::SignatureKey, C)> {
-        let map = self.pending_task.get_mut(&v)?;
-        let key = map.keys().next().cloned()?;
-        let crt = map.remove(&key)?;
-        Some((key, crt))
+    fn next_pending_sender(&mut self, k: C::Key) -> Option<(T::SignatureKey, C)> {
+        let map = self.pending_task.get_mut(&k)?;
+        let sender = map.keys().next().cloned()?;
+        let cert = map.remove(&sender)?;
+        if map.is_empty() {
+            self.pending_task.remove(&k);
+        }
+        Some((sender, cert))
+    }
+
+    fn is_stale(&self, key: C::Key) -> bool {
+        self.lower_bound.is_some_and(|lb| key < lb)
     }
 }
 
 /// Verifies certificates off the main coordinator thread.
 ///
-/// Unlike [`CertByViewVerifier`], these certificates are keyed by sender key
-/// instead of view, helping a lagging node jump to the frontier. While a
+/// Unlike [`CertVerifier`], these certificates are keyed by sender key
+/// instead of view/epoch, helping a lagging node jump to the frontier. While a
 /// certificate is verified, subsequent requests are dropped which bounds each
 /// peer to one verification at a time.
 pub struct CertBySenderVerifier<T: NodeType, C: Verifiable<T>> {
@@ -405,21 +442,21 @@ where
 
 /// The coordinator's network-certificate verifiers, one per certificate type.
 pub struct CertVerifiers<T: NodeType> {
-    pub cert1: CertByViewVerifier<T, Certificate1<T>>,
-    pub cert2: CertByViewVerifier<T, Certificate2<T>>,
+    pub cert1: CertVerifier<T, Certificate1<T>>,
+    pub cert2: CertVerifier<T, Certificate2<T>>,
     pub timeout: CertBySenderVerifier<T, TimeoutCertificate2<T>>,
     pub advance: CertBySenderVerifier<T, Certificate1<T>>,
-    pub epoch_change: CertByViewVerifier<T, EpochChangeMessage<T, Unchecked>>,
+    pub epoch_change: CertVerifier<T, EpochChangeMessage<T, Unchecked>>,
 }
 
 impl<T: NodeType> CertVerifiers<T> {
     pub fn new(membership: EpochMembershipCoordinator<T>, upgrade_lock: UpgradeLock<T>) -> Self {
         Self {
-            cert1: CertByViewVerifier::new(membership.clone(), upgrade_lock.clone()),
-            cert2: CertByViewVerifier::new(membership.clone(), upgrade_lock.clone()),
+            cert1: CertVerifier::new(membership.clone(), upgrade_lock.clone()),
+            cert2: CertVerifier::new(membership.clone(), upgrade_lock.clone()),
             timeout: CertBySenderVerifier::new(membership.clone(), upgrade_lock.clone()),
             advance: CertBySenderVerifier::new(membership.clone(), upgrade_lock.clone()),
-            epoch_change: CertByViewVerifier::new(membership, upgrade_lock),
+            epoch_change: CertVerifier::new(membership, upgrade_lock),
         }
     }
 
@@ -444,12 +481,12 @@ impl<T: NodeType> CertVerifiers<T> {
         }
     }
 
-    pub fn gc(&mut self, view: ViewNumber) {
+    pub fn gc(&mut self, view: ViewNumber, epoch: EpochNumber) {
         self.cert1.gc(view);
         self.cert2.gc(view);
         self.timeout.gc(view);
         self.advance.gc(view);
-        self.epoch_change.gc(view);
+        self.epoch_change.gc(epoch);
     }
 
     pub fn num_invalid_certs(&self) -> u64 {

@@ -86,6 +86,8 @@ const STORAGE_GC_MARGIN: u64 = 5;
 /// advances ([`CertVerifiers::retry_pending`] runs on every DRB arrival).
 const EPOCH_CHANGE_LOOKAHEAD: u64 = 3;
 
+pub(crate) const MAX_VIEWS_AHEAD: ViewNumber = ViewNumber::new(30);
+
 #[derive(Builder)]
 pub struct Coordinator<T: NodeType, S> {
     membership_coordinator: EpochMembershipCoordinator<T>,
@@ -1041,7 +1043,7 @@ where
                     let epoch = p.proposal.data.epoch;
                     let block = p.proposal.data.block_header.block_number();
                     debug!(%node, %sender, %view, %epoch, %block, "recv proposal");
-                    if !self.is_too_far_ahead(view)
+                    if !self.is_view_too_far_ahead(view)
                         && self.proposal_received_at.is_none_or(|(v, _)| v < view)
                     {
                         self.proposal_received_at = Some((view, Instant::now()));
@@ -1097,7 +1099,7 @@ where
                 },
                 ConsensusMessage::Vote1(vote1) => {
                     let view = vote1.vote.view_number();
-                    if self.is_too_far_ahead(view) {
+                    if self.is_view_too_far_ahead(view) {
                         warn!(%node, %sender, %view, "vote1 is too far ahead");
                         return None;
                     }
@@ -1126,7 +1128,7 @@ where
                 },
                 ConsensusMessage::VidShareBroadcast(share) => {
                     let view = share.view_number();
-                    if self.is_too_far_ahead(view) {
+                    if self.is_view_too_far_ahead(view) {
                         warn!(%node, %sender, %view, "vid share broadcast is too far ahead");
                         return None;
                     }
@@ -1140,7 +1142,7 @@ where
                 },
                 ConsensusMessage::Vote2(vote2) => {
                     let view = vote2.view_number();
-                    if self.is_too_far_ahead(view) {
+                    if self.is_view_too_far_ahead(view) {
                         warn!(%node, %sender, %view, "vote2 is too far ahead");
                         return None;
                     }
@@ -1159,8 +1161,12 @@ where
                         epoch = ?certificate1.epoch().map(|e| *e),
                         "recv certificate1"
                     );
-                    if self.is_too_far_ahead(view) {
+                    if self.is_view_too_far_ahead(view) {
                         warn!(%node, %sender, %view, "certificate1 is too far ahead");
+                        return None;
+                    }
+                    if self.is_epoch_too_far_ahead(certificate1.epoch()) {
+                        warn!(%node, %sender, %view, "certificate1 epoch is too far ahead");
                         return None;
                     }
                     if let Some(epoch) = self
@@ -1179,8 +1185,12 @@ where
                         epoch = ?certificate2.epoch().map(|e| *e),
                         "recv certificate2"
                     );
-                    if self.is_too_far_ahead(view) {
+                    if self.is_view_too_far_ahead(view) {
                         warn!(%node, %sender, %view, "certificate2 is too far ahead");
+                        return None;
+                    }
+                    if self.is_epoch_too_far_ahead(certificate2.epoch()) {
+                        warn!(%node, %sender, %view, "certificate2 epoch is too far ahead");
                         return None;
                     }
                     if let Some(epoch) = self
@@ -1231,7 +1241,7 @@ where
                         }
                     }
 
-                    if self.is_too_far_ahead(view) {
+                    if self.is_view_too_far_ahead(view) {
                         warn!(%node, %sender, %view, "timeout vote is too far ahead");
                         return None;
                     }
@@ -1290,11 +1300,7 @@ where
                     let view = epoch_change.cert1.view_number();
                     let epoch = epoch_change.cert1.epoch();
                     debug!(%node, %sender, %view, epoch = ?epoch.map(|e| *e), "recv epoch change");
-                    let current_epoch = self
-                        .consensus
-                        .current_epoch()
-                        .unwrap_or(EpochNumber::genesis());
-                    if epoch.is_some_and(|e| e > current_epoch + EPOCH_CHANGE_LOOKAHEAD) {
+                    if self.is_epoch_too_far_ahead(epoch) {
                         warn!(%node, %sender, %view, ?epoch, "epoch change is too far ahead");
                         return None;
                     }
@@ -1327,7 +1333,7 @@ where
                             hashes = manifest.hashes.len(),
                             "recv dedup manifest"
                         );
-                        if !self.is_too_far_ahead(manifest.view)
+                        if !self.is_view_too_far_ahead(manifest.view)
                             && let Some(view_leader) = self.leader(manifest.view, manifest.epoch)
                             && view_leader == message.sender
                         {
@@ -1799,7 +1805,7 @@ where
                 let decide_floor = self.consensus.decide_floor();
                 self.epoch_manager.gc(epoch);
                 self.epoch_root_collector.gc(view);
-                self.cert_verifiers.gc(decide_floor);
+                self.cert_verifiers.gc(decide_floor, epoch);
                 self.pending_proposal_fetches.gc(view);
                 self.requested_missing_proposals
                     .retain(|key| key.view > view);
@@ -1903,9 +1909,18 @@ where
         false
     }
 
-    /// We ignore votes more that 30 views ahead of our current view.
-    fn is_too_far_ahead(&self, v: ViewNumber) -> bool {
-        v > self.consensus.current_view() + 30
+    /// We ignore votes more than `MAX_VIEWS_AHEAD` ahead of ours.
+    fn is_view_too_far_ahead(&self, v: ViewNumber) -> bool {
+        v > self.consensus.current_view() + *MAX_VIEWS_AHEAD
+    }
+
+    /// We ignore certificates more than `EPOCH_CHANGE_LOOKAHEAD` ahead of ours.
+    fn is_epoch_too_far_ahead(&self, epoch: Option<EpochNumber>) -> bool {
+        let current = self
+            .consensus
+            .current_epoch()
+            .unwrap_or(EpochNumber::genesis());
+        epoch.is_some_and(|e| e > current + EPOCH_CHANGE_LOOKAHEAD)
     }
 
     pub(crate) fn catchup_evidence(&self) -> Option<ConsensusMessage<T, Validated>> {

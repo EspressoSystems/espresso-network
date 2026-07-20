@@ -12,6 +12,7 @@
 mod accumulate;
 
 use std::{
+    any::{type_name, type_name_of_val},
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     marker::PhantomData,
     mem,
@@ -30,7 +31,7 @@ use hotshot_types::{
     vote::{Certificate, HasViewNumber, LightClientStateUpdateVoteAccumulator, Vote},
 };
 use tokio_util::task::JoinMap;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::{cert_verifier::ValidCert, message::Vote1};
 
@@ -114,6 +115,7 @@ where
                 if let Some(e) = c.epoch() {
                     return Some(ValidCert::new(c, e));
                 } else {
+                    warn!(cert = type_name::<C>(), "certificate has no epoch number");
                     break;
                 }
             }
@@ -176,6 +178,10 @@ impl<T: NodeType> Tally<T> for EpochRootTally<T> {
                 if let Some(e) = q.epoch() {
                     return Some((ValidCert::new(q.clone(), e), s.clone()));
                 } else {
+                    warn!(
+                        cert = type_name_of_val(q),
+                        "certificate has no epoch number"
+                    );
                     break;
                 }
             }
