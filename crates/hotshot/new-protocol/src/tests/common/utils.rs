@@ -53,6 +53,7 @@ use hotshot_types::{
 };
 
 use crate::{
+    cert_verifier::ValidCert,
     client::{ClientLeafFetcherNetwork, CoordinatorClient},
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     helpers::{proposal_commitment, test_upgrade_lock},
@@ -168,12 +169,12 @@ impl TestView {
 
     /// Build an Event for Certificate1.
     pub fn cert1_input(&self) -> ConsensusInput<TestTypes> {
-        ConsensusInput::Certificate1(self.cert1.clone())
+        ConsensusInput::Certificate1(ValidCert::new(self.cert1.clone(), self.epoch_number))
     }
 
     /// Build an Event for Certificate2.
     pub fn cert2_input(&self) -> ConsensusInput<TestTypes> {
-        ConsensusInput::Certificate2(self.cert2.clone())
+        ConsensusInput::Certificate2(ValidCert::new(self.cert2.clone(), self.epoch_number))
     }
 
     /// Build a Vote1 Event from a specific validator, carrying that validator's
@@ -284,9 +285,11 @@ impl TestView {
     }
 
     /// Build an Event for a timeout certificate.
-    #[allow(dead_code)]
     pub fn timeout_cert_input(&self) -> ConsensusInput<TestTypes> {
-        ConsensusInput::TimeoutCertificate(self.timeout_cert.clone())
+        ConsensusInput::TimeoutCertificate(ValidCert::new(
+            self.timeout_cert.clone(),
+            self.epoch_number,
+        ))
     }
 }
 
