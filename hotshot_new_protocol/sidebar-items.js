@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["block","client","consensus","coordinator","cutover","epoch","helpers","logging","message","network","outbox","proposal","state","storage","utils","vid","vote"]};
+window.SIDEBAR_ITEMS = {"mod":["block","cert_verifier","client","consensus","coordinator","cutover","epoch","helpers","logging","message","network","outbox","proposal","state","storage","utils","vid","vote"]};

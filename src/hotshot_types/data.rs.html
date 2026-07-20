@@ -66,15 +66,15 @@
 <a href=#66 id=66 data-nosnippet>66</a>    (<span class="macro-nonterminal">$t</span>:ty, <span class="macro-nonterminal">$genesis_val</span>:expr) =&gt; {
 <a href=#67 id=67 data-nosnippet>67</a>        <span class="kw">impl </span><span class="macro-nonterminal">$t </span>{
 <a href=#68 id=68 data-nosnippet>68</a>            <span class="doccomment">/// Create a genesis number
-<a href=#69 id=69 data-nosnippet>69</a>            </span><span class="kw">pub fn </span>genesis() -&gt; <span class="self">Self </span>{
+<a href=#69 id=69 data-nosnippet>69</a>            </span><span class="kw">pub const fn </span>genesis() -&gt; <span class="self">Self </span>{
 <a href=#70 id=70 data-nosnippet>70</a>                <span class="self">Self</span>(<span class="macro-nonterminal">$genesis_val</span>)
 <a href=#71 id=71 data-nosnippet>71</a>            }
 <a href=#72 id=72 data-nosnippet>72</a>            <span class="doccomment">/// Create a new number with the given value.
-<a href=#73 id=73 data-nosnippet>73</a>            </span><span class="kw">pub fn </span>new(n: u64) -&gt; <span class="self">Self </span>{
+<a href=#73 id=73 data-nosnippet>73</a>            </span><span class="kw">pub const fn </span>new(n: u64) -&gt; <span class="self">Self </span>{
 <a href=#74 id=74 data-nosnippet>74</a>                <span class="self">Self</span>(n)
 <a href=#75 id=75 data-nosnippet>75</a>            }
 <a href=#76 id=76 data-nosnippet>76</a>            <span class="doccomment">/// Return the u64 format
-<a href=#77 id=77 data-nosnippet>77</a>            </span><span class="kw">pub fn </span>u64(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
+<a href=#77 id=77 data-nosnippet>77</a>            </span><span class="kw">pub const fn </span>u64(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
 <a href=#78 id=78 data-nosnippet>78</a>                <span class="self">self</span>.<span class="number">0
 <a href=#79 id=79 data-nosnippet>79</a>            </span>}
 <a href=#80 id=80 data-nosnippet>80</a>        }
