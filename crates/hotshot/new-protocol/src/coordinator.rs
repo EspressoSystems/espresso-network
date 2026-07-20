@@ -1163,7 +1163,11 @@ where
                         warn!(%node, %sender, %view, "certificate1 is too far ahead");
                         return None;
                     }
-                    if let Some(epoch) = self.cert_verifiers.cert1.verify(certificate1) {
+                    if let Some(epoch) = self
+                        .cert_verifiers
+                        .cert1
+                        .verify(message.sender, certificate1)
+                    {
                         self.epoch_manager.request_drb_result(epoch);
                     }
                     None
@@ -1179,7 +1183,11 @@ where
                         warn!(%node, %sender, %view, "certificate2 is too far ahead");
                         return None;
                     }
-                    if let Some(epoch) = self.cert_verifiers.cert2.verify(certificate2) {
+                    if let Some(epoch) = self
+                        .cert_verifiers
+                        .cert2
+                        .verify(message.sender, certificate2)
+                    {
                         self.epoch_manager.request_drb_result(epoch);
                     }
                     None
@@ -1290,7 +1298,11 @@ where
                         warn!(%node, %sender, %view, ?epoch, "epoch change is too far ahead");
                         return None;
                     }
-                    if let Some(epoch) = self.cert_verifiers.epoch_change.verify(epoch_change) {
+                    if let Some(epoch) = self
+                        .cert_verifiers
+                        .epoch_change
+                        .verify(message.sender, epoch_change)
+                    {
                         self.epoch_manager.request_drb_result(epoch);
                     }
                     None

@@ -120,7 +120,8 @@ impl<T: NodeType> Verifiable<T> for EpochChangeMessage<T, Unchecked> {
 /// keyed by view so duplicates are dropped.
 pub struct CertByViewVerifier<T: NodeType, C: Verifiable<T>> {
     tasks: JoinMap<ViewNumber, Option<ValidCert<C::Output>>>,
-    pending: BTreeMap<ViewNumber, C>,
+    pending_task: BTreeMap<ViewNumber, HashMap<T::SignatureKey, C>>,
+    pending_membership: BTreeMap<ViewNumber, HashMap<T::SignatureKey, C>>,
     completed: BTreeSet<ViewNumber>,
     lower_bound: ViewNumber,
     membership: EpochMembershipCoordinator<T>,
@@ -132,7 +133,8 @@ impl<T: NodeType, C: Verifiable<T> + Send + 'static> CertByViewVerifier<T, C> {
     pub fn new(membership: EpochMembershipCoordinator<T>, upgrade_lock: UpgradeLock<T>) -> Self {
         Self {
             tasks: JoinMap::new(),
-            pending: BTreeMap::new(),
+            pending_task: BTreeMap::new(),
+            pending_membership: BTreeMap::new(),
             completed: BTreeSet::new(),
             lower_bound: ViewNumber::genesis(),
             membership,
@@ -144,24 +146,43 @@ impl<T: NodeType, C: Verifiable<T> + Send + 'static> CertByViewVerifier<T, C> {
     /// Submit an item received from the network for verification. If the
     /// epoch's membership isn't ready the item is held and its epoch returned
     /// so the caller can drive that epoch's catchup. Duplicates are dropped.
-    pub fn verify(&mut self, cert: C) -> Option<EpochNumber> {
+    pub fn verify(&mut self, sender: T::SignatureKey, cert: C) -> Option<EpochNumber> {
         let view = cert.view_number();
-
-        if view < self.lower_bound
-            || self.completed.contains(&view)
-            || self.tasks.contains_key(&view)
-            || self.pending.contains_key(&view)
-        {
-            return None;
-        }
 
         let Some(epoch) = cert.epoch() else {
             warn!(%view, cert = type_name::<C>(), "received certificate has no epoch number");
             return None;
         };
 
+        if view < self.lower_bound || self.completed.contains(&view) {
+            return None;
+        }
+
+        if let Some(senders) = self.pending_task.get(&view)
+            && senders.contains_key(&sender)
+        {
+            return None;
+        }
+
+        if let Some(senders) = self.pending_membership.get(&view)
+            && senders.contains_key(&sender)
+        {
+            return None;
+        }
+
+        if self.tasks.contains_key(&view) {
+            self.pending_task
+                .entry(view)
+                .or_default()
+                .insert(sender, cert);
+            return None;
+        }
+
         let Ok(membership) = self.membership.membership_for_epoch(Some(epoch)) else {
-            self.pending.insert(view, cert);
+            self.pending_membership
+                .entry(view)
+                .or_default()
+                .insert(sender, cert);
             return Some(epoch);
         };
 
@@ -190,7 +211,8 @@ impl<T: NodeType, C: Verifiable<T> + Send + 'static> CertByViewVerifier<T, C> {
             return;
         }
         self.completed.insert(view);
-        self.pending.remove(&view);
+        self.pending_task.remove(&view);
+        self.pending_membership.remove(&view);
         self.tasks.abort(&view);
     }
 
@@ -199,9 +221,10 @@ impl<T: NodeType, C: Verifiable<T> + Send + 'static> CertByViewVerifier<T, C> {
     /// whose stake table is still missing so the caller can keep driving their
     /// catchup.
     pub fn retry_pending(&mut self) -> Vec<EpochNumber> {
-        mem::take(&mut self.pending)
+        mem::take(&mut self.pending_membership)
             .into_values()
-            .filter_map(|cert| self.verify(cert))
+            .flatten()
+            .filter_map(|(sender, cert)| self.verify(sender, cert))
             .collect()
     }
 
@@ -211,11 +234,18 @@ impl<T: NodeType, C: Verifiable<T> + Send + 'static> CertByViewVerifier<T, C> {
                 (view, Ok(Some(cert))) => {
                     if view >= self.lower_bound {
                         self.completed.insert(view);
+                        self.pending_task.remove(&view);
+                        self.pending_membership.remove(&view);
                         return Some(cert);
                     }
                 },
-                (_, Ok(None)) => {
+                (view, Ok(None)) => {
                     self.invalid_certs += 1;
+                    if view >= self.lower_bound
+                        && let Some((sender, cert)) = self.next_pending_sender(view)
+                    {
+                        self.verify(sender, cert);
+                    }
                 },
                 (view, Err(err)) => {
                     if err.is_panic() {
@@ -228,13 +258,21 @@ impl<T: NodeType, C: Verifiable<T> + Send + 'static> CertByViewVerifier<T, C> {
 
     pub fn gc(&mut self, view: ViewNumber) {
         self.completed = self.completed.split_off(&view);
-        self.pending = self.pending.split_off(&view);
+        self.pending_task = self.pending_task.split_off(&view);
+        self.pending_membership = self.pending_membership.split_off(&view);
         self.lower_bound = view;
         self.tasks.abort_matching(|v| *v < view);
     }
 
     pub fn num_invalid_certs(&self) -> u64 {
         self.invalid_certs
+    }
+
+    fn next_pending_sender(&mut self, v: ViewNumber) -> Option<(T::SignatureKey, C)> {
+        let map = self.pending_task.get_mut(&v)?;
+        let key = map.keys().next().cloned()?;
+        let crt = map.remove(&key)?;
+        Some((key, crt))
     }
 }
 
