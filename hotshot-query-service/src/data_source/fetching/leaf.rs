@@ -109,7 +109,13 @@ where
             AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
         P: AvailabilityProvider<Types>,
     {
-        fetch_leaf_with_callbacks(fetcher, req, None).await
+        // Backfill the leaf's cert2 (V6+ only) once it lands, the same way we backfill its payload
+        // and VID common data.
+        let cert2 = HeaderCallback::Cert2 {
+            fetcher: fetcher.clone(),
+        }
+        .into();
+        fetch_leaf_with_callbacks(fetcher, req, once(cert2)).await
     }
 
     async fn load<S>(storage: &mut S, req: Self::Request) -> QueryResult<Self>
@@ -226,6 +232,10 @@ pub(super) fn trigger_fetch_for_parent<Types, S, P>(
                     }
                     .into(),
                     HeaderCallback::VidCommon {
+                        fetcher: fetcher.clone(),
+                    }
+                    .into(),
+                    HeaderCallback::Cert2 {
                         fetcher: fetcher.clone(),
                     }
                     .into(),
@@ -364,7 +374,7 @@ where
                 // continue bulk fetching, rather than kick of a chain reaction of individual
                 // fetches, which will end up fetching the same data, slower.
             },
-            Self::Continuation { callback } => callback.run_range(leaves.start(), leaves.end()),
+            Self::Continuation { callback } => callback.run_range(&leaves),
         }
     }
 }
@@ -442,7 +452,12 @@ where
             AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
         P: AvailabilityProvider<Types>,
     {
-        fetch_leaf_range_with_callbacks(fetcher, req, None).await
+        // Backfill each leaf's cert2 (V6+ only) once the range lands, mirroring the singular fetch.
+        let cert2 = HeaderCallback::Cert2 {
+            fetcher: fetcher.clone(),
+        }
+        .into();
+        fetch_leaf_range_with_callbacks(fetcher, req, once(cert2)).await
     }
 
     async fn load<S>(storage: &mut S, req: Self::Request) -> QueryResult<Self>

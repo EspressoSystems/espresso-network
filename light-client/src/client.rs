@@ -18,7 +18,7 @@ use hotshot_query_service_types::availability::LeafId;
 use hotshot_query_service_types::{availability::LeafQueryData, node::BlockId};
 use hotshot_types::data::EpochNumber;
 #[cfg(feature = "client")]
-use surf_disco::Url;
+use surf_disco::{Error as _, StatusCode, Url};
 #[cfg(feature = "client")]
 use tagged_base64::TaggedBase64;
 #[cfg(feature = "client")]
@@ -253,11 +253,16 @@ impl Client for QueryServiceClient {
     }
 
     async fn cert2(&self, height: u64) -> Result<Option<Certificate2<SeqTypes>>> {
-        Ok(self
+        match self
             .client
-            .get(&format!("/availability/cert2/{height}"))
+            .get::<Option<Certificate2<SeqTypes>>>(&format!("/availability/cert2/{height}"))
             .send()
-            .await?)
+            .await
+        {
+            Ok(cert2) => Ok(cert2),
+            Err(err) if err.status() == StatusCode::NOT_FOUND => Ok(None),
+            Err(err) => Err(err.into()),
+        }
     }
 }
 

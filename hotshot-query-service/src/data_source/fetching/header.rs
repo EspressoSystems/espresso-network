@@ -22,8 +22,8 @@ use futures::{FutureExt, future::BoxFuture};
 use hotshot_types::traits::{block_contents::BlockHeader, node_implementation::NodeType};
 
 use super::{
-    AvailabilityProvider, Fetcher, block::fetch_block_with_header, leaf::fetch_leaf_with_callbacks,
-    vid::fetch_vid_common_with_header,
+    AvailabilityProvider, Fetcher, block::fetch_block_with_header, cert2::fetch_cert2_with_header,
+    leaf::fetch_leaf_with_callbacks, vid::fetch_vid_common_with_header,
 };
 use crate::{
     Header, Payload, QueryError, QueryResult,
@@ -102,9 +102,9 @@ where
         fetch_header_and_then(
             tx,
             req,
-            HeaderCallback::Payload {
+            [HeaderCallback::Payload {
                 fetcher: fetcher.clone(),
-            },
+            }],
         )
         .await
     }
@@ -133,6 +133,11 @@ where
         #[derivative(Debug = "ignore")]
         fetcher: Arc<Fetcher<Types, S, P>>,
     },
+    /// Callback when fetching the leaf in order to then backfill the corresponding cert2.
+    Cert2 {
+        #[derivative(Debug = "ignore")]
+        fetcher: Arc<Fetcher<Types, S, P>>,
+    },
 }
 
 impl<Types: NodeType, S, P> PartialEq for HeaderCallback<Types, S, P> {
@@ -151,12 +156,15 @@ impl<Types: NodeType, S, P> PartialOrd for HeaderCallback<Types, S, P> {
 
 impl<Types: NodeType, S, P> Ord for HeaderCallback<Types, S, P> {
     fn cmp(&self, other: &Self) -> Ordering {
-        // Arbitrarily, we choose to run payload callbacks before VID callbacks.
-        match (self, other) {
-            (Self::Payload { .. }, Self::VidCommon { .. }) => Ordering::Less,
-            (Self::VidCommon { .. }, Self::Payload { .. }) => Ordering::Greater,
-            _ => Ordering::Equal,
+        // Arbitrarily, we order the callbacks payload < VID < cert2.
+        fn rank<Types: NodeType, S, P>(cb: &HeaderCallback<Types, S, P>) -> u8 {
+            match cb {
+                HeaderCallback::Payload { .. } => 0,
+                HeaderCallback::VidCommon { .. } => 1,
+                HeaderCallback::Cert2 { .. } => 2,
+            }
         }
+        rank(self).cmp(&rank(other))
     }
 }
 
@@ -167,12 +175,14 @@ where
     Payload<Types>: QueryablePayload<Types>,
     S: VersionedDataSource + 'static,
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
+    for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
     P: AvailabilityProvider<Types>,
 {
     fn fetcher(&self) -> Arc<Fetcher<Types, S, P>> {
         match self {
             Self::Payload { fetcher } => fetcher.clone(),
             Self::VidCommon { fetcher } => fetcher.clone(),
+            Self::Cert2 { fetcher } => fetcher.clone(),
         }
     }
 
@@ -192,10 +202,14 @@ where
                 );
                 fetch_vid_common_with_header(fetcher, header);
             },
+            Self::Cert2 { fetcher } => {
+                fetch_cert2_with_header(&fetcher, &header);
+            },
         }
     }
 
-    pub(super) fn run_range(self, start: u64, end: u64) {
+    pub(super) fn run_range(self, leaves: &NonEmptyRange<LeafQueryData<Types>>) {
+        let (start, end) = (leaves.start(), leaves.end());
         match self {
             Self::Payload { fetcher } => {
                 tracing::info!("fetched leaves {start}..{end}, will now fetch payload",);
@@ -205,14 +219,21 @@ where
                 tracing::info!("fetched leaves {start}..{end}, will now fetch VID common",);
                 fetch_vid_common_range(fetcher, start, end);
             },
+            Self::Cert2 { fetcher } => {
+                // cert2 exists only from V6 onward, so gate per header rather than fetching every
+                // height in the range and bothering peers for certs that cannot exist.
+                for leaf in leaves.iter() {
+                    fetch_cert2_with_header(&fetcher, leaf.leaf().block_header());
+                }
+            },
         }
     }
 }
 
-pub(super) async fn fetch_header_and_then<Types, S, P>(
+pub(super) async fn fetch_header_and_then<Types, S, P, I>(
     tx: &mut impl AvailabilityStorage<Types>,
     req: BlockId<Types>,
-    callback: HeaderCallback<Types, S, P>,
+    callbacks: I,
 ) -> anyhow::Result<()>
 where
     Types: NodeType,
@@ -222,18 +243,28 @@ where
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
     for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
     P: AvailabilityProvider<Types>,
+    I: IntoIterator<Item = HeaderCallback<Types, S, P>> + Send,
+    I::IntoIter: Send,
 {
+    let mut callbacks = callbacks.into_iter().peekable();
+    let Some(first) = callbacks.peek() else {
+        return Ok(());
+    };
+    let fetcher = first.fetcher();
+
     // Check if at least the header is available in local storage. If it is, we benefit two ways:
     // 1. We know for sure the corresponding block exists, so we can unconditionally trigger an
     //    active fetch without unnecessarily bothering our peers.
     // 2. We only need to fetch the missing data (e.g. payload or VID common), not the full block.
     //    Not only is this marginally less data to download, there are some providers that may only
     //    be able to provide certain data. For example, the HotShot DA committee members may be able
-    //    to provide paylaods, but not full blocks. Or, in the case where VID recovery is needed,
+    //    to provide payloads, but not full blocks. Or, in the case where VID recovery is needed,
     //    the VID common data may be available but the full block may not exist anywhere.
     match tx.get_header(req).await {
         Ok(header) => {
-            callback.run(header);
+            for callback in callbacks {
+                callback.run(header.clone());
+            }
             return Ok(());
         },
         Err(QueryError::Missing | QueryError::NotFound) => {
@@ -254,7 +285,12 @@ where
     // header and leaf.
     match req {
         BlockId::Number(n) => {
-            fetch_leaf_with_callbacks(callback.fetcher(), n.into(), [callback.into()]).await?;
+            fetch_leaf_with_callbacks(
+                fetcher,
+                n.into(),
+                callbacks.map(Into::into).collect::<Vec<_>>(),
+            )
+            .await?;
         },
         BlockId::Hash(h) => {
             // Given only the hash, we cannot tell if the corresponding leaf actually exists, since
@@ -270,10 +306,10 @@ where
     Ok(())
 }
 
-pub(super) async fn fetch_header_range_and_then<Types, S, P>(
+pub(super) async fn fetch_header_range_and_then<Types, S, P, I>(
     tx: &mut impl AvailabilityStorage<Types>,
     req: RangeRequest,
-    callback: HeaderCallback<Types, S, P>,
+    callbacks: I,
 ) -> anyhow::Result<()>
 where
     Types: NodeType,
@@ -283,12 +319,22 @@ where
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
     for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
     P: AvailabilityProvider<Types>,
+    I: IntoIterator<Item = HeaderCallback<Types, S, P>> + Send,
+    I::IntoIter: Send,
 {
+    let mut callbacks = callbacks.into_iter().peekable();
+    let Some(first) = callbacks.peek() else {
+        return Ok(());
+    };
+    let fetcher = first.fetcher();
+
     // Check if the headers are already available in local storage; then we only need to fetch the
     // payload data.
     match <NonEmptyRange<LeafQueryData<Types>>>::load(tx, req).await {
-        Ok(_) => {
-            callback.run_range(req.start, req.end);
+        Ok(leaves) => {
+            for callback in callbacks {
+                callback.run_range(&leaves);
+            }
             return Ok(());
         },
         Err(QueryError::Missing | QueryError::NotFound) => {
@@ -304,7 +350,8 @@ where
     }
 
     // Fetch the headers (in fact, the entire leaves) first, then fetch the remaining payload data.
-    fetch_leaf_range_with_callbacks(callback.fetcher(), req, [callback.into()]).await?;
+    fetch_leaf_range_with_callbacks(fetcher, req, callbacks.map(Into::into).collect::<Vec<_>>())
+        .await?;
 
     Ok(())
 }

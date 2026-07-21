@@ -125,6 +125,7 @@ use crate::{
 };
 
 mod block;
+mod cert2;
 mod header;
 mod leaf;
 mod transaction;
@@ -132,6 +133,7 @@ mod vid;
 
 use self::{
     block::{PayloadFetcher, PayloadRangeFetcher},
+    cert2::Cert2Fetcher,
     leaf::{LeafFetcher, LeafRangeFetcher},
     transaction::TransactionRequest,
     vid::{VidCommonFetcher, VidCommonRequest},
@@ -960,6 +962,7 @@ where
     payload_range_fetcher: Option<Arc<PayloadRangeFetcher<Types, S, P>>>,
     vid_common_fetcher: Option<Arc<VidCommonFetcher<Types, S, P>>>,
     vid_common_range_fetcher: Option<Arc<VidCommonRangeFetcher<Types, S, P>>>,
+    cert2_fetcher: Option<Arc<Cert2Fetcher<Types, S, P>>>,
     range_chunk_size: usize,
     sync_status_chunk_size: usize,
     // Duration to sleep after each active fetch,
@@ -1036,6 +1039,12 @@ where
             };
         let leaf_fetcher = fetching::Fetcher::new(retry_semaphore.clone(), backoff.clone());
         let leaf_range_fetcher = fetching::Fetcher::new(retry_semaphore.clone(), backoff.clone());
+        let cert2_fetcher = (!builder.is_leaf_only()).then(|| {
+            Arc::new(fetching::Fetcher::new(
+                retry_semaphore.clone(),
+                backoff.clone(),
+            ))
+        });
 
         let leaf_only = builder.leaf_only;
         let sync_status_metrics =
@@ -1051,6 +1060,7 @@ where
             payload_range_fetcher,
             vid_common_fetcher,
             vid_common_range_fetcher,
+            cert2_fetcher,
             range_chunk_size: builder.range_chunk_size,
             sync_status_chunk_size: builder.sync_status_chunk_size,
             active_fetch_delay: builder.active_fetch_delay,

@@ -107,9 +107,12 @@ where
         fetch_header_and_then(
             tx,
             req,
-            HeaderCallback::Payload {
-                fetcher: fetcher.clone(),
-            },
+            [
+                HeaderCallback::Payload {
+                    fetcher: fetcher.clone(),
+                },
+                HeaderCallback::Cert2 { fetcher },
+            ],
         )
         .await
     }
@@ -428,7 +431,17 @@ where
             AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
         P: AvailabilityProvider<Types>,
     {
-        fetch_header_range_and_then(tx, req, HeaderCallback::Payload { fetcher }).await
+        fetch_header_range_and_then(
+            tx,
+            req,
+            [
+                HeaderCallback::Payload {
+                    fetcher: fetcher.clone(),
+                },
+                HeaderCallback::Cert2 { fetcher },
+            ],
+        )
+        .await
     }
 
     async fn load<S>(storage: &mut S, req: Self::Request) -> QueryResult<Self>
