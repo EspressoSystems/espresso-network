@@ -1,7 +1,6 @@
 use std::marker::PhantomData;
 
 use committable::{Commitment, Committable};
-pub use hotshot_types::new_protocol::Proposal;
 use hotshot_types::{
     data::{
         EpochNumber, VidDisperseShare2, ViewNumber, vid_disperse::AvidmGf2DisperseShareFragment,
@@ -12,17 +11,18 @@ use hotshot_types::{
         OneHonestThreshold, SimpleCertificate, SuccessThreshold, TimeoutCertificate2,
     },
     simple_vote::{
-        LightClientStateUpdateVote2, QuorumData2, QuorumVote2, SimpleVote, TimeoutData2,
-        TimeoutVote2, Vote2Data,
+        LightClientStateUpdateVote2, QuorumVote2, SimpleVote, TimeoutData2, TimeoutVote2, Vote2Data,
     },
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
     vote::HasViewNumber,
 };
+pub use hotshot_types::{
+    new_protocol::Proposal,
+    simple_certificate::{Certificate1, Certificate2},
+};
 use serde::{Deserialize, Serialize};
 
 pub type Vote2<T> = SimpleVote<T, Vote2Data<T>>;
-pub type Certificate1<T> = SimpleCertificate<T, QuorumData2<T>, SuccessThreshold>;
-pub type Certificate2<T> = SimpleCertificate<T, Vote2Data<T>, SuccessThreshold>;
 pub type TimeoutCertificate<T> = SimpleCertificate<T, TimeoutData2, SuccessThreshold>;
 pub type TimeoutOneHonest<T> = SimpleCertificate<T, TimeoutData2, OneHonestThreshold>;
 
@@ -42,6 +42,16 @@ pub struct ProposalMessage<T: NodeType, S> {
 
 impl<T: NodeType> ProposalMessage<T, Validated> {
     pub fn validated(p: SignedProposal<T, Proposal<T>>) -> Self {
+        Self {
+            proposal: p,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<T: NodeType> ProposalMessage<T, Unchecked> {
+    /// Wrap a proposal that has not been validated yet
+    pub fn unchecked(p: SignedProposal<T, Proposal<T>>) -> Self {
         Self {
             proposal: p,
             _marker: PhantomData,
@@ -327,4 +337,9 @@ impl<T: NodeType, S> HasViewNumber for Message<T, S> {
             MessageType::External(_) => ViewNumber::new(1), // TODO: This can become a problem
         }
     }
+}
+
+pub struct OpaqueMessage<K> {
+    pub sender: K,
+    pub data: Vec<u8>,
 }

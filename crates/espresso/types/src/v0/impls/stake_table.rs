@@ -1,43 +1,55 @@
 use std::{
     cmp::min,
     collections::{HashMap, HashSet},
-    future::Future,
     str::FromStr,
-    sync::Arc,
     time::{Duration, Instant},
 };
+#[cfg(feature = "node")]
+use std::{future::Future, sync::Arc};
 
+#[cfg(feature = "node")]
 use alloy::{
     eips::{BlockId, BlockNumberOrTag},
-    primitives::{Address, U256, utils::format_ether},
+    primitives::utils::format_ether,
     providers::Provider,
-    rpc::types::{Filter, Log},
+    rpc::types::Filter,
     sol_types::{SolEvent, SolEventInterface},
 };
-use anyhow::{Context, bail, ensure};
+use alloy::{
+    primitives::{Address, U256},
+    rpc::types::Log,
+};
+#[cfg(feature = "node")]
+use anyhow::bail;
+use anyhow::{Context, ensure};
 use ark_ec::AffineRepr;
 use ark_serialize::CanonicalSerialize;
 use ark_std::One;
-use async_lock::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
+#[cfg(any(feature = "node", test, feature = "testing"))]
+use async_lock::Mutex as AsyncMutex;
+#[cfg(feature = "node")]
+use async_lock::RwLock as AsyncRwLock;
 use bigdecimal::BigDecimal;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use futures::future::BoxFuture;
-use hotshot::types::{BLSPubKey, SchnorrPubKey, SignatureKey as _};
+#[cfg(feature = "node")]
+use hotshot_contract_adapter::sol_types::{
+    EspToken::{self, EspTokenInstance},
+    StakeTableV3,
+};
 use hotshot_contract_adapter::{
-    sol_types::{
-        EspToken::{self, EspTokenInstance},
-        StakeTableV3::{
-            self, CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated,
-            P2pAddrUpdated, StakeTableV3Events, Undelegated, UndelegatedV2, ValidatorExit,
-            ValidatorExitV2, ValidatorRegistered, ValidatorRegisteredV2, ValidatorRegisteredV3,
-            X25519KeyUpdated,
-        },
+    sol_types::StakeTableV3::{
+        CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, P2pAddrUpdated,
+        StakeTableV3Events, Undelegated, UndelegatedV2, ValidatorExit, ValidatorExitV2,
+        ValidatorRegistered, ValidatorRegisteredV2, ValidatorRegisteredV3, X25519KeyUpdated,
     },
     stake_table::StakeTableSolError,
 };
 use hotshot_types::{
     addr::NetAddr,
     data::{EpochNumber, vid_disperse::VID_TARGET_TOTAL_STAKE},
+    signature_key::{BLSPubKey, SchnorrPubKey},
+    traits::signature_key::SignatureKey as _,
     x25519,
 };
 use humantime::format_duration;
@@ -45,27 +57,36 @@ use indexmap::IndexMap;
 use itertools::Itertools;
 use num_traits::{FromPrimitive, Zero};
 use thiserror::Error;
-use tokio::{spawn, time::sleep};
+#[cfg(feature = "node")]
+use tokio::spawn;
+use tokio::time::sleep;
+#[cfg(feature = "node")]
 use tracing::Instrument;
 use vbs::version::Version;
 
+#[cfg(feature = "node")]
+use super::L1Client;
 #[cfg(any(test, feature = "testing"))]
 use super::v0_3::DAMembers;
 use super::{
-    Header, L1Client,
-    traits::{MembershipPersistence, StateCatchup},
+    Header,
+    traits::StateCatchup,
     v0_3::{
         AuthenticatedValidator, ChainConfig, EventKey, Fetcher, MAX_VALIDATORS,
-        RegisteredValidator, StakeTableEvent, StakeTableUpdateTask,
+        RegisteredValidator, StakeTableEvent,
     },
 };
-use crate::{
-    traits::EventsPersistenceRead,
-    v0_1::L1Provider,
-    v0_3::{
-        BLOCKS_PER_YEAR, COMMISSION_BASIS_POINTS, EventSortingError, ExpectedStakeTableError,
-        FetchRewardError, INFLATION_RATE, MILLISECONDS_PER_YEAR, RewardAmount, StakeTableError,
-    },
+#[cfg(feature = "node")]
+use super::{traits::MembershipPersistence, v0_3::StakeTableUpdateTask};
+#[cfg(feature = "node")]
+use crate::traits::EventsPersistenceRead;
+#[cfg(feature = "node")]
+use crate::v0_1::L1Provider;
+#[cfg(feature = "node")]
+use crate::v0_3::{BLOCKS_PER_YEAR, INFLATION_RATE};
+use crate::v0_3::{
+    COMMISSION_BASIS_POINTS, EventSortingError, ExpectedStakeTableError, FetchRewardError,
+    MILLISECONDS_PER_YEAR, RewardAmount, StakeTableError,
 };
 
 pub type RegisteredValidatorMap = IndexMap<Address, RegisteredValidator<BLSPubKey>>;
@@ -89,6 +110,7 @@ pub type StakeTableHash = Commitment<StakeTableState>;
 type ApplyEventResult<T> = Result<Result<T, ExpectedStakeTableError>, StakeTableError>;
 
 /// Format the alloy Log RPC type in a way to make it easy to find the event in an explorer.
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
 trait DisplayLog {
     fn display(&self) -> String;
 }
@@ -175,6 +197,7 @@ impl TryFrom<StakeTableV3Events> for StakeTableEvent {
     }
 }
 
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
 fn sort_stake_table_events(
     event_logs: Vec<(StakeTableV3Events, Log)>,
 ) -> Result<Vec<(EventKey, StakeTableEvent)>, EventSortingError> {
@@ -1016,6 +1039,7 @@ impl std::fmt::Debug for StakeTableEvent {
 }
 
 impl Fetcher {
+    #[cfg(feature = "node")]
     pub fn new(
         peers: Arc<dyn StateCatchup>,
         persistence: Arc<AsyncMutex<dyn MembershipPersistence>>,
@@ -1032,6 +1056,7 @@ impl Fetcher {
         }
     }
 
+    #[cfg(feature = "node")]
     pub async fn spawn_update_loop(&self) {
         let mut update_task = self.update_task.0.lock().await;
         if update_task.is_none() {
@@ -1043,6 +1068,7 @@ impl Fetcher {
     /// This function polls the finalized block number from the L1 client at an interval
     /// and fetches stake table from contract
     /// and updates the persistence
+    #[cfg(feature = "node")]
     fn update_loop(&self) -> impl Future<Output = ()> + use<> {
         let span = tracing::warn_span!("Stake table update loop");
         let self_clone = self.clone();
@@ -1118,6 +1144,7 @@ impl Fetcher {
     /// contract's initialization block to the provided `to_block` value.
     /// Events are fetched in chunks and retries are implemented for failed requests.
     /// Only new events fetched from L1 are stored in persistence.
+    #[cfg(feature = "node")]
     pub async fn fetch_and_store_stake_table_events(
         &self,
         contract: Address,
@@ -1201,6 +1228,7 @@ impl Fetcher {
     /// - `Ok(true)` if the event is valid and should be processed
     /// - `Ok(false)` if the event should be skipped (non-fatal error)
     /// - `Err(StakeTableError)` if a fatal error occurs
+    #[cfg_attr(not(feature = "node"), allow(dead_code))]
     fn validate_event(event: &StakeTableV3Events, log: &Log) -> Result<bool, StakeTableError> {
         match event {
             StakeTableV3Events::ConsensusKeysUpdatedV2(evt) => {
@@ -1228,6 +1256,7 @@ impl Fetcher {
     }
 
     /// Break a block range into fixed-size chunks.
+    #[cfg_attr(not(feature = "node"), allow(dead_code))]
     fn block_range_chunks(
         from_block: u64,
         to_block: u64,
@@ -1247,6 +1276,7 @@ impl Fetcher {
     }
 
     /// Fetch all stake table events from L1
+    #[cfg(feature = "node")]
     pub async fn fetch_events_from_contract(
         l1_client: L1Client,
         contract: Address,
@@ -1347,6 +1377,7 @@ impl Fetcher {
     }
 
     // Only used by staking CLI which doesn't have persistence
+    #[cfg(feature = "node")]
     pub async fn fetch_all_validators_from_contract(
         l1_client: L1Client,
         contract: Address,
@@ -1359,16 +1390,28 @@ impl Fetcher {
             .context("failed to construct validators set from l1 events")
     }
 
-    /// Calculates the fixed block reward based on the token's initial supply.
-    /// - The initial supply is fetched from the token contract
-    /// - If the supply is not present, it invokes `fetch_and_update_initial_supply` to retrieve it.
-    pub async fn fetch_fixed_block_reward(&self) -> Result<RewardAmount, FetchRewardError> {
+    /// Returns the initial token supply, fetching it from L1 if not yet known.
+    #[cfg(feature = "node")]
+    pub async fn initial_supply_or_fetch(&self) -> Result<U256, FetchRewardError> {
         // `fetch_and_update_initial_supply` needs a write lock, create temporary to drop lock
-        let initial_supply = *self.initial_supply.read().await;
-        let initial_supply = match initial_supply {
-            Some(supply) => supply,
-            None => self.fetch_and_update_initial_supply().await?,
-        };
+        let supply = *self.initial_supply.read().await;
+        match supply {
+            Some(supply) => Ok(supply),
+            None => self.fetch_and_update_initial_supply().await,
+        }
+    }
+
+    /// Returns the initial token supply, fetching it from L1 if not yet known.
+    #[cfg(not(feature = "node"))]
+    pub async fn initial_supply_or_fetch(&self) -> Result<U256, FetchRewardError> {
+        Ok((*self.initial_supply.read().await).expect("initial supply pre-populated"))
+    }
+
+    /// Calculates the fixed block reward based on the token's initial supply,
+    /// obtained via `initial_supply_or_fetch`.
+    #[cfg(feature = "node")]
+    pub async fn fetch_fixed_block_reward(&self) -> Result<RewardAmount, FetchRewardError> {
+        let initial_supply = self.initial_supply_or_fetch().await?;
 
         let reward = ((initial_supply * U256::from(INFLATION_RATE)) / U256::from(BLOCKS_PER_YEAR))
             .checked_div(U256::from(COMMISSION_BASIS_POINTS))
@@ -1393,6 +1436,7 @@ impl Fetcher {
     /// The stake table contract is deployed after the token contract as it holds the token
     /// contract address. We use the stake table contract initialization block as a safe upper bound
     /// when scanning backwards for the token contract initialization event.
+    #[cfg(feature = "node")]
     pub async fn fetch_and_update_initial_supply(&self) -> Result<U256, FetchRewardError> {
         tracing::info!("Fetching token initial supply");
         let chain_config = *self.chain_config.lock().await;
@@ -1509,6 +1553,7 @@ impl Fetcher {
     /// Starting from the stake table contract’s initialization block (which comes after the token contract
     /// is deployed), it scans in chunks (defined by `l1_events_max_block_range`) until it finds the event
     /// or until a maximum number of blocks (`MAX_BLOCKS_SCANNED`) is reached.
+    #[cfg(feature = "node")]
     pub async fn scan_token_contract_initialized_event_log(
         &self,
         stake_table_init_block: u64,
@@ -1562,6 +1607,7 @@ impl Fetcher {
         Ok(())
     }
 
+    #[cfg(feature = "node")]
     pub async fn fetch(&self, epoch: EpochNumber, header: &Header) -> anyhow::Result<ValidatorSet> {
         let chain_config = *self.chain_config.lock().await;
         let Some(address) = chain_config.stake_table_contract else {
@@ -1640,6 +1686,7 @@ impl Fetcher {
     }
 }
 
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
 async fn retry<F, T, E>(
     retry_delay: Duration,
     max_duration: Duration,
@@ -1756,6 +1803,7 @@ pub(crate) fn compute_block_reward(
 
 #[derive(Error, Debug)]
 /// Error representing fail cases for retrieving the stake table.
+#[cfg_attr(not(feature = "node"), allow(dead_code))]
 enum GetStakeTablesError {
     #[error("Error fetching from L1: {0}")]
     L1ClientFetchError(anyhow::Error),

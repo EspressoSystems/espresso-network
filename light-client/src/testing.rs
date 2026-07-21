@@ -391,6 +391,8 @@ struct InnerTestClient {
     upgrade: Option<(u64, Version)>,
     /// `Certificate2` finality proofs for new-protocol leaves, by height.
     cert2s: HashMap<usize, Certificate2<SeqTypes>>,
+    /// If set, fail leaf proof requests whose `finalized` hint exceeds this distance.
+    max_finalized_hint_distance: Option<u64>,
 }
 
 impl InnerTestClient {
@@ -792,6 +794,13 @@ impl TestClient {
         let mut inner = self.inner.lock().await;
         inner.mock_block_height = Some(height);
     }
+
+    /// Fail leaf proof requests whose `finalized` hint is more than `max_distance` past the
+    /// requested leaf.
+    pub async fn reject_distant_finalized_hints(&self, max_distance: u64) {
+        let mut inner = self.inner.lock().await;
+        inner.max_finalized_hint_distance = Some(max_distance);
+    }
 }
 
 impl Client for TestClient {
@@ -822,6 +831,16 @@ impl Client for TestClient {
             tracing::info!(height, sub, "return wrong leaf");
             height = *sub;
         };
+
+        if let (Some(finalized), Some(max_distance)) =
+            (finalized, inner.max_finalized_hint_distance)
+            && finalized.saturating_sub(height as u64) > max_distance
+        {
+            bail!(
+                "finalized hint ({finalized}) is more than {max_distance} blocks past the \
+                 requested leaf ({height})"
+            );
+        }
 
         let leaf = inner.leaf(height, self.epoch_height).await;
 

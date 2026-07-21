@@ -17,9 +17,9 @@ use std::{
 
 use derivative::Derivative;
 use derive_more::From;
+use disco_types::{request::RequestError, status::StatusCode};
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
-use tide_disco::StatusCode;
 
 pub use crate::availability::{BlockHash, BlockId};
 use crate::{HeightIndexed, QueryError};
@@ -155,7 +155,7 @@ pub struct Limits {
 #[snafu(visibility(pub))]
 pub enum Error {
     Request {
-        source: tide_disco::RequestError,
+        source: RequestError,
     },
     #[snafu(display("{source}"))]
     Query {

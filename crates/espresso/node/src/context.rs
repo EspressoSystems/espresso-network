@@ -166,6 +166,8 @@ where
             stake_table.0,
             0,
         )));
+        let consensus_metrics = ConsensusMetricsValue::new(metrics);
+
         let handle = SystemContext::init(
             validator_config.public_key,
             validator_config.private_key.clone(),
@@ -176,7 +178,7 @@ where
             membership_coordinator.clone(),
             network.clone(),
             initializer,
-            ConsensusMetricsValue::new(metrics),
+            consensus_metrics.clone(),
             Arc::clone(&persistence),
             StorageMetricsValue::new(metrics),
         )
@@ -232,18 +234,25 @@ where
             .timeout_duration(Duration::from_secs(10))
             .storage(Arc::clone(&persistence))
             .metrics(metrics)
+            .consensus_metrics(consensus_metrics)
             .maybe_locked_qc(locked_qc)
             .make();
 
         let legacy_event_rx = handle.event_stream_known_impl().deactivate();
         let hotshot_handle = Arc::new(RwLock::new(handle));
-        let consensus_handle = Arc::new(ConsensusHandle::new(
-            hotshot_handle.clone(),
-            coordinator,
-            epoch_height,
-            legacy_event_rx,
-            EXTERNAL_EVENT_CHANNEL_SIZE,
-        ));
+
+        let consensus_handle = {
+            let handle = ConsensusHandle::new(
+                hotshot_handle.clone(),
+                coordinator,
+                epoch_height.into(),
+                legacy_event_rx,
+                EXTERNAL_EVENT_CHANNEL_SIZE,
+                metrics,
+            )
+            .await;
+            Arc::new(handle)
+        };
 
         let mut state_signer = StateSigner::new(
             validator_config.state_private_key.clone(),
@@ -305,6 +314,7 @@ where
             &mut tasks,
             request_response_sender,
             outbound_message_receiver,
+            consensus_handle.clone(),
             network,
             pub_key,
         )
@@ -601,6 +611,13 @@ impl DecideProcessorMetrics {
     }
 }
 
+/// How many new-protocol decides to wait for before tearing down the legacy
+/// consensus stack (tasks + network). Once the coordinator has decided even a
+/// single leaf the cutover boundary is final and all consensus traffic runs
+/// on the coordinator's network; the margin only gives slightly-lagging peers
+/// a window to finish crossing the boundary with legacy help.
+const LEGACY_SHUTDOWN_DECIDE_COUNT: u64 = 100;
+
 #[tracing::instrument(skip_all, fields(node_id))]
 #[allow(clippy::too_many_arguments)]
 async fn handle_events<N, P, C>(
@@ -618,10 +635,23 @@ async fn handle_events<N, P, C>(
     P: SequencerPersistence,
     C: PersistenceEventConsumer + 'static,
 {
+    let mut new_protocol_decides: u64 = 0;
+
     while let Some(event) = events.next().await {
         tracing::debug!(node_id, ?event, "consensus event");
 
         match &event {
+            CoordinatorEvent::NewDecide { .. } => {
+                new_protocol_decides += 1;
+                if new_protocol_decides == LEGACY_SHUTDOWN_DECIDE_COUNT {
+                    tracing::info!(
+                        node_id,
+                        "new protocol is live, shutting down legacy consensus and network"
+                    );
+                    let handle = consensus_handle.clone();
+                    spawn(async move { handle.shut_down_legacy().await });
+                }
+            },
             CoordinatorEvent::LegacyEvent(hotshot_event) => {
                 if let hotshot_types::event::EventType::ExternalMessageReceived { ref data, .. } =
                     hotshot_event.event
@@ -629,8 +659,7 @@ async fn handle_events<N, P, C>(
                 {
                     tracing::warn!(%err, "Failed to handle legacy external message");
                 }
-                // Check if we're ready to start the new protocol
-                consensus_handle.cutover_active().await;
+                consensus_handle.activate().await;
             },
             CoordinatorEvent::ExternalMessageReceived { data, .. } => {
                 if let Err(err) = external_event_handler.handle_event(data).await {

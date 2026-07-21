@@ -8,7 +8,6 @@ use alloy::primitives::{Address, U256};
 use anyhow::{Context, bail};
 use async_lock::Mutex as AsyncMutex;
 use committable::Commitment;
-use hotshot::types::{BLSPubKey, SignatureKey as _};
 use hotshot_types::{
     PeerConfig, PeerConnectInfo,
     data::{BlockNumber, EpochNumber, ViewNumber},
@@ -17,21 +16,23 @@ use hotshot_types::{
         election::{RandomizedCommittee, generate_stake_cdf, select_randomized_leader},
     },
     epoch_membership::EpochMembershipCoordinator,
+    signature_key::BLSPubKey,
     stake_table::StakeTableEntry,
     traits::{
-        block_contents::BlockHeader,
         election::{Membership, MembershipSnapshot, NonEpochMembershipSnapshot},
-        signature_key::StakeTableEntryType,
+        signature_key::{SignatureKey as _, StakeTableEntryType},
     },
-    utils::{
-        epoch_from_block_number, is_epoch_root, root_block_in_epoch, transition_block_for_epoch,
-    },
+    utils::{epoch_from_block_number, root_block_in_epoch, transition_block_for_epoch},
 };
+#[cfg(feature = "node")]
+use hotshot_types::{traits::block_contents::BlockHeader, utils::is_epoch_root};
 use indexmap::IndexMap;
 use parking_lot::RwLock;
 use thiserror::Error;
 use tracing::{debug, error, info, warn};
-use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
+#[cfg(feature = "node")]
+use versions::DRB_AND_HEADER_UPGRADE_VERSION;
+use versions::EPOCH_VERSION;
 
 use super::{
     AuthenticatedValidatorMap, RegisteredValidatorMap, StakeTableHash, StakeTableState,
@@ -48,6 +49,7 @@ use crate::{
 pub struct EpochCommittees {
     inner: Arc<RwLock<Inner>>,
     fetcher: Arc<Fetcher>,
+    #[cfg_attr(not(feature = "node"), allow(dead_code))]
     update_fixed_block_reward_lock: Arc<AsyncMutex<()>>,
     epoch_height: BlockNumber,
 }
@@ -66,6 +68,7 @@ struct Inner {
     snapshots: BTreeMap<EpochNumber, EpochSnapshot>,
 
     /// Holds the full validator candidate sets temporarily, until we store them.
+    #[cfg_attr(not(feature = "node"), allow(dead_code))]
     all_validators: BTreeMap<EpochNumber, RegisteredValidatorMap>,
 
     /// DA committees, indexed by the first epoch in which they apply.
@@ -206,6 +209,7 @@ impl EpochCommittees {
     /// We used a fixed block reward for version v3
     /// Version v4 uses the dynamic block reward
     /// Assumes the stake table contract proxy address does not change
+    #[cfg(feature = "node")]
     async fn fetch_and_update_fixed_block_reward(
         &self,
         epoch: EpochNumber,
@@ -275,11 +279,7 @@ impl EpochCommittees {
 
         // Calculate total stake across all active validators
         let total_stake: U256 = validators.values().map(|v| v.stake).sum();
-        let initial_supply = *self.fetcher.initial_supply.read().await;
-        let initial_supply = match initial_supply {
-            Some(supply) => supply,
-            None => self.fetcher.fetch_and_update_initial_supply().await?,
-        };
+        let initial_supply = self.fetcher.initial_supply_or_fetch().await?;
         let total_supply = initial_supply
             .checked_add(previous_reward_distributed.0)
             .context("initial_supply + previous_reward_distributed overflow")?;
@@ -494,6 +494,7 @@ impl EpochCommittees {
         }
     }
 
+    #[cfg(feature = "node")]
     pub async fn reload_stake(&mut self, limit: u64) {
         match self.fetcher.fetch_fixed_block_reward().await {
             Ok(block_reward) => {
@@ -680,6 +681,20 @@ impl Membership<SeqTypes> for EpochCommittees {
     /// Adds the epoch committee and block reward for a given epoch,
     /// either by fetching from L1 or using local state if available.
     /// It also calculates and stores the block reward based on header version.
+    #[cfg(not(feature = "node"))]
+    async fn add_epoch_root(
+        &self,
+        _block_header: Header,
+        _coordinator: &EpochMembershipCoordinator<SeqTypes>,
+    ) -> Result<(), Self::Error> {
+        // Fetching stake table events for the new epoch requires an L1 client.
+        unimplemented!("add_epoch_root requires the node feature");
+    }
+
+    /// Adds the epoch committee and block reward for a given epoch,
+    /// either by fetching from L1 or using local state if available.
+    /// It also calculates and stores the block reward based on header version.
+    #[cfg(feature = "node")]
     async fn add_epoch_root(
         &self,
         block_header: Header,
