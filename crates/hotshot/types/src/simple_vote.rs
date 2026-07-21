@@ -41,7 +41,7 @@ pub struct QuorumData<TYPES: NodeType> {
     /// Commitment to the leaf
     pub leaf_commit: Commitment<Leaf<TYPES>>,
 }
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Hash, Eq)]
 /// Data used for a yes vote.
 #[serde(bound(deserialize = ""))]
 pub struct QuorumData2<TYPES: NodeType> {

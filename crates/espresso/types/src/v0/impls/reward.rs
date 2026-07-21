@@ -1200,14 +1200,13 @@ impl EpochRewardsCalculator {
             // Fetch the leaf at the last block of the epoch so we can verify
             // the header via QC against the stake table
             let membership = coordinator.membership().read().await;
-            let stake_table = membership.stake_table(Some(epoch));
-            let success_threshold = membership.success_threshold(Some(epoch));
+            let stake_tables = membership.epoch_stake_tables(Some(epoch));
             drop(membership);
 
             let leaf = instance_state
                 .state_catchup
                 .as_ref()
-                .fetch_leaf(epoch_last_block_height, stake_table, success_threshold)
+                .fetch_leaf(epoch_last_block_height, stake_tables)
                 .await
                 .with_context(|| {
                     format!(

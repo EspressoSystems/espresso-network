@@ -351,7 +351,7 @@ fn build_genesis_cert1(
         block_number: Some(0),
     };
     hotshot_new_protocol::message::Certificate1::new(
-        data.clone(),
+        data,
         data.commit(),
         ViewNumber::genesis(),
         None,
