@@ -6,7 +6,7 @@
 
 use hotshot_types::traits::signature_key::SignatureKey;
 use libp2p::{
-    Multiaddr, autonat,
+    Multiaddr,
     gossipsub::{Behaviour as GossipBehaviour, Event as GossipEvent, IdentTopic},
     identify::{Behaviour as IdentifyBehaviour, Event as IdentifyEvent},
     kad::store::MemoryStore,
@@ -53,11 +53,6 @@ pub struct NetworkDef<K: SignatureKey + 'static, D: DhtPersistentStorage> {
     /// purpose: directly messaging peer
     #[debug(skip)]
     pub direct_message: cbor::Behaviour<Vec<u8>, Vec<u8>>,
-
-    /// Auto NAT behaviour to determine if we are publicly reachable and
-    /// by which address
-    #[debug(skip)]
-    pub autonat: libp2p::autonat::Behaviour,
 }
 
 impl<K: SignatureKey + 'static, D: DhtPersistentStorage> NetworkDef<K, D> {
@@ -68,14 +63,12 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> NetworkDef<K, D> {
         dht: libp2p::kad::Behaviour<PersistentStore<ValidatedStore<MemoryStore, K>, D>>,
         identify: IdentifyBehaviour,
         direct_message: super::cbor::Behaviour<Vec<u8>, Vec<u8>>,
-        autonat: autonat::Behaviour,
     ) -> NetworkDef<K, D> {
         Self {
             gossipsub,
             dht,
             identify,
             direct_message,
-            autonat,
         }
     }
 }
@@ -151,11 +144,5 @@ impl From<IdentifyEvent> for NetworkEventInternal {
 impl From<libp2p::request_response::Event<Vec<u8>, Vec<u8>>> for NetworkEventInternal {
     fn from(value: libp2p::request_response::Event<Vec<u8>, Vec<u8>>) -> Self {
         Self::DMEvent(value)
-    }
-}
-
-impl From<libp2p::autonat::Event> for NetworkEventInternal {
-    fn from(event: libp2p::autonat::Event) -> Self {
-        Self::AutonatEvent(event)
     }
 }

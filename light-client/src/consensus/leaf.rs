@@ -11,7 +11,7 @@ use hotshot_types::{
 use serde::{Deserialize, Serialize};
 use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION};
 
-use super::quorum::{Certificate, Quorum};
+use super::quorum::{Certificate, ChainVersions, Quorum};
 use crate::consensus::quorum::StakeTableQuorum;
 
 /// Data sufficient to convince a client that a certain leaf is finalized.
@@ -31,7 +31,9 @@ pub enum FinalityProof {
     /// * `committing_qc.leaf_commit() == leaf.commit()`
     /// * `committing_qc.view_number() == leaf.view_number()`
     /// * `deciding_qc.view_number() == committing_qc.view_number() + 1`
-    /// * Both QCs have a valid threshold signature given a stake table
+    /// * Both QCs have a valid threshold signature given a stake table. When the leaf is the last
+    ///   leaf of an epoch, the deciding QC is produced in the subsequent epoch and is checked
+    ///   against the next epoch's stake table.
     HotStuff2 {
         committing_qc: Arc<Certificate>,
         deciding_qc: Arc<Certificate>,
@@ -147,13 +149,27 @@ impl LeafProof {
             ) => {
                 // Check that the given QCs form a 2-chain, which proves `curr` finalized under
                 // HotStuff2.
-                let version = quorum
+                let ChainVersions {
+                    leaf: version,
+                    max_cert,
+                } = quorum
                     .verify_qc_chain_and_get_version(curr, [&**committing_qc, &**deciding_qc])
                     .await?;
 
-                // Check that HotStuff2 is the appropriate commit rule to use. HotStuff2 commit rule
-                // was introduced with the epochs version of HotShot.
+                // Check that HotStuff2 is the appropriate commit rule to use. HotStuff2 commit
+                // rule was introduced with the epochs version of HotShot and retired by the new
+                // protocol.
                 ensure!(version >= EPOCH_VERSION);
+                ensure!(
+                    version < NEW_PROTOCOL_VERSION,
+                    "HotStuff2 finality proof used for new-protocol leaf"
+                );
+                // The 2-chain rule is only sound if every QC in the chain predates the cutover;
+                // post-cutover QCs do not imply finality.
+                ensure!(
+                    max_cert < NEW_PROTOCOL_VERSION,
+                    "HotStuff2 finality proof spans the new-protocol cutover"
+                );
 
                 committing_qc.qc().clone()
             },
@@ -167,7 +183,7 @@ impl LeafProof {
             ) => {
                 // Check that the given QCs form a 3-chain, which proves `curr` finalized under
                 // HotStuff.
-                let version = quorum
+                let ChainVersions { leaf: version, .. } = quorum
                     .verify_qc_chain_and_get_version(
                         curr,
                         [&**precommit_qc, &**committing_qc, &**deciding_qc],
@@ -241,10 +257,11 @@ impl LeafProof {
         let len = self.leaves.len();
 
         // Check if the new leaf plus the last saved leaf contain justifying QCs that form a
-        // HotStuff2 QC chain for the leaf before.
+        // HotStuff2 QC chain for the leaf before. The deciding QC signs `leaves[len - 1]`, so
+        // bounding that leaf's version keeps the whole chain pre-cutover.
         if len >= 2
             && self.leaves[len - 2].block_header().version() >= EPOCH_VERSION
-            && self.leaves[len - 2].block_header().version() < NEW_PROTOCOL_VERSION
+            && self.leaves[len - 1].block_header().version() < NEW_PROTOCOL_VERSION
         {
             let committing_qc = Certificate::for_parent(&self.leaves[len - 1]);
             let deciding_qc = Certificate::for_parent(new_leaf.leaf());
@@ -361,9 +378,13 @@ impl LeafProof {
 #[cfg(test)]
 mod test {
     use pretty_assertions::assert_eq;
+    use versions::{DRB_AND_HEADER_UPGRADE_VERSION, Upgrade};
 
     use super::*;
-    use crate::testing::{AlwaysFalseQuorum, AlwaysTrueQuorum, LEGACY_VERSION, leaf_chain};
+    use crate::testing::{
+        AlwaysFalseQuorum, AlwaysTrueQuorum, LEGACY_VERSION, VersionCheckQuorum, leaf_chain,
+        leaf_chain_with_upgrade,
+    };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_hotstuff2() {
@@ -461,6 +482,104 @@ mod test {
                 .await
                 .unwrap(),
             leaves[0]
+        );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_new_protocol_two_chain_rejected() {
+        let leaves = leaf_chain(1..=3, NEW_PROTOCOL_VERSION).await;
+
+        // The prover never completes a HotStuff2 chain from new-protocol leaves.
+        let mut proof = LeafProof::default();
+        assert!(!proof.push(leaves[0].clone()));
+        assert!(!proof.push(leaves[1].clone()));
+        assert!(!proof.push(leaves[2].clone()));
+
+        // A hand-crafted 2-chain proof fails to verify.
+        let mut proof = LeafProof::default();
+        assert!(!proof.push(leaves[0].clone()));
+        proof.add_qc_chain(
+            Arc::new(Certificate::for_parent(leaves[1].leaf())),
+            Arc::new(Certificate::for_parent(leaves[2].leaf())),
+        );
+        let err = proof
+            .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("HotStuff2 finality proof used for new-protocol leaf"),
+            "{err:#}"
+        );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_cutover_two_chain_pre_cutover() {
+        // Upgrade at height 3: both QCs predate the cutover, so the 2-chain is valid even though
+        // the first new-protocol leaf carries the deciding QC.
+        let leaves = leaf_chain_with_upgrade(
+            1..=3,
+            3,
+            Upgrade::new(DRB_AND_HEADER_UPGRADE_VERSION, NEW_PROTOCOL_VERSION),
+        )
+        .await;
+        assert_eq!(leaves[0].header().version(), DRB_AND_HEADER_UPGRADE_VERSION);
+        assert_eq!(leaves[1].header().version(), DRB_AND_HEADER_UPGRADE_VERSION);
+        assert_eq!(leaves[2].header().version(), NEW_PROTOCOL_VERSION);
+
+        let mut proof = LeafProof::default();
+        assert!(!proof.push(leaves[0].clone()));
+        assert!(!proof.push(leaves[1].clone()));
+        assert!(proof.push(leaves[2].clone()));
+        assert!(matches!(proof.proof(), FinalityProof::HotStuff2 { .. }));
+        assert_eq!(
+            proof
+                .verify(LeafProofHint::Quorum(&VersionCheckQuorum::new(
+                    leaves.iter().map(|leaf| leaf.leaf().clone())
+                )))
+                .await
+                .unwrap(),
+            leaves[0]
+        );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_cutover_two_chain_spanning_rejected() {
+        // Upgrade at height 2: the deciding QC forms at the cutover, so the 2-chain must be
+        // rejected even though the proven leaf is legacy.
+        let leaves = leaf_chain_with_upgrade(
+            1..=3,
+            2,
+            Upgrade::new(DRB_AND_HEADER_UPGRADE_VERSION, NEW_PROTOCOL_VERSION),
+        )
+        .await;
+        assert_eq!(leaves[0].header().version(), DRB_AND_HEADER_UPGRADE_VERSION);
+        assert_eq!(leaves[1].header().version(), NEW_PROTOCOL_VERSION);
+
+        // The prover never completes a 2-chain whose deciding QC postdates the cutover.
+        let mut proof = LeafProof::default();
+        assert!(!proof.push(leaves[0].clone()));
+        assert!(!proof.push(leaves[1].clone()));
+        assert!(!proof.push(leaves[2].clone()));
+
+        // A hand-crafted spanning 2-chain fails to verify.
+        let mut proof = LeafProof::default();
+        assert!(!proof.push(leaves[0].clone()));
+        proof.add_qc_chain(
+            Arc::new(Certificate::for_parent(leaves[1].leaf())),
+            Arc::new(Certificate::for_parent(leaves[2].leaf())),
+        );
+        assert!(matches!(proof.proof(), FinalityProof::HotStuff2 { .. }));
+        let err = proof
+            .verify(LeafProofHint::Quorum(&VersionCheckQuorum::new(
+                leaves.iter().map(|leaf| leaf.leaf().clone()),
+            )))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("HotStuff2 finality proof spans the new-protocol cutover"),
+            "{err:#}"
         );
     }
 

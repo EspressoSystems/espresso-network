@@ -515,19 +515,32 @@ impl InnerTestClient {
             {
                 assert!(block_header.set_next_stake_table_hash(self.stake_table_hash(*epoch + 1)));
             }
-            let next_epoch_justify_qc = if i > 0 && is_epoch_transition(i as u64, epoch_height) {
+            // As in production, a leaf carries a next-epoch justify QC exactly when the block
+            // justified by its QC (the parent) is part of an epoch transition, and that QC is
+            // signed by the epoch after the parent's. New-protocol leaves never carry one:
+            // epoch changes there are justified by `Certificate2`, and the `Leaf2`
+            // representation always has `next_epoch_justify_qc: None`.
+            let next_epoch_justify_qc = if i > 0
+                && self.version_at(i as u64) < NEW_PROTOCOL_VERSION
+                && is_epoch_transition(i as u64 - 1, epoch_height)
+            {
                 let parent_qc = self.leaves[i - 1].qc().clone();
+                let parent_epoch = epoch_from_block_number(i as u64 - 1, epoch_height);
+                let parent_upgrade = Upgrade::trivial(self.version_at(i as u64 - 1));
                 let data: NextEpochQuorumData2<SeqTypes> = parent_qc.data.into();
                 let versioned_commit = VersionedVoteData::new_infallible(
                     data.clone(),
                     parent_qc.view_number,
-                    &UpgradeLock::<SeqTypes>::new(upgrade),
+                    &UpgradeLock::<SeqTypes>::new(parent_upgrade),
                 )
                 .commit();
                 let commit_bytes: [u8; 32] = versioned_commit.into();
 
-                let (next_keys, next_validators): (Vec<_>, Vec<_>) =
-                    self.quorum_for_epoch(*epoch + 1).iter().cloned().unzip();
+                let (next_keys, next_validators): (Vec<_>, Vec<_>) = self
+                    .quorum_for_epoch(parent_epoch + 1)
+                    .iter()
+                    .cloned()
+                    .unzip();
                 let mut next_entries = vec![];
                 let mut next_total = U256::ZERO;
                 for validator in &next_validators {

@@ -5,16 +5,11 @@ runs:
   using: composite
   steps:
     - uses: ./.github/actions/install-foundry
+    - uses: ./.github/actions/install-postgres
     - shell: bash
       run: |
         set -euo pipefail
         sudo apt-get update
-        sudo apt-get install -y postgresql
-        # stop the auto-started cluster so the demo can bind 5432/5433
-        sudo systemctl stop postgresql || true
-        # postgres server binaries (initdb, postgres) are not on PATH on Debian
-        echo "$(ls -d /usr/lib/postgresql/*/bin | sort -V | tail -1)" >> "$GITHUB_PATH"
-
         # keydb: extract the prebuilt server (no apt repo for 24.04) + its runtime libs
         sudo apt-get install -y libsnappy1v5 libzstd1 libuuid1 libcurl4t64 libssl3t64
         curl -fsSL "https://download.keydb.dev/pkg/open_source/deb/ubuntu22.04_jammy/amd64/keydb-latest/keydb-tools_6.3.4-1~jammy1_amd64.deb" -o /tmp/keydb-tools.deb
