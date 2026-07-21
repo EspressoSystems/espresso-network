@@ -668,7 +668,7 @@ mod test {
         quorum: &QuorumKeys,
     ) -> QuorumCertificate2<SeqTypes> {
         let commit = VersionedVoteData::new_infallible(
-            data,
+            data.clone(),
             view,
             &UpgradeLock::<SeqTypes>::new(Upgrade::trivial(EPOCH_VERSION)),
         )
@@ -724,7 +724,7 @@ mod test {
             block_number: Some(10),
         };
         let committing_qc = Certificate::new(
-            boundary_signed_qc(committing_data, ViewNumber::new(10), &current),
+            boundary_signed_qc(committing_data.clone(), ViewNumber::new(10), &current),
             Some(boundary_signed_next_epoch_qc(
                 committing_data,
                 ViewNumber::new(10),
@@ -805,7 +805,7 @@ mod test {
             block_number: Some(5),
         };
         let committing_qc = Certificate::new(
-            boundary_signed_qc(committing_data, ViewNumber::new(5), &current),
+            boundary_signed_qc(committing_data.clone(), ViewNumber::new(5), &current),
             disguise_as_boundary
                 .then(|| boundary_signed_next_epoch_qc(committing_data, ViewNumber::new(5), &next)),
         );

@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     NodeType, PeerConfig,
+    data::EpochNumber,
     light_client::{CircuitField, StakeTableState, ToFieldsLightClientCompat},
     traits::signature_key::{SignatureKey, StakeTableEntryType},
 };
@@ -205,6 +206,38 @@ impl<TYPES: NodeType> HSStakeTable<TYPES> {
             .iter()
             .map(|peer| peer.stake_table_entry.stake())
             .sum()
+    }
+}
+
+/// The stake table and vote success threshold of a single epoch.
+///
+/// A fetched leaf chain can cross an epoch boundary, in which case its
+/// certificates are signed by different epochs' quorums. Verifiers take one of
+/// these per epoch the chain may touch and check each certificate against the
+/// stake table of the epoch committed in the certificate's signed payload.
+#[derive(Clone, Debug)]
+pub struct EpochStakeTable<TYPES: NodeType> {
+    /// The epoch whose quorum this stake table describes. `None` for
+    /// certificates produced before the epoch upgrade.
+    pub epoch: Option<EpochNumber>,
+    pub stake_table: HSStakeTable<TYPES>,
+    pub success_threshold: U256,
+}
+
+/// Per-epoch stake tables covering every epoch a fetched leaf chain may touch.
+#[derive(Clone, Debug)]
+pub struct EpochStakeTables<TYPES: NodeType>(pub Vec<EpochStakeTable<TYPES>>);
+
+impl<TYPES: NodeType> EpochStakeTables<TYPES> {
+    /// The stake table for the epoch a certificate claims in its signed
+    /// payload. Dispatching on the claimed epoch is sound: the epoch is part of
+    /// the signed vote data, so a certificate claiming the wrong epoch fails
+    /// signature verification.
+    pub fn for_epoch(&self, epoch: Option<EpochNumber>) -> anyhow::Result<&EpochStakeTable<TYPES>> {
+        self.0
+            .iter()
+            .find(|table| table.epoch == epoch)
+            .ok_or_else(|| anyhow::anyhow!("no stake table provided for epoch {epoch:?}"))
     }
 }
 
