@@ -2,7 +2,7 @@
 //! It also includes some trait implementations that cannot be implemented in an external crate.
 use std::{cmp::max, collections::BTreeMap, fmt::Debug, ops::Range, sync::Arc};
 
-use alloy::primitives::{Address, U256};
+use alloy::primitives::Address;
 use anyhow::{Context, bail, ensure};
 use async_trait::async_trait;
 use committable::Commitment;
@@ -23,12 +23,11 @@ use hotshot_types::{
         CertificatePair, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
         QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
     },
-    stake_table::HSStakeTable,
     traits::{
         ValidatedState as HotShotState, metrics::Metrics, node_implementation::NodeType,
         storage::Storage,
     },
-    utils::genesis_epoch_from_version,
+    utils::{EpochStakeTable, genesis_epoch_from_version},
     vote::HasViewNumber,
 };
 use indexmap::IndexMap;
@@ -54,27 +53,29 @@ use crate::{
 #[async_trait]
 pub trait StateCatchup: Send + Sync {
     /// Fetch the leaf at the given height without retrying on transient errors.
+    ///
+    /// `stake_tables` must cover every epoch the leaf's decide chain may
+    /// reference, with the entry for the epoch of `height` first; see
+    /// [`verify_leaf_chain`](hotshot_types::utils::verify_leaf_chain).
     async fn try_fetch_leaf(
         &self,
         retry: usize,
         height: u64,
-        stake_table: HSStakeTable<SeqTypes>,
-        success_threshold: U256,
+        stake_tables: Vec<EpochStakeTable<SeqTypes>>,
     ) -> anyhow::Result<Leaf2>;
 
     /// Fetch the leaf at the given height, retrying on transient errors.
     async fn fetch_leaf(
         &self,
         height: u64,
-        stake_table: HSStakeTable<SeqTypes>,
-        success_threshold: U256,
+        stake_tables: Vec<EpochStakeTable<SeqTypes>>,
     ) -> anyhow::Result<Leaf2> {
         self.backoff()
             .retry(self, |provider, retry| {
-                let stake_table_clone = stake_table.clone();
+                let stake_tables_clone = stake_tables.clone();
                 async move {
                     provider
-                        .try_fetch_leaf(retry, height, stake_table_clone, success_threshold)
+                        .try_fetch_leaf(retry, height, stake_tables_clone)
                         .await
                 }
                 .boxed()
@@ -299,23 +300,17 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
         &self,
         retry: usize,
         height: u64,
-        stake_table: HSStakeTable<SeqTypes>,
-        success_threshold: U256,
+        stake_tables: Vec<EpochStakeTable<SeqTypes>>,
     ) -> anyhow::Result<Leaf2> {
-        (**self)
-            .try_fetch_leaf(retry, height, stake_table, success_threshold)
-            .await
+        (**self).try_fetch_leaf(retry, height, stake_tables).await
     }
 
     async fn fetch_leaf(
         &self,
         height: u64,
-        stake_table: HSStakeTable<SeqTypes>,
-        success_threshold: U256,
+        stake_tables: Vec<EpochStakeTable<SeqTypes>>,
     ) -> anyhow::Result<Leaf2> {
-        (**self)
-            .fetch_leaf(height, stake_table, success_threshold)
-            .await
+        (**self).fetch_leaf(height, stake_tables).await
     }
 
     async fn try_fetch_accounts(

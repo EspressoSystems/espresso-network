@@ -8646,12 +8646,11 @@ mod test {
             Client::new(format!("http://localhost:{port}").parse().unwrap());
         wait_until_block_height(&height_client, "node/block-height", TARGET_HEIGHT + 5).await;
 
-        // Get the stake table and threshold for the epoch containing TARGET_HEIGHT
+        // Get the stake tables for the epoch containing TARGET_HEIGHT and its successor
         let coordinator = network.server.node_state().coordinator;
         let epoch = EpochNumber::new(epoch_from_block_number(TARGET_HEIGHT, EPOCH_HEIGHT));
         let membership = coordinator.membership().read().await;
-        let stake_table = membership.stake_table(Some(epoch));
-        let success_threshold = membership.success_threshold(Some(epoch));
+        let stake_tables = membership.epoch_stake_tables(Some(epoch));
         drop(membership);
 
         // Use StatePeers to fetch the leaf at the exact target height
@@ -8662,9 +8661,7 @@ mod test {
             &NoMetrics,
         );
 
-        let leaf = catchup
-            .fetch_leaf(TARGET_HEIGHT, stake_table, success_threshold)
-            .await?;
+        let leaf = catchup.fetch_leaf(TARGET_HEIGHT, stake_tables).await?;
 
         assert_eq!(
             leaf.height(),
