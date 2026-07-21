@@ -396,7 +396,7 @@ impl<T> FallbackClient<T> {
         Self::get_any_recursive(0, self.fallback_delay, clients.into_iter(), get, None)
             .await
             .map_err(|err| {
-                tracing::warn!("failed to fetch on all clients: {err:#}");
+                tracing::warn!(err = %format!("{err:#}"), "failed to fetch on all clients");
                 err.context("failed to fetch on all clients")
             })
     }
@@ -429,7 +429,7 @@ impl<T> FallbackClient<T> {
                 Either::Left((Err(err), _)) => {
                     // If the pending future fails, abandon it and immediately start the fallback
                     // even if we haven't hit the timeout.
-                    tracing::info!("failed to fetch on client {i}: {err:#}");
+                    tracing::info!(i, err = %format!("{err:#}"), "failed to fetch on client");
                     Self::get_any_recursive(i + 1, timeout, clients, get, Some(err)).await
                 },
                 Either::Right((_, fut)) => {
