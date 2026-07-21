@@ -3180,7 +3180,7 @@
 <a href=#3180 id=3180 data-nosnippet>3180</a>    <span class="kw">use </span>::light_client::{
 <a href=#3181 id=3181 data-nosnippet>3181</a>        consensus::{
 <a href=#3182 id=3182 data-nosnippet>3182</a>            header::HeaderProof,
-<a href=#3183 id=3183 data-nosnippet>3183</a>            leaf::{LeafProof, LeafProofHint},
+<a href=#3183 id=3183 data-nosnippet>3183</a>            leaf::{FinalityProof, LeafProof, LeafProofHint},
 <a href=#3184 id=3184 data-nosnippet>3184</a>            payload::PayloadProof,
 <a href=#3185 id=3185 data-nosnippet>3185</a>        },
 <a href=#3186 id=3186 data-nosnippet>3186</a>        testing::{EpochChangeQuorum, LEGACY_VERSION},
@@ -3189,7 +3189,7 @@
 <a href=#3189 id=3189 data-nosnippet>3189</a>        eips::BlockId,
 <a href=#3190 id=3190 data-nosnippet>3190</a>        network::EthereumWallet,
 <a href=#3191 id=3191 data-nosnippet>3191</a>        primitives::{Address, U256},
-<a href=#3192 id=3192 data-nosnippet>3192</a>        providers::ProviderBuilder,
+<a href=#3192 id=3192 data-nosnippet>3192</a>        providers::{ProviderBuilder, ext::AnvilApi},
 <a href=#3193 id=3193 data-nosnippet>3193</a>    };
 <a href=#3194 id=3194 data-nosnippet>3194</a>    <span class="kw">use </span>async_lock::Mutex;
 <a href=#3195 id=3195 data-nosnippet>3195</a>    <span class="kw">use </span>committable::{Commitment, Committable};
@@ -3204,7 +3204,7 @@
 <a href=#3204 id=3204 data-nosnippet>3204</a>        RegisteredValidatorMap, RewardDistributor, StakeTableState, StateCertQueryDataV1,
 <a href=#3205 id=3205 data-nosnippet>3205</a>        StateCertQueryDataV2, ValidatedState, ValidatorLeaderCounts,
 <a href=#3206 id=3206 data-nosnippet>3206</a>        config::PublicHotShotConfig,
-<a href=#3207 id=3207 data-nosnippet>3207</a>        traits::{MembershipPersistence, NullEventConsumer, PersistenceOptions},
+<a href=#3207 id=3207 data-nosnippet>3207</a>        traits::{NullEventConsumer, PersistenceOptions},
 <a href=#3208 id=3208 data-nosnippet>3208</a>        v0_3::{COMMISSION_BASIS_POINTS, Fetcher, RewardAmount, RewardMerkleProofV1},
 <a href=#3209 id=3209 data-nosnippet>3209</a>        v0_4::{RewardAccountV2, RewardMerkleProofV2},
 <a href=#3210 id=3210 data-nosnippet>3210</a>        validators_from_l1_events,
@@ -9816,463 +9816,700 @@
 <a href=#9816 id=9816 data-nosnippet>9816</a>        network.server.shut_down().<span class="kw">await</span>;
 <a href=#9817 id=9817 data-nosnippet>9817</a>    }
 <a href=#9818 id=9818 data-nosnippet>9818</a>
-<a href=#9819 id=9819 data-nosnippet>9819</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
-<a href=#9820 id=9820 data-nosnippet>9820</a>    </span><span class="kw">async fn </span>test_light_client_completeness() {
-<a href=#9821 id=9821 data-nosnippet>9821</a>        <span class="comment">// Run the through a protocol upgrade and epoch change, then check that we are able to get a
-<a href=#9822 id=9822 data-nosnippet>9822</a>        // correct light client proof for every finalized leaf.
-<a href=#9823 id=9823 data-nosnippet>9823</a>
-<a href=#9824 id=9824 data-nosnippet>9824</a>        </span><span class="kw">const </span>NUM_NODES: usize = <span class="number">1</span>;
-<a href=#9825 id=9825 data-nosnippet>9825</a>        <span class="kw">const </span>EPOCH_HEIGHT: u64 = <span class="number">200</span>;
-<a href=#9826 id=9826 data-nosnippet>9826</a>
-<a href=#9827 id=9827 data-nosnippet>9827</a>        <span class="kw">let </span>upgrade = Upgrade::new(LEGACY_VERSION, EPOCH_VERSION);
-<a href=#9828 id=9828 data-nosnippet>9828</a>        <span class="kw">let </span>port = reserve_tcp_port().expect(<span class="string">"OS should have ephemeral ports available"</span>);
-<a href=#9829 id=9829 data-nosnippet>9829</a>        <span class="kw">let </span>url: Url = <span class="macro">format!</span>(<span class="string">"http://localhost:{port}"</span>).parse().unwrap();
-<a href=#9830 id=9830 data-nosnippet>9830</a>
-<a href=#9831 id=9831 data-nosnippet>9831</a>        <span class="kw">let </span>test_config = TestConfigBuilder::default()
-<a href=#9832 id=9832 data-nosnippet>9832</a>            .epoch_height(EPOCH_HEIGHT)
-<a href=#9833 id=9833 data-nosnippet>9833</a>            .epoch_start_block(<span class="number">321</span>)
-<a href=#9834 id=9834 data-nosnippet>9834</a>            .set_upgrades(upgrade.target)
-<a href=#9835 id=9835 data-nosnippet>9835</a>            .<span class="kw">await
-<a href=#9836 id=9836 data-nosnippet>9836</a>            </span>.build();
+<a href=#9819 id=9819 data-nosnippet>9819</a>    <span class="doccomment">/// Verify the light client leaf, header, and payload proofs at each height
+<a href=#9820 id=9820 data-nosnippet>9820</a>    /// against the ground truth captured from the availability streams.
+<a href=#9821 id=9821 data-nosnippet>9821</a>    ///
+<a href=#9822 id=9822 data-nosnippet>9822</a>    /// Only checks that proofs verify, not which `FinalityProof` variant they
+<a href=#9823 id=9823 data-nosnippet>9823</a>    /// use
+<a href=#9824 id=9824 data-nosnippet>9824</a>    </span><span class="kw">async fn </span>check_light_client_proofs(
+<a href=#9825 id=9825 data-nosnippet>9825</a>        client: <span class="kw-2">&amp;</span>Client&lt;ServerError, StaticVersion&lt;<span class="number">0</span>, <span class="number">1</span>&gt;&gt;,
+<a href=#9826 id=9826 data-nosnippet>9826</a>        actual_leaves: <span class="kw-2">&amp;</span>[LeafQueryData&lt;SeqTypes&gt;],
+<a href=#9827 id=9827 data-nosnippet>9827</a>        actual_blocks: <span class="kw-2">&amp;</span>[BlockQueryData&lt;SeqTypes&gt;],
+<a href=#9828 id=9828 data-nosnippet>9828</a>        heights: <span class="kw">impl </span>IntoIterator&lt;Item = u64&gt;,
+<a href=#9829 id=9829 data-nosnippet>9829</a>        epoch_height: u64,
+<a href=#9830 id=9830 data-nosnippet>9830</a>    ) {
+<a href=#9831 id=9831 data-nosnippet>9831</a>        <span class="kw">let </span>quorum = EpochChangeQuorum::new(epoch_height);
+<a href=#9832 id=9832 data-nosnippet>9832</a>        <span class="kw">for </span>i <span class="kw">in </span>heights {
+<a href=#9833 id=9833 data-nosnippet>9833</a>            <span class="kw">let </span>leaf = <span class="kw-2">&amp;</span>actual_leaves[i <span class="kw">as </span>usize];
+<a href=#9834 id=9834 data-nosnippet>9834</a>            <span class="kw">let </span>block = <span class="kw-2">&amp;</span>actual_blocks[i <span class="kw">as </span>usize];
+<a href=#9835 id=9835 data-nosnippet>9835</a>            <span class="kw">let </span>version = leaf.header().version();
+<a href=#9836 id=9836 data-nosnippet>9836</a>            <span class="macro">tracing::info!</span>(i, %version, <span class="string">"check light client proofs"</span>);
 <a href=#9837 id=9837 data-nosnippet>9837</a>
-<a href=#9838 id=9838 data-nosnippet>9838</a>        <span class="kw">let </span>storage = join_all((<span class="number">0</span>..NUM_NODES).map(|<span class="kw">_</span>| SqlDataSource::create_storage())).<span class="kw">await</span>;
-<a href=#9839 id=9839 data-nosnippet>9839</a>        <span class="kw">let </span>persistence: [<span class="kw">_</span>; NUM_NODES] = storage
-<a href=#9840 id=9840 data-nosnippet>9840</a>            .iter()
-<a href=#9841 id=9841 data-nosnippet>9841</a>            .map(&lt;SqlDataSource <span class="kw">as </span>TestableSequencerDataSource&gt;::persistence_options)
-<a href=#9842 id=9842 data-nosnippet>9842</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
-<a href=#9843 id=9843 data-nosnippet>9843</a>            .try_into()
-<a href=#9844 id=9844 data-nosnippet>9844</a>            .unwrap();
-<a href=#9845 id=9845 data-nosnippet>9845</a>
-<a href=#9846 id=9846 data-nosnippet>9846</a>        <span class="kw">let </span>config = TestNetworkConfigBuilder::&lt;NUM_NODES, <span class="kw">_</span>, <span class="kw">_</span>&gt;::with_num_nodes()
-<a href=#9847 id=9847 data-nosnippet>9847</a>            .api_config(
-<a href=#9848 id=9848 data-nosnippet>9848</a>                SqlDataSource::options(<span class="kw-2">&amp;</span>storage[<span class="number">0</span>], Options::with_port(port))
-<a href=#9849 id=9849 data-nosnippet>9849</a>                    .light_client(Default::default()),
-<a href=#9850 id=9850 data-nosnippet>9850</a>            )
-<a href=#9851 id=9851 data-nosnippet>9851</a>            .persistences(persistence.clone())
-<a href=#9852 id=9852 data-nosnippet>9852</a>            .catchups(std::array::from_fn(|<span class="kw">_</span>| {
-<a href=#9853 id=9853 data-nosnippet>9853</a>                StatePeers::&lt;SequencerApiVersion&gt;::from_urls(
-<a href=#9854 id=9854 data-nosnippet>9854</a>                    <span class="macro">vec!</span>[url.clone()],
-<a href=#9855 id=9855 data-nosnippet>9855</a>                    Default::default(),
-<a href=#9856 id=9856 data-nosnippet>9856</a>                    Duration::from_secs(<span class="number">2</span>),
-<a href=#9857 id=9857 data-nosnippet>9857</a>                    <span class="kw-2">&amp;</span>NoMetrics,
-<a href=#9858 id=9858 data-nosnippet>9858</a>                )
-<a href=#9859 id=9859 data-nosnippet>9859</a>            }))
-<a href=#9860 id=9860 data-nosnippet>9860</a>            .network_config(test_config)
-<a href=#9861 id=9861 data-nosnippet>9861</a>            .build();
-<a href=#9862 id=9862 data-nosnippet>9862</a>
-<a href=#9863 id=9863 data-nosnippet>9863</a>        <span class="kw">let </span><span class="kw-2">mut </span>network = TestNetwork::new(config, upgrade).<span class="kw">await</span>;
-<a href=#9864 id=9864 data-nosnippet>9864</a>        <span class="kw">let </span>client: Client&lt;ServerError, StaticVersion&lt;<span class="number">0</span>, <span class="number">1</span>&gt;&gt; = Client::new(url);
-<a href=#9865 id=9865 data-nosnippet>9865</a>        client.connect(<span class="prelude-val">None</span>).<span class="kw">await</span>;
+<a href=#9838 id=9838 data-nosnippet>9838</a>            <span class="comment">// Get the same leaf proof by various IDs.
+<a href=#9839 id=9839 data-nosnippet>9839</a>            </span><span class="kw">let </span>proofs = try_join_all(
+<a href=#9840 id=9840 data-nosnippet>9840</a>                [
+<a href=#9841 id=9841 data-nosnippet>9841</a>                    <span class="macro">format!</span>(<span class="string">"light-client/leaf/{i}"</span>),
+<a href=#9842 id=9842 data-nosnippet>9842</a>                    <span class="macro">format!</span>(<span class="string">"light-client/leaf/hash/{}"</span>, leaf.hash()),
+<a href=#9843 id=9843 data-nosnippet>9843</a>                    <span class="macro">format!</span>(<span class="string">"light-client/leaf/block-hash/{}"</span>, leaf.block_hash()),
+<a href=#9844 id=9844 data-nosnippet>9844</a>                ]
+<a href=#9845 id=9845 data-nosnippet>9845</a>                .into_iter()
+<a href=#9846 id=9846 data-nosnippet>9846</a>                .map(|path| <span class="kw">async move </span>{
+<a href=#9847 id=9847 data-nosnippet>9847</a>                    <span class="macro">tracing::info!</span>(i, path, <span class="string">"fetch leaf proof"</span>);
+<a href=#9848 id=9848 data-nosnippet>9848</a>                    <span class="kw">let </span>proof = client.get::&lt;LeafProof&gt;(<span class="kw-2">&amp;</span>path).send().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#9849 id=9849 data-nosnippet>9849</a>                    <span class="prelude-val">Ok</span>::&lt;<span class="kw">_</span>, anyhow::Error&gt;((path, proof))
+<a href=#9850 id=9850 data-nosnippet>9850</a>                }),
+<a href=#9851 id=9851 data-nosnippet>9851</a>            )
+<a href=#9852 id=9852 data-nosnippet>9852</a>            .<span class="kw">await
+<a href=#9853 id=9853 data-nosnippet>9853</a>            </span>.unwrap();
+<a href=#9854 id=9854 data-nosnippet>9854</a>
+<a href=#9855 id=9855 data-nosnippet>9855</a>            <span class="comment">// Check proofs against the expected leaf.
+<a href=#9856 id=9856 data-nosnippet>9856</a>            </span><span class="kw">for </span>(path, proof) <span class="kw">in </span>proofs {
+<a href=#9857 id=9857 data-nosnippet>9857</a>                <span class="macro">tracing::info!</span>(i, path, <span class="string">"check leaf proof"</span>);
+<a href=#9858 id=9858 data-nosnippet>9858</a>                <span class="macro">assert_eq!</span>(
+<a href=#9859 id=9859 data-nosnippet>9859</a>                    proof
+<a href=#9860 id=9860 data-nosnippet>9860</a>                        .verify(LeafProofHint::Quorum(<span class="kw-2">&amp;</span>quorum))
+<a href=#9861 id=9861 data-nosnippet>9861</a>                        .<span class="kw">await
+<a href=#9862 id=9862 data-nosnippet>9862</a>                        </span>.unwrap_or_else(|err| <span class="macro">panic!</span>(<span class="string">"{path}: proof failed to verify: {err:#}"</span>)),
+<a href=#9863 id=9863 data-nosnippet>9863</a>                    <span class="kw-2">*</span>leaf
+<a href=#9864 id=9864 data-nosnippet>9864</a>                );
+<a href=#9865 id=9865 data-nosnippet>9865</a>            }
 <a href=#9866 id=9866 data-nosnippet>9866</a>
-<a href=#9867 id=9867 data-nosnippet>9867</a>        <span class="comment">// Get a leaf stream so that we can wait for various events. Also keep track of each leaf
-<a href=#9868 id=9868 data-nosnippet>9868</a>        // yielded, which we can use as ground truth later in the test.
-<a href=#9869 id=9869 data-nosnippet>9869</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>actual_leaves = <span class="macro">vec!</span>[];
-<a href=#9870 id=9870 data-nosnippet>9870</a>        <span class="kw">let </span><span class="kw-2">mut </span>actual_blocks = <span class="macro">vec!</span>[];
-<a href=#9871 id=9871 data-nosnippet>9871</a>        <span class="kw">let </span><span class="kw-2">mut </span>leaves = client
-<a href=#9872 id=9872 data-nosnippet>9872</a>            .socket(<span class="string">"availability/stream/leaves/0"</span>)
-<a href=#9873 id=9873 data-nosnippet>9873</a>            .subscribe::&lt;LeafQueryData&lt;SeqTypes&gt;&gt;()
-<a href=#9874 id=9874 data-nosnippet>9874</a>            .<span class="kw">await
-<a href=#9875 id=9875 data-nosnippet>9875</a>            </span>.unwrap()
-<a href=#9876 id=9876 data-nosnippet>9876</a>            .zip(
-<a href=#9877 id=9877 data-nosnippet>9877</a>                client
-<a href=#9878 id=9878 data-nosnippet>9878</a>                    .socket(<span class="string">"availability/stream/blocks/0"</span>)
-<a href=#9879 id=9879 data-nosnippet>9879</a>                    .subscribe::&lt;BlockQueryData&lt;SeqTypes&gt;&gt;()
-<a href=#9880 id=9880 data-nosnippet>9880</a>                    .<span class="kw">await
-<a href=#9881 id=9881 data-nosnippet>9881</a>                    </span>.unwrap(),
-<a href=#9882 id=9882 data-nosnippet>9882</a>            )
-<a href=#9883 id=9883 data-nosnippet>9883</a>            .map(|(leaf, block)| {
-<a href=#9884 id=9884 data-nosnippet>9884</a>                <span class="kw">let </span>leaf = leaf.unwrap();
-<a href=#9885 id=9885 data-nosnippet>9885</a>                <span class="kw">let </span>block = block.unwrap();
-<a href=#9886 id=9886 data-nosnippet>9886</a>                actual_leaves.push(leaf.clone());
-<a href=#9887 id=9887 data-nosnippet>9887</a>                actual_blocks.push(block);
-<a href=#9888 id=9888 data-nosnippet>9888</a>                leaf
-<a href=#9889 id=9889 data-nosnippet>9889</a>            });
-<a href=#9890 id=9890 data-nosnippet>9890</a>
-<a href=#9891 id=9891 data-nosnippet>9891</a>        <span class="comment">// Wait for the upgrade to take effect.
-<a href=#9892 id=9892 data-nosnippet>9892</a>        </span><span class="kw">let </span>(upgrade_height, first_epoch) = <span class="kw">loop </span>{
-<a href=#9893 id=9893 data-nosnippet>9893</a>            <span class="kw">let </span>leaf: LeafQueryData&lt;SeqTypes&gt; = leaves.next().<span class="kw">await</span>.unwrap();
-<a href=#9894 id=9894 data-nosnippet>9894</a>            <span class="kw">if </span>leaf.header().version() &lt; EPOCH_VERSION {
-<a href=#9895 id=9895 data-nosnippet>9895</a>                <span class="macro">tracing::info!</span>(version = %leaf.header().version(), height = leaf.header().height(), view = <span class="question-mark">?</span>leaf.leaf().view_number(), <span class="string">"waiting for epoch upgrade"</span>);
-<a href=#9896 id=9896 data-nosnippet>9896</a>                <span class="kw">continue</span>;
-<a href=#9897 id=9897 data-nosnippet>9897</a>            }
-<a href=#9898 id=9898 data-nosnippet>9898</a>            <span class="kw">break </span>(leaf.height(), leaf.leaf().epoch(EPOCH_HEIGHT).unwrap());
-<a href=#9899 id=9899 data-nosnippet>9899</a>        };
-<a href=#9900 id=9900 data-nosnippet>9900</a>        <span class="macro">tracing::info!</span>(upgrade_height, <span class="question-mark">?</span>first_epoch, <span class="string">"epochs enabled"</span>);
-<a href=#9901 id=9901 data-nosnippet>9901</a>
-<a href=#9902 id=9902 data-nosnippet>9902</a>        <span class="comment">// Wait for two epoch changes (so we get to the first epoch that actually uses the stake
-<a href=#9903 id=9903 data-nosnippet>9903</a>        // table).
-<a href=#9904 id=9904 data-nosnippet>9904</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>epoch_heights = [<span class="number">0</span>; <span class="number">2</span>];
-<a href=#9905 id=9905 data-nosnippet>9905</a>        <span class="kw">for </span>(i, epoch_height) <span class="kw">in </span>epoch_heights.iter_mut().enumerate() {
-<a href=#9906 id=9906 data-nosnippet>9906</a>            <span class="kw">let </span>desired_epoch = first_epoch + (i <span class="kw">as </span>u64) + <span class="number">1</span>;
-<a href=#9907 id=9907 data-nosnippet>9907</a>            <span class="kw-2">*</span>epoch_height = <span class="kw">loop </span>{
-<a href=#9908 id=9908 data-nosnippet>9908</a>                <span class="kw">let </span>leaf = leaves.next().<span class="kw">await</span>.unwrap();
-<a href=#9909 id=9909 data-nosnippet>9909</a>                <span class="kw">let </span>epoch = leaf.leaf().epoch(EPOCH_HEIGHT).unwrap();
-<a href=#9910 id=9910 data-nosnippet>9910</a>                <span class="kw">if </span>epoch &gt; desired_epoch {
-<a href=#9911 id=9911 data-nosnippet>9911</a>                    <span class="macro">tracing::info!</span>(
-<a href=#9912 id=9912 data-nosnippet>9912</a>                        height = leaf.height(),
-<a href=#9913 id=9913 data-nosnippet>9913</a>                        <span class="question-mark">?</span>desired_epoch,
-<a href=#9914 id=9914 data-nosnippet>9914</a>                        <span class="question-mark">?</span>epoch,
-<a href=#9915 id=9915 data-nosnippet>9915</a>                        <span class="string">"changed epoch"
-<a href=#9916 id=9916 data-nosnippet>9916</a>                    </span>);
-<a href=#9917 id=9917 data-nosnippet>9917</a>                    <span class="kw">break </span>leaf.height();
-<a href=#9918 id=9918 data-nosnippet>9918</a>                }
-<a href=#9919 id=9919 data-nosnippet>9919</a>                <span class="macro">tracing::info!</span>(
-<a href=#9920 id=9920 data-nosnippet>9920</a>                    <span class="question-mark">?</span>desired_epoch,
-<a href=#9921 id=9921 data-nosnippet>9921</a>                    height = leaf.header().height(),
-<a href=#9922 id=9922 data-nosnippet>9922</a>                    view = <span class="question-mark">?</span>leaf.leaf().view_number(),
-<a href=#9923 id=9923 data-nosnippet>9923</a>                    <span class="string">"waiting for epoch change"
-<a href=#9924 id=9924 data-nosnippet>9924</a>                </span>);
-<a href=#9925 id=9925 data-nosnippet>9925</a>            };
-<a href=#9926 id=9926 data-nosnippet>9926</a>        }
-<a href=#9927 id=9927 data-nosnippet>9927</a>
-<a href=#9928 id=9928 data-nosnippet>9928</a>        <span class="comment">// Wait a few more blocks.
-<a href=#9929 id=9929 data-nosnippet>9929</a>        </span><span class="kw">let </span>max_block = epoch_heights[<span class="number">1</span>] + <span class="number">1</span>;
-<a href=#9930 id=9930 data-nosnippet>9930</a>        <span class="kw">loop </span>{
-<a href=#9931 id=9931 data-nosnippet>9931</a>            <span class="kw">let </span>leaf = leaves.next().<span class="kw">await</span>.unwrap();
-<a href=#9932 id=9932 data-nosnippet>9932</a>            <span class="kw">if </span>leaf.height() &gt; max_block {
-<a href=#9933 id=9933 data-nosnippet>9933</a>                <span class="kw">break</span>;
-<a href=#9934 id=9934 data-nosnippet>9934</a>            }
-<a href=#9935 id=9935 data-nosnippet>9935</a>            <span class="macro">tracing::info!</span>(max_block, height = leaf.height(), <span class="string">"waiting for block"</span>);
-<a href=#9936 id=9936 data-nosnippet>9936</a>        }
-<a href=#9937 id=9937 data-nosnippet>9937</a>
-<a href=#9938 id=9938 data-nosnippet>9938</a>        <span class="comment">// Stop consensus. All the blocks we are going to query have already been produced.
-<a href=#9939 id=9939 data-nosnippet>9939</a>        // Continuing to run consensus would just waste resources while we check stuff.
-<a href=#9940 id=9940 data-nosnippet>9940</a>        </span>network.stop_consensus().<span class="kw">await</span>;
-<a href=#9941 id=9941 data-nosnippet>9941</a>
-<a href=#9942 id=9942 data-nosnippet>9942</a>        <span class="comment">// Check light client. Querying every single block is too slow, so we'll check a few blocks
-<a href=#9943 id=9943 data-nosnippet>9943</a>        // around various critical points:
-<a href=#9944 id=9944 data-nosnippet>9944</a>        </span><span class="kw">let </span>heights =
-<a href=#9945 id=9945 data-nosnippet>9945</a>        <span class="comment">// * The first few blocks, including genesis
-<a href=#9946 id=9946 data-nosnippet>9946</a>            </span>(<span class="number">0</span>..=<span class="number">1</span>)
-<a href=#9947 id=9947 data-nosnippet>9947</a>        <span class="comment">// * A few blocks just before and after the upgrade
-<a href=#9948 id=9948 data-nosnippet>9948</a>            </span>.chain(upgrade_height-<span class="number">1</span>..=upgrade_height+<span class="number">1</span>)
-<a href=#9949 id=9949 data-nosnippet>9949</a>        <span class="comment">// * A few blocks just before and after the first epoch change
-<a href=#9950 id=9950 data-nosnippet>9950</a>            </span>.chain(epoch_heights[<span class="number">0</span>]-<span class="number">1</span>..=epoch_heights[<span class="number">0</span>] + <span class="number">1</span>)
-<a href=#9951 id=9951 data-nosnippet>9951</a>        <span class="comment">// * A few blocks just before and after the stake table comes into effect
-<a href=#9952 id=9952 data-nosnippet>9952</a>            </span>.chain(epoch_heights[<span class="number">1</span>]-<span class="number">1</span>..=max_block);
-<a href=#9953 id=9953 data-nosnippet>9953</a>
-<a href=#9954 id=9954 data-nosnippet>9954</a>        <span class="kw">let </span>quorum = EpochChangeQuorum::new(EPOCH_HEIGHT);
-<a href=#9955 id=9955 data-nosnippet>9955</a>        <span class="kw">for </span>i <span class="kw">in </span>heights {
-<a href=#9956 id=9956 data-nosnippet>9956</a>            <span class="kw">let </span>leaf = <span class="kw-2">&amp;</span>actual_leaves[i <span class="kw">as </span>usize];
-<a href=#9957 id=9957 data-nosnippet>9957</a>            <span class="kw">let </span>block = <span class="kw-2">&amp;</span>actual_blocks[i <span class="kw">as </span>usize];
-<a href=#9958 id=9958 data-nosnippet>9958</a>            <span class="macro">tracing::info!</span>(i, <span class="question-mark">?</span>leaf, <span class="question-mark">?</span>block, <span class="string">"check leaf"</span>);
+<a href=#9867 id=9867 data-nosnippet>9867</a>            <span class="comment">// Get the corresponding header.
+<a href=#9868 id=9868 data-nosnippet>9868</a>            </span><span class="kw">let </span>root_height = i + <span class="number">1</span>;
+<a href=#9869 id=9869 data-nosnippet>9869</a>            <span class="kw">let </span>root = actual_leaves[root_height <span class="kw">as </span>usize].header();
+<a href=#9870 id=9870 data-nosnippet>9870</a>            <span class="kw">let </span>proofs = try_join_all(
+<a href=#9871 id=9871 data-nosnippet>9871</a>                [
+<a href=#9872 id=9872 data-nosnippet>9872</a>                    <span class="macro">format!</span>(<span class="string">"light-client/header/{root_height}/{i}"</span>),
+<a href=#9873 id=9873 data-nosnippet>9873</a>                    <span class="macro">format!</span>(
+<a href=#9874 id=9874 data-nosnippet>9874</a>                        <span class="string">"light-client/header/{root_height}/hash/{}"</span>,
+<a href=#9875 id=9875 data-nosnippet>9875</a>                        leaf.block_hash()
+<a href=#9876 id=9876 data-nosnippet>9876</a>                    ),
+<a href=#9877 id=9877 data-nosnippet>9877</a>                ]
+<a href=#9878 id=9878 data-nosnippet>9878</a>                .into_iter()
+<a href=#9879 id=9879 data-nosnippet>9879</a>                .map(|path| <span class="kw">async move </span>{
+<a href=#9880 id=9880 data-nosnippet>9880</a>                    <span class="macro">tracing::info!</span>(i, path, <span class="string">"fetch header proof"</span>);
+<a href=#9881 id=9881 data-nosnippet>9881</a>                    <span class="kw">let </span>proof = client.get::&lt;HeaderProof&gt;(<span class="kw-2">&amp;</span>path).send().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#9882 id=9882 data-nosnippet>9882</a>                    <span class="prelude-val">Ok</span>::&lt;<span class="kw">_</span>, anyhow::Error&gt;((path, proof))
+<a href=#9883 id=9883 data-nosnippet>9883</a>                }),
+<a href=#9884 id=9884 data-nosnippet>9884</a>            )
+<a href=#9885 id=9885 data-nosnippet>9885</a>            .<span class="kw">await
+<a href=#9886 id=9886 data-nosnippet>9886</a>            </span>.unwrap();
+<a href=#9887 id=9887 data-nosnippet>9887</a>            <span class="kw">for </span>(path, proof) <span class="kw">in </span>proofs {
+<a href=#9888 id=9888 data-nosnippet>9888</a>                <span class="macro">tracing::info!</span>(i, path, <span class="string">"check header proof"</span>);
+<a href=#9889 id=9889 data-nosnippet>9889</a>                <span class="macro">assert_eq!</span>(
+<a href=#9890 id=9890 data-nosnippet>9890</a>                    proof.verify_ref(root.block_merkle_tree_root()).unwrap(),
+<a href=#9891 id=9891 data-nosnippet>9891</a>                    leaf.header()
+<a href=#9892 id=9892 data-nosnippet>9892</a>                );
+<a href=#9893 id=9893 data-nosnippet>9893</a>            }
+<a href=#9894 id=9894 data-nosnippet>9894</a>
+<a href=#9895 id=9895 data-nosnippet>9895</a>            <span class="comment">// Get the corresponding payload.
+<a href=#9896 id=9896 data-nosnippet>9896</a>            </span><span class="kw">let </span>proof = client
+<a href=#9897 id=9897 data-nosnippet>9897</a>                .get::&lt;PayloadProof&gt;(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"light-client/payload/{i}"</span>))
+<a href=#9898 id=9898 data-nosnippet>9898</a>                .send()
+<a href=#9899 id=9899 data-nosnippet>9899</a>                .<span class="kw">await
+<a href=#9900 id=9900 data-nosnippet>9900</a>                </span>.unwrap();
+<a href=#9901 id=9901 data-nosnippet>9901</a>            <span class="macro">assert_eq!</span>(proof.verify(leaf.header()).unwrap(), <span class="kw-2">*</span>block.payload());
+<a href=#9902 id=9902 data-nosnippet>9902</a>        }
+<a href=#9903 id=9903 data-nosnippet>9903</a>    }
+<a href=#9904 id=9904 data-nosnippet>9904</a>
+<a href=#9905 id=9905 data-nosnippet>9905</a>    <span class="doccomment">/// Check the light client stake table endpoint: replaying `first_epoch + 2`
+<a href=#9906 id=9906 data-nosnippet>9906</a>    /// reproduces the validator set loaded from storage, and an earlier epoch
+<a href=#9907 id=9907 data-nosnippet>9907</a>    /// is a `BAD_REQUEST`.
+<a href=#9908 id=9908 data-nosnippet>9908</a>    </span><span class="kw">async fn </span>check_light_client_stake_table&lt;N, P&gt;(
+<a href=#9909 id=9909 data-nosnippet>9909</a>        client: <span class="kw-2">&amp;</span>Client&lt;ServerError, StaticVersion&lt;<span class="number">0</span>, <span class="number">1</span>&gt;&gt;,
+<a href=#9910 id=9910 data-nosnippet>9910</a>        server: <span class="kw-2">&amp;</span>SequencerContext&lt;N, P&gt;,
+<a href=#9911 id=9911 data-nosnippet>9911</a>        first_epoch: EpochNumber,
+<a href=#9912 id=9912 data-nosnippet>9912</a>    ) <span class="kw">where
+<a href=#9913 id=9913 data-nosnippet>9913</a>        </span>N: ConnectedNetwork&lt;PubKey&gt;,
+<a href=#9914 id=9914 data-nosnippet>9914</a>        P: SequencerPersistence,
+<a href=#9915 id=9915 data-nosnippet>9915</a>    {
+<a href=#9916 id=9916 data-nosnippet>9916</a>        <span class="kw">let </span>events: Vec&lt;StakeTableEvent&gt; = client
+<a href=#9917 id=9917 data-nosnippet>9917</a>            .get(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"light-client/stake-table/{}"</span>, first_epoch + <span class="number">2</span>))
+<a href=#9918 id=9918 data-nosnippet>9918</a>            .send()
+<a href=#9919 id=9919 data-nosnippet>9919</a>            .<span class="kw">await
+<a href=#9920 id=9920 data-nosnippet>9920</a>            </span>.unwrap();
+<a href=#9921 id=9921 data-nosnippet>9921</a>        <span class="kw">let </span><span class="kw-2">mut </span>state_from_events = StakeTableState::default();
+<a href=#9922 id=9922 data-nosnippet>9922</a>        <span class="kw">for </span>event <span class="kw">in </span>events {
+<a href=#9923 id=9923 data-nosnippet>9923</a>            state_from_events.apply_event(event).unwrap().unwrap();
+<a href=#9924 id=9924 data-nosnippet>9924</a>        }
+<a href=#9925 id=9925 data-nosnippet>9925</a>        <span class="macro">assert_eq!</span>(
+<a href=#9926 id=9926 data-nosnippet>9926</a>            state_from_events.into_validators(),
+<a href=#9927 id=9927 data-nosnippet>9927</a>            server
+<a href=#9928 id=9928 data-nosnippet>9928</a>                .consensus_handle()
+<a href=#9929 id=9929 data-nosnippet>9929</a>                .storage()
+<a href=#9930 id=9930 data-nosnippet>9930</a>                .<span class="kw">await
+<a href=#9931 id=9931 data-nosnippet>9931</a>                </span>.load_all_validators(first_epoch + <span class="number">2</span>, <span class="number">0</span>, <span class="number">1_000_000</span>)
+<a href=#9932 id=9932 data-nosnippet>9932</a>                .<span class="kw">await
+<a href=#9933 id=9933 data-nosnippet>9933</a>                </span>.unwrap()
+<a href=#9934 id=9934 data-nosnippet>9934</a>                .into_iter()
+<a href=#9935 id=9935 data-nosnippet>9935</a>                .map(|v| (v.account, v))
+<a href=#9936 id=9936 data-nosnippet>9936</a>                .collect::&lt;RegisteredValidatorMap&gt;()
+<a href=#9937 id=9937 data-nosnippet>9937</a>        );
+<a href=#9938 id=9938 data-nosnippet>9938</a>
+<a href=#9939 id=9939 data-nosnippet>9939</a>        <span class="comment">// Querying for a stake table before the first real epoch is an error.
+<a href=#9940 id=9940 data-nosnippet>9940</a>        </span><span class="kw">let </span>err = client
+<a href=#9941 id=9941 data-nosnippet>9941</a>            .get::&lt;Vec&lt;StakeTableEvent&gt;&gt;(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"light-client/stake-table/{}"</span>, first_epoch + <span class="number">1</span>))
+<a href=#9942 id=9942 data-nosnippet>9942</a>            .send()
+<a href=#9943 id=9943 data-nosnippet>9943</a>            .<span class="kw">await
+<a href=#9944 id=9944 data-nosnippet>9944</a>            </span>.unwrap_err();
+<a href=#9945 id=9945 data-nosnippet>9945</a>        <span class="macro">assert_eq!</span>(err.status(), StatusCode::BAD_REQUEST);
+<a href=#9946 id=9946 data-nosnippet>9946</a>    }
+<a href=#9947 id=9947 data-nosnippet>9947</a>
+<a href=#9948 id=9948 data-nosnippet>9948</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#9949 id=9949 data-nosnippet>9949</a>    </span><span class="kw">async fn </span>test_light_client_completeness() {
+<a href=#9950 id=9950 data-nosnippet>9950</a>        <span class="comment">// Run the through a protocol upgrade and epoch change, then check that we are able to get a
+<a href=#9951 id=9951 data-nosnippet>9951</a>        // correct light client proof for every finalized leaf.
+<a href=#9952 id=9952 data-nosnippet>9952</a>
+<a href=#9953 id=9953 data-nosnippet>9953</a>        </span><span class="kw">const </span>NUM_NODES: usize = <span class="number">1</span>;
+<a href=#9954 id=9954 data-nosnippet>9954</a>        <span class="kw">const </span>EPOCH_HEIGHT: u64 = <span class="number">200</span>;
+<a href=#9955 id=9955 data-nosnippet>9955</a>
+<a href=#9956 id=9956 data-nosnippet>9956</a>        <span class="kw">let </span>upgrade = Upgrade::new(LEGACY_VERSION, EPOCH_VERSION);
+<a href=#9957 id=9957 data-nosnippet>9957</a>        <span class="kw">let </span>port = reserve_tcp_port().expect(<span class="string">"OS should have ephemeral ports available"</span>);
+<a href=#9958 id=9958 data-nosnippet>9958</a>        <span class="kw">let </span>url: Url = <span class="macro">format!</span>(<span class="string">"http://localhost:{port}"</span>).parse().unwrap();
 <a href=#9959 id=9959 data-nosnippet>9959</a>
-<a href=#9960 id=9960 data-nosnippet>9960</a>            <span class="comment">// Get the same leaf proof by various IDs.
-<a href=#9961 id=9961 data-nosnippet>9961</a>            </span><span class="kw">let </span>client = <span class="kw-2">&amp;</span>client;
-<a href=#9962 id=9962 data-nosnippet>9962</a>            <span class="kw">let </span>proofs = try_join_all(
-<a href=#9963 id=9963 data-nosnippet>9963</a>                [
-<a href=#9964 id=9964 data-nosnippet>9964</a>                    <span class="macro">format!</span>(<span class="string">"light-client/leaf/{i}"</span>),
-<a href=#9965 id=9965 data-nosnippet>9965</a>                    <span class="macro">format!</span>(<span class="string">"light-client/leaf/hash/{}"</span>, leaf.hash()),
-<a href=#9966 id=9966 data-nosnippet>9966</a>                    <span class="macro">format!</span>(<span class="string">"light-client/leaf/block-hash/{}"</span>, leaf.block_hash()),
-<a href=#9967 id=9967 data-nosnippet>9967</a>                ]
-<a href=#9968 id=9968 data-nosnippet>9968</a>                .into_iter()
-<a href=#9969 id=9969 data-nosnippet>9969</a>                .map(|path| <span class="kw">async move </span>{
-<a href=#9970 id=9970 data-nosnippet>9970</a>                    <span class="macro">tracing::info!</span>(i, path, <span class="string">"fetch leaf proof"</span>);
-<a href=#9971 id=9971 data-nosnippet>9971</a>                    <span class="kw">let </span>proof = client.get::&lt;LeafProof&gt;(<span class="kw-2">&amp;</span>path).send().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#9972 id=9972 data-nosnippet>9972</a>                    <span class="prelude-val">Ok</span>::&lt;<span class="kw">_</span>, anyhow::Error&gt;((path, proof))
-<a href=#9973 id=9973 data-nosnippet>9973</a>                }),
-<a href=#9974 id=9974 data-nosnippet>9974</a>            )
-<a href=#9975 id=9975 data-nosnippet>9975</a>            .<span class="kw">await
-<a href=#9976 id=9976 data-nosnippet>9976</a>            </span>.unwrap();
-<a href=#9977 id=9977 data-nosnippet>9977</a>
-<a href=#9978 id=9978 data-nosnippet>9978</a>            <span class="comment">// Check proofs against expected leaf.
-<a href=#9979 id=9979 data-nosnippet>9979</a>            </span><span class="kw">for </span>(path, proof) <span class="kw">in </span>proofs {
-<a href=#9980 id=9980 data-nosnippet>9980</a>                <span class="macro">tracing::info!</span>(i, path, <span class="question-mark">?</span>proof, <span class="string">"check leaf proof"</span>);
-<a href=#9981 id=9981 data-nosnippet>9981</a>                <span class="macro">assert_eq!</span>(
-<a href=#9982 id=9982 data-nosnippet>9982</a>                    proof.verify(LeafProofHint::Quorum(<span class="kw-2">&amp;</span>quorum)).<span class="kw">await</span>.unwrap(),
-<a href=#9983 id=9983 data-nosnippet>9983</a>                    <span class="kw-2">*</span>leaf
-<a href=#9984 id=9984 data-nosnippet>9984</a>                );
-<a href=#9985 id=9985 data-nosnippet>9985</a>            }
-<a href=#9986 id=9986 data-nosnippet>9986</a>
-<a href=#9987 id=9987 data-nosnippet>9987</a>            <span class="comment">// Get the corresponding header.
-<a href=#9988 id=9988 data-nosnippet>9988</a>            </span><span class="kw">let </span>root_height = i + <span class="number">1</span>;
-<a href=#9989 id=9989 data-nosnippet>9989</a>            <span class="kw">let </span>root = actual_leaves[root_height <span class="kw">as </span>usize].header();
-<a href=#9990 id=9990 data-nosnippet>9990</a>            <span class="kw">let </span>proofs = try_join_all(
-<a href=#9991 id=9991 data-nosnippet>9991</a>                [
-<a href=#9992 id=9992 data-nosnippet>9992</a>                    <span class="macro">format!</span>(<span class="string">"light-client/header/{root_height}/{i}"</span>),
-<a href=#9993 id=9993 data-nosnippet>9993</a>                    <span class="macro">format!</span>(
-<a href=#9994 id=9994 data-nosnippet>9994</a>                        <span class="string">"light-client/header/{root_height}/hash/{}"</span>,
-<a href=#9995 id=9995 data-nosnippet>9995</a>                        leaf.block_hash()
-<a href=#9996 id=9996 data-nosnippet>9996</a>                    ),
-<a href=#9997 id=9997 data-nosnippet>9997</a>                ]
-<a href=#9998 id=9998 data-nosnippet>9998</a>                .into_iter()
-<a href=#9999 id=9999 data-nosnippet>9999</a>                .map(|path| <span class="kw">async move </span>{
-<a href=#10000 id=10000 data-nosnippet>10000</a>                    <span class="macro">tracing::info!</span>(i, path, <span class="string">"get header proof"</span>);
-<a href=#10001 id=10001 data-nosnippet>10001</a>                    <span class="kw">let </span>proof = client.get::&lt;HeaderProof&gt;(<span class="kw-2">&amp;</span>path).send().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#10002 id=10002 data-nosnippet>10002</a>                    <span class="prelude-val">Ok</span>::&lt;<span class="kw">_</span>, anyhow::Error&gt;((path, proof))
-<a href=#10003 id=10003 data-nosnippet>10003</a>                }),
-<a href=#10004 id=10004 data-nosnippet>10004</a>            )
-<a href=#10005 id=10005 data-nosnippet>10005</a>            .<span class="kw">await
-<a href=#10006 id=10006 data-nosnippet>10006</a>            </span>.unwrap();
-<a href=#10007 id=10007 data-nosnippet>10007</a>            <span class="kw">for </span>(path, proof) <span class="kw">in </span>proofs {
-<a href=#10008 id=10008 data-nosnippet>10008</a>                <span class="macro">tracing::info!</span>(i, path, <span class="question-mark">?</span>proof, <span class="string">"check header proof"</span>);
-<a href=#10009 id=10009 data-nosnippet>10009</a>                <span class="macro">assert_eq!</span>(
-<a href=#10010 id=10010 data-nosnippet>10010</a>                    proof.verify_ref(root.block_merkle_tree_root()).unwrap(),
-<a href=#10011 id=10011 data-nosnippet>10011</a>                    leaf.header()
-<a href=#10012 id=10012 data-nosnippet>10012</a>                );
-<a href=#10013 id=10013 data-nosnippet>10013</a>            }
-<a href=#10014 id=10014 data-nosnippet>10014</a>
-<a href=#10015 id=10015 data-nosnippet>10015</a>            <span class="comment">// Get the corresponding payload.
-<a href=#10016 id=10016 data-nosnippet>10016</a>            </span><span class="kw">let </span>proof = client
-<a href=#10017 id=10017 data-nosnippet>10017</a>                .get::&lt;PayloadProof&gt;(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"light-client/payload/{i}"</span>))
-<a href=#10018 id=10018 data-nosnippet>10018</a>                .send()
-<a href=#10019 id=10019 data-nosnippet>10019</a>                .<span class="kw">await
-<a href=#10020 id=10020 data-nosnippet>10020</a>                </span>.unwrap();
-<a href=#10021 id=10021 data-nosnippet>10021</a>            <span class="macro">assert_eq!</span>(proof.verify(leaf.header()).unwrap(), <span class="kw-2">*</span>block.payload());
-<a href=#10022 id=10022 data-nosnippet>10022</a>        }
-<a href=#10023 id=10023 data-nosnippet>10023</a>
-<a href=#10024 id=10024 data-nosnippet>10024</a>        <span class="comment">// Check light client stake table.
-<a href=#10025 id=10025 data-nosnippet>10025</a>        </span><span class="kw">let </span>events: Vec&lt;StakeTableEvent&gt; = client
-<a href=#10026 id=10026 data-nosnippet>10026</a>            .get(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"light-client/stake-table/{}"</span>, first_epoch + <span class="number">2</span>))
-<a href=#10027 id=10027 data-nosnippet>10027</a>            .send()
-<a href=#10028 id=10028 data-nosnippet>10028</a>            .<span class="kw">await
-<a href=#10029 id=10029 data-nosnippet>10029</a>            </span>.unwrap();
-<a href=#10030 id=10030 data-nosnippet>10030</a>        <span class="kw">let </span><span class="kw-2">mut </span>state_from_events = StakeTableState::default();
-<a href=#10031 id=10031 data-nosnippet>10031</a>        <span class="kw">for </span>event <span class="kw">in </span>events {
-<a href=#10032 id=10032 data-nosnippet>10032</a>            state_from_events.apply_event(event).unwrap().unwrap();
-<a href=#10033 id=10033 data-nosnippet>10033</a>        }
-<a href=#10034 id=10034 data-nosnippet>10034</a>
-<a href=#10035 id=10035 data-nosnippet>10035</a>        <span class="macro">assert_eq!</span>(
-<a href=#10036 id=10036 data-nosnippet>10036</a>            state_from_events.into_validators(),
-<a href=#10037 id=10037 data-nosnippet>10037</a>            network
-<a href=#10038 id=10038 data-nosnippet>10038</a>                .server
-<a href=#10039 id=10039 data-nosnippet>10039</a>                .consensus_handle()
-<a href=#10040 id=10040 data-nosnippet>10040</a>                .storage()
-<a href=#10041 id=10041 data-nosnippet>10041</a>                .<span class="kw">await
-<a href=#10042 id=10042 data-nosnippet>10042</a>                </span>.load_all_validators(first_epoch + <span class="number">2</span>, <span class="number">0</span>, <span class="number">1_000_000</span>)
-<a href=#10043 id=10043 data-nosnippet>10043</a>                .<span class="kw">await
-<a href=#10044 id=10044 data-nosnippet>10044</a>                </span>.unwrap()
-<a href=#10045 id=10045 data-nosnippet>10045</a>                .into_iter()
-<a href=#10046 id=10046 data-nosnippet>10046</a>                .map(|v| (v.account, v))
-<a href=#10047 id=10047 data-nosnippet>10047</a>                .collect::&lt;RegisteredValidatorMap&gt;()
-<a href=#10048 id=10048 data-nosnippet>10048</a>        );
-<a href=#10049 id=10049 data-nosnippet>10049</a>
-<a href=#10050 id=10050 data-nosnippet>10050</a>        <span class="comment">// Querying for a stake table before the first real epoch is an error.
-<a href=#10051 id=10051 data-nosnippet>10051</a>        </span><span class="kw">let </span>err = client
-<a href=#10052 id=10052 data-nosnippet>10052</a>            .get::&lt;Vec&lt;StakeTableEvent&gt;&gt;(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"light-client/stake-table/{}"</span>, first_epoch + <span class="number">1</span>))
-<a href=#10053 id=10053 data-nosnippet>10053</a>            .send()
-<a href=#10054 id=10054 data-nosnippet>10054</a>            .<span class="kw">await
-<a href=#10055 id=10055 data-nosnippet>10055</a>            </span>.unwrap_err();
-<a href=#10056 id=10056 data-nosnippet>10056</a>        <span class="macro">assert_eq!</span>(err.status(), StatusCode::BAD_REQUEST);
-<a href=#10057 id=10057 data-nosnippet>10057</a>    }
-<a href=#10058 id=10058 data-nosnippet>10058</a>
-<a href=#10059 id=10059 data-nosnippet>10059</a>    <span class="doccomment">/// Test that `fetch_leaf` returns a leaf with exactly the requested block height.
-<a href=#10060 id=10060 data-nosnippet>10060</a>    </span><span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
-<a href=#10061 id=10061 data-nosnippet>10061</a>    </span><span class="kw">async fn </span>test_fetch_leaf_returns_exact_height() -&gt; anyhow::Result&lt;()&gt; {
-<a href=#10062 id=10062 data-nosnippet>10062</a>        <span class="kw">const </span>EPOCH_HEIGHT: u64 = <span class="number">10</span>;
-<a href=#10063 id=10063 data-nosnippet>10063</a>        <span class="kw">const </span>NUM_NODES: usize = <span class="number">5</span>;
-<a href=#10064 id=10064 data-nosnippet>10064</a>        <span class="kw">const </span>TARGET_HEIGHT: u64 = EPOCH_HEIGHT * <span class="number">3 </span>+ <span class="number">2</span>;
-<a href=#10065 id=10065 data-nosnippet>10065</a>
-<a href=#10066 id=10066 data-nosnippet>10066</a>        <span class="kw">let </span>network_config = TestConfigBuilder::default()
-<a href=#10067 id=10067 data-nosnippet>10067</a>            .epoch_height(EPOCH_HEIGHT)
-<a href=#10068 id=10068 data-nosnippet>10068</a>            .build();
-<a href=#10069 id=10069 data-nosnippet>10069</a>
-<a href=#10070 id=10070 data-nosnippet>10070</a>        <span class="kw">let </span>port = reserve_tcp_port().expect(<span class="string">"No ports free for query service"</span>);
-<a href=#10071 id=10071 data-nosnippet>10071</a>
-<a href=#10072 id=10072 data-nosnippet>10072</a>        <span class="kw">let </span>storage = join_all((<span class="number">0</span>..NUM_NODES).map(|<span class="kw">_</span>| SqlDataSource::create_storage())).<span class="kw">await</span>;
-<a href=#10073 id=10073 data-nosnippet>10073</a>        <span class="kw">let </span>persistence: [<span class="kw">_</span>; NUM_NODES] = storage
-<a href=#10074 id=10074 data-nosnippet>10074</a>            .iter()
-<a href=#10075 id=10075 data-nosnippet>10075</a>            .map(&lt;SqlDataSource <span class="kw">as </span>TestableSequencerDataSource&gt;::persistence_options)
-<a href=#10076 id=10076 data-nosnippet>10076</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
-<a href=#10077 id=10077 data-nosnippet>10077</a>            .try_into()
-<a href=#10078 id=10078 data-nosnippet>10078</a>            .unwrap();
-<a href=#10079 id=10079 data-nosnippet>10079</a>
-<a href=#10080 id=10080 data-nosnippet>10080</a>        <span class="kw">let </span>catchup_peers = std::array::from_fn(|<span class="kw">_</span>| {
-<a href=#10081 id=10081 data-nosnippet>10081</a>            StatePeers::&lt;StaticVersion&lt;<span class="number">0</span>, <span class="number">1</span>&gt;&gt;::from_urls(
-<a href=#10082 id=10082 data-nosnippet>10082</a>                <span class="macro">vec!</span>[<span class="macro">format!</span>(<span class="string">"http://localhost:{port}"</span>).parse().unwrap()],
-<a href=#10083 id=10083 data-nosnippet>10083</a>                Default::default(),
-<a href=#10084 id=10084 data-nosnippet>10084</a>                Duration::from_secs(<span class="number">2</span>),
-<a href=#10085 id=10085 data-nosnippet>10085</a>                <span class="kw-2">&amp;</span>NoMetrics,
-<a href=#10086 id=10086 data-nosnippet>10086</a>            )
-<a href=#10087 id=10087 data-nosnippet>10087</a>        });
-<a href=#10088 id=10088 data-nosnippet>10088</a>
-<a href=#10089 id=10089 data-nosnippet>10089</a>        <span class="kw">let </span>config = TestNetworkConfigBuilder::with_num_nodes()
-<a href=#10090 id=10090 data-nosnippet>10090</a>            .api_config(SqlDataSource::options(
-<a href=#10091 id=10091 data-nosnippet>10091</a>                <span class="kw-2">&amp;</span>storage[<span class="number">0</span>],
-<a href=#10092 id=10092 data-nosnippet>10092</a>                Options::with_port(port),
-<a href=#10093 id=10093 data-nosnippet>10093</a>            ))
-<a href=#10094 id=10094 data-nosnippet>10094</a>            .network_config(network_config)
-<a href=#10095 id=10095 data-nosnippet>10095</a>            .persistences(persistence)
-<a href=#10096 id=10096 data-nosnippet>10096</a>            .catchups(catchup_peers)
-<a href=#10097 id=10097 data-nosnippet>10097</a>            .pos_hook(
-<a href=#10098 id=10098 data-nosnippet>10098</a>                DelegationConfig::MultipleDelegators,
-<a href=#10099 id=10099 data-nosnippet>10099</a>                Default::default(),
-<a href=#10100 id=10100 data-nosnippet>10100</a>                POS_V4,
-<a href=#10101 id=10101 data-nosnippet>10101</a>            )
-<a href=#10102 id=10102 data-nosnippet>10102</a>            .<span class="kw">await</span><span class="question-mark">?
-<a href=#10103 id=10103 data-nosnippet>10103</a>            </span>.build();
-<a href=#10104 id=10104 data-nosnippet>10104</a>
-<a href=#10105 id=10105 data-nosnippet>10105</a>        <span class="kw">let </span>network = TestNetwork::new(config, POS_V4).<span class="kw">await</span>;
+<a href=#9960 id=9960 data-nosnippet>9960</a>        <span class="kw">let </span>test_config = TestConfigBuilder::default()
+<a href=#9961 id=9961 data-nosnippet>9961</a>            .epoch_height(EPOCH_HEIGHT)
+<a href=#9962 id=9962 data-nosnippet>9962</a>            .epoch_start_block(<span class="number">321</span>)
+<a href=#9963 id=9963 data-nosnippet>9963</a>            .set_upgrades(upgrade.target)
+<a href=#9964 id=9964 data-nosnippet>9964</a>            .<span class="kw">await
+<a href=#9965 id=9965 data-nosnippet>9965</a>            </span>.build();
+<a href=#9966 id=9966 data-nosnippet>9966</a>
+<a href=#9967 id=9967 data-nosnippet>9967</a>        <span class="kw">let </span>storage = join_all((<span class="number">0</span>..NUM_NODES).map(|<span class="kw">_</span>| SqlDataSource::create_storage())).<span class="kw">await</span>;
+<a href=#9968 id=9968 data-nosnippet>9968</a>        <span class="kw">let </span>persistence: [<span class="kw">_</span>; NUM_NODES] = storage
+<a href=#9969 id=9969 data-nosnippet>9969</a>            .iter()
+<a href=#9970 id=9970 data-nosnippet>9970</a>            .map(&lt;SqlDataSource <span class="kw">as </span>TestableSequencerDataSource&gt;::persistence_options)
+<a href=#9971 id=9971 data-nosnippet>9971</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
+<a href=#9972 id=9972 data-nosnippet>9972</a>            .try_into()
+<a href=#9973 id=9973 data-nosnippet>9973</a>            .unwrap();
+<a href=#9974 id=9974 data-nosnippet>9974</a>
+<a href=#9975 id=9975 data-nosnippet>9975</a>        <span class="kw">let </span>config = TestNetworkConfigBuilder::&lt;NUM_NODES, <span class="kw">_</span>, <span class="kw">_</span>&gt;::with_num_nodes()
+<a href=#9976 id=9976 data-nosnippet>9976</a>            .api_config(
+<a href=#9977 id=9977 data-nosnippet>9977</a>                SqlDataSource::options(<span class="kw-2">&amp;</span>storage[<span class="number">0</span>], Options::with_port(port))
+<a href=#9978 id=9978 data-nosnippet>9978</a>                    .light_client(Default::default()),
+<a href=#9979 id=9979 data-nosnippet>9979</a>            )
+<a href=#9980 id=9980 data-nosnippet>9980</a>            .persistences(persistence.clone())
+<a href=#9981 id=9981 data-nosnippet>9981</a>            .catchups(std::array::from_fn(|<span class="kw">_</span>| {
+<a href=#9982 id=9982 data-nosnippet>9982</a>                StatePeers::&lt;SequencerApiVersion&gt;::from_urls(
+<a href=#9983 id=9983 data-nosnippet>9983</a>                    <span class="macro">vec!</span>[url.clone()],
+<a href=#9984 id=9984 data-nosnippet>9984</a>                    Default::default(),
+<a href=#9985 id=9985 data-nosnippet>9985</a>                    Duration::from_secs(<span class="number">2</span>),
+<a href=#9986 id=9986 data-nosnippet>9986</a>                    <span class="kw-2">&amp;</span>NoMetrics,
+<a href=#9987 id=9987 data-nosnippet>9987</a>                )
+<a href=#9988 id=9988 data-nosnippet>9988</a>            }))
+<a href=#9989 id=9989 data-nosnippet>9989</a>            .network_config(test_config)
+<a href=#9990 id=9990 data-nosnippet>9990</a>            .build();
+<a href=#9991 id=9991 data-nosnippet>9991</a>
+<a href=#9992 id=9992 data-nosnippet>9992</a>        <span class="kw">let </span><span class="kw-2">mut </span>network = TestNetwork::new(config, upgrade).<span class="kw">await</span>;
+<a href=#9993 id=9993 data-nosnippet>9993</a>        <span class="kw">let </span>client: Client&lt;ServerError, StaticVersion&lt;<span class="number">0</span>, <span class="number">1</span>&gt;&gt; = Client::new(url);
+<a href=#9994 id=9994 data-nosnippet>9994</a>        client.connect(<span class="prelude-val">None</span>).<span class="kw">await</span>;
+<a href=#9995 id=9995 data-nosnippet>9995</a>
+<a href=#9996 id=9996 data-nosnippet>9996</a>        <span class="comment">// Get a leaf stream so that we can wait for various events. Also keep track of each leaf
+<a href=#9997 id=9997 data-nosnippet>9997</a>        // yielded, which we can use as ground truth later in the test.
+<a href=#9998 id=9998 data-nosnippet>9998</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>actual_leaves = <span class="macro">vec!</span>[];
+<a href=#9999 id=9999 data-nosnippet>9999</a>        <span class="kw">let </span><span class="kw-2">mut </span>actual_blocks = <span class="macro">vec!</span>[];
+<a href=#10000 id=10000 data-nosnippet>10000</a>        <span class="kw">let </span><span class="kw-2">mut </span>leaves = client
+<a href=#10001 id=10001 data-nosnippet>10001</a>            .socket(<span class="string">"availability/stream/leaves/0"</span>)
+<a href=#10002 id=10002 data-nosnippet>10002</a>            .subscribe::&lt;LeafQueryData&lt;SeqTypes&gt;&gt;()
+<a href=#10003 id=10003 data-nosnippet>10003</a>            .<span class="kw">await
+<a href=#10004 id=10004 data-nosnippet>10004</a>            </span>.unwrap()
+<a href=#10005 id=10005 data-nosnippet>10005</a>            .zip(
+<a href=#10006 id=10006 data-nosnippet>10006</a>                client
+<a href=#10007 id=10007 data-nosnippet>10007</a>                    .socket(<span class="string">"availability/stream/blocks/0"</span>)
+<a href=#10008 id=10008 data-nosnippet>10008</a>                    .subscribe::&lt;BlockQueryData&lt;SeqTypes&gt;&gt;()
+<a href=#10009 id=10009 data-nosnippet>10009</a>                    .<span class="kw">await
+<a href=#10010 id=10010 data-nosnippet>10010</a>                    </span>.unwrap(),
+<a href=#10011 id=10011 data-nosnippet>10011</a>            )
+<a href=#10012 id=10012 data-nosnippet>10012</a>            .map(|(leaf, block)| {
+<a href=#10013 id=10013 data-nosnippet>10013</a>                <span class="kw">let </span>leaf = leaf.unwrap();
+<a href=#10014 id=10014 data-nosnippet>10014</a>                <span class="kw">let </span>block = block.unwrap();
+<a href=#10015 id=10015 data-nosnippet>10015</a>                actual_leaves.push(leaf.clone());
+<a href=#10016 id=10016 data-nosnippet>10016</a>                actual_blocks.push(block);
+<a href=#10017 id=10017 data-nosnippet>10017</a>                leaf
+<a href=#10018 id=10018 data-nosnippet>10018</a>            });
+<a href=#10019 id=10019 data-nosnippet>10019</a>
+<a href=#10020 id=10020 data-nosnippet>10020</a>        <span class="comment">// Wait for the upgrade to take effect.
+<a href=#10021 id=10021 data-nosnippet>10021</a>        </span><span class="kw">let </span>(upgrade_height, first_epoch) = <span class="kw">loop </span>{
+<a href=#10022 id=10022 data-nosnippet>10022</a>            <span class="kw">let </span>leaf: LeafQueryData&lt;SeqTypes&gt; = leaves.next().<span class="kw">await</span>.unwrap();
+<a href=#10023 id=10023 data-nosnippet>10023</a>            <span class="kw">if </span>leaf.header().version() &lt; EPOCH_VERSION {
+<a href=#10024 id=10024 data-nosnippet>10024</a>                <span class="macro">tracing::info!</span>(version = %leaf.header().version(), height = leaf.header().height(), view = <span class="question-mark">?</span>leaf.leaf().view_number(), <span class="string">"waiting for epoch upgrade"</span>);
+<a href=#10025 id=10025 data-nosnippet>10025</a>                <span class="kw">continue</span>;
+<a href=#10026 id=10026 data-nosnippet>10026</a>            }
+<a href=#10027 id=10027 data-nosnippet>10027</a>            <span class="kw">break </span>(leaf.height(), leaf.leaf().epoch(EPOCH_HEIGHT).unwrap());
+<a href=#10028 id=10028 data-nosnippet>10028</a>        };
+<a href=#10029 id=10029 data-nosnippet>10029</a>        <span class="macro">tracing::info!</span>(upgrade_height, <span class="question-mark">?</span>first_epoch, <span class="string">"epochs enabled"</span>);
+<a href=#10030 id=10030 data-nosnippet>10030</a>
+<a href=#10031 id=10031 data-nosnippet>10031</a>        <span class="comment">// Wait for two epoch changes (so we get to the first epoch that actually uses the stake
+<a href=#10032 id=10032 data-nosnippet>10032</a>        // table).
+<a href=#10033 id=10033 data-nosnippet>10033</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>epoch_heights = [<span class="number">0</span>; <span class="number">2</span>];
+<a href=#10034 id=10034 data-nosnippet>10034</a>        <span class="kw">for </span>(i, epoch_height) <span class="kw">in </span>epoch_heights.iter_mut().enumerate() {
+<a href=#10035 id=10035 data-nosnippet>10035</a>            <span class="kw">let </span>desired_epoch = first_epoch + (i <span class="kw">as </span>u64) + <span class="number">1</span>;
+<a href=#10036 id=10036 data-nosnippet>10036</a>            <span class="kw-2">*</span>epoch_height = <span class="kw">loop </span>{
+<a href=#10037 id=10037 data-nosnippet>10037</a>                <span class="kw">let </span>leaf = leaves.next().<span class="kw">await</span>.unwrap();
+<a href=#10038 id=10038 data-nosnippet>10038</a>                <span class="kw">let </span>epoch = leaf.leaf().epoch(EPOCH_HEIGHT).unwrap();
+<a href=#10039 id=10039 data-nosnippet>10039</a>                <span class="kw">if </span>epoch &gt; desired_epoch {
+<a href=#10040 id=10040 data-nosnippet>10040</a>                    <span class="macro">tracing::info!</span>(
+<a href=#10041 id=10041 data-nosnippet>10041</a>                        height = leaf.height(),
+<a href=#10042 id=10042 data-nosnippet>10042</a>                        <span class="question-mark">?</span>desired_epoch,
+<a href=#10043 id=10043 data-nosnippet>10043</a>                        <span class="question-mark">?</span>epoch,
+<a href=#10044 id=10044 data-nosnippet>10044</a>                        <span class="string">"changed epoch"
+<a href=#10045 id=10045 data-nosnippet>10045</a>                    </span>);
+<a href=#10046 id=10046 data-nosnippet>10046</a>                    <span class="kw">break </span>leaf.height();
+<a href=#10047 id=10047 data-nosnippet>10047</a>                }
+<a href=#10048 id=10048 data-nosnippet>10048</a>                <span class="macro">tracing::info!</span>(
+<a href=#10049 id=10049 data-nosnippet>10049</a>                    <span class="question-mark">?</span>desired_epoch,
+<a href=#10050 id=10050 data-nosnippet>10050</a>                    height = leaf.header().height(),
+<a href=#10051 id=10051 data-nosnippet>10051</a>                    view = <span class="question-mark">?</span>leaf.leaf().view_number(),
+<a href=#10052 id=10052 data-nosnippet>10052</a>                    <span class="string">"waiting for epoch change"
+<a href=#10053 id=10053 data-nosnippet>10053</a>                </span>);
+<a href=#10054 id=10054 data-nosnippet>10054</a>            };
+<a href=#10055 id=10055 data-nosnippet>10055</a>        }
+<a href=#10056 id=10056 data-nosnippet>10056</a>
+<a href=#10057 id=10057 data-nosnippet>10057</a>        <span class="comment">// Wait a few more blocks.
+<a href=#10058 id=10058 data-nosnippet>10058</a>        </span><span class="kw">let </span>max_block = epoch_heights[<span class="number">1</span>] + <span class="number">1</span>;
+<a href=#10059 id=10059 data-nosnippet>10059</a>        <span class="kw">loop </span>{
+<a href=#10060 id=10060 data-nosnippet>10060</a>            <span class="kw">let </span>leaf = leaves.next().<span class="kw">await</span>.unwrap();
+<a href=#10061 id=10061 data-nosnippet>10061</a>            <span class="kw">if </span>leaf.height() &gt; max_block {
+<a href=#10062 id=10062 data-nosnippet>10062</a>                <span class="kw">break</span>;
+<a href=#10063 id=10063 data-nosnippet>10063</a>            }
+<a href=#10064 id=10064 data-nosnippet>10064</a>            <span class="macro">tracing::info!</span>(max_block, height = leaf.height(), <span class="string">"waiting for block"</span>);
+<a href=#10065 id=10065 data-nosnippet>10065</a>        }
+<a href=#10066 id=10066 data-nosnippet>10066</a>
+<a href=#10067 id=10067 data-nosnippet>10067</a>        <span class="comment">// Stop consensus. All the blocks we are going to query have already been produced.
+<a href=#10068 id=10068 data-nosnippet>10068</a>        // Continuing to run consensus would just waste resources while we check stuff.
+<a href=#10069 id=10069 data-nosnippet>10069</a>        </span>network.stop_consensus().<span class="kw">await</span>;
+<a href=#10070 id=10070 data-nosnippet>10070</a>
+<a href=#10071 id=10071 data-nosnippet>10071</a>        <span class="comment">// Check light client. Querying every single block is too slow, so we'll check a few blocks
+<a href=#10072 id=10072 data-nosnippet>10072</a>        // around various critical points:
+<a href=#10073 id=10073 data-nosnippet>10073</a>        </span><span class="kw">let </span>heights =
+<a href=#10074 id=10074 data-nosnippet>10074</a>        <span class="comment">// * The first few blocks, including genesis
+<a href=#10075 id=10075 data-nosnippet>10075</a>            </span>(<span class="number">0</span>..=<span class="number">1</span>)
+<a href=#10076 id=10076 data-nosnippet>10076</a>        <span class="comment">// * A few blocks just before and after the upgrade
+<a href=#10077 id=10077 data-nosnippet>10077</a>            </span>.chain(upgrade_height-<span class="number">1</span>..=upgrade_height+<span class="number">1</span>)
+<a href=#10078 id=10078 data-nosnippet>10078</a>        <span class="comment">// * A few blocks just before and after the first epoch change
+<a href=#10079 id=10079 data-nosnippet>10079</a>            </span>.chain(epoch_heights[<span class="number">0</span>]-<span class="number">1</span>..=epoch_heights[<span class="number">0</span>] + <span class="number">1</span>)
+<a href=#10080 id=10080 data-nosnippet>10080</a>        <span class="comment">// * A few blocks just before and after the stake table comes into effect
+<a href=#10081 id=10081 data-nosnippet>10081</a>            </span>.chain(epoch_heights[<span class="number">1</span>]-<span class="number">1</span>..=max_block);
+<a href=#10082 id=10082 data-nosnippet>10082</a>
+<a href=#10083 id=10083 data-nosnippet>10083</a>        check_light_client_proofs(
+<a href=#10084 id=10084 data-nosnippet>10084</a>            <span class="kw-2">&amp;</span>client,
+<a href=#10085 id=10085 data-nosnippet>10085</a>            <span class="kw-2">&amp;</span>actual_leaves,
+<a href=#10086 id=10086 data-nosnippet>10086</a>            <span class="kw-2">&amp;</span>actual_blocks,
+<a href=#10087 id=10087 data-nosnippet>10087</a>            heights,
+<a href=#10088 id=10088 data-nosnippet>10088</a>            EPOCH_HEIGHT,
+<a href=#10089 id=10089 data-nosnippet>10089</a>        )
+<a href=#10090 id=10090 data-nosnippet>10090</a>        .<span class="kw">await</span>;
+<a href=#10091 id=10091 data-nosnippet>10091</a>        check_light_client_stake_table(<span class="kw-2">&amp;</span>client, <span class="kw-2">&amp;</span>network.server, first_epoch).<span class="kw">await</span>;
+<a href=#10092 id=10092 data-nosnippet>10092</a>    }
+<a href=#10093 id=10093 data-nosnippet>10093</a>
+<a href=#10094 id=10094 data-nosnippet>10094</a>    <span class="doccomment">/// run through the new protocol upgrade and a following epoch change, then check the
+<a href=#10095 id=10095 data-nosnippet>10095</a>    /// light client serves correct leaf, header, payload, and stake table
+<a href=#10096 id=10096 data-nosnippet>10096</a>    /// proofs around both boundaries.
+<a href=#10097 id=10097 data-nosnippet>10097</a>    </span><span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#10098 id=10098 data-nosnippet>10098</a>    </span><span class="kw">async fn </span>test_light_client_new_protocol_upgrade() {
+<a href=#10099 id=10099 data-nosnippet>10099</a>        <span class="kw">const </span>NUM_NODES: usize = <span class="number">5</span>;
+<a href=#10100 id=10100 data-nosnippet>10100</a>        <span class="kw">const </span>EPOCH_HEIGHT: u64 = <span class="number">70</span>;
+<a href=#10101 id=10101 data-nosnippet>10101</a>        <span class="kw">const </span>UPGRADE_START_PROPOSING_VIEW: u64 = <span class="number">3 </span>* EPOCH_HEIGHT + <span class="number">5</span>;
+<a href=#10102 id=10102 data-nosnippet>10102</a>        <span class="kw">const </span>UPGRADE: Upgrade = Upgrade::new(EPOCH_REWARD_VERSION, NEW_PROTOCOL_VERSION);
+<a href=#10103 id=10103 data-nosnippet>10103</a>
+<a href=#10104 id=10104 data-nosnippet>10104</a>        <span class="kw">let </span>port = reserve_tcp_port().expect(<span class="string">"OS should have ephemeral ports available"</span>);
+<a href=#10105 id=10105 data-nosnippet>10105</a>        <span class="kw">let </span>url: Url = <span class="macro">format!</span>(<span class="string">"http://localhost:{port}"</span>).parse().unwrap();
 <a href=#10106 id=10106 data-nosnippet>10106</a>
-<a href=#10107 id=10107 data-nosnippet>10107</a>        <span class="comment">// Wait for chain to advance past our target height
-<a href=#10108 id=10108 data-nosnippet>10108</a>        </span><span class="kw">let </span>height_client: Client&lt;ServerError, StaticVersion&lt;<span class="number">0</span>, <span class="number">1</span>&gt;&gt; =
-<a href=#10109 id=10109 data-nosnippet>10109</a>            Client::new(<span class="macro">format!</span>(<span class="string">"http://localhost:{port}"</span>).parse().unwrap());
-<a href=#10110 id=10110 data-nosnippet>10110</a>        wait_until_block_height(<span class="kw-2">&amp;</span>height_client, <span class="string">"node/block-height"</span>, TARGET_HEIGHT + <span class="number">5</span>).<span class="kw">await</span>;
-<a href=#10111 id=10111 data-nosnippet>10111</a>
-<a href=#10112 id=10112 data-nosnippet>10112</a>        <span class="kw">let </span>coordinator = network.server.node_state().coordinator;
-<a href=#10113 id=10113 data-nosnippet>10113</a>
-<a href=#10114 id=10114 data-nosnippet>10114</a>        <span class="comment">// Use StatePeers to fetch the leaf at the exact target height
-<a href=#10115 id=10115 data-nosnippet>10115</a>        </span><span class="kw">let </span>catchup = StatePeers::&lt;StaticVersion&lt;<span class="number">0</span>, <span class="number">1</span>&gt;&gt;::from_urls(
-<a href=#10116 id=10116 data-nosnippet>10116</a>            <span class="macro">vec!</span>[<span class="macro">format!</span>(<span class="string">"http://localhost:{port}"</span>).parse().unwrap()],
-<a href=#10117 id=10117 data-nosnippet>10117</a>            Default::default(),
-<a href=#10118 id=10118 data-nosnippet>10118</a>            Duration::from_secs(<span class="number">5</span>),
-<a href=#10119 id=10119 data-nosnippet>10119</a>            <span class="kw-2">&amp;</span>NoMetrics,
-<a href=#10120 id=10120 data-nosnippet>10120</a>        );
-<a href=#10121 id=10121 data-nosnippet>10121</a>
-<a href=#10122 id=10122 data-nosnippet>10122</a>        <span class="kw">let </span>leaf = catchup.fetch_leaf(coordinator, TARGET_HEIGHT).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#10123 id=10123 data-nosnippet>10123</a>
-<a href=#10124 id=10124 data-nosnippet>10124</a>        <span class="macro">assert_eq!</span>(
-<a href=#10125 id=10125 data-nosnippet>10125</a>            leaf.height(),
-<a href=#10126 id=10126 data-nosnippet>10126</a>            TARGET_HEIGHT,
-<a href=#10127 id=10127 data-nosnippet>10127</a>            <span class="string">"fetch_leaf must return the leaf at exactly the requested height"
-<a href=#10128 id=10128 data-nosnippet>10128</a>        </span>);
-<a href=#10129 id=10129 data-nosnippet>10129</a>
-<a href=#10130 id=10130 data-nosnippet>10130</a>        <span class="prelude-val">Ok</span>(())
-<a href=#10131 id=10131 data-nosnippet>10131</a>    }
+<a href=#10107 id=10107 data-nosnippet>10107</a>        <span class="kw">let </span>test_config = TestConfigBuilder::&lt;NUM_NODES&gt;::default()
+<a href=#10108 id=10108 data-nosnippet>10108</a>            .epoch_height(EPOCH_HEIGHT)
+<a href=#10109 id=10109 data-nosnippet>10109</a>            .epoch_start_block(<span class="number">0</span>)
+<a href=#10110 id=10110 data-nosnippet>10110</a>            .builder_timeout(Duration::from_millis(<span class="number">500</span>))
+<a href=#10111 id=10111 data-nosnippet>10111</a>            .set_upgrades(NEW_PROTOCOL_VERSION)
+<a href=#10112 id=10112 data-nosnippet>10112</a>            .<span class="kw">await
+<a href=#10113 id=10113 data-nosnippet>10113</a>            </span>.upgrade_proposing_views(UPGRADE_START_PROPOSING_VIEW, <span class="number">1000</span>)
+<a href=#10114 id=10114 data-nosnippet>10114</a>            .build();
+<a href=#10115 id=10115 data-nosnippet>10115</a>
+<a href=#10116 id=10116 data-nosnippet>10116</a>        test_config
+<a href=#10117 id=10117 data-nosnippet>10117</a>            .anvil()
+<a href=#10118 id=10118 data-nosnippet>10118</a>            .expect(<span class="string">"TestConfigBuilder starts an anvil"</span>)
+<a href=#10119 id=10119 data-nosnippet>10119</a>            .anvil_set_interval_mining(<span class="number">1</span>)
+<a href=#10120 id=10120 data-nosnippet>10120</a>            .<span class="kw">await
+<a href=#10121 id=10121 data-nosnippet>10121</a>            </span>.expect(<span class="string">"interval mining"</span>);
+<a href=#10122 id=10122 data-nosnippet>10122</a>
+<a href=#10123 id=10123 data-nosnippet>10123</a>        <span class="comment">// Base version V5 already has epochs, so genesis must carry the stake
+<a href=#10124 id=10124 data-nosnippet>10124</a>        // table contract deployed above.
+<a href=#10125 id=10125 data-nosnippet>10125</a>        </span><span class="kw">let </span>genesis_state = ValidatedState {
+<a href=#10126 id=10126 data-nosnippet>10126</a>            chain_config: test_config
+<a href=#10127 id=10127 data-nosnippet>10127</a>                .get_upgrade_map()
+<a href=#10128 id=10128 data-nosnippet>10128</a>                .chain_config(NEW_PROTOCOL_VERSION)
+<a href=#10129 id=10129 data-nosnippet>10129</a>                .into(),
+<a href=#10130 id=10130 data-nosnippet>10130</a>            ..Default::default()
+<a href=#10131 id=10131 data-nosnippet>10131</a>        };
 <a href=#10132 id=10132 data-nosnippet>10132</a>
-<a href=#10133 id=10133 data-nosnippet>10133</a>    <span class="doccomment">/// Start a network at V5 from genesis, restart ALL nodes just before an epoch transition block
-<a href=#10134 id=10134 data-nosnippet>10134</a>    /// (`boundary - 3`), and confirm the chain keeps producing blocks afterward.
-<a href=#10135 id=10135 data-nosnippet>10135</a>    </span><span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
-<a href=#10136 id=10136 data-nosnippet>10136</a>    </span><span class="kw">async fn </span>test_v5_restart_before_epoch_boundary() {
-<a href=#10137 id=10137 data-nosnippet>10137</a>        <span class="kw">const </span>NUM_NODES: usize = <span class="number">3</span>;
-<a href=#10138 id=10138 data-nosnippet>10138</a>        <span class="kw">const </span>EPOCH_HEIGHT: u64 = <span class="number">10</span>;
-<a href=#10139 id=10139 data-nosnippet>10139</a>        <span class="comment">// Rewards start in epoch 4. Restart 3 blocks before the boundary that closes epoch 4, so
-<a href=#10140 id=10140 data-nosnippet>10140</a>        // the restarted network produces the boundary block (`4 * EPOCH_HEIGHT`) itself.
-<a href=#10141 id=10141 data-nosnippet>10141</a>        </span><span class="kw">const </span>RESTART_EPOCH: u64 = <span class="number">4</span>;
-<a href=#10142 id=10142 data-nosnippet>10142</a>        <span class="kw">const </span>RESTART_BOUNDARY: u64 = RESTART_EPOCH * EPOCH_HEIGHT;
-<a href=#10143 id=10143 data-nosnippet>10143</a>        <span class="kw">const </span>RESTART_HEIGHT: u64 = RESTART_BOUNDARY - <span class="number">3</span>;
-<a href=#10144 id=10144 data-nosnippet>10144</a>        <span class="comment">// Blocks to produce after the restart before declaring success.
-<a href=#10145 id=10145 data-nosnippet>10145</a>        </span><span class="kw">const </span>BLOCKS_AFTER_RESTART: u64 = <span class="number">5</span>;
-<a href=#10146 id=10146 data-nosnippet>10146</a>
-<a href=#10147 id=10147 data-nosnippet>10147</a>        <span class="kw">const </span>V5: Upgrade = Upgrade::trivial(EPOCH_REWARD_VERSION);
-<a href=#10148 id=10148 data-nosnippet>10148</a>
-<a href=#10149 id=10149 data-nosnippet>10149</a>        <span class="kw">let </span>port = reserve_tcp_port().expect(<span class="string">"OS should have ephemeral ports available"</span>);
-<a href=#10150 id=10150 data-nosnippet>10150</a>
-<a href=#10151 id=10151 data-nosnippet>10151</a>        <span class="comment">// Slow empty-block production so we comfortably stop at the exact target height. On an idle
-<a href=#10152 id=10152 data-nosnippet>10152</a>        // chain the empty-block time is ~`builder_timeout`; raise `next_view_timeout` above it so
-<a href=#10153 id=10153 data-nosnippet>10153</a>        // the slow (but healthy) views aren't treated as failures.
-<a href=#10154 id=10154 data-nosnippet>10154</a>        </span><span class="kw">let </span>network_config = TestConfigBuilder::&lt;NUM_NODES&gt;::default()
-<a href=#10155 id=10155 data-nosnippet>10155</a>            .epoch_height(EPOCH_HEIGHT)
-<a href=#10156 id=10156 data-nosnippet>10156</a>            .builder_timeout(Duration::from_secs(<span class="number">3</span>))
-<a href=#10157 id=10157 data-nosnippet>10157</a>            .next_view_timeout(Duration::from_secs(<span class="number">10</span>))
-<a href=#10158 id=10158 data-nosnippet>10158</a>            .build();
-<a href=#10159 id=10159 data-nosnippet>10159</a>
-<a href=#10160 id=10160 data-nosnippet>10160</a>        <span class="kw">let </span>storage = join_all((<span class="number">0</span>..NUM_NODES).map(|<span class="kw">_</span>| SqlDataSource::create_storage())).<span class="kw">await</span>;
-<a href=#10161 id=10161 data-nosnippet>10161</a>        <span class="kw">let </span>persistence: [<span class="kw">_</span>; NUM_NODES] = storage
-<a href=#10162 id=10162 data-nosnippet>10162</a>            .iter()
-<a href=#10163 id=10163 data-nosnippet>10163</a>            .map(&lt;SqlDataSource <span class="kw">as </span>TestableSequencerDataSource&gt;::persistence_options)
-<a href=#10164 id=10164 data-nosnippet>10164</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
-<a href=#10165 id=10165 data-nosnippet>10165</a>            .try_into()
-<a href=#10166 id=10166 data-nosnippet>10166</a>            .unwrap();
-<a href=#10167 id=10167 data-nosnippet>10167</a>
-<a href=#10168 id=10168 data-nosnippet>10168</a>        <span class="kw">let </span>config = TestNetworkConfigBuilder::&lt;NUM_NODES, <span class="kw">_</span>, <span class="kw">_</span>&gt;::with_num_nodes()
-<a href=#10169 id=10169 data-nosnippet>10169</a>            .api_config(SqlDataSource::options(
-<a href=#10170 id=10170 data-nosnippet>10170</a>                <span class="kw-2">&amp;</span>storage[<span class="number">0</span>],
-<a href=#10171 id=10171 data-nosnippet>10171</a>                Options::with_port(port),
-<a href=#10172 id=10172 data-nosnippet>10172</a>            ))
-<a href=#10173 id=10173 data-nosnippet>10173</a>            .persistences(persistence.clone())
-<a href=#10174 id=10174 data-nosnippet>10174</a>            .catchups(std::array::from_fn(|<span class="kw">_</span>| {
-<a href=#10175 id=10175 data-nosnippet>10175</a>                StatePeers::&lt;SequencerApiVersion&gt;::from_urls(
-<a href=#10176 id=10176 data-nosnippet>10176</a>                    <span class="macro">vec!</span>[<span class="macro">format!</span>(<span class="string">"http://localhost:{port}"</span>).parse().unwrap()],
-<a href=#10177 id=10177 data-nosnippet>10177</a>                    Default::default(),
-<a href=#10178 id=10178 data-nosnippet>10178</a>                    Duration::from_secs(<span class="number">2</span>),
-<a href=#10179 id=10179 data-nosnippet>10179</a>                    <span class="kw-2">&amp;</span>NoMetrics,
-<a href=#10180 id=10180 data-nosnippet>10180</a>                )
-<a href=#10181 id=10181 data-nosnippet>10181</a>            }))
-<a href=#10182 id=10182 data-nosnippet>10182</a>            .network_config(network_config)
-<a href=#10183 id=10183 data-nosnippet>10183</a>            .pos_hook(DelegationConfig::MultipleDelegators, Default::default(), V5)
-<a href=#10184 id=10184 data-nosnippet>10184</a>            .<span class="kw">await
-<a href=#10185 id=10185 data-nosnippet>10185</a>            </span>.unwrap()
-<a href=#10186 id=10186 data-nosnippet>10186</a>            .build();
-<a href=#10187 id=10187 data-nosnippet>10187</a>
-<a href=#10188 id=10188 data-nosnippet>10188</a>        <span class="kw">let </span><span class="kw-2">mut </span>network = TestNetwork::new(config, V5).<span class="kw">await</span>;
-<a href=#10189 id=10189 data-nosnippet>10189</a>
-<a href=#10190 id=10190 data-nosnippet>10190</a>        <span class="comment">// Watch the decide stream and stop as soon as `boundary - 3` is decided. Consuming the
-<a href=#10191 id=10191 data-nosnippet>10191</a>        // stream (rather than polling `decided_leaf`) makes this independent of block timing: we
-<a href=#10192 id=10192 data-nosnippet>10192</a>        // see every decided leaf and stop the network the moment the target height appears, so we
-<a href=#10193 id=10193 data-nosnippet>10193</a>        // can never race past it regardless of how fast blocks are produced.
-<a href=#10194 id=10194 data-nosnippet>10194</a>        </span>{
-<a href=#10195 id=10195 data-nosnippet>10195</a>            <span class="kw">let </span><span class="kw-2">mut </span>events = network.server.event_stream();
-<a href=#10196 id=10196 data-nosnippet>10196</a>            <span class="lifetime">'wait</span>: <span class="kw">loop </span>{
-<a href=#10197 id=10197 data-nosnippet>10197</a>                <span class="kw">let </span>event = events
-<a href=#10198 id=10198 data-nosnippet>10198</a>                    .next()
-<a href=#10199 id=10199 data-nosnippet>10199</a>                    .<span class="kw">await
-<a href=#10200 id=10200 data-nosnippet>10200</a>                    </span>.expect(<span class="string">"event stream ended unexpectedly"</span>);
-<a href=#10201 id=10201 data-nosnippet>10201</a>                <span class="kw">let </span>CoordinatorEvent::LegacyEvent(Event {
-<a href=#10202 id=10202 data-nosnippet>10202</a>                    event: EventType::Decide { leaf_chain, .. },
-<a href=#10203 id=10203 data-nosnippet>10203</a>                    ..
-<a href=#10204 id=10204 data-nosnippet>10204</a>                }) = event
-<a href=#10205 id=10205 data-nosnippet>10205</a>                <span class="kw">else </span>{
-<a href=#10206 id=10206 data-nosnippet>10206</a>                    <span class="kw">continue</span>;
-<a href=#10207 id=10207 data-nosnippet>10207</a>                };
-<a href=#10208 id=10208 data-nosnippet>10208</a>                <span class="comment">// `leaf_chain` is newest-first; once any decided leaf has reached the target
-<a href=#10209 id=10209 data-nosnippet>10209</a>                // height, the chain is at or past it.
-<a href=#10210 id=10210 data-nosnippet>10210</a>                </span><span class="kw">for </span>LeafInfo { leaf, .. } <span class="kw">in </span>leaf_chain.iter() {
-<a href=#10211 id=10211 data-nosnippet>10211</a>                    <span class="kw">if </span>leaf.block_header().height() &gt;= RESTART_HEIGHT {
-<a href=#10212 id=10212 data-nosnippet>10212</a>                        <span class="kw">break </span><span class="lifetime">'wait</span>;
-<a href=#10213 id=10213 data-nosnippet>10213</a>                    }
+<a href=#10133 id=10133 data-nosnippet>10133</a>        <span class="kw">let </span>storage = join_all((<span class="number">0</span>..NUM_NODES).map(|<span class="kw">_</span>| SqlDataSource::create_storage())).<span class="kw">await</span>;
+<a href=#10134 id=10134 data-nosnippet>10134</a>        <span class="kw">let </span>persistence: [<span class="kw">_</span>; NUM_NODES] = storage
+<a href=#10135 id=10135 data-nosnippet>10135</a>            .iter()
+<a href=#10136 id=10136 data-nosnippet>10136</a>            .map(&lt;SqlDataSource <span class="kw">as </span>TestableSequencerDataSource&gt;::persistence_options)
+<a href=#10137 id=10137 data-nosnippet>10137</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
+<a href=#10138 id=10138 data-nosnippet>10138</a>            .try_into()
+<a href=#10139 id=10139 data-nosnippet>10139</a>            .unwrap();
+<a href=#10140 id=10140 data-nosnippet>10140</a>
+<a href=#10141 id=10141 data-nosnippet>10141</a>        <span class="kw">let </span>config = TestNetworkConfigBuilder::&lt;NUM_NODES, <span class="kw">_</span>, <span class="kw">_</span>&gt;::with_num_nodes()
+<a href=#10142 id=10142 data-nosnippet>10142</a>            .api_config(
+<a href=#10143 id=10143 data-nosnippet>10143</a>                SqlDataSource::options(<span class="kw-2">&amp;</span>storage[<span class="number">0</span>], Options::with_port(port))
+<a href=#10144 id=10144 data-nosnippet>10144</a>                    .light_client(Default::default()),
+<a href=#10145 id=10145 data-nosnippet>10145</a>            )
+<a href=#10146 id=10146 data-nosnippet>10146</a>            .persistences(persistence)
+<a href=#10147 id=10147 data-nosnippet>10147</a>            .states(std::array::from_fn(|<span class="kw">_</span>| genesis_state.clone()))
+<a href=#10148 id=10148 data-nosnippet>10148</a>            .catchups(std::array::from_fn(|<span class="kw">_</span>| {
+<a href=#10149 id=10149 data-nosnippet>10149</a>                StatePeers::&lt;SequencerApiVersion&gt;::from_urls(
+<a href=#10150 id=10150 data-nosnippet>10150</a>                    <span class="macro">vec!</span>[url.clone()],
+<a href=#10151 id=10151 data-nosnippet>10151</a>                    Default::default(),
+<a href=#10152 id=10152 data-nosnippet>10152</a>                    Duration::from_secs(<span class="number">2</span>),
+<a href=#10153 id=10153 data-nosnippet>10153</a>                    <span class="kw-2">&amp;</span>NoMetrics,
+<a href=#10154 id=10154 data-nosnippet>10154</a>                )
+<a href=#10155 id=10155 data-nosnippet>10155</a>            }))
+<a href=#10156 id=10156 data-nosnippet>10156</a>            .network_config(test_config)
+<a href=#10157 id=10157 data-nosnippet>10157</a>            .build();
+<a href=#10158 id=10158 data-nosnippet>10158</a>
+<a href=#10159 id=10159 data-nosnippet>10159</a>        <span class="kw">let </span><span class="kw-2">mut </span>network = TestNetwork::new(config, UPGRADE).<span class="kw">await</span>;
+<a href=#10160 id=10160 data-nosnippet>10160</a>        <span class="kw">let </span>client: Client&lt;ServerError, StaticVersion&lt;<span class="number">0</span>, <span class="number">1</span>&gt;&gt; = Client::new(url);
+<a href=#10161 id=10161 data-nosnippet>10161</a>        client.connect(<span class="prelude-val">None</span>).<span class="kw">await</span>;
+<a href=#10162 id=10162 data-nosnippet>10162</a>
+<a href=#10163 id=10163 data-nosnippet>10163</a>        <span class="comment">// Track each leaf and block served by the query service; they are the
+<a href=#10164 id=10164 data-nosnippet>10164</a>        // ground truth the light client proofs are checked against.
+<a href=#10165 id=10165 data-nosnippet>10165</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>actual_leaves = <span class="macro">vec!</span>[];
+<a href=#10166 id=10166 data-nosnippet>10166</a>        <span class="kw">let </span><span class="kw-2">mut </span>actual_blocks = <span class="macro">vec!</span>[];
+<a href=#10167 id=10167 data-nosnippet>10167</a>        <span class="kw">let </span><span class="kw-2">mut </span>leaves = client
+<a href=#10168 id=10168 data-nosnippet>10168</a>            .socket(<span class="string">"availability/stream/leaves/0"</span>)
+<a href=#10169 id=10169 data-nosnippet>10169</a>            .subscribe::&lt;LeafQueryData&lt;SeqTypes&gt;&gt;()
+<a href=#10170 id=10170 data-nosnippet>10170</a>            .<span class="kw">await
+<a href=#10171 id=10171 data-nosnippet>10171</a>            </span>.unwrap()
+<a href=#10172 id=10172 data-nosnippet>10172</a>            .zip(
+<a href=#10173 id=10173 data-nosnippet>10173</a>                client
+<a href=#10174 id=10174 data-nosnippet>10174</a>                    .socket(<span class="string">"availability/stream/blocks/0"</span>)
+<a href=#10175 id=10175 data-nosnippet>10175</a>                    .subscribe::&lt;BlockQueryData&lt;SeqTypes&gt;&gt;()
+<a href=#10176 id=10176 data-nosnippet>10176</a>                    .<span class="kw">await
+<a href=#10177 id=10177 data-nosnippet>10177</a>                    </span>.unwrap(),
+<a href=#10178 id=10178 data-nosnippet>10178</a>            )
+<a href=#10179 id=10179 data-nosnippet>10179</a>            .map(|(leaf, block)| {
+<a href=#10180 id=10180 data-nosnippet>10180</a>                <span class="kw">let </span>leaf = leaf.unwrap();
+<a href=#10181 id=10181 data-nosnippet>10181</a>                actual_leaves.push(leaf.clone());
+<a href=#10182 id=10182 data-nosnippet>10182</a>                actual_blocks.push(block.unwrap());
+<a href=#10183 id=10183 data-nosnippet>10183</a>                leaf
+<a href=#10184 id=10184 data-nosnippet>10184</a>            });
+<a href=#10185 id=10185 data-nosnippet>10185</a>
+<a href=#10186 id=10186 data-nosnippet>10186</a>        <span class="comment">// Wait for the upgrade to take effect.
+<a href=#10187 id=10187 data-nosnippet>10187</a>        </span><span class="kw">let </span>upgrade_height = timeout(Duration::from_secs(<span class="number">600</span>), <span class="kw">async </span>{
+<a href=#10188 id=10188 data-nosnippet>10188</a>            <span class="kw">loop </span>{
+<a href=#10189 id=10189 data-nosnippet>10189</a>                <span class="kw">let </span>leaf = leaves.next().<span class="kw">await</span>.unwrap();
+<a href=#10190 id=10190 data-nosnippet>10190</a>                <span class="kw">if </span>leaf.header().version() &gt;= NEW_PROTOCOL_VERSION {
+<a href=#10191 id=10191 data-nosnippet>10191</a>                    <span class="kw">break </span>leaf.height();
+<a href=#10192 id=10192 data-nosnippet>10192</a>                }
+<a href=#10193 id=10193 data-nosnippet>10193</a>                <span class="macro">tracing::info!</span>(
+<a href=#10194 id=10194 data-nosnippet>10194</a>                    version = %leaf.header().version(),
+<a href=#10195 id=10195 data-nosnippet>10195</a>                    height = leaf.header().height(),
+<a href=#10196 id=10196 data-nosnippet>10196</a>                    view = <span class="question-mark">?</span>leaf.leaf().view_number(),
+<a href=#10197 id=10197 data-nosnippet>10197</a>                    <span class="string">"waiting for new protocol upgrade"
+<a href=#10198 id=10198 data-nosnippet>10198</a>                </span>);
+<a href=#10199 id=10199 data-nosnippet>10199</a>            }
+<a href=#10200 id=10200 data-nosnippet>10200</a>        })
+<a href=#10201 id=10201 data-nosnippet>10201</a>        .<span class="kw">await
+<a href=#10202 id=10202 data-nosnippet>10202</a>        </span>.expect(<span class="string">"the network did not upgrade to the new protocol"</span>);
+<a href=#10203 id=10203 data-nosnippet>10203</a>        <span class="kw">let </span>upgrade_epoch = epoch_from_block_number(upgrade_height, EPOCH_HEIGHT);
+<a href=#10204 id=10204 data-nosnippet>10204</a>        <span class="macro">tracing::info!</span>(upgrade_height, upgrade_epoch, <span class="string">"new protocol enabled"</span>);
+<a href=#10205 id=10205 data-nosnippet>10205</a>
+<a href=#10206 id=10206 data-nosnippet>10206</a>        <span class="comment">// Wait for the first post upgrade epoch change, to also cover proofs
+<a href=#10207 id=10207 data-nosnippet>10207</a>        // across a V6 epoch boundary
+<a href=#10208 id=10208 data-nosnippet>10208</a>        </span><span class="kw">let </span>epoch_change_height = timeout(Duration::from_secs(<span class="number">300</span>), <span class="kw">async </span>{
+<a href=#10209 id=10209 data-nosnippet>10209</a>            <span class="kw">loop </span>{
+<a href=#10210 id=10210 data-nosnippet>10210</a>                <span class="kw">let </span>leaf = leaves.next().<span class="kw">await</span>.unwrap();
+<a href=#10211 id=10211 data-nosnippet>10211</a>                <span class="kw">let </span>epoch = epoch_from_block_number(leaf.height(), EPOCH_HEIGHT);
+<a href=#10212 id=10212 data-nosnippet>10212</a>                <span class="kw">if </span>epoch &gt; upgrade_epoch {
+<a href=#10213 id=10213 data-nosnippet>10213</a>                    <span class="kw">break </span>leaf.height();
 <a href=#10214 id=10214 data-nosnippet>10214</a>                }
-<a href=#10215 id=10215 data-nosnippet>10215</a>            }
-<a href=#10216 id=10216 data-nosnippet>10216</a>        }
-<a href=#10217 id=10217 data-nosnippet>10217</a>
-<a href=#10218 id=10218 data-nosnippet>10218</a>        <span class="kw">let </span>restart_height = network.server.decided_leaf().<span class="kw">await</span>.height();
-<a href=#10219 id=10219 data-nosnippet>10219</a>        <span class="macro">tracing::info!</span>(
-<a href=#10220 id=10220 data-nosnippet>10220</a>            restart_height,
-<a href=#10221 id=10221 data-nosnippet>10221</a>            restart_epoch = RESTART_EPOCH,
-<a href=#10222 id=10222 data-nosnippet>10222</a>            restart_boundary = RESTART_BOUNDARY,
-<a href=#10223 id=10223 data-nosnippet>10223</a>            <span class="string">"restarting all nodes 3 blocks before an epoch boundary"
-<a href=#10224 id=10224 data-nosnippet>10224</a>        </span>);
+<a href=#10215 id=10215 data-nosnippet>10215</a>                <span class="macro">tracing::info!</span>(
+<a href=#10216 id=10216 data-nosnippet>10216</a>                    height = leaf.height(),
+<a href=#10217 id=10217 data-nosnippet>10217</a>                    <span class="question-mark">?</span>epoch,
+<a href=#10218 id=10218 data-nosnippet>10218</a>                    <span class="string">"waiting for a post-upgrade epoch change"
+<a href=#10219 id=10219 data-nosnippet>10219</a>                </span>);
+<a href=#10220 id=10220 data-nosnippet>10220</a>            }
+<a href=#10221 id=10221 data-nosnippet>10221</a>        })
+<a href=#10222 id=10222 data-nosnippet>10222</a>        .<span class="kw">await
+<a href=#10223 id=10223 data-nosnippet>10223</a>        </span>.expect(<span class="string">"no epoch change happened after the upgrade"</span>);
+<a href=#10224 id=10224 data-nosnippet>10224</a>        <span class="macro">tracing::info!</span>(epoch_change_height, <span class="string">"post upgrade epoch change"</span>);
 <a href=#10225 id=10225 data-nosnippet>10225</a>
-<a href=#10226 id=10226 data-nosnippet>10226</a>        <span class="comment">// Clone the TestConfig before dropping the network so the anvil/L1/contracts stay alive.
-<a href=#10227 id=10227 data-nosnippet>10227</a>        </span><span class="kw">let </span>saved_cfg = network.cfg.clone();
-<a href=#10228 id=10228 data-nosnippet>10228</a>
-<a href=#10229 id=10229 data-nosnippet>10229</a>        network.stop_consensus().<span class="kw">await</span>;
-<a href=#10230 id=10230 data-nosnippet>10230</a>        drop(network);
-<a href=#10231 id=10231 data-nosnippet>10231</a>
-<a href=#10232 id=10232 data-nosnippet>10232</a>        <span class="comment">// Rebuild reusing the same persistence so nodes resume from stored state.
-<a href=#10233 id=10233 data-nosnippet>10233</a>        </span><span class="kw">let </span>port2 = reserve_tcp_port().expect(<span class="string">"OS should have ephemeral ports available"</span>);
-<a href=#10234 id=10234 data-nosnippet>10234</a>        <span class="kw">let </span>config2 = TestNetworkConfigBuilder::&lt;NUM_NODES, <span class="kw">_</span>, <span class="kw">_</span>&gt;::with_num_nodes()
-<a href=#10235 id=10235 data-nosnippet>10235</a>            .api_config(SqlDataSource::options(
-<a href=#10236 id=10236 data-nosnippet>10236</a>                <span class="kw-2">&amp;</span>storage[<span class="number">0</span>],
-<a href=#10237 id=10237 data-nosnippet>10237</a>                Options::with_port(port2),
-<a href=#10238 id=10238 data-nosnippet>10238</a>            ))
-<a href=#10239 id=10239 data-nosnippet>10239</a>            .persistences(persistence)
-<a href=#10240 id=10240 data-nosnippet>10240</a>            .catchups(std::array::from_fn(|<span class="kw">_</span>| {
-<a href=#10241 id=10241 data-nosnippet>10241</a>                StatePeers::&lt;SequencerApiVersion&gt;::from_urls(
-<a href=#10242 id=10242 data-nosnippet>10242</a>                    <span class="macro">vec!</span>[<span class="macro">format!</span>(<span class="string">"http://localhost:{port2}"</span>).parse().unwrap()],
-<a href=#10243 id=10243 data-nosnippet>10243</a>                    Default::default(),
-<a href=#10244 id=10244 data-nosnippet>10244</a>                    Duration::from_secs(<span class="number">2</span>),
-<a href=#10245 id=10245 data-nosnippet>10245</a>                    <span class="kw-2">&amp;</span>NoMetrics,
-<a href=#10246 id=10246 data-nosnippet>10246</a>                )
-<a href=#10247 id=10247 data-nosnippet>10247</a>            }))
-<a href=#10248 id=10248 data-nosnippet>10248</a>            .network_config(saved_cfg)
-<a href=#10249 id=10249 data-nosnippet>10249</a>            .build();
-<a href=#10250 id=10250 data-nosnippet>10250</a>        <span class="kw">let </span>network2 = TestNetwork::new(config2, V5).<span class="kw">await</span>;
-<a href=#10251 id=10251 data-nosnippet>10251</a>
-<a href=#10252 id=10252 data-nosnippet>10252</a>        <span class="comment">// The restarted network must keep advancing, including across the next epoch boundary.
-<a href=#10253 id=10253 data-nosnippet>10253</a>        // Require BLOCKS_AFTER_RESTART new decides, using a lack-of-progress watchdog so a
-<a href=#10254 id=10254 data-nosnippet>10254</a>        // healthy-but-slow chain still passes.
-<a href=#10255 id=10255 data-nosnippet>10255</a>        </span><span class="kw">let </span>target_height = restart_height + BLOCKS_AFTER_RESTART;
-<a href=#10256 id=10256 data-nosnippet>10256</a>        <span class="kw">let </span>stall_limit = <span class="number">30</span>; <span class="comment">// 30 polls * 2s = 60s without a new decide =&gt; stalled
-<a href=#10257 id=10257 data-nosnippet>10257</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>last_height = network2.server.decided_leaf().<span class="kw">await</span>.height();
-<a href=#10258 id=10258 data-nosnippet>10258</a>        <span class="kw">let </span><span class="kw-2">mut </span>stalled_polls = <span class="number">0</span>;
-<a href=#10259 id=10259 data-nosnippet>10259</a>        <span class="kw">while </span>last_height &lt; target_height {
-<a href=#10260 id=10260 data-nosnippet>10260</a>            sleep(Duration::from_secs(<span class="number">2</span>)).<span class="kw">await</span>;
-<a href=#10261 id=10261 data-nosnippet>10261</a>            <span class="kw">let </span>height = network2.server.decided_leaf().<span class="kw">await</span>.height();
-<a href=#10262 id=10262 data-nosnippet>10262</a>            <span class="kw">if </span>height &gt; last_height {
-<a href=#10263 id=10263 data-nosnippet>10263</a>                last_height = height;
-<a href=#10264 id=10264 data-nosnippet>10264</a>                stalled_polls = <span class="number">0</span>;
-<a href=#10265 id=10265 data-nosnippet>10265</a>            } <span class="kw">else </span>{
-<a href=#10266 id=10266 data-nosnippet>10266</a>                stalled_polls += <span class="number">1</span>;
-<a href=#10267 id=10267 data-nosnippet>10267</a>                <span class="kw">if </span>stalled_polls &gt;= stall_limit {
-<a href=#10268 id=10268 data-nosnippet>10268</a>                    <span class="macro">panic!</span>(
-<a href=#10269 id=10269 data-nosnippet>10269</a>                        <span class="string">"chain stalled after restart 3 blocks before boundary {RESTART_BOUNDARY}: \
-<a href=#10270 id=10270 data-nosnippet>10270</a>                         no new decide for 60s at height {last_height}, unable to produce/cross \
-<a href=#10271 id=10271 data-nosnippet>10271</a>                         the epoch boundary (target height was {target_height})."
-<a href=#10272 id=10272 data-nosnippet>10272</a>                    </span>);
-<a href=#10273 id=10273 data-nosnippet>10273</a>                }
-<a href=#10274 id=10274 data-nosnippet>10274</a>            }
-<a href=#10275 id=10275 data-nosnippet>10275</a>        }
-<a href=#10276 id=10276 data-nosnippet>10276</a>    }
-<a href=#10277 id=10277 data-nosnippet>10277</a>}
+<a href=#10226 id=10226 data-nosnippet>10226</a>        <span class="comment">// Run a few more blocks so every queried height has the descendants its
+<a href=#10227 id=10227 data-nosnippet>10227</a>        // proof needs (QC chains, header roots, and a finalizing `Certificate2`).
+<a href=#10228 id=10228 data-nosnippet>10228</a>        </span><span class="kw">let </span>max_block = epoch_change_height + <span class="number">3</span>;
+<a href=#10229 id=10229 data-nosnippet>10229</a>        timeout(Duration::from_secs(<span class="number">120</span>), <span class="kw">async </span>{
+<a href=#10230 id=10230 data-nosnippet>10230</a>            <span class="kw">loop </span>{
+<a href=#10231 id=10231 data-nosnippet>10231</a>                <span class="kw">let </span>leaf = leaves.next().<span class="kw">await</span>.unwrap();
+<a href=#10232 id=10232 data-nosnippet>10232</a>                <span class="kw">if </span>leaf.height() &gt; max_block {
+<a href=#10233 id=10233 data-nosnippet>10233</a>                    <span class="kw">break</span>;
+<a href=#10234 id=10234 data-nosnippet>10234</a>                }
+<a href=#10235 id=10235 data-nosnippet>10235</a>                <span class="macro">tracing::info!</span>(max_block, height = leaf.height(), <span class="string">"waiting for block"</span>);
+<a href=#10236 id=10236 data-nosnippet>10236</a>            }
+<a href=#10237 id=10237 data-nosnippet>10237</a>        })
+<a href=#10238 id=10238 data-nosnippet>10238</a>        .<span class="kw">await
+<a href=#10239 id=10239 data-nosnippet>10239</a>        </span>.expect(<span class="string">"the chain stopped making progress after the upgrade"</span>);
+<a href=#10240 id=10240 data-nosnippet>10240</a>
+<a href=#10241 id=10241 data-nosnippet>10241</a>        <span class="comment">// Stop consensus: every block we query has already been produced.
+<a href=#10242 id=10242 data-nosnippet>10242</a>        </span>network.stop_consensus().<span class="kw">await</span>;
+<a href=#10243 id=10243 data-nosnippet>10243</a>
+<a href=#10244 id=10244 data-nosnippet>10244</a>        <span class="comment">// Sample blocks around the two boundaries where proof logic changes
+<a href=#10245 id=10245 data-nosnippet>10245</a>        // the V5 -&gt; V6 upgrade and the following V6 epoch change.
+<a href=#10246 id=10246 data-nosnippet>10246</a>        </span><span class="kw">let </span>heights =
+<a href=#10247 id=10247 data-nosnippet>10247</a>            (upgrade_height - <span class="number">3</span>..=upgrade_height + <span class="number">1</span>).chain(epoch_change_height - <span class="number">1</span>..=max_block);
+<a href=#10248 id=10248 data-nosnippet>10248</a>
+<a href=#10249 id=10249 data-nosnippet>10249</a>        check_light_client_proofs(
+<a href=#10250 id=10250 data-nosnippet>10250</a>            <span class="kw-2">&amp;</span>client,
+<a href=#10251 id=10251 data-nosnippet>10251</a>            <span class="kw-2">&amp;</span>actual_leaves,
+<a href=#10252 id=10252 data-nosnippet>10252</a>            <span class="kw-2">&amp;</span>actual_blocks,
+<a href=#10253 id=10253 data-nosnippet>10253</a>            heights,
+<a href=#10254 id=10254 data-nosnippet>10254</a>            EPOCH_HEIGHT,
+<a href=#10255 id=10255 data-nosnippet>10255</a>        )
+<a href=#10256 id=10256 data-nosnippet>10256</a>        .<span class="kw">await</span>;
+<a href=#10257 id=10257 data-nosnippet>10257</a>
+<a href=#10258 id=10258 data-nosnippet>10258</a>        <span class="kw">let </span>client = <span class="kw-2">&amp;</span>client;
+<a href=#10259 id=10259 data-nosnippet>10259</a>        <span class="kw">let </span>finality_proof = |height: u64| <span class="kw">async move </span>{
+<a href=#10260 id=10260 data-nosnippet>10260</a>            client
+<a href=#10261 id=10261 data-nosnippet>10261</a>                .get::&lt;LeafProof&gt;(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"light-client/leaf/{height}"</span>))
+<a href=#10262 id=10262 data-nosnippet>10262</a>                .send()
+<a href=#10263 id=10263 data-nosnippet>10263</a>                .<span class="kw">await
+<a href=#10264 id=10264 data-nosnippet>10264</a>                </span>.unwrap()
+<a href=#10265 id=10265 data-nosnippet>10265</a>        };
+<a href=#10266 id=10266 data-nosnippet>10266</a>        <span class="comment">// Everything up to the last two pre cutover leaves is old protocol
+<a href=#10267 id=10267 data-nosnippet>10267</a>        </span><span class="kw">for </span>height <span class="kw">in </span>upgrade_height - <span class="number">10</span>..=upgrade_height - <span class="number">3 </span>{
+<a href=#10268 id=10268 data-nosnippet>10268</a>            <span class="kw">let </span>proof = finality_proof(height).<span class="kw">await</span>;
+<a href=#10269 id=10269 data-nosnippet>10269</a>            <span class="macro">assert!</span>(
+<a href=#10270 id=10270 data-nosnippet>10270</a>                <span class="macro">matches!</span>(proof.proof(), FinalityProof::HotStuff2 { .. }),
+<a href=#10271 id=10271 data-nosnippet>10271</a>                <span class="string">"leaf {height} should be proven by a HotStuff2 QC chain, got {:?}"</span>,
+<a href=#10272 id=10272 data-nosnippet>10272</a>                proof.proof(),
+<a href=#10273 id=10273 data-nosnippet>10273</a>            );
+<a href=#10274 id=10274 data-nosnippet>10274</a>        }
+<a href=#10275 id=10275 data-nosnippet>10275</a>
+<a href=#10276 id=10276 data-nosnippet>10276</a>        <span class="comment">// A post cutover leaf is proven by a new protocol certificate. The last
+<a href=#10277 id=10277 data-nosnippet>10277</a>        // two pre cutover leaves will be finalized by new protocol
+<a href=#10278 id=10278 data-nosnippet>10278</a>        // e.g cutover at 347 the old protocol decides up to 344 (HotStuff2), and the
+<a href=#10279 id=10279 data-nosnippet>10279</a>        // new protocol's first Cert2 directly commits 347 and finalizes
+<a href=#10280 id=10280 data-nosnippet>10280</a>        // 345 and 346 with it via the indirect commit rule.
+<a href=#10281 id=10281 data-nosnippet>10281</a>        </span><span class="kw">for </span>height <span class="kw">in </span>[upgrade_height - <span class="number">1</span>, epoch_change_height] {
+<a href=#10282 id=10282 data-nosnippet>10282</a>            <span class="kw">let </span>proof = finality_proof(height).<span class="kw">await</span>;
+<a href=#10283 id=10283 data-nosnippet>10283</a>            <span class="macro">assert!</span>(
+<a href=#10284 id=10284 data-nosnippet>10284</a>                <span class="macro">matches!</span>(proof.proof(), FinalityProof::NewProtocol { .. }),
+<a href=#10285 id=10285 data-nosnippet>10285</a>                <span class="string">"leaf {height} should be proven by a new protocol certificate, got {:?}"</span>,
+<a href=#10286 id=10286 data-nosnippet>10286</a>                proof.proof(),
+<a href=#10287 id=10287 data-nosnippet>10287</a>            );
+<a href=#10288 id=10288 data-nosnippet>10288</a>        }
+<a href=#10289 id=10289 data-nosnippet>10289</a>
+<a href=#10290 id=10290 data-nosnippet>10290</a>        <span class="comment">// Epochs run from genesis, so `first_epoch` is 1 and the endpoint is
+<a href=#10291 id=10291 data-nosnippet>10291</a>        // queryable from epoch 3, which the chain has long passed.
+<a href=#10292 id=10292 data-nosnippet>10292</a>        </span><span class="kw">let </span>first_epoch = EpochNumber::new(epoch_from_block_number(<span class="number">0</span>, EPOCH_HEIGHT));
+<a href=#10293 id=10293 data-nosnippet>10293</a>        check_light_client_stake_table(client, <span class="kw-2">&amp;</span>network.server, first_epoch).<span class="kw">await</span>;
+<a href=#10294 id=10294 data-nosnippet>10294</a>    }
+<a href=#10295 id=10295 data-nosnippet>10295</a>
+<a href=#10296 id=10296 data-nosnippet>10296</a>    <span class="doccomment">/// Test that `fetch_leaf` returns a leaf with exactly the requested block height.
+<a href=#10297 id=10297 data-nosnippet>10297</a>    </span><span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#10298 id=10298 data-nosnippet>10298</a>    </span><span class="kw">async fn </span>test_fetch_leaf_returns_exact_height() -&gt; anyhow::Result&lt;()&gt; {
+<a href=#10299 id=10299 data-nosnippet>10299</a>        <span class="kw">const </span>EPOCH_HEIGHT: u64 = <span class="number">10</span>;
+<a href=#10300 id=10300 data-nosnippet>10300</a>        <span class="kw">const </span>NUM_NODES: usize = <span class="number">5</span>;
+<a href=#10301 id=10301 data-nosnippet>10301</a>        <span class="kw">const </span>TARGET_HEIGHT: u64 = EPOCH_HEIGHT * <span class="number">3 </span>+ <span class="number">2</span>;
+<a href=#10302 id=10302 data-nosnippet>10302</a>
+<a href=#10303 id=10303 data-nosnippet>10303</a>        <span class="kw">let </span>network_config = TestConfigBuilder::default()
+<a href=#10304 id=10304 data-nosnippet>10304</a>            .epoch_height(EPOCH_HEIGHT)
+<a href=#10305 id=10305 data-nosnippet>10305</a>            .build();
+<a href=#10306 id=10306 data-nosnippet>10306</a>
+<a href=#10307 id=10307 data-nosnippet>10307</a>        <span class="kw">let </span>port = reserve_tcp_port().expect(<span class="string">"No ports free for query service"</span>);
+<a href=#10308 id=10308 data-nosnippet>10308</a>
+<a href=#10309 id=10309 data-nosnippet>10309</a>        <span class="kw">let </span>storage = join_all((<span class="number">0</span>..NUM_NODES).map(|<span class="kw">_</span>| SqlDataSource::create_storage())).<span class="kw">await</span>;
+<a href=#10310 id=10310 data-nosnippet>10310</a>        <span class="kw">let </span>persistence: [<span class="kw">_</span>; NUM_NODES] = storage
+<a href=#10311 id=10311 data-nosnippet>10311</a>            .iter()
+<a href=#10312 id=10312 data-nosnippet>10312</a>            .map(&lt;SqlDataSource <span class="kw">as </span>TestableSequencerDataSource&gt;::persistence_options)
+<a href=#10313 id=10313 data-nosnippet>10313</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
+<a href=#10314 id=10314 data-nosnippet>10314</a>            .try_into()
+<a href=#10315 id=10315 data-nosnippet>10315</a>            .unwrap();
+<a href=#10316 id=10316 data-nosnippet>10316</a>
+<a href=#10317 id=10317 data-nosnippet>10317</a>        <span class="kw">let </span>catchup_peers = std::array::from_fn(|<span class="kw">_</span>| {
+<a href=#10318 id=10318 data-nosnippet>10318</a>            StatePeers::&lt;StaticVersion&lt;<span class="number">0</span>, <span class="number">1</span>&gt;&gt;::from_urls(
+<a href=#10319 id=10319 data-nosnippet>10319</a>                <span class="macro">vec!</span>[<span class="macro">format!</span>(<span class="string">"http://localhost:{port}"</span>).parse().unwrap()],
+<a href=#10320 id=10320 data-nosnippet>10320</a>                Default::default(),
+<a href=#10321 id=10321 data-nosnippet>10321</a>                Duration::from_secs(<span class="number">2</span>),
+<a href=#10322 id=10322 data-nosnippet>10322</a>                <span class="kw-2">&amp;</span>NoMetrics,
+<a href=#10323 id=10323 data-nosnippet>10323</a>            )
+<a href=#10324 id=10324 data-nosnippet>10324</a>        });
+<a href=#10325 id=10325 data-nosnippet>10325</a>
+<a href=#10326 id=10326 data-nosnippet>10326</a>        <span class="kw">let </span>config = TestNetworkConfigBuilder::with_num_nodes()
+<a href=#10327 id=10327 data-nosnippet>10327</a>            .api_config(SqlDataSource::options(
+<a href=#10328 id=10328 data-nosnippet>10328</a>                <span class="kw-2">&amp;</span>storage[<span class="number">0</span>],
+<a href=#10329 id=10329 data-nosnippet>10329</a>                Options::with_port(port),
+<a href=#10330 id=10330 data-nosnippet>10330</a>            ))
+<a href=#10331 id=10331 data-nosnippet>10331</a>            .network_config(network_config)
+<a href=#10332 id=10332 data-nosnippet>10332</a>            .persistences(persistence)
+<a href=#10333 id=10333 data-nosnippet>10333</a>            .catchups(catchup_peers)
+<a href=#10334 id=10334 data-nosnippet>10334</a>            .pos_hook(
+<a href=#10335 id=10335 data-nosnippet>10335</a>                DelegationConfig::MultipleDelegators,
+<a href=#10336 id=10336 data-nosnippet>10336</a>                Default::default(),
+<a href=#10337 id=10337 data-nosnippet>10337</a>                POS_V4,
+<a href=#10338 id=10338 data-nosnippet>10338</a>            )
+<a href=#10339 id=10339 data-nosnippet>10339</a>            .<span class="kw">await</span><span class="question-mark">?
+<a href=#10340 id=10340 data-nosnippet>10340</a>            </span>.build();
+<a href=#10341 id=10341 data-nosnippet>10341</a>
+<a href=#10342 id=10342 data-nosnippet>10342</a>        <span class="kw">let </span>network = TestNetwork::new(config, POS_V4).<span class="kw">await</span>;
+<a href=#10343 id=10343 data-nosnippet>10343</a>
+<a href=#10344 id=10344 data-nosnippet>10344</a>        <span class="comment">// Wait for chain to advance past our target height
+<a href=#10345 id=10345 data-nosnippet>10345</a>        </span><span class="kw">let </span>height_client: Client&lt;ServerError, StaticVersion&lt;<span class="number">0</span>, <span class="number">1</span>&gt;&gt; =
+<a href=#10346 id=10346 data-nosnippet>10346</a>            Client::new(<span class="macro">format!</span>(<span class="string">"http://localhost:{port}"</span>).parse().unwrap());
+<a href=#10347 id=10347 data-nosnippet>10347</a>        wait_until_block_height(<span class="kw-2">&amp;</span>height_client, <span class="string">"node/block-height"</span>, TARGET_HEIGHT + <span class="number">5</span>).<span class="kw">await</span>;
+<a href=#10348 id=10348 data-nosnippet>10348</a>
+<a href=#10349 id=10349 data-nosnippet>10349</a>        <span class="kw">let </span>coordinator = network.server.node_state().coordinator;
+<a href=#10350 id=10350 data-nosnippet>10350</a>
+<a href=#10351 id=10351 data-nosnippet>10351</a>        <span class="comment">// Use StatePeers to fetch the leaf at the exact target height
+<a href=#10352 id=10352 data-nosnippet>10352</a>        </span><span class="kw">let </span>catchup = StatePeers::&lt;StaticVersion&lt;<span class="number">0</span>, <span class="number">1</span>&gt;&gt;::from_urls(
+<a href=#10353 id=10353 data-nosnippet>10353</a>            <span class="macro">vec!</span>[<span class="macro">format!</span>(<span class="string">"http://localhost:{port}"</span>).parse().unwrap()],
+<a href=#10354 id=10354 data-nosnippet>10354</a>            Default::default(),
+<a href=#10355 id=10355 data-nosnippet>10355</a>            Duration::from_secs(<span class="number">5</span>),
+<a href=#10356 id=10356 data-nosnippet>10356</a>            <span class="kw-2">&amp;</span>NoMetrics,
+<a href=#10357 id=10357 data-nosnippet>10357</a>        );
+<a href=#10358 id=10358 data-nosnippet>10358</a>
+<a href=#10359 id=10359 data-nosnippet>10359</a>        <span class="kw">let </span>leaf = catchup.fetch_leaf(coordinator, TARGET_HEIGHT).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#10360 id=10360 data-nosnippet>10360</a>
+<a href=#10361 id=10361 data-nosnippet>10361</a>        <span class="macro">assert_eq!</span>(
+<a href=#10362 id=10362 data-nosnippet>10362</a>            leaf.height(),
+<a href=#10363 id=10363 data-nosnippet>10363</a>            TARGET_HEIGHT,
+<a href=#10364 id=10364 data-nosnippet>10364</a>            <span class="string">"fetch_leaf must return the leaf at exactly the requested height"
+<a href=#10365 id=10365 data-nosnippet>10365</a>        </span>);
+<a href=#10366 id=10366 data-nosnippet>10366</a>
+<a href=#10367 id=10367 data-nosnippet>10367</a>        <span class="prelude-val">Ok</span>(())
+<a href=#10368 id=10368 data-nosnippet>10368</a>    }
+<a href=#10369 id=10369 data-nosnippet>10369</a>
+<a href=#10370 id=10370 data-nosnippet>10370</a>    <span class="doccomment">/// Start a network at V5 from genesis, restart ALL nodes just before an epoch transition block
+<a href=#10371 id=10371 data-nosnippet>10371</a>    /// (`boundary - 3`), and confirm the chain keeps producing blocks afterward.
+<a href=#10372 id=10372 data-nosnippet>10372</a>    </span><span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#10373 id=10373 data-nosnippet>10373</a>    </span><span class="kw">async fn </span>test_v5_restart_before_epoch_boundary() {
+<a href=#10374 id=10374 data-nosnippet>10374</a>        <span class="kw">const </span>NUM_NODES: usize = <span class="number">3</span>;
+<a href=#10375 id=10375 data-nosnippet>10375</a>        <span class="kw">const </span>EPOCH_HEIGHT: u64 = <span class="number">10</span>;
+<a href=#10376 id=10376 data-nosnippet>10376</a>        <span class="comment">// Rewards start in epoch 4. Restart 3 blocks before the boundary that closes epoch 4, so
+<a href=#10377 id=10377 data-nosnippet>10377</a>        // the restarted network produces the boundary block (`4 * EPOCH_HEIGHT`) itself.
+<a href=#10378 id=10378 data-nosnippet>10378</a>        </span><span class="kw">const </span>RESTART_EPOCH: u64 = <span class="number">4</span>;
+<a href=#10379 id=10379 data-nosnippet>10379</a>        <span class="kw">const </span>RESTART_BOUNDARY: u64 = RESTART_EPOCH * EPOCH_HEIGHT;
+<a href=#10380 id=10380 data-nosnippet>10380</a>        <span class="kw">const </span>RESTART_HEIGHT: u64 = RESTART_BOUNDARY - <span class="number">3</span>;
+<a href=#10381 id=10381 data-nosnippet>10381</a>        <span class="comment">// Blocks to produce after the restart before declaring success.
+<a href=#10382 id=10382 data-nosnippet>10382</a>        </span><span class="kw">const </span>BLOCKS_AFTER_RESTART: u64 = <span class="number">5</span>;
+<a href=#10383 id=10383 data-nosnippet>10383</a>
+<a href=#10384 id=10384 data-nosnippet>10384</a>        <span class="kw">const </span>V5: Upgrade = Upgrade::trivial(EPOCH_REWARD_VERSION);
+<a href=#10385 id=10385 data-nosnippet>10385</a>
+<a href=#10386 id=10386 data-nosnippet>10386</a>        <span class="kw">let </span>port = reserve_tcp_port().expect(<span class="string">"OS should have ephemeral ports available"</span>);
+<a href=#10387 id=10387 data-nosnippet>10387</a>
+<a href=#10388 id=10388 data-nosnippet>10388</a>        <span class="comment">// Slow empty-block production so we comfortably stop at the exact target height. On an idle
+<a href=#10389 id=10389 data-nosnippet>10389</a>        // chain the empty-block time is ~`builder_timeout`; raise `next_view_timeout` above it so
+<a href=#10390 id=10390 data-nosnippet>10390</a>        // the slow (but healthy) views aren't treated as failures.
+<a href=#10391 id=10391 data-nosnippet>10391</a>        </span><span class="kw">let </span>network_config = TestConfigBuilder::&lt;NUM_NODES&gt;::default()
+<a href=#10392 id=10392 data-nosnippet>10392</a>            .epoch_height(EPOCH_HEIGHT)
+<a href=#10393 id=10393 data-nosnippet>10393</a>            .builder_timeout(Duration::from_secs(<span class="number">3</span>))
+<a href=#10394 id=10394 data-nosnippet>10394</a>            .next_view_timeout(Duration::from_secs(<span class="number">10</span>))
+<a href=#10395 id=10395 data-nosnippet>10395</a>            .build();
+<a href=#10396 id=10396 data-nosnippet>10396</a>
+<a href=#10397 id=10397 data-nosnippet>10397</a>        <span class="kw">let </span>storage = join_all((<span class="number">0</span>..NUM_NODES).map(|<span class="kw">_</span>| SqlDataSource::create_storage())).<span class="kw">await</span>;
+<a href=#10398 id=10398 data-nosnippet>10398</a>        <span class="kw">let </span>persistence: [<span class="kw">_</span>; NUM_NODES] = storage
+<a href=#10399 id=10399 data-nosnippet>10399</a>            .iter()
+<a href=#10400 id=10400 data-nosnippet>10400</a>            .map(&lt;SqlDataSource <span class="kw">as </span>TestableSequencerDataSource&gt;::persistence_options)
+<a href=#10401 id=10401 data-nosnippet>10401</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
+<a href=#10402 id=10402 data-nosnippet>10402</a>            .try_into()
+<a href=#10403 id=10403 data-nosnippet>10403</a>            .unwrap();
+<a href=#10404 id=10404 data-nosnippet>10404</a>
+<a href=#10405 id=10405 data-nosnippet>10405</a>        <span class="kw">let </span>config = TestNetworkConfigBuilder::&lt;NUM_NODES, <span class="kw">_</span>, <span class="kw">_</span>&gt;::with_num_nodes()
+<a href=#10406 id=10406 data-nosnippet>10406</a>            .api_config(SqlDataSource::options(
+<a href=#10407 id=10407 data-nosnippet>10407</a>                <span class="kw-2">&amp;</span>storage[<span class="number">0</span>],
+<a href=#10408 id=10408 data-nosnippet>10408</a>                Options::with_port(port),
+<a href=#10409 id=10409 data-nosnippet>10409</a>            ))
+<a href=#10410 id=10410 data-nosnippet>10410</a>            .persistences(persistence.clone())
+<a href=#10411 id=10411 data-nosnippet>10411</a>            .catchups(std::array::from_fn(|<span class="kw">_</span>| {
+<a href=#10412 id=10412 data-nosnippet>10412</a>                StatePeers::&lt;SequencerApiVersion&gt;::from_urls(
+<a href=#10413 id=10413 data-nosnippet>10413</a>                    <span class="macro">vec!</span>[<span class="macro">format!</span>(<span class="string">"http://localhost:{port}"</span>).parse().unwrap()],
+<a href=#10414 id=10414 data-nosnippet>10414</a>                    Default::default(),
+<a href=#10415 id=10415 data-nosnippet>10415</a>                    Duration::from_secs(<span class="number">2</span>),
+<a href=#10416 id=10416 data-nosnippet>10416</a>                    <span class="kw-2">&amp;</span>NoMetrics,
+<a href=#10417 id=10417 data-nosnippet>10417</a>                )
+<a href=#10418 id=10418 data-nosnippet>10418</a>            }))
+<a href=#10419 id=10419 data-nosnippet>10419</a>            .network_config(network_config)
+<a href=#10420 id=10420 data-nosnippet>10420</a>            .pos_hook(DelegationConfig::MultipleDelegators, Default::default(), V5)
+<a href=#10421 id=10421 data-nosnippet>10421</a>            .<span class="kw">await
+<a href=#10422 id=10422 data-nosnippet>10422</a>            </span>.unwrap()
+<a href=#10423 id=10423 data-nosnippet>10423</a>            .build();
+<a href=#10424 id=10424 data-nosnippet>10424</a>
+<a href=#10425 id=10425 data-nosnippet>10425</a>        <span class="kw">let </span><span class="kw-2">mut </span>network = TestNetwork::new(config, V5).<span class="kw">await</span>;
+<a href=#10426 id=10426 data-nosnippet>10426</a>
+<a href=#10427 id=10427 data-nosnippet>10427</a>        <span class="comment">// Watch the decide stream and stop as soon as `boundary - 3` is decided. Consuming the
+<a href=#10428 id=10428 data-nosnippet>10428</a>        // stream (rather than polling `decided_leaf`) makes this independent of block timing: we
+<a href=#10429 id=10429 data-nosnippet>10429</a>        // see every decided leaf and stop the network the moment the target height appears, so we
+<a href=#10430 id=10430 data-nosnippet>10430</a>        // can never race past it regardless of how fast blocks are produced.
+<a href=#10431 id=10431 data-nosnippet>10431</a>        </span>{
+<a href=#10432 id=10432 data-nosnippet>10432</a>            <span class="kw">let </span><span class="kw-2">mut </span>events = network.server.event_stream();
+<a href=#10433 id=10433 data-nosnippet>10433</a>            <span class="lifetime">'wait</span>: <span class="kw">loop </span>{
+<a href=#10434 id=10434 data-nosnippet>10434</a>                <span class="kw">let </span>event = events
+<a href=#10435 id=10435 data-nosnippet>10435</a>                    .next()
+<a href=#10436 id=10436 data-nosnippet>10436</a>                    .<span class="kw">await
+<a href=#10437 id=10437 data-nosnippet>10437</a>                    </span>.expect(<span class="string">"event stream ended unexpectedly"</span>);
+<a href=#10438 id=10438 data-nosnippet>10438</a>                <span class="kw">let </span>CoordinatorEvent::LegacyEvent(Event {
+<a href=#10439 id=10439 data-nosnippet>10439</a>                    event: EventType::Decide { leaf_chain, .. },
+<a href=#10440 id=10440 data-nosnippet>10440</a>                    ..
+<a href=#10441 id=10441 data-nosnippet>10441</a>                }) = event
+<a href=#10442 id=10442 data-nosnippet>10442</a>                <span class="kw">else </span>{
+<a href=#10443 id=10443 data-nosnippet>10443</a>                    <span class="kw">continue</span>;
+<a href=#10444 id=10444 data-nosnippet>10444</a>                };
+<a href=#10445 id=10445 data-nosnippet>10445</a>                <span class="comment">// `leaf_chain` is newest-first; once any decided leaf has reached the target
+<a href=#10446 id=10446 data-nosnippet>10446</a>                // height, the chain is at or past it.
+<a href=#10447 id=10447 data-nosnippet>10447</a>                </span><span class="kw">for </span>LeafInfo { leaf, .. } <span class="kw">in </span>leaf_chain.iter() {
+<a href=#10448 id=10448 data-nosnippet>10448</a>                    <span class="kw">if </span>leaf.block_header().height() &gt;= RESTART_HEIGHT {
+<a href=#10449 id=10449 data-nosnippet>10449</a>                        <span class="kw">break </span><span class="lifetime">'wait</span>;
+<a href=#10450 id=10450 data-nosnippet>10450</a>                    }
+<a href=#10451 id=10451 data-nosnippet>10451</a>                }
+<a href=#10452 id=10452 data-nosnippet>10452</a>            }
+<a href=#10453 id=10453 data-nosnippet>10453</a>        }
+<a href=#10454 id=10454 data-nosnippet>10454</a>
+<a href=#10455 id=10455 data-nosnippet>10455</a>        <span class="kw">let </span>restart_height = network.server.decided_leaf().<span class="kw">await</span>.height();
+<a href=#10456 id=10456 data-nosnippet>10456</a>        <span class="macro">tracing::info!</span>(
+<a href=#10457 id=10457 data-nosnippet>10457</a>            restart_height,
+<a href=#10458 id=10458 data-nosnippet>10458</a>            restart_epoch = RESTART_EPOCH,
+<a href=#10459 id=10459 data-nosnippet>10459</a>            restart_boundary = RESTART_BOUNDARY,
+<a href=#10460 id=10460 data-nosnippet>10460</a>            <span class="string">"restarting all nodes 3 blocks before an epoch boundary"
+<a href=#10461 id=10461 data-nosnippet>10461</a>        </span>);
+<a href=#10462 id=10462 data-nosnippet>10462</a>
+<a href=#10463 id=10463 data-nosnippet>10463</a>        <span class="comment">// Clone the TestConfig before dropping the network so the anvil/L1/contracts stay alive.
+<a href=#10464 id=10464 data-nosnippet>10464</a>        </span><span class="kw">let </span>saved_cfg = network.cfg.clone();
+<a href=#10465 id=10465 data-nosnippet>10465</a>
+<a href=#10466 id=10466 data-nosnippet>10466</a>        network.stop_consensus().<span class="kw">await</span>;
+<a href=#10467 id=10467 data-nosnippet>10467</a>        drop(network);
+<a href=#10468 id=10468 data-nosnippet>10468</a>
+<a href=#10469 id=10469 data-nosnippet>10469</a>        <span class="comment">// Rebuild reusing the same persistence so nodes resume from stored state.
+<a href=#10470 id=10470 data-nosnippet>10470</a>        </span><span class="kw">let </span>port2 = reserve_tcp_port().expect(<span class="string">"OS should have ephemeral ports available"</span>);
+<a href=#10471 id=10471 data-nosnippet>10471</a>        <span class="kw">let </span>config2 = TestNetworkConfigBuilder::&lt;NUM_NODES, <span class="kw">_</span>, <span class="kw">_</span>&gt;::with_num_nodes()
+<a href=#10472 id=10472 data-nosnippet>10472</a>            .api_config(SqlDataSource::options(
+<a href=#10473 id=10473 data-nosnippet>10473</a>                <span class="kw-2">&amp;</span>storage[<span class="number">0</span>],
+<a href=#10474 id=10474 data-nosnippet>10474</a>                Options::with_port(port2),
+<a href=#10475 id=10475 data-nosnippet>10475</a>            ))
+<a href=#10476 id=10476 data-nosnippet>10476</a>            .persistences(persistence)
+<a href=#10477 id=10477 data-nosnippet>10477</a>            .catchups(std::array::from_fn(|<span class="kw">_</span>| {
+<a href=#10478 id=10478 data-nosnippet>10478</a>                StatePeers::&lt;SequencerApiVersion&gt;::from_urls(
+<a href=#10479 id=10479 data-nosnippet>10479</a>                    <span class="macro">vec!</span>[<span class="macro">format!</span>(<span class="string">"http://localhost:{port2}"</span>).parse().unwrap()],
+<a href=#10480 id=10480 data-nosnippet>10480</a>                    Default::default(),
+<a href=#10481 id=10481 data-nosnippet>10481</a>                    Duration::from_secs(<span class="number">2</span>),
+<a href=#10482 id=10482 data-nosnippet>10482</a>                    <span class="kw-2">&amp;</span>NoMetrics,
+<a href=#10483 id=10483 data-nosnippet>10483</a>                )
+<a href=#10484 id=10484 data-nosnippet>10484</a>            }))
+<a href=#10485 id=10485 data-nosnippet>10485</a>            .network_config(saved_cfg)
+<a href=#10486 id=10486 data-nosnippet>10486</a>            .build();
+<a href=#10487 id=10487 data-nosnippet>10487</a>        <span class="kw">let </span>network2 = TestNetwork::new(config2, V5).<span class="kw">await</span>;
+<a href=#10488 id=10488 data-nosnippet>10488</a>
+<a href=#10489 id=10489 data-nosnippet>10489</a>        <span class="comment">// The restarted network must keep advancing, including across the next epoch boundary.
+<a href=#10490 id=10490 data-nosnippet>10490</a>        // Require BLOCKS_AFTER_RESTART new decides, using a lack-of-progress watchdog so a
+<a href=#10491 id=10491 data-nosnippet>10491</a>        // healthy-but-slow chain still passes.
+<a href=#10492 id=10492 data-nosnippet>10492</a>        </span><span class="kw">let </span>target_height = restart_height + BLOCKS_AFTER_RESTART;
+<a href=#10493 id=10493 data-nosnippet>10493</a>        <span class="kw">let </span>stall_limit = <span class="number">30</span>; <span class="comment">// 30 polls * 2s = 60s without a new decide =&gt; stalled
+<a href=#10494 id=10494 data-nosnippet>10494</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>last_height = network2.server.decided_leaf().<span class="kw">await</span>.height();
+<a href=#10495 id=10495 data-nosnippet>10495</a>        <span class="kw">let </span><span class="kw-2">mut </span>stalled_polls = <span class="number">0</span>;
+<a href=#10496 id=10496 data-nosnippet>10496</a>        <span class="kw">while </span>last_height &lt; target_height {
+<a href=#10497 id=10497 data-nosnippet>10497</a>            sleep(Duration::from_secs(<span class="number">2</span>)).<span class="kw">await</span>;
+<a href=#10498 id=10498 data-nosnippet>10498</a>            <span class="kw">let </span>height = network2.server.decided_leaf().<span class="kw">await</span>.height();
+<a href=#10499 id=10499 data-nosnippet>10499</a>            <span class="kw">if </span>height &gt; last_height {
+<a href=#10500 id=10500 data-nosnippet>10500</a>                last_height = height;
+<a href=#10501 id=10501 data-nosnippet>10501</a>                stalled_polls = <span class="number">0</span>;
+<a href=#10502 id=10502 data-nosnippet>10502</a>            } <span class="kw">else </span>{
+<a href=#10503 id=10503 data-nosnippet>10503</a>                stalled_polls += <span class="number">1</span>;
+<a href=#10504 id=10504 data-nosnippet>10504</a>                <span class="kw">if </span>stalled_polls &gt;= stall_limit {
+<a href=#10505 id=10505 data-nosnippet>10505</a>                    <span class="macro">panic!</span>(
+<a href=#10506 id=10506 data-nosnippet>10506</a>                        <span class="string">"chain stalled after restart 3 blocks before boundary {RESTART_BOUNDARY}: \
+<a href=#10507 id=10507 data-nosnippet>10507</a>                         no new decide for 60s at height {last_height}, unable to produce/cross \
+<a href=#10508 id=10508 data-nosnippet>10508</a>                         the epoch boundary (target height was {target_height})."
+<a href=#10509 id=10509 data-nosnippet>10509</a>                    </span>);
+<a href=#10510 id=10510 data-nosnippet>10510</a>                }
+<a href=#10511 id=10511 data-nosnippet>10511</a>            }
+<a href=#10512 id=10512 data-nosnippet>10512</a>        }
+<a href=#10513 id=10513 data-nosnippet>10513</a>    }
+<a href=#10514 id=10514 data-nosnippet>10514</a>}
 </code></pre></div></section></main></body></html>
