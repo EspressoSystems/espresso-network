@@ -156,18 +156,16 @@ impl LeafProof {
                     .verify_qc_chain_and_get_version(curr, [&**committing_qc, &**deciding_qc])
                     .await?;
 
-                // Check that HotStuff2 is the appropriate commit rule to use. The HotStuff2 commit
+                // Check that HotStuff2 is the appropriate commit rule to use. HotStuff2 commit
                 // rule was introduced with the epochs version of HotShot and retired by the new
-                // protocol, where consecutive phase-1 certificates exist even for leaves that are
-                // never finalized (finality requires a Certificate2).
+                // protocol.
                 ensure!(version >= EPOCH_VERSION);
                 ensure!(
                     version < NEW_PROTOCOL_VERSION,
                     "HotStuff2 finality proof used for new-protocol leaf"
                 );
-                // The 2-chain rule is only sound when both QCs predate the cutover. A deciding QC
-                // formed at or after the new-protocol boundary is a phase-1 certificate that does
-                // not imply finality, so require a Certificate2 proof for those leaves instead.
+                // The 2-chain rule is only sound if every QC in the chain predates the cutover;
+                // post-cutover QCs do not imply finality.
                 ensure!(
                     max_cert < NEW_PROTOCOL_VERSION,
                     "HotStuff2 finality proof spans the new-protocol cutover"
@@ -259,11 +257,8 @@ impl LeafProof {
         let len = self.leaves.len();
 
         // Check if the new leaf plus the last saved leaf contain justifying QCs that form a
-        // HotStuff2 QC chain for the leaf before. The deciding QC signs `leaves[len - 1]`, so if
-        // that leaf is a new-protocol leaf the QC is a post-cutover phase-1 certificate which does
-        // not imply finality, and the verifier rejects the chain; fall through to a cert2 proof
-        // instead. This bound also covers the proven leaf `leaves[len - 2]`, since versions are
-        // non-decreasing along the chain.
+        // HotStuff2 QC chain for the leaf before. The deciding QC signs `leaves[len - 1]`, so
+        // bounding that leaf's version keeps the whole chain pre-cutover.
         if len >= 2
             && self.leaves[len - 2].block_header().version() >= EPOCH_VERSION
             && self.leaves[len - 1].block_header().version() < NEW_PROTOCOL_VERSION
@@ -492,9 +487,6 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_new_protocol_two_chain_rejected() {
-        // Under the new protocol, consecutive phase-1 certificates do not imply finality, so a
-        // 2-chain proof for a new-protocol leaf must be rejected even when the certificates
-        // themselves carry valid signatures.
         let leaves = leaf_chain(1..=3, NEW_PROTOCOL_VERSION).await;
 
         // The prover never completes a HotStuff2 chain from new-protocol leaves.
@@ -503,7 +495,7 @@ mod test {
         assert!(!proof.push(leaves[1].clone()));
         assert!(!proof.push(leaves[2].clone()));
 
-        // A hand-crafted 2-chain proof, with real QCs from consecutive views, fails to verify.
+        // A hand-crafted 2-chain proof fails to verify.
         let mut proof = LeafProof::default();
         assert!(!proof.push(leaves[0].clone()));
         proof.add_qc_chain(
@@ -523,9 +515,8 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_cutover_two_chain_pre_cutover() {
-        // A HotStuff2 chain whose QCs both predate the cutover is valid even though the first
-        // new-protocol leaf carries the deciding QC. Here the upgrade takes effect at height 3, so
-        // the committing (view 1) and deciding (view 2) QCs are both legacy, and the proof verifies.
+        // Upgrade at height 3: both QCs predate the cutover, so the 2-chain is valid even though
+        // the first new-protocol leaf carries the deciding QC.
         let leaves = leaf_chain_with_upgrade(
             1..=3,
             3,
@@ -554,10 +545,8 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_cutover_two_chain_spanning_rejected() {
-        // A HotStuff2 chain whose deciding QC is formed at or after the cutover must be rejected:
-        // that QC is a phase-1 certificate that does not prove finality. Here the upgrade takes
-        // effect at height 2, so the deciding QC (view 2) is a new-protocol certificate even though
-        // the proven leaf (height 1) is legacy.
+        // Upgrade at height 2: the deciding QC forms at the cutover, so the 2-chain must be
+        // rejected even though the proven leaf is legacy.
         let leaves = leaf_chain_with_upgrade(
             1..=3,
             2,
@@ -573,7 +562,7 @@ mod test {
         assert!(!proof.push(leaves[1].clone()));
         assert!(!proof.push(leaves[2].clone()));
 
-        // A hand-crafted spanning 2-chain, with real QCs from consecutive views, fails to verify.
+        // A hand-crafted spanning 2-chain fails to verify.
         let mut proof = LeafProof::default();
         assert!(!proof.push(leaves[0].clone()));
         proof.add_qc_chain(

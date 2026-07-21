@@ -179,9 +179,6 @@ pub trait Quorum: Sync {
             // Check the QC chain: valid signatures and sequential views.
             let mut first = None;
             let mut curr: Option<&Certificate> = None;
-            // Track the highest version any certificate was verified under. This can exceed the
-            // leaf's version if an upgrade takes effect within the chain (e.g. a deciding QC formed
-            // just after a protocol cutover).
             let mut max_cert_version = version;
             for cert in certs {
                 tracing::trace!(?cert, "verify cert");
@@ -265,10 +262,7 @@ pub struct ChainVersions {
 
     /// The highest protocol version any certificate in the chain was verified under.
     ///
-    /// This equals the version at the deciding QC's view. It may exceed [`leaf`](Self::leaf) when a
-    /// protocol upgrade takes effect within the chain, which matters for the HotStuff2 commit rule:
-    /// that rule is only sound while every certificate in the chain predates the new-protocol
-    /// cutover.
+    /// May exceed [`leaf`](Self::leaf) when an upgrade takes effect within the chain.
     pub max_cert: Version,
 }
 

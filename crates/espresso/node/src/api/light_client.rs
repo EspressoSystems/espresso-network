@@ -1465,9 +1465,8 @@ mod test {
         .await
         .unwrap();
 
-        // Upgrade mid-chain with contiguous views: the HotStuff2 chain begun before the cutover
-        // completes as soon as the walk reaches the first new-protocol leaf, without needing a
-        // cert2 (none is stored).
+        // Upgrade at height 3: the HotStuff2 chain begun before the cutover completes without
+        // needing a cert2 (none is stored).
         let leaves = leaf_chain_with_upgrade(
             1..=3,
             3,
@@ -1512,10 +1511,8 @@ mod test {
         .await
         .unwrap();
 
-        // Upgrade at height 2: leaf 1 is the last legacy leaf, so any 2-chain proving it has a
-        // deciding QC formed at the cutover, which the verifier rejects. The prover must fall
-        // through to the cert2 (here at height 3, past the first new-protocol leaf) instead of
-        // completing the spanning 2-chain.
+        // Upgrade at height 2: any 2-chain proving the last legacy leaf spans the cutover, so the
+        // prover must fall through to the cert2 at height 3 instead.
         let leaves = leaf_chain_with_upgrade(
             1..=4,
             2,
