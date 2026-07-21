@@ -521,7 +521,7 @@ impl EpochCommittees {
             },
         }
 
-        // Load the 50 latest stored stake tables
+        // Load the `limit` latest stored stake tables
         let loaded_stake = match self
             .fetcher
             .persistence
@@ -1186,29 +1186,27 @@ impl Inner {
         );
     }
 
-    /// Evict per-epoch state more than [`RECENT_STAKE_TABLES_LIMIT`] epochs
-    /// below `added`.
+    /// Evict snapshots more than [`RECENT_STAKE_TABLES_LIMIT`] epochs below
+    /// `added`.
     ///
     /// The cutoff only ever moves forward: `add_epoch_root` also runs for old
     /// epochs during catchup, and a lagging insert must neither evict newer
     /// state nor evict itself before its readers had a chance to observe it.
+    ///
+    /// `da_committees` is exempt: it holds one entry per configured DA
+    /// committee (seeded from config at startup and on upgrade certificates),
+    /// so it is bounded, and `resolve_da_committee`'s greatest-key-below
+    /// lookup needs the full history for re-inserted old epochs.
+    ///
+    /// This makes the genesis snapshots seeded by the constructor evictable;
+    /// `set_first_epoch` relies on them and must run before the tip advances
+    /// past the retention window (it runs at startup/cutover, so it does).
     #[cfg_attr(not(feature = "node"), allow(dead_code))]
     fn prune_epochs(&mut self, added: EpochNumber) {
         let cutoff = EpochNumber::new(added.saturating_sub(RECENT_STAKE_TABLES_LIMIT));
-        if cutoff <= self.prune_cutoff {
-            return;
-        }
-        self.prune_cutoff = cutoff;
-        self.snapshots = self.snapshots.split_off(&cutoff);
-        // `resolve_da_committee` picks the _greatest_ key <= epoch, so we need
-        // to find that key and can only drop entries below it.
-        if let Some(active) = self
-            .da_committees
-            .range(..=cutoff)
-            .next_back()
-            .map(|(k, _)| *k)
-        {
-            self.da_committees = self.da_committees.split_off(&active);
+        if cutoff > self.prune_cutoff {
+            self.prune_cutoff = cutoff;
+            self.snapshots = self.snapshots.split_off(&cutoff);
         }
     }
 }
@@ -1504,10 +1502,6 @@ mod tests {
             .epoch_committee(EpochNumber::genesis())
             .expect("genesis committee exists")
             .clone();
-        let da = inner.resolve_da_committee(None);
-        inner.da_committees.insert(EpochNumber::new(1), da.clone());
-        inner.da_committees.insert(EpochNumber::new(10), da.clone());
-        inner.da_committees.insert(EpochNumber::new(40), da);
 
         for e in 2..=50 {
             inner.put_epoch_committee(EpochNumber::new(e), template.clone());
@@ -1520,12 +1514,6 @@ mod tests {
             Some(cutoff)
         );
         assert!(inner.snapshots.contains_key(&EpochNumber::new(50)));
-        // The DA committee active at the cutoff (in effect since epoch 10)
-        // must survive; only the entry it shadows (epoch 1) is evicted.
-        assert_eq!(
-            inner.da_committees.keys().copied().collect::<Vec<_>>(),
-            vec![EpochNumber::new(10), EpochNumber::new(40)]
-        );
 
         // A catchup insert below the cutoff is not evicted by its own
         // insertion; it goes once the tip advances past it.
