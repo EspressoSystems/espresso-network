@@ -45,7 +45,7 @@ use hotshot_types::{
         election::{RandomizedCommittee, generate_stake_cdf, select_randomized_leader},
     },
     epoch_membership::EpochMembershipCoordinator,
-    stake_table::{HSStakeTable, StakeTableEntry},
+    stake_table::{EpochStakeTable, EpochStakeTables, HSStakeTable, StakeTableEntry},
     traits::{
         block_contents::BlockHeader, election::Membership, node_implementation::NodeType,
         signature_key::StakeTableEntryType,
@@ -1761,6 +1761,27 @@ impl EpochCommittees {
         self.first_epoch
     }
 
+    /// Stake tables for verifying a leaf chain whose expected leaf is in
+    /// `epoch`. A chain deciding a leaf near the end of an epoch contains
+    /// certificates signed by the next epoch's quorum, so include the next
+    /// epoch's stake table whenever we have it.
+    pub(crate) fn leaf_chain_stake_tables(&self, epoch: Epoch) -> EpochStakeTables<SeqTypes> {
+        let mut tables = vec![EpochStakeTable {
+            epoch: Some(epoch),
+            stake_table: self.stake_table(Some(epoch)),
+            success_threshold: self.success_threshold(Some(epoch)),
+        }];
+        let next_epoch = EpochNumber::new(*epoch + 1);
+        if self.has_stake_table(next_epoch) {
+            tables.push(EpochStakeTable {
+                epoch: Some(next_epoch),
+                stake_table: self.stake_table(Some(next_epoch)),
+                success_threshold: self.success_threshold(Some(next_epoch)),
+            });
+        }
+        EpochStakeTables(tables)
+    }
+
     pub fn fetcher(&self) -> &Fetcher {
         &self.fetcher
     }
@@ -2020,17 +2041,16 @@ impl EpochCommittees {
                          root height",
                     )?;
 
-                    let prev_stake_table = self
-                        .get_stake_table(&Some(EpochNumber::new(previous_epoch)))
-                        .context("Stake table not found")?
-                        .into();
-
-                    let success_threshold =
-                        self.success_threshold(Some(EpochNumber::new(previous_epoch)));
+                    ensure!(
+                        self.has_stake_table(EpochNumber::new(previous_epoch)),
+                        "Stake table not found"
+                    );
+                    let stake_tables =
+                        self.leaf_chain_stake_tables(EpochNumber::new(previous_epoch));
 
                     fetcher
                         .peers
-                        .fetch_leaf(root_height, prev_stake_table, success_threshold)
+                        .fetch_leaf(root_height, stake_tables)
                         .await
                         .context("Epoch root leaf not found")?
                         .block_header()
@@ -2745,14 +2765,11 @@ impl Membership<SeqTypes> for EpochCommittees {
         let membership_reader = membership.read().await;
         let block_height = root_block_in_epoch(*epoch, membership_reader.epoch_height);
         let peers = membership_reader.fetcher.peers.clone();
-        let stake_table = membership_reader.stake_table(Some(epoch)).clone();
-        let success_threshold = membership_reader.success_threshold(Some(epoch));
+        let stake_tables = membership_reader.leaf_chain_stake_tables(epoch);
         drop(membership_reader);
 
         // Fetch leaves from peers
-        let leaf: Leaf2 = peers
-            .fetch_leaf(block_height, stake_table.clone(), success_threshold)
-            .await?;
+        let leaf: Leaf2 = peers.fetch_leaf(block_height, stake_tables).await?;
 
         Ok(leaf)
     }
@@ -2781,8 +2798,7 @@ impl Membership<SeqTypes> for EpochCommittees {
             },
         };
 
-        let stake_table = membership_reader.stake_table(Some(previous_epoch)).clone();
-        let success_threshold = membership_reader.success_threshold(Some(previous_epoch));
+        let stake_tables = membership_reader.leaf_chain_stake_tables(previous_epoch);
 
         let block_height =
             transition_block_for_epoch(*previous_epoch, membership_reader.epoch_height);
@@ -2794,9 +2810,7 @@ impl Membership<SeqTypes> for EpochCommittees {
             epoch,
             block_height
         );
-        let drb_leaf = peers
-            .try_fetch_leaf(1, block_height, stake_table, success_threshold)
-            .await?;
+        let drb_leaf = peers.try_fetch_leaf(1, block_height, stake_tables).await?;
 
         let Some(drb) = drb_leaf.next_drb_result else {
             tracing::error!(

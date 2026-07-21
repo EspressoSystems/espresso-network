@@ -1197,17 +1197,31 @@ impl EpochRewardsCalculator {
         let leader_counts = if let Some(lc) = leader_counts {
             lc
         } else {
+            // The chain deciding the epoch's last block extends into the next
+            // epoch and is partly signed by the next epoch's quorum, so that
+            // stake table must be available too.
+            let next_epoch = EpochNumber::new(*epoch + 1);
+            if let Err(err) = coordinator.membership_for_epoch(Some(next_epoch)).await {
+                tracing::info!(
+                    %next_epoch,
+                    "stake table missing for epoch, triggering catchup: {err:#}"
+                );
+                coordinator
+                    .wait_for_catchup(next_epoch)
+                    .await
+                    .context(format!("failed to catch up for epoch={next_epoch}"))?;
+            }
+
             // Fetch the leaf at the last block of the epoch so we can verify
             // the header via QC against the stake table
             let membership = coordinator.membership().read().await;
-            let stake_table = membership.stake_table(Some(epoch));
-            let success_threshold = membership.success_threshold(Some(epoch));
+            let stake_tables = membership.leaf_chain_stake_tables(epoch);
             drop(membership);
 
             let leaf = instance_state
                 .state_catchup
                 .as_ref()
-                .fetch_leaf(epoch_last_block_height, stake_table, success_threshold)
+                .fetch_leaf(epoch_last_block_height, stake_tables)
                 .await
                 .with_context(|| {
                     format!(
