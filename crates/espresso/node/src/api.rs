@@ -610,7 +610,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> RequestResponseDataSo
                 duration,
                 request_response_protocol.request_indefinitely::<_, _, _>(
                     Request::VidShare(block_number, request_id),
-                    RequestType::Broadcast,
+                    RequestType::Batched,
                     move |_request, response| {
                         let avidm_param = avidm_param.clone();
                         let received_shares = received_shares_clone.clone();
@@ -3180,7 +3180,7 @@ mod test {
     use ::light_client::{
         consensus::{
             header::HeaderProof,
-            leaf::{LeafProof, LeafProofHint},
+            leaf::{FinalityProof, LeafProof, LeafProofHint},
             payload::PayloadProof,
         },
         testing::{EpochChangeQuorum, LEGACY_VERSION},
@@ -3189,7 +3189,7 @@ mod test {
         eips::BlockId,
         network::EthereumWallet,
         primitives::{Address, U256},
-        providers::ProviderBuilder,
+        providers::{ProviderBuilder, ext::AnvilApi},
     };
     use async_lock::Mutex;
     use committable::{Commitment, Committable};
@@ -3204,7 +3204,7 @@ mod test {
         StakeTableState, StateCertQueryDataV1, StateCertQueryDataV2, ValidatedState,
         ValidatorLeaderCounts,
         config::PublicHotShotConfig,
-        traits::{MembershipPersistence, NullEventConsumer, PersistenceOptions},
+        traits::{NullEventConsumer, PersistenceOptions},
         v0_3::{COMMISSION_BASIS_POINTS, Fetcher, RewardAmount, RewardMerkleProofV1},
         v0_4::{RewardAccountV2, RewardMerkleProofV2},
         validators_from_l1_events,
@@ -5215,6 +5215,104 @@ mod test {
             "expected at least {TARGET_BLOCK_HEIGHT} blocks, got {height} (leaf stream ended \
              early)",
         );
+
+        Ok(())
+    }
+
+    /// Run entirely without the legacy consensus stack: with base version
+    /// `NEW_PROTOCOL_VERSION` it is torn down at startup, and the explicit
+    /// mid-run `shut_down_legacy` calls below — what the decide-count trigger
+    /// in `handle_events` does after `LEGACY_SHUTDOWN_DECIDE_COUNT` decides
+    /// on an upgraded network — must be harmless to repeat. The network has
+    /// to keep deciding across epoch boundaries: DRB computations on the
+    /// shared membership coordinator must survive the teardown.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_new_protocol_survives_legacy_shutdown() -> anyhow::Result<()> {
+        const EPOCH_HEIGHT: u64 = 20;
+        const NUM_NODES: usize = 5;
+        const SHUTDOWN_HEIGHT: u64 = 10;
+        const TARGET_BLOCK_HEIGHT: u64 = 50;
+
+        const NEW_PROTOCOL: Upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .epoch_start_block(0)
+            .build();
+
+        let api_port = reserve_tcp_port().expect("No ports free for query service");
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence)
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<SequencerApiVersion>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    Duration::from_secs(2),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                StakeTableContractVersion::V3,
+                NEW_PROTOCOL,
+            )
+            .await
+            .unwrap()
+            .build();
+
+        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
+
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+        client.connect(Some(Duration::from_secs(30))).await;
+
+        let mut leaves = client
+            .socket("availability/stream/leaves/0")
+            .subscribe::<LeafQueryData<SeqTypes>>()
+            .await
+            .expect("subscribe to leaf stream");
+
+        // Let the new protocol decide a few blocks first.
+        let mut height = 0;
+        while height < SHUTDOWN_HEIGHT {
+            let leaf = leaves
+                .next()
+                .await
+                .expect("leaf stream ended early")
+                .expect("leaf stream yielded an error");
+            height = leaf.header().height();
+        }
+
+        // Tear down the legacy stack on every node.
+        network.server.consensus_handle().shut_down_legacy().await;
+        for peer in &network.peers {
+            peer.consensus_handle().shut_down_legacy().await;
+        }
+
+        // The chain must keep growing across the epoch boundaries at 20 and
+        // 40 purely on the new protocol.
+        while height < TARGET_BLOCK_HEIGHT {
+            let leaf = leaves
+                .next()
+                .await
+                .expect("leaf stream ended early")
+                .expect("leaf stream yielded an error");
+            height = leaf.header().height();
+        }
 
         Ok(())
     }
@@ -9779,6 +9877,135 @@ mod test {
         network.server.shut_down().await;
     }
 
+    /// Verify the light client leaf, header, and payload proofs at each height
+    /// against the ground truth captured from the availability streams.
+    ///
+    /// Only checks that proofs verify, not which `FinalityProof` variant they
+    /// use
+    async fn check_light_client_proofs(
+        client: &Client<ServerError, StaticVersion<0, 1>>,
+        actual_leaves: &[LeafQueryData<SeqTypes>],
+        actual_blocks: &[BlockQueryData<SeqTypes>],
+        heights: impl IntoIterator<Item = u64>,
+        epoch_height: u64,
+    ) {
+        let quorum = EpochChangeQuorum::new(epoch_height);
+        for i in heights {
+            let leaf = &actual_leaves[i as usize];
+            let block = &actual_blocks[i as usize];
+            let version = leaf.header().version();
+            tracing::info!(i, %version, "check light client proofs");
+
+            // Get the same leaf proof by various IDs.
+            let proofs = try_join_all(
+                [
+                    format!("light-client/leaf/{i}"),
+                    format!("light-client/leaf/hash/{}", leaf.hash()),
+                    format!("light-client/leaf/block-hash/{}", leaf.block_hash()),
+                ]
+                .into_iter()
+                .map(|path| async move {
+                    tracing::info!(i, path, "fetch leaf proof");
+                    let proof = client.get::<LeafProof>(&path).send().await?;
+                    Ok::<_, anyhow::Error>((path, proof))
+                }),
+            )
+            .await
+            .unwrap();
+
+            // Check proofs against the expected leaf.
+            for (path, proof) in proofs {
+                tracing::info!(i, path, "check leaf proof");
+                assert_eq!(
+                    proof
+                        .verify(LeafProofHint::Quorum(&quorum))
+                        .await
+                        .unwrap_or_else(|err| panic!("{path}: proof failed to verify: {err:#}")),
+                    *leaf
+                );
+            }
+
+            // Get the corresponding header.
+            let root_height = i + 1;
+            let root = actual_leaves[root_height as usize].header();
+            let proofs = try_join_all(
+                [
+                    format!("light-client/header/{root_height}/{i}"),
+                    format!(
+                        "light-client/header/{root_height}/hash/{}",
+                        leaf.block_hash()
+                    ),
+                ]
+                .into_iter()
+                .map(|path| async move {
+                    tracing::info!(i, path, "fetch header proof");
+                    let proof = client.get::<HeaderProof>(&path).send().await?;
+                    Ok::<_, anyhow::Error>((path, proof))
+                }),
+            )
+            .await
+            .unwrap();
+            for (path, proof) in proofs {
+                tracing::info!(i, path, "check header proof");
+                assert_eq!(
+                    proof.verify_ref(root.block_merkle_tree_root()).unwrap(),
+                    leaf.header()
+                );
+            }
+
+            // Get the corresponding payload.
+            let proof = client
+                .get::<PayloadProof>(&format!("light-client/payload/{i}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(proof.verify(leaf.header()).unwrap(), *block.payload());
+        }
+    }
+
+    /// Check the light client stake table endpoint: replaying `first_epoch + 2`
+    /// reproduces the validator set loaded from storage, and an earlier epoch
+    /// is a `BAD_REQUEST`.
+    async fn check_light_client_stake_table<N, P>(
+        client: &Client<ServerError, StaticVersion<0, 1>>,
+        server: &SequencerContext<N, P>,
+        first_epoch: EpochNumber,
+    ) where
+        N: ConnectedNetwork<PubKey>,
+        P: SequencerPersistence,
+    {
+        let events: Vec<StakeTableEvent> = client
+            .get(&format!("light-client/stake-table/{}", first_epoch + 2))
+            .send()
+            .await
+            .unwrap();
+        let mut state_from_events = StakeTableState::default();
+        for event in events {
+            state_from_events.apply_event(event).unwrap().unwrap();
+        }
+        assert_eq!(
+            state_from_events.into_validators(),
+            server
+                .consensus_handle()
+                .storage()
+                .await
+                .load_all_validators(first_epoch + 2, 0, 1_000_000)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|v| (v.account, v))
+                .collect::<RegisteredValidatorMap>()
+        );
+
+        // Querying for a stake table before the first real epoch is an error.
+        let err = client
+            .get::<Vec<StakeTableEvent>>(&format!("light-client/stake-table/{}", first_epoch + 1))
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+    }
+
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_light_client_completeness() {
         // Run the through a protocol upgrade and epoch change, then check that we are able to get a
@@ -9914,109 +10141,217 @@ mod test {
         // * A few blocks just before and after the stake table comes into effect
             .chain(epoch_heights[1]-1..=max_block);
 
-        let quorum = EpochChangeQuorum::new(EPOCH_HEIGHT);
-        for i in heights {
-            let leaf = &actual_leaves[i as usize];
-            let block = &actual_blocks[i as usize];
-            tracing::info!(i, ?leaf, ?block, "check leaf");
+        check_light_client_proofs(
+            &client,
+            &actual_leaves,
+            &actual_blocks,
+            heights,
+            EPOCH_HEIGHT,
+        )
+        .await;
+        check_light_client_stake_table(&client, &network.server, first_epoch).await;
+    }
 
-            // Get the same leaf proof by various IDs.
-            let client = &client;
-            let proofs = try_join_all(
-                [
-                    format!("light-client/leaf/{i}"),
-                    format!("light-client/leaf/hash/{}", leaf.hash()),
-                    format!("light-client/leaf/block-hash/{}", leaf.block_hash()),
-                ]
-                .into_iter()
-                .map(|path| async move {
-                    tracing::info!(i, path, "fetch leaf proof");
-                    let proof = client.get::<LeafProof>(&path).send().await?;
-                    Ok::<_, anyhow::Error>((path, proof))
-                }),
-            )
+    /// run through the new protocol upgrade and a following epoch change, then check the
+    /// light client serves correct leaf, header, payload, and stake table
+    /// proofs around both boundaries.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_light_client_new_protocol_upgrade() {
+        const NUM_NODES: usize = 5;
+        const EPOCH_HEIGHT: u64 = 70;
+        const UPGRADE_START_PROPOSING_VIEW: u64 = 3 * EPOCH_HEIGHT + 5;
+        const UPGRADE: Upgrade = Upgrade::new(EPOCH_REWARD_VERSION, NEW_PROTOCOL_VERSION);
+
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let url: Url = format!("http://localhost:{port}").parse().unwrap();
+
+        let test_config = TestConfigBuilder::<NUM_NODES>::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .epoch_start_block(0)
+            .builder_timeout(Duration::from_millis(500))
+            .set_upgrades(NEW_PROTOCOL_VERSION)
             .await
+            .upgrade_proposing_views(UPGRADE_START_PROPOSING_VIEW, 1000)
+            .build();
+
+        test_config
+            .anvil()
+            .expect("TestConfigBuilder starts an anvil")
+            .anvil_set_interval_mining(1)
+            .await
+            .expect("interval mining");
+
+        // Base version V5 already has epochs, so genesis must carry the stake
+        // table contract deployed above.
+        let genesis_state = ValidatedState {
+            chain_config: test_config
+                .get_upgrade_map()
+                .chain_config(NEW_PROTOCOL_VERSION)
+                .into(),
+            ..Default::default()
+        };
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
             .unwrap();
 
-            // Check proofs against expected leaf.
-            for (path, proof) in proofs {
-                tracing::info!(i, path, ?proof, "check leaf proof");
-                assert_eq!(
-                    proof.verify(LeafProofHint::Quorum(&quorum)).await.unwrap(),
-                    *leaf
-                );
-            }
-
-            // Get the corresponding header.
-            let root_height = i + 1;
-            let root = actual_leaves[root_height as usize].header();
-            let proofs = try_join_all(
-                [
-                    format!("light-client/header/{root_height}/{i}"),
-                    format!(
-                        "light-client/header/{root_height}/hash/{}",
-                        leaf.block_hash()
-                    ),
-                ]
-                .into_iter()
-                .map(|path| async move {
-                    tracing::info!(i, path, "get header proof");
-                    let proof = client.get::<HeaderProof>(&path).send().await?;
-                    Ok::<_, anyhow::Error>((path, proof))
-                }),
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(
+                SqlDataSource::options(&storage[0], Options::with_port(port))
+                    .light_client(Default::default()),
             )
+            .persistences(persistence)
+            .states(std::array::from_fn(|_| genesis_state.clone()))
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<SequencerApiVersion>::from_urls(
+                    vec![url.clone()],
+                    Default::default(),
+                    Duration::from_secs(2),
+                    &NoMetrics,
+                )
+            }))
+            .network_config(test_config)
+            .build();
+
+        let mut network = TestNetwork::new(config, UPGRADE).await;
+        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        client.connect(None).await;
+
+        // Track each leaf and block served by the query service; they are the
+        // ground truth the light client proofs are checked against.
+        let mut actual_leaves = vec![];
+        let mut actual_blocks = vec![];
+        let mut leaves = client
+            .socket("availability/stream/leaves/0")
+            .subscribe::<LeafQueryData<SeqTypes>>()
             .await
-            .unwrap();
-            for (path, proof) in proofs {
-                tracing::info!(i, path, ?proof, "check header proof");
-                assert_eq!(
-                    proof.verify_ref(root.block_merkle_tree_root()).unwrap(),
-                    leaf.header()
+            .unwrap()
+            .zip(
+                client
+                    .socket("availability/stream/blocks/0")
+                    .subscribe::<BlockQueryData<SeqTypes>>()
+                    .await
+                    .unwrap(),
+            )
+            .map(|(leaf, block)| {
+                let leaf = leaf.unwrap();
+                actual_leaves.push(leaf.clone());
+                actual_blocks.push(block.unwrap());
+                leaf
+            });
+
+        // Wait for the upgrade to take effect.
+        let upgrade_height = timeout(Duration::from_secs(600), async {
+            loop {
+                let leaf = leaves.next().await.unwrap();
+                if leaf.header().version() >= NEW_PROTOCOL_VERSION {
+                    break leaf.height();
+                }
+                tracing::info!(
+                    version = %leaf.header().version(),
+                    height = leaf.header().height(),
+                    view = ?leaf.leaf().view_number(),
+                    "waiting for new protocol upgrade"
                 );
             }
+        })
+        .await
+        .expect("the network did not upgrade to the new protocol");
+        let upgrade_epoch = epoch_from_block_number(upgrade_height, EPOCH_HEIGHT);
+        tracing::info!(upgrade_height, upgrade_epoch, "new protocol enabled");
 
-            // Get the corresponding payload.
-            let proof = client
-                .get::<PayloadProof>(&format!("light-client/payload/{i}"))
+        // Wait for the first post upgrade epoch change, to also cover proofs
+        // across a V6 epoch boundary
+        let epoch_change_height = timeout(Duration::from_secs(300), async {
+            loop {
+                let leaf = leaves.next().await.unwrap();
+                let epoch = epoch_from_block_number(leaf.height(), EPOCH_HEIGHT);
+                if epoch > upgrade_epoch {
+                    break leaf.height();
+                }
+                tracing::info!(
+                    height = leaf.height(),
+                    ?epoch,
+                    "waiting for a post-upgrade epoch change"
+                );
+            }
+        })
+        .await
+        .expect("no epoch change happened after the upgrade");
+        tracing::info!(epoch_change_height, "post upgrade epoch change");
+
+        // Run a few more blocks so every queried height has the descendants its
+        // proof needs (QC chains, header roots, and a finalizing `Certificate2`).
+        let max_block = epoch_change_height + 3;
+        timeout(Duration::from_secs(120), async {
+            loop {
+                let leaf = leaves.next().await.unwrap();
+                if leaf.height() > max_block {
+                    break;
+                }
+                tracing::info!(max_block, height = leaf.height(), "waiting for block");
+            }
+        })
+        .await
+        .expect("the chain stopped making progress after the upgrade");
+
+        // Stop consensus: every block we query has already been produced.
+        network.stop_consensus().await;
+
+        // Sample blocks around the two boundaries where proof logic changes
+        // the V5 -> V6 upgrade and the following V6 epoch change.
+        let heights =
+            (upgrade_height - 3..=upgrade_height + 1).chain(epoch_change_height - 1..=max_block);
+
+        check_light_client_proofs(
+            &client,
+            &actual_leaves,
+            &actual_blocks,
+            heights,
+            EPOCH_HEIGHT,
+        )
+        .await;
+
+        let client = &client;
+        let finality_proof = |height: u64| async move {
+            client
+                .get::<LeafProof>(&format!("light-client/leaf/{height}"))
                 .send()
                 .await
-                .unwrap();
-            assert_eq!(proof.verify(leaf.header()).unwrap(), *block.payload());
-        }
-
-        // Check light client stake table.
-        let events: Vec<StakeTableEvent> = client
-            .get(&format!("light-client/stake-table/{}", first_epoch + 2))
-            .send()
-            .await
-            .unwrap();
-        let mut state_from_events = StakeTableState::default();
-        for event in events {
-            state_from_events.apply_event(event).unwrap().unwrap();
-        }
-
-        assert_eq!(
-            state_from_events.into_validators(),
-            network
-                .server
-                .consensus_handle()
-                .storage()
-                .await
-                .load_all_validators(first_epoch + 2, 0, 1_000_000)
-                .await
                 .unwrap()
-                .into_iter()
-                .map(|v| (v.account, v))
-                .collect::<RegisteredValidatorMap>()
-        );
+        };
+        // Everything up to the last two pre cutover leaves is old protocol
+        for height in upgrade_height - 10..=upgrade_height - 3 {
+            let proof = finality_proof(height).await;
+            assert!(
+                matches!(proof.proof(), FinalityProof::HotStuff2 { .. }),
+                "leaf {height} should be proven by a HotStuff2 QC chain, got {:?}",
+                proof.proof(),
+            );
+        }
 
-        // Querying for a stake table before the first real epoch is an error.
-        let err = client
-            .get::<Vec<StakeTableEvent>>(&format!("light-client/stake-table/{}", first_epoch + 1))
-            .send()
-            .await
-            .unwrap_err();
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+        // A post cutover leaf is proven by a new protocol certificate. The last
+        // two pre cutover leaves will be finalized by new protocol
+        // e.g cutover at 347 the old protocol decides up to 344 (HotStuff2), and the
+        // new protocol's first Cert2 directly commits 347 and finalizes
+        // 345 and 346 with it via the indirect commit rule.
+        for height in [upgrade_height - 1, epoch_change_height] {
+            let proof = finality_proof(height).await;
+            assert!(
+                matches!(proof.proof(), FinalityProof::NewProtocol { .. }),
+                "leaf {height} should be proven by a new protocol certificate, got {:?}",
+                proof.proof(),
+            );
+        }
+
+        // Epochs run from genesis, so `first_epoch` is 1 and the endpoint is
+        // queryable from epoch 3, which the chain has long passed.
+        let first_epoch = EpochNumber::new(epoch_from_block_number(0, EPOCH_HEIGHT));
+        check_light_client_stake_table(client, &network.server, first_epoch).await;
     }
 
     /// Test that `fetch_leaf` returns a leaf with exactly the requested block height.

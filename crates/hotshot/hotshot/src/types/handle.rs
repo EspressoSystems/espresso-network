@@ -273,7 +273,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static> SystemContextHandl
     /// Shut down the inner hotshot and wait until all background threads are closed.
     pub async fn shut_down(&mut self) {
         self.membership_coordinator.cancel_all_drb();
+        self.shut_down_tasks_and_network().await;
+    }
 
+    /// Shut down all consensus and network tasks and the network itself, but
+    /// leave shared state alone: in-flight DRB computations on the membership
+    /// coordinator keep running, and the in-memory consensus state stays
+    /// readable.
+    pub async fn shut_down_tasks_and_network(&mut self) {
         // this is required because `SystemContextHandle` holds an inactive receiver and
         // `broadcast_direct` below can wait indefinitely
         self.internal_event_stream.0.set_await_active(false);
@@ -284,13 +291,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static> SystemContextHandl
             .await
             .inspect_err(|err| tracing::error!("Failed to send shutdown event: {err}"));
 
-        tracing::error!("Shutting down the network!");
+        tracing::info!(target: "announce", "Shutting down the network!");
         self.hotshot.network.shut_down().await;
 
-        tracing::error!("Shutting down network tasks!");
+        tracing::info!(target: "announce", "Shutting down network tasks!");
         self.network_registry.shutdown().await;
 
-        tracing::error!("Shutting down consensus!");
+        tracing::info!(target: "announce", "Shutting down consensus!");
         self.consensus_registry.shutdown().await;
     }
 

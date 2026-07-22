@@ -349,6 +349,11 @@ impl<TYPES: NodeType> ConnectedNetwork<TYPES::SignatureKey> for CombinedNetworks
     {
         let closure = async move {
             join!(self.primary().shut_down(), self.secondary().shut_down());
+            // The network object may be kept alive long after shutdown (e.g.
+            // the legacy stack after the new-protocol cutover); release the
+            // cached message hashes and per-view channels it still pins.
+            self.message_deduplication_cache.write().drop_contents();
+            self.delayed_tasks_channels.write().await.clear();
         };
         boxed_sync(closure)
     }
@@ -543,6 +548,13 @@ impl MessageDeduplicationCache {
                 NonZeroUsize::new(COMBINED_NETWORK_CACHE_SIZE).unwrap(),
             ),
         }
+    }
+
+    /// Drop all cached hashes and shrink to the minimum footprint. Only
+    /// sensible after `shut_down`, when no more messages will be processed.
+    fn drop_contents(&mut self) {
+        self.primary_message_cache = LruCache::new(NonZeroUsize::MIN);
+        self.secondary_message_cache = LruCache::new(NonZeroUsize::MIN);
     }
 
     /// Determine if a message is unique between two sources

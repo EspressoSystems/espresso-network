@@ -80,6 +80,62 @@ pub trait Quorum: Sync {
         cert2: &Certificate2<SeqTypes>,
     ) -> impl Send + Future<Output = Result<()>>;
 
+    /// Check a threshold signature on a certificate signed by the epoch after this quorum's.
+    fn verify_next_epoch(
+        &self,
+        cert: &Certificate,
+        version: Version,
+    ) -> impl Send + Future<Output = Result<()>> {
+        async move {
+            match (version.major, version.minor) {
+                (0, 1) => {
+                    self.verify_next_epoch_static::<StaticVersion<0, 1>>(cert)
+                        .await
+                },
+                (0, 2) => {
+                    self.verify_next_epoch_static::<StaticVersion<0, 2>>(cert)
+                        .await
+                },
+                (0, 3) => {
+                    self.verify_next_epoch_static::<StaticVersion<0, 3>>(cert)
+                        .await
+                },
+                (0, 4) => {
+                    self.verify_next_epoch_static::<StaticVersion<0, 4>>(cert)
+                        .await
+                },
+                (0, 5) => {
+                    self.verify_next_epoch_static::<StaticVersion<0, 5>>(cert)
+                        .await
+                },
+                (0, 6) => {
+                    self.verify_next_epoch_static::<StaticVersion<0, 6>>(cert)
+                        .await
+                },
+                _ => {
+                    const {
+                        assert!(MAX_SUPPORTED_VERSION.major == 0);
+                        assert!(MAX_SUPPORTED_VERSION.minor == 6);
+                    }
+                    bail!("unsupported version {version}");
+                },
+            }
+        }
+    }
+
+    /// Same as [`verify_next_epoch`](Self::verify_next_epoch), but with the version as a
+    /// type-level parameter.
+    ///
+    /// The default delegates to [`verify_static`](Self::verify_static), which is only appropriate
+    /// for quorums that do not distinguish epochs (such as test mocks). Implementations backed by
+    /// per-epoch stake tables must override this to verify against the next epoch's quorum.
+    fn verify_next_epoch_static<V: StaticVersionType + 'static>(
+        &self,
+        qc: &Certificate,
+    ) -> impl Send + Future<Output = Result<()>> {
+        self.verify_static::<V>(qc)
+    }
+
     /// Verify that QCs are signed, form a chain starting from `leaf`, with a particular protocol
     /// version.
     ///
@@ -88,7 +144,7 @@ pub trait Quorum: Sync {
         &self,
         leaf: &Leaf2,
         certs: impl Send + IntoIterator<Item = &'a Certificate, IntoIter: Send>,
-    ) -> impl Send + Future<Output = Result<Version>> {
+    ) -> impl Send + Future<Output = Result<ChainVersions>> {
         let span = tracing::trace_span!(
             "verify_qc_chain_and_get_version",
             height = leaf.block_header().height()
@@ -123,20 +179,55 @@ pub trait Quorum: Sync {
             // Check the QC chain: valid signatures and sequential views.
             let mut first = None;
             let mut curr: Option<&Certificate> = None;
+            let mut max_cert_version = version;
             for cert in certs {
                 tracing::trace!(?cert, "verify cert");
 
                 // What version number do we expect the quorum to have signed over?
-                let version = match &upgrade {
+                let cert_version = match &upgrade {
                     Some(upgrade) if cert.view_number() >= upgrade.data.new_version_first_view => {
                         tracing::debug!(?upgrade, view = ?cert.view_number(), "using upgraded version");
                         upgrade.data.new_version
                     },
                     _ => version,
                 };
+                if cert_version > max_cert_version {
+                    max_cert_version = cert_version;
+                }
+
+                // Which epoch's quorum do we expect to have signed this certificate? A chain
+                // proving the last leaf of an epoch necessarily contains certificates produced in
+                // the subsequent epoch, signed by the next epoch's quorum. Each certificate commits
+                // to its epoch in the signed payload, so dispatching on it is sound: a certificate
+                // claiming the wrong epoch will fail signature verification.
+                let committing = first.unwrap_or(cert);
+                let next_epoch = match (committing.epoch(), cert.epoch()) {
+                    // Certificates from before the epochs upgrade are always checked against the
+                    // quorum supplied for this proof.
+                    (None, _) | (_, None) => false,
+                    (Some(leaf_epoch), Some(cert_epoch)) if cert_epoch == leaf_epoch => false,
+                    (Some(leaf_epoch), Some(cert_epoch)) if cert_epoch == leaf_epoch + 1 => {
+                        // Only the last leaf of an epoch is justified by the next epoch's quorum,
+                        // and its committing QC is dual-signed: it carries a next-epoch QC that
+                        // `verify` has already checked against the next epoch's quorum. Requiring
+                        // that here stops the next epoch's quorum from finalizing an interior leaf
+                        // of the previous epoch, which it never co-signed.
+                        committing.next_epoch_qc().is_some()
+                    },
+                    (Some(leaf_epoch), Some(cert_epoch)) => {
+                        bail!(
+                            "certificate from epoch {cert_epoch} cannot justify a leaf in epoch \
+                             {leaf_epoch}"
+                        );
+                    },
+                };
 
                 // Check the signature.
-                self.verify(cert, version).await?;
+                if next_epoch {
+                    self.verify_next_epoch(cert, cert_version).await?;
+                } else {
+                    self.verify(cert, cert_version).await?;
+                }
 
                 // Check chaining.
                 if let Some(prev) = curr {
@@ -154,10 +245,25 @@ pub trait Quorum: Sync {
             let first_qc = first.context("empty QC chain")?;
             ensure!(first_qc.leaf_commit() == leaf.commit());
 
-            Ok(version)
+            Ok(ChainVersions {
+                leaf: version,
+                max_cert: max_cert_version,
+            })
         }
         .instrument(span)
     }
+}
+
+/// The protocol versions extracted while verifying a QC chain.
+#[derive(Clone, Copy, Debug)]
+pub struct ChainVersions {
+    /// The protocol version of the leaf the chain proves finalized.
+    pub leaf: Version,
+
+    /// The highest protocol version any certificate in the chain was verified under.
+    ///
+    /// May exceed [`leaf`](Self::leaf) when an upgrade takes effect within the chain.
+    pub max_cert: Version,
 }
 
 /// A stake table representing a particular quorum.
@@ -285,13 +391,22 @@ where
 
         if version(V::MAJOR, V::MINOR) >= EPOCH_VERSION {
             // If this certificate is part of an epoch change, also check that the next epoch's
-            // quorum has signed.
-            if let Some(next_epoch_qc) = cert.verify_next_epoch_qc(self.epoch_height)? {
-                let stake_table = self.membership.next_epoch_stake_table().await?;
-                stake_table
-                    .verify_cert::<V, _>(next_epoch_qc)
-                    .await
-                    .context("verifying next epoch QC")?;
+            // quorum has signed. Reject a next-epoch QC attached to any other certificate: it would
+            // otherwise go unverified, yet the epoch dispatch in `verify_qc_chain_and_get_version`
+            // treats a next-epoch QC on the committing certificate as proof that the next epoch
+            // co-signed the leaf.
+            match cert.verify_next_epoch_qc(self.epoch_height)? {
+                Some(next_epoch_qc) => {
+                    let stake_table = self.membership.next_epoch_stake_table().await?;
+                    stake_table
+                        .verify_cert::<V, _>(next_epoch_qc)
+                        .await
+                        .context("verifying next epoch QC")?;
+                },
+                None => ensure!(
+                    cert.next_epoch_qc().is_none(),
+                    "certificate carries a next-epoch QC but is not an epoch transition"
+                ),
             }
         }
 
@@ -308,10 +423,42 @@ where
             .await
             .context("verifying cert2")
     }
+
+    async fn verify_next_epoch_static<V: StaticVersionType + 'static>(
+        &self,
+        cert: &Certificate,
+    ) -> Result<()> {
+        let stake_table = self.membership.next_epoch_stake_table().await?;
+        stake_table
+            .verify_cert::<V, _>(cert.qc())
+            .await
+            .context("verifying QC against next epoch quorum")?;
+
+        // A certificate from the epoch after the proof's epoch is never itself part of an epoch
+        // transition (transition certificates belong to the epoch that is ending), so there is no
+        // second next-epoch QC to check.
+        ensure!(
+            cert.next_epoch_qc().is_none(),
+            "unexpected next-epoch QC on a certificate from the next epoch"
+        );
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod test {
+    use bitvec::vec::BitVec;
+    use committable::Commitment;
+    use espresso_types::PrivKey;
+    use hotshot_query_service_types::availability::LeafQueryData;
+    use hotshot_types::{
+        data::{EpochNumber, ViewNumber},
+        simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2},
+        simple_vote::{NextEpochQuorumData2, QuorumData2, VersionedVoteData},
+        traits::signature_key::SignatureKey,
+        vote::Certificate as _,
+    };
     use pretty_assertions::assert_eq;
 
     use super::*;
@@ -324,7 +471,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_valid_chain() {
         let leaves = leaf_chain(1..=3, EPOCH_VERSION).await;
-        let version = AlwaysTrueQuorum
+        let ChainVersions { leaf: version, .. } = AlwaysTrueQuorum
             .verify_qc_chain_and_get_version(
                 leaves[0].leaf(),
                 &qc_chain_from_leaf_chain(&leaves[1..]),
@@ -373,13 +520,14 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_upgrade() {
         let leaves = leaf_chain_with_upgrade(1..=3, 2, ENABLE_EPOCHS).await;
-        let version = VersionCheckQuorum::new(leaves.iter().map(|leaf| leaf.leaf().clone()))
-            .verify_qc_chain_and_get_version(
-                leaves[0].leaf(),
-                &qc_chain_from_leaf_chain(&leaves[1..]),
-            )
-            .await
-            .unwrap();
+        let ChainVersions { leaf: version, .. } =
+            VersionCheckQuorum::new(leaves.iter().map(|leaf| leaf.leaf().clone()))
+                .verify_qc_chain_and_get_version(
+                    leaves[0].leaf(),
+                    &qc_chain_from_leaf_chain(&leaves[1..]),
+                )
+                .await
+                .unwrap();
         assert_eq!(version, leaves[0].header().version());
     }
 
@@ -403,7 +551,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_epoch_change() {
         let leaves = epoch_change_leaf_chain(1..=5, 5, EPOCH_VERSION).await;
-        let version = EpochChangeQuorum::new(5)
+        let ChainVersions { leaf: version, .. } = EpochChangeQuorum::new(5)
             .verify_qc_chain_and_get_version(
                 leaves[0].leaf(),
                 &qc_chain_from_leaf_chain(&leaves[1..]),
@@ -472,7 +620,7 @@ mod test {
             proposal.next_epoch_justify_qc = None;
         })
         .await;
-        let version = EpochChangeQuorum::new(5)
+        let ChainVersions { leaf: version, .. } = EpochChangeQuorum::new(5)
             .verify_qc_chain_and_get_version(
                 leaves[0].leaf(),
                 &qc_chain_from_leaf_chain(&leaves[1..]),
@@ -480,5 +628,236 @@ mod test {
             .await
             .unwrap();
         assert_eq!(version, leaves[0].header().version());
+    }
+
+    const BOUNDARY_EPOCH_HEIGHT: u64 = 10;
+
+    fn boundary_quorum(seeds: impl IntoIterator<Item = u64>) -> QuorumKeys {
+        seeds
+            .into_iter()
+            .map(|i| {
+                let (stake_key, priv_key) =
+                    PubKey::generated_from_seed_indexed(Default::default(), i);
+                (
+                    priv_key,
+                    StakeTableEntry {
+                        stake_key,
+                        stake_amount: U256::from(1),
+                    },
+                )
+            })
+            .unzip()
+    }
+
+    type QuorumKeys = (Vec<PrivKey>, Vec<StakeTableEntry<PubKey>>);
+
+    fn boundary_signature(
+        msg: &[u8],
+        (keys, entries): &QuorumKeys,
+    ) -> <PubKey as SignatureKey>::QcType {
+        let total = entries
+            .iter()
+            .fold(U256::ZERO, |acc, entry| acc + entry.stake_amount);
+        let pp = PubKey::public_parameter(entries, supermajority_threshold(total));
+        let sigs = keys
+            .iter()
+            .map(|key| PubKey::sign(key, msg).unwrap())
+            .collect::<Vec<_>>();
+        PubKey::assemble(
+            &pp,
+            &std::iter::repeat_n(true, keys.len()).collect::<BitVec>(),
+            &sigs,
+        )
+    }
+
+    fn boundary_signed_qc(
+        data: QuorumData2<SeqTypes>,
+        view: ViewNumber,
+        quorum: &QuorumKeys,
+    ) -> QuorumCertificate2<SeqTypes> {
+        let commit = VersionedVoteData::new_infallible(
+            data,
+            view,
+            &UpgradeLock::<SeqTypes>::new(Upgrade::trivial(EPOCH_VERSION)),
+        )
+        .commit();
+        let sig = boundary_signature(commit.as_ref(), quorum);
+        QuorumCertificate2::create_signed_certificate(commit, data, sig, view)
+    }
+
+    fn boundary_signed_next_epoch_qc(
+        data: QuorumData2<SeqTypes>,
+        view: ViewNumber,
+        quorum: &QuorumKeys,
+    ) -> NextEpochQuorumCertificate2<SeqTypes> {
+        let data: NextEpochQuorumData2<SeqTypes> = data.into();
+        let commit = VersionedVoteData::new_infallible(
+            data.clone(),
+            view,
+            &UpgradeLock::<SeqTypes>::new(Upgrade::trivial(EPOCH_VERSION)),
+        )
+        .commit();
+        let commit_bytes: [u8; 32] = commit.into();
+        let sig = boundary_signature(commit.as_ref(), quorum);
+        NextEpochQuorumCertificate2::new(
+            data,
+            Commitment::from_raw(commit_bytes),
+            view,
+            Some(sig),
+            Default::default(),
+        )
+    }
+
+    /// Build a 2-chain proving the last leaf of epoch 1 (block 10), where epochs 1 and 2 have
+    /// disjoint quorums. The deciding QC is produced in epoch 2. If `deciding_signed_by_next` it
+    /// is correctly signed by epoch 2's quorum; otherwise it is (invalidly) signed by epoch 1's
+    /// quorum.
+    async fn epoch_boundary_fixture(
+        deciding_signed_by_next: bool,
+    ) -> (
+        Vec<LeafQueryData<SeqTypes>>,
+        Certificate,
+        Certificate,
+        StakeTableQuorum<(Arc<StakeTable>, Arc<StakeTable>)>,
+    ) {
+        let current = boundary_quorum(0..5);
+        let next = boundary_quorum(5..10);
+
+        let leaves = leaf_chain(9..=11, EPOCH_VERSION).await;
+
+        // Block 10 is an epoch transition block, so its QC is dual-signed by both quorums.
+        let committing_data = QuorumData2 {
+            leaf_commit: Committable::commit(leaves[1].leaf()),
+            epoch: Some(EpochNumber::new(1)),
+            block_number: Some(10),
+        };
+        let committing_qc = Certificate::new(
+            boundary_signed_qc(committing_data, ViewNumber::new(10), &current),
+            Some(boundary_signed_next_epoch_qc(
+                committing_data,
+                ViewNumber::new(10),
+                &next,
+            )),
+        );
+
+        let deciding_quorum = if deciding_signed_by_next {
+            &next
+        } else {
+            &current
+        };
+        let deciding_qc = Certificate::non_epoch_change(boundary_signed_qc(
+            QuorumData2 {
+                leaf_commit: Committable::commit(leaves[2].leaf()),
+                epoch: Some(EpochNumber::new(2)),
+                block_number: Some(11),
+            },
+            ViewNumber::new(11),
+            deciding_quorum,
+        ));
+
+        let quorum = StakeTableQuorum::new(
+            (
+                Arc::new(StakeTable::from(current.1)),
+                Arc::new(StakeTable::from(next.1)),
+            ),
+            BOUNDARY_EPOCH_HEIGHT,
+        );
+        (leaves, committing_qc, deciding_qc, quorum)
+    }
+
+    /// A 2-chain proving the last leaf of an epoch includes a deciding QC signed by the next
+    /// epoch's quorum; it must be verified against that quorum, not the quorum of the epoch of the
+    /// leaf under proof.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_epoch_boundary_quorum_change() {
+        let (leaves, committing_qc, deciding_qc, quorum) = epoch_boundary_fixture(true).await;
+        let ChainVersions { leaf: version, .. } = quorum
+            .verify_qc_chain_and_get_version(leaves[1].leaf(), [&committing_qc, &deciding_qc])
+            .await
+            .unwrap();
+        assert_eq!(version, leaves[1].header().version());
+    }
+
+    /// A deciding QC claiming to be from the next epoch but signed by the current epoch's quorum
+    /// must fail verification.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_epoch_boundary_deciding_qc_wrong_quorum() {
+        let (leaves, committing_qc, deciding_qc, quorum) = epoch_boundary_fixture(false).await;
+        quorum
+            .verify_qc_chain_and_get_version(leaves[1].leaf(), [&committing_qc, &deciding_qc])
+            .await
+            .unwrap_err();
+    }
+
+    /// Build a 2-chain over an interior (non-boundary) leaf of epoch 1 whose deciding QC is forged
+    /// by epoch 2's quorum, mimicking a next epoch trying to finalize a leaf the current epoch
+    /// never decided. If `disguise_as_boundary`, the committing QC also carries a next-epoch QC to
+    /// imitate a genuine epoch-transition committing QC.
+    async fn mid_epoch_forgery_fixture(
+        disguise_as_boundary: bool,
+    ) -> (
+        Vec<LeafQueryData<SeqTypes>>,
+        Certificate,
+        Certificate,
+        StakeTableQuorum<(Arc<StakeTable>, Arc<StakeTable>)>,
+    ) {
+        let current = boundary_quorum(0..5);
+        let next = boundary_quorum(5..10);
+
+        // Block 5 is in the interior of epoch 1 (epoch height 10), not an epoch boundary.
+        let leaves = leaf_chain(4..=6, EPOCH_VERSION).await;
+
+        let committing_data = QuorumData2 {
+            leaf_commit: Committable::commit(leaves[1].leaf()),
+            epoch: Some(EpochNumber::new(1)),
+            block_number: Some(5),
+        };
+        let committing_qc = Certificate::new(
+            boundary_signed_qc(committing_data, ViewNumber::new(5), &current),
+            disguise_as_boundary
+                .then(|| boundary_signed_next_epoch_qc(committing_data, ViewNumber::new(5), &next)),
+        );
+
+        let deciding_qc = Certificate::non_epoch_change(boundary_signed_qc(
+            QuorumData2 {
+                leaf_commit: Committable::commit(leaves[2].leaf()),
+                epoch: Some(EpochNumber::new(2)),
+                block_number: Some(6),
+            },
+            ViewNumber::new(6),
+            &next,
+        ));
+
+        let quorum = StakeTableQuorum::new(
+            (
+                Arc::new(StakeTable::from(current.1)),
+                Arc::new(StakeTable::from(next.1)),
+            ),
+            BOUNDARY_EPOCH_HEIGHT,
+        );
+        (leaves, committing_qc, deciding_qc, quorum)
+    }
+
+    /// The next epoch's quorum must not be able to finalize an interior leaf of the previous epoch:
+    /// only the last leaf of an epoch is justified by the next epoch, so a deciding QC signed by
+    /// the next epoch over a non-boundary leaf must be rejected.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_mid_epoch_next_epoch_forgery_rejected() {
+        let (leaves, committing_qc, deciding_qc, quorum) = mid_epoch_forgery_fixture(false).await;
+        quorum
+            .verify_qc_chain_and_get_version(leaves[1].leaf(), [&committing_qc, &deciding_qc])
+            .await
+            .unwrap_err();
+    }
+
+    /// The same forgery must be rejected even when the committing QC is dressed up with a
+    /// next-epoch QC to imitate a genuine epoch-transition committing QC.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_mid_epoch_next_epoch_forgery_with_fake_transition_rejected() {
+        let (leaves, committing_qc, deciding_qc, quorum) = mid_epoch_forgery_fixture(true).await;
+        quorum
+            .verify_qc_chain_and_get_version(leaves[1].leaf(), [&committing_qc, &deciding_qc])
+            .await
+            .unwrap_err();
     }
 }

@@ -27,7 +27,10 @@ use hotshot_types::{
     message::{Proposal as SignedProposal, UpgradeLock, convert_proposal},
     new_protocol::CoordinatorEvent,
     traits::{
-        ValidatedState, block_contents::BlockHeader, node_implementation::NodeType,
+        ValidatedState,
+        block_contents::BlockHeader,
+        metrics::{Gauge, Metrics},
+        node_implementation::NodeType,
         signature_key::SignatureKey,
     },
     utils::{StateAndDelta, epoch_from_block_number},
@@ -53,6 +56,7 @@ enum NewProtocol<T: NodeType, S> {
     Init {
         coordinator: Coordinator<T, S>,
         event_tx: Sender<CoordinatorEvent<T>>,
+        queue_len: Option<Arc<dyn Gauge>>,
     },
     Running {
         coordinator: AbortOnDropHandle<()>,
@@ -79,10 +83,22 @@ where
         epoch_height: BlockNumber,
         rx: InactiveReceiver<Event<T>>,
         event_channel_capacity: usize,
+        metrics: &dyn Metrics,
     ) -> Self {
         let (mut event_tx, mut event_rx) = broadcast(event_channel_capacity);
         event_tx.set_await_active(false);
         event_rx.set_overflow(true);
+
+        let coordinator_event_queue_len = metrics.is_recording().then(|| {
+            metrics
+                .create_gauge("coordinator_event_queue_len".into(), None)
+                .into()
+        });
+        let external_event_queue_len = metrics.is_recording().then(|| {
+            metrics
+                .create_gauge("external_event_queue_len".into(), None)
+                .into()
+        });
 
         let upgrade_lock = ctx.read().await.hotshot.upgrade_lock.clone();
 
@@ -91,6 +107,7 @@ where
         let new_proto = Arc::new(RwLock::new(NewProtocol::Init {
             coordinator,
             event_tx,
+            queue_len: coordinator_event_queue_len,
         }));
 
         let tasks = vec![
@@ -98,6 +115,7 @@ where
                 rx.clone(),
                 client_api.clone(),
                 upgrade_lock.clone(),
+                external_event_queue_len,
             ))),
             AbortOnDropHandle::new(spawn(forward_legacy_high_qc(
                 rx.clone(),
@@ -148,6 +166,7 @@ where
             NewProtocol::Init {
                 coordinator,
                 event_tx,
+                queue_len,
             } => {
                 let client_api = coordinator.client_api().clone();
                 let shutdown = CancellationToken::new();
@@ -155,6 +174,7 @@ where
                     coordinator: AbortOnDropHandle::new(spawn(run_coordinator(
                         coordinator,
                         event_tx,
+                        queue_len,
                         seed,
                         shutdown.clone(),
                     ))),
@@ -471,6 +491,10 @@ where
     pub async fn start_consensus(&self) {
         self.activate().await;
         if self.is_new_proto_running() {
+            if self.upgrade_lock.upgrade().base >= versions::NEW_PROTOCOL_VERSION {
+                tracing::info!("base version starts at the cutover, shutting down legacy stack");
+                self.shut_down_legacy().await;
+            }
             return;
         }
         self.legacy_handle
@@ -498,11 +522,29 @@ where
         let _ = coordinator.await;
     }
 
+    /// Permanently tear down the legacy consensus stack: its tasks and the
+    /// legacy network.
+    ///
+    /// The in-memory legacy consensus state stays readable for pre-cutover
+    /// queries, and in-flight DRB computations on the shared membership
+    /// coordinator keep running (the new protocol needs them for upcoming
+    /// epochs).
+    pub async fn shut_down_legacy(&self) {
+        for t in &self.tasks {
+            t.abort()
+        }
+        self.legacy_handle
+            .write()
+            .await
+            .shut_down_tasks_and_network()
+            .await;
+    }
+
     fn is_new_proto_running(&self) -> bool {
         matches!(*self.new_proto.read(), NewProtocol::Running { .. })
     }
 
-    async fn client_api(&self) -> Option<ClientApi<T>> {
+    pub(crate) async fn client_api(&self) -> Option<ClientApi<T>> {
         if let NewProtocol::Running { client_api, .. } = &*self.new_proto.read() {
             return Some(client_api.clone());
         }
@@ -518,6 +560,7 @@ where
 async fn run_coordinator<T, S>(
     mut coord: Coordinator<T, S>,
     tx: Sender<CoordinatorEvent<T>>,
+    queue_len: Option<Arc<dyn Gauge>>,
     seed: Option<PreCutoverSeed<T>>,
     shutdown: CancellationToken,
 ) where
@@ -533,6 +576,9 @@ async fn run_coordinator<T, S>(
                 if let Err(err) = apply_input(&mut coord, &tx, it).await {
                     error!(%err, "coordinator: critical error");
                     break;
+                }
+                if let Some(m) = &queue_len {
+                    m.set(tx.len())
                 }
             }
         }

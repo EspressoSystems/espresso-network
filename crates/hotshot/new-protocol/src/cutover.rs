@@ -8,7 +8,7 @@
 //!   client API so the new protocol can form TC2s and propose at the
 //!   boundary.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use async_broadcast::InactiveReceiver;
 use futures::StreamExt;
@@ -17,7 +17,7 @@ use hotshot_types::{
     data::Leaf2,
     event::{Event, EventType},
     message::UpgradeLock,
-    traits::node_implementation::NodeType,
+    traits::{metrics::Gauge, node_implementation::NodeType},
 };
 use versions::NEW_PROTOCOL_VERSION;
 
@@ -97,9 +97,13 @@ pub async fn forward_legacy_timeout_votes<T: NodeType>(
     legacy_event_rx: InactiveReceiver<Event<T>>,
     client_api: ClientApi<T>,
     upgrade_lock: UpgradeLock<T>,
+    queue_len: Option<Arc<dyn Gauge>>,
 ) {
     let mut rx = legacy_event_rx.activate_cloned();
     while let Some(event) = rx.next().await {
+        if let Some(m) = &queue_len {
+            m.set(rx.len())
+        }
         if let EventType::LegacyTimeoutVoteEmitted { vote } = event.event
             && cutover_decided(&upgrade_lock)
             && let Err(err) = client_api.try_submit_legacy_timeout_vote(vote)

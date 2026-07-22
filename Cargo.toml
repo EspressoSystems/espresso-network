@@ -310,7 +310,6 @@ jf-utils = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-uti
 lazy_static = "1"
 libp2p = { package = "libp2p", version = "0.56", default-features = false, features = [
     "macros",
-    "autonat",
     "cbor",
     "dns",
     "gossipsub",

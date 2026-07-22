@@ -391,6 +391,8 @@ struct InnerTestClient {
     upgrade: Option<(u64, Version)>,
     /// `Certificate2` finality proofs for new-protocol leaves, by height.
     cert2s: HashMap<usize, Certificate2<SeqTypes>>,
+    /// If set, fail leaf proof requests whose `finalized` hint exceeds this distance.
+    max_finalized_hint_distance: Option<u64>,
 }
 
 impl InnerTestClient {
@@ -513,19 +515,32 @@ impl InnerTestClient {
             {
                 assert!(block_header.set_next_stake_table_hash(self.stake_table_hash(*epoch + 1)));
             }
-            let next_epoch_justify_qc = if i > 0 && is_epoch_transition(i as u64, epoch_height) {
+            // As in production, a leaf carries a next-epoch justify QC exactly when the block
+            // justified by its QC (the parent) is part of an epoch transition, and that QC is
+            // signed by the epoch after the parent's. New-protocol leaves never carry one:
+            // epoch changes there are justified by `Certificate2`, and the `Leaf2`
+            // representation always has `next_epoch_justify_qc: None`.
+            let next_epoch_justify_qc = if i > 0
+                && self.version_at(i as u64) < NEW_PROTOCOL_VERSION
+                && is_epoch_transition(i as u64 - 1, epoch_height)
+            {
                 let parent_qc = self.leaves[i - 1].qc().clone();
+                let parent_epoch = epoch_from_block_number(i as u64 - 1, epoch_height);
+                let parent_upgrade = Upgrade::trivial(self.version_at(i as u64 - 1));
                 let data: NextEpochQuorumData2<SeqTypes> = parent_qc.data.into();
                 let versioned_commit = VersionedVoteData::new_infallible(
                     data.clone(),
                     parent_qc.view_number,
-                    &UpgradeLock::<SeqTypes>::new(upgrade),
+                    &UpgradeLock::<SeqTypes>::new(parent_upgrade),
                 )
                 .commit();
                 let commit_bytes: [u8; 32] = versioned_commit.into();
 
-                let (next_keys, next_validators): (Vec<_>, Vec<_>) =
-                    self.quorum_for_epoch(*epoch + 1).iter().cloned().unzip();
+                let (next_keys, next_validators): (Vec<_>, Vec<_>) = self
+                    .quorum_for_epoch(parent_epoch + 1)
+                    .iter()
+                    .cloned()
+                    .unzip();
                 let mut next_entries = vec![];
                 let mut next_total = U256::ZERO;
                 for validator in &next_validators {
@@ -792,6 +807,13 @@ impl TestClient {
         let mut inner = self.inner.lock().await;
         inner.mock_block_height = Some(height);
     }
+
+    /// Fail leaf proof requests whose `finalized` hint is more than `max_distance` past the
+    /// requested leaf.
+    pub async fn reject_distant_finalized_hints(&self, max_distance: u64) {
+        let mut inner = self.inner.lock().await;
+        inner.max_finalized_hint_distance = Some(max_distance);
+    }
 }
 
 impl Client for TestClient {
@@ -822,6 +844,16 @@ impl Client for TestClient {
             tracing::info!(height, sub, "return wrong leaf");
             height = *sub;
         };
+
+        if let (Some(finalized), Some(max_distance)) =
+            (finalized, inner.max_finalized_hint_distance)
+            && finalized.saturating_sub(height as u64) > max_distance
+        {
+            bail!(
+                "finalized hint ({finalized}) is more than {max_distance} blocks past the \
+                 requested leaf ({height})"
+            );
+        }
 
         let leaf = inner.leaf(height, self.epoch_height).await;
 
