@@ -9,6 +9,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use axum::{http::HeaderMap, response::Response, routing::get};
 use clap::Parser;
 use committable::{Commitment, Committable};
 #[cfg(feature = "benchmarking")]
@@ -26,8 +27,7 @@ use rand::{Rng, RngCore, SeedableRng};
 use rand_chacha::ChaChaRng;
 use rand_distr::Distribution;
 use surf_disco::{Client, Url, reexports::WebSocketConfig};
-use tide_disco::{App, error::ServerError};
-use tokio::{task::spawn, time::sleep};
+use tokio::{net::TcpListener, task::spawn, time::sleep};
 use vbs::version::StaticVersionType;
 
 /// Submit random transactions to an Espresso Sequencer.
@@ -201,7 +201,11 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) {
 
     // Subscribe to block stream so we can check that our transactions are getting sequenced.
     let client = Client::<Error, SequencerApiVersion>::new(opt.urls[0].clone());
-    let block_height: usize = client.get("status/block-height").send().await.unwrap();
+    let block_height: usize = client
+        .get(&espresso_api::routes::v1::status_block_height())
+        .send()
+        .await
+        .unwrap();
 
     // Create a new [`WebSocketConfig`]. We trust the events service on our nodes to not
     // send us malicious messages.
@@ -213,10 +217,7 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) {
 
     let mut blocks = client
         .socket_with_config(
-            &format!(
-                "availability/stream/blocks/{}",
-                block_height.saturating_sub(1)
-            ),
+            &espresso_api::routes::v1::stream_blocks(block_height.saturating_sub(1)),
             websocket_config,
         )
         .subscribe()
@@ -236,7 +237,7 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) {
 
     // Start healthcheck endpoint once tasks are running.
     if let Some(port) = opt.port {
-        spawn(server(port, SequencerApiVersion::instance()));
+        spawn(server(port));
     }
 
     // Keep track of the results.
@@ -508,13 +509,23 @@ async fn submit_transactions<ApiVer: StaticVersionType>(
     }
 }
 
-async fn server<ApiVer: StaticVersionType + 'static>(port: u16, bind_version: ApiVer) {
-    if let Err(err) = App::<(), ServerError>::with_state(())
-        .serve(format!("0.0.0.0:{port}"), bind_version)
-        .await
-    {
+async fn server(port: u16) {
+    let app = axum::Router::new().route("/healthcheck", get(healthcheck));
+    let addr = format!("0.0.0.0:{port}");
+    let listener = match TcpListener::bind(&addr).await {
+        Ok(listener) => listener,
+        Err(err) => {
+            tracing::error!("failed to bind web server to {addr}: {err}");
+            return;
+        },
+    };
+    if let Err(err) = axum::serve(listener, app).await {
         tracing::error!("web server exited: {err}");
     }
+}
+
+async fn healthcheck(headers: HeaderMap) -> Response {
+    espresso_api::healthcheck_response(&headers)
 }
 
 fn random_transaction(opt: &Options, rng: &mut ChaChaRng) -> Transaction {

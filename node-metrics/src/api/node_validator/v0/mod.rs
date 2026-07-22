@@ -4,6 +4,16 @@ use std::{fmt, future::Future, pin::Pin, str::FromStr, time::Duration};
 
 use alloy::primitives::Address;
 use anyhow::Context;
+use axum::{
+    Router,
+    extract::{
+        State,
+        ws::{Message, WebSocket, WebSocketUpgrade},
+    },
+    http::HeaderMap,
+    response::Response,
+    routing::get,
+};
 use espresso_types::{BackoffParams, SeqTypes, v0_3::AuthenticatedValidator};
 use futures::{
     FutureExt, Sink, SinkExt, Stream, StreamExt,
@@ -18,11 +28,13 @@ use hotshot_query_service::{
 use hotshot_types::{PeerConfig, signature_key::BLSPubKey};
 use indexmap::IndexMap;
 use prometheus_parse::{Sample, Scrape};
-use serde::{Deserialize, Serialize};
-use tide_disco::{Api, api::ApiError, socket::Connection};
+use serde::Deserialize;
 use tokio::{spawn, task::JoinHandle, time::timeout};
 use url::Url;
-use vbs::version::{StaticVersion, StaticVersionType, Version};
+use vbs::{
+    BinarySerializer, Serializer,
+    version::{StaticVersion, Version},
+};
 
 use crate::service::{
     client_message::{ClientMessage, InternalClientMessage},
@@ -50,113 +62,6 @@ pub type Version01 = StaticVersion<VERSION_MAJ, VERSION_MIN>;
 // Static instance of the Version01 type
 pub const STATIC_VER_0_1: Version01 = StaticVersion {};
 
-#[derive(Debug, Serialize, Deserialize)]
-pub enum Error {
-    UnhandledTideDisco(tide_disco::StatusCode, String),
-    UnhandledSurfDisco(surf_disco::StatusCode, String),
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::UnhandledSurfDisco(status, msg) => {
-                write!(f, "Unhandled Surf Disco Error: {status} - {msg}")
-            },
-
-            Self::UnhandledTideDisco(status, msg) => {
-                write!(f, "Unhandled Tide Disco Error: {status} - {msg}")
-            },
-        }
-    }
-}
-
-impl std::error::Error for Error {}
-
-impl tide_disco::Error for Error {
-    fn catch_all(status: tide_disco::StatusCode, msg: String) -> Self {
-        Self::UnhandledTideDisco(status, msg)
-    }
-
-    fn status(&self) -> tide_disco::StatusCode {
-        tide_disco::StatusCode::INTERNAL_SERVER_ERROR
-    }
-}
-
-#[derive(Debug)]
-pub enum LoadApiError {
-    Toml(toml::de::Error),
-    Api(ApiError),
-}
-
-impl From<toml::de::Error> for LoadApiError {
-    fn from(err: toml::de::Error) -> Self {
-        LoadApiError::Toml(err)
-    }
-}
-
-impl From<ApiError> for LoadApiError {
-    fn from(err: ApiError) -> Self {
-        LoadApiError::Api(err)
-    }
-}
-
-pub(crate) fn load_api<State: 'static, ApiVer: StaticVersionType + 'static>(
-    default: &str,
-) -> Result<Api<State, Error, ApiVer>, LoadApiError> {
-    let toml: toml::Value = toml::from_str(default)?;
-    Ok(Api::new(toml)?)
-}
-
-#[derive(Debug)]
-pub enum LoadTomlError {
-    Io(std::io::Error),
-    Toml(toml::de::Error),
-    Utf8(std::str::Utf8Error),
-}
-
-impl From<std::io::Error> for LoadTomlError {
-    fn from(err: std::io::Error) -> Self {
-        LoadTomlError::Io(err)
-    }
-}
-
-impl From<toml::de::Error> for LoadTomlError {
-    fn from(err: toml::de::Error) -> Self {
-        LoadTomlError::Toml(err)
-    }
-}
-
-impl From<std::str::Utf8Error> for LoadTomlError {
-    fn from(err: std::str::Utf8Error) -> Self {
-        LoadTomlError::Utf8(err)
-    }
-}
-
-#[derive(Debug)]
-pub enum DefineApiError {
-    LoadApiError(LoadApiError),
-    LoadTomlError(LoadTomlError),
-    ApiError(ApiError),
-}
-
-impl From<LoadApiError> for DefineApiError {
-    fn from(err: LoadApiError) -> Self {
-        DefineApiError::LoadApiError(err)
-    }
-}
-
-impl From<LoadTomlError> for DefineApiError {
-    fn from(err: LoadTomlError) -> Self {
-        DefineApiError::LoadTomlError(err)
-    }
-}
-
-impl From<ApiError> for DefineApiError {
-    fn from(err: ApiError) -> Self {
-        DefineApiError::ApiError(err)
-    }
-}
-
 /// [StateClientMessageSender] allows for the retrieval of a [Sender] for sending
 /// messages received from the client to the Server for request processing.
 pub trait StateClientMessageSender<K> {
@@ -166,131 +71,183 @@ pub trait StateClientMessageSender<K> {
 #[derive(Debug)]
 pub enum EndpointError {}
 
-pub fn define_api<State>() -> Result<Api<State, Error, Version01>, DefineApiError>
+fn wants_binary(headers: &HeaderMap) -> bool {
+    headers
+        .get(axum::http::header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.contains("application/octet-stream"))
+}
+
+/// Decode a message received from the `details` socket. Mirrors tide-disco's `Connection` stream
+/// impl: binary frames are vbs, text frames are JSON, decoded according to the frame actually
+/// received (not the negotiated response type). Returns `None` for anything that isn't a decoded
+/// [`ClientMessage`]; the caller treats control frames (ping/pong/close) as ignorable and anything
+/// else as a fatal decode error, closing the connection, matching tide-disco's behavior.
+fn decode_client_message(message: &Message) -> Option<ClientMessage> {
+    match message {
+        Message::Text(text) => serde_json::from_str(text).ok(),
+        Message::Binary(bytes) => Serializer::<Version01>::deserialize(bytes).ok(),
+        Message::Ping(_) | Message::Pong(_) | Message::Close(_) => None,
+    }
+}
+
+/// Encode a message to send on the `details` socket, negotiating VBS binary vs JSON text from the
+/// `Accept` header of the upgrade request, matching tide-disco's content negotiation. The
+/// dashboard client is a browser `WebSocket`, which cannot set an `Accept` header, so this
+/// defaults to JSON (mirroring tide-disco's negotiation order, which also prefers JSON on a
+/// wildcard `Accept`).
+fn encode_server_message(message: &ServerMessage, binary: bool) -> Option<Message> {
+    if binary {
+        Serializer::<Version01>::serialize(message)
+            .map(Message::binary)
+            .inspect_err(|err| tracing::error!("failed to serialize server message: {err}"))
+            .ok()
+    } else {
+        serde_json::to_string(message)
+            .map(Message::text)
+            .inspect_err(|err| tracing::error!("failed to serialize server message: {err}"))
+            .ok()
+    }
+}
+
+/// Relays messages between the `details` socket and the internal client-message channel. Mirrors
+/// tide-disco's socket handler: register with the server, wait for our assigned [`ClientId`], then
+/// forward client requests and server responses until either side disconnects.
+async fn handle_details_socket<S>(socket: WebSocket, state: S, binary: bool)
 where
-    State: StateClientMessageSender<Sender<ServerMessage>> + Send + Sync + 'static,
+    S: StateClientMessageSender<Sender<ServerMessage>>,
 {
-    let mut api = load_api::<State, Version01>(include_str!("./node_validator.toml"))?;
+    // Split into independent halves, matching tide-disco's `Connection`, which was `Clone` for
+    // exactly this reason: polling the next client message must not block sending server
+    // messages, and vice versa.
+    let (mut socket_sink, mut socket_stream) = socket.split();
 
-    api.with_version("0.0.1".parse().unwrap()).socket(
-        "details",
-        move |_req, socket: Connection<ServerMessage, ClientMessage, Error, Version01>, state| {
-            async move {
-                let mut socket_stream = socket.clone();
-                let mut socket_sink = socket;
+    let mut internal_client_message_sender = state.sender();
+    let (server_message_sender, mut server_message_receiver) = mpsc::channel(32);
 
-                let mut internal_client_message_sender = state.sender();
-                let (server_message_sender, mut server_message_receiver) = mpsc::channel(32);
+    // Let's register ourselves with the Server
+    if let Err(err) = internal_client_message_sender
+        .send(InternalClientMessage::Connected(server_message_sender))
+        .await
+    {
+        // This means that the client_message_sender is closed
+        // we need to exit the stream.
+        tracing::info!(
+            "client message sender is closed before first message: {}",
+            err
+        );
+        return;
+    }
 
-                // Let's register ourselves with the Server
+    // We should receive a response from the server that identifies us uniquely.
+    let client_id =
+        if let Some(ServerMessage::YouAre(client_id)) = server_message_receiver.next().await {
+            client_id
+        } else {
+            // The channel is closed, and this client should be removed we need to exit the stream
+            tracing::info!("server message receiver closed before first message");
+            return;
+        };
+
+    // We want to start these futures outside of the loop.  If we don't do this then every
+    // iteration will not be guaranteed to not skip a message.
+    let mut next_client_message = socket_stream.next();
+    let mut next_server_message = server_message_receiver.next();
+
+    loop {
+        match futures::future::select(next_client_message, next_server_message).await {
+            Either::Left((client_frame, remaining_server_message)) => {
+                let Some(client_frame) = client_frame else {
+                    // The client has disconnected, we need to exit the stream
+                    tracing::info!("client message has disconnected");
+                    break;
+                };
+
+                let Ok(client_frame) = client_frame else {
+                    // This indicates that there was a more specific error with the socket
+                    // message. This error can be various, and may be recoverable depending on
+                    // the actual nature of the error.  We will treat it as unrecoverable for now.
+                    break;
+                };
+
+                if matches!(client_frame, Message::Ping(_) | Message::Pong(_)) {
+                    // Not a client request; keep waiting without disturbing `client_id`.
+                    next_client_message = socket_stream.next();
+                    next_server_message = remaining_server_message;
+                    continue;
+                }
+
+                let Some(client_message) = decode_client_message(&client_frame) else {
+                    break;
+                };
+
+                let internal_client_message = client_message.to_internal_with_client_id(client_id);
                 if let Err(err) = internal_client_message_sender
-                    .send(InternalClientMessage::Connected(server_message_sender))
+                    .send(internal_client_message)
                     .await
                 {
                     // This means that the client_message_sender is closed
-                    // we need to exit the stream.
-                    tracing::info!(
-                        "client message sender is closed before first message: {}",
-                        err
-                    );
-                    return Ok(());
+                    tracing::info!("client message sender is closed: {}", err);
+                    break;
                 }
 
-                // We should receive a response from the server that identifies us
-                // uniquely.
-                let client_id = if let Some(ServerMessage::YouAre(client_id)) =
-                    server_message_receiver.next().await
-                {
-                    client_id
-                } else {
-                    // The channel is closed, and this client should be removed
-                    // we need to exit the stream
-                    tracing::info!("server message receiver closed before first message",);
-                    return Ok(());
+                // let's queue up the next client message to receive
+                next_client_message = socket_stream.next();
+                next_server_message = remaining_server_message;
+            },
+            Either::Right((server_message, remaining_client_message)) => {
+                // Alright, we have a server message, we want to forward it to the down-stream
+                // client.
+                let Some(server_message) = server_message else {
+                    // The server has disconnected, we need to exit the stream
+                    break;
                 };
 
-                // We want to start these futures outside of the loop.  If we
-                // don't do this then every iteration will not be guaranteed
-                // to not skip a message.
-                let mut next_client_message = socket_stream.next();
-                let mut next_server_message = server_message_receiver.next();
-
-                loop {
-                    match futures::future::select(next_client_message, next_server_message).await {
-                        Either::Left((client_request, remaining_server_message)) => {
-                            let client_request = if let Some(client_request) = client_request {
-                                client_request
-                            } else {
-                                // The client has disconnected, we need to exit the stream
-                                tracing::info!("client message has disconnected");
-                                break;
-                            };
-
-                            let client_request = if let Ok(client_request) = client_request {
-                                client_request
-                            } else {
-                                // This indicates that there was a more
-                                // specific error with the socket message.
-                                // This error can be various, and may be
-                                // recoverable depending on the actual nature
-                                // of the error.  We will treat it as
-                                // unrecoverable for now.
-                                break;
-                            };
-
-                            let internal_client_message =
-                                client_request.to_internal_with_client_id(client_id);
-                            if let Err(err) = internal_client_message_sender
-                                .send(internal_client_message)
-                                .await
-                            {
-                                // This means that the client_message_sender is closed
-                                tracing::info!("client message sender is closed: {}", err);
-                                break;
-                            }
-
-                            // let's queue up the next client message to receive
-                            next_client_message = socket_stream.next();
-                            next_server_message = remaining_server_message;
-                        },
-                        Either::Right((server_message, remaining_client_message)) => {
-                            // Alright, we have a server message, we want to forward it
-                            // to the down-stream client.
-
-                            let server_message = if let Some(server_message) = server_message {
-                                server_message
-                            } else {
-                                // The server has disconnected, we need to exit the stream
-                                break;
-                            };
-
-                            // We want to forward the message to the client
-                            if let Err(err) = socket_sink.send(&server_message).await {
-                                // This means that the socket is closed
-                                tracing::info!("socket is closed: {}", err);
-                                break;
-                            }
-
-                            // let's queue up the next server message to receive
-                            next_server_message = server_message_receiver.next();
-                            next_client_message = remaining_client_message;
-                        },
-                    }
+                let Some(frame) = encode_server_message(&server_message, binary) else {
+                    break;
+                };
+                // We want to forward the message to the client
+                if socket_sink.send(frame).await.is_err() {
+                    // This means that the socket is closed
+                    tracing::info!("socket is closed");
+                    break;
                 }
 
-                // We don't actually care if this fails or not, as we're exiting
-                // this function anyway, and these Senders and Receivers will
-                // automatically be dropped.
-                _ = internal_client_message_sender
-                    .send(InternalClientMessage::Disconnected(client_id))
-                    .await;
+                // let's queue up the next server message to receive
+                next_server_message = server_message_receiver.next();
+                next_client_message = remaining_client_message;
+            },
+        }
+    }
 
-                Ok(())
-            }
-            .boxed()
-        },
-    )?;
-    Ok(api)
+    // We don't actually care if this fails or not, as we're exiting this function anyway, and
+    // these Senders and Receivers will automatically be dropped.
+    _ = internal_client_message_sender
+        .send(InternalClientMessage::Disconnected(client_id))
+        .await;
+}
+
+async fn details_handler<S>(
+    ws: WebSocketUpgrade,
+    headers: HeaderMap,
+    State(state): State<S>,
+) -> Response
+where
+    S: StateClientMessageSender<Sender<ServerMessage>> + Send + 'static,
+{
+    let binary = wants_binary(&headers);
+    ws.on_upgrade(move |socket| handle_details_socket(socket, state, binary))
+}
+
+/// Builds the `node-validator` module's routes. tide-disco served `details` both directly and
+/// under a major-version prefix (`v0/details`), redirecting the former to the latter; we serve
+/// both forms directly instead, by nesting this router at both `/node-validator` and
+/// `/v0/node-validator`.
+pub fn router<S>() -> Router<S>
+where
+    S: StateClientMessageSender<Sender<ServerMessage>> + Clone + Send + Sync + 'static,
+{
+    Router::new().route("/details", get(details_handler::<S>))
 }
 
 /// [get_config_stake_table_from_sequencer] retrieves the stake table from the
@@ -423,9 +380,9 @@ pub async fn get_node_identity_from_url(url: url::Url) -> anyhow::Result<NodeIde
         .build()
         .with_context(|| "failed to build reqwest client")?;
 
-    // Join the URL with the status metrics API path
+    // Nodes serve /v1 natively; /v0 only works via the legacy path rewrite.
     let completed_url = url
-        .join("v0/status/metrics")
+        .join("v1/status/metrics")
         .with_context(|| "failed to join URL")?;
 
     // Send the request (with a timeout)
