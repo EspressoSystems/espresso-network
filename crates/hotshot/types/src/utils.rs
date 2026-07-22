@@ -35,7 +35,6 @@ use crate::{
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     simple_certificate::QuorumCertificate2,
-    simple_vote::HasEpoch,
     stake_table::StakeTableEntries,
     traits::{ValidatedState, node_implementation::NodeType},
     vote::{Certificate, HasViewNumber},
@@ -104,39 +103,21 @@ pub type StateAndDelta<TYPES> = (
     Option<Arc<<<TYPES as NodeType>::ValidatedState as ValidatedState<TYPES>>::Delta>>,
 );
 
+/// Verify a leaf chain deciding the leaf at `expected_height`.
+///
+/// The chain may cross an epoch boundary, in which case its QCs are signed by
+/// different epochs' quorums. Each QC is verified against the stake table of
+/// the epoch committed in its signed payload, resolved through `coordinator`.
+/// Only the expected height's epoch and its successor are accepted: the signed
+/// epoch binds a QC to one quorum, but any epoch's quorum could sign a
+/// fabricated chain claiming its own epoch, so the claimed epoch must also be
+/// pinned to the height being verified.
 pub async fn verify_leaf_chain<T: NodeType>(
     mut leaf_chain: Vec<Leaf2<T>>,
     coordinator: &EpochMembershipCoordinator<T>,
     expected_height: u64,
     upgrade_lock: &UpgradeLock<T>,
 ) -> anyhow::Result<Leaf2<T>> {
-    let epoch_height = *coordinator.epoch_height();
-    // Derive each QC's epoch from the height of the leaf it certifies; trusting
-    // the epoch claimed in the QC would let a stale epoch's quorum pick the
-    // stake table that verifies its own signatures.
-    let validate_qc = |qc: QuorumCertificate2<T>, certified_height: u64| -> anyhow::Result<()> {
-        let epoch = EpochNumber::new(epoch_from_block_number(certified_height, epoch_height));
-        ensure!(
-            qc.data.epoch() == Some(epoch),
-            "QC claims epoch {:?} but certifies the leaf at height {certified_height} in epoch \
-             {epoch}",
-            qc.data.epoch(),
-        );
-        if let Some(block_number) = qc.data.block_number {
-            ensure!(
-                block_number == certified_height,
-                "QC claims block number {block_number} but certifies the leaf at height \
-                 {certified_height}"
-            );
-        }
-        let membership = coordinator
-            .stake_table_for_epoch(Some(epoch))
-            .map_err(|err| anyhow!("no stake table available for epoch {epoch}: {err:?}"))?;
-        let entries = StakeTableEntries::<T>::from_iter(membership.stake_table()).0;
-        qc.is_valid_cert(&entries, membership.success_threshold(), upgrade_lock)?;
-        Ok(())
-    };
-
     // Sort the leaf chain by view number
     leaf_chain.sort_by_key(|l| l.view_number());
     // Reverse it
@@ -168,13 +149,40 @@ pub async fn verify_leaf_chain<T: NodeType>(
         ));
     }
 
+    // Verify each QC against the stake table of the epoch committed in its
+    // signed payload.
+    let expected_epoch = epoch_from_block_number(expected_height, *coordinator.epoch_height());
+    let allowed_epochs = [
+        Some(EpochNumber::new(expected_epoch)),
+        Some(EpochNumber::new(expected_epoch + 1)),
+    ];
+    let check_qc = |qc: &QuorumCertificate2<T>| -> anyhow::Result<()> {
+        let epoch = qc.data.epoch;
+        ensure!(
+            allowed_epochs.contains(&epoch),
+            "QC claims epoch {epoch:?}, expected epoch {expected_epoch} or {} for height \
+             {expected_height}",
+            expected_epoch + 1
+        );
+        let membership = coordinator
+            .stake_table_for_epoch(epoch)
+            .map_err(|err| anyhow!("no stake table available for epoch {epoch:?}: {err:?}"))?;
+        let entries = StakeTableEntries::<T>::from_iter(membership.stake_table()).0;
+        qc.is_valid_cert(&entries, membership.success_threshold(), upgrade_lock)?;
+        Ok(())
+    };
+
+    // verify all QCs are valid
+    check_qc(&newest_leaf.justify_qc())?;
+    check_qc(&parent.justify_qc())?;
+    check_qc(&grand_parent.justify_qc())?;
+
     // Verify the root is in the chain of decided leaves
-    validate_qc(newest_leaf.justify_qc(), parent.height())?;
     let mut last_leaf = parent;
     for leaf in leaf_chain.iter().skip(2) {
         ensure!(last_leaf.justify_qc().view_number() == leaf.view_number());
         ensure!(last_leaf.justify_qc().data().leaf_commit == leaf.commit());
-        validate_qc(last_leaf.justify_qc(), leaf.height())?;
+        check_qc(&leaf.justify_qc())?;
         if leaf.height() == expected_height {
             return Ok(leaf.clone());
         }
