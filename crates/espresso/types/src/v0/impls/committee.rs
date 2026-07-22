@@ -695,7 +695,7 @@ impl Membership<SeqTypes> for EpochCommittees {
     ///
     /// Everything persisted for the epoch is restored: the stake table, the
     /// epoch root header, and the randomized committee (rebuilt from the DRB
-    /// result), so lookups on the restored snapshot need no network catchup.
+    /// result).
     async fn load_stake_table(&self, epoch: EpochNumber) -> bool {
         if self.inner.read().snapshots.contains_key(&epoch) {
             return true;
