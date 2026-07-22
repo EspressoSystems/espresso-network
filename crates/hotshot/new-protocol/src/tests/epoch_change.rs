@@ -15,7 +15,7 @@ use super::common::{
 use crate::{
     consensus::{ConsensusInput, ConsensusOutput},
     helpers::proposal_commitment,
-    message::{EpochChangeMessage, Proposal, ProposalMessage},
+    message::{EpochChangeError, EpochChangeMessage, Proposal, ProposalMessage},
     tests::common::assertions::{
         any, count_matching, has_request_drb_for_epoch, is_proposal, is_request_block_and_header,
         is_vote1,
@@ -117,14 +117,11 @@ async fn test_handle_epoch_change_valid() {
     );
 }
 
-/// An EpochChangeMessage with mismatched cert1 and cert2 view numbers should be rejected.
+/// An EpochChangeMessage with mismatched cert1 and cert2 view numbers is not
+/// well-formed.
 #[tokio::test]
-async fn test_handle_epoch_change_mismatched_views() {
-    let mut harness = ConsensusHarness::new(0).await;
+async fn test_epoch_change_mismatched_views_not_well_formed() {
     let test_data = TestData::new_with_epoch_height(11, EPOCH_HEIGHT).await;
-    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
-
-    run_views_full(&mut harness, &test_data, &node_key, 0..9).await;
 
     // Mix cert1 from view 9 with cert2 from view 10 — mismatched views
     let proposal: Proposal<TestTypes> = test_data.views[9].proposal.data.clone();
@@ -134,28 +131,39 @@ async fn test_handle_epoch_change_mismatched_views() {
         proposal,
     );
 
-    let view_changed_before = count_matching(harness.outputs(), is_view_changed);
-
-    harness
-        .apply(ConsensusInput::EpochChange(epoch_change))
-        .await;
-
-    assert_eq!(
-        view_changed_before,
-        count_matching(harness.outputs(), is_view_changed),
-        "Mismatched EpochChange should be rejected — no new ViewChanged"
-    );
+    assert!(matches!(
+        epoch_change.well_formed(EPOCH_HEIGHT),
+        Err(EpochChangeError::CertificateMismatch)
+    ));
 }
 
-/// An EpochChangeMessage where the block is not the last block of the epoch
-/// should be rejected (block_number % epoch_height != 0).
+/// Certificates from different epochs are not well-formed. Each certificate
+/// can be individually crypto-valid (adjacent epochs often share a stake
+/// table), so this must be caught structurally before verification.
 #[tokio::test]
-async fn test_handle_epoch_change_wrong_block_number() {
-    let mut harness = ConsensusHarness::new(0).await;
-    let test_data = TestData::new(11).await;
-    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+async fn test_epoch_change_cross_epoch_certificates_not_well_formed() {
+    let test_data = TestData::new_with_epoch_height(21, EPOCH_HEIGHT).await;
 
-    run_views_full(&mut harness, &test_data, &node_key, 0..6).await;
+    // cert1 from the epoch-1 boundary (view 10), cert2 from the epoch-2
+    // boundary (view 20); both are genuine boundary certificates.
+    let proposal: Proposal<TestTypes> = test_data.views[9].proposal.data.clone();
+    let epoch_change = EpochChangeMessage::validated(
+        test_data.views[9].cert1.clone(),
+        test_data.views[19].cert2.clone(),
+        proposal,
+    );
+
+    assert!(matches!(
+        epoch_change.well_formed(EPOCH_HEIGHT),
+        Err(EpochChangeError::CertificateMismatch)
+    ));
+}
+
+/// An EpochChangeMessage whose block is not the last block of the epoch
+/// (block_number % epoch_height != 0) is not well-formed.
+#[tokio::test]
+async fn test_epoch_change_wrong_block_number_not_well_formed() {
+    let test_data = TestData::new_with_epoch_height(11, EPOCH_HEIGHT).await;
 
     // Use view 6 (block 6) which is NOT the last block of the epoch
     let mid_view = &test_data.views[5];
@@ -163,28 +171,17 @@ async fn test_handle_epoch_change_wrong_block_number() {
     let epoch_change =
         EpochChangeMessage::validated(mid_view.cert1.clone(), mid_view.cert2.clone(), proposal);
 
-    let view_changed_before = count_matching(harness.outputs(), is_view_changed);
-
-    harness
-        .apply(ConsensusInput::EpochChange(epoch_change))
-        .await;
-
-    assert_eq!(
-        view_changed_before,
-        count_matching(harness.outputs(), is_view_changed),
-        "EpochChange with wrong block number should be rejected"
-    );
+    assert!(matches!(
+        epoch_change.well_formed(EPOCH_HEIGHT),
+        Err(EpochChangeError::NotLastBlock)
+    ));
 }
 
 /// An EpochChangeMessage whose proposal commitment doesn't match cert1's
-/// leaf_commit should be rejected.
+/// leaf_commit is not well-formed.
 #[tokio::test]
-async fn test_handle_epoch_change_proposal_mismatch() {
-    let mut harness = ConsensusHarness::new(0).await;
+async fn test_epoch_change_proposal_mismatch_not_well_formed() {
     let test_data = TestData::new_with_epoch_height(11, EPOCH_HEIGHT).await;
-    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
-
-    run_views_full(&mut harness, &test_data, &node_key, 0..9).await;
 
     // Use cert1/cert2 from view 10 but proposal from view 9 — commitment mismatch
     let epoch_view = &test_data.views[9];
@@ -195,17 +192,10 @@ async fn test_handle_epoch_change_proposal_mismatch() {
         wrong_proposal,
     );
 
-    let view_changed_before = count_matching(harness.outputs(), is_view_changed);
-
-    harness
-        .apply(ConsensusInput::EpochChange(epoch_change))
-        .await;
-
-    assert_eq!(
-        view_changed_before,
-        count_matching(harness.outputs(), is_view_changed),
-        "EpochChange with mismatched proposal should be rejected"
-    );
+    assert!(matches!(
+        epoch_change.well_formed(EPOCH_HEIGHT),
+        Err(EpochChangeError::ProposalMismatch)
+    ));
 }
 
 /// A stale EpochChangeMessage (cert1 view < locked_cert view) should be rejected.
