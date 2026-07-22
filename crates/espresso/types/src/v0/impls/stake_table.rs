@@ -51,7 +51,8 @@ use hotshot_types::{
         signature_key::StakeTableEntryType,
     },
     utils::{
-        epoch_from_block_number, is_epoch_root, root_block_in_epoch, transition_block_for_epoch,
+        EpochStakeTable, epoch_from_block_number, is_epoch_root, root_block_in_epoch,
+        transition_block_for_epoch,
     },
     x25519,
 };
@@ -2020,17 +2021,12 @@ impl EpochCommittees {
                          root height",
                     )?;
 
-                    let prev_stake_table = self
-                        .get_stake_table(&Some(EpochNumber::new(previous_epoch)))
-                        .context("Stake table not found")?
-                        .into();
-
-                    let success_threshold =
-                        self.success_threshold(Some(EpochNumber::new(previous_epoch)));
+                    let stake_tables =
+                        self.epoch_stake_tables(Some(EpochNumber::new(previous_epoch)));
 
                     fetcher
                         .peers
-                        .fetch_leaf(root_height, prev_stake_table, success_threshold)
+                        .fetch_leaf(root_height, stake_tables)
                         .await
                         .context("Epoch root leaf not found")?
                         .block_header()
@@ -2296,6 +2292,30 @@ impl EpochCommittees {
         } else {
             Some(self.non_epoch_committee.stake_table.clone())
         }
+    }
+
+    /// Stake tables for `epoch` and its successor, labeled by epoch, for
+    /// verifying a leaf chain whose QCs may span an epoch boundary.
+    ///
+    /// Only epochs whose stake table is known are included; the successor's
+    /// table may still be unknown, e.g. while the root leaf it is derived from
+    /// is being fetched.
+    pub fn epoch_stake_tables(&self, epoch: Option<Epoch>) -> Vec<EpochStakeTable<SeqTypes>> {
+        let mut tables = Vec::new();
+        let mut push = |e: Option<Epoch>| {
+            if let Some(table) = self.get_stake_table(&e) {
+                tables.push(EpochStakeTable {
+                    epoch: e,
+                    stake_table: table.into(),
+                    success_threshold: self.success_threshold(e),
+                });
+            }
+        };
+        push(epoch);
+        if let Some(e) = epoch {
+            push(Some(Epoch::new(*e + 1)));
+        }
+        tables
     }
 
     fn get_da_committee(&self, epoch: Option<Epoch>) -> DaCommittee {
@@ -2745,14 +2765,11 @@ impl Membership<SeqTypes> for EpochCommittees {
         let membership_reader = membership.read().await;
         let block_height = root_block_in_epoch(*epoch, membership_reader.epoch_height);
         let peers = membership_reader.fetcher.peers.clone();
-        let stake_table = membership_reader.stake_table(Some(epoch)).clone();
-        let success_threshold = membership_reader.success_threshold(Some(epoch));
+        let stake_tables = membership_reader.epoch_stake_tables(Some(epoch));
         drop(membership_reader);
 
         // Fetch leaves from peers
-        let leaf: Leaf2 = peers
-            .fetch_leaf(block_height, stake_table.clone(), success_threshold)
-            .await?;
+        let leaf: Leaf2 = peers.fetch_leaf(block_height, stake_tables).await?;
 
         Ok(leaf)
     }
@@ -2781,8 +2798,7 @@ impl Membership<SeqTypes> for EpochCommittees {
             },
         };
 
-        let stake_table = membership_reader.stake_table(Some(previous_epoch)).clone();
-        let success_threshold = membership_reader.success_threshold(Some(previous_epoch));
+        let stake_tables = membership_reader.epoch_stake_tables(Some(previous_epoch));
 
         let block_height =
             transition_block_for_epoch(*previous_epoch, membership_reader.epoch_height);
@@ -2794,9 +2810,7 @@ impl Membership<SeqTypes> for EpochCommittees {
             epoch,
             block_height
         );
-        let drb_leaf = peers
-            .try_fetch_leaf(1, block_height, stake_table, success_threshold)
-            .await?;
+        let drb_leaf = peers.try_fetch_leaf(1, block_height, stake_tables).await?;
 
         let Some(drb) = drb_leaf.next_drb_result else {
             tracing::error!(
