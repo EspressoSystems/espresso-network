@@ -693,8 +693,9 @@ impl Membership<SeqTypes> for EpochCommittees {
 
     /// Load the committee for `epoch` from storage.
     ///
-    /// The restored snapshot carries no header and no randomized committee;
-    /// `add_epoch_root` and `add_drb_result` fill those in when needed.
+    /// The randomized committee is rebuilt from the persisted DRB result if
+    /// there is one, so leader lookups need no network catchup. The restored
+    /// snapshot carries no header; `add_epoch_root` fills that in when needed.
     async fn load_stake_table(&self, epoch: EpochNumber) -> bool {
         if self.inner.read().snapshots.contains_key(&epoch) {
             return true;
@@ -705,14 +706,9 @@ impl Membership<SeqTypes> for EpochCommittees {
         if self.inner.read().snapshots.contains_key(&epoch) {
             return true;
         }
-        let loaded = self
-            .fetcher
-            .persistence
-            .lock()
-            .await
-            .load_stake(epoch)
-            .await;
-        let (validators, block_reward, stake_table_hash) = match loaded {
+        let persistence = self.fetcher.persistence.lock().await;
+        let stake_table = persistence.load_stake(epoch).await;
+        let (validators, block_reward, stake_table_hash) = match stake_table {
             Ok(Some(stake)) => stake,
             Ok(None) => return false,
             Err(err) => {
@@ -720,16 +716,34 @@ impl Membership<SeqTypes> for EpochCommittees {
                 return false;
             },
         };
-        info!(%epoch, "stake table loaded from persistence");
-        self.inner.write().put_epoch_committee(
-            epoch,
-            Arc::new(EpochCommittee::new(
-                validators,
-                block_reward,
-                stake_table_hash,
-                None,
-            )),
-        );
+        let drb = match persistence.load_drb_result(epoch).await {
+            Ok(drb) => drb,
+            Err(err) => {
+                warn!(%err, "failed to load drb result for epoch {epoch} from persistence");
+                None
+            },
+        };
+        drop(persistence);
+        info!(%epoch, has_drb = drb.is_some(), "stake table loaded from persistence");
+        let committee = Arc::new(EpochCommittee::new(
+            validators,
+            block_reward,
+            stake_table_hash,
+            None,
+        ));
+        let randomized = drb.map(|drb| {
+            let leaders = committee
+                .eligible_leaders
+                .iter()
+                .map(|peer_config| peer_config.stake_table_entry.clone())
+                .collect();
+            Arc::new(generate_stake_cdf(leaders, drb))
+        });
+        let mut inner = self.inner.write();
+        inner.put_epoch_committee(epoch, committee);
+        if let Some(randomized) = randomized {
+            inner.put_randomized_committee(epoch, randomized);
+        }
         true
     }
 
@@ -1551,7 +1565,7 @@ mod tests {
             &self,
             epoch: EpochNumber,
         ) -> anyhow::Result<Option<crate::traits::StakeTuple>> {
-            Ok((*epoch == 7).then(|| (Default::default(), None, None)))
+            Ok((*epoch == 7 || *epoch == 8).then(|| (Default::default(), None, None)))
         }
 
         async fn load_latest_stake(
@@ -1559,6 +1573,10 @@ mod tests {
             _limit: u64,
         ) -> anyhow::Result<Option<Vec<crate::v0_3::IndexedStake>>> {
             Ok(None)
+        }
+
+        async fn load_drb_result(&self, epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
+            Ok((*epoch == 7).then_some([7; 32]))
         }
 
         async fn store_stake(
@@ -1613,7 +1631,8 @@ mod tests {
     }
 
     // `load_stake_table` materializes a snapshot from the persisted stake
-    // table (e.g. after eviction by `prune_epochs`) without network catchup.
+    // table (e.g. after eviction by `prune_epochs`) without network catchup,
+    // including the randomized committee when a DRB result is persisted.
     #[tokio::test]
     async fn restore_stake_table_from_persistence() {
         let fetcher = Fetcher::new(
@@ -1625,12 +1644,17 @@ mod tests {
         );
         let committees = build_committees_with_fetcher(4, fetcher);
 
+        // Epoch 7 has a stake table and a DRB result in storage.
         let seven = EpochNumber::new(7);
         assert!(committees.snapshot(seven).is_none());
         assert!(committees.load_stake_table(seven).await);
-        assert!(committees.snapshot(seven).is_some());
+        assert!(committees.snapshot(seven).unwrap().has_drb());
         // A second call is satisfied by the in-memory snapshot.
         assert!(committees.load_stake_table(seven).await);
+        // Epoch 8 has a stake table but no DRB result.
+        let eight = EpochNumber::new(8);
+        assert!(committees.load_stake_table(eight).await);
+        assert!(!committees.snapshot(eight).unwrap().has_drb());
         // Nothing persisted for epoch 9.
         assert!(!committees.load_stake_table(EpochNumber::new(9)).await);
     }

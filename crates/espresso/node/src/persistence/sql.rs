@@ -3177,6 +3177,28 @@ impl MembershipPersistence for Persistence {
             .transpose()
     }
 
+    async fn load_drb_result(&self, epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
+        let result = self
+            .db
+            .read()
+            .await?
+            .fetch_optional(
+                query(
+                    "SELECT drb_result FROM epoch_drb_and_root WHERE epoch = $1 AND drb_result IS \
+                     NOT NULL",
+                )
+                .bind(epoch.u64() as i64),
+            )
+            .await?;
+
+        result
+            .map(|row| {
+                let bytes: Vec<u8> = row.get("drb_result");
+                bytes.try_into().or_else(|_| bail!("invalid drb result"))
+            })
+            .transpose()
+    }
+
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
         let mut tx = self.db.read().await?;
 

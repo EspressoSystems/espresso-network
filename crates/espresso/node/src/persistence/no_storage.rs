@@ -314,6 +314,10 @@ impl MembershipPersistence for NoStorage {
         Ok(None)
     }
 
+    async fn load_drb_result(&self, _epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
+        Ok(None)
+    }
+
     async fn store_stake(
         &self,
         _epoch: EpochNumber,

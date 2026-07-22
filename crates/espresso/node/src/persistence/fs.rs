@@ -2034,6 +2034,24 @@ impl MembershipPersistence for Persistence {
         Ok(Some(stake))
     }
 
+    async fn load_drb_result(&self, epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
+        let inner = self.inner.read().await;
+        let file_path = inner
+            .epoch_drb_result_dir_path()
+            .join(epoch.to_string())
+            .with_extension("txt");
+
+        if !file_path.is_file() {
+            return Ok(None);
+        }
+
+        let bytes = fs::read(&file_path)
+            .context(format!("reading epoch drb result {}", file_path.display()))?;
+        let drb_result = bincode::deserialize::<DrbResult>(&bytes)
+            .context(format!("parsing epoch drb result {}", file_path.display()))?;
+        Ok(Some(drb_result))
+    }
+
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
         let limit = limit as usize;
         let inner = self.inner.read().await;
