@@ -60,6 +60,7 @@ pub struct EpochCommittees {
     fetcher: Arc<Fetcher>,
     #[cfg_attr(not(feature = "node"), allow(dead_code))]
     update_fixed_block_reward_lock: Arc<AsyncMutex<()>>,
+    load_from_storage_lock: Arc<AsyncMutex<()>>,
     epoch_height: BlockNumber,
 }
 
@@ -505,6 +506,7 @@ impl EpochCommittees {
             })),
             fetcher: Arc::new(fetcher),
             update_fixed_block_reward_lock: Arc::new(AsyncMutex::new(())),
+            load_from_storage_lock: Arc::new(AsyncMutex::new(())),
             epoch_height: epoch_height.into(),
         }
     }
@@ -689,6 +691,48 @@ impl Membership<SeqTypes> for EpochCommittees {
         self.inner.read().snapshots.get(&epoch).cloned()
     }
 
+    /// Load the committee for `epoch` from storage.
+    ///
+    /// The restored snapshot carries no header and no randomized committee;
+    /// `add_epoch_root` and `add_drb_result` fill those in when needed.
+    async fn load_stake_table(&self, epoch: EpochNumber) -> bool {
+        if self.inner.read().snapshots.contains_key(&epoch) {
+            return true;
+        }
+        // Ensure there is only one `load_stake_table` at a time:
+        let _guard = self.load_from_storage_lock.lock().await;
+        // Check if someone else won the race:
+        if self.inner.read().snapshots.contains_key(&epoch) {
+            return true;
+        }
+        let loaded = self
+            .fetcher
+            .persistence
+            .lock()
+            .await
+            .load_stake(epoch)
+            .await;
+        let (validators, block_reward, stake_table_hash) = match loaded {
+            Ok(Some(stake)) => stake,
+            Ok(None) => return false,
+            Err(err) => {
+                warn!(%err, "failed to load stake table for epoch {epoch} from persistence");
+                return false;
+            },
+        };
+        info!(%epoch, "stake table loaded from persistence");
+        self.inner.write().put_epoch_committee(
+            epoch,
+            Arc::new(EpochCommittee::new(
+                validators,
+                block_reward,
+                stake_table_hash,
+                None,
+            )),
+        );
+        true
+    }
+
     fn non_epoch_snapshot(&self) -> Self::NonEpochSnapshot {
         self.inner.read().non_epoch_snapshot.clone()
     }
@@ -748,6 +792,8 @@ impl Membership<SeqTypes> for EpochCommittees {
                 .map_err(Self::Error::Fetcher)?;
             block_reward = Some(reward);
         }
+
+        self.load_stake_table(epoch).await;
 
         let epoch_committee = self.inner.read().epoch_committee(epoch).cloned();
 
@@ -1477,6 +1523,10 @@ mod tests {
     const TEST_DURATION: Duration = Duration::from_secs(5);
 
     fn build_committees(num_peers: u64) -> EpochCommittees {
+        build_committees_with_fetcher(num_peers, Fetcher::mock())
+    }
+
+    fn build_committees_with_fetcher(num_peers: u64, fetcher: Fetcher) -> EpochCommittees {
         let peers: Vec<PeerConfig<SeqTypes>> = (0..num_peers)
             .map(|i| {
                 ValidatorConfig::<SeqTypes>::generated_from_seed_indexed(
@@ -1488,7 +1538,101 @@ mod tests {
                 .public_config()
             })
             .collect();
-        EpochCommittees::new_stake(peers.clone(), peers, None, Fetcher::mock(), 100u64)
+        EpochCommittees::new_stake(peers.clone(), peers, None, fetcher, 100u64)
+    }
+
+    /// Persistence stub holding a stake table for epoch 7 only.
+    #[derive(Debug)]
+    struct MockStakeStore;
+
+    #[async_trait::async_trait]
+    impl crate::traits::MembershipPersistence for MockStakeStore {
+        async fn load_stake(
+            &self,
+            epoch: EpochNumber,
+        ) -> anyhow::Result<Option<crate::traits::StakeTuple>> {
+            Ok((*epoch == 7).then(|| (Default::default(), None, None)))
+        }
+
+        async fn load_latest_stake(
+            &self,
+            _limit: u64,
+        ) -> anyhow::Result<Option<Vec<crate::v0_3::IndexedStake>>> {
+            Ok(None)
+        }
+
+        async fn store_stake(
+            &self,
+            _epoch: EpochNumber,
+            _stake: AuthenticatedValidatorMap,
+            _block_reward: Option<RewardAmount>,
+            _stake_table_hash: Option<StakeTableHash>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn store_events(
+            &self,
+            _l1_finalized: u64,
+            _events: Vec<(crate::v0_3::EventKey, crate::v0_3::StakeTableEvent)>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn load_events(
+            &self,
+            _from_l1_block: u64,
+            _l1_finalized: u64,
+        ) -> anyhow::Result<(
+            Option<crate::traits::EventsPersistenceRead>,
+            Vec<(crate::v0_3::EventKey, crate::v0_3::StakeTableEvent)>,
+        )> {
+            Ok((None, vec![]))
+        }
+
+        async fn delete_stake_tables(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn store_all_validators(
+            &self,
+            _epoch: EpochNumber,
+            _all_validators: IndexMap<Address, crate::v0_3::RegisteredValidator<PubKey>>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn load_all_validators(
+            &self,
+            _epoch: EpochNumber,
+            _offset: u64,
+            _limit: u64,
+        ) -> anyhow::Result<Vec<crate::v0_3::RegisteredValidator<PubKey>>> {
+            Ok(vec![])
+        }
+    }
+
+    // `load_stake_table` materializes a snapshot from the persisted stake
+    // table (e.g. after eviction by `prune_epochs`) without network catchup.
+    #[tokio::test]
+    async fn restore_stake_table_from_persistence() {
+        let fetcher = Fetcher::new(
+            Arc::new(crate::mock::MockStateCatchup::default()),
+            Arc::new(AsyncMutex::new(MockStakeStore)),
+            crate::L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
+                .expect("Failed to create L1 client"),
+            crate::ChainConfig::default(),
+        );
+        let committees = build_committees_with_fetcher(4, fetcher);
+
+        let seven = EpochNumber::new(7);
+        assert!(committees.snapshot(seven).is_none());
+        assert!(committees.load_stake_table(seven).await);
+        assert!(committees.snapshot(seven).is_some());
+        // A second call is satisfied by the in-memory snapshot.
+        assert!(committees.load_stake_table(seven).await);
+        // Nothing persisted for epoch 9.
+        assert!(!committees.load_stake_table(EpochNumber::new(9)).await);
     }
 
     // `prune_epochs` keeps a bounded window behind the newest decided epoch

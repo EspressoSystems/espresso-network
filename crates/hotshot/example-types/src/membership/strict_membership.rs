@@ -294,6 +294,10 @@ where
             committee.into_iter().map(Into::into).collect(),
         );
     }
+
+    async fn load_stake_table(&self, _: EpochNumber) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
