@@ -15,7 +15,7 @@ use committable::Committable;
 use derivative::Derivative;
 use derive_more::derive::{From, Into};
 use espresso_types::{
-    AuthenticatedValidatorMap, BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2,
+    AuthenticatedValidatorMap, BackoffParams, BlockMerkleTree, FeeMerkleTree, Header, Leaf, Leaf2,
     NetworkConfig, Payload, PubKey, Ratio, RegisteredValidatorMap, StakeTableHash, parse_duration,
     parse_size,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
@@ -3195,6 +3195,28 @@ impl MembershipPersistence for Persistence {
             .map(|row| {
                 let bytes: Vec<u8> = row.get("drb_result");
                 bytes.try_into().or_else(|_| bail!("invalid drb result"))
+            })
+            .transpose()
+    }
+
+    async fn load_epoch_root(&self, epoch: EpochNumber) -> anyhow::Result<Option<Header>> {
+        let result = self
+            .db
+            .read()
+            .await?
+            .fetch_optional(
+                query(
+                    "SELECT block_header FROM epoch_drb_and_root WHERE epoch = $1 AND \
+                     block_header IS NOT NULL",
+                )
+                .bind(epoch.u64() as i64),
+            )
+            .await?;
+
+        result
+            .map(|row| {
+                let bytes: Vec<u8> = row.get("block_header");
+                bincode::deserialize(&bytes).context("deserializing block header")
             })
             .transpose()
     }

@@ -57,7 +57,7 @@ use super::{
 };
 use crate::{
     AuthenticatedValidatorMap, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
-    Leaf2, PubKey, SeqTypes,
+    Header, Leaf2, PubKey, SeqTypes,
     v0::impls::StakeTableHash,
     v0_3::{
         ChainConfig, RegisteredValidator, RewardAccountProofV1, RewardAccountV1, RewardAmount,
@@ -524,6 +524,9 @@ pub trait MembershipPersistence: Send + Sync + 'static {
 
     /// Load the DRB result for `epoch`.
     async fn load_drb_result(&self, epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>>;
+
+    /// Load the epoch root block header for `epoch`.
+    async fn load_epoch_root(&self, epoch: EpochNumber) -> anyhow::Result<Option<Header>>;
 
     /// Store stake table at `epoch` in the persistence layer
     async fn store_stake(

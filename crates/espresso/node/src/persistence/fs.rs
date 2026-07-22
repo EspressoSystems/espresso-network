@@ -14,8 +14,8 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use clap::Parser;
 use espresso_types::{
-    AuthenticatedValidatorMap, Leaf, Leaf2, NetworkConfig, Payload, PubKey, RegisteredValidatorMap,
-    SeqTypes, StakeTableHash,
+    AuthenticatedValidatorMap, Header, Leaf, Leaf2, NetworkConfig, Payload, PubKey,
+    RegisteredValidatorMap, SeqTypes, StakeTableHash,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
     v0_3::{
@@ -2050,6 +2050,28 @@ impl MembershipPersistence for Persistence {
         let drb_result = bincode::deserialize::<DrbResult>(&bytes)
             .context(format!("parsing epoch drb result {}", file_path.display()))?;
         Ok(Some(drb_result))
+    }
+
+    async fn load_epoch_root(&self, epoch: EpochNumber) -> anyhow::Result<Option<Header>> {
+        let inner = self.inner.read().await;
+        let file_path = inner
+            .epoch_root_block_header_dir_path()
+            .join(epoch.to_string())
+            .with_extension("txt");
+
+        if !file_path.is_file() {
+            return Ok(None);
+        }
+
+        let bytes = fs::read(&file_path).context(format!(
+            "reading epoch root block header {}",
+            file_path.display()
+        ))?;
+        let header = bincode::deserialize::<Header>(&bytes).context(format!(
+            "parsing epoch root block header {}",
+            file_path.display()
+        ))?;
+        Ok(Some(header))
     }
 
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {

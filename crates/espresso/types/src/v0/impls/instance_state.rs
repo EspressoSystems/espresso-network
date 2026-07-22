@@ -25,7 +25,7 @@ use super::{
 #[cfg(feature = "node")]
 use crate::v0::L1Client;
 use crate::{
-    AuthenticatedValidatorMap, PubKey, RegisteredValidatorMap,
+    AuthenticatedValidatorMap, Header, PubKey, RegisteredValidatorMap,
     v0::{
         GenesisHeader, L1BlockInfo, Timestamp, Upgrade, UpgradeMode,
         impls::{StakeTableHash, fetch_and_calculate_block_reward, reward::EpochRewardsCalculator},
@@ -179,6 +179,10 @@ impl MembershipPersistence for NoStorage {
     }
 
     async fn load_drb_result(&self, _epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
+        Ok(None)
+    }
+
+    async fn load_epoch_root(&self, _epoch: EpochNumber) -> anyhow::Result<Option<Header>> {
         Ok(None)
     }
 
