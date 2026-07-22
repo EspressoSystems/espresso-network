@@ -3153,7 +3153,7 @@ impl MembershipPersistence for Persistence {
             .fetch_optional(
                 query(
                     "SELECT stake, block_reward, stake_table_hash FROM epoch_drb_and_root WHERE \
-                     epoch = $1",
+                     epoch = $1 AND stake IS NOT NULL",
                 )
                 .bind(epoch.u64() as i64),
             )
