@@ -18,6 +18,7 @@ use crate::{
     data::EpochNumber,
     light_client::{CircuitField, StakeTableState, ToFieldsLightClientCompat},
     traits::signature_key::{SignatureKey, StakeTableEntryType},
+    utils::epoch_from_block_number,
 };
 
 /// Stake table entry
@@ -226,15 +227,36 @@ pub struct EpochStakeTable<TYPES: NodeType> {
 
 /// Per-epoch stake tables covering every epoch a fetched leaf chain may touch.
 #[derive(Clone, Debug)]
-pub struct EpochStakeTables<TYPES: NodeType>(pub Vec<EpochStakeTable<TYPES>>);
+pub struct EpochStakeTables<TYPES: NodeType> {
+    /// One stake table per epoch the chain may touch.
+    pub tables: Vec<EpochStakeTable<TYPES>>,
+    /// Epoch height used to derive the epoch a block number belongs to.
+    pub epoch_height: u64,
+}
 
 impl<TYPES: NodeType> EpochStakeTables<TYPES> {
     /// The stake table for the epoch a certificate claims in its signed
     /// payload. Dispatching on the claimed epoch is sound: the epoch is part of
     /// the signed vote data, so a certificate claiming the wrong epoch fails
     /// signature verification.
-    pub fn for_epoch(&self, epoch: Option<EpochNumber>) -> anyhow::Result<&EpochStakeTable<TYPES>> {
-        self.0
+    ///
+    /// Honest quorums only sign vote data whose epoch is derived from the
+    /// block number, so a certificate whose claimed block number does not
+    /// correspond to its claimed epoch is rejected outright, before any
+    /// signature check.
+    pub fn for_epoch(
+        &self,
+        epoch: Option<EpochNumber>,
+        block_number: Option<u64>,
+    ) -> anyhow::Result<&EpochStakeTable<TYPES>> {
+        let derived = block_number
+            .map(|block| EpochNumber::new(epoch_from_block_number(block, self.epoch_height)));
+        anyhow::ensure!(
+            epoch == derived,
+            "certificate epoch {epoch:?} does not correspond to its block number {block_number:?} \
+             (derived epoch {derived:?})"
+        );
+        self.tables
             .iter()
             .find(|table| table.epoch == epoch)
             .ok_or_else(|| anyhow::anyhow!("no stake table provided for epoch {epoch:?}"))

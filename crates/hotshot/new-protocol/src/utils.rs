@@ -36,9 +36,11 @@ pub async fn verify_leaf_chain_with_cert2<T: NodeType>(
 
     // The chain may cross an epoch boundary, in which case its certificates
     // are signed by different epochs' quorums. Verify each certificate against
-    // the stake table of the epoch committed in its signed payload.
+    // the stake table of the epoch committed in its signed payload, after
+    // checking that the certificate's claimed block number corresponds to its
+    // claimed epoch.
     let check_qc = |qc: &QuorumCertificate2<T>| -> anyhow::Result<()> {
-        let table = stake_tables.for_epoch(qc.data.epoch)?;
+        let table = stake_tables.for_epoch(qc.data.epoch, qc.data.block_number)?;
         qc.is_valid_cert(
             &StakeTableEntries::<T>::from(table.stake_table.clone()).0,
             table.success_threshold,
@@ -47,7 +49,8 @@ pub async fn verify_leaf_chain_with_cert2<T: NodeType>(
         Ok(())
     };
 
-    let cert2_table = stake_tables.for_epoch(Some(cert2.data.epoch))?;
+    let cert2_table =
+        stake_tables.for_epoch(Some(cert2.data.epoch), Some(cert2.data.block_number))?;
     cert2.is_valid_cert(
         &StakeTableEntries::<T>::from(cert2_table.stake_table.clone()).0,
         cert2_table.success_threshold,
@@ -128,6 +131,9 @@ mod test {
 
     type PrivKey = <BLSPubKey as SignatureKey>::PrivateKey;
     type Quorum = (Vec<PrivKey>, Vec<PeerConfig<TestTypes>>);
+
+    /// Epoch height used by every fixture: blocks 1..=10 are epoch 1, 11..=20 epoch 2.
+    const EPOCH_HEIGHT: u64 = 10;
 
     fn quorum(indexes: std::ops::Range<u64>) -> Quorum {
         indexes
@@ -288,10 +294,10 @@ mod test {
         let chain = boundary_3_chain(&quorum1, &quorum2, &upgrade_lock);
         let expected = Committable::commit(&chain[0]);
 
-        let stake_tables = EpochStakeTables(vec![
-            stake_table_for(1, &quorum1),
-            stake_table_for(2, &quorum2),
-        ]);
+        let stake_tables = EpochStakeTables {
+            tables: vec![stake_table_for(1, &quorum1), stake_table_for(2, &quorum2)],
+            epoch_height: EPOCH_HEIGHT,
+        };
         let leaf = verify_leaf_chain(chain.clone(), &stake_tables, 10, &upgrade_lock)
             .await
             .unwrap();
@@ -299,7 +305,10 @@ mod test {
 
         // With only the leaf's own epoch provided (the pre-fix behavior), verification must fail
         // instead of checking the next epoch's QC against the wrong stake table.
-        let only_epoch1 = EpochStakeTables(vec![stake_table_for(1, &quorum1)]);
+        let only_epoch1 = EpochStakeTables {
+            tables: vec![stake_table_for(1, &quorum1)],
+            epoch_height: EPOCH_HEIGHT,
+        };
         verify_leaf_chain(chain, &only_epoch1, 10, &upgrade_lock)
             .await
             .unwrap_err();
@@ -315,13 +324,73 @@ mod test {
 
         let chain = boundary_3_chain(&quorum1, &quorum1, &upgrade_lock);
 
-        let stake_tables = EpochStakeTables(vec![
-            stake_table_for(1, &quorum1),
-            stake_table_for(2, &quorum2),
-        ]);
+        let stake_tables = EpochStakeTables {
+            tables: vec![stake_table_for(1, &quorum1), stake_table_for(2, &quorum2)],
+            epoch_height: EPOCH_HEIGHT,
+        };
         verify_leaf_chain(chain, &stake_tables, 10, &upgrade_lock)
             .await
             .unwrap_err();
+    }
+
+    /// A QC claiming epoch 2 for a block that belongs to epoch 1 must be rejected even when
+    /// epoch 2's quorum validly signed it: honest quorums only sign vote data whose epoch is
+    /// derived from the block number, so the claimed block must correspond to the claimed epoch.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_verify_leaf_chain_qc_epoch_block_mismatch() {
+        let quorum1 = quorum(0..5);
+        let quorum2 = quorum(5..10);
+        let upgrade_lock = UpgradeLock::<TestTypes>::new(Upgrade::trivial(EPOCH_VERSION));
+
+        // Same shape as `boundary_3_chain`, but the QC certifying block 10 (an epoch 1 block)
+        // claims epoch 2 and carries epoch 2's signatures, dispatching verification to a stake
+        // table the block's real quorum never belonged to.
+        let qc9 = signed_qc(
+            QuorumData2 {
+                leaf_commit: Commitment::from_raw([9; 32]),
+                epoch: Some(EpochNumber::new(1)),
+                block_number: Some(9),
+            },
+            9,
+            &quorum1,
+            &upgrade_lock,
+        );
+        let leaf10 = make_leaf(10, 10, 1, qc9, EPOCH_VERSION);
+        let forged_qc10 = signed_qc(
+            QuorumData2 {
+                leaf_commit: Committable::commit(&leaf10),
+                epoch: Some(EpochNumber::new(2)),
+                block_number: Some(10),
+            },
+            10,
+            &quorum2,
+            &upgrade_lock,
+        );
+        let leaf11 = make_leaf(11, 11, 2, forged_qc10, EPOCH_VERSION);
+        let qc11 = signed_qc(
+            QuorumData2 {
+                leaf_commit: Committable::commit(&leaf11),
+                epoch: Some(EpochNumber::new(2)),
+                block_number: Some(11),
+            },
+            11,
+            &quorum2,
+            &upgrade_lock,
+        );
+        let leaf12 = make_leaf(12, 12, 2, qc11, EPOCH_VERSION);
+        let chain = vec![leaf10, leaf11, leaf12];
+
+        let stake_tables = EpochStakeTables {
+            tables: vec![stake_table_for(1, &quorum1), stake_table_for(2, &quorum2)],
+            epoch_height: EPOCH_HEIGHT,
+        };
+        let err = verify_leaf_chain(chain, &stake_tables, 10, &upgrade_lock)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("does not correspond"),
+            "expected epoch/block correspondence error, got: {err}"
+        );
     }
 
     /// A new-protocol leaf range deciding the last block of epoch 1, finalized by a cert2 on the
@@ -378,10 +447,10 @@ mod test {
         let (chain, cert2) = boundary_cert2_chain(&quorum1, &quorum2, &upgrade_lock);
         let expected = Committable::commit(&chain[0]);
 
-        let stake_tables = EpochStakeTables(vec![
-            stake_table_for(1, &quorum1),
-            stake_table_for(2, &quorum2),
-        ]);
+        let stake_tables = EpochStakeTables {
+            tables: vec![stake_table_for(1, &quorum1), stake_table_for(2, &quorum2)],
+            epoch_height: EPOCH_HEIGHT,
+        };
         let leaf = verify_leaf_chain_with_cert2(
             chain.clone(),
             &stake_tables,
@@ -395,7 +464,10 @@ mod test {
 
         // With only the leaf's own epoch provided (the pre-fix behavior), verification must fail
         // instead of checking the cert2 against the wrong stake table.
-        let only_epoch1 = EpochStakeTables(vec![stake_table_for(1, &quorum1)]);
+        let only_epoch1 = EpochStakeTables {
+            tables: vec![stake_table_for(1, &quorum1)],
+            epoch_height: EPOCH_HEIGHT,
+        };
         verify_leaf_chain_with_cert2(chain, &only_epoch1, 10, &upgrade_lock, cert2)
             .await
             .unwrap_err();
@@ -411,12 +483,63 @@ mod test {
 
         let (chain, cert2) = boundary_cert2_chain(&quorum1, &quorum1, &upgrade_lock);
 
-        let stake_tables = EpochStakeTables(vec![
-            stake_table_for(1, &quorum1),
-            stake_table_for(2, &quorum2),
-        ]);
+        let stake_tables = EpochStakeTables {
+            tables: vec![stake_table_for(1, &quorum1), stake_table_for(2, &quorum2)],
+            epoch_height: EPOCH_HEIGHT,
+        };
         verify_leaf_chain_with_cert2(chain, &stake_tables, 10, &upgrade_lock, cert2)
             .await
             .unwrap_err();
+    }
+
+    /// A cert2 claiming epoch 2 for a block that belongs to epoch 1 must be rejected even when
+    /// epoch 2's quorum validly signed it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_verify_leaf_chain_with_cert2_epoch_block_mismatch() {
+        let quorum1 = quorum(0..5);
+        let quorum2 = quorum(5..10);
+        let upgrade_lock = UpgradeLock::<TestTypes>::new(Upgrade::trivial(NEW_PROTOCOL_VERSION));
+
+        let qc9 = signed_qc(
+            QuorumData2 {
+                leaf_commit: Commitment::from_raw([9; 32]),
+                epoch: Some(EpochNumber::new(1)),
+                block_number: Some(9),
+            },
+            9,
+            &quorum1,
+            &upgrade_lock,
+        );
+        let leaf10 = make_leaf(10, 10, 1, qc9, NEW_PROTOCOL_VERSION);
+        // Block 10 is the last block of epoch 1, but the cert2 claims epoch 2, dispatching
+        // verification to a stake table the block's real quorum never belonged to.
+        let forged_cert2 = signed_cert2(
+            Vote2Data {
+                leaf_commit: Committable::commit(&leaf10),
+                epoch: EpochNumber::new(2),
+                block_number: 10,
+            },
+            10,
+            &quorum2,
+            &upgrade_lock,
+        );
+
+        let stake_tables = EpochStakeTables {
+            tables: vec![stake_table_for(1, &quorum1), stake_table_for(2, &quorum2)],
+            epoch_height: EPOCH_HEIGHT,
+        };
+        let err = verify_leaf_chain_with_cert2(
+            vec![leaf10],
+            &stake_tables,
+            10,
+            &upgrade_lock,
+            forged_cert2,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("does not correspond"),
+            "expected epoch/block correspondence error, got: {err}"
+        );
     }
 }

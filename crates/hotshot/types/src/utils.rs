@@ -141,9 +141,10 @@ pub async fn verify_leaf_chain<T: NodeType>(
 
     // The chain may cross an epoch boundary, in which case its QCs are signed
     // by different epochs' quorums. Verify each QC against the stake table of
-    // the epoch committed in its signed payload.
+    // the epoch committed in its signed payload, after checking that the QC's
+    // claimed block number corresponds to its claimed epoch.
     let check_qc = |qc: &QuorumCertificate2<T>| -> anyhow::Result<()> {
-        let table = stake_tables.for_epoch(qc.data.epoch)?;
+        let table = stake_tables.for_epoch(qc.data.epoch, qc.data.block_number)?;
         qc.is_valid_cert(
             &StakeTableEntries::<T>::from(table.stake_table.clone()).0,
             table.success_threshold,

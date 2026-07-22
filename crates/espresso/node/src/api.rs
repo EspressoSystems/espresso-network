@@ -8651,11 +8651,14 @@ mod test {
         let coordinator = network.server.node_state().coordinator;
         let epoch = EpochNumber::new(epoch_from_block_number(TARGET_HEIGHT, EPOCH_HEIGHT));
         let membership = coordinator.membership().read().await;
-        let stake_tables = EpochStakeTables(vec![EpochStakeTable {
-            epoch: Some(epoch),
-            stake_table: membership.stake_table(Some(epoch)),
-            success_threshold: membership.success_threshold(Some(epoch)),
-        }]);
+        let stake_tables = EpochStakeTables {
+            tables: vec![EpochStakeTable {
+                epoch: Some(epoch),
+                stake_table: membership.stake_table(Some(epoch)),
+                success_threshold: membership.success_threshold(Some(epoch)),
+            }],
+            epoch_height: EPOCH_HEIGHT,
+        };
         drop(membership);
 
         // Use StatePeers to fetch the leaf at the exact target height

@@ -1779,7 +1779,10 @@ impl EpochCommittees {
                 success_threshold: self.success_threshold(Some(next_epoch)),
             });
         }
-        EpochStakeTables(tables)
+        EpochStakeTables {
+            tables,
+            epoch_height: self.epoch_height,
+        }
     }
 
     pub fn fetcher(&self) -> &Fetcher {
