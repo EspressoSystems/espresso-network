@@ -180,7 +180,7 @@ mod test {
         upgrade_lock: &UpgradeLock<TestTypes>,
     ) -> QuorumCertificate2<TestTypes> {
         let view = ViewNumber::new(view);
-        let commit = VersionedVoteData::new_infallible(data.clone(), view, upgrade_lock).commit();
+        let commit = VersionedVoteData::new_infallible(data, view, upgrade_lock).commit();
         QuorumCertificate2::create_signed_certificate(
             commit,
             data,
