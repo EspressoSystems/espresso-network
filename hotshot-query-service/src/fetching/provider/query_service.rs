@@ -204,21 +204,19 @@ impl<Ver: StaticVersionType> TrustedQueryServiceProvider<Ver> {
     pub async fn fetch_cert2<Types: NodeType>(
         &self,
         height: u64,
-    ) -> anyhow::Result<Option<Certificate2<Types>>> {
-        let cert2: Option<Certificate2<Types>> = self
+    ) -> anyhow::Result<Certificate2<Types>> {
+        let cert2: Certificate2<Types> = self
             .client
             .get(&format!("availability/cert2/{height}"))
             .send()
             .await
             .context("fetching cert2")?;
 
-        if let Some(cert2) = &cert2 {
-            ensure!(
-                cert2.data.block_number == height,
-                "received cert2 with the wrong height ({})",
-                cert2.data.block_number,
-            );
-        }
+        ensure!(
+            cert2.data.block_number == height,
+            "received cert2 with the wrong height ({})",
+            cert2.data.block_number,
+        );
 
         Ok(cert2)
     }
@@ -231,7 +229,9 @@ where
     Types: NodeType,
 {
     async fn fetch(&self, req: Certificate2Request) -> Option<Option<Certificate2<Types>>> {
-        self.handle_result(req, self.fetch_cert2(req.height).await)
+        // A found cert2 is `Some(Some(_))`; a 404 (or other error) is `None`, which `any_fetch`
+        // skips so it tries the next provider instead of resolving as absent.
+        self.handle_result(req, self.fetch_cert2(req.height).await.map(Some))
     }
 }
 
@@ -1986,6 +1986,80 @@ mod test {
         })
         .await
         .expect("cert2 not backfilled while a peer had it");
+        assert_eq!(backfilled.data.leaf_commit, cert2.data.leaf_commit);
+    }
+
+    // A peer that *responds* absent (it has the leaf but not the cert2, so the endpoint 404s) must
+    // not short-circuit the backfill either: the fetch skips it and gets the cert2 from a peer that
+    // has it. Regression test for the "first absent responder wins" bug.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_cert2_fetch_walks_past_absent_peers() {
+        let leaf = v6_leaf(1).await;
+        let tip = v6_leaf(2).await;
+        let cert2 = cert2_for(&leaf);
+
+        // Peer A has the leaves but no cert2, so `availability/cert2` 404s. It also serves the leaf.
+        let absent_db = TmpDb::init().await;
+        let absent = data_source(&absent_db, &NoFetching).await;
+        {
+            let mut tx = absent.write().await.unwrap();
+            tx.insert_leaf(&leaf).await.unwrap();
+            tx.insert_leaf(&tip).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+        let (absent_port, _absent_task) = serve_availability(absent).await;
+
+        // Peer B has the cert2.
+        let present_db = TmpDb::init().await;
+        let present = data_source(&present_db, &NoFetching).await;
+        {
+            let mut tx = present.write().await.unwrap();
+            tx.insert_leaf(&leaf).await.unwrap();
+            tx.insert_leaf(&tip).await.unwrap();
+            tx.insert_cert2(leaf.height(), cert2.clone()).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+        let (present_port, _present_task) = serve_availability(present).await;
+
+        // Leaf provider is peer B (which serves the leaf reliably); cert2 providers try the absent
+        // peer A first (it 404s), then peer B which has it.
+        let provider = AnyProvider::<MockTypes>::default()
+            .with_leaf_provider(TestProvider::new(trusted_provider(present_port)))
+            .with_cert2_provider(TestProvider::new(trusted_provider(absent_port)))
+            .with_cert2_provider(TestProvider::new(trusted_provider(present_port)));
+
+        let client_db = TmpDb::init().await;
+        let client = builder(&client_db, &provider)
+            .await
+            .with_max_retry_interval(Duration::from_secs(1))
+            .build()
+            .await
+            .unwrap();
+        {
+            let mut tx = client.write().await.unwrap();
+            tx.insert_leaf(&tip).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        client
+            .get_leaf(leaf.height() as usize)
+            .await
+            .with_timeout(Duration::from_secs(5))
+            .await
+            .unwrap();
+        let backfilled = timeout(Duration::from_secs(5), async {
+            loop {
+                {
+                    let mut tx = client.read().await.unwrap();
+                    if let Some(cert2) = tx.load_cert2(leaf.height()).await.unwrap() {
+                        break cert2;
+                    }
+                }
+                sleep(Duration::from_millis(200)).await;
+            }
+        })
+        .await
+        .expect("cert2 not backfilled: the absent peer short-circuited the fetch");
         assert_eq!(backfilled.data.leaf_commit, cert2.data.leaf_commit);
     }
 

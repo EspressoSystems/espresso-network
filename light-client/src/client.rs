@@ -164,6 +164,15 @@ impl QueryServiceClient {
 }
 
 #[cfg(feature = "client")]
+fn is_not_found(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<hotshot_query_service_types::Error>()
+            .is_some_and(|e| e.status() == StatusCode::NOT_FOUND)
+    })
+}
+
+#[cfg(feature = "client")]
 impl Client for QueryServiceClient {
     async fn block_height(&self) -> Result<u64> {
         self.fetch("/node/block-height").await
@@ -248,19 +257,12 @@ impl Client for QueryServiceClient {
     }
 
     async fn cert2(&self, height: u64) -> Result<Option<Certificate2<SeqTypes>>> {
-        // Use the raw client rather than `fetch` so the HTTP status is inspectable: a
-        // `NOT_FOUND` means this peer does not have the cert2, which is reported as `None`
-        // rather than an error, so the fetch resolves instead of retrying.
-        match self
-            .client
-            .get::<Option<Certificate2<SeqTypes>>>(&format!("/availability/cert2/{height}"))
-            .send()
+        // A peer that lacks the cert2 responds 404. We surface that as an error rather than
+        // `Ok(None)` so `FallbackClient` keeps trying other peers instead of stopping at the first
+        // one that lacks it; it resolves absent only once every peer has 404'd.
+        self.fetch::<Certificate2<SeqTypes>>(&format!("/availability/cert2/{height}"))
             .await
-        {
-            Ok(cert2) => Ok(cert2),
-            Err(err) if err.status() == StatusCode::NOT_FOUND => Ok(None),
-            Err(err) => Err(err.into()),
-        }
+            .map(Some)
     }
 }
 
@@ -389,8 +391,17 @@ where
     }
 
     async fn cert2(&self, height: u64) -> Result<Option<Certificate2<SeqTypes>>> {
-        self.get_any(&self.clients, |client| client.cert2(height))
+        // Each peer 404s (an error) when it lacks the cert2, so `get_any` keeps trying peers until
+        // one has it. Once every peer has 404'd, `get_any` returns that not-found error, which we
+        // map back to `Ok(None)` (absent). Any other error propagates so the fetch is retried.
+        match self
+            .get_any(&self.clients, |client| client.cert2(height))
             .await
+        {
+            Ok(cert2) => Ok(cert2),
+            Err(err) if is_not_found(&err) => Ok(None),
+            Err(err) => Err(err),
+        }
     }
 }
 

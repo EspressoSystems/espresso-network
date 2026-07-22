@@ -250,6 +250,10 @@ where
     };
     let fetcher = first.fetcher();
 
+    let callbacks = callbacks.chain(once(HeaderCallback::Cert2 {
+        fetcher: fetcher.clone(),
+    }));
+
     // Check if at least the header is available in local storage. If it is, we benefit two ways:
     // 1. We know for sure the corresponding block exists, so we can unconditionally trigger an
     //    active fetch without unnecessarily bothering our peers.
@@ -283,16 +287,10 @@ where
     // header and leaf.
     match req {
         BlockId::Number(n) => {
-            let cert2 = HeaderCallback::Cert2 {
-                fetcher: fetcher.clone(),
-            };
             fetch_leaf_with_callbacks(
                 fetcher,
                 n.into(),
-                callbacks
-                    .chain(once(cert2))
-                    .map(Into::into)
-                    .collect::<Vec<_>>(),
+                callbacks.map(Into::into).collect::<Vec<_>>(),
             )
             .await?;
         },
@@ -332,6 +330,10 @@ where
     };
     let fetcher = first.fetcher();
 
+    let callbacks = callbacks.chain(once(HeaderCallback::Cert2 {
+        fetcher: fetcher.clone(),
+    }));
+
     // Check if the headers are already available in local storage; then we only need to fetch the
     // payload data.
     match <NonEmptyRange<LeafQueryData<Types>>>::load(tx, req).await {
@@ -354,18 +356,8 @@ where
     }
 
     // Fetch the headers (in fact, the entire leaves) first, then fetch the remaining payload data.
-    let cert2 = HeaderCallback::Cert2 {
-        fetcher: fetcher.clone(),
-    };
-    fetch_leaf_range_with_callbacks(
-        fetcher,
-        req,
-        callbacks
-            .chain(once(cert2))
-            .map(Into::into)
-            .collect::<Vec<_>>(),
-    )
-    .await?;
+    fetch_leaf_range_with_callbacks(fetcher, req, callbacks.map(Into::into).collect::<Vec<_>>())
+        .await?;
 
     Ok(())
 }
