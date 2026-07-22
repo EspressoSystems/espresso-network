@@ -12,7 +12,7 @@
 
 //! Header fetching.
 
-use std::{cmp::Ordering, future::IntoFuture, sync::Arc};
+use std::{cmp::Ordering, future::IntoFuture, iter::once, sync::Arc};
 
 use anyhow::bail;
 use async_trait::async_trait;
@@ -220,8 +220,6 @@ where
                 fetch_vid_common_range(fetcher, start, end);
             },
             Self::Cert2 { fetcher } => {
-                // cert2 exists only from V6 onward, so gate per header rather than fetching every
-                // height in the range and bothering peers for certs that cannot exist.
                 for leaf in leaves.iter() {
                     fetch_cert2_with_header(&fetcher, leaf.leaf().block_header());
                 }
@@ -285,10 +283,16 @@ where
     // header and leaf.
     match req {
         BlockId::Number(n) => {
+            let cert2 = HeaderCallback::Cert2 {
+                fetcher: fetcher.clone(),
+            };
             fetch_leaf_with_callbacks(
                 fetcher,
                 n.into(),
-                callbacks.map(Into::into).collect::<Vec<_>>(),
+                callbacks
+                    .chain(once(cert2))
+                    .map(Into::into)
+                    .collect::<Vec<_>>(),
             )
             .await?;
         },
@@ -350,8 +354,18 @@ where
     }
 
     // Fetch the headers (in fact, the entire leaves) first, then fetch the remaining payload data.
-    fetch_leaf_range_with_callbacks(fetcher, req, callbacks.map(Into::into).collect::<Vec<_>>())
-        .await?;
+    let cert2 = HeaderCallback::Cert2 {
+        fetcher: fetcher.clone(),
+    };
+    fetch_leaf_range_with_callbacks(
+        fetcher,
+        req,
+        callbacks
+            .chain(once(cert2))
+            .map(Into::into)
+            .collect::<Vec<_>>(),
+    )
+    .await?;
 
     Ok(())
 }

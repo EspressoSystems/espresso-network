@@ -347,11 +347,7 @@ mod test {
         stream::StreamExt,
     };
     use hotshot_example_types::node_types::{EpochVersion, TEST_VERSIONS};
-    use hotshot_types::{
-        data::{Leaf2, ViewNumber},
-        simple_certificate::QuorumCertificate2,
-        simple_vote::Vote2Data,
-    };
+    use hotshot_types::data::ViewNumber;
     use test_utils::reserve_tcp_port;
     use tide_disco::{Api, App};
     use tokio::time::timeout;
@@ -369,14 +365,13 @@ mod test {
             AvailabilityProvider, FetchingDataSource, Transaction, VersionedDataSource,
             sql::{self, SqlDataSource},
             storage::{
-                AvailabilityStorage, NodeStorage, SqlStorage, StorageConnectionType,
-                UpdateAvailabilityStorage,
+                AvailabilityStorage, SqlStorage, StorageConnectionType, UpdateAvailabilityStorage,
                 fail_storage::{FailStorage, FailableAction},
                 pruning::{PrunedHeightStorage, PrunerCfg},
                 sql::testing::TmpDb,
             },
         },
-        fetching::provider::{NoFetching, Provider as ProviderTrait, TestProvider},
+        fetching::provider::{AnyProvider, NoFetching, Provider as ProviderTrait, TestProvider},
         node::data_source::NodeDataSource,
         task::BackgroundTask,
         testing::{
@@ -391,6 +386,79 @@ mod test {
     type EpochProvider = TestProvider<TrustedQueryServiceProvider<EpochVersion>>;
 
     fn ignore<T>(_: T) {}
+
+    async fn v6_leaf(number: u64) -> LeafQueryData<MockTypes> {
+        use committable::Committable;
+        use hotshot_types::{data::Leaf2, simple_certificate::QuorumCertificate2};
+
+        let mut leaf = Leaf2::<MockTypes>::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        leaf.block_header_mut().block_number = number;
+        leaf.block_header_mut().version = versions::NEW_PROTOCOL_VERSION;
+        let mut qc = QuorumCertificate2::<MockTypes>::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test,
+        )
+        .await;
+        qc.view_number = ViewNumber::new(number);
+        qc.data.leaf_commit = Committable::commit(&leaf);
+        LeafQueryData::new(leaf, qc).unwrap()
+    }
+
+    /// A cert2 finalizing `leaf`.
+    fn cert2_for(leaf: &LeafQueryData<MockTypes>) -> Certificate2<MockTypes> {
+        use committable::Committable;
+        use hotshot_types::simple_vote::Vote2Data;
+
+        let data = Vote2Data {
+            leaf_commit: leaf.leaf().commit(),
+            epoch: Default::default(),
+            block_number: leaf.height(),
+        };
+        Certificate2::new(
+            data.clone(),
+            data.commit(),
+            leaf.leaf().view_number(),
+            None,
+            PhantomData,
+        )
+    }
+
+    /// Serve the availability API for `data_source` on a fresh port and return the port and the
+    /// background task running the server.
+    async fn serve_availability(
+        data_source: impl AvailabilityDataSource<MockTypes> + Send + Sync + 'static,
+    ) -> (u16, BackgroundTask) {
+        let port = reserve_tcp_port().unwrap();
+        let mut app = App::<_, Error>::with_state(ApiState::from(data_source));
+        app.register_module(
+            "availability",
+            define_api(
+                &Default::default(),
+                MockBase::instance(),
+                "1.0.0".parse().unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let task = BackgroundTask::spawn(
+            "server",
+            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
+        );
+        (port, task)
+    }
+
+    fn trusted_provider(port: u16) -> TrustedQueryServiceProvider<MockBase> {
+        TrustedQueryServiceProvider::new(
+            format!("http://localhost:{port}").parse().unwrap(),
+            MockBase::instance(),
+        )
+    }
 
     /// Build a data source suitable for this suite of tests.
     async fn builder<P: AvailabilityProvider<MockTypes> + Clone>(
@@ -1708,30 +1776,9 @@ mod test {
     /// and store nothing, rather than retrying forever.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_backfill_cert2_with_leaf() {
-        // A server that has a V6 leaf and its cert2 in storage.
+        // A server that has V6 leaves and, at height 1, a cert2 in storage.
         let server_db = TmpDb::init().await;
         let server = data_source(&server_db, &NoFetching).await;
-
-        // Build V6 leaves so the client's cert2 backfill (gated on the new protocol version) fires.
-        async fn v6_leaf(number: u64) -> LeafQueryData<MockTypes> {
-            let mut leaf = Leaf2::<MockTypes>::genesis(
-                &Default::default(),
-                &Default::default(),
-                TEST_VERSIONS.test.base,
-            )
-            .await;
-            leaf.block_header_mut().block_number = number;
-            leaf.block_header_mut().version = versions::NEW_PROTOCOL_VERSION;
-            let mut qc = QuorumCertificate2::<MockTypes>::genesis(
-                &Default::default(),
-                &Default::default(),
-                TEST_VERSIONS.test,
-            )
-            .await;
-            qc.view_number = ViewNumber::new(number);
-            qc.data.leaf_commit = Committable::commit(&leaf);
-            LeafQueryData::new(leaf, qc).unwrap()
-        }
 
         // The leaf at `height` is a decide head and carries a cert2. The leaf at `sparse_height`
         // has none, the common case, since only the newest leaf of each decide batch carries one.
@@ -1741,18 +1788,7 @@ mod test {
         let sparse_height = 2u64;
         let sparse_leaf = v6_leaf(sparse_height).await;
         let later_leaf = v6_leaf(3).await;
-        let data = Vote2Data {
-            leaf_commit: leaf.leaf().commit(),
-            epoch: Default::default(),
-            block_number: height,
-        };
-        let cert2 = Certificate2::<MockTypes>::new(
-            data.clone(),
-            data.commit(),
-            leaf.leaf().view_number(),
-            None,
-            PhantomData,
-        );
+        let cert2 = cert2_for(&leaf);
 
         {
             let mut tx = server.write().await.unwrap();
@@ -1763,30 +1799,11 @@ mod test {
             tx.commit().await.unwrap();
         }
 
-        // Serve the availability API (including the cert2 endpoint) from the server.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(server));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        let _server_task = BackgroundTask::spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server_task) = serve_availability(server).await;
 
         // A client with no cert2, fetching leaves from the server.
         let client_db = TmpDb::init().await;
-        let provider = Provider::new(TrustedQueryServiceProvider::new(
-            format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
-        ));
+        let provider = Provider::new(trusted_provider(port));
         let client = builder(&client_db, &provider)
             .await
             .with_max_retry_interval(Duration::from_secs(1))
@@ -1844,6 +1861,199 @@ mod test {
                 tx.load_cert2(sparse_height).await.unwrap();
             assert!(cert2.is_none());
         }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_backfill_cert2_with_scanner() {
+        // A server holding a V6 leaf and its cert2.
+        let server_db = TmpDb::init().await;
+        let server = data_source(&server_db, &NoFetching).await;
+
+        let height = 1u64;
+        let leaf = v6_leaf(height).await;
+        let tip = v6_leaf(2).await;
+        let cert2 = cert2_for(&leaf);
+        {
+            let mut tx = server.write().await.unwrap();
+            tx.insert_leaf(&leaf).await.unwrap();
+            tx.insert_leaf(&tip).await.unwrap();
+            tx.insert_cert2(height, cert2.clone()).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        let (port, _server_task) = serve_availability(server).await;
+
+        // A client that fetches from the server and runs the proactive scanner frequently. We do
+        // NOT call get_leaf/get_cert2 ourselves: the scanner alone should discover the missing
+        // history and backfill the cert2 as a side effect of fetching the leaf.
+        let client_db = TmpDb::init().await;
+        let provider = Provider::new(trusted_provider(port));
+        let client = client_db
+            .config()
+            .builder::<MockTypes, _>(provider)
+            .await
+            .unwrap()
+            .with_proactive_interval(Duration::from_secs(1))
+            .with_sync_status_ttl(Duration::from_secs(1))
+            .with_max_retry_interval(Duration::from_secs(1))
+            .build()
+            .await
+            .unwrap();
+
+        // Seed the tip so the scanner knows the block height and scans [1, 2).
+        {
+            let mut tx = client.write().await.unwrap();
+            tx.insert_leaf(&tip).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        let backfilled = timeout(Duration::from_secs(30), async {
+            loop {
+                {
+                    let mut tx = client.read().await.unwrap();
+                    if let Some(cert2) = tx.load_cert2(height).await.unwrap() {
+                        break cert2;
+                    }
+                }
+                sleep(Duration::from_millis(500)).await;
+            }
+        })
+        .await
+        .expect("scanner did not backfill cert2");
+        assert_eq!(backfilled.data.leaf_commit, cert2.data.leaf_commit);
+    }
+
+    // A failing cert2 peer must not resolve the backfill on its own
+    // the fetch walks past failures
+    // to a peer that answers and stores the cert2 it finds.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_cert2_fetch_walks_past_failing_peers() {
+        let server_db = TmpDb::init().await;
+        let server = data_source(&server_db, &NoFetching).await;
+        let leaf = v6_leaf(1).await;
+        let tip = v6_leaf(2).await;
+        let cert2 = cert2_for(&leaf);
+        {
+            let mut tx = server.write().await.unwrap();
+            tx.insert_leaf(&leaf).await.unwrap();
+            tx.insert_leaf(&tip).await.unwrap();
+            tx.insert_cert2(leaf.height(), cert2.clone()).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+        let (port, _server_task) = serve_availability(server).await;
+
+        // A healthy leaf provider (so the leaf fetch succeeds), and cert2 providers that are two
+        // failing then one healthy: the failures must not short-circuit the cert2 backfill.
+        let failing_a = TestProvider::new(trusted_provider(port));
+        let failing_b = TestProvider::new(trusted_provider(port));
+        failing_a.fail();
+        failing_b.fail();
+        let provider = AnyProvider::<MockTypes>::default()
+            .with_leaf_provider(TestProvider::new(trusted_provider(port)))
+            .with_cert2_provider(failing_a)
+            .with_cert2_provider(failing_b)
+            .with_cert2_provider(TestProvider::new(trusted_provider(port)));
+
+        let client_db = TmpDb::init().await;
+        let client = builder(&client_db, &provider)
+            .await
+            .with_max_retry_interval(Duration::from_secs(1))
+            .build()
+            .await
+            .unwrap();
+        {
+            let mut tx = client.write().await.unwrap();
+            tx.insert_leaf(&tip).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        client
+            .get_leaf(leaf.height() as usize)
+            .await
+            .with_timeout(Duration::from_secs(5))
+            .await
+            .unwrap();
+        let backfilled = timeout(Duration::from_secs(5), async {
+            loop {
+                {
+                    let mut tx = client.read().await.unwrap();
+                    if let Some(cert2) = tx.load_cert2(leaf.height()).await.unwrap() {
+                        break cert2;
+                    }
+                }
+                sleep(Duration::from_millis(200)).await;
+            }
+        })
+        .await
+        .expect("cert2 not backfilled while a peer had it");
+        assert_eq!(backfilled.data.leaf_commit, cert2.data.leaf_commit);
+    }
+
+    // When no cert2 provider can answer, the backfill resolves and
+    // stores nothing. The leaf is fetched from a healthy provider so its backfill callback fires
+    // while the cert2 providers all fail.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_cert2_fetch_resolves_when_no_peer_has_it() {
+        let server_db = TmpDb::init().await;
+        let server = data_source(&server_db, &NoFetching).await;
+        let leaf = v6_leaf(1).await;
+        let tip = v6_leaf(2).await;
+        {
+            let mut tx = server.write().await.unwrap();
+            tx.insert_leaf(&leaf).await.unwrap();
+            tx.insert_leaf(&tip).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+        let (port, _server_task) = serve_availability(server).await;
+
+        // Leaf provider is healthy; the only cert2 provider fails, so no cert2 fetch can be
+        // answered. (with_leaf_provider, not with_provider, so the failing cert2 provider is the
+        // sole entry in the cert2 list.)
+        let failing_cert2 = TestProvider::new(trusted_provider(port));
+        failing_cert2.fail();
+        let provider = AnyProvider::<MockTypes>::default()
+            .with_leaf_provider(TestProvider::new(trusted_provider(port)))
+            .with_cert2_provider(failing_cert2);
+
+        let client_db = TmpDb::init().await;
+        let client = builder(&client_db, &provider)
+            .await
+            .with_max_retry_interval(Duration::from_secs(1))
+            .build()
+            .await
+            .unwrap();
+        {
+            let mut tx = client.write().await.unwrap();
+            tx.insert_leaf(&tip).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        // Fetching the leaf succeeds (via the healthy leaf provider) and fires the cert2 backfill,
+        // whose providers all fail.
+        client
+            .get_leaf(leaf.height() as usize)
+            .await
+            .with_timeout(Duration::from_secs(5))
+            .await
+            .unwrap();
+
+        sleep(Duration::from_secs(2)).await;
+
+        // Nothing is stored, and the fetch resolved rather than dangling: no cert2 fetch is still in
+        // progress. If cert2 retried forever, this request would still be in progress here.
+        {
+            let mut tx = client.read().await.unwrap();
+            let cert2: Option<Certificate2<MockTypes>> =
+                tx.load_cert2(leaf.height()).await.unwrap();
+            assert!(
+                cert2.is_none(),
+                "no cert2 should be stored when no peer has it"
+            );
+        }
+        assert!(
+            !client.is_fetching_cert2(leaf.height()).await,
+            "cert2 fetch should have resolved, not be left retrying"
+        );
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

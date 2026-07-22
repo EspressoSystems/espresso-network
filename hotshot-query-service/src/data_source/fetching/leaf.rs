@@ -109,8 +109,6 @@ where
             AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
         P: AvailabilityProvider<Types>,
     {
-        // Backfill the leaf's cert2 (V6+ only) once it lands, the same way we backfill its payload
-        // and VID common data.
         let cert2 = HeaderCallback::Cert2 {
             fetcher: fetcher.clone(),
         }
@@ -149,6 +147,7 @@ where
                 request::LeafRequest::new(n as u64),
                 fetcher.provider.clone(),
                 once(LeafCallback::Leaf { fetcher }).chain(callbacks),
+                true,
             );
         },
         LeafId::Hash(h) => {
@@ -240,6 +239,7 @@ pub(super) fn trigger_fetch_for_parent<Types, S, P>(
                     }
                     .into(),
                 ],
+                true,
             );
         }
         .instrument(span),
@@ -452,7 +452,6 @@ where
             AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
         P: AvailabilityProvider<Types>,
     {
-        // Backfill each leaf's cert2 (V6+ only) once the range lands, mirroring the singular fetch.
         let cert2 = HeaderCallback::Cert2 {
             fetcher: fetcher.clone(),
         }
@@ -530,6 +529,7 @@ where
         },
         fetcher.provider.clone(),
         once(LeafCallback::Leaf { fetcher }).chain(callbacks),
+        true,
     );
 
     Ok(())

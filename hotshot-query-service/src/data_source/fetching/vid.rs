@@ -219,6 +219,7 @@ pub(super) fn fetch_vid_common_with_header<Types, S, P>(
             header,
             fetcher: fetcher.clone(),
         }),
+        true,
     );
 }
 
@@ -461,6 +462,7 @@ pub(super) fn fetch_vid_common_range<Types, S, P>(
         once(VidCommonRangeCallback {
             fetcher: fetcher.clone(),
         }),
+        true,
     );
 }
 

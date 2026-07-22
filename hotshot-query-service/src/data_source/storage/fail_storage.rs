@@ -447,6 +447,11 @@ where
         self.maybe_fail_read(FailableAction::GetTransaction).await?;
         self.inner.get_block_with_transaction(hash).await
     }
+
+    async fn load_cert2(&mut self, height: u64) -> QueryResult<Option<Certificate2<Types>>> {
+        self.maybe_fail_read(FailableAction::Any).await?;
+        self.inner.load_cert2(height).await
+    }
 }
 
 impl<Types, T> UpdateAvailabilityStorage<Types> for Transaction<T>
@@ -581,11 +586,6 @@ where
     async fn latest_qc_chain(&mut self) -> QueryResult<Option<[CertificatePair<Types>; 2]>> {
         self.maybe_fail_read(FailableAction::Any).await?;
         self.inner.latest_qc_chain().await
-    }
-
-    async fn load_cert2(&mut self, height: u64) -> QueryResult<Option<Certificate2<Types>>> {
-        self.maybe_fail_read(FailableAction::Any).await?;
-        self.inner.load_cert2(height).await
     }
 
     async fn load_earliest_cert2(

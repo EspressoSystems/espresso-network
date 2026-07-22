@@ -708,10 +708,10 @@ where
         }
         .boxed()
     })?
-    .get("get_cert2", |req, state| {
+    .get("get_cert2", move |req, state| {
         async move {
             let height: u64 = req.integer_param("height")?;
-            state.get_cert2(height).await.map_err(|err| err.into())
+            Ok(state.get_cert2(height).await.with_timeout(timeout).await)
         }
         .boxed()
     })?;

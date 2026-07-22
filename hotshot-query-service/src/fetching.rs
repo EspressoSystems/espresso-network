@@ -79,6 +79,14 @@ impl<T, C> Fetcher<T, C> {
             backoff,
         }
     }
+
+    #[cfg(any(test, feature = "testing"))]
+    pub async fn is_fetching(&self, req: &T) -> bool
+    where
+        T: Eq + std::hash::Hash,
+    {
+        self.in_progress.lock().await.contains_key(req)
+    }
 }
 
 impl<T, C> Fetcher<T, C> {
@@ -97,14 +105,17 @@ impl<T, C> Fetcher<T, C> {
     /// Note that while callbacks are allowed to be async, they are executed sequentially while an
     /// exclusive lock is held, and thus they should not take too long to run or block indefinitely.
     ///
-    /// The spawned task will continue trying to fetch the object until it succeeds, so it is the
-    /// caller's responsibility only to use this method for resources which are known to exist and
-    /// be fetchable by `provider`.
+    /// When `retry_forever` is `true`, the spawned task will continue trying to fetch the object
+    /// until it succeeds, so it is the caller's responsibility to only fetch resources which are
+    /// known to exist and be fetchable by `provider`. When `retry_forever` is `false`, the task
+    /// instead gives up the first time no provider can supply the object, running no callbacks.
+    /// This suits resources that are not guaranteed to exist on any peer (e.g. sparse objects).
     pub fn spawn_fetch<Types>(
         &self,
         req: T,
         provider: impl Provider<Types, T> + 'static,
         callbacks: impl IntoIterator<Item = C> + Send + 'static,
+        retry_forever: bool,
     ) where
         T: Request<Types> + 'static,
         C: Callback<T::Response> + 'static,
@@ -143,12 +154,16 @@ impl<T, C> Fetcher<T, C> {
                 // Acquire a permit from the semaphore to rate limit the number of concurrent fetch requests
                 let permit = permit.acquire().await;
                 if let Some(res) = provider.fetch(req).await {
-                    break res;
+                    break Some(res);
                 }
 
-                // We only fetch objects which are known to exist, so we should eventually succeed
-                // in fetching if we retry enough. For example, we may be fetching a block from a
-                // peer who hasn't received the block yet.
+                if !retry_forever {
+                    break None;
+                }
+
+                // We only fetch objects which are known to exist, so we should eventually
+                // succeed in fetching if we retry enough. For example, we may be fetching a block
+                // from a peer who hasn't received the block yet.
                 //
                 // To understand why it is ok to retry indefinitely, think about manual
                 // intervention: if we don't retry, or retry with a limit, we may require manual
@@ -180,8 +195,10 @@ impl<T, C> Fetcher<T, C> {
             // `in_progress`, and so it is safe to acquire any lock _after_ acquiring `in_progress`.
             let mut in_progress = in_progress.lock().await;
             let callbacks = in_progress.remove(&req).unwrap_or_default();
-            for callback in callbacks {
-                callback.run(res.clone()).await;
+            if let Some(res) = res {
+                for callback in callbacks {
+                    callback.run(res.clone()).await;
+                }
             }
         });
     }

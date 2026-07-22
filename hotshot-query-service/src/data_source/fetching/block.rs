@@ -197,6 +197,7 @@ pub(super) fn fetch_block_with_header<Types, S, P>(
             header,
             fetcher: fetcher.clone(),
         }),
+        true,
     );
 }
 
@@ -518,6 +519,7 @@ pub(super) fn fetch_block_range<Types, S, P>(
         once(BlockRangeCallback {
             fetcher: fetcher.clone(),
         }),
+        true,
     );
 }
 

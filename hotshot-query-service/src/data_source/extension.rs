@@ -315,7 +315,7 @@ where
         self.data_source.get_block_containing_transaction(h).await
     }
 
-    async fn get_cert2(&self, height: u64) -> QueryResult<Option<Certificate2<Types>>> {
+    async fn get_cert2(&self, height: u64) -> Fetch<Certificate2<Types>> {
         self.data_source.get_cert2(height).await
     }
 }
