@@ -177,16 +177,16 @@ where
             state_private_key,
             stake_table_capacity,
             upgrade_lock.clone(),
-            initializer.anchor_leaf.clone(),
-            initializer.epoch_height,
+            initializer.anchor_leaf().clone(),
+            initializer.epoch_height(),
         );
 
-        let anchor_leaf = &initializer.anchor_leaf;
+        let anchor_leaf = initializer.anchor_leaf();
         let anchor_view = anchor_leaf.view_number();
         let anchor_epoch = anchor_leaf
-            .epoch(initializer.epoch_height)
+            .epoch(initializer.epoch_height())
             .unwrap_or(EpochNumber::genesis());
-        let cert1 = initializer.high_qc.clone();
+        let cert1 = initializer.high_qc().clone();
         let parent_proposal = message::Proposal {
             block_header: anchor_leaf.block_header().clone(),
             view_number: anchor_view,
@@ -210,7 +210,7 @@ where
             .then(|| metrics::Metrics::new(consensus_metrics));
 
         let mut state_manager = StateManager::new(
-            Arc::new(initializer.instance_state.clone()),
+            Arc::new(initializer.instance_state().clone()),
             upgrade_lock.clone(),
         )
         .with_metrics(
@@ -226,12 +226,12 @@ where
         );
         // Seed `from_header` stubs for restored undecided proposals so a child
         // proposal can be validated; anchor seeded last so its state wins.
-        for p in initializer.saved_proposals.values() {
+        for p in initializer.saved_proposals().values() {
             state_manager.seed_from_header(message::Proposal::from(p.data.clone()));
         }
         state_manager.seed_state(
             anchor_view,
-            initializer.anchor_state.clone(),
+            initializer.anchor_state().clone(),
             anchor_leaf.clone(),
         );
         // The anchor leaf and persisted proposals are blocks this node had
@@ -241,7 +241,7 @@ where
             std::iter::once((anchor_view, anchor_leaf.block_header().clone()))
                 .chain(
                     initializer
-                        .saved_proposals
+                        .saved_proposals()
                         .iter()
                         .map(|(view, p)| (*view, p.data.block_header().clone())),
                 )
@@ -251,7 +251,7 @@ where
                 });
         // Seed every persisted proposal before `seed_parent` so its authoritative anchor wins.
         let saved_proposals = initializer
-            .saved_proposals
+            .saved_proposals()
             .values()
             .map(|p| message::Proposal::from(p.data.clone()));
         consensus.seed_proposals(saved_proposals);
@@ -267,10 +267,10 @@ where
         }
         consensus.resume_from_restart(
             anchor_view,
-            initializer.start_view,
-            initializer.last_actioned_view,
+            initializer.start_view(),
+            initializer.last_actioned_view(),
         );
-        if let Some(state_cert) = initializer.state_cert.clone() {
+        if let Some(state_cert) = initializer.state_cert().cloned() {
             consensus.seed_state_cert(state_cert);
         }
 
@@ -320,23 +320,23 @@ where
                 lock.clone(),
             ))
             .epoch_manager(EpochManager::new(
-                initializer.epoch_height,
+                initializer.epoch_height(),
                 membership_coordinator.clone(),
             ))
             .block_builder(BlockBuilder::new(
-                Arc::new(initializer.instance_state.clone()),
+                Arc::new(initializer.instance_state().clone()),
                 membership_coordinator.clone(),
                 BlockBuilderConfig::default(),
                 upgrade_lock.clone(),
             ))
             .proposal_validator(ProposalValidator::new(
                 membership_coordinator.clone(),
-                initializer.epoch_height,
+                initializer.epoch_height(),
                 upgrade_lock.clone(),
             ))
             .share_validator(VidShareValidator::new(
                 membership_coordinator.clone(),
-                initializer.epoch_height,
+                initializer.epoch_height(),
                 upgrade_lock,
             ))
             .storage(Storage::new(storage, private_key).with_metrics(metrics))

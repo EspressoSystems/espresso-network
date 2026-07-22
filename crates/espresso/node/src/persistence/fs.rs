@@ -1206,27 +1206,6 @@ impl SequencerPersistence for Persistence {
         )
     }
 
-    async fn store_next_epoch_quorum_certificate(
-        &self,
-        high_qc: NextEpochQuorumCertificate2<SeqTypes>,
-    ) -> anyhow::Result<()> {
-        let mut inner = self.inner.write().await;
-        let path = &inner.next_epoch_qc();
-
-        inner.replace(
-            path,
-            |_| {
-                // Always overwrite the previous file.
-                Ok(true)
-            },
-            |mut file| {
-                let bytes = bincode::serialize(&high_qc).context("serializing next epoch qc")?;
-                file.write_all(&bytes)?;
-                Ok(())
-            },
-        )
-    }
-
     async fn load_next_epoch_quorum_certificate(
         &self,
     ) -> anyhow::Result<Option<NextEpochQuorumCertificate2<SeqTypes>>> {
@@ -1239,6 +1218,34 @@ impl SequencerPersistence for Persistence {
         Ok(Some(
             bincode::deserialize(&bytes).context("deserialize next epoch qc")?,
         ))
+    }
+
+    async fn append_next_epoch_high_qc2(
+        &self,
+        next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        let mut inner = self.inner.write().await;
+        let path = &inner.next_epoch_qc();
+        let view = next_epoch_high_qc.view_number();
+        inner.replace(
+            path,
+            |mut file| {
+                // Overwrite only when the new QC is newer. The whole replace runs under the inner
+                // write lock, so this compare-and-set is atomic and a stale concurrent write cannot
+                // regress the stored view (mirrors `append_high_qc2`).
+                let mut bytes = vec![];
+                file.read_to_end(&mut bytes)?;
+                let existing: NextEpochQuorumCertificate2<SeqTypes> = bincode::deserialize(&bytes)
+                    .context("deserializing existing next epoch high_qc2")?;
+                Ok(existing.view_number() < view)
+            },
+            |mut file| {
+                let bytes = bincode::serialize(&next_epoch_high_qc)
+                    .context("serializing next epoch high_qc2")?;
+                file.write_all(&bytes)?;
+                Ok(())
+            },
+        )
     }
 
     async fn store_eqc(

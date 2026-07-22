@@ -158,7 +158,7 @@ where
         let should_vote =
             state_signature::should_vote(&stake_table, &validator_config.state_public_key);
 
-        let epoch_height = initializer.epoch_height;
+        let epoch_height = initializer.epoch_height();
 
         let initializer_for_coordinator = initializer.clone();
 
