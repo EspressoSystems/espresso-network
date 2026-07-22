@@ -95,10 +95,23 @@ pub async fn verify_new_protocol_leaf_chain<T: NodeType>(
             leaf.height().checked_add(1) == Some(current.height()),
             "leaf heights do not chain"
         );
-        let qc_epoch = justify_qc
-            .data()
-            .epoch
-            .ok_or_else(|| anyhow!("justify QC at height {} is missing an epoch", leaf.height()))?;
+        let qc_epoch = EpochNumber::new(epoch_from_block_number(
+            leaf.height(),
+            *coordinator.epoch_height(),
+        ));
+        ensure!(
+            justify_qc.data().epoch == Some(qc_epoch),
+            "justify QC claims epoch {:?} but certifies the leaf at height {} in epoch {qc_epoch}",
+            justify_qc.data().epoch,
+            leaf.height()
+        );
+        if let Some(block_number) = justify_qc.data().block_number {
+            ensure!(
+                block_number == leaf.height(),
+                "justify QC claims block number {block_number} but certifies the leaf at height {}",
+                leaf.height()
+            );
+        }
         let membership = coordinator
             .stake_table_for_epoch(Some(qc_epoch))
             .map_err(|err| anyhow!("no stake table available for epoch {qc_epoch}: {err:?}"))?;
