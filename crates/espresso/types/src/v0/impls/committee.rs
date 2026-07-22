@@ -1197,17 +1197,17 @@ impl Inner {
     /// committee (seeded from config at startup and on upgrade certificates),
     /// so it is bounded, and `resolve_da_committee`'s greatest-key-below
     /// lookup needs the full history for re-inserted old epochs.
-    ///
-    /// This makes the genesis snapshots seeded by the constructor evictable;
-    /// `set_first_epoch` relies on them and must run before the tip advances
-    /// past the retention window (it runs at startup/cutover, so it does).
     #[cfg_attr(not(feature = "node"), allow(dead_code))]
     fn prune_epochs(&mut self, added: EpochNumber) {
         let cutoff = EpochNumber::new(added.saturating_sub(RECENT_STAKE_TABLES_LIMIT));
-        if cutoff > self.prune_cutoff {
-            self.prune_cutoff = cutoff;
-            self.snapshots = self.snapshots.split_off(&cutoff);
+        if cutoff <= self.prune_cutoff {
+            return;
         }
+        self.prune_cutoff = cutoff;
+        // The snapshots for `first_epoch` and `first_epoch + 1` (seeded by
+        // `set_first_epoch`) are never evicted:
+        let keep = self.first_epoch.unwrap_or_else(EpochNumber::genesis) + 1u64;
+        self.snapshots.retain(|e, _| *e <= keep || *e >= cutoff);
     }
 }
 
@@ -1492,12 +1492,13 @@ mod tests {
     }
 
     // `prune_epochs` keeps a bounded window behind the newest decided epoch
-    // and its cutoff never regresses when an older epoch is (re-)inserted
-    // during catchup.
+    // plus the first-epoch seeds (catchup anchors), and its cutoff never
+    // regresses when an older epoch is (re-)inserted during catchup.
     #[test]
     fn prune_epochs_keeps_recent_window() {
         let committees = build_committees(4);
         let mut inner = committees.inner.write();
+        inner.first_epoch = Some(EpochNumber::new(1));
         let template = inner
             .epoch_committee(EpochNumber::genesis())
             .expect("genesis committee exists")
@@ -1508,12 +1509,18 @@ mod tests {
             inner.prune_epochs(EpochNumber::new(e));
         }
 
+        // The seeds for `first_epoch` and `first_epoch + 1` survive, then
+        // nothing until the cutoff.
         let cutoff = EpochNumber::new(50 - RECENT_STAKE_TABLES_LIMIT);
+        let expected: Vec<EpochNumber> = [1, 2]
+            .into_iter()
+            .chain(*cutoff..=50)
+            .map(EpochNumber::new)
+            .collect();
         assert_eq!(
-            inner.snapshots.first_key_value().map(|(k, _)| *k),
-            Some(cutoff)
+            inner.snapshots.keys().copied().collect::<Vec<_>>(),
+            expected
         );
-        assert!(inner.snapshots.contains_key(&EpochNumber::new(50)));
 
         // A catchup insert below the cutoff is not evicted by its own
         // insertion; it goes once the tip advances past it.
