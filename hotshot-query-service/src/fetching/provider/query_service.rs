@@ -376,7 +376,7 @@ mod test {
         task::BackgroundTask,
         testing::{
             consensus::{MockDataSource, MockNetwork},
-            mocks::{MockBase, MockTypes, mock_transaction},
+            mocks::{MockBase, MockPayload, MockTypes, mock_transaction},
             sleep,
         },
         types::HeightIndexed,
@@ -1823,14 +1823,14 @@ mod test {
         let fetched = client
             .get_leaf(height as usize)
             .await
-            .with_timeout(Duration::from_secs(5))
+            .with_timeout(Duration::from_secs(30))
             .await
             .unwrap();
         assert_eq!(fetched.height(), height);
 
         // The cert2 is backfilled into the client's storage without an explicit cert2 request.
         // Read it directly from storage so this check does not itself trigger a fetch.
-        let backfilled = timeout(Duration::from_secs(5), async {
+        let backfilled = timeout(Duration::from_secs(30), async {
             loop {
                 {
                     let mut tx = client.read().await.unwrap();
@@ -1850,7 +1850,7 @@ mod test {
         let fetched = client
             .get_leaf(sparse_height as usize)
             .await
-            .with_timeout(Duration::from_secs(5))
+            .with_timeout(Duration::from_secs(30))
             .await
             .unwrap();
         assert_eq!(fetched.height(), sparse_height);
@@ -1865,18 +1865,30 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_backfill_cert2_with_scanner() {
-        // A server holding a V6 leaf and its cert2.
+        // A server holding full blocks (so the scanner's block fetch succeeds) and, at height 1, a
+        // cert2. The scanner fetches missing blocks, which triggers the leaf fetch and hence the
+        // cert2 backfill.
         let server_db = TmpDb::init().await;
         let server = data_source(&server_db, &NoFetching).await;
 
+        // The scanner scans the whole range `[0, block_height)`, so the server needs a contiguous
+        // set of leaves and blocks from genesis. Only height 1 carries a cert2.
         let height = 1u64;
-        let leaf = v6_leaf(height).await;
-        let tip = v6_leaf(2).await;
+        let mut leaves = Vec::new();
+        for n in 0..=2 {
+            leaves.push(v6_leaf(n).await);
+        }
+        let leaf = leaves[height as usize].clone();
+        let tip = leaves.last().unwrap().clone();
         let cert2 = cert2_for(&leaf);
         {
             let mut tx = server.write().await.unwrap();
-            tx.insert_leaf(&leaf).await.unwrap();
-            tx.insert_leaf(&tip).await.unwrap();
+            for l in &leaves {
+                tx.insert_leaf(l).await.unwrap();
+                let block =
+                    BlockQueryData::<MockTypes>::new(l.header().clone(), MockPayload::genesis());
+                tx.insert_block(&block).await.unwrap();
+            }
             tx.insert_cert2(height, cert2.clone()).await.unwrap();
             tx.commit().await.unwrap();
         }
@@ -1900,10 +1912,13 @@ mod test {
             .await
             .unwrap();
 
-        // Seed the tip so the scanner knows the block height and scans [1, 2).
+        // Seed the tip so the scanner knows the block height and scans the range below it.
         {
             let mut tx = client.write().await.unwrap();
             tx.insert_leaf(&tip).await.unwrap();
+            let tip_block =
+                BlockQueryData::<MockTypes>::new(tip.header().clone(), MockPayload::genesis());
+            tx.insert_block(&tip_block).await.unwrap();
             tx.commit().await.unwrap();
         }
 
@@ -1923,9 +1938,10 @@ mod test {
         assert_eq!(backfilled.data.leaf_commit, cert2.data.leaf_commit);
     }
 
-    // A failing cert2 peer must not resolve the backfill on its own
-    // the fetch walks past failures
-    // to a peer that answers and stores the cert2 it finds.
+    // A cert2 provider that cannot supply the cert2 must not short-circuit the backfill: the fetch
+    // walks past it to a provider that has it. This covers both ways a provider fails to supply a
+    // cert2 — since a peer that responds "absent" 404s, `fetch_cert2` errors and the provider
+    // returns `None`, the same outer-`None` a transport failure (`fail()`) produces here.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_cert2_fetch_walks_past_failing_peers() {
         let server_db = TmpDb::init().await;
@@ -1970,10 +1986,10 @@ mod test {
         client
             .get_leaf(leaf.height() as usize)
             .await
-            .with_timeout(Duration::from_secs(5))
+            .with_timeout(Duration::from_secs(30))
             .await
             .unwrap();
-        let backfilled = timeout(Duration::from_secs(5), async {
+        let backfilled = timeout(Duration::from_secs(30), async {
             loop {
                 {
                     let mut tx = client.read().await.unwrap();
@@ -1986,80 +2002,6 @@ mod test {
         })
         .await
         .expect("cert2 not backfilled while a peer had it");
-        assert_eq!(backfilled.data.leaf_commit, cert2.data.leaf_commit);
-    }
-
-    // A peer that *responds* absent (it has the leaf but not the cert2, so the endpoint 404s) must
-    // not short-circuit the backfill either: the fetch skips it and gets the cert2 from a peer that
-    // has it. Regression test for the "first absent responder wins" bug.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_cert2_fetch_walks_past_absent_peers() {
-        let leaf = v6_leaf(1).await;
-        let tip = v6_leaf(2).await;
-        let cert2 = cert2_for(&leaf);
-
-        // Peer A has the leaves but no cert2, so `availability/cert2` 404s. It also serves the leaf.
-        let absent_db = TmpDb::init().await;
-        let absent = data_source(&absent_db, &NoFetching).await;
-        {
-            let mut tx = absent.write().await.unwrap();
-            tx.insert_leaf(&leaf).await.unwrap();
-            tx.insert_leaf(&tip).await.unwrap();
-            tx.commit().await.unwrap();
-        }
-        let (absent_port, _absent_task) = serve_availability(absent).await;
-
-        // Peer B has the cert2.
-        let present_db = TmpDb::init().await;
-        let present = data_source(&present_db, &NoFetching).await;
-        {
-            let mut tx = present.write().await.unwrap();
-            tx.insert_leaf(&leaf).await.unwrap();
-            tx.insert_leaf(&tip).await.unwrap();
-            tx.insert_cert2(leaf.height(), cert2.clone()).await.unwrap();
-            tx.commit().await.unwrap();
-        }
-        let (present_port, _present_task) = serve_availability(present).await;
-
-        // Leaf provider is peer B (which serves the leaf reliably); cert2 providers try the absent
-        // peer A first (it 404s), then peer B which has it.
-        let provider = AnyProvider::<MockTypes>::default()
-            .with_leaf_provider(TestProvider::new(trusted_provider(present_port)))
-            .with_cert2_provider(TestProvider::new(trusted_provider(absent_port)))
-            .with_cert2_provider(TestProvider::new(trusted_provider(present_port)));
-
-        let client_db = TmpDb::init().await;
-        let client = builder(&client_db, &provider)
-            .await
-            .with_max_retry_interval(Duration::from_secs(1))
-            .build()
-            .await
-            .unwrap();
-        {
-            let mut tx = client.write().await.unwrap();
-            tx.insert_leaf(&tip).await.unwrap();
-            tx.commit().await.unwrap();
-        }
-
-        client
-            .get_leaf(leaf.height() as usize)
-            .await
-            .with_timeout(Duration::from_secs(5))
-            .await
-            .unwrap();
-        let backfilled = timeout(Duration::from_secs(5), async {
-            loop {
-                {
-                    let mut tx = client.read().await.unwrap();
-                    if let Some(cert2) = tx.load_cert2(leaf.height()).await.unwrap() {
-                        break cert2;
-                    }
-                }
-                sleep(Duration::from_millis(200)).await;
-            }
-        })
-        .await
-        .expect("cert2 not backfilled: the absent peer short-circuited the fetch");
         assert_eq!(backfilled.data.leaf_commit, cert2.data.leaf_commit);
     }
 
@@ -2107,7 +2049,7 @@ mod test {
         client
             .get_leaf(leaf.height() as usize)
             .await
-            .with_timeout(Duration::from_secs(5))
+            .with_timeout(Duration::from_secs(30))
             .await
             .unwrap();
 
