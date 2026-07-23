@@ -138,25 +138,27 @@ impl Server {
 
         loop {
             select! {
-                x = listener.accept() => match x {
-                    Ok((stream, addr)) => {
-                        debug!(
-                            name = %self.conf.name,
-                            node = %self.key,
-                            %addr,
-                            "accepted new tcp connection"
-                        );
-                        self.spawn_accept(stream)
+                x = listener.accept(), if self.accept_tasks.len() < self.conf.max_accept_tasks => {
+                    match x {
+                        Ok((stream, addr)) => {
+                            debug!(
+                                name = %self.conf.name,
+                                node = %self.key,
+                                %addr,
+                                "accepted new tcp connection"
+                            );
+                            self.spawn_accept(stream)
+                        }
+                        Err(err) => {
+                            warn!(
+                                name = %self.conf.name,
+                                node = %self.key,
+                                %err,
+                                "error accepting tcp connection"
+                            )
+                        }
                     }
-                    Err(err) => {
-                        warn!(
-                            name = %self.conf.name,
-                            node = %self.key,
-                            %err,
-                            "error accepting tcp connection"
-                        )
-                    }
-                },
+                }
 
                 Some(h) = self.accept_tasks.join_next() => match h {
                     Ok(Ok(conn)) => {
