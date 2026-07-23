@@ -1518,28 +1518,6 @@ impl<T: NodeType> Consensus<T> {
             warn!("locked certificate is newer than epoch change certificate1");
             return Protocol::Abort;
         }
-        // Check if the certificates match
-        if cert1.view_number() != cert2.view_number()
-            || cert1.epoch() != cert2.epoch()
-            || cert1.data.leaf_commit != cert2.data.leaf_commit
-        {
-            warn!("epoch change certificates do not match");
-            return Protocol::Abort;
-        }
-        // check if it's the last block for the correct epoch
-        if !is_last_block(cert2.data.block_number, *self.epoch_height) {
-            warn!("epoch change certificate2 is not the last block of the epoch");
-            return Protocol::Abort;
-        }
-        if cert2.data.block_number / *self.epoch_height != *cert2.data.epoch {
-            warn!("epoch change certificate2 is not for the correct epoch");
-            return Protocol::Abort;
-        }
-        // Check if the proposal matches the certificate1
-        if proposal_commitment(&proposal) != cert1.data.leaf_commit {
-            warn!("epoch change proposal commitment does not match certificate1 leaf commitment");
-            return Protocol::Abort;
-        }
         let next_view = cert2.view_number() + 1;
         let next_epoch = cert2.data.epoch + 1;
         // Change view to the first view of the next epoch

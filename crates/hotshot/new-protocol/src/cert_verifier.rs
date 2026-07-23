@@ -20,7 +20,7 @@ use hotshot_types::{
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
     vote::{Certificate, HasViewNumber},
 };
-use hotshot_utils::anytrace::Result;
+use hotshot_utils::anytrace::{Result, Wrap};
 use tokio_util::task::JoinMap;
 use tracing::{error, warn};
 
@@ -76,6 +76,7 @@ pub trait Verifiable<T: NodeType>: HasViewNumber + HasEpoch + Sized {
         self,
         stake_table: &[<T::SignatureKey as SignatureKey>::StakeTableEntry],
         threshold: U256,
+        epoch_height: u64,
         upgrade_lock: &UpgradeLock<T>,
     ) -> Result<Self::Output>;
 }
@@ -98,6 +99,7 @@ where
         self,
         stake_table: &[<T::SignatureKey as SignatureKey>::StakeTableEntry],
         threshold: U256,
+        _epoch_height: u64,
         upgrade_lock: &UpgradeLock<T>,
     ) -> Result<Self> {
         self.is_valid_cert(stake_table, threshold, upgrade_lock)?;
@@ -117,8 +119,10 @@ impl<T: NodeType> Verifiable<T> for EpochChangeMessage<T, Unchecked> {
         self,
         stake_table: &[<T::SignatureKey as SignatureKey>::StakeTableEntry],
         threshold: U256,
+        epoch_height: u64,
         upgrade_lock: &UpgradeLock<T>,
     ) -> Result<Self::Output> {
+        self.well_formed(epoch_height).wrap()?;
         self.cert1
             .is_valid_cert(stake_table, threshold, upgrade_lock)?;
         self.cert2
@@ -212,11 +216,12 @@ impl<T: NodeType, C: Verifiable<T> + Send + 'static> CertVerifier<T, C> {
         };
 
         let lock = self.upgrade_lock.clone();
+        let epoch_height = *self.membership.epoch_height();
 
         self.tasks.spawn_blocking(key, move || {
             let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
             let threshold = membership.success_threshold();
-            match cert.check(&entries, threshold, &lock) {
+            match cert.check(&entries, threshold, epoch_height, &lock) {
                 Ok(valid) => Some(ValidCert::new(valid, epoch)),
                 Err(err) => {
                     warn!(%key, %epoch, %err, cert = type_name::<C>(), "invalid certificate");
@@ -371,11 +376,12 @@ where
         };
 
         let lock = self.upgrade_lock.clone();
+        let epoch_height = *self.membership.epoch_height();
 
         self.tasks.spawn_blocking(sender, move || {
             let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
             let threshold = membership.success_threshold();
-            match cert.check(&entries, threshold, &lock) {
+            match cert.check(&entries, threshold, epoch_height, &lock) {
                 Ok(valid) => Some(ValidCert::new(valid, epoch)),
                 Err(err) => {
                     warn!(%view, %epoch, %err, cert = type_name::<C>(), "invalid certificate");
