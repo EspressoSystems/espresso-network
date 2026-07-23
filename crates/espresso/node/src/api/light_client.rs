@@ -30,6 +30,7 @@ use light_client::{
         header::HeaderProof, leaf::LeafProof, namespace::NamespaceProof, payload::PayloadProof,
     },
 };
+use tagged_base64::TaggedBase64;
 use tide_disco::{Api, RequestParams, StatusCode, method::ReadState};
 use vbs::version::StaticVersionType;
 use versions::NEW_PROTOCOL_VERSION;
@@ -489,7 +490,7 @@ where
         .collect())
 }
 
-async fn get_namespaces_proof_range<State>(
+pub(crate) async fn get_namespaces_proof_range<State>(
     state: &State,
     start: usize,
     end: usize,
@@ -518,21 +519,28 @@ where
         .collect()
 }
 
+/// Decode the `namespaces` path segment: a `TaggedBase64` string tagged `NS` wrapping a
+/// JSON-encoded `Vec<u64>`.
+pub(crate) fn parse_namespaces_str(encoded: &str) -> anyhow::Result<Vec<u64>> {
+    let encoded: TaggedBase64 = encoded
+        .parse()
+        .map_err(|err| anyhow::anyhow!("invalid namespaces parameter: {err}"))?;
+    if encoded.tag() != NAMESPACES_PARAM_TAG {
+        anyhow::bail!(
+            "invalid namespaces parameter tag: expected {NAMESPACES_PARAM_TAG}, got {}",
+            encoded.tag()
+        );
+    }
+    serde_json::from_slice(&encoded.value())
+        .map_err(|err| anyhow::anyhow!("invalid namespaces parameter: {err}"))
+}
+
 fn parse_namespaces_param(req: &RequestParams) -> Result<Vec<u64>, Error> {
     let encoded = req
         .tagged_base64_param("namespaces")
         .map_err(bad_param("namespaces"))?;
-    if encoded.tag() != NAMESPACES_PARAM_TAG {
-        return Err(Error::Custom {
-            message: format!(
-                "invalid namespaces parameter tag: expected {NAMESPACES_PARAM_TAG}, got {}",
-                encoded.tag()
-            ),
-            status: StatusCode::BAD_REQUEST,
-        });
-    }
-    serde_json::from_slice(&encoded.value()).map_err(|err| Error::Custom {
-        message: format!("invalid namespaces parameter: {err}"),
+    parse_namespaces_str(&encoded.to_string()).map_err(|err| Error::Custom {
+        message: err.to_string(),
         status: StatusCode::BAD_REQUEST,
     })
 }

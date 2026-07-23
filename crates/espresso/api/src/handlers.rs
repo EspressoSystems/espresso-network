@@ -4,6 +4,7 @@
 use serialization_api::v2::*;
 
 use crate::{
+    axum::classify_availability_error,
     error::ApiError,
     v2::{ConsensusApi, DataApi, RewardApi},
 };
@@ -24,7 +25,7 @@ where
     let result = state
         .get_reward_claim_input(address)
         .await
-        .map_err(ApiError::Internal)?;
+        .map_err(classify_availability_error)?;
 
     state
         .serialize_reward_claim_input(&address_string, &result)
@@ -45,7 +46,7 @@ where
     let result = state
         .get_reward_balance(address)
         .await
-        .map_err(ApiError::Internal)?;
+        .map_err(classify_availability_error)?;
 
     state
         .serialize_reward_balance(&result)
@@ -66,7 +67,7 @@ where
     let result = state
         .get_reward_account_proof(address)
         .await
-        .map_err(ApiError::Internal)?;
+        .map_err(classify_availability_error)?;
 
     state
         .serialize_reward_account_query_data(&result)
@@ -83,7 +84,7 @@ where
     let result = state
         .get_reward_balances(request.height, request.offset, request.limit)
         .await
-        .map_err(ApiError::Internal)?;
+        .map_err(classify_availability_error)?;
 
     state
         .serialize_reward_balances(&result)
@@ -100,7 +101,7 @@ where
     let result = state
         .get_reward_merkle_tree_v2(request.height)
         .await
-        .map_err(ApiError::Internal)?;
+        .map_err(classify_availability_error)?;
 
     state
         .serialize_reward_merkle_tree_data(&result)
