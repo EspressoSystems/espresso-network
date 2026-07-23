@@ -1867,10 +1867,12 @@ where
     }
 
     async fn get_cert2(&self, height: u64) -> anyhow::Result<Option<Self::Cert2>> {
-        self.data_source
+        Ok(self
+            .data_source
             .get_cert2(height)
             .await
-            .map_err(|e| anyhow::anyhow!("{}", e))
+            .with_timeout(Duration::from_millis(500))
+            .await)
     }
 
     async fn stream_leaves(&self, from: usize) -> anyhow::Result<BoxStream<'static, Self::Leaf>> {

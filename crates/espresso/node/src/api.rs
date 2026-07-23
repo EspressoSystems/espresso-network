@@ -8828,12 +8828,14 @@ mod test {
                 // Limits endpoint (static response)
                 compare_endpoints(&http, api_port, axum_port, "availability/limits").await?;
 
-                // Cert2 endpoint (returns null when no cert is available at this height)
-                compare_endpoints(
+                // Cert2 endpoint: `avail_block` is a mid-chain block with no cert2, so both APIs
+                // return 404. Compare status only, since the two error bodies differ by design.
+                compare_error_endpoints(
                     &http,
                     api_port,
                     axum_port,
                     &format!("availability/cert2/{avail_block}"),
+                    404,
                 )
                 .await?;
 

@@ -708,10 +708,18 @@ where
         }
         .boxed()
     })?
-    .get("get_cert2", |req, state| {
+    .get("get_cert2", move |req, state| {
         async move {
             let height: u64 = req.integer_param("height")?;
-            state.get_cert2(height).await.map_err(|err| err.into())
+            state
+                .get_cert2(height)
+                .await
+                .with_timeout(timeout)
+                .await
+                .ok_or(Error::Custom {
+                    message: format!("no cert2 available for height {height}"),
+                    status: StatusCode::NOT_FOUND,
+                })
         }
         .boxed()
     })?;

@@ -21,14 +21,14 @@ use snafu::OptionExt;
 use sqlx::FromRow;
 
 use super::{
-    super::transaction::{Transaction, TransactionMode, query},
-    BLOCK_COLUMNS, LEAF_COLUMNS, PAYLOAD_COLUMNS, PAYLOAD_METADATA_COLUMNS, QueryBuilder,
-    VID_COMMON_COLUMNS, VID_COMMON_METADATA_COLUMNS,
+    super::transaction::{Transaction, TransactionMode, query, query_as},
+    BLOCK_COLUMNS, DecodeError, LEAF_COLUMNS, PAYLOAD_COLUMNS, PAYLOAD_METADATA_COLUMNS,
+    QueryBuilder, VID_COMMON_COLUMNS, VID_COMMON_METADATA_COLUMNS,
 };
 use crate::{
     Header, MissingSnafu, Payload, QueryError, QueryResult,
     availability::{
-        BlockId, BlockQueryData, LeafId, LeafQueryData, NamespaceInfo, NamespaceMap,
+        BlockId, BlockQueryData, Certificate2, LeafId, LeafQueryData, NamespaceInfo, NamespaceMap,
         PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash, VidCommonQueryData,
     },
     data_source::storage::{
@@ -356,6 +356,18 @@ where
         );
         let row = query.query(&sql).fetch_one(self.as_mut()).await?;
         Ok(BlockQueryData::from_row(&row)?)
+    }
+
+    async fn load_cert2(&mut self, height: u64) -> QueryResult<Option<Certificate2<Types>>> {
+        let Some((json,)) = query_as("SELECT data FROM cert2 WHERE height = $1")
+            .bind(height as i64)
+            .fetch_optional(self.as_mut())
+            .await?
+        else {
+            return Ok(None);
+        };
+        let cert2 = serde_json::from_value(json).decode_error("malformed cert2")?;
+        Ok(cert2)
     }
 }
 

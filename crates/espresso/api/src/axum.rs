@@ -648,10 +648,13 @@ where
     };
 
     let get_cert2 = |State(state): State<S>, Path(height): Path<u64>| async move {
-        <S as v1::HotShotAvailabilityApi>::get_cert2(&state, height)
-            .await
-            .map(Json)
-            .map_err(ApiError::Internal)
+        match <S as v1::HotShotAvailabilityApi>::get_cert2(&state, height).await {
+            Ok(Some(cert2)) => Ok(Json(cert2)),
+            Ok(None) => Err(ApiError::NotFound(anyhow::anyhow!(
+                "no cert2 available for height {height}"
+            ))),
+            Err(err) => Err(ApiError::Internal(err)),
+        }
     };
 
     // WebSocket streaming handlers

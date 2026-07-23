@@ -109,7 +109,11 @@ where
             AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
         P: AvailabilityProvider<Types>,
     {
-        fetch_leaf_with_callbacks(fetcher, req, None).await
+        let cert2 = HeaderCallback::Cert2 {
+            fetcher: fetcher.clone(),
+        }
+        .into();
+        fetch_leaf_with_callbacks(fetcher, req, once(cert2)).await
     }
 
     async fn load<S>(storage: &mut S, req: Self::Request) -> QueryResult<Self>
@@ -143,6 +147,7 @@ where
                 request::LeafRequest::new(n as u64),
                 fetcher.provider.clone(),
                 once(LeafCallback::Leaf { fetcher }).chain(callbacks),
+                true,
             );
         },
         LeafId::Hash(h) => {
@@ -229,7 +234,12 @@ pub(super) fn trigger_fetch_for_parent<Types, S, P>(
                         fetcher: fetcher.clone(),
                     }
                     .into(),
+                    HeaderCallback::Cert2 {
+                        fetcher: fetcher.clone(),
+                    }
+                    .into(),
                 ],
+                true,
             );
         }
         .instrument(span),
@@ -364,7 +374,7 @@ where
                 // continue bulk fetching, rather than kick of a chain reaction of individual
                 // fetches, which will end up fetching the same data, slower.
             },
-            Self::Continuation { callback } => callback.run_range(leaves.start(), leaves.end()),
+            Self::Continuation { callback } => callback.run_range(&leaves),
         }
     }
 }
@@ -442,7 +452,11 @@ where
             AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
         P: AvailabilityProvider<Types>,
     {
-        fetch_leaf_range_with_callbacks(fetcher, req, None).await
+        let cert2 = HeaderCallback::Cert2 {
+            fetcher: fetcher.clone(),
+        }
+        .into();
+        fetch_leaf_range_with_callbacks(fetcher, req, once(cert2)).await
     }
 
     async fn load<S>(storage: &mut S, req: Self::Request) -> QueryResult<Self>
@@ -515,6 +529,7 @@ where
         },
         fetcher.provider.clone(),
         once(LeafCallback::Leaf { fetcher }).chain(callbacks),
+        true,
     );
 
     Ok(())

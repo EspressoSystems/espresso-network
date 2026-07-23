@@ -104,14 +104,7 @@ where
             AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
         P: AvailabilityProvider<Types>,
     {
-        fetch_header_and_then(
-            tx,
-            req,
-            HeaderCallback::Payload {
-                fetcher: fetcher.clone(),
-            },
-        )
-        .await
+        fetch_header_and_then(tx, req, [HeaderCallback::Payload { fetcher }]).await
     }
 
     async fn load<S>(storage: &mut S, req: Self::Request) -> QueryResult<Self>
@@ -194,6 +187,7 @@ pub(super) fn fetch_block_with_header<Types, S, P>(
             header,
             fetcher: fetcher.clone(),
         }),
+        true,
     );
 }
 
@@ -428,7 +422,7 @@ where
             AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
         P: AvailabilityProvider<Types>,
     {
-        fetch_header_range_and_then(tx, req, HeaderCallback::Payload { fetcher }).await
+        fetch_header_range_and_then(tx, req, [HeaderCallback::Payload { fetcher }]).await
     }
 
     async fn load<S>(storage: &mut S, req: Self::Request) -> QueryResult<Self>
@@ -505,6 +499,7 @@ pub(super) fn fetch_block_range<Types, S, P>(
         once(BlockRangeCallback {
             fetcher: fetcher.clone(),
         }),
+        true,
     );
 }
 
