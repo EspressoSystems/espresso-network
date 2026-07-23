@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["EpochCommitteesError"],"fn":["fetch_and_calculate_block_reward"],"struct":["DaCommittee","EpochCommittee","EpochCommittees","EpochSnapshot","EpochSnapshotInner","Inner","NonEpochCommittee","NonEpochSnapshot","NonEpochSnapshotInner"]};
+window.SIDEBAR_ITEMS = {"constant":["RECENT_STAKE_TABLES_LIMIT"],"enum":["EpochCommitteesError"],"fn":["fetch_and_calculate_block_reward"],"struct":["DaCommittee","EpochCommittee","EpochCommittees","EpochSnapshot","EpochSnapshotInner","Inner","NonEpochCommittee","NonEpochSnapshot","NonEpochSnapshotInner"]};

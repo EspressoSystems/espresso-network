@@ -314,13 +314,18 @@
 <a href=#314 id=314 data-nosnippet>314</a>    <span class="doccomment">/// Called to notify the Membership when a new DRB result has been calculated.
 <a href=#315 id=315 data-nosnippet>315</a>    </span><span class="kw">fn </span>add_drb_result(<span class="kw-2">&amp;</span><span class="self">self</span>, e: EpochNumber, d: DrbResult);
 <a href=#316 id=316 data-nosnippet>316</a>
-<a href=#317 id=317 data-nosnippet>317</a>    <span class="doccomment">/// Called to notify the Membership that Epochs are enabled.
-<a href=#318 id=318 data-nosnippet>318</a>    /// Implementations should copy the pre-epoch stake table into epoch and epoch+1
-<a href=#319 id=319 data-nosnippet>319</a>    /// when this is called. The value of initial_drb_result should be used for DRB
-<a href=#320 id=320 data-nosnippet>320</a>    /// calculations for epochs (epoch+1) and earlier.
-<a href=#321 id=321 data-nosnippet>321</a>    </span><span class="kw">fn </span>set_first_epoch(<span class="kw-2">&amp;</span><span class="self">self</span>, e: EpochNumber, r: DrbResult);
-<a href=#322 id=322 data-nosnippet>322</a>
-<a href=#323 id=323 data-nosnippet>323</a>    <span class="doccomment">/// Register a DA committee that takes effect starting at `first_epoch`.
-<a href=#324 id=324 data-nosnippet>324</a>    </span><span class="kw">fn </span>add_da_committee(<span class="kw-2">&amp;</span><span class="self">self</span>, first_epoch: EpochNumber, da_committee: Vec&lt;PeerConfig&lt;T&gt;&gt;);
-<a href=#325 id=325 data-nosnippet>325</a>}
+<a href=#317 id=317 data-nosnippet>317</a>    <span class="doccomment">/// Load the committee for `epoch` from local storage.
+<a href=#318 id=318 data-nosnippet>318</a>    ///
+<a href=#319 id=319 data-nosnippet>319</a>    /// Returns `true` if a snapshot for `epoch` is available afterwards.
+<a href=#320 id=320 data-nosnippet>320</a>    </span><span class="kw">fn </span>load_stake_table(<span class="kw-2">&amp;</span><span class="self">self</span>, epoch: EpochNumber) -&gt; <span class="kw">impl </span>Future&lt;Output = bool&gt; + Send;
+<a href=#321 id=321 data-nosnippet>321</a>
+<a href=#322 id=322 data-nosnippet>322</a>    <span class="doccomment">/// Called to notify the Membership that Epochs are enabled.
+<a href=#323 id=323 data-nosnippet>323</a>    /// Implementations should copy the pre-epoch stake table into epoch and epoch+1
+<a href=#324 id=324 data-nosnippet>324</a>    /// when this is called. The value of initial_drb_result should be used for DRB
+<a href=#325 id=325 data-nosnippet>325</a>    /// calculations for epochs (epoch+1) and earlier.
+<a href=#326 id=326 data-nosnippet>326</a>    </span><span class="kw">fn </span>set_first_epoch(<span class="kw-2">&amp;</span><span class="self">self</span>, e: EpochNumber, r: DrbResult);
+<a href=#327 id=327 data-nosnippet>327</a>
+<a href=#328 id=328 data-nosnippet>328</a>    <span class="doccomment">/// Register a DA committee that takes effect starting at `first_epoch`.
+<a href=#329 id=329 data-nosnippet>329</a>    </span><span class="kw">fn </span>add_da_committee(<span class="kw-2">&amp;</span><span class="self">self</span>, first_epoch: EpochNumber, da_committee: Vec&lt;PeerConfig&lt;T&gt;&gt;);
+<a href=#330 id=330 data-nosnippet>330</a>}
 </code></pre></div></section></main></body></html>

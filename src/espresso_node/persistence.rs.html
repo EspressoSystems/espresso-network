@@ -2396,267 +2396,325 @@
 <a href=#2396 id=2396 data-nosnippet>2396</a>        <span class="prelude-val">Ok</span>(())
 <a href=#2397 id=2397 data-nosnippet>2397</a>    }
 <a href=#2398 id=2398 data-nosnippet>2398</a>
-<a href=#2399 id=2399 data-nosnippet>2399</a>    <span class="attr">#[rstest_reuse::apply(persistence_types)]
-<a href=#2400 id=2400 data-nosnippet>2400</a>    </span><span class="kw">pub async fn </span>test_delete_stake_tables&lt;P: TestablePersistence&gt;(
-<a href=#2401 id=2401 data-nosnippet>2401</a>        _p: PhantomData&lt;P&gt;,
-<a href=#2402 id=2402 data-nosnippet>2402</a>    ) -&gt; anyhow::Result&lt;()&gt; {
-<a href=#2403 id=2403 data-nosnippet>2403</a>        <span class="kw">let </span>tmp = P::tmp_storage().<span class="kw">await</span>;
-<a href=#2404 id=2404 data-nosnippet>2404</a>        <span class="kw">let </span><span class="kw-2">mut </span>opt = P::options(<span class="kw-2">&amp;</span>tmp);
-<a href=#2405 id=2405 data-nosnippet>2405</a>        <span class="kw">let </span>storage = opt.create().<span class="kw">await</span>.unwrap();
-<a href=#2406 id=2406 data-nosnippet>2406</a>
-<a href=#2407 id=2407 data-nosnippet>2407</a>        <span class="kw">let </span>event1 = StakeTableEvent::Delegate(Delegated {
-<a href=#2408 id=2408 data-nosnippet>2408</a>            delegator: Address::ZERO,
-<a href=#2409 id=2409 data-nosnippet>2409</a>            validator: Address::ZERO,
-<a href=#2410 id=2410 data-nosnippet>2410</a>            amount: U256::from(<span class="number">100</span>),
-<a href=#2411 id=2411 data-nosnippet>2411</a>        });
-<a href=#2412 id=2412 data-nosnippet>2412</a>        <span class="kw">let </span>event2 = StakeTableEvent::Delegate(Delegated {
-<a href=#2413 id=2413 data-nosnippet>2413</a>            delegator: Address::ZERO,
-<a href=#2414 id=2414 data-nosnippet>2414</a>            validator: Address::ZERO,
-<a href=#2415 id=2415 data-nosnippet>2415</a>            amount: U256::from(<span class="number">200</span>),
-<a href=#2416 id=2416 data-nosnippet>2416</a>        });
+<a href=#2399 id=2399 data-nosnippet>2399</a>    <span class="comment">// Epoch data is stored piecemeal: `store_drb_result`, `store_epoch_root`
+<a href=#2400 id=2400 data-nosnippet>2400</a>    // and `store_stake` each write only their part (one row in SQL, separate
+<a href=#2401 id=2401 data-nosnippet>2401</a>    // files in FS). A loader must report data another writer created the
+<a href=#2402 id=2402 data-nosnippet>2402</a>    // epoch entry for as absent — regression test for `load_stake` panicking
+<a href=#2403 id=2403 data-nosnippet>2403</a>    // on a DRB-only row's NULL stake column.
+<a href=#2404 id=2404 data-nosnippet>2404</a>    </span><span class="attr">#[rstest_reuse::apply(persistence_types)]
+<a href=#2405 id=2405 data-nosnippet>2405</a>    </span><span class="kw">pub async fn </span>test_load_partially_stored_epoch_data&lt;P: TestablePersistence&gt;(
+<a href=#2406 id=2406 data-nosnippet>2406</a>        _p: PhantomData&lt;P&gt;,
+<a href=#2407 id=2407 data-nosnippet>2407</a>    ) -&gt; anyhow::Result&lt;()&gt; {
+<a href=#2408 id=2408 data-nosnippet>2408</a>        <span class="kw">let </span>tmp = P::tmp_storage().<span class="kw">await</span>;
+<a href=#2409 id=2409 data-nosnippet>2409</a>        <span class="kw">let </span>storage = P::connect(<span class="kw-2">&amp;</span>tmp).<span class="kw">await</span>;
+<a href=#2410 id=2410 data-nosnippet>2410</a>
+<a href=#2411 id=2411 data-nosnippet>2411</a>        <span class="kw">let </span>instance_state = NodeState::mock();
+<a href=#2412 id=2412 data-nosnippet>2412</a>        <span class="kw">let </span>validated_state = hotshot_types::traits::ValidatedState::genesis(<span class="kw-2">&amp;</span>instance_state).<span class="number">0</span>;
+<a href=#2413 id=2413 data-nosnippet>2413</a>        <span class="kw">let </span>leaf: Leaf2 = Leaf::genesis(<span class="kw-2">&amp;</span>validated_state, <span class="kw-2">&amp;</span>instance_state, MOCK_UPGRADE.base)
+<a href=#2414 id=2414 data-nosnippet>2414</a>            .<span class="kw">await
+<a href=#2415 id=2415 data-nosnippet>2415</a>            </span>.into();
+<a href=#2416 id=2416 data-nosnippet>2416</a>        <span class="kw">let </span>header = leaf.block_header().clone();
 <a href=#2417 id=2417 data-nosnippet>2417</a>
-<a href=#2418 id=2418 data-nosnippet>2418</a>        <span class="kw">let </span>l1_block = <span class="number">42u64</span>;
-<a href=#2419 id=2419 data-nosnippet>2419</a>        <span class="kw">let </span>events: Vec&lt;(EventKey, StakeTableEvent)&gt; =
-<a href=#2420 id=2420 data-nosnippet>2420</a>            <span class="macro">vec!</span>[((l1_block, <span class="number">0</span>), event1), ((l1_block, <span class="number">1</span>), event2)];
+<a href=#2418 id=2418 data-nosnippet>2418</a>        <span class="kw">let </span>validator = AuthenticatedValidator::mock();
+<a href=#2419 id=2419 data-nosnippet>2419</a>        <span class="kw">let </span><span class="kw-2">mut </span>stake = IndexMap::new();
+<a href=#2420 id=2420 data-nosnippet>2420</a>        stake.insert(validator.account, validator);
 <a href=#2421 id=2421 data-nosnippet>2421</a>
-<a href=#2422 id=2422 data-nosnippet>2422</a>        storage.store_events(l1_block, events.clone()).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#2423 id=2423 data-nosnippet>2423</a>
-<a href=#2424 id=2424 data-nosnippet>2424</a>        <span class="kw">let </span>(read_offset, loaded_events) = storage.load_events(<span class="number">0_u64</span>, l1_block).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#2425 id=2425 data-nosnippet>2425</a>        <span class="macro">assert!</span>(read_offset.is_some());
-<a href=#2426 id=2426 data-nosnippet>2426</a>        <span class="macro">assert_eq!</span>(loaded_events.len(), <span class="number">2</span>);
-<a href=#2427 id=2427 data-nosnippet>2427</a>        <span class="macro">assert_eq!</span>(loaded_events, events);
-<a href=#2428 id=2428 data-nosnippet>2428</a>
-<a href=#2429 id=2429 data-nosnippet>2429</a>        <span class="comment">// Store some validators
-<a href=#2430 id=2430 data-nosnippet>2430</a>        </span><span class="kw">let </span>v = RegisteredValidator::mock();
-<a href=#2431 id=2431 data-nosnippet>2431</a>        <span class="kw">let </span><span class="kw-2">mut </span>vmap = IndexMap::new();
-<a href=#2432 id=2432 data-nosnippet>2432</a>        vmap.insert(v.account, v);
-<a href=#2433 id=2433 data-nosnippet>2433</a>        storage
-<a href=#2434 id=2434 data-nosnippet>2434</a>            .store_all_validators(EpochNumber::new(<span class="number">1</span>), vmap.clone())
-<a href=#2435 id=2435 data-nosnippet>2435</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#2436 id=2436 data-nosnippet>2436</a>
-<a href=#2437 id=2437 data-nosnippet>2437</a>        <span class="kw">let </span>loaded = storage
-<a href=#2438 id=2438 data-nosnippet>2438</a>            .load_all_validators(EpochNumber::new(<span class="number">1</span>), <span class="number">0</span>, <span class="number">10</span>)
-<a href=#2439 id=2439 data-nosnippet>2439</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#2440 id=2440 data-nosnippet>2440</a>        <span class="macro">assert_eq!</span>(loaded.len(), <span class="number">1</span>);
-<a href=#2441 id=2441 data-nosnippet>2441</a>
-<a href=#2442 id=2442 data-nosnippet>2442</a>        storage.delete_stake_tables().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#2443 id=2443 data-nosnippet>2443</a>
-<a href=#2444 id=2444 data-nosnippet>2444</a>        <span class="comment">// Events cleared
-<a href=#2445 id=2445 data-nosnippet>2445</a>        </span><span class="kw">let </span>(read_offset, loaded_events) = storage.load_events(<span class="number">0_u64</span>, l1_block).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#2446 id=2446 data-nosnippet>2446</a>        <span class="macro">assert!</span>(read_offset.is_none());
-<a href=#2447 id=2447 data-nosnippet>2447</a>        <span class="macro">assert!</span>(loaded_events.is_empty());
-<a href=#2448 id=2448 data-nosnippet>2448</a>
-<a href=#2449 id=2449 data-nosnippet>2449</a>        <span class="comment">// Validators cleared
-<a href=#2450 id=2450 data-nosnippet>2450</a>        </span><span class="kw">let </span>loaded = storage
-<a href=#2451 id=2451 data-nosnippet>2451</a>            .load_all_validators(EpochNumber::new(<span class="number">1</span>), <span class="number">0</span>, <span class="number">10</span>)
-<a href=#2452 id=2452 data-nosnippet>2452</a>            .<span class="kw">await
-<a href=#2453 id=2453 data-nosnippet>2453</a>            </span>.unwrap_or_default();
-<a href=#2454 id=2454 data-nosnippet>2454</a>        <span class="macro">assert!</span>(loaded.is_empty());
-<a href=#2455 id=2455 data-nosnippet>2455</a>
-<a href=#2456 id=2456 data-nosnippet>2456</a>        <span class="kw">let </span>event3 = StakeTableEvent::Delegate(Delegated {
-<a href=#2457 id=2457 data-nosnippet>2457</a>            delegator: Address::ZERO,
-<a href=#2458 id=2458 data-nosnippet>2458</a>            validator: Address::ZERO,
-<a href=#2459 id=2459 data-nosnippet>2459</a>            amount: U256::from(<span class="number">300</span>),
-<a href=#2460 id=2460 data-nosnippet>2460</a>        });
-<a href=#2461 id=2461 data-nosnippet>2461</a>        <span class="kw">let </span>new_events: Vec&lt;(EventKey, StakeTableEvent)&gt; = <span class="macro">vec!</span>[((l1_block, <span class="number">0</span>), event3)];
-<a href=#2462 id=2462 data-nosnippet>2462</a>        storage.store_events(l1_block, new_events.clone()).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#2463 id=2463 data-nosnippet>2463</a>
-<a href=#2464 id=2464 data-nosnippet>2464</a>        <span class="kw">let </span>(read_offset, loaded_events) = storage.load_events(<span class="number">0_u64</span>, l1_block).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#2465 id=2465 data-nosnippet>2465</a>        <span class="macro">assert!</span>(read_offset.is_some());
-<a href=#2466 id=2466 data-nosnippet>2466</a>        <span class="macro">assert_eq!</span>(loaded_events.len(), <span class="number">1</span>);
-<a href=#2467 id=2467 data-nosnippet>2467</a>        <span class="macro">assert_eq!</span>(loaded_events, new_events);
-<a href=#2468 id=2468 data-nosnippet>2468</a>
-<a href=#2469 id=2469 data-nosnippet>2469</a>        <span class="prelude-val">Ok</span>(())
-<a href=#2470 id=2470 data-nosnippet>2470</a>    }
-<a href=#2471 id=2471 data-nosnippet>2471</a>
-<a href=#2472 id=2472 data-nosnippet>2472</a>    <span class="attr">#[rstest_reuse::apply(persistence_types)]
-<a href=#2473 id=2473 data-nosnippet>2473</a>    </span><span class="kw">pub async fn </span>test_store_and_load_all_validators&lt;P: TestablePersistence&gt;(
-<a href=#2474 id=2474 data-nosnippet>2474</a>        _p: PhantomData&lt;P&gt;,
-<a href=#2475 id=2475 data-nosnippet>2475</a>    ) -&gt; anyhow::Result&lt;()&gt; {
-<a href=#2476 id=2476 data-nosnippet>2476</a>        <span class="kw">let </span>tmp = P::tmp_storage().<span class="kw">await</span>;
-<a href=#2477 id=2477 data-nosnippet>2477</a>        <span class="kw">let </span><span class="kw-2">mut </span>opt = P::options(<span class="kw-2">&amp;</span>tmp);
-<a href=#2478 id=2478 data-nosnippet>2478</a>        <span class="kw">let </span>storage = opt.create().<span class="kw">await</span>.unwrap();
+<a href=#2422 id=2422 data-nosnippet>2422</a>        <span class="comment">// Nothing stored yet.
+<a href=#2423 id=2423 data-nosnippet>2423</a>        </span><span class="kw">let </span>epoch = EpochNumber::new(<span class="number">1</span>);
+<a href=#2424 id=2424 data-nosnippet>2424</a>        <span class="macro">assert!</span>(storage.load_stake(epoch).<span class="kw">await</span><span class="question-mark">?</span>.is_none());
+<a href=#2425 id=2425 data-nosnippet>2425</a>        <span class="macro">assert!</span>(storage.load_drb_result(epoch).<span class="kw">await</span><span class="question-mark">?</span>.is_none());
+<a href=#2426 id=2426 data-nosnippet>2426</a>        <span class="macro">assert!</span>(storage.load_epoch_root(epoch).<span class="kw">await</span><span class="question-mark">?</span>.is_none());
+<a href=#2427 id=2427 data-nosnippet>2427</a>
+<a href=#2428 id=2428 data-nosnippet>2428</a>        <span class="comment">// A DRB result alone; the other loaders report their data as absent.
+<a href=#2429 id=2429 data-nosnippet>2429</a>        </span>storage.store_drb_result(epoch, [<span class="number">1</span>; <span class="number">32</span>]).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2430 id=2430 data-nosnippet>2430</a>        <span class="macro">assert!</span>(storage.load_stake(epoch).<span class="kw">await</span><span class="question-mark">?</span>.is_none());
+<a href=#2431 id=2431 data-nosnippet>2431</a>        <span class="macro">assert_eq!</span>(storage.load_drb_result(epoch).<span class="kw">await</span><span class="question-mark">?</span>, <span class="prelude-val">Some</span>([<span class="number">1</span>; <span class="number">32</span>]));
+<a href=#2432 id=2432 data-nosnippet>2432</a>        <span class="macro">assert!</span>(storage.load_epoch_root(epoch).<span class="kw">await</span><span class="question-mark">?</span>.is_none());
+<a href=#2433 id=2433 data-nosnippet>2433</a>
+<a href=#2434 id=2434 data-nosnippet>2434</a>        <span class="comment">// A stake table alone, likewise.
+<a href=#2435 id=2435 data-nosnippet>2435</a>        </span><span class="kw">let </span>epoch2 = EpochNumber::new(<span class="number">2</span>);
+<a href=#2436 id=2436 data-nosnippet>2436</a>        storage
+<a href=#2437 id=2437 data-nosnippet>2437</a>            .store_stake(epoch2, stake.clone(), <span class="prelude-val">None</span>, <span class="prelude-val">None</span>)
+<a href=#2438 id=2438 data-nosnippet>2438</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2439 id=2439 data-nosnippet>2439</a>        <span class="macro">assert!</span>(storage.load_stake(epoch2).<span class="kw">await</span><span class="question-mark">?</span>.is_some());
+<a href=#2440 id=2440 data-nosnippet>2440</a>        <span class="macro">assert!</span>(storage.load_drb_result(epoch2).<span class="kw">await</span><span class="question-mark">?</span>.is_none());
+<a href=#2441 id=2441 data-nosnippet>2441</a>        <span class="macro">assert!</span>(storage.load_epoch_root(epoch2).<span class="kw">await</span><span class="question-mark">?</span>.is_none());
+<a href=#2442 id=2442 data-nosnippet>2442</a>
+<a href=#2443 id=2443 data-nosnippet>2443</a>        <span class="comment">// With everything stored for one epoch, each loader returns its
+<a href=#2444 id=2444 data-nosnippet>2444</a>        // value and none has clobbered the others.
+<a href=#2445 id=2445 data-nosnippet>2445</a>        </span>storage.store_epoch_root(epoch, header.clone()).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2446 id=2446 data-nosnippet>2446</a>        storage
+<a href=#2447 id=2447 data-nosnippet>2447</a>            .store_stake(epoch, stake.clone(), <span class="prelude-val">None</span>, <span class="prelude-val">None</span>)
+<a href=#2448 id=2448 data-nosnippet>2448</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2449 id=2449 data-nosnippet>2449</a>        <span class="kw">let </span>(table, ..) = storage.load_stake(epoch).<span class="kw">await</span><span class="question-mark">?</span>.unwrap();
+<a href=#2450 id=2450 data-nosnippet>2450</a>        <span class="macro">assert_eq!</span>(stake, table);
+<a href=#2451 id=2451 data-nosnippet>2451</a>        <span class="macro">assert_eq!</span>(storage.load_drb_result(epoch).<span class="kw">await</span><span class="question-mark">?</span>, <span class="prelude-val">Some</span>([<span class="number">1</span>; <span class="number">32</span>]));
+<a href=#2452 id=2452 data-nosnippet>2452</a>        <span class="macro">assert_eq!</span>(storage.load_epoch_root(epoch).<span class="kw">await</span><span class="question-mark">?</span>, <span class="prelude-val">Some</span>(header));
+<a href=#2453 id=2453 data-nosnippet>2453</a>
+<a href=#2454 id=2454 data-nosnippet>2454</a>        <span class="prelude-val">Ok</span>(())
+<a href=#2455 id=2455 data-nosnippet>2455</a>    }
+<a href=#2456 id=2456 data-nosnippet>2456</a>
+<a href=#2457 id=2457 data-nosnippet>2457</a>    <span class="attr">#[rstest_reuse::apply(persistence_types)]
+<a href=#2458 id=2458 data-nosnippet>2458</a>    </span><span class="kw">pub async fn </span>test_delete_stake_tables&lt;P: TestablePersistence&gt;(
+<a href=#2459 id=2459 data-nosnippet>2459</a>        _p: PhantomData&lt;P&gt;,
+<a href=#2460 id=2460 data-nosnippet>2460</a>    ) -&gt; anyhow::Result&lt;()&gt; {
+<a href=#2461 id=2461 data-nosnippet>2461</a>        <span class="kw">let </span>tmp = P::tmp_storage().<span class="kw">await</span>;
+<a href=#2462 id=2462 data-nosnippet>2462</a>        <span class="kw">let </span><span class="kw-2">mut </span>opt = P::options(<span class="kw-2">&amp;</span>tmp);
+<a href=#2463 id=2463 data-nosnippet>2463</a>        <span class="kw">let </span>storage = opt.create().<span class="kw">await</span>.unwrap();
+<a href=#2464 id=2464 data-nosnippet>2464</a>
+<a href=#2465 id=2465 data-nosnippet>2465</a>        <span class="kw">let </span>event1 = StakeTableEvent::Delegate(Delegated {
+<a href=#2466 id=2466 data-nosnippet>2466</a>            delegator: Address::ZERO,
+<a href=#2467 id=2467 data-nosnippet>2467</a>            validator: Address::ZERO,
+<a href=#2468 id=2468 data-nosnippet>2468</a>            amount: U256::from(<span class="number">100</span>),
+<a href=#2469 id=2469 data-nosnippet>2469</a>        });
+<a href=#2470 id=2470 data-nosnippet>2470</a>        <span class="kw">let </span>event2 = StakeTableEvent::Delegate(Delegated {
+<a href=#2471 id=2471 data-nosnippet>2471</a>            delegator: Address::ZERO,
+<a href=#2472 id=2472 data-nosnippet>2472</a>            validator: Address::ZERO,
+<a href=#2473 id=2473 data-nosnippet>2473</a>            amount: U256::from(<span class="number">200</span>),
+<a href=#2474 id=2474 data-nosnippet>2474</a>        });
+<a href=#2475 id=2475 data-nosnippet>2475</a>
+<a href=#2476 id=2476 data-nosnippet>2476</a>        <span class="kw">let </span>l1_block = <span class="number">42u64</span>;
+<a href=#2477 id=2477 data-nosnippet>2477</a>        <span class="kw">let </span>events: Vec&lt;(EventKey, StakeTableEvent)&gt; =
+<a href=#2478 id=2478 data-nosnippet>2478</a>            <span class="macro">vec!</span>[((l1_block, <span class="number">0</span>), event1), ((l1_block, <span class="number">1</span>), event2)];
 <a href=#2479 id=2479 data-nosnippet>2479</a>
-<a href=#2480 id=2480 data-nosnippet>2480</a>        <span class="kw">let </span><span class="kw-2">mut </span>vmap1 = IndexMap::new();
-<a href=#2481 id=2481 data-nosnippet>2481</a>        <span class="kw">for </span>_i <span class="kw">in </span><span class="number">0</span>..<span class="number">25 </span>{
-<a href=#2482 id=2482 data-nosnippet>2482</a>            <span class="kw">let </span>v = RegisteredValidator::mock();
-<a href=#2483 id=2483 data-nosnippet>2483</a>            vmap1.insert(v.account, v);
-<a href=#2484 id=2484 data-nosnippet>2484</a>        }
-<a href=#2485 id=2485 data-nosnippet>2485</a>        storage
-<a href=#2486 id=2486 data-nosnippet>2486</a>            .store_all_validators(EpochNumber::new(<span class="number">10</span>), vmap1.clone())
-<a href=#2487 id=2487 data-nosnippet>2487</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#2488 id=2488 data-nosnippet>2488</a>
-<a href=#2489 id=2489 data-nosnippet>2489</a>        <span class="kw">let </span><span class="kw-2">mut </span>expected_all: Vec&lt;<span class="kw">_</span>&gt; = vmap1.clone().into_values().collect();
-<a href=#2490 id=2490 data-nosnippet>2490</a>        expected_all.sort_by_key(|v| v.account);
-<a href=#2491 id=2491 data-nosnippet>2491</a>
-<a href=#2492 id=2492 data-nosnippet>2492</a>        <span class="comment">// Load all
-<a href=#2493 id=2493 data-nosnippet>2493</a>        </span><span class="kw">let </span>loaded_all = storage
-<a href=#2494 id=2494 data-nosnippet>2494</a>            .load_all_validators(EpochNumber::new(<span class="number">10</span>), <span class="number">0</span>, <span class="number">100</span>)
-<a href=#2495 id=2495 data-nosnippet>2495</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#2496 id=2496 data-nosnippet>2496</a>        <span class="comment">// SQLite returns a different ordered list even though there is an `ORDER BY address ASC` clause
-<a href=#2497 id=2497 data-nosnippet>2497</a>        </span><span class="macro">assert_eq!</span>(expected_all, loaded_all);
-<a href=#2498 id=2498 data-nosnippet>2498</a>
-<a href=#2499 id=2499 data-nosnippet>2499</a>        <span class="comment">// Load first 10
-<a href=#2500 id=2500 data-nosnippet>2500</a>        </span><span class="kw">let </span>loaded_first_10 = storage
-<a href=#2501 id=2501 data-nosnippet>2501</a>            .load_all_validators(EpochNumber::new(<span class="number">10</span>), <span class="number">0</span>, <span class="number">10</span>)
-<a href=#2502 id=2502 data-nosnippet>2502</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#2503 id=2503 data-nosnippet>2503</a>
-<a href=#2504 id=2504 data-nosnippet>2504</a>        <span class="macro">assert_eq!</span>(expected_all[..<span class="number">10</span>], loaded_first_10);
-<a href=#2505 id=2505 data-nosnippet>2505</a>
-<a href=#2506 id=2506 data-nosnippet>2506</a>        <span class="comment">// Load next 10
-<a href=#2507 id=2507 data-nosnippet>2507</a>        </span><span class="kw">let </span>loaded_next_10 = storage
-<a href=#2508 id=2508 data-nosnippet>2508</a>            .load_all_validators(EpochNumber::new(<span class="number">10</span>), <span class="number">10</span>, <span class="number">10</span>)
-<a href=#2509 id=2509 data-nosnippet>2509</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#2510 id=2510 data-nosnippet>2510</a>
-<a href=#2511 id=2511 data-nosnippet>2511</a>        <span class="macro">assert_eq!</span>(expected_all[<span class="number">10</span>..<span class="number">20</span>], loaded_next_10);
-<a href=#2512 id=2512 data-nosnippet>2512</a>
-<a href=#2513 id=2513 data-nosnippet>2513</a>        <span class="comment">// Load remaining 5
-<a href=#2514 id=2514 data-nosnippet>2514</a>        </span><span class="kw">let </span>loaded_last_5 = storage
-<a href=#2515 id=2515 data-nosnippet>2515</a>            .load_all_validators(EpochNumber::new(<span class="number">10</span>), <span class="number">20</span>, <span class="number">10</span>)
-<a href=#2516 id=2516 data-nosnippet>2516</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#2517 id=2517 data-nosnippet>2517</a>
-<a href=#2518 id=2518 data-nosnippet>2518</a>        <span class="macro">assert_eq!</span>(expected_all[<span class="number">20</span>..], loaded_last_5);
-<a href=#2519 id=2519 data-nosnippet>2519</a>
-<a href=#2520 id=2520 data-nosnippet>2520</a>        <span class="comment">// offset beyond size should return empty
-<a href=#2521 id=2521 data-nosnippet>2521</a>        </span><span class="kw">let </span>loaded_empty = storage
-<a href=#2522 id=2522 data-nosnippet>2522</a>            .load_all_validators(EpochNumber::new(<span class="number">10</span>), <span class="number">100</span>, <span class="number">10</span>)
-<a href=#2523 id=2523 data-nosnippet>2523</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#2524 id=2524 data-nosnippet>2524</a>        <span class="macro">assert!</span>(loaded_empty.is_empty());
-<a href=#2525 id=2525 data-nosnippet>2525</a>
-<a href=#2526 id=2526 data-nosnippet>2526</a>        <span class="comment">// epoch 11
-<a href=#2527 id=2527 data-nosnippet>2527</a>        </span><span class="kw">let </span>validator2 = RegisteredValidator::mock();
-<a href=#2528 id=2528 data-nosnippet>2528</a>        <span class="kw">let </span><span class="kw-2">mut </span>vmap2 = IndexMap::new();
-<a href=#2529 id=2529 data-nosnippet>2529</a>        vmap2.insert(validator2.account, validator2.clone());
-<a href=#2530 id=2530 data-nosnippet>2530</a>
-<a href=#2531 id=2531 data-nosnippet>2531</a>        storage
-<a href=#2532 id=2532 data-nosnippet>2532</a>            .store_all_validators(EpochNumber::new(<span class="number">11</span>), vmap2.clone())
-<a href=#2533 id=2533 data-nosnippet>2533</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#2534 id=2534 data-nosnippet>2534</a>
-<a href=#2535 id=2535 data-nosnippet>2535</a>        <span class="kw">let </span><span class="kw-2">mut </span>expected_epoch11: Vec&lt;<span class="kw">_</span>&gt; = vmap2.clone().into_values().collect();
-<a href=#2536 id=2536 data-nosnippet>2536</a>        expected_epoch11.sort_by_key(|v| v.account);
+<a href=#2480 id=2480 data-nosnippet>2480</a>        storage.store_events(l1_block, events.clone()).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2481 id=2481 data-nosnippet>2481</a>
+<a href=#2482 id=2482 data-nosnippet>2482</a>        <span class="kw">let </span>(read_offset, loaded_events) = storage.load_events(<span class="number">0_u64</span>, l1_block).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2483 id=2483 data-nosnippet>2483</a>        <span class="macro">assert!</span>(read_offset.is_some());
+<a href=#2484 id=2484 data-nosnippet>2484</a>        <span class="macro">assert_eq!</span>(loaded_events.len(), <span class="number">2</span>);
+<a href=#2485 id=2485 data-nosnippet>2485</a>        <span class="macro">assert_eq!</span>(loaded_events, events);
+<a href=#2486 id=2486 data-nosnippet>2486</a>
+<a href=#2487 id=2487 data-nosnippet>2487</a>        <span class="comment">// Store some validators
+<a href=#2488 id=2488 data-nosnippet>2488</a>        </span><span class="kw">let </span>v = RegisteredValidator::mock();
+<a href=#2489 id=2489 data-nosnippet>2489</a>        <span class="kw">let </span><span class="kw-2">mut </span>vmap = IndexMap::new();
+<a href=#2490 id=2490 data-nosnippet>2490</a>        vmap.insert(v.account, v);
+<a href=#2491 id=2491 data-nosnippet>2491</a>        storage
+<a href=#2492 id=2492 data-nosnippet>2492</a>            .store_all_validators(EpochNumber::new(<span class="number">1</span>), vmap.clone())
+<a href=#2493 id=2493 data-nosnippet>2493</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2494 id=2494 data-nosnippet>2494</a>
+<a href=#2495 id=2495 data-nosnippet>2495</a>        <span class="kw">let </span>loaded = storage
+<a href=#2496 id=2496 data-nosnippet>2496</a>            .load_all_validators(EpochNumber::new(<span class="number">1</span>), <span class="number">0</span>, <span class="number">10</span>)
+<a href=#2497 id=2497 data-nosnippet>2497</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2498 id=2498 data-nosnippet>2498</a>        <span class="macro">assert_eq!</span>(loaded.len(), <span class="number">1</span>);
+<a href=#2499 id=2499 data-nosnippet>2499</a>
+<a href=#2500 id=2500 data-nosnippet>2500</a>        storage.delete_stake_tables().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2501 id=2501 data-nosnippet>2501</a>
+<a href=#2502 id=2502 data-nosnippet>2502</a>        <span class="comment">// Events cleared
+<a href=#2503 id=2503 data-nosnippet>2503</a>        </span><span class="kw">let </span>(read_offset, loaded_events) = storage.load_events(<span class="number">0_u64</span>, l1_block).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2504 id=2504 data-nosnippet>2504</a>        <span class="macro">assert!</span>(read_offset.is_none());
+<a href=#2505 id=2505 data-nosnippet>2505</a>        <span class="macro">assert!</span>(loaded_events.is_empty());
+<a href=#2506 id=2506 data-nosnippet>2506</a>
+<a href=#2507 id=2507 data-nosnippet>2507</a>        <span class="comment">// Validators cleared
+<a href=#2508 id=2508 data-nosnippet>2508</a>        </span><span class="kw">let </span>loaded = storage
+<a href=#2509 id=2509 data-nosnippet>2509</a>            .load_all_validators(EpochNumber::new(<span class="number">1</span>), <span class="number">0</span>, <span class="number">10</span>)
+<a href=#2510 id=2510 data-nosnippet>2510</a>            .<span class="kw">await
+<a href=#2511 id=2511 data-nosnippet>2511</a>            </span>.unwrap_or_default();
+<a href=#2512 id=2512 data-nosnippet>2512</a>        <span class="macro">assert!</span>(loaded.is_empty());
+<a href=#2513 id=2513 data-nosnippet>2513</a>
+<a href=#2514 id=2514 data-nosnippet>2514</a>        <span class="kw">let </span>event3 = StakeTableEvent::Delegate(Delegated {
+<a href=#2515 id=2515 data-nosnippet>2515</a>            delegator: Address::ZERO,
+<a href=#2516 id=2516 data-nosnippet>2516</a>            validator: Address::ZERO,
+<a href=#2517 id=2517 data-nosnippet>2517</a>            amount: U256::from(<span class="number">300</span>),
+<a href=#2518 id=2518 data-nosnippet>2518</a>        });
+<a href=#2519 id=2519 data-nosnippet>2519</a>        <span class="kw">let </span>new_events: Vec&lt;(EventKey, StakeTableEvent)&gt; = <span class="macro">vec!</span>[((l1_block, <span class="number">0</span>), event3)];
+<a href=#2520 id=2520 data-nosnippet>2520</a>        storage.store_events(l1_block, new_events.clone()).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2521 id=2521 data-nosnippet>2521</a>
+<a href=#2522 id=2522 data-nosnippet>2522</a>        <span class="kw">let </span>(read_offset, loaded_events) = storage.load_events(<span class="number">0_u64</span>, l1_block).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2523 id=2523 data-nosnippet>2523</a>        <span class="macro">assert!</span>(read_offset.is_some());
+<a href=#2524 id=2524 data-nosnippet>2524</a>        <span class="macro">assert_eq!</span>(loaded_events.len(), <span class="number">1</span>);
+<a href=#2525 id=2525 data-nosnippet>2525</a>        <span class="macro">assert_eq!</span>(loaded_events, new_events);
+<a href=#2526 id=2526 data-nosnippet>2526</a>
+<a href=#2527 id=2527 data-nosnippet>2527</a>        <span class="prelude-val">Ok</span>(())
+<a href=#2528 id=2528 data-nosnippet>2528</a>    }
+<a href=#2529 id=2529 data-nosnippet>2529</a>
+<a href=#2530 id=2530 data-nosnippet>2530</a>    <span class="attr">#[rstest_reuse::apply(persistence_types)]
+<a href=#2531 id=2531 data-nosnippet>2531</a>    </span><span class="kw">pub async fn </span>test_store_and_load_all_validators&lt;P: TestablePersistence&gt;(
+<a href=#2532 id=2532 data-nosnippet>2532</a>        _p: PhantomData&lt;P&gt;,
+<a href=#2533 id=2533 data-nosnippet>2533</a>    ) -&gt; anyhow::Result&lt;()&gt; {
+<a href=#2534 id=2534 data-nosnippet>2534</a>        <span class="kw">let </span>tmp = P::tmp_storage().<span class="kw">await</span>;
+<a href=#2535 id=2535 data-nosnippet>2535</a>        <span class="kw">let </span><span class="kw-2">mut </span>opt = P::options(<span class="kw-2">&amp;</span>tmp);
+<a href=#2536 id=2536 data-nosnippet>2536</a>        <span class="kw">let </span>storage = opt.create().<span class="kw">await</span>.unwrap();
 <a href=#2537 id=2537 data-nosnippet>2537</a>
-<a href=#2538 id=2538 data-nosnippet>2538</a>        <span class="kw">let </span>loaded2 = storage
-<a href=#2539 id=2539 data-nosnippet>2539</a>            .load_all_validators(EpochNumber::new(<span class="number">11</span>), <span class="number">0</span>, <span class="number">100</span>)
-<a href=#2540 id=2540 data-nosnippet>2540</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#2541 id=2541 data-nosnippet>2541</a>
-<a href=#2542 id=2542 data-nosnippet>2542</a>        <span class="macro">assert_eq!</span>(expected_epoch11, loaded2);
-<a href=#2543 id=2543 data-nosnippet>2543</a>
-<a href=#2544 id=2544 data-nosnippet>2544</a>        <span class="comment">// Epoch 10 still there
-<a href=#2545 id=2545 data-nosnippet>2545</a>        </span><span class="kw">let </span>loaded1_again = storage
-<a href=#2546 id=2546 data-nosnippet>2546</a>            .load_all_validators(EpochNumber::new(<span class="number">10</span>), <span class="number">0</span>, <span class="number">100</span>)
-<a href=#2547 id=2547 data-nosnippet>2547</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#2548 id=2548 data-nosnippet>2548</a>
-<a href=#2549 id=2549 data-nosnippet>2549</a>        <span class="macro">assert_eq!</span>(expected_all, loaded1_again);
-<a href=#2550 id=2550 data-nosnippet>2550</a>
-<a href=#2551 id=2551 data-nosnippet>2551</a>        <span class="prelude-val">Ok</span>(())
-<a href=#2552 id=2552 data-nosnippet>2552</a>    }
-<a href=#2553 id=2553 data-nosnippet>2553</a>
-<a href=#2554 id=2554 data-nosnippet>2554</a>    <span class="attr">#[rstest_reuse::apply(persistence_types)]
-<a href=#2555 id=2555 data-nosnippet>2555</a>    </span><span class="kw">pub async fn </span>test_non_consecutive_decide&lt;P: TestablePersistence&gt;(_p: PhantomData&lt;P&gt;) {
-<a href=#2556 id=2556 data-nosnippet>2556</a>        <span class="kw">let </span>tmp = P::tmp_storage().<span class="kw">await</span>;
-<a href=#2557 id=2557 data-nosnippet>2557</a>        <span class="kw">let </span>storage = P::connect(<span class="kw-2">&amp;</span>tmp).<span class="kw">await</span>;
-<a href=#2558 id=2558 data-nosnippet>2558</a>
-<a href=#2559 id=2559 data-nosnippet>2559</a>        <span class="kw">let </span>genesis_leaf: Leaf2 = Leaf2::genesis(
-<a href=#2560 id=2560 data-nosnippet>2560</a>            <span class="kw-2">&amp;</span>ValidatedState::default(),
-<a href=#2561 id=2561 data-nosnippet>2561</a>            <span class="kw-2">&amp;</span>NodeState::mock(),
-<a href=#2562 id=2562 data-nosnippet>2562</a>            TEST_VERSIONS.test.base,
-<a href=#2563 id=2563 data-nosnippet>2563</a>        )
-<a href=#2564 id=2564 data-nosnippet>2564</a>        .<span class="kw">await</span>;
-<a href=#2565 id=2565 data-nosnippet>2565</a>        <span class="kw">let </span><span class="kw-2">mut </span>quorum_proposal = QuorumProposalWrapper::&lt;SeqTypes&gt; {
-<a href=#2566 id=2566 data-nosnippet>2566</a>            proposal: QuorumProposal2::&lt;SeqTypes&gt; {
-<a href=#2567 id=2567 data-nosnippet>2567</a>                epoch: <span class="prelude-val">None</span>,
-<a href=#2568 id=2568 data-nosnippet>2568</a>                block_header: genesis_leaf.block_header().clone(),
-<a href=#2569 id=2569 data-nosnippet>2569</a>                view_number: genesis_leaf.view_number(),
-<a href=#2570 id=2570 data-nosnippet>2570</a>                justify_qc: QuorumCertificate2::genesis(
-<a href=#2571 id=2571 data-nosnippet>2571</a>                    <span class="kw-2">&amp;</span>ValidatedState::default(),
-<a href=#2572 id=2572 data-nosnippet>2572</a>                    <span class="kw-2">&amp;</span>NodeState::mock(),
-<a href=#2573 id=2573 data-nosnippet>2573</a>                    TEST_VERSIONS.test,
-<a href=#2574 id=2574 data-nosnippet>2574</a>                )
-<a href=#2575 id=2575 data-nosnippet>2575</a>                .<span class="kw">await</span>,
-<a href=#2576 id=2576 data-nosnippet>2576</a>                upgrade_certificate: <span class="prelude-val">None</span>,
-<a href=#2577 id=2577 data-nosnippet>2577</a>                view_change_evidence: <span class="prelude-val">None</span>,
-<a href=#2578 id=2578 data-nosnippet>2578</a>                next_drb_result: <span class="prelude-val">None</span>,
-<a href=#2579 id=2579 data-nosnippet>2579</a>                next_epoch_justify_qc: <span class="prelude-val">None</span>,
-<a href=#2580 id=2580 data-nosnippet>2580</a>                state_cert: <span class="prelude-val">None</span>,
-<a href=#2581 id=2581 data-nosnippet>2581</a>            },
-<a href=#2582 id=2582 data-nosnippet>2582</a>        };
+<a href=#2538 id=2538 data-nosnippet>2538</a>        <span class="kw">let </span><span class="kw-2">mut </span>vmap1 = IndexMap::new();
+<a href=#2539 id=2539 data-nosnippet>2539</a>        <span class="kw">for </span>_i <span class="kw">in </span><span class="number">0</span>..<span class="number">25 </span>{
+<a href=#2540 id=2540 data-nosnippet>2540</a>            <span class="kw">let </span>v = RegisteredValidator::mock();
+<a href=#2541 id=2541 data-nosnippet>2541</a>            vmap1.insert(v.account, v);
+<a href=#2542 id=2542 data-nosnippet>2542</a>        }
+<a href=#2543 id=2543 data-nosnippet>2543</a>        storage
+<a href=#2544 id=2544 data-nosnippet>2544</a>            .store_all_validators(EpochNumber::new(<span class="number">10</span>), vmap1.clone())
+<a href=#2545 id=2545 data-nosnippet>2545</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2546 id=2546 data-nosnippet>2546</a>
+<a href=#2547 id=2547 data-nosnippet>2547</a>        <span class="kw">let </span><span class="kw-2">mut </span>expected_all: Vec&lt;<span class="kw">_</span>&gt; = vmap1.clone().into_values().collect();
+<a href=#2548 id=2548 data-nosnippet>2548</a>        expected_all.sort_by_key(|v| v.account);
+<a href=#2549 id=2549 data-nosnippet>2549</a>
+<a href=#2550 id=2550 data-nosnippet>2550</a>        <span class="comment">// Load all
+<a href=#2551 id=2551 data-nosnippet>2551</a>        </span><span class="kw">let </span>loaded_all = storage
+<a href=#2552 id=2552 data-nosnippet>2552</a>            .load_all_validators(EpochNumber::new(<span class="number">10</span>), <span class="number">0</span>, <span class="number">100</span>)
+<a href=#2553 id=2553 data-nosnippet>2553</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2554 id=2554 data-nosnippet>2554</a>        <span class="comment">// SQLite returns a different ordered list even though there is an `ORDER BY address ASC` clause
+<a href=#2555 id=2555 data-nosnippet>2555</a>        </span><span class="macro">assert_eq!</span>(expected_all, loaded_all);
+<a href=#2556 id=2556 data-nosnippet>2556</a>
+<a href=#2557 id=2557 data-nosnippet>2557</a>        <span class="comment">// Load first 10
+<a href=#2558 id=2558 data-nosnippet>2558</a>        </span><span class="kw">let </span>loaded_first_10 = storage
+<a href=#2559 id=2559 data-nosnippet>2559</a>            .load_all_validators(EpochNumber::new(<span class="number">10</span>), <span class="number">0</span>, <span class="number">10</span>)
+<a href=#2560 id=2560 data-nosnippet>2560</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2561 id=2561 data-nosnippet>2561</a>
+<a href=#2562 id=2562 data-nosnippet>2562</a>        <span class="macro">assert_eq!</span>(expected_all[..<span class="number">10</span>], loaded_first_10);
+<a href=#2563 id=2563 data-nosnippet>2563</a>
+<a href=#2564 id=2564 data-nosnippet>2564</a>        <span class="comment">// Load next 10
+<a href=#2565 id=2565 data-nosnippet>2565</a>        </span><span class="kw">let </span>loaded_next_10 = storage
+<a href=#2566 id=2566 data-nosnippet>2566</a>            .load_all_validators(EpochNumber::new(<span class="number">10</span>), <span class="number">10</span>, <span class="number">10</span>)
+<a href=#2567 id=2567 data-nosnippet>2567</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2568 id=2568 data-nosnippet>2568</a>
+<a href=#2569 id=2569 data-nosnippet>2569</a>        <span class="macro">assert_eq!</span>(expected_all[<span class="number">10</span>..<span class="number">20</span>], loaded_next_10);
+<a href=#2570 id=2570 data-nosnippet>2570</a>
+<a href=#2571 id=2571 data-nosnippet>2571</a>        <span class="comment">// Load remaining 5
+<a href=#2572 id=2572 data-nosnippet>2572</a>        </span><span class="kw">let </span>loaded_last_5 = storage
+<a href=#2573 id=2573 data-nosnippet>2573</a>            .load_all_validators(EpochNumber::new(<span class="number">10</span>), <span class="number">20</span>, <span class="number">10</span>)
+<a href=#2574 id=2574 data-nosnippet>2574</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2575 id=2575 data-nosnippet>2575</a>
+<a href=#2576 id=2576 data-nosnippet>2576</a>        <span class="macro">assert_eq!</span>(expected_all[<span class="number">20</span>..], loaded_last_5);
+<a href=#2577 id=2577 data-nosnippet>2577</a>
+<a href=#2578 id=2578 data-nosnippet>2578</a>        <span class="comment">// offset beyond size should return empty
+<a href=#2579 id=2579 data-nosnippet>2579</a>        </span><span class="kw">let </span>loaded_empty = storage
+<a href=#2580 id=2580 data-nosnippet>2580</a>            .load_all_validators(EpochNumber::new(<span class="number">10</span>), <span class="number">100</span>, <span class="number">10</span>)
+<a href=#2581 id=2581 data-nosnippet>2581</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2582 id=2582 data-nosnippet>2582</a>        <span class="macro">assert!</span>(loaded_empty.is_empty());
 <a href=#2583 id=2583 data-nosnippet>2583</a>
-<a href=#2584 id=2584 data-nosnippet>2584</a>        <span class="kw">let </span>leaf0 = Leaf2::from_quorum_proposal(<span class="kw-2">&amp;</span>quorum_proposal);
-<a href=#2585 id=2585 data-nosnippet>2585</a>
-<a href=#2586 id=2586 data-nosnippet>2586</a>        quorum_proposal.proposal.view_number = ViewNumber::new(<span class="number">2</span>);
-<a href=#2587 id=2587 data-nosnippet>2587</a>        <span class="kw-2">*</span>quorum_proposal.proposal.block_header.height_mut() = <span class="number">2</span>;
-<a href=#2588 id=2588 data-nosnippet>2588</a>        quorum_proposal.proposal.justify_qc.view_number = ViewNumber::new(<span class="number">1</span>);
-<a href=#2589 id=2589 data-nosnippet>2589</a>        <span class="kw">let </span>leaf2 = Leaf2::from_quorum_proposal(<span class="kw-2">&amp;</span>quorum_proposal);
-<a href=#2590 id=2590 data-nosnippet>2590</a>
-<a href=#2591 id=2591 data-nosnippet>2591</a>        <span class="kw">let </span><span class="kw-2">mut </span>qc0 = leaf0.justify_qc();
-<a href=#2592 id=2592 data-nosnippet>2592</a>        qc0.data.leaf_commit = Committable::commit(<span class="kw-2">&amp;</span>leaf0);
-<a href=#2593 id=2593 data-nosnippet>2593</a>
-<a href=#2594 id=2594 data-nosnippet>2594</a>        <span class="kw">let </span><span class="kw-2">mut </span>qc2 = leaf2.justify_qc();
-<a href=#2595 id=2595 data-nosnippet>2595</a>        qc2.view_number += <span class="number">1</span>;
-<a href=#2596 id=2596 data-nosnippet>2596</a>        qc2.data.leaf_commit = Committable::commit(<span class="kw-2">&amp;</span>leaf2);
-<a href=#2597 id=2597 data-nosnippet>2597</a>
-<a href=#2598 id=2598 data-nosnippet>2598</a>        <span class="kw">let </span><span class="kw-2">mut </span>deciding_qc = qc2.clone();
-<a href=#2599 id=2599 data-nosnippet>2599</a>        deciding_qc.view_number += <span class="number">1</span>;
-<a href=#2600 id=2600 data-nosnippet>2600</a>
-<a href=#2601 id=2601 data-nosnippet>2601</a>        <span class="comment">// Decide the first leaf, but fail to generate a decide event.
-<a href=#2602 id=2602 data-nosnippet>2602</a>        </span>storage
-<a href=#2603 id=2603 data-nosnippet>2603</a>            .append_decided_leaves(
-<a href=#2604 id=2604 data-nosnippet>2604</a>                ViewNumber::new(<span class="number">0</span>),
-<a href=#2605 id=2605 data-nosnippet>2605</a>                [(
-<a href=#2606 id=2606 data-nosnippet>2606</a>                    <span class="kw-2">&amp;</span>leaf_info(leaf0.clone()),
-<a href=#2607 id=2607 data-nosnippet>2607</a>                    CertificatePair::non_epoch_change(qc0),
-<a href=#2608 id=2608 data-nosnippet>2608</a>                )],
-<a href=#2609 id=2609 data-nosnippet>2609</a>                <span class="prelude-val">None</span>,
-<a href=#2610 id=2610 data-nosnippet>2610</a>                <span class="kw-2">&amp;</span>FailConsumer,
-<a href=#2611 id=2611 data-nosnippet>2611</a>            )
-<a href=#2612 id=2612 data-nosnippet>2612</a>            .<span class="kw">await
-<a href=#2613 id=2613 data-nosnippet>2613</a>            </span>.unwrap();
-<a href=#2614 id=2614 data-nosnippet>2614</a>
-<a href=#2615 id=2615 data-nosnippet>2615</a>        <span class="comment">// Later, decide a new leaf, but skipping some leaf in the middle. This should generate
-<a href=#2616 id=2616 data-nosnippet>2616</a>        // decide events for both the leaves, correctly separating into two events since the leaves
-<a href=#2617 id=2617 data-nosnippet>2617</a>        // are non-consecutive, and correctly applying `deciding_qc` only to the last event.
-<a href=#2618 id=2618 data-nosnippet>2618</a>        </span><span class="kw">let </span>consumer = EventCollector::default();
-<a href=#2619 id=2619 data-nosnippet>2619</a>        storage
-<a href=#2620 id=2620 data-nosnippet>2620</a>            .append_decided_leaves(
-<a href=#2621 id=2621 data-nosnippet>2621</a>                ViewNumber::new(<span class="number">2</span>),
-<a href=#2622 id=2622 data-nosnippet>2622</a>                [(
-<a href=#2623 id=2623 data-nosnippet>2623</a>                    <span class="kw-2">&amp;</span>leaf_info(leaf2.clone()),
-<a href=#2624 id=2624 data-nosnippet>2624</a>                    CertificatePair::non_epoch_change(qc2),
-<a href=#2625 id=2625 data-nosnippet>2625</a>                )],
-<a href=#2626 id=2626 data-nosnippet>2626</a>                <span class="prelude-val">Some</span>(Arc::new(CertificatePair::non_epoch_change(
-<a href=#2627 id=2627 data-nosnippet>2627</a>                    deciding_qc.clone(),
-<a href=#2628 id=2628 data-nosnippet>2628</a>                ))),
-<a href=#2629 id=2629 data-nosnippet>2629</a>                <span class="kw-2">&amp;</span>consumer,
-<a href=#2630 id=2630 data-nosnippet>2630</a>            )
-<a href=#2631 id=2631 data-nosnippet>2631</a>            .<span class="kw">await
-<a href=#2632 id=2632 data-nosnippet>2632</a>            </span>.unwrap();
-<a href=#2633 id=2633 data-nosnippet>2633</a>
-<a href=#2634 id=2634 data-nosnippet>2634</a>        <span class="kw">let </span>events = consumer.events.read().<span class="kw">await</span>;
-<a href=#2635 id=2635 data-nosnippet>2635</a>        <span class="macro">assert_eq!</span>(events.len(), <span class="number">2</span>);
-<a href=#2636 id=2636 data-nosnippet>2636</a>
-<a href=#2637 id=2637 data-nosnippet>2637</a>        <span class="kw">let </span>EventType::Decide {
-<a href=#2638 id=2638 data-nosnippet>2638</a>            leaf_chain: leaf_chain0,
-<a href=#2639 id=2639 data-nosnippet>2639</a>            deciding_qc: deciding_qc0,
-<a href=#2640 id=2640 data-nosnippet>2640</a>            ..
-<a href=#2641 id=2641 data-nosnippet>2641</a>        } = <span class="kw-2">&amp;</span>events[<span class="number">0</span>].event
-<a href=#2642 id=2642 data-nosnippet>2642</a>        <span class="kw">else </span>{
-<a href=#2643 id=2643 data-nosnippet>2643</a>            <span class="macro">panic!</span>(<span class="string">"expected decide event, got {:?}"</span>, events[<span class="number">0</span>].event);
-<a href=#2644 id=2644 data-nosnippet>2644</a>        };
-<a href=#2645 id=2645 data-nosnippet>2645</a>        <span class="macro">assert_eq!</span>(leaf_chain0.len(), <span class="number">1</span>);
-<a href=#2646 id=2646 data-nosnippet>2646</a>        <span class="macro">assert_eq!</span>(leaf_chain0[<span class="number">0</span>].leaf, leaf0);
-<a href=#2647 id=2647 data-nosnippet>2647</a>        <span class="macro">assert_eq!</span>(<span class="kw-2">*</span>deciding_qc0, <span class="prelude-val">None</span>);
+<a href=#2584 id=2584 data-nosnippet>2584</a>        <span class="comment">// epoch 11
+<a href=#2585 id=2585 data-nosnippet>2585</a>        </span><span class="kw">let </span>validator2 = RegisteredValidator::mock();
+<a href=#2586 id=2586 data-nosnippet>2586</a>        <span class="kw">let </span><span class="kw-2">mut </span>vmap2 = IndexMap::new();
+<a href=#2587 id=2587 data-nosnippet>2587</a>        vmap2.insert(validator2.account, validator2.clone());
+<a href=#2588 id=2588 data-nosnippet>2588</a>
+<a href=#2589 id=2589 data-nosnippet>2589</a>        storage
+<a href=#2590 id=2590 data-nosnippet>2590</a>            .store_all_validators(EpochNumber::new(<span class="number">11</span>), vmap2.clone())
+<a href=#2591 id=2591 data-nosnippet>2591</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2592 id=2592 data-nosnippet>2592</a>
+<a href=#2593 id=2593 data-nosnippet>2593</a>        <span class="kw">let </span><span class="kw-2">mut </span>expected_epoch11: Vec&lt;<span class="kw">_</span>&gt; = vmap2.clone().into_values().collect();
+<a href=#2594 id=2594 data-nosnippet>2594</a>        expected_epoch11.sort_by_key(|v| v.account);
+<a href=#2595 id=2595 data-nosnippet>2595</a>
+<a href=#2596 id=2596 data-nosnippet>2596</a>        <span class="kw">let </span>loaded2 = storage
+<a href=#2597 id=2597 data-nosnippet>2597</a>            .load_all_validators(EpochNumber::new(<span class="number">11</span>), <span class="number">0</span>, <span class="number">100</span>)
+<a href=#2598 id=2598 data-nosnippet>2598</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2599 id=2599 data-nosnippet>2599</a>
+<a href=#2600 id=2600 data-nosnippet>2600</a>        <span class="macro">assert_eq!</span>(expected_epoch11, loaded2);
+<a href=#2601 id=2601 data-nosnippet>2601</a>
+<a href=#2602 id=2602 data-nosnippet>2602</a>        <span class="comment">// Epoch 10 still there
+<a href=#2603 id=2603 data-nosnippet>2603</a>        </span><span class="kw">let </span>loaded1_again = storage
+<a href=#2604 id=2604 data-nosnippet>2604</a>            .load_all_validators(EpochNumber::new(<span class="number">10</span>), <span class="number">0</span>, <span class="number">100</span>)
+<a href=#2605 id=2605 data-nosnippet>2605</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2606 id=2606 data-nosnippet>2606</a>
+<a href=#2607 id=2607 data-nosnippet>2607</a>        <span class="macro">assert_eq!</span>(expected_all, loaded1_again);
+<a href=#2608 id=2608 data-nosnippet>2608</a>
+<a href=#2609 id=2609 data-nosnippet>2609</a>        <span class="prelude-val">Ok</span>(())
+<a href=#2610 id=2610 data-nosnippet>2610</a>    }
+<a href=#2611 id=2611 data-nosnippet>2611</a>
+<a href=#2612 id=2612 data-nosnippet>2612</a>    <span class="attr">#[rstest_reuse::apply(persistence_types)]
+<a href=#2613 id=2613 data-nosnippet>2613</a>    </span><span class="kw">pub async fn </span>test_non_consecutive_decide&lt;P: TestablePersistence&gt;(_p: PhantomData&lt;P&gt;) {
+<a href=#2614 id=2614 data-nosnippet>2614</a>        <span class="kw">let </span>tmp = P::tmp_storage().<span class="kw">await</span>;
+<a href=#2615 id=2615 data-nosnippet>2615</a>        <span class="kw">let </span>storage = P::connect(<span class="kw-2">&amp;</span>tmp).<span class="kw">await</span>;
+<a href=#2616 id=2616 data-nosnippet>2616</a>
+<a href=#2617 id=2617 data-nosnippet>2617</a>        <span class="kw">let </span>genesis_leaf: Leaf2 = Leaf2::genesis(
+<a href=#2618 id=2618 data-nosnippet>2618</a>            <span class="kw-2">&amp;</span>ValidatedState::default(),
+<a href=#2619 id=2619 data-nosnippet>2619</a>            <span class="kw-2">&amp;</span>NodeState::mock(),
+<a href=#2620 id=2620 data-nosnippet>2620</a>            TEST_VERSIONS.test.base,
+<a href=#2621 id=2621 data-nosnippet>2621</a>        )
+<a href=#2622 id=2622 data-nosnippet>2622</a>        .<span class="kw">await</span>;
+<a href=#2623 id=2623 data-nosnippet>2623</a>        <span class="kw">let </span><span class="kw-2">mut </span>quorum_proposal = QuorumProposalWrapper::&lt;SeqTypes&gt; {
+<a href=#2624 id=2624 data-nosnippet>2624</a>            proposal: QuorumProposal2::&lt;SeqTypes&gt; {
+<a href=#2625 id=2625 data-nosnippet>2625</a>                epoch: <span class="prelude-val">None</span>,
+<a href=#2626 id=2626 data-nosnippet>2626</a>                block_header: genesis_leaf.block_header().clone(),
+<a href=#2627 id=2627 data-nosnippet>2627</a>                view_number: genesis_leaf.view_number(),
+<a href=#2628 id=2628 data-nosnippet>2628</a>                justify_qc: QuorumCertificate2::genesis(
+<a href=#2629 id=2629 data-nosnippet>2629</a>                    <span class="kw-2">&amp;</span>ValidatedState::default(),
+<a href=#2630 id=2630 data-nosnippet>2630</a>                    <span class="kw-2">&amp;</span>NodeState::mock(),
+<a href=#2631 id=2631 data-nosnippet>2631</a>                    TEST_VERSIONS.test,
+<a href=#2632 id=2632 data-nosnippet>2632</a>                )
+<a href=#2633 id=2633 data-nosnippet>2633</a>                .<span class="kw">await</span>,
+<a href=#2634 id=2634 data-nosnippet>2634</a>                upgrade_certificate: <span class="prelude-val">None</span>,
+<a href=#2635 id=2635 data-nosnippet>2635</a>                view_change_evidence: <span class="prelude-val">None</span>,
+<a href=#2636 id=2636 data-nosnippet>2636</a>                next_drb_result: <span class="prelude-val">None</span>,
+<a href=#2637 id=2637 data-nosnippet>2637</a>                next_epoch_justify_qc: <span class="prelude-val">None</span>,
+<a href=#2638 id=2638 data-nosnippet>2638</a>                state_cert: <span class="prelude-val">None</span>,
+<a href=#2639 id=2639 data-nosnippet>2639</a>            },
+<a href=#2640 id=2640 data-nosnippet>2640</a>        };
+<a href=#2641 id=2641 data-nosnippet>2641</a>
+<a href=#2642 id=2642 data-nosnippet>2642</a>        <span class="kw">let </span>leaf0 = Leaf2::from_quorum_proposal(<span class="kw-2">&amp;</span>quorum_proposal);
+<a href=#2643 id=2643 data-nosnippet>2643</a>
+<a href=#2644 id=2644 data-nosnippet>2644</a>        quorum_proposal.proposal.view_number = ViewNumber::new(<span class="number">2</span>);
+<a href=#2645 id=2645 data-nosnippet>2645</a>        <span class="kw-2">*</span>quorum_proposal.proposal.block_header.height_mut() = <span class="number">2</span>;
+<a href=#2646 id=2646 data-nosnippet>2646</a>        quorum_proposal.proposal.justify_qc.view_number = ViewNumber::new(<span class="number">1</span>);
+<a href=#2647 id=2647 data-nosnippet>2647</a>        <span class="kw">let </span>leaf2 = Leaf2::from_quorum_proposal(<span class="kw-2">&amp;</span>quorum_proposal);
 <a href=#2648 id=2648 data-nosnippet>2648</a>
-<a href=#2649 id=2649 data-nosnippet>2649</a>        <span class="kw">let </span>EventType::Decide {
-<a href=#2650 id=2650 data-nosnippet>2650</a>            leaf_chain: leaf_chain2,
-<a href=#2651 id=2651 data-nosnippet>2651</a>            deciding_qc: deciding_qc2,
-<a href=#2652 id=2652 data-nosnippet>2652</a>            ..
-<a href=#2653 id=2653 data-nosnippet>2653</a>        } = <span class="kw-2">&amp;</span>events[<span class="number">1</span>].event
-<a href=#2654 id=2654 data-nosnippet>2654</a>        <span class="kw">else </span>{
-<a href=#2655 id=2655 data-nosnippet>2655</a>            <span class="macro">panic!</span>(<span class="string">"expected decide event, got {:?}"</span>, events[<span class="number">1</span>].event);
-<a href=#2656 id=2656 data-nosnippet>2656</a>        };
-<a href=#2657 id=2657 data-nosnippet>2657</a>        <span class="macro">assert_eq!</span>(leaf_chain2.len(), <span class="number">1</span>);
-<a href=#2658 id=2658 data-nosnippet>2658</a>        <span class="macro">assert_eq!</span>(leaf_chain2[<span class="number">0</span>].leaf, leaf2);
-<a href=#2659 id=2659 data-nosnippet>2659</a>        <span class="macro">assert_eq!</span>(deciding_qc2.as_ref().unwrap().qc(), <span class="kw-2">&amp;</span>deciding_qc);
-<a href=#2660 id=2660 data-nosnippet>2660</a>    }
-<a href=#2661 id=2661 data-nosnippet>2661</a>}
+<a href=#2649 id=2649 data-nosnippet>2649</a>        <span class="kw">let </span><span class="kw-2">mut </span>qc0 = leaf0.justify_qc();
+<a href=#2650 id=2650 data-nosnippet>2650</a>        qc0.data.leaf_commit = Committable::commit(<span class="kw-2">&amp;</span>leaf0);
+<a href=#2651 id=2651 data-nosnippet>2651</a>
+<a href=#2652 id=2652 data-nosnippet>2652</a>        <span class="kw">let </span><span class="kw-2">mut </span>qc2 = leaf2.justify_qc();
+<a href=#2653 id=2653 data-nosnippet>2653</a>        qc2.view_number += <span class="number">1</span>;
+<a href=#2654 id=2654 data-nosnippet>2654</a>        qc2.data.leaf_commit = Committable::commit(<span class="kw-2">&amp;</span>leaf2);
+<a href=#2655 id=2655 data-nosnippet>2655</a>
+<a href=#2656 id=2656 data-nosnippet>2656</a>        <span class="kw">let </span><span class="kw-2">mut </span>deciding_qc = qc2.clone();
+<a href=#2657 id=2657 data-nosnippet>2657</a>        deciding_qc.view_number += <span class="number">1</span>;
+<a href=#2658 id=2658 data-nosnippet>2658</a>
+<a href=#2659 id=2659 data-nosnippet>2659</a>        <span class="comment">// Decide the first leaf, but fail to generate a decide event.
+<a href=#2660 id=2660 data-nosnippet>2660</a>        </span>storage
+<a href=#2661 id=2661 data-nosnippet>2661</a>            .append_decided_leaves(
+<a href=#2662 id=2662 data-nosnippet>2662</a>                ViewNumber::new(<span class="number">0</span>),
+<a href=#2663 id=2663 data-nosnippet>2663</a>                [(
+<a href=#2664 id=2664 data-nosnippet>2664</a>                    <span class="kw-2">&amp;</span>leaf_info(leaf0.clone()),
+<a href=#2665 id=2665 data-nosnippet>2665</a>                    CertificatePair::non_epoch_change(qc0),
+<a href=#2666 id=2666 data-nosnippet>2666</a>                )],
+<a href=#2667 id=2667 data-nosnippet>2667</a>                <span class="prelude-val">None</span>,
+<a href=#2668 id=2668 data-nosnippet>2668</a>                <span class="kw-2">&amp;</span>FailConsumer,
+<a href=#2669 id=2669 data-nosnippet>2669</a>            )
+<a href=#2670 id=2670 data-nosnippet>2670</a>            .<span class="kw">await
+<a href=#2671 id=2671 data-nosnippet>2671</a>            </span>.unwrap();
+<a href=#2672 id=2672 data-nosnippet>2672</a>
+<a href=#2673 id=2673 data-nosnippet>2673</a>        <span class="comment">// Later, decide a new leaf, but skipping some leaf in the middle. This should generate
+<a href=#2674 id=2674 data-nosnippet>2674</a>        // decide events for both the leaves, correctly separating into two events since the leaves
+<a href=#2675 id=2675 data-nosnippet>2675</a>        // are non-consecutive, and correctly applying `deciding_qc` only to the last event.
+<a href=#2676 id=2676 data-nosnippet>2676</a>        </span><span class="kw">let </span>consumer = EventCollector::default();
+<a href=#2677 id=2677 data-nosnippet>2677</a>        storage
+<a href=#2678 id=2678 data-nosnippet>2678</a>            .append_decided_leaves(
+<a href=#2679 id=2679 data-nosnippet>2679</a>                ViewNumber::new(<span class="number">2</span>),
+<a href=#2680 id=2680 data-nosnippet>2680</a>                [(
+<a href=#2681 id=2681 data-nosnippet>2681</a>                    <span class="kw-2">&amp;</span>leaf_info(leaf2.clone()),
+<a href=#2682 id=2682 data-nosnippet>2682</a>                    CertificatePair::non_epoch_change(qc2),
+<a href=#2683 id=2683 data-nosnippet>2683</a>                )],
+<a href=#2684 id=2684 data-nosnippet>2684</a>                <span class="prelude-val">Some</span>(Arc::new(CertificatePair::non_epoch_change(
+<a href=#2685 id=2685 data-nosnippet>2685</a>                    deciding_qc.clone(),
+<a href=#2686 id=2686 data-nosnippet>2686</a>                ))),
+<a href=#2687 id=2687 data-nosnippet>2687</a>                <span class="kw-2">&amp;</span>consumer,
+<a href=#2688 id=2688 data-nosnippet>2688</a>            )
+<a href=#2689 id=2689 data-nosnippet>2689</a>            .<span class="kw">await
+<a href=#2690 id=2690 data-nosnippet>2690</a>            </span>.unwrap();
+<a href=#2691 id=2691 data-nosnippet>2691</a>
+<a href=#2692 id=2692 data-nosnippet>2692</a>        <span class="kw">let </span>events = consumer.events.read().<span class="kw">await</span>;
+<a href=#2693 id=2693 data-nosnippet>2693</a>        <span class="macro">assert_eq!</span>(events.len(), <span class="number">2</span>);
+<a href=#2694 id=2694 data-nosnippet>2694</a>
+<a href=#2695 id=2695 data-nosnippet>2695</a>        <span class="kw">let </span>EventType::Decide {
+<a href=#2696 id=2696 data-nosnippet>2696</a>            leaf_chain: leaf_chain0,
+<a href=#2697 id=2697 data-nosnippet>2697</a>            deciding_qc: deciding_qc0,
+<a href=#2698 id=2698 data-nosnippet>2698</a>            ..
+<a href=#2699 id=2699 data-nosnippet>2699</a>        } = <span class="kw-2">&amp;</span>events[<span class="number">0</span>].event
+<a href=#2700 id=2700 data-nosnippet>2700</a>        <span class="kw">else </span>{
+<a href=#2701 id=2701 data-nosnippet>2701</a>            <span class="macro">panic!</span>(<span class="string">"expected decide event, got {:?}"</span>, events[<span class="number">0</span>].event);
+<a href=#2702 id=2702 data-nosnippet>2702</a>        };
+<a href=#2703 id=2703 data-nosnippet>2703</a>        <span class="macro">assert_eq!</span>(leaf_chain0.len(), <span class="number">1</span>);
+<a href=#2704 id=2704 data-nosnippet>2704</a>        <span class="macro">assert_eq!</span>(leaf_chain0[<span class="number">0</span>].leaf, leaf0);
+<a href=#2705 id=2705 data-nosnippet>2705</a>        <span class="macro">assert_eq!</span>(<span class="kw-2">*</span>deciding_qc0, <span class="prelude-val">None</span>);
+<a href=#2706 id=2706 data-nosnippet>2706</a>
+<a href=#2707 id=2707 data-nosnippet>2707</a>        <span class="kw">let </span>EventType::Decide {
+<a href=#2708 id=2708 data-nosnippet>2708</a>            leaf_chain: leaf_chain2,
+<a href=#2709 id=2709 data-nosnippet>2709</a>            deciding_qc: deciding_qc2,
+<a href=#2710 id=2710 data-nosnippet>2710</a>            ..
+<a href=#2711 id=2711 data-nosnippet>2711</a>        } = <span class="kw-2">&amp;</span>events[<span class="number">1</span>].event
+<a href=#2712 id=2712 data-nosnippet>2712</a>        <span class="kw">else </span>{
+<a href=#2713 id=2713 data-nosnippet>2713</a>            <span class="macro">panic!</span>(<span class="string">"expected decide event, got {:?}"</span>, events[<span class="number">1</span>].event);
+<a href=#2714 id=2714 data-nosnippet>2714</a>        };
+<a href=#2715 id=2715 data-nosnippet>2715</a>        <span class="macro">assert_eq!</span>(leaf_chain2.len(), <span class="number">1</span>);
+<a href=#2716 id=2716 data-nosnippet>2716</a>        <span class="macro">assert_eq!</span>(leaf_chain2[<span class="number">0</span>].leaf, leaf2);
+<a href=#2717 id=2717 data-nosnippet>2717</a>        <span class="macro">assert_eq!</span>(deciding_qc2.as_ref().unwrap().qc(), <span class="kw-2">&amp;</span>deciding_qc);
+<a href=#2718 id=2718 data-nosnippet>2718</a>    }
+<a href=#2719 id=2719 data-nosnippet>2719</a>}
 </code></pre></div></section></main></body></html>
