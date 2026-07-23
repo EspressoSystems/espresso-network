@@ -1765,7 +1765,14 @@ impl EpochCommittees {
     /// `epoch`. A chain deciding a leaf near the end of an epoch contains
     /// certificates signed by the next epoch's quorum, so include the next
     /// epoch's stake table whenever we have it.
-    pub(crate) fn leaf_chain_stake_tables(&self, epoch: Epoch) -> EpochStakeTables<SeqTypes> {
+    pub(crate) fn leaf_chain_stake_tables(
+        &self,
+        epoch: Epoch,
+    ) -> anyhow::Result<EpochStakeTables<SeqTypes>> {
+        ensure!(
+            self.has_stake_table(epoch),
+            "Requested stake table is missing"
+        );
         let mut tables = vec![EpochStakeTable {
             epoch: Some(epoch),
             stake_table: self.stake_table(Some(epoch)),
@@ -1779,10 +1786,10 @@ impl EpochCommittees {
                 success_threshold: self.success_threshold(Some(next_epoch)),
             });
         }
-        EpochStakeTables {
+        Ok(EpochStakeTables {
             tables,
             epoch_height: self.epoch_height,
-        }
+        })
     }
 
     pub fn fetcher(&self) -> &Fetcher {
@@ -2044,12 +2051,8 @@ impl EpochCommittees {
                          root height",
                     )?;
 
-                    ensure!(
-                        self.has_stake_table(EpochNumber::new(previous_epoch)),
-                        "Stake table not found"
-                    );
                     let stake_tables =
-                        self.leaf_chain_stake_tables(EpochNumber::new(previous_epoch));
+                        self.leaf_chain_stake_tables(EpochNumber::new(previous_epoch))?;
 
                     fetcher
                         .peers
@@ -2768,7 +2771,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         let membership_reader = membership.read().await;
         let block_height = root_block_in_epoch(*epoch, membership_reader.epoch_height);
         let peers = membership_reader.fetcher.peers.clone();
-        let stake_tables = membership_reader.leaf_chain_stake_tables(epoch);
+        let stake_tables = membership_reader.leaf_chain_stake_tables(epoch)?;
         drop(membership_reader);
 
         // Fetch leaves from peers
@@ -2801,7 +2804,7 @@ impl Membership<SeqTypes> for EpochCommittees {
             },
         };
 
-        let stake_tables = membership_reader.leaf_chain_stake_tables(previous_epoch);
+        let stake_tables = membership_reader.leaf_chain_stake_tables(previous_epoch)?;
 
         let block_height =
             transition_block_for_epoch(*previous_epoch, membership_reader.epoch_height);

@@ -1215,7 +1215,7 @@ impl EpochRewardsCalculator {
             // Fetch the leaf at the last block of the epoch so we can verify
             // the header via QC against the stake table
             let membership = coordinator.membership().read().await;
-            let stake_tables = membership.leaf_chain_stake_tables(epoch);
+            let stake_tables = membership.leaf_chain_stake_tables(epoch)?;
             drop(membership);
 
             let leaf = instance_state
