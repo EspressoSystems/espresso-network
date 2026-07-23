@@ -140,11 +140,29 @@ pub async fn verify_leaf_chain<T: NodeType>(
     }
 
     // The chain may cross an epoch boundary, in which case its QCs are signed
-    // by different epochs' quorums. Verify each QC against the stake table of
-    // the epoch committed in its signed payload, after checking that the QC's
-    // claimed block number corresponds to its claimed epoch.
-    let check_qc = |qc: &QuorumCertificate2<T>| -> anyhow::Result<()> {
-        let table = stake_tables.for_epoch(qc.data.epoch, qc.data.block_number)?;
+    // by different epochs' quorums. Derive each QC's epoch from the height of
+    // the leaf it certifies; trusting the claims in the QC itself would let a
+    // quorum of a different epoch pick the stake table that verifies its own
+    // signatures.
+    let check_qc = |qc: &QuorumCertificate2<T>, certified_height: u64| -> anyhow::Result<()> {
+        let epoch = EpochNumber::new(epoch_from_block_number(
+            certified_height,
+            stake_tables.epoch_height,
+        ));
+        ensure!(
+            qc.data.epoch == Some(epoch),
+            "QC claims epoch {:?} but certifies the leaf at height {certified_height} in epoch \
+             {epoch}",
+            qc.data.epoch,
+        );
+        if let Some(block_number) = qc.data.block_number {
+            ensure!(
+                block_number == certified_height,
+                "QC claims block number {block_number} but certifies the leaf at height \
+                 {certified_height}"
+            );
+        }
+        let table = stake_tables.for_epoch(Some(epoch))?;
         qc.is_valid_cert(
             &StakeTableEntries::<T>::from(table.stake_table.clone()).0,
             table.success_threshold,
@@ -153,17 +171,13 @@ pub async fn verify_leaf_chain<T: NodeType>(
         Ok(())
     };
 
-    // verify all QCs are valid
-    check_qc(&newest_leaf.justify_qc())?;
-    check_qc(&parent.justify_qc())?;
-    check_qc(&grand_parent.justify_qc())?;
-
     // Verify the root is in the chain of decided leaves
+    check_qc(&newest_leaf.justify_qc(), parent.height())?;
     let mut last_leaf = parent;
     for leaf in leaf_chain.iter().skip(2) {
         ensure!(last_leaf.justify_qc().view_number() == leaf.view_number());
         ensure!(last_leaf.justify_qc().data().leaf_commit == leaf.commit());
-        check_qc(&leaf.justify_qc())?;
+        check_qc(&last_leaf.justify_qc(), leaf.height())?;
         if leaf.height() == expected_height {
             return Ok(leaf.clone());
         }

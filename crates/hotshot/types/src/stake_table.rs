@@ -18,7 +18,6 @@ use crate::{
     data::EpochNumber,
     light_client::{CircuitField, StakeTableState, ToFieldsLightClientCompat},
     traits::signature_key::{SignatureKey, StakeTableEntryType},
-    utils::epoch_from_block_number,
 };
 
 /// Stake table entry
@@ -235,27 +234,12 @@ pub struct EpochStakeTables<TYPES: NodeType> {
 }
 
 impl<TYPES: NodeType> EpochStakeTables<TYPES> {
-    /// The stake table for the epoch a certificate claims in its signed
-    /// payload. Dispatching on the claimed epoch is sound: the epoch is part of
-    /// the signed vote data, so a certificate claiming the wrong epoch fails
-    /// signature verification.
-    ///
-    /// Honest quorums only sign vote data whose epoch is derived from the
-    /// block number, so a certificate whose claimed block number does not
-    /// correspond to its claimed epoch is rejected outright, before any
-    /// signature check.
-    pub fn for_epoch(
-        &self,
-        epoch: Option<EpochNumber>,
-        block_number: Option<u64>,
-    ) -> anyhow::Result<&EpochStakeTable<TYPES>> {
-        let derived = block_number
-            .map(|block| EpochNumber::new(epoch_from_block_number(block, self.epoch_height)));
-        anyhow::ensure!(
-            epoch == derived,
-            "certificate epoch {epoch:?} does not correspond to its block number {block_number:?} \
-             (derived epoch {derived:?})"
-        );
+    /// The stake table for a given epoch. Callers must derive `epoch` from
+    /// trusted chain structure — the height of the leaf the certificate
+    /// commits to — never from the certificate's own claims, which would let
+    /// a quorum of a different epoch pick the stake table that verifies its
+    /// own signatures.
+    pub fn for_epoch(&self, epoch: Option<EpochNumber>) -> anyhow::Result<&EpochStakeTable<TYPES>> {
         self.tables
             .iter()
             .find(|table| table.epoch == epoch)
