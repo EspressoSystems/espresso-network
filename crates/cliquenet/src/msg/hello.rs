@@ -33,7 +33,7 @@ impl Hello {
         }
     }
 
-    pub fn to_bytes(&self) -> HelloBytes {
+    pub fn to_bytes(self) -> HelloBytes {
         match self {
             Self::Ok => HelloBytes::Ok([0]),
             Self::BackOff(d) => {

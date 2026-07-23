@@ -35,6 +35,7 @@ pub struct Server {
     obound: UnboundedReceiver<Command>,
     next_slot: watch::Receiver<Slot>,
     accept_tasks: JoinSet<Result<Connection, NetworkError>>,
+    #[allow(clippy::type_complexity)]
     hello_tasks: JoinMap<PublicKey, Result<(Hello, Connection, Option<Hello>), NetworkError>>,
     connect_tasks: JoinMap<PublicKey, Connection>,
     peer_tasks: JoinMap<PublicKey, Peer>,
