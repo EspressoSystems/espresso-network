@@ -35,7 +35,8 @@ pub struct Server {
     obound: UnboundedReceiver<Command>,
     next_slot: watch::Receiver<Slot>,
     accept_tasks: JoinSet<Result<Connection, NetworkError>>,
-    hello_tasks: JoinMap<PublicKey, Result<(Hello, Connection, Hello), NetworkError>>,
+    #[allow(clippy::type_complexity)]
+    hello_tasks: JoinMap<PublicKey, Result<(Hello, Connection, Option<Hello>), NetworkError>>,
     connect_tasks: JoinMap<PublicKey, Connection>,
     peer_tasks: JoinMap<PublicKey, Peer>,
     metrics: Arc<dyn Metrics>,
@@ -138,25 +139,27 @@ impl Server {
 
         loop {
             select! {
-                x = listener.accept() => match x {
-                    Ok((stream, addr)) => {
-                        debug!(
-                            name = %self.conf.name,
-                            node = %self.key,
-                            %addr,
-                            "accepted new tcp connection"
-                        );
-                        self.spawn_accept(stream)
+                x = listener.accept(), if self.accept_tasks.len() < self.conf.max_accept_tasks => {
+                    match x {
+                        Ok((stream, addr)) => {
+                            debug!(
+                                name = %self.conf.name,
+                                node = %self.key,
+                                %addr,
+                                "accepted new tcp connection"
+                            );
+                            self.spawn_accept(stream)
+                        }
+                        Err(err) => {
+                            warn!(
+                                name = %self.conf.name,
+                                node = %self.key,
+                                %err,
+                                "error accepting tcp connection"
+                            )
+                        }
                     }
-                    Err(err) => {
-                        warn!(
-                            name = %self.conf.name,
-                            node = %self.key,
-                            %err,
-                            "error accepting tcp connection"
-                        )
-                    }
-                },
+                }
 
                 Some(h) = self.accept_tasks.join_next() => match h {
                     Ok(Ok(conn)) => {
@@ -231,7 +234,7 @@ impl Server {
                             );
                             continue
                         };
-                        if !(our_hello.is_ok() && their_hello.is_ok()) {
+                        if !(our_hello.is_ok() && their_hello.is_some_and(|h| h.is_ok())) {
                             warn!(
                                 name   = %self.conf.name,
                                 node   = %self.key,
@@ -681,12 +684,27 @@ impl Server {
 
         self.metrics.add(&conn.key, HELLOS, 1);
 
+        // Under normal circumstances we should never witness more hellos than parties.
+        // An adversary may nevertheless pass the accept stage and since we do not
+        // know the party we inform it to back off. If the remote does not send us
+        // their hello in due time this will occupy the hello task (and a file
+        // descriptor). To put a cap on that we make the reading of hellos contingent
+        // on how many ongoing hellos we already process. Under attack we do not
+        // bother with reading the remote's (unless it is a peer we want), but only
+        // send our hello and drop the connection. NB that this may cause the remote
+        // to see a connection reset.
+        let under_pressure = self.hello_tasks.len() > 2 * self.parties.len();
+
         self.hello_tasks.abort(&conn.key);
         self.hello_tasks.spawn(
             conn.key,
             until(self.conf.handshake_timeout, async move {
-                let theirs = conn.recv_hello().await?;
-                conn.send_hello(ours.clone()).await?;
+                let theirs = if ours.is_ok() || !under_pressure {
+                    Some(conn.recv_hello().await?)
+                } else {
+                    None
+                };
+                conn.send_hello(ours).await?;
                 Ok::<_, NetworkError>((ours, conn, theirs))
             }),
         );

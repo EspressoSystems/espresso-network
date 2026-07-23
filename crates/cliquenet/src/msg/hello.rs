@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hello {
     Ok,
     BackOff(Duration),
@@ -33,7 +33,7 @@ impl Hello {
         }
     }
 
-    pub fn to_bytes(&self) -> HelloBytes {
+    pub fn to_bytes(self) -> HelloBytes {
         match self {
             Self::Ok => HelloBytes::Ok([0]),
             Self::BackOff(d) => {

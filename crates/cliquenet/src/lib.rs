@@ -118,6 +118,10 @@ pub struct Config {
     #[builder(default = 6)]
     keep_alive_retries: u8,
 
+    /// Max. number of concurrent accept tasks.
+    #[builder(default = (3 * parties.len()).max(100))]
+    max_accept_tasks: usize,
+
     /// Optional metrics implementation.
     metrics: Option<Arc<dyn Metrics>>,
 }
@@ -156,6 +160,7 @@ impl fmt::Debug for Config {
             .field("keepalive_after", &self.keep_alive_after)
             .field("keepalive_interval", &self.keep_alive_interval)
             .field("keepalive_retries", &self.keep_alive_retries)
+            .field("max_accept_tasks", &self.max_accept_tasks)
             .finish()
     }
 }
