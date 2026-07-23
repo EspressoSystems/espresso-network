@@ -21,6 +21,7 @@ use hotshot_types::{
 use super::utils::reconstructed_blocks;
 use crate::{
     block::{BlockBuilder, BlockBuilderConfig},
+    cert_verifier::CertVerifiers,
     client::CoordinatorClient,
     consensus::{Consensus, PreCutoverSeed},
     coordinator::{Coordinator, timer::Timer},
@@ -245,6 +246,7 @@ pub async fn build_test_coordinator(
         .timeout_collector(timeout_collector)
         .timeout_one_honest_collector(timeout_one_honest_collector)
         .epoch_root_collector(epoch_root_collector)
+        .cert_verifiers(CertVerifiers::new(membership.clone(), upgrade_lock.clone()))
         .vid_reconstructor(vid_reconstructor)
         .epoch_manager(epoch_manager)
         .block_builder(block_builder)

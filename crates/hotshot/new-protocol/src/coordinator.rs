@@ -35,6 +35,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     block::{BlockAndHeaderRequest, BlockBuilder, BlockBuilderConfig},
+    cert_verifier::CertVerifiers,
     client::{ClientApi, ClientRequest, CoordinatorClient, QueryError},
     consensus::{Consensus, ConsensusInput, ConsensusOutput, PreCutoverSeed},
     coordinator::{
@@ -77,6 +78,16 @@ pub(crate) const VID_RECONSTRUCT_GC_MARGIN: u64 = 5;
 /// storage writes for recent views aren't aborted before they persist.
 const STORAGE_GC_MARGIN: u64 = 5;
 
+/// Epoch changes claiming an epoch further ahead than this are dropped at
+/// intake. We could not verify them anyway: an epoch's stake table only
+/// materializes by walking the DRB chain, so parking such a message and
+/// driving catchup for an arbitrary claimed epoch just burns resources.
+/// Within the ceiling, deferred changes verify progressively as catchup
+/// advances ([`CertVerifiers::retry_pending`] runs on every DRB arrival).
+const EPOCH_CHANGE_LOOKAHEAD: u64 = 3;
+
+pub(crate) const MAX_VIEWS_AHEAD: ViewNumber = ViewNumber::new(30);
+
 #[derive(Builder)]
 pub struct Coordinator<T: NodeType, S> {
     membership_coordinator: EpochMembershipCoordinator<T>,
@@ -94,6 +105,7 @@ pub struct Coordinator<T: NodeType, S> {
     timeout_one_honest_collector:
         VoteCollector<T, SimpleTally<T, TimeoutVote2<T>, TimeoutOneHonest<T>>>,
     epoch_root_collector: VoteCollector<T, EpochRootTally<T>>,
+    cert_verifiers: CertVerifiers<T>,
     epoch_manager: EpochManager<T>,
     block_builder: BlockBuilder<T>,
     proposal_validator: ProposalValidator<T>,
@@ -293,7 +305,14 @@ where
                 membership_coordinator.clone(),
                 lock.clone(),
             ))
-            .epoch_root_collector(VoteCollector::new(membership_coordinator.clone(), lock))
+            .epoch_root_collector(VoteCollector::new(
+                membership_coordinator.clone(),
+                lock.clone(),
+            ))
+            .cert_verifiers(CertVerifiers::new(
+                membership_coordinator.clone(),
+                lock.clone(),
+            ))
             .epoch_manager(EpochManager::new(
                 initializer.epoch_height,
                 membership_coordinator.clone(),
@@ -457,6 +476,7 @@ where
                     }
                 }
                 Some(tcert) = self.timeout_collector.next() => {
+                    self.cert_verifiers.timeout.mark_completed(tcert.view_number());
                     return Ok(ConsensusInput::TimeoutCertificate(tcert))
                 }
                 Some(out) = self.timeout_one_honest_collector.next() => {
@@ -467,12 +487,30 @@ where
                     return Ok(ConsensusInput::TimeoutOneHonest(out.view_number(), epoch))
                 }
                 Some(cert1) = self.vote1_collector.next() => {
+                    self.cert_verifiers.cert1.mark_completed(cert1.view_number());
                     return Ok(ConsensusInput::Certificate1(cert1))
                 }
                 Some(cert2) = self.vote2_collector.next() => {
+                    self.cert_verifiers.cert2.mark_completed(cert2.view_number());
                     return Ok(ConsensusInput::Certificate2(cert2))
                 }
+                Some(cert1) = self.cert_verifiers.cert1.next() => {
+                    return Ok(ConsensusInput::Certificate1(cert1))
+                }
+                Some(cert2) = self.cert_verifiers.cert2.next() => {
+                    return Ok(ConsensusInput::Certificate2(cert2))
+                }
+                Some(tc) = self.cert_verifiers.timeout.next() => {
+                    return Ok(ConsensusInput::TimeoutCertificate(tc))
+                }
+                Some(cert1) = self.cert_verifiers.advance.next() => {
+                    return Ok(ConsensusInput::AdvanceView(cert1))
+                }
+                Some(epoch_change) = self.cert_verifiers.epoch_change.next() => {
+                    return Ok(ConsensusInput::EpochChange(epoch_change.into_cert()))
+                }
                 Some((cert1, state_cert)) = self.epoch_root_collector.next() => {
+                    self.cert_verifiers.cert1.mark_completed(cert1.view_number());
                     self.storage.append_state_cert(
                         ViewNumber::new(state_cert.light_client_state.view_number),
                         state_cert.clone(),
@@ -575,13 +613,12 @@ where
                 },
                 Some(result) = self.epoch_manager.next() => match result {
                     Ok(EpochRootResult::DrbResult(epoch, drb_result)) => {
-                        // New epoch data available — retry votes that were
-                        // buffered because their membership wasn't ready.
                         self.vote1_collector.retry_pending_votes();
                         self.vote2_collector.retry_pending_votes();
                         self.timeout_collector.retry_pending_votes();
                         self.timeout_one_honest_collector.retry_pending_votes();
                         self.epoch_root_collector.retry_pending_votes();
+                        self.cert_verifiers.retry_pending(|e| self.epoch_manager.request_drb_result(e));
                         return Ok(ConsensusInput::DrbResult(epoch, drb_result))
                     }
                     Err(failure) => {
@@ -979,7 +1016,7 @@ where
                     let epoch = p.proposal.data.epoch;
                     let block = p.proposal.data.block_header.block_number();
                     debug!(%node, %sender, %view, %epoch, %block, "recv proposal");
-                    if !self.is_too_far_ahead(view)
+                    if !self.is_view_too_far_ahead(view)
                         && self.proposal_received_at.is_none_or(|(v, _)| v < view)
                     {
                         self.proposal_received_at = Some((view, Instant::now()));
@@ -1035,7 +1072,7 @@ where
                 },
                 ConsensusMessage::Vote1(vote1) => {
                     let view = vote1.vote.view_number();
-                    if self.is_too_far_ahead(view) {
+                    if self.is_view_too_far_ahead(view) {
                         warn!(%node, %sender, %view, "vote1 is too far ahead");
                         return None;
                     }
@@ -1064,7 +1101,7 @@ where
                 },
                 ConsensusMessage::VidShareBroadcast(share) => {
                     let view = share.view_number();
-                    if self.is_too_far_ahead(view) {
+                    if self.is_view_too_far_ahead(view) {
                         warn!(%node, %sender, %view, "vid share broadcast is too far ahead");
                         return None;
                     }
@@ -1078,7 +1115,7 @@ where
                 },
                 ConsensusMessage::Vote2(vote2) => {
                     let view = vote2.view_number();
-                    if self.is_too_far_ahead(view) {
+                    if self.is_view_too_far_ahead(view) {
                         warn!(%node, %sender, %view, "vote2 is too far ahead");
                         return None;
                     }
@@ -1091,22 +1128,52 @@ where
                     None
                 },
                 ConsensusMessage::Certificate1(certificate1, _key) => {
+                    let view = certificate1.view_number();
                     debug!(
-                        %node, %sender,
-                        view = %certificate1.view_number(),
+                        %node, %sender, %view,
                         epoch = ?certificate1.epoch().map(|e| *e),
                         "recv certificate1"
                     );
-                    Some(ConsensusInput::Certificate1(certificate1))
+                    if self.is_view_too_far_ahead(view) {
+                        warn!(%node, %sender, %view, "certificate1 is too far ahead");
+                        return None;
+                    }
+                    if self.is_epoch_too_far_ahead(certificate1.epoch()) {
+                        warn!(%node, %sender, %view, "certificate1 epoch is too far ahead");
+                        return None;
+                    }
+                    if let Some(epoch) = self
+                        .cert_verifiers
+                        .cert1
+                        .verify(message.sender, certificate1)
+                    {
+                        self.epoch_manager.request_drb_result(epoch);
+                    }
+                    None
                 },
                 ConsensusMessage::Certificate2(certificate2, _key) => {
+                    let view = certificate2.view_number();
                     debug!(
-                        %node, %sender,
-                        view = %certificate2.view_number(),
+                        %node, %sender, %view,
                         epoch = ?certificate2.epoch().map(|e| *e),
                         "recv certificate2"
                     );
-                    Some(ConsensusInput::Certificate2(certificate2))
+                    if self.is_view_too_far_ahead(view) {
+                        warn!(%node, %sender, %view, "certificate2 is too far ahead");
+                        return None;
+                    }
+                    if self.is_epoch_too_far_ahead(certificate2.epoch()) {
+                        warn!(%node, %sender, %view, "certificate2 epoch is too far ahead");
+                        return None;
+                    }
+                    if let Some(epoch) = self
+                        .cert_verifiers
+                        .cert2
+                        .verify(message.sender, certificate2)
+                    {
+                        self.epoch_manager.request_drb_result(epoch);
+                    }
+                    None
                 },
                 ConsensusMessage::TimeoutVote(timeout_msg) => {
                     let view = timeout_msg.vote.view_number();
@@ -1120,37 +1187,55 @@ where
                     // If a peer times out in a view at or ahead of us we adopt its
                     // highest certificate. Evidence takes precedence over
                     // the vote being too far ahead, and a valid certificate proves
-                    // the network reached that view, and consensus verifies it
-                    // before acting on it.
-                    //
-                    // TODO: Make verification asynchronous
-                    let evidence = timeout_msg
+                    // the network reached that view.
+                    if let Some(e) = timeout_msg
                         .evidence
                         .filter(|e| e.view_number() >= current_view)
-                        .map(|e| match e {
-                            CatchupEvidence::Qc(qc) => ConsensusInput::AdvanceView(qc),
-                            CatchupEvidence::Tc(tc) => ConsensusInput::TimeoutCertificate(tc),
-                        });
-
-                    if self.is_too_far_ahead(view) {
-                        warn!(%node, %sender, %view, "timeout vote is too far ahead");
-                        return evidence;
+                    {
+                        match e {
+                            CatchupEvidence::Qc(qc) => {
+                                if let Some(epoch) = self
+                                    .cert_verifiers
+                                    .advance
+                                    .verify(message.sender.clone(), qc)
+                                {
+                                    self.epoch_manager.request_drb_result(epoch);
+                                }
+                            },
+                            CatchupEvidence::Tc(tc) => {
+                                if let Some(epoch) = self
+                                    .cert_verifiers
+                                    .timeout
+                                    .verify(message.sender.clone(), tc)
+                                {
+                                    self.epoch_manager.request_drb_result(epoch);
+                                }
+                            },
+                        }
                     }
+
+                    if self.is_view_too_far_ahead(view) {
+                        warn!(%node, %sender, %view, "timeout vote is too far ahead");
+                        return None;
+                    }
+
                     if view < current_view {
                         debug!(
                             %node, %sender, %view, %current_view,
                             "timeout vote for stale view; replying with catchup evidence"
                         );
                         self.send_catchup_evidence(&message.sender, view);
-                        return evidence;
+                        return None;
                     }
+
                     debug!(%node, %sender, %view, has_evidence, "recv timeout vote");
+
                     self.timeout_collector
                         .accumulate_vote(timeout_msg.vote.clone());
                     self.timeout_one_honest_collector
                         .accumulate_vote(timeout_msg.vote);
 
-                    evidence
+                    None
                 },
                 ConsensusMessage::TimeoutCertificate(tc) => {
                     debug!(
@@ -1159,7 +1244,14 @@ where
                         epoch = ?tc.epoch().map(|e| *e),
                         "recv timeout certificate"
                     );
-                    Some(ConsensusInput::TimeoutCertificate(tc))
+                    if let Some(epoch) = self
+                        .cert_verifiers
+                        .timeout
+                        .verify(message.sender.clone(), tc)
+                    {
+                        self.epoch_manager.request_drb_result(epoch);
+                    }
+                    None
                 },
                 ConsensusMessage::HighQc(qc) => {
                     debug!(
@@ -1168,16 +1260,31 @@ where
                         epoch = ?qc.epoch().map(|e| *e),
                         "recv high qc"
                     );
-                    Some(ConsensusInput::AdvanceView(qc))
+                    if let Some(epoch) = self
+                        .cert_verifiers
+                        .advance
+                        .verify(message.sender.clone(), qc)
+                    {
+                        self.epoch_manager.request_drb_result(epoch);
+                    }
+                    None
                 },
                 ConsensusMessage::EpochChange(epoch_change) => {
-                    debug!(
-                        %node, %sender,
-                        view = %epoch_change.cert1.view_number(),
-                        epoch = ?epoch_change.cert1.epoch().map(|e| *e),
-                        "recv epoch change"
-                    );
-                    Some(ConsensusInput::EpochChange(epoch_change))
+                    let view = epoch_change.cert1.view_number();
+                    let epoch = epoch_change.cert1.epoch();
+                    debug!(%node, %sender, %view, epoch = ?epoch.map(|e| *e), "recv epoch change");
+                    if self.is_epoch_too_far_ahead(epoch) {
+                        warn!(%node, %sender, %view, ?epoch, "epoch change is too far ahead");
+                        return None;
+                    }
+                    if let Some(epoch) = self
+                        .cert_verifiers
+                        .epoch_change
+                        .verify(message.sender, epoch_change)
+                    {
+                        self.epoch_manager.request_drb_result(epoch);
+                    }
+                    None
                 },
             },
             MessageType::Block(msg) => {
@@ -1199,7 +1306,7 @@ where
                             hashes = manifest.hashes.len(),
                             "recv dedup manifest"
                         );
-                        if !self.is_too_far_ahead(manifest.view)
+                        if !self.is_view_too_far_ahead(manifest.view)
                             && let Some(view_leader) = self.leader(manifest.view, manifest.epoch)
                             && view_leader == message.sender
                         {
@@ -1532,8 +1639,8 @@ where
         let consensus = &m.consensus;
         consensus.current_view.set(*view as usize);
         let invalid_certs = self
-            .consensus
-            .invalid_certs()
+            .cert_verifiers
+            .num_invalid_certs()
             .saturating_sub(self.invalid_certs_at_decide);
         consensus.invalid_qc.set(invalid_certs as usize);
         let last_decided_view = self.consensus.last_decided_view();
@@ -1561,7 +1668,7 @@ where
         // a gap-fill decide of older views must not regress the gauges.
         let advanced = newest.view_number() == self.consensus.last_decided_view();
         if advanced {
-            self.invalid_certs_at_decide = self.consensus.invalid_certs();
+            self.invalid_certs_at_decide = self.cert_verifiers.num_invalid_certs();
         }
         let Some(m) = &self.metrics else { return };
         let consensus = &m.consensus;
@@ -1671,8 +1778,10 @@ where
                 self.vote2_collector.gc(view);
             },
             GcScope::Decided(view) => {
+                let decide_floor = self.consensus.decide_floor();
                 self.epoch_manager.gc(epoch);
                 self.epoch_root_collector.gc(view);
+                self.cert_verifiers.gc(decide_floor, epoch);
                 self.pending_proposal_fetches.gc(view);
                 self.requested_missing_proposals
                     .retain(|key| key.view > view);
@@ -1683,9 +1792,7 @@ where
                     .gc(view.saturating_sub(VID_RECONSTRUCT_GC_MARGIN).into());
                 let vc = VidCommitment2::default();
                 self.da_payloads = self.da_payloads.split_off(&(view, vc));
-                self.payload_txn_bytes = self
-                    .payload_txn_bytes
-                    .split_off(&(self.consensus.decide_floor() + 1));
+                self.payload_txn_bytes = self.payload_txn_bytes.split_off(&(decide_floor + 1));
             },
             GcScope::Timeout(view) => {
                 self.vid_reconstructor.retire_view(view);
@@ -1778,9 +1885,18 @@ where
         false
     }
 
-    /// We ignore votes more that 30 views ahead of our current view.
-    fn is_too_far_ahead(&self, v: ViewNumber) -> bool {
-        v > self.consensus.current_view() + 30
+    /// We ignore votes more than `MAX_VIEWS_AHEAD` ahead of ours.
+    fn is_view_too_far_ahead(&self, v: ViewNumber) -> bool {
+        v > self.consensus.current_view() + *MAX_VIEWS_AHEAD
+    }
+
+    /// We ignore certificates more than `EPOCH_CHANGE_LOOKAHEAD` ahead of ours.
+    fn is_epoch_too_far_ahead(&self, epoch: Option<EpochNumber>) -> bool {
+        let current = self
+            .consensus
+            .current_epoch()
+            .unwrap_or(EpochNumber::genesis());
+        epoch.is_some_and(|e| e > current + EPOCH_CHANGE_LOOKAHEAD)
     }
 
     pub(crate) fn catchup_evidence(&self) -> Option<ConsensusMessage<T, Validated>> {

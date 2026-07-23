@@ -225,6 +225,7 @@ async fn build_cutover_coordinator(
 
     use crate::{
         block::{BlockBuilder, BlockBuilderConfig},
+        cert_verifier::CertVerifiers,
         consensus::Consensus,
         epoch::EpochManager,
         proposal::{ProposalValidator, VidShareValidator},
@@ -301,6 +302,7 @@ async fn build_cutover_coordinator(
         .timeout_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
         .timeout_one_honest_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
         .epoch_root_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
+        .cert_verifiers(CertVerifiers::new(membership.clone(), upgrade_lock.clone()))
         .vid_reconstructor(VidReconstructor::new())
         .epoch_manager(EpochManager::new(epoch_height, membership.clone()))
         .block_builder(block_builder)

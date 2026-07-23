@@ -144,7 +144,7 @@ pub trait Quorum: Sync {
         &self,
         leaf: &Leaf2,
         certs: impl Send + IntoIterator<Item = &'a Certificate, IntoIter: Send>,
-    ) -> impl Send + Future<Output = Result<Version>> {
+    ) -> impl Send + Future<Output = Result<ChainVersions>> {
         let span = tracing::trace_span!(
             "verify_qc_chain_and_get_version",
             height = leaf.block_header().height()
@@ -179,17 +179,21 @@ pub trait Quorum: Sync {
             // Check the QC chain: valid signatures and sequential views.
             let mut first = None;
             let mut curr: Option<&Certificate> = None;
+            let mut max_cert_version = version;
             for cert in certs {
                 tracing::trace!(?cert, "verify cert");
 
                 // What version number do we expect the quorum to have signed over?
-                let version = match &upgrade {
+                let cert_version = match &upgrade {
                     Some(upgrade) if cert.view_number() >= upgrade.data.new_version_first_view => {
                         tracing::debug!(?upgrade, view = ?cert.view_number(), "using upgraded version");
                         upgrade.data.new_version
                     },
                     _ => version,
                 };
+                if cert_version > max_cert_version {
+                    max_cert_version = cert_version;
+                }
 
                 // Which epoch's quorum do we expect to have signed this certificate? A chain
                 // proving the last leaf of an epoch necessarily contains certificates produced in
@@ -220,9 +224,9 @@ pub trait Quorum: Sync {
 
                 // Check the signature.
                 if next_epoch {
-                    self.verify_next_epoch(cert, version).await?;
+                    self.verify_next_epoch(cert, cert_version).await?;
                 } else {
-                    self.verify(cert, version).await?;
+                    self.verify(cert, cert_version).await?;
                 }
 
                 // Check chaining.
@@ -241,10 +245,25 @@ pub trait Quorum: Sync {
             let first_qc = first.context("empty QC chain")?;
             ensure!(first_qc.leaf_commit() == leaf.commit());
 
-            Ok(version)
+            Ok(ChainVersions {
+                leaf: version,
+                max_cert: max_cert_version,
+            })
         }
         .instrument(span)
     }
+}
+
+/// The protocol versions extracted while verifying a QC chain.
+#[derive(Clone, Copy, Debug)]
+pub struct ChainVersions {
+    /// The protocol version of the leaf the chain proves finalized.
+    pub leaf: Version,
+
+    /// The highest protocol version any certificate in the chain was verified under.
+    ///
+    /// May exceed [`leaf`](Self::leaf) when an upgrade takes effect within the chain.
+    pub max_cert: Version,
 }
 
 /// A stake table representing a particular quorum.
@@ -452,7 +471,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_valid_chain() {
         let leaves = leaf_chain(1..=3, EPOCH_VERSION).await;
-        let version = AlwaysTrueQuorum
+        let ChainVersions { leaf: version, .. } = AlwaysTrueQuorum
             .verify_qc_chain_and_get_version(
                 leaves[0].leaf(),
                 &qc_chain_from_leaf_chain(&leaves[1..]),
@@ -501,13 +520,14 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_upgrade() {
         let leaves = leaf_chain_with_upgrade(1..=3, 2, ENABLE_EPOCHS).await;
-        let version = VersionCheckQuorum::new(leaves.iter().map(|leaf| leaf.leaf().clone()))
-            .verify_qc_chain_and_get_version(
-                leaves[0].leaf(),
-                &qc_chain_from_leaf_chain(&leaves[1..]),
-            )
-            .await
-            .unwrap();
+        let ChainVersions { leaf: version, .. } =
+            VersionCheckQuorum::new(leaves.iter().map(|leaf| leaf.leaf().clone()))
+                .verify_qc_chain_and_get_version(
+                    leaves[0].leaf(),
+                    &qc_chain_from_leaf_chain(&leaves[1..]),
+                )
+                .await
+                .unwrap();
         assert_eq!(version, leaves[0].header().version());
     }
 
@@ -531,7 +551,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_epoch_change() {
         let leaves = epoch_change_leaf_chain(1..=5, 5, EPOCH_VERSION).await;
-        let version = EpochChangeQuorum::new(5)
+        let ChainVersions { leaf: version, .. } = EpochChangeQuorum::new(5)
             .verify_qc_chain_and_get_version(
                 leaves[0].leaf(),
                 &qc_chain_from_leaf_chain(&leaves[1..]),
@@ -600,7 +620,7 @@ mod test {
             proposal.next_epoch_justify_qc = None;
         })
         .await;
-        let version = EpochChangeQuorum::new(5)
+        let ChainVersions { leaf: version, .. } = EpochChangeQuorum::new(5)
             .verify_qc_chain_and_get_version(
                 leaves[0].leaf(),
                 &qc_chain_from_leaf_chain(&leaves[1..]),
@@ -751,7 +771,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_epoch_boundary_quorum_change() {
         let (leaves, committing_qc, deciding_qc, quorum) = epoch_boundary_fixture(true).await;
-        let version = quorum
+        let ChainVersions { leaf: version, .. } = quorum
             .verify_qc_chain_and_get_version(leaves[1].leaf(), [&committing_qc, &deciding_qc])
             .await
             .unwrap();

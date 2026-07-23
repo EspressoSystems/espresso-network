@@ -1455,6 +1455,206 @@ mod test {
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_qc_chain_new_protocol_cutover_two_chain() {
+        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
+        let ds = DataSource::create(
+            DataSource::persistence_options(&storage),
+            Default::default(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        // Upgrade at height 3: the HotStuff2 chain begun before the cutover completes without
+        // needing a cert2 (none is stored).
+        let leaves = leaf_chain_with_upgrade(
+            1..=3,
+            3,
+            Upgrade::new(DRB_AND_HEADER_UPGRADE_VERSION, NEW_PROTOCOL_VERSION),
+        )
+        .await;
+        assert_eq!(leaves[1].header().version(), DRB_AND_HEADER_UPGRADE_VERSION);
+        assert_eq!(leaves[2].header().version(), NEW_PROTOCOL_VERSION);
+
+        {
+            let mut tx = ds.write().await.unwrap();
+            for leaf in &leaves {
+                tx.insert_leaf(leaf).await.unwrap();
+            }
+            tx.commit().await.unwrap();
+        }
+
+        let proof =
+            get_leaf_proof_with_qc_chain(&ds, leaves[0].clone(), Duration::MAX, CHAIN_LIMIT)
+                .await
+                .unwrap();
+        assert!(matches!(proof.proof(), FinalityProof::HotStuff2 { .. }));
+        assert_eq!(
+            proof
+                .verify(LeafProofHint::Quorum(&VersionCheckQuorum::new(
+                    leaves.iter().map(|leaf| leaf.leaf().clone())
+                )))
+                .await
+                .unwrap(),
+            leaves[0]
+        );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_qc_chain_last_legacy_leaf_uses_cert2() {
+        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
+        let ds = DataSource::create(
+            DataSource::persistence_options(&storage),
+            Default::default(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        // Upgrade at height 2: any 2-chain proving the last legacy leaf spans the cutover, so the
+        // prover must fall through to the cert2 at height 3 instead.
+        let leaves = leaf_chain_with_upgrade(
+            1..=4,
+            2,
+            Upgrade::new(DRB_AND_HEADER_UPGRADE_VERSION, NEW_PROTOCOL_VERSION),
+        )
+        .await;
+        assert_eq!(leaves[0].header().version(), DRB_AND_HEADER_UPGRADE_VERSION);
+        assert_eq!(leaves[1].header().version(), NEW_PROTOCOL_VERSION);
+
+        let cert2_leaf = &leaves[2];
+        let cert2 = cert2_for_leaf(cert2_leaf);
+
+        {
+            let mut tx = ds.write().await.unwrap();
+            for leaf in &leaves {
+                tx.insert_leaf(leaf).await.unwrap();
+            }
+            tx.insert_cert2(cert2_leaf.height(), cert2).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        let proof =
+            get_leaf_proof_with_qc_chain(&ds, leaves[0].clone(), Duration::MAX, CHAIN_LIMIT)
+                .await
+                .unwrap();
+        assert!(matches!(proof.proof(), FinalityProof::NewProtocol { .. }));
+        assert_eq!(
+            proof
+                .verify(LeafProofHint::Quorum(&VersionCheckQuorum::new(
+                    leaves.iter().map(|leaf| leaf.leaf().clone())
+                )))
+                .await
+                .unwrap(),
+            leaves[0]
+        );
+    }
+
+    /// With a gapless cutover, the leaf two before the cutover (`upgrade_height
+    /// - 2`) is finalized by the old protocol: its HotStuff2 2-chain completes
+    /// within pre-cutover leaves (deciding QC belongs to `upgrade_height - 1`,
+    /// still V5), so no cert2 is needed.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_leaf_before_cutover_uses_hotstuff2() {
+        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
+        let ds = DataSource::create(
+            DataSource::persistence_options(&storage),
+            Default::default(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        // Cutover at height 4, so `upgrade_height - 2` is height 2 (leaves[1]).
+        let leaves = leaf_chain_with_upgrade(
+            1..=5,
+            4,
+            Upgrade::new(DRB_AND_HEADER_UPGRADE_VERSION, NEW_PROTOCOL_VERSION),
+        )
+        .await;
+        assert!(leaves[1].header().version() < NEW_PROTOCOL_VERSION);
+        assert!(leaves[3].header().version() >= NEW_PROTOCOL_VERSION);
+
+        {
+            let mut tx = ds.write().await.unwrap();
+            for leaf in &leaves {
+                tx.insert_leaf(leaf).await.unwrap();
+            }
+            tx.commit().await.unwrap();
+        }
+
+        let proof =
+            get_leaf_proof_with_qc_chain(&ds, leaves[1].clone(), Duration::MAX, CHAIN_LIMIT)
+                .await
+                .unwrap();
+        assert!(matches!(proof.proof(), FinalityProof::HotStuff2 { .. }));
+        assert_eq!(
+            proof
+                .verify(LeafProofHint::Quorum(&VersionCheckQuorum::new(
+                    leaves.iter().map(|leaf| leaf.leaf().clone())
+                )))
+                .await
+                .unwrap(),
+            leaves[1]
+        );
+    }
+
+    /// When a view gap at the cutover prevents a HotStuff2 2-chain from
+    /// completing within pre-cutover leaves, the leaf two before the cutover
+    /// (`upgrade_height - 2`) instead falls through to cert2 finality. Skewing
+    /// the view numbers breaks the consecutive-view requirement, so no 2-chain
+    /// forms and the proof terminates at the first cert2.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_leaf_before_cutover_uses_cert2() {
+        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
+        let ds = DataSource::create(
+            DataSource::persistence_options(&storage),
+            Default::default(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        // Cutover at height 4, so `upgrade_height - 2` is height 2 (leaves[1]).
+        // Skewed views mean no HotStuff2 2-chain ever forms.
+        let leaves = custom_leaf_chain_with_upgrade(
+            1..=5,
+            4,
+            Upgrade::new(DRB_AND_HEADER_UPGRADE_VERSION, NEW_PROTOCOL_VERSION),
+            |proposal| {
+                proposal.view_number = ViewNumber::new(proposal.block_header.height() * 2);
+            },
+        )
+        .await;
+        assert!(leaves[1].header().version() < NEW_PROTOCOL_VERSION);
+        assert!(leaves[3].header().version() >= NEW_PROTOCOL_VERSION);
+        let cert2_leaf = &leaves[3];
+        let cert2 = cert2_for_leaf(cert2_leaf);
+
+        {
+            let mut tx = ds.write().await.unwrap();
+            for leaf in &leaves {
+                tx.insert_leaf(leaf).await.unwrap();
+            }
+            tx.insert_cert2(cert2_leaf.height(), cert2).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        let proof =
+            get_leaf_proof_with_qc_chain(&ds, leaves[1].clone(), Duration::MAX, CHAIN_LIMIT)
+                .await
+                .unwrap();
+        assert!(matches!(proof.proof(), FinalityProof::NewProtocol { .. }));
+        assert_eq!(
+            proof
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .await
+                .unwrap(),
+            leaves[1]
+        );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_bad_finalized() {
         let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
         let ds = DataSource::create(
