@@ -44,6 +44,15 @@ use crate::{
     v0_3::{ASSUMED_BLOCK_TIME_SECONDS, AuthenticatedValidator, Fetcher, RewardAmount},
 };
 
+/// Number of recent per-epoch stake tables kept in memory.
+///
+/// `reload_stake` loads this many epochs from persistence on startup and
+/// `prune_epochs` evicts anything older as the tip advances, so a
+/// long-running node holds the same window as a freshly restarted one.
+/// Evicted epochs are recovered on demand via the membership coordinator's
+/// catchup.
+pub const RECENT_STAKE_TABLES_LIMIT: u64 = 20;
+
 /// Type to describe DA and Stake memberships.
 #[derive(Clone, Debug)]
 pub struct EpochCommittees {
@@ -51,6 +60,7 @@ pub struct EpochCommittees {
     fetcher: Arc<Fetcher>,
     #[cfg_attr(not(feature = "node"), allow(dead_code))]
     update_fixed_block_reward_lock: Arc<AsyncMutex<()>>,
+    load_from_storage_lock: Arc<AsyncMutex<()>>,
     epoch_height: BlockNumber,
 }
 
@@ -75,6 +85,11 @@ struct Inner {
     ///
     /// Kept separate from `snapshots` because the lookup is a range query.
     da_committees: BTreeMap<EpochNumber, Arc<DaCommittee>>,
+
+    /// Epochs below this have been evicted by `prune_epochs`.
+    ///
+    /// Only ever moves forward.
+    prune_cutoff: EpochNumber,
 
     first_epoch: Option<EpochNumber>,
 
@@ -485,11 +500,13 @@ impl EpochCommittees {
                 da_committees: BTreeMap::new(),
                 snapshots,
                 all_validators: BTreeMap::new(),
+                prune_cutoff: EpochNumber::genesis(),
                 first_epoch: None,
                 fixed_block_reward,
             })),
             fetcher: Arc::new(fetcher),
             update_fixed_block_reward_lock: Arc::new(AsyncMutex::new(())),
+            load_from_storage_lock: Arc::new(AsyncMutex::new(())),
             epoch_height: epoch_height.into(),
         }
     }
@@ -506,7 +523,7 @@ impl EpochCommittees {
             },
         }
 
-        // Load the 50 latest stored stake tables
+        // Load the `limit` latest stored stake tables
         let loaded_stake = match self
             .fetcher
             .persistence
@@ -674,6 +691,74 @@ impl Membership<SeqTypes> for EpochCommittees {
         self.inner.read().snapshots.get(&epoch).cloned()
     }
 
+    /// Load the committee for `epoch` from storage.
+    ///
+    /// Everything persisted for the epoch is restored: the stake table, the
+    /// epoch root header, and the randomized committee (rebuilt from the DRB
+    /// result).
+    async fn load_stake_table(&self, epoch: EpochNumber) -> bool {
+        if self.inner.read().snapshots.contains_key(&epoch) {
+            return true;
+        }
+        // Ensure there is only one `load_stake_table` at a time:
+        let _guard = self.load_from_storage_lock.lock().await;
+        // Check if someone else won the race:
+        if self.inner.read().snapshots.contains_key(&epoch) {
+            return true;
+        }
+        let persistence = self.fetcher.persistence.lock().await;
+        let stake_table = persistence.load_stake(epoch).await;
+        let (validators, block_reward, stake_table_hash) = match stake_table {
+            Ok(Some(stake)) => stake,
+            Ok(None) => return false,
+            Err(err) => {
+                warn!(%err, "failed to load stake table for epoch {epoch} from persistence");
+                return false;
+            },
+        };
+        let drb = match persistence.load_drb_result(epoch).await {
+            Ok(drb) => drb,
+            Err(err) => {
+                warn!(%err, "failed to load drb result for epoch {epoch} from persistence");
+                None
+            },
+        };
+        let header = match persistence.load_epoch_root(epoch).await {
+            Ok(header) => header,
+            Err(err) => {
+                warn!(%err, "failed to load epoch root for epoch {epoch} from persistence");
+                None
+            },
+        };
+        drop(persistence);
+        info!(
+            %epoch,
+            has_drb = drb.is_some(),
+            has_header = header.is_some(),
+            "stake table loaded from persistence"
+        );
+        let committee = Arc::new(EpochCommittee::new(
+            validators,
+            block_reward,
+            stake_table_hash,
+            header,
+        ));
+        let randomized = drb.map(|drb| {
+            let leaders = committee
+                .eligible_leaders
+                .iter()
+                .map(|peer_config| peer_config.stake_table_entry.clone())
+                .collect();
+            Arc::new(generate_stake_cdf(leaders, drb))
+        });
+        let mut inner = self.inner.write();
+        inner.put_epoch_committee(epoch, committee);
+        if let Some(randomized) = randomized {
+            inner.put_randomized_committee(epoch, randomized);
+        }
+        true
+    }
+
     fn non_epoch_snapshot(&self) -> Self::NonEpochSnapshot {
         self.inner.read().non_epoch_snapshot.clone()
     }
@@ -733,6 +818,8 @@ impl Membership<SeqTypes> for EpochCommittees {
                 .map_err(Self::Error::Fetcher)?;
             block_reward = Some(reward);
         }
+
+        self.load_stake_table(epoch).await;
 
         let epoch_committee = self.inner.read().epoch_committee(epoch).cloned();
 
@@ -840,6 +927,7 @@ impl Membership<SeqTypes> for EpochCommittees {
             // extract `all_validators` for the previous epoch
             previous_validators = inner.all_validators.remove(&previous_epoch);
             inner.all_validators.insert(epoch, all_validators.clone());
+            inner.prune_epochs(epoch);
         }
 
         let persistence_lock = self.fetcher.persistence.lock().await;
@@ -1169,6 +1257,30 @@ impl Inner {
             ),
         );
     }
+
+    /// Evict snapshots more than [`RECENT_STAKE_TABLES_LIMIT`] epochs below
+    /// `added`.
+    ///
+    /// The cutoff only ever moves forward: `add_epoch_root` also runs for old
+    /// epochs during catchup, and a lagging insert must neither evict newer
+    /// state nor evict itself before its readers had a chance to observe it.
+    ///
+    /// `da_committees` is exempt: it holds one entry per configured DA
+    /// committee (seeded from config at startup and on upgrade certificates),
+    /// so it is bounded, and `resolve_da_committee`'s greatest-key-below
+    /// lookup needs the full history for re-inserted old epochs.
+    #[cfg_attr(not(feature = "node"), allow(dead_code))]
+    fn prune_epochs(&mut self, added: EpochNumber) {
+        let cutoff = EpochNumber::new(added.saturating_sub(RECENT_STAKE_TABLES_LIMIT));
+        if cutoff <= self.prune_cutoff {
+            return;
+        }
+        self.prune_cutoff = cutoff;
+        // The snapshots for `first_epoch` and `first_epoch + 1` (seeded by
+        // `set_first_epoch`) are never evicted:
+        let keep = self.first_epoch.unwrap_or_else(EpochNumber::genesis) + 1u64;
+        self.snapshots.retain(|e, _| *e <= keep || *e >= cutoff);
+    }
 }
 
 /// A consistent per-epoch view of `EpochCommittees`.
@@ -1437,6 +1549,10 @@ mod tests {
     const TEST_DURATION: Duration = Duration::from_secs(5);
 
     fn build_committees(num_peers: u64) -> EpochCommittees {
+        build_committees_with_fetcher(num_peers, Fetcher::mock())
+    }
+
+    fn build_committees_with_fetcher(num_peers: u64, fetcher: Fetcher) -> EpochCommittees {
         let peers: Vec<PeerConfig<SeqTypes>> = (0..num_peers)
             .map(|i| {
                 ValidatorConfig::<SeqTypes>::generated_from_seed_indexed(
@@ -1448,7 +1564,166 @@ mod tests {
                 .public_config()
             })
             .collect();
-        EpochCommittees::new_stake(peers.clone(), peers, None, Fetcher::mock(), 100u64)
+        EpochCommittees::new_stake(peers.clone(), peers, None, fetcher, 100u64)
+    }
+
+    /// Persistence stub holding stake tables for epochs 7 and 8, plus a DRB
+    /// result and an epoch root header for epoch 7 only.
+    #[derive(Debug)]
+    struct MockStakeStore {
+        header: Header,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::traits::MembershipPersistence for MockStakeStore {
+        async fn load_stake(
+            &self,
+            epoch: EpochNumber,
+        ) -> anyhow::Result<Option<crate::traits::StakeTuple>> {
+            Ok((*epoch == 7 || *epoch == 8).then(|| (Default::default(), None, None)))
+        }
+
+        async fn load_latest_stake(
+            &self,
+            _limit: u64,
+        ) -> anyhow::Result<Option<Vec<crate::v0_3::IndexedStake>>> {
+            Ok(None)
+        }
+
+        async fn load_drb_result(&self, epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
+            Ok((*epoch == 7).then_some([7; 32]))
+        }
+
+        async fn load_epoch_root(&self, epoch: EpochNumber) -> anyhow::Result<Option<Header>> {
+            Ok((*epoch == 7).then(|| self.header.clone()))
+        }
+
+        async fn store_stake(
+            &self,
+            _epoch: EpochNumber,
+            _stake: AuthenticatedValidatorMap,
+            _block_reward: Option<RewardAmount>,
+            _stake_table_hash: Option<StakeTableHash>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn store_events(
+            &self,
+            _l1_finalized: u64,
+            _events: Vec<(crate::v0_3::EventKey, crate::v0_3::StakeTableEvent)>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn load_events(
+            &self,
+            _from_l1_block: u64,
+            _l1_finalized: u64,
+        ) -> anyhow::Result<(
+            Option<crate::traits::EventsPersistenceRead>,
+            Vec<(crate::v0_3::EventKey, crate::v0_3::StakeTableEvent)>,
+        )> {
+            Ok((None, vec![]))
+        }
+
+        async fn delete_stake_tables(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn store_all_validators(
+            &self,
+            _epoch: EpochNumber,
+            _all_validators: IndexMap<Address, crate::v0_3::RegisteredValidator<PubKey>>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn load_all_validators(
+            &self,
+            _epoch: EpochNumber,
+            _offset: u64,
+            _limit: u64,
+        ) -> anyhow::Result<Vec<crate::v0_3::RegisteredValidator<PubKey>>> {
+            Ok(vec![])
+        }
+    }
+
+    // `load_stake_table` materializes a snapshot from the persisted stake
+    // table (e.g. after eviction by `prune_epochs`) without network catchup,
+    // including the randomized committee and the epoch root header when
+    // they are persisted.
+    #[tokio::test]
+    async fn restore_stake_table_from_persistence() {
+        let store = MockStakeStore {
+            header: build_epoch_root_header().await,
+        };
+        let fetcher = Fetcher::new(
+            Arc::new(crate::mock::MockStateCatchup::default()),
+            Arc::new(AsyncMutex::new(store)),
+            crate::L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
+                .expect("Failed to create L1 client"),
+            crate::ChainConfig::default(),
+        );
+        let committees = build_committees_with_fetcher(4, fetcher);
+
+        // Epoch 7 has a stake table, a DRB result and a root header in storage.
+        let seven = EpochNumber::new(7);
+        assert!(committees.snapshot(seven).is_none());
+        assert!(committees.load_stake_table(seven).await);
+        let snapshot = committees.snapshot(seven).unwrap();
+        assert!(snapshot.has_drb());
+        assert!(snapshot.inner.committee.header.is_some());
+        // A second call is satisfied by the in-memory snapshot.
+        assert!(committees.load_stake_table(seven).await);
+        // Epoch 8 has a stake table but no DRB result and no root header.
+        let eight = EpochNumber::new(8);
+        assert!(committees.load_stake_table(eight).await);
+        let snapshot = committees.snapshot(eight).unwrap();
+        assert!(!snapshot.has_drb());
+        assert!(snapshot.inner.committee.header.is_none());
+        // Nothing persisted for epoch 9.
+        assert!(!committees.load_stake_table(EpochNumber::new(9)).await);
+    }
+
+    // `prune_epochs` keeps a bounded window behind the newest decided epoch
+    // plus the first-epoch seeds (catchup anchors), and its cutoff never
+    // regresses when an older epoch is (re-)inserted during catchup.
+    #[test]
+    fn prune_epochs_keeps_recent_window() {
+        let committees = build_committees(4);
+        let mut inner = committees.inner.write();
+        inner.first_epoch = Some(EpochNumber::new(1));
+        let template = inner
+            .epoch_committee(EpochNumber::genesis())
+            .expect("genesis committee exists")
+            .clone();
+
+        for e in 2..=50 {
+            inner.put_epoch_committee(EpochNumber::new(e), template.clone());
+            inner.prune_epochs(EpochNumber::new(e));
+        }
+
+        // The seeds for `first_epoch` and `first_epoch + 1` survive, then
+        // nothing until the cutoff.
+        let cutoff = EpochNumber::new(50 - RECENT_STAKE_TABLES_LIMIT);
+        let expected: Vec<EpochNumber> = [1, 2]
+            .into_iter()
+            .chain(*cutoff..=50)
+            .map(EpochNumber::new)
+            .collect();
+        assert_eq!(
+            inner.snapshots.keys().copied().collect::<Vec<_>>(),
+            expected
+        );
+
+        // A catchup insert below the cutoff is not evicted by its own
+        // insertion; it goes once the tip advances past it.
+        inner.put_epoch_committee(EpochNumber::new(5), template);
+        inner.prune_epochs(EpochNumber::new(5));
+        assert!(inner.snapshots.contains_key(&EpochNumber::new(5)));
+        inner.prune_epochs(EpochNumber::new(51));
+        assert!(!inner.snapshots.contains_key(&EpochNumber::new(5)));
     }
 
     // Concurrent reads must not panic or deadlock while a writer drives
