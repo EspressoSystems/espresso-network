@@ -519,7 +519,7 @@ pub mod mock {
     use committable::Commitment;
     use hotshot_types::{
         data::ViewNumber, simple_certificate::LightClientStateUpdateCertificateV2,
-        utils::EpochStakeTable,
+        stake_table::EpochStakeTables,
     };
     use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
 
@@ -571,7 +571,7 @@ pub mod mock {
             &self,
             _retry: usize,
             _height: u64,
-            _stake_tables: Vec<EpochStakeTable<SeqTypes>>,
+            _stake_tables: EpochStakeTables<SeqTypes>,
         ) -> anyhow::Result<Leaf2> {
             Err(anyhow::anyhow!("todo"))
         }

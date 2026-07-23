@@ -12,7 +12,6 @@ use std::{
     sync::Arc,
 };
 
-use alloy::primitives::U256;
 use anyhow::{anyhow, ensure};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use bincode::{
@@ -35,7 +34,7 @@ use crate::{
     data::{EpochNumber, Leaf2, VidCommitment, ViewNumber},
     message::UpgradeLock,
     simple_certificate::QuorumCertificate2,
-    stake_table::{HSStakeTable, StakeTableEntries},
+    stake_table::{EpochStakeTables, StakeTableEntries},
     traits::{ValidatedState, node_implementation::NodeType},
     vote::{Certificate, HasViewNumber},
 };
@@ -103,27 +102,9 @@ pub type StateAndDelta<TYPES> = (
     Option<Arc<<<TYPES as NodeType>::ValidatedState as ValidatedState<TYPES>>::Delta>>,
 );
 
-/// A stake table labeled with the epoch it is valid for.
-///
-/// [`verify_leaf_chain`] verifies each QC in a leaf chain against the stake
-/// table of the epoch the QC was created in, carried in its vote data: the
-/// chain deciding an epoch-boundary leaf spans the transition, so its QCs are
-/// signed by different committees.
-#[derive(Clone, Debug)]
-pub struct EpochStakeTable<T: NodeType> {
-    pub epoch: Option<EpochNumber>,
-    pub stake_table: HSStakeTable<T>,
-    pub success_threshold: U256,
-}
-
-/// Verify a leaf chain deciding the leaf at `expected_height`.
-///
-/// `stake_tables` must contain an entry for every epoch the chain's QCs were
-/// created in; for a chain deciding an epoch-boundary leaf this is the epoch
-/// of `expected_height` and its successor.
 pub async fn verify_leaf_chain<T: NodeType>(
     mut leaf_chain: Vec<Leaf2<T>>,
-    stake_tables: &[EpochStakeTable<T>],
+    stake_tables: &EpochStakeTables<T>,
     expected_height: u64,
     upgrade_lock: &UpgradeLock<T>,
 ) -> anyhow::Result<Leaf2<T>> {
@@ -158,29 +139,45 @@ pub async fn verify_leaf_chain<T: NodeType>(
         ));
     }
 
-    // Verify each QC against the stake table of the epoch it was created in.
-    let check_qc = |qc: QuorumCertificate2<T>| -> anyhow::Result<()> {
-        let epoch = qc.data().epoch;
-        let table = stake_tables
-            .iter()
-            .find(|t| t.epoch == epoch)
-            .ok_or_else(|| anyhow!("no stake table available for epoch {epoch:?}"))?;
-        let stake_table_entries = StakeTableEntries::<T>::from(table.stake_table.0.clone()).0;
-        qc.is_valid_cert(&stake_table_entries, table.success_threshold, upgrade_lock)?;
+    // The chain may cross an epoch boundary, in which case its QCs are signed
+    // by different epochs' quorums. Derive each QC's epoch from the height of
+    // the leaf it certifies; trusting the claims in the QC itself would let a
+    // quorum of a different epoch pick the stake table that verifies its own
+    // signatures.
+    let check_qc = |qc: &QuorumCertificate2<T>, certified_height: u64| -> anyhow::Result<()> {
+        let epoch = EpochNumber::new(epoch_from_block_number(
+            certified_height,
+            stake_tables.epoch_height,
+        ));
+        ensure!(
+            qc.data.epoch == Some(epoch),
+            "QC claims epoch {:?} but certifies the leaf at height {certified_height} in epoch \
+             {epoch}",
+            qc.data.epoch,
+        );
+        if let Some(block_number) = qc.data.block_number {
+            ensure!(
+                block_number == certified_height,
+                "QC claims block number {block_number} but certifies the leaf at height \
+                 {certified_height}"
+            );
+        }
+        let table = stake_tables.for_epoch(Some(epoch))?;
+        qc.is_valid_cert(
+            &StakeTableEntries::<T>::from(table.stake_table.clone()).0,
+            table.success_threshold,
+            upgrade_lock,
+        )?;
         Ok(())
     };
 
-    // verify all QCs are valid
-    check_qc(newest_leaf.justify_qc())?;
-    check_qc(parent.justify_qc())?;
-    check_qc(grand_parent.justify_qc())?;
-
     // Verify the root is in the chain of decided leaves
+    check_qc(&newest_leaf.justify_qc(), parent.height())?;
     let mut last_leaf = parent;
     for leaf in leaf_chain.iter().skip(2) {
         ensure!(last_leaf.justify_qc().view_number() == leaf.view_number());
         ensure!(last_leaf.justify_qc().data().leaf_commit == leaf.commit());
-        check_qc(leaf.justify_qc())?;
+        check_qc(&last_leaf.justify_qc(), leaf.height())?;
         if leaf.height() == expected_height {
             return Ok(leaf.clone());
         }

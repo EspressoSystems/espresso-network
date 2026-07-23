@@ -342,7 +342,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug>
         if let HotShotEvent::QuorumVoteSend(vote) = event {
             let new_view = vote.view_number + self.view_increment;
             let spoofed_vote = QuorumVote2::<TYPES>::create_signed_vote(
-                vote.data.clone(),
+                vote.data,
                 new_view,
                 public_key,
                 private_key,
@@ -426,7 +426,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + std::fmt::Debug>
                     // We wont update internal consensus state for this Byzantine replica but we are at least
                     // Going to send a vote to the next honest leader
                     let vote = QuorumVote2::<TYPES>::create_signed_vote(
-                        self.votes_sent.last().unwrap().data.clone(),
+                        self.votes_sent.last().unwrap().data,
                         event.view_number().unwrap(),
                         public_key,
                         private_key,

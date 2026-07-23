@@ -355,7 +355,7 @@ mod tests {
                         };
                         // form a justify qc
                         SimpleCertificate::<TestTypes, QuorumData2<TestTypes>, SuccessThreshold>::new(
-                            q_data.clone(),
+                            q_data,
                             q_data.commit(),
                             view_number,
                             previous_justify_qc.signatures.clone(),

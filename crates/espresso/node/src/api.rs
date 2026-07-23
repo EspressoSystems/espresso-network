@@ -3202,6 +3202,7 @@ mod test {
         data::EpochNumber,
         event::LeafInfo,
         new_protocol::CoordinatorEvent,
+        stake_table::{EpochStakeTable, EpochStakeTables},
         traits::{block_contents::BlockHeader, election::Membership, metrics::NoMetrics},
         utils::epoch_from_block_number,
         x25519,
@@ -8646,11 +8647,18 @@ mod test {
             Client::new(format!("http://localhost:{port}").parse().unwrap());
         wait_until_block_height(&height_client, "node/block-height", TARGET_HEIGHT + 5).await;
 
-        // Get the stake tables for the epoch containing TARGET_HEIGHT and its successor
+        // Get the stake tables for the epoch containing TARGET_HEIGHT
         let coordinator = network.server.node_state().coordinator;
         let epoch = EpochNumber::new(epoch_from_block_number(TARGET_HEIGHT, EPOCH_HEIGHT));
         let membership = coordinator.membership().read().await;
-        let stake_tables = membership.epoch_stake_tables(Some(epoch));
+        let stake_tables = EpochStakeTables {
+            tables: vec![EpochStakeTable {
+                epoch: Some(epoch),
+                stake_table: membership.stake_table(Some(epoch)),
+                success_threshold: membership.success_threshold(Some(epoch)),
+            }],
+            epoch_height: EPOCH_HEIGHT,
+        };
         drop(membership);
 
         // Use StatePeers to fetch the leaf at the exact target height

@@ -36,11 +36,12 @@ use hotshot_types::{
     message::UpgradeLock,
     network::NetworkConfig,
     simple_certificate::LightClientStateUpdateCertificateV2,
+    stake_table::EpochStakeTables,
     traits::{
         ValidatedState as ValidatedStateTrait,
         metrics::{Counter, CounterFamily, Metrics},
     },
-    utils::{EpochStakeTable, verify_leaf_chain},
+    utils::verify_leaf_chain,
 };
 use itertools::Itertools;
 use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme, prelude::MerkleNode};
@@ -366,7 +367,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         &self,
         retry: usize,
         height: u64,
-        stake_tables: Vec<EpochStakeTable<SeqTypes>>,
+        stake_tables: EpochStakeTables<SeqTypes>,
     ) -> anyhow::Result<Leaf2> {
         // Fetch the leaf chain. For new protocol heights this is a leaf range
         // `[height..=cert2_height]`
@@ -400,20 +401,11 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
                 .await
                 .with_context(|| format!("failed to fetch cert2 for height {height}"))?;
 
-            // The first entry is the stake table for the epoch of `height` itself.
-            let table = stake_tables
-                .first()
-                .ok_or_else(|| anyhow!("no stake table provided for height {height}"))?;
-            verify_leaf_chain_with_cert2(
-                leaf_chain,
-                &table.stake_table,
-                table.success_threshold,
-                height,
-                &upgrade_lock,
-                cert2,
-            )
-            .await
-            .with_context(|| format!("failed to verify leaf chain with cert2 at height {height}"))
+            verify_leaf_chain_with_cert2(leaf_chain, &stake_tables, height, &upgrade_lock, cert2)
+                .await
+                .with_context(|| {
+                    format!("failed to verify leaf chain with cert2 at height {height}")
+                })
         } else {
             let upgrade_lock =
                 UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(EPOCH_VERSION));
@@ -754,7 +746,7 @@ where
         &self,
         _retry: usize,
         height: u64,
-        _stake_tables: Vec<EpochStakeTable<SeqTypes>>,
+        _stake_tables: EpochStakeTables<SeqTypes>,
     ) -> anyhow::Result<Leaf2> {
         // Leaves in our local DB were verified before they were stored, so we can return the leaf
         // at `height` directly without re-verifying.
@@ -948,7 +940,7 @@ impl StateCatchup for NullStateCatchup {
         &self,
         _retry: usize,
         _height: u64,
-        _stake_tables: Vec<EpochStakeTable<SeqTypes>>,
+        _stake_tables: EpochStakeTables<SeqTypes>,
     ) -> anyhow::Result<Leaf2> {
         bail!("state catchup is disabled")
     }
@@ -1167,7 +1159,7 @@ impl StateCatchup for ParallelStateCatchup {
         &self,
         retry: usize,
         height: u64,
-        stake_tables: Vec<EpochStakeTable<SeqTypes>>,
+        stake_tables: EpochStakeTables<SeqTypes>,
     ) -> anyhow::Result<Leaf2> {
         // Try fetching the leaf on the local providers first
         let local_result = self
@@ -1529,7 +1521,7 @@ impl StateCatchup for ParallelStateCatchup {
     async fn fetch_leaf(
         &self,
         height: u64,
-        stake_tables: Vec<EpochStakeTable<SeqTypes>>,
+        stake_tables: EpochStakeTables<SeqTypes>,
     ) -> anyhow::Result<Leaf2> {
         // Try fetching the leaf on the local providers first
         let local_result = self
