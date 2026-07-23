@@ -15,6 +15,7 @@ use hotshot_types::{
         Vote2Data,
     },
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
+    utils::is_last_block,
     vote::HasViewNumber,
 };
 pub use hotshot_types::{
@@ -22,6 +23,8 @@ pub use hotshot_types::{
     simple_certificate::{Certificate1, Certificate2},
 };
 use serde::{Deserialize, Serialize};
+
+use crate::helpers::proposal_commitment;
 
 pub type Vote2<T> = SimpleVote<T, Vote2Data<T>>;
 pub type TimeoutCertificate<T> = SimpleCertificate<T, TimeoutData2, SuccessThreshold>;
@@ -181,6 +184,26 @@ impl<T: NodeType> EpochChangeMessage<T, Unchecked> {
 }
 
 impl<T: NodeType, S> EpochChangeMessage<T, S> {
+    /// Structural validity of the message, independent of signatures.
+    pub fn well_formed(&self, epoch_height: u64) -> Result<(), EpochChangeError> {
+        if self.cert1.view_number() != self.cert2.view_number()
+            || self.cert1.epoch() != self.cert2.epoch()
+            || self.cert1.data.leaf_commit != self.cert2.data.leaf_commit
+        {
+            return Err(EpochChangeError::CertificateMismatch);
+        }
+        if !is_last_block(self.cert2.data.block_number, epoch_height) {
+            return Err(EpochChangeError::NotLastBlock);
+        }
+        if self.cert2.data.block_number / epoch_height != *self.cert2.data.epoch {
+            return Err(EpochChangeError::WrongEpoch);
+        }
+        if proposal_commitment(&self.proposal) != self.cert1.data.leaf_commit {
+            return Err(EpochChangeError::ProposalMismatch);
+        }
+        Ok(())
+    }
+
     #[cfg(test)]
     pub fn into_unchecked(self) -> EpochChangeMessage<T, Unchecked> {
         EpochChangeMessage {
@@ -190,6 +213,19 @@ impl<T: NodeType, S> EpochChangeMessage<T, S> {
             _marker: PhantomData,
         }
     }
+}
+
+/// Reason an [`EpochChangeMessage`] is not [well-formed](EpochChangeMessage::well_formed).
+#[derive(Copy, Clone, Debug, thiserror::Error)]
+pub enum EpochChangeError {
+    #[error("certificates differ in view, epoch or leaf commitment")]
+    CertificateMismatch,
+    #[error("certificate2 is not for the last block of an epoch")]
+    NotLastBlock,
+    #[error("certificate2's block number does not match its epoch")]
+    WrongEpoch,
+    #[error("proposal commitment does not match certificate1's leaf commitment")]
+    ProposalMismatch,
 }
 
 impl<T: NodeType, S> HasViewNumber for EpochChangeMessage<T, S> {
