@@ -8,7 +8,14 @@ use std::{ops::Bound, time::Duration};
 use alloy::primitives::U256;
 use async_trait::async_trait;
 use committable::Committable as _;
-use espresso_api::{error::AvailabilityError, v1::HotShotAvailabilityApi};
+use espresso_api::{
+    error::AvailabilityError,
+    v1::{
+        BlockIdent, HeaderQuery, HeaderWindowStart, HotShotAvailabilityApi, LeafQuery, Snapshot,
+        TxIdent, TxSummaryFilter, VidShareId,
+        availability::{BlockId, LeafId, PayloadId},
+    },
+};
 use espresso_types::{
     NamespaceId, NamespaceProofQueryData, NsProof, SeqTypes,
     v0::sparse_mt::KeccakNode,
@@ -205,10 +212,6 @@ impl<D> NodeApiStateImpl<D> {
     }
 }
 
-// ============================================================================
-// ApiSerializations implementation (conversion layer)
-// ============================================================================
-
 impl<D> serialization_api::ApiSerializations for NodeApiStateImpl<D>
 where
     D: std::ops::Deref + Send + Sync + 'static,
@@ -277,10 +280,8 @@ where
         &self,
         value: &Self::RewardAccountQueryData,
     ) -> anyhow::Result<RewardAccountQueryDataV2> {
-        // Convert balance to decimal string
         let balance = value.balance.to_string();
 
-        // Convert the proof
         let proof = Some(self.convert_reward_account_proof_v2(&value.proof)?);
 
         Ok(RewardAccountQueryDataV2 { balance, proof })
@@ -292,7 +293,6 @@ where
     ) -> anyhow::Result<RewardBalances> {
         let (amounts_vec, total) = value;
 
-        // Convert each account/amount pair to proto format
         let amounts = amounts_vec
             .iter()
             .map(|(account, amount)| serialization_api::v2::RewardAmount {
@@ -527,10 +527,6 @@ where
     }
 }
 
-// ============================================================================
-// RewardApiV2 implementation (business logic)
-// ============================================================================
-
 #[async_trait]
 impl<D> espresso_api::v2::RewardApi for NodeApiStateImpl<D>
 where
@@ -553,7 +549,6 @@ where
                 ))
             })?;
 
-        // Convert the proof to reward claim input and return internal type
         proof.to_reward_claim_input().map_err(|err| match err {
             RewardClaimError::ZeroRewardError => {
                 not_found(format!("zero reward balance for {:?}", address))
@@ -670,10 +665,6 @@ where
     }
 }
 
-// ============================================================================
-// RewardApiV1 implementation (internal types, no proto conversion)
-// ============================================================================
-
 #[async_trait]
 impl<D> espresso_api::v1::RewardApi for NodeApiStateImpl<D>
 where
@@ -774,7 +765,6 @@ where
                 ))
             })?;
 
-        // Convert the proof to reward claim input (internal type)
         let claim_input = proof.to_reward_claim_input().map_err(|err| match err {
             RewardClaimError::ZeroRewardError => not_found(format!(
                 "zero reward balance for {} at height {}",
@@ -954,12 +944,12 @@ where
 
     async fn get_reward_state_path_v1(
         &self,
-        snapshot: espresso_api::v1::Snapshot,
+        snapshot: Snapshot,
         key: String,
     ) -> anyhow::Result<Self::RewardStatePathV1> {
         let hs_snapshot = match snapshot {
-            espresso_api::v1::Snapshot::Height(h) => HsSnapshot::Index(h),
-            espresso_api::v1::Snapshot::Commit(c) => {
+            Snapshot::Height(h) => HsSnapshot::Index(h),
+            Snapshot::Commit(c) => {
                 let tb64: TaggedBase64 = c
                     .parse()
                     .map_err(|_| bad_request("failed to parse commit param"))?;
@@ -980,12 +970,12 @@ where
 
     async fn get_reward_state_path_v2(
         &self,
-        snapshot: espresso_api::v1::Snapshot,
+        snapshot: Snapshot,
         key: String,
     ) -> anyhow::Result<Self::RewardStatePathV2> {
         let hs_snapshot = match snapshot {
-            espresso_api::v1::Snapshot::Height(h) => HsSnapshot::Index(h),
-            espresso_api::v1::Snapshot::Commit(c) => {
+            Snapshot::Height(h) => HsSnapshot::Index(h),
+            Snapshot::Commit(c) => {
                 let tb64: TaggedBase64 = c
                     .parse()
                     .map_err(|_| bad_request("failed to parse commit param"))?;
@@ -1004,10 +994,6 @@ where
             .map_err(classify_query_error)
     }
 }
-
-// ============================================================================
-// v2::DataApi implementation
-// ============================================================================
 
 #[async_trait]
 impl<D> espresso_api::v2::DataApi for NodeApiStateImpl<D>
@@ -1226,10 +1212,6 @@ where
     }
 }
 
-// ============================================================================
-// v2::ConsensusApi implementation
-// ============================================================================
-
 #[async_trait]
 impl<D> espresso_api::v2::ConsensusApi for NodeApiStateImpl<D>
 where
@@ -1272,10 +1254,6 @@ where
     }
 }
 
-// ============================================================================
-// v1::AvailabilityApi implementation
-// ============================================================================
-
 #[async_trait]
 impl<D> espresso_api::v1::AvailabilityApi for NodeApiStateImpl<D>
 where
@@ -1298,21 +1276,20 @@ where
 
     async fn get_namespace_proof(
         &self,
-        block_id: espresso_api::v1::availability::BlockId,
+        block_id: BlockId,
         namespace: u32,
     ) -> anyhow::Result<Self::NamespaceProofQueryData> {
         let ns_id = NamespaceId::from(namespace);
 
-        // Convert v1 BlockId to hotshot BlockId
         let hs_block_id = match block_id {
-            espresso_api::v1::availability::BlockId::Height(h) => HsBlockId::Number(h as usize),
-            espresso_api::v1::availability::BlockId::Hash(h) => {
+            BlockId::Height(h) => HsBlockId::Number(h as usize),
+            BlockId::Hash(h) => {
                 let hash = h
                     .parse()
                     .map_err(|_| bad_request(format!("invalid block hash: {}", h)))?;
                 HsBlockId::Hash(hash)
             },
-            espresso_api::v1::availability::BlockId::PayloadHash(h) => {
+            BlockId::PayloadHash(h) => {
                 let payload_hash = h
                     .parse()
                     .map_err(|_| bad_request(format!("invalid payload hash: {}", h)))?;
@@ -1487,20 +1464,20 @@ where
 
     async fn get_incorrect_encoding_proof(
         &self,
-        block_id: espresso_api::v1::availability::BlockId,
+        block_id: BlockId,
         namespace: u32,
     ) -> anyhow::Result<Self::IncorrectEncodingProof> {
         let ns_id = NamespaceId::from(namespace);
 
         let hs_block_id = match block_id {
-            espresso_api::v1::availability::BlockId::Height(h) => HsBlockId::Number(h as usize),
-            espresso_api::v1::availability::BlockId::Hash(h) => {
+            BlockId::Height(h) => HsBlockId::Number(h as usize),
+            BlockId::Hash(h) => {
                 let hash = h
                     .parse()
                     .map_err(|_| anyhow::anyhow!("invalid block hash: {}", h))?;
                 HsBlockId::Hash(hash)
             },
-            espresso_api::v1::availability::BlockId::PayloadHash(h) => {
+            BlockId::PayloadHash(h) => {
                 let payload_hash = h
                     .parse()
                     .map_err(|_| anyhow::anyhow!("invalid payload hash: {}", h))?;
@@ -1627,10 +1604,6 @@ where
     }
 }
 
-// ============================================================================
-// v1::HotShotAvailabilityApi implementation
-// ============================================================================
-
 fn not_found(msg: impl Into<String>) -> anyhow::Error {
     AvailabilityError::NotFound(msg.into()).into()
 }
@@ -1669,13 +1642,10 @@ where
     type Limits = HsLimits;
     type Cert2 = Certificate2<espresso_types::SeqTypes>;
 
-    async fn get_leaf(
-        &self,
-        id: espresso_api::v1::availability::LeafId,
-    ) -> anyhow::Result<Self::Leaf> {
+    async fn get_leaf(&self, id: LeafId) -> anyhow::Result<Self::Leaf> {
         let hs_id = match id {
-            espresso_api::v1::availability::LeafId::Height(h) => HsLeafId::Number(h as usize),
-            espresso_api::v1::availability::LeafId::Hash(h) => {
+            LeafId::Height(h) => HsLeafId::Number(h as usize),
+            LeafId::Hash(h) => {
                 HsLeafId::Hash(h.parse().map_err(|_| bad_request("invalid leaf hash"))?)
             },
         };
@@ -1706,10 +1676,7 @@ where
         Ok(results)
     }
 
-    async fn get_header(
-        &self,
-        id: espresso_api::v1::availability::BlockId,
-    ) -> anyhow::Result<Self::Header> {
+    async fn get_header(&self, id: BlockId) -> anyhow::Result<Self::Header> {
         let hs_id = block_id_to_hs(id)?;
         let ds = &*self.data_source;
         ds.get_header(hs_id)
@@ -1742,10 +1709,7 @@ where
         Ok(results)
     }
 
-    async fn get_block(
-        &self,
-        id: espresso_api::v1::availability::BlockId,
-    ) -> anyhow::Result<Self::Block> {
+    async fn get_block(&self, id: BlockId) -> anyhow::Result<Self::Block> {
         let hs_id = block_id_to_hs(id)?;
         let ds = &*self.data_source;
         ds.get_block(hs_id)
@@ -1774,10 +1738,7 @@ where
         Ok(results)
     }
 
-    async fn get_payload(
-        &self,
-        id: espresso_api::v1::availability::PayloadId,
-    ) -> anyhow::Result<Self::Payload> {
+    async fn get_payload(&self, id: PayloadId) -> anyhow::Result<Self::Payload> {
         let hs_id = payload_id_to_hs(id)?;
         let ds = &*self.data_source;
         ds.get_payload(hs_id)
@@ -1810,10 +1771,7 @@ where
         Ok(results)
     }
 
-    async fn get_vid_common(
-        &self,
-        id: espresso_api::v1::availability::BlockId,
-    ) -> anyhow::Result<Self::VidCommon> {
+    async fn get_vid_common(&self, id: BlockId) -> anyhow::Result<Self::VidCommon> {
         let hs_id = block_id_to_hs(id)?;
         let ds = &*self.data_source;
         ds.get_vid_common(hs_id)
@@ -2083,18 +2041,16 @@ where
     }
 }
 
-fn block_id_to_hs(
-    id: espresso_api::v1::availability::BlockId,
-) -> anyhow::Result<HsBlockId<SeqTypes>> {
+fn block_id_to_hs(id: BlockId) -> anyhow::Result<HsBlockId<SeqTypes>> {
     match id {
-        espresso_api::v1::availability::BlockId::Height(h) => Ok(HsBlockId::Number(h as usize)),
-        espresso_api::v1::availability::BlockId::Hash(h) => {
+        BlockId::Height(h) => Ok(HsBlockId::Number(h as usize)),
+        BlockId::Hash(h) => {
             let hash = h
                 .parse()
                 .map_err(|_| bad_request(format!("invalid block hash: {}", h)))?;
             Ok(HsBlockId::Hash(hash))
         },
-        espresso_api::v1::availability::BlockId::PayloadHash(h) => {
+        BlockId::PayloadHash(h) => {
             let payload_hash = h
                 .parse()
                 .map_err(|_| bad_request(format!("invalid payload hash: {}", h)))?;
@@ -2103,18 +2059,16 @@ fn block_id_to_hs(
     }
 }
 
-fn payload_id_to_hs(
-    id: espresso_api::v1::availability::PayloadId,
-) -> anyhow::Result<HsBlockId<SeqTypes>> {
+fn payload_id_to_hs(id: PayloadId) -> anyhow::Result<HsBlockId<SeqTypes>> {
     match id {
-        espresso_api::v1::availability::PayloadId::Height(h) => Ok(HsBlockId::Number(h as usize)),
-        espresso_api::v1::availability::PayloadId::Hash(h) => {
+        PayloadId::Height(h) => Ok(HsBlockId::Number(h as usize)),
+        PayloadId::Hash(h) => {
             let payload_hash = h
                 .parse()
                 .map_err(|_| bad_request(format!("invalid payload hash: {}", h)))?;
             Ok(HsBlockId::PayloadHash(payload_hash))
         },
-        espresso_api::v1::availability::PayloadId::BlockHash(h) => {
+        PayloadId::BlockHash(h) => {
             let hash = h
                 .parse()
                 .map_err(|_| bad_request(format!("invalid block hash: {}", h)))?;
@@ -2151,12 +2105,12 @@ where
 
     async fn get_block_state_path(
         &self,
-        snapshot: espresso_api::v1::Snapshot,
+        snapshot: Snapshot,
         key: String,
     ) -> anyhow::Result<Self::MerkleProof> {
         let hs_snapshot = match snapshot {
-            espresso_api::v1::Snapshot::Height(h) => HsSnapshot::Index(h),
-            espresso_api::v1::Snapshot::Commit(c) => {
+            Snapshot::Height(h) => HsSnapshot::Index(h),
+            Snapshot::Commit(c) => {
                 let tb64: TaggedBase64 = c
                     .parse()
                     .map_err(|_| bad_request("failed to parse commit param"))?;
@@ -2210,12 +2164,12 @@ where
 
     async fn get_fee_state_path(
         &self,
-        snapshot: espresso_api::v1::Snapshot,
+        snapshot: Snapshot,
         key: String,
     ) -> anyhow::Result<Self::MerkleProof> {
         let hs_snapshot = match snapshot {
-            espresso_api::v1::Snapshot::Height(h) => HsSnapshot::Index(h),
-            espresso_api::v1::Snapshot::Commit(c) => {
+            Snapshot::Height(h) => HsSnapshot::Index(h),
+            Snapshot::Commit(c) => {
                 let tb64: TaggedBase64 = c
                     .parse()
                     .map_err(|_| bad_request("failed to parse commit param"))?;
@@ -2274,10 +2228,6 @@ where
     }
 }
 
-// ============================================================================
-// v1::StatusApi implementation
-// ============================================================================
-
 #[async_trait]
 impl<D> espresso_api::v1::StatusApi for NodeApiStateImpl<D>
 where
@@ -2312,10 +2262,6 @@ where
     }
 }
 
-// ============================================================================
-// v1::ConfigApi implementation
-// ============================================================================
-
 #[async_trait]
 impl<D> espresso_api::v1::ConfigApi for NodeApiStateImpl<D>
 where
@@ -2336,17 +2282,10 @@ where
 
     async fn runtime_config(&self) -> anyhow::Result<Self::RuntimeConfig> {
         self.public_node_config.as_deref().cloned().ok_or_else(|| {
-            espresso_api::error::AvailabilityError::NotFound(
-                "runtime config not available".to_string(),
-            )
-            .into()
+            AvailabilityError::NotFound("runtime config not available".to_string()).into()
         })
     }
 }
-
-// ============================================================================
-// v1::NodeApi implementation
-// ============================================================================
 
 #[async_trait]
 impl<D> espresso_api::v1::NodeApi for NodeApiStateImpl<D>
@@ -2431,18 +2370,15 @@ where
         Ok(size as u64)
     }
 
-    async fn get_vid_share(
-        &self,
-        id: espresso_api::v1::VidShareId,
-    ) -> anyhow::Result<Self::VidShare> {
+    async fn get_vid_share(&self, id: VidShareId) -> anyhow::Result<Self::VidShare> {
         let ds = &*self.data_source;
         let node_id: HsBlockId<espresso_types::SeqTypes> = match id {
-            espresso_api::v1::VidShareId::Height(h) => HsBlockId::Number(h as usize),
-            espresso_api::v1::VidShareId::Hash(h) => HsBlockId::Hash(
+            VidShareId::Height(h) => HsBlockId::Number(h as usize),
+            VidShareId::Hash(h) => HsBlockId::Hash(
                 h.parse()
                     .map_err(|_| bad_request(format!("invalid block hash: {h}")))?,
             ),
-            espresso_api::v1::VidShareId::PayloadHash(h) => HsBlockId::PayloadHash(
+            VidShareId::PayloadHash(h) => HsBlockId::PayloadHash(
                 h.parse()
                     .map_err(|_| bad_request(format!("invalid payload hash: {h}")))?,
             ),
@@ -2461,14 +2397,14 @@ where
 
     async fn get_header_window(
         &self,
-        start: espresso_api::v1::HeaderWindowStart,
+        start: HeaderWindowStart,
         end: u64,
     ) -> anyhow::Result<Self::HeaderWindow> {
         let ds = &*self.data_source;
         let start: WindowStart<espresso_types::SeqTypes> = match start {
-            espresso_api::v1::HeaderWindowStart::Time(t) => WindowStart::Time(t),
-            espresso_api::v1::HeaderWindowStart::Height(h) => WindowStart::Height(h),
-            espresso_api::v1::HeaderWindowStart::Hash(h) => WindowStart::Hash(
+            HeaderWindowStart::Time(t) => WindowStart::Time(t),
+            HeaderWindowStart::Height(h) => WindowStart::Height(h),
+            HeaderWindowStart::Hash(h) => WindowStart::Hash(
                 h.parse()
                     .map_err(|err| bad_request(format!("invalid block hash {h}: {err}")))?,
             ),
@@ -2570,10 +2506,6 @@ where
 fn node_window_limit() -> usize {
     hotshot_query_service::node::Options::default().window_limit
 }
-
-// ============================================================================
-// v1::CatchupApi implementation
-// ============================================================================
 
 #[async_trait]
 impl<D> espresso_api::v1::CatchupApi for NodeApiStateImpl<D>
@@ -2744,10 +2676,6 @@ where
     }
 }
 
-// ============================================================================
-// v1::SubmitApi implementation
-// ============================================================================
-
 #[async_trait]
 impl<D> espresso_api::v1::SubmitApi for NodeApiStateImpl<D>
 where
@@ -2800,10 +2728,6 @@ where
         <Self as super::data_source::SubmitDataSource<N, P>>::submit(self, tx).await
     }
 }
-
-// ============================================================================
-// v1::StateSignatureApi implementation
-// ============================================================================
 
 #[async_trait]
 impl<D> espresso_api::v1::StateSignatureApi for NodeApiStateImpl<D>
@@ -2861,10 +2785,6 @@ where
     }
 }
 
-// ============================================================================
-// v1::ExplorerApi implementation
-// ============================================================================
-
 #[async_trait]
 impl<D> espresso_api::v1::ExplorerApi for NodeApiStateImpl<D>
 where
@@ -2885,18 +2805,15 @@ where
     type SearchResult =
         hotshot_query_service::explorer::SearchResultResponse<espresso_types::SeqTypes>;
 
-    async fn get_block_detail(
-        &self,
-        ident: espresso_api::v1::BlockIdent,
-    ) -> anyhow::Result<Self::BlockDetail> {
+    async fn get_block_detail(&self, ident: BlockIdent) -> anyhow::Result<Self::BlockDetail> {
         let ds = &*self.data_source;
         let target = match ident {
-            espresso_api::v1::BlockIdent::Height(h) => BlockIdentifier::Height(h as usize),
-            espresso_api::v1::BlockIdent::Hash(h) => BlockIdentifier::Hash(
+            BlockIdent::Height(h) => BlockIdentifier::Height(h as usize),
+            BlockIdent::Hash(h) => BlockIdentifier::Hash(
                 h.parse()
                     .map_err(|err| bad_request(format!("invalid block hash {h}: {err}")))?,
             ),
-            espresso_api::v1::BlockIdent::Latest => BlockIdentifier::Latest,
+            BlockIdent::Latest => BlockIdentifier::Latest,
         };
         ds.get_block_detail(target)
             .await
@@ -2906,7 +2823,7 @@ where
 
     async fn get_block_summaries(
         &self,
-        target: espresso_api::v1::BlockIdent,
+        target: BlockIdent,
         limit: u64,
     ) -> anyhow::Result<Self::BlockSummaries> {
         let ds = &*self.data_source;
@@ -2916,12 +2833,12 @@ where
             return Err(bad_request("limit must be <= 100"));
         }
         let target = match target {
-            espresso_api::v1::BlockIdent::Height(h) => BlockIdentifier::Height(h as usize),
-            espresso_api::v1::BlockIdent::Hash(h) => BlockIdentifier::Hash(
+            BlockIdent::Height(h) => BlockIdentifier::Height(h as usize),
+            BlockIdent::Hash(h) => BlockIdentifier::Hash(
                 h.parse()
                     .map_err(|err| bad_request(format!("invalid block hash {h}: {err}")))?,
             ),
-            espresso_api::v1::BlockIdent::Latest => BlockIdentifier::Latest,
+            BlockIdent::Latest => BlockIdentifier::Latest,
         };
         ds.get_block_summaries(GetBlockSummariesRequest(BlockRange { target, num_blocks }))
             .await
@@ -2931,18 +2848,18 @@ where
 
     async fn get_transaction_detail(
         &self,
-        ident: espresso_api::v1::TxIdent,
+        ident: TxIdent,
     ) -> anyhow::Result<Self::TransactionDetail> {
         let ds = &*self.data_source;
         let target = match ident {
-            espresso_api::v1::TxIdent::HeightAndOffset(h, o) => {
+            TxIdent::HeightAndOffset(h, o) => {
                 TransactionIdentifier::HeightAndOffset(h as usize, o as usize)
             },
-            espresso_api::v1::TxIdent::Hash(h) => TransactionIdentifier::Hash(
+            TxIdent::Hash(h) => TransactionIdentifier::Hash(
                 h.parse()
                     .map_err(|err| bad_request(format!("invalid tx hash {h}: {err}")))?,
             ),
-            espresso_api::v1::TxIdent::Latest => TransactionIdentifier::Latest,
+            TxIdent::Latest => TransactionIdentifier::Latest,
         };
         ds.get_transaction_detail(target)
             .await
@@ -2952,9 +2869,9 @@ where
 
     async fn get_transaction_summaries(
         &self,
-        target: espresso_api::v1::TxIdent,
+        target: TxIdent,
         limit: u64,
-        filter: espresso_api::v1::TxSummaryFilter,
+        filter: TxSummaryFilter,
     ) -> anyhow::Result<Self::TransactionSummaries> {
         let ds = &*self.data_source;
         let num_transactions = std::num::NonZeroUsize::new(limit as usize)
@@ -2963,23 +2880,19 @@ where
             return Err(bad_request("limit must be <= 100"));
         }
         let target = match target {
-            espresso_api::v1::TxIdent::HeightAndOffset(h, o) => {
+            TxIdent::HeightAndOffset(h, o) => {
                 TransactionIdentifier::HeightAndOffset(h as usize, o as usize)
             },
-            espresso_api::v1::TxIdent::Hash(h) => TransactionIdentifier::Hash(
+            TxIdent::Hash(h) => TransactionIdentifier::Hash(
                 h.parse()
                     .map_err(|err| bad_request(format!("invalid tx hash {h}: {err}")))?,
             ),
-            espresso_api::v1::TxIdent::Latest => TransactionIdentifier::Latest,
+            TxIdent::Latest => TransactionIdentifier::Latest,
         };
         let filter = match filter {
-            espresso_api::v1::TxSummaryFilter::None => TransactionSummaryFilter::None,
-            espresso_api::v1::TxSummaryFilter::Block(b) => {
-                TransactionSummaryFilter::Block(b as usize)
-            },
-            espresso_api::v1::TxSummaryFilter::Namespace(n) => {
-                TransactionSummaryFilter::RollUp(n.into())
-            },
+            TxSummaryFilter::None => TransactionSummaryFilter::None,
+            TxSummaryFilter::Block(b) => TransactionSummaryFilter::Block(b as usize),
+            TxSummaryFilter::Namespace(n) => TransactionSummaryFilter::RollUp(n.into()),
         };
         ds.get_transaction_summaries(GetTransactionSummariesRequest {
             range: TransactionRange {
@@ -3013,10 +2926,6 @@ where
     }
 }
 
-// ============================================================================
-// v1::LightClientApi implementation
-// ============================================================================
-
 #[async_trait]
 impl<D> espresso_api::v1::LightClientApi for NodeApiStateImpl<D>
 where
@@ -3043,19 +2952,19 @@ where
 
     async fn get_leaf_proof(
         &self,
-        query: espresso_api::v1::LeafQuery,
+        query: LeafQuery,
         finalized: Option<u64>,
     ) -> anyhow::Result<Self::LeafProof> {
         let ds = &*self.data_source;
         let fetch_timeout = lc_fetch_timeout();
 
         let requested = match query {
-            espresso_api::v1::LeafQuery::Height(h) => HsLeafId::Number(h as usize),
-            espresso_api::v1::LeafQuery::Hash(h) => HsLeafId::Hash(
+            LeafQuery::Height(h) => HsLeafId::Number(h as usize),
+            LeafQuery::Hash(h) => HsLeafId::Hash(
                 h.parse()
                     .map_err(|err| bad_request(format!("invalid leaf hash {h}: {err}")))?,
             ),
-            espresso_api::v1::LeafQuery::BlockHash(h) => {
+            LeafQuery::BlockHash(h) => {
                 let parsed = h
                     .parse()
                     .map_err(|err| bad_request(format!("invalid block hash {h}: {err}")))?;
@@ -3066,7 +2975,7 @@ where
                     .ok_or_else(|| not_found(format!("unknown block hash {h}")))?;
                 HsLeafId::Number(header.height() as usize)
             },
-            espresso_api::v1::LeafQuery::PayloadHash(h) => {
+            LeafQuery::PayloadHash(h) => {
                 let parsed = h
                     .parse()
                     .map_err(|err| bad_request(format!("invalid payload hash {h}: {err}")))?;
@@ -3099,17 +3008,17 @@ where
     async fn get_header_proof(
         &self,
         root: u64,
-        requested: espresso_api::v1::HeaderQuery,
+        requested: HeaderQuery,
     ) -> anyhow::Result<Self::HeaderProof> {
         let ds = &*self.data_source;
         let fetch_timeout = lc_fetch_timeout();
         let requested = match requested {
-            espresso_api::v1::HeaderQuery::Height(h) => HsBlockId::Number(h as usize),
-            espresso_api::v1::HeaderQuery::Hash(h) => HsBlockId::Hash(
+            HeaderQuery::Height(h) => HsBlockId::Number(h as usize),
+            HeaderQuery::Hash(h) => HsBlockId::Hash(
                 h.parse()
                     .map_err(|err| bad_request(format!("invalid block hash {h}: {err}")))?,
             ),
-            espresso_api::v1::HeaderQuery::PayloadHash(h) => HsBlockId::PayloadHash(
+            HeaderQuery::PayloadHash(h) => HsBlockId::PayloadHash(
                 h.parse()
                     .map_err(|err| bad_request(format!("invalid payload hash {h}: {err}")))?,
             ),
@@ -3325,10 +3234,6 @@ fn lc_leaf_proof_chain_limit() -> usize {
     crate::api::light_client::Options::default().leaf_proof_chain_limit
 }
 
-// ============================================================================
-// v1::HotShotEventsApi implementation
-// ============================================================================
-
 #[async_trait]
 impl<D> espresso_api::v1::HotShotEventsApi for NodeApiStateImpl<D>
 where
@@ -3350,10 +3255,6 @@ where
         Ok(Box::pin(stream))
     }
 }
-
-// ============================================================================
-// v1::TokenApi implementation
-// ============================================================================
 
 #[async_trait]
 impl<D> espresso_api::v1::TokenApi for NodeApiStateImpl<D>
@@ -3436,10 +3337,6 @@ where
         total_reward_distributed,
     ))
 }
-
-// ============================================================================
-// v1::DatabaseApi implementation
-// ============================================================================
 
 #[async_trait]
 impl<D> espresso_api::v1::DatabaseApi for NodeApiStateImpl<D>

@@ -1,8 +1,8 @@
 //! Route path definitions shared between the axum router and clients that build request URLs.
 //!
-//! v1 routes are registered inline at their handlers in [`super::routers`]; only the version
-//! prefix and docs paths need naming here. v2 keeps a [`Route`] table (path + gRPC + OpenAPI
-//! metadata) because those routes are shared with the Tonic gRPC service.
+//! v1 routes are registered inline in each module's `router_*` table in [`super::routers`]; only
+//! the version prefix and docs paths need naming here. v2 keeps a [`Route`] table (path + gRPC +
+//! OpenAPI metadata) because those routes are shared with the Tonic gRPC service.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Route {
