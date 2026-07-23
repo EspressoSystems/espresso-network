@@ -35,6 +35,7 @@ use espresso_types::{
     v0::traits::SequencerPersistence,
     v0_1::{ChainId, DECAF_CHAIN_ID},
     v0_3::Fetcher,
+    validators_from_l1_events,
 };
 
 pub(crate) const MAINNET_CHAIN_ID: ChainId = ChainId(U256::ONE);
@@ -69,7 +70,7 @@ use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtP
 use hotshot_new_protocol::network::Cliquenet;
 use hotshot_orchestrator::client::{OrchestratorClient, get_complete_config};
 use hotshot_types::{
-    ValidatorConfig,
+    PeerConnectInfo, ValidatorConfig,
     addr::NetAddr,
     data::ViewNumber,
     epoch_membership::EpochMembershipCoordinator,
@@ -158,6 +159,8 @@ pub struct NetworkParams {
     pub cliquenet_advertise_addr: Option<NetAddr>,
     /// X25519 secret key.
     pub x25519_secret_key: x25519::SecretKey,
+    /// Skip the startup cliquenet-registration check.
+    pub skip_cliquenet_registration_check: bool,
     /// The address to send to other Libp2p nodes to contact us. Required for orchestrator
     /// bootstrap; optional otherwise. When set, it is added to the swarm as an external address
     /// so peers can reach us behind NAT.
@@ -756,11 +759,13 @@ where
     check_cliquenet_info_registered(
         &membership,
         &validator_config.public_key,
-        genesis.base_version,
+        &network_params.x25519_secret_key.public_key(),
+        genesis.base_version.max(genesis.upgrade_version),
         genesis.chain_config.stake_table_contract,
         &l1_client,
+        network_params.skip_cliquenet_registration_check,
     )
-    .await;
+    .await?;
 
     let persistence = Arc::new(persistence);
     let coordinator = EpochMembershipCoordinator::new(
@@ -885,22 +890,73 @@ pub fn empty_builder_commitment() -> BuilderCommitment {
     BuilderCommitment::from_bytes([])
 }
 
-/// On the version immediately preceding CLIQUENET, log an error if this
-/// validator has a stake-table entry without an x25519 key or p2p address.
-/// Skipped unless StakeTableV3 is deployed (otherwise the operator has no
-/// actionable path), detected via `getVersion()` on the proxy.
+const CLIQUENET_REGISTRATION_REMEDIATION: &str =
+    "After the CLIQUENET upgrade activates, this validator will be excluded from the active set \
+     and stop earning rewards. To fix, register the node's x25519 key and p2p address on-chain \
+     with `staking-cli update-network-config` and configure your node to use the new key, see \
+     https://github.com/EspressoSystems/espresso-network/blob/main/staking-cli/README.md#configuring-networking-x25519-key-and-p2p-address";
+
+/// Bounds the contract-head read; the underlying L1 fetch retries ~20 minutes, then panics.
+const CLIQUENET_HEAD_FETCH_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Cliquenet dials peers from the previous, current and next epoch stake
+/// tables, so those entries plus the contract head must hold a working key.
+const CLIQUENET_SNAPSHOT_MATCH_LIMIT: usize = 3;
+
+/// A match against either the snapshots or the contract head suffices: a
+/// rotated key may have propagated to only one of them.
+fn verify_cliquenet_registration(
+    local_key: &x25519::PublicKey,
+    snapshot_infos: &[PeerConnectInfo],
+    head_info: Option<&PeerConnectInfo>,
+) -> anyhow::Result<()> {
+    let infos: Vec<&PeerConnectInfo> = snapshot_infos.iter().chain(head_info).collect();
+    anyhow::ensure!(
+        !infos.is_empty(),
+        "Validator has no x25519 key or p2p address registered on-chain. {}",
+        CLIQUENET_REGISTRATION_REMEDIATION
+    );
+    if infos.iter().any(|info| info.x25519_key == *local_key) {
+        return Ok(());
+    }
+    let mut registered: Vec<_> = infos
+        .iter()
+        .map(|info| info.x25519_key.to_string())
+        .collect();
+    registered.sort_unstable();
+    registered.dedup();
+    anyhow::bail!(
+        "Locally configured x25519 key {local_key} does not match any x25519 key registered \
+         on-chain for this validator ({}). {}",
+        registered.join(", "),
+        CLIQUENET_REGISTRATION_REMEDIATION
+    );
+}
+
+/// From `EPOCH_REWARD_VERSION` onward, abort startup unless the local x25519
+/// key matches one registered on-chain. Skipped below StakeTableV3, where the
+/// operator has no way to register.
 async fn check_cliquenet_info_registered(
     membership: &EpochCommittees,
     pub_key: &BLSPubKey,
-    current_version: vbs::version::Version,
+    local_x25519_key: &x25519::PublicKey,
+    max_version: vbs::version::Version,
     stake_table_contract: Option<alloy::primitives::Address>,
     l1_client: &espresso_types::v0::L1Client,
-) {
-    if current_version != versions::EPOCH_REWARD_VERSION {
-        return;
+    skip: bool,
+) -> anyhow::Result<()> {
+    if max_version < versions::EPOCH_REWARD_VERSION {
+        return Ok(());
+    }
+    if skip {
+        tracing::warn!(
+            "cliquenet registration check skipped \
+             (ESPRESSO_NODE_SKIP_CLIQUENET_REGISTRATION_CHECK)"
+        );
+        return Ok(());
     }
     let Some(addr) = stake_table_contract else {
-        return;
+        return Ok(());
     };
     let stake_table =
         hotshot_contract_adapter::sol_types::StakeTableV3::new(addr, l1_client.provider.clone());
@@ -926,29 +982,76 @@ async fn check_cliquenet_info_registered(
             err = ?last_err,
             "could not read StakeTable getVersion() after 3 attempts; skipping check"
         );
-        return;
+        return Ok(());
     };
     if major < 3 {
         tracing::info!(
             major,
             "StakeTableV3 not deployed; skipping network-info registration check"
         );
-        return;
+        return Ok(());
     }
-    let Some(cfg) = membership.latest_peer_config(pub_key) else {
-        return;
+
+    let Some(finalized) = l1_client.snapshot().await.finalized else {
+        tracing::warn!("no finalized L1 block yet; skipping network-info registration check");
+        return Ok(());
     };
-    if cfg.connect_info.is_some() {
-        return;
+    let head_fetch = async {
+        let events = membership
+            .fetcher()
+            .fetch_and_store_stake_table_events(addr, finalized.number)
+            .await?;
+        let (validators, _hash) =
+            validators_from_l1_events(events.into_iter().map(|(_, event)| event))?;
+        anyhow::Ok(
+            validators
+                .values()
+                .find(|v| v.stake_table_key.as_ref() == Some(pub_key))
+                .cloned(),
+        )
+    };
+    let head_validator = match tokio::time::timeout(CLIQUENET_HEAD_FETCH_TIMEOUT, head_fetch).await
+    {
+        Err(_) => {
+            tracing::warn!(
+                timeout = ?CLIQUENET_HEAD_FETCH_TIMEOUT,
+                "timed out reading stake table at L1 head; skipping registration check"
+            );
+            return Ok(());
+        },
+        Ok(Err(e)) => {
+            tracing::warn!(%e, "failed to read stake table at L1 head; skipping registration check");
+            return Ok(());
+        },
+        Ok(Ok(validator)) => validator,
+    };
+
+    let peer_configs = membership.peer_configs(pub_key);
+    if peer_configs.is_empty() && head_validator.is_none() {
+        tracing::info!(
+            bls_key = %pub_key,
+            "not a registered validator; skipping cliquenet registration check"
+        );
+        return Ok(());
     }
-    tracing::error!(
-        bls_key = %pub_key,
-        "Validator has no x25519 key or p2p address registered on-chain. After the CLIQUENET \
-         upgrade activates, the validator will be excluded from the active set and stop earning \
-         rewards. To fix: (1) generate an x25519 keypair if needed (`keygen --scheme x25519 \
-         --out keys.env`), then (2) register it on-chain (`staking-cli update-network-config \
-         --x25519-key <ESPRESSO_NODE_PUBLIC_X25519_KEY> --p2p-addr <host:port>`)."
-    );
+
+    let snapshot_infos: Vec<PeerConnectInfo> = peer_configs
+        .into_iter()
+        .take(CLIQUENET_SNAPSHOT_MATCH_LIMIT)
+        .filter_map(|cfg| cfg.connect_info)
+        .collect();
+    let head_info = head_validator.as_ref().and_then(head_connect_info);
+    verify_cliquenet_registration(local_x25519_key, &snapshot_infos, head_info.as_ref())
+}
+
+/// Mirrors the `EpochCommittee` construction rule: both fields must be set on-chain.
+fn head_connect_info(
+    validator: &espresso_types::v0_3::RegisteredValidator<BLSPubKey>,
+) -> Option<PeerConnectInfo> {
+    Some(PeerConnectInfo {
+        x25519_key: validator.x25519_key?,
+        p2p_addr: validator.p2p_addr.clone()?,
+    })
 }
 
 #[cfg(any(test, feature = "testing"))]
@@ -1860,12 +1963,16 @@ pub mod testing {
 
 #[cfg(test)]
 mod test {
-    use alloy::node_bindings::Anvil;
-    use espresso_types::{Header, MOCK_SEQUENCER_VERSIONS, NamespaceId, Payload, Transaction};
+    use alloy::{node_bindings::Anvil, primitives::Address};
+    use espresso_types::{
+        ChainConfig, Header, MOCK_SEQUENCER_VERSIONS, NamespaceId, Payload, Transaction,
+        v0::L1Client,
+    };
     use futures::StreamExt;
     use hotshot::types::{Event, EventType};
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::{
+        PeerConfig,
         event::LeafInfo,
         new_protocol::CoordinatorEvent,
         traits::block_contents::{BlockHeader, BlockPayload},
@@ -1896,6 +2003,248 @@ mod test {
 
     use self::testing::run_test_builder;
     use super::*;
+
+    fn connect_info(key: x25519::PublicKey) -> PeerConnectInfo {
+        PeerConnectInfo {
+            x25519_key: key,
+            p2p_addr: "127.0.0.1:9000".parse().unwrap(),
+        }
+    }
+
+    #[test]
+    fn cliquenet_registration_missing_info_is_err() {
+        let local = x25519::Keypair::generate().unwrap().public_key();
+        verify_cliquenet_registration(&local, &[], None).unwrap_err();
+    }
+
+    #[test]
+    fn cliquenet_registration_wrong_key_is_err() {
+        let local = x25519::Keypair::generate().unwrap().public_key();
+        let other = x25519::Keypair::generate().unwrap().public_key();
+        verify_cliquenet_registration(&local, &[connect_info(other)], Some(&connect_info(other)))
+            .unwrap_err();
+    }
+
+    #[test]
+    fn cliquenet_registration_head_match_only_is_ok() {
+        let local = x25519::Keypair::generate().unwrap().public_key();
+        let old = x25519::Keypair::generate().unwrap().public_key();
+        verify_cliquenet_registration(&local, &[connect_info(old)], Some(&connect_info(local)))
+            .unwrap();
+    }
+
+    #[test]
+    fn cliquenet_registration_snapshot_match_only_is_ok() {
+        let local = x25519::Keypair::generate().unwrap().public_key();
+        let new = x25519::Keypair::generate().unwrap().public_key();
+        verify_cliquenet_registration(&local, &[connect_info(local)], Some(&connect_info(new)))
+            .unwrap();
+    }
+
+    #[test]
+    fn cliquenet_registration_match_both_is_ok() {
+        let local = x25519::Keypair::generate().unwrap().public_key();
+        verify_cliquenet_registration(&local, &[connect_info(local)], Some(&connect_info(local)))
+            .unwrap();
+    }
+
+    #[test]
+    fn head_connect_info_requires_both_x25519_key_and_p2p_addr() {
+        use espresso_types::v0_3::RegisteredValidator;
+
+        let mut validator = RegisteredValidator {
+            account: Default::default(),
+            stake_table_key: None,
+            state_ver_key: None,
+            stake: Default::default(),
+            commission: 0,
+            delegators: Default::default(),
+            authenticated: false,
+            x25519_key: Some(x25519::Keypair::generate().unwrap().public_key()),
+            p2p_addr: None,
+        };
+        assert!(head_connect_info(&validator).is_none());
+
+        validator.p2p_addr = Some("127.0.0.1:9000".parse().unwrap());
+        assert!(head_connect_info(&validator).is_some());
+    }
+
+    #[test]
+    fn cliquenet_registration_head_missing_p2p_addr_and_no_snapshot_is_err() {
+        use espresso_types::v0_3::RegisteredValidator;
+
+        let local = x25519::Keypair::generate().unwrap().public_key();
+        // Matching x25519 key but no p2p addr yields no head connect info.
+        let head_validator = RegisteredValidator {
+            account: Default::default(),
+            stake_table_key: None,
+            state_ver_key: None,
+            stake: Default::default(),
+            commission: 0,
+            delegators: Default::default(),
+            authenticated: false,
+            x25519_key: Some(local),
+            p2p_addr: None,
+        };
+        let head_info = head_connect_info(&head_validator);
+        verify_cliquenet_registration(&local, &[], head_info.as_ref()).unwrap_err();
+    }
+
+    fn membership_for(
+        l1_client: &L1Client,
+        chain_config: ChainConfig,
+        committee: Vec<PeerConfig<SeqTypes>>,
+    ) -> EpochCommittees {
+        let fetcher = Fetcher::new(
+            Arc::new(catchup::NullStateCatchup::default()),
+            Arc::new(Mutex::new(persistence::no_storage::NoStorage)),
+            l1_client.clone(),
+            chain_config,
+        );
+        EpochCommittees::new_stake(committee, vec![], None, fetcher, 10u64)
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn check_cliquenet_info_registered_below_gate_version_is_ok_without_rpc() {
+        // An unreachable L1 URL proves the version gate returns before any RPC call.
+        let l1_client = L1Client::new(vec!["http://127.0.0.1:1".parse().unwrap()]).unwrap();
+        let membership = membership_for(&l1_client, ChainConfig::default(), vec![]);
+        let (pub_key, _) = <PubKey as SignatureKey>::generated_from_seed_indexed([0u8; 32], 0);
+        let local_key = x25519::Keypair::generate().unwrap().public_key();
+
+        check_cliquenet_info_registered(
+            &membership,
+            &pub_key,
+            &local_key,
+            versions::EPOCH_VERSION,
+            Some(Address::random()),
+            &l1_client,
+            false,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn check_cliquenet_info_registered_get_version_failure_is_ok() {
+        let anvil = Anvil::new().spawn();
+        let l1_client = L1Client::anvil(&anvil).unwrap();
+        let membership = membership_for(&l1_client, ChainConfig::default(), vec![]);
+        let (pub_key, _) = <PubKey as SignatureKey>::generated_from_seed_indexed([0u8; 32], 0);
+        let local_key = x25519::Keypair::generate().unwrap().public_key();
+
+        // No contract deployed at this address, so `getVersion()` fails.
+        check_cliquenet_info_registered(
+            &membership,
+            &pub_key,
+            &local_key,
+            versions::EPOCH_REWARD_VERSION,
+            Some(Address::random()),
+            &l1_client,
+            false,
+        )
+        .await
+        .unwrap();
+    }
+
+    /// Runs the wrapper against a deployed StakeTableV3 across all registration scenarios.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn check_cliquenet_info_registered_against_deployed_contract() {
+        let config = TestConfigBuilder::<2>::default()
+            .set_upgrades(versions::EPOCH_REWARD_VERSION)
+            .await
+            .build();
+
+        let chain_config = config
+            .upgrades()
+            .get(&versions::EPOCH_REWARD_VERSION)
+            .and_then(|u| u.upgrade_type.chain_config())
+            .expect("PoS upgrade sets a chain config with the stake table contract address");
+
+        let l1_client = L1Client::anvil(config.anvil().unwrap().anvil()).unwrap();
+        l1_client.spawn_tasks().await;
+        l1_client.wait_for_finalized_block(0).await;
+
+        let membership = membership_for(&l1_client, chain_config, vec![]);
+        let pub_key = PubKey::public_key(&config.known_nodes_with_stake()[0].stake_table_entry);
+        let registered_key = config.staking_priv_keys()[0].x25519.public_key();
+        let wrong_key = x25519::Keypair::generate().unwrap().public_key();
+
+        // Not a registered validator: no entry anywhere, so no abort.
+        let (unregistered_key, _) =
+            <PubKey as SignatureKey>::generated_from_seed_indexed([1u8; 32], 0);
+        check_cliquenet_info_registered(
+            &membership,
+            &unregistered_key,
+            &wrong_key,
+            versions::EPOCH_REWARD_VERSION,
+            chain_config.stake_table_contract,
+            &l1_client,
+            false,
+        )
+        .await
+        .unwrap();
+
+        // Steady state: locally configured key matches the registered one.
+        check_cliquenet_info_registered(
+            &membership,
+            &pub_key,
+            &registered_key,
+            versions::EPOCH_REWARD_VERSION,
+            chain_config.stake_table_contract,
+            &l1_client,
+            false,
+        )
+        .await
+        .unwrap();
+
+        // Wrong key: local key does not match what's registered on-chain.
+        check_cliquenet_info_registered(
+            &membership,
+            &pub_key,
+            &wrong_key,
+            versions::EPOCH_REWARD_VERSION,
+            chain_config.stake_table_contract,
+            &l1_client,
+            false,
+        )
+        .await
+        .unwrap_err();
+
+        // Escape hatch: same mismatch, but `skip` skips the check entirely.
+        check_cliquenet_info_registered(
+            &membership,
+            &pub_key,
+            &wrong_key,
+            versions::EPOCH_REWARD_VERSION,
+            chain_config.stake_table_contract,
+            &l1_client,
+            true,
+        )
+        .await
+        .unwrap();
+
+        // Registered in a snapshot but with no connect info: must still abort.
+        let (bootstrap_key, _) =
+            <PubKey as SignatureKey>::generated_from_seed_indexed([3u8; 32], 0);
+        let bootstrap_cfg = PeerConfig::<SeqTypes> {
+            stake_table_entry: bootstrap_key.stake_table_entry(U256::from(1)),
+            state_ver_key: StateKeyPair::generate_from_seed_indexed([3u8; 32], 0).ver_key(),
+            connect_info: None,
+        };
+        let bootstrap_membership = membership_for(&l1_client, chain_config, vec![bootstrap_cfg]);
+        check_cliquenet_info_registered(
+            &bootstrap_membership,
+            &bootstrap_key,
+            &wrong_key,
+            versions::EPOCH_REWARD_VERSION,
+            chain_config.stake_table_contract,
+            &l1_client,
+            false,
+        )
+        .await
+        .unwrap_err();
+    }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_skeleton_instantiation() {
