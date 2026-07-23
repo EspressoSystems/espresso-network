@@ -11,10 +11,9 @@ use crate::{
     tests::common::assertions::{
         any, count_matching, is_block_built, is_block_reconstructed, is_cert1, is_cert2,
         is_drb_result, is_header_created, is_header_created_for_view, is_leaf_decided, is_proposal,
-        is_proposal_for_view, is_request_block_and_header, is_request_vid_disperse, is_send_cert1,
-        is_send_epoch_change, is_send_timeout_vote, is_state_validated, is_timeout,
-        is_timeout_cert, is_timeout_one_honest, is_vid_disperse, is_view_changed, is_vote1,
-        is_vote2, node_index_for_key,
+        is_proposal_for_view, is_request_block_and_header, is_send_cert1, is_send_epoch_change,
+        is_send_timeout_vote, is_state_validated, is_timeout, is_timeout_cert,
+        is_timeout_one_honest, is_view_changed, is_vote1, is_vote2, node_index_for_key,
     },
 };
 
@@ -216,12 +215,11 @@ async fn test_leader_proposal() {
                 && any(inputs, is_state_validated)
                 && any(inputs, is_block_built)
                 && any(inputs, is_header_created)
-                && any(inputs, is_vid_disperse)
         })
         .await;
 
-    // SendProposal proves the CPU VidDisperseTask computed the VID
-    // disperse — consensus cannot send a proposal without it.
+    // The leader proposes once the block is built and the header is created;
+    // VID dispersal fans out in the background and does not gate the proposal.
     harness
         .process_until_output(|outputs| any(outputs, is_proposal))
         .await;
@@ -302,9 +300,7 @@ async fn test_leader_proposes_after_timeout() {
     harness
         .process_until(|inputs| {
             assert!(!any(inputs, is_timeout));
-            any(inputs, is_vid_disperse)
-                && any(inputs, is_block_built)
-                && any(inputs, is_header_created)
+            any(inputs, is_block_built) && any(inputs, is_header_created)
         })
         .await;
 
@@ -313,10 +309,6 @@ async fn test_leader_proposes_after_timeout() {
         "Leader should request block and header after TC"
     );
 
-    assert!(
-        any(harness.outputs(), is_request_vid_disperse),
-        "Leader should request VID disperse after TC"
-    );
     // Proposal with timeout view change evidence, released once stored.
     harness
         .process_until_output(|outputs| any(outputs, is_proposal))

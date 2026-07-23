@@ -14,7 +14,7 @@ use hotshot::{HotShotInitializer, traits::BlockPayload, types::SignatureKey};
 use hotshot_types::{
     consensus::{ConsensusMetricsValue, ParticipationTracker},
     data::{
-        EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewNumber,
+        EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperseShare2, ViewNumber,
         vid_disperse::vid_total_weight,
     },
     epoch_membership::EpochMembershipCoordinator,
@@ -52,10 +52,10 @@ use crate::{
     },
     network::Cliquenet,
     outbox::Outbox,
-    proposal::{ProposalValidator, VidShareValidator},
+    proposal::{ProposalValidator, ValidatedProposal, VidShareValidator},
     state::{HeaderRequest, StateEntry, StateManager, StateManagerOutput},
     storage::{NewProtocolStorage, Storage},
-    vid::{VidDisperseRequest, VidDisperser, VidFragmentAccumulator, VidReconstructor},
+    vid::{VidFragmentAccumulator, VidReconstructor},
     vote::{EpochRootTally, SimpleTally, VoteCollector},
 };
 
@@ -96,7 +96,6 @@ pub struct Coordinator<T: NodeType, S> {
     state_manager: StateManager<T>,
     #[builder(default)]
     client: CoordinatorClient<T>,
-    vid_disperser: VidDisperser<T>,
     vid_reconstructor: VidReconstructor<T>,
     #[builder(default)]
     vid_fragment_accumulator: VidFragmentAccumulator<T>,
@@ -124,6 +123,10 @@ pub struct Coordinator<T: NodeType, S> {
     pending_proposal_fetches: PendingProposalFetches<T>,
     #[builder(skip)]
     requested_missing_proposals: HashSet<ProposalFetchKey<T>>,
+    #[builder(default)]
+    cached_validated_proposals: BTreeMap<(ViewNumber, VidCommitment2), ValidatedProposal<T>>,
+    #[builder(default)]
+    cached_vid_shares: BTreeMap<(ViewNumber, VidCommitment2), VidDisperseShare2<T>>,
     #[builder(skip)]
     da_payloads: BTreeMap<(ViewNumber, VidCommitment2), PendingDa<T>>,
     metrics: Option<metrics::Metrics>,
@@ -274,26 +277,17 @@ where
             consensus.seed_state_cert(state_cert);
         }
 
-        let participation = ParticipationTracker::new(&membership_coordinator, anchor_epoch);
+        // Capture a network sender for the block builder's VID fanout before
+        // `network` is moved into the coordinator below.
+        let block_builder_sender = network.sender().clone();
 
-        let vid_disperser = VidDisperser::new(
-            membership_coordinator.clone(),
-            network.sender().clone(),
-            public_key.clone(),
-            private_key.clone(),
-        )
-        .with_metrics(
-            coordinator_metrics
-                .as_ref()
-                .map(|m| m.consensus.vid_disperse_duration.clone().into()),
-        );
+        let participation = ParticipationTracker::new(&membership_coordinator, anchor_epoch);
 
         let lock = upgrade_lock.clone();
         Self::builder()
             .consensus(consensus)
             .network(network)
             .state_manager(state_manager)
-            .vid_disperser(vid_disperser)
             .vid_reconstructor(VidReconstructor::new())
             .vote1_collector(VoteCollector::new(
                 membership_coordinator.clone(),
@@ -326,6 +320,9 @@ where
             .block_builder(BlockBuilder::new(
                 Arc::new(initializer.instance_state.clone()),
                 membership_coordinator.clone(),
+                block_builder_sender,
+                public_key.clone(),
+                private_key.clone(),
                 BlockBuilderConfig::default(),
                 upgrade_lock.clone(),
             ))
@@ -377,7 +374,7 @@ where
             self.storage.append_da(
                 ViewNumber::genesis(),
                 EpochNumber::genesis(),
-                payload,
+                Arc::new(payload),
                 metadata,
                 genesis_leaf.payload_commitment(),
             );
@@ -555,8 +552,8 @@ where
                                 (block.view, commit),
                                 PendingDa {
                                     epoch: block.epoch,
-                                    payload: block.payload.payload.clone(),
-                                    metadata: block.payload.metadata.clone(),
+                                    payload: block.payload.clone(),
+                                    metadata: block.metadata.clone(),
                                 },
                             );
                         } else {
@@ -575,14 +572,6 @@ where
                         return Err(CoordinatorError::regular(err).context("block building"))
                     }
                 },
-                Some(item) = self.vid_disperser.next() => match item {
-                    Ok(out) => {
-                        return Ok(ConsensusInput::VidDisperseCreated(out.view, out.payload_commitment))
-                    }
-                    Err(err) => {
-                        return Err(CoordinatorError::from(err).context("vid disperse"))
-                    }
-                },
                 Some(item) = self.vid_reconstructor.next() => match item {
                     Ok(out) => {
                         self.payload_txn_bytes.insert(out.view, out.payload.txn_bytes());
@@ -590,7 +579,7 @@ where
                         self.storage.append_da(
                             out.view,
                             out.epoch,
-                            out.payload.clone(),
+                            Arc::new(out.payload.clone()),
                             out.metadata.clone(),
                             VidCommitment::V2(out.payload_commitment),
                         );
@@ -667,22 +656,6 @@ where
                     "request state validation"
                 );
                 self.state_manager.request_state(state_request);
-            },
-            ConsensusOutput::RequestVidDisperse {
-                view,
-                epoch,
-                payload,
-                metadata,
-                payload_commitment,
-            } => {
-                debug!(%node, %view, %epoch, "request vid disperse");
-                self.vid_disperser.request_vid_disperse(VidDisperseRequest {
-                    view,
-                    epoch,
-                    block: payload,
-                    metadata,
-                    payload_commitment,
-                });
             },
             ConsensusOutput::RequestDrbResult(epoch) => {
                 debug!(%node, %epoch, "request drb result");
@@ -1789,8 +1762,11 @@ where
         self.consensus.gc(scope);
         match scope {
             GcScope::Local(view) => {
+                let vc = VidCommitment2::default();
                 self.block_builder.gc(view);
-                self.vid_disperser.gc(view);
+                self.cached_validated_proposals =
+                    self.cached_validated_proposals.split_off(&(view, vc));
+                self.cached_vid_shares = self.cached_vid_shares.split_off(&(view, vc));
                 self.vid_fragment_accumulator.gc(view);
                 // When we enter a new view, we do not want to GC certain data
                 // for the previous view yet:
@@ -1965,7 +1941,7 @@ pub enum GcScope {
 /// A payload built locally and awaiting DA persistence.
 struct PendingDa<T: NodeType> {
     epoch: EpochNumber,
-    payload: T::BlockPayload,
+    payload: Arc<T::BlockPayload>,
     metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
 }
 

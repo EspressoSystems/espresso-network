@@ -26,8 +26,8 @@ use hotshot_testing::{
 use hotshot_types::{
     PeerConnectInfo,
     data::{
-        EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperse, VidDisperse2,
-        VidDisperseShare2, ViewNumber, vid_commitment,
+        EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperse2, VidDisperseShare2,
+        ViewNumber, vid_commitment,
         vid_disperse::{AvidmGf2DisperseShareFragment, AvidmGf2NamespacePiece},
     },
     epoch_membership::EpochMembershipCoordinator,
@@ -110,7 +110,7 @@ impl TestView {
     /// messages the leader unicasts to `recipient_key` for this view — the
     /// production wire form, where a node reassembles its share from the
     /// fragments. The leader's signature is over the share's
-    /// `payload_commitment`, matching what the `VidDisperser` produces.
+    /// `payload_commitment`, matching what the block builder's fanout produces.
     ///
     /// Pair this with `proposal_input` when simulating a leader's send to a
     /// replica.
@@ -979,8 +979,7 @@ pub fn reconstructed_blocks(
 
 /// Lightweight consensus-only test harness. Wraps a single [`Consensus`]
 /// instance and auto-responds to outputs that consensus expects feedback for
-/// (`RequestState`, `RequestBlockAndHeader`, `RequestVidDisperse`,
-/// `RequestDrbResult`).
+/// (`RequestState`, `RequestBlockAndHeader`, `RequestDrbResult`).
 pub(crate) struct ConsensusHarness {
     pub consensus: Consensus<TestTypes>,
     pub membership_coordinator: EpochMembershipCoordinator<TestTypes>,
@@ -1162,36 +1161,11 @@ impl ConsensusHarness {
                     ConsensusInput::BlockBuilt {
                         view: req.view,
                         epoch: req.epoch,
-                        payload: mock_block.block,
-                        metadata: mock_block.metadata,
+                        payload: std::sync::Arc::new(mock_block.block),
                         payload_commitment: mock_block.payload_commitment,
                     },
                     outbox,
                 );
-            },
-            ConsensusOutput::RequestVidDisperse {
-                view,
-                epoch,
-                payload,
-                metadata,
-                payload_commitment: _,
-            } => {
-                let vid_disperse = VidDisperse::calculate_vid_disperse(
-                    payload,
-                    &self.membership_coordinator,
-                    *view,
-                    Some(*epoch),
-                    Some(*epoch),
-                    metadata,
-                    &test_upgrade_lock(),
-                )
-                .await
-                .unwrap();
-                let VidDisperse::V2(vid) = vid_disperse.disperse else {
-                    panic!("VidDisperse is not a V2");
-                };
-                let input = ConsensusInput::VidDisperseCreated(*view, vid.payload_commitment);
-                self.consensus.apply(input, outbox);
             },
             ConsensusOutput::RequestDrbResult(epoch) => {
                 self.consensus

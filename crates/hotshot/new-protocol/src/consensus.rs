@@ -6,7 +6,6 @@ use std::{
 };
 
 use committable::{Commitment, CommitmentBoundsArkless, Committable};
-use hotshot::traits::BlockPayload;
 use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_types::{
     data::{
@@ -83,8 +82,7 @@ pub enum ConsensusInput<T: NodeType> {
     BlockBuilt {
         view: ViewNumber,
         epoch: EpochNumber,
-        payload: T::BlockPayload,
-        metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
+        payload: Arc<T::BlockPayload>,
         payload_commitment: VidCommitment,
     },
     BlockReconstructed(ViewNumber, VidCommitment2),
@@ -116,7 +114,6 @@ pub enum ConsensusInput<T: NodeType> {
     Timeout(ViewNumber, EpochNumber),
     TimeoutCertificate(ValidCert<TimeoutCertificate2<T>>),
     TimeoutOneHonest(ViewNumber, EpochNumber),
-    VidDisperseCreated(ViewNumber, VidCommitment2),
     DrbResult(EpochNumber, DrbResult),
 }
 
@@ -139,13 +136,6 @@ pub enum ConsensusOutput<T: NodeType> {
     /// from votes can still decide. Mirrors `SendCertificate1`.
     SendCertificate2(Certificate2<T>),
     SendEpochChange(EpochChangeMessage<T, Validated>),
-    RequestVidDisperse {
-        view: ViewNumber,
-        epoch: EpochNumber,
-        payload: T::BlockPayload,
-        metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
-        payload_commitment: VidCommitment2,
-    },
     LeafDecided {
         leaves: Vec<Leaf2<T>>,
         /// Certificate1 (QC) that certifies the most recent (first) leaf in the chain.
@@ -208,7 +198,7 @@ pub struct Consensus<T: NodeType> {
     unpaired_vid_shares: UnpairedVidShares<T>,
     states_verified: BTreeMap<ViewNumber, Commitment<Leaf2<T>>>,
     blocks_reconstructed: BTreeSet<(ViewNumber, VidCommitment2)>,
-    blocks: BTreeMap<(ViewNumber, VidCommitment2), T::BlockPayload>,
+    blocks: BTreeMap<(ViewNumber, VidCommitment2), Arc<T::BlockPayload>>,
     certs: BTreeMap<ViewNumber, Certificate1<T>>,
     certs2: BTreeMap<ViewNumber, Certificate2<T>>,
     timeout_certs: BTreeMap<ViewNumber, TimeoutCertificate2<T>>,
@@ -783,27 +773,18 @@ impl<T: NodeType> Consensus<T> {
                 view,
                 epoch,
                 payload,
-                metadata,
                 payload_commitment,
             } => {
                 debug!(%view, %epoch, "apply: block built");
                 if let VidCommitment::V2(payload_commitment) = payload_commitment {
-                    outbox.push_back(ConsensusOutput::RequestVidDisperse {
-                        view,
-                        epoch,
-                        payload: payload.clone(),
-                        metadata,
-                        payload_commitment,
-                    });
+                    // We built this block and are dispersing its shares from the
+                    // build task, so the payload is available locally without
+                    // reconstruction (formerly signalled by VidDisperseCreated).
+                    self.blocks_reconstructed.insert((view, payload_commitment));
                     self.blocks.insert((view, payload_commitment), payload);
                 } else {
                     warn!(%view, %epoch, "block built with non-V2 payload commitment; ignoring");
                 }
-                Protocol::Continue
-            },
-            ConsensusInput::VidDisperseCreated(view, payload_commitment) => {
-                debug!(%view, "apply: vid disperse created");
-                self.blocks_reconstructed.insert((view, payload_commitment));
                 Protocol::Continue
             },
             ConsensusInput::DrbResult(epoch, drb_result) => {
@@ -1806,7 +1787,7 @@ impl<T: NodeType> Consensus<T> {
         if let VidCommitment::V2(pc) = proposal.block_header.payload_commitment()
             && let Some(payload) = self.blocks.get(&(view, pc))
         {
-            leaf.fill_block_payload_unchecked(payload.clone());
+            leaf.fill_block_payload_unchecked((**payload).clone());
         }
         let mut decided = vec![leaf];
         let mut vid_shares = vec![self.signed_vid_share(view)];
@@ -1827,7 +1808,7 @@ impl<T: NodeType> Consensus<T> {
             if let VidCommitment::V2(pc) = proposal.block_header.payload_commitment()
                 && let Some(payload) = self.blocks.get(&(parent_view, pc))
             {
-                leaf.fill_block_payload_unchecked(payload.clone());
+                leaf.fill_block_payload_unchecked((**payload).clone());
             }
             vid_shares.push(self.signed_vid_share(parent_view));
             decided.push(leaf);
@@ -2531,7 +2512,6 @@ impl<T: NodeType> ConsensusInput<T> {
                 // processing is for the next view
                 cert.view_number() + 1
             },
-            ConsensusInput::VidDisperseCreated(view, _) => *view,
             // DRB results arrive asynchronously and don't belong to any
             // particular view; `apply` handles routing by using
             // `current_view` for this variant.

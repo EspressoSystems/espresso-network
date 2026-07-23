@@ -984,8 +984,7 @@ async fn test_bridged_legacy_qc_adopts_lock_and_reproposes() {
         ConsensusInput::BlockBuilt {
             view: ViewNumber::new(3),
             epoch: request_epoch,
-            payload: mock_block.block,
-            metadata: mock_block.metadata,
+            payload: std::sync::Arc::new(mock_block.block),
             payload_commitment: mock_block.payload_commitment,
         },
         &mut outbox,
