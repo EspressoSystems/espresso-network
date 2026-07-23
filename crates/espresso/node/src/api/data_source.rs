@@ -410,9 +410,6 @@ pub(crate) trait DatabaseMetadataSource {
     ) -> impl Send + Future<Output = anyhow::Result<Vec<MigrationStatus>>>;
 }
 
-// ============================================================================
-// Arc delegation implementations
-// ============================================================================
 // These implementations allow Arc<T> to implement the data source traits
 // when T implements them, which is necessary for NodeApiStateImpl to work
 // with Arc-wrapped data sources.
