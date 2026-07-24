@@ -136,7 +136,7 @@ pub async fn proposals_with_transactions(
     };
 
     let versioned_data =
-        VersionedVoteData::<_, _>::new_infallible(quorum_data.clone(), view_number, &upgrade_lock);
+        VersionedVoteData::<_, _>::new_infallible(quorum_data, view_number, &upgrade_lock);
 
     let commitment = Commitment::from_raw(versioned_data.commit().into());
 

@@ -514,13 +514,12 @@ impl Upgrade {
 pub mod mock {
     use std::collections::HashMap;
 
-    use alloy::primitives::U256;
     use anyhow::Context;
     use async_trait::async_trait;
     use committable::Commitment;
     use hotshot_types::{
         data::ViewNumber, simple_certificate::LightClientStateUpdateCertificateV2,
-        stake_table::HSStakeTable,
+        stake_table::EpochStakeTables,
     };
     use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
 
@@ -572,8 +571,7 @@ pub mod mock {
             &self,
             _retry: usize,
             _height: u64,
-            _stake_table: HSStakeTable<SeqTypes>,
-            _success_threshold: U256,
+            _stake_tables: EpochStakeTables<SeqTypes>,
         ) -> anyhow::Result<Leaf2> {
             Err(anyhow::anyhow!("todo"))
         }

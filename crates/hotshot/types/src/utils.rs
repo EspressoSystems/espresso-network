@@ -12,7 +12,6 @@ use std::{
     sync::Arc,
 };
 
-use alloy::primitives::U256;
 use anyhow::{anyhow, ensure};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use bincode::{
@@ -32,10 +31,10 @@ use vbs::version::Version;
 use versions::EPOCH_VERSION;
 
 use crate::{
-    PeerConfig,
     data::{EpochNumber, Leaf2, VidCommitment, ViewNumber},
     message::UpgradeLock,
-    stake_table::StakeTableEntries,
+    simple_certificate::QuorumCertificate2,
+    stake_table::{EpochStakeTables, StakeTableEntries},
     traits::{ValidatedState, node_implementation::NodeType},
     vote::{Certificate, HasViewNumber},
 };
@@ -105,8 +104,7 @@ pub type StateAndDelta<TYPES> = (
 
 pub async fn verify_leaf_chain<T: NodeType>(
     mut leaf_chain: Vec<Leaf2<T>>,
-    stake_table: &[PeerConfig<T>],
-    success_threshold: U256,
+    stake_tables: &EpochStakeTables<T>,
     expected_height: u64,
     upgrade_lock: &UpgradeLock<T>,
 ) -> anyhow::Result<Leaf2<T>> {
@@ -141,31 +139,45 @@ pub async fn verify_leaf_chain<T: NodeType>(
         ));
     }
 
-    // Get the stake table entries
-    let stake_table_entries = StakeTableEntries::<T>::from(stake_table.to_vec()).0;
-
-    // verify all QCs are valid
-    newest_leaf.justify_qc().is_valid_cert(
-        &stake_table_entries,
-        success_threshold,
-        upgrade_lock,
-    )?;
-    parent
-        .justify_qc()
-        .is_valid_cert(&stake_table_entries, success_threshold, upgrade_lock)?;
-    grand_parent.justify_qc().is_valid_cert(
-        &stake_table_entries,
-        success_threshold,
-        upgrade_lock,
-    )?;
+    // The chain may cross an epoch boundary, in which case its QCs are signed
+    // by different epochs' quorums. Derive each QC's epoch from the height of
+    // the leaf it certifies; trusting the claims in the QC itself would let a
+    // quorum of a different epoch pick the stake table that verifies its own
+    // signatures.
+    let check_qc = |qc: &QuorumCertificate2<T>, certified_height: u64| -> anyhow::Result<()> {
+        let epoch = EpochNumber::new(epoch_from_block_number(
+            certified_height,
+            stake_tables.epoch_height,
+        ));
+        ensure!(
+            qc.data.epoch == Some(epoch),
+            "QC claims epoch {:?} but certifies the leaf at height {certified_height} in epoch \
+             {epoch}",
+            qc.data.epoch,
+        );
+        if let Some(block_number) = qc.data.block_number {
+            ensure!(
+                block_number == certified_height,
+                "QC claims block number {block_number} but certifies the leaf at height \
+                 {certified_height}"
+            );
+        }
+        let table = stake_tables.for_epoch(Some(epoch))?;
+        qc.is_valid_cert(
+            &StakeTableEntries::<T>::from(table.stake_table.clone()).0,
+            table.success_threshold,
+            upgrade_lock,
+        )?;
+        Ok(())
+    };
 
     // Verify the root is in the chain of decided leaves
+    check_qc(&newest_leaf.justify_qc(), parent.height())?;
     let mut last_leaf = parent;
     for leaf in leaf_chain.iter().skip(2) {
         ensure!(last_leaf.justify_qc().view_number() == leaf.view_number());
         ensure!(last_leaf.justify_qc().data().leaf_commit == leaf.commit());
-        leaf.justify_qc()
-            .is_valid_cert(&stake_table_entries, success_threshold, upgrade_lock)?;
+        check_qc(&last_leaf.justify_qc(), leaf.height())?;
         if leaf.height() == expected_height {
             return Ok(leaf.clone());
         }
