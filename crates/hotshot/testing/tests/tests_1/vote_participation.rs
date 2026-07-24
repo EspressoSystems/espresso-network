@@ -61,7 +61,7 @@ mod tests {
         };
         let genesis_qc: QuorumCertificate2<TestTypes> =
             SimpleCertificate::<TestTypes, QuorumData2<TestTypes>, SuccessThreshold>::new(
-                genesis_data.clone(),
+                genesis_data,
                 genesis_data.commit(),
                 ViewNumber::genesis(),
                 None,
@@ -122,7 +122,7 @@ mod tests {
             block_number: Some(view),
         };
         SimpleCertificate::<TestTypes, QuorumData2<TestTypes>, SuccessThreshold>::new(
-            data.clone(),
+            data,
             data.commit(),
             ViewNumber::new(view),
             Some(qc_type),
@@ -267,7 +267,7 @@ mod tests {
         };
         let genesis_qc: QuorumCertificate2<TestTypes> =
             SimpleCertificate::<TestTypes, QuorumData2<TestTypes>, SuccessThreshold>::new(
-                genesis_data.clone(),
+                genesis_data,
                 genesis_data.commit(),
                 ViewNumber::genesis(),
                 // Provide a Some signature so the QC is not rejected for missing sigs

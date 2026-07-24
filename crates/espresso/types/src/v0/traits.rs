@@ -23,11 +23,12 @@ use hotshot_types::{
         CertificatePair, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
         QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
     },
+    stake_table::EpochStakeTables,
     traits::{
         ValidatedState as HotShotState, metrics::Metrics, node_implementation::NodeType,
         storage::Storage,
     },
-    utils::{EpochStakeTable, genesis_epoch_from_version},
+    utils::genesis_epoch_from_version,
     vote::HasViewNumber,
 };
 use indexmap::IndexMap;
@@ -54,21 +55,21 @@ use crate::{
 pub trait StateCatchup: Send + Sync {
     /// Fetch the leaf at the given height without retrying on transient errors.
     ///
-    /// `stake_tables` must cover every epoch the leaf's decide chain may
-    /// reference, with the entry for the epoch of `height` first; see
-    /// [`verify_leaf_chain`](hotshot_types::utils::verify_leaf_chain).
+    /// `stake_tables` must cover every epoch the verified leaf chain may
+    /// touch: a chain deciding a leaf near the end of an epoch contains
+    /// certificates signed by the next epoch's quorum.
     async fn try_fetch_leaf(
         &self,
         retry: usize,
         height: u64,
-        stake_tables: Vec<EpochStakeTable<SeqTypes>>,
+        stake_tables: EpochStakeTables<SeqTypes>,
     ) -> anyhow::Result<Leaf2>;
 
     /// Fetch the leaf at the given height, retrying on transient errors.
     async fn fetch_leaf(
         &self,
         height: u64,
-        stake_tables: Vec<EpochStakeTable<SeqTypes>>,
+        stake_tables: EpochStakeTables<SeqTypes>,
     ) -> anyhow::Result<Leaf2> {
         self.backoff()
             .retry(self, |provider, retry| {
@@ -300,7 +301,7 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
         &self,
         retry: usize,
         height: u64,
-        stake_tables: Vec<EpochStakeTable<SeqTypes>>,
+        stake_tables: EpochStakeTables<SeqTypes>,
     ) -> anyhow::Result<Leaf2> {
         (**self).try_fetch_leaf(retry, height, stake_tables).await
     }
@@ -308,7 +309,7 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
     async fn fetch_leaf(
         &self,
         height: u64,
-        stake_tables: Vec<EpochStakeTable<SeqTypes>>,
+        stake_tables: EpochStakeTables<SeqTypes>,
     ) -> anyhow::Result<Leaf2> {
         (**self).fetch_leaf(height, stake_tables).await
     }
