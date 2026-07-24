@@ -4,7 +4,7 @@
     epoch_height: <a class="primitive" href="https://doc.rust-lang.org/1.97.1/std/primitive.u64.html">u64</a>,
 )<div class="where">where
     T: <a class="trait" href="../../hotshot_types/traits/node_implementation/trait.NodeType.html" title="trait hotshot_types::traits::node_implementation::NodeType">NodeType</a>,
-    S: NewProtocolStorage&lt;T&gt;,</div></code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Forward legacy epoch transitions into the coordinator so cliquenet keeps
+    S: <a class="trait" href="../../hotshot_new_protocol/storage/trait.NewProtocolStorage.html" title="trait hotshot_new_protocol::storage::NewProtocolStorage">NewProtocolStorage</a>&lt;T&gt;,</div></code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Forward legacy epoch transitions into the coordinator so cliquenet keeps
 dialing the current validator set before cutover.</p>
 <p>The parked coordinator’s event loop is not running yet, so its network is
 bumped directly under the state lock. Once the coordinator runs, it
