@@ -9,6 +9,7 @@ mod failures;
 mod integration;
 mod legacy_cutover;
 mod restarts;
+mod stake_table_changes;
 mod state;
 mod storage;
 mod vid;

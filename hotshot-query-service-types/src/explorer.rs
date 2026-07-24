@@ -16,9 +16,9 @@ use std::{
     num::{NonZeroUsize, TryFromIntError},
 };
 
+use disco_types::status::StatusCode;
 use hotshot_types::traits::{block_contents::BlockHeader, node_implementation::NodeType};
 use serde::{Deserialize, Serialize};
-use tide_disco::StatusCode;
 use time::format_description::well_known::Rfc3339;
 
 use self::{

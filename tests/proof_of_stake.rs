@@ -75,7 +75,11 @@ async fn test_native_demo_drb_header_base() -> Result<()> {
     let progress_requirements = TestRequirements {
         block_height_increment: expected_block_height,
         txn_count_increment: 2 * expected_block_height,
-        global_timeout: Duration::from_secs(expected_block_height as u64 * 3),
+        // The light client stalls for one or two prover cycles during the LCv2 -> v3
+        // switchover (fresh one-shot prover run, proving-key reload, per-epoch catchup),
+        // and reward claims are gated on the LC finalized height. Give the prover
+        // enough headroom on slow CI runners.
+        global_timeout: Duration::from_secs(expected_block_height as u64 * 6),
         first_reward_block: Some(first_reward_block),
         ..Default::default()
     };

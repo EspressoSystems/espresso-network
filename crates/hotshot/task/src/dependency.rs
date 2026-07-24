@@ -89,12 +89,9 @@ impl<T: Clone + Send + Sync> Dependency<T> for OrDependency<T> {
     async fn completed(self) -> Option<T> {
         let mut futures = FuturesUnordered::from_iter(self.deps);
         loop {
-            if let Some(maybe) = futures.next().await {
-                if maybe.is_some() {
-                    return maybe;
-                }
-            } else {
-                return None;
+            let maybe = futures.next().await?;
+            if maybe.is_some() {
+                return maybe;
             }
         }
     }

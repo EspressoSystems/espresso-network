@@ -230,7 +230,6 @@ modules:
   http:
     port: 24000
     max_connections: ~
-    axum_port: ~
     tonic_port: ~
   query:
     peers: []

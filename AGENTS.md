@@ -15,6 +15,7 @@ Espresso Network is a confirmation layer for Ethereum rollups, providing fast fi
 
 - `doc/agents/rust.md`
 - `doc/agents/solidity.md`
+- `doc/cargo-features.md` - feature gates for zkVM builds and which functions panic without them
 
 ## Writing Reviewable Code
 

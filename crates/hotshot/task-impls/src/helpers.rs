@@ -269,11 +269,7 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
             // First add the epoch root to `membership`
             {
                 let start = Instant::now();
-                if let Err(e) = membership_clone
-                    .membership()
-                    .add_epoch_root(decided_block_header)
-                    .await
-                {
+                if let Err(e) = membership_clone.add_epoch_root(decided_block_header).await {
                     tracing::error!("Failed to add epoch root for epoch {next_epoch_number}: {e}");
                 }
                 tracing::info!("Time taken to add epoch root: {:?}", start.elapsed());
@@ -699,12 +695,18 @@ pub(crate) async fn parent_leaf_and_state<TYPES: NodeType>(
     epoch_height: u64,
 ) -> Result<(Leaf2<TYPES>, Arc<<TYPES as NodeType>::ValidatedState>)> {
     let consensus_reader = consensus.read().await;
-    let vsm_contains_parent_view = consensus_reader
+    // A `Da` or `Failed` entry in the state map doesn't carry the parent leaf
+    // and state, so it can't be proposed on; treat it like a missing view and
+    // fetch the proposal. This matters when we form the QC from unicast votes
+    // before validating the parent proposal ourselves: the DA proposal's
+    // entry would otherwise mask the fetch and abort our proposal.
+    let vsm_contains_parent_leaf = consensus_reader
         .validated_state_map()
-        .contains_key(&parent_qc.view_number());
+        .get(&parent_qc.view_number())
+        .is_some_and(|view| view.leaf_and_state().is_some());
     drop(consensus_reader);
 
-    if !vsm_contains_parent_view {
+    if !vsm_contains_parent_leaf {
         let _ = fetch_proposal(
             parent_qc,
             event_sender.clone(),

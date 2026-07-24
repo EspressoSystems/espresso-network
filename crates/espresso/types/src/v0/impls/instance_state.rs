@@ -1,12 +1,15 @@
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+#[cfg(feature = "node")]
+use std::time::Duration;
+use std::{collections::BTreeMap, sync::Arc};
 
 use alloy::primitives::Address;
 use anyhow::{Context, bail};
 use async_lock::Mutex;
 use async_trait::async_trait;
+#[cfg(feature = "node")]
 use hotshot_contract_adapter::sol_types::{LightClientV3, StakeTableV3};
 use hotshot_types::{
-    HotShotConfig, data::EpochNumber, epoch_membership::EpochMembershipCoordinator,
+    HotShotConfig, data::EpochNumber, drb::DrbResult, epoch_membership::EpochMembershipCoordinator,
     traits::states::InstanceState,
 };
 use moka::future::Cache;
@@ -19,10 +22,12 @@ use super::{
     v0_1::NoStorage,
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
 };
+#[cfg(feature = "node")]
+use crate::v0::L1Client;
 use crate::{
-    AuthenticatedValidatorMap, PubKey, RegisteredValidatorMap,
+    AuthenticatedValidatorMap, Header, PubKey, RegisteredValidatorMap,
     v0::{
-        GenesisHeader, L1BlockInfo, L1Client, Timestamp, Upgrade, UpgradeMode,
+        GenesisHeader, L1BlockInfo, Timestamp, Upgrade, UpgradeMode,
         impls::{StakeTableHash, fetch_and_calculate_block_reward, reward::EpochRewardsCalculator},
         traits::StateCatchup,
         v0_3::ChainConfig,
@@ -37,6 +42,7 @@ use crate::{
 pub struct NodeState {
     pub node_id: u64,
     pub chain_config: ChainConfig,
+    #[cfg(feature = "node")]
     pub l1_client: L1Client,
     #[debug("{}", state_catchup.name())]
     pub state_catchup: Arc<dyn StateCatchup>,
@@ -88,6 +94,7 @@ impl NodeState {
             .context("fixed block reward not found")
     }
 
+    #[cfg(feature = "node")]
     pub async fn light_client_contract_address(&self) -> anyhow::Result<Address> {
         match self.light_client_contract_address.get(&()).await {
             Some(address) => Ok(address),
@@ -110,6 +117,7 @@ impl NodeState {
         }
     }
 
+    #[cfg(feature = "node")]
     pub async fn token_contract_address(&self) -> anyhow::Result<Address> {
         match self.token_contract_address.get(&()).await {
             Some(address) => Ok(address),
@@ -132,6 +140,7 @@ impl NodeState {
         }
     }
 
+    #[cfg(feature = "node")]
     pub async fn finalized_hotshot_height(&self) -> anyhow::Result<u64> {
         match self.finalized_hotshot_height.get(&()).await {
             Some(block) => Ok(block),
@@ -166,6 +175,14 @@ impl MembershipPersistence for NoStorage {
     }
 
     async fn load_latest_stake(&self, _limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
+        Ok(None)
+    }
+
+    async fn load_drb_result(&self, _epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
+        Ok(None)
+    }
+
+    async fn load_epoch_root(&self, _epoch: EpochNumber) -> anyhow::Result<Option<Header>> {
         Ok(None)
     }
 
@@ -221,6 +238,7 @@ impl MembershipPersistence for NoStorage {
 }
 
 impl NodeState {
+    #[cfg(feature = "node")]
     pub fn new(
         node_id: u64,
         chain_config: ChainConfig,
@@ -347,6 +365,7 @@ impl NodeState {
         )
     }
 
+    #[cfg(feature = "node")]
     pub fn with_l1(mut self, l1_client: L1Client) -> Self {
         self.l1_client = l1_client;
         self
@@ -491,13 +510,11 @@ impl Upgrade {
 pub mod mock {
     use std::collections::HashMap;
 
-    use alloy::primitives::U256;
     use anyhow::Context;
     use async_trait::async_trait;
     use committable::Commitment;
     use hotshot_types::{
         data::ViewNumber, simple_certificate::LightClientStateUpdateCertificateV2,
-        stake_table::HSStakeTable,
     };
     use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
 
@@ -548,9 +565,8 @@ pub mod mock {
         async fn try_fetch_leaf(
             &self,
             _retry: usize,
+            _coordinator: EpochMembershipCoordinator<SeqTypes>,
             _height: u64,
-            _stake_table: HSStakeTable<SeqTypes>,
-            _success_threshold: U256,
         ) -> anyhow::Result<Leaf2> {
             Err(anyhow::anyhow!("todo"))
         }

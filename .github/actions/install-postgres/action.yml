@@ -1,0 +1,15 @@
+name: Install postgres
+description: Install the postgres server binaries (initdb, postgres, pg_isready) and put them on PATH.
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install -y postgresql
+        # stop the auto-started cluster; tests run their own instances on ephemeral ports
+        sudo systemctl stop postgresql || true
+        # server binaries (initdb, postgres) are not on PATH on Debian
+        echo "$(ls -d /usr/lib/postgresql/*/bin | sort -V | tail -1)" >> "$GITHUB_PATH"

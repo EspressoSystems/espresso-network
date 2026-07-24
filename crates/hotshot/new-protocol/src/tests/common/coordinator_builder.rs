@@ -21,11 +21,11 @@ use hotshot_types::{
 use super::utils::reconstructed_blocks;
 use crate::{
     block::{BlockBuilder, BlockBuilderConfig},
+    cert_verifier::CertVerifiers,
     client::CoordinatorClient,
     consensus::{Consensus, PreCutoverSeed},
     coordinator::{Coordinator, timer::Timer},
     epoch::EpochManager,
-    epoch_root_vote_collector::EpochRootVoteCollector,
     helpers::test_upgrade_lock,
     message::{Certificate1, Proposal},
     network::Cliquenet,
@@ -59,8 +59,7 @@ pub async fn build_test_coordinator(
     let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let timeout_one_honest_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
-    let epoch_root_collector =
-        EpochRootVoteCollector::new(membership.clone(), upgrade_lock.clone());
+    let epoch_root_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
 
     let genesis_state = TestValidatedState::default();
     let genesis_leaf =
@@ -250,6 +249,7 @@ pub async fn build_test_coordinator(
         .timeout_collector(timeout_collector)
         .timeout_one_honest_collector(timeout_one_honest_collector)
         .epoch_root_collector(epoch_root_collector)
+        .cert_verifiers(CertVerifiers::new(membership.clone(), upgrade_lock.clone()))
         .vid_disperser(vid_disperser)
         .vid_reconstructor(vid_reconstructor)
         .epoch_manager(epoch_manager)
@@ -269,7 +269,7 @@ pub async fn build_test_coordinator(
         .build();
 
     // Emit initial ViewChanged + RequestBlockAndHeader (if leader).
-    coordinator.start();
+    coordinator.start(None);
 
     // Process the initial outputs so the timer resets and block builder
     // gets notified before the event loop starts.

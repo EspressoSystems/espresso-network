@@ -36,12 +36,12 @@ EOF
 }
 
 get_block_height() {
-  curl -sL "${ESPRESSO_API_URL}/status/block-height" 2>/dev/null || echo ""
+  curl -sL "${ESPRESSO_API_URL}/v1/status/block-height" 2>/dev/null || echo ""
 }
 
 get_header_at_height() {
   local height="$1"
-  curl -sL "${ESPRESSO_API_URL}/v0/availability/header/${height}" 2>/dev/null || echo ""
+  curl -sL "${ESPRESSO_API_URL}/v1/availability/header/${height}" 2>/dev/null || echo ""
 }
 
 is_valid_value() {
@@ -164,8 +164,8 @@ new-epochs)
   ;;
 esac
 
-echo "Getting hotshot config from: ${ESPRESSO_API_URL}/config/hotshot"
-blocks_per_epoch=$(curl -sL "${ESPRESSO_API_URL}/config/hotshot" | jq -r '.config.epoch_height')
+echo "Getting hotshot config from: ${ESPRESSO_API_URL}/v1/config/hotshot"
+blocks_per_epoch=$(curl -sL "${ESPRESSO_API_URL}/v1/config/hotshot" | jq -r '.config.epoch_height')
 echo "Blocks per epoch: ${blocks_per_epoch}"
 
 if [ "$MODE" = "new-epochs" ]; then

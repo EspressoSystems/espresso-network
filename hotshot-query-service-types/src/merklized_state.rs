@@ -5,6 +5,7 @@ use std::{
 
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use derive_more::From;
+use disco_types::{request::RequestError, status::StatusCode};
 use hotshot_types::traits::node_implementation::NodeType;
 use jf_merkle_tree_compat::{
     DigestAlgorithm, Element, ForgetableMerkleTreeScheme, Index, MerkleCommitment, NodeValue,
@@ -13,7 +14,6 @@ use jf_merkle_tree_compat::{
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use snafu::Snafu;
 use tagged_base64::TaggedBase64;
-use tide_disco::StatusCode;
 
 use crate::QueryError;
 
@@ -73,7 +73,7 @@ where
 #[snafu(visibility(pub))]
 pub enum Error {
     Request {
-        source: tide_disco::RequestError,
+        source: RequestError,
     },
     #[snafu(display("{source}"))]
     Query {

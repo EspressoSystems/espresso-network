@@ -176,10 +176,6 @@ struct Args {
     #[clap(long, env = "ESPRESSO_NODE_API_MAX_CONNECTIONS")]
     sequencer_api_max_connections: Option<usize>,
 
-    /// Optional port for new Axum API server (skeleton implementation).
-    #[clap(long, env = "ESPRESSO_NODE_AXUM_PORT")]
-    axum_port: Option<u16>,
-
     /// Optional port for Tonic gRPC API server.
     #[clap(long, env = "ESPRESSO_NODE_TONIC_PORT")]
     tonic_port: Option<u16>,
@@ -250,6 +246,7 @@ struct ChainInfo {
 }
 
 fn main() -> anyhow::Result<()> {
+    espresso_types::assert_node_feature();
     let migrated_envs = espresso_utils::env_compat::migrate_legacy_env_vars();
     tokio::runtime::Runtime::new()
         .unwrap()
@@ -270,7 +267,6 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
         alt_multisig_addresses,
         sequencer_api_port,
         sequencer_api_max_connections,
-        axum_port,
         tonic_port,
         builder_port,
         prover_port,
@@ -663,7 +659,6 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     let api_options = options::Options::from(options::Http {
         port: sequencer_api_port,
         max_connections: sequencer_api_max_connections,
-        axum_port,
         tonic_port,
     })
     .submit(Default::default())

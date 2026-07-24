@@ -55,7 +55,7 @@ use vbs::{
     BinarySerializer,
     version::{StaticVersion, Version},
 };
-use versions::{EPOCH_VERSION, version};
+use versions::{EPOCH_REWARD_VERSION, EPOCH_VERSION, version};
 
 use crate::{
     ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId,
@@ -68,12 +68,14 @@ use crate::{
         REWARD_MERKLE_TREE_V2_HEIGHT, RewardAccountProofV2, RewardAccountQueryDataV2,
         RewardAccountV2, RewardMerkleTreeV2,
     },
+    v0_5::{LeaderCounts, MAX_VALIDATORS},
 };
 
 type V1Serializer = vbs::Serializer<StaticVersion<0, 1>>;
 type V2Serializer = vbs::Serializer<StaticVersion<0, 2>>;
 type V3Serializer = vbs::Serializer<StaticVersion<0, 3>>;
 type V4Serializer = vbs::Serializer<StaticVersion<0, 4>>;
+type V5Serializer = vbs::Serializer<StaticVersion<0, 5>>;
 
 const REFERENCE_NAMESPACE_ID: u32 = 12648430;
 
@@ -243,6 +245,9 @@ async fn reference_header(version: Version) -> Header {
 
     let state = ValidatedState::default();
 
+    // `leader_counts` was added to the header in V5. Earlier versions don't carry the field.
+    let leader_counts = (version >= EPOCH_REWARD_VERSION).then(reference_leader_counts);
+
     Header::create(
         reference_chain_config(),
         42,
@@ -262,14 +267,23 @@ async fn reference_header(version: Version) -> Header {
         None,
         version,
         Some(staket_table_hash),
-        None,
+        leader_counts,
     )
+}
+
+fn reference_leader_counts() -> LeaderCounts {
+    let mut counts = [0u16; MAX_VALIDATORS];
+    for (i, count) in counts.iter_mut().enumerate() {
+        *count = i as u16;
+    }
+    counts
 }
 
 const REFERENCE_V1_HEADER_COMMITMENT: &str = "BLOCK~dh1KpdvvxSvnnPpOi2yI3DOg8h6ltr2Kv13iRzbQvtN2";
 const REFERENCE_V2_HEADER_COMMITMENT: &str = "BLOCK~V0GJjL19nCrlm9n1zZ6gaOKEekSMCT6uR5P-h7Gi6UJR";
 const REFERENCE_V3_HEADER_COMMITMENT: &str = "BLOCK~qKb0axY9NwpusJn5ZFhjJAyG8IYpJpHN2-BDIsIkhrEd";
 const REFERENCE_V4_HEADER_COMMITMENT: &str = "BLOCK~hPVq9NasWW1vVYGGGr0PSRv1TV3nUV_8ARw5fWHlQLx3";
+const REFERENCE_V5_HEADER_COMMITMENT: &str = "BLOCK~yYZmWrTIWJerGV7VA-EeKWL4tnsdJya1BpK4HWdvnwAA";
 
 fn reference_transaction<R>(ns_id: NamespaceId, rng: &mut R) -> Transaction
 where
@@ -344,6 +358,7 @@ change in the serialization of this data structure.
         "v2" => V2Serializer::serialize(&reference).unwrap(),
         "v3" => V3Serializer::serialize(&reference).unwrap(),
         "v4" => V4Serializer::serialize(&reference).unwrap(),
+        "v5" => V5Serializer::serialize(&reference).unwrap(),
         _ => panic!("invalid version"),
     };
     if actual != expected {
@@ -374,6 +389,7 @@ change in the serialization of this data structure.
         "v2" => V2Serializer::deserialize(&expected).unwrap(),
         "v3" => V3Serializer::deserialize(&expected).unwrap(),
         "v4" => V4Serializer::deserialize(&expected).unwrap(),
+        "v5" => V5Serializer::deserialize(&expected).unwrap(),
         _ => panic!("invalid version"),
     };
 
@@ -519,6 +535,16 @@ async fn test_reference_header_v4() {
         "header",
         reference_header(version(0, 4)).await,
         REFERENCE_V4_HEADER_COMMITMENT,
+    );
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_reference_header_v5() {
+    reference_test(
+        "v5",
+        "header",
+        reference_header(version(0, 5)).await,
+        REFERENCE_V5_HEADER_COMMITMENT,
     );
 }
 

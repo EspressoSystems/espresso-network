@@ -1,9 +1,9 @@
 use std::fmt::Display;
 
 use derive_more::From;
+use disco_types::{request::RequestError, status::StatusCode};
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
-use tide_disco::{RequestError, StatusCode};
 
 /// Error exposed to clients of the status API.
 #[derive(Clone, Debug, From, Snafu, Deserialize, Serialize)]

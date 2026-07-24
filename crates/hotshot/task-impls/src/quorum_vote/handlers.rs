@@ -6,7 +6,6 @@
 
 use std::{sync::Arc, time::Instant};
 
-use alloy::primitives::U256;
 use async_broadcast::{InactiveReceiver, Sender};
 use chrono::Utc;
 use committable::Committable;
@@ -18,9 +17,7 @@ use hotshot_types::{
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     event::{Event, EventType},
     message::{Proposal, UpgradeLock},
-    simple_vote::{
-        EpochRootQuorumVote2, HasEpoch, LightClientStateUpdateVote2, QuorumData2, QuorumVote2,
-    },
+    simple_vote::{EpochRootQuorumVote2, LightClientStateUpdateVote2, QuorumData2, QuorumVote2},
     stake_table::HSStakeTable,
     storage_metrics::StorageMetricsValue,
     traits::{
@@ -216,35 +213,8 @@ pub(crate) async fn handle_quorum_proposal_validated<
             .number_of_views_per_decide_event
             .add_point(cur_number_of_views_per_decide_event as f64);
         for leaf in leaf_views.iter().rev() {
-            let qc_epoch = leaf.leaf.justify_qc().epoch();
-            if qc_epoch > Some(consensus_writer.current_proposal_participation_epoch())
-                && let Some(e) = qc_epoch
-            {
-                consensus_writer.update_validator_participation_epoch(e);
-            }
-            if qc_epoch > consensus_writer.current_vote_participation_epoch() {
-                let (stake_table, success_threshold) = if let Ok(epoch_membership) =
-                    task_state.membership.stake_table_for_epoch(qc_epoch)
-                {
-                    (
-                        HSStakeTable::from_iter(epoch_membership.stake_table()),
-                        epoch_membership.success_threshold(),
-                    )
-                } else {
-                    tracing::warn!(
-                        "Failed to get stake table for epoch {:?} while updating vote \
-                         participation",
-                        qc_epoch
-                    );
-                    (HSStakeTable::default(), U256::MAX)
-                };
-                consensus_writer
-                    .update_vote_participation_epoch(stake_table, success_threshold, qc_epoch)
-                    .context(warn!("Updating vote participation"))?;
-            }
-            if let Err(e) = consensus_writer.update_vote_participation(leaf.leaf.justify_qc()) {
-                tracing::warn!("Failed to update vote participation: {e}");
-            }
+            consensus_writer
+                .update_participation_from_qc(&leaf.leaf.justify_qc(), &task_state.membership)?;
         }
 
         // We don't need to hold this while we broadcast

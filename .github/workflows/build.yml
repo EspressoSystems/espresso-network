@@ -712,11 +712,29 @@ jobs:
             exit 1
           fi
 
-  memory-soak-pr:
+  # The soak test takes ~1h; on PRs only run it when the scripts driving it change.
+  memory-soak-changes:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    outputs:
+      soak: ${{ steps.filter.outputs.soak }}
+    steps:
+      - id: filter
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
+            --paginate --jq '.[].filename' | grep -q '^crates/process-metrics/scripts/'; then
+            echo "soak=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "soak=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  memory-soak-pr:
+    if: github.event_name == 'pull_request' && needs.memory-soak-changes.outputs.soak == 'true'
+    runs-on: ubuntu-latest
     timeout-minutes: 90
-    needs: [build-dockers-amd]
+    needs: [build-dockers-amd, memory-soak-changes]
     strategy:
       fail-fast: false
       matrix:

@@ -54,6 +54,7 @@ pub(crate) fn default_telemetry_endpoint(chain_id: ChainId) -> Option<&'static s
     }
 }
 
+pub use espresso_types::RECENT_STAKE_TABLES_LIMIT;
 use genesis::L1Finalized;
 pub use genesis::{Genesis, GenesisSource};
 use hotshot::{
@@ -97,8 +98,6 @@ use url::Url;
 use vbs::version::StaticVersion;
 
 use crate::request_response::data_source::Storage as RequestResponseStorage;
-
-pub const RECENT_STAKE_TABLES_LIMIT: u64 = 20;
 
 /// The Sequencer node is generic over the hotshot CommChannel.
 #[derive(Derivative, Serialize, Deserialize)]
@@ -396,7 +395,7 @@ where
         .with_context(|| {
             format!(
                 "Failed to derive Libp2p bind address of {}",
-                &network_params.libp2p_bind_address
+                network_params.libp2p_bind_address
             )
         })?;
     let advertise_multiaddr = network_params
@@ -826,15 +825,20 @@ where
 
         info!("Libp2p network initialized");
 
-        tracing::warn!("Waiting for at least one connection to be initialized");
-        select! {
-            _ = cdn_network.wait_for_ready() => {
-                tracing::warn!("CDN connection initialized");
-            },
-            _ = p2p_network.wait_for_ready() => {
-                tracing::warn!("P2P connection initialized");
-            },
-        };
+        // From `NEW_PROTOCOL_VERSION` on, all consensus traffic runs on
+        // cliquenet and the legacy stack is torn down at startup, so don't
+        // hold up boot waiting for legacy connectivity.
+        if genesis.base_version < versions::NEW_PROTOCOL_VERSION {
+            tracing::warn!("Waiting for at least one connection to be initialized");
+            select! {
+                _ = cdn_network.wait_for_ready() => {
+                    tracing::warn!("CDN connection initialized");
+                },
+                _ = p2p_network.wait_for_ready() => {
+                    tracing::warn!("P2P connection initialized");
+                },
+            };
+        }
 
         // Combine the CDN and P2P networks
         CombinedNetworks::new(cdn_network, p2p_network, Some(Duration::from_secs(1)))
@@ -1819,31 +1823,38 @@ pub mod testing {
 
     /// Waits until a node has reached the given target epoch (exclusive).
     /// The function returns once the first event indicates an epoch higher than `target_epoch`.
+    /// Panics if the event stream ends before reaching `target_epoch`.
     pub async fn wait_for_epochs(
         events: &mut (impl futures::Stream<Item = CoordinatorEvent<SeqTypes>> + std::marker::Unpin),
         epoch_height: u64,
         target_epoch: u64,
     ) {
         tracing::info!(target_epoch, "waiting for epoch");
+        let mut last_seen = None;
         while let Some(event) = events.next().await {
-            if let CoordinatorEvent::LegacyEvent(Event {
-                event: EventType::Decide { leaf_chain, .. },
-                ..
-            }) = event
-            {
-                let leaf = leaf_chain[0].leaf.clone();
-                let epoch = leaf.epoch(epoch_height);
-                tracing::debug!(
-                    "Node decided at height: {}, epoch: {epoch:?}",
-                    leaf.height(),
-                );
+            // Decides arrive as `LegacyEvent` before the new protocol and as
+            // `NewDecide` after; both carry the most recent leaf first.
+            let leaf = match event {
+                CoordinatorEvent::LegacyEvent(Event {
+                    event: EventType::Decide { leaf_chain, .. },
+                    ..
+                }) => leaf_chain[0].leaf.clone(),
+                CoordinatorEvent::NewDecide { leaf_infos, .. } => leaf_infos[0].leaf.clone(),
+                _ => continue,
+            };
+            let epoch = leaf.epoch(epoch_height);
+            tracing::debug!(
+                "Node decided at height: {}, epoch: {epoch:?}",
+                leaf.height(),
+            );
 
-                if epoch > Some(EpochNumber::new(target_epoch)) {
-                    break;
-                }
+            if epoch > Some(EpochNumber::new(target_epoch)) {
+                tracing::info!(target_epoch, "epoch started");
+                return;
             }
+            last_seen = Some((leaf.height(), epoch));
         }
-        tracing::info!(target_epoch, "epoch started");
+        panic!("event stream ended before target epoch {target_epoch}, last decide: {last_seen:?}");
     }
 }
 

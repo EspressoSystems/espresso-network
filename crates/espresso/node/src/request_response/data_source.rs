@@ -13,6 +13,7 @@ use espresso_types::{
     v0_4::{RewardAccountV2, RewardMerkleTreeV2},
 };
 use hotshot::traits::NodeImplementation;
+use hotshot_new_protocol::storage::NewProtocolStorage;
 use hotshot_query_service::{
     data_source::{
         VersionedDataSource,
@@ -67,6 +68,8 @@ pub struct DataSource<
 #[async_trait]
 impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerPersistence>
     DataSourceTrait<Request> for DataSource<I, N, P>
+where
+    I::Storage: NewProtocolStorage<SeqTypes>,
 {
     async fn derive_response_for(&self, request: &Request) -> Result<Response> {
         match request {
@@ -328,10 +331,16 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
             Request::RewardMerkleTreeV2(height, view) => {
                 // Try to get the reward merkle tree from memory first, then fall back to storage
                 if let Some(state) = self.consensus_handle.state(ViewNumber::new(*view)).await {
-                    let merkle_tree_bytes = bincode::serialize(
-                        &TryInto::<RewardMerkleTreeV2Data>::try_into(&state.reward_merkle_tree_v2)?,
-                    )
-                    .context("Merkle tree serialization failed; this should never happen.")?;
+                    let tree_data =
+                        TryInto::<RewardMerkleTreeV2Data>::try_into(&state.reward_merkle_tree_v2)
+                            .inspect_err(|err| {
+                            tracing::debug!(
+                                %err, height, view,
+                                "cannot serve reward merkle tree from memory"
+                            )
+                        })?;
+                    let merkle_tree_bytes = bincode::serialize(&tree_data)
+                        .context("Merkle tree serialization failed; this should never happen.")?;
 
                     return Ok(Response::RewardMerkleTreeV2(merkle_tree_bytes));
                 }
@@ -361,7 +370,10 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
 async fn legacy_leaf_chain_from_memory<I: NodeImplementation<SeqTypes>>(
     consensus_handle: &ConsensusHandle<SeqTypes, I>,
     height: u64,
-) -> anyhow::Result<Vec<espresso_types::Leaf2>> {
+) -> anyhow::Result<Vec<espresso_types::Leaf2>>
+where
+    I::Storage: NewProtocolStorage<SeqTypes>,
+{
     let mut leaves = consensus_handle.undecided_leaves().await;
     leaves.sort_by_key(|l| l.view_number());
 

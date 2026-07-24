@@ -78,7 +78,7 @@ For timelocks:
 | FeeContract | [`0x42835083fD1d3FC5d799B5f6815AE4BF2623E6D0`](https://sepolia.etherscan.io/address/0x42835083fD1d3FC5d799B5f6815AE4BF2623E6D0) | 1.0.0 | ops_timelock | - |
 | LightClient | [`0x303872BB82a191771321d4828888920100d0b3e4`](https://sepolia.etherscan.io/address/0x303872BB82a191771321d4828888920100d0b3e4) | 3.0.0 | ops_timelock | - |
 | RewardClaim | [`0xe81908E34dBb4BA01f27F8769264199727Be50c8`](https://sepolia.etherscan.io/address/0xe81908E34dBb4BA01f27F8769264199727Be50c8) | 1.0.0 | safe_exit_timelock | espresso_labs |
-| StakeTable | [`0x40304FbE94D5E7D1492Dd90c53a2D63E8506a037`](https://sepolia.etherscan.io/address/0x40304FbE94D5E7D1492Dd90c53a2D63E8506a037) | 2.0.0 | ops_timelock | espresso_labs |
+| StakeTable | [`0x40304FbE94D5E7D1492Dd90c53a2D63E8506a037`](https://sepolia.etherscan.io/address/0x40304FbE94D5E7D1492Dd90c53a2D63E8506a037) | 3.0.0 | ops_timelock | espresso_labs |
 
 | Multisig | Address | Version | Threshold |
 |----------|---------|---------|----------|

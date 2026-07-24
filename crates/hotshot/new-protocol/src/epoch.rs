@@ -7,7 +7,7 @@ use hotshot_types::{
     data::{BlockNumber, EpochNumber, Leaf2},
     drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
-    traits::{block_contents::BlockHeader, election::Membership, node_implementation::NodeType},
+    traits::{block_contents::BlockHeader, node_implementation::NodeType},
     utils::{is_epoch_root, is_transition_block},
 };
 use hotshot_utils::anytrace;
@@ -114,7 +114,6 @@ impl<T: NodeType> EpochManager<T> {
             handles.push(self.tasks.spawn(async move {
                 let result = async {
                     membership_coordinator
-                        .membership()
                         .add_epoch_root(root_leaf.block_header().clone())
                         .await
                         .map_err(|e| EpochManagerError::EpochRoot(anyhow::anyhow!("{e}")))?;

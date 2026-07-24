@@ -3,6 +3,9 @@
 debug/
 target/
 
+# Repo-local scratch directory for build trees and temporary files
+/tmp/
+
 # .envrc typically just has `use flake .`
 # but this should be done by the user
 .envrc.local

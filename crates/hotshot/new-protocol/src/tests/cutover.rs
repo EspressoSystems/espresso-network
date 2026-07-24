@@ -1,11 +1,15 @@
 //! Unit tests for the cutover bridging API.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, num::NonZeroUsize, sync::Arc, time::Duration};
 
+use committable::Committable;
 use hotshot::types::{BLSPubKey, SignatureKey};
 use hotshot_example_types::{node_types::TestTypes, state_types::TestValidatedState};
 use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
+    event::{Event, EventType},
+    message::UpgradeLock,
+    simple_certificate::UpgradeCertificate,
     simple_vote::UpgradeProposalData,
     stake_table::StakeTableEntries,
     vote::{Certificate, HasViewNumber},
@@ -13,9 +17,11 @@ use hotshot_types::{
 use versions::{NEW_PROTOCOL_VERSION, version};
 
 use crate::{
+    client::{ClientApi, ClientRequest, CoordinatorClient},
     consensus::PreCutoverSeed,
+    cutover::forward_legacy_high_qc,
     helpers::test_upgrade_lock,
-    tests::common::utils::{ConsensusHarness, TestData},
+    tests::common::utils::{ConsensusHarness, TestData, TestView},
 };
 
 /// Build a `PreCutoverSeed` from leaves, using `TestValidatedState::default()`
@@ -236,4 +242,142 @@ async fn upgrade_certificate_cutover() {
         .run()
         .await
         .expect("new protocol should decide past the upgrade boundary");
+}
+
+fn high_qc_event(view: &TestView) -> Event<TestTypes> {
+    Event {
+        view_number: view.view_number,
+        event: EventType::LegacyHighQcFormed {
+            qc: view.cert1.clone(),
+        },
+    }
+}
+
+/// Certificate deciding the upgrade to `NEW_PROTOCOL_VERSION`.
+fn new_protocol_upgrade_cert() -> UpgradeCertificate<TestTypes> {
+    let upgrade_data = UpgradeProposalData {
+        old_version: version(0, 1),
+        new_version: NEW_PROTOCOL_VERSION,
+        decide_by: ViewNumber::genesis(),
+        new_version_hash: Default::default(),
+        old_version_last_view: ViewNumber::genesis(),
+        new_version_first_view: ViewNumber::genesis(),
+    };
+    UpgradeCertificate::new(
+        upgrade_data.clone(),
+        upgrade_data.commit(),
+        ViewNumber::genesis(),
+        Default::default(),
+        Default::default(),
+    )
+}
+
+/// With the coordinator parked (never polling `next_request`), the forwarder
+/// must keep draining the legacy event stream instead of blocking on a reply.
+#[tokio::test]
+async fn forward_legacy_high_qc_never_blocks_on_parked_coordinator() {
+    let test_data = TestData::new(6).await;
+
+    let client = CoordinatorClient::<TestTypes>::new(NonZeroUsize::new(4).unwrap());
+    let client_api = client.handle().clone();
+
+    let (legacy_tx, legacy_rx) = async_broadcast::broadcast::<Event<TestTypes>>(8);
+
+    let upgrade_lock = test_upgrade_lock::<TestTypes>();
+    upgrade_lock.set_decided_upgrade_cert(Some(new_protocol_upgrade_cert()));
+
+    let forwarder = tokio::spawn(forward_legacy_high_qc(
+        legacy_rx.deactivate(),
+        client_api,
+        upgrade_lock,
+    ));
+
+    for view in &test_data.views {
+        legacy_tx
+            .broadcast_direct(high_qc_event(view))
+            .await
+            .expect("legacy event channel should accept the send");
+    }
+    drop(legacy_tx);
+
+    // Pre-fix: blocked awaiting the parked coordinator's reply, never exited.
+    tokio::time::timeout(Duration::from_secs(5), forwarder)
+        .await
+        .expect(
+            "forward_legacy_high_qc stalled: broadcast channel did not drain (parked coordinator \
+             blocked try_submit_legacy_high_qc)",
+        )
+        .expect("forwarder task should not panic");
+
+    drop(client);
+}
+
+/// Feed `views` as `LegacyHighQcFormed` events and wait for the forwarder to exit.
+async fn run_high_qc_forwarder(
+    api: ClientApi<TestTypes>,
+    views: &[TestView],
+    lock: UpgradeLock<TestTypes>,
+) {
+    let (legacy_tx, legacy_rx) = async_broadcast::broadcast::<Event<TestTypes>>(8);
+    let forwarder = tokio::spawn(forward_legacy_high_qc(legacy_rx.deactivate(), api, lock));
+    for view in views {
+        legacy_tx
+            .broadcast_direct(high_qc_event(view))
+            .await
+            .expect("legacy event channel should accept the send");
+    }
+    drop(legacy_tx);
+    tokio::time::timeout(Duration::from_secs(5), forwarder)
+        .await
+        .expect("forwarder should drain and exit")
+        .expect("forwarder task should not panic");
+}
+
+/// No request queues before the V0_6 upgrade is decided; one per event after.
+#[tokio::test]
+async fn forward_legacy_high_qc_gates_on_decided_upgrade() {
+    let test_data = TestData::new(3).await;
+    let mut client = CoordinatorClient::<TestTypes>::new(NonZeroUsize::new(8).unwrap());
+    let upgrade_lock = test_upgrade_lock::<TestTypes>();
+
+    run_high_qc_forwarder(
+        client.handle().clone(),
+        &test_data.views[..2],
+        upgrade_lock.clone(),
+    )
+    .await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), client.next_request())
+            .await
+            .is_err(),
+        "no request should be forwarded while the upgrade is undecided",
+    );
+
+    upgrade_lock.set_decided_upgrade_cert(Some(new_protocol_upgrade_cert()));
+    let boundary_view = &test_data.views[2];
+    run_high_qc_forwarder(
+        client.handle().clone(),
+        std::slice::from_ref(boundary_view),
+        upgrade_lock,
+    )
+    .await;
+
+    let request = tokio::time::timeout(Duration::from_millis(50), client.next_request())
+        .await
+        .expect("a request should be forwarded once the upgrade is decided")
+        .expect("request channel should be open");
+    assert!(
+        matches!(
+            &request,
+            ClientRequest::SubmitLegacyHighQc { qc } if qc.view_number() == boundary_view.view_number
+        ),
+        "expected SubmitLegacyHighQc for view {}",
+        boundary_view.view_number,
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), client.next_request())
+            .await
+            .is_err(),
+        "exactly one request should be forwarded per event",
+    );
 }

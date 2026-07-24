@@ -1,32 +1,36 @@
 //! This module contains all the traits used for building the sequencer types.
 //! It also includes some trait implementations that cannot be implemented in an external crate.
-use std::{cmp::max, collections::BTreeMap, fmt::Debug, ops::Range, sync::Arc};
+#[cfg(feature = "node")]
+use std::{cmp::max, collections::BTreeMap};
+use std::{fmt::Debug, ops::Range, sync::Arc};
 
-use alloy::primitives::{Address, U256};
+use alloy::primitives::Address;
+#[cfg(feature = "node")]
 use anyhow::{Context, bail, ensure};
 use async_trait::async_trait;
 use committable::Commitment;
 use futures::{FutureExt, TryFutureExt};
+#[cfg(feature = "node")]
 use hotshot::{HotShotInitializer, InitializerEpochInfo, types::EventType};
+#[cfg(feature = "node")]
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
-use hotshot_new_protocol::{
-    message::{Certificate1, Certificate2},
-    storage::NewProtocolStorage,
-};
+#[cfg(feature = "node")]
+use hotshot_new_protocol::storage::NewProtocolStorage;
+#[cfg(feature = "node")]
+use hotshot_types::simple_certificate::{Certificate1, Certificate2};
+#[cfg(feature = "node")]
 use hotshot_types::{
     data::{
-        DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposal2,
-        QuorumProposalWrapper, VidCommitment, VidDisperseShare, ViewNumber,
+        DaProposal, DaProposal2, QuorumProposal, QuorumProposal2, QuorumProposalWrapper,
+        VidCommitment, VidDisperseShare,
     },
-    drb::{DrbInput, DrbResult},
+    drb::DrbInput,
     event::{HotShotAction, LeafInfo},
     message::{Proposal, convert_proposal},
-    new_protocol::CoordinatorEvent,
     simple_certificate::{
-        CertificatePair, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
-        QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
+        CertificatePair, NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2,
+        UpgradeCertificate,
     },
-    stake_table::HSStakeTable,
     traits::{
         ValidatedState as HotShotState, metrics::Metrics, node_implementation::NodeType,
         storage::Storage,
@@ -34,8 +38,16 @@ use hotshot_types::{
     utils::genesis_epoch_from_version,
     vote::HasViewNumber,
 };
+use hotshot_types::{
+    data::{EpochNumber, ViewNumber},
+    drb::DrbResult,
+    epoch_membership::EpochMembershipCoordinator,
+    new_protocol::CoordinatorEvent,
+    simple_certificate::LightClientStateUpdateCertificateV2,
+};
 use indexmap::IndexMap;
 use serde::{Serialize, de::DeserializeOwned};
+#[cfg(feature = "node")]
 use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
 use super::{
@@ -45,42 +57,41 @@ use super::{
 };
 use crate::{
     AuthenticatedValidatorMap, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
-    Leaf2, NetworkConfig, PubKey, SeqTypes,
-    v0::impls::{StakeTableHash, ValidatedState},
+    Header, Leaf2, PubKey, SeqTypes,
+    v0::impls::StakeTableHash,
     v0_3::{
         ChainConfig, RegisteredValidator, RewardAccountProofV1, RewardAccountV1, RewardAmount,
         RewardMerkleCommitmentV1,
     },
     v0_4::{PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleCommitmentV2},
 };
+#[cfg(feature = "node")]
+use crate::{NetworkConfig, v0::impls::ValidatedState};
 
 #[async_trait]
 pub trait StateCatchup: Send + Sync {
     /// Fetch the leaf at the given height without retrying on transient errors.
+    ///
+    /// `coordinator` resolves the stake tables used to verify the fetched leaf
+    /// chain, triggering catchup for epochs whose stake table is not yet
+    /// available.
     async fn try_fetch_leaf(
         &self,
         retry: usize,
+        coordinator: EpochMembershipCoordinator<SeqTypes>,
         height: u64,
-        stake_table: HSStakeTable<SeqTypes>,
-        success_threshold: U256,
     ) -> anyhow::Result<Leaf2>;
 
     /// Fetch the leaf at the given height, retrying on transient errors.
     async fn fetch_leaf(
         &self,
+        coordinator: EpochMembershipCoordinator<SeqTypes>,
         height: u64,
-        stake_table: HSStakeTable<SeqTypes>,
-        success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
         self.backoff()
             .retry(self, |provider, retry| {
-                let stake_table_clone = stake_table.clone();
-                async move {
-                    provider
-                        .try_fetch_leaf(retry, height, stake_table_clone, success_threshold)
-                        .await
-                }
-                .boxed()
+                let coordinator = coordinator.clone();
+                async move { provider.try_fetch_leaf(retry, coordinator, height).await }.boxed()
             })
             .await
     }
@@ -301,24 +312,18 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
     async fn try_fetch_leaf(
         &self,
         retry: usize,
+        coordinator: EpochMembershipCoordinator<SeqTypes>,
         height: u64,
-        stake_table: HSStakeTable<SeqTypes>,
-        success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
-        (**self)
-            .try_fetch_leaf(retry, height, stake_table, success_threshold)
-            .await
+        (**self).try_fetch_leaf(retry, coordinator, height).await
     }
 
     async fn fetch_leaf(
         &self,
+        coordinator: EpochMembershipCoordinator<SeqTypes>,
         height: u64,
-        stake_table: HSStakeTable<SeqTypes>,
-        success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
-        (**self)
-            .fetch_leaf(height, stake_table, success_threshold)
-            .await
+        (**self).fetch_leaf(coordinator, height).await
     }
 
     async fn try_fetch_accounts(
@@ -482,6 +487,7 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
     }
 }
 
+#[cfg(feature = "node")]
 #[async_trait]
 pub trait PersistenceOptions: Clone + Send + Sync + Debug + 'static {
     type Persistence: SequencerPersistence + MembershipPersistence;
@@ -515,6 +521,12 @@ pub trait MembershipPersistence: Send + Sync + 'static {
 
     /// Load stake tables for storage for latest `n` known epochs
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>>;
+
+    /// Load the DRB result for `epoch`.
+    async fn load_drb_result(&self, epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>>;
+
+    /// Load the epoch root block header for `epoch`.
+    async fn load_epoch_root(&self, epoch: EpochNumber) -> anyhow::Result<Option<Header>>;
 
     /// Store stake table at `epoch` in the persistence layer
     async fn store_stake(
@@ -556,6 +568,7 @@ pub trait MembershipPersistence: Send + Sync + 'static {
     ) -> anyhow::Result<Vec<RegisteredValidator<PubKey>>>;
 }
 
+#[cfg(feature = "node")]
 #[async_trait]
 pub trait SequencerPersistence:
     Sized + Send + Sync + Clone + 'static + DhtPersistentStorage + MembershipPersistence
@@ -1146,6 +1159,7 @@ impl EventConsumer for NullEventConsumer {
     }
 }
 
+#[cfg(feature = "node")]
 #[async_trait]
 impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
     async fn append_vid(
@@ -1271,6 +1285,7 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
     }
 }
 
+#[cfg(feature = "node")]
 #[async_trait]
 impl<P: SequencerPersistence> NewProtocolStorage<SeqTypes> for Arc<P> {
     async fn append_cert2(

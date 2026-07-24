@@ -24,6 +24,7 @@ use hotshot_testing::{
     view_generator::TestViewGenerator,
 };
 use hotshot_types::{
+    PeerConnectInfo,
     data::{
         EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperse, VidDisperse2,
         VidDisperseShare2, ViewNumber, vid_commitment,
@@ -52,12 +53,13 @@ use hotshot_types::{
 };
 
 use crate::{
+    cert_verifier::ValidCert,
     client::{ClientLeafFetcherNetwork, CoordinatorClient},
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     helpers::{proposal_commitment, test_upgrade_lock},
     message::{
-        Certificate1, Certificate2, ConsensusMessage, Message, MessageType, Proposal,
-        ProposalMessage, TimeoutVoteMessage, Validated, Vote1, Vote2,
+        CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, Message, MessageType,
+        Proposal, ProposalMessage, TimeoutVoteMessage, Validated, Vote1, Vote2,
     },
     outbox::Outbox,
     state::StateResponse,
@@ -146,11 +148,17 @@ impl TestView {
             )),
         }
     }
-    pub fn proposal_input_consensus(&self, recipient_key: &BLSPubKey) -> ConsensusInput<TestTypes> {
-        ConsensusInput::ProposalWithVidShare(
-            self.leader_public_key,
-            self.proposal_message(),
-            self.vid_share_for(recipient_key),
+    /// Build the proposal and VID share inputs a node receives for this view.
+    ///
+    /// Consensus pairs the two internally, so both must be applied
+    /// (cf. [`ConsensusHarness::apply_pair`]).
+    pub fn proposal_input_consensus(
+        &self,
+        recipient_key: &BLSPubKey,
+    ) -> (ConsensusInput<TestTypes>, ConsensusInput<TestTypes>) {
+        (
+            ConsensusInput::Proposal(self.leader_public_key, self.proposal_message()),
+            ConsensusInput::VidShare(self.vid_share_for(recipient_key)),
         )
     }
 
@@ -161,12 +169,12 @@ impl TestView {
 
     /// Build an Event for Certificate1.
     pub fn cert1_input(&self) -> ConsensusInput<TestTypes> {
-        ConsensusInput::Certificate1(self.cert1.clone())
+        ConsensusInput::Certificate1(ValidCert::new(self.cert1.clone(), self.epoch_number))
     }
 
     /// Build an Event for Certificate2.
     pub fn cert2_input(&self) -> ConsensusInput<TestTypes> {
-        ConsensusInput::Certificate2(self.cert2.clone())
+        ConsensusInput::Certificate2(ValidCert::new(self.cert2.clone(), self.epoch_number))
     }
 
     /// Build a Vote1 Event from a specific validator, carrying that validator's
@@ -243,16 +251,17 @@ impl TestView {
         )
         .expect("Failed to sign Vote2");
         Message {
-            sender: self.leader_public_key,
+            sender: pub_key,
             message_type: MessageType::Consensus(ConsensusMessage::Vote2(vote)),
         }
     }
 
-    /// Build a TimeoutVote Event from a specific validator.
+    /// Build a TimeoutVote Event from a specific validator, optionally
+    /// carrying the sender's catchup evidence.
     pub fn timeout_vote_input(
         &self,
         node_index: u64,
-        lock: Option<Certificate1<TestTypes>>,
+        evidence: Option<CatchupEvidence<TestTypes>>,
     ) -> Message<TestTypes, Validated> {
         let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
         let data = TimeoutData2 {
@@ -268,17 +277,19 @@ impl TestView {
         )
         .expect("Failed to sign TimeoutVote2");
         Message {
-            sender: self.leader_public_key,
+            sender: pub_key,
             message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote(
-                TimeoutVoteMessage { vote, lock },
+                TimeoutVoteMessage { vote, evidence },
             )),
         }
     }
 
     /// Build an Event for a timeout certificate.
-    #[allow(dead_code)]
     pub fn timeout_cert_input(&self) -> ConsensusInput<TestTypes> {
-        ConsensusInput::TimeoutCertificate(self.timeout_cert.clone())
+        ConsensusInput::TimeoutCertificate(ValidCert::new(
+            self.timeout_cert.clone(),
+            self.epoch_number,
+        ))
     }
 }
 
@@ -444,7 +455,6 @@ impl TestData {
                 let target_epoch =
                     EpochNumber::new(epoch_from_block_number(block_number, epoch_height) + 2);
                 let _ = membership
-                    .membership()
                     .add_epoch_root(proposal.block_header.clone())
                     .await;
                 if let Ok(drb) = membership
@@ -606,6 +616,47 @@ pub fn mock_membership_with_client(
     (coord, storage, client, external_events_tx)
 }
 
+/// Per-epoch stake table schedule, by node index into the seed-indexed key
+/// space (`BLSPubKey::generated_from_seed_indexed([0u8; 32], i)`).
+#[derive(Clone, Debug)]
+pub struct StakeTableSchedule {
+    /// Committee for the genesis epochs (1 and 2 at minimum).
+    pub initial: Vec<usize>,
+    /// `(first_epoch, committee)` overrides, applied to both the quorum and
+    /// DA tables. `first_epoch` must be >= 3: epochs 1 and 2 are fixed at
+    /// genesis by `set_first_epoch`.
+    pub changes: Vec<(u64, Vec<usize>)>,
+}
+
+/// Like `mock_membership_with_client`, but with a per-epoch stake table
+/// schedule. Members carry connect info so cliquenet can add scheduled
+/// joiners as peers at the epoch boundary.
+pub fn mock_membership_with_client_and_schedule(
+    num_nodes: usize,
+    epoch_height: u64,
+    public_key: BLSPubKey,
+    storage: TestStorage<TestTypes>,
+    schedule: &StakeTableSchedule,
+    connect_infos: &[PeerConnectInfo],
+) -> (
+    EpochMembershipCoordinator<TestTypes>,
+    TestStorage<TestTypes>,
+    CoordinatorClient<TestTypes>,
+    async_broadcast::Sender<hotshot_types::event::Event<TestTypes>>,
+) {
+    let client = CoordinatorClient::<TestTypes>::default();
+    let leaf_fetcher_network = Arc::new(ClientLeafFetcherNetwork::new(client.handle().clone()));
+    let (coord, storage, external_events_tx) = mock_membership_core(
+        num_nodes,
+        epoch_height,
+        leaf_fetcher_network,
+        public_key,
+        storage,
+        Some((schedule, connect_infos)),
+    );
+    (coord, storage, client, external_events_tx)
+}
+
 pub fn mock_membership_with_leaf_fetcher_network(
     num_nodes: usize,
     epoch_height: u64,
@@ -619,18 +670,58 @@ pub fn mock_membership_with_leaf_fetcher_network(
     TestStorage<TestTypes>,
     async_broadcast::Sender<hotshot_types::event::Event<TestTypes>>,
 ) {
-    let members = gen_node_lists(
+    mock_membership_core(
+        num_nodes,
+        epoch_height,
+        leaf_fetcher_network,
+        public_key,
+        storage,
+        None,
+    )
+}
+
+fn mock_membership_core(
+    num_nodes: usize,
+    epoch_height: u64,
+    leaf_fetcher_network: Arc<
+        dyn hotshot_types::traits::leaf_fetcher_network::LeafFetcherNetwork<TestTypes>,
+    >,
+    public_key: BLSPubKey,
+    storage: TestStorage<TestTypes>,
+    schedule: Option<(&StakeTableSchedule, &[PeerConnectInfo])>,
+) -> (
+    EpochMembershipCoordinator<TestTypes>,
+    TestStorage<TestTypes>,
+    async_broadcast::Sender<hotshot_types::event::Event<TestTypes>>,
+) {
+    let mut members = gen_node_lists(
         num_nodes as u64,
         num_nodes as u64,
         &TestNodeStakes::default(),
     )
     .0;
+    if let Some((_, connect_infos)) = schedule {
+        for (member, info) in members.iter_mut().zip(connect_infos) {
+            member.connect_info = Some(info.clone());
+        }
+    }
+    let initial: Vec<_> = match schedule {
+        Some((s, _)) => s.initial.iter().map(|&i| members[i].clone()).collect(),
+        None => members.clone(),
+    };
     let membership = StrictMembership::<TestTypes, StaticStakeTable<BLSPubKey, SchnorrPubKey>>::new(
-        members.clone(),
-        members.clone(),
+        initial.clone(),
+        initial,
         public_key,
         epoch_height,
     );
+    if let Some((s, _)) = schedule {
+        for (first_epoch, committee) in &s.changes {
+            let committee: Vec<_> = committee.iter().map(|&i| members[i].clone()).collect();
+            membership.add_quorum_committee(EpochNumber::new(*first_epoch), committee.clone());
+            membership.add_da_committee(EpochNumber::new(*first_epoch), committee);
+        }
+    }
     // Channel used by the Coordinator to forward ExternalMessageReceived
     // events to the membership's Leaf2Fetcher (drives epoch catchup).
     // Overflow is enabled so slow listeners don't stall the Coordinator.
@@ -648,7 +739,7 @@ pub fn mock_membership_with_leaf_fetcher_network(
     membership.set_first_epoch(EpochNumber::genesis(), [0u8; 32]);
 
     let coordinator =
-        EpochMembershipCoordinator::new(membership, num_nodes as u64, &TestStorage::default());
+        EpochMembershipCoordinator::new(membership, epoch_height, &TestStorage::default());
     // Set the DRB difficulty selector so compute_drb_result can run.
     // Difficulty 0 makes the computation instant for tests.
     coordinator
@@ -985,22 +1076,18 @@ impl ConsensusHarness {
     /// actions that consensus expects feedback for.
     pub async fn apply(&mut self, input: ConsensusInput<TestTypes>) {
         let mut outbox = Outbox::new();
-        // The coordinator persists incoming proposals and VID shares before
-        // consensus sees them; simulate those storage confirmations.
-        if let ConsensusInput::ProposalWithVidShare(_, msg, vid_share) = &input {
-            let view = msg.proposal.data.view_number;
-            let commitment = proposal_commitment(&msg.proposal.data);
-            self.consensus.apply(
-                ConsensusInput::Stored(StorageOutput::Proposal(view, commitment)),
-                &mut outbox,
-            );
-            self.consensus.apply(
-                ConsensusInput::Stored(StorageOutput::Vid(vid_share.view_number)),
-                &mut outbox,
-            );
-        }
         self.consensus.apply(input, &mut outbox);
         self.drain_outbox(&mut outbox).await;
+    }
+
+    /// Apply a proposal/VID-share input pair
+    /// (cf. `TestView::proposal_input_consensus`).
+    pub async fn apply_pair(
+        &mut self,
+        (proposal, vid_share): (ConsensusInput<TestTypes>, ConsensusInput<TestTypes>),
+    ) {
+        self.apply(proposal).await;
+        self.apply(vid_share).await;
     }
 
     async fn drain_outbox(&mut self, outbox: &mut Outbox<ConsensusOutput<TestTypes>>) {
@@ -1037,6 +1124,23 @@ impl ConsensusHarness {
                 let commitment = proposal_commitment(&proposal.data);
                 self.consensus.apply(
                     ConsensusInput::Stored(StorageOutput::Proposal(view, commitment)),
+                    outbox,
+                );
+            },
+            // The coordinator persists a paired proposal and VID share;
+            // simulate the storage confirmations.
+            ConsensusOutput::ProposalPaired {
+                proposal,
+                vid_share,
+            } => {
+                let view = proposal.data.view_number;
+                let commitment = proposal_commitment(&proposal.data);
+                self.consensus.apply(
+                    ConsensusInput::Stored(StorageOutput::Proposal(view, commitment)),
+                    outbox,
+                );
+                self.consensus.apply(
+                    ConsensusInput::Stored(StorageOutput::Vid(vid_share.view_number)),
                     outbox,
                 );
             },
@@ -1107,7 +1211,6 @@ impl ConsensusHarness {
                     }
                     let header = leaf.block_header().clone();
                     self.membership_coordinator
-                        .membership()
                         .add_epoch_root(header)
                         .await
                         .expect("add_epoch_root should succeed in test harness");
@@ -1182,7 +1285,7 @@ pub(crate) fn build_cert2(
     )
 }
 
-fn build_timeout_cert(
+pub(crate) fn build_timeout_cert(
     view_number: ViewNumber,
     epoch: EpochNumber,
     epoch_membership: &hotshot_types::epoch_membership::EpochMembership<TestTypes>,

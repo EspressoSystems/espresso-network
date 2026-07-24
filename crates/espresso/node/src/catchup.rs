@@ -6,11 +6,11 @@ use std::{
     time::Duration,
 };
 
-use alloy::primitives::U256;
 use anyhow::{Context, anyhow, bail, ensure};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
+use espresso_api::routes::v1 as paths;
 use espresso_types::{
     BackoffParams, BlockMerkleTree, Certificate2, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
     FeeMerkleTree, Leaf2, NodeState, SeqTypes, ValidatedState,
@@ -30,14 +30,14 @@ use futures::{
     future::{Future, FutureExt, TryFuture, TryFutureExt},
     stream::FuturesUnordered,
 };
-use hotshot_new_protocol::utils::verify_leaf_chain_with_cert2;
+use hotshot_new_protocol::{storage::NewProtocolStorage, utils::verify_new_protocol_leaf_chain};
 use hotshot_types::{
     ValidatorConfig,
     data::ViewNumber,
+    epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     network::NetworkConfig,
     simple_certificate::LightClientStateUpdateCertificateV2,
-    stake_table::HSStakeTable,
     traits::{
         ValidatedState as ValidatedStateTrait,
         metrics::{Counter, CounterFamily, Metrics},
@@ -263,7 +263,7 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
                 async move {
                     let cfg: PublicNetworkConfig = provider
                         .fetch(retry, |client| {
-                            let url = client.url.join("config/hotshot").unwrap();
+                            let url = client.url.join(&paths::config_hotshot()).unwrap();
 
                             reqwest::get(url.clone())
                         })
@@ -277,6 +277,18 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
             })
             .await
     }
+}
+
+/// Verify a legacy (pre-V6) leaf chain
+pub(crate) async fn verify_legacy_leaf_chain(
+    leaf_chain: Vec<Leaf2>,
+    coordinator: &EpochMembershipCoordinator<SeqTypes>,
+    height: u64,
+) -> anyhow::Result<Leaf2> {
+    let upgrade_lock = UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(EPOCH_VERSION));
+    verify_leaf_chain(leaf_chain, coordinator, height, &upgrade_lock)
+        .await
+        .with_context(|| format!("failed to verify leaf chain at height {height}"))
 }
 
 #[async_trait]
@@ -294,7 +306,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         self.fetch(retry, |client| async move {
             let tree = client
                 .inner
-                .post::<FeeMerkleTree>(&format!("catchup/{height}/{}/accounts", view.u64()))
+                .post::<FeeMerkleTree>(&paths::catchup_accounts(height, view.u64()))
                 .body_binary(&accounts.to_vec())?
                 .send()
                 .await?;
@@ -329,7 +341,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
                 let mut mt = mt.clone();
                 async move {
                     let frontier = client
-                        .get::<BlocksFrontier>(&format!("catchup/{height}/{}/blocks", view.u64()))
+                        .get::<BlocksFrontier>(&paths::catchup_blocks(height, view.u64()))
                         .send()
                         .await?;
                     let elem = frontier
@@ -351,7 +363,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
     ) -> anyhow::Result<ChainConfig> {
         self.fetch(retry, |client| async move {
             let cf = client
-                .get::<ChainConfig>(&format!("catchup/chain-config/{commitment}"))
+                .get::<ChainConfig>(&paths::catchup_chainconfig(commitment))
                 .send()
                 .await?;
             ensure!(
@@ -367,9 +379,8 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
     async fn try_fetch_leaf(
         &self,
         retry: usize,
+        coordinator: EpochMembershipCoordinator<SeqTypes>,
         height: u64,
-        stake_table: HSStakeTable<SeqTypes>,
-        success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
         // Fetch the leaf chain. For new protocol heights this is a leaf range
         // `[height..=cert2_height]`
@@ -377,7 +388,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         let leaf_chain = self
             .fetch(retry, |client| async move {
                 let chain = client
-                    .get::<Vec<Leaf2>>(&format!("catchup/{height}/leafchain"))
+                    .get::<Vec<Leaf2>>(&paths::catchup_leafchain(height))
                     .send()
                     .await?;
                 anyhow::Ok(chain)
@@ -402,7 +413,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
             let cert2 = self
                 .fetch(retry, |client| async move {
                     let cert2 = client
-                        .get::<Certificate2<SeqTypes>>(&format!("catchup/{cert2_height}/cert2"))
+                        .get::<Certificate2<SeqTypes>>(&paths::catchup_cert2(cert2_height))
                         .send()
                         .await?;
                     anyhow::Ok(cert2)
@@ -410,28 +421,13 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
                 .await
                 .with_context(|| format!("failed to fetch cert2 for height {cert2_height}"))?;
 
-            verify_leaf_chain_with_cert2(
-                leaf_chain,
-                &stake_table,
-                success_threshold,
-                height,
-                &upgrade_lock,
-                cert2,
-            )
-            .await
-            .with_context(|| format!("failed to verify leaf chain with cert2 at height {height}"))
+            verify_new_protocol_leaf_chain(leaf_chain, &coordinator, height, &upgrade_lock, cert2)
+                .await
+                .with_context(|| {
+                    format!("failed to verify leaf chain with cert2 at height {height}")
+                })
         } else {
-            let upgrade_lock =
-                UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(EPOCH_VERSION));
-            verify_leaf_chain(
-                leaf_chain,
-                &stake_table,
-                success_threshold,
-                height,
-                &upgrade_lock,
-            )
-            .await
-            .with_context(|| format!("failed to verify leaf chain at height {height}"))
+            verify_legacy_leaf_chain(leaf_chain, &coordinator, height).await
         }
     }
 
@@ -450,7 +446,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
                 // the reward-state-v2 endpoint which returns from storage decided state
                 let tree_bytes = match client
                     .inner
-                    .get::<Vec<u8>>(&format!("catchup/reward-merkle-tree-v2/{height}/{}", *view))
+                    .get::<Vec<u8>>(&paths::catchup_reward_merkle_tree_v2(height, *view))
                     .send()
                     .await
                 {
@@ -461,9 +457,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
                         );
                         client
                             .inner
-                            .get::<Vec<u8>>(&format!(
-                                "reward-state-v2/reward-merkle-tree-v2/{height}"
-                            ))
+                            .get::<Vec<u8>>(&paths::reward_merkle_tree_v2(height))
                             .send()
                             .await?
                     },
@@ -502,10 +496,7 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         self.fetch(retry, |client| async move {
             let tree = client
                 .inner
-                .post::<RewardMerkleTreeV1>(&format!(
-                    "catchup/{height}/{}/reward-accounts",
-                    view.u64()
-                ))
+                .post::<RewardMerkleTreeV1>(&paths::catchup_reward_accounts(height, view.u64()))
                 .body_binary(&accounts.to_vec())?
                 .send()
                 .await?;
@@ -534,8 +525,8 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
     ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
         self.fetch(retry, |client| async move {
             client
-                .get::<LightClientStateUpdateCertificateV2<SeqTypes>>(&format!(
-                    "catchup/{epoch}/state-cert"
+                .get::<LightClientStateUpdateCertificateV2<SeqTypes>>(&paths::catchup_state_cert(
+                    epoch,
                 ))
                 .send()
                 .await
@@ -759,9 +750,8 @@ where
     async fn try_fetch_leaf(
         &self,
         _retry: usize,
+        _coordinator: EpochMembershipCoordinator<SeqTypes>,
         height: u64,
-        _stake_table: HSStakeTable<SeqTypes>,
-        _success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
         // Leaves in our local DB were verified before they were stored, so we can return the leaf
         // at `height` directly without re-verifying.
@@ -954,9 +944,8 @@ impl StateCatchup for NullStateCatchup {
     async fn try_fetch_leaf(
         &self,
         _retry: usize,
+        _coordinator: EpochMembershipCoordinator<SeqTypes>,
         _height: u64,
-        _stake_table: HSStakeTable<SeqTypes>,
-        _success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
         bail!("state catchup is disabled")
     }
@@ -1174,16 +1163,15 @@ impl StateCatchup for ParallelStateCatchup {
     async fn try_fetch_leaf(
         &self,
         retry: usize,
+        coordinator: EpochMembershipCoordinator<SeqTypes>,
         height: u64,
-        stake_table: HSStakeTable<SeqTypes>,
-        success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
         // Try fetching the leaf on the local providers first
         let local_result = self
-            .on_local_providers(clone! {(stake_table) move |provider| {
-                clone!{(stake_table) async move {
+            .on_local_providers(clone! {(coordinator) move |provider| {
+                clone!{(coordinator) async move {
                     provider
-                        .try_fetch_leaf(retry, height, stake_table, success_threshold)
+                        .try_fetch_leaf(retry, coordinator, height)
                         .await
                 }}
             }})
@@ -1196,10 +1184,10 @@ impl StateCatchup for ParallelStateCatchup {
         }
 
         // If that fails, try the remote ones
-        self.on_remote_providers(clone! {(stake_table) move |provider| {
-            clone!{(stake_table) async move {
+        self.on_remote_providers(clone! {(coordinator) move |provider| {
+            clone!{(coordinator) async move {
                 provider
-                    .try_fetch_leaf(retry, height, stake_table, success_threshold)
+                    .try_fetch_leaf(retry, coordinator, height)
                     .await
             }}
         }})
@@ -1537,16 +1525,15 @@ impl StateCatchup for ParallelStateCatchup {
 
     async fn fetch_leaf(
         &self,
+        coordinator: EpochMembershipCoordinator<SeqTypes>,
         height: u64,
-        stake_table: HSStakeTable<SeqTypes>,
-        success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
         // Try fetching the leaf on the local providers first
         let local_result = self
-            .on_local_providers(clone! {(stake_table) move |provider| {
-                clone!{(stake_table) async move {
+            .on_local_providers(clone! {(coordinator) move |provider| {
+                clone!{(coordinator) async move {
                     provider
-                        .try_fetch_leaf(0, height, stake_table, success_threshold)
+                        .try_fetch_leaf(0, coordinator, height)
                         .await
                 }}
             }})
@@ -1559,10 +1546,10 @@ impl StateCatchup for ParallelStateCatchup {
         }
 
         // If that fails, try the remote ones (with retry)
-        self.on_remote_providers(clone! {(stake_table) move |provider| {
-        clone!{(stake_table) async move {
+        self.on_remote_providers(clone! {(coordinator) move |provider| {
+        clone!{(coordinator) async move {
             provider
-                .fetch_leaf(height, stake_table, success_threshold)
+                .fetch_leaf(coordinator, height)
                 .await
         }}
         }})
@@ -1743,7 +1730,10 @@ pub async fn add_fee_accounts_to_state<I: hotshot::traits::NodeImplementation<Se
     accounts: &[FeeAccount],
     tree: &FeeMerkleTree,
     leaf: Leaf2,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<()>
+where
+    I::Storage: NewProtocolStorage<SeqTypes>,
+{
     let (existing_state, delta) = consensus_handle.state_and_delta(*view).await;
     let (state, delta) = match existing_state {
         Some(existing) => {
@@ -1790,7 +1780,10 @@ pub async fn add_v2_reward_accounts_to_state<I: hotshot::traits::NodeImplementat
     accounts: &[RewardAccountV2],
     tree: &RewardMerkleTreeV2,
     leaf: Leaf2,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<()>
+where
+    I::Storage: NewProtocolStorage<SeqTypes>,
+{
     let (existing_state, delta) = consensus_handle.state_and_delta(*view).await;
     let (state, delta) = match existing_state {
         Some(existing) => {
@@ -1837,7 +1830,10 @@ pub async fn add_v1_reward_accounts_to_state<I: hotshot::traits::NodeImplementat
     accounts: &[RewardAccountV1],
     tree: &RewardMerkleTreeV1,
     leaf: Leaf2,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<()>
+where
+    I::Storage: NewProtocolStorage<SeqTypes>,
+{
     let (existing_state, delta) = consensus_handle.state_and_delta(*view).await;
     let (state, delta) = match existing_state {
         Some(existing) => {

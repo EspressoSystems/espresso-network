@@ -23,8 +23,8 @@ ark-std = { workspace = true }
 clap = { workspace = true }
 displaydoc = { workspace = true }
 espresso-contract-deployer = { workspace = true }
-espresso-types = { workspace = true }
-espresso-utils = { workspace = true }
+espresso-types = { workspace = true, features = ["node"] }
+espresso-utils = { workspace = true, features = ["full"] }
 futures = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-query-service = { workspace = true }
@@ -55,7 +55,7 @@ url = { workspace = true }
 vbs = { workspace = true }
 
 [dev-dependencies]
-espresso-utils = { workspace = true, features = ["testing"] }
+espresso-utils = { workspace = true, features = ["full", "testing"] }
 rstest = { workspace = true }
 test-log = { workspace = true }
 
