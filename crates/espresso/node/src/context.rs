@@ -248,6 +248,7 @@ where
                 epoch_height.into(),
                 legacy_event_rx,
                 EXTERNAL_EVENT_CHANNEL_SIZE,
+                metrics,
             )
             .await;
             Arc::new(handle)
@@ -313,6 +314,7 @@ where
             &mut tasks,
             request_response_sender,
             outbound_message_receiver,
+            consensus_handle.clone(),
             network,
             pub_key,
         )
@@ -609,6 +611,13 @@ impl DecideProcessorMetrics {
     }
 }
 
+/// How many new-protocol decides to wait for before tearing down the legacy
+/// consensus stack (tasks + network). Once the coordinator has decided even a
+/// single leaf the cutover boundary is final and all consensus traffic runs
+/// on the coordinator's network; the margin only gives slightly-lagging peers
+/// a window to finish crossing the boundary with legacy help.
+const LEGACY_SHUTDOWN_DECIDE_COUNT: u64 = 100;
+
 #[tracing::instrument(skip_all, fields(node_id))]
 #[allow(clippy::too_many_arguments)]
 async fn handle_events<N, P, C>(
@@ -626,10 +635,23 @@ async fn handle_events<N, P, C>(
     P: SequencerPersistence,
     C: PersistenceEventConsumer + 'static,
 {
+    let mut new_protocol_decides: u64 = 0;
+
     while let Some(event) = events.next().await {
         tracing::debug!(node_id, ?event, "consensus event");
 
         match &event {
+            CoordinatorEvent::NewDecide { .. } => {
+                new_protocol_decides += 1;
+                if new_protocol_decides == LEGACY_SHUTDOWN_DECIDE_COUNT {
+                    tracing::info!(
+                        node_id,
+                        "new protocol is live, shutting down legacy consensus and network"
+                    );
+                    let handle = consensus_handle.clone();
+                    spawn(async move { handle.shut_down_legacy().await });
+                }
+            },
             CoordinatorEvent::LegacyEvent(hotshot_event) => {
                 if let hotshot_types::event::EventType::ExternalMessageReceived { ref data, .. } =
                     hotshot_event.event

@@ -54,6 +54,7 @@ pub(crate) fn default_telemetry_endpoint(chain_id: ChainId) -> Option<&'static s
     }
 }
 
+pub use espresso_types::RECENT_STAKE_TABLES_LIMIT;
 use genesis::L1Finalized;
 pub use genesis::{Genesis, GenesisSource};
 use hotshot::{
@@ -97,8 +98,6 @@ use url::Url;
 use vbs::version::StaticVersion;
 
 use crate::request_response::data_source::Storage as RequestResponseStorage;
-
-pub const RECENT_STAKE_TABLES_LIMIT: u64 = 20;
 
 /// The Sequencer node is generic over the hotshot CommChannel.
 #[derive(Derivative, Serialize, Deserialize)]
@@ -826,15 +825,20 @@ where
 
         info!("Libp2p network initialized");
 
-        tracing::warn!("Waiting for at least one connection to be initialized");
-        select! {
-            _ = cdn_network.wait_for_ready() => {
-                tracing::warn!("CDN connection initialized");
-            },
-            _ = p2p_network.wait_for_ready() => {
-                tracing::warn!("P2P connection initialized");
-            },
-        };
+        // From `NEW_PROTOCOL_VERSION` on, all consensus traffic runs on
+        // cliquenet and the legacy stack is torn down at startup, so don't
+        // hold up boot waiting for legacy connectivity.
+        if genesis.base_version < versions::NEW_PROTOCOL_VERSION {
+            tracing::warn!("Waiting for at least one connection to be initialized");
+            select! {
+                _ = cdn_network.wait_for_ready() => {
+                    tracing::warn!("CDN connection initialized");
+                },
+                _ = p2p_network.wait_for_ready() => {
+                    tracing::warn!("P2P connection initialized");
+                },
+            };
+        }
 
         // Combine the CDN and P2P networks
         CombinedNetworks::new(cdn_network, p2p_network, Some(Duration::from_secs(1)))

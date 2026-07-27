@@ -337,7 +337,8 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
 
         // First figure out which epochs we need to fetch
         loop {
-            let has_stake_table = self.membership.snapshot(try_epoch).is_some();
+            let has_stake_table = self.membership.snapshot(try_epoch).is_some()
+                || self.membership.load_stake_table(try_epoch).await;
             if has_stake_table {
                 // We have this stake table but we need to make sure we have the
                 // epoch root of the requested epoch

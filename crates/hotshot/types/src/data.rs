@@ -66,15 +66,15 @@ macro_rules! impl_u64_wrapper {
     ($t:ty, $genesis_val:expr) => {
         impl $t {
             /// Create a genesis number
-            pub fn genesis() -> Self {
+            pub const fn genesis() -> Self {
                 Self($genesis_val)
             }
             /// Create a new number with the given value.
-            pub fn new(n: u64) -> Self {
+            pub const fn new(n: u64) -> Self {
                 Self(n)
             }
             /// Return the u64 format
-            pub fn u64(&self) -> u64 {
+            pub const fn u64(&self) -> u64 {
                 self.0
             }
         }

@@ -15,7 +15,7 @@ use super::common::{
 use crate::{
     consensus::{ConsensusInput, ConsensusOutput},
     helpers::proposal_commitment,
-    message::{EpochChangeMessage, Proposal, ProposalMessage},
+    message::{EpochChangeError, EpochChangeMessage, Proposal, ProposalMessage},
     tests::common::assertions::{
         any, count_matching, has_request_drb_for_epoch, is_proposal, is_request_block_and_header,
         is_vote1,
@@ -49,7 +49,7 @@ async fn run_views_full(
 
     for i in range {
         harness
-            .apply(test_data.views[i].proposal_input_consensus(node_key))
+            .apply_pair(test_data.views[i].proposal_input_consensus(node_key))
             .await;
         harness
             .apply(test_data.views[i].block_reconstructed_input())
@@ -104,11 +104,8 @@ async fn test_handle_epoch_change_valid() {
     // Construct a valid EpochChangeMessage for view 10 (block 10, last block of epoch 1)
     let epoch_view = &test_data.views[9];
     let proposal: Proposal<TestTypes> = epoch_view.proposal.data.clone();
-    let epoch_change = EpochChangeMessage {
-        cert1: epoch_view.cert1.clone(),
-        cert2: epoch_view.cert2.clone(),
-        proposal,
-    };
+    let epoch_change =
+        EpochChangeMessage::validated(epoch_view.cert1.clone(), epoch_view.cert2.clone(), proposal);
 
     harness
         .apply(ConsensusInput::EpochChange(epoch_change))
@@ -120,98 +117,85 @@ async fn test_handle_epoch_change_valid() {
     );
 }
 
-/// An EpochChangeMessage with mismatched cert1 and cert2 view numbers should be rejected.
+/// An EpochChangeMessage with mismatched cert1 and cert2 view numbers is not
+/// well-formed.
 #[tokio::test]
-async fn test_handle_epoch_change_mismatched_views() {
-    let mut harness = ConsensusHarness::new(0).await;
+async fn test_epoch_change_mismatched_views_not_well_formed() {
     let test_data = TestData::new_with_epoch_height(11, EPOCH_HEIGHT).await;
-    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
-
-    run_views_full(&mut harness, &test_data, &node_key, 0..9).await;
 
     // Mix cert1 from view 9 with cert2 from view 10 — mismatched views
     let proposal: Proposal<TestTypes> = test_data.views[9].proposal.data.clone();
-    let epoch_change = EpochChangeMessage {
-        cert1: test_data.views[8].cert1.clone(),
-        cert2: test_data.views[9].cert2.clone(),
+    let epoch_change = EpochChangeMessage::validated(
+        test_data.views[8].cert1.clone(),
+        test_data.views[9].cert2.clone(),
         proposal,
-    };
-
-    let view_changed_before = count_matching(harness.outputs(), is_view_changed);
-
-    harness
-        .apply(ConsensusInput::EpochChange(epoch_change))
-        .await;
-
-    assert_eq!(
-        view_changed_before,
-        count_matching(harness.outputs(), is_view_changed),
-        "Mismatched EpochChange should be rejected — no new ViewChanged"
     );
+
+    assert!(matches!(
+        epoch_change.well_formed(EPOCH_HEIGHT),
+        Err(EpochChangeError::CertificateMismatch)
+    ));
 }
 
-/// An EpochChangeMessage where the block is not the last block of the epoch
-/// should be rejected (block_number % epoch_height != 0).
+/// Certificates from different epochs are not well-formed. Each certificate
+/// can be individually crypto-valid (adjacent epochs often share a stake
+/// table), so this must be caught structurally before verification.
 #[tokio::test]
-async fn test_handle_epoch_change_wrong_block_number() {
-    let mut harness = ConsensusHarness::new(0).await;
-    let test_data = TestData::new(11).await;
-    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+async fn test_epoch_change_cross_epoch_certificates_not_well_formed() {
+    let test_data = TestData::new_with_epoch_height(21, EPOCH_HEIGHT).await;
 
-    run_views_full(&mut harness, &test_data, &node_key, 0..6).await;
+    // cert1 from the epoch-1 boundary (view 10), cert2 from the epoch-2
+    // boundary (view 20); both are genuine boundary certificates.
+    let proposal: Proposal<TestTypes> = test_data.views[9].proposal.data.clone();
+    let epoch_change = EpochChangeMessage::validated(
+        test_data.views[9].cert1.clone(),
+        test_data.views[19].cert2.clone(),
+        proposal,
+    );
+
+    assert!(matches!(
+        epoch_change.well_formed(EPOCH_HEIGHT),
+        Err(EpochChangeError::CertificateMismatch)
+    ));
+}
+
+/// An EpochChangeMessage whose block is not the last block of the epoch
+/// (block_number % epoch_height != 0) is not well-formed.
+#[tokio::test]
+async fn test_epoch_change_wrong_block_number_not_well_formed() {
+    let test_data = TestData::new_with_epoch_height(11, EPOCH_HEIGHT).await;
 
     // Use view 6 (block 6) which is NOT the last block of the epoch
     let mid_view = &test_data.views[5];
     let proposal: Proposal<TestTypes> = mid_view.proposal.data.clone();
-    let epoch_change = EpochChangeMessage {
-        cert1: mid_view.cert1.clone(),
-        cert2: mid_view.cert2.clone(),
-        proposal,
-    };
+    let epoch_change =
+        EpochChangeMessage::validated(mid_view.cert1.clone(), mid_view.cert2.clone(), proposal);
 
-    let view_changed_before = count_matching(harness.outputs(), is_view_changed);
-
-    harness
-        .apply(ConsensusInput::EpochChange(epoch_change))
-        .await;
-
-    assert_eq!(
-        view_changed_before,
-        count_matching(harness.outputs(), is_view_changed),
-        "EpochChange with wrong block number should be rejected"
-    );
+    assert!(matches!(
+        epoch_change.well_formed(EPOCH_HEIGHT),
+        Err(EpochChangeError::NotLastBlock)
+    ));
 }
 
 /// An EpochChangeMessage whose proposal commitment doesn't match cert1's
-/// leaf_commit should be rejected.
+/// leaf_commit is not well-formed.
 #[tokio::test]
-async fn test_handle_epoch_change_proposal_mismatch() {
-    let mut harness = ConsensusHarness::new(0).await;
+async fn test_epoch_change_proposal_mismatch_not_well_formed() {
     let test_data = TestData::new_with_epoch_height(11, EPOCH_HEIGHT).await;
-    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
-
-    run_views_full(&mut harness, &test_data, &node_key, 0..9).await;
 
     // Use cert1/cert2 from view 10 but proposal from view 9 — commitment mismatch
     let epoch_view = &test_data.views[9];
     let wrong_proposal: Proposal<TestTypes> = test_data.views[8].proposal.data.clone();
-    let epoch_change = EpochChangeMessage {
-        cert1: epoch_view.cert1.clone(),
-        cert2: epoch_view.cert2.clone(),
-        proposal: wrong_proposal,
-    };
-
-    let view_changed_before = count_matching(harness.outputs(), is_view_changed);
-
-    harness
-        .apply(ConsensusInput::EpochChange(epoch_change))
-        .await;
-
-    assert_eq!(
-        view_changed_before,
-        count_matching(harness.outputs(), is_view_changed),
-        "EpochChange with mismatched proposal should be rejected"
+    let epoch_change = EpochChangeMessage::validated(
+        epoch_view.cert1.clone(),
+        epoch_view.cert2.clone(),
+        wrong_proposal,
     );
+
+    assert!(matches!(
+        epoch_change.well_formed(EPOCH_HEIGHT),
+        Err(EpochChangeError::ProposalMismatch)
+    ));
 }
 
 /// A stale EpochChangeMessage (cert1 view < locked_cert view) should be rejected.
@@ -228,11 +212,8 @@ async fn test_handle_epoch_change_stale() {
     // is at view 10 after processing all views, so view 6 is behind the lock.
     let stale_view = &test_data.views[5];
     let proposal: Proposal<TestTypes> = stale_view.proposal.data.clone();
-    let stale_epoch_change = EpochChangeMessage {
-        cert1: stale_view.cert1.clone(),
-        cert2: stale_view.cert2.clone(),
-        proposal,
-    };
+    let stale_epoch_change =
+        EpochChangeMessage::validated(stale_view.cert1.clone(), stale_view.cert2.clone(), proposal);
 
     let view_changed_before = count_matching(harness.outputs(), is_view_changed);
 
@@ -267,11 +248,8 @@ async fn test_handle_epoch_change_replay_of_crossed_boundary() {
     // Replay the epoch 1 → 2 boundary (view 10, block 10).
     let epoch_view = &test_data.views[9];
     let proposal: Proposal<TestTypes> = epoch_view.proposal.data.clone();
-    let epoch_change = EpochChangeMessage {
-        cert1: epoch_view.cert1.clone(),
-        cert2: epoch_view.cert2.clone(),
-        proposal,
-    };
+    let epoch_change =
+        EpochChangeMessage::validated(epoch_view.cert1.clone(), epoch_view.cert2.clone(), proposal);
 
     harness
         .apply(ConsensusInput::EpochChange(epoch_change))
@@ -357,11 +335,8 @@ async fn test_epoch_change_leader_proposes() {
     let epoch_view = &test_data.views[9];
 
     let proposal: Proposal<TestTypes> = epoch_view.proposal.data.clone();
-    let epoch_change = EpochChangeMessage {
-        cert1: epoch_view.cert1.clone(),
-        cert2: epoch_view.cert2.clone(),
-        proposal,
-    };
+    let epoch_change =
+        EpochChangeMessage::validated(epoch_view.cert1.clone(), epoch_view.cert2.clone(), proposal);
 
     let mut harness = ConsensusHarness::new(1).await;
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 1).0;
@@ -394,11 +369,11 @@ async fn test_epoch_change_votes() {
     let epoch_view = &test_data.views[9]; // view 10, last block of epoch 1
 
     let epoch_proposal: Proposal<TestTypes> = epoch_view.proposal.data.clone();
-    let epoch_change = EpochChangeMessage {
-        cert1: epoch_view.cert1.clone(),
-        cert2: epoch_view.cert2.clone(),
-        proposal: epoch_proposal,
-    };
+    let epoch_change = EpochChangeMessage::validated(
+        epoch_view.cert1.clone(),
+        epoch_view.cert2.clone(),
+        epoch_proposal,
+    );
 
     // Use node 0 (non-leader for the first view of epoch 2)
     let mut harness = ConsensusHarness::new(0).await;
@@ -430,10 +405,12 @@ async fn test_epoch_change_votes() {
         .clone();
 
     harness
-        .apply(ConsensusInput::ProposalWithVidShare(
-            first_view.leader_public_key,
-            ProposalMessage::validated(signed_proposal),
-            vid_share,
+        .apply_pair((
+            ConsensusInput::Proposal(
+                first_view.leader_public_key,
+                ProposalMessage::validated(signed_proposal),
+            ),
+            ConsensusInput::VidShare(vid_share),
         ))
         .await;
 
@@ -460,7 +437,7 @@ async fn test_first_epoch_leader_proposes_without_drb() {
     // should propose — but maybe_propose also needs to skip the DRB check.
     for i in 0..7 {
         harness
-            .apply(test_data.views[i].proposal_input_consensus(&node_key))
+            .apply_pair(test_data.views[i].proposal_input_consensus(&node_key))
             .await;
         harness
             .apply(test_data.views[i].block_reconstructed_input())
@@ -498,11 +475,11 @@ async fn test_second_epoch_leader_proposes_without_drb() {
     // ---- Epoch boundary ----
     let epoch_view = &test_data.views[9];
     let epoch_proposal: Proposal<TestTypes> = epoch_view.proposal.data.clone();
-    let epoch_change = EpochChangeMessage {
-        cert1: epoch_view.cert1.clone(),
-        cert2: epoch_view.cert2.clone(),
-        proposal: epoch_proposal,
-    };
+    let epoch_change = EpochChangeMessage::validated(
+        epoch_view.cert1.clone(),
+        epoch_view.cert2.clone(),
+        epoch_proposal,
+    );
     harness
         .apply(ConsensusInput::EpochChange(epoch_change))
         .await;
@@ -529,10 +506,12 @@ async fn test_second_epoch_leader_proposes_without_drb() {
         .expect("VID share not found")
         .clone();
     harness
-        .apply(ConsensusInput::ProposalWithVidShare(
-            first_e2_view.leader_public_key,
-            ProposalMessage::validated(signed),
-            vid_share,
+        .apply_pair((
+            ConsensusInput::Proposal(
+                first_e2_view.leader_public_key,
+                ProposalMessage::validated(signed),
+            ),
+            ConsensusInput::VidShare(vid_share),
         ))
         .await;
     harness
@@ -544,7 +523,7 @@ async fn test_second_epoch_leader_proposes_without_drb() {
     // ---- Epoch 2 views 12-16 (blocks 12-16, before transition window) ----
     for i in 11..16 {
         harness
-            .apply(test_data.views[i].proposal_input_consensus(&node_key))
+            .apply_pair(test_data.views[i].proposal_input_consensus(&node_key))
             .await;
         harness
             .apply(test_data.views[i].block_reconstructed_input())
@@ -558,7 +537,7 @@ async fn test_second_epoch_leader_proposes_without_drb() {
     // Process view 17 (block 17, first block in transition window).
     // After cert1 for view 17, the leader for view 18 should propose.
     harness
-        .apply(test_data.views[16].proposal_input_consensus(&node_key))
+        .apply_pair(test_data.views[16].proposal_input_consensus(&node_key))
         .await;
     harness
         .apply(test_data.views[16].block_reconstructed_input())
@@ -589,11 +568,11 @@ async fn test_epoch3_transition_requests_drb_for_future_epoch() {
     // ---- Epoch boundary ----
     let epoch_view = &test_data.views[9];
     let epoch_proposal: Proposal<TestTypes> = epoch_view.proposal.data.clone();
-    let epoch_change = EpochChangeMessage {
-        cert1: epoch_view.cert1.clone(),
-        cert2: epoch_view.cert2.clone(),
-        proposal: epoch_proposal,
-    };
+    let epoch_change = EpochChangeMessage::validated(
+        epoch_view.cert1.clone(),
+        epoch_view.cert2.clone(),
+        epoch_proposal,
+    );
     harness
         .apply(ConsensusInput::EpochChange(epoch_change))
         .await;
@@ -617,10 +596,12 @@ async fn test_epoch3_transition_requests_drb_for_future_epoch() {
         .expect("VID share not found")
         .clone();
     harness
-        .apply(ConsensusInput::ProposalWithVidShare(
-            first_e2_view.leader_public_key,
-            ProposalMessage::validated(signed),
-            vid_share,
+        .apply_pair((
+            ConsensusInput::Proposal(
+                first_e2_view.leader_public_key,
+                ProposalMessage::validated(signed),
+            ),
+            ConsensusInput::VidShare(vid_share),
         ))
         .await;
     harness
@@ -632,7 +613,7 @@ async fn test_epoch3_transition_requests_drb_for_future_epoch() {
     // ---- Epoch 2 views 12-16 (before transition window) ----
     for i in 11..16 {
         harness
-            .apply(test_data.views[i].proposal_input_consensus(&node_key))
+            .apply_pair(test_data.views[i].proposal_input_consensus(&node_key))
             .await;
         harness
             .apply(test_data.views[i].block_reconstructed_input())
@@ -662,10 +643,9 @@ async fn test_epoch3_transition_requests_drb_for_future_epoch() {
         .expect("VID share not found")
         .clone();
     harness
-        .apply(ConsensusInput::ProposalWithVidShare(
-            v17.leader_public_key,
-            ProposalMessage::validated(signed),
-            vid_share,
+        .apply_pair((
+            ConsensusInput::Proposal(v17.leader_public_key, ProposalMessage::validated(signed)),
+            ConsensusInput::VidShare(vid_share),
         ))
         .await;
 
