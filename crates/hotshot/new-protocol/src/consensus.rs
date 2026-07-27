@@ -1376,8 +1376,9 @@ impl<T: NodeType> Consensus<T> {
         }
 
         // If a cert1 already formed for this view, the holdup is one step
-        // further along: we need the reconstructed block to match the
-        // proposal's payload commitment before we can vote2 and update lock.
+        // further along: vote2 goes out on cert1 alone, but we still need the
+        // reconstructed block matching the proposal's payload commitment before
+        // we can update the lock and decide.
         if self.certs.contains_key(&view) {
             let proposal_commit = self
                 .proposals
@@ -1827,6 +1828,13 @@ impl<T: NodeType> Consensus<T> {
             debug!(%view, "cert1 missing");
             return;
         };
+        // Decide requires the block locally available. The phase-2 vote no
+        // longer gates on reconstruction (PR #4307), so enforce data
+        // availability here — a leaf is never finalized without its payload.
+        if !self.block_matches_proposal(view, proposal) {
+            debug!(%view, "block not locally available; deferring decide");
+            return;
+        }
         // Handle Epoch Change by broadcasting the epoch change message if we have
         // all the data we need.
         if is_last_block(proposal.block_header.block_number(), *self.epoch_height)
@@ -2014,13 +2022,15 @@ impl<T: NodeType> Consensus<T> {
         outbox.push_back(ConsensusOutput::SendVote2(vote2));
     }
 
-    /// Whether the view's Vote action and VID share are persisted, gating the
-    /// phase-2 vote. A restart-barred view persisted both before the crash:
-    /// its vote is re-cast, but its Vote action is never re-recorded.
+    /// Whether the view's Vote action is persisted, gating the phase-2 vote.
+    ///
+    /// Data availability is enforced at lock-update and decide (see
+    /// `block_matches_proposal`), not at the phase-2 vote, so this no longer
+    /// requires the VID/DA to be stored — only that the Vote action is durable
+    /// so a restart won't re-cast a conflicting vote. A restart-barred view
+    /// persisted its vote before the crash.
     fn vote2_persisted(&self, view: ViewNumber) -> bool {
-        view <= self.restart_barred_view
-            || (self.stored_actions.contains(&(view, ActionKind::Vote))
-                && self.stored_vids.contains(&view))
+        view <= self.restart_barred_view || self.stored_actions.contains(&(view, ActionKind::Vote))
     }
 
     fn release_proposal(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
@@ -2221,6 +2231,19 @@ impl<T: NodeType> Consensus<T> {
     }
 
     #[instrument(level = "debug", skip_all)]
+    /// Whether a payload matching the proposal's commitment is locally
+    /// available — either a block we built (`blocks`) or one we reconstructed
+    /// (`blocks_reconstructed`). Gates the data-availability-sensitive steps
+    /// (lock update and decide); the phase-2 vote no longer requires it.
+    fn block_matches_proposal(&self, view: ViewNumber, proposal: &Proposal<T>) -> bool {
+        let VidCommitment::V2(expected) = proposal.block_header.payload_commitment() else {
+            warn!(%view, "proposal payload commitment is not a V2 VID commitment");
+            return false;
+        };
+        self.blocks.contains_key(&(view, expected))
+            || self.blocks_reconstructed.contains(&(view, expected))
+    }
+
     fn maybe_vote_2_and_update_lock(
         &mut self,
         view: ViewNumber,
@@ -2230,14 +2253,11 @@ impl<T: NodeType> Consensus<T> {
         if self.pre_cutover_views.contains(&view) {
             return;
         }
-        if self.voted_2_views.contains(&view) {
-            return;
-        }
-        let Some(cert1) = self.certs.get(&view) else {
+        let Some(cert1) = self.certs.get(&view).cloned() else {
             debug!(%view, "cert1 not available");
             return;
         };
-        let Some(proposal) = self.proposals.get(&view) else {
+        let Some(proposal) = self.proposals.get(&view).cloned() else {
             debug!(%view, "proposal not available");
             return;
         };
@@ -2245,8 +2265,7 @@ impl<T: NodeType> Consensus<T> {
         let block = proposal.block_header.block_number();
         let qc_view = proposal.justify_qc.view_number();
         let qc_epoch = proposal.justify_qc.epoch();
-
-        let proposal_commit = proposal_commitment(proposal);
+        let proposal_commit = proposal_commitment(&proposal);
 
         // The certificate must match the proposal
         if cert1.data.leaf_commit != proposal_commit {
@@ -2256,28 +2275,74 @@ impl<T: NodeType> Consensus<T> {
             );
             return;
         }
-        let VidCommitment::V2(proposal_block_commitment) =
-            proposal.block_header.payload_commitment()
-        else {
-            warn!(
-                %view, %block, epoch = %proposal_epoch, %qc_view, ?qc_epoch,
-                "proposal payload commitment is not a V2 VID commitment"
-            );
-            return;
-        };
-        if !self
-            .blocks_reconstructed
-            .contains(&(view, proposal_block_commitment))
+
+        // Phase-2 vote (PR #4307): commit as soon as we hold cert1 and the
+        // matching proposal — the block need NOT be reconstructed. Data
+        // availability is enforced below at lock-update and at decide
+        // (`block_matches_proposal`).
+        if !self.voted_2_views.contains(&view)
+            && !self.certs2.contains_key(&view)
+            && !self.decided_views.contains(&view)
+            && view > self.decide_floor()
+            && self.staked_in_epoch(proposal_epoch)
         {
+            match SimpleVote::create_signed_vote(
+                Vote2Data {
+                    leaf_commit: proposal_commit,
+                    epoch: proposal_epoch,
+                    block_number: block,
+                },
+                view,
+                &self.public_key,
+                &self.private_key,
+                &self.upgrade_lock,
+            ) {
+                Ok(vote) => {
+                    crate::trace_leader_event!(
+                        self.tracer,
+                        view,
+                        crate::leader_trace::LeaderEvent::Vote2VMinus1Signed
+                    );
+                    self.voted_2_views.insert(view);
+                    // The vote commits on cert1(view); persist it so a restart
+                    // won't re-cast a conflicting vote. `release_vote2` waits on
+                    // this (via `high_qc_persisted(view)`), independent of the
+                    // block-gated lock update below.
+                    outbox.push_back(ConsensusOutput::PersistHighQc(cert1.clone()));
+                    if self.vote2_persisted(view) && self.high_qc_persisted(view) {
+                        outbox.push_back(ConsensusOutput::SendVote2(vote));
+                    } else {
+                        if view > self.restart_barred_view {
+                            self.request_action(
+                                view,
+                                Some(proposal_epoch),
+                                ActionKind::Vote,
+                                outbox,
+                            );
+                        }
+                        self.pending_vote2.insert(view, (vote, view));
+                    }
+                    crate::trace_leader_event!(
+                        self.tracer,
+                        view,
+                        crate::leader_trace::LeaderEvent::Vote2VMinus1Queued
+                    );
+                },
+                Err(err) => {
+                    warn!(%view, %err, "failed to created signed vote2");
+                },
+            }
+        }
+
+        // Lock update / ViewChanged / SendCertificate1 are the safety-critical
+        // steps and DO require the block locally available.
+        if !self.block_matches_proposal(view, &proposal) {
             debug!(
-                %view, %block, epoch = %proposal_epoch, %qc_view, ?qc_epoch,
-                "no reconstructed block matching the proposal commitment"
+                %view, %block, epoch = %proposal_epoch,
+                "block not locally available; deferring lock update"
             );
             return;
         }
-
-        // We have a valid certificate, proposal, and reconstructed block
-        // We can now update the lock, change view and vote
         if self
             .locked_cert
             .as_mut()
@@ -2289,60 +2354,8 @@ impl<T: NodeType> Consensus<T> {
             outbox.push_back(ConsensusOutput::ViewChanged(view + 1, proposal_epoch));
             outbox.push_back(ConsensusOutput::SendCertificate1(cert1.clone()));
             // Persist the new lock; `release_vote2` gates the phase-2 vote on it.
-            outbox.push_back(ConsensusOutput::PersistHighQc(cert1.clone()));
+            outbox.push_back(ConsensusOutput::PersistHighQc(cert1));
         }
-
-        if self.certs2.contains_key(&view)
-            || self.decided_views.contains(&view)
-            || view <= self.decide_floor()
-        {
-            return;
-        }
-
-        if !self.staked_in_epoch(proposal_epoch) {
-            return;
-        }
-
-        let vote = match SimpleVote::create_signed_vote(
-            Vote2Data {
-                leaf_commit: proposal_commit,
-                epoch: proposal_epoch,
-                block_number: proposal.block_header.block_number(),
-            },
-            view,
-            &self.public_key,
-            &self.private_key,
-            &self.upgrade_lock,
-        ) {
-            Ok(vote) => vote,
-            Err(err) => {
-                warn!(%view, %err, "failed to created signed vote2");
-                return;
-            },
-        };
-        crate::trace_leader_event!(
-            self.tracer,
-            view,
-            crate::leader_trace::LeaderEvent::Vote2VMinus1Signed
-        );
-        self.voted_2_views.insert(view);
-        // Lock is set above and >= view; the vote waits until it is persisted.
-        let required = self
-            .locked_view()
-            .expect("locked_cert is set before voting in phase 2");
-        if self.vote2_persisted(view) && self.high_qc_persisted(required) {
-            outbox.push_back(ConsensusOutput::SendVote2(vote));
-        } else {
-            if view > self.restart_barred_view {
-                self.request_action(view, Some(proposal_epoch), ActionKind::Vote, outbox);
-            }
-            self.pending_vote2.insert(view, (vote, required));
-        }
-        crate::trace_leader_event!(
-            self.tracer,
-            view,
-            crate::leader_trace::LeaderEvent::Vote2VMinus1Queued
-        );
     }
 
     #[instrument(level = "trace", skip_all)]

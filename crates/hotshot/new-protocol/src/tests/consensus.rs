@@ -409,6 +409,11 @@ async fn test_gap_fill_decide_of_older_view() {
     harness
         .consensus
         .seed_proposals([test_data.views[2].proposal.data.clone()]);
+    // Decide requires the block locally available (PR #4307): reconstruct the
+    // gap view's block before its late certs can decide it.
+    harness
+        .apply(test_data.views[2].block_reconstructed_input())
+        .await;
     harness.apply(test_data.views[2].cert1_input()).await;
     harness.apply(test_data.views[2].cert2_input()).await;
 
@@ -561,9 +566,11 @@ async fn test_decide_requires_cert2() {
     );
 }
 
-/// Vote2 requires BlockReconstructed for the current view.
+/// Vote2 fires on cert1 without waiting for BlockReconstructed (PR #4307); the
+/// block is instead required at decide, so data availability is preserved at
+/// finality rather than at the phase-2 vote.
 #[tokio::test]
-async fn test_vote2_missing_block_reconstructed() {
+async fn test_vote2_without_block_reconstructed() {
     let mut harness = ConsensusHarness::new(0).await;
     let test_data = TestData::new(3).await;
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
@@ -575,15 +582,32 @@ async fn test_vote2_missing_block_reconstructed() {
         .apply(test_data.views[0].block_reconstructed_input())
         .await;
 
-    // View 2: proposal + cert1, but NO block_reconstructed for view 2
+    // View 2: proposal + cert1, but NO block_reconstructed for view 2.
     harness
         .apply(test_data.views[1].proposal_input_consensus(&node_key))
         .await;
     harness.apply(test_data.views[1].cert1_input()).await;
 
     assert!(
-        !any(harness.outputs(), is_vote2),
-        "Vote2 should not fire without BlockReconstructed"
+        any(harness.outputs(), is_vote2),
+        "Vote2 should fire on cert1 even without BlockReconstructed"
+    );
+
+    // Decide, however, must still wait for the block: cert2 alone does not
+    // finalize the view.
+    harness.apply(test_data.views[1].cert2_input()).await;
+    assert!(
+        !any(harness.outputs(), is_leaf_decided),
+        "decide must not happen without the block locally available"
+    );
+
+    // Once the block is reconstructed, the view decides.
+    harness
+        .apply(test_data.views[1].block_reconstructed_input())
+        .await;
+    assert!(
+        any(harness.outputs(), is_leaf_decided),
+        "decide should fire once the block is available"
     );
 }
 
