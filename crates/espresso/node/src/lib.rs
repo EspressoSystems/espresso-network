@@ -999,6 +999,7 @@ pub mod testing {
     use hotshot_builder_refactored::service::{
         BuilderConfig as LegacyBuilderConfig, GlobalState as LegacyGlobalState,
     };
+    use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
     use hotshot_testing::block_builder::{
         BuilderTask, SimpleBuilderImplementation, TestBuilderImplementation,
     };
@@ -1150,6 +1151,24 @@ pub mod testing {
         builder_port: Option<u16>,
         upgrades: BTreeMap<Version, Upgrade>,
         coordinator_addrs: Vec<NetAddr>,
+        contracts: Option<Contracts>,
+    }
+
+    /// Picks the key sets at `indices` out of the full deterministic sequence,
+    /// preserving the order of `indices`. Panics on duplicate or out-of-range
+    /// indices.
+    fn select_staking_key_sets(all: Vec<StakingKeySet>, indices: &[usize]) -> Vec<StakingKeySet> {
+        let mut by_index: Vec<Option<StakingKeySet>> = all.into_iter().map(Some).collect();
+        indices
+            .iter()
+            .map(|&i| {
+                by_index
+                    .get_mut(i)
+                    .unwrap_or_else(|| panic!("validator index {i} out of range"))
+                    .take()
+                    .unwrap_or_else(|| panic!("duplicate validator index {i}"))
+            })
+            .collect()
     }
 
     pub fn staking_priv_keys(
@@ -1231,7 +1250,22 @@ pub mod testing {
 
         /// Version specific upgrade setup. Extend to future upgrades
         /// by adding a branch to the `match` statement.
-        pub async fn set_upgrades(mut self, version: Version) -> Self {
+        pub async fn set_upgrades(self, version: Version) -> Self {
+            let registered: Vec<usize> = (0..NUM_NODES).collect();
+            self.set_upgrades_with(version, StakeTableContractVersion::V3, &registered)
+                .await
+        }
+
+        /// Like [`Self::set_upgrades`], but deploys the requested stake table
+        /// contract version and registers only the validators at the
+        /// `registered` node indices. The deployed [`Contracts`] registry is
+        /// retained and available via [`TestConfig::contracts`].
+        pub async fn set_upgrades_with(
+            mut self,
+            version: Version,
+            stake_table_version: StakeTableContractVersion,
+            registered: &[usize],
+        ) -> Self {
             let upgrade = match version {
                 version if version >= EPOCH_VERSION => {
                     tracing::debug!(?version, "upgrade version");
@@ -1244,11 +1278,14 @@ pub mod testing {
                     )
                     .unwrap();
 
-                    let validators = staking_priv_keys(
-                        &self.priv_keys,
-                        &self.state_key_pairs,
-                        &self.coordinator_addrs,
-                        NUM_NODES,
+                    let validators = select_staking_key_sets(
+                        staking_priv_keys(
+                            &self.priv_keys,
+                            &self.state_key_pairs,
+                            &self.coordinator_addrs,
+                            NUM_NODES,
+                        ),
+                        registered,
                     );
 
                     let deployer = ProviderBuilder::new()
@@ -1282,9 +1319,18 @@ pub mod testing {
                         .safe_exit_timelock_executors(vec![self.signer.address()])
                         .build()
                         .unwrap();
-                    args.deploy_to_stake_table_v3(&mut contracts)
-                        .await
-                        .expect("failed to deploy all contracts");
+                    match stake_table_version {
+                        StakeTableContractVersion::V1 => {
+                            args.deploy_to_stake_table_v1(&mut contracts).await
+                        },
+                        StakeTableContractVersion::V2 => {
+                            args.deploy_to_stake_table_v2(&mut contracts).await
+                        },
+                        StakeTableContractVersion::V3 => {
+                            args.deploy_to_stake_table_v3(&mut contracts).await
+                        },
+                    }
+                    .expect("failed to deploy all contracts");
 
                     let st_addr = contracts
                         .address(Contract::StakeTableProxy)
@@ -1302,6 +1348,8 @@ pub mod testing {
                     .apply_all()
                     .await
                     .expect("send all txns failed");
+
+                    self.contracts = Some(contracts);
 
                     Upgrade::pos_view_based(st_addr)
                 },
@@ -1365,6 +1413,7 @@ pub mod testing {
                 upgrades: self.upgrades,
                 anvil_provider: self.anvil_provider,
                 coordinator_addrs: self.coordinator_addrs,
+                contracts: self.contracts,
             }
         }
 
@@ -1482,6 +1531,7 @@ pub mod testing {
                 builder_port: None,
                 upgrades: Default::default(),
                 coordinator_addrs,
+                contracts: None,
             }
         }
     }
@@ -1501,6 +1551,8 @@ pub mod testing {
         upgrades: BTreeMap<Version, Upgrade>,
         /// Per-node cliquenet coordinator bind addresses, indexed by node.
         coordinator_addrs: Vec<NetAddr>,
+        /// Contracts deployed by [`TestConfigBuilder::set_upgrades_with`], if any.
+        contracts: Option<Contracts>,
     }
 
     impl<const NUM_NODES: usize> TestConfig<NUM_NODES> {
@@ -1547,6 +1599,20 @@ pub mod testing {
                 &self.coordinator_addrs,
                 self.num_nodes(),
             )
+        }
+
+        /// Key sets for the given node indices, aligned with
+        /// [`Self::staking_priv_keys`]: the full deterministic sequence is
+        /// generated first and then filtered, so a subset keeps the same keys
+        /// per node index.
+        pub fn staking_key_sets(&self, indices: &[usize]) -> Vec<StakingKeySet> {
+            select_staking_key_sets(self.staking_priv_keys(), indices)
+        }
+
+        /// Contracts deployed by [`TestConfigBuilder::set_upgrades_with`], if
+        /// that was used to set up this config.
+        pub fn contracts(&self) -> Option<Contracts> {
+            self.contracts.clone()
         }
 
         pub fn validator_providers(
@@ -1792,31 +1858,31 @@ pub mod testing {
             let event = events.next().await.unwrap();
             tracing::info!("Received event from handle: {event:?}");
 
-            if let CoordinatorEvent::LegacyEvent(Event {
-                event: EventType::Decide { leaf_chain, .. },
-                ..
-            }) = event
-            {
-                if let Some((height, size)) =
-                    leaf_chain.iter().find_map(|LeafInfo { leaf, .. }| {
-                        if leaf
-                            .block_payload()
-                            .as_ref()?
-                            .transaction_commitments(leaf.block_header().metadata())
-                            .contains(&commitment)
-                        {
-                            let size = leaf.block_payload().unwrap().encode().len();
-                            Some((leaf.block_header().block_number(), size))
-                        } else {
-                            None
-                        }
-                    })
+            // Decides arrive as `LegacyEvent` before the new protocol and as
+            // `NewDecide` after.
+            let leaf_chain: &[LeafInfo<SeqTypes>] = match &event {
+                CoordinatorEvent::LegacyEvent(Event {
+                    event: EventType::Decide { leaf_chain, .. },
+                    ..
+                }) => leaf_chain,
+                CoordinatorEvent::NewDecide { leaf_infos, .. } => leaf_infos,
+                _ => continue,
+            };
+            if let Some((height, size)) = leaf_chain.iter().find_map(|LeafInfo { leaf, .. }| {
+                if leaf
+                    .block_payload()
+                    .as_ref()?
+                    .transaction_commitments(leaf.block_header().metadata())
+                    .contains(&commitment)
                 {
-                    tracing::info!(height, "transaction {commitment} sequenced");
-                    return (height, size);
+                    let size = leaf.block_payload().unwrap().encode().len();
+                    Some((leaf.block_header().block_number(), size))
+                } else {
+                    None
                 }
-            } else {
-                // Keep waiting
+            }) {
+                tracing::info!(height, "transaction {commitment} sequenced");
+                return (height, size);
             }
         }
     }
