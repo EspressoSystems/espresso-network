@@ -165,7 +165,7 @@
 <a href=#165 id=165 data-nosnippet>165</a>        <span class="kw">match </span><span class="self">self</span>.fetch_certificate2(req.height).<span class="kw">await </span>{
 <a href=#166 id=166 data-nosnippet>166</a>            <span class="prelude-val">Ok</span>(cert2) =&gt; <span class="prelude-val">Some</span>(cert2),
 <a href=#167 id=167 data-nosnippet>167</a>            <span class="prelude-val">Err</span>(err) =&gt; {
-<a href=#168 id=168 data-nosnippet>168</a>                <span class="macro">tracing::warn!</span>(<span class="question-mark">?</span>req, <span class="string">"failed to fetch cert2: {err:#}"</span>);
+<a href=#168 id=168 data-nosnippet>168</a>                <span class="macro">tracing::info!</span>(<span class="question-mark">?</span>req, %err, <span class="string">"failed to fetch cert2, will retry"</span>);
 <a href=#169 id=169 data-nosnippet>169</a>                <span class="prelude-val">None
 <a href=#170 id=170 data-nosnippet>170</a>            </span>},
 <a href=#171 id=171 data-nosnippet>171</a>        }
