@@ -42,6 +42,20 @@ filter = 'test(slow_test_restart_new_protocol)'
 slow-timeout = { period = "2m", terminate-after = 5 }
 threads-required = 'num-cpus'
 
+# The stake-table-change upgrade tests run many epochs across a real protocol
+# upgrade (epoch_height 70 for the 0.5->0.6 cutover cases).
+[[profile.default.overrides]]
+filter = 'test(test_stake_table_full_swap) | test(test_new_protocol_upgrade_ineligible_validator_drops)'
+slow-timeout = { period = "2m", terminate-after = 15 }
+threads-required = 'num-cpus'
+
+# In-process stake-table-change integration tests: multi-node networks
+# against a real L1, running for several epochs.
+[[profile.default.overrides]]
+filter = 'test(/stake_table_changes_test::/)'
+slow-timeout = { period = "2m", terminate-after = 8 }
+threads-required = 'num-cpus'
+
 # The restart tests run an entire sequencing network, and so are quite resource intensive.
 [[profile.default.overrides]]
 filter = 'test(slow_test_restart)'
