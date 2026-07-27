@@ -3180,7 +3180,7 @@ mod test {
     use ::light_client::{
         consensus::{
             header::HeaderProof,
-            leaf::{LeafProof, LeafProofHint},
+            leaf::{FinalityProof, LeafProof, LeafProofHint},
             payload::PayloadProof,
         },
         testing::{EpochChangeQuorum, LEGACY_VERSION},
@@ -3189,7 +3189,7 @@ mod test {
         eips::BlockId,
         network::EthereumWallet,
         primitives::{Address, U256},
-        providers::ProviderBuilder,
+        providers::{ProviderBuilder, ext::AnvilApi},
     };
     use async_lock::Mutex;
     use committable::{Commitment, Committable};
@@ -3199,12 +3199,12 @@ mod test {
         upgrade_stake_table_v3,
     };
     use espresso_types::{
-        ADVZNamespaceProofQueryData, FeeAmount, Header, L1Client, L1ClientOptions,
-        MOCK_SEQUENCER_VERSIONS, NamespaceId, NamespaceProofQueryData, NsProof,
-        RegisteredValidatorMap, RewardDistributor, StakeTableState, StateCertQueryDataV1,
-        StateCertQueryDataV2, ValidatedState, ValidatorLeaderCounts,
+        FeeAmount, Header, L1Client, L1ClientOptions, MOCK_SEQUENCER_VERSIONS, NamespaceId,
+        NamespaceProofQueryData, NsProof, RegisteredValidatorMap, RewardDistributor,
+        StakeTableState, StateCertQueryDataV1, StateCertQueryDataV2, ValidatedState,
+        ValidatorLeaderCounts,
         config::PublicHotShotConfig,
-        traits::{MembershipPersistence, NullEventConsumer, PersistenceOptions},
+        traits::{NullEventConsumer, PersistenceOptions},
         v0_3::{COMMISSION_BASIS_POINTS, Fetcher, RewardAmount, RewardMerkleProofV1},
         v0_4::{RewardAccountV2, RewardMerkleProofV2},
         validators_from_l1_events,
@@ -3432,6 +3432,40 @@ mod test {
             .send()
             .await
             .unwrap_err();
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_database_metadata_endpoints() {
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+
+        let storage = SqlDataSource::create_storage().await;
+        let options = SqlDataSource::options(&storage, Options::with_port(port));
+
+        let network_config = TestConfigBuilder::default().build();
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(options)
+            .network_config(network_config)
+            .build();
+        let _network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
+        let url = format!("http://localhost:{port}").parse().unwrap();
+        let client: Client<ServerError, SequencerApiVersion> = Client::new(url);
+        client.connect(Some(Duration::from_secs(15))).await;
+
+        let table_sizes = client
+            .get::<Vec<data_source::TableSize>>("database/table-sizes")
+            .send()
+            .await
+            .unwrap();
+        assert!(!table_sizes.is_empty());
+
+        // Deferred backfill migrations register tracking rows at node startup, so the list may
+        // be non-empty; just check the entries are well-formed.
+        let migration_status = client
+            .get::<Vec<data_source::MigrationStatus>>("database/migration-status")
+            .send()
+            .await
+            .unwrap();
+        assert!(migration_status.iter().all(|m| !m.name.is_empty()));
     }
 
     async fn run_catchup_test(url_suffix: &str) {
@@ -3872,7 +3906,6 @@ mod test {
             .api_config(Options::from(options::Http {
                 port,
                 max_connections: None,
-                axum_port: None,
                 tonic_port: None,
             }))
             .states(states)
@@ -8306,9 +8339,11 @@ mod test {
                 .build();
 
             let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
-            let axum_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+            // After the tide-disco cutover the single `port` field serves the Axum API.
+            // The parity-test helpers still accept two ports — wire both to the same Axum
+            // server so the existing call sites remain unchanged.
+            let axum_port = api_port;
             println!("API PORT = {api_port}");
-            println!("AXUM PORT = {axum_port}");
 
             let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
             let persistence: [_; NUM_NODES] = storage
@@ -8318,14 +8353,12 @@ mod test {
                 .try_into()
                 .unwrap();
 
-            let mut api_opts = Options::with_port(api_port)
+            let api_opts = Options::with_port(api_port)
                 .catchup(Default::default())
                 .config(Default::default())
-                .submit(Default::default())
                 .explorer(Default::default())
                 .light_client(Default::default())
-                .hotshot_events(HotshotEvents);
-            api_opts.http.axum_port = Some(axum_port);
+                .hotshot_events(Default::default());
 
             let config = TestNetworkConfigBuilder::with_num_nodes()
                 .api_config(SqlDataSource::options(&storage[0], api_opts))
@@ -8499,6 +8532,26 @@ mod test {
 
                     assert_eq!(reward_claim_input, res.to_reward_claim_input()?);
 
+                    // Tide contract relied on by scripts/claim-rewards-loop: an account with no
+                    // rewards yields 404; any other error status makes the claim loop exit and
+                    // process-compose tear down the whole demo.
+                    let absent = alloy::primitives::Address::with_last_byte(0xaa);
+                    assert!(
+                        validated_state
+                            .reward_merkle_tree_v2
+                            .iter()
+                            .all(|(addr, _)| addr.0 != absent),
+                        "sentinel address unexpectedly present in reward tree"
+                    );
+                    let err = client
+                        .get::<RewardClaimInput>(&format!(
+                            "reward-state-v2/reward-claim-input/{height}/{absent}"
+                        ))
+                        .send()
+                        .await
+                        .unwrap_err();
+                    assert_matches!(err, ServerError { status, .. } if status == StatusCode::NOT_FOUND);
+
                     // Both servers share the same underlying SQL data source; compare responses
                     // for each per-address endpoint under reward-state-v2.
                     compare_endpoints(
@@ -8536,6 +8589,24 @@ mod test {
                         &format!("reward-state-v2/reward-balance/latest/{address}"),
                     )
                     .await?;
+
+                    // Tide-disco registered the same reward.toml handlers on both the
+                    // reward-state and reward-state-v2 mounts, so these two routes hit the
+                    // same v2-tree-backed handlers as the pair above, just under reward-state.
+                    compare_endpoints(
+                        &http,
+                        api_port,
+                        axum_port,
+                        &format!("reward-state/proof/latest/{address}"),
+                    )
+                    .await?;
+                    compare_endpoints(
+                        &http,
+                        api_port,
+                        axum_port,
+                        &format!("reward-state/reward-balance/latest/{address}"),
+                    )
+                    .await?;
                 }
 
                 compare_endpoints(
@@ -8552,6 +8623,60 @@ mod test {
                     &format!("reward-state-v2/reward-merkle-tree-v2/{height}"),
                 )
                 .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("reward-state/reward-amounts/{height}/0/1000"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("reward-state/reward-merkle-tree-v2/{height}"),
+                )
+                .await?;
+
+                // Merklized-state `get_path` routes, inherited by both reward mounts from
+                // `hotshot-query-service`'s base `state.toml` (mirrors the block-state /
+                // fee-state checks below). Nothing in this codebase populates the generic
+                // merklized-state tables for the reward trees today; the reward-state modules
+                // persist snapshots via the separate `persist_tree`/`load_tree` bincode-blob
+                // mechanism instead, so these routes 404 in practice. We only assert that both
+                // mounts, in both height and commit form, return well-formed (and identical
+                // between the two "servers") JSON.
+                let reward_address = validated_state
+                    .reward_merkle_tree_v2
+                    .iter()
+                    .next()
+                    .map(|(addr, _)| *addr)
+                    .expect("reward tree should have at least one account");
+                let reward_header: Header = client
+                    .get(&format!("availability/header/{height}"))
+                    .send()
+                    .await
+                    .unwrap();
+                let reward_mt_commit = match reward_header.reward_merkle_tree_root() {
+                    either::Either::Left(commit) => commit.to_string(),
+                    either::Either::Right(commit) => commit.to_string(),
+                };
+                for mount in ["reward-state", "reward-state-v2"] {
+                    compare_endpoints(
+                        &http,
+                        api_port,
+                        axum_port,
+                        &format!("{mount}/{height}/{reward_address}"),
+                    )
+                    .await?;
+                    compare_endpoints(
+                        &http,
+                        api_port,
+                        axum_port,
+                        &format!("{mount}/commit/{reward_mt_commit}/{reward_address}"),
+                    )
+                    .await?;
+                }
 
                 // Availability v1 parity: verify the axum v1 routes return the same JSON as tide.
 
@@ -9327,6 +9452,24 @@ mod test {
                 )
                 .await?;
 
+                // Regression: an oversized range on the plural namespaces route must return
+                // 400 Bad Request (the status carried by the query-service error), not 500.
+                let encoded_ns = tagged_base64::TaggedBase64::new(
+                    ::light_client::client::NAMESPACES_PARAM_TAG,
+                    &serde_json::to_vec(&vec![u64::from(avail_ns)])?,
+                )?;
+                compare_error_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!(
+                        "light-client/namespaces/{avail_block}/{}/{encoded_ns}",
+                        avail_block + 200
+                    ),
+                    400,
+                )
+                .await?;
+
                 // hotshot-events startup info: both must return matching JSON.
                 compare_endpoints(&http, api_port, axum_port, "hotshot-events/startup_info")
                     .await?;
@@ -9623,7 +9766,6 @@ mod test {
             .api_config(Options::from(options::Http {
                 port,
                 max_connections: None,
-                axum_port: None,
                 tonic_port: None,
             }))
             .catchups(std::array::from_fn(|_| {
@@ -9732,88 +9874,136 @@ mod test {
             }
         }
 
-        // The legacy version of the API only works for old VID.
-        tracing::info!("test namespace API version: v0");
-        if version < EPOCH_VERSION {
-            let ns_proof: ADVZNamespaceProofQueryData = client
-                .get(&format!("v0/availability/block/{block}/namespace/{ns}"))
-                .send()
-                .await
-                .unwrap();
-            let proof = ns_proof.proof.as_ref().unwrap();
-            let VidCommon::V0(common) = common.common() else {
-                panic!("wrong VID common version");
-            };
-            let (txs, ns_from_proof) = proof
-                .verify(header.ns_table(), &header.payload_commitment(), common)
-                .unwrap();
-            assert_eq!(ns_from_proof, ns);
-            assert_eq!(txs, ns_proof.transactions);
-            assert_eq!(&txs, std::slice::from_ref(&tx));
+        network.server.shut_down().await;
+    }
 
-            // Test range endpoint.
-            let ns_proofs: Vec<ADVZNamespaceProofQueryData> = client
-                .get(&format!(
-                    "v0/availability/block/{}/{}/namespace/{ns}",
-                    block,
-                    block + 1
-                ))
+    /// Verify the light client leaf, header, and payload proofs at each height
+    /// against the ground truth captured from the availability streams.
+    ///
+    /// Only checks that proofs verify, not which `FinalityProof` variant they
+    /// use
+    async fn check_light_client_proofs(
+        client: &Client<ServerError, StaticVersion<0, 1>>,
+        actual_leaves: &[LeafQueryData<SeqTypes>],
+        actual_blocks: &[BlockQueryData<SeqTypes>],
+        heights: impl IntoIterator<Item = u64>,
+        epoch_height: u64,
+    ) {
+        let quorum = EpochChangeQuorum::new(epoch_height);
+        for i in heights {
+            let leaf = &actual_leaves[i as usize];
+            let block = &actual_blocks[i as usize];
+            let version = leaf.header().version();
+            tracing::info!(i, %version, "check light client proofs");
+
+            // Get the same leaf proof by various IDs.
+            let proofs = try_join_all(
+                [
+                    format!("light-client/leaf/{i}"),
+                    format!("light-client/leaf/hash/{}", leaf.hash()),
+                    format!("light-client/leaf/block-hash/{}", leaf.block_hash()),
+                ]
+                .into_iter()
+                .map(|path| async move {
+                    tracing::info!(i, path, "fetch leaf proof");
+                    let proof = client.get::<LeafProof>(&path).send().await?;
+                    Ok::<_, anyhow::Error>((path, proof))
+                }),
+            )
+            .await
+            .unwrap();
+
+            // Check proofs against the expected leaf.
+            for (path, proof) in proofs {
+                tracing::info!(i, path, "check leaf proof");
+                assert_eq!(
+                    proof
+                        .verify(LeafProofHint::Quorum(&quorum))
+                        .await
+                        .unwrap_or_else(|err| panic!("{path}: proof failed to verify: {err:#}")),
+                    *leaf
+                );
+            }
+
+            // Get the corresponding header.
+            let root_height = i + 1;
+            let root = actual_leaves[root_height as usize].header();
+            let proofs = try_join_all(
+                [
+                    format!("light-client/header/{root_height}/{i}"),
+                    format!(
+                        "light-client/header/{root_height}/hash/{}",
+                        leaf.block_hash()
+                    ),
+                ]
+                .into_iter()
+                .map(|path| async move {
+                    tracing::info!(i, path, "fetch header proof");
+                    let proof = client.get::<HeaderProof>(&path).send().await?;
+                    Ok::<_, anyhow::Error>((path, proof))
+                }),
+            )
+            .await
+            .unwrap();
+            for (path, proof) in proofs {
+                tracing::info!(i, path, "check header proof");
+                assert_eq!(
+                    proof.verify_ref(root.block_merkle_tree_root()).unwrap(),
+                    leaf.header()
+                );
+            }
+
+            // Get the corresponding payload.
+            let proof = client
+                .get::<PayloadProof>(&format!("light-client/payload/{i}"))
                 .send()
                 .await
                 .unwrap();
-            assert_eq!(&ns_proofs, std::slice::from_ref(&ns_proof));
-        } else {
-            // It will fail if we ask for a proof for a block using new VID.
-            client
-                .get::<ADVZNamespaceProofQueryData>(&format!(
-                    "v0/availability/block/{block}/namespace/{ns}"
-                ))
-                .send()
-                .await
-                .unwrap_err();
+            assert_eq!(proof.verify(leaf.header()).unwrap(), *block.payload());
         }
+    }
 
-        // Any API version can correctly tell us that the namespace does not exist.
-        let ns_proof: ADVZNamespaceProofQueryData = client
-            .get(&format!(
-                "v0/availability/block/{}/namespace/{ns}",
-                block - 1
-            ))
+    /// Check the light client stake table endpoint: replaying `first_epoch + 2`
+    /// reproduces the validator set loaded from storage, and an earlier epoch
+    /// is a `BAD_REQUEST`.
+    async fn check_light_client_stake_table<N, P>(
+        client: &Client<ServerError, StaticVersion<0, 1>>,
+        server: &SequencerContext<N, P>,
+        first_epoch: EpochNumber,
+    ) where
+        N: ConnectedNetwork<PubKey>,
+        P: SequencerPersistence,
+    {
+        let events: Vec<StakeTableEvent> = client
+            .get(&format!("light-client/stake-table/{}", first_epoch + 2))
             .send()
             .await
             .unwrap();
-        assert_eq!(ns_proof.proof, None);
-        assert_eq!(ns_proof.transactions, vec![]);
-
-        // Use the legacy API to stream namespace proofs until we get to a non-trivial proof or a
-        // VID version we can't deal with.
-        let mut proofs = client
-            .socket(&format!("v0/availability/stream/blocks/0/namespace/{ns}"))
-            .subscribe()
-            .await
-            .unwrap();
-        for i in 0.. {
-            tracing::info!(i, "stream proof");
-            let proof: ADVZNamespaceProofQueryData = match proofs.next().await {
-                Some(proof) => proof.unwrap(),
-                None => {
-                    // Steam not expected to end on legacy consensus version.
-                    assert!(
-                        version >= EPOCH_VERSION,
-                        "legacy steam ended while still on legacy consensus"
-                    );
-                    break;
-                },
-            };
-            if proof.proof.is_none() {
-                tracing::info!("waiting for non-trivial proof from stream");
-                continue;
-            }
-            assert_eq!(&proof.transactions, std::slice::from_ref(&tx));
-            break;
+        let mut state_from_events = StakeTableState::default();
+        for event in events {
+            state_from_events.apply_event(event).unwrap().unwrap();
         }
+        assert_eq!(
+            state_from_events.into_validators(),
+            server
+                .consensus_handle()
+                .storage()
+                .await
+                .load_all_validators(first_epoch + 2, 0, 1_000_000)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|v| (v.account, v))
+                .collect::<RegisteredValidatorMap>()
+        );
 
-        network.server.shut_down().await;
+        // Querying for a stake table before the first real epoch is an error.
+        let err = client
+            .get::<Vec<StakeTableEvent>>(&format!("light-client/stake-table/{}", first_epoch + 1))
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -9951,109 +10141,217 @@ mod test {
         // * A few blocks just before and after the stake table comes into effect
             .chain(epoch_heights[1]-1..=max_block);
 
-        let quorum = EpochChangeQuorum::new(EPOCH_HEIGHT);
-        for i in heights {
-            let leaf = &actual_leaves[i as usize];
-            let block = &actual_blocks[i as usize];
-            tracing::info!(i, ?leaf, ?block, "check leaf");
+        check_light_client_proofs(
+            &client,
+            &actual_leaves,
+            &actual_blocks,
+            heights,
+            EPOCH_HEIGHT,
+        )
+        .await;
+        check_light_client_stake_table(&client, &network.server, first_epoch).await;
+    }
 
-            // Get the same leaf proof by various IDs.
-            let client = &client;
-            let proofs = try_join_all(
-                [
-                    format!("light-client/leaf/{i}"),
-                    format!("light-client/leaf/hash/{}", leaf.hash()),
-                    format!("light-client/leaf/block-hash/{}", leaf.block_hash()),
-                ]
-                .into_iter()
-                .map(|path| async move {
-                    tracing::info!(i, path, "fetch leaf proof");
-                    let proof = client.get::<LeafProof>(&path).send().await?;
-                    Ok::<_, anyhow::Error>((path, proof))
-                }),
-            )
+    /// run through the new protocol upgrade and a following epoch change, then check the
+    /// light client serves correct leaf, header, payload, and stake table
+    /// proofs around both boundaries.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_light_client_new_protocol_upgrade() {
+        const NUM_NODES: usize = 5;
+        const EPOCH_HEIGHT: u64 = 70;
+        const UPGRADE_START_PROPOSING_VIEW: u64 = 3 * EPOCH_HEIGHT + 5;
+        const UPGRADE: Upgrade = Upgrade::new(EPOCH_REWARD_VERSION, NEW_PROTOCOL_VERSION);
+
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let url: Url = format!("http://localhost:{port}").parse().unwrap();
+
+        let test_config = TestConfigBuilder::<NUM_NODES>::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .epoch_start_block(0)
+            .builder_timeout(Duration::from_millis(500))
+            .set_upgrades(NEW_PROTOCOL_VERSION)
             .await
+            .upgrade_proposing_views(UPGRADE_START_PROPOSING_VIEW, 1000)
+            .build();
+
+        test_config
+            .anvil()
+            .expect("TestConfigBuilder starts an anvil")
+            .anvil_set_interval_mining(1)
+            .await
+            .expect("interval mining");
+
+        // Base version V5 already has epochs, so genesis must carry the stake
+        // table contract deployed above.
+        let genesis_state = ValidatedState {
+            chain_config: test_config
+                .get_upgrade_map()
+                .chain_config(NEW_PROTOCOL_VERSION)
+                .into(),
+            ..Default::default()
+        };
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
             .unwrap();
 
-            // Check proofs against expected leaf.
-            for (path, proof) in proofs {
-                tracing::info!(i, path, ?proof, "check leaf proof");
-                assert_eq!(
-                    proof.verify(LeafProofHint::Quorum(&quorum)).await.unwrap(),
-                    *leaf
-                );
-            }
-
-            // Get the corresponding header.
-            let root_height = i + 1;
-            let root = actual_leaves[root_height as usize].header();
-            let proofs = try_join_all(
-                [
-                    format!("light-client/header/{root_height}/{i}"),
-                    format!(
-                        "light-client/header/{root_height}/hash/{}",
-                        leaf.block_hash()
-                    ),
-                ]
-                .into_iter()
-                .map(|path| async move {
-                    tracing::info!(i, path, "get header proof");
-                    let proof = client.get::<HeaderProof>(&path).send().await?;
-                    Ok::<_, anyhow::Error>((path, proof))
-                }),
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(
+                SqlDataSource::options(&storage[0], Options::with_port(port))
+                    .light_client(Default::default()),
             )
+            .persistences(persistence)
+            .states(std::array::from_fn(|_| genesis_state.clone()))
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<SequencerApiVersion>::from_urls(
+                    vec![url.clone()],
+                    Default::default(),
+                    Duration::from_secs(2),
+                    &NoMetrics,
+                )
+            }))
+            .network_config(test_config)
+            .build();
+
+        let mut network = TestNetwork::new(config, UPGRADE).await;
+        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        client.connect(None).await;
+
+        // Track each leaf and block served by the query service; they are the
+        // ground truth the light client proofs are checked against.
+        let mut actual_leaves = vec![];
+        let mut actual_blocks = vec![];
+        let mut leaves = client
+            .socket("availability/stream/leaves/0")
+            .subscribe::<LeafQueryData<SeqTypes>>()
             .await
-            .unwrap();
-            for (path, proof) in proofs {
-                tracing::info!(i, path, ?proof, "check header proof");
-                assert_eq!(
-                    proof.verify_ref(root.block_merkle_tree_root()).unwrap(),
-                    leaf.header()
+            .unwrap()
+            .zip(
+                client
+                    .socket("availability/stream/blocks/0")
+                    .subscribe::<BlockQueryData<SeqTypes>>()
+                    .await
+                    .unwrap(),
+            )
+            .map(|(leaf, block)| {
+                let leaf = leaf.unwrap();
+                actual_leaves.push(leaf.clone());
+                actual_blocks.push(block.unwrap());
+                leaf
+            });
+
+        // Wait for the upgrade to take effect.
+        let upgrade_height = timeout(Duration::from_secs(600), async {
+            loop {
+                let leaf = leaves.next().await.unwrap();
+                if leaf.header().version() >= NEW_PROTOCOL_VERSION {
+                    break leaf.height();
+                }
+                tracing::info!(
+                    version = %leaf.header().version(),
+                    height = leaf.header().height(),
+                    view = ?leaf.leaf().view_number(),
+                    "waiting for new protocol upgrade"
                 );
             }
+        })
+        .await
+        .expect("the network did not upgrade to the new protocol");
+        let upgrade_epoch = epoch_from_block_number(upgrade_height, EPOCH_HEIGHT);
+        tracing::info!(upgrade_height, upgrade_epoch, "new protocol enabled");
 
-            // Get the corresponding payload.
-            let proof = client
-                .get::<PayloadProof>(&format!("light-client/payload/{i}"))
+        // Wait for the first post upgrade epoch change, to also cover proofs
+        // across a V6 epoch boundary
+        let epoch_change_height = timeout(Duration::from_secs(300), async {
+            loop {
+                let leaf = leaves.next().await.unwrap();
+                let epoch = epoch_from_block_number(leaf.height(), EPOCH_HEIGHT);
+                if epoch > upgrade_epoch {
+                    break leaf.height();
+                }
+                tracing::info!(
+                    height = leaf.height(),
+                    ?epoch,
+                    "waiting for a post-upgrade epoch change"
+                );
+            }
+        })
+        .await
+        .expect("no epoch change happened after the upgrade");
+        tracing::info!(epoch_change_height, "post upgrade epoch change");
+
+        // Run a few more blocks so every queried height has the descendants its
+        // proof needs (QC chains, header roots, and a finalizing `Certificate2`).
+        let max_block = epoch_change_height + 3;
+        timeout(Duration::from_secs(120), async {
+            loop {
+                let leaf = leaves.next().await.unwrap();
+                if leaf.height() > max_block {
+                    break;
+                }
+                tracing::info!(max_block, height = leaf.height(), "waiting for block");
+            }
+        })
+        .await
+        .expect("the chain stopped making progress after the upgrade");
+
+        // Stop consensus: every block we query has already been produced.
+        network.stop_consensus().await;
+
+        // Sample blocks around the two boundaries where proof logic changes
+        // the V5 -> V6 upgrade and the following V6 epoch change.
+        let heights =
+            (upgrade_height - 3..=upgrade_height + 1).chain(epoch_change_height - 1..=max_block);
+
+        check_light_client_proofs(
+            &client,
+            &actual_leaves,
+            &actual_blocks,
+            heights,
+            EPOCH_HEIGHT,
+        )
+        .await;
+
+        let client = &client;
+        let finality_proof = |height: u64| async move {
+            client
+                .get::<LeafProof>(&format!("light-client/leaf/{height}"))
                 .send()
                 .await
-                .unwrap();
-            assert_eq!(proof.verify(leaf.header()).unwrap(), *block.payload());
-        }
-
-        // Check light client stake table.
-        let events: Vec<StakeTableEvent> = client
-            .get(&format!("light-client/stake-table/{}", first_epoch + 2))
-            .send()
-            .await
-            .unwrap();
-        let mut state_from_events = StakeTableState::default();
-        for event in events {
-            state_from_events.apply_event(event).unwrap().unwrap();
-        }
-
-        assert_eq!(
-            state_from_events.into_validators(),
-            network
-                .server
-                .consensus_handle()
-                .storage()
-                .await
-                .load_all_validators(first_epoch + 2, 0, 1_000_000)
-                .await
                 .unwrap()
-                .into_iter()
-                .map(|v| (v.account, v))
-                .collect::<RegisteredValidatorMap>()
-        );
+        };
+        // Everything up to the last two pre cutover leaves is old protocol
+        for height in upgrade_height - 10..=upgrade_height - 3 {
+            let proof = finality_proof(height).await;
+            assert!(
+                matches!(proof.proof(), FinalityProof::HotStuff2 { .. }),
+                "leaf {height} should be proven by a HotStuff2 QC chain, got {:?}",
+                proof.proof(),
+            );
+        }
 
-        // Querying for a stake table before the first real epoch is an error.
-        let err = client
-            .get::<Vec<StakeTableEvent>>(&format!("light-client/stake-table/{}", first_epoch + 1))
-            .send()
-            .await
-            .unwrap_err();
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+        // A post cutover leaf is proven by a new protocol certificate. The last
+        // two pre cutover leaves will be finalized by new protocol
+        // e.g cutover at 347 the old protocol decides up to 344 (HotStuff2), and the
+        // new protocol's first Cert2 directly commits 347 and finalizes
+        // 345 and 346 with it via the indirect commit rule.
+        for height in [upgrade_height - 1, epoch_change_height] {
+            let proof = finality_proof(height).await;
+            assert!(
+                matches!(proof.proof(), FinalityProof::NewProtocol { .. }),
+                "leaf {height} should be proven by a new protocol certificate, got {:?}",
+                proof.proof(),
+            );
+        }
+
+        // Epochs run from genesis, so `first_epoch` is 1 and the endpoint is
+        // queryable from epoch 3, which the chain has long passed.
+        let first_epoch = EpochNumber::new(epoch_from_block_number(0, EPOCH_HEIGHT));
+        check_light_client_stake_table(client, &network.server, first_epoch).await;
     }
 
     /// Test that `fetch_leaf` returns a leaf with exactly the requested block height.

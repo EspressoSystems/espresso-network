@@ -2,6 +2,8 @@
 //!
 //! Mirrors the tide-disco endpoints defined in `crates/espresso/node/api/light-client.toml`.
 
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use serde::Serialize;
 
@@ -65,4 +67,14 @@ pub trait LightClientApi {
         end: u64,
         namespace: u64,
     ) -> anyhow::Result<Vec<Self::NamespaceProof>>;
+
+    /// `namespaces` is the raw `TaggedBase64`-encoded path segment produced by the light-client
+    /// client (tag `NS`, wrapping a JSON `Vec<u64>`); decoding it is left to the implementation
+    /// so this crate does not need a `tagged-base64` dependency.
+    async fn get_lc_namespaces_proof_range(
+        &self,
+        start: u64,
+        end: u64,
+        namespaces: String,
+    ) -> anyhow::Result<Vec<HashMap<u64, Self::NamespaceProof>>>;
 }

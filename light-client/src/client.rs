@@ -2,9 +2,9 @@ use std::{collections::HashMap, future::Future};
 #[cfg(feature = "client")]
 use std::{fmt::Debug, pin::pin, time::Duration};
 
-#[cfg(feature = "client")]
-use anyhow::Context;
 use anyhow::Result;
+#[cfg(feature = "client")]
+use anyhow::{Context, anyhow};
 #[cfg(feature = "client")]
 use derive_builder::Builder;
 use espresso_types::{Certificate2, NamespaceId, SeqTypes, v0_3::StakeTableEvent};
@@ -17,6 +17,8 @@ use futures::{
 use hotshot_query_service_types::availability::LeafId;
 use hotshot_query_service_types::{availability::LeafQueryData, node::BlockId};
 use hotshot_types::data::EpochNumber;
+#[cfg(feature = "client")]
+use serde::de::DeserializeOwned;
 #[cfg(feature = "client")]
 use surf_disco::Url;
 #[cfg(feature = "client")]
@@ -150,12 +152,21 @@ impl QueryServiceClient {
                 .build(),
         }
     }
+
+    /// GET `path`, deserializing the response
+    async fn fetch<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
+        self.client
+            .get(path)
+            .send()
+            .await
+            .with_context(|| format!("fetching {path}"))
+    }
 }
 
 #[cfg(feature = "client")]
 impl Client for QueryServiceClient {
     async fn block_height(&self) -> Result<u64> {
-        Ok(self.client.get("/node/block-height").send().await?)
+        self.fetch("/node/block-height").await
     }
 
     async fn leaf_proof(
@@ -176,8 +187,7 @@ impl Client for QueryServiceClient {
             Some(finalized) => format!("{path}/{finalized}"),
             None => path,
         };
-        let proof = self.client.get(&path).send().await?;
-        Ok(proof)
+        self.fetch(&path).await
     }
 
     /// Get all leaves in the given range `[start, end)`.
@@ -186,33 +196,27 @@ impl Client for QueryServiceClient {
         start: usize,
         end: usize,
     ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
-        let path = format!("/availability/leaf/{start}/{end}");
-        let leaves = self.client.get(&path).send().await?;
-        Ok(leaves)
+        self.fetch(&format!("/availability/leaf/{start}/{end}"))
+            .await
     }
 
     async fn header_proof(&self, root: u64, id: BlockId<SeqTypes>) -> Result<HeaderProof> {
-        let path = format!("/light-client/header/{root}/{}", fmt_block_id(id));
-        let proof = self.client.get(&path).send().await?;
-        Ok(proof)
+        self.fetch(&format!("/light-client/header/{root}/{}", fmt_block_id(id)))
+            .await
     }
 
     async fn payload_proof(&self, height: u64) -> Result<PayloadProof> {
-        let path = format!("/light-client/payload/{height}");
-        Ok(self.client.get(&path).send().await?)
+        self.fetch(&format!("/light-client/payload/{height}")).await
     }
 
     async fn payload_proofs_in_range(&self, start: u64, end: u64) -> Result<Vec<PayloadProof>> {
-        let path = format!("/light-client/payload/{start}/{end}");
-        Ok(self.client.get(&path).send().await?)
+        self.fetch(&format!("/light-client/payload/{start}/{end}"))
+            .await
     }
 
     async fn namespace_proof(&self, height: u64, namespace: NamespaceId) -> Result<NamespaceProof> {
-        Ok(self
-            .client
-            .get(&format!("/light-client/namespace/{height}/{namespace}"))
-            .send()
-            .await?)
+        self.fetch(&format!("/light-client/namespace/{height}/{namespace}"))
+            .await
     }
 
     async fn namespace_proofs_in_range(
@@ -221,13 +225,10 @@ impl Client for QueryServiceClient {
         end: u64,
         namespace: NamespaceId,
     ) -> Result<Vec<NamespaceProof>> {
-        Ok(self
-            .client
-            .get(&format!(
-                "/light-client/namespace/{start}/{end}/{namespace}"
-            ))
-            .send()
-            .await?)
+        self.fetch(&format!(
+            "/light-client/namespace/{start}/{end}/{namespace}"
+        ))
+        .await
     }
 
     async fn namespaces_proofs_in_range(
@@ -237,27 +238,17 @@ impl Client for QueryServiceClient {
         namespaces: &[NamespaceId],
     ) -> Result<Vec<HashMap<NamespaceId, NamespaceProof>>> {
         let encoded = TaggedBase64::new(NAMESPACES_PARAM_TAG, &serde_json::to_vec(namespaces)?)?;
-        Ok(self
-            .client
-            .get(&format!("/light-client/namespaces/{start}/{end}/{encoded}"))
-            .send()
-            .await?)
+        self.fetch(&format!("/light-client/namespaces/{start}/{end}/{encoded}"))
+            .await
     }
 
     async fn stake_table_events(&self, epoch: EpochNumber) -> Result<Vec<StakeTableEvent>> {
-        Ok(self
-            .client
-            .get(&format!("/light-client/stake-table/{epoch}"))
-            .send()
-            .await?)
+        self.fetch(&format!("/light-client/stake-table/{epoch}"))
+            .await
     }
 
     async fn cert2(&self, height: u64) -> Result<Option<Certificate2<SeqTypes>>> {
-        Ok(self
-            .client
-            .get(&format!("/availability/cert2/{height}"))
-            .send()
-            .await?)
+        self.fetch(&format!("/availability/cert2/{height}")).await
     }
 }
 
@@ -402,7 +393,12 @@ impl<T> FallbackClient<T> {
         C: Send + Sync,
         F: TryFuture<Ok: Send, Error = anyhow::Error> + Send,
     {
-        Self::get_any_recursive(0, self.fallback_delay, clients.into_iter(), get).await
+        Self::get_any_recursive(0, self.fallback_delay, clients.into_iter(), get, None)
+            .await
+            .map_err(|err| {
+                tracing::warn!(%err, "failed to fetch on all clients");
+                err.context("failed to fetch on all clients")
+            })
     }
 
     fn get_any_recursive<'a, C, F>(
@@ -410,13 +406,16 @@ impl<T> FallbackClient<T> {
         timeout: Duration,
         mut clients: impl Iterator<Item = C> + Send + 'a,
         get: impl Fn(C) -> F + Send + 'a,
+        prev_err: Option<anyhow::Error>,
     ) -> BoxFuture<'a, Result<F::Ok>>
     where
         C: Send + Sync + 'a,
         F: TryFuture<Ok: Send, Error = anyhow::Error> + Send + 'a,
     {
         async move {
-            let client = clients.next().context("failed to fetch on all clients")?;
+            let Some(client) = clients.next() else {
+                return Err(prev_err.unwrap_or_else(|| anyhow!("no clients available")));
+            };
             match select(
                 pin!(TryFutureExt::into_future(get(client))),
                 pin!(sleep(timeout)),
@@ -430,8 +429,8 @@ impl<T> FallbackClient<T> {
                 Either::Left((Err(err), _)) => {
                     // If the pending future fails, abandon it and immediately start the fallback
                     // even if we haven't hit the timeout.
-                    tracing::warn!("failed to fetch on client {i}: {err:#}");
-                    Self::get_any_recursive(i + 1, timeout, clients, get).await
+                    tracing::info!(i, %err, "failed to fetch on client");
+                    Self::get_any_recursive(i + 1, timeout, clients, get, Some(err)).await
                 },
                 Either::Right((_, fut)) => {
                     // The timeout has elapsed. Start the request on the next client, but also keep
@@ -443,7 +442,7 @@ impl<T> FallbackClient<T> {
                     );
                     Ok(select_ok([
                         fut.boxed(),
-                        Self::get_any_recursive(i + 1, timeout, clients, get),
+                        Self::get_any_recursive(i + 1, timeout, clients, get, prev_err),
                     ])
                     .await?
                     .0)

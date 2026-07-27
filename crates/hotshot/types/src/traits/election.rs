@@ -314,6 +314,11 @@ pub trait Membership<T: NodeType>: Debug + Send + Sync {
     /// Called to notify the Membership when a new DRB result has been calculated.
     fn add_drb_result(&self, e: EpochNumber, d: DrbResult);
 
+    /// Load the committee for `epoch` from local storage.
+    ///
+    /// Returns `true` if a snapshot for `epoch` is available afterwards.
+    fn load_stake_table(&self, epoch: EpochNumber) -> impl Future<Output = bool> + Send;
+
     /// Called to notify the Membership that Epochs are enabled.
     /// Implementations should copy the pre-epoch stake table into epoch and epoch+1
     /// when this is called. The value of initial_drb_result should be used for DRB
