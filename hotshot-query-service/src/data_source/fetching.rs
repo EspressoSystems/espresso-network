@@ -125,6 +125,7 @@ use crate::{
 };
 
 mod block;
+mod cert2;
 mod header;
 mod leaf;
 mod transaction;
@@ -132,6 +133,7 @@ mod vid;
 
 use self::{
     block::{PayloadFetcher, PayloadRangeFetcher},
+    cert2::Cert2Fetcher,
     leaf::{LeafFetcher, LeafRangeFetcher},
     transaction::TransactionRequest,
     vid::{VidCommonFetcher, VidCommonRequest},
@@ -487,6 +489,18 @@ where
         Builder::new(storage, provider)
     }
 
+    #[cfg(any(test, feature = "testing"))]
+    pub async fn is_fetching_cert2(&self, height: u64) -> bool {
+        match &self.fetcher.cert2_fetcher {
+            Some(fetcher) => {
+                fetcher
+                    .is_fetching(&request::Certificate2Request { height })
+                    .await
+            },
+            None => false,
+        }
+    }
+
     async fn new(builder: Builder<Types, S, P>) -> anyhow::Result<Self> {
         let leaf_only = builder.is_leaf_only();
         let aggregator = builder.aggregator;
@@ -779,8 +793,10 @@ where
         self.fetcher.clone().get(TransactionRequest::from(h)).await
     }
 
-    async fn get_cert2(&self, height: u64) -> QueryResult<Option<Certificate2<Types>>> {
-        self.fetcher.get_cert2(height).await
+    async fn get_cert2(&self, height: u64) -> Fetch<Certificate2<Types>> {
+        self.fetcher
+            .get(request::Certificate2Request { height })
+            .await
     }
 }
 
@@ -960,6 +976,7 @@ where
     payload_range_fetcher: Option<Arc<PayloadRangeFetcher<Types, S, P>>>,
     vid_common_fetcher: Option<Arc<VidCommonFetcher<Types, S, P>>>,
     vid_common_range_fetcher: Option<Arc<VidCommonRangeFetcher<Types, S, P>>>,
+    cert2_fetcher: Option<Arc<Cert2Fetcher<Types, S, P>>>,
     range_chunk_size: usize,
     sync_status_chunk_size: usize,
     // Duration to sleep after each active fetch,
@@ -1036,6 +1053,12 @@ where
             };
         let leaf_fetcher = fetching::Fetcher::new(retry_semaphore.clone(), backoff.clone());
         let leaf_range_fetcher = fetching::Fetcher::new(retry_semaphore.clone(), backoff.clone());
+        let cert2_fetcher = (!builder.is_leaf_only()).then(|| {
+            Arc::new(fetching::Fetcher::new(
+                retry_semaphore.clone(),
+                backoff.clone(),
+            ))
+        });
 
         let leaf_only = builder.leaf_only;
         let sync_status_metrics =
@@ -1051,6 +1074,7 @@ where
             payload_range_fetcher,
             vid_common_fetcher,
             vid_common_range_fetcher,
+            cert2_fetcher,
             range_chunk_size: builder.range_chunk_size,
             sync_status_chunk_size: builder.sync_status_chunk_size,
             active_fetch_delay: builder.active_fetch_delay,
@@ -1812,42 +1836,6 @@ where
 impl<Types, S, P> Fetcher<Types, S, P>
 where
     Types: NodeType,
-    Header<Types>: QueryableHeader<Types>,
-    Payload<Types>: QueryablePayload<Types>,
-    S: VersionedDataSource + 'static,
-    for<'a> S::ReadOnly<'a>: NodeStorage<Types>,
-    for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
-    P: AvailabilityProvider<Types>,
-{
-    /// Load a cert2 from availability storage
-    async fn get_cert2(self: &Arc<Self>, height: u64) -> QueryResult<Option<Certificate2<Types>>> {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-
-        if let Some(cert2) = tx.load_cert2(height).await? {
-            return Ok(Some(cert2));
-        }
-
-        drop(tx);
-
-        let Some(cert2) = self
-            .provider
-            .fetch(request::Certificate2Request { height })
-            .await
-            .flatten()
-        else {
-            return Ok(None);
-        };
-
-        self.store(&(height, cert2.clone())).await;
-        Ok(Some(cert2))
-    }
-}
-
-impl<Types, S, P> Fetcher<Types, S, P>
-where
-    Types: NodeType,
     S: VersionedDataSource,
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
 {
@@ -1927,6 +1915,7 @@ where
     block: Notifier<BlockQueryData<Types>>,
     leaf: Notifier<LeafQueryData<Types>>,
     vid_common: Notifier<VidCommonQueryData<Types>>,
+    cert2: Notifier<Certificate2<Types>>,
 }
 
 impl<Types> Default for Notifiers<Types>
@@ -1938,6 +1927,7 @@ where
             block: Notifier::new(),
             leaf: Notifier::new(),
             vid_common: Notifier::new(),
+            cert2: Notifier::new(),
         }
     }
 }
@@ -2380,8 +2370,8 @@ impl<Types: NodeType> Storable<Types> for (u64, Certificate2<Types>) {
         format!("cert2 at height {}", self.0)
     }
 
-    async fn notify(&self, _notifiers: &Notifiers<Types>) {
-        // No passive listeners for cert2.
+    async fn notify(&self, notifiers: &Notifiers<Types>) {
+        notifiers.cert2.notify(&self.1).await;
     }
 
     async fn store(

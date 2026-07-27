@@ -292,18 +292,6 @@ where
         Ok(qcs)
     }
 
-    async fn load_cert2(&mut self, height: u64) -> QueryResult<Option<Certificate2<Types>>> {
-        let Some((json,)) = query_as("SELECT data FROM cert2 WHERE height = $1")
-            .bind(height as i64)
-            .fetch_optional(self.as_mut())
-            .await?
-        else {
-            return Ok(None);
-        };
-        let cert2 = serde_json::from_value(json).decode_error("malformed cert2")?;
-        Ok(cert2)
-    }
-
     async fn load_earliest_cert2(
         &mut self,
         height: u64,
