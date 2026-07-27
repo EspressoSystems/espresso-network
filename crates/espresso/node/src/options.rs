@@ -787,7 +787,6 @@ pub struct ApiModulesConfig {
 pub struct HttpConfig {
     pub port: u16,
     pub max_connections: Option<usize>,
-    pub axum_port: Option<u16>,
     pub tonic_port: Option<u16>,
 }
 
@@ -870,7 +869,6 @@ impl From<&api::options::Http> for HttpConfig {
         Self {
             port: o.port,
             max_connections: o.max_connections,
-            axum_port: o.axum_port,
             tonic_port: o.tonic_port,
         }
     }

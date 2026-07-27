@@ -2396,6 +2396,64 @@ mod tests {
         Ok(())
     }
 
+    // Epoch data is stored piecemeal: `store_drb_result`, `store_epoch_root`
+    // and `store_stake` each write only their part (one row in SQL, separate
+    // files in FS). A loader must report data another writer created the
+    // epoch entry for as absent — regression test for `load_stake` panicking
+    // on a DRB-only row's NULL stake column.
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_load_partially_stored_epoch_data<P: TestablePersistence>(
+        _p: PhantomData<P>,
+    ) -> anyhow::Result<()> {
+        let tmp = P::tmp_storage().await;
+        let storage = P::connect(&tmp).await;
+
+        let instance_state = NodeState::mock();
+        let validated_state = hotshot_types::traits::ValidatedState::genesis(&instance_state).0;
+        let leaf: Leaf2 = Leaf::genesis(&validated_state, &instance_state, MOCK_UPGRADE.base)
+            .await
+            .into();
+        let header = leaf.block_header().clone();
+
+        let validator = AuthenticatedValidator::mock();
+        let mut stake = IndexMap::new();
+        stake.insert(validator.account, validator);
+
+        // Nothing stored yet.
+        let epoch = EpochNumber::new(1);
+        assert!(storage.load_stake(epoch).await?.is_none());
+        assert!(storage.load_drb_result(epoch).await?.is_none());
+        assert!(storage.load_epoch_root(epoch).await?.is_none());
+
+        // A DRB result alone; the other loaders report their data as absent.
+        storage.store_drb_result(epoch, [1; 32]).await?;
+        assert!(storage.load_stake(epoch).await?.is_none());
+        assert_eq!(storage.load_drb_result(epoch).await?, Some([1; 32]));
+        assert!(storage.load_epoch_root(epoch).await?.is_none());
+
+        // A stake table alone, likewise.
+        let epoch2 = EpochNumber::new(2);
+        storage
+            .store_stake(epoch2, stake.clone(), None, None)
+            .await?;
+        assert!(storage.load_stake(epoch2).await?.is_some());
+        assert!(storage.load_drb_result(epoch2).await?.is_none());
+        assert!(storage.load_epoch_root(epoch2).await?.is_none());
+
+        // With everything stored for one epoch, each loader returns its
+        // value and none has clobbered the others.
+        storage.store_epoch_root(epoch, header.clone()).await?;
+        storage
+            .store_stake(epoch, stake.clone(), None, None)
+            .await?;
+        let (table, ..) = storage.load_stake(epoch).await?.unwrap();
+        assert_eq!(stake, table);
+        assert_eq!(storage.load_drb_result(epoch).await?, Some([1; 32]));
+        assert_eq!(storage.load_epoch_root(epoch).await?, Some(header));
+
+        Ok(())
+    }
+
     #[rstest_reuse::apply(persistence_types)]
     pub async fn test_delete_stake_tables<P: TestablePersistence>(
         _p: PhantomData<P>,

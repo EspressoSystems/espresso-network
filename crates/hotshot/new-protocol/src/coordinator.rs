@@ -637,7 +637,7 @@ where
                         // the pending guard; consensus's `maybe_propose`
                         // will re-request the DRB when it next tries to
                         // build a transition proposal and finds it missing.
-                        warn!(%failure.error, epoch = %failure.epoch, "DRB request failed");
+                        warn!(err = %failure.error, epoch = %failure.epoch, "DRB request failed");
                         continue;
                     }
                 },

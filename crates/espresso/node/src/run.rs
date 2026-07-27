@@ -429,9 +429,12 @@ mod test {
 
         // The metrics should include information about the node and software version. surf-disco
         // doesn't currently support fetching a plaintext file, so we use a raw reqwest client.
-        let res = reqwest::get(url.join("/status/metrics").unwrap())
-            .await
-            .unwrap();
+        let res = reqwest::get(
+            url.join(&espresso_api::routes::v1::status_metrics())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
         assert!(res.status().is_success(), "{}", res.status());
         let metrics = res.text().await.unwrap();
         let lines = metrics.lines().collect::<Vec<_>>();
@@ -488,7 +491,10 @@ mod test {
         // reqwest client to fetch JSON, since surf-disco defaults to bincode encoding which can't
         // round-trip arbitrary JSON via `serde_json::Value`.
         let res = reqwest::Client::new()
-            .get(url.join("/config/runtime").unwrap())
+            .get(
+                url.join(&espresso_api::routes::v1::config_runtime())
+                    .unwrap(),
+            )
             .header(reqwest::header::ACCEPT, "application/json")
             .send()
             .await
