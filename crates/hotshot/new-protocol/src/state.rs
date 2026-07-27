@@ -175,8 +175,15 @@ impl<T: NodeType> StateManager<T> {
 
     /// Seed a commitment-only (`from_header`) state so a child proposal can be
     /// validated against this leaf via catchup instead of being dropped.
+    ///
+    /// A real (validated) state for the leaf is never displaced, and any
+    /// header/state requests already queued on this leaf are restarted.
     pub(crate) fn seed_from_header(&mut self, proposal: Proposal<T>) {
-        self.insert_empty_state(proposal);
+        let commitment = proposal_commitment(&proposal);
+        if !self.validated_states.contains_key(&commitment) {
+            self.insert_empty_state(proposal);
+        }
+        self.start_pending(commitment);
     }
 
     pub fn request_state(&mut self, request: StateRequest<T>) {

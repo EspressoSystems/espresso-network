@@ -49,6 +49,32 @@ async fn validator_joins_at_epoch_boundary() {
         .unwrap();
 }
 
+/// 10 nodes, epoch_height=15; the committee narrows to nodes 0-4 at epoch 3
+/// (blocks 31-45) and is replaced wholesale by the disjoint set 5-9 at
+/// epoch 4 (blocks 46-60) — a 100% turnover of the active committee.
+///
+/// The incoming cohort followed epoch 3 via broadcast cert2s without VID
+/// shares. The handoff works because the boundary leaf is final (Cert1 +
+/// Cert2): the coordinator seeds a commitment-only state for it, so the
+/// first epoch-4 leader and voters need neither the epoch-3 tail's payloads
+/// nor its replayed state.
+#[tokio::test(flavor = "multi_thread")]
+async fn validator_set_replaced_at_epoch_boundary() {
+    TestRunner::builder()
+        .num_nodes(10)
+        .target_decisions(55)
+        .max_runtime(Duration::from_secs(500))
+        .epoch_height(15)
+        .stake_table_schedule(StakeTableSchedule {
+            initial: (0..10).collect(),
+            changes: vec![(3, vec![0, 1, 2, 3, 4]), (4, vec![5, 6, 7, 8, 9])],
+        })
+        .build()
+        .run()
+        .await
+        .unwrap();
+}
+
 /// 6 nodes, epoch_height=10; all form epochs 1-2, node 5 is removed from
 /// the committee at epoch 3 (blocks 21-30).
 ///
