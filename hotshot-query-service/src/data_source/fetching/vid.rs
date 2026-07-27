@@ -115,9 +115,9 @@ where
         fetch_header_and_then(
             tx,
             req.0,
-            HeaderCallback::VidCommon {
+            [HeaderCallback::VidCommon {
                 fetcher: fetcher.clone(),
-            },
+            }],
         )
         .await
     }
@@ -219,6 +219,7 @@ pub(super) fn fetch_vid_common_with_header<Types, S, P>(
             header,
             fetcher: fetcher.clone(),
         }),
+        true,
     );
 }
 
@@ -382,7 +383,7 @@ where
             AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
         P: AvailabilityProvider<Types>,
     {
-        fetch_header_range_and_then(tx, req, HeaderCallback::VidCommon { fetcher }).await
+        fetch_header_range_and_then(tx, req, [HeaderCallback::VidCommon { fetcher }]).await
     }
 
     async fn load<S>(storage: &mut S, req: Self::Request) -> QueryResult<Self>
@@ -461,6 +462,7 @@ pub(super) fn fetch_vid_common_range<Types, S, P>(
         once(VidCommonRangeCallback {
             fetcher: fetcher.clone(),
         }),
+        true,
     );
 }
 
