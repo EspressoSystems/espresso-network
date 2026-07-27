@@ -841,6 +841,30 @@ async fn test_cli_stake_for_demo_three_validators(
     Ok(())
 }
 
+/// `--metadata-network` + `--metadata-hosts` register a distinct metadata URI per validator,
+/// shaped like `https://{host}.{network}.devnet.espresso.network/v1/status/metrics`. The hosts are
+/// assigned to validators in order and there must be at least `--num-validators` of them.
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
+async fn test_cli_stake_for_demo_with_metadata_uris(
+    #[case] version: StakeTableContractVersion,
+) -> Result<()> {
+    let system = TestSystem::deploy_version(version).await?;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("demo")
+        .arg("stake")
+        .arg("--num-validators")
+        .arg("3")
+        .arg("--metadata-network")
+        .arg("milk")
+        .arg("--metadata-hosts")
+        .arg("query-1,query-2,query-3")
+        .assert()
+        .success();
+    Ok(())
+}
+
 #[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_stake_for_demo_with_mnemonic_env(
     #[case] version: StakeTableContractVersion,
@@ -966,6 +990,28 @@ async fn test_cli_deprecated_stake_for_demo_three_validators(
         .arg("stake-for-demo")
         .arg("--num-validators")
         .arg("3")
+        .assert()
+        .success();
+    Ok(())
+}
+
+/// The deprecated `stake-for-demo` command accepts the same per-validator metadata URI options as
+/// `demo stake`.
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
+async fn test_cli_deprecated_stake_for_demo_with_metadata_uris(
+    #[case] version: StakeTableContractVersion,
+) -> Result<()> {
+    let system = TestSystem::deploy_version(version).await?;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("stake-for-demo")
+        .arg("--num-validators")
+        .arg("3")
+        .arg("--metadata-network")
+        .arg("milk")
+        .arg("--metadata-hosts")
+        .arg("query-1,query-2,query-3")
         .assert()
         .success();
     Ok(())
