@@ -60,7 +60,8 @@ pub struct StakingKeySet {
     pub state: StateKeyPair,
     pub x25519: x25519::Keypair,
     pub p2p_addr: NetAddr,
-    pub metadata_uri: Url,
+    /// `None` registers the demo placeholder URI.
+    pub metadata_uri: Option<Url>,
 }
 
 #[derive(Debug, Error)]
@@ -883,8 +884,10 @@ impl StakingTransactions<HttpProviderWithWallet> {
         let mut rng = ChaCha20Rng::from_seed(seed);
 
         let mut validator_info = vec![];
+        let mut configured_metadata_uris = false;
         for (val_index, key_set) in validators.into_iter().enumerate() {
             let commission = Commission::try_from(100u64 + 10u64 * val_index as u64)?;
+            configured_metadata_uris |= key_set.metadata_uri.is_some();
 
             validator_info.push(ValidatorConfig {
                 signer: key_set.signer,
@@ -893,7 +896,11 @@ impl StakingTransactions<HttpProviderWithWallet> {
                 state_key_pair: key_set.state,
                 x25519: key_set.x25519,
                 p2p_addr: key_set.p2p_addr,
-                metadata_uri: MetadataUri::try_from(key_set.metadata_uri)?,
+                metadata_uri: MetadataUri::try_from(
+                    key_set
+                        .metadata_uri
+                        .unwrap_or_else(placeholder_metadata_uri),
+                )?,
                 index: val_index,
             });
         }
@@ -940,6 +947,14 @@ impl StakingTransactions<HttpProviderWithWallet> {
         let st = StakeTableV3::new(stake_table, &token_holder_provider);
         let version: StakeTableContractVersion = st.getVersion().call().await?.try_into()?;
         tracing::info!(?version, "stake table contract version");
+        if configured_metadata_uris && matches!(version, StakeTableContractVersion::V1) {
+            // `registerValidator` has no metadataUri argument before V2, so the demo drops the URI
+            // here the same way it drops x25519 keys and p2p addresses on pre-V3 contracts.
+            tracing::warn!(
+                "stake table V1 does not record metadata URIs: the configured metadata hosts will \
+                 not be registered"
+            );
+        }
         if matches!(
             version,
             StakeTableContractVersion::V2 | StakeTableContractVersion::V3
@@ -1182,27 +1197,61 @@ const METADATA_URI_DOMAIN: &str = "devnet.espresso.network";
 /// Fixed path for demo validator metadata URIs (a node's OpenMetrics endpoint).
 const METADATA_URI_PATH: &str = "v1/status/metrics";
 
+/// URI registered for every validator when no metadata hosts are configured.
+const METADATA_URI_PLACEHOLDER: &str = "https://example.com/metadata";
+
+fn placeholder_metadata_uri() -> Url {
+    METADATA_URI_PLACEHOLDER
+        .parse()
+        .expect("placeholder metadata URI parses")
+}
+
+/// A label interpolated into a metadata URI must be a bare DNS label: `format!` + `Url::parse`
+/// accepts `/`, `@`, `:`, `?` and `#`, but silently yields a URI with a different structure.
+fn check_dns_label(kind: &str, label: &str) -> Result<()> {
+    if label.is_empty() || !label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        bail!("invalid metadata {kind} label {label:?}: expected [A-Za-z0-9-]");
+    }
+    Ok(())
+}
+
 /// Build the per-validator metadata URIs registered by the demo.
 fn demo_metadata_uris(
     num_validators: u16,
     network: Option<&str>,
     hosts: &[String],
-) -> Result<Vec<Url>> {
+) -> Result<Option<Vec<Url>>> {
     let num_validators = num_validators as usize;
 
+    // `ESPRESSO_DEMO_METADATA_HOSTS=` and trailing commas arrive as blank entries; treating them
+    // as unset is what lets an env file disable the feature.
+    let hosts: Vec<&str> = hosts
+        .iter()
+        .map(|host| host.trim())
+        .filter(|host| !host.is_empty())
+        .collect();
+
     if hosts.is_empty() {
-        let placeholder: Url = "https://example.com/metadata".parse()?;
-        return Ok(vec![placeholder; num_validators]);
+        return Ok(None);
     }
 
     let network = network.context(
         "--metadata-network (ESPRESSO_DEMO_METADATA_NETWORK) is required when --metadata-hosts is \
          set",
     )?;
+    check_dns_label("network", network)?;
+
     if hosts.len() < num_validators {
         bail!(
             "not enough metadata hosts: {} provided for {num_validators} validators",
             hosts.len()
+        );
+    }
+    if hosts.len() > num_validators {
+        tracing::warn!(
+            hosts = hosts.len(),
+            num_validators,
+            "more metadata hosts than validators, ignoring the surplus"
         );
     }
 
@@ -1210,11 +1259,13 @@ fn demo_metadata_uris(
         .iter()
         .take(num_validators)
         .map(|host| {
+            check_dns_label("host", host)?;
             let url = format!("https://{host}.{network}.{METADATA_URI_DOMAIN}/{METADATA_URI_PATH}");
             url.parse()
                 .with_context(|| format!("invalid metadata URI {url}"))
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()
+        .map(Some)
 }
 
 /// Register validators, and delegate to themselves for demo purposes.
@@ -1233,6 +1284,10 @@ pub(crate) async fn stake_for_demo(
     concurrency: usize,
 ) -> Result<()> {
     tracing::info!("staking to stake table contract for demo");
+
+    // Validate the metadata options before any RPC work, so a bad `--metadata-hosts` fails fast.
+    let metadata_uris =
+        demo_metadata_uris(num_validators, metadata_network.as_deref(), &metadata_hosts)?;
 
     // let grant_recipient = mk_signer(config.signer.account_index.unwrap())?;
     let grant_recipient = build_provider(
@@ -1267,9 +1322,6 @@ pub(crate) async fn stake_for_demo(
         );
     }
 
-    let metadata_uris =
-        demo_metadata_uris(num_validators, metadata_network.as_deref(), &metadata_hosts)?;
-
     let mut validator_keys = vec![];
     for val_index in 0..num_validators {
         let signer = build_signer(
@@ -1279,7 +1331,9 @@ pub(crate) async fn stake_for_demo(
 
         let (bls, state, x25519) = load_validator_keys(val_index, mnemonic_env.as_deref())?;
         let p2p_addr = load_p2p_addr(val_index)?;
-        let metadata_uri = metadata_uris[val_index as usize].clone();
+        let metadata_uri = metadata_uris
+            .as_ref()
+            .map(|uris| uris[val_index as usize].clone());
         tracing::info!(
             val_index,
             address = %signer.address(),
@@ -1287,7 +1341,7 @@ pub(crate) async fn stake_for_demo(
             state_key = %state.ver_key(),
             x25519_key = %x25519.public_key(),
             %p2p_addr,
-            %metadata_uri,
+            ?metadata_uri,
             "registering validator",
         );
         validator_keys.push(StakingKeySet {
@@ -1983,17 +2037,46 @@ mod test {
 
     #[test]
     fn demo_metadata_uris_placeholder_when_no_hosts() {
-        let uris = demo_metadata_uris(3, Some("milk"), &[]).unwrap();
-        assert_eq!(uris.len(), 3);
-        for uri in &uris {
-            assert_eq!(uri.to_string(), "https://example.com/metadata");
+        assert_eq!(demo_metadata_uris(3, Some("milk"), &[]).unwrap(), None);
+        assert_eq!(
+            placeholder_metadata_uri().to_string(),
+            "https://example.com/metadata"
+        );
+    }
+
+    /// `ESPRESSO_DEMO_METADATA_HOSTS=` and trailing commas reach clap as blank entries, and must
+    /// disable the feature rather than build `https://.milk.devnet.espresso.network/...` or trip
+    /// the missing-network error.
+    #[test]
+    fn demo_metadata_uris_ignores_blank_hosts() {
+        for hosts in [
+            vec!["".to_string()],
+            vec!["  ".to_string()],
+            vec!["".to_string(), "".to_string()],
+        ] {
+            assert_eq!(demo_metadata_uris(2, None, &hosts).unwrap(), None);
         }
+
+        let trailing_comma = ["query-1".to_string(), "".to_string()];
+        let uris = demo_metadata_uris(1, Some("milk"), &trailing_comma)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            uris,
+            vec![
+                "https://query-1.milk.devnet.espresso.network/v1/status/metrics"
+                    .parse::<Url>()
+                    .unwrap()
+            ]
+        );
     }
 
     #[test]
     fn demo_metadata_uris_builds_per_host_urls() {
         let hosts = ["query-1".to_string(), "query-2".to_string()];
-        let uris = demo_metadata_uris(2, Some("milk"), &hosts).unwrap();
+        let uris = demo_metadata_uris(2, Some("milk"), &hosts)
+            .unwrap()
+            .unwrap();
         assert_eq!(
             uris.iter().map(|u| u.to_string()).collect::<Vec<_>>(),
             vec![
@@ -2010,7 +2093,9 @@ mod test {
             "query-2".to_string(),
             "query-3".to_string(),
         ];
-        let uris = demo_metadata_uris(2, Some("milk"), &hosts).unwrap();
+        let uris = demo_metadata_uris(2, Some("milk"), &hosts)
+            .unwrap()
+            .unwrap();
         assert_eq!(uris.len(), 2);
         assert_eq!(
             uris[1].to_string(),
@@ -2030,6 +2115,29 @@ mod test {
         let hosts = ["query-1".to_string()];
         let err = demo_metadata_uris(3, Some("milk"), &hosts).unwrap_err();
         assert!(err.to_string().contains("not enough metadata hosts"));
+    }
+
+    /// A label containing URL syntax still parses, but as a different URI: `query-1/x` would put
+    /// the domain in the path. Reject such labels instead of registering the wrong URI on-chain.
+    #[test]
+    fn demo_metadata_uris_rejects_url_syntax_in_labels() {
+        for bad in ["query-1/x", "query-1:8080", "query@1", "query?x", "query#x"] {
+            let hosts = [bad.to_string()];
+            let err = demo_metadata_uris(1, Some("milk"), &hosts).unwrap_err();
+            assert!(
+                err.to_string().contains("invalid metadata host label"),
+                "unexpected error for host {bad}: {err}"
+            );
+        }
+
+        let hosts = ["query-1".to_string()];
+        for bad_network in ["milk/x", "milk.devnet", ""] {
+            let err = demo_metadata_uris(1, Some(bad_network), &hosts).unwrap_err();
+            assert!(
+                err.to_string().contains("invalid metadata network label"),
+                "unexpected error for network {bad_network:?}: {err}"
+            );
+        }
     }
 
     /// Verify that the per-validator consensus keys in `.env` are exactly what `DEV_MNEMONIC` at

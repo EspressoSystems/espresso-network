@@ -1177,7 +1177,7 @@ pub mod testing {
                     .get(i)
                     .cloned()
                     .unwrap_or_else(|| "127.0.0.1:8080".parse().unwrap()),
-                metadata_uri: "https://example.com/metadata".parse().unwrap(),
+                metadata_uri: None,
             })
             .collect()
     }
