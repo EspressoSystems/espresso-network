@@ -108,6 +108,47 @@ fn decided_epoch(event: &CoordinatorEvent<SeqTypes>) -> Option<EpochNumber> {
     }
 }
 
+/// Wait until the query node at `restarted_port` serves merklized state at the
+/// current tip again, so it can act as a catchup source for other nodes. The
+/// tip is read from the healthy query node at `healthy_port`.
+async fn wait_for_query_node_at_tip(restarted_port: u16, healthy_port: u16) {
+    let tip_url: Url = format!("http://127.0.0.1:{healthy_port}").parse().unwrap();
+    let url: Url = format!("http://127.0.0.1:{restarted_port}")
+        .parse()
+        .unwrap();
+    let tip_client = surf_disco::Client::<ClientError, SequencerApiVersion>::new(tip_url);
+    let client = surf_disco::Client::<ClientError, SequencerApiVersion>::new(url);
+
+    let tip = tip_client
+        .get::<u64>("status/block-height")
+        .send()
+        .await
+        .expect("healthy query node should serve its block height");
+    tracing::info!(
+        restarted_port,
+        tip,
+        "waiting for restarted query node to reach the tip"
+    );
+
+    timeout(Duration::from_secs(240), async {
+        loop {
+            match client.get::<u64>("block-state/block-height").send().await {
+                Ok(height) if height >= tip => {
+                    tracing::info!(restarted_port, height, "query node reached the tip");
+                    break;
+                },
+                Ok(height) => {
+                    tracing::info!(restarted_port, height, tip, "query node still catching up")
+                },
+                Err(err) => tracing::info!(restarted_port, %err, "query node API not ready"),
+            }
+            sleep(Duration::from_secs(3)).await;
+        }
+    })
+    .await
+    .expect("timed out waiting for restarted query node to reach the tip");
+}
+
 async fn test_restart_helper(
     network: (usize, usize),
     restart: (usize, usize),
@@ -270,6 +311,38 @@ async fn slow_test_restart_new_protocol_10_of_10() {
     test_restart_helper((2, 8), (2, 8), false, NEW_PROTOCOL_VERSION).await;
 }
 
+/// Rolling restarts of every node one at a time on its existing storage,
+/// non query nodes first and then query nodes, followed by an all-at-once
+/// restart of the whole network. The new protocol has no DA committee, so all
+/// ten nodes are equal validators; two of them (nodes 0 and 4) also serve
+/// query APIs. The harness's da/regular grouping only affects legacy
+/// networking, which a pure new protocol network does not use.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn slow_test_restart_new_protocol_rolling_and_full() {
+    let mut network = TestNetwork::new_with_query_nodes(4, 6, NEW_PROTOCOL_VERSION, &[0, 4]).await;
+
+    network.check_progress().await;
+    network.wait_for_epoch().await;
+
+    // Roll the non-query nodes one at a time.
+    for node in [1, 2, 3, 5, 6, 7, 8, 9] {
+        network.restart_and_progress_node(node).await;
+    }
+
+    // Roll the query nodes, health-gating each so the network always has a
+    // current catchup source.
+    let node_0_port = network.node_api_port(0);
+    let node_4_port = network.node_api_port(4);
+    network.restart_and_progress_node(0).await;
+    wait_for_query_node_at_tip(node_0_port, node_4_port).await;
+    network.restart_and_progress_node(4).await;
+    wait_for_query_node_at_tip(node_4_port, node_0_port).await;
+
+    network.restart(4, 6).await;
+
+    network.shut_down().await;
+}
+
 #[ignore]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_staggered() {
@@ -304,6 +377,7 @@ struct NetworkParams<'a> {
     l1_provider: &'a str,
     peer_ports: &'a [u16],
     api_ports: &'a [u16],
+    state_peer_ports: &'a [u16],
 }
 
 #[derive(Clone, Debug)]
@@ -315,10 +389,12 @@ struct NodeParams {
     state_key: StateKeyPair,
     x25519_key: x25519::Keypair,
     is_da: bool,
+    is_query: bool,
+    query_peers: bool,
 }
 
 impl NodeParams {
-    fn new(i: u64, is_da: bool) -> anyhow::Result<Self> {
+    fn new(i: u64, is_da: bool, is_query: bool, query_peers: bool) -> anyhow::Result<Self> {
         Ok(Self {
             api_port: reserve_tcp_port()?,
             libp2p_port: reserve_tcp_port()?,
@@ -327,6 +403,8 @@ impl NodeParams {
             state_key: StateKeyPair::generate_from_seed_indexed([0; 32], i),
             x25519_key: x25519::Keypair::generated_from_seed_indexed([0; 32], i)?,
             is_da,
+            is_query,
+            query_peers,
         })
     }
 
@@ -347,6 +425,7 @@ struct TestNode<S: TestableSequencerDataSource> {
     modules: Modules,
     opt: Options,
     num_nodes: usize,
+    api_port: u16,
     reference_state: Arc<RwLock<BTreeMap<u64, Commitment<Leaf2>>>>,
     /// Number of epochs to wait after restart before running progress check.
     wait_for_epoch: EpochNumber,
@@ -363,21 +442,25 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
 
         let mut modules = Modules {
             http: Some(api::options::Http::with_port(node.api_port)),
-            query: Some(Default::default()),
-            storage_fs: opt.storage_fs,
-            storage_sql: opt.storage_sql,
-            light_client: Some(Default::default()),
             ..Default::default()
         };
-        if node.is_da {
-            modules.query = Some(Query {
-                peers: network
+        if node.is_query {
+            let peers = if node.query_peers {
+                network
                     .api_ports
                     .iter()
                     .map(|port| format!("http://127.0.0.1:{port}").parse().unwrap())
-                    .collect(),
+                    .collect()
+            } else {
+                vec![]
+            };
+            modules.query = Some(Query {
+                peers,
                 ..Default::default()
             });
+            modules.storage_fs = opt.storage_fs;
+            modules.storage_sql = opt.storage_sql;
+            modules.light_client = Some(Default::default());
         }
 
         let mut opt = Options::parse_from([
@@ -415,7 +498,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             &format!("127.0.0.1:{}", network.cdn_port),
             "--state-peers",
             &network
-                .peer_ports
+                .state_peer_ports
                 .iter()
                 .map(|port| format!("http://127.0.0.1:{port}"))
                 .join(","),
@@ -432,6 +515,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             modules,
             opt,
             num_nodes: network.peer_ports.len(),
+            api_port: node.api_port,
             context: None,
             reference_state: Default::default(),
             wait_for_epoch: EpochNumber::new(3),
@@ -525,11 +609,12 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                     .config
                     .next_view_timeout
             };
-            // Give enough time for every node to propose, with every view timing out. This is
-            // conservative: of course if we actually make progress, not every view will time out,
-            // and we will take less than this amount of time.
+            // Give enough time for every node to propose, with every view timing out, plus
+            // headroom for the slow views right after a whole-network restart, when every node
+            // is still bootstrapping and catching up. If we actually make progress, not every
+            // view will time out, and we will take less than this amount of time.
             let timeout_duration =
-                4 * Duration::from_millis(next_view_timeout) * (self.num_nodes as u32);
+                8 * Duration::from_millis(next_view_timeout) * (self.num_nodes as u32);
             match timeout(timeout_duration, self.check_progress()).await {
                 Ok(res) => res,
                 Err(_) => bail!("timed out waiting for progress on node {node_id}"),
@@ -617,7 +702,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                     collected_leaves += 1;
                 }
 
-                if collected_leaves == 30 {
+                if collected_leaves >= 30 {
                     return Ok(());
                 }
             }
@@ -745,6 +830,29 @@ impl Drop for TestNetwork {
 
 impl TestNetwork {
     async fn new(da_nodes: usize, regular_nodes: usize, cdn: bool, version: Version) -> Self {
+        Self::new_inner(da_nodes, regular_nodes, cdn, version, None).await
+    }
+
+    /// Like [`new`](Self::new), but only the nodes at `query_nodes` (indices
+    /// into the full node list, `da_nodes` group first) run the query module
+    /// and serve state catchup. Being a query node is independent of the
+    /// da/regular grouping.
+    async fn new_with_query_nodes(
+        da_nodes: usize,
+        regular_nodes: usize,
+        version: Version,
+        query_nodes: &[usize],
+    ) -> Self {
+        Self::new_inner(da_nodes, regular_nodes, false, version, Some(query_nodes)).await
+    }
+
+    async fn new_inner(
+        da_nodes: usize,
+        regular_nodes: usize,
+        cdn: bool,
+        version: Version,
+        query_nodes: Option<&[usize]>,
+    ) -> Self {
         let tmp = TempDir::new().unwrap();
         let genesis_file_path = tmp.path().join("genesis.toml");
 
@@ -781,7 +889,19 @@ impl TestNetwork {
         };
 
         let node_params = (0..da_nodes + regular_nodes)
-            .map(|i| NodeParams::new(i as u64, i < da_nodes))
+            .map(|i| {
+                let is_da = i < da_nodes;
+                // Without an explicit query set, every node runs the query
+                // module and the DA nodes act as the query peers.
+                let (is_query, query_peers) = match query_nodes {
+                    Some(query_nodes) => {
+                        let is_query = query_nodes.contains(&i);
+                        (is_query, is_query)
+                    },
+                    None => (true, is_da),
+                };
+                NodeParams::new(i as u64, is_da, is_query, query_peers)
+            })
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
 
@@ -818,13 +938,17 @@ impl TestNetwork {
 
         let api_ports = node_params
             .iter()
-            .take(da_nodes)
+            .filter(|node| node.query_peers)
             .map(|node| node.api_port)
             .collect::<Vec<_>>();
         let peer_ports = node_params
             .iter()
             .map(|node| node.api_port)
             .collect::<Vec<_>>();
+        let state_peer_ports = match query_nodes {
+            None => peer_ports.clone(),
+            Some(_) => api_ports.clone(),
+        };
         let network_params = NetworkParams {
             genesis_file: &genesis_file_path,
             orchestrator_port,
@@ -832,6 +956,7 @@ impl TestNetwork {
             l1_provider: &anvil_endpoint,
             api_ports: &api_ports,
             peer_ports: &peer_ports,
+            state_peer_ports: &state_peer_ports,
         };
 
         let mut network = Self {
@@ -1112,6 +1237,27 @@ impl TestNetwork {
         self.check_state().await;
     }
 
+    /// Restart the node with the given index in the full node list, ensuring
+    /// progress is maintained at all times. The da/regular grouping is a
+    /// harness artifact, so callers can address nodes by one flat index.
+    async fn restart_and_progress_node(&mut self, node: usize) {
+        if node < self.da_nodes.len() {
+            self.restart_and_progress([node], []).await
+        } else {
+            self.restart_and_progress([], [node - self.da_nodes.len()])
+                .await
+        }
+    }
+
+    /// API port of the node with the given index in the full node list.
+    fn node_api_port(&self, node: usize) -> u16 {
+        if node < self.da_nodes.len() {
+            self.da_nodes[node].api_port
+        } else {
+            self.regular_nodes[node - self.da_nodes.len()].api_port
+        }
+    }
+
     /// Restart indicated nodes, ensuring progress is maintained at all times.
     ///
     /// This is a lighter weight version of [`restart`](Self::restart). While the former includes
@@ -1124,28 +1270,51 @@ impl TestNetwork {
         da_nodes: impl IntoIterator<Item = usize>,
         regular_nodes: impl IntoIterator<Item = usize>,
     ) {
-        self.restart_helper(da_nodes, regular_nodes, true).await;
+        let da_nodes = da_nodes.into_iter().collect::<Vec<_>>();
+        let regular_nodes = regular_nodes.into_iter().collect::<Vec<_>>();
+        self.restart_helper(da_nodes.clone(), regular_nodes.clone(), true)
+            .await;
 
-        // Just wait for one decide after the restart, so we don't restart subsequent nodes too
-        // quickly.
-        tracing::info!("waiting for progress after restart");
-        let mut events = self.da_nodes[0].event_stream().await.unwrap();
-        let timeout_duration = Duration::from_secs((2 * self.num_nodes()) as u64);
-        timeout(timeout_duration, async {
-            loop {
-                let event = events
-                    .next()
-                    .await
-                    .expect("event stream terminated unexpectedly");
-                let Some(leaf_chain) = decided_leaves(&event) else {
-                    continue;
-                };
-                tracing::info!(?leaf_chain, "got decide, chain is progressing");
-                break;
-            }
-        })
-        .await
-        .expect("timed out waiting for progress after restart");
+        // Wait until every restarted node sees a decide before moving on, so
+        // subsequent restarts cannot outpace how fast nodes actually rejoin.
+        // A node that receives decides has rejoined the network and the chain
+        // is progressing.
+        tracing::info!("waiting for restarted nodes to see progress");
+        let timeout_duration = Duration::from_secs((8 * self.num_nodes()) as u64);
+        let restarted = self
+            .da_nodes
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| da_nodes.contains(i))
+            .chain(
+                self.regular_nodes
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| regular_nodes.contains(i)),
+            )
+            .map(|(_, node)| node);
+        join_all(restarted.map(|node| async move {
+            let node_id = node.node_id();
+            let mut events = node
+                .event_stream()
+                .await
+                .expect("restarted node should be running");
+            timeout(timeout_duration, async {
+                loop {
+                    let event = events
+                        .next()
+                        .await
+                        .expect("event stream terminated unexpectedly");
+                    if decided_leaves(&event).is_some() {
+                        tracing::info!(?node_id, "restarted node got a decide");
+                        break;
+                    }
+                }
+            })
+            .await
+            .expect("timed out waiting for restarted node to see progress");
+        }))
+        .await;
     }
 
     async fn restart_helper(
@@ -1199,9 +1368,11 @@ impl TestNetwork {
                 .unwrap();
             let mut events = da_node.event_stream().await.unwrap();
 
-            // Wait for a few decides, the first couple may be from before the restart.
+            // Wait for a few decides, the first couple may be from before the restart. The
+            // per-decide budget has headroom for view failures while recently restarted nodes
+            // are still rejoining.
             for _ in 0..5 {
-                let timeout_duration = Duration::from_secs((2 * self.num_nodes()) as u64);
+                let timeout_duration = Duration::from_secs((4 * self.num_nodes()) as u64);
                 timeout(timeout_duration, async {
                     loop {
                         let event = events
