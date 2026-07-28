@@ -165,7 +165,7 @@ where
         match self.fetch_certificate2(req.height).await {
             Ok(cert2) => Some(cert2),
             Err(err) => {
-                tracing::warn!(?req, "failed to fetch cert2: {err:#}");
+                tracing::info!(?req, %err, "failed to fetch cert2, will retry");
                 None
             },
         }
