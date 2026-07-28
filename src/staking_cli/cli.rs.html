@@ -516,414 +516,422 @@
 <a href=#516 id=516 data-nosnippet>516</a>        num_validators,
 <a href=#517 id=517 data-nosnippet>517</a>        num_delegators_per_validator,
 <a href=#518 id=518 data-nosnippet>518</a>        delegation_config,
-<a href=#519 id=519 data-nosnippet>519</a>        concurrency,
-<a href=#520 id=520 data-nosnippet>520</a>    } = config.commands
-<a href=#521 id=521 data-nosnippet>521</a>    {
-<a href=#522 id=522 data-nosnippet>522</a>        <span class="macro">tracing::info!</span>(
-<a href=#523 id=523 data-nosnippet>523</a>            <span class="string">"Staking for demo with {num_validators} validators and config {delegation_config}"
-<a href=#524 id=524 data-nosnippet>524</a>        </span>);
-<a href=#525 id=525 data-nosnippet>525</a>        stake_for_demo(
-<a href=#526 id=526 data-nosnippet>526</a>            <span class="kw-2">&amp;</span>config,
-<a href=#527 id=527 data-nosnippet>527</a>            num_validators,
-<a href=#528 id=528 data-nosnippet>528</a>            num_delegators_per_validator,
-<a href=#529 id=529 data-nosnippet>529</a>            delegation_config,
-<a href=#530 id=530 data-nosnippet>530</a>            concurrency,
-<a href=#531 id=531 data-nosnippet>531</a>        )
-<a href=#532 id=532 data-nosnippet>532</a>        .<span class="kw">await
-<a href=#533 id=533 data-nosnippet>533</a>        </span>.context(<span class="string">"failed to stake for demo"</span>)<span class="question-mark">?</span>;
-<a href=#534 id=534 data-nosnippet>534</a>        <span class="kw">return </span><span class="prelude-val">Ok</span>(());
-<a href=#535 id=535 data-nosnippet>535</a>    }
-<a href=#536 id=536 data-nosnippet>536</a>
-<a href=#537 id=537 data-nosnippet>537</a>    <span class="comment">// Handle Demo subcommands
-<a href=#538 id=538 data-nosnippet>538</a>    </span><span class="kw">if let </span>Commands::Demo(<span class="kw-2">ref </span>demo) = config.commands {
-<a href=#539 id=539 data-nosnippet>539</a>        <span class="kw">match </span><span class="kw-2">&amp;</span>demo.command {
-<a href=#540 id=540 data-nosnippet>540</a>            DemoCommands::Stake {
-<a href=#541 id=541 data-nosnippet>541</a>                num_validators,
-<a href=#542 id=542 data-nosnippet>542</a>                num_delegators_per_validator,
-<a href=#543 id=543 data-nosnippet>543</a>                delegation_config,
-<a href=#544 id=544 data-nosnippet>544</a>                concurrency,
-<a href=#545 id=545 data-nosnippet>545</a>            } =&gt; {
-<a href=#546 id=546 data-nosnippet>546</a>                <span class="macro">tracing::info!</span>(
-<a href=#547 id=547 data-nosnippet>547</a>                    <span class="string">"Staking for demo with {num_validators} validators and config \
-<a href=#548 id=548 data-nosnippet>548</a>                     {delegation_config}"
-<a href=#549 id=549 data-nosnippet>549</a>                </span>);
-<a href=#550 id=550 data-nosnippet>550</a>                stake_for_demo(
-<a href=#551 id=551 data-nosnippet>551</a>                    <span class="kw-2">&amp;</span>config,
-<a href=#552 id=552 data-nosnippet>552</a>                    <span class="kw-2">*</span>num_validators,
-<a href=#553 id=553 data-nosnippet>553</a>                    <span class="kw-2">*</span>num_delegators_per_validator,
-<a href=#554 id=554 data-nosnippet>554</a>                    <span class="kw-2">*</span>delegation_config,
-<a href=#555 id=555 data-nosnippet>555</a>                    <span class="kw-2">*</span>concurrency,
-<a href=#556 id=556 data-nosnippet>556</a>                )
-<a href=#557 id=557 data-nosnippet>557</a>                .<span class="kw">await
-<a href=#558 id=558 data-nosnippet>558</a>                </span>.context(<span class="string">"failed to stake for demo"</span>)<span class="question-mark">?</span>;
-<a href=#559 id=559 data-nosnippet>559</a>                <span class="kw">return </span><span class="prelude-val">Ok</span>(());
-<a href=#560 id=560 data-nosnippet>560</a>            },
-<a href=#561 id=561 data-nosnippet>561</a>            DemoCommands::Delegate {
-<a href=#562 id=562 data-nosnippet>562</a>                validators,
-<a href=#563 id=563 data-nosnippet>563</a>                delegator_start_index,
-<a href=#564 id=564 data-nosnippet>564</a>                num_delegators,
-<a href=#565 id=565 data-nosnippet>565</a>                min_amount,
-<a href=#566 id=566 data-nosnippet>566</a>                max_amount,
-<a href=#567 id=567 data-nosnippet>567</a>                log_path,
-<a href=#568 id=568 data-nosnippet>568</a>                concurrency,
-<a href=#569 id=569 data-nosnippet>569</a>            } =&gt; {
-<a href=#570 id=570 data-nosnippet>570</a>                <span class="macro">tracing::info!</span>(
-<a href=#571 id=571 data-nosnippet>571</a>                    <span class="string">"Mass delegating {} delegators to {} validators"</span>,
-<a href=#572 id=572 data-nosnippet>572</a>                    num_delegators,
-<a href=#573 id=573 data-nosnippet>573</a>                    validators.len()
-<a href=#574 id=574 data-nosnippet>574</a>                );
-<a href=#575 id=575 data-nosnippet>575</a>                delegate_for_demo(
-<a href=#576 id=576 data-nosnippet>576</a>                    <span class="kw-2">&amp;</span>config,
-<a href=#577 id=577 data-nosnippet>577</a>                    validators.clone(),
-<a href=#578 id=578 data-nosnippet>578</a>                    <span class="kw-2">*</span>delegator_start_index,
-<a href=#579 id=579 data-nosnippet>579</a>                    <span class="kw-2">*</span>num_delegators,
-<a href=#580 id=580 data-nosnippet>580</a>                    <span class="kw-2">*</span>min_amount,
-<a href=#581 id=581 data-nosnippet>581</a>                    <span class="kw-2">*</span>max_amount,
-<a href=#582 id=582 data-nosnippet>582</a>                    log_path.clone(),
-<a href=#583 id=583 data-nosnippet>583</a>                    <span class="kw-2">*</span>concurrency,
-<a href=#584 id=584 data-nosnippet>584</a>                )
-<a href=#585 id=585 data-nosnippet>585</a>                .<span class="kw">await
-<a href=#586 id=586 data-nosnippet>586</a>                </span>.context(<span class="string">"failed to delegate for demo"</span>)<span class="question-mark">?</span>;
-<a href=#587 id=587 data-nosnippet>587</a>                <span class="kw">return </span><span class="prelude-val">Ok</span>(());
-<a href=#588 id=588 data-nosnippet>588</a>            },
-<a href=#589 id=589 data-nosnippet>589</a>            DemoCommands::Undelegate {
-<a href=#590 id=590 data-nosnippet>590</a>                validators,
-<a href=#591 id=591 data-nosnippet>591</a>                delegator_start_index,
-<a href=#592 id=592 data-nosnippet>592</a>                num_delegators,
-<a href=#593 id=593 data-nosnippet>593</a>                log_path,
-<a href=#594 id=594 data-nosnippet>594</a>                concurrency,
-<a href=#595 id=595 data-nosnippet>595</a>            } =&gt; {
-<a href=#596 id=596 data-nosnippet>596</a>                <span class="macro">tracing::info!</span>(
-<a href=#597 id=597 data-nosnippet>597</a>                    <span class="string">"Mass undelegating {} delegators from {} validators"</span>,
-<a href=#598 id=598 data-nosnippet>598</a>                    num_delegators,
-<a href=#599 id=599 data-nosnippet>599</a>                    validators.len()
-<a href=#600 id=600 data-nosnippet>600</a>                );
-<a href=#601 id=601 data-nosnippet>601</a>                undelegate_for_demo(
-<a href=#602 id=602 data-nosnippet>602</a>                    <span class="kw-2">&amp;</span>config,
-<a href=#603 id=603 data-nosnippet>603</a>                    validators.clone(),
-<a href=#604 id=604 data-nosnippet>604</a>                    <span class="kw-2">*</span>delegator_start_index,
-<a href=#605 id=605 data-nosnippet>605</a>                    <span class="kw-2">*</span>num_delegators,
-<a href=#606 id=606 data-nosnippet>606</a>                    log_path.clone(),
-<a href=#607 id=607 data-nosnippet>607</a>                    <span class="kw-2">*</span>concurrency,
-<a href=#608 id=608 data-nosnippet>608</a>                )
-<a href=#609 id=609 data-nosnippet>609</a>                .<span class="kw">await
-<a href=#610 id=610 data-nosnippet>610</a>                </span>.context(<span class="string">"failed to undelegate for demo"</span>)<span class="question-mark">?</span>;
-<a href=#611 id=611 data-nosnippet>611</a>                <span class="kw">return </span><span class="prelude-val">Ok</span>(());
-<a href=#612 id=612 data-nosnippet>612</a>            },
-<a href=#613 id=613 data-nosnippet>613</a>            DemoCommands::Churn {
-<a href=#614 id=614 data-nosnippet>614</a>                validator_start_index,
-<a href=#615 id=615 data-nosnippet>615</a>                num_validators,
-<a href=#616 id=616 data-nosnippet>616</a>                delegator_start_index,
-<a href=#617 id=617 data-nosnippet>617</a>                num_delegators,
-<a href=#618 id=618 data-nosnippet>618</a>                min_amount,
-<a href=#619 id=619 data-nosnippet>619</a>                max_amount,
-<a href=#620 id=620 data-nosnippet>620</a>                delay,
-<a href=#621 id=621 data-nosnippet>621</a>                concurrency,
-<a href=#622 id=622 data-nosnippet>622</a>            } =&gt; {
-<a href=#623 id=623 data-nosnippet>623</a>                <span class="macro">tracing::info!</span>(
-<a href=#624 id=624 data-nosnippet>624</a>                    <span class="string">"Starting churn with {} validators and {} delegators"</span>,
-<a href=#625 id=625 data-nosnippet>625</a>                    num_validators,
-<a href=#626 id=626 data-nosnippet>626</a>                    num_delegators
-<a href=#627 id=627 data-nosnippet>627</a>                );
-<a href=#628 id=628 data-nosnippet>628</a>                churn_for_demo(
-<a href=#629 id=629 data-nosnippet>629</a>                    <span class="kw-2">&amp;</span>config,
-<a href=#630 id=630 data-nosnippet>630</a>                    ChurnParams {
-<a href=#631 id=631 data-nosnippet>631</a>                        validator_start_index: <span class="kw-2">*</span>validator_start_index,
-<a href=#632 id=632 data-nosnippet>632</a>                        num_validators: <span class="kw-2">*</span>num_validators,
-<a href=#633 id=633 data-nosnippet>633</a>                        delegator_start_index: <span class="kw-2">*</span>delegator_start_index,
-<a href=#634 id=634 data-nosnippet>634</a>                        num_delegators: <span class="kw-2">*</span>num_delegators,
-<a href=#635 id=635 data-nosnippet>635</a>                        min_amount: <span class="kw-2">*</span>min_amount,
-<a href=#636 id=636 data-nosnippet>636</a>                        max_amount: <span class="kw-2">*</span>max_amount,
-<a href=#637 id=637 data-nosnippet>637</a>                        delay: <span class="kw-2">*</span>delay,
-<a href=#638 id=638 data-nosnippet>638</a>                        concurrency: <span class="kw-2">*</span>concurrency,
-<a href=#639 id=639 data-nosnippet>639</a>                    },
-<a href=#640 id=640 data-nosnippet>640</a>                )
-<a href=#641 id=641 data-nosnippet>641</a>                .<span class="kw">await
-<a href=#642 id=642 data-nosnippet>642</a>                </span>.context(<span class="string">"failed to churn for demo"</span>)<span class="question-mark">?</span>;
-<a href=#643 id=643 data-nosnippet>643</a>                <span class="kw">return </span><span class="prelude-val">Ok</span>(());
-<a href=#644 id=644 data-nosnippet>644</a>            },
-<a href=#645 id=645 data-nosnippet>645</a>            <span class="attr">#[cfg(feature = <span class="string">"testing"</span>)]
-<a href=#646 id=646 data-nosnippet>646</a>            </span>DemoCommands::DeployContracts { .. } =&gt; <span class="macro">unreachable!</span>(<span class="string">"handled earlier"</span>),
-<a href=#647 id=647 data-nosnippet>647</a>        }
-<a href=#648 id=648 data-nosnippet>648</a>    }
-<a href=#649 id=649 data-nosnippet>649</a>
-<a href=#650 id=650 data-nosnippet>650</a>    <span class="comment">// Build Transaction for state-changing commands
-<a href=#651 id=651 data-nosnippet>651</a>    </span><span class="kw">let </span>tx: Transaction = <span class="kw">match </span><span class="kw-2">&amp;</span>config.commands {
-<a href=#652 id=652 data-nosnippet>652</a>        Commands::RegisterValidator {
-<a href=#653 id=653 data-nosnippet>653</a>            signature_args,
-<a href=#654 id=654 data-nosnippet>654</a>            commission,
-<a href=#655 id=655 data-nosnippet>655</a>            metadata_uri_args,
-<a href=#656 id=656 data-nosnippet>656</a>            x25519_key,
-<a href=#657 id=657 data-nosnippet>657</a>            p2p_addr,
-<a href=#658 id=658 data-nosnippet>658</a>        } =&gt; {
-<a href=#659 id=659 data-nosnippet>659</a>            <span class="kw">let </span>version = fetch_stake_table_version(<span class="kw-2">&amp;</span>readonly_provider, stake_table_addr).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#660 id=660 data-nosnippet>660</a>            <span class="kw">if </span>config.export_calldata &amp;&amp; <span class="macro">matches!</span>(version, StakeTableContractVersion::V1) {
-<a href=#661 id=661 data-nosnippet>661</a>                <span class="macro">anyhow::bail!</span>(
-<a href=#662 id=662 data-nosnippet>662</a>                    <span class="string">"Calldata export is not supported for V1 stake table contracts. V1 is \
-<a href=#663 id=663 data-nosnippet>663</a>                     deprecated."
-<a href=#664 id=664 data-nosnippet>664</a>                </span>);
-<a href=#665 id=665 data-nosnippet>665</a>            }
-<a href=#666 id=666 data-nosnippet>666</a>            <span class="kw">if </span><span class="macro">matches!</span>(version, StakeTableContractVersion::V3)
-<a href=#667 id=667 data-nosnippet>667</a>                &amp;&amp; (x25519_key.is_none() || p2p_addr.is_none())
-<a href=#668 id=668 data-nosnippet>668</a>            {
+<a href=#519 id=519 data-nosnippet>519</a>        <span class="kw-2">ref </span>metadata_network,
+<a href=#520 id=520 data-nosnippet>520</a>        <span class="kw-2">ref </span>metadata_hosts,
+<a href=#521 id=521 data-nosnippet>521</a>        concurrency,
+<a href=#522 id=522 data-nosnippet>522</a>    } = config.commands
+<a href=#523 id=523 data-nosnippet>523</a>    {
+<a href=#524 id=524 data-nosnippet>524</a>        <span class="macro">tracing::info!</span>(
+<a href=#525 id=525 data-nosnippet>525</a>            <span class="string">"Staking for demo with {num_validators} validators and config {delegation_config}"
+<a href=#526 id=526 data-nosnippet>526</a>        </span>);
+<a href=#527 id=527 data-nosnippet>527</a>        stake_for_demo(
+<a href=#528 id=528 data-nosnippet>528</a>            <span class="kw-2">&amp;</span>config,
+<a href=#529 id=529 data-nosnippet>529</a>            num_validators,
+<a href=#530 id=530 data-nosnippet>530</a>            num_delegators_per_validator,
+<a href=#531 id=531 data-nosnippet>531</a>            delegation_config,
+<a href=#532 id=532 data-nosnippet>532</a>            metadata_network.clone(),
+<a href=#533 id=533 data-nosnippet>533</a>            metadata_hosts.clone(),
+<a href=#534 id=534 data-nosnippet>534</a>            concurrency,
+<a href=#535 id=535 data-nosnippet>535</a>        )
+<a href=#536 id=536 data-nosnippet>536</a>        .<span class="kw">await
+<a href=#537 id=537 data-nosnippet>537</a>        </span>.context(<span class="string">"failed to stake for demo"</span>)<span class="question-mark">?</span>;
+<a href=#538 id=538 data-nosnippet>538</a>        <span class="kw">return </span><span class="prelude-val">Ok</span>(());
+<a href=#539 id=539 data-nosnippet>539</a>    }
+<a href=#540 id=540 data-nosnippet>540</a>
+<a href=#541 id=541 data-nosnippet>541</a>    <span class="comment">// Handle Demo subcommands
+<a href=#542 id=542 data-nosnippet>542</a>    </span><span class="kw">if let </span>Commands::Demo(<span class="kw-2">ref </span>demo) = config.commands {
+<a href=#543 id=543 data-nosnippet>543</a>        <span class="kw">match </span><span class="kw-2">&amp;</span>demo.command {
+<a href=#544 id=544 data-nosnippet>544</a>            DemoCommands::Stake {
+<a href=#545 id=545 data-nosnippet>545</a>                num_validators,
+<a href=#546 id=546 data-nosnippet>546</a>                num_delegators_per_validator,
+<a href=#547 id=547 data-nosnippet>547</a>                delegation_config,
+<a href=#548 id=548 data-nosnippet>548</a>                metadata_network,
+<a href=#549 id=549 data-nosnippet>549</a>                metadata_hosts,
+<a href=#550 id=550 data-nosnippet>550</a>                concurrency,
+<a href=#551 id=551 data-nosnippet>551</a>            } =&gt; {
+<a href=#552 id=552 data-nosnippet>552</a>                <span class="macro">tracing::info!</span>(
+<a href=#553 id=553 data-nosnippet>553</a>                    <span class="string">"Staking for demo with {num_validators} validators and config \
+<a href=#554 id=554 data-nosnippet>554</a>                     {delegation_config}"
+<a href=#555 id=555 data-nosnippet>555</a>                </span>);
+<a href=#556 id=556 data-nosnippet>556</a>                stake_for_demo(
+<a href=#557 id=557 data-nosnippet>557</a>                    <span class="kw-2">&amp;</span>config,
+<a href=#558 id=558 data-nosnippet>558</a>                    <span class="kw-2">*</span>num_validators,
+<a href=#559 id=559 data-nosnippet>559</a>                    <span class="kw-2">*</span>num_delegators_per_validator,
+<a href=#560 id=560 data-nosnippet>560</a>                    <span class="kw-2">*</span>delegation_config,
+<a href=#561 id=561 data-nosnippet>561</a>                    metadata_network.clone(),
+<a href=#562 id=562 data-nosnippet>562</a>                    metadata_hosts.clone(),
+<a href=#563 id=563 data-nosnippet>563</a>                    <span class="kw-2">*</span>concurrency,
+<a href=#564 id=564 data-nosnippet>564</a>                )
+<a href=#565 id=565 data-nosnippet>565</a>                .<span class="kw">await
+<a href=#566 id=566 data-nosnippet>566</a>                </span>.context(<span class="string">"failed to stake for demo"</span>)<span class="question-mark">?</span>;
+<a href=#567 id=567 data-nosnippet>567</a>                <span class="kw">return </span><span class="prelude-val">Ok</span>(());
+<a href=#568 id=568 data-nosnippet>568</a>            },
+<a href=#569 id=569 data-nosnippet>569</a>            DemoCommands::Delegate {
+<a href=#570 id=570 data-nosnippet>570</a>                validators,
+<a href=#571 id=571 data-nosnippet>571</a>                delegator_start_index,
+<a href=#572 id=572 data-nosnippet>572</a>                num_delegators,
+<a href=#573 id=573 data-nosnippet>573</a>                min_amount,
+<a href=#574 id=574 data-nosnippet>574</a>                max_amount,
+<a href=#575 id=575 data-nosnippet>575</a>                log_path,
+<a href=#576 id=576 data-nosnippet>576</a>                concurrency,
+<a href=#577 id=577 data-nosnippet>577</a>            } =&gt; {
+<a href=#578 id=578 data-nosnippet>578</a>                <span class="macro">tracing::info!</span>(
+<a href=#579 id=579 data-nosnippet>579</a>                    <span class="string">"Mass delegating {} delegators to {} validators"</span>,
+<a href=#580 id=580 data-nosnippet>580</a>                    num_delegators,
+<a href=#581 id=581 data-nosnippet>581</a>                    validators.len()
+<a href=#582 id=582 data-nosnippet>582</a>                );
+<a href=#583 id=583 data-nosnippet>583</a>                delegate_for_demo(
+<a href=#584 id=584 data-nosnippet>584</a>                    <span class="kw-2">&amp;</span>config,
+<a href=#585 id=585 data-nosnippet>585</a>                    validators.clone(),
+<a href=#586 id=586 data-nosnippet>586</a>                    <span class="kw-2">*</span>delegator_start_index,
+<a href=#587 id=587 data-nosnippet>587</a>                    <span class="kw-2">*</span>num_delegators,
+<a href=#588 id=588 data-nosnippet>588</a>                    <span class="kw-2">*</span>min_amount,
+<a href=#589 id=589 data-nosnippet>589</a>                    <span class="kw-2">*</span>max_amount,
+<a href=#590 id=590 data-nosnippet>590</a>                    log_path.clone(),
+<a href=#591 id=591 data-nosnippet>591</a>                    <span class="kw-2">*</span>concurrency,
+<a href=#592 id=592 data-nosnippet>592</a>                )
+<a href=#593 id=593 data-nosnippet>593</a>                .<span class="kw">await
+<a href=#594 id=594 data-nosnippet>594</a>                </span>.context(<span class="string">"failed to delegate for demo"</span>)<span class="question-mark">?</span>;
+<a href=#595 id=595 data-nosnippet>595</a>                <span class="kw">return </span><span class="prelude-val">Ok</span>(());
+<a href=#596 id=596 data-nosnippet>596</a>            },
+<a href=#597 id=597 data-nosnippet>597</a>            DemoCommands::Undelegate {
+<a href=#598 id=598 data-nosnippet>598</a>                validators,
+<a href=#599 id=599 data-nosnippet>599</a>                delegator_start_index,
+<a href=#600 id=600 data-nosnippet>600</a>                num_delegators,
+<a href=#601 id=601 data-nosnippet>601</a>                log_path,
+<a href=#602 id=602 data-nosnippet>602</a>                concurrency,
+<a href=#603 id=603 data-nosnippet>603</a>            } =&gt; {
+<a href=#604 id=604 data-nosnippet>604</a>                <span class="macro">tracing::info!</span>(
+<a href=#605 id=605 data-nosnippet>605</a>                    <span class="string">"Mass undelegating {} delegators from {} validators"</span>,
+<a href=#606 id=606 data-nosnippet>606</a>                    num_delegators,
+<a href=#607 id=607 data-nosnippet>607</a>                    validators.len()
+<a href=#608 id=608 data-nosnippet>608</a>                );
+<a href=#609 id=609 data-nosnippet>609</a>                undelegate_for_demo(
+<a href=#610 id=610 data-nosnippet>610</a>                    <span class="kw-2">&amp;</span>config,
+<a href=#611 id=611 data-nosnippet>611</a>                    validators.clone(),
+<a href=#612 id=612 data-nosnippet>612</a>                    <span class="kw-2">*</span>delegator_start_index,
+<a href=#613 id=613 data-nosnippet>613</a>                    <span class="kw-2">*</span>num_delegators,
+<a href=#614 id=614 data-nosnippet>614</a>                    log_path.clone(),
+<a href=#615 id=615 data-nosnippet>615</a>                    <span class="kw-2">*</span>concurrency,
+<a href=#616 id=616 data-nosnippet>616</a>                )
+<a href=#617 id=617 data-nosnippet>617</a>                .<span class="kw">await
+<a href=#618 id=618 data-nosnippet>618</a>                </span>.context(<span class="string">"failed to undelegate for demo"</span>)<span class="question-mark">?</span>;
+<a href=#619 id=619 data-nosnippet>619</a>                <span class="kw">return </span><span class="prelude-val">Ok</span>(());
+<a href=#620 id=620 data-nosnippet>620</a>            },
+<a href=#621 id=621 data-nosnippet>621</a>            DemoCommands::Churn {
+<a href=#622 id=622 data-nosnippet>622</a>                validator_start_index,
+<a href=#623 id=623 data-nosnippet>623</a>                num_validators,
+<a href=#624 id=624 data-nosnippet>624</a>                delegator_start_index,
+<a href=#625 id=625 data-nosnippet>625</a>                num_delegators,
+<a href=#626 id=626 data-nosnippet>626</a>                min_amount,
+<a href=#627 id=627 data-nosnippet>627</a>                max_amount,
+<a href=#628 id=628 data-nosnippet>628</a>                delay,
+<a href=#629 id=629 data-nosnippet>629</a>                concurrency,
+<a href=#630 id=630 data-nosnippet>630</a>            } =&gt; {
+<a href=#631 id=631 data-nosnippet>631</a>                <span class="macro">tracing::info!</span>(
+<a href=#632 id=632 data-nosnippet>632</a>                    <span class="string">"Starting churn with {} validators and {} delegators"</span>,
+<a href=#633 id=633 data-nosnippet>633</a>                    num_validators,
+<a href=#634 id=634 data-nosnippet>634</a>                    num_delegators
+<a href=#635 id=635 data-nosnippet>635</a>                );
+<a href=#636 id=636 data-nosnippet>636</a>                churn_for_demo(
+<a href=#637 id=637 data-nosnippet>637</a>                    <span class="kw-2">&amp;</span>config,
+<a href=#638 id=638 data-nosnippet>638</a>                    ChurnParams {
+<a href=#639 id=639 data-nosnippet>639</a>                        validator_start_index: <span class="kw-2">*</span>validator_start_index,
+<a href=#640 id=640 data-nosnippet>640</a>                        num_validators: <span class="kw-2">*</span>num_validators,
+<a href=#641 id=641 data-nosnippet>641</a>                        delegator_start_index: <span class="kw-2">*</span>delegator_start_index,
+<a href=#642 id=642 data-nosnippet>642</a>                        num_delegators: <span class="kw-2">*</span>num_delegators,
+<a href=#643 id=643 data-nosnippet>643</a>                        min_amount: <span class="kw-2">*</span>min_amount,
+<a href=#644 id=644 data-nosnippet>644</a>                        max_amount: <span class="kw-2">*</span>max_amount,
+<a href=#645 id=645 data-nosnippet>645</a>                        delay: <span class="kw-2">*</span>delay,
+<a href=#646 id=646 data-nosnippet>646</a>                        concurrency: <span class="kw-2">*</span>concurrency,
+<a href=#647 id=647 data-nosnippet>647</a>                    },
+<a href=#648 id=648 data-nosnippet>648</a>                )
+<a href=#649 id=649 data-nosnippet>649</a>                .<span class="kw">await
+<a href=#650 id=650 data-nosnippet>650</a>                </span>.context(<span class="string">"failed to churn for demo"</span>)<span class="question-mark">?</span>;
+<a href=#651 id=651 data-nosnippet>651</a>                <span class="kw">return </span><span class="prelude-val">Ok</span>(());
+<a href=#652 id=652 data-nosnippet>652</a>            },
+<a href=#653 id=653 data-nosnippet>653</a>            <span class="attr">#[cfg(feature = <span class="string">"testing"</span>)]
+<a href=#654 id=654 data-nosnippet>654</a>            </span>DemoCommands::DeployContracts { .. } =&gt; <span class="macro">unreachable!</span>(<span class="string">"handled earlier"</span>),
+<a href=#655 id=655 data-nosnippet>655</a>        }
+<a href=#656 id=656 data-nosnippet>656</a>    }
+<a href=#657 id=657 data-nosnippet>657</a>
+<a href=#658 id=658 data-nosnippet>658</a>    <span class="comment">// Build Transaction for state-changing commands
+<a href=#659 id=659 data-nosnippet>659</a>    </span><span class="kw">let </span>tx: Transaction = <span class="kw">match </span><span class="kw-2">&amp;</span>config.commands {
+<a href=#660 id=660 data-nosnippet>660</a>        Commands::RegisterValidator {
+<a href=#661 id=661 data-nosnippet>661</a>            signature_args,
+<a href=#662 id=662 data-nosnippet>662</a>            commission,
+<a href=#663 id=663 data-nosnippet>663</a>            metadata_uri_args,
+<a href=#664 id=664 data-nosnippet>664</a>            x25519_key,
+<a href=#665 id=665 data-nosnippet>665</a>            p2p_addr,
+<a href=#666 id=666 data-nosnippet>666</a>        } =&gt; {
+<a href=#667 id=667 data-nosnippet>667</a>            <span class="kw">let </span>version = fetch_stake_table_version(<span class="kw-2">&amp;</span>readonly_provider, stake_table_addr).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#668 id=668 data-nosnippet>668</a>            <span class="kw">if </span>config.export_calldata &amp;&amp; <span class="macro">matches!</span>(version, StakeTableContractVersion::V1) {
 <a href=#669 id=669 data-nosnippet>669</a>                <span class="macro">anyhow::bail!</span>(
-<a href=#670 id=670 data-nosnippet>670</a>                    <span class="string">"V3 stake table requires --x25519-key and --p2p-addr for registration"
-<a href=#671 id=671 data-nosnippet>671</a>                </span>);
-<a href=#672 id=672 data-nosnippet>672</a>            }
-<a href=#673 id=673 data-nosnippet>673</a>            <span class="kw">if </span>!config.export_calldata {
-<a href=#674 id=674 data-nosnippet>674</a>                wallet.as_ref().ok_or_else(<span class="kw-2">&amp;</span>require_wallet)<span class="question-mark">?</span>;
-<a href=#675 id=675 data-nosnippet>675</a>            }
-<a href=#676 id=676 data-nosnippet>676</a>            <span class="kw">let </span>payload = resolve_node_signatures(
-<a href=#677 id=677 data-nosnippet>677</a>                signature_args,
-<a href=#678 id=678 data-nosnippet>678</a>                config.export_calldata,
-<a href=#679 id=679 data-nosnippet>679</a>                wallet.as_ref(),
-<a href=#680 id=680 data-nosnippet>680</a>                config.sender_address,
-<a href=#681 id=681 data-nosnippet>681</a>            )<span class="question-mark">?</span>;
-<a href=#682 id=682 data-nosnippet>682</a>            <span class="kw">let </span>metadata_uri: MetadataUri = metadata_uri_args.clone().try_into()<span class="question-mark">?</span>;
-<a href=#683 id=683 data-nosnippet>683</a>
-<a href=#684 id=684 data-nosnippet>684</a>            <span class="comment">// Validate metadata URI if present and validation not skipped
-<a href=#685 id=685 data-nosnippet>685</a>            </span><span class="kw">if let </span><span class="prelude-val">Some</span>(url) = metadata_uri.url()
-<a href=#686 id=686 data-nosnippet>686</a>                &amp;&amp; !metadata_uri_args.skip_metadata_validation
-<a href=#687 id=687 data-nosnippet>687</a>            {
-<a href=#688 id=688 data-nosnippet>688</a>                validate_metadata_uri(url, <span class="kw-2">&amp;</span>payload.bls_vk)
-<a href=#689 id=689 data-nosnippet>689</a>                    .<span class="kw">await
-<a href=#690 id=690 data-nosnippet>690</a>                    </span>.context(<span class="string">"use --skip-metadata-validation to skip"</span>)<span class="question-mark">?</span>;
-<a href=#691 id=691 data-nosnippet>691</a>            }
-<a href=#692 id=692 data-nosnippet>692</a>
-<a href=#693 id=693 data-nosnippet>693</a>            Transaction::RegisterValidator {
-<a href=#694 id=694 data-nosnippet>694</a>                stake_table: stake_table_addr,
-<a href=#695 id=695 data-nosnippet>695</a>                commission: <span class="kw-2">*</span>commission,
-<a href=#696 id=696 data-nosnippet>696</a>                metadata_uri,
-<a href=#697 id=697 data-nosnippet>697</a>                payload,
-<a href=#698 id=698 data-nosnippet>698</a>                version,
-<a href=#699 id=699 data-nosnippet>699</a>                x25519_key: <span class="kw-2">*</span>x25519_key,
-<a href=#700 id=700 data-nosnippet>700</a>                p2p_addr: p2p_addr.clone(),
-<a href=#701 id=701 data-nosnippet>701</a>            }
-<a href=#702 id=702 data-nosnippet>702</a>        },
-<a href=#703 id=703 data-nosnippet>703</a>        Commands::UpdateConsensusKeys { signature_args } =&gt; {
-<a href=#704 id=704 data-nosnippet>704</a>            <span class="kw">let </span>version = fetch_stake_table_version(<span class="kw-2">&amp;</span>readonly_provider, stake_table_addr).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#705 id=705 data-nosnippet>705</a>            <span class="kw">if </span>config.export_calldata &amp;&amp; <span class="macro">matches!</span>(version, StakeTableContractVersion::V1) {
-<a href=#706 id=706 data-nosnippet>706</a>                <span class="macro">anyhow::bail!</span>(
-<a href=#707 id=707 data-nosnippet>707</a>                    <span class="string">"Calldata export is not supported for V1 stake table contracts. V1 is \
-<a href=#708 id=708 data-nosnippet>708</a>                     deprecated."
-<a href=#709 id=709 data-nosnippet>709</a>                </span>);
-<a href=#710 id=710 data-nosnippet>710</a>            }
-<a href=#711 id=711 data-nosnippet>711</a>            <span class="kw">if </span>!config.export_calldata {
-<a href=#712 id=712 data-nosnippet>712</a>                <span class="kw">let </span>w = wallet.as_ref().ok_or_else(<span class="kw-2">&amp;</span>require_wallet)<span class="question-mark">?</span>;
-<a href=#713 id=713 data-nosnippet>713</a>                <span class="kw">let </span>addr = NetworkWallet::&lt;Ethereum&gt;::default_signer_address(w);
-<a href=#714 id=714 data-nosnippet>714</a>                <span class="macro">tracing::info!</span>(<span class="string">"Updating validator {} with new keys"</span>, addr);
-<a href=#715 id=715 data-nosnippet>715</a>            }
-<a href=#716 id=716 data-nosnippet>716</a>            <span class="kw">let </span>payload = resolve_node_signatures(
-<a href=#717 id=717 data-nosnippet>717</a>                signature_args,
-<a href=#718 id=718 data-nosnippet>718</a>                config.export_calldata,
-<a href=#719 id=719 data-nosnippet>719</a>                wallet.as_ref(),
-<a href=#720 id=720 data-nosnippet>720</a>                config.sender_address,
-<a href=#721 id=721 data-nosnippet>721</a>            )<span class="question-mark">?</span>;
-<a href=#722 id=722 data-nosnippet>722</a>            Transaction::UpdateConsensusKeys {
-<a href=#723 id=723 data-nosnippet>723</a>                stake_table: stake_table_addr,
-<a href=#724 id=724 data-nosnippet>724</a>                payload,
-<a href=#725 id=725 data-nosnippet>725</a>                version,
-<a href=#726 id=726 data-nosnippet>726</a>            }
-<a href=#727 id=727 data-nosnippet>727</a>        },
-<a href=#728 id=728 data-nosnippet>728</a>        Commands::DeregisterValidator {} =&gt; Transaction::DeregisterValidator {
-<a href=#729 id=729 data-nosnippet>729</a>            stake_table: stake_table_addr,
-<a href=#730 id=730 data-nosnippet>730</a>        },
-<a href=#731 id=731 data-nosnippet>731</a>        Commands::UpdateCommission { new_commission } =&gt; Transaction::UpdateCommission {
-<a href=#732 id=732 data-nosnippet>732</a>            stake_table: stake_table_addr,
-<a href=#733 id=733 data-nosnippet>733</a>            new_commission: <span class="kw-2">*</span>new_commission,
-<a href=#734 id=734 data-nosnippet>734</a>        },
-<a href=#735 id=735 data-nosnippet>735</a>        Commands::UpdateMetadataUri {
-<a href=#736 id=736 data-nosnippet>736</a>            metadata_uri_args,
-<a href=#737 id=737 data-nosnippet>737</a>            consensus_public_key,
-<a href=#738 id=738 data-nosnippet>738</a>        } =&gt; {
-<a href=#739 id=739 data-nosnippet>739</a>            <span class="kw">let </span>metadata_uri: MetadataUri = metadata_uri_args.clone().try_into()<span class="question-mark">?</span>;
-<a href=#740 id=740 data-nosnippet>740</a>
-<a href=#741 id=741 data-nosnippet>741</a>            <span class="comment">// Validate metadata URI if present and validation not skipped
-<a href=#742 id=742 data-nosnippet>742</a>            </span><span class="kw">if let </span><span class="prelude-val">Some</span>(url) = metadata_uri.url()
-<a href=#743 id=743 data-nosnippet>743</a>                &amp;&amp; !metadata_uri_args.skip_metadata_validation
-<a href=#744 id=744 data-nosnippet>744</a>            {
-<a href=#745 id=745 data-nosnippet>745</a>                <span class="kw">let </span>bls_vk = consensus_public_key.ok_or_else(|| {
-<a href=#746 id=746 data-nosnippet>746</a>                    <span class="macro">anyhow::anyhow!</span>(
-<a href=#747 id=747 data-nosnippet>747</a>                        <span class="string">"--consensus-public-key is required for metadata validation (use \
-<a href=#748 id=748 data-nosnippet>748</a>                         --skip-metadata-validation to skip)"
-<a href=#749 id=749 data-nosnippet>749</a>                    </span>)
-<a href=#750 id=750 data-nosnippet>750</a>                })<span class="question-mark">?</span>;
-<a href=#751 id=751 data-nosnippet>751</a>                validate_metadata_uri(url, <span class="kw-2">&amp;</span>bls_vk)
-<a href=#752 id=752 data-nosnippet>752</a>                    .<span class="kw">await
-<a href=#753 id=753 data-nosnippet>753</a>                    </span>.context(<span class="string">"use --skip-metadata-validation to skip"</span>)<span class="question-mark">?</span>;
-<a href=#754 id=754 data-nosnippet>754</a>            }
-<a href=#755 id=755 data-nosnippet>755</a>
-<a href=#756 id=756 data-nosnippet>756</a>            Transaction::UpdateMetadataUri {
-<a href=#757 id=757 data-nosnippet>757</a>                stake_table: stake_table_addr,
-<a href=#758 id=758 data-nosnippet>758</a>                metadata_uri,
-<a href=#759 id=759 data-nosnippet>759</a>            }
-<a href=#760 id=760 data-nosnippet>760</a>        },
-<a href=#761 id=761 data-nosnippet>761</a>        Commands::UpdateNetworkConfig {
-<a href=#762 id=762 data-nosnippet>762</a>            x25519_key,
-<a href=#763 id=763 data-nosnippet>763</a>            p2p_addr,
-<a href=#764 id=764 data-nosnippet>764</a>        } =&gt; {
-<a href=#765 id=765 data-nosnippet>765</a>            <span class="kw">if </span>!config.export_calldata {
-<a href=#766 id=766 data-nosnippet>766</a>                wallet.as_ref().ok_or_else(<span class="kw-2">&amp;</span>require_wallet)<span class="question-mark">?</span>;
+<a href=#670 id=670 data-nosnippet>670</a>                    <span class="string">"Calldata export is not supported for V1 stake table contracts. V1 is \
+<a href=#671 id=671 data-nosnippet>671</a>                     deprecated."
+<a href=#672 id=672 data-nosnippet>672</a>                </span>);
+<a href=#673 id=673 data-nosnippet>673</a>            }
+<a href=#674 id=674 data-nosnippet>674</a>            <span class="kw">if </span><span class="macro">matches!</span>(version, StakeTableContractVersion::V3)
+<a href=#675 id=675 data-nosnippet>675</a>                &amp;&amp; (x25519_key.is_none() || p2p_addr.is_none())
+<a href=#676 id=676 data-nosnippet>676</a>            {
+<a href=#677 id=677 data-nosnippet>677</a>                <span class="macro">anyhow::bail!</span>(
+<a href=#678 id=678 data-nosnippet>678</a>                    <span class="string">"V3 stake table requires --x25519-key and --p2p-addr for registration"
+<a href=#679 id=679 data-nosnippet>679</a>                </span>);
+<a href=#680 id=680 data-nosnippet>680</a>            }
+<a href=#681 id=681 data-nosnippet>681</a>            <span class="kw">if </span>!config.export_calldata {
+<a href=#682 id=682 data-nosnippet>682</a>                wallet.as_ref().ok_or_else(<span class="kw-2">&amp;</span>require_wallet)<span class="question-mark">?</span>;
+<a href=#683 id=683 data-nosnippet>683</a>            }
+<a href=#684 id=684 data-nosnippet>684</a>            <span class="kw">let </span>payload = resolve_node_signatures(
+<a href=#685 id=685 data-nosnippet>685</a>                signature_args,
+<a href=#686 id=686 data-nosnippet>686</a>                config.export_calldata,
+<a href=#687 id=687 data-nosnippet>687</a>                wallet.as_ref(),
+<a href=#688 id=688 data-nosnippet>688</a>                config.sender_address,
+<a href=#689 id=689 data-nosnippet>689</a>            )<span class="question-mark">?</span>;
+<a href=#690 id=690 data-nosnippet>690</a>            <span class="kw">let </span>metadata_uri: MetadataUri = metadata_uri_args.clone().try_into()<span class="question-mark">?</span>;
+<a href=#691 id=691 data-nosnippet>691</a>
+<a href=#692 id=692 data-nosnippet>692</a>            <span class="comment">// Validate metadata URI if present and validation not skipped
+<a href=#693 id=693 data-nosnippet>693</a>            </span><span class="kw">if let </span><span class="prelude-val">Some</span>(url) = metadata_uri.url()
+<a href=#694 id=694 data-nosnippet>694</a>                &amp;&amp; !metadata_uri_args.skip_metadata_validation
+<a href=#695 id=695 data-nosnippet>695</a>            {
+<a href=#696 id=696 data-nosnippet>696</a>                validate_metadata_uri(url, <span class="kw-2">&amp;</span>payload.bls_vk)
+<a href=#697 id=697 data-nosnippet>697</a>                    .<span class="kw">await
+<a href=#698 id=698 data-nosnippet>698</a>                    </span>.context(<span class="string">"use --skip-metadata-validation to skip"</span>)<span class="question-mark">?</span>;
+<a href=#699 id=699 data-nosnippet>699</a>            }
+<a href=#700 id=700 data-nosnippet>700</a>
+<a href=#701 id=701 data-nosnippet>701</a>            Transaction::RegisterValidator {
+<a href=#702 id=702 data-nosnippet>702</a>                stake_table: stake_table_addr,
+<a href=#703 id=703 data-nosnippet>703</a>                commission: <span class="kw-2">*</span>commission,
+<a href=#704 id=704 data-nosnippet>704</a>                metadata_uri,
+<a href=#705 id=705 data-nosnippet>705</a>                payload,
+<a href=#706 id=706 data-nosnippet>706</a>                version,
+<a href=#707 id=707 data-nosnippet>707</a>                x25519_key: <span class="kw-2">*</span>x25519_key,
+<a href=#708 id=708 data-nosnippet>708</a>                p2p_addr: p2p_addr.clone(),
+<a href=#709 id=709 data-nosnippet>709</a>            }
+<a href=#710 id=710 data-nosnippet>710</a>        },
+<a href=#711 id=711 data-nosnippet>711</a>        Commands::UpdateConsensusKeys { signature_args } =&gt; {
+<a href=#712 id=712 data-nosnippet>712</a>            <span class="kw">let </span>version = fetch_stake_table_version(<span class="kw-2">&amp;</span>readonly_provider, stake_table_addr).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#713 id=713 data-nosnippet>713</a>            <span class="kw">if </span>config.export_calldata &amp;&amp; <span class="macro">matches!</span>(version, StakeTableContractVersion::V1) {
+<a href=#714 id=714 data-nosnippet>714</a>                <span class="macro">anyhow::bail!</span>(
+<a href=#715 id=715 data-nosnippet>715</a>                    <span class="string">"Calldata export is not supported for V1 stake table contracts. V1 is \
+<a href=#716 id=716 data-nosnippet>716</a>                     deprecated."
+<a href=#717 id=717 data-nosnippet>717</a>                </span>);
+<a href=#718 id=718 data-nosnippet>718</a>            }
+<a href=#719 id=719 data-nosnippet>719</a>            <span class="kw">if </span>!config.export_calldata {
+<a href=#720 id=720 data-nosnippet>720</a>                <span class="kw">let </span>w = wallet.as_ref().ok_or_else(<span class="kw-2">&amp;</span>require_wallet)<span class="question-mark">?</span>;
+<a href=#721 id=721 data-nosnippet>721</a>                <span class="kw">let </span>addr = NetworkWallet::&lt;Ethereum&gt;::default_signer_address(w);
+<a href=#722 id=722 data-nosnippet>722</a>                <span class="macro">tracing::info!</span>(<span class="string">"Updating validator {} with new keys"</span>, addr);
+<a href=#723 id=723 data-nosnippet>723</a>            }
+<a href=#724 id=724 data-nosnippet>724</a>            <span class="kw">let </span>payload = resolve_node_signatures(
+<a href=#725 id=725 data-nosnippet>725</a>                signature_args,
+<a href=#726 id=726 data-nosnippet>726</a>                config.export_calldata,
+<a href=#727 id=727 data-nosnippet>727</a>                wallet.as_ref(),
+<a href=#728 id=728 data-nosnippet>728</a>                config.sender_address,
+<a href=#729 id=729 data-nosnippet>729</a>            )<span class="question-mark">?</span>;
+<a href=#730 id=730 data-nosnippet>730</a>            Transaction::UpdateConsensusKeys {
+<a href=#731 id=731 data-nosnippet>731</a>                stake_table: stake_table_addr,
+<a href=#732 id=732 data-nosnippet>732</a>                payload,
+<a href=#733 id=733 data-nosnippet>733</a>                version,
+<a href=#734 id=734 data-nosnippet>734</a>            }
+<a href=#735 id=735 data-nosnippet>735</a>        },
+<a href=#736 id=736 data-nosnippet>736</a>        Commands::DeregisterValidator {} =&gt; Transaction::DeregisterValidator {
+<a href=#737 id=737 data-nosnippet>737</a>            stake_table: stake_table_addr,
+<a href=#738 id=738 data-nosnippet>738</a>        },
+<a href=#739 id=739 data-nosnippet>739</a>        Commands::UpdateCommission { new_commission } =&gt; Transaction::UpdateCommission {
+<a href=#740 id=740 data-nosnippet>740</a>            stake_table: stake_table_addr,
+<a href=#741 id=741 data-nosnippet>741</a>            new_commission: <span class="kw-2">*</span>new_commission,
+<a href=#742 id=742 data-nosnippet>742</a>        },
+<a href=#743 id=743 data-nosnippet>743</a>        Commands::UpdateMetadataUri {
+<a href=#744 id=744 data-nosnippet>744</a>            metadata_uri_args,
+<a href=#745 id=745 data-nosnippet>745</a>            consensus_public_key,
+<a href=#746 id=746 data-nosnippet>746</a>        } =&gt; {
+<a href=#747 id=747 data-nosnippet>747</a>            <span class="kw">let </span>metadata_uri: MetadataUri = metadata_uri_args.clone().try_into()<span class="question-mark">?</span>;
+<a href=#748 id=748 data-nosnippet>748</a>
+<a href=#749 id=749 data-nosnippet>749</a>            <span class="comment">// Validate metadata URI if present and validation not skipped
+<a href=#750 id=750 data-nosnippet>750</a>            </span><span class="kw">if let </span><span class="prelude-val">Some</span>(url) = metadata_uri.url()
+<a href=#751 id=751 data-nosnippet>751</a>                &amp;&amp; !metadata_uri_args.skip_metadata_validation
+<a href=#752 id=752 data-nosnippet>752</a>            {
+<a href=#753 id=753 data-nosnippet>753</a>                <span class="kw">let </span>bls_vk = consensus_public_key.ok_or_else(|| {
+<a href=#754 id=754 data-nosnippet>754</a>                    <span class="macro">anyhow::anyhow!</span>(
+<a href=#755 id=755 data-nosnippet>755</a>                        <span class="string">"--consensus-public-key is required for metadata validation (use \
+<a href=#756 id=756 data-nosnippet>756</a>                         --skip-metadata-validation to skip)"
+<a href=#757 id=757 data-nosnippet>757</a>                    </span>)
+<a href=#758 id=758 data-nosnippet>758</a>                })<span class="question-mark">?</span>;
+<a href=#759 id=759 data-nosnippet>759</a>                validate_metadata_uri(url, <span class="kw-2">&amp;</span>bls_vk)
+<a href=#760 id=760 data-nosnippet>760</a>                    .<span class="kw">await
+<a href=#761 id=761 data-nosnippet>761</a>                    </span>.context(<span class="string">"use --skip-metadata-validation to skip"</span>)<span class="question-mark">?</span>;
+<a href=#762 id=762 data-nosnippet>762</a>            }
+<a href=#763 id=763 data-nosnippet>763</a>
+<a href=#764 id=764 data-nosnippet>764</a>            Transaction::UpdateMetadataUri {
+<a href=#765 id=765 data-nosnippet>765</a>                stake_table: stake_table_addr,
+<a href=#766 id=766 data-nosnippet>766</a>                metadata_uri,
 <a href=#767 id=767 data-nosnippet>767</a>            }
-<a href=#768 id=768 data-nosnippet>768</a>            Transaction::UpdateNetworkConfig {
-<a href=#769 id=769 data-nosnippet>769</a>                stake_table: stake_table_addr,
-<a href=#770 id=770 data-nosnippet>770</a>                x25519_key: <span class="kw-2">*</span>x25519_key,
-<a href=#771 id=771 data-nosnippet>771</a>                p2p_addr: p2p_addr.clone(),
-<a href=#772 id=772 data-nosnippet>772</a>            }
-<a href=#773 id=773 data-nosnippet>773</a>        },
-<a href=#774 id=774 data-nosnippet>774</a>        Commands::UpdateX25519Key { x25519_key } =&gt; {
-<a href=#775 id=775 data-nosnippet>775</a>            <span class="kw">if </span>!config.export_calldata {
-<a href=#776 id=776 data-nosnippet>776</a>                wallet.as_ref().ok_or_else(<span class="kw-2">&amp;</span>require_wallet)<span class="question-mark">?</span>;
-<a href=#777 id=777 data-nosnippet>777</a>            }
-<a href=#778 id=778 data-nosnippet>778</a>            Transaction::UpdateX25519Key {
-<a href=#779 id=779 data-nosnippet>779</a>                stake_table: stake_table_addr,
-<a href=#780 id=780 data-nosnippet>780</a>                x25519_key: <span class="kw-2">*</span>x25519_key,
-<a href=#781 id=781 data-nosnippet>781</a>            }
-<a href=#782 id=782 data-nosnippet>782</a>        },
-<a href=#783 id=783 data-nosnippet>783</a>        Commands::UpdateP2pAddr { p2p_addr } =&gt; {
-<a href=#784 id=784 data-nosnippet>784</a>            <span class="kw">if </span>!config.export_calldata {
-<a href=#785 id=785 data-nosnippet>785</a>                wallet.as_ref().ok_or_else(<span class="kw-2">&amp;</span>require_wallet)<span class="question-mark">?</span>;
-<a href=#786 id=786 data-nosnippet>786</a>            }
-<a href=#787 id=787 data-nosnippet>787</a>            Transaction::UpdateP2pAddr {
-<a href=#788 id=788 data-nosnippet>788</a>                stake_table: stake_table_addr,
-<a href=#789 id=789 data-nosnippet>789</a>                p2p_addr: p2p_addr.clone(),
-<a href=#790 id=790 data-nosnippet>790</a>            }
-<a href=#791 id=791 data-nosnippet>791</a>        },
-<a href=#792 id=792 data-nosnippet>792</a>        Commands::Approve { amount } =&gt; Transaction::Approve {
-<a href=#793 id=793 data-nosnippet>793</a>            token: token_addr,
-<a href=#794 id=794 data-nosnippet>794</a>            spender: stake_table_addr,
-<a href=#795 id=795 data-nosnippet>795</a>            amount: <span class="kw-2">*</span>amount,
-<a href=#796 id=796 data-nosnippet>796</a>        },
-<a href=#797 id=797 data-nosnippet>797</a>        Commands::Delegate {
-<a href=#798 id=798 data-nosnippet>798</a>            validator_address,
-<a href=#799 id=799 data-nosnippet>799</a>            amount,
-<a href=#800 id=800 data-nosnippet>800</a>        } =&gt; Transaction::Delegate {
-<a href=#801 id=801 data-nosnippet>801</a>            stake_table: stake_table_addr,
-<a href=#802 id=802 data-nosnippet>802</a>            validator: <span class="kw-2">*</span>validator_address,
+<a href=#768 id=768 data-nosnippet>768</a>        },
+<a href=#769 id=769 data-nosnippet>769</a>        Commands::UpdateNetworkConfig {
+<a href=#770 id=770 data-nosnippet>770</a>            x25519_key,
+<a href=#771 id=771 data-nosnippet>771</a>            p2p_addr,
+<a href=#772 id=772 data-nosnippet>772</a>        } =&gt; {
+<a href=#773 id=773 data-nosnippet>773</a>            <span class="kw">if </span>!config.export_calldata {
+<a href=#774 id=774 data-nosnippet>774</a>                wallet.as_ref().ok_or_else(<span class="kw-2">&amp;</span>require_wallet)<span class="question-mark">?</span>;
+<a href=#775 id=775 data-nosnippet>775</a>            }
+<a href=#776 id=776 data-nosnippet>776</a>            Transaction::UpdateNetworkConfig {
+<a href=#777 id=777 data-nosnippet>777</a>                stake_table: stake_table_addr,
+<a href=#778 id=778 data-nosnippet>778</a>                x25519_key: <span class="kw-2">*</span>x25519_key,
+<a href=#779 id=779 data-nosnippet>779</a>                p2p_addr: p2p_addr.clone(),
+<a href=#780 id=780 data-nosnippet>780</a>            }
+<a href=#781 id=781 data-nosnippet>781</a>        },
+<a href=#782 id=782 data-nosnippet>782</a>        Commands::UpdateX25519Key { x25519_key } =&gt; {
+<a href=#783 id=783 data-nosnippet>783</a>            <span class="kw">if </span>!config.export_calldata {
+<a href=#784 id=784 data-nosnippet>784</a>                wallet.as_ref().ok_or_else(<span class="kw-2">&amp;</span>require_wallet)<span class="question-mark">?</span>;
+<a href=#785 id=785 data-nosnippet>785</a>            }
+<a href=#786 id=786 data-nosnippet>786</a>            Transaction::UpdateX25519Key {
+<a href=#787 id=787 data-nosnippet>787</a>                stake_table: stake_table_addr,
+<a href=#788 id=788 data-nosnippet>788</a>                x25519_key: <span class="kw-2">*</span>x25519_key,
+<a href=#789 id=789 data-nosnippet>789</a>            }
+<a href=#790 id=790 data-nosnippet>790</a>        },
+<a href=#791 id=791 data-nosnippet>791</a>        Commands::UpdateP2pAddr { p2p_addr } =&gt; {
+<a href=#792 id=792 data-nosnippet>792</a>            <span class="kw">if </span>!config.export_calldata {
+<a href=#793 id=793 data-nosnippet>793</a>                wallet.as_ref().ok_or_else(<span class="kw-2">&amp;</span>require_wallet)<span class="question-mark">?</span>;
+<a href=#794 id=794 data-nosnippet>794</a>            }
+<a href=#795 id=795 data-nosnippet>795</a>            Transaction::UpdateP2pAddr {
+<a href=#796 id=796 data-nosnippet>796</a>                stake_table: stake_table_addr,
+<a href=#797 id=797 data-nosnippet>797</a>                p2p_addr: p2p_addr.clone(),
+<a href=#798 id=798 data-nosnippet>798</a>            }
+<a href=#799 id=799 data-nosnippet>799</a>        },
+<a href=#800 id=800 data-nosnippet>800</a>        Commands::Approve { amount } =&gt; Transaction::Approve {
+<a href=#801 id=801 data-nosnippet>801</a>            token: token_addr,
+<a href=#802 id=802 data-nosnippet>802</a>            spender: stake_table_addr,
 <a href=#803 id=803 data-nosnippet>803</a>            amount: <span class="kw-2">*</span>amount,
 <a href=#804 id=804 data-nosnippet>804</a>        },
-<a href=#805 id=805 data-nosnippet>805</a>        Commands::Undelegate {
+<a href=#805 id=805 data-nosnippet>805</a>        Commands::Delegate {
 <a href=#806 id=806 data-nosnippet>806</a>            validator_address,
 <a href=#807 id=807 data-nosnippet>807</a>            amount,
-<a href=#808 id=808 data-nosnippet>808</a>        } =&gt; Transaction::Undelegate {
+<a href=#808 id=808 data-nosnippet>808</a>        } =&gt; Transaction::Delegate {
 <a href=#809 id=809 data-nosnippet>809</a>            stake_table: stake_table_addr,
 <a href=#810 id=810 data-nosnippet>810</a>            validator: <span class="kw-2">*</span>validator_address,
 <a href=#811 id=811 data-nosnippet>811</a>            amount: <span class="kw-2">*</span>amount,
 <a href=#812 id=812 data-nosnippet>812</a>        },
-<a href=#813 id=813 data-nosnippet>813</a>        Commands::ClaimWithdrawal { validator_address } =&gt; Transaction::ClaimWithdrawal {
-<a href=#814 id=814 data-nosnippet>814</a>            stake_table: stake_table_addr,
-<a href=#815 id=815 data-nosnippet>815</a>            validator: <span class="kw-2">*</span>validator_address,
-<a href=#816 id=816 data-nosnippet>816</a>        },
-<a href=#817 id=817 data-nosnippet>817</a>        Commands::ClaimValidatorExit { validator_address } =&gt; Transaction::ClaimValidatorExit {
-<a href=#818 id=818 data-nosnippet>818</a>            stake_table: stake_table_addr,
-<a href=#819 id=819 data-nosnippet>819</a>            validator: <span class="kw-2">*</span>validator_address,
+<a href=#813 id=813 data-nosnippet>813</a>        Commands::Undelegate {
+<a href=#814 id=814 data-nosnippet>814</a>            validator_address,
+<a href=#815 id=815 data-nosnippet>815</a>            amount,
+<a href=#816 id=816 data-nosnippet>816</a>        } =&gt; Transaction::Undelegate {
+<a href=#817 id=817 data-nosnippet>817</a>            stake_table: stake_table_addr,
+<a href=#818 id=818 data-nosnippet>818</a>            validator: <span class="kw-2">*</span>validator_address,
+<a href=#819 id=819 data-nosnippet>819</a>            amount: <span class="kw-2">*</span>amount,
 <a href=#820 id=820 data-nosnippet>820</a>        },
-<a href=#821 id=821 data-nosnippet>821</a>        Commands::ClaimRewards {} =&gt; {
-<a href=#822 id=822 data-nosnippet>822</a>            <span class="kw">let </span>espresso_url = config.espresso_url.clone().ok_or_else(|| {
-<a href=#823 id=823 data-nosnippet>823</a>                <span class="macro">anyhow::anyhow!</span>(<span class="string">"espresso_url not set, use --espresso-url or ESPRESSO_URL"</span>)
-<a href=#824 id=824 data-nosnippet>824</a>            })<span class="question-mark">?</span>;
-<a href=#825 id=825 data-nosnippet>825</a>            <span class="kw">let </span>claimer_address = <span class="kw">if </span>config.export_calldata {
-<a href=#826 id=826 data-nosnippet>826</a>                config.sender_address.ok_or_else(|| {
-<a href=#827 id=827 data-nosnippet>827</a>                    <span class="macro">anyhow::anyhow!</span>(
-<a href=#828 id=828 data-nosnippet>828</a>                        <span class="string">"claim-rewards with --export-calldata requires --sender-address"
-<a href=#829 id=829 data-nosnippet>829</a>                    </span>)
-<a href=#830 id=830 data-nosnippet>830</a>                })<span class="question-mark">?
-<a href=#831 id=831 data-nosnippet>831</a>            </span>} <span class="kw">else </span>{
-<a href=#832 id=832 data-nosnippet>832</a>                NetworkWallet::&lt;Ethereum&gt;::default_signer_address(
-<a href=#833 id=833 data-nosnippet>833</a>                    wallet.as_ref().ok_or_else(<span class="kw-2">&amp;</span>require_wallet)<span class="question-mark">?</span>,
-<a href=#834 id=834 data-nosnippet>834</a>                )
-<a href=#835 id=835 data-nosnippet>835</a>            };
-<a href=#836 id=836 data-nosnippet>836</a>            fetch_claim_rewards_inputs(
-<a href=#837 id=837 data-nosnippet>837</a>                <span class="kw-2">&amp;</span>readonly_provider,
-<a href=#838 id=838 data-nosnippet>838</a>                stake_table_addr,
-<a href=#839 id=839 data-nosnippet>839</a>                <span class="kw-2">&amp;</span>espresso_url,
-<a href=#840 id=840 data-nosnippet>840</a>                claimer_address,
-<a href=#841 id=841 data-nosnippet>841</a>            )
-<a href=#842 id=842 data-nosnippet>842</a>            .<span class="kw">await</span><span class="question-mark">?
-<a href=#843 id=843 data-nosnippet>843</a>            </span>.ok_or_else(|| <span class="macro">anyhow::anyhow!</span>(<span class="string">"No reward claim data found for address"</span>))<span class="question-mark">?
-<a href=#844 id=844 data-nosnippet>844</a>        </span>},
-<a href=#845 id=845 data-nosnippet>845</a>        Commands::Transfer { amount, to } =&gt; Transaction::Transfer {
-<a href=#846 id=846 data-nosnippet>846</a>            token: token_addr,
-<a href=#847 id=847 data-nosnippet>847</a>            to: <span class="kw-2">*</span>to,
-<a href=#848 id=848 data-nosnippet>848</a>            amount: <span class="kw-2">*</span>amount,
-<a href=#849 id=849 data-nosnippet>849</a>        },
-<a href=#850 id=850 data-nosnippet>850</a>        Commands::Version
-<a href=#851 id=851 data-nosnippet>851</a>        | Commands::Config
-<a href=#852 id=852 data-nosnippet>852</a>        | Commands::Init { .. }
-<a href=#853 id=853 data-nosnippet>853</a>        | Commands::Purge { .. }
-<a href=#854 id=854 data-nosnippet>854</a>        | Commands::StakeTable { .. }
-<a href=#855 id=855 data-nosnippet>855</a>        | Commands::Account
-<a href=#856 id=856 data-nosnippet>856</a>        | Commands::UnclaimedRewards { .. }
-<a href=#857 id=857 data-nosnippet>857</a>        | Commands::TokenBalance { .. }
-<a href=#858 id=858 data-nosnippet>858</a>        | Commands::TokenAllowance { .. }
-<a href=#859 id=859 data-nosnippet>859</a>        | Commands::ExportNodeSignatures { .. }
-<a href=#860 id=860 data-nosnippet>860</a>        | Commands::PreviewMetadata { .. }
-<a href=#861 id=861 data-nosnippet>861</a>        | Commands::Demo(..)
-<a href=#862 id=862 data-nosnippet>862</a>        | Commands::StakeForDemo { .. } =&gt; {
-<a href=#863 id=863 data-nosnippet>863</a>            <span class="macro">unreachable!</span>(<span class="string">"Non-state-change commands are handled earlier in the function"</span>)
-<a href=#864 id=864 data-nosnippet>864</a>        },
-<a href=#865 id=865 data-nosnippet>865</a>    };
-<a href=#866 id=866 data-nosnippet>866</a>
-<a href=#867 id=867 data-nosnippet>867</a>    <span class="comment">// Validate even for export mode to fail early if the transaction would fail on-chain.
-<a href=#868 id=868 data-nosnippet>868</a>    </span>tx.validate_delegate_amount(<span class="kw-2">&amp;</span>readonly_provider).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#869 id=869 data-nosnippet>869</a>
-<a href=#870 id=870 data-nosnippet>870</a>    <span class="comment">// Single code path for both export and execute modes
-<a href=#871 id=871 data-nosnippet>871</a>    </span><span class="kw">if </span>config.export_calldata {
-<a href=#872 id=872 data-nosnippet>872</a>        <span class="kw">if </span>config.skip_simulation {
-<a href=#873 id=873 data-nosnippet>873</a>            output_warn(<span class="string">"Skipping calldata validation (--skip-simulation)"</span>);
-<a href=#874 id=874 data-nosnippet>874</a>        } <span class="kw">else </span>{
-<a href=#875 id=875 data-nosnippet>875</a>            <span class="kw">let </span>sender = config.sender_address.ok_or_else(|| {
-<a href=#876 id=876 data-nosnippet>876</a>                <span class="macro">anyhow::anyhow!</span>(
-<a href=#877 id=877 data-nosnippet>877</a>                    <span class="string">"--sender-address is required for calldata simulation (use --skip-simulation \
-<a href=#878 id=878 data-nosnippet>878</a>                     to skip)"
-<a href=#879 id=879 data-nosnippet>879</a>                </span>)
-<a href=#880 id=880 data-nosnippet>880</a>            })<span class="question-mark">?</span>;
-<a href=#881 id=881 data-nosnippet>881</a>            tx.simulate(<span class="kw-2">&amp;</span>readonly_provider, sender).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#882 id=882 data-nosnippet>882</a>        }
-<a href=#883 id=883 data-nosnippet>883</a>        <span class="kw">let </span>description = tx.description();
-<a href=#884 id=884 data-nosnippet>884</a>        <span class="kw">let </span>(to, data, fi) = tx.calldata()<span class="question-mark">?</span>;
-<a href=#885 id=885 data-nosnippet>885</a>        <span class="kw">let </span>chain_id = readonly_provider.get_chain_id().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#886 id=886 data-nosnippet>886</a>        <span class="kw">let </span>info = <span class="kw">match </span>fi {
-<a href=#887 id=887 data-nosnippet>887</a>            <span class="prelude-val">Some</span>(fi) =&gt; CalldataInfo::with_method(to, data, U256::ZERO, fi),
-<a href=#888 id=888 data-nosnippet>888</a>            <span class="prelude-val">None </span>=&gt; CalldataInfo::new(to, data),
-<a href=#889 id=889 data-nosnippet>889</a>        }
-<a href=#890 id=890 data-nosnippet>890</a>        .with_description(description);
-<a href=#891 id=891 data-nosnippet>891</a>        <span class="kw">return </span>output_calldata(<span class="kw-2">&amp;</span>info, <span class="kw-2">&amp;</span>config.output, chain_id);
-<a href=#892 id=892 data-nosnippet>892</a>    }
-<a href=#893 id=893 data-nosnippet>893</a>
-<a href=#894 id=894 data-nosnippet>894</a>    <span class="comment">// For execution, we need the wallet
-<a href=#895 id=895 data-nosnippet>895</a>    </span><span class="kw">let </span>wallet = wallet.ok_or_else(<span class="kw-2">&amp;</span>require_wallet)<span class="question-mark">?</span>;
-<a href=#896 id=896 data-nosnippet>896</a>    <span class="kw">let </span>account = NetworkWallet::&lt;Ethereum&gt;::default_signer_address(<span class="kw-2">&amp;</span>wallet);
-<a href=#897 id=897 data-nosnippet>897</a>
-<a href=#898 id=898 data-nosnippet>898</a>    <span class="comment">// Check that our Ethereum balance isn't zero before proceeding.
-<a href=#899 id=899 data-nosnippet>899</a>    </span><span class="kw">let </span>balance = readonly_provider.get_balance(account).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#900 id=900 data-nosnippet>900</a>    <span class="kw">if </span>balance.is_zero() {
-<a href=#901 id=901 data-nosnippet>901</a>        exit(<span class="macro">format!</span>(
-<a href=#902 id=902 data-nosnippet>902</a>            <span class="string">"zero Ethereum balance for account {account}, please fund account"
-<a href=#903 id=903 data-nosnippet>903</a>        </span>));
-<a href=#904 id=904 data-nosnippet>904</a>    }
+<a href=#821 id=821 data-nosnippet>821</a>        Commands::ClaimWithdrawal { validator_address } =&gt; Transaction::ClaimWithdrawal {
+<a href=#822 id=822 data-nosnippet>822</a>            stake_table: stake_table_addr,
+<a href=#823 id=823 data-nosnippet>823</a>            validator: <span class="kw-2">*</span>validator_address,
+<a href=#824 id=824 data-nosnippet>824</a>        },
+<a href=#825 id=825 data-nosnippet>825</a>        Commands::ClaimValidatorExit { validator_address } =&gt; Transaction::ClaimValidatorExit {
+<a href=#826 id=826 data-nosnippet>826</a>            stake_table: stake_table_addr,
+<a href=#827 id=827 data-nosnippet>827</a>            validator: <span class="kw-2">*</span>validator_address,
+<a href=#828 id=828 data-nosnippet>828</a>        },
+<a href=#829 id=829 data-nosnippet>829</a>        Commands::ClaimRewards {} =&gt; {
+<a href=#830 id=830 data-nosnippet>830</a>            <span class="kw">let </span>espresso_url = config.espresso_url.clone().ok_or_else(|| {
+<a href=#831 id=831 data-nosnippet>831</a>                <span class="macro">anyhow::anyhow!</span>(<span class="string">"espresso_url not set, use --espresso-url or ESPRESSO_URL"</span>)
+<a href=#832 id=832 data-nosnippet>832</a>            })<span class="question-mark">?</span>;
+<a href=#833 id=833 data-nosnippet>833</a>            <span class="kw">let </span>claimer_address = <span class="kw">if </span>config.export_calldata {
+<a href=#834 id=834 data-nosnippet>834</a>                config.sender_address.ok_or_else(|| {
+<a href=#835 id=835 data-nosnippet>835</a>                    <span class="macro">anyhow::anyhow!</span>(
+<a href=#836 id=836 data-nosnippet>836</a>                        <span class="string">"claim-rewards with --export-calldata requires --sender-address"
+<a href=#837 id=837 data-nosnippet>837</a>                    </span>)
+<a href=#838 id=838 data-nosnippet>838</a>                })<span class="question-mark">?
+<a href=#839 id=839 data-nosnippet>839</a>            </span>} <span class="kw">else </span>{
+<a href=#840 id=840 data-nosnippet>840</a>                NetworkWallet::&lt;Ethereum&gt;::default_signer_address(
+<a href=#841 id=841 data-nosnippet>841</a>                    wallet.as_ref().ok_or_else(<span class="kw-2">&amp;</span>require_wallet)<span class="question-mark">?</span>,
+<a href=#842 id=842 data-nosnippet>842</a>                )
+<a href=#843 id=843 data-nosnippet>843</a>            };
+<a href=#844 id=844 data-nosnippet>844</a>            fetch_claim_rewards_inputs(
+<a href=#845 id=845 data-nosnippet>845</a>                <span class="kw-2">&amp;</span>readonly_provider,
+<a href=#846 id=846 data-nosnippet>846</a>                stake_table_addr,
+<a href=#847 id=847 data-nosnippet>847</a>                <span class="kw-2">&amp;</span>espresso_url,
+<a href=#848 id=848 data-nosnippet>848</a>                claimer_address,
+<a href=#849 id=849 data-nosnippet>849</a>            )
+<a href=#850 id=850 data-nosnippet>850</a>            .<span class="kw">await</span><span class="question-mark">?
+<a href=#851 id=851 data-nosnippet>851</a>            </span>.ok_or_else(|| <span class="macro">anyhow::anyhow!</span>(<span class="string">"No reward claim data found for address"</span>))<span class="question-mark">?
+<a href=#852 id=852 data-nosnippet>852</a>        </span>},
+<a href=#853 id=853 data-nosnippet>853</a>        Commands::Transfer { amount, to } =&gt; Transaction::Transfer {
+<a href=#854 id=854 data-nosnippet>854</a>            token: token_addr,
+<a href=#855 id=855 data-nosnippet>855</a>            to: <span class="kw-2">*</span>to,
+<a href=#856 id=856 data-nosnippet>856</a>            amount: <span class="kw-2">*</span>amount,
+<a href=#857 id=857 data-nosnippet>857</a>        },
+<a href=#858 id=858 data-nosnippet>858</a>        Commands::Version
+<a href=#859 id=859 data-nosnippet>859</a>        | Commands::Config
+<a href=#860 id=860 data-nosnippet>860</a>        | Commands::Init { .. }
+<a href=#861 id=861 data-nosnippet>861</a>        | Commands::Purge { .. }
+<a href=#862 id=862 data-nosnippet>862</a>        | Commands::StakeTable { .. }
+<a href=#863 id=863 data-nosnippet>863</a>        | Commands::Account
+<a href=#864 id=864 data-nosnippet>864</a>        | Commands::UnclaimedRewards { .. }
+<a href=#865 id=865 data-nosnippet>865</a>        | Commands::TokenBalance { .. }
+<a href=#866 id=866 data-nosnippet>866</a>        | Commands::TokenAllowance { .. }
+<a href=#867 id=867 data-nosnippet>867</a>        | Commands::ExportNodeSignatures { .. }
+<a href=#868 id=868 data-nosnippet>868</a>        | Commands::PreviewMetadata { .. }
+<a href=#869 id=869 data-nosnippet>869</a>        | Commands::Demo(..)
+<a href=#870 id=870 data-nosnippet>870</a>        | Commands::StakeForDemo { .. } =&gt; {
+<a href=#871 id=871 data-nosnippet>871</a>            <span class="macro">unreachable!</span>(<span class="string">"Non-state-change commands are handled earlier in the function"</span>)
+<a href=#872 id=872 data-nosnippet>872</a>        },
+<a href=#873 id=873 data-nosnippet>873</a>    };
+<a href=#874 id=874 data-nosnippet>874</a>
+<a href=#875 id=875 data-nosnippet>875</a>    <span class="comment">// Validate even for export mode to fail early if the transaction would fail on-chain.
+<a href=#876 id=876 data-nosnippet>876</a>    </span>tx.validate_delegate_amount(<span class="kw-2">&amp;</span>readonly_provider).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#877 id=877 data-nosnippet>877</a>
+<a href=#878 id=878 data-nosnippet>878</a>    <span class="comment">// Single code path for both export and execute modes
+<a href=#879 id=879 data-nosnippet>879</a>    </span><span class="kw">if </span>config.export_calldata {
+<a href=#880 id=880 data-nosnippet>880</a>        <span class="kw">if </span>config.skip_simulation {
+<a href=#881 id=881 data-nosnippet>881</a>            output_warn(<span class="string">"Skipping calldata validation (--skip-simulation)"</span>);
+<a href=#882 id=882 data-nosnippet>882</a>        } <span class="kw">else </span>{
+<a href=#883 id=883 data-nosnippet>883</a>            <span class="kw">let </span>sender = config.sender_address.ok_or_else(|| {
+<a href=#884 id=884 data-nosnippet>884</a>                <span class="macro">anyhow::anyhow!</span>(
+<a href=#885 id=885 data-nosnippet>885</a>                    <span class="string">"--sender-address is required for calldata simulation (use --skip-simulation \
+<a href=#886 id=886 data-nosnippet>886</a>                     to skip)"
+<a href=#887 id=887 data-nosnippet>887</a>                </span>)
+<a href=#888 id=888 data-nosnippet>888</a>            })<span class="question-mark">?</span>;
+<a href=#889 id=889 data-nosnippet>889</a>            tx.simulate(<span class="kw-2">&amp;</span>readonly_provider, sender).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#890 id=890 data-nosnippet>890</a>        }
+<a href=#891 id=891 data-nosnippet>891</a>        <span class="kw">let </span>description = tx.description();
+<a href=#892 id=892 data-nosnippet>892</a>        <span class="kw">let </span>(to, data, fi) = tx.calldata()<span class="question-mark">?</span>;
+<a href=#893 id=893 data-nosnippet>893</a>        <span class="kw">let </span>chain_id = readonly_provider.get_chain_id().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#894 id=894 data-nosnippet>894</a>        <span class="kw">let </span>info = <span class="kw">match </span>fi {
+<a href=#895 id=895 data-nosnippet>895</a>            <span class="prelude-val">Some</span>(fi) =&gt; CalldataInfo::with_method(to, data, U256::ZERO, fi),
+<a href=#896 id=896 data-nosnippet>896</a>            <span class="prelude-val">None </span>=&gt; CalldataInfo::new(to, data),
+<a href=#897 id=897 data-nosnippet>897</a>        }
+<a href=#898 id=898 data-nosnippet>898</a>        .with_description(description);
+<a href=#899 id=899 data-nosnippet>899</a>        <span class="kw">return </span>output_calldata(<span class="kw-2">&amp;</span>info, <span class="kw-2">&amp;</span>config.output, chain_id);
+<a href=#900 id=900 data-nosnippet>900</a>    }
+<a href=#901 id=901 data-nosnippet>901</a>
+<a href=#902 id=902 data-nosnippet>902</a>    <span class="comment">// For execution, we need the wallet
+<a href=#903 id=903 data-nosnippet>903</a>    </span><span class="kw">let </span>wallet = wallet.ok_or_else(<span class="kw-2">&amp;</span>require_wallet)<span class="question-mark">?</span>;
+<a href=#904 id=904 data-nosnippet>904</a>    <span class="kw">let </span>account = NetworkWallet::&lt;Ethereum&gt;::default_signer_address(<span class="kw-2">&amp;</span>wallet);
 <a href=#905 id=905 data-nosnippet>905</a>
-<a href=#906 id=906 data-nosnippet>906</a>    <span class="comment">// Create provider with wallet for signing
-<a href=#907 id=907 data-nosnippet>907</a>    </span><span class="kw">let </span>provider = ProviderBuilder::new()
-<a href=#908 id=908 data-nosnippet>908</a>        .wallet(wallet)
-<a href=#909 id=909 data-nosnippet>909</a>        .connect_http(config.rpc_url.clone());
-<a href=#910 id=910 data-nosnippet>910</a>
-<a href=#911 id=911 data-nosnippet>911</a>    <span class="comment">// Execute the state change
-<a href=#912 id=912 data-nosnippet>912</a>    </span><span class="kw">let </span>pending_tx = tx
-<a href=#913 id=913 data-nosnippet>913</a>        .send(<span class="kw-2">&amp;</span>provider)
-<a href=#914 id=914 data-nosnippet>914</a>        .<span class="kw">await
-<a href=#915 id=915 data-nosnippet>915</a>        </span>.unwrap_or_else(|err| exit_err(<span class="string">"Error"</span>, err));
-<a href=#916 id=916 data-nosnippet>916</a>
-<a href=#917 id=917 data-nosnippet>917</a>    <span class="kw">match </span>pending_tx.get_receipt().<span class="kw">await </span>{
-<a href=#918 id=918 data-nosnippet>918</a>        <span class="prelude-val">Ok</span>(receipt) =&gt; {
-<a href=#919 id=919 data-nosnippet>919</a>            output_success(<span class="macro">format!</span>(
-<a href=#920 id=920 data-nosnippet>920</a>                <span class="string">"Success! transaction hash: {}"</span>,
-<a href=#921 id=921 data-nosnippet>921</a>                receipt.transaction_hash
-<a href=#922 id=922 data-nosnippet>922</a>            ));
-<a href=#923 id=923 data-nosnippet>923</a>            decode_and_display_logs(receipt.inner.logs());
-<a href=#924 id=924 data-nosnippet>924</a>            <span class="prelude-val">Ok</span>(())
-<a href=#925 id=925 data-nosnippet>925</a>        },
-<a href=#926 id=926 data-nosnippet>926</a>        <span class="prelude-val">Err</span>(err) =&gt; exit_err(<span class="string">"Failed"</span>, err),
-<a href=#927 id=927 data-nosnippet>927</a>    }
-<a href=#928 id=928 data-nosnippet>928</a>}
+<a href=#906 id=906 data-nosnippet>906</a>    <span class="comment">// Check that our Ethereum balance isn't zero before proceeding.
+<a href=#907 id=907 data-nosnippet>907</a>    </span><span class="kw">let </span>balance = readonly_provider.get_balance(account).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#908 id=908 data-nosnippet>908</a>    <span class="kw">if </span>balance.is_zero() {
+<a href=#909 id=909 data-nosnippet>909</a>        exit(<span class="macro">format!</span>(
+<a href=#910 id=910 data-nosnippet>910</a>            <span class="string">"zero Ethereum balance for account {account}, please fund account"
+<a href=#911 id=911 data-nosnippet>911</a>        </span>));
+<a href=#912 id=912 data-nosnippet>912</a>    }
+<a href=#913 id=913 data-nosnippet>913</a>
+<a href=#914 id=914 data-nosnippet>914</a>    <span class="comment">// Create provider with wallet for signing
+<a href=#915 id=915 data-nosnippet>915</a>    </span><span class="kw">let </span>provider = ProviderBuilder::new()
+<a href=#916 id=916 data-nosnippet>916</a>        .wallet(wallet)
+<a href=#917 id=917 data-nosnippet>917</a>        .connect_http(config.rpc_url.clone());
+<a href=#918 id=918 data-nosnippet>918</a>
+<a href=#919 id=919 data-nosnippet>919</a>    <span class="comment">// Execute the state change
+<a href=#920 id=920 data-nosnippet>920</a>    </span><span class="kw">let </span>pending_tx = tx
+<a href=#921 id=921 data-nosnippet>921</a>        .send(<span class="kw-2">&amp;</span>provider)
+<a href=#922 id=922 data-nosnippet>922</a>        .<span class="kw">await
+<a href=#923 id=923 data-nosnippet>923</a>        </span>.unwrap_or_else(|err| exit_err(<span class="string">"Error"</span>, err));
+<a href=#924 id=924 data-nosnippet>924</a>
+<a href=#925 id=925 data-nosnippet>925</a>    <span class="kw">match </span>pending_tx.get_receipt().<span class="kw">await </span>{
+<a href=#926 id=926 data-nosnippet>926</a>        <span class="prelude-val">Ok</span>(receipt) =&gt; {
+<a href=#927 id=927 data-nosnippet>927</a>            output_success(<span class="macro">format!</span>(
+<a href=#928 id=928 data-nosnippet>928</a>                <span class="string">"Success! transaction hash: {}"</span>,
+<a href=#929 id=929 data-nosnippet>929</a>                receipt.transaction_hash
+<a href=#930 id=930 data-nosnippet>930</a>            ));
+<a href=#931 id=931 data-nosnippet>931</a>            decode_and_display_logs(receipt.inner.logs());
+<a href=#932 id=932 data-nosnippet>932</a>            <span class="prelude-val">Ok</span>(())
+<a href=#933 id=933 data-nosnippet>933</a>        },
+<a href=#934 id=934 data-nosnippet>934</a>        <span class="prelude-val">Err</span>(err) =&gt; exit_err(<span class="string">"Failed"</span>, err),
+<a href=#935 id=935 data-nosnippet>935</a>    }
+<a href=#936 id=936 data-nosnippet>936</a>}
 </code></pre></div></section></main></body></html>
