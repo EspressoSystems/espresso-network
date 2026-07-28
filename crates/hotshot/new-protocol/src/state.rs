@@ -214,7 +214,11 @@ impl<T: NodeType> StateManager<T> {
                 "parent state unavailable; deferring state validation (from_header stub inserted). \
                  If this persists, the node cannot vote until the parent state is recovered."
             );
-            self.insert_empty_state(request.proposal);
+            self.insert_empty_state(request.proposal.clone());
+            self.pending_requests
+                .entry(request.parent_commitment)
+                .or_default()
+                .push(Pending::State(request));
             self.start_pending(commitment);
             return;
         };
