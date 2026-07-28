@@ -312,11 +312,11 @@ async fn slow_test_restart_new_protocol_10_of_10() {
 }
 
 /// Rolling restarts of every node one at a time on its existing storage,
-/// non query nodes first and then query nodes, followed by an all-at-once
-/// restart of the whole network. The new protocol has no DA committee, so all
-/// ten nodes are equal validators; two of them (nodes 0 and 4) also serve
-/// query APIs. The harness's da/regular grouping only affects legacy
-/// networking, which a pure new protocol network does not use.
+/// non query nodes first and then query nodes, followed by a restart of the
+/// whole network with a staggered shutdown. The new protocol has no DA
+/// committee, so all ten nodes are equal validators; two of them (nodes 0 and
+/// 4) also serve query APIs. The harness's da/regular grouping only affects
+/// legacy networking, which a pure new protocol network does not use.
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_new_protocol_rolling_and_full() {
     let mut network = TestNetwork::new_with_query_nodes(4, 6, NEW_PROTOCOL_VERSION, &[0, 4]).await;
@@ -338,7 +338,11 @@ async fn slow_test_restart_new_protocol_rolling_and_full() {
     network.restart_and_progress_node(4).await;
     wait_for_query_node_at_tip(node_4_port, node_0_port).await;
 
-    network.restart(4, 6).await;
+    // Take the whole network down, a few seconds between stops so nodes shut
+    // down at different points in the chain, and check it recovers.
+    network
+        .restart_all_with_staggered_shutdown(Duration::from_secs(3))
+        .await;
 
     network.shut_down().await;
 }
@@ -1232,6 +1236,36 @@ impl TestNetwork {
     async fn restart(&mut self, da_nodes: usize, regular_nodes: usize) {
         self.restart_helper(0..da_nodes, 0..regular_nodes, false)
             .await;
+        self.wait_for_epoch().await;
+        self.check_progress().await;
+        self.check_state().await;
+    }
+
+    /// Restart the whole network, stopping nodes a few seconds apart instead
+    /// of all at once, so they shut down at different points in the chain and
+    /// come back with different anchors. Nodes are started together: starting
+    /// them one at a time can deadlock the network layer.
+    async fn restart_all_with_staggered_shutdown(&mut self, gap: Duration) {
+        tracing::info!(?gap, "stopping all nodes with a staggered shutdown");
+        for node in self
+            .da_nodes
+            .iter_mut()
+            .chain(self.regular_nodes.iter_mut())
+        {
+            node.stop().await;
+            // Gap until the next stop; after the last node it doubles as the
+            // delay the OS needs to release the nodes' ports.
+            sleep(gap).await;
+        }
+
+        join_all(
+            self.da_nodes
+                .iter_mut()
+                .map(TestNode::start)
+                .chain(self.regular_nodes.iter_mut().map(TestNode::start)),
+        )
+        .await;
+
         self.wait_for_epoch().await;
         self.check_progress().await;
         self.check_state().await;
