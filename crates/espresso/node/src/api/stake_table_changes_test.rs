@@ -811,6 +811,101 @@ async fn test_stake_table_full_swap_across_epoch_reward_upgrade(
     Ok(())
 }
 
+/// A single validator is deregistered right when the 0.4 -> 0.5 upgrade is
+/// proposed, so the shrunken committee activates at one of the first
+/// post-upgrade epoch boundaries — the boundaries whose reward calculations
+/// every node performs through leaf-chain catchup, because no leader counts
+/// were tracked while the epoch still ran under 0.4. The fetched chains
+/// cross the shrink boundary, so each QC must be verified against its own
+/// epoch's stake table (#4740): against a single stake table the
+/// verification jams on the size mismatch and the network halts at the
+/// boundary.
+///
+/// Most nodes are sequencer-only — node 0, the query node, never joins the
+/// committee — mirroring the production topology where non-validators hit
+/// this catchup path despite having been online the whole time.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_stake_table_single_removal_across_epoch_reward_upgrade() -> anyhow::Result<()> {
+    const NUM_NODES: usize = 8;
+    const EPOCH_HEIGHT: u64 = 20;
+    const UPGRADE_START_PROPOSING_VIEW: u64 = 65;
+    // 3 of 8 nodes validate; the other 5, including the query node, follow
+    // as sequencer-only.
+    let registered = [5, 6, 7];
+    let removed = 7;
+    let upgrade = Upgrade::new(DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION);
+
+    let network_config = TestConfigBuilder::<NUM_NODES>::default()
+        .epoch_height(EPOCH_HEIGHT)
+        .epoch_start_block(0)
+        .set_upgrades_with(
+            EPOCH_REWARD_VERSION,
+            StakeTableContractVersion::V3,
+            &registered,
+        )
+        .await
+        .upgrade_proposing_views(UPGRADE_START_PROPOSING_VIEW, 1000)
+        .build();
+
+    let net = StakeTableTestNetwork::start_upgrading(network_config.clone(), upgrade).await;
+    let remaining_addrs = staking_addresses(&network_config, &[5, 6]);
+    let mut events = net.network.server.event_stream();
+
+    wait_for_upgrade_proposal(&net.network.server, EPOCH_REWARD_VERSION).await;
+    deregister_validators(&network_config, net.stake_table, &[removed]).await?;
+    net.wait_for_version(EPOCH_REWARD_VERSION, Duration::from_secs(600))
+        .await;
+
+    let current_epoch = net
+        .network
+        .server
+        .decided_leaf()
+        .await
+        .epoch(EPOCH_HEIGHT)
+        .expect("epochs active")
+        .u64();
+    let (activation_epoch, _) = wait_for_committee(
+        &net.client,
+        &mut events,
+        EPOCH_HEIGHT,
+        current_epoch + 1,
+        MAX_ACTIVATION_EPOCHS,
+        committee_is(remaining_addrs),
+    )
+    .await;
+    tracing::info!(activation_epoch, "removal activated across the upgrade");
+
+    // The sequencer-only query node must keep applying blocks past the
+    // shrink: its epoch rewards catchup has to verify the boundary-crossing
+    // leaf chains.
+    assert_node_live(&net.network.server, EPOCH_HEIGHT, 2).await;
+
+    // Rewards keep flowing under the shrunken committee.
+    let first = net
+        .header_at((activation_epoch + 1) * EPOCH_HEIGHT)
+        .await
+        .total_reward_distributed()
+        .expect("v5 headers carry the total distributed reward");
+    let second = net
+        .header_at((activation_epoch + 2) * EPOCH_HEIGHT)
+        .await
+        .total_reward_distributed()
+        .expect("v5 headers carry the total distributed reward");
+    assert!(
+        first.0 > U256::ZERO,
+        "no rewards distributed by the end of the first full post-removal epoch"
+    );
+    assert!(
+        second.0 > first.0,
+        "rewards stopped accruing under the shrunken committee"
+    );
+
+    let all_nodes: Vec<_> = (0..NUM_NODES).map(|i| net.network.node(i)).collect();
+    assert_nodes_agree(&all_nodes, activation_epoch * EPOCH_HEIGHT).await;
+
+    Ok(())
+}
+
 /// Full set replacement across the 0.5 -> 0.6 (new protocol / fast finality)
 /// upgrade: the network starts at 0.5 with committee {0,1,2} and cuts over
 /// to cliquenet-based consensus mid-run while the committee is replaced

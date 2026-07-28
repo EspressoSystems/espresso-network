@@ -45,7 +45,7 @@ threads-required = 'num-cpus'
 # The stake-table-change upgrade tests run many epochs across a real protocol
 # upgrade (epoch_height 70 for the 0.5->0.6 cutover cases).
 [[profile.default.overrides]]
-filter = 'test(test_stake_table_full_swap) | test(test_new_protocol_upgrade_ineligible_validator_drops)'
+filter = 'test(test_stake_table_full_swap) | test(test_stake_table_single_removal) | test(test_new_protocol_upgrade_ineligible_validator_drops)'
 slow-timeout = { period = "2m", terminate-after = 15 }
 threads-required = 'num-cpus'
 
