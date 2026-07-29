@@ -3,10 +3,12 @@ use std::time::Duration;
 use hotshot::types::BLSPubKey;
 use hotshot_example_types::node_types::TestTypes;
 use hotshot_types::{traits::signature_key::SignatureKey, vote::HasViewNumber};
+use tokio::time::timeout;
 
 use super::common::{harness::TestHarness, utils::TestData};
 use crate::{
     consensus::ConsensusInput,
+    coordinator::error::Severity,
     message::{CatchupEvidence, ConsensusMessage, EpochChangeMessage, Proposal, Validated},
     tests::common::assertions::{
         any, count_matching, is_block_built, is_block_reconstructed, is_cert1, is_cert2,
@@ -263,6 +265,59 @@ async fn test_timeout_votes_form_tc() {
     assert!(
         any(harness.outputs(), is_view_changed),
         "View should advance after timeout certificate"
+    );
+}
+
+/// Regression test for duplicate timeout-certificate applies: once a
+/// network-received TC for a view has been returned by the coordinator,
+/// the local timeout-vote collector must not produce a second certificate
+/// for that view.
+///
+/// Drains `next_consensus_input` without applying: applying the TC would
+/// advance the view, and the late votes would then be dropped as stale
+/// before ever reaching the collector.
+#[tokio::test]
+async fn test_network_tc_suppresses_local_timeout_collector() {
+    let test_data = TestData::new(2).await;
+    let mut harness = TestHarness::new(0).await;
+    let test_view = &test_data.views[0];
+    let view = test_view.view_number;
+
+    // A peer rebroadcasts a TC for the current view.
+    harness.message(test_view.timeout_cert_message(1));
+    let tc = timeout(Duration::from_secs(30), async {
+        loop {
+            match harness.coordinator_mut().next_consensus_input().await {
+                Ok(ConsensusInput::TimeoutCertificate(tc)) => break tc,
+                Ok(_) => {},
+                Err(err) if err.severity == Severity::Critical => {
+                    panic!("critical coordinator error: {err}")
+                },
+                Err(_) => {},
+            }
+        }
+    })
+    .await
+    .expect("network TC should be verified and returned");
+    assert_eq!(tc.view_number(), view);
+
+    // Late timeout votes for the same view must not form a second
+    // certificate through the local collector.
+    for i in 0..THRESHOLD {
+        harness.message(test_view.timeout_vote_input(i, None));
+    }
+    let second = timeout(Duration::from_secs(2), async {
+        loop {
+            match harness.coordinator_mut().next_consensus_input().await {
+                Ok(input) if is_timeout_cert(&input) => break input,
+                _ => {},
+            }
+        }
+    })
+    .await;
+    assert!(
+        second.is_err(),
+        "timeout certificate for view {view} was produced twice: {second:?}"
     );
 }
 

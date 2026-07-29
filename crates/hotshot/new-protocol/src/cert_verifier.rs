@@ -634,6 +634,23 @@ mod tests {
         assert!(verifier.next().await.is_none());
     }
 
+    /// A sender can't park a second copy behind its own in-flight one.
+    #[tokio::test]
+    async fn test_same_sender_resubmit_is_dropped() {
+        let mut verifier = verifier();
+        let view = ViewNumber::new(1);
+        let tc = valid_tc(1);
+
+        verifier.verify(sender(0), tc.clone());
+        verifier.verify(sender(0), tc);
+        assert_eq!(verifier.tasks.len(), 1);
+        assert!(verifier.parked.is_empty());
+
+        let cert = verifier.next().await.expect("certificate should verify");
+        assert_eq!(cert.view_number(), view);
+        assert!(verifier.next().await.is_none());
+    }
+
     /// A parked copy is verified when the in-flight one proves invalid.
     #[tokio::test]
     async fn test_parked_copy_promoted_after_invalid() {
@@ -681,8 +698,40 @@ mod tests {
         verifier.mark_completed(view);
         assert!(verifier.parked.is_empty());
         assert!(verifier.next().await.is_none());
+        // Draining the aborted in-flight task through `next()`'s error arm
+        // must not have promoted or respawned anything for the view.
+        assert!(verifier.tasks.is_empty());
+        assert!(verifier.in_flight.is_empty());
 
         verifier.verify(sender(3), valid_tc(1));
         assert!(verifier.tasks.is_empty());
+    }
+
+    /// `gc` drops parked and in-flight state below the cutoff, rejects
+    /// stale resubmits, and leaves views at or above the cutoff live.
+    #[tokio::test]
+    async fn test_gc_clears_stale_state() {
+        let mut verifier = verifier();
+        let stale = ViewNumber::new(1);
+        let live = ViewNumber::new(5);
+
+        verifier.verify(sender(1), valid_tc(1));
+        verifier.verify(sender(2), valid_tc(1));
+        verifier.verify(sender(3), valid_tc(5));
+        verifier.gc(live);
+
+        assert!(verifier.parked.is_empty());
+        assert_eq!(
+            verifier.in_flight.keys().copied().collect::<Vec<_>>(),
+            [live]
+        );
+
+        verifier.verify(sender(4), valid_tc(1));
+        assert!(!verifier.in_flight.contains_key(&stale));
+        assert!(!verifier.tasks.contains_key(&sender(4)));
+
+        let cert = verifier.next().await.expect("live view should verify");
+        assert_eq!(cert.view_number(), live);
+        assert!(verifier.next().await.is_none());
     }
 }
