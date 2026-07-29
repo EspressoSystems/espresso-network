@@ -34,6 +34,7 @@ use serialization_api::v2::{
     GetRewardMerkleTreeRequest, GetStakeTableRequest, GetStateCertificateRequest,
 };
 use tokio::sync::Semaphore;
+use tower_http::cors::{Any, CorsLayer};
 use vbs::{BinarySerializer, Serializer, version::StaticVersion};
 
 use crate::{
@@ -392,6 +393,12 @@ pub(crate) fn with_top_level_routes(router: Router) -> Router {
         .route("/healthcheck", get(healthcheck))
         .route("/v1/{module}/healthcheck", get(module_healthcheck))
         .route("/version", get(version))
+        .layer(
+            CorsLayer::new()
+                .allow_methods(Any)
+                .allow_headers(Any)
+                .allow_origin(Any),
+        )
 }
 
 /// Health status of an application.
@@ -4743,6 +4750,74 @@ mod tests {
             .await
             .expect("read response body");
         String::from_utf8(bytes.to_vec()).expect("response body is utf8")
+    }
+
+    /// Checks that every response from a router built with `with_top_level_routes` carries
+    /// `Access-Control-Allow-Origin: *`: top-level routes, API routes merged in by the caller,
+    /// error responses, and 404s. Also checks that an OPTIONS preflight is answered with the
+    /// allow-origin, allow-methods, and allow-headers a browser requires.
+    #[tokio::test]
+    async fn responses_carry_cors_headers() {
+        let router = with_top_level_routes(
+            Router::new()
+                .route("/v1/status/block-height", get(|| async { "0" }))
+                .route(
+                    "/v1/failing",
+                    get(|| async { StatusCode::INTERNAL_SERVER_ERROR }),
+                ),
+        );
+
+        let allow_origin = |resp: &Response, uri: &str| {
+            resp.headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .unwrap_or_else(|| panic!("no CORS header on {uri}"))
+                .clone()
+        };
+
+        for (uri, expected_status) in [
+            ("/healthcheck", StatusCode::OK),
+            ("/v1/status/block-height", StatusCode::OK),
+            ("/v1/failing", StatusCode::INTERNAL_SERVER_ERROR),
+            ("/no/such/route", StatusCode::NOT_FOUND),
+        ] {
+            let req = Request::builder()
+                .uri(uri)
+                .header(header::ORIGIN, "https://example.com")
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let resp = tower::ServiceExt::oneshot(router.clone(), req)
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), expected_status, "{uri}");
+            assert_eq!(allow_origin(&resp, uri), "*", "{uri}");
+        }
+
+        // Browsers preflight non-simple requests (e.g. a JSON POST to submit) with OPTIONS and
+        // require allow-origin, allow-methods, and allow-headers in the answer, even on routes
+        // that only register GET handlers.
+        let preflight = Request::builder()
+            .method(axum::http::Method::OPTIONS)
+            .uri("/v1/status/block-height")
+            .header(header::ORIGIN, "https://example.com")
+            .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+            .header(header::ACCESS_CONTROL_REQUEST_HEADERS, "content-type")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router, preflight).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(allow_origin(&resp, "preflight"), "*");
+        assert_eq!(
+            resp.headers()
+                .get(header::ACCESS_CONTROL_ALLOW_METHODS)
+                .expect("allow-methods on preflight"),
+            "*"
+        );
+        assert_eq!(
+            resp.headers()
+                .get(header::ACCESS_CONTROL_ALLOW_HEADERS)
+                .expect("allow-headers on preflight"),
+            "*"
+        );
     }
 
     #[tokio::test]
