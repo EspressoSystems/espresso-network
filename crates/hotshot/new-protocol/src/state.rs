@@ -175,8 +175,15 @@ impl<T: NodeType> StateManager<T> {
 
     /// Seed a commitment-only (`from_header`) state so a child proposal can be
     /// validated against this leaf via catchup instead of being dropped.
+    ///
+    /// A real (validated) state for the leaf is never displaced, and any
+    /// header/state requests already queued on this leaf are restarted.
     pub(crate) fn seed_from_header(&mut self, proposal: Proposal<T>) {
-        self.insert_empty_state(proposal);
+        let commitment = proposal_commitment(&proposal);
+        if !self.validated_states.contains_key(&commitment) {
+            self.insert_empty_state(proposal);
+        }
+        self.start_pending(commitment);
     }
 
     pub fn request_state(&mut self, request: StateRequest<T>) {
@@ -204,10 +211,20 @@ impl<T: NodeType> StateManager<T> {
                 epoch = %request.epoch,
                 block = %request.block,
                 parent_commitment = %request.parent_commitment,
-                "parent state unavailable; deferring state validation (from_header stub inserted). \
-                 If this persists, the node cannot vote until the parent state is recovered."
+                "parent state unavailable; queued on parent for retry (from_header stub inserted). \
+                 If this persists, the parent state never arrived and the node cannot vote."
             );
-            self.insert_empty_state(request.proposal);
+            self.insert_empty_state(request.proposal.clone());
+            let queued = self
+                .pending_requests
+                .entry(request.parent_commitment)
+                .or_default();
+            if !queued
+                .iter()
+                .any(|p| matches!(p, Pending::State(r) if r.view == request.view))
+            {
+                queued.push(Pending::State(request));
+            }
             self.start_pending(commitment);
             return;
         };
