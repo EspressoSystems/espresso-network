@@ -5724,6 +5724,371 @@ mod test {
         Ok(())
     }
 
+    /// A query node whose database is wiped has to rebuild itself from its peer
+    /// and rejoin consensus.
+    ///
+    /// Six nodes run the new protocol from genesis. Nodes 0 and 1 both serve the
+    /// query API and are peered at each other so either can backfill from the
+    /// other; nodes 2 through 5 are plain validators. Once the network decides
+    /// past epoch seven, node 1 is taken down and started again on an empty
+    /// database: no consensus state, no archive, no merklized state. To recover
+    /// it has to bootstrap its stake-table window, resync consensus, backfill
+    /// the chain it lost from node 0 (including the new protocol's cert2
+    /// finality certificates), and resume proposing.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_new_protocol_query_node_restart_with_fresh_storage() -> anyhow::Result<()> {
+        const NUM_NODES: usize = 6;
+        const EPOCH_HEIGHT: u64 = 10;
+        const EPOCHS_BEFORE_RESTART: u64 = 7;
+        const NEW_PROTOCOL: Upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
+        /// Bound on each stage of the restarted node's recovery.
+        const RECOVERY_TIMEOUT: Duration = Duration::from_secs(240);
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .epoch_start_block(0)
+            .build();
+
+        let api_port = reserve_tcp_port().expect("No ports free for query service");
+        let query_port = reserve_tcp_port().expect("No ports free for query service");
+        let api_url: Url = format!("http://localhost:{api_port}").parse()?;
+        let query_url: Url = format!("http://localhost:{query_port}").parse()?;
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        // Both query nodes need the catchup and light client modules: state
+        // catchup is served over the former, and the query service validates
+        // leaves fetched from a peer with light client proofs served over the
+        // latter. Every node can catch up from either query node.
+        let query_urls = vec![api_url.clone(), query_url.clone()];
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(
+                Options::with_port(api_port)
+                    .catchup(Default::default())
+                    .light_client(Default::default())
+                    .query_sql(
+                        Query {
+                            peers: vec![query_url.clone()],
+                            ..Default::default()
+                        },
+                        tmp_options(&storage[0]),
+                    ),
+            )
+            .network_config(network_config)
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<SequencerApiVersion>::from_urls(
+                    query_urls.clone(),
+                    Default::default(),
+                    Duration::from_secs(2),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                StakeTableContractVersion::V3,
+                NEW_PROTOCOL,
+            )
+            .await?
+            .build();
+
+        let genesis_state = config.states()[0].clone();
+        let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
+
+        // `TestNetwork` only gives node 0 an API, so node 1 has to be served
+        // separately to become the second query node. Its keys are already in the
+        // config, so it rejoins under the same index.
+        network.peers[0].shut_down().await;
+        network.peers.remove(0);
+
+        let cfg = network.cfg.clone();
+        let peer_url = api_url.clone();
+        let start_query_node = move |db: persistence::sql::Options| {
+            let cfg = cfg.clone();
+            let genesis_state = genesis_state.clone();
+            let peer_url = peer_url.clone();
+            async move {
+                let opt = Options::with_port(query_port)
+                    .catchup(Default::default())
+                    .light_client(Default::default())
+                    .query_sql(
+                        Query {
+                            peers: vec![peer_url.clone()],
+                            ..Default::default()
+                        },
+                        db.clone(),
+                    );
+                let ctx = opt
+                    .serve(move |metrics, consumer, storage| {
+                        async move {
+                            Ok(cfg
+                                .init_node(
+                                    1,
+                                    genesis_state,
+                                    db,
+                                    Some(StatePeers::<SequencerApiVersion>::from_urls(
+                                        vec![peer_url],
+                                        Default::default(),
+                                        Duration::from_secs(2),
+                                        &NoMetrics,
+                                    )),
+                                    storage,
+                                    &*metrics,
+                                    test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
+                                    consumer,
+                                    NEW_PROTOCOL,
+                                    Default::default(),
+                                )
+                                .await)
+                        }
+                        .boxed()
+                    })
+                    .await
+                    .expect("second query node should start");
+                ctx.start_consensus().await;
+                ctx
+            }
+        };
+
+        let mut query_node = start_query_node(tmp_options(&storage[1])).await;
+
+        let api_client: Client<ServerError, SequencerApiVersion> = Client::new(api_url);
+        let query_client: Client<ServerError, SequencerApiVersion> = Client::new(query_url);
+        assert!(
+            api_client.connect(Some(Duration::from_secs(60))).await,
+            "node 0 query API did not come up"
+        );
+        assert!(
+            query_client.connect(Some(Duration::from_secs(60))).await,
+            "node 1 query API did not come up"
+        );
+
+        // Run the network for seven epochs, watching a validator that stays up
+        // for the whole test.
+        let mut events = network.peers[0].event_stream();
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, EPOCHS_BEFORE_RESTART).await;
+
+        // The node about to be wiped must be healthy first, otherwise the test
+        // would prove nothing about recovering from a wipe.
+        let height_before_restart = query_node.decided_leaf().await.height();
+        timeout(
+            RECOVERY_TIMEOUT,
+            wait_until_block_height(
+                &query_client,
+                "block-state/block-height",
+                height_before_restart,
+            ),
+        )
+        .await
+        .context("second query node was not caught up before the restart")?;
+
+        // Pick a height the new protocol finalized with a cert2 to check the
+        // restarted node backfills those too. A cert2 is only stored at the
+        // height it finalizes, so scan back from the tip for one.
+        let mut finalized_height = None;
+        for height in (1..height_before_restart).rev() {
+            if api_client
+                .get::<espresso_types::Certificate2<SeqTypes>>(&format!(
+                    "availability/cert2/{height}"
+                ))
+                .send()
+                .await
+                .is_ok()
+            {
+                finalized_height = Some(height);
+                break;
+            }
+        }
+        let finalized_height =
+            finalized_height.context("no cert2 stored on a new protocol chain")?;
+
+        tracing::info!(
+            height_before_restart,
+            finalized_height,
+            "restarting the second query node with fresh storage"
+        );
+        query_node.shut_down().await;
+        // The node has to come back on the same ports: node 0 dials the query
+        // API at the peer URL baked in at network construction, and cliquenet
+        // peers dial the address registered in the stake table. `shut_down`
+        // aborts the server tasks without waiting for them to finish, so poll
+        // until the old listeners are actually gone before rebinding.
+        let cliquenet_port = network.cfg.known_nodes_with_stake()[1]
+            .connect_info
+            .as_ref()
+            .expect("node 1 registered cliquenet connect info")
+            .p2p_addr
+            .port();
+        timeout(RECOVERY_TIMEOUT, async {
+            for port in [query_port, cliquenet_port] {
+                while std::net::TcpListener::bind(("127.0.0.1", port)).is_err() {
+                    sleep(Duration::from_millis(100)).await;
+                }
+            }
+        })
+        .await
+        .context("shut-down node did not release its ports")?;
+
+        let fresh_storage = SqlDataSource::create_storage().await;
+        let query_node = start_query_node(tmp_options(&fresh_storage)).await;
+        assert!(
+            query_client.connect(Some(Duration::from_secs(60))).await,
+            "restarted query API did not come up"
+        );
+
+        // First it has to get back to the height it lost, in both the archive and
+        // the merklized state derived from it.
+        timeout(
+            RECOVERY_TIMEOUT,
+            wait_until_block_height(&query_client, "status/block-height", height_before_restart),
+        )
+        .await
+        .context("restarted node did not rebuild its archive")?;
+        timeout(
+            RECOVERY_TIMEOUT,
+            wait_until_block_height(
+                &query_client,
+                "block-state/block-height",
+                height_before_restart,
+            ),
+        )
+        .await
+        .context("restarted node did not rebuild its merklized state")?;
+
+        // Reaching the tip only proves it is following consensus again, so stream
+        // the whole range it lost from both nodes: the restarted node's copy can
+        // only have come from node 0, and it has to be the chain the network
+        // actually decided. Streaming also forces the restarted node to backfill
+        // every leaf in the range, since the stream endpoint fetches on demand.
+        let wiped_range = (height_before_restart - 1) as usize;
+        let stream_leaves = |client: Client<ServerError, SequencerApiVersion>,
+                             who: &'static str| async move {
+            let leaves: Vec<LeafQueryData<SeqTypes>> = client
+                .socket("availability/stream/leaves/1")
+                .subscribe()
+                .await
+                .with_context(|| format!("subscribing to {who}'s leaf stream"))?
+                .take(wiped_range)
+                .try_collect()
+                .await
+                .with_context(|| format!("{who}'s leaf stream errored"))?;
+            anyhow::Ok(leaves)
+        };
+        // Node 0's stream returns immediately, so the shared timeout is in
+        // practice a bound on the restarted node's backfill.
+        let (ours, theirs) = timeout(
+            RECOVERY_TIMEOUT,
+            future::try_join(
+                stream_leaves(query_client.clone(), "the restarted node"),
+                stream_leaves(api_client.clone(), "node 0"),
+            ),
+        )
+        .await
+        .context("streaming the wiped range stalled")??;
+        assert_eq!(
+            ours.len(),
+            wiped_range,
+            "restarted node's leaf stream ended early"
+        );
+        assert_eq!(
+            theirs.len(),
+            wiped_range,
+            "node 0's leaf stream ended early"
+        );
+        for (ours, theirs) in ours.iter().zip(&theirs) {
+            assert_eq!(
+                ours.hash(),
+                theirs.hash(),
+                "restarted node's leaf at height {} diverges from node 0",
+                ours.height(),
+            );
+            assert_eq!(
+                ours.header().version(),
+                NEW_PROTOCOL_VERSION,
+                "block {} should have been produced under the new protocol",
+                ours.height(),
+            );
+        }
+
+        let cert2 = timeout(RECOVERY_TIMEOUT, async {
+            loop {
+                match query_client
+                    .get::<espresso_types::Certificate2<SeqTypes>>(&format!(
+                        "availability/cert2/{finalized_height}"
+                    ))
+                    .send()
+                    .await
+                {
+                    Ok(cert2) => break cert2,
+                    Err(err) => {
+                        tracing::info!(finalized_height, %err, "cert2 not backfilled yet")
+                    },
+                }
+                sleep(Duration::from_secs(2)).await;
+            }
+        })
+        .await
+        .context("restarted node did not backfill the cert2")?;
+        assert_eq!(cert2.data.block_number, finalized_height);
+
+        // Tracking decides is not enough to call the node a participant: wait for
+        // a block it proposed itself to be decided after the restart.
+        let node_1_key = network.cfg.known_nodes_with_stake()[1]
+            .stake_table_entry
+            .stake_key;
+        let coordinator = query_node.node_state().coordinator;
+        let mut events = query_node.event_stream();
+        let proposed = timeout(RECOVERY_TIMEOUT, async {
+            while let Some(event) = events.next().await {
+                let leaf_infos: &[LeafInfo<SeqTypes>] = match &event {
+                    CoordinatorEvent::LegacyEvent(Event {
+                        event: EventType::Decide { leaf_chain, .. },
+                        ..
+                    }) => leaf_chain,
+                    CoordinatorEvent::NewDecide { leaf_infos, .. } => leaf_infos,
+                    _ => continue,
+                };
+                for LeafInfo { leaf, .. } in leaf_infos {
+                    if leaf.height() <= height_before_restart {
+                        continue;
+                    }
+                    let membership =
+                        match coordinator.membership_for_epoch(leaf.epoch(EPOCH_HEIGHT)) {
+                            Ok(membership) => membership,
+                            Err(err) => {
+                                tracing::warn!(
+                                    height = leaf.height(),
+                                    %err,
+                                    "no membership for epoch",
+                                );
+                                continue;
+                            },
+                        };
+                    match membership.leader(leaf.view_number()) {
+                        Ok(leader) if leader == node_1_key => return Some(leaf.height()),
+                        Ok(_) => {},
+                        Err(err) => {
+                            tracing::warn!(view = ?leaf.view_number(), %err, "leader unresolved");
+                        },
+                    }
+                }
+            }
+            None
+        })
+        .await
+        .context("restarted node's event stream stalled")?;
+        let proposed = proposed.context("restarted node's event stream ended")?;
+        tracing::info!(proposed, "restarted node proposed a decided block");
+
+        Ok(())
+    }
+
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_epoch_reward_total_distributed_rewards() -> anyhow::Result<()> {
         // Epochs 1-3: No rewards distributed (total_reward_distributed = 0)
