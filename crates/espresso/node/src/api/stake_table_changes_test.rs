@@ -248,13 +248,27 @@ impl<const NUM_NODES: usize> StakeTableTestNetwork<NUM_NODES> {
         }
     }
 
-    /// The committee reported for `epoch` by node 0's query API.
+    /// The committee reported for `epoch` by node 0's query API, retried
+    /// while the node finishes the epoch's snapshot: the membership endpoint
+    /// errors rather than waits when the epoch's DRB is still being computed.
     async fn committee(&self, epoch: u64) -> AuthenticatedValidatorMap {
-        self.client
-            .get::<AuthenticatedValidatorMap>(&format!("node/validators/{epoch}"))
-            .send()
-            .await
-            .unwrap_or_else(|err| panic!("validators for epoch {epoch}: {err}"))
+        let mut last_err = None;
+        for _ in 0..60 {
+            match self
+                .client
+                .get::<AuthenticatedValidatorMap>(&format!("node/validators/{epoch}"))
+                .send()
+                .await
+            {
+                Ok(committee) => return committee,
+                Err(err) => last_err = Some(err),
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        panic!(
+            "validators for epoch {epoch}: {}",
+            last_err.expect("at least one attempt")
+        );
     }
 
     /// Streams decided leaves from the query service until one reaches
@@ -330,6 +344,7 @@ async fn wait_for_version_on_events(
 async fn wait_for_upgrade_proposal<P: SequencerPersistence>(
     node: &SequencerContext<network::Memory, P>,
     version: Version,
+    deadline: Duration,
 ) {
     let mut events = node
         .consensus_handle()
@@ -337,14 +352,20 @@ async fn wait_for_upgrade_proposal<P: SequencerPersistence>(
         .read()
         .await
         .event_stream();
-    loop {
-        let event = events.next().await.unwrap();
-        if let EventType::UpgradeProposal { proposal, .. } = event.event {
-            let new_version = proposal.data.upgrade_proposal.new_version;
-            assert_eq!(new_version, version, "unexpected upgrade target proposed");
-            return;
+    timeout(deadline, async {
+        loop {
+            let event = events.next().await.unwrap();
+            if let EventType::UpgradeProposal { proposal, .. } = event.event {
+                let new_version = proposal.data.upgrade_proposal.new_version;
+                assert_eq!(new_version, version, "unexpected upgrade target proposed");
+                return;
+            }
         }
-    }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!("no UpgradeProposal for {version} observed in time (emitted before subscribing?)")
+    });
 }
 
 /// Which point of a protocol upgrade the swap transactions are sent at.
@@ -780,6 +801,20 @@ async fn test_stake_table_full_swap_across_epoch_reward_upgrade(
         anyhow::Ok(())
     };
 
+    let decided_epoch = || async {
+        net.network
+            .server
+            .decided_leaf()
+            .await
+            .epoch(EPOCH_HEIGHT)
+            .expect("epochs active")
+            .u64()
+    };
+
+    // For the triggers whose activation is confirmed only after the upgrade,
+    // the epoch during which the swap was submitted: the swap cannot
+    // activate before `swap_epoch + 2`.
+    let mut swap_epoch = None;
     let pre_upgrade_activation = match trigger {
         SwapTrigger::BeforeUpgrade => {
             wait_for_epochs(&mut events, EPOCH_HEIGHT, 1).await;
@@ -797,7 +832,13 @@ async fn test_stake_table_full_swap_across_epoch_reward_upgrade(
             Some(activation_epoch)
         },
         SwapTrigger::AtUpgradeProposal => {
-            wait_for_upgrade_proposal(&net.network.server, EPOCH_REWARD_VERSION).await;
+            wait_for_upgrade_proposal(
+                &net.network.server,
+                EPOCH_REWARD_VERSION,
+                Duration::from_secs(600),
+            )
+            .await;
+            swap_epoch = Some(decided_epoch().await);
             swap().await?;
             None
         },
@@ -809,6 +850,7 @@ async fn test_stake_table_full_swap_across_epoch_reward_upgrade(
         .await;
     let upgrade_epoch = epoch_from_block_number(upgrade_height, EPOCH_HEIGHT);
     if matches!(trigger, SwapTrigger::AfterUpgrade) {
+        swap_epoch = Some(decided_epoch().await);
         swap().await?;
     }
 
@@ -823,19 +865,16 @@ async fn test_stake_table_full_swap_across_epoch_reward_upgrade(
             activation_epoch
         },
         None => {
-            let current_epoch = net
-                .network
-                .server
-                .decided_leaf()
-                .await
-                .epoch(EPOCH_HEIGHT)
-                .expect("epochs active")
-                .u64();
+            // Probe from the earliest epoch the swap could have activated,
+            // so the reported epoch is the actual activation epoch even
+            // though `wait_for_version` may have run for several epochs
+            // since the swap was submitted.
+            let swap_epoch = swap_epoch.expect("the swap has been sent");
             let (activation_epoch, _) = wait_for_committee(
                 &net.client,
                 &mut events,
                 EPOCH_HEIGHT,
-                current_epoch + 1,
+                swap_epoch + 2,
                 MAX_ACTIVATION_EPOCHS,
                 committee_is(incoming_addrs),
             )
@@ -925,12 +964,15 @@ async fn test_stake_table_single_removal_across_epoch_reward_upgrade() -> anyhow
     let remaining_addrs = staking_addresses(&network_config, &[5, 6]);
     let mut events = net.network.server.event_stream();
 
-    wait_for_upgrade_proposal(&net.network.server, EPOCH_REWARD_VERSION).await;
-    deregister_validators(&network_config, net.stake_table, &[removed]).await?;
-    net.wait_for_version(EPOCH_REWARD_VERSION, Duration::from_secs(600))
-        .await;
-
-    let current_epoch = net
+    wait_for_upgrade_proposal(
+        &net.network.server,
+        EPOCH_REWARD_VERSION,
+        Duration::from_secs(600),
+    )
+    .await;
+    // The removal cannot activate before `removal_epoch + 2`; probing from
+    // there reports the actual activation epoch.
+    let removal_epoch = net
         .network
         .server
         .decided_leaf()
@@ -938,11 +980,15 @@ async fn test_stake_table_single_removal_across_epoch_reward_upgrade() -> anyhow
         .epoch(EPOCH_HEIGHT)
         .expect("epochs active")
         .u64();
+    deregister_validators(&network_config, net.stake_table, &[removed]).await?;
+    net.wait_for_version(EPOCH_REWARD_VERSION, Duration::from_secs(600))
+        .await;
+
     let (activation_epoch, _) = wait_for_committee(
         &net.client,
         &mut events,
         EPOCH_HEIGHT,
-        current_epoch + 1,
+        removal_epoch + 2,
         MAX_ACTIVATION_EPOCHS,
         committee_is(remaining_addrs),
     )
@@ -1052,7 +1098,12 @@ async fn full_swap_across_new_protocol_upgrade(trigger: SwapTrigger) -> anyhow::
             Some(activation_epoch)
         },
         SwapTrigger::AtUpgradeProposal => {
-            wait_for_upgrade_proposal(&net.network.server, NEW_PROTOCOL_VERSION).await;
+            wait_for_upgrade_proposal(
+                &net.network.server,
+                NEW_PROTOCOL_VERSION,
+                Duration::from_secs(600),
+            )
+            .await;
             swap().await?;
             None
         },
