@@ -43,18 +43,25 @@ slow-timeout = { period = "2m", terminate-after = 5 }
 threads-required = 'num-cpus'
 
 # The stake-table-change upgrade tests run many epochs across a real protocol
-# upgrade (epoch_height 70 for the 0.5->0.6 cutover cases).
+# upgrade (epoch_height 70 for the 0.5->0.6 cutover cases). This block must
+# stay above the module-wide `stake_table_changes_test::` override: nextest
+# takes the first matching override per setting, and these tests need the
+# larger terminate-after.
 [[profile.default.overrides]]
-filter = 'test(test_stake_table_full_swap) | test(test_stake_table_single_removal) | test(test_new_protocol_upgrade_ineligible_validator_drops)'
+filter = 'test(/stake_table_changes_test::test_(stake_table_full_swap|stake_table_single_removal|new_protocol_upgrade_ineligible)/)'
 slow-timeout = { period = "2m", terminate-after = 15 }
 threads-required = 'num-cpus'
+retries = 0
 
 # In-process stake-table-change integration tests: multi-node networks
-# against a real L1, running for several epochs.
+# against a real L1, running for several epochs. No retries: these run
+# serialized (threads-required = num-cpus), so retrying a hung test would
+# cost more CI wall-clock than most full runs, and a flake here is signal.
 [[profile.default.overrides]]
 filter = 'test(/stake_table_changes_test::/)'
 slow-timeout = { period = "2m", terminate-after = 8 }
 threads-required = 'num-cpus'
+retries = 0
 
 # The restart tests run an entire sequencing network, and so are quite resource intensive.
 [[profile.default.overrides]]
