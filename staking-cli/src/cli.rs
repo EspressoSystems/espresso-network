@@ -516,6 +516,8 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
         num_validators,
         num_delegators_per_validator,
         delegation_config,
+        ref metadata_network,
+        ref metadata_hosts,
         concurrency,
     } = config.commands
     {
@@ -527,6 +529,8 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
             num_validators,
             num_delegators_per_validator,
             delegation_config,
+            metadata_network.clone(),
+            metadata_hosts.clone(),
             concurrency,
         )
         .await
@@ -541,6 +545,8 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
                 num_validators,
                 num_delegators_per_validator,
                 delegation_config,
+                metadata_network,
+                metadata_hosts,
                 concurrency,
             } => {
                 tracing::info!(
@@ -552,6 +558,8 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
                     *num_validators,
                     *num_delegators_per_validator,
                     *delegation_config,
+                    metadata_network.clone(),
+                    metadata_hosts.clone(),
                     *concurrency,
                 )
                 .await

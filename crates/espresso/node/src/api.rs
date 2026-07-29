@@ -1869,7 +1869,12 @@ where
 
 #[cfg(any(test, feature = "testing"))]
 pub mod test_helpers {
-    use std::{cmp::max, collections::HashSet, time::Duration};
+    use std::{
+        cmp::max,
+        collections::HashSet,
+        sync::atomic::{AtomicU32, Ordering},
+        time::Duration,
+    };
 
     use alloy::{
         network::EthereumWallet,
@@ -1917,8 +1922,8 @@ pub mod test_helpers {
         network,
         persistence::no_storage,
         testing::{
-            TestConfig, TestConfigBuilder, run_legacy_builder, wait_for_decide_on_handle,
-            wait_for_epochs,
+            TestConfig, TestConfigBuilder, deploy_stake_table, run_legacy_builder,
+            wait_for_decide_on_handle, wait_for_epochs,
         },
     };
 
@@ -2157,18 +2162,9 @@ pub mod test_helpers {
                 .build()
                 .unwrap();
 
-            match stake_table_version {
-                StakeTableContractVersion::V1 => {
-                    args.deploy_to_stake_table_v1(&mut contracts).await
-                },
-                StakeTableContractVersion::V2 => {
-                    args.deploy_to_stake_table_v2(&mut contracts).await
-                },
-                StakeTableContractVersion::V3 => {
-                    args.deploy_to_stake_table_v3(&mut contracts).await
-                },
-            }
-            .context("failed to deploy contracts")?;
+            deploy_stake_table(&args, stake_table_version, &mut contracts)
+                .await
+                .context("failed to deploy contracts")?;
 
             let stake_table_address = contracts
                 .address(Contract::StakeTableProxy)
@@ -2573,33 +2569,37 @@ pub mod test_helpers {
         move |validators| validators.keys().copied().collect::<HashSet<_>>() == expected
     }
 
-    /// Asserts the node is live: it must advance `epochs_ahead` epochs past
-    /// its current decided epoch, and — when the chain runs the self-building
-    /// new protocol — sequence a newly submitted transaction. Inclusion is
-    /// not asserted on legacy versions because the test-only legacy builder
-    /// stops producing non-empty blocks after roughly a hundred views,
-    /// independent of any stake table activity.
+    /// Asserts the node is live: it must advance `epochs_ahead` epochs (at
+    /// least 1) past its current decided epoch, and — when the chain runs the
+    /// self-building new protocol — sequence a newly submitted transaction.
+    /// Inclusion is not asserted on legacy versions because the test-only
+    /// legacy builder stops producing non-empty blocks after roughly a
+    /// hundred views, independent of any stake table activity.
     pub async fn assert_node_live<P: SequencerPersistence>(
         node: &SequencerContext<network::Memory, P>,
         epoch_height: u64,
         epochs_ahead: u64,
     ) {
+        assert!(epochs_ahead > 0, "epochs_ahead must be at least 1");
         let mut events = node.event_stream();
         let leaf = node.decided_leaf().await;
         let current = leaf
             .epoch(epoch_height)
             .map(|epoch| epoch.u64())
             .unwrap_or_default();
-        wait_for_epochs(&mut events, epoch_height, current + epochs_ahead).await;
+        // `wait_for_epochs` returns on the first epoch strictly greater than
+        // its target.
+        wait_for_epochs(&mut events, epoch_height, current + epochs_ahead - 1).await;
 
         if node.decided_leaf().await.block_header().version() < versions::NEW_PROTOCOL_VERSION {
             tracing::info!("legacy version: skipping transaction-inclusion liveness check");
             return;
         }
         // Detect inclusion via the header's namespace table: the namespace is
-        // unique to this check, and decide events at 0.6 do not carry
+        // unique to this call, and decide events at 0.6 do not always carry
         // payloads.
-        let namespace = NamespaceId::from(10_101_u32);
+        static NAMESPACE_COUNTER: AtomicU32 = AtomicU32::new(10_101);
+        let namespace = NamespaceId::from(NAMESPACE_COUNTER.fetch_add(1, Ordering::Relaxed));
         let tx = Transaction::new(namespace, vec![7; 8]);
         node.submit_transaction(tx)
             .await
