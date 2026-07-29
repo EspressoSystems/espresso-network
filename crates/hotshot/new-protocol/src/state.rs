@@ -211,14 +211,20 @@ impl<T: NodeType> StateManager<T> {
                 epoch = %request.epoch,
                 block = %request.block,
                 parent_commitment = %request.parent_commitment,
-                "parent state unavailable; deferring state validation (from_header stub inserted). \
-                 If this persists, the node cannot vote until the parent state is recovered."
+                "parent state unavailable; queued on parent for retry (from_header stub inserted). \
+                 If this persists, the parent state never arrived and the node cannot vote."
             );
             self.insert_empty_state(request.proposal.clone());
-            self.pending_requests
+            let queued = self
+                .pending_requests
                 .entry(request.parent_commitment)
-                .or_default()
-                .push(Pending::State(request));
+                .or_default();
+            if !queued
+                .iter()
+                .any(|p| matches!(p, Pending::State(r) if r.view == request.view))
+            {
+                queued.push(Pending::State(request));
+            }
             self.start_pending(commitment);
             return;
         };

@@ -58,6 +58,13 @@ async fn validator_joins_at_epoch_boundary() {
 /// Cert2): the coordinator seeds a commitment-only state for it, so the
 /// first epoch-4 leader and voters need neither the epoch-3 tail's payloads
 /// nor its replayed state.
+///
+/// Reaching block 55 proves nodes 5-9 drove epoch 4: nodes 0-4 hold no
+/// epoch-4 stake, so no quorum forms without the incoming cohort. The
+/// 55-decision target also binds the outgoing nodes 0-4, which can only
+/// meet it as retained followers — peers keep a leaving validator for one
+/// extra epoch, so 0-4 follow epoch 4 by broadcast until the cliff at
+/// block 60. Shortening that retention window breaks this test.
 #[tokio::test(flavor = "multi_thread")]
 async fn validator_set_replaced_at_epoch_boundary() {
     TestRunner::builder()

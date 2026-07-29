@@ -175,6 +175,11 @@ async fn test_state_request_missing_parent_retried_after_seed() {
     // seeding it must restart the queued request.
     manager.seed_from_header(test_data.views[0].proposal.data.clone());
 
+    assert!(
+        !manager.pending_contains_commitment(&view_1_commit),
+        "the queued request should be consumed, not re-queued"
+    );
+
     let output = manager.next().await.expect("view 2 should complete");
     assert!(
         matches!(
