@@ -1867,25 +1867,31 @@ where
 
 #[cfg(any(test, feature = "testing"))]
 pub mod test_helpers {
-    use std::{cmp::max, time::Duration};
+    use std::{
+        cmp::max,
+        collections::HashSet,
+        sync::atomic::{AtomicU32, Ordering},
+        time::Duration,
+    };
 
     use alloy::{
         network::EthereumWallet,
-        primitives::{Address, U256},
-        providers::{ProviderBuilder, ext::AnvilApi},
+        primitives::{Address, U256, utils::parse_ether},
+        providers::{Provider, ProviderBuilder, ext::AnvilApi},
+        signers::local::PrivateKeySigner,
     };
-    use committable::Committable;
+    use committable::{Commitment, Committable};
     use espresso_contract_deployer::{
         Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS, builder::DeployerArgsBuilder,
         network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
         MOCK_SEQUENCER_VERSIONS, NamespaceId, ValidatedState,
-        v0::traits::{NullEventConsumer, PersistenceOptions, StateCatchup},
+        v0::traits::{NullEventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
     };
     use futures::{
         future::{FutureExt, join_all},
-        stream::StreamExt,
+        stream::{Stream, StreamExt},
     };
     use hotshot::types::{Event, EventType};
     use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
@@ -1895,7 +1901,10 @@ pub mod test_helpers {
     };
     use itertools::izip;
     use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme};
-    use staking_cli::demo::{DelegationConfig, StakingTransactions};
+    use staking_cli::{
+        Transaction as StakingTransaction,
+        demo::{DelegationConfig, StakingTransactions},
+    };
     use surf_disco::Client;
     use tempfile::TempDir;
     use test_utils::reserve_tcp_port;
@@ -1910,7 +1919,10 @@ pub mod test_helpers {
         catchup::NullStateCatchup,
         network,
         persistence::no_storage,
-        testing::{TestConfig, TestConfigBuilder, run_legacy_builder, wait_for_decide_on_handle},
+        testing::{
+            TestConfig, TestConfigBuilder, deploy_stake_table, run_legacy_builder,
+            wait_for_decide_on_handle, wait_for_epochs,
+        },
     };
 
     pub const STAKE_TABLE_CAPACITY_FOR_TEST: usize = 10;
@@ -2061,6 +2073,27 @@ pub mod test_helpers {
             stake_table_version: StakeTableContractVersion,
             upgrade: Upgrade,
         ) -> anyhow::Result<Self> {
+            let registered: Vec<usize> = (0..NUM_NODES).collect();
+            self.pos_hook_with_registered(
+                delegation_config,
+                stake_table_version,
+                upgrade,
+                &registered,
+            )
+            .await
+        }
+
+        /// Like [`Self::pos_hook`], but registers only the validators at the
+        /// `registered` node indices on the stake table contract. The other
+        /// nodes still run from genesis (which seeds the first two epochs)
+        /// and can be registered mid-test via [`register_validators`].
+        pub async fn pos_hook_with_registered(
+            self,
+            delegation_config: DelegationConfig,
+            stake_table_version: StakeTableContractVersion,
+            upgrade: Upgrade,
+            registered: &[usize],
+        ) -> anyhow::Result<Self> {
             if upgrade.base < EPOCH_VERSION && upgrade.target < EPOCH_VERSION {
                 panic!("given version does not require pos deployment");
             };
@@ -2112,18 +2145,9 @@ pub mod test_helpers {
                 .build()
                 .unwrap();
 
-            match stake_table_version {
-                StakeTableContractVersion::V1 => {
-                    args.deploy_to_stake_table_v1(&mut contracts).await
-                },
-                StakeTableContractVersion::V2 => {
-                    args.deploy_to_stake_table_v2(&mut contracts).await
-                },
-                StakeTableContractVersion::V3 => {
-                    args.deploy_to_stake_table_v3(&mut contracts).await
-                },
-            }
-            .context("failed to deploy contracts")?;
+            deploy_stake_table(&args, stake_table_version, &mut contracts)
+                .await
+                .context("failed to deploy contracts")?;
 
             let stake_table_address = contracts
                 .address(Contract::StakeTableProxy)
@@ -2133,7 +2157,7 @@ pub mod test_helpers {
                 l1_url.clone(),
                 &deployer,
                 stake_table_address,
-                network_config.staking_priv_keys(),
+                network_config.staking_key_sets(registered),
                 None,
                 delegation_config,
             )
@@ -2314,6 +2338,249 @@ pub mod test_helpers {
 
             for ctx in &mut self.peers {
                 ctx.shutdown_consensus().await;
+            }
+        }
+
+        /// The context of the node at index `i` (node 0 is the API server).
+        pub fn node(&self, i: usize) -> &SequencerContext<network::Memory, P::Persistence> {
+            if i == 0 {
+                &self.server
+            } else {
+                &self.peers[i - 1]
+            }
+        }
+    }
+
+    /// Registers and delegates to a batch of new validators mid-run, funding
+    /// their L1 accounts from the network's deployer signer.
+    pub async fn register_validators<const NUM_NODES: usize>(
+        cfg: &TestConfig<NUM_NODES>,
+        stake_table: Address,
+        indices: &[usize],
+        delegation_config: DelegationConfig,
+    ) -> anyhow::Result<()> {
+        let deployer = ProviderBuilder::new()
+            .wallet(EthereumWallet::from(cfg.signer()))
+            .connect_http(cfg.l1_url());
+        StakingTransactions::create(
+            cfg.l1_url(),
+            &deployer,
+            stake_table,
+            cfg.staking_key_sets(indices),
+            None,
+            delegation_config,
+        )
+        .await?
+        .apply_all()
+        .await?;
+        Ok(())
+    }
+
+    /// Deregisters the validators at the given node indices, each exit sent
+    /// from that validator's own funded provider.
+    pub async fn deregister_validators<const NUM_NODES: usize>(
+        cfg: &TestConfig<NUM_NODES>,
+        stake_table: Address,
+        indices: &[usize],
+    ) -> anyhow::Result<()> {
+        let providers = cfg.validator_providers();
+        for &i in indices {
+            let (address, provider) = &providers[i];
+            let receipt = StakingTransaction::DeregisterValidator { stake_table }
+                .send(provider)
+                .await?
+                .get_receipt()
+                .await?;
+            anyhow::ensure!(
+                receipt.status(),
+                "deregistration of validator {i} ({address}) reverted"
+            );
+        }
+        Ok(())
+    }
+
+    /// Funds a fresh delegator account (ETH via anvil, ESP from the deployer)
+    /// and delegates `amount` to `validator`. Returns the delegator's provider
+    /// so the test can later undelegate.
+    pub async fn delegate_new<const NUM_NODES: usize>(
+        cfg: &TestConfig<NUM_NODES>,
+        token: Address,
+        stake_table: Address,
+        validator: Address,
+        amount: U256,
+    ) -> anyhow::Result<impl Provider + Clone + use<NUM_NODES>> {
+        let deployer = ProviderBuilder::new()
+            .wallet(EthereumWallet::from(cfg.signer()))
+            .connect_http(cfg.l1_url());
+        let signer = PrivateKeySigner::random();
+        let delegator = signer.address();
+        let provider = ProviderBuilder::new()
+            .wallet(EthereumWallet::from(signer))
+            .connect_http(cfg.l1_url());
+
+        deployer
+            .anvil_set_balance(delegator, parse_ether("10").unwrap())
+            .await?;
+        let funding = StakingTransaction::Transfer {
+            token,
+            to: delegator,
+            amount,
+        }
+        .send(&deployer)
+        .await?
+        .get_receipt()
+        .await?;
+        anyhow::ensure!(funding.status(), "ESP transfer to delegator reverted");
+
+        for tx in [
+            StakingTransaction::Approve {
+                token,
+                spender: stake_table,
+                amount,
+            },
+            StakingTransaction::Delegate {
+                stake_table,
+                validator,
+                amount,
+            },
+        ] {
+            let receipt = tx.send(&provider).await?.get_receipt().await?;
+            anyhow::ensure!(receipt.status(), "delegator transaction reverted");
+        }
+        Ok(provider)
+    }
+
+    /// Waits epoch by epoch, starting at `start_epoch`, until the committee
+    /// reported by `node/validators/{epoch}` satisfies `pred`. Returns the
+    /// first matching epoch and its committee; panics after `max_epochs`
+    /// epochs without a match.
+    pub async fn wait_for_committee(
+        client: &Client<ServerError, SequencerApiVersion>,
+        events: &mut (impl Stream<Item = CoordinatorEvent<SeqTypes>> + Unpin),
+        epoch_height: u64,
+        start_epoch: u64,
+        max_epochs: u64,
+        pred: impl Fn(&AuthenticatedValidatorMap) -> bool,
+    ) -> (u64, AuthenticatedValidatorMap) {
+        let mut last = None;
+        for epoch in start_epoch..start_epoch + max_epochs {
+            wait_for_epochs(events, epoch_height, epoch).await;
+            let validators = client
+                .get::<AuthenticatedValidatorMap>(&format!("node/validators/{epoch}"))
+                .send()
+                .await
+                .expect("validators for a decided epoch");
+            if pred(&validators) {
+                return (epoch, validators);
+            }
+            last = Some((epoch, validators));
+        }
+        let last =
+            last.map(|(epoch, validators)| (epoch, validators.keys().copied().collect::<Vec<_>>()));
+        panic!(
+            "committee predicate not satisfied within {max_epochs} epochs starting at \
+             {start_epoch}; last committee: {last:?}"
+        );
+    }
+
+    /// The L1 accounts of the validators at the given node indices.
+    pub fn staking_addresses<const NUM_NODES: usize>(
+        cfg: &TestConfig<NUM_NODES>,
+        indices: &[usize],
+    ) -> HashSet<Address> {
+        cfg.staking_key_sets(indices)
+            .iter()
+            .map(|keys| keys.signer.address())
+            .collect()
+    }
+
+    /// Predicate for [`wait_for_committee`]: the committee is exactly the
+    /// expected set of validator accounts.
+    pub fn committee_is(expected: HashSet<Address>) -> impl Fn(&AuthenticatedValidatorMap) -> bool {
+        move |validators| validators.keys().copied().collect::<HashSet<_>>() == expected
+    }
+
+    /// Asserts the node is live: it must advance `epochs_ahead` epochs (at
+    /// least 1) past its current decided epoch, and — when the chain runs the
+    /// self-building new protocol — sequence a newly submitted transaction.
+    /// Inclusion is not asserted on legacy versions because the test-only
+    /// legacy builder stops producing non-empty blocks after roughly a
+    /// hundred views, independent of any stake table activity.
+    pub async fn assert_node_live<P: SequencerPersistence>(
+        node: &SequencerContext<network::Memory, P>,
+        epoch_height: u64,
+        epochs_ahead: u64,
+    ) {
+        assert!(epochs_ahead > 0, "epochs_ahead must be at least 1");
+        let mut events = node.event_stream();
+        let leaf = node.decided_leaf().await;
+        let current = leaf
+            .epoch(epoch_height)
+            .map(|epoch| epoch.u64())
+            .unwrap_or_default();
+        // `wait_for_epochs` returns on the first epoch strictly greater than
+        // its target.
+        wait_for_epochs(&mut events, epoch_height, current + epochs_ahead - 1).await;
+
+        if node.decided_leaf().await.block_header().version() < versions::NEW_PROTOCOL_VERSION {
+            tracing::info!("legacy version: skipping transaction-inclusion liveness check");
+            return;
+        }
+        // Detect inclusion via the header's namespace table: the namespace is
+        // unique to this call, and decide events at 0.6 do not always carry
+        // payloads.
+        static NAMESPACE_COUNTER: AtomicU32 = AtomicU32::new(10_101);
+        let namespace = NamespaceId::from(NAMESPACE_COUNTER.fetch_add(1, Ordering::Relaxed));
+        let tx = Transaction::new(namespace, vec![7; 8]);
+        node.submit_transaction(tx)
+            .await
+            .expect("live node accepts transactions");
+        tokio::time::timeout(Duration::from_secs(120), async {
+            loop {
+                let leaf = match events.next().await.unwrap() {
+                    CoordinatorEvent::LegacyEvent(Event {
+                        event: EventType::Decide { leaf_chain, .. },
+                        ..
+                    }) => leaf_chain[0].leaf.clone(),
+                    CoordinatorEvent::NewDecide { leaf_infos, .. } => leaf_infos[0].leaf.clone(),
+                    _ => continue,
+                };
+                if leaf
+                    .block_header()
+                    .ns_table()
+                    .find_ns_id(&namespace)
+                    .is_some()
+                {
+                    tracing::info!(height = leaf.height(), "transaction namespace sequenced");
+                    return;
+                }
+            }
+        })
+        .await
+        .expect("submitted transaction was not sequenced in time");
+    }
+
+    /// Asserts every node has decided at least `min_height`, and that nodes
+    /// which have decided the same height agree on the leaf.
+    pub async fn assert_nodes_agree<P: SequencerPersistence>(
+        nodes: &[&SequencerContext<network::Memory, P>],
+        min_height: u64,
+    ) {
+        let leaves = join_all(nodes.iter().map(|node| node.decided_leaf())).await;
+        let mut by_height: std::collections::BTreeMap<u64, Commitment<Leaf2>> = Default::default();
+        for (i, leaf) in leaves.iter().enumerate() {
+            assert!(
+                leaf.height() >= min_height,
+                "node {i} decided height {} is below {min_height}",
+                leaf.height()
+            );
+            if let Some(other) = by_height.insert(leaf.height(), leaf.commit()) {
+                assert_eq!(
+                    other,
+                    leaf.commit(),
+                    "decided-leaf divergence at height {}",
+                    leaf.height()
+                );
             }
         }
     }
