@@ -5462,12 +5462,12 @@ mod test {
     ///
     /// Six nodes run the new protocol from genesis. Nodes 0 and 1 both serve the
     /// query API and are peered at each other so either can backfill from the
-    /// other; nodes 2 through 5 are plain validators. After seven epochs node 1
-    /// is taken down and started again on an empty database: no consensus state,
-    /// no archive, no merklized state. To recover it has to bootstrap its
-    /// stake-table window, resync consensus, backfill the chain it lost from
-    /// node 0 (including the new protocol's cert2 finality certificates), and
-    /// resume proposing.
+    /// other; nodes 2 through 5 are plain validators. Once the network decides
+    /// past epoch seven, node 1 is taken down and started again on an empty
+    /// database: no consensus state, no archive, no merklized state. To recover
+    /// it has to bootstrap its stake-table window, resync consensus, backfill
+    /// the chain it lost from node 0 (including the new protocol's cert2
+    /// finality certificates), and resume proposing.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_new_protocol_query_node_restart_with_fresh_storage() -> anyhow::Result<()> {
         const NUM_NODES: usize = 6;
@@ -5647,9 +5647,26 @@ mod test {
             "restarting the second query node with fresh storage"
         );
         query_node.shut_down().await;
-        // Let the OS release the API and cliquenet ports before the node binds
-        // them again.
-        sleep(Duration::from_secs(2)).await;
+        // The node has to come back on the same ports: node 0 dials the query
+        // API at the peer URL baked in at network construction, and cliquenet
+        // peers dial the address registered in the stake table. `shut_down`
+        // aborts the server tasks without waiting for them to finish, so poll
+        // until the old listeners are actually gone before rebinding.
+        let cliquenet_port = network.cfg.known_nodes_with_stake()[1]
+            .connect_info
+            .as_ref()
+            .expect("node 1 registered cliquenet connect info")
+            .p2p_addr
+            .port();
+        timeout(RECOVERY_TIMEOUT, async {
+            for port in [query_port, cliquenet_port] {
+                while std::net::TcpListener::bind(("127.0.0.1", port)).is_err() {
+                    sleep(Duration::from_millis(100)).await;
+                }
+            }
+        })
+        .await
+        .context("shut-down node did not release its ports")?;
 
         let fresh_storage = SqlDataSource::create_storage().await;
         let query_node = start_query_node(tmp_options(&fresh_storage)).await;
@@ -5683,32 +5700,40 @@ mod test {
         // actually decided. Streaming also forces the restarted node to backfill
         // every leaf in the range, since the stream endpoint fetches on demand.
         let wiped_range = (height_before_restart - 1) as usize;
-        let ours: Vec<LeafQueryData<SeqTypes>> = timeout(
-            RECOVERY_TIMEOUT,
-            query_client
+        let stream_leaves = |client: Client<ServerError, SequencerApiVersion>,
+                             who: &'static str| async move {
+            let leaves: Vec<LeafQueryData<SeqTypes>> = client
                 .socket("availability/stream/leaves/1")
                 .subscribe()
                 .await
-                .context("subscribing to the restarted node's leaf stream")?
+                .with_context(|| format!("subscribing to {who}'s leaf stream"))?
                 .take(wiped_range)
-                .try_collect(),
-        )
-        .await
-        .context("restarted node's leaf stream stalled")?
-        .context("restarted node's leaf stream errored")?;
-        let theirs: Vec<LeafQueryData<SeqTypes>> = timeout(
-            RECOVERY_TIMEOUT,
-            api_client
-                .socket("availability/stream/leaves/1")
-                .subscribe()
+                .try_collect()
                 .await
-                .context("subscribing to node 0's leaf stream")?
-                .take(wiped_range)
-                .try_collect(),
+                .with_context(|| format!("{who}'s leaf stream errored"))?;
+            anyhow::Ok(leaves)
+        };
+        // Node 0's stream returns immediately, so the shared timeout is in
+        // practice a bound on the restarted node's backfill.
+        let (ours, theirs) = timeout(
+            RECOVERY_TIMEOUT,
+            future::try_join(
+                stream_leaves(query_client.clone(), "the restarted node"),
+                stream_leaves(api_client.clone(), "node 0"),
+            ),
         )
         .await
-        .context("node 0's leaf stream stalled")?
-        .context("node 0's leaf stream errored")?;
+        .context("streaming the wiped range stalled")??;
+        assert_eq!(
+            ours.len(),
+            wiped_range,
+            "restarted node's leaf stream ended early"
+        );
+        assert_eq!(
+            theirs.len(),
+            wiped_range,
+            "node 0's leaf stream ended early"
+        );
         for (ours, theirs) in ours.iter().zip(&theirs) {
             assert_eq!(
                 ours.hash(),
@@ -5766,12 +5791,24 @@ mod test {
                     if leaf.height() <= height_before_restart {
                         continue;
                     }
-                    let Ok(membership) = coordinator.membership_for_epoch(leaf.epoch(EPOCH_HEIGHT))
-                    else {
-                        continue;
-                    };
-                    if membership.leader(leaf.view_number()).ok() == Some(node_1_key) {
-                        return Some(leaf.height());
+                    let membership =
+                        match coordinator.membership_for_epoch(leaf.epoch(EPOCH_HEIGHT)) {
+                            Ok(membership) => membership,
+                            Err(err) => {
+                                tracing::warn!(
+                                    height = leaf.height(),
+                                    %err,
+                                    "no membership for epoch",
+                                );
+                                continue;
+                            },
+                        };
+                    match membership.leader(leaf.view_number()) {
+                        Ok(leader) if leader == node_1_key => return Some(leaf.height()),
+                        Ok(_) => {},
+                        Err(err) => {
+                            tracing::warn!(view = ?leaf.view_number(), %err, "leader unresolved");
+                        },
                     }
                 }
             }
