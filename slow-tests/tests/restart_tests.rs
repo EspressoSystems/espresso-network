@@ -84,6 +84,9 @@ use vbs::version::Version;
 use vec1::vec1;
 use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION};
 
+/// Bound on each per-node recovery wait after a restart.
+const RECOVERY_TIMEOUT: Duration = Duration::from_secs(240);
+
 /// Extract the decided leaf chain from a consensus event, or `None` if it isn't a decide.
 fn decided_leaves(event: &CoordinatorEvent<SeqTypes>) -> Option<&[LeafInfo<SeqTypes>]> {
     match event {
@@ -108,10 +111,12 @@ fn decided_epoch(event: &CoordinatorEvent<SeqTypes>) -> Option<EpochNumber> {
     }
 }
 
-/// Wait until the query node at `restarted_port` serves merklized state at the
-/// current tip again, so it can act as a catchup source for other nodes. The
-/// tip is read from the healthy query node at `healthy_port`.
-async fn wait_for_query_node_at_tip(restarted_port: u16, healthy_port: u16) {
+/// Wait until the query node at index `restarted` serves merklized state at
+/// the current tip again, so it can act as a catchup source for other nodes.
+/// The tip is read from the healthy query node at index `healthy`.
+async fn wait_for_query_node_at_tip(network: &TestNetwork, restarted: usize, healthy: usize) {
+    let restarted_port = network.node_api_port(restarted);
+    let healthy_port = network.node_api_port(healthy);
     let tip_url: Url = format!("http://127.0.0.1:{healthy_port}").parse().unwrap();
     let url: Url = format!("http://127.0.0.1:{restarted_port}")
         .parse()
@@ -119,18 +124,26 @@ async fn wait_for_query_node_at_tip(restarted_port: u16, healthy_port: u16) {
     let tip_client = surf_disco::Client::<ClientError, SequencerApiVersion>::new(tip_url);
     let client = surf_disco::Client::<ClientError, SequencerApiVersion>::new(url);
 
-    let tip = tip_client
-        .get::<u64>("status/block-height")
-        .send()
-        .await
-        .expect("healthy query node should serve its block height");
+    let tip = timeout(RECOVERY_TIMEOUT, async {
+        loop {
+            match tip_client.get::<u64>("status/block-height").send().await {
+                Ok(tip) => break tip,
+                Err(err) => {
+                    tracing::info!(healthy_port, %err, "healthy query node not ready");
+                    sleep(Duration::from_secs(3)).await;
+                },
+            }
+        }
+    })
+    .await
+    .expect("timed out reading the tip from the healthy query node");
     tracing::info!(
         restarted_port,
         tip,
         "waiting for restarted query node to reach the tip"
     );
 
-    timeout(Duration::from_secs(240), async {
+    timeout(RECOVERY_TIMEOUT, async {
         loop {
             match client.get::<u64>("block-state/block-height").send().await {
                 Ok(height) if height >= tip => {
@@ -331,12 +344,10 @@ async fn slow_test_restart_new_protocol_rolling_and_full() {
 
     // Roll the query nodes, health-gating each so the network always has a
     // current catchup source.
-    let node_0_port = network.node_api_port(0);
-    let node_4_port = network.node_api_port(4);
     network.restart_and_progress_node(0).await;
-    wait_for_query_node_at_tip(node_0_port, node_4_port).await;
+    wait_for_query_node_at_tip(&network, 0, 4).await;
     network.restart_and_progress_node(4).await;
-    wait_for_query_node_at_tip(node_4_port, node_0_port).await;
+    wait_for_query_node_at_tip(&network, 4, 0).await;
 
     // Take the whole network down, a few seconds between stops so nodes shut
     // down at different points in the chain, and check it recovers.
@@ -433,6 +444,7 @@ struct TestNode<S: TestableSequencerDataSource> {
     reference_state: Arc<RwLock<BTreeMap<u64, Commitment<Leaf2>>>>,
     /// Number of epochs to wait after restart before running progress check.
     wait_for_epoch: EpochNumber,
+    progress_timeout_factor: u32,
 }
 
 impl<S: TestableSequencerDataSource> TestNode<S> {
@@ -444,8 +456,13 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         let storage = S::create_storage().await;
         let opt = S::options(&storage, opts);
 
+        // Storage options stay set even without the query module, matching how
+        // a production validator runs (`storage-sql` without `query`); only the
+        // public node config reads them here.
         let mut modules = Modules {
             http: Some(api::options::Http::with_port(node.api_port)),
+            storage_fs: opt.storage_fs,
+            storage_sql: opt.storage_sql,
             ..Default::default()
         };
         if node.is_query {
@@ -462,8 +479,6 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                 peers,
                 ..Default::default()
             });
-            modules.storage_fs = opt.storage_fs;
-            modules.storage_sql = opt.storage_sql;
             modules.light_client = Some(Default::default());
         }
 
@@ -523,6 +538,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             context: None,
             reference_state: Default::default(),
             wait_for_epoch: EpochNumber::new(3),
+            progress_timeout_factor: 4,
         }
     }
 
@@ -613,12 +629,10 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                     .config
                     .next_view_timeout
             };
-            // Give enough time for every node to propose, with every view timing out, plus
-            // headroom for the slow views right after a whole-network restart, when every node
-            // is still bootstrapping and catching up. If we actually make progress, not every
-            // view will time out, and we will take less than this amount of time.
-            let timeout_duration =
-                8 * Duration::from_millis(next_view_timeout) * (self.num_nodes as u32);
+            // Enough time for every node to propose with every view timing out.
+            let timeout_duration = self.progress_timeout_factor
+                * Duration::from_millis(next_view_timeout)
+                * (self.num_nodes as u32);
             match timeout(timeout_duration, self.check_progress()).await {
                 Ok(res) => res,
                 Err(_) => bail!("timed out waiting for progress on node {node_id}"),
@@ -777,8 +791,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         tracing::info!(node_id, "waiting for epoch: {epoch:?}");
         let mut events = context.event_stream();
 
-        let timeout_duration = Duration::from_secs(240);
-        timeout(timeout_duration, async {
+        timeout(RECOVERY_TIMEOUT, async {
             while let Some(event) = events.next().await {
                 let Some(decided_epoch) = decided_epoch(&event) else {
                     continue;
@@ -791,6 +804,45 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         })
         .await
         .expect("timed out waiting for epoch after restart");
+    }
+
+    /// Height of this node's latest decided leaf, or `None` if it is stopped.
+    async fn decided_height(&self) -> Option<u64> {
+        let context = self.context.as_ref()?;
+        Some(context.decided_leaf().await.height())
+    }
+
+    /// Wait until this node decides a leaf above `height`. A restarted node
+    /// re-emits decides for the leaves it recovers during catchup, so only a
+    /// decide past its pre-restart height proves it has rejoined the live
+    /// chain.
+    async fn wait_for_decide_past(&self, height: u64, timeout_duration: Duration) {
+        let context = self
+            .context
+            .as_ref()
+            .expect("waiting for decides on a stopped node");
+        let node_id = context.node_id();
+        tracing::info!(node_id, height, "waiting for a decide past height");
+        let mut events = context.event_stream();
+
+        timeout(timeout_duration, async {
+            while let Some(event) = events.next().await {
+                let Some(leaf_chain) = decided_leaves(&event) else {
+                    continue;
+                };
+                if let Some(leaf) = leaf_chain.iter().find(|leaf| leaf.leaf.height() > height) {
+                    tracing::info!(
+                        node_id,
+                        height = leaf.leaf.height(),
+                        "node decided past the target height"
+                    );
+                    return;
+                }
+            }
+            panic!("node {node_id} event stream ended unexpectedly");
+        })
+        .await
+        .expect("timed out waiting for a decide past the pre-restart height");
     }
 }
 
@@ -840,13 +892,17 @@ impl TestNetwork {
     /// Like [`new`](Self::new), but only the nodes at `query_nodes` (indices
     /// into the full node list, `da_nodes` group first) run the query module
     /// and serve state catchup. Being a query node is independent of the
-    /// da/regular grouping.
+    /// da/regular grouping. This variant always runs without the CDN.
     async fn new_with_query_nodes(
         da_nodes: usize,
         regular_nodes: usize,
         version: Version,
         query_nodes: &[usize],
     ) -> Self {
+        assert!(
+            !query_nodes.is_empty() && query_nodes.iter().all(|i| *i < da_nodes + regular_nodes),
+            "query node indices out of range: {query_nodes:?}"
+        );
         Self::new_inner(da_nodes, regular_nodes, false, version, Some(query_nodes)).await
     }
 
@@ -1213,14 +1269,20 @@ impl TestNetwork {
             let node_id = node.node_id().expect("Node id not found");
             let state = node.reference_state.read().await.clone();
 
+            let mut compared = 0;
             for (height, commitment) in state.iter() {
                 if let Some(ref_commitment) = ref_state.get(height) {
                     assert_eq!(
                         ref_commitment, commitment,
                         "State mismatch between node {node_id} and reference node {ref_id}"
                     );
+                    compared += 1;
                 }
             }
+            assert!(
+                compared > 0,
+                "no overlapping heights between node {node_id} and reference node {ref_id}"
+            );
         }
     }
 
@@ -1247,11 +1309,17 @@ impl TestNetwork {
     /// them one at a time can deadlock the network layer.
     async fn restart_all_with_staggered_shutdown(&mut self, gap: Duration) {
         tracing::info!(?gap, "stopping all nodes with a staggered shutdown");
+        // Recovery is only proven by decides past the highest height any node
+        // goes down with; anything below can be replayed from catchup.
+        let mut tip = 0;
         for node in self
             .da_nodes
             .iter_mut()
             .chain(self.regular_nodes.iter_mut())
         {
+            if let Some(height) = node.decided_height().await {
+                tip = tip.max(height);
+            }
             node.stop().await;
             // Gap until the next stop; after the last node it doubles as the
             // delay the OS needs to release the nodes' ports.
@@ -1266,7 +1334,25 @@ impl TestNetwork {
         )
         .await;
 
-        self.wait_for_epoch().await;
+        for node in self
+            .da_nodes
+            .iter_mut()
+            .chain(self.regular_nodes.iter_mut())
+        {
+            node.progress_timeout_factor = 8;
+        }
+
+        tracing::info!(
+            tip,
+            "waiting for the network to decide past the pre-shutdown tip"
+        );
+        join_all(
+            self.da_nodes
+                .iter()
+                .chain(self.regular_nodes.iter())
+                .map(|node| node.wait_for_decide_past(tip, RECOVERY_TIMEOUT)),
+        )
+        .await;
         self.check_progress().await;
         self.check_state().await;
     }
@@ -1306,47 +1392,34 @@ impl TestNetwork {
     ) {
         let da_nodes = da_nodes.into_iter().collect::<Vec<_>>();
         let regular_nodes = regular_nodes.into_iter().collect::<Vec<_>>();
-        self.restart_helper(da_nodes.clone(), regular_nodes.clone(), true)
-            .await;
 
-        // Wait until every restarted node sees a decide before moving on, so
-        // subsequent restarts cannot outpace how fast nodes actually rejoin.
-        // A node that receives decides has rejoined the network and the chain
-        // is progressing.
-        tracing::info!("waiting for restarted nodes to see progress");
-        let timeout_duration = Duration::from_secs((8 * self.num_nodes()) as u64);
-        let restarted = self
-            .da_nodes
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| da_nodes.contains(i))
-            .chain(
-                self.regular_nodes
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, _)| regular_nodes.contains(i)),
-            )
-            .map(|(_, node)| node);
-        join_all(restarted.map(|node| async move {
-            let node_id = node.node_id();
-            let mut events = node
-                .event_stream()
+        let mut targets = Vec::new();
+        for &i in &da_nodes {
+            let height = self.da_nodes[i]
+                .decided_height()
                 .await
-                .expect("restarted node should be running");
-            timeout(timeout_duration, async {
-                loop {
-                    let event = events
-                        .next()
-                        .await
-                        .expect("event stream terminated unexpectedly");
-                    if decided_leaves(&event).is_some() {
-                        tracing::info!(?node_id, "restarted node got a decide");
-                        break;
-                    }
-                }
-            })
-            .await
-            .expect("timed out waiting for restarted node to see progress");
+                .expect("node to restart should be running");
+            targets.push((true, i, height));
+        }
+        for &i in &regular_nodes {
+            let height = self.regular_nodes[i]
+                .decided_height()
+                .await
+                .expect("node to restart should be running");
+            targets.push((false, i, height));
+        }
+
+        self.restart_helper(da_nodes, regular_nodes, true).await;
+
+        tracing::info!("waiting for restarted nodes to rejoin");
+        let timeout_duration = Duration::from_secs((8 * self.num_nodes()) as u64);
+        join_all(targets.into_iter().map(|(is_da, i, height)| {
+            let node = if is_da {
+                &self.da_nodes[i]
+            } else {
+                &self.regular_nodes[i]
+            };
+            node.wait_for_decide_past(height, timeout_duration)
         }))
         .await;
     }
