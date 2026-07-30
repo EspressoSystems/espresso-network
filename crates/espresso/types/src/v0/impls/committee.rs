@@ -220,11 +220,6 @@ impl EpochCommittees {
             .cloned()
     }
 
-    /// Find the Ethereum account under which `key` is registered.
-    ///
-    /// Scans loaded epochs from highest to lowest. Returns `None` if the key
-    /// does not appear in any loaded epoch stake table (the pre-epoch
-    /// committee has no Ethereum accounts).
     pub fn latest_account(&self, key: &PubKey) -> Option<Address> {
         let inner = self.inner.read();
         inner

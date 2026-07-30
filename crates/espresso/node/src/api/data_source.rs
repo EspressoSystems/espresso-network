@@ -126,16 +126,11 @@ pub(crate) trait NodeStateDataSource {
     fn node_state(&self) -> impl Send + Future<Output = NodeState>;
 }
 
-/// This node's public keys, serialized in the same format as stake-table responses.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NodePublicKeys {
-    /// Ethereum account of the node's stake-table registration, if registered.
     pub eth_account: Option<Address>,
-    /// The node's BLS (staking) key.
     pub consensus_key: BLSPubKey,
-    /// The node's Schnorr (state) key.
     pub state_ver_key: StateVerKey,
-    /// The node's x25519 (cliquenet) key, if configured.
     pub x25519_key: Option<x25519::PublicKey>,
 }
 
@@ -613,8 +608,6 @@ mod test {
 
     use super::*;
 
-    /// `NodePublicKeys` must serialize each key exactly as `RegisteredValidator` does, so the
-    /// keys endpoint displays keys in the same format as stake-table responses.
     #[test]
     fn test_node_public_keys_serialize_like_stake_table() {
         let account = Address::random();

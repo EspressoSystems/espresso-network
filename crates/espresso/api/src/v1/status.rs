@@ -1,14 +1,12 @@
 //! V1 status API.
 //!
-//! Mirrors the tide-disco endpoints defined in `hotshot-query-service/api/status.toml`,
-//! plus the Espresso-specific `keys` endpoint.
+//! Mirrors the tide-disco endpoints defined in `hotshot-query-service/api/status.toml`.
 
 use async_trait::async_trait;
 use serde::Serialize;
 
 #[async_trait]
 pub trait StatusApi {
-    /// The node's public keys, formatted as in stake-table responses.
     type Keys: Serialize + Send + Sync + 'static;
 
     async fn block_height(&self) -> anyhow::Result<u64>;

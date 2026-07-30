@@ -2660,7 +2660,6 @@ pub mod test_helpers {
         // We know at least some views have been successful, since we finalized a block.
         assert!(success_rate > 0.0, "{success_rate}");
 
-        // The keys endpoint reports the server's public keys.
         let keys: NodePublicKeys = client.get("status/keys").send().await.unwrap();
         let expected = network.server.validator_config();
         assert_eq!(keys.consensus_key, expected.public_key);
@@ -2669,11 +2668,8 @@ pub mod test_helpers {
             keys.x25519_key,
             expected.x25519_keypair.as_ref().map(|kp| kp.public_key())
         );
-        // This network runs without a stake table contract, so the node has no registered
-        // Ethereum account.
         assert_eq!(keys.eth_account, None);
 
-        // Keys are serialized in the same format as stake-table responses.
         let json: serde_json::Value = client.get("status/keys").send().await.unwrap();
         let bls = json["consensus_key"].as_str().unwrap();
         assert!(bls.starts_with("BLS_VER_KEY~"), "{bls}");
