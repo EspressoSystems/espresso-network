@@ -2675,7 +2675,8 @@ pub mod test_helpers {
         assert!(bls.starts_with("BLS_VER_KEY~"), "{bls}");
         let schnorr = json["state_ver_key"].as_str().unwrap();
         assert!(schnorr.starts_with("SCHNORR_VER_KEY~"), "{schnorr}");
-        assert!(json["x25519_key"].is_string(), "{json}");
+        let x25519 = json["x25519_key"].as_str().unwrap();
+        assert!(x25519.starts_with("X25519_PK~"), "{x25519}");
     }
 
     /// Test the submit API with custom options.

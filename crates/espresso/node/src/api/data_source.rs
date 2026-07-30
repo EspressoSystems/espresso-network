@@ -131,7 +131,29 @@ pub struct NodePublicKeys {
     pub eth_account: Option<Address>,
     pub consensus_key: BLSPubKey,
     pub state_ver_key: StateVerKey,
+    #[serde(with = "x25519_tagged")]
     pub x25519_key: Option<x25519::PublicKey>,
+}
+
+mod x25519_tagged {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
+
+    use super::x25519;
+
+    pub fn serialize<S: Serializer>(
+        key: &Option<x25519::PublicKey>,
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
+        key.as_ref().map(ToString::to_string).serialize(s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<Option<x25519::PublicKey>, D::Error> {
+        Option::<String>::deserialize(d)?
+            .map(|s| s.parse().map_err(D::Error::custom))
+            .transpose()
+    }
 }
 
 pub(crate) trait NodeKeysDataSource {
@@ -641,7 +663,7 @@ mod test {
         assert_eq!(keys["eth_account"], validator["account"]);
         assert_eq!(keys["consensus_key"], validator["stake_table_key"]);
         assert_eq!(keys["state_ver_key"], validator["state_ver_key"]);
-        assert_eq!(keys["x25519_key"], validator["x25519_key"]);
+        assert_eq!(keys["x25519_key"], x25519_key.to_string());
     }
 }
 

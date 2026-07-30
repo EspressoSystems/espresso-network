@@ -1746,10 +1746,10 @@ where
             routes::v1::STATUS_KEYS_ROUTE,
             get_with(status_keys, |op| {
                 op.summary("Get node public keys").description(
-                    "Get this node's public keys (Ethereum account, BLS, Schnorr, x25519), \
-                     formatted as in stake-table responses. The Ethereum account is taken from \
-                     the node's stake-table registration and is null if the node is not \
-                     registered.",
+                    "Get this node's public keys (Ethereum account, BLS, Schnorr, x25519). The \
+                     BLS and Schnorr keys are formatted as in stake-table responses; the x25519 \
+                     key is tagged base64. The Ethereum account is taken from the node's \
+                     stake-table registration and is null if the node is not registered.",
                 )
             }),
         )
