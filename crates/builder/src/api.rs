@@ -376,7 +376,7 @@ pub fn router(state: ProxyGlobalState<espresso_types::SeqTypes>) -> Router {
     Router::new()
         .route("/healthcheck", get(healthcheck))
         .nest("/block_info", block_info.clone())
-        .nest("/block_info/v0", block_info)
+        .nest("/v0/block_info", block_info)
         .nest("/txn_submit", txn_submit.clone())
-        .nest("/txn_submit/v0", txn_submit)
+        .nest("/v0/txn_submit", txn_submit)
 }
