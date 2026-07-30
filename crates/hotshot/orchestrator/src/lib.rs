@@ -48,6 +48,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use surf_disco::Url;
 use tide_disco::{error::ServerError, healthcheck::HealthStatus};
 use tokio::net::TcpListener;
+use tower_http::cors::{Any, CorsLayer};
 use vbs::{BinarySerializer, Serializer, version::StaticVersion};
 
 /// Orchestrator is not, strictly speaking, bound to the network; it can have its own versioning.
@@ -1008,7 +1009,13 @@ pub async fn run_orchestrator<TYPES: NodeType>(
         .route("/healthcheck", get(healthcheck))
         .nest("/api", api.clone())
         .nest("/v0/api", api)
-        .with_state(state);
+        .with_state(state)
+        .layer(
+            CorsLayer::new()
+                .allow_methods(Any)
+                .allow_headers(Any)
+                .allow_origin(Any),
+        );
 
     let host = url
         .host_str()

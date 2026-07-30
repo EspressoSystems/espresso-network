@@ -63,6 +63,7 @@ use staking_cli::demo::{DelegationConfig, StakingTransactions};
 use tempfile::NamedTempFile;
 use test_utils::reserve_tcp_port;
 use tokio::spawn;
+use tower_http::cors::{Any, CorsLayer};
 use url::Url;
 use vbs::version::StaticVersionType;
 use versions::Upgrade;
@@ -950,6 +951,12 @@ fn dev_node_router(state: DevNodeState) -> Router {
         .nest("/api", api.clone())
         .nest("/v0/api", api)
         .route("/healthcheck", get(healthcheck))
+        .layer(
+            CorsLayer::new()
+                .allow_methods(Any)
+                .allow_headers(Any)
+                .allow_origin(Any),
+        )
 }
 
 async fn run_dev_node_server<ApiVer: StaticVersionType + 'static>(

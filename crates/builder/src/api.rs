@@ -35,6 +35,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use surf_disco::{Error as _, StatusCode};
 use tagged_base64::TaggedBase64;
 use tide_disco::healthcheck::HealthStatus;
+use tower_http::cors::{Any, CorsLayer};
 use vbs::{BinarySerializer, Serializer, version::StaticVersion};
 
 /// Binary framing version for VBS-negotiated responses, matching `hotshot_builder_api::v0_1`'s
@@ -368,7 +369,8 @@ fn txn_submit_router(state: SharedState) -> Router {
 
 /// Builds the full router: `healthcheck`, plus `block_info` and `txn_submit`, served both
 /// unversioned and under `/v0` (both modules were registered with API version major `0`, tide's
-/// convention for the module's only registered major version).
+/// convention for the module's only registered major version). Like tide-disco, every response
+/// carries permissive CORS headers.
 pub fn router(state: ProxyGlobalState<espresso_types::SeqTypes>) -> Router {
     let state: SharedState = Arc::new(state);
     let block_info = block_info_router(state.clone());
@@ -379,4 +381,10 @@ pub fn router(state: ProxyGlobalState<espresso_types::SeqTypes>) -> Router {
         .nest("/v0/block_info", block_info)
         .nest("/txn_submit", txn_submit.clone())
         .nest("/v0/txn_submit", txn_submit)
+        .layer(
+            CorsLayer::new()
+                .allow_methods(Any)
+                .allow_headers(Any)
+                .allow_origin(Any),
+        )
 }

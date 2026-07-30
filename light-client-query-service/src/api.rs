@@ -36,6 +36,7 @@ use hotshot_types::data::VidCommitment;
 use serde::Serialize;
 use surf_disco::Error as _;
 use tide_disco::healthcheck::HealthStatus;
+use tower_http::cors::{Any, CorsLayer};
 use vbs::{BinarySerializer, Serializer, version::StaticVersion};
 
 /// Binary framing version for VBS-negotiated responses, matching the wire version this service
@@ -1227,4 +1228,10 @@ pub fn router(ds: DataSource) -> Router {
         .nest("/v1/availability", availability)
         .nest("/node", node.clone())
         .nest("/v1/node", node)
+        .layer(
+            CorsLayer::new()
+                .allow_methods(Any)
+                .allow_headers(Any)
+                .allow_origin(Any),
+        )
 }

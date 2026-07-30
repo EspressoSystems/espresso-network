@@ -22,6 +22,7 @@ use lcv3_relay::{LCV3StateRelayServerDataSource, LCV3StateRelayServerState};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tide_disco::healthcheck::HealthStatus;
 use tokio::{net::TcpListener, sync::oneshot};
+use tower_http::cors::{Any, CorsLayer};
 use url::Url;
 use vbs::{
     BinarySerializer, Serializer,
@@ -390,7 +391,12 @@ fn router(state: SharedState) -> Router {
                 post(post_legacy_state).get(get_legacy_state),
             );
     }
-    router.with_state(state)
+    router.with_state(state).layer(
+        CorsLayer::new()
+            .allow_methods(Any)
+            .allow_headers(Any)
+            .allow_origin(Any),
+    )
 }
 
 async fn serve(server_url: Url, state: StateRelayServerState) -> anyhow::Result<()> {

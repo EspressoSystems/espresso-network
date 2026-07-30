@@ -3,6 +3,7 @@
 
 use alloy::primitives::Address;
 use axum::{Json, Router, routing::get};
+use tower_http::cors::{Any, CorsLayer};
 
 /// Serve the light client contract address at the paths tide-disco used to expose it:
 /// `/v0/api/lightclient_contract` directly, and `/api/lightclient_contract` (which tide-disco
@@ -19,7 +20,13 @@ pub(crate) fn start_light_client_contract_server(port: u16, light_client_address
             "/v0/api/lightclient_contract",
             get(move || async move { Json(light_client_address) }),
         )
-        .route("/healthcheck", get(healthcheck));
+        .route("/healthcheck", get(healthcheck))
+        .layer(
+            CorsLayer::new()
+                .allow_methods(Any)
+                .allow_headers(Any)
+                .allow_origin(Any),
+        );
 
     tokio::spawn(async move {
         let addr = format!("0.0.0.0:{port}");
