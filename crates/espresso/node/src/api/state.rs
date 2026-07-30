@@ -66,9 +66,9 @@ use super::{
     RewardMerkleTreeDataSource, RewardMerkleTreeV2Data as InternalRewardTreeData,
     data_source::{
         CatchupDataSource as _, DatabaseMetadataSource as _, HotShotConfigDataSource as _,
-        NodeStateDataSource as _, PruningDataSource as _, RequestResponseDataSource as _,
-        StakeTableDataSource, StateCertDataSource, StateCertFetchingDataSource,
-        StateSignatureDataSource, TokenDataSource as _,
+        NodeKeysDataSource, NodePublicKeys, NodeStateDataSource as _, PruningDataSource as _,
+        RequestResponseDataSource as _, StakeTableDataSource, StateCertDataSource,
+        StateCertFetchingDataSource, StateSignatureDataSource, TokenDataSource as _,
     },
 };
 
@@ -2284,8 +2284,10 @@ where
 impl<D> espresso_api::v1::StatusApi for NodeApiStateImpl<D>
 where
     D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target: hotshot_query_service::status::StatusDataSource + Send + Sync,
+    D::Target: hotshot_query_service::status::StatusDataSource + NodeKeysDataSource + Send + Sync,
 {
+    type Keys = NodePublicKeys;
+
     async fn block_height(&self) -> anyhow::Result<u64> {
         let ds = &*self.data_source;
         let h = hotshot_query_service::status::StatusDataSource::block_height(ds)
@@ -2311,6 +2313,10 @@ where
     async fn metrics(&self) -> anyhow::Result<String> {
         let ds = &*self.data_source;
         ds.metrics().export().map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    async fn keys(&self) -> anyhow::Result<NodePublicKeys> {
+        Ok(self.data_source.node_public_keys().await)
     }
 }
 

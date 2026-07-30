@@ -1706,6 +1706,13 @@ where
         }
     };
 
+    let status_keys = |State(state): State<S>| async move {
+        <S as v1::StatusApi>::keys(&state)
+            .await
+            .map(ApiJson)
+            .map_err(ApiError::Internal)
+    };
+
     ApiRouter::new()
         .api_route(
             routes::v1::STATUS_BLOCK_HEIGHT_ROUTE,
@@ -1733,6 +1740,17 @@ where
             get_with(status_metrics, |op| {
                 op.summary("Get Prometheus metrics")
                     .description("Prometheus endpoint exposing consensus-related metrics.")
+            }),
+        )
+        .api_route(
+            routes::v1::STATUS_KEYS_ROUTE,
+            get_with(status_keys, |op| {
+                op.summary("Get node public keys").description(
+                    "Get this node's public keys (Ethereum account, BLS, Schnorr, x25519), \
+                     formatted as in stake-table responses. The Ethereum account is taken from \
+                     the node's stake-table registration and is null if the node is not \
+                     registered.",
+                )
             }),
         )
         .with_state(state)
@@ -4356,6 +4374,8 @@ mod tests {
 
     #[async_trait::async_trait]
     impl v1::StatusApi for MockState {
+        type Keys = ();
+
         async fn block_height(&self) -> anyhow::Result<u64> {
             unimplemented!()
         }
@@ -4366,6 +4386,9 @@ mod tests {
             unimplemented!()
         }
         async fn metrics(&self) -> anyhow::Result<String> {
+            unimplemented!()
+        }
+        async fn keys(&self) -> anyhow::Result<Self::Keys> {
             unimplemented!()
         }
     }

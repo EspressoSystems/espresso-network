@@ -220,6 +220,20 @@ impl EpochCommittees {
             .cloned()
     }
 
+    /// Find the Ethereum account under which `key` is registered.
+    ///
+    /// Scans loaded epochs from highest to lowest. Returns `None` if the key
+    /// does not appear in any loaded epoch stake table (the pre-epoch
+    /// committee has no Ethereum accounts).
+    pub fn latest_account(&self, key: &PubKey) -> Option<Address> {
+        let inner = self.inner.read();
+        inner
+            .snapshots
+            .values()
+            .rev()
+            .find_map(|snap| snap.inner.committee.address_mapping.get(key).copied())
+    }
+
     /// Fetch the fixed block reward and update it if its None.
     /// We used a fixed block reward for version v3
     /// Version v4 uses the dynamic block reward

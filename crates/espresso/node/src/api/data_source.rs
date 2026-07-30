@@ -28,9 +28,10 @@ use hotshot_query_service::{
 use hotshot_types::{
     PeerConfig,
     data::{EpochNumber, VidShare, ViewNumber},
-    light_client::LCV3StateSignatureRequestBody,
+    light_client::{LCV3StateSignatureRequestBody, StateVerKey},
     simple_certificate::LightClientStateUpdateCertificateV2,
     traits::{network::ConnectedNetwork, node_implementation::NodeType},
+    x25519,
 };
 use indexmap::IndexMap;
 use light_client::{state::LightClientOptions, storage::LightClientSqliteOptions};
@@ -123,6 +124,23 @@ pub(crate) trait StateSignatureDataSource<N: ConnectedNetwork<PubKey>> {
 
 pub(crate) trait NodeStateDataSource {
     fn node_state(&self) -> impl Send + Future<Output = NodeState>;
+}
+
+/// This node's public keys, serialized in the same format as stake-table responses.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodePublicKeys {
+    /// Ethereum account of the node's stake-table registration, if registered.
+    pub eth_account: Option<Address>,
+    /// The node's BLS (staking) key.
+    pub consensus_key: BLSPubKey,
+    /// The node's Schnorr (state) key.
+    pub state_ver_key: StateVerKey,
+    /// The node's x25519 (cliquenet) key, if configured.
+    pub x25519_key: Option<x25519::PublicKey>,
+}
+
+pub(crate) trait NodeKeysDataSource {
+    fn node_public_keys(&self) -> impl Send + Future<Output = NodePublicKeys>;
 }
 
 pub(crate) trait TokenDataSource<T: NodeType> {
@@ -587,6 +605,51 @@ pub(crate) trait PruningDataSource {
     fn get_oldest_leaf(
         &self,
     ) -> impl Send + Future<Output = anyhow::Result<Option<LeafQueryData<SeqTypes>>>>;
+}
+
+#[cfg(test)]
+mod test {
+    use hotshot_types::{light_client::StateKeyPair, traits::signature_key::SignatureKey as _};
+
+    use super::*;
+
+    /// `NodePublicKeys` must serialize each key exactly as `RegisteredValidator` does, so the
+    /// keys endpoint displays keys in the same format as stake-table responses.
+    #[test]
+    fn test_node_public_keys_serialize_like_stake_table() {
+        let account = Address::random();
+        let consensus_key = BLSPubKey::generated_from_seed_indexed([1; 32], 0).0;
+        let state_ver_key = StateKeyPair::generate_from_seed_indexed([2; 32], 0).ver_key();
+        let x25519_key = x25519::Keypair::generated_from_seed_indexed([3; 32], 0)
+            .unwrap()
+            .public_key();
+
+        let validator = serde_json::to_value(RegisteredValidator::<BLSPubKey> {
+            account,
+            stake_table_key: Some(consensus_key),
+            state_ver_key: Some(state_ver_key.clone()),
+            stake: U256::from(1u64),
+            commission: 0,
+            delegators: HashMap::new(),
+            authenticated: true,
+            x25519_key: Some(x25519_key),
+            p2p_addr: None,
+        })
+        .unwrap();
+
+        let keys = serde_json::to_value(NodePublicKeys {
+            eth_account: Some(account),
+            consensus_key,
+            state_ver_key,
+            x25519_key: Some(x25519_key),
+        })
+        .unwrap();
+
+        assert_eq!(keys["eth_account"], validator["account"]);
+        assert_eq!(keys["consensus_key"], validator["stake_table_key"]);
+        assert_eq!(keys["state_ver_key"], validator["state_ver_key"]);
+        assert_eq!(keys["x25519_key"], validator["x25519_key"]);
+    }
 }
 
 #[cfg(any(test, feature = "testing"))]
