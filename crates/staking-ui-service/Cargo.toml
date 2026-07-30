@@ -1,0 +1,90 @@
+[package]
+name = "staking-ui-service"
+version = { workspace = true }
+edition = { workspace = true }
+authors = { workspace = true }
+license = "mit"
+default-run = "staking-ui-service"
+
+[[bin]]
+name = "client-swarm"
+test = false
+required-features = ["rand"]
+
+[features]
+default = []
+testing = [
+    "espresso-contract-deployer",
+    "espresso-node",
+    "espresso-types/testing",
+    "hotshot-state-prover",
+    "jf-signature",
+    "pretty_assertions",
+    "rand",
+    "staking-cli",
+    "versions",
+]
+
+[dependencies]
+alloy = { workspace = true }
+anyhow = { workspace = true }
+async-lock = { workspace = true }
+bigdecimal = { workspace = true }
+bitvec = { workspace = true }
+clap = { workspace = true }
+cld = { workspace = true }
+committable = { workspace = true }
+derivative = { workspace = true }
+derive_more = { workspace = true }
+espresso-types = { workspace = true }
+futures = { workspace = true }
+hickory-resolver = "0.25"
+hotshot-contract-adapter = { workspace = true }
+hotshot-query-service = { workspace = true }
+hotshot-types = { workspace = true }
+im = { version = "15", features = ["serde"] }
+log-panics = { workspace = true }
+parking_lot = { workspace = true }
+prometheus = { workspace = true }
+prometheus-parse = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true, features = ["sqlite", "migrate"] }
+surf-disco = { workspace = true }
+tagged-base64 = { workspace = true }
+tide-disco = { workspace = true }
+tokio = { workspace = true }
+toml = { workspace = true }
+tower-service = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+vbs = { workspace = true }
+
+# Testing dependencies
+async-trait = { workspace = true }
+espresso-contract-deployer = { workspace = true, optional = true }
+espresso-node = { workspace = true, features = [
+    "embedded-db",
+    "testing",
+], optional = true }
+hotshot-state-prover = { workspace = true, optional = true }
+jf-signature = { workspace = true, optional = true }
+pretty_assertions = { workspace = true, optional = true }
+rand = { workspace = true, optional = true }
+staking-cli = { workspace = true, optional = true }
+versions = { workspace = true, optional = true }
+
+[build-dependencies]
+anyhow = { workspace = true }
+vergen = { workspace = true }
+vergen-gitcl = { workspace = true }
+
+[dev-dependencies]
+# Enable our own `testing` feature when building tests.
+staking-ui-service = { path = ".", features = ["testing"] }
+
+portpicker = "0.1"
+tempfile = { workspace = true }
+test-log = { workspace = true }
+warp = { workspace = true }

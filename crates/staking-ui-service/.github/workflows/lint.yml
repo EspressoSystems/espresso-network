@@ -1,0 +1,44 @@
+name: Lint
+
+on:
+  push:
+    branches:
+      - main
+      - release-*
+    tags:
+      # YYYYMMDD
+      - "20[0-9][0-9][0-1][0-9][0-3][0-9]*"
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cargo-fmt:
+    name: cargo fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo +nightly fmt -- --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main'  }}
+          shared-key: cargo-clippy
+      - uses: extractions/setup-just@v3
+
+      - name: Run clippy
+        run: just lint
