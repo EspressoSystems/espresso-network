@@ -335,14 +335,13 @@ fn txn_submit_router(state: SharedState) -> Router {
 /// carries permissive CORS headers.
 pub fn router(state: ProxyGlobalState<espresso_types::SeqTypes>) -> Router {
     let state: SharedState = Arc::new(state);
-    let block_info = block_info_router(state.clone());
-    let txn_submit = txn_submit_router(state);
+    let api = Router::new()
+        .nest("/block_info", block_info_router(state.clone()))
+        .nest("/txn_submit", txn_submit_router(state));
     Router::new()
         .route("/healthcheck", get(healthcheck))
-        .nest("/block_info", block_info.clone())
-        .nest("/v0/block_info", block_info)
-        .nest("/txn_submit", txn_submit.clone())
-        .nest("/v0/txn_submit", txn_submit)
+        .merge(api.clone())
+        .nest("/v0", api)
         .layer(
             CorsLayer::new()
                 .allow_methods(Any)

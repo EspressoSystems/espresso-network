@@ -219,10 +219,13 @@ pub async fn run_standalone_service(options: Options) {
     // tide-disco served `details` both directly (e.g. `node-validator/details`) and under a
     // major-version prefix (`v0/node-validator/details`), redirecting the former to the latter;
     // we serve both forms directly instead.
-    let node_validator_api = api::node_validator::v0::router::<MainState>();
+    let api = Router::new().nest(
+        "/node-validator",
+        api::node_validator::v0::router::<MainState>(),
+    );
     let app = Router::new()
-        .nest("/node-validator", node_validator_api.clone())
-        .nest("/v0/node-validator", node_validator_api)
+        .merge(api.clone())
+        .nest("/v0", api)
         .with_state(state)
         .layer(
             CorsLayer::new()

@@ -1169,14 +1169,13 @@ fn node_router(ds: DataSource) -> Router {
 /// unversioned and under `/v1`, matching the paths tide-disco exposed for this service (which
 /// only ever registered API version `1.0.0`).
 pub fn router(ds: DataSource) -> Router {
-    let availability = availability_router(ds.clone());
-    let node = node_router(ds);
+    let api = Router::new()
+        .nest("/availability", availability_router(ds.clone()))
+        .nest("/node", node_router(ds));
     Router::new()
         .route("/healthcheck", get(healthcheck))
-        .nest("/availability", availability.clone())
-        .nest("/v1/availability", availability)
-        .nest("/node", node.clone())
-        .nest("/v1/node", node)
+        .merge(api.clone())
+        .nest("/v1", api)
         .layer(
             CorsLayer::new()
                 .allow_methods(Any)

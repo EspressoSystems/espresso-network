@@ -235,8 +235,8 @@ where
 
 /// Builds the `node-validator` module's routes. tide-disco served `details` both directly and
 /// under a major-version prefix (`v0/details`), redirecting the former to the latter; we serve
-/// both forms directly instead, by nesting this router at both `/node-validator` and
-/// `/v0/node-validator`.
+/// both forms directly instead, by mounting the `/node-validator` tree at the root and under
+/// `/v0`.
 pub fn router<S>() -> Router<S>
 where
     S: StateClientMessageSender<Sender<ServerMessage>> + Clone + Send + Sync + 'static,

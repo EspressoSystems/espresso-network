@@ -941,15 +941,18 @@ async fn healthcheck(headers: HeaderMap) -> Response {
 /// tide-disco served directly and the unversioned `/api/...` forms it served via a redirect
 /// (used by the Go SDK and surf-disco clients, respectively).
 fn dev_node_router(state: DevNodeState) -> Router {
-    let api = Router::new()
-        .route("/dev-info", get(get_dev_info))
-        .route("/set-hotshot-down", post(set_hotshot_down))
-        .route("/set-hotshot-up", post(set_hotshot_up))
-        .with_state(state);
+    let api = Router::new().nest(
+        "/api",
+        Router::new()
+            .route("/dev-info", get(get_dev_info))
+            .route("/set-hotshot-down", post(set_hotshot_down))
+            .route("/set-hotshot-up", post(set_hotshot_up))
+            .with_state(state),
+    );
 
     Router::new()
-        .nest("/api", api.clone())
-        .nest("/v0/api", api)
+        .merge(api.clone())
+        .nest("/v0", api)
         .route("/healthcheck", get(healthcheck))
         .layer(
             CorsLayer::new()

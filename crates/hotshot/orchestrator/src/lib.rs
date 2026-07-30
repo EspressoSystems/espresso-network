@@ -881,7 +881,7 @@ async fn get_builders<TYPES: NodeType>(
 
 /// Builds the `api` module's routes. tide-disco served these both directly (e.g. `api/identity`)
 /// and under a major-version prefix (`v0/api/identity`), redirecting the former to the latter; we
-/// serve both forms directly instead, by nesting this router at both `/api` and `/v0/api`.
+/// serve both forms directly instead, by mounting the `/api` tree at the root and under `/v0`.
 fn api_router<TYPES: NodeType>() -> Router<SharedOrchestratorState<TYPES>> {
     Router::new()
         .route("/healthcheck", get(healthcheck))
@@ -966,14 +966,14 @@ pub async fn run_orchestrator<TYPES: NodeType>(
     let state: SharedOrchestratorState<TYPES> =
         Arc::new(RwLock::new(OrchestratorState::new(network_config)));
 
-    let api = api_router::<TYPES>();
+    let api = Router::new().nest("/api", api_router::<TYPES>());
     let app = Router::new()
         // tide-disco's app-level `healthcheck` isn't actually reachable for a singleton app like
         // this one (it only registers the `api` module's own `healthcheck`), but we serve it
         // anyway for parity with other axum conversions in this repo; no client depends on it.
         .route("/healthcheck", get(healthcheck))
-        .nest("/api", api.clone())
-        .nest("/v0/api", api)
+        .merge(api.clone())
+        .nest("/v0", api)
         .with_state(state)
         .layer(
             CorsLayer::new()
