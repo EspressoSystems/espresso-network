@@ -27,6 +27,7 @@ use axum::{
     routing::{get, post},
 };
 use clap::{Parser, ValueEnum};
+use espresso_api::healthcheck_response;
 use espresso_contract_deployer::{
     self as deployer, Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS, DeployedContracts,
     HttpProviderWithWallet, network_config::light_client_genesis_from_stake_table,
@@ -934,7 +935,7 @@ async fn set_hotshot_up(
 }
 
 async fn healthcheck(headers: HeaderMap) -> Response {
-    espresso_api::healthcheck_response(&headers)
+    healthcheck_response(&headers)
 }
 
 /// Serves the dev-info/set-hotshot-down/set-hotshot-up routes at both the `/v0/api/...` forms

@@ -3,6 +3,7 @@
 
 use alloy::primitives::Address;
 use axum::{Json, Router, http::HeaderMap, response::Response, routing::get};
+use espresso_api::healthcheck_response;
 use tower_http::cors::{Any, CorsLayer};
 
 /// Serve the light client contract address at the paths tide-disco used to expose it:
@@ -44,5 +45,5 @@ pub(crate) fn start_light_client_contract_server(port: u16, light_client_address
 }
 
 async fn healthcheck(headers: HeaderMap) -> Response {
-    espresso_api::healthcheck_response(&headers)
+    healthcheck_response(&headers)
 }

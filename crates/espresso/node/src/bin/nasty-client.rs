@@ -31,6 +31,7 @@ use axum::{
 use clap::Parser;
 use committable::Committable;
 use derivative::Derivative;
+use espresso_api::healthcheck_response;
 use espresso_node::SequencerApiVersion;
 use espresso_types::{
     ADVZNamespaceProofQueryData, BlockMerkleTree, FeeMerkleTree, Header, SeqTypes, parse_duration,
@@ -1408,7 +1409,7 @@ async fn serve(port: u16, metrics: PrometheusMetrics) {
 }
 
 async fn healthcheck(headers: HeaderMap) -> Response {
-    espresso_api::healthcheck_response(&headers)
+    healthcheck_response(&headers)
 }
 
 /// Prometheus text exposition of `metrics`, matching the `text/plain; charset=utf-8` content type

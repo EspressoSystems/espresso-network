@@ -17,7 +17,11 @@ use axum::{
     routing::{get, post},
 };
 use committable::Committable;
-use espresso_api::wire::{self, DecodeFailure, WireFormat};
+use espresso_api::{
+    healthcheck_response,
+    wire::{self, DecodeFailure, WireFormat},
+};
+use espresso_types::SeqTypes;
 use hotshot_builder_api::v0_1::{
     block_info::{
         AvailableBlockData, AvailableBlockHeaderInputV1, AvailableBlockHeaderInputV2,
@@ -42,7 +46,7 @@ use vbs::version::StaticVersion;
 /// framing, which is what `BuilderClient` sends/expects.
 type WireVersion = StaticVersion<0, 1>;
 
-type SharedState = Arc<ProxyGlobalState<espresso_types::SeqTypes>>;
+type SharedState = Arc<ProxyGlobalState<SeqTypes>>;
 
 /// Wire format of the builder API: [`WireVersion`] VBS framing and the [`BuilderApiError`]
 /// envelope.
@@ -109,7 +113,7 @@ where
     })
 }
 
-type Sender = <espresso_types::SeqTypes as NodeType>::SignatureKey;
+type Sender = <SeqTypes as NodeType>::SignatureKey;
 type Signature = <Sender as SignatureKey>::PureAssembledSignatureType;
 
 fn parse_sender_signature(
@@ -122,10 +126,8 @@ fn parse_sender_signature(
 }
 
 async fn healthcheck(headers: HeaderMap) -> Response {
-    espresso_api::healthcheck_response(&headers)
+    healthcheck_response(&headers)
 }
-
-// --- block_info -----------------------------------------------------------------------------
 
 async fn available_blocks(
     State(state): State<SharedState>,
@@ -218,23 +220,22 @@ async fn claim_header_input_v2(
     headers: HeaderMap,
     Path((block_hash, view_number, sender, signature)): Path<(String, u64, String, String)>,
 ) -> Response {
-    let result: Result<AvailableBlockHeaderInputV2<espresso_types::SeqTypes>, BuilderApiError> =
-        async {
-            let hash = parse_hash_param::<BuilderCommitment>(&block_hash, "block_hash")?;
-            let (sender, signature) = parse_sender_signature(&sender, &signature)?;
-            let input = state
-                .claim_block_header_input(&hash, view_number, sender, &signature)
-                .await
-                .map_err(|source| BuilderApiError::BlockClaim {
-                    source,
-                    resource: hash.to_string(),
-                })?;
-            Ok(AvailableBlockHeaderInputV2 {
-                fee_signature: input.fee_signature,
-                sender: input.sender,
-            })
-        }
-        .await;
+    let result: Result<AvailableBlockHeaderInputV2<SeqTypes>, BuilderApiError> = async {
+        let hash = parse_hash_param::<BuilderCommitment>(&block_hash, "block_hash")?;
+        let (sender, signature) = parse_sender_signature(&sender, &signature)?;
+        let input = state
+            .claim_block_header_input(&hash, view_number, sender, &signature)
+            .await
+            .map_err(|source| BuilderApiError::BlockClaim {
+                source,
+                resource: hash.to_string(),
+            })?;
+        Ok(AvailableBlockHeaderInputV2 {
+            fee_signature: input.fee_signature,
+            sender: input.sender,
+        })
+    }
+    .await;
     respond(&headers, result)
 }
 
@@ -243,11 +244,9 @@ async fn builder_address(State(state): State<SharedState>, headers: HeaderMap) -
     respond(&headers, result)
 }
 
-// --- txn_submit -------------------------------------------------------------------------------
-
 async fn submit_txn(State(state): State<SharedState>, headers: HeaderMap, body: Bytes) -> Response {
     let result = async {
-        let tx: <espresso_types::SeqTypes as NodeType>::Transaction =
+        let tx: <SeqTypes as NodeType>::Transaction =
             decode_body(&headers, &body).map_err(BuilderApiError::TxnUnpack)?;
         let hash = tx.commit();
         state
@@ -266,7 +265,7 @@ async fn submit_batch(
     body: Bytes,
 ) -> Response {
     let result = async {
-        let txns: Vec<<espresso_types::SeqTypes as NodeType>::Transaction> =
+        let txns: Vec<<SeqTypes as NodeType>::Transaction> =
             decode_body(&headers, &body).map_err(BuilderApiError::TxnUnpack)?;
         let hashes = txns.iter().map(|tx| tx.commit()).collect::<Vec<_>>();
         state
@@ -333,7 +332,7 @@ fn txn_submit_router(state: SharedState) -> Router {
 /// unversioned and under `/v0` (both modules were registered with API version major `0`, tide's
 /// convention for the module's only registered major version). Like tide-disco, every response
 /// carries permissive CORS headers.
-pub fn router(state: ProxyGlobalState<espresso_types::SeqTypes>) -> Router {
+pub fn router(state: ProxyGlobalState<SeqTypes>) -> Router {
     let state: SharedState = Arc::new(state);
     let api = Router::new()
         .nest("/block_info", block_info_router(state.clone()))

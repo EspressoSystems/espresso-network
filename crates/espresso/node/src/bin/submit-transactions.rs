@@ -14,6 +14,7 @@ use clap::Parser;
 use committable::{Commitment, Committable};
 #[cfg(feature = "benchmarking")]
 use csv::Writer;
+use espresso_api::healthcheck_response;
 use espresso_node::SequencerApiVersion;
 use espresso_types::{SeqTypes, Transaction, parse_duration, parse_size};
 use espresso_utils::logging;
@@ -533,7 +534,7 @@ async fn server(port: u16) {
 }
 
 async fn healthcheck(headers: HeaderMap) -> Response {
-    espresso_api::healthcheck_response(&headers)
+    healthcheck_response(&headers)
 }
 
 fn random_transaction(opt: &Options, rng: &mut ChaChaRng) -> Transaction {

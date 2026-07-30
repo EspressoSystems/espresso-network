@@ -15,7 +15,7 @@ use axum::{
     routing::get,
 };
 use espresso_api::{
-    drive_ws_stream,
+    drive_ws_stream, healthcheck_response,
     wire::{self, WireFormat},
     ws_format,
 };
@@ -113,10 +113,8 @@ fn enforce_range_limit(from: usize, until: usize, limit: usize) -> Result<(), av
 }
 
 async fn healthcheck(headers: HeaderMap) -> Response {
-    espresso_api::healthcheck_response(&headers)
+    healthcheck_response(&headers)
 }
-
-// --- availability -----------------------------------------------------------------------------
 
 async fn fetch_leaf(
     ds: &DataSource,
@@ -768,7 +766,12 @@ async fn get_cert2(
     let result = ds
         .get_cert2(height)
         .await
-        .map_err(availability::Error::from);
+        .with_timeout(FETCH_TIMEOUT)
+        .await
+        .ok_or(availability::Error::Custom {
+            message: format!("no cert2 available for height {height}"),
+            status: surf_disco::StatusCode::NOT_FOUND,
+        });
     respond(&headers, result.map_err(ApiError::from))
 }
 
@@ -858,8 +861,6 @@ fn availability_router(ds: DataSource) -> Router {
         .route("/limits", get(get_availability_limits))
         .with_state(ds)
 }
-
-// --- node ---------------------------------------------------------------------------------------
 
 fn range_bounds(from: Option<u64>, to: Option<u64>) -> (Bound<usize>, Bound<usize>) {
     (

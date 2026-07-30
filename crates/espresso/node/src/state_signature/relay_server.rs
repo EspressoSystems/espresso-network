@@ -9,7 +9,10 @@ use axum::{
     response::Response,
     routing::{get, post},
 };
-use espresso_api::wire::{self, DecodeFailure, WireFormat};
+use espresso_api::{
+    healthcheck_response,
+    wire::{self, DecodeFailure, WireFormat},
+};
 use hotshot_types::{
     light_client::{
         LCV1StateSignatureRequestBody, LCV1StateSignaturesBundle, LCV2StateSignatureRequestBody,
@@ -272,7 +275,7 @@ async fn get_latest_state_v3(state: &SharedState) -> Result<LCV3StateSignaturesB
 }
 
 async fn healthcheck(headers: HeaderMap) -> Response {
-    espresso_api::healthcheck_response(&headers)
+    healthcheck_response(&headers)
 }
 
 async fn post_state(State(state): State<SharedState>, headers: HeaderMap, body: Bytes) -> Response {
@@ -405,6 +408,7 @@ pub async fn run_relay_server_with_state<BindVer: StaticVersionType + 'static>(
 #[cfg(test)]
 mod test {
     use alloy::primitives::{FixedBytes, U256};
+    use axum::Json;
     use espresso_types::SeqTypes;
     use hotshot::types::SchnorrPubKey;
     use hotshot_contract_adapter::light_client::derive_signed_state_digest;
@@ -436,7 +440,7 @@ mod test {
             "/config/hotshot",
             get(move || {
                 let config = config.clone();
-                async move { axum::Json(config) }
+                async move { Json(config) }
             }),
         );
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

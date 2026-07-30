@@ -30,7 +30,10 @@ use axum::{
 };
 use client::{BenchResults, BenchResultsDownloadConfig};
 use csv::Writer;
-use espresso_api::wire::{self, WireFormat};
+use espresso_api::{
+    healthcheck_response,
+    wire::{self, WireFormat},
+};
 use futures::{StreamExt, stream::FuturesUnordered};
 use hotshot_types::{
     PeerConfig,
@@ -730,7 +733,7 @@ fn decode_wrapped_peer_config<TYPES: NodeType>(
 }
 
 async fn healthcheck(headers: HeaderMap) -> Response {
-    espresso_api::healthcheck_response(&headers)
+    healthcheck_response(&headers)
 }
 
 async fn post_identity<TYPES: NodeType>(
