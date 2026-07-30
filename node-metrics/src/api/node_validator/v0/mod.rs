@@ -14,6 +14,7 @@ use axum::{
     response::Response,
     routing::get,
 };
+use espresso_api::wire::wants_binary;
 use espresso_types::{BackoffParams, SeqTypes, v0_3::AuthenticatedValidator};
 use futures::{
     FutureExt, Sink, SinkExt, Stream, StreamExt,
@@ -70,13 +71,6 @@ pub trait StateClientMessageSender<K> {
 
 #[derive(Debug)]
 pub enum EndpointError {}
-
-fn wants_binary(headers: &HeaderMap) -> bool {
-    headers
-        .get(axum::http::header::ACCEPT)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.contains("application/octet-stream"))
-}
 
 /// Decode a message received from the `details` socket. Mirrors tide-disco's `Connection` stream
 /// impl: binary frames are vbs, text frames are JSON, decoded according to the frame actually

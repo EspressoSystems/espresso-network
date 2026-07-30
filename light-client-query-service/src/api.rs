@@ -8,13 +8,17 @@
 use std::{ops::Bound, time::Duration};
 
 use axum::{
-    Json, Router,
+    Router,
     extract::{Path, State, ws::WebSocketUpgrade},
-    http::{HeaderMap, StatusCode, header},
-    response::{IntoResponse, Response},
+    http::{HeaderMap, StatusCode},
+    response::Response,
     routing::get,
 };
-use espresso_api::{drive_ws_stream, ws_format};
+use espresso_api::{
+    drive_ws_stream,
+    wire::{self, WireFormat},
+    ws_format,
+};
 use espresso_node::api::sql::DataSource;
 use espresso_types::SeqTypes;
 use futures::{StreamExt as _, TryStreamExt as _, stream::BoxStream};
@@ -33,9 +37,8 @@ use hotshot_query_service::{
 use hotshot_types::data::VidCommitment;
 use serde::Serialize;
 use surf_disco::Error as _;
-use tide_disco::healthcheck::HealthStatus;
 use tower_http::cors::{Any, CorsLayer};
-use vbs::{BinarySerializer, Serializer, version::StaticVersion};
+use vbs::version::StaticVersion;
 
 /// Binary framing version for VBS-negotiated responses, matching the wire version this service
 /// used under tide-disco.
@@ -48,58 +51,31 @@ const SMALL_OBJECT_RANGE_LIMIT: usize = 500;
 const LARGE_OBJECT_RANGE_LIMIT: usize = 100;
 const WINDOW_LIMIT: usize = 500;
 
-fn wants_binary(headers: &HeaderMap) -> bool {
-    headers
-        .get(header::ACCEPT)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.contains("application/octet-stream"))
+/// Wire format of this service: [`WireVersion`] VBS framing and the [`ApiError`] envelope.
+/// `ApiError` is `hotshot_query_service::Error`, the exact type the old tide-disco `App` used, so
+/// both its status mapping and its wire shape (externally tagged enum) match byte-for-byte.
+struct QueryServiceWireFormat;
+
+impl WireFormat for QueryServiceWireFormat {
+    type Error = ApiError;
+    type Version = WireVersion;
+
+    fn status(err: &ApiError) -> StatusCode {
+        // Maps `hotshot_query_service`'s wrapped `reqwest`-based status code onto axum's.
+        StatusCode::from_u16(u16::from(err.status())).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
+    }
+
+    fn serialize_failure(message: String) -> ApiError {
+        ApiError::internal(message)
+    }
 }
 
-/// Maps `hotshot_query_service`'s wrapped `reqwest`-based status code onto axum's.
-fn wire_status(status: surf_disco::StatusCode) -> StatusCode {
-    StatusCode::from_u16(u16::from(status)).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
-}
-
-/// Encode a successful response, negotiating VBS binary vs JSON from the `Accept` header, just
-/// as tide-disco did for `surf-disco` clients (which default to `application/octet-stream`).
 fn encode_ok<T: Serialize>(headers: &HeaderMap, value: T) -> Response {
-    if wants_binary(headers) {
-        match Serializer::<WireVersion>::serialize(&value) {
-            Ok(bytes) => {
-                ([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response()
-            },
-            Err(err) => encode_err(headers, ApiError::internal(err)),
-        }
-    } else {
-        Json(value).into_response()
-    }
-}
-
-/// Encode an error response using the same content negotiation as [`encode_ok`]. `err` is
-/// `hotshot_query_service::Error`, the exact type the old tide-disco `App` used, so both its
-/// status mapping and its wire shape (externally tagged enum) match byte-for-byte.
-fn encode_err(headers: &HeaderMap, err: ApiError) -> Response {
-    let status = wire_status(err.status());
-    if wants_binary(headers) {
-        match Serializer::<WireVersion>::serialize(&err) {
-            Ok(bytes) => (
-                status,
-                [(header::CONTENT_TYPE, "application/octet-stream")],
-                bytes,
-            )
-                .into_response(),
-            Err(_) => (status, Json(err)).into_response(),
-        }
-    } else {
-        (status, Json(err)).into_response()
-    }
+    wire::encode_ok::<QueryServiceWireFormat, _>(headers, value)
 }
 
 fn respond<T: Serialize>(headers: &HeaderMap, result: Result<T, ApiError>) -> Response {
-    match result {
-        Ok(v) => encode_ok(headers, v),
-        Err(e) => encode_err(headers, e),
-    }
+    wire::respond::<QueryServiceWireFormat, _>(headers, result)
 }
 
 /// Parses a path parameter the way tide-disco's `TaggedBase64`/`Integer` param types did,
@@ -136,10 +112,8 @@ fn enforce_range_limit(from: usize, until: usize, limit: usize) -> Result<(), av
     Ok(())
 }
 
-/// Tide-disco-compatible singleton-app healthcheck: a bare [`HealthStatus`], negotiated JSON or
-/// vbs binary from `Accept`.
 async fn healthcheck(headers: HeaderMap) -> Response {
-    encode_ok(&headers, HealthStatus::Available)
+    espresso_api::healthcheck_response(&headers)
 }
 
 // --- availability -----------------------------------------------------------------------------

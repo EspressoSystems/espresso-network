@@ -13,6 +13,7 @@ async-lock = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }
 committable = { workspace = true }
+espresso-api = { workspace = true }
 espresso-node = { workspace = true, default-features = false }
 espresso-types = { workspace = true, features = ["node"] }
 espresso-utils = { workspace = true, features = ["full"] }
@@ -31,7 +32,6 @@ serde_json = { workspace = true }
 surf-disco = { workspace = true }
 tagged-base64 = { workspace = true }
 test-utils = { workspace = true }
-tide-disco = { workspace = true }
 tokio = { workspace = true }
 tower-http = { workspace = true, features = ["cors"] }
 tracing = { workspace = true }
@@ -45,6 +45,7 @@ espresso-node = { workspace = true, default-features = false, features = ["testi
 jf-signature = { workspace = true }
 tempfile = { workspace = true }
 test-log = { workspace = true }
+tide-disco = { workspace = true }
 
 [lints]
 workspace = true

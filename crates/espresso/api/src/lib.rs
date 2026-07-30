@@ -7,6 +7,7 @@ pub mod handlers;
 mod tonic;
 pub mod v1;
 pub mod v2;
+pub mod wire;
 
 use tower::Layer;
 

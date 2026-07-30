@@ -9,14 +9,15 @@
 use std::sync::Arc;
 
 use axum::{
-    Json, Router,
+    Router,
     body::Bytes,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode as AxumStatusCode, header},
-    response::{IntoResponse, Response},
+    http::{HeaderMap, StatusCode as AxumStatusCode},
+    response::Response,
     routing::{get, post},
 };
 use committable::Committable;
+use espresso_api::wire::{self, DecodeFailure, WireFormat};
 use hotshot_builder_api::v0_1::{
     block_info::{
         AvailableBlockData, AvailableBlockHeaderInputV1, AvailableBlockHeaderInputV2,
@@ -34,9 +35,8 @@ use hotshot_types::{
 use serde::{Serialize, de::DeserializeOwned};
 use surf_disco::{Error as _, StatusCode};
 use tagged_base64::TaggedBase64;
-use tide_disco::healthcheck::HealthStatus;
 use tower_http::cors::{Any, CorsLayer};
-use vbs::{BinarySerializer, Serializer, version::StaticVersion};
+use vbs::version::StaticVersion;
 
 /// Binary framing version for VBS-negotiated responses, matching `hotshot_builder_api::v0_1`'s
 /// framing, which is what `BuilderClient` sends/expects.
@@ -44,74 +44,38 @@ type WireVersion = StaticVersion<0, 1>;
 
 type SharedState = Arc<ProxyGlobalState<espresso_types::SeqTypes>>;
 
-fn wants_binary(headers: &HeaderMap) -> bool {
-    headers
-        .get(header::ACCEPT)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.contains("application/octet-stream"))
-}
+/// Wire format of the builder API: [`WireVersion`] VBS framing and the [`BuilderApiError`]
+/// envelope.
+struct BuilderWireFormat;
 
-/// Maps tide-disco's `StatusCode` (what `BuilderApiError::status()` returns) onto axum's.
-fn wire_status(status: StatusCode) -> AxumStatusCode {
-    AxumStatusCode::from_u16(u16::from(status)).unwrap_or(AxumStatusCode::INTERNAL_SERVER_ERROR)
-}
+impl WireFormat for BuilderWireFormat {
+    type Error = BuilderApiError;
+    type Version = WireVersion;
 
-fn encode_ok<T: Serialize>(headers: &HeaderMap, value: T) -> Response {
-    if wants_binary(headers) {
-        match Serializer::<WireVersion>::serialize(&value) {
-            Ok(bytes) => {
-                ([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response()
-            },
-            Err(err) => encode_err(
-                headers,
-                BuilderApiError::Custom {
-                    message: err.to_string(),
-                    status: StatusCode::INTERNAL_SERVER_ERROR,
-                },
-            ),
-        }
-    } else {
-        Json(value).into_response()
+    fn status(err: &BuilderApiError) -> AxumStatusCode {
+        // Maps tide-disco's `StatusCode` (what `BuilderApiError::status()` returns) onto axum's.
+        AxumStatusCode::from_u16(u16::from(err.status()))
+            .unwrap_or(AxumStatusCode::INTERNAL_SERVER_ERROR)
     }
-}
 
-fn encode_err(headers: &HeaderMap, err: BuilderApiError) -> Response {
-    let status = wire_status(err.status());
-    if wants_binary(headers) {
-        match Serializer::<WireVersion>::serialize(&err) {
-            Ok(bytes) => (
-                status,
-                [(header::CONTENT_TYPE, "application/octet-stream")],
-                bytes,
-            )
-                .into_response(),
-            Err(_) => (status, Json(err)).into_response(),
+    fn serialize_failure(message: String) -> BuilderApiError {
+        BuilderApiError::Custom {
+            message,
+            status: StatusCode::INTERNAL_SERVER_ERROR,
         }
-    } else {
-        (status, Json(err)).into_response()
     }
 }
 
 fn respond<T: Serialize>(headers: &HeaderMap, result: Result<T, BuilderApiError>) -> Response {
-    match result {
-        Ok(v) => encode_ok(headers, v),
-        Err(e) => encode_err(headers, e),
-    }
+    wire::respond::<BuilderWireFormat, _>(headers, result)
 }
 
-/// Decodes a request body the way tide-disco's `body_auto` did: VBS for
-/// `application/octet-stream`, JSON for `application/json`.
 fn decode_body<T: DeserializeOwned>(headers: &HeaderMap, body: &[u8]) -> Result<T, RequestError> {
-    match headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-    {
-        Some("application/json") => serde_json::from_slice(body).map_err(|_| RequestError::Json),
-        Some("application/octet-stream") => {
-            Serializer::<WireVersion>::deserialize(body).map_err(|_| RequestError::Binary)
-        },
-        _ => Err(RequestError::UnsupportedContentType),
-    }
+    wire::decode_body::<WireVersion, T>(headers, body).map_err(|failure| match failure {
+        DecodeFailure::Json(_) => RequestError::Json,
+        DecodeFailure::Binary(_) => RequestError::Binary,
+        DecodeFailure::UnsupportedContentType => RequestError::UnsupportedContentType,
+    })
 }
 
 fn tb64_request_error(field: &str) -> BuilderApiError {
@@ -157,10 +121,8 @@ fn parse_sender_signature(
     Ok((sender, signature))
 }
 
-/// Tide-disco-compatible singleton-app healthcheck: a bare [`HealthStatus`], so
-/// `BuilderClient::connect` can decode it in both JSON and binary form.
 async fn healthcheck(headers: HeaderMap) -> Response {
-    encode_ok(&headers, HealthStatus::Available)
+    espresso_api::healthcheck_response(&headers)
 }
 
 // --- block_info -----------------------------------------------------------------------------

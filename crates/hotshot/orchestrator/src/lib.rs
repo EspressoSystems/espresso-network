@@ -21,15 +21,16 @@ use std::{
 use alloy::primitives::U256;
 use async_lock::RwLock;
 use axum::{
-    Json, Router,
+    Router,
     body::Bytes,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode, header},
-    response::{IntoResponse, Response},
+    http::{HeaderMap, StatusCode},
+    response::Response,
     routing::{get, post},
 };
 use client::{BenchResults, BenchResultsDownloadConfig};
 use csv::Writer;
+use espresso_api::wire::{self, WireFormat};
 use futures::{StreamExt, stream::FuturesUnordered};
 use hotshot_types::{
     PeerConfig,
@@ -46,7 +47,7 @@ use libp2p_identity::{
 use multiaddr::Multiaddr;
 use serde::{Serialize, de::DeserializeOwned};
 use surf_disco::Url;
-use tide_disco::{error::ServerError, healthcheck::HealthStatus};
+use tide_disco::error::ServerError;
 use tokio::net::TcpListener;
 use tower_http::cors::{Any, CorsLayer};
 use vbs::{BinarySerializer, Serializer, version::StaticVersion};
@@ -675,62 +676,28 @@ where
 /// Shared, lock-guarded orchestrator state, cloned into every axum handler via `State`.
 type SharedOrchestratorState<TYPES> = Arc<RwLock<OrchestratorState<TYPES>>>;
 
-fn wants_binary(headers: &HeaderMap) -> bool {
-    headers
-        .get(header::ACCEPT)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.contains("application/octet-stream"))
-}
+/// Wire format of the orchestrator: [`OrchestratorVersion`] VBS framing and tide-disco's
+/// `ServerError` envelope, which `OrchestratorClient` decodes.
+struct OrchestratorWireFormat;
 
-fn axum_status(status: tide_disco::StatusCode) -> StatusCode {
-    StatusCode::from_u16(u16::from(status)).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
-}
+impl WireFormat for OrchestratorWireFormat {
+    type Error = ServerError;
+    type Version = OrchestratorVersion;
 
-/// Encode a successful response body, negotiating VBS binary vs JSON from the `Accept` header, to
-/// match tide-disco's content negotiation for `OrchestratorClient`, whose surf-disco client
-/// defaults to `Accept: application/octet-stream`.
-fn encode_ok<T: Serialize>(headers: &HeaderMap, value: T) -> Response {
-    if wants_binary(headers) {
-        match Serializer::<OrchestratorVersion>::serialize(&value) {
-            Ok(bytes) => {
-                ([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response()
-            },
-            Err(err) => encode_err(
-                headers,
-                ServerError {
-                    status: tide_disco::StatusCode::INTERNAL_SERVER_ERROR,
-                    message: err.to_string(),
-                },
-            ),
-        }
-    } else {
-        Json(value).into_response()
+    fn status(err: &ServerError) -> StatusCode {
+        StatusCode::from_u16(u16::from(err.status)).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
     }
-}
 
-/// Encode an error response using the same content negotiation as [`encode_ok`].
-fn encode_err(headers: &HeaderMap, err: ServerError) -> Response {
-    let status = axum_status(err.status);
-    if wants_binary(headers) {
-        match Serializer::<OrchestratorVersion>::serialize(&err) {
-            Ok(bytes) => (
-                status,
-                [(header::CONTENT_TYPE, "application/octet-stream")],
-                bytes,
-            )
-                .into_response(),
-            Err(_) => (status, Json(err)).into_response(),
+    fn serialize_failure(message: String) -> ServerError {
+        ServerError {
+            status: tide_disco::StatusCode::INTERNAL_SERVER_ERROR,
+            message,
         }
-    } else {
-        (status, Json(err)).into_response()
     }
 }
 
 fn respond<T: Serialize>(headers: &HeaderMap, result: Result<T, ServerError>) -> Response {
-    match result {
-        Ok(value) => encode_ok(headers, value),
-        Err(err) => encode_err(headers, err),
-    }
+    wire::respond::<OrchestratorWireFormat, _>(headers, result)
 }
 
 fn malformed_body() -> ServerError {
@@ -762,10 +729,8 @@ fn decode_wrapped_peer_config<TYPES: NodeType>(
         .ok_or_else(malformed_body)
 }
 
-/// Tide-disco-compatible module healthcheck: a bare [`HealthStatus`], negotiated JSON or vbs
-/// binary from `Accept`.
 async fn healthcheck(headers: HeaderMap) -> Response {
-    encode_ok(&headers, HealthStatus::Available)
+    espresso_api::healthcheck_response(&headers)
 }
 
 async fn post_identity<TYPES: NodeType>(

@@ -12,6 +12,7 @@ axum = { workspace = true }
 blake3 = { workspace = true }
 clap = { workspace = true }
 csv = { workspace = true }
+espresso-api = { workspace = true }
 futures = { workspace = true }
 hotshot-types = { workspace = true }
 libp2p-identity = { workspace = true }

@@ -18,6 +18,7 @@ bincode = { workspace = true }
 bitvec = { workspace = true }
 circular-buffer = { workspace = true }
 clap = { workspace = true }
+espresso-api = { workspace = true }
 espresso-types = { workspace = true, features = ["node"] }
 espresso-utils = { workspace = true, features = ["full"] }
 futures = { workspace = true }
