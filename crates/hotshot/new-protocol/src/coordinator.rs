@@ -510,7 +510,14 @@ where
                     return Ok(ConsensusInput::AdvanceView(cert1))
                 }
                 Some(epoch_change) = self.cert_verifiers.epoch_change.next() => {
-                    return Ok(ConsensusInput::EpochChange(epoch_change.into_cert()))
+                    let epoch_change = epoch_change.into_cert();
+                    // The boundary leaf is final (Cert1 + Cert2), so seed a
+                    // commitment-only state for it: a validator whose
+                    // membership starts at this boundary can then build and
+                    // validate the new epoch's first proposals via catchup.
+                    self.state_manager
+                        .seed_from_header(epoch_change.proposal.clone());
+                    return Ok(ConsensusInput::EpochChange(epoch_change))
                 }
                 Some((cert1, state_cert)) = self.epoch_root_collector.next() => {
                     self.cert_verifiers.cert1.mark_completed(cert1.view_number());
@@ -899,6 +906,11 @@ where
                     epoch = ?epoch_change.cert1.epoch().map(|e| *e),
                     "send epoch change"
                 );
+                // A node that decided the boundary from broadcast Cert2s needs
+                // the boundary state seeded just like a receiver of an
+                // EpochChangeMessage; for members this is a no-op.
+                self.state_manager
+                    .seed_from_header(epoch_change.proposal.clone());
                 self.broadcast(
                     ConsensusMessage::EpochChange(epoch_change),
                     "broadcast epoch change",
