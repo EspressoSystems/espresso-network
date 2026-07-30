@@ -18,6 +18,7 @@ genesis = []
 anyhow = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }
+espresso-api = { workspace = true }
 espresso-node = { workspace = true, default-features = false }
 espresso-types = { workspace = true }
 futures = { workspace = true }

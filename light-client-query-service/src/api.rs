@@ -9,14 +9,12 @@ use std::{ops::Bound, time::Duration};
 
 use axum::{
     Json, Router,
-    extract::{
-        Path, State,
-        ws::{Message, WebSocket, WebSocketUpgrade},
-    },
+    extract::{Path, State, ws::WebSocketUpgrade},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::get,
 };
+use espresso_api::{drive_ws_stream, ws_format};
 use espresso_node::api::sql::DataSource;
 use espresso_types::SeqTypes;
 use futures::{StreamExt as _, TryStreamExt as _, stream::BoxStream};
@@ -142,29 +140,6 @@ fn enforce_range_limit(from: usize, until: usize, limit: usize) -> Result<(), av
 /// vbs binary from `Accept`.
 async fn healthcheck(headers: HeaderMap) -> Response {
     encode_ok(&headers, HealthStatus::Available)
-}
-
-async fn drive_ws_stream<T: Serialize + Send + 'static>(
-    mut socket: WebSocket,
-    mut stream: BoxStream<'static, T>,
-    binary: bool,
-) {
-    while let Some(item) = stream.next().await {
-        let msg = if binary {
-            match Serializer::<WireVersion>::serialize(&item) {
-                Ok(bytes) => Message::Binary(bytes.into()),
-                Err(_) => break,
-            }
-        } else {
-            match serde_json::to_string(&item) {
-                Ok(text) => Message::Text(text.into()),
-                Err(_) => break,
-            }
-        };
-        if socket.send(msg).await.is_err() {
-            break;
-        }
-    }
 }
 
 // --- availability -----------------------------------------------------------------------------
@@ -476,10 +451,10 @@ async fn stream_leaves(
     headers: HeaderMap,
     Path(height): Path<usize>,
 ) -> Response {
-    let binary = wants_binary(&headers);
+    let format = ws_format(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = ds.subscribe_leaves(height).await;
-        drive_ws_stream(socket, stream, binary).await;
+        drive_ws_stream(socket, stream, format).await;
     })
 }
 
@@ -528,10 +503,10 @@ async fn stream_headers(
     headers: HeaderMap,
     Path(height): Path<usize>,
 ) -> Response {
-    let binary = wants_binary(&headers);
+    let format = ws_format(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = ds.subscribe_headers(height).await;
-        drive_ws_stream(socket, stream, binary).await;
+        drive_ws_stream(socket, stream, format).await;
     })
 }
 
@@ -580,10 +555,10 @@ async fn stream_blocks(
     headers: HeaderMap,
     Path(height): Path<usize>,
 ) -> Response {
-    let binary = wants_binary(&headers);
+    let format = ws_format(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = ds.subscribe_blocks(height).await;
-        drive_ws_stream(socket, stream, binary).await;
+        drive_ws_stream(socket, stream, format).await;
     })
 }
 
@@ -632,10 +607,10 @@ async fn stream_payloads(
     headers: HeaderMap,
     Path(height): Path<usize>,
 ) -> Response {
-    let binary = wants_binary(&headers);
+    let format = ws_format(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = ds.subscribe_payloads(height).await;
-        drive_ws_stream(socket, stream, binary).await;
+        drive_ws_stream(socket, stream, format).await;
     })
 }
 
@@ -684,10 +659,10 @@ async fn stream_vid_common(
     headers: HeaderMap,
     Path(height): Path<usize>,
 ) -> Response {
-    let binary = wants_binary(&headers);
+    let format = ws_format(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = ds.subscribe_vid_common(height).await;
-        drive_ws_stream(socket, stream, binary).await;
+        drive_ws_stream(socket, stream, format).await;
     })
 }
 
@@ -745,10 +720,10 @@ async fn stream_transactions(
     headers: HeaderMap,
     Path(height): Path<usize>,
 ) -> Response {
-    let binary = wants_binary(&headers);
+    let format = ws_format(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = transactions_stream(ds.subscribe_blocks(height).await, None);
-        drive_ws_stream(socket, stream, binary).await;
+        drive_ws_stream(socket, stream, format).await;
     })
 }
 
@@ -758,10 +733,10 @@ async fn stream_transactions_ns(
     headers: HeaderMap,
     Path((height, namespace)): Path<(usize, i64)>,
 ) -> Response {
-    let binary = wants_binary(&headers);
+    let format = ws_format(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = transactions_stream(ds.subscribe_blocks(height).await, Some(namespace));
-        drive_ws_stream(socket, stream, binary).await;
+        drive_ws_stream(socket, stream, format).await;
     })
 }
 
