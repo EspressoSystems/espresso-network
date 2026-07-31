@@ -1,4 +1,5 @@
 pub mod block;
+pub mod cert_verifier;
 pub mod client;
 pub mod consensus;
 pub mod coordinator;

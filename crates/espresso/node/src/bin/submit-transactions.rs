@@ -14,6 +14,7 @@ use clap::Parser;
 use committable::{Commitment, Committable};
 #[cfg(feature = "benchmarking")]
 use csv::Writer;
+use espresso_api::healthcheck_response;
 use espresso_node::SequencerApiVersion;
 use espresso_types::{SeqTypes, Transaction, parse_duration, parse_size};
 use espresso_utils::logging;
@@ -28,6 +29,7 @@ use rand_chacha::ChaChaRng;
 use rand_distr::Distribution;
 use surf_disco::{Client, Url, reexports::WebSocketConfig};
 use tokio::{net::TcpListener, task::spawn, time::sleep};
+use tower_http::cors::{Any, CorsLayer};
 use vbs::version::StaticVersionType;
 
 /// Submit random transactions to an Espresso Sequencer.
@@ -510,7 +512,14 @@ async fn submit_transactions<ApiVer: StaticVersionType>(
 }
 
 async fn server(port: u16) {
-    let app = axum::Router::new().route("/healthcheck", get(healthcheck));
+    let app = axum::Router::new()
+        .route("/healthcheck", get(healthcheck))
+        .layer(
+            CorsLayer::new()
+                .allow_methods(Any)
+                .allow_headers(Any)
+                .allow_origin(Any),
+        );
     let addr = format!("0.0.0.0:{port}");
     let listener = match TcpListener::bind(&addr).await {
         Ok(listener) => listener,
@@ -525,7 +534,7 @@ async fn server(port: u16) {
 }
 
 async fn healthcheck(headers: HeaderMap) -> Response {
-    espresso_api::healthcheck_response(&headers)
+    healthcheck_response(&headers)
 }
 
 fn random_transaction(opt: &Options, rng: &mut ChaChaRng) -> Transaction {

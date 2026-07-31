@@ -59,6 +59,10 @@ pub struct Genesis {
     pub chain_id: ChainId,
 }
 
+/// Maximum distance between a requested leaf and the `finalized` hint sent to the server. Servers
+/// reject or ignore distant hints; beyond this we omit the hint and verify against a quorum.
+const MAX_FINALIZED_HINT_DISTANCE: u64 = 500;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "clap", derive(clap::Parser))]
 pub struct LightClientOptions {
@@ -200,6 +204,13 @@ where
         } else {
             None
         };
+        let known_finalized = known_finalized.filter(|anchor| match id {
+            LeafId::Number(n) => {
+                anchor.height().saturating_sub(n as u64) <= MAX_FINALIZED_HINT_DISTANCE
+            },
+            // Hash lookups only ever return the requested leaf itself, handled above.
+            LeafId::Hash(_) => true,
+        });
         let known_finalized = known_finalized.as_ref().map(LeafQueryData::leaf);
         self.fetch_leaf_from_server(id, known_finalized, quorum)
             .await
@@ -946,6 +957,28 @@ mod test {
 
         let db = SqliteStorage::default().await.unwrap();
         db.insert_leaf(client.leaf(2).await).await.unwrap();
+
+        let lc = LightClient::from_genesis(db, client.clone(), client.genesis().await);
+        assert_eq!(
+            lc.fetch_leaf(LeafId::Number(1)).await.unwrap(),
+            client.leaf(1).await,
+        );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_leaf_distant_upper_bound() {
+        let client = TestClient::default();
+        client.reject_distant_finalized_hints(16).await;
+
+        // A cached leaf far above the requested one must not be sent as the finalized hint; the
+        // fetch should use a quorum-verified proof instead.
+        let distant = MAX_FINALIZED_HINT_DISTANCE + 2;
+        let distant_leaf = leaf_chain(distant..=distant, DRB_AND_HEADER_UPGRADE_VERSION)
+            .await
+            .remove(0);
+        let db = SqliteStorage::default().await.unwrap();
+        db.insert_leaf(distant_leaf).await.unwrap();
 
         let lc = LightClient::from_genesis(db, client.clone(), client.genesis().await);
         assert_eq!(

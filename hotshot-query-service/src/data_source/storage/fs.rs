@@ -644,6 +644,15 @@ where
             .context(NotFoundSnafu)?;
         self.inner.get_block((*height as usize).into())
     }
+
+    async fn load_cert2(&mut self, height: u64) -> QueryResult<Option<Certificate2<Types>>> {
+        Ok(self
+            .inner
+            .cert2_storage
+            .iter()
+            .nth(height as usize)
+            .flatten())
+    }
 }
 
 impl<Types: NodeType> UpdateAvailabilityStorage<Types>
@@ -916,15 +925,6 @@ where
 
     async fn latest_qc_chain(&mut self) -> QueryResult<Option<[CertificatePair<Types>; 2]>> {
         Ok(self.inner.latest_qc_chain.clone())
-    }
-
-    async fn load_cert2(&mut self, height: u64) -> QueryResult<Option<Certificate2<Types>>> {
-        Ok(self
-            .inner
-            .cert2_storage
-            .iter()
-            .nth(height as usize)
-            .flatten())
     }
 
     async fn load_earliest_cert2(

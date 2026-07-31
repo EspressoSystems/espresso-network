@@ -108,6 +108,7 @@ use futures::{
 };
 use service::data_state::MAX_VOTERS_HISTORY;
 use tokio::{net::TcpListener, spawn};
+use tower_http::cors::{Any, CorsLayer};
 use url::Url;
 
 use crate::{
@@ -218,11 +219,20 @@ pub async fn run_standalone_service(options: Options) {
     // tide-disco served `details` both directly (e.g. `node-validator/details`) and under a
     // major-version prefix (`v0/node-validator/details`), redirecting the former to the latter;
     // we serve both forms directly instead.
-    let node_validator_api = api::node_validator::v0::router::<MainState>();
+    let api = Router::new().nest(
+        "/node-validator",
+        api::node_validator::v0::router::<MainState>(),
+    );
     let app = Router::new()
-        .nest("/node-validator", node_validator_api.clone())
-        .nest("/v0/node-validator", node_validator_api)
-        .with_state(state);
+        .merge(api.clone())
+        .nest("/v0", api)
+        .with_state(state)
+        .layer(
+            CorsLayer::new()
+                .allow_methods(Any)
+                .allow_headers(Any)
+                .allow_origin(Any),
+        );
 
     let (leaf_and_block_pair_sender, leaf_and_block_pair_receiver) = mpsc::channel(10);
 

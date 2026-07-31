@@ -33,7 +33,7 @@ use futures::{
 use hotshot_new_protocol::{storage::NewProtocolStorage, utils::verify_new_protocol_leaf_chain};
 use hotshot_types::{
     ValidatorConfig,
-    data::{EpochNumber, ViewNumber},
+    data::ViewNumber,
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     network::NetworkConfig,
@@ -42,7 +42,7 @@ use hotshot_types::{
         ValidatedState as ValidatedStateTrait,
         metrics::{Counter, CounterFamily, Metrics},
     },
-    utils::{epoch_from_block_number, verify_leaf_chain},
+    utils::verify_leaf_chain,
 };
 use itertools::Itertools;
 use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme, prelude::MerkleNode};
@@ -286,20 +286,9 @@ pub(crate) async fn verify_legacy_leaf_chain(
     height: u64,
 ) -> anyhow::Result<Leaf2> {
     let upgrade_lock = UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(EPOCH_VERSION));
-    let epoch = EpochNumber::new(epoch_from_block_number(height, *coordinator.epoch_height()));
-    let membership = coordinator
-        .stake_table_for_epoch(Some(epoch))
-        .map_err(|err| anyhow!("no stake table available for epoch {epoch}: {err:?}"))?;
-    let stake_table: Vec<_> = membership.stake_table().cloned().collect();
-    verify_leaf_chain(
-        leaf_chain,
-        &stake_table,
-        membership.success_threshold(),
-        height,
-        &upgrade_lock,
-    )
-    .await
-    .with_context(|| format!("failed to verify leaf chain at height {height}"))
+    verify_leaf_chain(leaf_chain, coordinator, height, &upgrade_lock)
+        .await
+        .with_context(|| format!("failed to verify leaf chain at height {height}"))
 }
 
 #[async_trait]

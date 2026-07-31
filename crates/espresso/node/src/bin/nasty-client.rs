@@ -31,6 +31,7 @@ use axum::{
 use clap::Parser;
 use committable::Committable;
 use derivative::Derivative;
+use espresso_api::healthcheck_response;
 use espresso_node::SequencerApiVersion;
 use espresso_types::{
     ADVZNamespaceProofQueryData, BlockMerkleTree, FeeMerkleTree, Header, SeqTypes, parse_duration,
@@ -61,6 +62,7 @@ use strum::{EnumDiscriminants, VariantArray};
 use surf_disco::{Error, StatusCode, Url, error::ClientError, socket};
 use time::OffsetDateTime;
 use tokio::{net::TcpListener, task::spawn, time::sleep};
+use tower_http::cors::{Any, CorsLayer};
 use tracing::info_span;
 
 /// An adversarial stress test for sequencer APIs.
@@ -1385,7 +1387,13 @@ async fn serve(port: u16, metrics: PrometheusMetrics) {
         .route("/healthcheck", get(healthcheck))
         .route("/status/metrics", get(status_metrics))
         .route("/v0/status/metrics", get(status_metrics))
-        .with_state(metrics);
+        .with_state(metrics)
+        .layer(
+            CorsLayer::new()
+                .allow_methods(Any)
+                .allow_headers(Any)
+                .allow_origin(Any),
+        );
 
     let addr = format!("0.0.0.0:{port}");
     let listener = match TcpListener::bind(&addr).await {
@@ -1401,7 +1409,7 @@ async fn serve(port: u16, metrics: PrometheusMetrics) {
 }
 
 async fn healthcheck(headers: HeaderMap) -> Response {
-    espresso_api::healthcheck_response(&headers)
+    healthcheck_response(&headers)
 }
 
 /// Prometheus text exposition of `metrics`, matching the `text/plain; charset=utf-8` content type

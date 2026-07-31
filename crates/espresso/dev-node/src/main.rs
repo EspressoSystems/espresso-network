@@ -27,6 +27,7 @@ use axum::{
     routing::{get, post},
 };
 use clap::{Parser, ValueEnum};
+use espresso_api::healthcheck_response;
 use espresso_contract_deployer::{
     self as deployer, Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS, DeployedContracts,
     HttpProviderWithWallet, network_config::light_client_genesis_from_stake_table,
@@ -63,6 +64,7 @@ use staking_cli::demo::{DelegationConfig, StakingTransactions};
 use tempfile::NamedTempFile;
 use test_utils::reserve_tcp_port;
 use tokio::spawn;
+use tower_http::cors::{Any, CorsLayer};
 use url::Url;
 use vbs::version::StaticVersionType;
 use versions::Upgrade;
@@ -933,23 +935,32 @@ async fn set_hotshot_up(
 }
 
 async fn healthcheck(headers: HeaderMap) -> Response {
-    espresso_api::healthcheck_response(&headers)
+    healthcheck_response(&headers)
 }
 
 /// Serves the dev-info/set-hotshot-down/set-hotshot-up routes at both the `/v0/api/...` forms
 /// tide-disco served directly and the unversioned `/api/...` forms it served via a redirect
 /// (used by the Go SDK and surf-disco clients, respectively).
 fn dev_node_router(state: DevNodeState) -> Router {
-    let api = Router::new()
-        .route("/dev-info", get(get_dev_info))
-        .route("/set-hotshot-down", post(set_hotshot_down))
-        .route("/set-hotshot-up", post(set_hotshot_up))
-        .with_state(state);
+    let api = Router::new().nest(
+        "/api",
+        Router::new()
+            .route("/dev-info", get(get_dev_info))
+            .route("/set-hotshot-down", post(set_hotshot_down))
+            .route("/set-hotshot-up", post(set_hotshot_up))
+            .with_state(state),
+    );
 
     Router::new()
-        .nest("/api", api.clone())
-        .nest("/v0/api", api)
+        .merge(api.clone())
+        .nest("/v0", api)
         .route("/healthcheck", get(healthcheck))
+        .layer(
+            CorsLayer::new()
+                .allow_methods(Any)
+                .allow_headers(Any)
+                .allow_origin(Any),
+        )
 }
 
 async fn run_dev_node_server<ApiVer: StaticVersionType + 'static>(

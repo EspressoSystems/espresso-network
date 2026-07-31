@@ -259,6 +259,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/free-disk-space
       - uses: ./.github/actions/install-foundry
+      - uses: ./.github/actions/install-postgres
       - uses: taiki-e/install-action@nextest
 
       - name: Download archive
@@ -373,6 +374,7 @@ jobs:
       - uses: ./.github/actions/install-process-compose
         with:
           version: v1.75.2
+      - uses: ./.github/actions/install-native-demo-deps
 
       - name: Download archive
         uses: actions/download-artifact@v8
@@ -433,6 +435,7 @@ jobs:
       - uses: ./.github/actions/install-process-compose
         with:
           version: v1.75.2
+      - uses: ./.github/actions/install-native-demo-deps
       - uses: ./.github/actions/free-disk-space
 
         # TODO: this downloads all (available) artifacts, which is a bit wasteful but artifact

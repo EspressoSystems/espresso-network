@@ -12,6 +12,7 @@ axum = { workspace = true }
 blake3 = { workspace = true }
 clap = { workspace = true }
 csv = { workspace = true }
+espresso-api = { workspace = true }
 futures = { workspace = true }
 hotshot-types = { workspace = true }
 libp2p-identity = { workspace = true }
@@ -25,6 +26,7 @@ surf-disco = { workspace = true }
 tide-disco = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }
+tower-http = { workspace = true, features = ["cors"] }
 tracing = { workspace = true }
 vbs = { workspace = true }
 

@@ -14,6 +14,7 @@ use axum::{
     response::Response,
     routing::get,
 };
+use espresso_api::wire::wants_binary;
 use espresso_types::{BackoffParams, SeqTypes, v0_3::AuthenticatedValidator};
 use futures::{
     FutureExt, Sink, SinkExt, Stream, StreamExt,
@@ -70,13 +71,6 @@ pub trait StateClientMessageSender<K> {
 
 #[derive(Debug)]
 pub enum EndpointError {}
-
-fn wants_binary(headers: &HeaderMap) -> bool {
-    headers
-        .get(axum::http::header::ACCEPT)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.contains("application/octet-stream"))
-}
 
 /// Decode a message received from the `details` socket. Mirrors tide-disco's `Connection` stream
 /// impl: binary frames are vbs, text frames are JSON, decoded according to the frame actually
@@ -241,8 +235,8 @@ where
 
 /// Builds the `node-validator` module's routes. tide-disco served `details` both directly and
 /// under a major-version prefix (`v0/details`), redirecting the former to the latter; we serve
-/// both forms directly instead, by nesting this router at both `/node-validator` and
-/// `/v0/node-validator`.
+/// both forms directly instead, by mounting the `/node-validator` tree at the root and under
+/// `/v0`.
 pub fn router<S>() -> Router<S>
 where
     S: StateClientMessageSender<Sender<ServerMessage>> + Clone + Send + Sync + 'static,

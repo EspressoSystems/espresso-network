@@ -292,16 +292,16 @@ impl<T: schemars::JsonSchema> aide::operation::OperationInput for SendQuery<T> {
     }
 }
 
-/// Wire format for a WebSocket stream — negotiated from the upgrade request's `Accept` header
+/// Wire format for a WebSocket stream, negotiated from the upgrade request's `Accept` header
 /// to match tide-disco. surf-disco clients default to `application/octet-stream`, so production
 /// stream consumers expect VBS-encoded `Message::Binary` frames.
 #[derive(Clone, Copy)]
-enum WsFormat {
+pub enum WsFormat {
     Binary,
     Json,
 }
 
-fn ws_format(headers: &HeaderMap) -> WsFormat {
+pub fn ws_format(headers: &HeaderMap) -> WsFormat {
     let accept = headers
         .get(header::ACCEPT)
         .and_then(|v| v.to_str().ok())
@@ -313,7 +313,11 @@ fn ws_format(headers: &HeaderMap) -> WsFormat {
     }
 }
 
-async fn drive_ws_stream<T: Serialize>(
+/// Forwards `stream` over `socket` in the negotiated [`WsFormat`] until the stream ends or the
+/// client disconnects, then performs the close handshake. This is the one shared way to serve a
+/// tide-disco-style socket stream endpoint; hand-rolled write-only loops leak the task and its
+/// data-source subscription whenever a client disconnects while the stream is quiet.
+pub async fn drive_ws_stream<T: Serialize>(
     mut socket: axum::extract::ws::WebSocket,
     stream: BoxStream<'static, T>,
     format: WsFormat,
@@ -1015,10 +1019,13 @@ where
     };
 
     let get_cert2 = |State(state): State<S>, Path(height): Path<u64>| async move {
-        <S as v1::HotShotAvailabilityApi>::get_cert2(&state, height)
-            .await
-            .map(ApiJson)
-            .map_err(ApiError::Internal)
+        match <S as v1::HotShotAvailabilityApi>::get_cert2(&state, height).await {
+            Ok(Some(cert2)) => Ok(ApiJson(cert2)),
+            Ok(None) => Err(ApiError::NotFound(anyhow::anyhow!(
+                "no cert2 available for height {height}"
+            ))),
+            Err(err) => Err(ApiError::Internal(err)),
+        }
     };
 
     // WebSocket streaming handlers

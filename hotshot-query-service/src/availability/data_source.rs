@@ -14,7 +14,7 @@ use std::ops::{Bound, RangeBounds};
 
 use async_trait::async_trait;
 use futures::{
-    future::Future,
+    future::{Future, FutureExt},
     stream::{BoxStream, StreamExt},
 };
 pub use hotshot_new_protocol::message::Certificate2;
@@ -31,7 +31,7 @@ use super::{
         QueryablePayload, TransactionHash, VidCommonMetadata, VidCommonQueryData,
     },
 };
-use crate::{Header, Payload, QueryResult, types::HeightIndexed};
+use crate::{Header, Payload, types::HeightIndexed};
 
 pub type FetchStream<T> = BoxStream<'static, Fetch<T>>;
 
@@ -226,8 +226,8 @@ where
             .boxed()
     }
 
-    async fn get_cert2(&self, _height: u64) -> QueryResult<Option<Certificate2<Types>>> {
-        Ok(None)
+    async fn get_cert2(&self, _height: u64) -> Fetch<Certificate2<Types>> {
+        Fetch::Pending(futures::future::pending().boxed())
     }
 }
 

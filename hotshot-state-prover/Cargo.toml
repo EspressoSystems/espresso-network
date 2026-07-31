@@ -23,6 +23,7 @@ ark-std = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }
 displaydoc = { workspace = true }
+espresso-api = { workspace = true }
 espresso-contract-deployer = { workspace = true }
 espresso-types = { workspace = true, features = ["node"] }
 espresso-utils = { workspace = true, features = ["full"] }
@@ -51,6 +52,7 @@ surf-disco = { workspace = true }
 tide-disco = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }
+tower-http = { workspace = true, features = ["cors"] }
 tracing = { workspace = true }
 url = { workspace = true }
 vbs = { workspace = true }

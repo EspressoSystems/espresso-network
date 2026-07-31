@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Native postgres for the demo: initdb, create the espresso db, run in foreground.
+set -euo pipefail
+
+readonly SCRIPT_NAME="${0##*/}"
+
+usage() {
+  cat <<EOF
+Usage: ${SCRIPT_NAME} PORT DATADIR
+
+Start a native postgres instance bound to 127.0.0.1:PORT, storing data
+and the unix socket under DATADIR, with a "root" superuser (trust auth)
+and an "espresso" database.
+
+ARGUMENTS:
+  PORT      TCP port for postgres to listen on
+  DATADIR   Data directory to initialize (created if missing; must be empty if it exists)
+
+OPTIONS:
+  -h, --help   Show this help
+EOF
+}
+
+err() {
+  echo "[${SCRIPT_NAME}] $*" >&2
+}
+
+main() {
+  if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    usage
+    exit 0
+  fi
+
+  if [[ $# -ne 2 ]]; then
+    err "Expected 2 arguments, got $#"
+    usage >&2
+    exit 1
+  fi
+
+  local port="$1"
+  local datadir="$2"
+  local pg_pid
+
+  initdb -D "${datadir}" -U root --auth=trust >/dev/null
+
+  postgres -D "${datadir}" -p "${port}" -k "${datadir}" -h 127.0.0.1 &
+  pg_pid=$!
+
+  # SIGINT = fast shutdown (SIGTERM waits for clients). Flag lets the readiness
+  # loop exit if signalled before postgres is ready.
+  local shutting_down=0
+  trap 'shutting_down=1; kill -INT "${pg_pid}" 2>/dev/null' TERM INT
+
+  until pg_isready -h 127.0.0.1 -p "${port}" >/dev/null 2>&1; do
+    [[ "${shutting_down}" -eq 1 ]] && break
+    sleep 0.5
+  done
+
+  if [[ "${shutting_down}" -eq 0 ]]; then
+    createdb -h 127.0.0.1 -p "${port}" -U root espresso
+  fi
+
+  # first wait returns on trap; second blocks until postgres actually exits.
+  wait "${pg_pid}" || true
+  wait "${pg_pid}" 2>/dev/null || true
+}
+
+main "$@"

@@ -10,8 +10,8 @@ use hotshot_types::{
     simple_certificate::check_qc_state_cert_correspondence,
     simple_vote::HasEpoch,
     stake_table::StakeTableEntries,
-    traits::node_implementation::NodeType,
-    utils::is_epoch_root,
+    traits::{block_contents::BlockHeader, node_implementation::NodeType},
+    utils::{is_epoch_root, is_last_block},
     vote::{Certificate, HasViewNumber},
 };
 use hotshot_utils::anytrace;
@@ -90,6 +90,7 @@ impl<T: NodeType> ProposalValidator<T> {
         self.tasks.spawn(async move {
             let sender = v.signature(&p.proposal).await?;
             v.justify_qc(&p.proposal.data).await?;
+            v.next_epoch_justify_qc(&p.proposal.data).await?;
             v.view_change_evidence(&p.proposal.data).await?;
             v.state_cert(&p.proposal.data).await?;
             let validated_proposal = ValidatedProposal {
@@ -222,6 +223,36 @@ impl<T: NodeType> Validator<T> {
         }
     }
 
+    /// Verify the next-epoch justify QC on the first proposal of an epoch.
+    ///
+    /// If the previous block is the last block of an epoch, this proposal is
+    /// the first of the new epoch and must carry a `next_epoch_justify_qc`
+    /// over the same leaf as its justify QC.
+    async fn next_epoch_justify_qc(&self, proposal: &Proposal<T>) -> Result<()> {
+        let block_number = proposal.block_header.block_number();
+        if !is_last_block(block_number.saturating_sub(1), self.epoch_height) {
+            return Ok(());
+        }
+        let Some(cert2) = proposal.next_epoch_justify_qc.as_ref() else {
+            return Err(ValidationError::MissingNextEpochJustifyQc);
+        };
+        if cert2.data.leaf_commit != proposal.justify_qc.data.leaf_commit {
+            return Err(ValidationError::NextEpochJustifyQcMismatch);
+        }
+        let Some(epoch) = proposal.justify_qc.epoch() else {
+            return Err(ValidationError::MissingEpoch(
+                proposal.view_number,
+                "justify_qc",
+            ));
+        };
+        let membership = self.membership(epoch).await?;
+        let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
+        let threshold = membership.success_threshold();
+        cert2
+            .is_valid_cert(&entries, threshold, &self.upgrade_lock)
+            .map_err(ValidationError::InvalidNextEpochJustifyQc)
+    }
+
     /// Validate the proposal's view-change evidence (timeout certificate).
     async fn view_change_evidence(&self, proposal: &Proposal<T>) -> Result<()> {
         let view = proposal.view_number();
@@ -303,6 +334,15 @@ pub enum ValidationError {
 
     #[error("invalid proposal justify qc: {0}")]
     InvalidJustifyQc(#[source] anytrace::Error),
+
+    #[error("first proposal of an epoch is missing next_epoch_justify_qc")]
+    MissingNextEpochJustifyQc,
+
+    #[error("next_epoch_justify_qc does not match the justify qc leaf commitment")]
+    NextEpochJustifyQcMismatch,
+
+    #[error("invalid next_epoch_justify_qc: {0}")]
+    InvalidNextEpochJustifyQc(#[source] anytrace::Error),
 
     #[error("vid share does not match proposal")]
     VidCommitmentDoesNotMatchProposal,

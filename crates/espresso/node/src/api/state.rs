@@ -2012,10 +2012,12 @@ where
     }
 
     async fn get_cert2(&self, height: u64) -> anyhow::Result<Option<Self::Cert2>> {
-        self.data_source
+        Ok(self
+            .data_source
             .get_cert2(height)
             .await
-            .map_err(|e| anyhow::anyhow!("{}", e))
+            .with_timeout(Duration::from_millis(500))
+            .await)
     }
 
     async fn stream_leaves(&self, from: usize) -> anyhow::Result<BoxStream<'static, Self::Leaf>> {
@@ -3085,26 +3087,15 @@ where
             .await
             .ok_or_else(|| not_found(format!("unknown leaf {requested}")))?;
 
-        let proof_result = if let Some(finalized) = finalized {
-            crate::api::light_client::get_leaf_proof_with_finalized_assumption(
-                ds,
-                requested_leaf,
-                finalized as usize,
-                fetch_timeout,
-            )
-            .await
-        } else if requested_leaf.header().version() >= versions::NEW_PROTOCOL_VERSION {
-            crate::api::light_client::get_leaf_proof_with_cert2(ds, requested_leaf, fetch_timeout)
-                .await
-        } else {
-            crate::api::light_client::get_leaf_proof_with_qc_chain(
-                ds,
-                requested_leaf,
-                fetch_timeout,
-            )
-            .await
-        };
-        proof_result.map_err(|err| anyhow::anyhow!("{err}"))
+        crate::api::light_client::get_leaf_proof(
+            ds,
+            requested_leaf,
+            finalized.map(|f| f as usize),
+            fetch_timeout,
+            lc_leaf_proof_chain_limit(),
+        )
+        .await
+        .map_err(|err| anyhow::anyhow!("{err}"))
     }
 
     async fn get_header_proof(
@@ -3330,6 +3321,10 @@ pub(crate) fn lc_error(err: hotshot_query_service::Error) -> anyhow::Error {
         StatusCode::BAD_REQUEST => bad_request(err.to_string()),
         _ => anyhow::anyhow!("{err}"),
     }
+}
+
+fn lc_leaf_proof_chain_limit() -> usize {
+    crate::api::light_client::Options::default().leaf_proof_chain_limit
 }
 
 // ============================================================================
