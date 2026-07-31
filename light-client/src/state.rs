@@ -1816,6 +1816,19 @@ mod test {
             "{err:#}"
         );
     }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_genesis_round_trip() {
+        let client = TestClient::default();
+        let genesis = client.genesis().await;
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            genesis.clone(),
+        );
+        assert_eq!(lc.genesis(), genesis);
+    }
 }
 
 #[cfg(all(test, feature = "rlp"))]
