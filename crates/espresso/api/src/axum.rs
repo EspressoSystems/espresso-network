@@ -382,23 +382,25 @@ where
     let router_v1 = create_router_v1(state.clone());
     let router_v2 = create_router_v2(state);
 
-    with_top_level_routes(router_v2.merge(router_v1))
+    with_top_level_routes(router_v2.merge(router_v1)).layer(cors_layer())
 }
 
 /// Add the routes that every mode serves regardless of which API modules are enabled:
-/// `/`, `/healthcheck`, and `/version`.
+/// `/`, `/healthcheck`, `/v1/{module}/healthcheck`, and `/version`. Callers apply CORS.
 pub(crate) fn with_top_level_routes(router: Router) -> Router {
     router
         .route("/", get(redirect_to_docs))
         .route("/healthcheck", get(healthcheck))
         .route("/v1/{module}/healthcheck", get(module_healthcheck))
         .route("/version", get(version))
-        .layer(
-            CorsLayer::new()
-                .allow_methods(Any)
-                .allow_headers(Any)
-                .allow_origin(Any),
-        )
+}
+
+/// Permissive CORS, so browser clients served from another origin can read every response.
+pub(crate) fn cors_layer() -> CorsLayer {
+    CorsLayer::new()
+        .allow_methods(Any)
+        .allow_headers(Any)
+        .allow_origin(Any)
 }
 
 /// Health status of an application.
@@ -3943,6 +3945,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
     use super::*;
 
     fn rewritten_uri(uri: &str) -> String {
@@ -4752,7 +4756,7 @@ mod tests {
         String::from_utf8(bytes.to_vec()).expect("response body is utf8")
     }
 
-    /// Checks that every response from a router built with `with_top_level_routes` carries
+    /// Checks that every response carries
     /// `Access-Control-Allow-Origin: *`: top-level routes, API routes merged in by the caller,
     /// error responses, and 404s. Also checks that an OPTIONS preflight is answered with the
     /// allow-origin, allow-methods, and allow-headers a browser requires.
@@ -4765,7 +4769,8 @@ mod tests {
                     "/v1/failing",
                     get(|| async { StatusCode::INTERNAL_SERVER_ERROR }),
                 ),
-        );
+        )
+        .layer(cors_layer());
 
         let allow_origin = |resp: &Response, uri: &str| {
             resp.headers()
@@ -4817,6 +4822,43 @@ mod tests {
                 .get(header::ACCESS_CONTROL_ALLOW_HEADERS)
                 .expect("allow-headers on preflight"),
             "*"
+        );
+    }
+
+    /// Serves with zero connection slots so every request is shed, and checks the 429 still
+    /// carries `Access-Control-Allow-Origin: *`.
+    #[tokio::test]
+    async fn shed_requests_carry_cors_headers() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(crate::serve_router(
+            listener,
+            "test",
+            Router::new().route("/v1/status/block-height", get(|| async { "0" })),
+            Some(0),
+        ));
+
+        let mut sock = tokio::net::TcpStream::connect(addr).await.unwrap();
+        sock.write_all(
+            b"GET /v1/status/block-height HTTP/1.1\r\nHost: localhost\r\nOrigin: https://example.com\r\n\r\n",
+        )
+        .await
+        .unwrap();
+        let mut head = Vec::new();
+        let mut buf = [0u8; 512];
+        while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+            let n = sock.read(&mut buf).await.unwrap();
+            assert!(
+                n > 0,
+                "connection closed before the response head: {head:?}"
+            );
+            head.extend_from_slice(&buf[..n]);
+        }
+        let head = String::from_utf8_lossy(&head).to_ascii_lowercase();
+        assert!(head.contains("429"), "request must be shed: {head}");
+        assert!(
+            head.contains("access-control-allow-origin: *"),
+            "no CORS header on 429: {head}"
         );
     }
 
