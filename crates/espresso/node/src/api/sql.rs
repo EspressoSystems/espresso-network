@@ -2056,11 +2056,13 @@ mod tests {
         gc.collect(&storage).await.unwrap();
         assert_eq!(fee_state_heights(&storage).await, [2, 3, 4, 5]);
 
+        // Resumes from the pruned height rather than rescanning from 0, and again keeps the
+        // version at the new pruned height.
         for height in 6..=8 {
             write_fee_state(&storage, account, 100 * height, height).await;
         }
         gc.collect(&storage).await.unwrap();
-        assert_eq!(fee_state_heights(&storage).await, [6, 7, 8]);
+        assert_eq!(fee_state_heights(&storage).await, [5, 6, 7, 8]);
 
         let mut tx = storage.read().await.unwrap();
         assert_eq!(tx.load_state_pruned_height().await.unwrap(), Some(5));
