@@ -253,6 +253,9 @@ mod stake_table_state_rlp {
         fn try_from(state: &StakeTableState) -> Result<Self, Self::Error> {
             // The HashSets of used keys do not have a canonical order, so we need to sort them to
             // make this format canonical.
+            let mut validators = state.validators.values().cloned().collect::<Vec<_>>();
+            validators.sort_by_key(|v| v.account);
+
             let mut validator_exits = state.validator_exits.iter().copied().collect::<Vec<_>>();
             validator_exits.sort();
 
@@ -281,9 +284,7 @@ mod stake_table_state_rlp {
             used_x25519_keys.sort();
 
             Ok(Self {
-                // `IndexMap` has a canonical iteration order over the values, so it is safe to
-                // simply read the validators into a `Vec`.
-                validators: state.validators.values().cloned().collect(),
+                validators,
                 validator_exits,
                 used_bls_keys,
                 used_schnorr_keys,
@@ -5003,7 +5004,7 @@ mod rlp_tests {
     #[test]
     fn test_registered_validator_round_canonical_order() {
         let seed = [0; 32];
-        let validator = RegisteredValidator {
+        let validator1 = RegisteredValidator {
             account: Address::random(),
             stake_table_key: Some(BLSPubKey::generated_from_seed_indexed(seed, 0).0),
             state_ver_key: Some(SchnorrPubKey::generated_from_seed_indexed(seed, 0).0),
@@ -5018,6 +5019,10 @@ mod rlp_tests {
             authenticated: true,
             x25519_key: Some(x25519::Keypair::generate().unwrap().public_key()),
             p2p_addr: Some(NetAddr::named("localhost", 8080)),
+        };
+        let validator2 = RegisteredValidator {
+            account: Address::random(),
+            ..validator1.clone()
         };
 
         // Two hashsets with different capacities are very likely to end up with a different
@@ -5067,23 +5072,32 @@ mod rlp_tests {
             used_x25519_keys2.iter().collect::<Vec<_>>()
         );
 
-        let validators = [(validator.account, validator)]
-            .into_iter()
-            .collect::<RegisteredValidatorMap>();
         let state1 = StakeTableState {
-            validators: validators.clone(),
+            validators: [
+                (validator1.account, validator1.clone()),
+                (validator2.account, validator2.clone()),
+            ]
+            .into_iter()
+            .collect(),
             validator_exits: validator_exits1,
             used_bls_keys: used_bls_keys1,
             used_schnorr_keys: used_schnorr_keys1,
             used_x25519_keys: used_x25519_keys1,
         };
         let state2 = StakeTableState {
-            validators,
+            validators: [
+                (validator2.account, validator2.clone()),
+                (validator1.account, validator1.clone()),
+            ]
+            .into_iter()
+            .collect(),
             validator_exits: validator_exits2,
             used_bls_keys: used_bls_keys2,
             used_schnorr_keys: used_schnorr_keys2,
             used_x25519_keys: used_x25519_keys2,
         };
+        assert_eq!(state1, state2);
+        assert_eq!(state1.commit(), state2.commit());
 
         let mut bytes1 = vec![];
         state1.encode(&mut bytes1);
