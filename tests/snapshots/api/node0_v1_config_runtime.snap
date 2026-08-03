@@ -151,7 +151,6 @@ modules:
   explorer: "<bool>"
   hotshot_events: "<bool>"
   http:
-    axum_port: "<number>"
     max_connections: "<number>"
     port: "<number>"
     tonic_port: "<number>"

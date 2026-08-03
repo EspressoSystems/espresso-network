@@ -1,4 +1,4 @@
 ---
 source: tests/common/api_snapshot.rs
 ---
-version: 0.1.0
+amount: "<string>"
