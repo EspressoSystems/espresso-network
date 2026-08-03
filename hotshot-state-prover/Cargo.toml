@@ -52,7 +52,6 @@ surf-disco = { workspace = true }
 tide-disco = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }
-tower-http = { workspace = true, features = ["cors"] }
 tracing = { workspace = true }
 url = { workspace = true }
 vbs = { workspace = true }
@@ -61,6 +60,7 @@ vbs = { workspace = true }
 espresso-utils = { workspace = true, features = ["full", "testing"] }
 rstest = { workspace = true }
 test-log = { workspace = true }
+tower = { workspace = true, features = ["util"] }
 
 [lints]
 workspace = true

@@ -26,9 +26,12 @@ surf-disco = { workspace = true }
 tide-disco = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }
-tower-http = { workspace = true, features = ["cors"] }
 tracing = { workspace = true }
 vbs = { workspace = true }
+
+[dev-dependencies]
+hotshot-example-types = { workspace = true }
+tower = { workspace = true, features = ["util"] }
 
 [lints]
 workspace = true

@@ -15,7 +15,7 @@ use axum::{
     routing::get,
 };
 use espresso_api::{
-    drive_ws_stream, healthcheck_response,
+    cors_layer, drive_ws_stream, healthcheck_response,
     wire::{self, WireFormat},
     ws_format,
 };
@@ -37,7 +37,6 @@ use hotshot_query_service::{
 use hotshot_types::data::VidCommitment;
 use serde::Serialize;
 use surf_disco::Error as _;
-use tower_http::cors::{Any, CorsLayer};
 use vbs::version::StaticVersion;
 
 /// Binary framing version for VBS-negotiated responses, matching the wire version this service
@@ -426,7 +425,7 @@ async fn stream_leaves(
     let format = ws_format(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = ds.subscribe_leaves(height).await;
-        drive_ws_stream(socket, stream, format).await;
+        drive_ws_stream::<WireVersion, _>(socket, stream, format).await;
     })
 }
 
@@ -478,7 +477,7 @@ async fn stream_headers(
     let format = ws_format(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = ds.subscribe_headers(height).await;
-        drive_ws_stream(socket, stream, format).await;
+        drive_ws_stream::<WireVersion, _>(socket, stream, format).await;
     })
 }
 
@@ -530,7 +529,7 @@ async fn stream_blocks(
     let format = ws_format(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = ds.subscribe_blocks(height).await;
-        drive_ws_stream(socket, stream, format).await;
+        drive_ws_stream::<WireVersion, _>(socket, stream, format).await;
     })
 }
 
@@ -582,7 +581,7 @@ async fn stream_payloads(
     let format = ws_format(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = ds.subscribe_payloads(height).await;
-        drive_ws_stream(socket, stream, format).await;
+        drive_ws_stream::<WireVersion, _>(socket, stream, format).await;
     })
 }
 
@@ -634,7 +633,7 @@ async fn stream_vid_common(
     let format = ws_format(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = ds.subscribe_vid_common(height).await;
-        drive_ws_stream(socket, stream, format).await;
+        drive_ws_stream::<WireVersion, _>(socket, stream, format).await;
     })
 }
 
@@ -695,7 +694,7 @@ async fn stream_transactions(
     let format = ws_format(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = transactions_stream(ds.subscribe_blocks(height).await, None);
-        drive_ws_stream(socket, stream, format).await;
+        drive_ws_stream::<WireVersion, _>(socket, stream, format).await;
     })
 }
 
@@ -708,7 +707,7 @@ async fn stream_transactions_ns(
     let format = ws_format(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = transactions_stream(ds.subscribe_blocks(height).await, Some(namespace));
-        drive_ws_stream(socket, stream, format).await;
+        drive_ws_stream::<WireVersion, _>(socket, stream, format).await;
     })
 }
 
@@ -1177,10 +1176,5 @@ pub fn router(ds: DataSource) -> Router {
         .route("/healthcheck", get(healthcheck))
         .merge(api.clone())
         .nest("/v1", api)
-        .layer(
-            CorsLayer::new()
-                .allow_methods(Any)
-                .allow_headers(Any)
-                .allow_origin(Any),
-        )
+        .layer(cors_layer())
 }

@@ -10,7 +10,7 @@ use axum::{
     routing::{get, post},
 };
 use espresso_api::{
-    healthcheck_response,
+    cors_layer, healthcheck_response,
     wire::{self, DecodeFailure, WireFormat},
 };
 use hotshot_types::{
@@ -25,7 +25,6 @@ use lcv2_relay::{LCV2StateRelayServerDataSource, LCV2StateRelayServerState};
 use lcv3_relay::{LCV3StateRelayServerDataSource, LCV3StateRelayServerState};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::{net::TcpListener, sync::oneshot};
-use tower_http::cors::{Any, CorsLayer};
 use url::Url;
 use vbs::version::{StaticVersion, StaticVersionType};
 
@@ -363,12 +362,7 @@ fn router(state: SharedState) -> Router {
                 post(post_legacy_state).get(get_legacy_state),
             );
     }
-    router.with_state(state).layer(
-        CorsLayer::new()
-            .allow_methods(Any)
-            .allow_headers(Any)
-            .allow_origin(Any),
-    )
+    router.with_state(state).layer(cors_layer())
 }
 
 async fn serve(server_url: Url, state: StateRelayServerState) -> anyhow::Result<()> {
@@ -522,5 +516,30 @@ mod test {
         assert_eq!(bundle.state, light_client_state);
         assert_eq!(bundle.signatures.len(), 1);
         assert!(bundle.signatures.contains_key(&validator.state_public_key));
+    }
+
+    /// Like tide-disco, every response carries permissive CORS headers. The light client prover
+    /// reads `lateststate` over surf-disco, but the staking UI reads it from a browser.
+    #[tokio::test]
+    async fn responses_carry_cors_headers() {
+        let relay_url = spawn_relay(StateRelayServerState::new(
+            "http://127.0.0.1:1".parse().unwrap(),
+        ))
+        .await;
+        for path in ["healthcheck", "api/lateststate", "no/such/route"] {
+            let resp = reqwest::Client::new()
+                .get(relay_url.join(path).unwrap())
+                .header("Origin", "https://example.com")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                resp.headers()
+                    .get("access-control-allow-origin")
+                    .unwrap_or_else(|| panic!("no CORS header on {path}")),
+                "*",
+                "{path}"
+            );
+        }
     }
 }

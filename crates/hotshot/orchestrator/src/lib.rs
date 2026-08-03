@@ -31,7 +31,7 @@ use axum::{
 use client::{BenchResults, BenchResultsDownloadConfig};
 use csv::Writer;
 use espresso_api::{
-    healthcheck_response,
+    cors_layer, healthcheck_response,
     wire::{self, WireFormat},
 };
 use futures::{StreamExt, stream::FuturesUnordered};
@@ -52,7 +52,6 @@ use serde::{Serialize, de::DeserializeOwned};
 use surf_disco::Url;
 use tide_disco::error::ServerError;
 use tokio::net::TcpListener;
-use tower_http::cors::{Any, CorsLayer};
 use vbs::{BinarySerializer, Serializer, version::StaticVersion};
 
 /// Orchestrator is not, strictly speaking, bound to the network; it can have its own versioning.
@@ -905,6 +904,18 @@ fn api_router<TYPES: NodeType>() -> Router<SharedOrchestratorState<TYPES>> {
         .route("/builder", post(post_builder::<TYPES>))
 }
 
+/// Builds the full router: the app-level `healthcheck`, plus the `api` module served both
+/// unversioned and under `/v0`. Like tide-disco, every response carries permissive CORS headers.
+fn app<TYPES: NodeType>(state: SharedOrchestratorState<TYPES>) -> Router {
+    let api = Router::new().nest("/api", api_router::<TYPES>());
+    Router::new()
+        .route("/healthcheck", get(healthcheck))
+        .merge(api.clone())
+        .nest("/v0", api)
+        .with_state(state)
+        .layer(cors_layer())
+}
+
 /// Runs the orchestrator
 /// # Errors
 /// This errors if axum runs into an issue during serving
@@ -968,22 +979,7 @@ pub async fn run_orchestrator<TYPES: NodeType>(
 
     let state: SharedOrchestratorState<TYPES> =
         Arc::new(RwLock::new(OrchestratorState::new(network_config)));
-
-    let api = Router::new().nest("/api", api_router::<TYPES>());
-    let app = Router::new()
-        // tide-disco's app-level `healthcheck` isn't actually reachable for a singleton app like
-        // this one (it only registers the `api` module's own `healthcheck`), but we serve it
-        // anyway for parity with other axum conversions in this repo; no client depends on it.
-        .route("/healthcheck", get(healthcheck))
-        .merge(api.clone())
-        .nest("/v0", api)
-        .with_state(state)
-        .layer(
-            CorsLayer::new()
-                .allow_methods(Any)
-                .allow_headers(Any)
-                .allow_origin(Any),
-        );
+    let app = app::<TYPES>(state);
 
     let host = url
         .host_str()
@@ -995,4 +991,52 @@ pub async fn run_orchestrator<TYPES: NodeType>(
 
     tracing::error!("listening on {url:?}");
     axum::serve(listener, app).await
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::{Request, header};
+    use hotshot_example_types::node_types::TestTypes;
+
+    use super::*;
+
+    fn test_app() -> Router {
+        app::<TestTypes>(Arc::new(RwLock::new(OrchestratorState::new(
+            NetworkConfig::default(),
+        ))))
+    }
+
+    /// Like tide-disco, every response carries permissive CORS headers.
+    #[tokio::test]
+    async fn responses_carry_cors_headers() {
+        for uri in ["/healthcheck", "/api/peer_pub_ready", "/no/such/route"] {
+            let req = Request::builder()
+                .uri(uri)
+                .header(header::ORIGIN, "https://example.com")
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let resp = tower::ServiceExt::oneshot(test_app(), req).await.unwrap();
+            assert_eq!(
+                resp.headers()
+                    .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                    .unwrap_or_else(|| panic!("no CORS header on {uri}")),
+                "*",
+                "{uri}"
+            );
+        }
+    }
+
+    /// tide-disco served the `api` module both unversioned and under `/v0`, redirecting the former
+    /// to the latter; both forms must route here.
+    #[tokio::test]
+    async fn versioned_and_unversioned_api_paths_route() {
+        for uri in ["/api/peer_pub_ready", "/v0/api/peer_pub_ready"] {
+            let req = Request::builder()
+                .uri(uri)
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let resp = tower::ServiceExt::oneshot(test_app(), req).await.unwrap();
+            assert_ne!(resp.status(), StatusCode::NOT_FOUND, "{uri} did not route");
+        }
+    }
 }

@@ -18,7 +18,7 @@ use axum::{
 };
 use committable::Committable;
 use espresso_api::{
-    healthcheck_response,
+    cors_layer, healthcheck_response,
     wire::{self, DecodeFailure, WireFormat},
 };
 use espresso_types::SeqTypes;
@@ -39,7 +39,6 @@ use hotshot_types::{
 use serde::{Serialize, de::DeserializeOwned};
 use surf_disco::{Error as _, StatusCode};
 use tagged_base64::TaggedBase64;
-use tower_http::cors::{Any, CorsLayer};
 use vbs::version::StaticVersion;
 
 /// Binary framing version for VBS-negotiated responses, matching `hotshot_builder_api::v0_1`'s
@@ -341,10 +340,97 @@ pub fn router(state: ProxyGlobalState<SeqTypes>) -> Router {
         .route("/healthcheck", get(healthcheck))
         .merge(api.clone())
         .nest("/v0", api)
-        .layer(
-            CorsLayer::new()
-                .allow_methods(Any)
-                .allow_headers(Any)
-                .allow_origin(Any),
-        )
+        .layer(cors_layer())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use async_lock::RwLock;
+    use axum::http::{Method, Request, header};
+    use hotshot_builder_legacy::service::GlobalState;
+    use hotshot_types::{data::ViewNumber, traits::signature_key::BuilderSignatureKey as _};
+
+    use super::*;
+
+    fn test_router() -> Router {
+        let (bootstrap_sender, _bootstrap_receiver) = async_broadcast::broadcast(10);
+        let (tx_sender, _tx_receiver) = async_broadcast::broadcast(10);
+        let keys =
+            <SeqTypes as NodeType>::BuilderSignatureKey::generated_from_seed_indexed([0; 32], 0);
+        router(ProxyGlobalState::new(
+            Arc::new(RwLock::new(GlobalState::new(
+                bootstrap_sender,
+                tx_sender,
+                VidCommitment::default(),
+                ViewNumber::new(0),
+                ViewNumber::new(0),
+                Duration::from_secs(60),
+                1024,
+                1,
+                1,
+            ))),
+            keys,
+            Duration::from_millis(100),
+        ))
+    }
+
+    async fn request(method: Method, uri: &str) -> axum::http::Response<axum::body::Body> {
+        let req = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::ORIGIN, "https://example.com")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        tower::ServiceExt::oneshot(test_router(), req)
+            .await
+            .unwrap()
+    }
+
+    /// tide-disco served both modules at `/v0/<module>/...` and redirected the unversioned paths
+    /// there, so both forms must route. Nesting the version after the module path instead
+    /// (`/block_info/v0/...`) silently 404s the canonical versioned URLs.
+    #[tokio::test]
+    async fn versioned_and_unversioned_module_paths_route() {
+        for uri in [
+            "/block_info/builderaddress",
+            "/v0/block_info/builderaddress",
+            "/txn_submit/status/abc",
+            "/v0/txn_submit/status/abc",
+        ] {
+            assert_ne!(
+                request(Method::GET, uri).await.status(),
+                AxumStatusCode::NOT_FOUND,
+                "{uri} did not route"
+            );
+        }
+        assert_eq!(
+            request(Method::GET, "/block_info/v0/builderaddress")
+                .await
+                .status(),
+            AxumStatusCode::NOT_FOUND,
+            "the version belongs before the module path, not after"
+        );
+    }
+
+    /// Like tide-disco, every response carries permissive CORS headers; the node's builder client
+    /// is not a browser, but the demo tooling and dashboards are.
+    #[tokio::test]
+    async fn responses_carry_cors_headers() {
+        for (method, uri) in [
+            (Method::GET, "/healthcheck"),
+            (Method::GET, "/v0/block_info/builderaddress"),
+            (Method::GET, "/no/such/route"),
+        ] {
+            let resp = request(method.clone(), uri).await;
+            assert_eq!(
+                resp.headers()
+                    .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                    .unwrap_or_else(|| panic!("no CORS header on {uri}")),
+                "*",
+                "{uri}"
+            );
+        }
+    }
 }
