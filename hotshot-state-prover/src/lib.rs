@@ -28,6 +28,7 @@ pub mod v3;
 
 pub mod utils;
 
+mod http;
 mod test_utils;
 
 /// Configuration/Parameters used for hotshot state prover

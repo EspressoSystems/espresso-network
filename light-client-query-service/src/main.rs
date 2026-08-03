@@ -3,16 +3,13 @@ use std::{cmp::max, fs, path::PathBuf, process::ExitCode, sync::Arc, time::Durat
 use anyhow::{Context, Result};
 use clap::Parser;
 use espresso_node::{
-    SequencerApiVersion,
     api::{data_source::SequencerDataSource, sql::DataSource},
     persistence::sql,
 };
 use espresso_types::parse_duration;
 use hotshot_query_service::{
-    ApiState,
-    availability::{self, BlockInfo, LeafId, UpdateAvailabilityData},
+    availability::{BlockInfo, LeafId, UpdateAvailabilityData},
     fetching::provider::AnyProvider,
-    node,
 };
 use light_client::{
     LightClient,
@@ -20,12 +17,10 @@ use light_client::{
     state,
     storage::{LightClientSqliteOptions, Storage},
 };
-use light_client_query_service::{LogFormat, init_logging};
-use semver::Version;
-use tide_disco::{App, Url};
-use tokio::{spawn, time::sleep};
+use light_client_query_service::{LogFormat, api, init_logging};
+use tokio::{net::TcpListener, spawn, time::sleep};
 use tracing::instrument;
-use vbs::version::StaticVersionType;
+use url::Url;
 
 /// Run an Espresso query service.
 ///
@@ -188,19 +183,10 @@ async fn run() -> Result<()> {
     spawn(update(lc, ds.clone(), opt.poll_opt));
 
     // Run server.
-    let mut app = App::<_, hotshot_query_service::Error>::with_state(ApiState::from(ds));
-    let ver = SequencerApiVersion::instance();
-    let api_ver: Version = "1.0.0".parse().unwrap();
-    app.register_module(
-        "availability",
-        availability::define_api(&Default::default(), ver, api_ver.clone())?,
-    )?
-    .register_module("node", node::define_api(&Default::default(), ver, api_ver)?)?;
-    app.serve(
-        format!("0.0.0.0:{}", opt.api_port),
-        SequencerApiVersion::instance(),
-    )
-    .await?;
+    let listener = TcpListener::bind(("0.0.0.0", opt.api_port))
+        .await
+        .context("binding query service API port")?;
+    axum::serve(listener, api::router(ds)).await?;
 
     Ok(())
 }
