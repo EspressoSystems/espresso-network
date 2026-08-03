@@ -1,0 +1,11 @@
+---
+source: tests/common/api_snapshot.rs
+---
+transaction_summaries:
+  - hash: "<string>"
+    height: "<number>"
+    num_transactions: "<number>"
+    offset: "<number>"
+    rollups:
+      - "<number>"
+    time: "<string>"

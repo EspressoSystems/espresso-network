@@ -1,0 +1,9 @@
+---
+source: tests/common/api_snapshot.rs
+---
+auth_root: "<string>"
+epoch: "<number>"
+light_client_state: "<string>"
+next_stake_table_state: "<string>"
+signatures:
+  - - "<string>"

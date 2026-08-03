@@ -1,0 +1,58 @@
+---
+source: tests/common/api_snapshot.rs
+---
+"0x02484cb50aac86eae85610d6f4bf026f30f6627d":
+  account: "<string>"
+  authenticated: "<bool>"
+  commission: "<number>"
+  delegators:
+    "0x02484cb50aac86eae85610d6f4bf026f30f6627d": "<string>"
+  p2p_addr: "<string>"
+  stake: "<string>"
+  stake_table_key: "<string>"
+  state_ver_key: "<string>"
+  x25519_key: "<string>"
+"0x08135da0a343e492fa2d4282f2ae34c6c5cc1bbe":
+  account: "<string>"
+  authenticated: "<bool>"
+  commission: "<number>"
+  delegators:
+    "0x08135da0a343e492fa2d4282f2ae34c6c5cc1bbe": "<string>"
+  p2p_addr: "<string>"
+  stake: "<string>"
+  stake_table_key: "<string>"
+  state_ver_key: "<string>"
+  x25519_key: "<string>"
+"0x09db0a93b389bef724429898f539aeb7ac2dd55f":
+  account: "<string>"
+  authenticated: "<bool>"
+  commission: "<number>"
+  delegators:
+    "0x09db0a93b389bef724429898f539aeb7ac2dd55f": "<string>"
+  p2p_addr: "<string>"
+  stake: "<string>"
+  stake_table_key: "<string>"
+  state_ver_key: "<string>"
+  x25519_key: "<string>"
+"0x5e661b79fe2d3f6ce70f5aac07d8cd9abb2743f1":
+  account: "<string>"
+  authenticated: "<bool>"
+  commission: "<number>"
+  delegators:
+    "0x5e661b79fe2d3f6ce70f5aac07d8cd9abb2743f1": "<string>"
+  p2p_addr: "<string>"
+  stake: "<string>"
+  stake_table_key: "<string>"
+  state_ver_key: "<string>"
+  x25519_key: "<string>"
+"0x61097ba76cd906d2ba4fd106e757f7eb455fc295":
+  account: "<string>"
+  authenticated: "<bool>"
+  commission: "<number>"
+  delegators:
+    "0x61097ba76cd906d2ba4fd106e757f7eb455fc295": "<string>"
+  p2p_addr: "<string>"
+  stake: "<string>"
+  stake_table_key: "<string>"
+  state_ver_key: "<string>"
+  x25519_key: "<string>"

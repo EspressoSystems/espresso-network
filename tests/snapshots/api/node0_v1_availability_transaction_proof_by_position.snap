@@ -1,0 +1,20 @@
+---
+source: tests/common/api_snapshot.rs
+---
+block_hash: "<string>"
+block_height: "<number>"
+hash: "<string>"
+index: "<number>"
+namespace: "<number>"
+pos_in_namespace: "<number>"
+proof:
+  V1:
+    ns_proof:
+      ns_index: "<number>"
+      ns_payload: "<string>"
+      ns_proof: "<string>"
+    tx_index:
+      - "<number>"
+transaction:
+  namespace: "<number>"
+  payload: "<string>"

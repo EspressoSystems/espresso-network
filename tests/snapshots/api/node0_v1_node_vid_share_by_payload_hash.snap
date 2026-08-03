@@ -1,0 +1,15 @@
+---
+source: tests/common/api_snapshot.rs
+---
+V1:
+  content:
+    - mt_proofs: "<string>"
+      payload: "<string>"
+      range:
+        end: "<number>"
+        start: "<number>"
+  index: "<number>"
+  ns_commits:
+    - "<string>"
+  ns_lens:
+    - "<number>"

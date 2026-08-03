@@ -1,0 +1,5 @@
+---
+source: tests/common/api_snapshot.rs
+---
+large_object_range_limit: 100
+small_object_range_limit: 500

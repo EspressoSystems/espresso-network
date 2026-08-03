@@ -1,0 +1,81 @@
+---
+source: tests/common/api_snapshot.rs
+---
+app_version: ~
+disco_version: 0.9.7
+modules:
+  availability:
+    - api_version: 1.1.0
+      spec_version: 0.1.0
+    - api_version: 0.0.1
+      spec_version: 0.1.0
+  block-state:
+    - api_version: 1.1.0
+      spec_version: 0.1.0
+    - api_version: 0.0.1
+      spec_version: 0.1.0
+  catchup:
+    - api_version: 1.1.0
+      spec_version: 0.1.0
+    - api_version: 0.0.1
+      spec_version: 0.1.0
+  config:
+    - api_version: 1.1.0
+      spec_version: 0.1.0
+    - api_version: 0.0.1
+      spec_version: 0.1.0
+  database:
+    - api_version: 1.1.0
+      spec_version: 0.1.0
+    - api_version: 0.0.1
+      spec_version: 0.1.0
+  fee-state:
+    - api_version: 1.1.0
+      spec_version: 0.1.0
+    - api_version: 0.0.1
+      spec_version: 0.1.0
+  hotshot-events:
+    - api_version: 1.1.0
+      spec_version: 0.1.0
+    - api_version: 0.0.1
+      spec_version: 0.1.0
+  light-client:
+    - api_version: 1.1.0
+      spec_version: 0.1.0
+    - api_version: 0.0.1
+      spec_version: 0.1.0
+  node:
+    - api_version: 1.1.0
+      spec_version: 0.1.0
+    - api_version: 0.0.1
+      spec_version: 0.1.0
+  reward-state:
+    - api_version: 1.1.0
+      spec_version: 0.1.0
+    - api_version: 0.0.1
+      spec_version: 0.1.0
+  reward-state-v2:
+    - api_version: 1.1.0
+      spec_version: 0.1.0
+    - api_version: 0.0.1
+      spec_version: 0.1.0
+  state-signature:
+    - api_version: 1.1.0
+      spec_version: 0.1.0
+    - api_version: 0.0.1
+      spec_version: 0.1.0
+  status:
+    - api_version: 1.1.0
+      spec_version: 0.1.0
+    - api_version: 0.0.1
+      spec_version: 0.1.0
+  submit:
+    - api_version: 1.1.0
+      spec_version: 0.1.0
+    - api_version: 0.0.1
+      spec_version: 0.1.0
+  token:
+    - api_version: 1.1.0
+      spec_version: 0.1.0
+    - api_version: 0.0.1
+      spec_version: 0.1.0

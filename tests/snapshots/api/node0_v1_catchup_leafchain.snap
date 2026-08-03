@@ -1,0 +1,84 @@
+---
+source: tests/common/api_snapshot.rs
+---
+- block_header:
+    fields:
+      block_merkle_tree_root: "<string>"
+      builder_commitment: "<string>"
+      builder_signature:
+        r: "<string>"
+        s: "<string>"
+        v: "<number>"
+      chain_config:
+        chain_config:
+          Left:
+            base_fee: "<string>"
+            chain_id: "<string>"
+            fee_contract: "<string>"
+            fee_recipient: "<string>"
+            max_block_size: "<string>"
+            stake_table_contract: "<string>"
+      fee_info:
+        account: "<string>"
+        amount: "<string>"
+      fee_merkle_tree_root: "<string>"
+      height: "<number>"
+      l1_finalized:
+        hash: "<string>"
+        number: "<number>"
+        timestamp: "<string>"
+      l1_head: "<number>"
+      next_stake_table_hash: "<string>"
+      ns_table:
+        bytes: "<string>"
+      payload_commitment: "<string>"
+      reward_merkle_tree_root: "<string>"
+      timestamp: "<number>"
+      timestamp_millis: "<number>"
+      total_reward_distributed: "<string>"
+    version:
+      Version:
+        major: "<number>"
+        minor: "<number>"
+  block_payload: ~
+  justify_qc:
+    _pd: ~
+    data:
+      block_number: "<number>"
+      epoch: "<number>"
+      leaf_commit: "<string>"
+    signatures:
+      - "<string>"
+      - bits: "<number>"
+        data:
+          - "<number>"
+        head:
+          index: "<number>"
+          width: "<number>"
+        order: "<string>"
+    view_number: "<number>"
+    vote_commitment: "<string>"
+  next_drb_result:
+    - "<number>"
+  next_epoch_justify_qc:
+    _pd: ~
+    data:
+      block_number: "<number>"
+      epoch: "<number>"
+      leaf_commit: "<string>"
+    signatures:
+      - "<string>"
+      - bits: "<number>"
+        data:
+          - "<number>"
+        head:
+          index: "<number>"
+          width: "<number>"
+        order: "<string>"
+    view_number: "<number>"
+    vote_commitment: "<string>"
+  parent_commitment: "<string>"
+  upgrade_certificate: ~
+  view_change_evidence: ~
+  view_number: "<number>"
+  with_epoch: "<bool>"

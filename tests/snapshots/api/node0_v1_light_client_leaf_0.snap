@@ -1,0 +1,81 @@
+---
+source: tests/common/api_snapshot.rs
+---
+leaves:
+  - block_header:
+      fields:
+        block_merkle_tree_root: MERKLE_COMM~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAQA
+        builder_commitment: BUILDER_COMMITMENT~tEvs0rxqOiMCvfe2R0omNNaphSlUiEDrb2q0IZpRcgA_
+        builder_signature: ~
+        chain_config:
+          chain_config:
+            Left:
+              base_fee: "1"
+              chain_id: "999999999"
+              fee_contract: "0x8ce361602b935680e8dec218b820ff5056beb7af"
+              fee_recipient: "0x0000000000000000000000000000000000000000"
+              max_block_size: "10000000"
+              stake_table_contract: "0xf7cd8fa9b94db2aa972023b379c7f72c65e4de9d"
+        fee_info:
+          account: "0x0000000000000000000000000000000000000000"
+          amount: "0"
+        fee_merkle_tree_root: MERKLE_COMM~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAUAAAAAAAAAAAAAAAAAAAAKA
+        height: 0
+        l1_finalized:
+          hash: "<masked>"
+          number: "<masked>"
+          timestamp: "<masked>"
+        l1_head: 0
+        next_stake_table_hash: ~
+        ns_table:
+          bytes: AAAAAA==
+        payload_commitment: AvidMCommit~8JNU_HGmIatiu1NdaEgDp-VIdiHrlYRz49Cq6TE3kzZf
+        reward_merkle_tree_root: MERKLE_COMM~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACgAAAAAAAAAAAAAAAAAAAARw
+        timestamp: 0
+        timestamp_millis: 0
+        total_reward_distributed: "0"
+      version:
+        Version:
+          major: 0
+          minor: 4
+    block_payload: ~
+    justify_qc:
+      _pd: ~
+      data:
+        block_number: 0
+        epoch: 1
+        leaf_commit: "<masked>"
+      signatures: "<masked>"
+      view_number: 0
+      vote_commitment: "<masked>"
+    next_drb_result: ~
+    next_epoch_justify_qc: ~
+    parent_commitment: COMMIT~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB
+    upgrade_certificate: ~
+    view_change_evidence: ~
+    view_number: 0
+    with_epoch: true
+proof:
+  HotStuff2:
+    committing_qc:
+      next_epoch_qc: ~
+      qc:
+        _pd: ~
+        data:
+          block_number: 0
+          epoch: 1
+          leaf_commit: "<masked>"
+        signatures: "<masked>"
+        view_number: 0
+        vote_commitment: "<masked>"
+    deciding_qc:
+      next_epoch_qc: ~
+      qc:
+        _pd: ~
+        data:
+          block_number: 1
+          epoch: 1
+          leaf_commit: "<masked>"
+        signatures: "<masked>"
+        view_number: 1
+        vote_commitment: "<masked>"

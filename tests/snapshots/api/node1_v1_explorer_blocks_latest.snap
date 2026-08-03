@@ -1,0 +1,11 @@
+---
+source: tests/common/api_snapshot.rs
+---
+block_summaries:
+  - hash: "<string>"
+    height: "<number>"
+    num_transactions: "<number>"
+    proposer_id:
+      - "<string>"
+    size: "<number>"
+    time: "<string>"

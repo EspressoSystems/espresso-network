@@ -1,0 +1,15 @@
+---
+source: tests/common/api_snapshot.rs
+---
+pos: "<string>"
+proof:
+  - Leaf:
+      elem: "<string>"
+      pos: "<string>"
+      value: "<string>"
+  - Branch:
+      children:
+        - ForgettenSubtree:
+            value: "<string>"
+        - "<string>"
+      value: "<string>"

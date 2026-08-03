@@ -1,0 +1,76 @@
+---
+source: tests/common/api_snapshot.rs
+---
+builder: "<string>"
+builder_timeout:
+  nanos: "<number>"
+  secs: "<number>"
+cdn_marshal_address: ~
+combined_network_config: ~
+commit_sha: "<string>"
+config:
+  builder_timeout:
+    nanos: "<number>"
+    secs: "<number>"
+  builder_urls:
+    - "<string>"
+  da_committees: []
+  da_staked_committee_size: "<number>"
+  data_request_delay:
+    nanos: "<number>"
+    secs: "<number>"
+  drb_difficulty: "<number>"
+  drb_upgrade_difficulty: "<number>"
+  epoch_height: "<number>"
+  epoch_start_block: "<number>"
+  fixed_leader_for_gpuvid: "<number>"
+  known_da_nodes:
+    - connect_info: ~
+      stake_table_entry:
+        stake_amount: "<string>"
+        stake_key: "<string>"
+      state_ver_key: "<string>"
+  known_nodes_with_stake:
+    - connect_info: ~
+      stake_table_entry:
+        stake_amount: "<string>"
+        stake_key: "<string>"
+      state_ver_key: "<string>"
+  next_view_timeout: "<number>"
+  num_bootstrap: "<number>"
+  num_nodes_with_stake: "<number>"
+  stake_table_capacity: "<number>"
+  start_proposing_time: "<number>"
+  start_proposing_view: "<number>"
+  start_threshold:
+    - "<number>"
+  start_voting_time: "<number>"
+  start_voting_view: "<number>"
+  stop_proposing_time: "<number>"
+  stop_proposing_view: "<number>"
+  stop_voting_time: "<number>"
+  stop_voting_view: "<number>"
+  view_sync_timeout:
+    nanos: "<number>"
+    secs: "<number>"
+data_request_delay:
+  nanos: "<number>"
+  secs: "<number>"
+indexed_da: "<bool>"
+key_type_name: "<string>"
+libp2p_config:
+  bootstrap_nodes:
+    - - "<string>"
+manual_start_password: "<string>"
+next_view_timeout: "<number>"
+node_index: "<number>"
+num_bootrap: "<number>"
+random_builder: ~
+rounds: "<number>"
+seed:
+  - "<number>"
+transaction_size: "<number>"
+transactions_per_round: "<number>"
+view_sync_timeout:
+  nanos: "<number>"
+  secs: "<number>"

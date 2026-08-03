@@ -1,0 +1,223 @@
+---
+source: tests/common/api_snapshot.rs
+---
+bootstrap_epoch_catchup_timeout:
+  nanos: "<number>"
+  secs: "<number>"
+builder_urls: []
+catchup_backoff:
+  base:
+    nanos: "<number>"
+    secs: "<number>"
+  disable: "<bool>"
+  factor: "<number>"
+  jitter:
+    denominator: "<number>"
+    numerator: "<number>"
+  max:
+    nanos: "<number>"
+    secs: "<number>"
+catchup_base_timeout:
+  nanos: "<number>"
+  secs: "<number>"
+cdn_endpoint: "<string>"
+cliquenet_advertise_address: "<string>"
+cliquenet_bind_address: "<string>"
+config_peers: ~
+genesis:
+  accounts: {}
+  base_version: "<string>"
+  chain_config:
+    base_fee: "<string>"
+    chain_id: "<string>"
+    fee_contract: "<string>"
+    fee_recipient: "<string>"
+    max_block_size: "<string>"
+    stake_table_contract: "<string>"
+  da_committees: ~
+  drb_difficulty: "<number>"
+  drb_upgrade_difficulty: "<number>"
+  epoch_height: "<number>"
+  epoch_start_block: "<number>"
+  genesis_version: "<string>"
+  header:
+    chain_config:
+      base_fee: "<string>"
+      chain_id: "<string>"
+      fee_contract: "<string>"
+      fee_recipient: "<string>"
+      max_block_size: "<string>"
+      stake_table_contract: "<string>"
+    timestamp: "<string>"
+  l1_finalized:
+    number: "<number>"
+  stake_table:
+    capacity: "<number>"
+  stake_table_capacity: "<number>"
+  upgrade: []
+  upgrade_version: "<string>"
+genesis_file: "<string>"
+identity:
+  company_name: "<string>"
+  company_website: "<string>"
+  country_code: "<string>"
+  icon_14x14_1x: ~
+  icon_14x14_2x: ~
+  icon_14x14_3x: ~
+  icon_24x24_1x: ~
+  icon_24x24_2x: ~
+  icon_24x24_3x: ~
+  latitude: "<number>"
+  longitude: "<number>"
+  network_type: "<string>"
+  node_description: ~
+  node_name: "<string>"
+  node_type: "<string>"
+  operating_system: "<string>"
+is_da: "<bool>"
+l1:
+  blocks_cache_size: "<number>"
+  consecutive_failure_tolerance: "<number>"
+  events_channel_capacity: "<number>"
+  events_max_block_range: "<number>"
+  events_max_retry_duration:
+    nanos: "<number>"
+    secs: "<number>"
+  failover_revert:
+    nanos: "<number>"
+    secs: "<number>"
+  finalized_safety_margin: ~
+  frequent_failure_tolerance:
+    nanos: "<number>"
+    secs: "<number>"
+  polling_interval:
+    nanos: "<number>"
+    secs: "<number>"
+  rate_limit_delay: ~
+  retry_delay:
+    nanos: "<number>"
+    secs: "<number>"
+  stake_table_update_interval:
+    nanos: "<number>"
+    secs: "<number>"
+  subscription_timeout:
+    nanos: "<number>"
+    secs: "<number>"
+l1_provider_count: "<number>"
+l1_ws_provider_count: "<number>"
+libp2p:
+  duplicate_cache_time:
+    nanos: "<number>"
+    secs: "<number>"
+  fanout_ttl:
+    nanos: "<number>"
+    secs: "<number>"
+  flood_publish: "<bool>"
+  gossip_factor: "<number>"
+  gossip_lazy: "<number>"
+  gossip_retransmission: "<number>"
+  heartbeat_initial_delay:
+    nanos: "<number>"
+    secs: "<number>"
+  heartbeat_interval:
+    nanos: "<number>"
+    secs: "<number>"
+  history_gossip: "<number>"
+  history_length: "<number>"
+  iwant_followup_time:
+    nanos: "<number>"
+    secs: "<number>"
+  max_direct_transmit_size: "<number>"
+  max_gossip_transmit_size: "<number>"
+  max_ihave_length: "<number>"
+  max_ihave_messages: "<number>"
+  max_messages_per_rpc: ~
+  mesh_n: "<number>"
+  mesh_n_high: "<number>"
+  mesh_n_low: "<number>"
+  mesh_outbound_min: "<number>"
+  published_message_ids_cache_time:
+    nanos: "<number>"
+    secs: "<number>"
+libp2p_advertise_address: "<string>"
+libp2p_bind_address: "<string>"
+libp2p_bootstrap_nodes: ~
+local_catchup_timeout:
+  nanos: "<number>"
+  secs: "<number>"
+modules:
+  catchup: "<bool>"
+  config: "<bool>"
+  explorer: "<bool>"
+  hotshot_events: "<bool>"
+  http:
+    axum_port: "<number>"
+    max_connections: "<number>"
+    port: "<number>"
+    tonic_port: "<number>"
+  light_client: "<bool>"
+  query:
+    light_client:
+      num_stake_tables_in_memory: "<number>"
+    light_client_db:
+      lc_path: "<string>"
+      num_connections: "<number>"
+      num_leaves: "<number>"
+      num_stake_tables: "<number>"
+    peers:
+      - "<string>"
+  status: "<bool>"
+  submit: "<bool>"
+orchestrator_url: "<string>"
+proposal_fetcher:
+  fetch_timeout:
+    nanos: "<number>"
+    secs: "<number>"
+  num_workers: "<number>"
+public_api_url: "<string>"
+state_peers:
+  - "<string>"
+state_relay_server_url: "<string>"
+storage:
+  backend: "<string>"
+  fs: ~
+  sql:
+    active_fetch_delay: ~
+    archive: "<bool>"
+    chunk_fetch_delay: ~
+    connection_timeout:
+      nanos: "<number>"
+      secs: "<number>"
+    consensus_pruning:
+      minimum_retention: "<number>"
+      target_retention: "<number>"
+      target_usage: "<number>"
+    disable_proactive_fetching: "<bool>"
+    fetch_rate_limit: "<number>"
+    idle_connection_timeout:
+      nanos: "<number>"
+      secs: "<number>"
+    lightweight: "<bool>"
+    max_connections: "<number>"
+    min_connections: "<number>"
+    proactive_scan_chunk_size: ~
+    proactive_scan_interval: ~
+    prune: "<bool>"
+    pruning:
+      batch_size: ~
+      interval: ~
+      max_usage: ~
+      minimum_retention: ~
+      pages: ~
+      pruning_threshold: ~
+      target_retention: ~
+    query_max_connections: ~
+    query_min_connections: ~
+    slow_statement_threshold:
+      nanos: "<number>"
+      secs: "<number>"
+    statement_timeout:
+      nanos: "<number>"
+      secs: "<number>"
+    sync_status_chunk_size: ~
+    sync_status_ttl: ~

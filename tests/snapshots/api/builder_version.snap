@@ -1,0 +1,12 @@
+---
+source: tests/common/api_snapshot.rs
+---
+app_version: ~
+disco_version: "<string>"
+modules:
+  block_info:
+    - api_version: "<string>"
+      spec_version: "<string>"
+  txn_submit:
+    - api_version: "<string>"
+      spec_version: "<string>"

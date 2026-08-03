@@ -1,0 +1,8 @@
+---
+source: tests/common/api_snapshot.rs
+---
+accumulated_weight: "<string>"
+next_stake: "<string>"
+signatures:
+  - "<string>"
+state: "<string>"

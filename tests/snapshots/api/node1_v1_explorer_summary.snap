@@ -1,0 +1,45 @@
+---
+source: tests/common/api_snapshot.rs
+---
+explorer_summary:
+  genesis_overview:
+    blocks: "<number>"
+    rollups: "<number>"
+    transactions: "<number>"
+  histograms:
+    block_heights:
+      - "<number>"
+    block_size:
+      - "<number>"
+    block_time:
+      - "<number>"
+    block_transactions:
+      - "<number>"
+  latest_block:
+    block_reward:
+      - "<string>"
+    fee_recipient:
+      - "<string>"
+    hash: "<string>"
+    height: "<number>"
+    num_transactions: "<number>"
+    proposer_id:
+      - "<string>"
+    size: "<number>"
+    time: "<string>"
+  latest_blocks:
+    - hash: "<string>"
+      height: "<number>"
+      num_transactions: "<number>"
+      proposer_id:
+        - "<string>"
+      size: "<number>"
+      time: "<string>"
+  latest_transactions:
+    - hash: "<string>"
+      height: "<number>"
+      num_transactions: "<number>"
+      offset: "<number>"
+      rollups:
+        - "<number>"
+      time: "<string>"

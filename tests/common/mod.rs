@@ -7,6 +7,8 @@ use std::{
     time::Duration,
 };
 
+pub mod api_snapshot;
+
 use alloy::{
     primitives::{Address, U256},
     providers::{Provider, ProviderBuilder},

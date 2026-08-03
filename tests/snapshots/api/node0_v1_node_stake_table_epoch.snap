@@ -1,0 +1,10 @@
+---
+source: tests/common/api_snapshot.rs
+---
+- connect_info:
+    p2p_addr: "<string>"
+    x25519_key: "<string>"
+  stake_table_entry:
+    stake_amount: "<string>"
+    stake_key: "<string>"
+  state_ver_key: "<string>"

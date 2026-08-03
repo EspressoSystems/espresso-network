@@ -1,0 +1,11 @@
+---
+source: tests/common/api_snapshot.rs
+---
+- block_hash: "<masked>"
+  data:
+    ns_table:
+      bytes: AAAAAA==
+    raw_payload: ""
+  hash: "<masked>"
+  height: 0
+  size: 0
