@@ -81,8 +81,8 @@ use crate::{
 
 /// Number of recent block heights of merklized state an archive node retains by default.
 ///
-/// A week of blocks at a 2 second block time.
-pub const DEFAULT_ARCHIVE_STATE_RETENTION: u64 = 302_400;
+/// About two weeks of blocks at a 2 second block time.
+pub const DEFAULT_ARCHIVE_STATE_RETENTION: u64 = 700_000;
 
 /// Options for Postgres-backed persistence.
 #[derive(Parser, Clone, Derivative)]
