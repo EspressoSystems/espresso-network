@@ -147,6 +147,15 @@ where
         }
     }
 
+    pub fn genesis(&self) -> Genesis {
+        Genesis {
+            epoch_height: self.epoch_height,
+            first_epoch_with_dynamic_stake_table: self.first_epoch_with_dynamic_stake_table,
+            stake_table: (*self.genesis_stake_table).clone().into(),
+            chain_id: self.chain_id,
+        }
+    }
+
     /// Get the number of known blocks in the chain.
     ///
     /// This is equivalent to one more than the block number of the latest known block. The latest
@@ -1806,6 +1815,19 @@ mod test {
             err.to_string().contains("invalid namespace proof"),
             "{err:#}"
         );
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_genesis_round_trip() {
+        let client = TestClient::default();
+        let genesis = client.genesis().await;
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            genesis.clone(),
+        );
+        assert_eq!(lc.genesis(), genesis);
     }
 }
 

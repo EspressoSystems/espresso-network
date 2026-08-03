@@ -398,7 +398,7 @@ snafu = "0.8"
 snap = "1"
 snow = { version = "0.10.0", features = ["ring-accelerated"] }
 socket2 = "0.6.4"
-sqlx = { version = "=0.8.3", features = [
+sqlx = { version = "0.8.6", features = [
     "bit-vec",
     "chrono",
     "postgres",
