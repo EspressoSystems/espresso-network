@@ -1,0 +1,9 @@
+(function() {
+    const implementors = Object.fromEntries([["builder",[["impl <a class=\"trait\" href=\"espresso_api/wire/trait.WireFormat.html\" title=\"trait espresso_api::wire::WireFormat\">WireFormat</a> for <a class=\"struct\" href=\"builder/api/struct.BuilderWireFormat.html\" title=\"struct builder::api::BuilderWireFormat\">BuilderWireFormat</a>",0]]],["espresso_api",[]],["espresso_node",[["impl <a class=\"trait\" href=\"espresso_api/wire/trait.WireFormat.html\" title=\"trait espresso_api::wire::WireFormat\">WireFormat</a> for <a class=\"struct\" href=\"espresso_node/state_signature/relay_server/struct.RelayWireFormat.html\" title=\"struct espresso_node::state_signature::relay_server::RelayWireFormat\">RelayWireFormat</a>",0]]],["hotshot_orchestrator",[["impl <a class=\"trait\" href=\"espresso_api/wire/trait.WireFormat.html\" title=\"trait espresso_api::wire::WireFormat\">WireFormat</a> for <a class=\"struct\" href=\"hotshot_orchestrator/struct.OrchestratorWireFormat.html\" title=\"struct hotshot_orchestrator::OrchestratorWireFormat\">OrchestratorWireFormat</a>",0]]],["light_client_query_service",[["impl <a class=\"trait\" href=\"espresso_api/wire/trait.WireFormat.html\" title=\"trait espresso_api::wire::WireFormat\">WireFormat</a> for <a class=\"struct\" href=\"light_client_query_service/api/struct.QueryServiceWireFormat.html\" title=\"struct light_client_query_service::api::QueryServiceWireFormat\">QueryServiceWireFormat</a>",0]]]]);
+    if (window.register_implementors) {
+        window.register_implementors(implementors);
+    } else {
+        window.pending_implementors = implementors;
+    }
+})()
+//{"start":59,"fragment_lengths":[300,20,364,346,373]}

@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["LogFormat"],"fn":["init_logging"]};
+window.SIDEBAR_ITEMS = {"enum":["LogFormat"],"fn":["init_logging"],"mod":["api"]};

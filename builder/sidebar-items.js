@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["run_builder_api_service"],"mod":["non_permissioned"]};
+window.SIDEBAR_ITEMS = {"fn":["run_builder_api_service"],"mod":["api","non_permissioned"]};

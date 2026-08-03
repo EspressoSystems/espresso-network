@@ -25,11 +25,11 @@
 <a href=#25 id=25 data-nosnippet>25</a>    RequestStakeTableSnapshot,
 <a href=#26 id=26 data-nosnippet>26</a>
 <a href=#27 id=27 data-nosnippet>27</a>    <span class="doccomment">/// This allows the use-case of a user sending a message that is not a
-<a href=#28 id=28 data-nosnippet>28</a>    /// valid recognized request to be handled explicitly by the server rather
-<a href=#29 id=29 data-nosnippet>29</a>    /// than the underlying mechanism of tide-disco.
-<a href=#30 id=30 data-nosnippet>30</a>    /// If not for this case [tide_disco] would silently ignore the error and
-<a href=#31 id=31 data-nosnippet>31</a>    /// drop the client connection, resulting in the client receiving no
-<a href=#32 id=32 data-nosnippet>32</a>    /// response / feedback about the mistake in the request.
+<a href=#28 id=28 data-nosnippet>28</a>    /// valid recognized request to be handled explicitly by the server,
+<a href=#29 id=29 data-nosnippet>29</a>    /// rather than by the underlying websocket handling mechanism.
+<a href=#30 id=30 data-nosnippet>30</a>    /// If not for this case, an unrecognized message would fail to
+<a href=#31 id=31 data-nosnippet>31</a>    /// deserialize and drop the client connection, resulting in the client
+<a href=#32 id=32 data-nosnippet>32</a>    /// receiving no response / feedback about the mistake in the request.
 <a href=#33 id=33 data-nosnippet>33</a>    </span><span class="attr">#[serde(untagged)]
 <a href=#34 id=34 data-nosnippet>34</a>    </span>UnrecognizedCommand(serde_json::Value),
 <a href=#35 id=35 data-nosnippet>35</a>}

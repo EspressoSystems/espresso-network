@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["Action","ActionDiscriminants","Resource"],"fn":["async_main","main","serve"],"struct":["ActionDistribution","Client","ClientConfig","Metrics","Options","ResourceManager","Subscription"],"trait":["Queryable"],"type":["Connection"]};
+window.SIDEBAR_ITEMS = {"enum":["Action","ActionDiscriminants","Resource"],"fn":["async_main","healthcheck","main","serve","status_metrics"],"struct":["ActionDistribution","Client","ClientConfig","Metrics","Options","ResourceManager","Subscription"],"trait":["Queryable"],"type":["Connection"]};
