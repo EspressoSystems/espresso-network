@@ -754,7 +754,8 @@ impl SqlStorage {
         if config.archive {
             // If running in archive mode, ensure the pruned height is set to 0, so the fetcher will
             // reconstruct previously pruned data.
-            query("DELETE FROM pruned_height")
+            query("DELETE FROM pruned_height WHERE id = $1")
+                .bind(Transaction::<Write>::PRUNED_HEIGHT_ID)
                 .execute(conn.as_mut())
                 .await?;
         }
@@ -1195,7 +1196,11 @@ impl HasMetrics for SqlStorage {
 }
 
 impl SqlStorage {
-    async fn prune_write(&self) -> anyhow::Result<Transaction<Prune>> {
+    /// Open a transaction for deleting old data.
+    ///
+    /// Runs under READ COMMITTED on Postgres so that deletes do not trip SSI predicate-lock
+    /// conflicts against concurrent consensus writes. See [`Prune`].
+    pub async fn prune_write(&self) -> anyhow::Result<Transaction<Prune>> {
         Transaction::new(&self.pool, self.pool_metrics.clone()).await
     }
 

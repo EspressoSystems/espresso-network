@@ -38,6 +38,7 @@ use super::{
         provider,
     },
     endpoints, fs, light_client, sql,
+    sql::ArchiveStateGc,
     state::NodeApiStateImpl,
     update::ApiEventConsumer,
 };
@@ -574,6 +575,16 @@ impl Options {
             "merklized state storage update loop",
             update_state_storage_loop(ds.clone(), get_node_state),
         );
+
+        // Archive mode disables the pruner, so nothing else bounds the merklized state tables.
+        // Only recent merklized state is worth keeping: it serves catchup, and any height can be
+        // derived again from the leaves, so storing all of it buys nothing for a lot of disk.
+        if mod_opt.archive && !mod_opt.archive_full_state {
+            tasks.spawn(
+                "archive state garbage collector",
+                ArchiveStateGc::new(&mod_opt).run(inner_storage.clone()),
+            );
+        }
 
         // Initialize hotshot events API if enabled
         if self.hotshot_events.is_some() {

@@ -79,6 +79,11 @@ use crate::{
     persistence::{migrate_network_config, persistence_metrics::PersistenceMetricsValue},
 };
 
+/// Number of recent block heights of merklized state an archive node retains by default.
+///
+/// A week of blocks at a 2 second block time.
+pub const DEFAULT_ARCHIVE_STATE_RETENTION: u64 = 302_400;
+
 /// Options for Postgres-backed persistence.
 #[derive(Parser, Clone, Derivative)]
 #[derivative(Debug)]
@@ -243,8 +248,26 @@ pub struct Options {
     /// reconstruct data that was pruned in a previous run where pruning was enabled. This option
     /// instructs the service to run without pruning _and_ reconstruct all previously pruned data by
     /// fetching from peers.
+    ///
+    /// Historical merklized state is garbage collected down to ARCHIVE_STATE_RETENTION heights.
+    /// Use ARCHIVE_FULL_STATE to retain all of it.
     #[clap(long, env = "ESPRESSO_NODE_ARCHIVE", conflicts_with = "prune")]
     pub(crate) archive: bool,
+
+    /// Number of recent block heights of merklized state an archive node retains.
+
+    #[clap(
+        long,
+        env = "ESPRESSO_NODE_ARCHIVE_STATE_RETENTION",
+        default_value_t = DEFAULT_ARCHIVE_STATE_RETENTION
+    )]
+    pub(crate) archive_state_retention: u64,
+
+    /// Retain all historical merklized state on an archive node.
+    ///
+    /// Disables the state garbage collector that archive nodes run by default.
+    #[clap(long, env = "ESPRESSO_NODE_ARCHIVE_FULL_STATE")]
+    pub(crate) archive_full_state: bool,
 
     /// Turns on leaf only data storage
     #[clap(
@@ -430,6 +453,8 @@ impl From<SqliteOptions> for Options {
             proactive_scan_interval: None,
             disable_proactive_fetching: false,
             archive: false,
+            archive_state_retention: DEFAULT_ARCHIVE_STATE_RETENTION,
+            archive_full_state: false,
             lightweight: false,
             min_connections: 0,
             pool: None,
