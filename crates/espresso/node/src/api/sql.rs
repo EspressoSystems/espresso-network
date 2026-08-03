@@ -196,7 +196,7 @@ impl ArchiveStateGc {
             // The first pass on an existing archive node can span millions of heights, so report
             // progress and reclaim space every 100 batches, not only at the end.
             batches += 1;
-            if batches % 100 == 0 {
+            if batches.is_multiple_of(100) {
                 tracing::info!(from, target, "archive state collection progress");
                 self.vacuum(storage).await?;
             }
