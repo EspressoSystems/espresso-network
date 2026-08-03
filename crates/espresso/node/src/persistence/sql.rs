@@ -10,7 +10,7 @@ use std::{
 use alloy::primitives::Address;
 use anyhow::{Context, bail};
 use async_trait::async_trait;
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use committable::Committable;
 use derivative::Derivative;
 use derive_more::derive::{From, Into};
@@ -78,6 +78,42 @@ use crate::{
     catchup::SqlStateCatchup,
     persistence::{migrate_network_config, persistence_metrics::PersistenceMetricsValue},
 };
+
+/// Selects how much derivable data a node persists.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+pub enum StorageProfile {
+    /// Store all data, including everything derivable. Required for validators and any node that
+    /// serves the historical state-query APIs or reward-claim-input.
+    #[default]
+    Full,
+    /// Drop merklized state and aggregate statistics (both derivable). Keeps leaves, payloads,
+    /// headers, the transaction index, and VID. Disables the historical state-query APIs
+    /// (block-state/fee-state/reward-state[-v2]) and reward-claim-input.
+    Compact,
+}
+
+/// Resolved set of optional datasets a node persists. Leaves, payloads, and consensus tables are
+/// always stored; this set covers data that a profile may omit. Extended in later profiles.
+#[derive(Clone, Copy, Debug)]
+pub struct StorageContents {
+    pub merklized_state: bool,
+    pub aggregates: bool,
+}
+
+impl StorageProfile {
+    pub fn contents(self) -> StorageContents {
+        match self {
+            Self::Full => StorageContents {
+                merklized_state: true,
+                aggregates: true,
+            },
+            Self::Compact => StorageContents {
+                merklized_state: false,
+                aggregates: false,
+            },
+        }
+    }
+}
 
 /// Options for Postgres-backed persistence.
 #[derive(Parser, Clone, Derivative)]
@@ -255,6 +291,11 @@ pub struct Options {
     )]
     pub(crate) lightweight: bool,
 
+    /// How much derivable data to persist. See `StorageProfile`. Independent of `--lightweight`,
+    /// which is a separate leaf-only mode that also drops payloads.
+    #[clap(long, value_enum, env = "ESPRESSO_NODE_STORAGE_PROFILE", default_value_t = StorageProfile::Full)]
+    pub(crate) storage_profile: StorageProfile,
+
     /// The maximum idle time of a database connection.
     ///
     /// Any connection which has been open and unused longer than this duration will be
@@ -431,6 +472,7 @@ impl From<SqliteOptions> for Options {
             disable_proactive_fetching: false,
             archive: false,
             lightweight: false,
+            storage_profile: StorageProfile::Full,
             min_connections: 0,
             pool: None,
             serializable_retry: SerializableRetryOptions::default(),
@@ -4974,5 +5016,24 @@ mod postgres_tests {
 
         let latest = storage.load_latest_acted_view().await.unwrap();
         assert_eq!(latest, Some(ViewNumber::new(19)));
+    }
+}
+
+#[cfg(test)]
+mod storage_profile_tests {
+    use super::StorageProfile;
+
+    #[test]
+    fn full_profile_enables_all() {
+        let c = StorageProfile::Full.contents();
+        assert!(c.merklized_state);
+        assert!(c.aggregates);
+    }
+
+    #[test]
+    fn compact_profile_disables_merklized_state_and_aggregates() {
+        let c = StorageProfile::Compact.contents();
+        assert!(!c.merklized_state);
+        assert!(!c.aggregates);
     }
 }

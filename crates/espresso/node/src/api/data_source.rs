@@ -605,6 +605,9 @@ pub mod testing {
         ) -> anyhow::Result<Options> {
             anyhow::bail!("not supported")
         }
+        fn compact_ds_options(_storage: &Self::Storage, _opt: Options) -> anyhow::Result<Options> {
+            anyhow::bail!("not supported")
+        }
         fn options(storage: &Self::Storage, opt: Options) -> Options;
     }
 }

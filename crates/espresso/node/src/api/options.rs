@@ -532,48 +532,51 @@ impl Options {
                 .context("failed to define database api")
         })?;
 
-        // Initialize merklized state module for block merkle tree
+        let contents = mod_opt.storage_profile.contents();
 
-        register_api("block-state", &mut app, move |ver| {
-            endpoints::merklized_state::<N, P, _, BlockMerkleTree, 3>(ver)
-                .context("failed to define block-state api")
-        })?;
+        if contents.merklized_state {
+            // Initialize merklized state module for block merkle tree
+            register_api("block-state", &mut app, move |ver| {
+                endpoints::merklized_state::<N, P, _, BlockMerkleTree, 3>(ver)
+                    .context("failed to define block-state api")
+            })?;
 
-        // Initialize merklized state module for fee merkle tree
+            // Initialize merklized state module for fee merkle tree
+            register_api("fee-state", &mut app, move |ver| {
+                endpoints::fee::<_, SequencerApiVersion>(ver)
+                    .context("failed to define fee-state api")
+            })?;
 
-        register_api("fee-state", &mut app, move |ver| {
-            endpoints::fee::<_, SequencerApiVersion>(ver).context("failed to define fee-state api")
-        })?;
+            register_api("reward-state", &mut app, move |ver| {
+                endpoints::reward::<
+                    _,
+                    SequencerApiVersion,
+                    RewardMerkleTreeV1,
+                    { RewardMerkleTreeV1::ARITY },
+                >(ver, RewardMerkleTreeVersion::V1)
+                .context("failed to define reward-state api")
+            })?;
 
-        register_api("reward-state", &mut app, move |ver| {
-            endpoints::reward::<
-                _,
-                SequencerApiVersion,
-                RewardMerkleTreeV1,
-                { RewardMerkleTreeV1::ARITY },
-            >(ver, RewardMerkleTreeVersion::V1)
-            .context("failed to define reward-state api")
-        })?;
+            // register new api for new reward merkle tree
+            register_api("reward-state-v2", &mut app, move |ver| {
+                endpoints::reward::<
+                    _,
+                    SequencerApiVersion,
+                    RewardMerkleTreeV2,
+                    { RewardMerkleTreeV2::ARITY },
+                >(ver, RewardMerkleTreeVersion::V2)
+                .context("failed to define reward-state api")
+            })?;
 
-        // register new api for new reward merkle tree
-        register_api("reward-state-v2", &mut app, move |ver| {
-            endpoints::reward::<
-                _,
-                SequencerApiVersion,
-                RewardMerkleTreeV2,
-                { RewardMerkleTreeV2::ARITY },
-            >(ver, RewardMerkleTreeVersion::V2)
-            .context("failed to define reward-state api")
-        })?;
-
-        let get_node_state = {
-            let state = state.clone();
-            async move { state.node_state().await.clone() }
-        };
-        tasks.spawn(
-            "merklized state storage update loop",
-            update_state_storage_loop(ds.clone(), get_node_state),
-        );
+            let get_node_state = {
+                let state = state.clone();
+                async move { state.node_state().await.clone() }
+            };
+            tasks.spawn(
+                "merklized state storage update loop",
+                update_state_storage_loop(ds.clone(), get_node_state),
+            );
+        }
 
         // Initialize hotshot events API if enabled
         if self.hotshot_events.is_some() {

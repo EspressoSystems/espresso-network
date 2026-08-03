@@ -87,6 +87,10 @@ impl SequencerDataSource for DataSource {
             builder = builder.leaf_only();
         }
 
+        if !opt.storage_profile.contents().aggregates {
+            builder = builder.disable_aggregator();
+        }
+
         if let Some(delay) = active_fetch_delay {
             builder = builder.with_active_fetch_delay(delay);
         }
@@ -1811,6 +1815,15 @@ pub(crate) mod impl_testable_data_source {
         ) -> anyhow::Result<api::Options> {
             let mut ds_opts = tmp_options(storage);
             ds_opts.lightweight = true;
+            Ok(opt.query_sql(Default::default(), ds_opts))
+        }
+
+        fn compact_ds_options(
+            storage: &Self::Storage,
+            opt: api::Options,
+        ) -> anyhow::Result<api::Options> {
+            let mut ds_opts = tmp_options(storage);
+            ds_opts.storage_profile = crate::persistence::sql::StorageProfile::Compact;
             Ok(opt.query_sql(Default::default(), ds_opts))
         }
 
