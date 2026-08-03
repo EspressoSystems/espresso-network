@@ -291,6 +291,12 @@ impl From<StakeTableEntries<SeqTypes>> for StakeTable {
     }
 }
 
+impl From<StakeTable> for Vec<StakeTableEntry<PubKey>> {
+    fn from(stake_table: StakeTable) -> Self {
+        stake_table.entries
+    }
+}
+
 impl FromIterator<StakeTableEntry<PubKey>> for StakeTable {
     fn from_iter<T: IntoIterator<Item = StakeTableEntry<PubKey>>>(entries: T) -> Self {
         let mut total_stake = U256::ZERO;
