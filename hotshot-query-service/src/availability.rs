@@ -296,7 +296,6 @@ where
     api.with_version(api_ver.clone());
 
     // `LeafQueryData` now contains `Leaf2` and `QC2``, which is a breaking change.
-    // On node startup, all leaves are migrated to `Leaf2`.
     //
     // To maintain compatibility with nodes running an older version
     // (which expect `LeafQueryData` with `Leaf1` and `QC1`),
