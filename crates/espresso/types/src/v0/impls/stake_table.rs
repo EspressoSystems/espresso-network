@@ -232,6 +232,124 @@ pub struct StakeTableState {
     used_x25519_keys: HashSet<x25519::PublicKey>,
 }
 
+#[cfg(feature = "rlp")]
+mod stake_table_state_rlp {
+    use alloy_rlp::{Decodable, Encodable, RlpDecodable, RlpEncodable};
+
+    use super::*;
+
+    #[derive(RlpEncodable, RlpDecodable)]
+    struct StakeTableStateRlp {
+        validators: Vec<RegisteredValidator<BLSPubKey>>,
+        validator_exits: Vec<Address>,
+        used_bls_keys: Vec<Vec<u8>>,
+        used_schnorr_keys: Vec<Vec<u8>>,
+        used_x25519_keys: Vec<Vec<u8>>,
+    }
+
+    impl TryFrom<&StakeTableState> for StakeTableStateRlp {
+        type Error = anyhow::Error;
+
+        fn try_from(state: &StakeTableState) -> Result<Self, Self::Error> {
+            // The HashSets of used keys do not have a canonical order, so we need to sort them to
+            // make this format canonical.
+            let mut validator_exits = state.validator_exits.iter().copied().collect::<Vec<_>>();
+            validator_exits.sort();
+
+            let mut used_bls_keys = state
+                .used_bls_keys
+                .iter()
+                .map(bincode::serialize)
+                .collect::<Result<Vec<_>, _>>()
+                .context("serializing used_bls_keys")?;
+            used_bls_keys.sort();
+
+            let mut used_schnorr_keys = state
+                .used_schnorr_keys
+                .iter()
+                .map(bincode::serialize)
+                .collect::<Result<Vec<_>, _>>()
+                .context("serializing used_schnorr_keys")?;
+            used_schnorr_keys.sort();
+
+            let mut used_x25519_keys = state
+                .used_x25519_keys
+                .iter()
+                .map(bincode::serialize)
+                .collect::<Result<Vec<_>, _>>()
+                .context("serializing used_x25519_keys")?;
+            used_x25519_keys.sort();
+
+            Ok(Self {
+                // `IndexMap` has a canonical iteration order over the values, so it is safe to
+                // simply read the validators into a `Vec`.
+                validators: state.validators.values().cloned().collect(),
+                validator_exits,
+                used_bls_keys,
+                used_schnorr_keys,
+                used_x25519_keys,
+            })
+        }
+    }
+
+    impl TryFrom<StakeTableStateRlp> for StakeTableState {
+        type Error = anyhow::Error;
+
+        fn try_from(state: StakeTableStateRlp) -> Result<Self, Self::Error> {
+            Ok(Self {
+                validators: state
+                    .validators
+                    .into_iter()
+                    .map(|v| (v.account, v))
+                    .collect(),
+                validator_exits: state.validator_exits.into_iter().collect(),
+                used_bls_keys: state
+                    .used_bls_keys
+                    .iter()
+                    .map(|bytes| bincode::deserialize(bytes))
+                    .collect::<Result<HashSet<_>, _>>()
+                    .context("deserializing used_bls_keys")?,
+                used_schnorr_keys: state
+                    .used_schnorr_keys
+                    .iter()
+                    .map(|bytes| bincode::deserialize(bytes))
+                    .collect::<Result<HashSet<_>, _>>()
+                    .context("deserializing used_schnorr_keys")?,
+                used_x25519_keys: state
+                    .used_x25519_keys
+                    .iter()
+                    .map(|bytes| bincode::deserialize(bytes))
+                    .collect::<Result<HashSet<_>, _>>()
+                    .context("deserializing used_x25519_keys")?,
+            })
+        }
+    }
+
+    impl Encodable for StakeTableState {
+        fn encode(&self, out: &mut dyn alloy_rlp::BufMut) {
+            StakeTableStateRlp::try_from(self)
+                .expect("failed to canonicalize StakeTableState")
+                .encode(out);
+        }
+
+        fn length(&self) -> usize {
+            StakeTableStateRlp::try_from(self)
+                .expect("failed to canonicalize StakeTableState")
+                .length()
+        }
+    }
+
+    impl Decodable for StakeTableState {
+        fn decode(buf: &mut &[u8]) -> alloy_rlp::Result<Self> {
+            let rlp = StakeTableStateRlp::decode(buf)?;
+            rlp.try_into().map_err(|err| {
+                tracing::error!("failed to parse canonical StakeTableState: {err:#}");
+                alloy_rlp::Error::Custom("failed to parse canonical StakeTableState")
+            })
+        }
+    }
+}
+
 impl Committable for StakeTableState {
     fn commit(&self) -> committable::Commitment<Self> {
         let mut builder = RawCommitmentBuilder::new(&Self::tag());
@@ -4871,5 +4989,118 @@ mod proptest_x25519_key {
                 Ok(())
             })
             .unwrap();
+    }
+}
+
+#[cfg(all(test, feature = "rlp"))]
+mod rlp_tests {
+    use alloy_rlp::{Decodable, Encodable};
+    use hotshot::types::BLSPubKey;
+    use hotshot_types::traits::signature_key::StateSignatureKey;
+
+    use super::*;
+
+    #[test]
+    fn test_registered_validator_round_canonical_order() {
+        let seed = [0; 32];
+        let validator = RegisteredValidator {
+            account: Address::random(),
+            stake_table_key: Some(BLSPubKey::generated_from_seed_indexed(seed, 0).0),
+            state_ver_key: Some(SchnorrPubKey::generated_from_seed_indexed(seed, 0).0),
+            stake: U256::MAX,
+            commission: u16::MAX,
+            delegators: [
+                (Address::random(), U256::ZERO),
+                (Address::random(), U256::MAX),
+            ]
+            .into_iter()
+            .collect(),
+            authenticated: true,
+            x25519_key: Some(x25519::Keypair::generate().unwrap().public_key()),
+            p2p_addr: Some(NetAddr::named("localhost", 8080)),
+        };
+
+        // Two hashsets with different capacities are very likely to end up with a different
+        // iteration order.
+        let mut validator_exits1 = HashSet::with_capacity(100);
+        let mut validator_exits2 = HashSet::with_capacity(10_000);
+        let mut used_bls_keys1 = HashSet::with_capacity(100);
+        let mut used_bls_keys2 = HashSet::with_capacity(10_000);
+        let mut used_schnorr_keys1 = HashSet::with_capacity(100);
+        let mut used_schnorr_keys2 = HashSet::with_capacity(10_000);
+        let mut used_x25519_keys1 = HashSet::with_capacity(100);
+        let mut used_x25519_keys2 = HashSet::with_capacity(10_000);
+
+        for i in 0..100 {
+            let exit = Address::random();
+            let bls_key = BLSPubKey::generated_from_seed_indexed([0; 32], i).0;
+            let schnorr_key = SchnorrPubKey::generated_from_seed_indexed([0; 32], i).0;
+            let x25519_key = x25519::Keypair::generate().unwrap().public_key();
+
+            validator_exits1.insert(exit);
+            validator_exits2.insert(exit);
+            used_bls_keys1.insert(bls_key);
+            used_bls_keys2.insert(bls_key);
+            used_schnorr_keys1.insert(schnorr_key.clone());
+            used_schnorr_keys2.insert(schnorr_key);
+            used_x25519_keys1.insert(x25519_key);
+            used_x25519_keys2.insert(x25519_key);
+        }
+        assert_eq!(validator_exits1, validator_exits2);
+        assert_eq!(used_bls_keys1, used_bls_keys2);
+        assert_eq!(used_schnorr_keys1, used_schnorr_keys2);
+        assert_eq!(used_x25519_keys1, used_x25519_keys2);
+        assert_ne!(
+            validator_exits1.iter().collect::<Vec<_>>(),
+            validator_exits2.iter().collect::<Vec<_>>()
+        );
+        assert_ne!(
+            used_bls_keys1.iter().collect::<Vec<_>>(),
+            used_bls_keys2.iter().collect::<Vec<_>>()
+        );
+        assert_ne!(
+            used_schnorr_keys1.iter().collect::<Vec<_>>(),
+            used_schnorr_keys2.iter().collect::<Vec<_>>()
+        );
+        assert_ne!(
+            used_x25519_keys1.iter().collect::<Vec<_>>(),
+            used_x25519_keys2.iter().collect::<Vec<_>>()
+        );
+
+        let validators = [(validator.account, validator)]
+            .into_iter()
+            .collect::<RegisteredValidatorMap>();
+        let state1 = StakeTableState {
+            validators: validators.clone(),
+            validator_exits: validator_exits1,
+            used_bls_keys: used_bls_keys1,
+            used_schnorr_keys: used_schnorr_keys1,
+            used_x25519_keys: used_x25519_keys1,
+        };
+        let state2 = StakeTableState {
+            validators,
+            validator_exits: validator_exits2,
+            used_bls_keys: used_bls_keys2,
+            used_schnorr_keys: used_schnorr_keys2,
+            used_x25519_keys: used_x25519_keys2,
+        };
+
+        let mut bytes1 = vec![];
+        state1.encode(&mut bytes1);
+        assert_eq!(bytes1.len(), state1.length());
+
+        let mut bytes2 = vec![];
+        state2.encode(&mut bytes2);
+        assert_eq!(bytes2.len(), state2.length());
+
+        assert_eq!(bytes1, bytes2);
+        assert_eq!(
+            state1,
+            StakeTableState::decode(&mut bytes2.as_slice()).unwrap()
+        );
+        assert_eq!(
+            state2,
+            StakeTableState::decode(&mut bytes1.as_slice()).unwrap()
+        );
     }
 }
