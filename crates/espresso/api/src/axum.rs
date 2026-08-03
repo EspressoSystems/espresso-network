@@ -34,6 +34,7 @@ use serialization_api::v2::{
     GetRewardMerkleTreeRequest, GetStakeTableRequest, GetStateCertificateRequest,
 };
 use tokio::sync::Semaphore;
+use tower_http::cors::{Any, CorsLayer};
 use vbs::{BinarySerializer, Serializer, version::StaticVersion};
 
 use crate::{
@@ -381,17 +382,25 @@ where
     let router_v1 = create_router_v1(state.clone());
     let router_v2 = create_router_v2(state);
 
-    with_top_level_routes(router_v2.merge(router_v1))
+    with_top_level_routes(router_v2.merge(router_v1)).layer(cors_layer())
 }
 
 /// Add the routes that every mode serves regardless of which API modules are enabled:
-/// `/`, `/healthcheck`, and `/version`.
+/// `/`, `/healthcheck`, `/v1/{module}/healthcheck`, and `/version`. Callers apply CORS.
 pub(crate) fn with_top_level_routes(router: Router) -> Router {
     router
         .route("/", get(redirect_to_docs))
         .route("/healthcheck", get(healthcheck))
         .route("/v1/{module}/healthcheck", get(module_healthcheck))
         .route("/version", get(version))
+}
+
+/// Permissive CORS, so browser clients served from another origin can read every response.
+pub(crate) fn cors_layer() -> CorsLayer {
+    CorsLayer::new()
+        .allow_methods(Any)
+        .allow_headers(Any)
+        .allow_origin(Any)
 }
 
 /// Health status of an application.
@@ -3936,6 +3945,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
     use super::*;
 
     fn rewritten_uri(uri: &str) -> String {
@@ -4743,6 +4754,112 @@ mod tests {
             .await
             .expect("read response body");
         String::from_utf8(bytes.to_vec()).expect("response body is utf8")
+    }
+
+    /// Checks that every response carries
+    /// `Access-Control-Allow-Origin: *`: top-level routes, API routes merged in by the caller,
+    /// error responses, and 404s. Also checks that an OPTIONS preflight is answered with the
+    /// allow-origin, allow-methods, and allow-headers a browser requires.
+    #[tokio::test]
+    async fn responses_carry_cors_headers() {
+        let router = with_top_level_routes(
+            Router::new()
+                .route("/v1/status/block-height", get(|| async { "0" }))
+                .route(
+                    "/v1/failing",
+                    get(|| async { StatusCode::INTERNAL_SERVER_ERROR }),
+                ),
+        )
+        .layer(cors_layer());
+
+        let allow_origin = |resp: &Response, uri: &str| {
+            resp.headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .unwrap_or_else(|| panic!("no CORS header on {uri}"))
+                .clone()
+        };
+
+        for (uri, expected_status) in [
+            ("/healthcheck", StatusCode::OK),
+            ("/v1/status/block-height", StatusCode::OK),
+            ("/v1/failing", StatusCode::INTERNAL_SERVER_ERROR),
+            ("/no/such/route", StatusCode::NOT_FOUND),
+        ] {
+            let req = Request::builder()
+                .uri(uri)
+                .header(header::ORIGIN, "https://example.com")
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let resp = tower::ServiceExt::oneshot(router.clone(), req)
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), expected_status, "{uri}");
+            assert_eq!(allow_origin(&resp, uri), "*", "{uri}");
+        }
+
+        // Browsers preflight non-simple requests (e.g. a JSON POST to submit) with OPTIONS and
+        // require allow-origin, allow-methods, and allow-headers in the answer, even on routes
+        // that only register GET handlers.
+        let preflight = Request::builder()
+            .method(axum::http::Method::OPTIONS)
+            .uri("/v1/status/block-height")
+            .header(header::ORIGIN, "https://example.com")
+            .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+            .header(header::ACCESS_CONTROL_REQUEST_HEADERS, "content-type")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router, preflight).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(allow_origin(&resp, "preflight"), "*");
+        assert_eq!(
+            resp.headers()
+                .get(header::ACCESS_CONTROL_ALLOW_METHODS)
+                .expect("allow-methods on preflight"),
+            "*"
+        );
+        assert_eq!(
+            resp.headers()
+                .get(header::ACCESS_CONTROL_ALLOW_HEADERS)
+                .expect("allow-headers on preflight"),
+            "*"
+        );
+    }
+
+    /// Serves with zero connection slots so every request is shed, and checks the 429 still
+    /// carries `Access-Control-Allow-Origin: *`.
+    #[tokio::test]
+    async fn shed_requests_carry_cors_headers() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(crate::serve_router(
+            listener,
+            "test",
+            Router::new().route("/v1/status/block-height", get(|| async { "0" })),
+            Some(0),
+        ));
+
+        let mut sock = tokio::net::TcpStream::connect(addr).await.unwrap();
+        sock.write_all(
+            b"GET /v1/status/block-height HTTP/1.1\r\nHost: localhost\r\nOrigin: https://example.com\r\n\r\n",
+        )
+        .await
+        .unwrap();
+        let mut head = Vec::new();
+        let mut buf = [0u8; 512];
+        while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+            let n = sock.read(&mut buf).await.unwrap();
+            assert!(
+                n > 0,
+                "connection closed before the response head: {head:?}"
+            );
+            head.extend_from_slice(&buf[..n]);
+        }
+        let head = String::from_utf8_lossy(&head).to_ascii_lowercase();
+        assert!(head.contains("429"), "request must be shed: {head}");
+        assert!(
+            head.contains("access-control-allow-origin: *"),
+            "no CORS header on 429: {head}"
+        );
     }
 
     #[tokio::test]
