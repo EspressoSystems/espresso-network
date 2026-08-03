@@ -171,9 +171,13 @@ impl ArchiveStateGc {
             return Ok(());
         }
 
+        // A zero configured batch size would underflow below and never make progress.
+        let batch_size = self.cfg.batch_size().max(1);
+
         tracing::info!(head, target, from, "collecting archived merklized state");
+        let mut batches = 0u64;
         while from < target {
-            let to = min(from + self.cfg.batch_size(), target) - 1;
+            let to = min(from + batch_size, target) - 1;
 
             // Delete and record the new pruned height together, so readers never see state
             // missing without the height that says it is gone.
@@ -188,6 +192,14 @@ impl ArchiveStateGc {
                 .context("committing deleted state")?;
 
             from = to + 1;
+
+            // The first pass on an existing archive node can span millions of heights, so report
+            // progress and reclaim space every 100 batches, not only at the end.
+            batches += 1;
+            if batches % 100 == 0 {
+                tracing::info!(from, target, "archive state collection progress");
+                self.vacuum(storage).await?;
+            }
         }
 
         self.vacuum(storage).await
@@ -2030,6 +2042,29 @@ mod tests {
         assert_eq!(tx.load_state_pruned_height().await.unwrap(), Some(2));
         // Consensus data is untouched, so the fetcher must not treat any of it as pruned.
         assert_eq!(tx.load_pruned_height().await.unwrap(), None);
+    }
+
+    /// A zero configured batch size is clamped rather than underflowing.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_archive_state_gc_zero_batch_size() {
+        let db = TmpDb::init().await;
+        let opt = tmp_options(&db);
+        let cfg = Config::try_from(&opt).expect("failed to create config from options");
+        let storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
+            .await
+            .expect("failed to connect to storage");
+
+        let account = FeeAccount::from(Address::repeat_byte(0x42));
+        for height in 1..=5 {
+            write_fee_state(&storage, account, 100 * height, height).await;
+        }
+
+        archive_state_gc(&opt, 2, 0)
+            .collect(&storage)
+            .await
+            .unwrap();
+        assert_eq!(fee_state_heights(&storage).await, [2, 3, 4, 5]);
     }
 
     /// Collection spans batches and resumes from the last pruned height.

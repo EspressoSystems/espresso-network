@@ -255,7 +255,10 @@ pub struct Options {
     pub(crate) archive: bool,
 
     /// Number of recent block heights of merklized state an archive node retains.
-
+    ///
+    /// Collection runs on the pruner interval (ESPRESSO_NODE_PRUNER_INTERVAL) in batches of
+    /// ESPRESSO_NODE_PRUNER_BATCH_SIZE heights, even though the pruner itself is disabled in
+    /// archive mode.
     #[clap(
         long,
         env = "ESPRESSO_NODE_ARCHIVE_STATE_RETENTION",

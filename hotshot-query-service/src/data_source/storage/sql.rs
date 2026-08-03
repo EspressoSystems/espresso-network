@@ -2357,6 +2357,30 @@ mod test {
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_archive_clears_data_pruned_height_only() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        let mut tx = storage.write().await.unwrap();
+        tx.save_pruned_height(10).await.unwrap();
+        tx.save_state_pruned_height(20).await.unwrap();
+        tx.commit().await.unwrap();
+        drop(storage);
+
+        // Reconnecting in archive mode clears the data pruned height, so the fetcher will
+        // reconstruct previously pruned data, but preserves the state pruned height: merklized
+        // state is never fetched from peers, and an archive node may garbage collect it.
+        let storage = SqlStorage::connect(db.config().archive(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let mut tx = storage.read().await.unwrap();
+        assert_eq!(tx.load_pruned_height().await.unwrap(), None);
+        assert_eq!(tx.load_state_pruned_height().await.unwrap(), Some(20));
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_separate_state_data_pruning() {
         let db = TmpDb::init().await;
         let mut storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
