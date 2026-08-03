@@ -22,8 +22,8 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     traits::{EncodeBytes, block_contents::GENESIS_VID_NUM_STORAGE_NODES, metrics::NoMetrics},
 };
-use tide_disco::Url;
 use tokio::spawn;
+use url::Url;
 use vbs::version::Version;
 
 use crate::run_builder_api_service;

@@ -25,11 +25,11 @@ pub enum ClientMessage {
     RequestStakeTableSnapshot,
 
     /// This allows the use-case of a user sending a message that is not a
-    /// valid recognized request to be handled explicitly by the server rather
-    /// than the underlying mechanism of tide-disco.
-    /// If not for this case [tide_disco] would silently ignore the error and
-    /// drop the client connection, resulting in the client receiving no
-    /// response / feedback about the mistake in the request.
+    /// valid recognized request to be handled explicitly by the server,
+    /// rather than by the underlying websocket handling mechanism.
+    /// If not for this case, an unrecognized message would fail to
+    /// deserialize and drop the client connection, resulting in the client
+    /// receiving no response / feedback about the mistake in the request.
     #[serde(untagged)]
     UnrecognizedCommand(serde_json::Value),
 }
