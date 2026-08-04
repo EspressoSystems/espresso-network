@@ -38,6 +38,7 @@ pub struct Client<E, VER: StaticVersionType> {
     inner: reqwest::Client,
     base_url: Url,
     accept: ContentType,
+    retry_interval: Duration,
     _marker: PhantomData<fn(E, VER)>,
 }
 
@@ -47,6 +48,7 @@ impl<E, VER: StaticVersionType> Clone for Client<E, VER> {
             inner: self.inner.clone(),
             base_url: self.base_url.clone(),
             accept: self.accept,
+            retry_interval: self.retry_interval,
             _marker: PhantomData,
         }
     }
@@ -78,7 +80,8 @@ impl<E: ClientError, VER: StaticVersionType> Client<E, VER> {
     /// This is useful to wait for the server to come up if it may be offline when the client is
     /// created.
     ///
-    /// Polls the server's `/healthcheck` endpoint every 10 seconds until it returns
+    /// Polls the server's `/healthcheck` endpoint at the configured
+    /// [retry interval](ClientBuilder::set_retry_interval) until it returns
     /// [`StatusCode::OK`](reqwest::StatusCode::OK), or until `timeout` elapses (or forever, if
     /// `timeout` is `None`).
     pub async fn connect(&self, timeout: Option<Duration>) -> bool {
@@ -108,7 +111,7 @@ impl<E: ClientError, VER: StaticVersionType> Client<E, VER> {
                     );
                 },
             }
-            sleep(Duration::from_secs(10)).await;
+            sleep(self.retry_interval).await;
         }
         false
     }
@@ -128,7 +131,7 @@ impl<E: ClientError, VER: StaticVersionType> Client<E, VER> {
         while deadline.map(|t| Instant::now() < t).unwrap_or(true) {
             match self.healthcheck::<H>().await {
                 Ok(health) if healthy(&health) => return Some(health),
-                _ => sleep(Duration::from_secs(10)).await,
+                _ => sleep(self.retry_interval).await,
             }
         }
         None
@@ -195,10 +198,13 @@ impl<E: ClientError, VER: StaticVersionType> Client<E, VER> {
         &self,
         prefix: &str,
     ) -> Result<Client<E2, VER>, url::ParseError> {
+        let mut base_url = self.base_url.join(prefix)?;
+        ensure_trailing_slash(&mut base_url);
         Ok(Client {
             inner: self.inner.clone(),
-            base_url: self.base_url.join(prefix)?,
+            base_url,
             accept: self.accept,
+            retry_interval: self.retry_interval,
             _marker: PhantomData,
         })
     }
@@ -214,21 +220,19 @@ pub struct ClientBuilder<E: ClientError, VER: StaticVersionType> {
     accept: ContentType,
     base_url: Url,
     timeout: Option<Duration>,
+    retry_interval: Duration,
     _marker: PhantomData<fn(E, VER)>,
 }
 
 impl<E: ClientError, VER: StaticVersionType> ClientBuilder<E, VER> {
     fn new(mut base_url: Url) -> Self {
-        // If the path part of `base_url` does not end in `/`, `join` will treat it as a filename
-        // and remove it, which is never what we want: `base_url` is always a directory-like path.
-        if !base_url.path().ends_with('/') {
-            base_url.set_path(&format!("{}/", base_url.path()));
-        }
+        ensure_trailing_slash(&mut base_url);
         Self {
             inner: reqwest::Client::builder(),
             accept: ContentType::Binary,
             base_url,
             timeout: Some(Duration::from_secs(60)),
+            retry_interval: Duration::from_secs(10),
             _marker: PhantomData,
         }
     }
@@ -240,6 +244,15 @@ impl<E: ClientError, VER: StaticVersionType> ClientBuilder<E, VER> {
     /// Default: `Some(Duration::from_secs(60))`.
     pub fn set_timeout(mut self, timeout: Option<Duration>) -> Self {
         self.timeout = timeout;
+        self
+    }
+
+    /// Set the interval between healthcheck probes in [`connect`](Client::connect) and
+    /// [`wait_for_health`](Client::wait_for_health).
+    ///
+    /// Default: 10 seconds.
+    pub fn set_retry_interval(mut self, interval: Duration) -> Self {
+        self.retry_interval = interval;
         self
     }
 
@@ -259,6 +272,7 @@ impl<E: ClientError, VER: StaticVersionType> ClientBuilder<E, VER> {
             inner: builder.build().unwrap(),
             base_url: self.base_url,
             accept: self.accept,
+            retry_interval: self.retry_interval,
             _marker: PhantomData,
         }
     }
@@ -267,6 +281,16 @@ impl<E: ClientError, VER: StaticVersionType> ClientBuilder<E, VER> {
 impl<E: ClientError, VER: StaticVersionType> From<ClientBuilder<E, VER>> for Client<E, VER> {
     fn from(builder: ClientBuilder<E, VER>) -> Self {
         builder.build()
+    }
+}
+
+/// Ensure a base URL's path ends in `/`, so that `join` treats it as a directory.
+///
+/// If the path does not end in `/`, `join` will treat the last segment as a filename and remove
+/// it, which is never what we want: a base URL is always a directory-like path.
+fn ensure_trailing_slash(url: &mut Url) {
+    if !url.path().ends_with('/') {
+        url.set_path(&format!("{}/", url.path()));
     }
 }
 
@@ -304,5 +328,15 @@ mod test {
         let client =
             Client::<ClientErr, Ver01>::builder("http://example.com".parse().unwrap()).build();
         assert_eq!(client.base_url(), "http://example.com/".parse().unwrap());
+    }
+
+    #[test]
+    fn module_adds_trailing_slash_to_prefix() {
+        let client = Client::<ClientErr, Ver01>::new("http://example.com/api".parse().unwrap());
+        let module = client.module::<ClientErr>("sub").unwrap();
+        assert_eq!(
+            module.base_url(),
+            "http://example.com/api/sub/".parse().unwrap()
+        );
     }
 }

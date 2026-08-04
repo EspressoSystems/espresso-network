@@ -1,6 +1,6 @@
 //! Loopback tests against a small axum server, covering the response-decode paths of
-//! `Request::send`, `Request::bytes`, healthcheck polling, and the frame-decode and
-//! redirect-following paths of `SocketRequest`.
+//! `Request::send`, `Request::bytes`, healthcheck polling, and the frame-encode, frame-decode,
+//! and redirect-following paths of `SocketRequest`.
 
 use std::{
     sync::{Arc, RwLock},
@@ -17,7 +17,7 @@ use axum::{
     routing::{get, post},
 };
 use futures::{SinkExt, StreamExt};
-use http_client::{Client, ClientError, error::ClientErr, healthcheck::HealthStatus};
+use http_client::{Client, ClientError, ContentType, error::ClientErr, healthcheck::HealthStatus};
 use tokio::net::TcpListener;
 use vbs::{BinarySerializer, Serializer, version::StaticVersion};
 
@@ -64,6 +64,18 @@ async fn ws_redirect() -> impl IntoResponse {
         axum::http::StatusCode::TEMPORARY_REDIRECT,
         [(axum::http::header::LOCATION, "/ws_naturals")],
     )
+}
+
+async fn ws_echo(ws: WebSocketUpgrade) -> impl IntoResponse {
+    ws.on_upgrade(|mut socket| async move {
+        while let Some(Ok(msg)) = socket.next().await {
+            if matches!(msg, WsMessage::Binary(_) | WsMessage::Text(_))
+                && socket.send(msg).await.is_err()
+            {
+                return;
+            }
+        }
+    })
 }
 
 async fn ws_naturals(ws: WebSocketUpgrade) -> impl IntoResponse {
@@ -160,6 +172,17 @@ async fn module_prefixes_routes() {
 }
 
 #[tokio::test]
+async fn module_without_trailing_slash_prefixes_routes() {
+    let app = Router::new().route("/mod/get_json", get(get_json));
+    let base_url = spawn_server(app).await;
+
+    let client = Client::<ClientErr, Ver01>::new(base_url);
+    let module = client.module::<ClientErr>("mod").unwrap();
+    let res: String = module.get("get_json").send().await.unwrap();
+    assert_eq!(res, "response");
+}
+
+#[tokio::test]
 async fn socket_subscribe_decodes_binary_frames() {
     let app = Router::new().route("/ws_naturals", get(ws_naturals));
     let base_url = spawn_server(app).await;
@@ -173,6 +196,38 @@ async fn socket_subscribe_decodes_binary_frames() {
         .collect()
         .await;
     assert_eq!(naturals, (0u64..3).map(Ok).collect::<Vec<_>>());
+}
+
+#[tokio::test]
+async fn socket_send_encodes_binary_frames() {
+    let app = Router::new().route("/ws_echo", get(ws_echo));
+    let base_url = spawn_server(app).await;
+
+    let client = Client::<ClientErr, Ver01>::new(base_url);
+    let mut conn = client
+        .socket("ws_echo")
+        .connect::<u64, u64>()
+        .await
+        .unwrap();
+    conn.send(&42).await.unwrap();
+    assert_eq!(conn.next().await.unwrap().unwrap(), 42);
+}
+
+#[tokio::test]
+async fn socket_send_encodes_json_frames() {
+    let app = Router::new().route("/ws_echo", get(ws_echo));
+    let base_url = spawn_server(app).await;
+
+    let client = Client::<ClientErr, Ver01>::builder(base_url)
+        .content_type(ContentType::Json)
+        .build();
+    let mut conn = client
+        .socket("ws_echo")
+        .connect::<u64, u64>()
+        .await
+        .unwrap();
+    conn.send(&42).await.unwrap();
+    assert_eq!(conn.next().await.unwrap().unwrap(), 42);
 }
 
 #[tokio::test]
@@ -265,6 +320,10 @@ async fn connect_returns_false_when_server_is_down() {
     let addr = listener.local_addr().unwrap();
     drop(listener);
 
-    let client = Client::<ClientErr, Ver01>::new(format!("http://{addr}/").parse().unwrap());
-    assert!(!client.connect(Some(Duration::ZERO)).await);
+    // A non-zero timeout guarantees at least one probe reaches the refused connection before the
+    // deadline check stops the retry loop.
+    let client = Client::<ClientErr, Ver01>::builder(format!("http://{addr}/").parse().unwrap())
+        .set_retry_interval(Duration::from_millis(10))
+        .build();
+    assert!(!client.connect(Some(Duration::from_millis(100))).await);
 }
