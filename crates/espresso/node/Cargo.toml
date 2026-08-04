@@ -132,6 +132,7 @@ vergen = { workspace = true }
 vergen-gitcl = { workspace = true }
 
 [dev-dependencies]
+bitvec = { workspace = true }
 escargot = { workspace = true }
 espresso-macros = { workspace = true }
 # Enable "testing" feature when running tests

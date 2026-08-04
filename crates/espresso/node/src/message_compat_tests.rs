@@ -9,8 +9,9 @@
 //!
 //! There is one vector per protocol version, and two kinds of vector: `messages` for the HotShot
 //! `Message` envelope, and `new_protocol_messages` for the new protocol (fast finality) envelope
-//! introduced at version 0.6. Binary vectors are produced with the same versioned serialization
-//! the network uses, so the committed bytes are the bytes on the wire.
+//! introduced at version 0.6. Binary vectors are produced with `versions::encode`, the encoder
+//! the network itself uses (via `UpgradeLock::serialize`), so the committed bytes are the bytes
+//! on the wire.
 //!
 //! If this test fails and you intended to change the consensus API, you may simply replace the
 //! serialized file as indicated in the test output. Note however that this may break compatibility
@@ -21,6 +22,8 @@
 
 use std::{fmt::Debug, path::Path};
 
+use alloy::primitives::U256;
+use bitvec::bitvec;
 use committable::Committable;
 use espresso_types::{
     EpochCommittees, Leaf, Leaf2, NewProposal, NodeState, Payload, PubKey, SeqTypes, Transaction,
@@ -70,10 +73,7 @@ use hotshot_types::{
 use pretty_assertions::assert_eq;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
-use vbs::{
-    BinarySerializer,
-    version::{StaticVersion, StaticVersionType, Version},
-};
+use vbs::version::{StaticVersion, StaticVersionType, Version};
 
 /// Compare `messages` against the vectors committed at `data/v{minor}/{name}.{json,bin}`.
 ///
@@ -92,7 +92,9 @@ where
 
     // Ensure the current serialization implementation generates the same JSON as the committed
     // reference.
-    let reference_json = std::fs::read(data_dir.join(format!("{name}.json"))).unwrap();
+    let json_path = data_dir.join(format!("{name}.json"));
+    let reference_json = std::fs::read(&json_path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", json_path.display()));
     let reference_json: Value = serde_json::from_slice(&reference_json).unwrap();
     let actual = serde_json::to_value(messages).unwrap();
     if actual != reference_json {
@@ -123,10 +125,13 @@ where
     let parsed: D = serde_json::from_value(reference_json).unwrap();
     assert_eq!(&parsed, expected);
 
-    // Ensure the current serialization implementation generates the same binary output as the
-    // committed reference.
-    let reference_bin = std::fs::read(data_dir.join(format!("{name}.bin"))).unwrap();
-    let actual = vbs::Serializer::<Ver>::serialize(messages).unwrap();
+    // Ensure the wire encoder generates the same binary output as the committed reference. This
+    // is the same function the network serializes messages with (via `UpgradeLock::serialize`),
+    // so the committed bytes are the bytes on the wire, version prefix included.
+    let bin_path = data_dir.join(format!("{name}.bin"));
+    let reference_bin = std::fs::read(&bin_path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", bin_path.display()));
+    let actual = versions::encode(Ver::VERSION, messages).unwrap();
     if actual != reference_bin {
         // Write the actual output to a file to make it easier to compare with/replace the expected
         // file if the serialization change was actually intended.
@@ -147,13 +152,10 @@ where
         );
     }
 
-    // The committed bytes are the bytes on the wire, which the network prefixes with the version.
-    let mut prefix = Ver::VERSION.major.to_le_bytes().to_vec();
-    prefix.extend(Ver::VERSION.minor.to_le_bytes());
-    assert_eq!(reference_bin[..prefix.len()], prefix[..]);
-
-    // Ensure the committed reference binary can be parsed by the current message types.
-    let parsed: D = vbs::Serializer::<Ver>::deserialize(&reference_bin).unwrap();
+    // Ensure the committed reference binary can be parsed by the wire decoder, and that its
+    // version prefix is the version under test.
+    let (version, parsed): (Version, D) = versions::decode(&reference_bin).unwrap();
+    assert_eq!(version, Ver::VERSION);
     assert_eq!(&parsed, expected);
 }
 
@@ -400,6 +402,21 @@ async fn test_v5_message_compat() {
     test_message_compat(StaticVersion::<0, 5> {}).await;
 }
 
+/// Assemble an aggregated QC signature over `commitment` the way the vote accumulator does, from
+/// a one-member stake table whose only signer is `signer`. BLS signing and signature aggregation
+/// are deterministic, so the assembled signature is reproducible across runs.
+fn assemble_qc_signature(
+    signer: &PubKey,
+    priv_key: &<PubKey as SignatureKey>::PrivateKey,
+    commitment: &[u8],
+) -> <PubKey as SignatureKey>::QcType {
+    let partial = PubKey::sign(priv_key, commitment).unwrap();
+    let stake_entries = vec![signer.stake_table_entry(U256::from(1))];
+    let params = <PubKey as SignatureKey>::public_parameter(&stake_entries, U256::from(1));
+    let signers = bitvec![1; stake_entries.len()];
+    <PubKey as SignatureKey>::assemble(&params, signers.as_bitslice(), &[partial])
+}
+
 /// One instance of every new protocol message variant.
 ///
 /// Optional fields are populated wherever a variant allows it, so the vector pins the encoding of
@@ -446,8 +463,8 @@ async fn reference_new_protocol_messages() -> Vec<NewProtocolMessage<SeqTypes, V
     .await
     .unwrap();
 
-    // Certificates carry no aggregated signature, as in the legacy message compat vector: an
-    // assembled signature is not reproducible across runs.
+    // Unlike the legacy message compat vector, certificates carry a real aggregated signature, so
+    // the vector pins the `Some((signature, signers))` encoding rather than the `None` case.
     let quorum_data = QuorumData2::<SeqTypes> {
         leaf_commit,
         epoch: Some(epoch),
@@ -457,7 +474,11 @@ async fn reference_new_protocol_messages() -> Vec<NewProtocolMessage<SeqTypes, V
         quorum_data,
         quorum_data.commit(),
         view,
-        None,
+        Some(assemble_qc_signature(
+            &sender,
+            &priv_key,
+            quorum_data.commit().as_ref(),
+        )),
         Default::default(),
     );
     let vote2_data = Vote2Data::<SeqTypes> {
@@ -469,7 +490,11 @@ async fn reference_new_protocol_messages() -> Vec<NewProtocolMessage<SeqTypes, V
         vote2_data.clone(),
         vote2_data.commit(),
         view,
-        None,
+        Some(assemble_qc_signature(
+            &sender,
+            &priv_key,
+            vote2_data.commit().as_ref(),
+        )),
         Default::default(),
     );
     let timeout_data = TimeoutData2 {
@@ -480,7 +505,11 @@ async fn reference_new_protocol_messages() -> Vec<NewProtocolMessage<SeqTypes, V
         timeout_data.clone(),
         timeout_data.commit(),
         view,
-        None,
+        Some(assemble_qc_signature(
+            &sender,
+            &priv_key,
+            timeout_data.commit().as_ref(),
+        )),
         Default::default(),
     );
     let upgrade_data = UpgradeProposalData {
@@ -495,7 +524,11 @@ async fn reference_new_protocol_messages() -> Vec<NewProtocolMessage<SeqTypes, V
         upgrade_data.clone(),
         upgrade_data.commit(),
         view,
-        Default::default(),
+        Some(assemble_qc_signature(
+            &sender,
+            &priv_key,
+            upgrade_data.commit().as_ref(),
+        )),
         Default::default(),
     );
 
