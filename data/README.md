@@ -19,12 +19,11 @@ Vectors are grouped by protocol version, so `data/vN` holds the objects as they 
 Alongside the types above, each version directory may contain message vectors, which pin the consensus wire format
 rather than a single data type:
 
-- `messages.{json,bin}` is the HotShot `Message` envelope, produced by `espresso-node::message_compat_tests`.
-- `new_protocol_messages.{json,bin}` is the new protocol (fast finality) `Message` envelope introduced at version 0.6,
-  produced by `espresso-node::new_protocol_message_compat_tests`.
+- `messages.{json,bin}` is the HotShot `Message` envelope.
+- `new_protocol_messages.{json,bin}` is the new protocol (fast finality) `Message` envelope introduced at version 0.6.
 
-Binary message vectors are serialized exactly as nodes serialize them on the wire, so they begin with a four byte
-version prefix.
+Both are produced by `espresso-node::message_compat_tests`. Binary message vectors are serialized exactly as nodes
+serialize them on the wire, so they begin with a four byte version prefix.
 
 ```bash
 cargo test -p espresso-node message_compat
