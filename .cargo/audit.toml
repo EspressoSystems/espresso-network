@@ -21,4 +21,7 @@ ignore = [
     # hickory-proto O(n^2) name compression on encode. libp2p does lookups one name at a time, not
     # vulnerable, no patch release in libp2p available yet
     "RUSTSEC-2026-0119",
+    # rkyv OOB read, only fixed in 0.8 while Push-CDN pins 0.7. Needs unsized `Rc`/`Arc` pointees,
+    # which the CDN archived types don't have.
+    "RUSTSEC-2026-0235",
 ]
