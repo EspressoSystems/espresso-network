@@ -10,7 +10,7 @@ use axum::{
     routing::{get, post},
 };
 use espresso_api::{
-    cors_layer, healthcheck_response,
+    body_limit_layer, cors_layer, healthcheck_response,
     wire::{self, DecodeFailure, WireFormat},
 };
 use hotshot_types::{
@@ -362,7 +362,10 @@ fn router(state: SharedState) -> Router {
                 post(post_legacy_state).get(get_legacy_state),
             );
     }
-    router.with_state(state).layer(cors_layer())
+    router
+        .with_state(state)
+        .layer(body_limit_layer())
+        .layer(cors_layer())
 }
 
 async fn serve(server_url: Url, state: StateRelayServerState) -> anyhow::Result<()> {
