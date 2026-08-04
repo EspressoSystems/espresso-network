@@ -2500,4 +2500,128 @@ mod test {
             "unauthenticated validator should remain unauthenticated"
         );
     }
+
+    fn write_legacy_stake_file(
+        path: &std::path::Path,
+        epoch: u64,
+        validator: RegisteredValidatorPreOption,
+    ) {
+        use indexmap::IndexMap;
+
+        let mut map: IndexMap<Address, RegisteredValidatorPreOption> = IndexMap::new();
+        map.insert(validator.account, validator);
+        type PreOptionTuple = (
+            IndexMap<Address, RegisteredValidatorPreOption>,
+            Option<RewardAmount>,
+            Option<StakeTableHash>,
+        );
+        let data: PreOptionTuple = (map, None, None);
+        let bytes = bincode::serialize(&data).unwrap();
+        fs::create_dir_all(path).unwrap();
+        fs::write(path.join(format!("{epoch}.txt")), &bytes).unwrap();
+    }
+
+    fn pre_option_validator(seed: u8, stake: u64) -> RegisteredValidatorPreOption {
+        use std::collections::HashMap;
+
+        use alloy::primitives::U256;
+
+        RegisteredValidatorPreOption {
+            account: Address::random(),
+            stake_table_key: BLSPubKey::generated_from_seed_indexed([seed; 32], 0).0,
+            state_ver_key: hotshot_types::light_client::StateVerKey::default(),
+            stake: U256::from(stake),
+            commission: 0,
+            delegators: HashMap::new(),
+            authenticated: true,
+            x25519_key: None,
+            p2p_addr: None,
+        }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_load_stake_legacy_storage() {
+        let tmp = Persistence::tmp_storage().await;
+        let mut opt = Persistence::options(&tmp);
+        let storage = opt.create().await.unwrap();
+
+        let v1 = pre_option_validator(1, 100);
+        let v2 = pre_option_validator(2, 200);
+        let v1_addr = v1.account;
+        let v2_addr = v2.account;
+
+        let path = {
+            let inner = storage.inner.read().await;
+            inner.stake_table_dir_path()
+        };
+        write_legacy_stake_file(&path, 1, v1);
+        write_legacy_stake_file(&path, 2, v2);
+
+        let (loaded1, ..) = storage
+            .load_stake(EpochNumber::new(1))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded1.len(), 1);
+        assert!(loaded1.get(&v1_addr).unwrap().stake_table_key.is_some());
+
+        let (loaded2, ..) = storage
+            .load_stake(EpochNumber::new(2))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded2.len(), 1);
+        assert!(loaded2.get(&v2_addr).unwrap().stake_table_key.is_some());
+
+        let latest = storage.load_latest_stake(10).await.unwrap().unwrap();
+        assert_eq!(latest.len(), 2);
+        let epochs: Vec<_> = latest.iter().map(|(e, ..)| *e).collect();
+        assert!(epochs.contains(&EpochNumber::new(1)));
+        assert!(epochs.contains(&EpochNumber::new(2)));
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_load_stake_mixed_storage() {
+        use indexmap::IndexMap;
+
+        let tmp = Persistence::tmp_storage().await;
+        let mut opt = Persistence::options(&tmp);
+        let storage = opt.create().await.unwrap();
+
+        let legacy_v = pre_option_validator(3, 300);
+        let legacy_addr = legacy_v.account;
+        let path = {
+            let inner = storage.inner.read().await;
+            inner.stake_table_dir_path()
+        };
+        write_legacy_stake_file(&path, 5, legacy_v);
+
+        let current_v = espresso_types::v0_3::AuthenticatedValidator::mock();
+        let current_addr = current_v.account;
+        let mut current_map = IndexMap::new();
+        current_map.insert(current_addr, current_v);
+        storage
+            .store_stake(EpochNumber::new(6), current_map, None, None)
+            .await
+            .unwrap();
+
+        let latest = storage.load_latest_stake(10).await.unwrap().unwrap();
+        assert_eq!(latest.len(), 2);
+        let by_epoch: std::collections::HashMap<_, _> = latest
+            .into_iter()
+            .map(|(e, (map, _), _)| (e, map))
+            .collect();
+        assert!(
+            by_epoch
+                .get(&EpochNumber::new(5))
+                .unwrap()
+                .contains_key(&legacy_addr)
+        );
+        assert!(
+            by_epoch
+                .get(&EpochNumber::new(6))
+                .unwrap()
+                .contains_key(&current_addr)
+        );
+    }
 }
