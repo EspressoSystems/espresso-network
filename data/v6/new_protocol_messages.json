@@ -1,0 +1,1133 @@
+[
+  {
+    "message_type": {
+      "Consensus": {
+        "Proposal": {
+          "proposal": {
+            "_pd": null,
+            "data": {
+              "block_header": {
+                "fields": {
+                  "block_merkle_tree_root": "MERKLE_COMM~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAQA",
+                  "builder_commitment": "BUILDER_COMMITMENT~tEvs0rxqOiMCvfe2R0omNNaphSlUiEDrb2q0IZpRcgA_",
+                  "builder_signature": null,
+                  "chain_config": {
+                    "chain_config": {
+                      "Left": {
+                        "base_fee": "0",
+                        "chain_id": "35353",
+                        "fee_contract": null,
+                        "fee_recipient": "0x0000000000000000000000000000000000000000",
+                        "max_block_size": "30720",
+                        "stake_table_contract": null
+                      }
+                    }
+                  },
+                  "fee_info": {
+                    "account": "0x0000000000000000000000000000000000000000",
+                    "amount": "0"
+                  },
+                  "fee_merkle_tree_root": "MERKLE_COMM~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAUAAAAAAAAAAAAAAAAAAAAKA",
+                  "height": 0,
+                  "l1_finalized": null,
+                  "l1_head": 0,
+                  "leader_counts": [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0
+                  ],
+                  "next_stake_table_hash": null,
+                  "ns_table": {
+                    "bytes": "AAAAAA=="
+                  },
+                  "payload_commitment": "AvidmGf2Commit~qhlWCuUhwJGLdE1KYKb86uDfDCtkx_8goi2YjW-6kuQ2",
+                  "reward_merkle_tree_root": "MERKLE_COMM~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACgAAAAAAAAAAAAAAAAAAAARw",
+                  "timestamp": 0,
+                  "timestamp_millis": 0,
+                  "total_reward_distributed": "0"
+                },
+                "version": {
+                  "Version": {
+                    "major": 0,
+                    "minor": 6
+                  }
+                }
+              },
+              "epoch": 1,
+              "justify_qc": {
+                "_pd": null,
+                "data": {
+                  "block_number": 0,
+                  "epoch": 1,
+                  "leaf_commit": "COMMIT~C16WN3ZnAjtbeqU2_7OYdb2vsV45zJZCv32CpeEtrLpa"
+                },
+                "signatures": null,
+                "view_number": 0,
+                "vote_commitment": "COMMIT~P0irsaMnQsR4UQDIT2og71MULgvYi1LO2ZDQlS2PNr-h"
+              },
+              "next_drb_result": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "next_epoch_justify_qc": {
+                "_pd": null,
+                "data": {
+                  "block_number": 0,
+                  "epoch": 1,
+                  "leaf_commit": "COMMIT~C16WN3ZnAjtbeqU2_7OYdb2vsV45zJZCv32CpeEtrLpa"
+                },
+                "signatures": null,
+                "view_number": 0,
+                "vote_commitment": "COMMIT~eA4GNnwEAQ0GZ4ZY61UAV1Sf2rBkaUcv4FLbI1fUxenY"
+              },
+              "state_cert": {
+                "auth_root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "epoch": 1,
+                "light_client_state": "LIGHT_CLIENT_STATE~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABA",
+                "next_stake_table_state": "STAKE_TABLE_STATE~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB8",
+                "signatures": []
+              },
+              "upgrade_certificate": {
+                "_pd": null,
+                "data": {
+                  "decide_by": 0,
+                  "new_version": {
+                    "major": 1,
+                    "minor": 0
+                  },
+                  "new_version_first_view": 0,
+                  "new_version_hash": [],
+                  "old_version": {
+                    "major": 0,
+                    "minor": 1
+                  },
+                  "old_version_last_view": 0
+                },
+                "signatures": null,
+                "view_number": 0,
+                "vote_commitment": "COMMIT~roiQgLLeI4uYqYxjz-0jPwtLyNhSlnfriPEVZ-_4RUrW"
+              },
+              "view_change_evidence": {
+                "_pd": null,
+                "data": {
+                  "epoch": 1,
+                  "view": 0
+                },
+                "signatures": null,
+                "view_number": 0,
+                "vote_commitment": "COMMIT~TZG1F34lxU6Ny9aKQMkjZAxjW9zotdwW75EHEGbyALOi"
+              },
+              "view_number": 0
+            },
+            "signature": "BLS_SIG~g3CUcLMD7fnDsBhItKvSqXLwEqdWfvusSrgpL1GBAxf-SWFW0t32Agt2jrOiempjjpI7dBwYGgXv-0mvI4sGEEE"
+          }
+        }
+      }
+    },
+    "sender": "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U"
+  },
+  {
+    "message_type": {
+      "Consensus": {
+        "Vote1": {
+          "state_vote": {
+            "auth_root": "0xd397b3b043d87fcd6fad1291ff0bfd16401c274896d8c63a923727f077b8e0b5",
+            "epoch": 1,
+            "light_client_state": "LIGHT_CLIENT_STATE~AAAAAAAAAAAAAAAAAAAAAEgFs_tzuTettbq8h9wQqBAxPIuTUYy5pc7H5qct7TUE8Q",
+            "next_stake_table_state": "STAKE_TABLE_STATE~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB8",
+            "signature": "SCHNORR_SIG~23qKWQ1avYB5sQiMmfjI8estQkrQgf4AL1QhdH0iSQMaShxFS4RTHcrsAj9MS2jrTuu1CEA_3Y6TtNSbtUaxDdq9qFKKS0QsWBykd9Ca-WvyfLOhZ7ha5KYqIgnl5TUpsA",
+            "signed_state_digest": "FIELD~Nn4drt2A75pNE0ymwmrBEz_DGvYESvwHn5_frk0NzSUJ",
+            "v2_signature": "SCHNORR_SIG~BFeVK0d0jcJsifBdCQakX8sp-TIu1qsVBvT4N7WCugXMrhMWklesU6qVkHtj86sBtN_IVMd-4gzr3hKK_0jWKEc-aMvn6mTl5gOarO5GIslMnKGGg_a9M9VxoLjLbf8fyw"
+          },
+          "vote": {
+            "data": {
+              "block_number": 0,
+              "epoch": 1,
+              "leaf_commit": "COMMIT~C16WN3ZnAjtbeqU2_7OYdb2vsV45zJZCv32CpeEtrLpa"
+            },
+            "signature": [
+              "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U",
+              "BLS_SIG~g3CUcLMD7fnDsBhItKvSqXLwEqdWfvusSrgpL1GBAxf-SWFW0t32Agt2jrOiempjjpI7dBwYGgXv-0mvI4sGEEE"
+            ],
+            "view_number": 0
+          }
+        }
+      }
+    },
+    "sender": "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U"
+  },
+  {
+    "message_type": {
+      "Consensus": {
+        "Vote2": {
+          "data": {
+            "block_number": 0,
+            "epoch": 1,
+            "leaf_commit": "COMMIT~C16WN3ZnAjtbeqU2_7OYdb2vsV45zJZCv32CpeEtrLpa"
+          },
+          "signature": [
+            "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U",
+            "BLS_SIG~g3CUcLMD7fnDsBhItKvSqXLwEqdWfvusSrgpL1GBAxf-SWFW0t32Agt2jrOiempjjpI7dBwYGgXv-0mvI4sGEEE"
+          ],
+          "view_number": 0
+        }
+      }
+    },
+    "sender": "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U"
+  },
+  {
+    "message_type": {
+      "Consensus": {
+        "Certificate1": [
+          {
+            "_pd": null,
+            "data": {
+              "block_number": 0,
+              "epoch": 1,
+              "leaf_commit": "COMMIT~C16WN3ZnAjtbeqU2_7OYdb2vsV45zJZCv32CpeEtrLpa"
+            },
+            "signatures": null,
+            "view_number": 0,
+            "vote_commitment": "COMMIT~P0irsaMnQsR4UQDIT2og71MULgvYi1LO2ZDQlS2PNr-h"
+          },
+          "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U"
+        ]
+      }
+    },
+    "sender": "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U"
+  },
+  {
+    "message_type": {
+      "Consensus": {
+        "Certificate2": [
+          {
+            "_pd": null,
+            "data": {
+              "block_number": 0,
+              "epoch": 1,
+              "leaf_commit": "COMMIT~C16WN3ZnAjtbeqU2_7OYdb2vsV45zJZCv32CpeEtrLpa"
+            },
+            "signatures": null,
+            "view_number": 0,
+            "vote_commitment": "COMMIT~eA4GNnwEAQ0GZ4ZY61UAV1Sf2rBkaUcv4FLbI1fUxenY"
+          },
+          "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U"
+        ]
+      }
+    },
+    "sender": "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U"
+  },
+  {
+    "message_type": {
+      "Consensus": {
+        "TimeoutVote": {
+          "evidence": {
+            "Qc": {
+              "_pd": null,
+              "data": {
+                "block_number": 0,
+                "epoch": 1,
+                "leaf_commit": "COMMIT~C16WN3ZnAjtbeqU2_7OYdb2vsV45zJZCv32CpeEtrLpa"
+              },
+              "signatures": null,
+              "view_number": 0,
+              "vote_commitment": "COMMIT~P0irsaMnQsR4UQDIT2og71MULgvYi1LO2ZDQlS2PNr-h"
+            }
+          },
+          "vote": {
+            "data": {
+              "epoch": 1,
+              "view": 0
+            },
+            "signature": [
+              "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U",
+              "BLS_SIG~g3CUcLMD7fnDsBhItKvSqXLwEqdWfvusSrgpL1GBAxf-SWFW0t32Agt2jrOiempjjpI7dBwYGgXv-0mvI4sGEEE"
+            ],
+            "view_number": 0
+          }
+        }
+      }
+    },
+    "sender": "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U"
+  },
+  {
+    "message_type": {
+      "Consensus": {
+        "TimeoutVote": {
+          "evidence": {
+            "Tc": {
+              "_pd": null,
+              "data": {
+                "epoch": 1,
+                "view": 0
+              },
+              "signatures": null,
+              "view_number": 0,
+              "vote_commitment": "COMMIT~TZG1F34lxU6Ny9aKQMkjZAxjW9zotdwW75EHEGbyALOi"
+            }
+          },
+          "vote": {
+            "data": {
+              "epoch": 1,
+              "view": 0
+            },
+            "signature": [
+              "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U",
+              "BLS_SIG~g3CUcLMD7fnDsBhItKvSqXLwEqdWfvusSrgpL1GBAxf-SWFW0t32Agt2jrOiempjjpI7dBwYGgXv-0mvI4sGEEE"
+            ],
+            "view_number": 0
+          }
+        }
+      }
+    },
+    "sender": "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U"
+  },
+  {
+    "message_type": {
+      "Consensus": {
+        "TimeoutCertificate": {
+          "_pd": null,
+          "data": {
+            "epoch": 1,
+            "view": 0
+          },
+          "signatures": null,
+          "view_number": 0,
+          "vote_commitment": "COMMIT~TZG1F34lxU6Ny9aKQMkjZAxjW9zotdwW75EHEGbyALOi"
+        }
+      }
+    },
+    "sender": "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U"
+  },
+  {
+    "message_type": {
+      "Consensus": {
+        "EpochChange": {
+          "cert1": {
+            "_pd": null,
+            "data": {
+              "block_number": 0,
+              "epoch": 1,
+              "leaf_commit": "COMMIT~C16WN3ZnAjtbeqU2_7OYdb2vsV45zJZCv32CpeEtrLpa"
+            },
+            "signatures": null,
+            "view_number": 0,
+            "vote_commitment": "COMMIT~P0irsaMnQsR4UQDIT2og71MULgvYi1LO2ZDQlS2PNr-h"
+          },
+          "cert2": {
+            "_pd": null,
+            "data": {
+              "block_number": 0,
+              "epoch": 1,
+              "leaf_commit": "COMMIT~C16WN3ZnAjtbeqU2_7OYdb2vsV45zJZCv32CpeEtrLpa"
+            },
+            "signatures": null,
+            "view_number": 0,
+            "vote_commitment": "COMMIT~eA4GNnwEAQ0GZ4ZY61UAV1Sf2rBkaUcv4FLbI1fUxenY"
+          },
+          "proposal": {
+            "block_header": {
+              "fields": {
+                "block_merkle_tree_root": "MERKLE_COMM~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAQA",
+                "builder_commitment": "BUILDER_COMMITMENT~tEvs0rxqOiMCvfe2R0omNNaphSlUiEDrb2q0IZpRcgA_",
+                "builder_signature": null,
+                "chain_config": {
+                  "chain_config": {
+                    "Left": {
+                      "base_fee": "0",
+                      "chain_id": "35353",
+                      "fee_contract": null,
+                      "fee_recipient": "0x0000000000000000000000000000000000000000",
+                      "max_block_size": "30720",
+                      "stake_table_contract": null
+                    }
+                  }
+                },
+                "fee_info": {
+                  "account": "0x0000000000000000000000000000000000000000",
+                  "amount": "0"
+                },
+                "fee_merkle_tree_root": "MERKLE_COMM~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAUAAAAAAAAAAAAAAAAAAAAKA",
+                "height": 0,
+                "l1_finalized": null,
+                "l1_head": 0,
+                "leader_counts": [
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "next_stake_table_hash": null,
+                "ns_table": {
+                  "bytes": "AAAAAA=="
+                },
+                "payload_commitment": "AvidmGf2Commit~qhlWCuUhwJGLdE1KYKb86uDfDCtkx_8goi2YjW-6kuQ2",
+                "reward_merkle_tree_root": "MERKLE_COMM~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACgAAAAAAAAAAAAAAAAAAAARw",
+                "timestamp": 0,
+                "timestamp_millis": 0,
+                "total_reward_distributed": "0"
+              },
+              "version": {
+                "Version": {
+                  "major": 0,
+                  "minor": 6
+                }
+              }
+            },
+            "epoch": 1,
+            "justify_qc": {
+              "_pd": null,
+              "data": {
+                "block_number": 0,
+                "epoch": 1,
+                "leaf_commit": "COMMIT~C16WN3ZnAjtbeqU2_7OYdb2vsV45zJZCv32CpeEtrLpa"
+              },
+              "signatures": null,
+              "view_number": 0,
+              "vote_commitment": "COMMIT~P0irsaMnQsR4UQDIT2og71MULgvYi1LO2ZDQlS2PNr-h"
+            },
+            "next_drb_result": [
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1
+            ],
+            "next_epoch_justify_qc": {
+              "_pd": null,
+              "data": {
+                "block_number": 0,
+                "epoch": 1,
+                "leaf_commit": "COMMIT~C16WN3ZnAjtbeqU2_7OYdb2vsV45zJZCv32CpeEtrLpa"
+              },
+              "signatures": null,
+              "view_number": 0,
+              "vote_commitment": "COMMIT~eA4GNnwEAQ0GZ4ZY61UAV1Sf2rBkaUcv4FLbI1fUxenY"
+            },
+            "state_cert": {
+              "auth_root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+              "epoch": 1,
+              "light_client_state": "LIGHT_CLIENT_STATE~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABA",
+              "next_stake_table_state": "STAKE_TABLE_STATE~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB8",
+              "signatures": []
+            },
+            "upgrade_certificate": {
+              "_pd": null,
+              "data": {
+                "decide_by": 0,
+                "new_version": {
+                  "major": 1,
+                  "minor": 0
+                },
+                "new_version_first_view": 0,
+                "new_version_hash": [],
+                "old_version": {
+                  "major": 0,
+                  "minor": 1
+                },
+                "old_version_last_view": 0
+              },
+              "signatures": null,
+              "view_number": 0,
+              "vote_commitment": "COMMIT~roiQgLLeI4uYqYxjz-0jPwtLyNhSlnfriPEVZ-_4RUrW"
+            },
+            "view_change_evidence": {
+              "_pd": null,
+              "data": {
+                "epoch": 1,
+                "view": 0
+              },
+              "signatures": null,
+              "view_number": 0,
+              "vote_commitment": "COMMIT~TZG1F34lxU6Ny9aKQMkjZAxjW9zotdwW75EHEGbyALOi"
+            },
+            "view_number": 0
+          }
+        }
+      }
+    },
+    "sender": "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U"
+  },
+  {
+    "message_type": {
+      "Consensus": {
+        "VidShareFragment": {
+          "_pd": null,
+          "data": {
+            "epoch": 1,
+            "namespaces": [
+              {
+                "ns_commit": "AvidmGf2Commit~w-oXBlrpclni_EskEGeymNrefgkpQzD4Twu1jC1qk519",
+                "ns_index": 0,
+                "ns_payload_byte_len": 11,
+                "ns_share": {
+                  "mt_proofs": [
+                    "MERKLE_PROOF~AAAAAAAAAAA7"
+                  ],
+                  "payload": [
+                    [
+                      1,
+                      0,
+                      0,
+                      0,
+                      3,
+                      0,
+                      0,
+                      0,
+                      1,
+                      2,
+                      3,
+                      1
+                    ]
+                  ],
+                  "range": {
+                    "end": 1,
+                    "start": 0
+                  }
+                }
+              }
+            ],
+            "num_namespaces": 1,
+            "param": {
+              "recovery_threshold": 1,
+              "total_weights": 1
+            },
+            "payload_commitment": "AvidmGf2Commit~9LKLS9Ujz0CW4SMEkrri7lN9W7b-ckN2MXiy50gHKdo4",
+            "recipient_key": "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U",
+            "target_epoch": 1,
+            "view_number": 0
+          },
+          "signature": "BLS_SIG~g3CUcLMD7fnDsBhItKvSqXLwEqdWfvusSrgpL1GBAxf-SWFW0t32Agt2jrOiempjjpI7dBwYGgXv-0mvI4sGEEE"
+        }
+      }
+    },
+    "sender": "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U"
+  },
+  {
+    "message_type": {
+      "Consensus": {
+        "VidShareBroadcast": {
+          "common": {
+            "ns_commits": [
+              "AvidmGf2Commit~w-oXBlrpclni_EskEGeymNrefgkpQzD4Twu1jC1qk519"
+            ],
+            "ns_lens": [
+              11
+            ],
+            "param": {
+              "recovery_threshold": 1,
+              "total_weights": 1
+            }
+          },
+          "epoch": 1,
+          "payload_commitment": "AvidmGf2Commit~9LKLS9Ujz0CW4SMEkrri7lN9W7b-ckN2MXiy50gHKdo4",
+          "recipient_key": "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U",
+          "share": [
+            {
+              "mt_proofs": [
+                "MERKLE_PROOF~AAAAAAAAAAA7"
+              ],
+              "payload": [
+                [
+                  1,
+                  0,
+                  0,
+                  0,
+                  3,
+                  0,
+                  0,
+                  0,
+                  1,
+                  2,
+                  3,
+                  1
+                ]
+              ],
+              "range": {
+                "end": 1,
+                "start": 0
+              }
+            }
+          ],
+          "target_epoch": 1,
+          "view_number": 0
+        }
+      }
+    },
+    "sender": "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U"
+  },
+  {
+    "message_type": {
+      "Consensus": {
+        "HighQc": {
+          "_pd": null,
+          "data": {
+            "block_number": 0,
+            "epoch": 1,
+            "leaf_commit": "COMMIT~C16WN3ZnAjtbeqU2_7OYdb2vsV45zJZCv32CpeEtrLpa"
+          },
+          "signatures": null,
+          "view_number": 0,
+          "vote_commitment": "COMMIT~P0irsaMnQsR4UQDIT2og71MULgvYi1LO2ZDQlS2PNr-h"
+        }
+      }
+    },
+    "sender": "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U"
+  },
+  {
+    "message_type": {
+      "Block": {
+        "Transactions": {
+          "transactions": [
+            {
+              "namespace": 1,
+              "payload": "AQID"
+            }
+          ],
+          "view": 0
+        }
+      }
+    },
+    "sender": "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U"
+  },
+  {
+    "message_type": {
+      "Block": {
+        "DedupManifest": {
+          "epoch": 1,
+          "hashes": [
+            "TX~XcLtNwxVvJ33mFNn5OYCOswjd81dY9Cn-XcbmSeCnGmE"
+          ],
+          "view": 0
+        }
+      }
+    },
+    "sender": "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U"
+  },
+  {
+    "message_type": {
+      "ProposalFetch": {
+        "Request": {
+          "payload": {
+            "key": "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U",
+            "view_number": 0
+          },
+          "signature": "BLS_SIG~34oB-xNJcq0PaP8Mkf6fs-1ankfggWejQlCpSnSYISI2rTjSRLIH7p_HehzHBzBlE7vmJ0ATfqBcWv9xFTN0pw0"
+        }
+      }
+    },
+    "sender": "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U"
+  },
+  {
+    "message_type": {
+      "ProposalFetch": {
+        "Response": {
+          "_pd": null,
+          "data": {
+            "block_header": {
+              "fields": {
+                "block_merkle_tree_root": "MERKLE_COMM~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAQA",
+                "builder_commitment": "BUILDER_COMMITMENT~tEvs0rxqOiMCvfe2R0omNNaphSlUiEDrb2q0IZpRcgA_",
+                "builder_signature": null,
+                "chain_config": {
+                  "chain_config": {
+                    "Left": {
+                      "base_fee": "0",
+                      "chain_id": "35353",
+                      "fee_contract": null,
+                      "fee_recipient": "0x0000000000000000000000000000000000000000",
+                      "max_block_size": "30720",
+                      "stake_table_contract": null
+                    }
+                  }
+                },
+                "fee_info": {
+                  "account": "0x0000000000000000000000000000000000000000",
+                  "amount": "0"
+                },
+                "fee_merkle_tree_root": "MERKLE_COMM~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAUAAAAAAAAAAAAAAAAAAAAKA",
+                "height": 0,
+                "l1_finalized": null,
+                "l1_head": 0,
+                "leader_counts": [
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "next_stake_table_hash": null,
+                "ns_table": {
+                  "bytes": "AAAAAA=="
+                },
+                "payload_commitment": "AvidmGf2Commit~qhlWCuUhwJGLdE1KYKb86uDfDCtkx_8goi2YjW-6kuQ2",
+                "reward_merkle_tree_root": "MERKLE_COMM~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACgAAAAAAAAAAAAAAAAAAAARw",
+                "timestamp": 0,
+                "timestamp_millis": 0,
+                "total_reward_distributed": "0"
+              },
+              "version": {
+                "Version": {
+                  "major": 0,
+                  "minor": 6
+                }
+              }
+            },
+            "epoch": 1,
+            "justify_qc": {
+              "_pd": null,
+              "data": {
+                "block_number": 0,
+                "epoch": 1,
+                "leaf_commit": "COMMIT~C16WN3ZnAjtbeqU2_7OYdb2vsV45zJZCv32CpeEtrLpa"
+              },
+              "signatures": null,
+              "view_number": 0,
+              "vote_commitment": "COMMIT~P0irsaMnQsR4UQDIT2og71MULgvYi1LO2ZDQlS2PNr-h"
+            },
+            "next_drb_result": [
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1
+            ],
+            "next_epoch_justify_qc": {
+              "_pd": null,
+              "data": {
+                "block_number": 0,
+                "epoch": 1,
+                "leaf_commit": "COMMIT~C16WN3ZnAjtbeqU2_7OYdb2vsV45zJZCv32CpeEtrLpa"
+              },
+              "signatures": null,
+              "view_number": 0,
+              "vote_commitment": "COMMIT~eA4GNnwEAQ0GZ4ZY61UAV1Sf2rBkaUcv4FLbI1fUxenY"
+            },
+            "state_cert": {
+              "auth_root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+              "epoch": 1,
+              "light_client_state": "LIGHT_CLIENT_STATE~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABA",
+              "next_stake_table_state": "STAKE_TABLE_STATE~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB8",
+              "signatures": []
+            },
+            "upgrade_certificate": {
+              "_pd": null,
+              "data": {
+                "decide_by": 0,
+                "new_version": {
+                  "major": 1,
+                  "minor": 0
+                },
+                "new_version_first_view": 0,
+                "new_version_hash": [],
+                "old_version": {
+                  "major": 0,
+                  "minor": 1
+                },
+                "old_version_last_view": 0
+              },
+              "signatures": null,
+              "view_number": 0,
+              "vote_commitment": "COMMIT~roiQgLLeI4uYqYxjz-0jPwtLyNhSlnfriPEVZ-_4RUrW"
+            },
+            "view_change_evidence": {
+              "_pd": null,
+              "data": {
+                "epoch": 1,
+                "view": 0
+              },
+              "signatures": null,
+              "view_number": 0,
+              "vote_commitment": "COMMIT~TZG1F34lxU6Ny9aKQMkjZAxjW9zotdwW75EHEGbyALOi"
+            },
+            "view_number": 0
+          },
+          "signature": "BLS_SIG~g3CUcLMD7fnDsBhItKvSqXLwEqdWfvusSrgpL1GBAxf-SWFW0t32Agt2jrOiempjjpI7dBwYGgXv-0mvI4sGEEE"
+        }
+      }
+    },
+    "sender": "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U"
+  },
+  {
+    "message_type": {
+      "External": [
+        1,
+        2,
+        3
+      ]
+    },
+    "sender": "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U"
+  }
+]

@@ -1,5 +1,6 @@
 mod external_event_handler;
 mod message_compat_tests;
+mod new_protocol_message_compat_tests;
 mod proposal_fetcher;
 mod request_response;
 mod startup_catchup;
