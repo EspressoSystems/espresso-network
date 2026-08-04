@@ -26,11 +26,11 @@ jobs:
           - old-from-new-pg
     name: binary-upgrade-test (${{ matrix.scenario }})
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-tags: true
       - uses: taiki-e/install-action@just
-      - uses: astral-sh/setup-uv@v8.1.0
+      - uses: astral-sh/setup-uv@v9.0.0
 
       - name: Pull docker images
         env:

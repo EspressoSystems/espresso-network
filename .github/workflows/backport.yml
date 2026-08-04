@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -59,7 +59,7 @@ jobs:
       - name: Create backport pull requests
         id: backport
         if: github.event_name == 'pull_request_target'
-        uses: korthout/backport-action@v3
+        uses: korthout/backport-action@v4
         with:
           experimental: '{"conflict_resolution":"draft_commit_conflicts"}'
 

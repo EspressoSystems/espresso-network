@@ -52,7 +52,7 @@ jobs:
           - binary: espresso-dev-node
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: rui314/setup-mold@v1
 
       - name: Install Protoc
@@ -117,7 +117,7 @@ jobs:
           - binary: espresso-dev-node
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: rui314/setup-mold@v1
 
       - name: Install Protoc
@@ -194,7 +194,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download executables AMD
         uses: actions/download-artifact@v8
@@ -223,7 +223,7 @@ jobs:
             password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Generate ${{ matrix.service }} docker metadata
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         id: metadata
         with:
           images: ghcr.io/espressosystems/espresso-network/${{matrix.service}}
@@ -324,7 +324,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download executables ARM
         uses: actions/download-artifact@v8
@@ -352,7 +352,7 @@ jobs:
             password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Generate ${{ matrix.service }} docker metadata
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         id: metadata
         with:
           images: ghcr.io/espressosystems/espresso-network/${{ matrix.service }}
@@ -423,7 +423,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Docker Buildx
         uses: Wandalen/wretry.action@v3.8.0
@@ -452,7 +452,7 @@ jobs:
 
       - name: Docker meta
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/espressosystems/espresso-network/${{ matrix.service }}
 
@@ -511,7 +511,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-dockers-amd]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: taiki-e/install-action@just
 
       - name: Download artifacts
@@ -552,7 +552,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-dockers-amd, create-multiplatform-docker-image]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: taiki-e/install-action@just
 
       - name: Set docker image tag for compose
@@ -608,11 +608,11 @@ jobs:
           - old-from-new-pg
     name: binary-upgrade-test-pr (${{ matrix.scenario }})
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-tags: true
       - uses: taiki-e/install-action@just
-      - uses: astral-sh/setup-uv@v8.1.0
+      - uses: astral-sh/setup-uv@v9.0.0
 
       - name: Download artifacts
         uses: actions/download-artifact@v8
@@ -665,11 +665,11 @@ jobs:
           - old-from-new-pg
     name: binary-upgrade-test-non-pr (${{ matrix.scenario }})
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-tags: true
       - uses: taiki-e/install-action@just
-      - uses: astral-sh/setup-uv@v8.1.0
+      - uses: astral-sh/setup-uv@v9.0.0
 
       - name: Set upgrade tag
         run: |
@@ -744,8 +744,8 @@ jobs:
       ESPRESSO_NODE_GENESIS_FILE: genesis/${{ matrix.genesis }}.toml
       DURATION_SECONDS: 3600
     steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v8.1.0
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v9.0.0
       - uses: taiki-e/install-action@just
 
       - name: Download docker image artifacts
@@ -803,8 +803,8 @@ jobs:
       ESPRESSO_NODE_GENESIS_FILE: genesis/${{ matrix.genesis }}.toml
       DURATION_SECONDS: 3600
     steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v8.1.0
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v9.0.0
       - uses: taiki-e/install-action@just
 
       - name: Set docker tag
