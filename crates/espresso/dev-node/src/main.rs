@@ -27,7 +27,7 @@ use axum::{
     routing::{get, post},
 };
 use clap::{Parser, ValueEnum};
-use espresso_api::{cors_layer, healthcheck_response};
+use espresso_api::{cors_layer, healthcheck_response, version};
 use espresso_contract_deployer::{
     self as deployer, Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS, DeployedContracts,
     HttpProviderWithWallet, network_config::light_client_genesis_from_stake_table,
@@ -954,6 +954,7 @@ fn dev_node_router(state: DevNodeState) -> Router {
         .merge(api.clone())
         .nest("/v0", api)
         .route("/healthcheck", get(healthcheck))
+        .route("/version", get(version))
         .layer(cors_layer())
 }
 

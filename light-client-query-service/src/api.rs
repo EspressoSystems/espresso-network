@@ -15,7 +15,7 @@ use axum::{
     routing::get,
 };
 use espresso_api::{
-    cors_layer, drive_ws_stream, healthcheck_response,
+    cors_layer, drive_ws_stream, healthcheck_response, version,
     wire::{self, WireFormat},
     ws_format,
 };
@@ -1174,6 +1174,7 @@ pub fn router(ds: DataSource) -> Router {
         .nest("/node", node_router(ds));
     Router::new()
         .route("/healthcheck", get(healthcheck))
+        .route("/version", get(version))
         .merge(api.clone())
         .nest("/v1", api)
         .layer(cors_layer())

@@ -18,7 +18,7 @@ use axum::{
 };
 use committable::Committable;
 use espresso_api::{
-    cors_layer, healthcheck_response,
+    cors_layer, healthcheck_response, version,
     wire::{self, DecodeFailure, WireFormat},
 };
 use espresso_types::SeqTypes;
@@ -338,6 +338,7 @@ pub fn router(state: ProxyGlobalState<SeqTypes>) -> Router {
         .nest("/txn_submit", txn_submit_router(state));
     Router::new()
         .route("/healthcheck", get(healthcheck))
+        .route("/version", get(version))
         .merge(api.clone())
         .nest("/v0", api)
         .layer(cors_layer())

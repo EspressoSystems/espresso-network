@@ -20,7 +20,7 @@ pub mod proto {
 pub use self::{
     axum::{
         WsFormat, cors_layer, create_combined_router, create_router_v1, create_router_v2,
-        drive_ws_stream, healthcheck_response, routes, ws_format,
+        drive_ws_stream, healthcheck_response, routes, version, ws_format,
     },
     tonic::create_reward_service,
 };
