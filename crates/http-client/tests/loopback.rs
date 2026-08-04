@@ -276,6 +276,10 @@ async fn connect_returns_false_when_server_is_down() {
     let addr = listener.local_addr().unwrap();
     drop(listener);
 
-    let client = Client::<ClientErr, Ver01>::new(format!("http://{addr}/").parse().unwrap());
-    assert!(!client.connect(Some(Duration::ZERO)).await);
+    // A non-zero timeout guarantees at least one probe reaches the refused connection before the
+    // deadline check stops the retry loop.
+    let client = Client::<ClientErr, Ver01>::builder(format!("http://{addr}/").parse().unwrap())
+        .set_retry_interval(Duration::from_millis(10))
+        .build();
+    assert!(!client.connect(Some(Duration::from_millis(100))).await);
 }
