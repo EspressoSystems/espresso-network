@@ -49,7 +49,7 @@ use hotshot_types::{
     vid::{
         advz::advz_scheme,
         avidm::init_avidm_param,
-        avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
+        avidm_gf2::{AvidmGf2Common, AvidmGf2Scheme, init_avidm_gf2_param},
     },
     x25519,
 };
@@ -171,6 +171,39 @@ async fn reference_ns_proof_enum_avidm() -> NamespaceProofQueryData {
 
     let avidm_param = init_avidm_param(10).unwrap();
     let proof = NsProof::new(&payload, &ns_index, &VidCommon::V1(avidm_param));
+    let transactions = proof
+        .as_ref()
+        .unwrap()
+        .export_all_txs(&REFERENCE_NAMESPACE_ID.into());
+    NamespaceProofQueryData {
+        proof,
+        transactions,
+    }
+}
+
+async fn reference_avidm_gf2_common() -> AvidmGf2Common {
+    let payload = reference_payload().await;
+    let encoded = payload.encode();
+    let payload_byte_len = payload.byte_len();
+    let ns_table = payload.ns_table();
+    let ns_table = ns_table
+        .iter()
+        .map(|index| ns_table.ns_range(&index, &payload_byte_len).0)
+        .collect::<Vec<_>>();
+    let param = init_avidm_gf2_param(10).unwrap();
+    let (_, common) = AvidmGf2Scheme::commit(&param, &encoded, ns_table).unwrap();
+    common
+}
+
+async fn reference_ns_proof_enum_avidm_gf2() -> NamespaceProofQueryData {
+    let payload = reference_payload().await;
+    let ns_index = payload
+        .ns_table()
+        .find_ns_id(&(REFERENCE_NAMESPACE_ID.into()))
+        .unwrap();
+
+    let common = reference_avidm_gf2_common().await;
+    let proof = NsProof::new(&payload, &ns_index, &VidCommon::V2(common));
     let transactions = proof
         .as_ref()
         .unwrap()
@@ -599,6 +632,17 @@ async fn test_reference_ns_proof_enum_avidm() {
     reference_test_without_committable("v3", "ns_proof_V1", &reference_ns_proof_enum_avidm().await);
 }
 
+// "V2" does not refer to the version scheme used in this crate but to the NsProof::V2 variant,
+// the AvidmGf2 (VID2) proof introduced with the new protocol.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_reference_ns_proof_enum_avidm_gf2() {
+    reference_test_without_committable(
+        "v6",
+        "ns_proof_V2",
+        &reference_ns_proof_enum_avidm_gf2().await,
+    );
+}
+
 // Legacy leaf query data
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_leaf_query_data_legacy_v1() {
@@ -678,16 +722,7 @@ async fn test_vid_common_v1_query_data() {
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_vid_common_v2_query_data() {
     let header = reference_header(version(0, 1)).await;
-    let payload = reference_payload().await;
-    let encoded = payload.encode();
-    let payload_byte_len = payload.byte_len();
-    let ns_table = payload.ns_table();
-    let ns_table = ns_table
-        .iter()
-        .map(|index| ns_table.ns_range(&index, &payload_byte_len).0)
-        .collect::<Vec<_>>();
-    let param = init_avidm_gf2_param(10).unwrap();
-    let (_, common) = AvidmGf2Scheme::commit(&param, &encoded, ns_table).unwrap();
+    let common = reference_avidm_gf2_common().await;
     let vid = VidCommonQueryData::<SeqTypes>::new(header, VidCommon::V2(common));
 
     reference_test_without_committable("v2", "vid_common_v2", &vid);
