@@ -22,18 +22,50 @@
 use std::{fmt::Debug, path::Path};
 
 use committable::Committable;
-use espresso_types::{NodeState, PubKey, ValidatedState};
+use espresso_types::{
+    EpochCommittees, Leaf, Leaf2, NewProposal, NodeState, Payload, PubKey, SeqTypes, Transaction,
+    ValidatedState, v0_3::Fetcher,
+};
+use hotshot_contract_adapter::light_client::derive_signed_state_digest;
+use hotshot_example_types::{node_types::TEST_VERSIONS, storage_types::TestStorage};
+use hotshot_new_protocol::message::{
+    BlockMessage, CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, DedupManifest,
+    EpochChangeMessage, Message as NewProtocolMessage, MessageType, ProposalFetchMessage,
+    ProposalFetchRequest, ProposalMessage, TimeoutVoteMessage, TransactionMessage, Unchecked,
+    Validated, Vote1,
+};
 use hotshot_types::{
+    PeerConfig,
     data::{
-        DaProposal, EpochNumber, QuorumProposal, UpgradeProposal, ViewChangeEvidence, ViewNumber,
+        DaProposal, EpochNumber, QuorumProposal, UpgradeProposal, VidDisperse2, ViewChangeEvidence,
+        ViewNumber,
+        vid_disperse::{ADVZDisperse, AvidmGf2DisperseShareFragment, AvidmGf2NamespacePiece},
     },
+    epoch_membership::EpochMembershipCoordinator,
+    light_client::{StakeTableState, StateKeyPair},
     message::{
         DaConsensusMessage, DataMessage, GeneralConsensusMessage, Message, MessageKind, Proposal,
         SequencingMessage,
     },
-    simple_certificate::{DaCertificate, QuorumCertificate, UpgradeCertificate},
-    simple_vote::{DaData, DaVote, QuorumData, QuorumVote, UpgradeProposalData, UpgradeVote},
-    traits::{BlockPayload, EncodeBytes, signature_key::SignatureKey},
+    simple_certificate::{
+        DaCertificate, LightClientStateUpdateCertificateV2, QuorumCertificate, SimpleCertificate,
+        TimeoutCertificate, TimeoutCertificate2, UpgradeCertificate, ViewSyncCommitCertificate,
+        ViewSyncFinalizeCertificate, ViewSyncPreCommitCertificate,
+    },
+    simple_vote::{
+        DaData, DaVote, LightClientStateUpdateVote2, QuorumData, QuorumData2, QuorumVote,
+        SimpleVote, TimeoutData, TimeoutData2, TimeoutVote, UpgradeProposalData, UpgradeVote,
+        ViewSyncCommitData, ViewSyncCommitVote, ViewSyncFinalizeData, ViewSyncFinalizeVote,
+        ViewSyncPreCommitData, ViewSyncPreCommitVote, Vote2Data,
+    },
+    traits::{
+        BlockPayload, EncodeBytes,
+        block_contents::BlockHeader,
+        election::Membership,
+        node_implementation::NodeType,
+        signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey},
+    },
+    vid::avidm_gf2::AvidmGf2Scheme,
 };
 use pretty_assertions::assert_eq;
 use serde::{Serialize, de::DeserializeOwned};
@@ -127,23 +159,6 @@ where
 
 #[cfg(feature = "testing")]
 async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
-    use espresso_types::{EpochCommittees, Leaf, Payload, SeqTypes, Transaction, v0_3::Fetcher};
-    use hotshot_example_types::{node_types::TEST_VERSIONS, storage_types::TestStorage};
-    use hotshot_types::{
-        PeerConfig,
-        data::vid_disperse::ADVZDisperse,
-        epoch_membership::EpochMembershipCoordinator,
-        simple_certificate::{
-            TimeoutCertificate, ViewSyncCommitCertificate, ViewSyncFinalizeCertificate,
-            ViewSyncPreCommitCertificate,
-        },
-        simple_vote::{
-            TimeoutData, TimeoutVote, ViewSyncCommitData, ViewSyncCommitVote, ViewSyncFinalizeData,
-            ViewSyncFinalizeVote, ViewSyncPreCommitData, ViewSyncPreCommitVote,
-        },
-        traits::election::Membership,
-    };
-
     let (sender, priv_key) = PubKey::generated_from_seed_indexed(Default::default(), 0);
     let signature = PubKey::sign(&priv_key, &[]).unwrap();
     let committee = vec![PeerConfig::test_default()]; /* one committee member, necessary to generate a VID share */
@@ -390,51 +405,7 @@ async fn test_v5_message_compat() {
 /// Optional fields are populated wherever a variant allows it, so the vector pins the encoding of
 /// the `Some` case rather than the cheaper `None` case.
 #[cfg(feature = "testing")]
-async fn reference_new_protocol_messages() -> Vec<
-    hotshot_new_protocol::message::Message<
-        espresso_types::SeqTypes,
-        hotshot_new_protocol::message::Validated,
-    >,
-> {
-    use committable::Committable;
-    use espresso_types::{
-        EpochCommittees, Leaf2, NewProposal, NodeState, Payload, PubKey, SeqTypes, Transaction,
-        ValidatedState, v0_3::Fetcher,
-    };
-    use hotshot_contract_adapter::light_client::derive_signed_state_digest;
-    use hotshot_example_types::storage_types::TestStorage;
-    use hotshot_new_protocol::message::{
-        BlockMessage, CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, DedupManifest,
-        EpochChangeMessage, Message, MessageType, ProposalFetchMessage, ProposalFetchRequest,
-        ProposalMessage, TimeoutVoteMessage, TransactionMessage, Vote1,
-    };
-    use hotshot_types::{
-        PeerConfig,
-        data::{
-            EpochNumber, VidDisperse2, ViewNumber,
-            vid_disperse::{AvidmGf2DisperseShareFragment, AvidmGf2NamespacePiece},
-        },
-        epoch_membership::EpochMembershipCoordinator,
-        light_client::{StakeTableState, StateKeyPair},
-        message::Proposal as SignedProposal,
-        simple_certificate::{
-            LightClientStateUpdateCertificateV2, SimpleCertificate, TimeoutCertificate2,
-            UpgradeCertificate,
-        },
-        simple_vote::{
-            LightClientStateUpdateVote2, QuorumData2, SimpleVote, TimeoutData2,
-            UpgradeProposalData, Vote2Data,
-        },
-        traits::{
-            BlockPayload,
-            block_contents::BlockHeader,
-            election::Membership,
-            node_implementation::NodeType,
-            signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey},
-        },
-        vid::avidm_gf2::AvidmGf2Scheme,
-    };
-
+async fn reference_new_protocol_messages() -> Vec<NewProtocolMessage<SeqTypes, Validated>> {
     let (sender, priv_key) = PubKey::generated_from_seed_indexed(Default::default(), 0);
     let signature = PubKey::sign(&priv_key, &[]).unwrap();
     let view = ViewNumber::genesis();
@@ -539,7 +510,7 @@ async fn reference_new_protocol_messages() -> Vec<
         next_drb_result: Some([1u8; 32]),
         state_cert: Some(LightClientStateUpdateCertificateV2::<SeqTypes>::genesis()),
     };
-    let signed_proposal = SignedProposal::new(proposal.clone(), signature.clone());
+    let signed_proposal = Proposal::new(proposal.clone(), signature.clone());
 
     // Schnorr signing derives its nonce from the signing key and message, so a real state vote is
     // reproducible across runs.
@@ -654,7 +625,7 @@ async fn reference_new_protocol_messages() -> Vec<
             cert2,
             proposal,
         )),
-        ConsensusMessage::VidShareFragment(SignedProposal::new(vid_fragment, signature.clone())),
+        ConsensusMessage::VidShareFragment(Proposal::new(vid_fragment, signature.clone())),
         ConsensusMessage::VidShareBroadcast(vid_share),
         ConsensusMessage::HighQc(cert1),
     ];
@@ -682,7 +653,7 @@ async fn reference_new_protocol_messages() -> Vec<
         ]);
 
     message_types
-        .map(|message_type| Message {
+        .map(|message_type| NewProtocolMessage {
             sender,
             message_type,
         })
@@ -692,16 +663,13 @@ async fn reference_new_protocol_messages() -> Vec<
 #[cfg(feature = "testing")]
 #[tokio::test(flavor = "multi_thread")]
 async fn test_v6_new_protocol_message_compat() {
-    use espresso_types::SeqTypes;
-    use hotshot_new_protocol::message::{Message, Unchecked};
-
     let messages = reference_new_protocol_messages().await;
     // A node parses what it receives as `Unchecked`, so that is the form the committed vectors are
     // compared against.
-    let unchecked: Vec<Message<SeqTypes, Unchecked>> = messages
+    let unchecked: Vec<NewProtocolMessage<SeqTypes, Unchecked>> = messages
         .iter()
         .cloned()
-        .map(Message::into_unchecked)
+        .map(NewProtocolMessage::into_unchecked)
         .collect();
 
     check_reference_messages::<StaticVersion<0, 6>, _, _>(
