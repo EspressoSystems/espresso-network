@@ -10,7 +10,7 @@ use axum::{
     routing::{get, post},
 };
 use espresso_api::{
-    cors_layer, healthcheck_response,
+    cors_layer, healthcheck_response, version,
     wire::{self, DecodeFailure, WireFormat},
 };
 use hotshot_types::{
@@ -342,6 +342,7 @@ const LATEST_STATE_PATH: &str = "/api/lateststate";
 fn router(state: SharedState) -> Router {
     let mut router = Router::<SharedState>::new()
         .route("/healthcheck", get(healthcheck))
+        .route("/version", get(version))
         .route(STATE_PATH, post(post_state).get(get_state))
         .route(
             LEGACY_STATE_PATH,

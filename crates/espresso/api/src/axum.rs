@@ -493,9 +493,9 @@ async fn module_healthcheck(headers: HeaderMap) -> Response {
     module_healthcheck_response(&headers)
 }
 
-/// Tide-disco-compatible version response. Tide emits the binary's clap version; we emit the
-/// crate version so `surf_disco::Client::connect` and similar polling helpers succeed.
-async fn version() -> Json<serde_json::Value> {
+/// App-level `/version`, served by every migrated service. All workspace crates carry one version,
+/// so this reports the same value each binary would report itself.
+pub async fn version() -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
     }))

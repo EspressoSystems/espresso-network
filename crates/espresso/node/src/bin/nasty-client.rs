@@ -31,7 +31,7 @@ use axum::{
 use clap::Parser;
 use committable::Committable;
 use derivative::Derivative;
-use espresso_api::{cors_layer, healthcheck_response};
+use espresso_api::{cors_layer, healthcheck_response, version};
 use espresso_node::SequencerApiVersion;
 use espresso_types::{
     ADVZNamespaceProofQueryData, BlockMerkleTree, FeeMerkleTree, Header, SeqTypes, parse_duration,
@@ -1384,6 +1384,7 @@ async fn serve(port: u16, metrics: PrometheusMetrics) {
     let metrics = Arc::new(metrics);
     let app = axum::Router::new()
         .route("/healthcheck", get(healthcheck))
+        .route("/version", get(version))
         .route("/status/metrics", get(status_metrics))
         .route("/v0/status/metrics", get(status_metrics))
         .with_state(metrics)

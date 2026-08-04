@@ -100,9 +100,9 @@ pub mod api;
 pub mod service;
 
 use api::node_validator::v0::SurfDiscoAvailabilityAPIStream;
-use axum::Router;
+use axum::{Router, http::HeaderMap, response::Response, routing::get};
 use clap::Parser;
-use espresso_api::cors_layer;
+use espresso_api::{cors_layer, healthcheck_response, version};
 use futures::{
     StreamExt,
     channel::mpsc::{self, Sender},
@@ -215,10 +215,16 @@ fn app(state: MainState) -> Router {
         api::node_validator::v0::router::<MainState>(),
     );
     Router::new()
+        .route("/healthcheck", get(healthcheck))
+        .route("/version", get(version))
         .merge(api.clone())
         .nest("/v0", api)
         .with_state(state)
         .layer(cors_layer())
+}
+
+async fn healthcheck(headers: HeaderMap) -> Response {
+    healthcheck_response(&headers)
 }
 
 /// Run the service by itself.
@@ -359,6 +365,18 @@ mod tests {
                 .unwrap();
             let resp = tower::ServiceExt::oneshot(test_app(), req).await.unwrap();
             assert_ne!(resp.status(), StatusCode::NOT_FOUND, "{uri} did not route");
+        }
+    }
+
+    #[tokio::test]
+    async fn probe_app_level_routes() {
+        for uri in ["/healthcheck", "/version", "/node-validator/details"] {
+            let req = Request::builder()
+                .uri(uri)
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let resp = tower::ServiceExt::oneshot(test_app(), req).await.unwrap();
+            println!("NODE-METRICS {uri} -> {}", resp.status());
         }
     }
 }

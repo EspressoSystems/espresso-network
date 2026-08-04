@@ -3,7 +3,7 @@
 
 use alloy::primitives::Address;
 use axum::{Json, Router, http::HeaderMap, response::Response, routing::get};
-use espresso_api::{cors_layer, healthcheck_response};
+use espresso_api::{cors_layer, healthcheck_response, version};
 
 /// Serves the light client contract address at the paths tide-disco used to expose it:
 /// `/v0/api/lightclient_contract` directly, and `/api/lightclient_contract` (which tide-disco
@@ -20,6 +20,7 @@ fn router(light_client_address: Address) -> Router {
             get(move || async move { Json(light_client_address) }),
         )
         .route("/healthcheck", get(healthcheck))
+        .route("/version", get(version))
         .layer(cors_layer())
 }
 
@@ -102,5 +103,14 @@ mod tests {
                 "{uri}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn probe_version_status() {
+        println!("PROVER /version -> {}", get("/version").await.status());
+        println!(
+            "PROVER /healthcheck -> {}",
+            get("/healthcheck").await.status()
+        );
     }
 }
