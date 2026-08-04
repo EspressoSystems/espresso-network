@@ -1,5 +1,3 @@
-use std::{future::Future, sync::Arc};
-
 #[cfg(feature = "client")]
 use std::{
     collections::HashMap,
@@ -10,6 +8,7 @@ use std::{
 };
 #[cfg(all(unix, feature = "client"))]
 use std::{fs::Permissions, os::unix::fs::PermissionsExt};
+use std::{future::Future, sync::Arc};
 
 #[cfg(feature = "client")]
 use alloy::primitives::Address;
