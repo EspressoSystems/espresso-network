@@ -160,6 +160,17 @@ async fn module_prefixes_routes() {
 }
 
 #[tokio::test]
+async fn module_without_trailing_slash_prefixes_routes() {
+    let app = Router::new().route("/mod/get_json", get(get_json));
+    let base_url = spawn_server(app).await;
+
+    let client = Client::<ClientErr, Ver01>::new(base_url);
+    let module = client.module::<ClientErr>("mod").unwrap();
+    let res: String = module.get("get_json").send().await.unwrap();
+    assert_eq!(res, "response");
+}
+
+#[tokio::test]
 async fn socket_subscribe_decodes_binary_frames() {
     let app = Router::new().route("/ws_naturals", get(ws_naturals));
     let base_url = spawn_server(app).await;

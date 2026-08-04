@@ -195,9 +195,11 @@ impl<E: ClientError, VER: StaticVersionType> Client<E, VER> {
         &self,
         prefix: &str,
     ) -> Result<Client<E2, VER>, url::ParseError> {
+        let mut base_url = self.base_url.join(prefix)?;
+        ensure_trailing_slash(&mut base_url);
         Ok(Client {
             inner: self.inner.clone(),
-            base_url: self.base_url.join(prefix)?,
+            base_url,
             accept: self.accept,
             _marker: PhantomData,
         })
@@ -219,11 +221,7 @@ pub struct ClientBuilder<E: ClientError, VER: StaticVersionType> {
 
 impl<E: ClientError, VER: StaticVersionType> ClientBuilder<E, VER> {
     fn new(mut base_url: Url) -> Self {
-        // If the path part of `base_url` does not end in `/`, `join` will treat it as a filename
-        // and remove it, which is never what we want: `base_url` is always a directory-like path.
-        if !base_url.path().ends_with('/') {
-            base_url.set_path(&format!("{}/", base_url.path()));
-        }
+        ensure_trailing_slash(&mut base_url);
         Self {
             inner: reqwest::Client::builder(),
             accept: ContentType::Binary,
@@ -270,6 +268,16 @@ impl<E: ClientError, VER: StaticVersionType> From<ClientBuilder<E, VER>> for Cli
     }
 }
 
+/// Ensure a base URL's path ends in `/`, so that `join` treats it as a directory.
+///
+/// If the path does not end in `/`, `join` will treat the last segment as a filename and remove
+/// it, which is never what we want: a base URL is always a directory-like path.
+fn ensure_trailing_slash(url: &mut Url) {
+    if !url.path().ends_with('/') {
+        url.set_path(&format!("{}/", url.path()));
+    }
+}
+
 #[cfg(test)]
 mod test {
     use vbs::version::StaticVersion;
@@ -304,5 +312,15 @@ mod test {
         let client =
             Client::<ClientErr, Ver01>::builder("http://example.com".parse().unwrap()).build();
         assert_eq!(client.base_url(), "http://example.com/".parse().unwrap());
+    }
+
+    #[test]
+    fn module_adds_trailing_slash_to_prefix() {
+        let client = Client::<ClientErr, Ver01>::new("http://example.com/api".parse().unwrap());
+        let module = client.module::<ClientErr>("sub").unwrap();
+        assert_eq!(
+            module.base_url(),
+            "http://example.com/api/sub/".parse().unwrap()
+        );
     }
 }
