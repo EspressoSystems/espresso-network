@@ -343,8 +343,11 @@ pub async fn drive_ws_stream<Ver: StaticVersionType, T: Serialize>(
     stream: BoxStream<'static, T>,
     format: WsFormat,
 ) {
-    use axum::extract::ws::Message;
+    use axum::extract::ws::{CloseFrame, Message, close_code};
     futures::pin_mut!(stream);
+    // `None` closes cleanly, signalling normal end-of-stream. A serialization failure closes with
+    // an error frame instead, so a client can tell a server-side bug from a completed stream.
+    let mut failure: Option<String> = None;
     loop {
         // Also poll the client side: a disconnect must end this task even while the stream is
         // quiet, or the socket's connection slot and the stream task leak until the next send.
@@ -356,24 +359,35 @@ pub async fn drive_ws_stream<Ver: StaticVersionType, T: Serialize>(
             },
         };
         let Some(item) = item else { break };
-        let msg = match format {
-            WsFormat::Binary => match Serializer::<Ver>::serialize(&item) {
-                Ok(bytes) => Message::Binary(bytes.into()),
-                Err(_) => break,
-            },
-            WsFormat::Json => match serde_json::to_string(&item) {
-                Ok(json) => Message::Text(json.into()),
-                Err(_) => break,
-            },
+        let encoded = match format {
+            WsFormat::Binary => Serializer::<Ver>::serialize(&item)
+                .map(|bytes| Message::Binary(bytes.into()))
+                .map_err(|err| err.to_string()),
+            WsFormat::Json => serde_json::to_string(&item)
+                .map(|json| Message::Text(json.into()))
+                .map_err(|err| err.to_string()),
         };
-        if socket.send(msg).await.is_err() {
-            return;
+        match encoded {
+            Ok(msg) => {
+                if socket.send(msg).await.is_err() {
+                    return;
+                }
+            },
+            Err(err) => {
+                tracing::warn!(%err, "websocket stream item failed to serialize; closing stream");
+                failure = Some(err);
+                break;
+            },
         }
     }
     // Close handshake, like tide-disco's socket handler. Without it, dropping the socket resets
     // the connection and clients see an error instead of end-of-stream — the finite v0 streams
     // rely on a clean close to signal completion.
-    let _ = socket.send(Message::Close(None)).await;
+    let close = failure.map(|reason| CloseFrame {
+        code: close_code::ERROR,
+        reason: reason.into(),
+    });
+    let _ = socket.send(Message::Close(close)).await;
 }
 
 /// Create a combined router serving both v1 and v2 APIs
