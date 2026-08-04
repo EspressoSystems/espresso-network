@@ -400,6 +400,13 @@ async fn test_v5_message_compat() {
     test_message_compat(StaticVersion::<0, 5> {}).await;
 }
 
+// The legacy envelope is still decoded at 0.6: the new protocol network falls back to it for
+// messages that do not parse as new protocol messages.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_v6_message_compat() {
+    test_message_compat(StaticVersion::<0, 6> {}).await;
+}
+
 /// One instance of every new protocol message variant.
 ///
 /// Optional fields are populated wherever a variant allows it, so the vector pins the encoding of
