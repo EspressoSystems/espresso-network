@@ -19,8 +19,8 @@ pub mod proto {
 // Re-exports
 pub use self::{
     axum::{
-        WsFormat, create_combined_router, create_router_v1, create_router_v2, drive_ws_stream,
-        healthcheck_response, routes, ws_format,
+        WsFormat, cors_layer, create_combined_router, create_router_v1, create_router_v2,
+        drive_ws_stream, healthcheck_response, routes, ws_format,
     },
     tonic::create_reward_service,
 };
@@ -286,6 +286,8 @@ async fn serve_router(
     if let Some(limit) = max_connections {
         router = apply_connection_limit(router, limit);
     }
+    // CORS goes on last so it wraps the connection limit, whose 429 would otherwise skip it.
+    let router = router.layer(axum::cors_layer());
     // `Router::layer` middleware runs after routing, so it can't rewrite a URI to match a
     // different route. Wrapping the whole router with `MapRequestLayer` instead runs the
     // rewrite before routing, per the axum-documented pattern for this case.

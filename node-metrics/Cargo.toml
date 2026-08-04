@@ -45,6 +45,7 @@ vbs = { workspace = true }
 [dev-dependencies]
 node-metrics = { path = ".", features = ["testing"] }
 test-log = { workspace = true }
+tower = { workspace = true, features = ["util"] }
 
 [lints]
 workspace = true

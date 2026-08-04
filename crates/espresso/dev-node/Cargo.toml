@@ -30,7 +30,6 @@ staking-cli = { workspace = true }
 tempfile = { workspace = true }
 test-utils = { workspace = true }
 tokio = { workspace = true }
-tower-http = { workspace = true, features = ["cors"] }
 tracing = { workspace = true }
 url = { workspace = true }
 vbs = { workspace = true }

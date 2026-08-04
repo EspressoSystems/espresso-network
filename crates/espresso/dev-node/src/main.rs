@@ -27,7 +27,7 @@ use axum::{
     routing::{get, post},
 };
 use clap::{Parser, ValueEnum};
-use espresso_api::healthcheck_response;
+use espresso_api::{cors_layer, healthcheck_response};
 use espresso_contract_deployer::{
     self as deployer, Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS, DeployedContracts,
     HttpProviderWithWallet, network_config::light_client_genesis_from_stake_table,
@@ -64,7 +64,6 @@ use staking_cli::demo::{DelegationConfig, StakingTransactions};
 use tempfile::NamedTempFile;
 use test_utils::reserve_tcp_port;
 use tokio::spawn;
-use tower_http::cors::{Any, CorsLayer};
 use url::Url;
 use vbs::version::StaticVersionType;
 use versions::Upgrade;
@@ -955,12 +954,7 @@ fn dev_node_router(state: DevNodeState) -> Router {
         .merge(api.clone())
         .nest("/v0", api)
         .route("/healthcheck", get(healthcheck))
-        .layer(
-            CorsLayer::new()
-                .allow_methods(Any)
-                .allow_headers(Any)
-                .allow_origin(Any),
-        )
+        .layer(cors_layer())
 }
 
 async fn run_dev_node_server<ApiVer: StaticVersionType + 'static>(
