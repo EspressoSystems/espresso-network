@@ -21,6 +21,7 @@ testing = [
     "light-client/testing",
     "espresso-utils/testing",
     "hotshot-query-service/testing",
+    "hotshot-new-protocol/testing",
 ]
 benchmarking = []
 embedded-db = ["hotshot-query-service/embedded-db", "sqlx/sqlite"]
