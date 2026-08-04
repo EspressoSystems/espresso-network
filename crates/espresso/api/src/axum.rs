@@ -2,7 +2,7 @@
 
 pub mod routes;
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 
 use aide::{
     axum::{
@@ -26,6 +26,7 @@ use axum::{
     routing::get,
 };
 use futures::{StreamExt, stream::BoxStream};
+use http_wire::{AppHealth, ContentType, HealthStatus, encode_binary_frame, encode_text_frame};
 use schemars::transform::Transform;
 use serde::Serialize;
 use serialization_api::v2::{
@@ -35,10 +36,7 @@ use serialization_api::v2::{
 };
 use tokio::sync::Semaphore;
 use tower_http::cors::{Any, CorsLayer};
-use vbs::{
-    BinarySerializer, Serializer,
-    version::{StaticVersion, StaticVersionType},
-};
+use vbs::version::{StaticVersion, StaticVersionType};
 
 use crate::{
     error::{ApiError, AvailabilityError},
@@ -108,7 +106,7 @@ impl WireFormat for NodeApiWire {
     fn serialize_failure(message: String) -> ErrorResponse {
         ErrorResponse::new(
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("vbs serialize: {message}"),
+            format!("serialize: {message}"),
         )
     }
 }
@@ -310,28 +308,14 @@ impl<T: schemars::JsonSchema> aide::operation::OperationInput for SendQuery<T> {
     }
 }
 
-/// Wire format for a WebSocket stream, negotiated from the upgrade request's `Accept` header
-/// to match tide-disco. surf-disco clients default to `application/octet-stream`, so production
-/// stream consumers expect VBS-encoded `Message::Binary` frames.
-#[derive(Clone, Copy)]
-pub enum WsFormat {
-    Binary,
-    Json,
+/// Negotiate the frame format for a WebSocket stream from the upgrade request's `Accept` header.
+/// Production stream consumers default to `application/octet-stream` and expect VBS-encoded
+/// `Message::Binary` frames.
+pub fn ws_format(headers: &HeaderMap) -> ContentType {
+    ContentType::negotiate(headers)
 }
 
-pub fn ws_format(headers: &HeaderMap) -> WsFormat {
-    let accept = headers
-        .get(header::ACCEPT)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    if accept.contains("application/octet-stream") {
-        WsFormat::Binary
-    } else {
-        WsFormat::Json
-    }
-}
-
-/// Forwards `stream` over `socket` in the negotiated [`WsFormat`] until the stream ends or the
+/// Forwards `stream` over `socket` in the negotiated [`ContentType`] until the stream ends or the
 /// client disconnects, then performs the close handshake. This is the one shared way to serve a
 /// tide-disco-style socket stream endpoint; hand-rolled write-only loops leak the task and its
 /// data-source subscription whenever a client disconnects while the stream is quiet.
@@ -341,7 +325,7 @@ pub fn ws_format(headers: &HeaderMap) -> WsFormat {
 pub async fn drive_ws_stream<Ver: StaticVersionType, T: Serialize>(
     mut socket: axum::extract::ws::WebSocket,
     stream: BoxStream<'static, T>,
-    format: WsFormat,
+    format: ContentType,
 ) {
     use axum::extract::ws::Message;
     futures::pin_mut!(stream);
@@ -356,16 +340,13 @@ pub async fn drive_ws_stream<Ver: StaticVersionType, T: Serialize>(
             },
         };
         let Some(item) = item else { break };
-        let msg = match format {
-            WsFormat::Binary => match Serializer::<Ver>::serialize(&item) {
-                Ok(bytes) => Message::Binary(bytes.into()),
-                Err(_) => break,
+        let frame = match format {
+            ContentType::Binary => {
+                encode_binary_frame::<Ver, _>(&item).map(|bytes| Message::Binary(bytes.into()))
             },
-            WsFormat::Json => match serde_json::to_string(&item) {
-                Ok(json) => Message::Text(json.into()),
-                Err(_) => break,
-            },
+            ContentType::Json => encode_text_frame(&item).map(|json| Message::Text(json.into())),
         };
+        let Ok(msg) = frame else { break };
         if socket.send(msg).await.is_err() {
             return;
         }
@@ -435,43 +416,18 @@ pub(crate) fn with_top_level_routes(router: Router) -> Router {
         .route("/version", get(version))
 }
 
-/// Health status of an application.
-///
-/// Wire-compatible with `tide_disco::healthcheck::HealthStatus` 0.9.6: `Available` is its first
-/// variant, so JSON emits the same name and vbs/bincode the same ordinal. The server only ever
-/// reports `Available`; the remaining tide variants are omitted until a client-side type exists.
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum HealthStatus {
-    Available,
-}
-
-/// Wire-compatible with `tide_disco::app::AppHealth`: JSON keys, variant casing, and the
-/// vbs/bincode field order (status ordinal, then modules map) must not change.
-#[derive(Serialize)]
-struct AppHealth {
-    status: HealthStatus,
-    // Tide populated this with each module's versioned health status; the axum modules don't
-    // report individual health, so it stays empty.
-    modules: BTreeMap<String, BTreeMap<u64, u16>>,
-}
-
 /// App-level `/healthcheck` response, in JSON or vbs binary depending on `Accept`.
 ///
 /// Every service migrated to axum registered at least one *named* tide-disco module, so none of
 /// them was a singleton app and all of them served the app-level [`AppHealth`] object here rather
-/// than a bare [`HealthStatus`] (`tide-disco-0.9.6/src/app.rs`, `App::serve` skips the app-level
+/// than a bare [`HealthStatus`] (`tide-disco-0.9.7/src/app.rs`, `App::serve` skips the app-level
 /// routes only when `modules.is_singleton()`). The standalone axum servers (builder, orchestrator,
 /// light client query service, relay server, prover, dev-node, submit-transactions, nasty-client)
 /// all share this, so each reports the shape its tide predecessor did.
 pub fn healthcheck_response(headers: &HeaderMap) -> Response {
-    encode_response(
-        headers,
-        AppHealth {
-            status: HealthStatus::Available,
-            modules: BTreeMap::new(),
-        },
-    )
+    // `default()` is `Available` with no per-module entries: the axum modules don't report
+    // individual health.
+    encode_response(headers, AppHealth::default())
 }
 
 /// Per-module `/healthcheck` response: a bare [`HealthStatus`], which is what tide-disco served
@@ -3983,7 +3939,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use vbs::{BinarySerializer, Serializer};
 
     use super::*;
 

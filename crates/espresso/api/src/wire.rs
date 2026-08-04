@@ -1,18 +1,21 @@
-//! Tide-disco-compatible content negotiation, shared by the axum ports of the tide-disco
-//! services (builder, state relay server, orchestrator, light client query service).
+//! Content negotiation for the axum services (builder, state relay server, orchestrator, light
+//! client query service).
 //!
 //! Each service keeps its own wire error envelope (the exact `Serialize` shape its existing
-//! clients decode) and describes it to these helpers with a [`WireFormat`] impl; the negotiation
-//! logic itself (`Accept`/`Content-Type` handling, VBS vs JSON, serialization fallbacks) lives
-//! only here.
+//! clients decode) and describes it to these helpers with a [`WireFormat`] impl. The protocol
+//! itself (`Accept`/`Content-Type` matching, the VBS and JSON codecs) lives in [`http_wire`],
+//! shared with the `http-client` crate, so both sides of the network encode and decode with the
+//! same functions; this module only adds the axum glue.
 
 use axum::{
     Json,
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
+use http_wire::encode_body;
+pub use http_wire::{ContentType, DecodeFailure, wants_binary};
 use serde::{Serialize, de::DeserializeOwned};
-use vbs::{BinarySerializer, Serializer, version::StaticVersionType};
+use vbs::version::StaticVersionType;
 
 /// Describes a service's wire protocol: its VBS framing version and its error envelope.
 pub trait WireFormat {
@@ -24,48 +27,29 @@ pub trait WireFormat {
     /// The HTTP status an error response is sent with.
     fn status(err: &Self::Error) -> StatusCode;
 
-    /// The error reported when a response body fails to VBS-serialize.
+    /// The error reported when a response body fails to serialize. The message names the
+    /// format that failed.
     fn serialize_failure(message: String) -> Self::Error;
-}
-
-/// Whether the request negotiates VBS binary responses, matching tide-disco: surf-disco clients
-/// default to `Accept: application/octet-stream`; everything else (browsers, curl) gets JSON.
-pub fn wants_binary(headers: &HeaderMap) -> bool {
-    headers
-        .get(header::ACCEPT)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.contains("application/octet-stream"))
 }
 
 /// Encode a successful response body, negotiating VBS binary vs JSON from the `Accept` header.
 pub fn encode_ok<C: WireFormat, T: Serialize>(headers: &HeaderMap, value: T) -> Response {
-    if wants_binary(headers) {
-        match Serializer::<C::Version>::serialize(&value) {
-            Ok(bytes) => {
-                ([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response()
-            },
-            Err(err) => encode_err::<C>(headers, C::serialize_failure(err.to_string())),
-        }
-    } else {
-        Json(value).into_response()
+    let format = ContentType::negotiate(headers);
+    match encode_body::<C::Version, _>(format, &value) {
+        Ok(bytes) => ([(header::CONTENT_TYPE, format.mime())], bytes).into_response(),
+        Err(err) => encode_err::<C>(headers, C::serialize_failure(err.to_string())),
     }
 }
 
 /// Encode an error response using the same content negotiation as [`encode_ok`].
 pub fn encode_err<C: WireFormat>(headers: &HeaderMap, err: C::Error) -> Response {
     let status = C::status(&err);
-    if wants_binary(headers) {
-        match Serializer::<C::Version>::serialize(&err) {
-            Ok(bytes) => (
-                status,
-                [(header::CONTENT_TYPE, "application/octet-stream")],
-                bytes,
-            )
-                .into_response(),
-            Err(_) => (status, Json(err)).into_response(),
-        }
-    } else {
-        (status, Json(err)).into_response()
+    let format = ContentType::negotiate(headers);
+    match encode_body::<C::Version, _>(format, &err) {
+        Ok(bytes) => (status, [(header::CONTENT_TYPE, format.mime())], bytes).into_response(),
+        // The envelope itself failed to serialize; fall back to JSON so the client at least
+        // sees the status and a body (axum's `Json` degrades to a plain 500 if even that fails).
+        Err(_) => (status, Json(err)).into_response(),
     }
 }
 
@@ -79,42 +63,23 @@ pub fn respond<C: WireFormat, T: Serialize>(
     }
 }
 
-/// Why a request body failed to decode; each service maps this into its own wire error type.
-#[derive(Debug)]
-pub enum DecodeFailure {
-    /// The body was `application/json` but did not parse.
-    Json(String),
-    /// The body was `application/octet-stream` but did not VBS-deserialize.
-    Binary(String),
-    /// The `Content-Type` was missing or not one of the two supported types.
-    UnsupportedContentType,
-}
-
-/// Decode a request body, matching tide-disco's `body_auto`: VBS for `application/octet-stream`,
-/// JSON for `application/json`. Content types are prefix-matched so parameters (e.g. a charset)
-/// are tolerated.
+/// Decode a request body: VBS for `application/octet-stream`, JSON for `application/json`.
+/// Content types are matched by media-type essence so parameters (e.g. a charset) are tolerated.
 pub fn decode_body<Ver: StaticVersionType, T: DeserializeOwned>(
     headers: &HeaderMap,
     body: &[u8],
 ) -> Result<T, DecodeFailure> {
     let content_type = headers
         .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or_default();
-    if content_type.starts_with("application/octet-stream") {
-        Serializer::<Ver>::deserialize(body).map_err(|e| DecodeFailure::Binary(e.to_string()))
-    } else if content_type.starts_with("application/json") {
-        serde_json::from_slice(body).map_err(|e| DecodeFailure::Json(e.to_string()))
-    } else {
-        Err(DecodeFailure::UnsupportedContentType)
-    }
+        .and_then(|v| v.to_str().ok());
+    http_wire::decode_body::<Ver, T>(content_type, body)
 }
 
 #[cfg(test)]
 mod tests {
     use axum::http::HeaderValue;
     use serde::Deserialize;
-    use vbs::version::StaticVersion;
+    use vbs::{BinarySerializer, Serializer, version::StaticVersion};
 
     use super::*;
 
@@ -197,7 +162,7 @@ mod tests {
     }
 
     #[test]
-    fn decode_matches_content_type_by_prefix() {
+    fn decode_matches_content_type_by_essence() {
         let json = headers(header::CONTENT_TYPE, "application/json; charset=utf-8");
         let decoded: u64 = decode_body::<StaticVersion<0, 1>, _>(&json, b"42").unwrap();
         assert_eq!(decoded, 42);

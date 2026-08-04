@@ -4783,6 +4783,7 @@ dependencies = [
  "base64 0.22.1",
  "futures",
  "hex",
+ "http-wire",
  "prost 0.14.4",
  "schemars 0.9.0",
  "serde",
@@ -7036,10 +7037,10 @@ dependencies = [
  "axum 0.8.9",
  "futures",
  "hex",
+ "http-wire",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
- "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite 0.28.0",
  "tracing",
@@ -7081,6 +7082,18 @@ dependencies = [
  "serde_qs 0.8.5",
  "serde_urlencoded",
  "url",
+]
+
+[[package]]
+name = "http-wire"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "http 1.4.2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "vbs",
 ]
 
 [[package]]

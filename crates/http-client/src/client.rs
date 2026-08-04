@@ -4,6 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub use http_wire::ContentType;
 use serde::de::DeserializeOwned;
 use tokio::time::sleep;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
@@ -16,22 +17,6 @@ use crate::{
     request::{Request, reqwest_error_msg},
     socket::SocketRequest,
 };
-
-/// Content types supported by a `tide_disco`-shaped API.
-#[derive(Clone, Copy, Debug)]
-pub enum ContentType {
-    Json,
-    Binary,
-}
-
-impl ContentType {
-    fn mime(self) -> &'static str {
-        match self {
-            Self::Json => "application/json",
-            Self::Binary => "application/octet-stream",
-        }
-    }
-}
 
 /// A client of an HTTP/WebSocket application.
 pub struct Client<E, VER: StaticVersionType> {

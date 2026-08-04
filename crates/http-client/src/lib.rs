@@ -1,4 +1,9 @@
-//! A reqwest-based HTTP/WebSocket client for `tide_disco`-shaped APIs.
+//! A reqwest-based HTTP/WebSocket client for the network's HTTP APIs.
+//!
+//! This crate is only the transport shell (reqwest for HTTP, tokio-tungstenite for WebSockets)
+//! and the surf-disco-shaped API surface; the wire protocol itself (content negotiation, body
+//! and frame codecs, error envelope, health types) lives in [`http_wire`], shared with the
+//! server side in `espresso-api`.
 //!
 //! This crate is a path dependency only, never published: the unrelated crates.io package
 //! `http-client` 6.5.3 remains in the dependency graph transitively via `tide`/`surf` until
