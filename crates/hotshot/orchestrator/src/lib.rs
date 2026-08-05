@@ -31,7 +31,7 @@ use axum::{
 use client::{BenchResults, BenchResultsDownloadConfig};
 use csv::Writer;
 use espresso_api::{
-    body_limit_layer, cors_layer, healthcheck_response,
+    cors_layer, healthcheck_response,
     wire::{self, WireFormat},
 };
 use futures::{StreamExt, stream::FuturesUnordered};
@@ -913,7 +913,6 @@ fn app<TYPES: NodeType>(state: SharedOrchestratorState<TYPES>) -> Router {
         .merge(api.clone())
         .nest("/v0", api)
         .with_state(state)
-        .layer(body_limit_layer())
         .layer(cors_layer())
 }
 
