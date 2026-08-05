@@ -13,8 +13,25 @@ use alloy::{
     providers::{ProviderBuilder, ext::AnvilApi},
 };
 use espresso_contract_deployer::{Contract, upgrade_stake_table_v3};
+use espresso_node::{
+    SequencerApiVersion,
+    api::{
+        Options,
+        data_source::{SequencerDataSource, testing::TestableSequencerDataSource},
+        sql::DataSource as SqlDataSource,
+        test_helpers::{
+            TestNetwork, TestNetworkConfigBuilder, assert_node_live, assert_nodes_agree,
+            committee_is, delegate_new, deregister_validators, register_validators,
+            staking_addresses, wait_for_committee,
+        },
+    },
+    catchup::StatePeers,
+    context::SequencerContext,
+    network,
+    testing::{TestConfig, TestConfigBuilder, wait_for_epochs},
+};
 use espresso_types::{
-    AuthenticatedValidatorMap, Header, ValidatedState, v0::traits::SequencerPersistence,
+    AuthenticatedValidatorMap, Header, SeqTypes, ValidatedState, v0::traits::SequencerPersistence,
 };
 use futures::{
     future::join_all,
@@ -37,23 +54,6 @@ use tokio::time::timeout;
 use vbs::version::Version;
 use versions::{
     DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, NEW_PROTOCOL_VERSION, Upgrade,
-};
-
-use super::{
-    Options,
-    data_source::{SequencerDataSource, testing::TestableSequencerDataSource},
-    sql::DataSource as SqlDataSource,
-    test_helpers::{
-        TestNetwork, TestNetworkConfigBuilder, assert_node_live, assert_nodes_agree, committee_is,
-        delegate_new, deregister_validators, register_validators, staking_addresses,
-        wait_for_committee,
-    },
-};
-use crate::{
-    SeqTypes, SequencerApiVersion, SequencerContext,
-    catchup::StatePeers,
-    network,
-    testing::{TestConfig, TestConfigBuilder, wait_for_epochs},
 };
 
 const V5: Upgrade = Upgrade::trivial(EPOCH_REWARD_VERSION);

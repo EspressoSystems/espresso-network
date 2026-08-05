@@ -95,8 +95,6 @@ pub mod fs;
 pub mod light_client;
 pub mod options;
 pub mod sql;
-#[cfg(test)]
-mod stake_table_changes_test;
 pub mod state;
 pub mod unlock_schedule;
 mod update;
