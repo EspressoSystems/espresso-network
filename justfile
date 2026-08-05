@@ -139,6 +139,11 @@ down *args:
 pull:
     docker compose pull
 
+# Cut the next X.Y.Z.N tag on a release-X.Y.Z branch.
+# Equivalent to commenting `/tag` on the corresponding release tracker issue.
+tag branch:
+    gh workflow run tag-release.yml --ref {{branch}}
+
 docker-stop-rm:
     docker stop $(docker ps -aq); docker rm $(docker ps -aq)
 
