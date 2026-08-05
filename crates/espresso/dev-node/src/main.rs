@@ -50,7 +50,6 @@ use espresso_types::{
     L1ClientOptions, SeqTypes, ValidatedState, parse_duration, v0_3::ChainConfig,
 };
 use espresso_utils::logging;
-use espresso_wire::{cors_layer, healthcheck_response};
 use futures::{StreamExt, future::join_all, stream::FuturesUnordered};
 use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
 use hotshot_state_prover::{StateProverConfig, v2::service::run_prover_service};
@@ -58,6 +57,7 @@ use hotshot_types::{
     stake_table::{HSStakeTable, one_honest_threshold},
     utils::epoch_from_block_number,
 };
+use http_wire::{cors_layer, healthcheck_response};
 use itertools::izip;
 use serde::{Deserialize, Serialize};
 use staking_cli::demo::{DelegationConfig, StakingTransactions};

@@ -25,7 +25,7 @@ use axum::{
     response::{Html, IntoResponse, Response},
     routing::get,
 };
-use espresso_wire::{
+use http_wire::{
     ContentType, DecodeFailure, WireFormat, cors_layer, drive_ws_stream, healthcheck_response,
     module_healthcheck_response,
 };
@@ -118,7 +118,7 @@ impl WireFormat for NodeApiWire {
 /// (peer-catchup, submit-transactions, light-client provider) expect VBS-encoded responses for
 /// the endpoints that flow large structured data. Falls back to JSON otherwise.
 fn encode_response<T: Serialize>(headers: &HeaderMap, value: T) -> Response {
-    espresso_wire::encode_ok::<NodeApiWire, _>(headers, value)
+    http_wire::encode_ok::<NodeApiWire, _>(headers, value)
 }
 
 /// Decode a request body based on its `Content-Type`, matched by media-type essence.
@@ -130,7 +130,7 @@ fn decode_body<T: serde::de::DeserializeOwned>(
     headers: &HeaderMap,
     body: &[u8],
 ) -> Result<T, ApiError> {
-    espresso_wire::decode_body::<WireVersion, T>(headers, body).map_err(|err| {
+    http_wire::decode_body::<WireVersion, T>(headers, body).map_err(|err| {
         ApiError::BadRequest(match err {
             DecodeFailure::Binary(err) => anyhow::anyhow!("invalid binary body: {err}"),
             DecodeFailure::Json(err) => anyhow::anyhow!("invalid json body: {err}"),

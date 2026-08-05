@@ -18,7 +18,6 @@ use axum::{
 };
 use committable::Committable;
 use espresso_types::SeqTypes;
-use espresso_wire::{self as wire, DecodeFailure, WireFormat, cors_layer, healthcheck_response};
 use hotshot_builder_api::v0_1::{
     block_info::{
         AvailableBlockData, AvailableBlockHeaderInputV1, AvailableBlockHeaderInputV2,
@@ -33,6 +32,7 @@ use hotshot_types::{
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
     utils::BuilderCommitment,
 };
+use http_wire::{self as wire, DecodeFailure, WireFormat, cors_layer, healthcheck_response};
 use serde::{Serialize, de::DeserializeOwned};
 use surf_disco::{Error as _, StatusCode};
 use tagged_base64::TaggedBase64;

@@ -16,9 +16,6 @@ use axum::{
 };
 use espresso_node::api::sql::DataSource;
 use espresso_types::SeqTypes;
-use espresso_wire::{
-    self as wire, ContentType, WireFormat, cors_layer, drive_ws_stream, healthcheck_response,
-};
 use futures::{StreamExt as _, TryStreamExt as _, stream::BoxStream};
 use hotshot_query_service::{
     Error as ApiError, Header,
@@ -33,6 +30,9 @@ use hotshot_query_service::{
     types::HeightIndexed as _,
 };
 use hotshot_types::data::VidCommitment;
+use http_wire::{
+    self as wire, ContentType, WireFormat, cors_layer, drive_ws_stream, healthcheck_response,
+};
 use serde::Serialize;
 use surf_disco::Error as _;
 use vbs::version::StaticVersion;

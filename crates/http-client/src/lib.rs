@@ -2,7 +2,7 @@
 //!
 //! This crate is only the transport shell (reqwest for HTTP, tokio-tungstenite for WebSockets)
 //! and the surf-disco-shaped API surface; the wire protocol itself (content negotiation, body
-//! and frame codecs, error envelope, health types) lives in [`espresso_wire`], shared with the
+//! and frame codecs, error envelope, health types) lives in [`http_wire`], shared with the
 //! server side in `espresso-api`.
 //!
 //! This crate is a path dependency only, never published: the unrelated crates.io package

@@ -59,7 +59,6 @@ espresso-keyset = { workspace = true }
 espresso-telemetry = { workspace = true }
 espresso-types = { workspace = true, features = ["node"] }
 espresso-utils = { workspace = true, features = ["full"] }
-espresso-wire = { workspace = true }
 futures = { workspace = true }
 generic-tests = { workspace = true }
 hotshot = { workspace = true }
@@ -74,6 +73,7 @@ hotshot-state-prover = { workspace = true }
 hotshot-task-impls = { workspace = true }
 hotshot-testing = { workspace = true, optional = true }
 hotshot-types = { workspace = true }
+http-wire = { workspace = true, features = ["server"] }
 include_dir = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true }

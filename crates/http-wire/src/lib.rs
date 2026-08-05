@@ -12,13 +12,15 @@
 //! (variant ordinals, the `Unavailabale` misspelling, the numeric status envelope) live here,
 //! next to the one implementation they constrain.
 //!
-//! The codecs themselves name no transport. HTTP types come from the `http` crate, whose
-//! [`StatusCode`] and `HeaderMap` are the very types axum and reqwest re-export, so neither side
-//! converts anything, and WebSocket frame payloads are plain bytes and strings (binary frames
-//! carry VBS, text frames JSON). On top of the codecs, the crate provides the axum glue every
-//! service needs regardless of its routes ([`WireFormat`], [`respond`], healthcheck responses,
-//! [`drive_ws_stream`], [`cors_layer`]), so services depend on this leaf instead of on another
-//! service's API crate.
+//! The codecs name no transport. HTTP types come from the `http` crate, whose [`StatusCode`] and
+//! `HeaderMap` are the very types axum and reqwest re-export, so neither side converts anything,
+//! and WebSocket frame payloads are plain bytes and strings (binary frames carry VBS, text frames
+//! JSON).
+//!
+//! The `server` feature, on by default, adds the axum glue every service needs regardless of its
+//! routes (`WireFormat`, `respond`, healthcheck responses, `drive_ws_stream`, `cors_layer`), so
+//! services depend on this leaf instead of on another service's API crate. Clients depend on the
+//! crate with `default-features = false` and get only the codecs, no server stack.
 //!
 //! [`StatusCode`]: http::StatusCode
 
@@ -26,6 +28,7 @@ mod body;
 mod content_type;
 mod error;
 mod health;
+#[cfg(feature = "server")]
 mod server;
 mod ws;
 
@@ -33,6 +36,7 @@ pub use body::{DecodeFailure, EncodeFailure, decode_response, encode_body};
 pub use content_type::{ContentType, wants_binary};
 pub use error::{ServerError, WireError};
 pub use health::{AppHealth, HealthCheck, HealthStatus};
+#[cfg(feature = "server")]
 pub use server::{
     WireFormat, cors_layer, decode_body, drive_ws_stream, encode_err, encode_ok,
     healthcheck_response, module_healthcheck_response, respond,

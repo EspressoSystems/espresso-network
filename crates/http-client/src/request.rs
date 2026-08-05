@@ -1,6 +1,6 @@
 use std::error::Error as _;
 
-use espresso_wire::{ContentType, decode_response, encode_body};
+use http_wire::{ContentType, decode_response, encode_body};
 use serde::{Serialize, de::DeserializeOwned};
 use vbs::version::StaticVersionType;
 

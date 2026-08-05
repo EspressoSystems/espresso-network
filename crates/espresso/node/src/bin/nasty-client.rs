@@ -37,7 +37,6 @@ use espresso_types::{
     v0_1::IterableFeeInfo,
 };
 use espresso_utils::logging;
-use espresso_wire::{cors_layer, healthcheck_response};
 use futures::{
     future::{FutureExt, TryFuture, TryFutureExt},
     stream::{Peekable, StreamExt},
@@ -52,6 +51,7 @@ use hotshot_types::traits::{
     block_contents::BlockHeader,
     metrics::{Counter, Gauge, Histogram, Metrics as _},
 };
+use http_wire::{cors_layer, healthcheck_response};
 use jf_merkle_tree_compat::{
     ForgetableMerkleTreeScheme, MerkleTreeScheme, UniversalMerkleTreeScheme,
 };

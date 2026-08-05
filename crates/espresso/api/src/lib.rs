@@ -283,7 +283,7 @@ async fn serve_router(
         router = apply_connection_limit(router, limit);
     }
     // CORS goes on last so it wraps the connection limit, whose 429 would otherwise skip it.
-    let router = router.layer(espresso_wire::cors_layer());
+    let router = router.layer(http_wire::cors_layer());
     // `Router::layer` middleware runs after routing, so it can't rewrite a URI to match a
     // different route. Wrapping the whole router with `MapRequestLayer` instead runs the
     // rewrite before routing, per the axum-documented pattern for this case.

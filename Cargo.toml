@@ -13,7 +13,6 @@ members = [
     "crates/builder",
     "crates/cliquenet",
     "crates/cliquenet-types",
-    "crates/espresso-wire",
     "crates/espresso/api",
     "crates/espresso/dev-node",
     "crates/espresso/keyset",
@@ -39,6 +38,7 @@ members = [
     "crates/hotshot/types",
     "crates/hotshot/utils",
     "crates/http-client",
+    "crates/http-wire",
     "crates/process-metrics",
     "crates/serialization/api",
     "crates/versions",
@@ -226,7 +226,6 @@ espresso-safe-tx-builder = { path = "contracts/rust/safe-tx-builder" }
 espresso-telemetry = { path = "crates/espresso/telemetry" }
 espresso-types = { path = "crates/espresso/types" }
 espresso-utils = { path = "crates/espresso/utils" }
-espresso-wire = { path = "crates/espresso-wire" }
 ethers = { version = "2.0", features = ["solc", "ws"] }
 ethers-core = "2.0"
 fluent-asserter = "0.1.9"
@@ -259,6 +258,7 @@ hotshot-types = { path = "crates/hotshot/types" }
 hotshot-utils = { path = "crates/hotshot/utils" }
 http = "1"
 http-client = { path = "crates/http-client" }
+http-wire = { path = "crates/http-wire", default-features = false }
 humantime = "2"
 include_dir = "0.7"
 indexmap = { version = "2", features = ["serde"] }

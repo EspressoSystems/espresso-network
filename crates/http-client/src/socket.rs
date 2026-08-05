@@ -1,12 +1,10 @@
 use std::{collections::HashMap, pin::Pin};
 
-use espresso_wire::{
-    decode_binary_frame, decode_text_frame, encode_binary_frame, encode_text_frame,
-};
 use futures::{
     Sink, Stream,
     task::{Context, Poll},
 };
+use http_wire::{decode_binary_frame, decode_text_frame, encode_binary_frame, encode_text_frame};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::net::TcpStream;
 use tokio_tungstenite::{

@@ -20,11 +20,11 @@ circular-buffer = { workspace = true }
 clap = { workspace = true }
 espresso-types = { workspace = true, features = ["node"] }
 espresso-utils = { workspace = true, features = ["full"] }
-espresso-wire = { workspace = true }
 futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-example-types = { workspace = true }
 hotshot-query-service = { workspace = true }
+http-wire = { workspace = true, features = ["server"] }
 
 # Dependencies for feature `testing`
 hotshot-types = { workspace = true }

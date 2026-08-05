@@ -7,9 +7,9 @@ description = "Reqwest-based HTTP/WebSocket client for tide-disco-shaped APIs."
 publish = false
 
 [dependencies]
-espresso-wire = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
+http-wire = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 tokio = { workspace = true }

@@ -102,11 +102,11 @@ pub mod service;
 use api::node_validator::v0::SurfDiscoAvailabilityAPIStream;
 use axum::Router;
 use clap::Parser;
-use espresso_wire::cors_layer;
 use futures::{
     StreamExt,
     channel::mpsc::{self, Sender},
 };
+use http_wire::cors_layer;
 use service::data_state::MAX_VOTERS_HISTORY;
 use tokio::{net::TcpListener, spawn};
 use url::Url;

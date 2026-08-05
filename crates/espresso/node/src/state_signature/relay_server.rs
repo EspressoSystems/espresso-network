@@ -9,7 +9,6 @@ use axum::{
     response::Response,
     routing::{get, post},
 };
-use espresso_wire::{self as wire, DecodeFailure, WireFormat, cors_layer, healthcheck_response};
 use hotshot_types::{
     light_client::{
         LCV1StateSignatureRequestBody, LCV1StateSignaturesBundle, LCV2StateSignatureRequestBody,
@@ -17,6 +16,7 @@ use hotshot_types::{
     },
     traits::signature_key::LCV1StateSignatureKey,
 };
+use http_wire::{self as wire, DecodeFailure, WireFormat, cors_layer, healthcheck_response};
 use lcv1_relay::{LCV1StateRelayServerDataSource, LCV1StateRelayServerState};
 use lcv2_relay::{LCV2StateRelayServerDataSource, LCV2StateRelayServerState};
 use lcv3_relay::{LCV3StateRelayServerDataSource, LCV3StateRelayServerState};

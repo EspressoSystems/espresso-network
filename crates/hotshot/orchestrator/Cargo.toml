@@ -12,9 +12,9 @@ axum = { workspace = true }
 blake3 = { workspace = true }
 clap = { workspace = true }
 csv = { workspace = true }
-espresso-wire = { workspace = true }
 futures = { workspace = true }
 hotshot-types = { workspace = true }
+http-wire = { workspace = true, features = ["server"] }
 libp2p-identity = { workspace = true }
 multiaddr = { workspace = true }
 serde = { workspace = true }

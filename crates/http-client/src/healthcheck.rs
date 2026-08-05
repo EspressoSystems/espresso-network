@@ -1,6 +1,6 @@
-//! Healthcheck types, re-exported from [`espresso_wire`].
+//! Healthcheck types, re-exported from [`http_wire`].
 //!
 //! The types' wire compatibility (variant order, the `Unavailabale` misspelling) is pinned by
-//! tests in `espresso-wire`, next to the one implementation both sides share.
+//! tests in `http-wire`, next to the one implementation both sides share.
 
-pub use espresso_wire::{AppHealth, HealthCheck, HealthStatus};
+pub use http_wire::{AppHealth, HealthCheck, HealthStatus};
