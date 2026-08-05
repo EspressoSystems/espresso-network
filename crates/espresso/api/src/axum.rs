@@ -20,7 +20,7 @@ use aide::{
 use axum::{
     Extension, Json, Router,
     body::Bytes,
-    extract::{Path, Request, State, ws::WebSocketUpgrade},
+    extract::{DefaultBodyLimit, Path, Request, State, ws::WebSocketUpgrade},
     http::{HeaderMap, StatusCode, Uri, header},
     response::{Html, IntoResponse, Response},
     routing::get,
@@ -406,7 +406,16 @@ where
     let router_v1 = create_router_v1(state.clone());
     let router_v2 = create_router_v2(state);
 
-    with_top_level_routes(router_v2.merge(router_v1)).layer(cors_layer())
+    with_top_level_routes(router_v2.merge(router_v1))
+        .layer(body_limit_layer())
+        .layer(cors_layer())
+}
+
+pub const MAX_REQUEST_BODY_BYTES: usize = 128 * 1024 * 1024;
+
+/// Only for routers whose bodies carry transactions; everything else keeps axum's 2 MiB default.
+pub fn body_limit_layer() -> DefaultBodyLimit {
+    DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES)
 }
 
 /// The permissive CORS policy tide-disco applied to every response it served, which browser
@@ -5017,6 +5026,80 @@ mod tests {
             routes::v1::STATUS_BLOCK_HEIGHT_ROUTE,
             body
         );
+    }
+
+    /// `submit` and the bulk `catchup` routes take bodies over axum's 2 MiB `Bytes` default, and
+    /// the chain's `max_block_size` is what decides whether a transaction is too big, so the body
+    /// has to reach the handler. Drives the real `serve_router`.
+    #[tokio::test]
+    async fn served_router_admits_bodies_over_the_axum_default() {
+        const LEN: usize = 3 * 1024 * 1024;
+        let router = Router::new().route(
+            "/v1/submit/submit",
+            axum::routing::post(|body: Bytes| async move { body.len().to_string() }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(crate::serve_router(listener, "test", router, None));
+
+        let mut sock = tokio::net::TcpStream::connect(addr).await.unwrap();
+        sock.write_all(
+            format!(
+                "POST /v1/submit/submit HTTP/1.1\r\nHost: localhost\r\nContent-Type: \
+                 application/octet-stream\r\nContent-Length: {LEN}\r\n\r\n"
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+        // The server may reset the connection mid-write if it rejects the body early; the asserts
+        // below report that legibly.
+        let _ = sock.write_all(&vec![b'x'; LEN]).await;
+
+        let mut resp = String::new();
+        let read = async {
+            loop {
+                let mut buf = [0u8; 1024];
+                // A read error is end-of-input too: the server resets the connection after an
+                // early rejection, and whatever arrived before the reset belongs in the asserts.
+                let Ok(n) = sock.read(&mut buf).await else {
+                    break;
+                };
+                if n == 0 {
+                    break;
+                }
+                resp.push_str(&String::from_utf8_lossy(&buf[..n]));
+                if resp.contains(&LEN.to_string()) || resp.len() > 4096 {
+                    break;
+                }
+            }
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(30), read)
+            .await
+            .expect("server never answered; a 413 would produce no matching body");
+        assert!(resp.starts_with("HTTP/1.1 200 OK"), "{resp}");
+        let body = resp.split_once("\r\n\r\n").map_or("", |(_, body)| body);
+        assert!(
+            body.contains(&LEN.to_string()),
+            "handler saw a truncated body: {resp}"
+        );
+    }
+
+    /// The control: the same handler without the layer, pinning that the test above can fail.
+    #[tokio::test]
+    async fn axum_default_body_limit_rejects_the_same_request() {
+        let router = Router::new().route(
+            "/v1/submit/submit",
+            axum::routing::post(|body: Bytes| async move { body.len().to_string() }),
+        );
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/submit/submit")
+            .header(header::CONTENT_TYPE, "application/octet-stream")
+            .body(axum::body::Body::from(vec![b'x'; 3 * 1024 * 1024]))
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router, req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 
     #[tokio::test]
