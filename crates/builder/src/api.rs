@@ -32,7 +32,9 @@ use hotshot_types::{
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
     utils::BuilderCommitment,
 };
-use http_wire::{self as wire, DecodeFailure, WireFormat, cors_layer, healthcheck_response};
+use http_wire::{
+    self as wire, DecodeFailure, WireFormat, body_limit_layer, cors_layer, healthcheck_response,
+};
 use serde::{Serialize, de::DeserializeOwned};
 use surf_disco::{Error as _, StatusCode};
 use tagged_base64::TaggedBase64;
@@ -337,6 +339,7 @@ pub fn router(state: ProxyGlobalState<SeqTypes>) -> Router {
         .route("/healthcheck", get(healthcheck))
         .merge(api.clone())
         .nest("/v0", api)
+        .layer(body_limit_layer())
         .layer(cors_layer())
 }
 

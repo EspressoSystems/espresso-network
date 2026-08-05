@@ -282,6 +282,7 @@ async fn serve_router(
     if let Some(limit) = max_connections {
         router = apply_connection_limit(router, limit);
     }
+    let router = router.layer(http_wire::body_limit_layer());
     // CORS goes on last so it wraps the connection limit, whose 429 would otherwise skip it.
     let router = router.layer(http_wire::cors_layer());
     // `Router::layer` middleware runs after routing, so it can't rewrite a URI to match a

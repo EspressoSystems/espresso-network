@@ -8,7 +8,10 @@
 
 use axum::{
     Json,
-    extract::ws::{Message, WebSocket},
+    extract::{
+        DefaultBodyLimit,
+        ws::{Message, WebSocket},
+    },
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
@@ -94,6 +97,13 @@ pub fn healthcheck_response(headers: &HeaderMap) -> Response {
 /// without an explicit healthcheck handler.
 pub fn module_healthcheck_response(headers: &HeaderMap) -> Response {
     encode_health(headers, &HealthStatus::Available)
+}
+
+pub const MAX_REQUEST_BODY_BYTES: usize = 128 * 1024 * 1024;
+
+/// Only for routers whose bodies carry transactions; everything else keeps axum's 2 MiB default.
+pub fn body_limit_layer() -> DefaultBodyLimit {
+    DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES)
 }
 
 /// Permissive CORS: allow any origin, method, and headers on every response.

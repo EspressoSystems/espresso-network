@@ -38,7 +38,7 @@ pub use error::{ServerError, WireError};
 pub use health::{AppHealth, HealthCheck, HealthStatus};
 #[cfg(feature = "server")]
 pub use server::{
-    WireFormat, cors_layer, decode_body, drive_ws_stream, encode_err, encode_ok,
-    healthcheck_response, module_healthcheck_response, respond,
+    MAX_REQUEST_BODY_BYTES, WireFormat, body_limit_layer, cors_layer, decode_body, drive_ws_stream,
+    encode_err, encode_ok, healthcheck_response, module_healthcheck_response, respond,
 };
 pub use ws::{decode_binary_frame, decode_text_frame, encode_binary_frame, encode_text_frame};
