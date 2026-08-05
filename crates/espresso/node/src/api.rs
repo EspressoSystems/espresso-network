@@ -71,7 +71,10 @@ use tokio::time::timeout;
 use url::Url;
 use vbs::version::Version;
 
-use self::data_source::{HotShotConfigDataSource, NodeStateDataSource, StateSignatureDataSource};
+use self::data_source::{
+    HotShotConfigDataSource, NodeKeysDataSource, NodePublicKeys, NodeStateDataSource,
+    StateSignatureDataSource,
+};
 use crate::{
     SeqTypes, SequencerApiVersion, SequencerContext,
     api::data_source::TokenDataSource,
@@ -1265,6 +1268,34 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> HotShotConfigDataSour
 {
     async fn get_config(&self) -> PublicNetworkConfig {
         self.network_config().await.into()
+    }
+}
+
+impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> NodeKeysDataSource
+    for StorageState<N, P, D>
+{
+    async fn node_public_keys(&self) -> NodePublicKeys {
+        self.as_ref().node_public_keys().await
+    }
+}
+
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> NodeKeysDataSource for ApiState<N, P> {
+    async fn node_public_keys(&self) -> NodePublicKeys {
+        let ctx = self.sequencer_context.as_ref().get().await.get_ref();
+        let config = ctx.validator_config();
+        let consensus_key = config.public_key;
+        let eth_account = ctx
+            .consensus_handle()
+            .membership_coordinator()
+            .await
+            .membership()
+            .latest_account(&consensus_key);
+        NodePublicKeys {
+            eth_account,
+            consensus_key,
+            state_ver_key: config.state_public_key.clone(),
+            x25519_key: config.x25519_keypair.as_ref().map(|kp| kp.public_key()),
+        }
     }
 }
 
@@ -2603,7 +2634,7 @@ pub mod test_helpers {
             .api_config(options)
             .network_config(network_config)
             .build();
-        let _network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
+        let network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
         client.connect(None).await;
 
         // The status API is well tested in the query service repo. Here we are just smoke testing
@@ -2628,6 +2659,24 @@ pub mod test_helpers {
         assert!(success_rate.is_finite(), "{success_rate}");
         // We know at least some views have been successful, since we finalized a block.
         assert!(success_rate > 0.0, "{success_rate}");
+
+        let keys: NodePublicKeys = client.get("status/keys").send().await.unwrap();
+        let expected = network.server.validator_config();
+        assert_eq!(keys.consensus_key, expected.public_key);
+        assert_eq!(keys.state_ver_key, expected.state_public_key);
+        assert_eq!(
+            keys.x25519_key,
+            expected.x25519_keypair.as_ref().map(|kp| kp.public_key())
+        );
+        assert_eq!(keys.eth_account, None);
+
+        let json: serde_json::Value = client.get("status/keys").send().await.unwrap();
+        let bls = json["consensus_key"].as_str().unwrap();
+        assert!(bls.starts_with("BLS_VER_KEY~"), "{bls}");
+        let schnorr = json["state_ver_key"].as_str().unwrap();
+        assert!(schnorr.starts_with("SCHNORR_VER_KEY~"), "{schnorr}");
+        let x25519 = json["x25519_key"].as_str().unwrap();
+        assert!(x25519.starts_with("X25519_PK~"), "{x25519}");
     }
 
     /// Test the submit API with custom options.
