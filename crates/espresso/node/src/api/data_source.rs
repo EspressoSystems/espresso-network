@@ -1,4 +1,4 @@
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, ops::RangeInclusive, time::Duration};
 
 use alloy::primitives::Address;
 use anyhow::Context;
@@ -203,6 +203,19 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
         from_l1_block: u64,
         to_l1_block: u64,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<StakeTableEvent>>>;
+
+    /// Get the leader of each view in `views`, all elected from `epoch`'s randomized stake table.
+    fn leaders(
+        &self,
+        views: RangeInclusive<ViewNumber>,
+        epoch: Option<EpochNumber>,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<T::SignatureKey>>>;
+
+    /// Get the epoch the node is currently in, or `None` if epochs are not enabled.
+    fn current_epoch(&self) -> impl Send + Future<Output = Option<EpochNumber>>;
+
+    /// Get the number of blocks per epoch.
+    fn epoch_height(&self) -> impl Send + Future<Output = u64>;
 }
 
 // Thin wrapper trait to access persistence methods from API handlers

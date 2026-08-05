@@ -2127,6 +2127,22 @@ where
             .map_err(ApiError::Internal)
     };
 
+    let node_leader = |State(state): State<S>, Path(view): Path<u64>| async move {
+        state
+            .leader(view)
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
+    let node_leaders = |State(state): State<S>, Path((from, until)): Path<(u64, u64)>| async move {
+        state
+            .leaders(from, until)
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
+    };
+
     ApiRouter::new()
         .api_route(
             routes::v1::NODE_BLOCK_HEIGHT_ROUTE,
@@ -2432,6 +2448,32 @@ where
                     "Get the oldest (smallest height) leaf present in storage, or null if none is \
                      stored.",
                 )
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_LEADER_ROUTE,
+            get_with(node_leader, |op| {
+                op.summary("Get the leader of a view").description(
+                    "Get the leader of the given view, including views that produced no \
+                     block.\n\nThe epoch is resolved from the decided chain: it is the epoch of \
+                     the first leaf decided at or after the requested view, or the epoch the node \
+                     is currently in for views that are not decided yet. Views older than the \
+                     oldest retained leaf cannot be resolved and return 404. During an epoch \
+                     transition the next epoch's leader is also entitled to propose, so for those \
+                     views the answer is one of two possible leaders.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::NODE_LEADERS_ROUTE,
+            get_with(node_leaders, |op| {
+                op.summary("Get the leaders of a range of views")
+                    .description(
+                        "Get the leader of every view in `from..=until` inclusive, up to 10000 \
+                         views per request.\n\nA range crossing an epoch boundary is truncated at \
+                         the boundary: each entry carries its own view, so the caller resumes \
+                         from the last returned view plus one.",
+                    )
             }),
         )
         .with_state(state)
@@ -4449,6 +4491,7 @@ mod tests {
         type BlockReward = ();
         type Block = ();
         type Leaf = ();
+        type ViewLeader = ();
 
         async fn block_height(&self) -> anyhow::Result<u64> {
             unimplemented!()
@@ -4527,6 +4570,12 @@ mod tests {
             unimplemented!()
         }
         async fn get_oldest_leaf(&self) -> anyhow::Result<Option<Self::Leaf>> {
+            unimplemented!()
+        }
+        async fn leader(&self, _view: u64) -> anyhow::Result<Self::ViewLeader> {
+            unimplemented!()
+        }
+        async fn leaders(&self, _from: u64, _until: u64) -> anyhow::Result<Vec<Self::ViewLeader>> {
             unimplemented!()
         }
     }

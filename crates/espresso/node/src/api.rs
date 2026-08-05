@@ -1,4 +1,4 @@
-use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
+use std::{collections::HashMap, ops::RangeInclusive, pin::Pin, sync::Arc, time::Duration};
 
 use ::light_client::{
     LightClient,
@@ -92,6 +92,7 @@ use crate::{
 pub mod data_source;
 pub mod endpoints;
 pub mod fs;
+pub mod leader;
 pub mod light_client;
 pub mod options;
 pub mod sql;
@@ -314,6 +315,22 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> StakeTableDa
             .stake_table_events(from_l1_block, to_l1_block)
             .await
     }
+
+    async fn leaders(
+        &self,
+        views: RangeInclusive<ViewNumber>,
+        epoch: Option<EpochNumber>,
+    ) -> anyhow::Result<Vec<PubKey>> {
+        self.as_ref().leaders(views, epoch).await
+    }
+
+    async fn current_epoch(&self) -> Option<EpochNumber> {
+        self.as_ref().current_epoch().await
+    }
+
+    async fn epoch_height(&self) -> u64 {
+        self.as_ref().epoch_height().await
+    }
 }
 
 impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> TokenDataSource<SeqTypes>
@@ -529,6 +546,43 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
             "some events in range [{from_l1_block}, {to_l1_block}] are not available ({status:?})"
         );
         Ok(events.into_iter().map(|(_, event)| event).collect())
+    }
+
+    /// Get the leader of each view in `views` from `epoch`'s randomized stake table.
+    ///
+    /// Waits for stake table catchup when the epoch is no longer held in memory.
+    async fn leaders(
+        &self,
+        views: RangeInclusive<ViewNumber>,
+        epoch: Option<EpochNumber>,
+    ) -> anyhow::Result<Vec<PubKey>> {
+        let coordinator = self.consensus_handle().await.membership_coordinator().await;
+        let membership = match coordinator.membership_for_epoch(epoch) {
+            Ok(membership) => membership,
+            Err(err) => {
+                let epoch = epoch
+                    .with_context(|| format!("failed to get non-epoch membership: {err:#}"))?;
+                coordinator.wait_for_catchup(epoch).await.map_err(|err| {
+                    anyhow::anyhow!("stake table catchup for epoch {epoch} failed: {err:#}")
+                })?
+            },
+        };
+
+        (views.start().u64()..=views.end().u64())
+            .map(|view| {
+                membership.leader(ViewNumber::new(view)).map_err(|err| {
+                    anyhow::anyhow!("no leader for view {view} in epoch {epoch:?}: {err:#}")
+                })
+            })
+            .collect()
+    }
+
+    async fn current_epoch(&self) -> Option<EpochNumber> {
+        self.consensus_handle().await.current_epoch().await
+    }
+
+    async fn epoch_height(&self) -> u64 {
+        self.consensus_handle().await.epoch_height().await.u64()
     }
 }
 
@@ -6428,6 +6482,173 @@ mod test {
                 break;
             }
         }
+
+        Ok(())
+    }
+
+    /// Verifies the leader endpoints against the leaders the committee elects for the decided views,
+    /// including the epoch each view is resolved to and views that produced no block.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_leader_api() -> anyhow::Result<()> {
+        const EPOCH_HEIGHT: u64 = 10;
+        const NUM_NODES: usize = 5;
+        const LAST_HEIGHT: u64 = 4 * EPOCH_HEIGHT;
+        const V5: Upgrade = Upgrade::trivial(EPOCH_REWARD_VERSION);
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+        let api_port = reserve_tcp_port().expect("No ports free for query service");
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence)
+            .pos_hook(DelegationConfig::MultipleDelegators, Default::default(), V5)
+            .await
+            .unwrap()
+            .build();
+
+        let network = TestNetwork::new(config, V5).await;
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+        client.connect(None).await;
+
+        // Epochs 1 and 2 are seeded from config by `set_first_epoch`; later epochs use a stake table
+        // fetched from L1.
+        let mut decided: Vec<(ViewNumber, EpochNumber)> = Vec::new();
+        let mut leaves = client
+            .socket("availability/stream/leaves/0")
+            .subscribe::<LeafQueryData<SeqTypes>>()
+            .await
+            .unwrap();
+        while let Some(leaf) = leaves.next().await {
+            let leaf = leaf.unwrap();
+            let height = leaf.header().height();
+            let epoch = leaf.leaf().epoch(EPOCH_HEIGHT).expect("epochs are enabled");
+            if epoch > EpochNumber::new(2) {
+                decided.push((leaf.leaf().view_number(), epoch));
+            }
+            if height >= LAST_HEIGHT {
+                break;
+            }
+        }
+        assert!(
+            decided.iter().any(|(_, epoch)| *epoch != decided[0].1),
+            "the decided range must cross an epoch boundary"
+        );
+
+        let coordinator = network.server.node_state().coordinator;
+        let expected_leader = |view, epoch| {
+            coordinator
+                .membership()
+                .snapshot(epoch)
+                .expect("committee for epoch")
+                .leader(view)
+                .expect("leader for view")
+        };
+
+        for (view, epoch) in &decided {
+            let leader: leader::ViewLeader = client
+                .get(&format!("node/leader/{view}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                leader,
+                leader::ViewLeader {
+                    view: *view,
+                    epoch: Some(*epoch),
+                    leader: expected_leader(*view, *epoch),
+                }
+            );
+        }
+
+        // A view with no leaf produced no block, so it is elected from the epoch of the next leaf.
+        let mut without_block = 0;
+        for pair in decided.windows(2) {
+            let (previous, _) = pair[0];
+            let (view, epoch) = pair[1];
+            for missing in previous.u64() + 1..view.u64() {
+                without_block += 1;
+                let leader: leader::ViewLeader = client
+                    .get(&format!("node/leader/{missing}"))
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    leader,
+                    leader::ViewLeader {
+                        view: ViewNumber::new(missing),
+                        epoch: Some(epoch),
+                        leader: expected_leader(ViewNumber::new(missing), epoch),
+                    }
+                );
+            }
+        }
+        tracing::info!("checked {without_block} views that produced no block");
+
+        let (last_view, last_epoch) = *decided.last().unwrap();
+        let epoch_start = decided
+            .iter()
+            .find(|(_, epoch)| *epoch == last_epoch)
+            .unwrap()
+            .0;
+        let range: Vec<leader::ViewLeader> = client
+            .get(&format!("node/leaders/{epoch_start}/{last_view}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(range.len() as u64, last_view.u64() - epoch_start.u64() + 1);
+        for (offset, entry) in range.iter().enumerate() {
+            assert_eq!(entry.view, epoch_start + offset as u64);
+            assert_eq!(entry.epoch, Some(last_epoch));
+            assert_eq!(entry.leader, expected_leader(entry.view, last_epoch));
+        }
+        let (first_view, first_epoch) = decided[0];
+        let spanning: Vec<leader::ViewLeader> = client
+            .get(&format!("node/leaders/{first_view}/{last_view}"))
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            spanning
+                .iter()
+                .all(|entry| entry.epoch == Some(first_epoch))
+        );
+        assert!(spanning.last().unwrap().view < last_view);
+
+        let over_limit = client
+            .get::<Vec<leader::ViewLeader>>(&format!(
+                "node/leaders/0/{}",
+                leader::LEADER_RANGE_LIMIT
+            ))
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(over_limit.status(), StatusCode::BAD_REQUEST);
+
+        let inverted = client
+            .get::<Vec<leader::ViewLeader>>("node/leaders/2/1")
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(inverted.status(), StatusCode::BAD_REQUEST);
+
+        // Nothing is pruned here, so view 0 resolves; a pruned node reports 404 for views below its
+        // oldest retained leaf.
+        let genesis: leader::ViewLeader = client.get("node/leader/0").send().await.unwrap();
+        assert_eq!(genesis.view, ViewNumber::genesis());
 
         Ok(())
     }

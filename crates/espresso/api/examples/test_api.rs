@@ -442,6 +442,7 @@ impl v1::NodeApi for TestApi {
     type BlockReward = serde_json::Value;
     type Block = serde_json::Value;
     type Leaf = serde_json::Value;
+    type ViewLeader = serde_json::Value;
 
     async fn block_height(&self) -> Result<u64> {
         Ok(0)
@@ -521,6 +522,12 @@ impl v1::NodeApi for TestApi {
     }
     async fn get_oldest_leaf(&self) -> Result<Option<Self::Leaf>> {
         Ok(None)
+    }
+    async fn leader(&self, _view: u64) -> Result<Self::ViewLeader> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn leaders(&self, _from: u64, _until: u64) -> Result<Vec<Self::ViewLeader>> {
+        Ok(vec![])
     }
 }
 

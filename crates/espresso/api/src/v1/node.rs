@@ -34,6 +34,7 @@ pub trait NodeApi {
     type BlockReward: Serialize + Send + Sync + 'static;
     type Block: Serialize + Send + Sync + 'static;
     type Leaf: Serialize + Send + Sync + 'static;
+    type ViewLeader: Serialize + Send + Sync + 'static;
 
     async fn block_height(&self) -> anyhow::Result<u64>;
 
@@ -85,4 +86,7 @@ pub trait NodeApi {
 
     async fn get_oldest_block(&self) -> anyhow::Result<Option<Self::Block>>;
     async fn get_oldest_leaf(&self) -> anyhow::Result<Option<Self::Leaf>>;
+
+    async fn leader(&self, view: u64) -> anyhow::Result<Self::ViewLeader>;
+    async fn leaders(&self, from: u64, until: u64) -> anyhow::Result<Vec<Self::ViewLeader>>;
 }

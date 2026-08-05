@@ -45,7 +45,7 @@ use hotshot_query_service::{
     types::HeightIndexed as _,
 };
 use hotshot_types::{
-    data::{EpochNumber, VidShare},
+    data::{EpochNumber, VidShare, ViewNumber},
     utils::{epoch_from_block_number, root_block_in_epoch},
     vid::avidm::AvidMShare,
 };
@@ -70,6 +70,7 @@ use super::{
         StakeTableDataSource, StateCertDataSource, StateCertFetchingDataSource,
         StateSignatureDataSource, TokenDataSource as _,
     },
+    leader,
 };
 
 /// Node API state implementation
@@ -2355,6 +2356,7 @@ impl<D> espresso_api::v1::NodeApi for NodeApiStateImpl<D>
 where
     D: std::ops::Deref + Clone + Send + Sync + 'static,
     D::Target: hotshot_query_service::node::NodeDataSource<espresso_types::SeqTypes>
+        + AvailabilityDataSource<espresso_types::SeqTypes>
         + super::data_source::StakeTableDataSource<espresso_types::SeqTypes>
         + super::data_source::PruningDataSource
         + Send
@@ -2378,6 +2380,7 @@ where
     type BlockReward = Option<espresso_types::v0_3::RewardAmount>;
     type Block = hotshot_query_service::availability::BlockQueryData<espresso_types::SeqTypes>;
     type Leaf = hotshot_query_service::availability::LeafQueryData<espresso_types::SeqTypes>;
+    type ViewLeader = leader::ViewLeader;
 
     async fn block_height(&self) -> anyhow::Result<u64> {
         let ds = &*self.data_source;
@@ -2567,6 +2570,39 @@ where
         let ds = &*self.data_source;
         ds.get_oldest_leaf().await
     }
+
+    async fn leader(&self, view: u64) -> anyhow::Result<Self::ViewLeader> {
+        self.leaders(view, view)
+            .await?
+            .pop()
+            .ok_or_else(|| not_found(format!("no leader for view {view}")))
+    }
+
+    async fn leaders(&self, from: u64, until: u64) -> anyhow::Result<Vec<Self::ViewLeader>> {
+        if from > until {
+            return Err(bad_request(format!(
+                "from {from} is greater than until {until}"
+            )));
+        }
+        if until - from >= leader::LEADER_RANGE_LIMIT {
+            return Err(range_exceeded(format!(
+                "range {from}..={until} exceeds the limit of {} views",
+                leader::LEADER_RANGE_LIMIT
+            )));
+        }
+        leader::leaders(
+            &*self.data_source,
+            ViewNumber::new(from),
+            ViewNumber::new(until),
+            leader_fetch_timeout(),
+        )
+        .await
+    }
+}
+
+/// Timeout for each leaf read done while resolving the epoch of a view.
+fn leader_fetch_timeout() -> Duration {
+    Duration::from_millis(500)
 }
 
 fn node_window_limit() -> usize {

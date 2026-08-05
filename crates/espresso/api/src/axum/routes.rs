@@ -218,6 +218,9 @@ pub mod v1 {
     pub const NODE_OLDEST_BLOCK_ROUTE: &str = "/v1/node/oldest-block";
     pub const NODE_OLDEST_LEAF_ROUTE: &str = "/v1/node/oldest-leaf";
 
+    pub const NODE_LEADER_ROUTE: &str = "/v1/node/leader/{view}";
+    pub const NODE_LEADERS_ROUTE: &str = "/v1/node/leaders/{from}/{until}";
+
     // Catchup routes (under /v1/catchup)
     pub const CATCHUP_ACCOUNT_ROUTE: &str = "/v1/catchup/{height}/{view}/account/{address}";
     pub const CATCHUP_ACCOUNTS_ROUTE: &str = "/v1/catchup/{height}/{view}/accounts";
@@ -749,6 +752,9 @@ pub mod v1 {
     );
     path_fn!(node_oldest_block, NODE_OLDEST_BLOCK_ROUTE);
     path_fn!(node_oldest_leaf, NODE_OLDEST_LEAF_ROUTE);
+
+    path_fn!(node_leader, NODE_LEADER_ROUTE, view);
+    path_fn!(node_leaders, NODE_LEADERS_ROUTE, from, until);
 
     // Catchup
     path_fn!(
