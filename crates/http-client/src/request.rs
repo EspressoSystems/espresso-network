@@ -1,7 +1,8 @@
 use std::error::Error as _;
 
+use http_wire::{ContentType, decode_response, encode_body};
 use serde::{Serialize, de::DeserializeOwned};
-use vbs::{BinarySerializer, Serializer, version::StaticVersionType};
+use vbs::version::StaticVersionType;
 
 use crate::error::ClientError;
 
@@ -29,14 +30,10 @@ impl<T: DeserializeOwned, E: ClientError, VER: StaticVersionType> Request<T, E, 
 
     /// Set the request body using JSON.
     ///
-    /// Body is serialized using [`serde_json`] and the `Content-Type` header is set to
+    /// Body is serialized using `serde_json` and the `Content-Type` header is set to
     /// `application/json`.
     pub fn body_json<B: Serialize>(self, body: &B) -> Result<Self, E> {
-        Ok(self
-            .header("Content-Type", "application/json")
-            .inner
-            .body(serde_json::to_string(body).map_err(request_error)?)
-            .into())
+        self.body(ContentType::Json, body)
     }
 
     /// Set the request body using [`vbs`].
@@ -48,10 +45,14 @@ impl<T: DeserializeOwned, E: ClientError, VER: StaticVersionType> Request<T, E, 
     ///
     /// Fails if `body` does not serialize successfully.
     pub fn body_binary<B: Serialize>(self, body: &B) -> Result<Self, E> {
+        self.body(ContentType::Binary, body)
+    }
+
+    fn body<B: Serialize>(self, content_type: ContentType, body: &B) -> Result<Self, E> {
         Ok(self
-            .header("Content-Type", "application/octet-stream")
+            .header("Content-Type", content_type.mime())
             .inner
-            .body(Serializer::<VER>::serialize(body).map_err(request_error)?)
+            .body(encode_body::<VER, _>(content_type, body).map_err(request_error)?)
             .into())
     }
 
@@ -74,70 +75,26 @@ impl<T: DeserializeOwned, E: ClientError, VER: StaticVersionType> Request<T, E, 
         let res = self.inner.send().await.map_err(reqwest_error)?;
         let status = res.status();
         let content_type = res.headers().get("Content-Type").cloned();
-        if status == reqwest::StatusCode::OK {
-            match &content_type {
-                Some(content_type) => match content_type.to_str() {
-                    Ok("application/json") => res.json().await.map_err(reqwest_error),
-                    Ok("application/octet-stream") => {
-                        Serializer::<VER>::deserialize(&res.bytes().await.map_err(reqwest_error)?)
-                            .map_err(request_error)
-                    },
-                    to_str_result => {
-                        let msg = body_debug_string(res).await;
-                        Err(E::catch_all(
-                            reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                            format!("unsupported content type {to_str_result:?} {msg}"),
-                        ))
-                    },
-                },
-                None => Err(E::catch_all(
-                    reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                    "unspecified content type in response".into(),
-                )),
+        let bytes = res.bytes().await.map_err(|err| {
+            // Reading an error response's body can itself fail (e.g. the connection drops
+            // mid-body); keep reporting the response's own status rather than a synthetic 500.
+            if status == reqwest::StatusCode::OK {
+                reqwest_error(err)
+            } else {
+                E::catch_all(
+                    status,
+                    format!(
+                        "Request terminated with error {status}. Failed to read response body due \
+                         to {err}",
+                    ),
+                )
             }
-        } else {
-            let bytes = match res.bytes().await {
-                Ok(bytes) => bytes,
-                Err(err) => {
-                    return Err(E::catch_all(
-                        status,
-                        format!(
-                            "Request terminated with error {status}. Failed to read request body \
-                             due to {err}",
-                        ),
-                    ));
-                },
-            };
-            if let Some(content_type) = content_type.as_ref().and_then(|c| c.to_str().ok()) {
-                match content_type {
-                    "application/json" => {
-                        if let Ok(err) = serde_json::from_slice(&bytes) {
-                            return Err(err);
-                        }
-                    },
-                    "application/octet-stream" => {
-                        if let Ok(err) = Serializer::<VER>::deserialize(&bytes) {
-                            return Err(err);
-                        }
-                    },
-                    _ => {},
-                }
-            }
-            if let Ok(msg) = std::str::from_utf8(&bytes) {
-                return Err(E::catch_all(status, msg.to_string()));
-            }
-            Err(E::catch_all(
-                status,
-                format!(
-                    "Request terminated with error {status}. Content-Type: {}. Body: 0x{}",
-                    content_type
-                        .as_ref()
-                        .and_then(|c| c.to_str().ok())
-                        .unwrap_or("unspecified"),
-                    hex::encode(&bytes),
-                ),
-            ))
-        }
+        })?;
+        decode_response::<VER, T, E>(
+            status,
+            content_type.as_ref().and_then(|c| c.to_str().ok()),
+            &bytes,
+        )
     }
 
     /// Send the request and return the full response body as raw bytes.
@@ -150,7 +107,7 @@ impl<T: DeserializeOwned, E: ClientError, VER: StaticVersionType> Request<T, E, 
             E::catch_all(
                 status,
                 format!(
-                    "Request terminated with error {status}. Failed to read request body due to \
+                    "Request terminated with error {status}. Failed to read response body due to \
                      {err}",
                 ),
             )
@@ -178,17 +135,6 @@ impl<T: DeserializeOwned, E: ClientError, VER: StaticVersionType> Request<T, E, 
     }
 }
 
-/// Read the response body for inclusion in an error message about an unexpected content type.
-async fn body_debug_string(res: reqwest::Response) -> String {
-    match res.bytes().await {
-        Ok(bytes) => match std::str::from_utf8(&bytes) {
-            Ok(s) => format!("body: {s}"),
-            Err(_) => format!("body: {}", hex::encode(&bytes)),
-        },
-        Err(_) => String::default(),
-    }
-}
-
 fn request_error<E: ClientError>(source: impl std::fmt::Display) -> E {
     E::catch_all(reqwest::StatusCode::BAD_REQUEST, source.to_string())
 }
@@ -211,9 +157,8 @@ pub(crate) fn reqwest_error_msg(err: reqwest::Error) -> String {
 
 #[cfg(test)]
 mod test {
-    use vbs::version::StaticVersion;
+    use vbs::{BinarySerializer, Serializer, version::StaticVersion};
 
-    use super::*;
     use crate::{client::Client, error::ClientErr};
 
     type Ver01 = StaticVersion<0, 1>;

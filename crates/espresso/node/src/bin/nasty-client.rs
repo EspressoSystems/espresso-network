@@ -31,7 +31,6 @@ use axum::{
 use clap::Parser;
 use committable::Committable;
 use derivative::Derivative;
-use espresso_api::{cors_layer, healthcheck_response};
 use espresso_node::SequencerApiVersion;
 use espresso_types::{
     ADVZNamespaceProofQueryData, BlockMerkleTree, FeeMerkleTree, Header, SeqTypes, parse_duration,
@@ -52,6 +51,7 @@ use hotshot_types::traits::{
     block_contents::BlockHeader,
     metrics::{Counter, Gauge, Histogram, Metrics as _},
 };
+use http_wire::{cors_layer, healthcheck_response};
 use jf_merkle_tree_compat::{
     ForgetableMerkleTreeScheme, MerkleTreeScheme, UniversalMerkleTreeScheme,
 };

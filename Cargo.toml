@@ -38,6 +38,7 @@ members = [
     "crates/hotshot/types",
     "crates/hotshot/utils",
     "crates/http-client",
+    "crates/http-wire",
     "crates/process-metrics",
     "crates/serialization/api",
     "crates/versions",
@@ -255,7 +256,9 @@ hotshot-task-impls = { path = "crates/hotshot/task-impls" }
 hotshot-testing = { path = "crates/hotshot/testing" }
 hotshot-types = { path = "crates/hotshot/types" }
 hotshot-utils = { path = "crates/hotshot/utils" }
+http = "1"
 http-client = { path = "crates/http-client" }
+http-wire = { path = "crates/http-wire", default-features = false }
 humantime = "2"
 include_dir = "0.7"
 indexmap = { version = "2", features = ["serde"] }

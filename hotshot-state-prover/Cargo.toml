@@ -23,7 +23,6 @@ ark-std = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }
 displaydoc = { workspace = true }
-espresso-api = { workspace = true }
 espresso-contract-deployer = { workspace = true }
 espresso-types = { workspace = true, features = ["node"] }
 espresso-utils = { workspace = true, features = ["full"] }
@@ -32,6 +31,7 @@ hotshot-contract-adapter = { workspace = true }
 hotshot-query-service = { workspace = true }
 hotshot-task-impls = { workspace = true }
 hotshot-types = { workspace = true }
+http-wire = { workspace = true, features = ["server"] }
 itertools = { workspace = true }
 jf-crhf = { workspace = true }
 jf-pcs = { workspace = true }

@@ -4,6 +4,7 @@ use futures::{
     Sink, Stream,
     task::{Context, Poll},
 };
+use http_wire::{decode_binary_frame, decode_text_frame, encode_binary_frame, encode_text_frame};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::net::TcpStream;
 use tokio_tungstenite::{
@@ -16,7 +17,7 @@ use tokio_tungstenite::{
     },
 };
 use url::Url;
-use vbs::{BinarySerializer, Serializer, version::StaticVersionType};
+use vbs::version::StaticVersionType;
 
 use crate::{client::ContentType, error::ClientError};
 
@@ -186,14 +187,14 @@ impl<FromServer: DeserializeOwned, ToServer: ?Sized, E: ClientError, VER: Static
             },
             Poll::Ready(Some(Ok(msg))) => Poll::Ready(match msg {
                 Message::Binary(bytes) => {
-                    Some(Serializer::<VER>::deserialize(&bytes).map_err(|err| {
+                    Some(decode_binary_frame::<VER, _>(&bytes).map_err(|err| {
                         E::catch_all(
                             reqwest::StatusCode::INTERNAL_SERVER_ERROR,
                             format!("invalid binary: {err}\n{bytes:?}"),
                         )
                     }))
                 },
-                Message::Text(s) => Some(serde_json::from_str(&s).map_err(|err| {
+                Message::Text(s) => Some(decode_text_frame(&s).map_err(|err| {
                     E::catch_all(
                         reqwest::StatusCode::INTERNAL_SERVER_ERROR,
                         format!("invalid JSON: {err}\n{s}"),
@@ -226,27 +227,12 @@ impl<FromServer, ToServer: Serialize + ?Sized, E: ClientError, VER: StaticVersio
 
     fn start_send(self: Pin<&mut Self>, item: &ToServer) -> Result<(), Self::Error> {
         let msg = match self.content_type {
-            ContentType::Binary => Message::Binary(
-                Serializer::<VER>::serialize(item)
-                    .map_err(|err| {
-                        E::catch_all(
-                            reqwest::StatusCode::BAD_REQUEST,
-                            format!("invalid binary serialization: {err}"),
-                        )
-                    })?
-                    .into(),
-            ),
-            ContentType::Json => Message::Text(
-                serde_json::to_string(item)
-                    .map_err(|err| {
-                        E::catch_all(
-                            reqwest::StatusCode::BAD_REQUEST,
-                            format!("invalid JSON serialization: {err}"),
-                        )
-                    })?
-                    .into(),
-            ),
-        };
+            ContentType::Binary => {
+                encode_binary_frame::<VER, _>(item).map(|bytes| Message::Binary(bytes.into()))
+            },
+            ContentType::Json => encode_text_frame(item).map(|s| Message::Text(s.into())),
+        }
+        .map_err(|err| E::catch_all(reqwest::StatusCode::BAD_REQUEST, err.to_string()))?;
         self.pinned_inner().start_send(msg).map_err(|err| {
             E::catch_all(
                 reqwest::StatusCode::INTERNAL_SERVER_ERROR,

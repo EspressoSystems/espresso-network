@@ -2,7 +2,7 @@
 
 pub mod routes;
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 
 use aide::{
     axum::{
@@ -25,7 +25,10 @@ use axum::{
     response::{Html, IntoResponse, Response},
     routing::get,
 };
-use futures::{StreamExt, stream::BoxStream};
+use http_wire::{
+    ContentType, DecodeFailure, WireFormat, cors_layer, drive_ws_stream, healthcheck_response,
+    module_healthcheck_response,
+};
 use schemars::transform::Transform;
 use serde::Serialize;
 use serialization_api::v2::{
@@ -34,16 +37,11 @@ use serialization_api::v2::{
     GetRewardMerkleTreeRequest, GetStakeTableRequest, GetStateCertificateRequest,
 };
 use tokio::sync::Semaphore;
-use tower_http::cors::{Any, CorsLayer};
-use vbs::{
-    BinarySerializer, Serializer,
-    version::{StaticVersion, StaticVersionType},
-};
+use vbs::version::StaticVersion;
 
 use crate::{
     error::{ApiError, AvailabilityError},
     handlers, v1, v2,
-    wire::{self, DecodeFailure, WireFormat},
 };
 
 /// API error response — wire-compatible with the `Custom` variant of the per-module error enums
@@ -108,7 +106,7 @@ impl WireFormat for NodeApiWire {
     fn serialize_failure(message: String) -> ErrorResponse {
         ErrorResponse::new(
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("vbs serialize: {message}"),
+            format!("serialize: {message}"),
         )
     }
 }
@@ -120,19 +118,19 @@ impl WireFormat for NodeApiWire {
 /// (peer-catchup, submit-transactions, light-client provider) expect VBS-encoded responses for
 /// the endpoints that flow large structured data. Falls back to JSON otherwise.
 fn encode_response<T: Serialize>(headers: &HeaderMap, value: T) -> Response {
-    wire::encode_ok::<NodeApiWire, _>(headers, value)
+    http_wire::encode_ok::<NodeApiWire, _>(headers, value)
 }
 
-/// Decode a request body based on its `Content-Type`, matching tide-disco's `body_auto` behavior.
+/// Decode a request body based on its `Content-Type`, matched by media-type essence.
 ///
-/// - `application/octet-stream`: VBS (versioned binary) — what `surf-disco::Request::body_binary`
+/// - `application/octet-stream`: VBS (versioned binary) — what `Request::body_binary`
 ///   sends, and what production peer-catchup / submit-transactions clients use.
 /// - `application/json`: serde_json.
 fn decode_body<T: serde::de::DeserializeOwned>(
     headers: &HeaderMap,
     body: &[u8],
 ) -> Result<T, ApiError> {
-    wire::decode_body::<WireVersion, T>(headers, body).map_err(|err| {
+    http_wire::decode_body::<WireVersion, T>(headers, body).map_err(|err| {
         ApiError::BadRequest(match err {
             DecodeFailure::Binary(err) => anyhow::anyhow!("invalid binary body: {err}"),
             DecodeFailure::Json(err) => anyhow::anyhow!("invalid json body: {err}"),
@@ -310,72 +308,6 @@ impl<T: schemars::JsonSchema> aide::operation::OperationInput for SendQuery<T> {
     }
 }
 
-/// Wire format for a WebSocket stream, negotiated from the upgrade request's `Accept` header
-/// to match tide-disco. surf-disco clients default to `application/octet-stream`, so production
-/// stream consumers expect VBS-encoded `Message::Binary` frames.
-#[derive(Clone, Copy)]
-pub enum WsFormat {
-    Binary,
-    Json,
-}
-
-pub fn ws_format(headers: &HeaderMap) -> WsFormat {
-    let accept = headers
-        .get(header::ACCEPT)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    if accept.contains("application/octet-stream") {
-        WsFormat::Binary
-    } else {
-        WsFormat::Json
-    }
-}
-
-/// Forwards `stream` over `socket` in the negotiated [`WsFormat`] until the stream ends or the
-/// client disconnects, then performs the close handshake. This is the one shared way to serve a
-/// tide-disco-style socket stream endpoint; hand-rolled write-only loops leak the task and its
-/// data-source subscription whenever a client disconnects while the stream is quiet.
-///
-/// `Ver` is the VBS framing version of binary frames, and must be the same version the service's
-/// [`WireFormat`](crate::wire::WireFormat) uses for its request/response bodies.
-pub async fn drive_ws_stream<Ver: StaticVersionType, T: Serialize>(
-    mut socket: axum::extract::ws::WebSocket,
-    stream: BoxStream<'static, T>,
-    format: WsFormat,
-) {
-    use axum::extract::ws::Message;
-    futures::pin_mut!(stream);
-    loop {
-        // Also poll the client side: a disconnect must end this task even while the stream is
-        // quiet, or the socket's connection slot and the stream task leak until the next send.
-        let item = tokio::select! {
-            item = stream.next() => item,
-            msg = socket.recv() => match msg {
-                None | Some(Err(_)) | Some(Ok(Message::Close(_))) => return,
-                Some(Ok(_)) => continue,
-            },
-        };
-        let Some(item) = item else { break };
-        let msg = match format {
-            WsFormat::Binary => match Serializer::<Ver>::serialize(&item) {
-                Ok(bytes) => Message::Binary(bytes.into()),
-                Err(_) => break,
-            },
-            WsFormat::Json => match serde_json::to_string(&item) {
-                Ok(json) => Message::Text(json.into()),
-                Err(_) => break,
-            },
-        };
-        if socket.send(msg).await.is_err() {
-            return;
-        }
-    }
-    // Close handshake, like tide-disco's socket handler. Without it, dropping the socket resets
-    // the connection and clients see an error instead of end-of-stream — the finite v0 streams
-    // rely on a clean close to signal completion.
-    let _ = socket.send(Message::Close(None)).await;
-}
-
 /// Create a combined router serving both v1 and v2 APIs
 pub fn create_combined_router<S>(state: S) -> Router
 where
@@ -409,22 +341,6 @@ where
     with_top_level_routes(router_v2.merge(router_v1)).layer(cors_layer())
 }
 
-/// The permissive CORS policy tide-disco applied to every response it served, which browser
-/// clients (the explorer, the staking UI) depend on. Every axum-migrated service layers this on
-/// its router; without it, a browser rejects the response before the page ever sees it.
-///
-/// Apply it as the outermost layer, so it also covers responses generated by middleware rather
-/// than a handler (the connection limit's 429 would otherwise skip it).
-///
-/// `allow_methods` and `allow_headers` are only echoed on the `OPTIONS` preflight, which is where
-/// a browser reads them; `allow_origin` goes out on every response.
-pub fn cors_layer() -> CorsLayer {
-    CorsLayer::new()
-        .allow_methods(Any)
-        .allow_headers(Any)
-        .allow_origin(Any)
-}
-
 /// Add the routes that every mode serves regardless of which API modules are enabled:
 /// `/`, `/healthcheck`, `/v1/{module}/healthcheck`, and `/version`. Callers apply CORS.
 pub(crate) fn with_top_level_routes(router: Router) -> Router {
@@ -433,51 +349,6 @@ pub(crate) fn with_top_level_routes(router: Router) -> Router {
         .route("/healthcheck", get(healthcheck))
         .route("/v1/{module}/healthcheck", get(module_healthcheck))
         .route("/version", get(version))
-}
-
-/// Health status of an application.
-///
-/// Wire-compatible with `tide_disco::healthcheck::HealthStatus` 0.9.6: `Available` is its first
-/// variant, so JSON emits the same name and vbs/bincode the same ordinal. The server only ever
-/// reports `Available`; the remaining tide variants are omitted until a client-side type exists.
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum HealthStatus {
-    Available,
-}
-
-/// Wire-compatible with `tide_disco::app::AppHealth`: JSON keys, variant casing, and the
-/// vbs/bincode field order (status ordinal, then modules map) must not change.
-#[derive(Serialize)]
-struct AppHealth {
-    status: HealthStatus,
-    // Tide populated this with each module's versioned health status; the axum modules don't
-    // report individual health, so it stays empty.
-    modules: BTreeMap<String, BTreeMap<u64, u16>>,
-}
-
-/// App-level `/healthcheck` response, in JSON or vbs binary depending on `Accept`.
-///
-/// Every service migrated to axum registered at least one *named* tide-disco module, so none of
-/// them was a singleton app and all of them served the app-level [`AppHealth`] object here rather
-/// than a bare [`HealthStatus`] (`tide-disco-0.9.6/src/app.rs`, `App::serve` skips the app-level
-/// routes only when `modules.is_singleton()`). The standalone axum servers (builder, orchestrator,
-/// light client query service, relay server, prover, dev-node, submit-transactions, nasty-client)
-/// all share this, so each reports the shape its tide predecessor did.
-pub fn healthcheck_response(headers: &HeaderMap) -> Response {
-    encode_response(
-        headers,
-        AppHealth {
-            status: HealthStatus::Available,
-            modules: BTreeMap::new(),
-        },
-    )
-}
-
-/// Per-module `/healthcheck` response: a bare [`HealthStatus`], which is what tide-disco served
-/// for a module without an explicit healthcheck handler.
-fn module_healthcheck_response(headers: &HeaderMap) -> Response {
-    encode_response(headers, HealthStatus::Available)
 }
 
 async fn healthcheck(headers: HeaderMap) -> Response {
@@ -1076,7 +947,7 @@ where
                          State(state): State<S>,
                          headers: HeaderMap,
                          Path(height): Path<usize>| async move {
-        let format = ws_format(&headers);
+        let format = ContentType::negotiate(&headers);
         ws.on_upgrade(move |socket| async move {
             match state.stream_leaves(height).await {
                 Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
@@ -1089,7 +960,7 @@ where
                           State(state): State<S>,
                           headers: HeaderMap,
                           Path(height): Path<usize>| async move {
-        let format = ws_format(&headers);
+        let format = ContentType::negotiate(&headers);
         ws.on_upgrade(move |socket| async move {
             match state.stream_headers(height).await {
                 Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
@@ -1102,7 +973,7 @@ where
                          State(state): State<S>,
                          headers: HeaderMap,
                          Path(height): Path<usize>| async move {
-        let format = ws_format(&headers);
+        let format = ContentType::negotiate(&headers);
         ws.on_upgrade(move |socket| async move {
             match state.stream_blocks(height).await {
                 Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
@@ -1115,7 +986,7 @@ where
                            State(state): State<S>,
                            headers: HeaderMap,
                            Path(height): Path<usize>| async move {
-        let format = ws_format(&headers);
+        let format = ContentType::negotiate(&headers);
         ws.on_upgrade(move |socket| async move {
             match state.stream_payloads(height).await {
                 Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
@@ -1128,7 +999,7 @@ where
                              State(state): State<S>,
                              headers: HeaderMap,
                              Path(height): Path<usize>| async move {
-        let format = ws_format(&headers);
+        let format = ContentType::negotiate(&headers);
         ws.on_upgrade(move |socket| async move {
             match state.stream_vid_common(height).await {
                 Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
@@ -1141,7 +1012,7 @@ where
                                State(state): State<S>,
                                headers: HeaderMap,
                                Path(height): Path<usize>| async move {
-        let format = ws_format(&headers);
+        let format = ContentType::negotiate(&headers);
         ws.on_upgrade(move |socket| async move {
             match state.stream_transactions(height, None).await {
                 Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
@@ -1155,7 +1026,7 @@ where
          State(state): State<S>,
          headers: HeaderMap,
          Path((height, namespace)): Path<(usize, u32)>| async move {
-            let format = ws_format(&headers);
+            let format = ContentType::negotiate(&headers);
             ws.on_upgrade(move |socket| async move {
                 match state.stream_transactions(height, Some(namespace)).await {
                     Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
@@ -1169,7 +1040,7 @@ where
          State(state): State<S>,
          headers: HeaderMap,
          Path((height, namespace)): Path<(usize, u32)>| async move {
-            let format = ws_format(&headers);
+            let format = ContentType::negotiate(&headers);
             ws.on_upgrade(move |socket| async move {
                 match state.stream_namespace_proofs(height, namespace).await {
                     Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
@@ -2731,7 +2602,7 @@ where
 
     let hotshot_events_stream =
         |State(state): State<S>, headers: HeaderMap, ws: WebSocketUpgrade| async move {
-            let format = ws_format(&headers);
+            let format = ContentType::negotiate(&headers);
             match <S as v1::HotShotEventsApi>::events(&state).await {
                 Ok(stream) => ws.on_upgrade(move |socket| async move {
                     drive_ws_stream::<WireVersion, _>(socket, stream, format).await
@@ -3983,7 +3854,11 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
+    use futures::stream::BoxStream;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use vbs::{BinarySerializer, Serializer};
 
     use super::*;
 
