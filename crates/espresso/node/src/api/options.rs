@@ -19,7 +19,7 @@ use futures::{
 use hotshot_query_service::{
     ApiState as AppState, Error,
     data_source::{ExtensibleDataSource, MetricsDataSource},
-    status::{self, HasMetrics, UpdateStatusData},
+    status::{HasMetrics, UpdateStatusData},
 };
 use hotshot_types::traits::{
     metrics::{Metrics, NoMetrics},
@@ -232,8 +232,7 @@ impl Options {
 
             // Initialize v0 and v1 status API.
             register_api("status", &mut app, move |ver| {
-                status::define_api(&Default::default(), SequencerApiVersion::instance(), ver)
-                    .context("failed to define status api")
+                endpoints::status(ver).context("failed to define status api")
             })?;
 
             self.init_hotshot_modules(&mut app)?;
@@ -316,8 +315,7 @@ impl Options {
 
         // Initialize v0 and v1 status API.
         register_api("status", &mut app, move |ver| {
-            status::define_api(&Default::default(), SequencerApiVersion::instance(), ver)
-                .context("failed to define status api")
+            endpoints::status(ver).context("failed to define status api")
         })?;
 
         // Initialize availability and node APIs (these both use the same data source).

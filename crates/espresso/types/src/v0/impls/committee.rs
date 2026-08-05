@@ -205,6 +205,15 @@ impl EpochCommittees {
             .cloned()
     }
 
+    pub fn latest_account(&self, key: &PubKey) -> Option<Address> {
+        let inner = self.inner.read();
+        inner
+            .snapshots
+            .values()
+            .rev()
+            .find_map(|snap| snap.inner.committee.address_mapping.get(key).copied())
+    }
+
     /// Fetch the fixed block reward and update it if its None.
     /// We used a fixed block reward for version v3
     /// Version v4 uses the dynamic block reward

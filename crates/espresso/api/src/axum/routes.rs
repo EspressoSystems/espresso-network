@@ -108,6 +108,7 @@ pub mod v1 {
     pub const STATUS_SUCCESS_RATE_ROUTE: &str = "/v1/status/success-rate";
     pub const STATUS_TIME_SINCE_LAST_DECIDE_ROUTE: &str = "/v1/status/time-since-last-decide";
     pub const STATUS_METRICS_ROUTE: &str = "/v1/status/metrics";
+    pub const STATUS_KEYS_ROUTE: &str = "/v1/status/keys";
 
     pub const CONFIG_HOTSHOT_ROUTE: &str = "/v1/config/hotshot";
     pub const CONFIG_ENV_ROUTE: &str = "/v1/config/env";
