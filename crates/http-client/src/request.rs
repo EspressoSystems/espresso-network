@@ -1,6 +1,6 @@
 use std::error::Error as _;
 
-use http_wire::{ContentType, decode_response, encode_body};
+use espresso_wire::{ContentType, decode_response, encode_body};
 use serde::{Serialize, de::DeserializeOwned};
 use vbs::version::StaticVersionType;
 
@@ -30,7 +30,7 @@ impl<T: DeserializeOwned, E: ClientError, VER: StaticVersionType> Request<T, E, 
 
     /// Set the request body using JSON.
     ///
-    /// Body is serialized using [`serde_json`] and the `Content-Type` header is set to
+    /// Body is serialized using `serde_json` and the `Content-Type` header is set to
     /// `application/json`.
     pub fn body_json<B: Serialize>(self, body: &B) -> Result<Self, E> {
         self.body(ContentType::Json, body)
@@ -75,7 +75,21 @@ impl<T: DeserializeOwned, E: ClientError, VER: StaticVersionType> Request<T, E, 
         let res = self.inner.send().await.map_err(reqwest_error)?;
         let status = res.status();
         let content_type = res.headers().get("Content-Type").cloned();
-        let bytes = res.bytes().await.map_err(reqwest_error)?;
+        let bytes = res.bytes().await.map_err(|err| {
+            // Reading an error response's body can itself fail (e.g. the connection drops
+            // mid-body); keep reporting the response's own status rather than a synthetic 500.
+            if status == reqwest::StatusCode::OK {
+                reqwest_error(err)
+            } else {
+                E::catch_all(
+                    status,
+                    format!(
+                        "Request terminated with error {status}. Failed to read response body due \
+                         to {err}",
+                    ),
+                )
+            }
+        })?;
         decode_response::<VER, T, E>(
             status,
             content_type.as_ref().and_then(|c| c.to_str().ok()),

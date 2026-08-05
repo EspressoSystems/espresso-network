@@ -102,7 +102,7 @@ pub mod service;
 use api::node_validator::v0::SurfDiscoAvailabilityAPIStream;
 use axum::Router;
 use clap::Parser;
-use espresso_api::cors_layer;
+use espresso_wire::cors_layer;
 use futures::{
     StreamExt,
     channel::mpsc::{self, Sender},

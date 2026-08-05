@@ -23,10 +23,10 @@ ark-std = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }
 displaydoc = { workspace = true }
-espresso-api = { workspace = true }
 espresso-contract-deployer = { workspace = true }
 espresso-types = { workspace = true, features = ["node"] }
 espresso-utils = { workspace = true, features = ["full"] }
+espresso-wire = { workspace = true }
 futures = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-query-service = { workspace = true }

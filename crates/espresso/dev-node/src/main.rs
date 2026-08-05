@@ -27,7 +27,6 @@ use axum::{
     routing::{get, post},
 };
 use clap::{Parser, ValueEnum};
-use espresso_api::{cors_layer, healthcheck_response};
 use espresso_contract_deployer::{
     self as deployer, Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS, DeployedContracts,
     HttpProviderWithWallet, network_config::light_client_genesis_from_stake_table,
@@ -51,6 +50,7 @@ use espresso_types::{
     L1ClientOptions, SeqTypes, ValidatedState, parse_duration, v0_3::ChainConfig,
 };
 use espresso_utils::logging;
+use espresso_wire::{cors_layer, healthcheck_response};
 use futures::{StreamExt, future::join_all, stream::FuturesUnordered};
 use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
 use hotshot_state_prover::{StateProverConfig, v2::service::run_prover_service};

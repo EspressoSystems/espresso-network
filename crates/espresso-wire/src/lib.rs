@@ -3,7 +3,7 @@
 //! The protocol covers content negotiation between VBS binary and JSON via the `Accept` and
 //! `Content-Type` headers, an error envelope (`{"status": <u16>, "message": <string>}`),
 //! healthcheck types, and per-content-type WebSocket frame formats. Both halves live in this
-//! repo: the axum services (via `espresso-api`) serve what `http-client` calls, and vice versa.
+//! repo: the axum services (via `espresso-api`) serve what `http-client` calls.
 //!
 //! This crate is the single implementation of that protocol. Servers and clients call the same
 //! codec functions, so compatibility between them holds by construction rather than by parallel
@@ -12,10 +12,13 @@
 //! (variant ordinals, the `Unavailabale` misspelling, the numeric status envelope) live here,
 //! next to the one implementation they constrain.
 //!
-//! Nothing here names a transport. HTTP types come from the `http` crate, whose [`StatusCode`]
-//! and `HeaderMap` are the very types axum and reqwest re-export, so neither side converts
-//! anything. WebSocket frame payloads are plain bytes and strings (binary frames carry VBS,
-//! text frames JSON), so any WebSocket implementation can map them onto its own frame type.
+//! The codecs themselves name no transport. HTTP types come from the `http` crate, whose
+//! [`StatusCode`] and `HeaderMap` are the very types axum and reqwest re-export, so neither side
+//! converts anything, and WebSocket frame payloads are plain bytes and strings (binary frames
+//! carry VBS, text frames JSON). On top of the codecs, the crate provides the axum glue every
+//! service needs regardless of its routes ([`WireFormat`], [`respond`], healthcheck responses,
+//! [`drive_ws_stream`], [`cors_layer`]), so services depend on this leaf instead of on another
+//! service's API crate.
 //!
 //! [`StatusCode`]: http::StatusCode
 
@@ -23,10 +26,15 @@ mod body;
 mod content_type;
 mod error;
 mod health;
+mod server;
 mod ws;
 
-pub use body::{DecodeFailure, EncodeFailure, decode_body, decode_response, encode_body};
+pub use body::{DecodeFailure, EncodeFailure, decode_response, encode_body};
 pub use content_type::{ContentType, wants_binary};
 pub use error::{ServerError, WireError};
 pub use health::{AppHealth, HealthCheck, HealthStatus};
+pub use server::{
+    WireFormat, cors_layer, decode_body, drive_ws_stream, encode_err, encode_ok,
+    healthcheck_response, module_healthcheck_response, respond,
+};
 pub use ws::{decode_binary_frame, decode_text_frame, encode_binary_frame, encode_text_frame};

@@ -17,11 +17,8 @@ use axum::{
     routing::{get, post},
 };
 use committable::Committable;
-use espresso_api::{
-    cors_layer, healthcheck_response,
-    wire::{self, DecodeFailure, WireFormat},
-};
 use espresso_types::SeqTypes;
+use espresso_wire::{self as wire, DecodeFailure, WireFormat, cors_layer, healthcheck_response};
 use hotshot_builder_api::v0_1::{
     block_info::{
         AvailableBlockData, AvailableBlockHeaderInputV1, AvailableBlockHeaderInputV2,

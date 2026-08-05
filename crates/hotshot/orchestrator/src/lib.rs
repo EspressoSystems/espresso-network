@@ -30,10 +30,7 @@ use axum::{
 };
 use client::{BenchResults, BenchResultsDownloadConfig};
 use csv::Writer;
-use espresso_api::{
-    cors_layer, healthcheck_response,
-    wire::{self, WireFormat},
-};
+use espresso_wire::{self as wire, WireFormat, cors_layer, healthcheck_response};
 use futures::{StreamExt, stream::FuturesUnordered};
 use hotshot_types::{
     PeerConfig,

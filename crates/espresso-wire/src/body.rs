@@ -5,6 +5,10 @@ use vbs::{BinarySerializer, Serializer, version::StaticVersionType};
 use crate::{content_type::ContentType, error::WireError};
 
 /// Why a body failed to decode.
+///
+/// Variants carry the bare codec error message and `Display` adds no prefix, unlike
+/// [`EncodeFailure`]: decode call sites compose their own context, and several of those
+/// messages are historic client-visible text that must not gain a prefix.
 #[derive(Debug, thiserror::Error)]
 pub enum DecodeFailure {
     /// The body was `application/json` but did not parse.
@@ -47,7 +51,7 @@ pub fn encode_body<Ver: StaticVersionType, T: Serialize + ?Sized>(
 ///
 /// The header is matched by media-type essence (see [`ContentType::parse`]), so parameters are
 /// tolerated.
-pub fn decode_body<Ver: StaticVersionType, T: DeserializeOwned>(
+pub(crate) fn decode_body<Ver: StaticVersionType, T: DeserializeOwned>(
     content_type: Option<&str>,
     body: &[u8],
 ) -> Result<T, DecodeFailure> {

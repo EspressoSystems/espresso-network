@@ -14,8 +14,8 @@ use axum::{
     response::Response,
     routing::get,
 };
-use espresso_api::wire::wants_binary;
 use espresso_types::{BackoffParams, SeqTypes, v0_3::AuthenticatedValidator};
+use espresso_wire::wants_binary;
 use futures::{
     FutureExt, Sink, SinkExt, Stream, StreamExt,
     channel::mpsc::{self, SendError, Sender},

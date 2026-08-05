@@ -31,13 +31,13 @@ use axum::{
 use clap::Parser;
 use committable::Committable;
 use derivative::Derivative;
-use espresso_api::{cors_layer, healthcheck_response};
 use espresso_node::SequencerApiVersion;
 use espresso_types::{
     ADVZNamespaceProofQueryData, BlockMerkleTree, FeeMerkleTree, Header, SeqTypes, parse_duration,
     v0_1::IterableFeeInfo,
 };
 use espresso_utils::logging;
+use espresso_wire::{cors_layer, healthcheck_response};
 use futures::{
     future::{FutureExt, TryFuture, TryFutureExt},
     stream::{Peekable, StreamExt},

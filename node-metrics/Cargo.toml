@@ -18,9 +18,9 @@ bincode = { workspace = true }
 bitvec = { workspace = true }
 circular-buffer = { workspace = true }
 clap = { workspace = true }
-espresso-api = { workspace = true }
 espresso-types = { workspace = true, features = ["node"] }
 espresso-utils = { workspace = true, features = ["full"] }
+espresso-wire = { workspace = true }
 futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-example-types = { workspace = true }

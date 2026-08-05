@@ -2703,10 +2703,10 @@ dependencies = [
  "axum 0.8.9",
  "clap 4.6.1",
  "committable",
- "espresso-api",
  "espresso-node",
  "espresso-types",
  "espresso-utils",
+ "espresso-wire",
  "futures",
  "hotshot",
  "hotshot-builder-api",
@@ -4781,9 +4781,9 @@ dependencies = [
  "async-trait",
  "axum 0.8.9",
  "base64 0.22.1",
+ "espresso-wire",
  "futures",
  "hex",
- "http-wire",
  "prost 0.14.4",
  "schemars 0.9.0",
  "serde",
@@ -4797,7 +4797,6 @@ dependencies = [
  "tonic-prost-build",
  "tonic-reflection",
  "tower 0.4.13",
- "tower-http",
  "tracing",
  "tracing-subscriber 0.3.23",
  "url",
@@ -4866,11 +4865,11 @@ dependencies = [
  "clap 4.6.1",
  "committable",
  "escargot",
- "espresso-api",
  "espresso-contract-deployer",
  "espresso-node",
  "espresso-types",
  "espresso-utils",
+ "espresso-wire",
  "futures",
  "hotshot-contract-adapter",
  "hotshot-query-service",
@@ -4963,6 +4962,7 @@ dependencies = [
  "espresso-telemetry",
  "espresso-types",
  "espresso-utils",
+ "espresso-wire",
  "futures",
  "generic-tests",
  "hotshot",
@@ -5196,6 +5196,22 @@ dependencies = [
  "url",
  "vergen",
  "vergen-gitcl",
+]
+
+[[package]]
+name = "espresso-wire"
+version = "0.1.0"
+dependencies = [
+ "axum 0.8.9",
+ "futures",
+ "hex",
+ "http 1.4.2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tower-http",
+ "vbs",
 ]
 
 [[package]]
@@ -6641,7 +6657,7 @@ dependencies = [
  "blake3",
  "clap 4.6.1",
  "csv",
- "espresso-api",
+ "espresso-wire",
  "futures",
  "hotshot-example-types",
  "hotshot-types",
@@ -6768,10 +6784,10 @@ dependencies = [
  "axum 0.8.9",
  "clap 4.6.1",
  "displaydoc",
- "espresso-api",
  "espresso-contract-deployer",
  "espresso-types",
  "espresso-utils",
+ "espresso-wire",
  "futures",
  "hotshot-contract-adapter",
  "hotshot-query-service",
@@ -7035,12 +7051,11 @@ name = "http-client"
 version = "0.1.0"
 dependencies = [
  "axum 0.8.9",
+ "espresso-wire",
  "futures",
  "hex",
- "http-wire",
  "reqwest 0.12.28",
  "serde",
- "serde_json",
  "tokio",
  "tokio-tungstenite 0.28.0",
  "tracing",
@@ -7082,18 +7097,6 @@ dependencies = [
  "serde_qs 0.8.5",
  "serde_urlencoded",
  "url",
-]
-
-[[package]]
-name = "http-wire"
-version = "0.1.0"
-dependencies = [
- "hex",
- "http 1.4.2",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "vbs",
 ]
 
 [[package]]
@@ -8796,9 +8799,9 @@ dependencies = [
  "anyhow",
  "axum 0.8.9",
  "clap 4.6.1",
- "espresso-api",
  "espresso-node",
  "espresso-types",
+ "espresso-wire",
  "futures",
  "hotshot-query-service",
  "hotshot-types",
@@ -9336,9 +9339,9 @@ dependencies = [
  "bitvec 1.1.0",
  "circular-buffer",
  "clap 4.6.1",
- "espresso-api",
  "espresso-types",
  "espresso-utils",
+ "espresso-wire",
  "futures",
  "hotshot",
  "hotshot-example-types",

@@ -14,13 +14,11 @@ use axum::{
     response::Response,
     routing::get,
 };
-use espresso_api::{
-    cors_layer, drive_ws_stream, healthcheck_response,
-    wire::{self, WireFormat},
-    ws_format,
-};
 use espresso_node::api::sql::DataSource;
 use espresso_types::SeqTypes;
+use espresso_wire::{
+    self as wire, ContentType, WireFormat, cors_layer, drive_ws_stream, healthcheck_response,
+};
 use futures::{StreamExt as _, TryStreamExt as _, stream::BoxStream};
 use hotshot_query_service::{
     Error as ApiError, Header,
@@ -422,7 +420,7 @@ async fn stream_leaves(
     headers: HeaderMap,
     Path(height): Path<usize>,
 ) -> Response {
-    let format = ws_format(&headers);
+    let format = ContentType::negotiate(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = ds.subscribe_leaves(height).await;
         drive_ws_stream::<WireVersion, _>(socket, stream, format).await;
@@ -474,7 +472,7 @@ async fn stream_headers(
     headers: HeaderMap,
     Path(height): Path<usize>,
 ) -> Response {
-    let format = ws_format(&headers);
+    let format = ContentType::negotiate(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = ds.subscribe_headers(height).await;
         drive_ws_stream::<WireVersion, _>(socket, stream, format).await;
@@ -526,7 +524,7 @@ async fn stream_blocks(
     headers: HeaderMap,
     Path(height): Path<usize>,
 ) -> Response {
-    let format = ws_format(&headers);
+    let format = ContentType::negotiate(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = ds.subscribe_blocks(height).await;
         drive_ws_stream::<WireVersion, _>(socket, stream, format).await;
@@ -578,7 +576,7 @@ async fn stream_payloads(
     headers: HeaderMap,
     Path(height): Path<usize>,
 ) -> Response {
-    let format = ws_format(&headers);
+    let format = ContentType::negotiate(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = ds.subscribe_payloads(height).await;
         drive_ws_stream::<WireVersion, _>(socket, stream, format).await;
@@ -630,7 +628,7 @@ async fn stream_vid_common(
     headers: HeaderMap,
     Path(height): Path<usize>,
 ) -> Response {
-    let format = ws_format(&headers);
+    let format = ContentType::negotiate(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = ds.subscribe_vid_common(height).await;
         drive_ws_stream::<WireVersion, _>(socket, stream, format).await;
@@ -691,7 +689,7 @@ async fn stream_transactions(
     headers: HeaderMap,
     Path(height): Path<usize>,
 ) -> Response {
-    let format = ws_format(&headers);
+    let format = ContentType::negotiate(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = transactions_stream(ds.subscribe_blocks(height).await, None);
         drive_ws_stream::<WireVersion, _>(socket, stream, format).await;
@@ -704,7 +702,7 @@ async fn stream_transactions_ns(
     headers: HeaderMap,
     Path((height, namespace)): Path<(usize, i64)>,
 ) -> Response {
-    let format = ws_format(&headers);
+    let format = ContentType::negotiate(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = transactions_stream(ds.subscribe_blocks(height).await, Some(namespace));
         drive_ws_stream::<WireVersion, _>(socket, stream, format).await;

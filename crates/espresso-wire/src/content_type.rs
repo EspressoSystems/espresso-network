@@ -26,9 +26,8 @@ impl ContentType {
     /// match.
     pub fn parse(header_value: &str) -> Option<Self> {
         let essence = header_value
-            .split(';')
-            .next()
-            .unwrap_or_default()
+            .split_once(';')
+            .map_or(header_value, |(essence, _)| essence)
             .trim()
             .to_ascii_lowercase();
         match essence.as_str() {

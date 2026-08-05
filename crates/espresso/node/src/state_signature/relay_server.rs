@@ -9,10 +9,7 @@ use axum::{
     response::Response,
     routing::{get, post},
 };
-use espresso_api::{
-    cors_layer, healthcheck_response,
-    wire::{self, DecodeFailure, WireFormat},
-};
+use espresso_wire::{self as wire, DecodeFailure, WireFormat, cors_layer, healthcheck_response};
 use hotshot_types::{
     light_client::{
         LCV1StateSignatureRequestBody, LCV1StateSignaturesBundle, LCV2StateSignatureRequestBody,

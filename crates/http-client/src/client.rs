@@ -4,7 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub use http_wire::ContentType;
+pub use espresso_wire::ContentType;
 use serde::de::DeserializeOwned;
 use tokio::time::sleep;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
