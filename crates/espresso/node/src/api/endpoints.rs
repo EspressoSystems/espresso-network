@@ -13,6 +13,7 @@ use espresso_types::{
     v0_3::RewardAccountV1,
     v0_4::{RewardAccountV2, RewardClaimError},
 };
+use espresso_utils::redact::Redacted;
 
 use crate::api::{
     RewardAmount, RewardMerkleTreeV2Data, data_source::TokenDataSource, unlock_schedule,
@@ -422,7 +423,7 @@ where
                 .read(|state| state.get_total_supply_l1().boxed())
                 .await
                 .map_err(|err| node::Error::Custom {
-                    message: format!("failed to get total supply. err={err:#}"),
+                    message: format!("failed to get total supply. err={:#}", Redacted(&err)),
                     status: StatusCode::NOT_FOUND,
                 })?;
 
@@ -485,7 +486,7 @@ where
         .read(|s| s.get_initial_supply_l1().boxed())
         .await
         .map_err(|err| node::Error::Custom {
-            message: format!("failed to get initial supply: {err:#}"),
+            message: format!("failed to get initial supply: {:#}", Redacted(&err)),
             status: StatusCode::INTERNAL_SERVER_ERROR,
         })?;
 
@@ -493,7 +494,7 @@ where
         .read(|s| s.get_total_supply_l1().boxed())
         .await
         .map_err(|err| node::Error::Custom {
-            message: format!("failed to get total supply: {err:#}"),
+            message: format!("failed to get total supply: {:#}", Redacted(&err)),
             status: StatusCode::INTERNAL_SERVER_ERROR,
         })?;
 
@@ -542,7 +543,10 @@ where
                 .read(|state| state.get_stake_table(epoch).boxed())
                 .await
                 .map_err(|err| node::Error::Custom {
-                    message: format!("failed to get stake table for epoch={epoch:?}. err={err:#}"),
+                    message: format!(
+                        "failed to get stake table for epoch={epoch:?}. err={:#}",
+                        Redacted(&err)
+                    ),
                     status: StatusCode::NOT_FOUND,
                 })
         }
@@ -554,7 +558,10 @@ where
                 .read(|state| state.get_stake_table_current().boxed())
                 .await
                 .map_err(|err| node::Error::Custom {
-                    message: format!("failed to get current stake table. err={err:#}"),
+                    message: format!(
+                        "failed to get current stake table. err={:#}",
+                        Redacted(&err)
+                    ),
                     status: StatusCode::NOT_FOUND,
                 })
         }
@@ -577,7 +584,8 @@ where
                 .await
                 .map_err(|err| node::Error::Custom {
                     message: format!(
-                        "failed to get DA stake table for epoch={epoch:?}. err={err:#}"
+                        "failed to get DA stake table for epoch={epoch:?}. err={:#}",
+                        Redacted(&err)
                     ),
                     status: StatusCode::NOT_FOUND,
                 })
@@ -590,7 +598,10 @@ where
                 .read(|state| state.get_da_stake_table_current().boxed())
                 .await
                 .map_err(|err| node::Error::Custom {
-                    message: format!("failed to get current DA stake table. err={err:#}"),
+                    message: format!(
+                        "failed to get current DA stake table. err={:#}",
+                        Redacted(&err)
+                    ),
                     status: StatusCode::NOT_FOUND,
                 })
         }
@@ -609,7 +620,7 @@ where
                 .read(|state| state.get_validators(EpochNumber::new(epoch)).boxed())
                 .await
                 .map_err(|err| hotshot_query_service::node::Error::Custom {
-                    message: format!("failed to get validators mapping: err: {err}"),
+                    message: format!("failed to get validators mapping: err: {}", Redacted(&err)),
                     status: StatusCode::NOT_FOUND,
                 })
         }
@@ -642,7 +653,7 @@ where
                 })
                 .await
                 .map_err(|err| hotshot_query_service::node::Error::Custom {
-                    message: format!("failed to get all validators : err: {err}"),
+                    message: format!("failed to get all validators : err: {}", Redacted(&err)),
                     status: StatusCode::INTERNAL_SERVER_ERROR,
                 })
         }
@@ -704,7 +715,7 @@ where
                 .read(|state| state.get_block_reward(epoch).boxed())
                 .await
                 .map_err(|err| node::Error::Custom {
-                    message: format!("failed to get block reward. err={err:#}"),
+                    message: format!("failed to get block reward. err={:#}", Redacted(&err)),
                     status: StatusCode::NOT_FOUND,
                 })
         }
