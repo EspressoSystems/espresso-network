@@ -89,8 +89,8 @@ mod test {
 
     use async_lock::RwLock;
     use futures::FutureExt;
+    use http_client::Client;
     use reqwest::redirect::Policy;
-    use surf_disco::Client;
     use tempfile::TempDir;
     use test_utils::reserve_tcp_port;
     use tide_disco::{App, StatusCode, Url};

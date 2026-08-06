@@ -115,6 +115,35 @@ impl tide_disco::error::Error for Error {
     }
 }
 
+/// Mirrors the `tide_disco::error::Error` impl above, converting between `tide_disco::StatusCode`
+/// and `reqwest::StatusCode` (the wire status carried by `http_client`).
+impl http_client::ClientError for Error {
+    fn catch_all(status: http_client::StatusCode, msg: String) -> Self {
+        Error::Custom {
+            message: msg,
+            status: status.into(),
+        }
+    }
+
+    fn status(&self) -> http_client::StatusCode {
+        let status = match self {
+            Error::Request { .. } => StatusCode::BAD_REQUEST,
+            Error::BlockAvailable { source, .. } | Error::BlockClaim { source, .. } => match source
+            {
+                BuildError::NotFound => StatusCode::NOT_FOUND,
+                BuildError::Missing => StatusCode::NOT_FOUND,
+                BuildError::Error { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            },
+            Error::TxnUnpack { .. } => StatusCode::BAD_REQUEST,
+            Error::TxnSubmit { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            Error::Custom { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            Error::BuilderAddress { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            Error::TxnStat { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        status.into()
+    }
+}
+
 pub(crate) fn try_extract_param<T: for<'a> TryFrom<&'a TaggedBase64>>(
     params: &RequestParams,
     param_name: &str,

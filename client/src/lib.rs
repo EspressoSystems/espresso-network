@@ -4,14 +4,14 @@ use alloy::primitives::Address;
 use anyhow::Context;
 use espresso_types::{FeeAccount, FeeAmount, FeeMerkleTree, Header};
 use futures::{StreamExt, stream::BoxStream};
+use http_client::{
+    Url,
+    error::ClientErr,
+    socket::{Connection, Unsupported},
+};
 use jf_merkle_tree_compat::{
     MerkleTreeScheme,
     prelude::{MerkleProof, Sha3Node},
-};
-use surf_disco::{
-    Url,
-    error::ClientError,
-    socket::{Connection, Unsupported},
 };
 use tokio::time::sleep;
 use vbs::version::StaticVersion;
@@ -19,13 +19,13 @@ use vbs::version::StaticVersion;
 pub type SequencerApiVersion = StaticVersion<0, 1>;
 
 #[derive(Clone, Debug)]
-pub struct SequencerClient(surf_disco::Client<ClientError, SequencerApiVersion>);
+pub struct SequencerClient(http_client::Client<ClientErr, SequencerApiVersion>);
 
 pub type FeeMerkleProof = MerkleProof<FeeAmount, FeeAccount, Sha3Node, { FeeMerkleTree::ARITY }>;
 
 impl SequencerClient {
     pub fn new(provider: Url) -> Self {
-        Self(surf_disco::Client::new(provider))
+        Self(http_client::Client::new(provider))
     }
 
     /// GET Block Height from the node
@@ -50,7 +50,7 @@ impl SequencerClient {
     pub async fn subscribe_headers(
         &self,
         height: u64,
-    ) -> anyhow::Result<BoxStream<'static, Result<Header, ClientError>>> {
+    ) -> anyhow::Result<BoxStream<'static, Result<Header, ClientErr>>> {
         self.0
             .socket(&format!("availability/stream/headers/{height}"))
             .subscribe::<Header>()
@@ -63,7 +63,7 @@ impl SequencerClient {
     pub async fn subscribe_blocks(
         &self,
         height: u64,
-    ) -> anyhow::Result<Connection<Header, Unsupported, ClientError, SequencerApiVersion>> {
+    ) -> anyhow::Result<Connection<Header, Unsupported, ClientErr, SequencerApiVersion>> {
         self.0
             .socket(&format!("availability/stream/blocks/{height}"))
             .subscribe()

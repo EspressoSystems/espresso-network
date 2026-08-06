@@ -43,13 +43,12 @@ use hotshot_query_service::{availability::LeafQueryData, types::HeightIndexed};
 use hotshot_types::{
     new_protocol::CoordinatorEvent, traits::metrics::NoMetrics, utils::epoch_from_block_number,
 };
+use http_client::{Client, error::ClientErr};
 use rstest::rstest;
 use staking_cli::{
     Transaction as StakingTransaction, demo::DelegationConfig, update_network_config,
 };
-use surf_disco::Client;
 use test_utils::reserve_tcp_port;
-use tide_disco::error::ServerError;
 use tokio::time::timeout;
 use vbs::version::Version;
 use versions::{
@@ -74,7 +73,7 @@ type SqlPersistence = <SqlDataSource as SequencerDataSource>::Options;
 /// only the validators at `registered` indices staked on the contract.
 struct StakeTableTestNetwork<const NUM_NODES: usize> {
     network: TestNetwork<SqlPersistence, NUM_NODES>,
-    client: Client<ServerError, SequencerApiVersion>,
+    client: Client<ClientErr, SequencerApiVersion>,
     stake_table: Address,
     api_port: u16,
     /// Every node's genesis state (its chain config carries the stake table
@@ -141,7 +140,7 @@ impl<const NUM_NODES: usize> StakeTableTestNetwork<NUM_NODES> {
             .address(Contract::StakeTableProxy)
             .unwrap();
 
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         client.connect(Some(Duration::from_secs(30))).await;
 
@@ -234,7 +233,7 @@ impl<const NUM_NODES: usize> StakeTableTestNetwork<NUM_NODES> {
             .address(Contract::StakeTableProxy)
             .unwrap();
 
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         client.connect(Some(Duration::from_secs(30))).await;
 

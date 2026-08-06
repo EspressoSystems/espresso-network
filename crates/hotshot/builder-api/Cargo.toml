@@ -11,6 +11,7 @@ committable = { workspace = true }
 derive_more = { workspace = true }
 futures = { workspace = true }
 hotshot-types = { workspace = true }
+http-client = { workspace = true }
 serde = { workspace = true }
 tagged-base64 = { workspace = true }
 thiserror = { workspace = true }

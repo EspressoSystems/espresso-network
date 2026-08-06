@@ -18,9 +18,9 @@ use hotshot_query_service_types::availability::LeafId;
 use hotshot_query_service_types::{availability::LeafQueryData, node::BlockId};
 use hotshot_types::data::EpochNumber;
 #[cfg(feature = "client")]
-use serde::de::DeserializeOwned;
+use http_client::{StatusCode, Url, error::ClientError as _};
 #[cfg(feature = "client")]
-use surf_disco::{Error as _, StatusCode, Url};
+use serde::de::DeserializeOwned;
 #[cfg(feature = "client")]
 use tagged_base64::TaggedBase64;
 #[cfg(feature = "client")]
@@ -133,7 +133,7 @@ pub trait Client: Send + Sync + 'static {
 }
 
 #[cfg(feature = "client")]
-type HttpClient = surf_disco::Client<hotshot_query_service_types::Error, StaticVersion<0, 1>>;
+type HttpClient = http_client::Client<hotshot_query_service_types::Error, StaticVersion<0, 1>>;
 
 /// A [`Client`] connected to the HotShot query service.
 #[cfg(feature = "client")]
@@ -147,7 +147,7 @@ impl QueryServiceClient {
     /// Connect to a HotShot query service at the given base URL.
     pub fn new(url: Url) -> Self {
         Self {
-            client: surf_disco::Client::builder(url)
+            client: http_client::Client::builder(url)
                 .set_timeout(Some(Duration::from_secs(10)))
                 .build(),
         }

@@ -81,6 +81,30 @@ impl tide_disco::error::Error for Error {
     }
 }
 
+/// Mirrors the `tide_disco::error::Error` impl above, converting between `tide_disco::StatusCode`
+/// and `reqwest::StatusCode` (the wire status carried by `http_client`).
+impl http_client::ClientError for Error {
+    fn catch_all(status: http_client::StatusCode, msg: String) -> Self {
+        Error::Custom {
+            message: msg,
+            status: status.into(),
+        }
+    }
+
+    fn status(&self) -> http_client::StatusCode {
+        let status = match self {
+            Error::Request { .. } => StatusCode::BAD_REQUEST,
+            Error::EventAvailable { source, .. } => match source {
+                EventError::NotFound => StatusCode::NOT_FOUND,
+                EventError::Missing => StatusCode::NOT_FOUND,
+                EventError::Error { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            },
+            Error::Custom { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        status.into()
+    }
+}
+
 pub fn define_api<State, Types, Ver>(
     options: &Options,
     api_ver: semver::Version,

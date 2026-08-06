@@ -1991,7 +1991,7 @@ pub mod tests {
         let mut process_leaf_stream_handle = ProcessLeafAndBlockPairStreamTask::new(
             leaf_receiver,
             data_state,
-            surf_disco::client::Client::new("http://localhost/".parse().unwrap()),
+            http_client::client::Client::new("http://localhost/".parse().unwrap()),
             PublicHotShotConfig {
                 epoch_height: None,
                 epoch_start_block: None,

@@ -10,7 +10,7 @@ use clap::Parser;
 use espresso_types::SeqTypes;
 use hotshot_orchestrator::client::OrchestratorClient;
 use hotshot_types::{network::NetworkConfig, traits::signature_key::SignatureKey};
-use surf_disco::Url;
+use http_client::Url;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
