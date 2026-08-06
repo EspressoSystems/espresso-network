@@ -10,10 +10,6 @@ license = "MIT"
 name = "new-protocol-bench-node"
 path = "src/bin/node.rs"
 
-[[bin]]
-name = "microbench"
-path = "src/bin/microbench.rs"
-
 [dependencies]
 anyhow = { workspace = true }
 async-broadcast = { workspace = true }
