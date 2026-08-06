@@ -431,7 +431,7 @@ type AvailabilityConnection<T> = http_client::socket::Connection<
 type BoxFutureConnection<'a, T> =
     BoxFuture<'a, Result<AvailabilityConnection<T>, hotshot_query_service::Error>>;
 
-pub struct SurfDiscoAvailabilityAPIStream<'a, T> {
+pub struct AvailabilityAPIStream<'a, T> {
     // path_url: Url,
     client: http_client::Client<hotshot_query_service::Error, Version01>,
 
@@ -446,7 +446,7 @@ pub struct SurfDiscoAvailabilityAPIStream<'a, T> {
 
 const MAX_STREAM_RECONNECT_ATTEMPTS: usize = 100;
 
-/// [SurfDiscoAvailabilityAPIPathResolver] is a trait that allows for the
+/// [AvailabilityAPIPathResolver] is a trait that allows for the
 /// specification of a sub path to the base URL that will resolve in a
 /// URL to point to the correct endpoint for the desired Stream type.
 ///
@@ -454,24 +454,20 @@ const MAX_STREAM_RECONNECT_ATTEMPTS: usize = 100;
 /// specific type of data you are wanting to stream, and the block height
 /// to start retrieving that data for.  This trait allows for us to
 /// abstract out these endpoints.
-pub trait SurfDiscoAvailabilityAPIPathResolver {
+pub trait AvailabilityAPIPathResolver {
     /// [resolve_path_for_height] resolves the path for the given height.
     /// It is expected that the path will be appended to the base URL
     /// to create a full URL that can be used to connect to the stream.
     fn resolve_path_for_height(&self, height: u64) -> String;
 }
 
-impl SurfDiscoAvailabilityAPIPathResolver
-    for SurfDiscoAvailabilityAPIStream<'_, Leaf1QueryData<SeqTypes>>
-{
+impl AvailabilityAPIPathResolver for AvailabilityAPIStream<'_, Leaf1QueryData<SeqTypes>> {
     fn resolve_path_for_height(&self, height: u64) -> String {
         format!("availability/stream/leaves/{height}")
     }
 }
 
-impl SurfDiscoAvailabilityAPIPathResolver
-    for SurfDiscoAvailabilityAPIStream<'_, BlockQueryData<SeqTypes>>
-{
+impl AvailabilityAPIPathResolver for AvailabilityAPIStream<'_, BlockQueryData<SeqTypes>> {
     fn resolve_path_for_height(&self, height: u64) -> String {
         format!("availability/stream/blocks/{height}")
     }
@@ -492,7 +488,7 @@ pub trait UpdateBlockHeightForEntry<T> {
 }
 
 impl UpdateBlockHeightForEntry<Leaf1QueryData<SeqTypes>>
-    for SurfDiscoAvailabilityAPIStream<'_, Leaf1QueryData<SeqTypes>>
+    for AvailabilityAPIStream<'_, Leaf1QueryData<SeqTypes>>
 {
     fn block_height_for_entry(&self, entry: &Leaf1QueryData<SeqTypes>) -> u64 {
         entry.leaf().height()
@@ -504,7 +500,7 @@ impl UpdateBlockHeightForEntry<Leaf1QueryData<SeqTypes>>
 }
 
 impl UpdateBlockHeightForEntry<BlockQueryData<SeqTypes>>
-    for SurfDiscoAvailabilityAPIStream<'_, BlockQueryData<SeqTypes>>
+    for AvailabilityAPIStream<'_, BlockQueryData<SeqTypes>>
 {
     fn block_height_for_entry(&self, entry: &BlockQueryData<SeqTypes>) -> u64 {
         entry.height()
@@ -515,7 +511,7 @@ impl UpdateBlockHeightForEntry<BlockQueryData<SeqTypes>>
     }
 }
 
-impl SurfDiscoAvailabilityAPIStream<'_, Leaf1QueryData<SeqTypes>> {
+impl AvailabilityAPIStream<'_, Leaf1QueryData<SeqTypes>> {
     pub fn new_leaf_stream(
         client: http_client::Client<hotshot_query_service::Error, Version01>,
         starting_block: u64,
@@ -530,7 +526,7 @@ impl SurfDiscoAvailabilityAPIStream<'_, Leaf1QueryData<SeqTypes>> {
     }
 }
 
-impl SurfDiscoAvailabilityAPIStream<'_, BlockQueryData<SeqTypes>> {
+impl AvailabilityAPIStream<'_, BlockQueryData<SeqTypes>> {
     pub fn new_block_stream(
         client: http_client::Client<hotshot_query_service::Error, Version01>,
         starting_block: u64,
@@ -545,17 +541,17 @@ impl SurfDiscoAvailabilityAPIStream<'_, BlockQueryData<SeqTypes>> {
     }
 }
 
-impl<T> SurfDiscoAvailabilityAPIStream<'_, T>
+impl<T> AvailabilityAPIStream<'_, T>
 where
     T: serde::de::DeserializeOwned,
-    Self: SurfDiscoAvailabilityAPIPathResolver + UpdateBlockHeightForEntry<T>,
+    Self: AvailabilityAPIPathResolver + UpdateBlockHeightForEntry<T>,
 {
 }
 
-impl<T> Stream for SurfDiscoAvailabilityAPIStream<'_, T>
+impl<T> Stream for AvailabilityAPIStream<'_, T>
 where
     T: serde::de::DeserializeOwned,
-    Self: SurfDiscoAvailabilityAPIPathResolver + UpdateBlockHeightForEntry<T>,
+    Self: AvailabilityAPIPathResolver + UpdateBlockHeightForEntry<T>,
 {
     type Item = T;
 

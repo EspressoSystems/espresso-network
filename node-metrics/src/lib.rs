@@ -99,7 +99,7 @@
 pub mod api;
 pub mod service;
 
-use api::node_validator::v0::SurfDiscoAvailabilityAPIStream;
+use api::node_validator::v0::AvailabilityAPIStream;
 use axum::Router;
 use clap::Parser;
 use futures::{
@@ -272,8 +272,8 @@ pub async fn run_standalone_service(options: Options) {
 
     tracing::debug!("creating stream starting at block height: {}", block_height);
 
-    let leaf_stream = SurfDiscoAvailabilityAPIStream::new_leaf_stream(client.clone(), block_height);
-    let block_stream = SurfDiscoAvailabilityAPIStream::new_block_stream(client, block_height);
+    let leaf_stream = AvailabilityAPIStream::new_leaf_stream(client.clone(), block_height);
+    let block_stream = AvailabilityAPIStream::new_block_stream(client, block_height);
 
     let zipped_stream = leaf_stream.zip(block_stream);
 
