@@ -117,7 +117,6 @@ thiserror = { workspace = true }
 tide-disco = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }
-tokio-tungstenite = { workspace = true }
 tokio-util = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
@@ -149,6 +148,7 @@ rand = { workspace = true }
 reqwest = { workspace = true }
 tempfile = { workspace = true }
 test-log = { workspace = true }
+tokio-tungstenite = { workspace = true }
 
 [lints]
 workspace = true
