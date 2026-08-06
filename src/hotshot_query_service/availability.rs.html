@@ -789,11 +789,11 @@
 <a href=#789 id=789 data-nosnippet>789</a>    <span class="kw">use </span>futures::future::FutureExt;
 <a href=#790 id=790 data-nosnippet>790</a>    <span class="kw">use </span>hotshot_example_types::node_types::TEST_VERSIONS;
 <a href=#791 id=791 data-nosnippet>791</a>    <span class="kw">use </span>hotshot_types::{data::Leaf2, simple_certificate::QuorumCertificate2};
-<a href=#792 id=792 data-nosnippet>792</a>    <span class="kw">use </span>serde::de::DeserializeOwned;
-<a href=#793 id=793 data-nosnippet>793</a>    <span class="kw">use </span>surf_disco::{Client, Error <span class="kw">as _</span>};
+<a href=#792 id=792 data-nosnippet>792</a>    <span class="kw">use </span>http_client::Client;
+<a href=#793 id=793 data-nosnippet>793</a>    <span class="kw">use </span>serde::de::DeserializeOwned;
 <a href=#794 id=794 data-nosnippet>794</a>    <span class="kw">use </span>tempfile::TempDir;
 <a href=#795 id=795 data-nosnippet>795</a>    <span class="kw">use </span>test_utils::reserve_tcp_port;
-<a href=#796 id=796 data-nosnippet>796</a>    <span class="kw">use </span>tide_disco::App;
+<a href=#796 id=796 data-nosnippet>796</a>    <span class="kw">use </span>tide_disco::{App, Error <span class="kw">as _</span>};
 <a href=#797 id=797 data-nosnippet>797</a>    <span class="kw">use </span>toml::toml;
 <a href=#798 id=798 data-nosnippet>798</a>
 <a href=#799 id=799 data-nosnippet>799</a>    <span class="kw">use super</span>::<span class="kw-2">*</span>;

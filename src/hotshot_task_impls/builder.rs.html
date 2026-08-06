@@ -15,8 +15,8 @@
 <a href=#15 id=15 data-nosnippet>15</a>    data::VidCommitment,
 <a href=#16 id=16 data-nosnippet>16</a>    traits::{node_implementation::NodeType, signature_key::SignatureKey},
 <a href=#17 id=17 data-nosnippet>17</a>};
-<a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>serde::{Deserialize, Serialize};
-<a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span>surf_disco::{Client, Url, client::HealthStatus};
+<a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>http_client::{Client, Url, healthcheck::HealthStatus};
+<a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span>serde::{Deserialize, Serialize};
 <a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span>tagged_base64::TaggedBase64;
 <a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span>thiserror::Error;
 <a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span>tokio::time::sleep;
@@ -61,7 +61,7 @@
 <a href=#61 id=61 data-nosnippet>61</a>
 <a href=#62 id=62 data-nosnippet>62</a><span class="doccomment">/// Client for builder API
 <a href=#63 id=63 data-nosnippet>63</a></span><span class="kw">pub struct </span>BuilderClient&lt;TYPES: NodeType, Ver: StaticVersionType&gt; {
-<a href=#64 id=64 data-nosnippet>64</a>    <span class="doccomment">/// Underlying surf_disco::Client for the legacy builder api
+<a href=#64 id=64 data-nosnippet>64</a>    <span class="doccomment">/// Underlying http_client::Client for the legacy builder api
 <a href=#65 id=65 data-nosnippet>65</a>    </span>client: Client&lt;BuilderApiError, Ver&gt;,
 <a href=#66 id=66 data-nosnippet>66</a>    <span class="doccomment">/// Marker for [`NodeType`] used here
 <a href=#67 id=67 data-nosnippet>67</a>    </span>_marker: std::marker::PhantomData&lt;TYPES&gt;,

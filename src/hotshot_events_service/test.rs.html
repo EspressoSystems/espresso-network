@@ -14,9 +14,9 @@
 <a href=#14 id=14 data-nosnippet>14</a>        signature_key::BLSPubKey,
 <a href=#15 id=15 data-nosnippet>15</a>        traits::{node_implementation::NodeType, signature_key::SignatureKey},
 <a href=#16 id=16 data-nosnippet>16</a>    };
-<a href=#17 id=17 data-nosnippet>17</a>    <span class="kw">use </span>surf_disco::Client;
+<a href=#17 id=17 data-nosnippet>17</a>    <span class="kw">use </span>http_client::{Client, Url};
 <a href=#18 id=18 data-nosnippet>18</a>    <span class="kw">use </span>test_utils::reserve_tcp_port;
-<a href=#19 id=19 data-nosnippet>19</a>    <span class="kw">use </span>tide_disco::{App, Url};
+<a href=#19 id=19 data-nosnippet>19</a>    <span class="kw">use </span>tide_disco::App;
 <a href=#20 id=20 data-nosnippet>20</a>    <span class="kw">use </span>tokio::{spawn, time::sleep};
 <a href=#21 id=21 data-nosnippet>21</a>    <span class="kw">use </span>tracing_test::traced_test;
 <a href=#22 id=22 data-nosnippet>22</a>    <span class="kw">use </span>vbs::version::{StaticVersion, StaticVersionType};

@@ -301,7 +301,7 @@
 <a href=#301 id=301 data-nosnippet>301</a>        v0_1::{UpgradeMode, ViewBasedUpgrade},
 <a href=#302 id=302 data-nosnippet>302</a>    };
 <a href=#303 id=303 data-nosnippet>303</a>    <span class="kw">use </span>hotshot_types::{light_client::StateKeyPair, traits::signature_key::SignatureKey, x25519};
-<a href=#304 id=304 data-nosnippet>304</a>    <span class="kw">use </span>surf_disco::{Client, Url, error::ClientError};
+<a href=#304 id=304 data-nosnippet>304</a>    <span class="kw">use </span>http_client::{Client, Url, error::ClientErr};
 <a href=#305 id=305 data-nosnippet>305</a>    <span class="kw">use </span>tagged_base64::TaggedBase64;
 <a href=#306 id=306 data-nosnippet>306</a>    <span class="kw">use </span>tempfile::TempDir;
 <a href=#307 id=307 data-nosnippet>307</a>    <span class="kw">use </span>test_utils::reserve_tcp_port;
@@ -418,12 +418,12 @@
 <a href=#418 id=418 data-nosnippet>418</a>        // orchestrator.
 <a href=#419 id=419 data-nosnippet>419</a>        </span><span class="macro">tracing::info!</span>(<span class="string">"waiting for API to start"</span>);
 <a href=#420 id=420 data-nosnippet>420</a>        <span class="kw">let </span>url: Url = <span class="macro">format!</span>(<span class="string">"http://localhost:{port1}"</span>).parse().unwrap();
-<a href=#421 id=421 data-nosnippet>421</a>        <span class="kw">let </span>client = Client::&lt;ClientError, SequencerApiVersion&gt;::new(url.clone());
+<a href=#421 id=421 data-nosnippet>421</a>        <span class="kw">let </span>client = Client::&lt;ClientErr, SequencerApiVersion&gt;::new(url.clone());
 <a href=#422 id=422 data-nosnippet>422</a>        <span class="macro">assert!</span>(client.connect(<span class="prelude-val">Some</span>(Duration::from_secs(<span class="number">60</span>))).<span class="kw">await</span>);
 <a href=#423 id=423 data-nosnippet>423</a>        client.get::&lt;()&gt;(<span class="string">"healthcheck"</span>).send().<span class="kw">await</span>.unwrap();
 <a href=#424 id=424 data-nosnippet>424</a>
-<a href=#425 id=425 data-nosnippet>425</a>        <span class="comment">// The metrics should include information about the node and software version. surf-disco
-<a href=#426 id=426 data-nosnippet>426</a>        // doesn't currently support fetching a plaintext file, so we use a raw reqwest client.
+<a href=#425 id=425 data-nosnippet>425</a>        <span class="comment">// The metrics should include information about the node and software version. The
+<a href=#426 id=426 data-nosnippet>426</a>        // client doesn't support fetching a plaintext file, so we use a raw reqwest client.
 <a href=#427 id=427 data-nosnippet>427</a>        </span><span class="kw">let </span>res = reqwest::get(
 <a href=#428 id=428 data-nosnippet>428</a>            url.join(<span class="kw-2">&amp;</span>espresso_api::routes::v1::status_metrics())
 <a href=#429 id=429 data-nosnippet>429</a>                .unwrap(),
@@ -483,7 +483,7 @@
 <a href=#483 id=483 data-nosnippet>483</a>        </span>);
 <a href=#484 id=484 data-nosnippet>484</a>
 <a href=#485 id=485 data-nosnippet>485</a>        <span class="comment">// The /config/runtime endpoint should be available and reflect CLI overrides. Use a raw
-<a href=#486 id=486 data-nosnippet>486</a>        // reqwest client to fetch JSON, since surf-disco defaults to bincode encoding which can't
+<a href=#486 id=486 data-nosnippet>486</a>        // reqwest client to fetch JSON, since our client defaults to VBS encoding which can't
 <a href=#487 id=487 data-nosnippet>487</a>        // round-trip arbitrary JSON via `serde_json::Value`.
 <a href=#488 id=488 data-nosnippet>488</a>        </span><span class="kw">let </span>res = reqwest::Client::new()
 <a href=#489 id=489 data-nosnippet>489</a>            .get(

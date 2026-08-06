@@ -1991,7 +1991,7 @@
 <a href=#1991 id=1991 data-nosnippet>1991</a>        <span class="kw">let </span><span class="kw-2">mut </span>process_leaf_stream_handle = ProcessLeafAndBlockPairStreamTask::new(
 <a href=#1992 id=1992 data-nosnippet>1992</a>            leaf_receiver,
 <a href=#1993 id=1993 data-nosnippet>1993</a>            data_state,
-<a href=#1994 id=1994 data-nosnippet>1994</a>            surf_disco::client::Client::new(<span class="string">"http://localhost/"</span>.parse().unwrap()),
+<a href=#1994 id=1994 data-nosnippet>1994</a>            http_client::Client::new(<span class="string">"http://localhost/"</span>.parse().unwrap()),
 <a href=#1995 id=1995 data-nosnippet>1995</a>            PublicHotShotConfig {
 <a href=#1996 id=1996 data-nosnippet>1996</a>                epoch_height: <span class="prelude-val">None</span>,
 <a href=#1997 id=1997 data-nosnippet>1997</a>                epoch_start_block: <span class="prelude-val">None</span>,

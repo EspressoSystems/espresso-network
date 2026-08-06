@@ -5,7 +5,7 @@
 <a href=#5 id=5 data-nosnippet>5</a><span class="kw">use </span>espresso_node::SequencerApiVersion;
 <a href=#6 id=6 data-nosnippet>6</a><span class="kw">use </span>espresso_types::{Header, NamespaceId, NamespaceProofQueryData};
 <a href=#7 id=7 data-nosnippet>7</a><span class="kw">use </span>futures::{future::try_join_all, stream::StreamExt};
-<a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>surf_disco::Url;
+<a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>http_client::{Client, Url};
 <a href=#9 id=9 data-nosnippet>9</a>
 <a href=#10 id=10 data-nosnippet>10</a><span class="doccomment">/// Count transactions and bytes confirmed in a given namespace.
 <a href=#11 id=11 data-nosnippet>11</a></span><span class="attr">#[derive(Debug, Parser)]
@@ -38,79 +38,77 @@
 <a href=#38 id=38 data-nosnippet>38</a>
 <a href=#39 id=39 data-nosnippet>39</a><span class="kw">pub async fn </span>run(opt: Options) -&gt; anyhow::Result&lt;()&gt; {
 <a href=#40 id=40 data-nosnippet>40</a>    <span class="kw">let </span>ns = NamespaceId::from(opt.namespace);
-<a href=#41 id=41 data-nosnippet>41</a>    <span class="kw">let </span>client = surf_disco::Client::&lt;hotshot_query_service::Error, SequencerApiVersion&gt;::new(
-<a href=#42 id=42 data-nosnippet>42</a>        opt.url.clone(),
-<a href=#43 id=43 data-nosnippet>43</a>    );
-<a href=#44 id=44 data-nosnippet>44</a>
-<a href=#45 id=45 data-nosnippet>45</a>    <span class="comment">// Convert optional closed [from, to] interval to a semi-open [start, end) interval, which makes
-<a href=#46 id=46 data-nosnippet>46</a>    // arithmetic simpler later on.
-<a href=#47 id=47 data-nosnippet>47</a>    </span><span class="kw">let </span>start = opt.from_block;
-<a href=#48 id=48 data-nosnippet>48</a>    <span class="kw">let </span>end = <span class="kw">match </span>opt.to_block {
-<a href=#49 id=49 data-nosnippet>49</a>        <span class="prelude-val">Some</span>(to) =&gt; to + <span class="number">1</span>,
-<a href=#50 id=50 data-nosnippet>50</a>        <span class="prelude-val">None </span>=&gt; client.get(<span class="string">"status/block-height"</span>).send().<span class="kw">await</span><span class="question-mark">?</span>,
-<a href=#51 id=51 data-nosnippet>51</a>    };
-<a href=#52 id=52 data-nosnippet>52</a>    <span class="macro">ensure!</span>(end &gt; start, <span class="string">"to-block &lt; from-block"</span>);
-<a href=#53 id=53 data-nosnippet>53</a>
-<a href=#54 id=54 data-nosnippet>54</a>    <span class="kw">let </span>tasks = (<span class="number">0</span>..opt.jobs).map(|i| {
-<a href=#55 id=55 data-nosnippet>55</a>        <span class="kw">let </span>chunk_size = (end - start) / opt.jobs;
-<a href=#56 id=56 data-nosnippet>56</a>        <span class="kw">let </span>chunk_start = start + i * chunk_size;
-<a href=#57 id=57 data-nosnippet>57</a>        <span class="kw">let </span>chunk_end = min(chunk_start + chunk_size, end);
-<a href=#58 id=58 data-nosnippet>58</a>        process_chunk(opt.url.clone(), ns, chunk_start, chunk_end)
-<a href=#59 id=59 data-nosnippet>59</a>    });
-<a href=#60 id=60 data-nosnippet>60</a>    <span class="kw">let </span>chunks = try_join_all(tasks).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#61 id=61 data-nosnippet>61</a>
-<a href=#62 id=62 data-nosnippet>62</a>    <span class="kw">let </span><span class="kw-2">mut </span>num_txs = <span class="number">0</span>;
-<a href=#63 id=63 data-nosnippet>63</a>    <span class="kw">let </span><span class="kw-2">mut </span>bytes = <span class="number">0</span>;
-<a href=#64 id=64 data-nosnippet>64</a>    <span class="kw">for </span>(chunk_txs, chunk_bytes) <span class="kw">in </span>chunks {
-<a href=#65 id=65 data-nosnippet>65</a>        num_txs += chunk_txs;
-<a href=#66 id=66 data-nosnippet>66</a>        bytes += chunk_bytes;
-<a href=#67 id=67 data-nosnippet>67</a>    }
-<a href=#68 id=68 data-nosnippet>68</a>
-<a href=#69 id=69 data-nosnippet>69</a>    <span class="macro">println!</span>(<span class="string">"Scanned range [{start}, {end}) for namespace {ns}"</span>);
-<a href=#70 id=70 data-nosnippet>70</a>    <span class="macro">println!</span>(<span class="string">"{num_txs} transactions"</span>);
-<a href=#71 id=71 data-nosnippet>71</a>    <span class="macro">println!</span>(<span class="string">"{bytes} bytes"</span>);
-<a href=#72 id=72 data-nosnippet>72</a>
-<a href=#73 id=73 data-nosnippet>73</a>    <span class="prelude-val">Ok</span>(())
-<a href=#74 id=74 data-nosnippet>74</a>}
-<a href=#75 id=75 data-nosnippet>75</a>
-<a href=#76 id=76 data-nosnippet>76</a><span class="kw">async fn </span>process_chunk(
-<a href=#77 id=77 data-nosnippet>77</a>    url: Url,
-<a href=#78 id=78 data-nosnippet>78</a>    ns: NamespaceId,
-<a href=#79 id=79 data-nosnippet>79</a>    start: usize,
-<a href=#80 id=80 data-nosnippet>80</a>    end: usize,
-<a href=#81 id=81 data-nosnippet>81</a>) -&gt; anyhow::Result&lt;(usize, usize)&gt; {
-<a href=#82 id=82 data-nosnippet>82</a>    <span class="kw">let </span>client = surf_disco::Client::&lt;hotshot_query_service::Error, SequencerApiVersion&gt;::new(url);
-<a href=#83 id=83 data-nosnippet>83</a>    <span class="kw">let </span><span class="kw-2">mut </span>headers = client
-<a href=#84 id=84 data-nosnippet>84</a>        .socket(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"availability/stream/headers/{start}"</span>))
-<a href=#85 id=85 data-nosnippet>85</a>        .subscribe::&lt;Header&gt;()
-<a href=#86 id=86 data-nosnippet>86</a>        .<span class="kw">await</span><span class="question-mark">?
-<a href=#87 id=87 data-nosnippet>87</a>        </span>.take(end - start);
-<a href=#88 id=88 data-nosnippet>88</a>
-<a href=#89 id=89 data-nosnippet>89</a>    <span class="kw">let </span><span class="kw-2">mut </span>num_txs = <span class="number">0</span>;
-<a href=#90 id=90 data-nosnippet>90</a>    <span class="kw">let </span><span class="kw-2">mut </span>bytes = <span class="number">0</span>;
-<a href=#91 id=91 data-nosnippet>91</a>    <span class="kw">while let </span><span class="prelude-val">Some</span>(header) = headers.next().<span class="kw">await </span>{
-<a href=#92 id=92 data-nosnippet>92</a>        <span class="kw">let </span>header = header<span class="question-mark">?</span>;
-<a href=#93 id=93 data-nosnippet>93</a>        <span class="kw">let </span>height = header.height();
-<a href=#94 id=94 data-nosnippet>94</a>
-<a href=#95 id=95 data-nosnippet>95</a>        <span class="kw">if </span>header.ns_table().find_ns_id(<span class="kw-2">&amp;</span>ns).is_none() {
-<a href=#96 id=96 data-nosnippet>96</a>            <span class="macro">tracing::debug!</span>(height, <span class="string">"trivial block"</span>);
-<a href=#97 id=97 data-nosnippet>97</a>            <span class="kw">continue</span>;
-<a href=#98 id=98 data-nosnippet>98</a>        }
-<a href=#99 id=99 data-nosnippet>99</a>        <span class="macro">tracing::info!</span>(height, <span class="string">"non-trivial block"</span>);
-<a href=#100 id=100 data-nosnippet>100</a>
-<a href=#101 id=101 data-nosnippet>101</a>        <span class="kw">let </span>payload: NamespaceProofQueryData = client
-<a href=#102 id=102 data-nosnippet>102</a>            .get(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"availability/block/{height}/namespace/{ns}"</span>,))
-<a href=#103 id=103 data-nosnippet>103</a>            .send()
-<a href=#104 id=104 data-nosnippet>104</a>            .<span class="kw">await
-<a href=#105 id=105 data-nosnippet>105</a>            </span>.context(<span class="macro">format!</span>(<span class="string">"requesting namespace for block {height}"</span>))<span class="question-mark">?</span>;
-<a href=#106 id=106 data-nosnippet>106</a>        num_txs += payload.transactions.len();
-<a href=#107 id=107 data-nosnippet>107</a>        bytes += payload
-<a href=#108 id=108 data-nosnippet>108</a>            .transactions
-<a href=#109 id=109 data-nosnippet>109</a>            .iter()
-<a href=#110 id=110 data-nosnippet>110</a>            .map(|tx| tx.payload().len())
-<a href=#111 id=111 data-nosnippet>111</a>            .sum::&lt;usize&gt;();
-<a href=#112 id=112 data-nosnippet>112</a>    }
-<a href=#113 id=113 data-nosnippet>113</a>
-<a href=#114 id=114 data-nosnippet>114</a>    <span class="prelude-val">Ok</span>((num_txs, bytes))
-<a href=#115 id=115 data-nosnippet>115</a>}
+<a href=#41 id=41 data-nosnippet>41</a>    <span class="kw">let </span>client = Client::&lt;hotshot_query_service::Error, SequencerApiVersion&gt;::new(opt.url.clone());
+<a href=#42 id=42 data-nosnippet>42</a>
+<a href=#43 id=43 data-nosnippet>43</a>    <span class="comment">// Convert optional closed [from, to] interval to a semi-open [start, end) interval, which makes
+<a href=#44 id=44 data-nosnippet>44</a>    // arithmetic simpler later on.
+<a href=#45 id=45 data-nosnippet>45</a>    </span><span class="kw">let </span>start = opt.from_block;
+<a href=#46 id=46 data-nosnippet>46</a>    <span class="kw">let </span>end = <span class="kw">match </span>opt.to_block {
+<a href=#47 id=47 data-nosnippet>47</a>        <span class="prelude-val">Some</span>(to) =&gt; to + <span class="number">1</span>,
+<a href=#48 id=48 data-nosnippet>48</a>        <span class="prelude-val">None </span>=&gt; client.get(<span class="string">"status/block-height"</span>).send().<span class="kw">await</span><span class="question-mark">?</span>,
+<a href=#49 id=49 data-nosnippet>49</a>    };
+<a href=#50 id=50 data-nosnippet>50</a>    <span class="macro">ensure!</span>(end &gt; start, <span class="string">"to-block &lt; from-block"</span>);
+<a href=#51 id=51 data-nosnippet>51</a>
+<a href=#52 id=52 data-nosnippet>52</a>    <span class="kw">let </span>tasks = (<span class="number">0</span>..opt.jobs).map(|i| {
+<a href=#53 id=53 data-nosnippet>53</a>        <span class="kw">let </span>chunk_size = (end - start) / opt.jobs;
+<a href=#54 id=54 data-nosnippet>54</a>        <span class="kw">let </span>chunk_start = start + i * chunk_size;
+<a href=#55 id=55 data-nosnippet>55</a>        <span class="kw">let </span>chunk_end = min(chunk_start + chunk_size, end);
+<a href=#56 id=56 data-nosnippet>56</a>        process_chunk(opt.url.clone(), ns, chunk_start, chunk_end)
+<a href=#57 id=57 data-nosnippet>57</a>    });
+<a href=#58 id=58 data-nosnippet>58</a>    <span class="kw">let </span>chunks = try_join_all(tasks).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#59 id=59 data-nosnippet>59</a>
+<a href=#60 id=60 data-nosnippet>60</a>    <span class="kw">let </span><span class="kw-2">mut </span>num_txs = <span class="number">0</span>;
+<a href=#61 id=61 data-nosnippet>61</a>    <span class="kw">let </span><span class="kw-2">mut </span>bytes = <span class="number">0</span>;
+<a href=#62 id=62 data-nosnippet>62</a>    <span class="kw">for </span>(chunk_txs, chunk_bytes) <span class="kw">in </span>chunks {
+<a href=#63 id=63 data-nosnippet>63</a>        num_txs += chunk_txs;
+<a href=#64 id=64 data-nosnippet>64</a>        bytes += chunk_bytes;
+<a href=#65 id=65 data-nosnippet>65</a>    }
+<a href=#66 id=66 data-nosnippet>66</a>
+<a href=#67 id=67 data-nosnippet>67</a>    <span class="macro">println!</span>(<span class="string">"Scanned range [{start}, {end}) for namespace {ns}"</span>);
+<a href=#68 id=68 data-nosnippet>68</a>    <span class="macro">println!</span>(<span class="string">"{num_txs} transactions"</span>);
+<a href=#69 id=69 data-nosnippet>69</a>    <span class="macro">println!</span>(<span class="string">"{bytes} bytes"</span>);
+<a href=#70 id=70 data-nosnippet>70</a>
+<a href=#71 id=71 data-nosnippet>71</a>    <span class="prelude-val">Ok</span>(())
+<a href=#72 id=72 data-nosnippet>72</a>}
+<a href=#73 id=73 data-nosnippet>73</a>
+<a href=#74 id=74 data-nosnippet>74</a><span class="kw">async fn </span>process_chunk(
+<a href=#75 id=75 data-nosnippet>75</a>    url: Url,
+<a href=#76 id=76 data-nosnippet>76</a>    ns: NamespaceId,
+<a href=#77 id=77 data-nosnippet>77</a>    start: usize,
+<a href=#78 id=78 data-nosnippet>78</a>    end: usize,
+<a href=#79 id=79 data-nosnippet>79</a>) -&gt; anyhow::Result&lt;(usize, usize)&gt; {
+<a href=#80 id=80 data-nosnippet>80</a>    <span class="kw">let </span>client = Client::&lt;hotshot_query_service::Error, SequencerApiVersion&gt;::new(url);
+<a href=#81 id=81 data-nosnippet>81</a>    <span class="kw">let </span><span class="kw-2">mut </span>headers = client
+<a href=#82 id=82 data-nosnippet>82</a>        .socket(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"availability/stream/headers/{start}"</span>))
+<a href=#83 id=83 data-nosnippet>83</a>        .subscribe::&lt;Header&gt;()
+<a href=#84 id=84 data-nosnippet>84</a>        .<span class="kw">await</span><span class="question-mark">?
+<a href=#85 id=85 data-nosnippet>85</a>        </span>.take(end - start);
+<a href=#86 id=86 data-nosnippet>86</a>
+<a href=#87 id=87 data-nosnippet>87</a>    <span class="kw">let </span><span class="kw-2">mut </span>num_txs = <span class="number">0</span>;
+<a href=#88 id=88 data-nosnippet>88</a>    <span class="kw">let </span><span class="kw-2">mut </span>bytes = <span class="number">0</span>;
+<a href=#89 id=89 data-nosnippet>89</a>    <span class="kw">while let </span><span class="prelude-val">Some</span>(header) = headers.next().<span class="kw">await </span>{
+<a href=#90 id=90 data-nosnippet>90</a>        <span class="kw">let </span>header = header<span class="question-mark">?</span>;
+<a href=#91 id=91 data-nosnippet>91</a>        <span class="kw">let </span>height = header.height();
+<a href=#92 id=92 data-nosnippet>92</a>
+<a href=#93 id=93 data-nosnippet>93</a>        <span class="kw">if </span>header.ns_table().find_ns_id(<span class="kw-2">&amp;</span>ns).is_none() {
+<a href=#94 id=94 data-nosnippet>94</a>            <span class="macro">tracing::debug!</span>(height, <span class="string">"trivial block"</span>);
+<a href=#95 id=95 data-nosnippet>95</a>            <span class="kw">continue</span>;
+<a href=#96 id=96 data-nosnippet>96</a>        }
+<a href=#97 id=97 data-nosnippet>97</a>        <span class="macro">tracing::info!</span>(height, <span class="string">"non-trivial block"</span>);
+<a href=#98 id=98 data-nosnippet>98</a>
+<a href=#99 id=99 data-nosnippet>99</a>        <span class="kw">let </span>payload: NamespaceProofQueryData = client
+<a href=#100 id=100 data-nosnippet>100</a>            .get(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"availability/block/{height}/namespace/{ns}"</span>,))
+<a href=#101 id=101 data-nosnippet>101</a>            .send()
+<a href=#102 id=102 data-nosnippet>102</a>            .<span class="kw">await
+<a href=#103 id=103 data-nosnippet>103</a>            </span>.context(<span class="macro">format!</span>(<span class="string">"requesting namespace for block {height}"</span>))<span class="question-mark">?</span>;
+<a href=#104 id=104 data-nosnippet>104</a>        num_txs += payload.transactions.len();
+<a href=#105 id=105 data-nosnippet>105</a>        bytes += payload
+<a href=#106 id=106 data-nosnippet>106</a>            .transactions
+<a href=#107 id=107 data-nosnippet>107</a>            .iter()
+<a href=#108 id=108 data-nosnippet>108</a>            .map(|tx| tx.payload().len())
+<a href=#109 id=109 data-nosnippet>109</a>            .sum::&lt;usize&gt;();
+<a href=#110 id=110 data-nosnippet>110</a>    }
+<a href=#111 id=111 data-nosnippet>111</a>
+<a href=#112 id=112 data-nosnippet>112</a>    <span class="prelude-val">Ok</span>((num_txs, bytes))
+<a href=#113 id=113 data-nosnippet>113</a>}
 </code></pre></div></section></main></body></html>

@@ -13,9 +13,9 @@
 <a href=#13 id=13 data-nosnippet>13</a>    network::{NetworkConfig, NetworkConfigSource},
 <a href=#14 id=14 data-nosnippet>14</a>    traits::node_implementation::NodeType,
 <a href=#15 id=15 data-nosnippet>15</a>};
-<a href=#16 id=16 data-nosnippet>16</a><span class="kw">use </span>libp2p_identity::PeerId;
-<a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>multiaddr::Multiaddr;
-<a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>surf_disco::{Client, Url, error::ClientError};
+<a href=#16 id=16 data-nosnippet>16</a><span class="kw">use </span>http_client::{Client, Url, error::ClientErr};
+<a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>libp2p_identity::PeerId;
+<a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>multiaddr::Multiaddr;
 <a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span>tokio::time::sleep;
 <a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span>tracing::{info, instrument};
 <a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span>vbs::BinarySerializer;
@@ -25,7 +25,7 @@
 <a href=#25 id=25 data-nosnippet>25</a><span class="doccomment">/// Holds the client connection to the orchestrator
 <a href=#26 id=26 data-nosnippet>26</a></span><span class="kw">pub struct </span>OrchestratorClient {
 <a href=#27 id=27 data-nosnippet>27</a>    <span class="doccomment">/// the client
-<a href=#28 id=28 data-nosnippet>28</a>    </span><span class="kw">pub </span>client: surf_disco::Client&lt;ClientError, OrchestratorVersion&gt;,
+<a href=#28 id=28 data-nosnippet>28</a>    </span><span class="kw">pub </span>client: Client&lt;ClientErr, OrchestratorVersion&gt;,
 <a href=#29 id=29 data-nosnippet>29</a>}
 <a href=#30 id=30 data-nosnippet>30</a>
 <a href=#31 id=31 data-nosnippet>31</a><span class="doccomment">/// Struct describing a benchmark result
@@ -237,7 +237,7 @@
 <a href=#237 id=237 data-nosnippet>237</a>    <span class="doccomment">/// Creates the client that will connect to the orchestrator
 <a href=#238 id=238 data-nosnippet>238</a>    </span><span class="attr">#[must_use]
 <a href=#239 id=239 data-nosnippet>239</a>    </span><span class="kw">pub fn </span>new(url: Url) -&gt; <span class="self">Self </span>{
-<a href=#240 id=240 data-nosnippet>240</a>        <span class="kw">let </span>client = surf_disco::Client::&lt;ClientError, OrchestratorVersion&gt;::new(url);
+<a href=#240 id=240 data-nosnippet>240</a>        <span class="kw">let </span>client = Client::&lt;ClientErr, OrchestratorVersion&gt;::new(url);
 <a href=#241 id=241 data-nosnippet>241</a>        <span class="comment">// TODO ED: Add healthcheck wait here
 <a href=#242 id=242 data-nosnippet>242</a>        </span>OrchestratorClient { client }
 <a href=#243 id=243 data-nosnippet>243</a>    }
@@ -264,11 +264,11 @@
 <a href=#264 id=264 data-nosnippet>264</a>            libp2p_public_key,
 <a href=#265 id=265 data-nosnippet>265</a>        ))<span class="question-mark">?</span>;
 <a href=#266 id=266 data-nosnippet>266</a>
-<a href=#267 id=267 data-nosnippet>267</a>        <span class="kw">let </span>identity = |client: Client&lt;ClientError, OrchestratorVersion&gt;| {
+<a href=#267 id=267 data-nosnippet>267</a>        <span class="kw">let </span>identity = |client: Client&lt;ClientErr, OrchestratorVersion&gt;| {
 <a href=#268 id=268 data-nosnippet>268</a>            <span class="comment">// We need to clone here to move it into the closure
 <a href=#269 id=269 data-nosnippet>269</a>            </span><span class="kw">let </span>request_body = request_body.clone();
 <a href=#270 id=270 data-nosnippet>270</a>            <span class="kw">async move </span>{
-<a href=#271 id=271 data-nosnippet>271</a>                <span class="kw">let </span>node_index: <span class="prelude-ty">Result</span>&lt;u16, ClientError&gt; = client
+<a href=#271 id=271 data-nosnippet>271</a>                <span class="kw">let </span>node_index: <span class="prelude-ty">Result</span>&lt;u16, ClientErr&gt; = client
 <a href=#272 id=272 data-nosnippet>272</a>                    .post(<span class="string">"api/identity"</span>)
 <a href=#273 id=273 data-nosnippet>273</a>                    .body_binary(<span class="kw-2">&amp;</span>request_body)
 <a href=#274 id=274 data-nosnippet>274</a>                    .expect(<span class="string">"failed to set request body"</span>)
@@ -282,9 +282,9 @@
 <a href=#282 id=282 data-nosnippet>282</a>        <span class="kw">let </span>node_index = <span class="self">self</span>.wait_for_fn_from_orchestrator(identity).<span class="kw">await</span>;
 <a href=#283 id=283 data-nosnippet>283</a>
 <a href=#284 id=284 data-nosnippet>284</a>        <span class="comment">// get the corresponding config
-<a href=#285 id=285 data-nosnippet>285</a>        </span><span class="kw">let </span>f = |client: Client&lt;ClientError, OrchestratorVersion&gt;| {
+<a href=#285 id=285 data-nosnippet>285</a>        </span><span class="kw">let </span>f = |client: Client&lt;ClientErr, OrchestratorVersion&gt;| {
 <a href=#286 id=286 data-nosnippet>286</a>            <span class="kw">async move </span>{
-<a href=#287 id=287 data-nosnippet>287</a>                <span class="kw">let </span>config: <span class="prelude-ty">Result</span>&lt;NetworkConfig&lt;TYPES&gt;, ClientError&gt; = client
+<a href=#287 id=287 data-nosnippet>287</a>                <span class="kw">let </span>config: <span class="prelude-ty">Result</span>&lt;NetworkConfig&lt;TYPES&gt;, ClientErr&gt; = client
 <a href=#288 id=288 data-nosnippet>288</a>                    .post(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"api/config/{node_index}"</span>))
 <a href=#289 id=289 data-nosnippet>289</a>                    .send()
 <a href=#290 id=290 data-nosnippet>290</a>                    .<span class="kw">await</span>;
@@ -305,9 +305,9 @@
 <a href=#305 id=305 data-nosnippet>305</a>    /// if unable to post
 <a href=#306 id=306 data-nosnippet>306</a>    </span><span class="attr">#[instrument(skip_all, name = <span class="string">"orchestrator node index for validator config"</span>)]
 <a href=#307 id=307 data-nosnippet>307</a>    </span><span class="kw">pub async fn </span>get_node_index_for_init_validator_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u16 {
-<a href=#308 id=308 data-nosnippet>308</a>        <span class="kw">let </span>cur_node_index = |client: Client&lt;ClientError, OrchestratorVersion&gt;| {
+<a href=#308 id=308 data-nosnippet>308</a>        <span class="kw">let </span>cur_node_index = |client: Client&lt;ClientErr, OrchestratorVersion&gt;| {
 <a href=#309 id=309 data-nosnippet>309</a>            <span class="kw">async move </span>{
-<a href=#310 id=310 data-nosnippet>310</a>                <span class="kw">let </span>cur_node_index: <span class="prelude-ty">Result</span>&lt;u16, ClientError&gt; = client
+<a href=#310 id=310 data-nosnippet>310</a>                <span class="kw">let </span>cur_node_index: <span class="prelude-ty">Result</span>&lt;u16, ClientErr&gt; = client
 <a href=#311 id=311 data-nosnippet>311</a>                    .post(<span class="string">"api/get_tmp_node_index"</span>)
 <a href=#312 id=312 data-nosnippet>312</a>                    .send()
 <a href=#313 id=313 data-nosnippet>313</a>                    .<span class="kw">await
@@ -327,7 +327,7 @@
 <a href=#327 id=327 data-nosnippet>327</a>    </span><span class="attr">#[instrument(skip_all, name = <span class="string">"orchestrator config"</span>)]
 <a href=#328 id=328 data-nosnippet>328</a>    </span><span class="kw">pub async fn </span>get_config_after_collection&lt;TYPES: NodeType&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; NetworkConfig&lt;TYPES&gt; {
 <a href=#329 id=329 data-nosnippet>329</a>        <span class="comment">// Define the request for post-register configurations
-<a href=#330 id=330 data-nosnippet>330</a>        </span><span class="kw">let </span>get_config_after_collection = |client: Client&lt;ClientError, OrchestratorVersion&gt;| {
+<a href=#330 id=330 data-nosnippet>330</a>        </span><span class="kw">let </span>get_config_after_collection = |client: Client&lt;ClientErr, OrchestratorVersion&gt;| {
 <a href=#331 id=331 data-nosnippet>331</a>            <span class="kw">async move </span>{
 <a href=#332 id=332 data-nosnippet>332</a>                <span class="kw">let </span>result = client
 <a href=#333 id=333 data-nosnippet>333</a>                    .post(<span class="string">"api/post_config_after_peer_collected"</span>)
@@ -353,12 +353,12 @@
 <a href=#353 id=353 data-nosnippet>353</a>    /// # Panics
 <a href=#354 id=354 data-nosnippet>354</a>    /// if unable to serialize `address`
 <a href=#355 id=355 data-nosnippet>355</a>    </span><span class="kw">pub async fn </span>post_builder_addresses(<span class="kw-2">&amp;</span><span class="self">self</span>, addresses: Vec&lt;Url&gt;) {
-<a href=#356 id=356 data-nosnippet>356</a>        <span class="kw">let </span>send_builder_f = |client: Client&lt;ClientError, OrchestratorVersion&gt;| {
+<a href=#356 id=356 data-nosnippet>356</a>        <span class="kw">let </span>send_builder_f = |client: Client&lt;ClientErr, OrchestratorVersion&gt;| {
 <a href=#357 id=357 data-nosnippet>357</a>            <span class="kw">let </span>request_body = vbs::Serializer::&lt;OrchestratorVersion&gt;::serialize(<span class="kw-2">&amp;</span>addresses)
 <a href=#358 id=358 data-nosnippet>358</a>                .expect(<span class="string">"Failed to serialize request"</span>);
 <a href=#359 id=359 data-nosnippet>359</a>
 <a href=#360 id=360 data-nosnippet>360</a>            <span class="kw">async move </span>{
-<a href=#361 id=361 data-nosnippet>361</a>                <span class="kw">let </span>result: <span class="prelude-ty">Result</span>&lt;<span class="kw">_</span>, ClientError&gt; = client
+<a href=#361 id=361 data-nosnippet>361</a>                <span class="kw">let </span>result: <span class="prelude-ty">Result</span>&lt;<span class="kw">_</span>, ClientErr&gt; = client
 <a href=#362 id=362 data-nosnippet>362</a>                    .post(<span class="string">"api/builder"</span>)
 <a href=#363 id=363 data-nosnippet>363</a>                    .body_binary(<span class="kw-2">&amp;</span>request_body)
 <a href=#364 id=364 data-nosnippet>364</a>                    .unwrap()
@@ -376,7 +376,7 @@
 <a href=#376 id=376 data-nosnippet>376</a>    <span class="doccomment">/// Requests a builder URL from orchestrator
 <a href=#377 id=377 data-nosnippet>377</a>    </span><span class="kw">pub async fn </span>get_builder_addresses(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;Url&gt; {
 <a href=#378 id=378 data-nosnippet>378</a>        <span class="comment">// Define the request for post-register configurations
-<a href=#379 id=379 data-nosnippet>379</a>        </span><span class="kw">let </span>get_builder = |client: Client&lt;ClientError, OrchestratorVersion&gt;| {
+<a href=#379 id=379 data-nosnippet>379</a>        </span><span class="kw">let </span>get_builder = |client: Client&lt;ClientErr, OrchestratorVersion&gt;| {
 <a href=#380 id=380 data-nosnippet>380</a>            <span class="kw">async move </span>{
 <a href=#381 id=381 data-nosnippet>381</a>                <span class="kw">let </span>result = client.get(<span class="string">"api/builders"</span>).send().<span class="kw">await</span>;
 <a href=#382 id=382 data-nosnippet>382</a>
@@ -438,7 +438,7 @@
 <a href=#438 id=438 data-nosnippet>438</a>        validator_config.is_da = is_da;
 <a href=#439 id=439 data-nosnippet>439</a>
 <a href=#440 id=440 data-nosnippet>440</a>        <span class="comment">// wait for all nodes' public keys
-<a href=#441 id=441 data-nosnippet>441</a>        </span><span class="kw">let </span>wait_for_all_nodes_pub_key = |client: Client&lt;ClientError, OrchestratorVersion&gt;| {
+<a href=#441 id=441 data-nosnippet>441</a>        </span><span class="kw">let </span>wait_for_all_nodes_pub_key = |client: Client&lt;ClientErr, OrchestratorVersion&gt;| {
 <a href=#442 id=442 data-nosnippet>442</a>            <span class="kw">async move </span>{
 <a href=#443 id=443 data-nosnippet>443</a>                client
 <a href=#444 id=444 data-nosnippet>444</a>                    .get(<span class="string">"api/peer_pub_ready"</span>)
@@ -464,10 +464,10 @@
 <a href=#464 id=464 data-nosnippet>464</a>    /// Panics if unable to post.
 <a href=#465 id=465 data-nosnippet>465</a>    </span><span class="attr">#[instrument(skip(<span class="self">self</span>), name = <span class="string">"orchestrator ready signal"</span>)]
 <a href=#466 id=466 data-nosnippet>466</a>    </span><span class="kw">pub async fn </span>wait_for_all_nodes_ready(<span class="kw-2">&amp;</span><span class="self">self</span>, peer_config: Vec&lt;u8&gt;) -&gt; bool {
-<a href=#467 id=467 data-nosnippet>467</a>        <span class="kw">let </span>send_ready_f = |client: Client&lt;ClientError, OrchestratorVersion&gt;| {
+<a href=#467 id=467 data-nosnippet>467</a>        <span class="kw">let </span>send_ready_f = |client: Client&lt;ClientErr, OrchestratorVersion&gt;| {
 <a href=#468 id=468 data-nosnippet>468</a>            <span class="kw">let </span>pk = peer_config.clone();
 <a href=#469 id=469 data-nosnippet>469</a>            <span class="kw">async move </span>{
-<a href=#470 id=470 data-nosnippet>470</a>                <span class="kw">let </span>result: <span class="prelude-ty">Result</span>&lt;<span class="kw">_</span>, ClientError&gt; = client
+<a href=#470 id=470 data-nosnippet>470</a>                <span class="kw">let </span>result: <span class="prelude-ty">Result</span>&lt;<span class="kw">_</span>, ClientErr&gt; = client
 <a href=#471 id=471 data-nosnippet>471</a>                    .post(<span class="string">"api/ready"</span>)
 <a href=#472 id=472 data-nosnippet>472</a>                    .body_binary(<span class="kw-2">&amp;</span>pk)
 <a href=#473 id=473 data-nosnippet>473</a>                    .unwrap()
@@ -481,7 +481,7 @@
 <a href=#481 id=481 data-nosnippet>481</a>        <span class="self">self</span>.wait_for_fn_from_orchestrator::&lt;<span class="kw">_</span>, <span class="kw">_</span>, ()&gt;(send_ready_f)
 <a href=#482 id=482 data-nosnippet>482</a>            .<span class="kw">await</span>;
 <a href=#483 id=483 data-nosnippet>483</a>
-<a href=#484 id=484 data-nosnippet>484</a>        <span class="kw">let </span>wait_for_all_nodes_ready_f = |client: Client&lt;ClientError, OrchestratorVersion&gt;| {
+<a href=#484 id=484 data-nosnippet>484</a>        <span class="kw">let </span>wait_for_all_nodes_ready_f = |client: Client&lt;ClientErr, OrchestratorVersion&gt;| {
 <a href=#485 id=485 data-nosnippet>485</a>            <span class="kw">async move </span>{ client.get(<span class="string">"api/start"</span>).send().<span class="kw">await </span>}.boxed()
 <a href=#486 id=486 data-nosnippet>486</a>        };
 <a href=#487 id=487 data-nosnippet>487</a>        <span class="self">self</span>.wait_for_fn_from_orchestrator(wait_for_all_nodes_ready_f)
@@ -493,7 +493,7 @@
 <a href=#493 id=493 data-nosnippet>493</a>    /// Panics if unable to post
 <a href=#494 id=494 data-nosnippet>494</a>    </span><span class="attr">#[instrument(skip_all, name = <span class="string">"orchestrator metrics"</span>)]
 <a href=#495 id=495 data-nosnippet>495</a>    </span><span class="kw">pub async fn </span>post_bench_results(<span class="kw-2">&amp;</span><span class="self">self</span>, bench_results: BenchResults) {
-<a href=#496 id=496 data-nosnippet>496</a>        <span class="kw">let </span>_send_metrics_f: <span class="prelude-ty">Result</span>&lt;(), ClientError&gt; = <span class="self">self
+<a href=#496 id=496 data-nosnippet>496</a>        <span class="kw">let </span>_send_metrics_f: <span class="prelude-ty">Result</span>&lt;(), ClientErr&gt; = <span class="self">self
 <a href=#497 id=497 data-nosnippet>497</a>            </span>.client
 <a href=#498 id=498 data-nosnippet>498</a>            .post(<span class="string">"api/results"</span>)
 <a href=#499 id=499 data-nosnippet>499</a>            .body_json(<span class="kw-2">&amp;</span>bench_results)
@@ -508,8 +508,8 @@
 <a href=#508 id=508 data-nosnippet>508</a>    </span><span class="attr">#[instrument(skip_all, name = <span class="string">"waiting for orchestrator"</span>)]
 <a href=#509 id=509 data-nosnippet>509</a>    </span><span class="kw">async fn </span>wait_for_fn_from_orchestrator&lt;F, Fut, GEN&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, f: F) -&gt; GEN
 <a href=#510 id=510 data-nosnippet>510</a>    <span class="kw">where
-<a href=#511 id=511 data-nosnippet>511</a>        </span>F: Fn(Client&lt;ClientError, OrchestratorVersion&gt;) -&gt; Fut,
-<a href=#512 id=512 data-nosnippet>512</a>        Fut: Future&lt;Output = <span class="prelude-ty">Result</span>&lt;GEN, ClientError&gt;&gt;,
+<a href=#511 id=511 data-nosnippet>511</a>        </span>F: Fn(Client&lt;ClientErr, OrchestratorVersion&gt;) -&gt; Fut,
+<a href=#512 id=512 data-nosnippet>512</a>        Fut: Future&lt;Output = <span class="prelude-ty">Result</span>&lt;GEN, ClientErr&gt;&gt;,
 <a href=#513 id=513 data-nosnippet>513</a>    {
 <a href=#514 id=514 data-nosnippet>514</a>        <span class="kw">loop </span>{
 <a href=#515 id=515 data-nosnippet>515</a>            <span class="kw">let </span>client = <span class="self">self</span>.client.clone();

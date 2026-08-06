@@ -15,8 +15,8 @@
 <a href=#15 id=15 data-nosnippet>15</a>};
 <a href=#16 id=16 data-nosnippet>16</a><span class="kw">use </span>espresso_types::SeqTypes;
 <a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>hotshot_types::{data::EpochNumber, light_client::StakeTableState, stake_table::HSStakeTable};
-<a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>jf_plonk::PlonkError;
-<a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span>tide_disco::error::ServerError;
+<a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>http_client::error::ClientErr;
+<a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span>jf_plonk::PlonkError;
 <a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span>url::Url;
 <a href=#21 id=21 data-nosnippet>21</a>
 <a href=#22 id=22 data-nosnippet>22</a><span class="doccomment">/// The original prover for light client V1
@@ -130,9 +130,9 @@
 <a href=#130 id=130 data-nosnippet>130</a>    <span class="doccomment">/// Error when communicating with the smart contract: {0}
 <a href=#131 id=131 data-nosnippet>131</a>    </span>ContractError(anyhow::Error),
 <a href=#132 id=132 data-nosnippet>132</a>    <span class="doccomment">/// Error when communicating with the state relay server: {0}
-<a href=#133 id=133 data-nosnippet>133</a>    </span>RelayServerError(ServerError),
+<a href=#133 id=133 data-nosnippet>133</a>    </span>RelayServerError(ClientErr),
 <a href=#134 id=134 data-nosnippet>134</a>    <span class="doccomment">/// Error when communicating with the sequencer. Url: {0}, Error: {1}
-<a href=#135 id=135 data-nosnippet>135</a>    </span>SequencerCommunicationError(Url, ServerError),
+<a href=#135 id=135 data-nosnippet>135</a>    </span>SequencerCommunicationError(Url, ClientErr),
 <a href=#136 id=136 data-nosnippet>136</a>    <span class="doccomment">/// Internal error when generating the SNARK proof: {0}
 <a href=#137 id=137 data-nosnippet>137</a>    </span>PlonkError(PlonkError),
 <a href=#138 id=138 data-nosnippet>138</a>    <span class="doccomment">/// Internal error: {0}

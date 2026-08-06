@@ -322,7 +322,7 @@
 <a href=#322 id=322 data-nosnippet>322</a>
 <a href=#323 id=323 data-nosnippet>323</a><span class="kw">async fn </span>perform_stake_table_epoch_check_and_update&lt;STSink, EVSink&gt;(
 <a href=#324 id=324 data-nosnippet>324</a>    data_state: Arc&lt;RwLock&lt;DataState&gt;&gt;,
-<a href=#325 id=325 data-nosnippet>325</a>    client: surf_disco::Client&lt;hotshot_query_service::Error, Version01&gt;,
+<a href=#325 id=325 data-nosnippet>325</a>    client: http_client::Client&lt;hotshot_query_service::Error, Version01&gt;,
 <a href=#326 id=326 data-nosnippet>326</a>    hotshot_config: <span class="kw-2">&amp;</span>PublicHotShotConfig,
 <a href=#327 id=327 data-nosnippet>327</a>    block_height: u64,
 <a href=#328 id=328 data-nosnippet>328</a>    <span class="kw-2">mut </span>stake_table_sender: STSink,
@@ -423,7 +423,7 @@
 <a href=#423 id=423 data-nosnippet>423</a>    leaf: Leaf1QueryData&lt;SeqTypes&gt;,
 <a href=#424 id=424 data-nosnippet>424</a>    block: BlockQueryData&lt;SeqTypes&gt;,
 <a href=#425 id=425 data-nosnippet>425</a>    data_state: Arc&lt;RwLock&lt;DataState&gt;&gt;,
-<a href=#426 id=426 data-nosnippet>426</a>    client: surf_disco::Client&lt;hotshot_query_service::Error, Version01&gt;,
+<a href=#426 id=426 data-nosnippet>426</a>    client: http_client::Client&lt;hotshot_query_service::Error, Version01&gt;,
 <a href=#427 id=427 data-nosnippet>427</a>    hotshot_config: <span class="kw-2">&amp;</span>PublicHotShotConfig,
 <a href=#428 id=428 data-nosnippet>428</a>    senders: (BDSink, BVSink, STSink, EVSink),
 <a href=#429 id=429 data-nosnippet>429</a>) -&gt; <span class="prelude-ty">Result</span>&lt;(), ProcessLeafError&gt;
@@ -549,7 +549,7 @@
 <a href=#549 id=549 data-nosnippet>549</a>    </span><span class="kw">pub fn </span>new&lt;S, K1, K2, K3, K4&gt;(
 <a href=#550 id=550 data-nosnippet>550</a>        leaf_receiver: S,
 <a href=#551 id=551 data-nosnippet>551</a>        data_state: Arc&lt;RwLock&lt;DataState&gt;&gt;,
-<a href=#552 id=552 data-nosnippet>552</a>        client: surf_disco::Client&lt;hotshot_query_service::Error, Version01&gt;,
+<a href=#552 id=552 data-nosnippet>552</a>        client: http_client::Client&lt;hotshot_query_service::Error, Version01&gt;,
 <a href=#553 id=553 data-nosnippet>553</a>        hotshot_config: PublicHotShotConfig,
 <a href=#554 id=554 data-nosnippet>554</a>        senders: (K1, K2, K3, K4),
 <a href=#555 id=555 data-nosnippet>555</a>    ) -&gt; <span class="self">Self
@@ -588,7 +588,7 @@
 <a href=#588 id=588 data-nosnippet>588</a>    </span><span class="kw">async fn </span>process_leaf_stream&lt;S, BDSink, BVSink, STSink, EVSink&gt;(
 <a href=#589 id=589 data-nosnippet>589</a>        <span class="kw-2">mut </span>stream: S,
 <a href=#590 id=590 data-nosnippet>590</a>        data_state: Arc&lt;RwLock&lt;DataState&gt;&gt;,
-<a href=#591 id=591 data-nosnippet>591</a>        client: surf_disco::Client&lt;hotshot_query_service::Error, Version01&gt;,
+<a href=#591 id=591 data-nosnippet>591</a>        client: http_client::Client&lt;hotshot_query_service::Error, Version01&gt;,
 <a href=#592 id=592 data-nosnippet>592</a>        hotshot_config: PublicHotShotConfig,
 <a href=#593 id=593 data-nosnippet>593</a>        senders: (BDSink, BVSink, STSink, EVSink),
 <a href=#594 id=594 data-nosnippet>594</a>    ) <span class="kw">where
@@ -888,7 +888,7 @@
 <a href=#888 id=888 data-nosnippet>888</a>        <span class="kw">let </span><span class="kw-2">mut </span>process_leaf_stream_task_handle = ProcessLeafAndBlockPairStreamTask::new(
 <a href=#889 id=889 data-nosnippet>889</a>            leaf_receiver,
 <a href=#890 id=890 data-nosnippet>890</a>            data_state.clone(),
-<a href=#891 id=891 data-nosnippet>891</a>            surf_disco::Client::new(<span class="string">"http://localhost/"</span>.parse().unwrap()),
+<a href=#891 id=891 data-nosnippet>891</a>            http_client::Client::new(<span class="string">"http://localhost/"</span>.parse().unwrap()),
 <a href=#892 id=892 data-nosnippet>892</a>            PublicHotShotConfig {
 <a href=#893 id=893 data-nosnippet>893</a>                epoch_start_block: <span class="prelude-val">None</span>,
 <a href=#894 id=894 data-nosnippet>894</a>                epoch_height: <span class="prelude-val">None</span>,

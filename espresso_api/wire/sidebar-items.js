@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["DecodeFailure"],"fn":["decode_body","encode_err","encode_ok","respond","wants_binary"],"trait":["WireFormat"]};

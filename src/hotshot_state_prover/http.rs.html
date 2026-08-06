@@ -3,7 +3,7 @@
 <a href=#3 id=3 data-nosnippet>3</a>
 <a href=#4 id=4 data-nosnippet>4</a></span><span class="kw">use </span>alloy::primitives::Address;
 <a href=#5 id=5 data-nosnippet>5</a><span class="kw">use </span>axum::{Json, Router, http::HeaderMap, response::Response, routing::get};
-<a href=#6 id=6 data-nosnippet>6</a><span class="kw">use </span>espresso_api::{cors_layer, healthcheck_response};
+<a href=#6 id=6 data-nosnippet>6</a><span class="kw">use </span>http_wire::{cors_layer, healthcheck_response};
 <a href=#7 id=7 data-nosnippet>7</a>
 <a href=#8 id=8 data-nosnippet>8</a><span class="doccomment">/// Serves the light client contract address at the paths tide-disco used to expose it:
 <a href=#9 id=9 data-nosnippet>9</a>/// `/v0/api/lightclient_contract` directly, and `/api/lightclient_contract` (which tide-disco
