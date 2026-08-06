@@ -37,6 +37,8 @@ members = [
     "crates/hotshot/testing",
     "crates/hotshot/types",
     "crates/hotshot/utils",
+    "crates/http-client",
+    "crates/http-wire",
     "crates/process-metrics",
     "crates/serialization/api",
     "crates/versions",
@@ -254,6 +256,9 @@ hotshot-task-impls = { path = "crates/hotshot/task-impls" }
 hotshot-testing = { path = "crates/hotshot/testing" }
 hotshot-types = { path = "crates/hotshot/types" }
 hotshot-utils = { path = "crates/hotshot/utils" }
+http = "1"
+http-client = { path = "crates/http-client" }
+http-wire = { path = "crates/http-wire", default-features = false }
 humantime = "2"
 include_dir = "0.7"
 indexmap = { version = "2", features = ["serde"] }
@@ -420,6 +425,7 @@ thiserror = "2"
 tide-disco = "0.9"
 time = "0.3"
 tokio = { version = "1", features = ["macros", "time", "rt-multi-thread"] }
+tokio-tungstenite = "0.28"
 tokio-util = { version = "0.7", features = ["rt"] }
 toml = "0.8"
 tonic = { version = "0.14.5", features = ["transport"] }

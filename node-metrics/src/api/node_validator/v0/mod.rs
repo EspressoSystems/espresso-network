@@ -14,7 +14,6 @@ use axum::{
     response::Response,
     routing::get,
 };
-use espresso_api::wire::wants_binary;
 use espresso_types::{BackoffParams, SeqTypes, v0_3::AuthenticatedValidator};
 use futures::{
     FutureExt, Sink, SinkExt, Stream, StreamExt,
@@ -27,6 +26,7 @@ use hotshot_query_service::{
     types::HeightIndexed,
 };
 use hotshot_types::{PeerConfig, signature_key::BLSPubKey};
+use http_wire::wants_binary;
 use indexmap::IndexMap;
 use prometheus_parse::{Sample, Scrape};
 use serde::Deserialize;

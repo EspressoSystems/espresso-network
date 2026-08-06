@@ -2703,7 +2703,6 @@ dependencies = [
  "axum 0.8.9",
  "clap 4.6.1",
  "committable",
- "espresso-api",
  "espresso-node",
  "espresso-types",
  "espresso-utils",
@@ -2716,6 +2715,7 @@ dependencies = [
  "hotshot-example-types",
  "hotshot-state-prover",
  "hotshot-types",
+ "http-wire",
  "jf-signature 0.4.2",
  "rand 0.8.6",
  "serde",
@@ -4783,6 +4783,7 @@ dependencies = [
  "base64 0.22.1",
  "futures",
  "hex",
+ "http-wire",
  "prost 0.14.4",
  "schemars 0.9.0",
  "serde",
@@ -4796,7 +4797,6 @@ dependencies = [
  "tonic-prost-build",
  "tonic-reflection",
  "tower 0.4.13",
- "tower-http",
  "tracing",
  "tracing-subscriber 0.3.23",
  "url",
@@ -4865,7 +4865,6 @@ dependencies = [
  "clap 4.6.1",
  "committable",
  "escargot",
- "espresso-api",
  "espresso-contract-deployer",
  "espresso-node",
  "espresso-types",
@@ -4875,6 +4874,7 @@ dependencies = [
  "hotshot-query-service",
  "hotshot-state-prover",
  "hotshot-types",
+ "http-wire",
  "itertools 0.14.0",
  "jf-merkle-tree-compat",
  "rand 0.8.6",
@@ -4978,6 +4978,7 @@ dependencies = [
  "hotshot-task-impls",
  "hotshot-testing",
  "hotshot-types",
+ "http-wire",
  "include_dir",
  "indexmap 2.14.0",
  "insta",
@@ -6641,10 +6642,10 @@ dependencies = [
  "blake3",
  "clap 4.6.1",
  "csv",
- "espresso-api",
  "futures",
  "hotshot-example-types",
  "hotshot-types",
+ "http-wire",
  "libp2p-identity",
  "multiaddr",
  "serde",
@@ -6768,7 +6769,6 @@ dependencies = [
  "axum 0.8.9",
  "clap 4.6.1",
  "displaydoc",
- "espresso-api",
  "espresso-contract-deployer",
  "espresso-types",
  "espresso-utils",
@@ -6777,6 +6777,7 @@ dependencies = [
  "hotshot-query-service",
  "hotshot-task-impls",
  "hotshot-types",
+ "http-wire",
  "itertools 0.14.0",
  "jf-crhf",
  "jf-pcs",
@@ -7032,6 +7033,23 @@ dependencies = [
 
 [[package]]
 name = "http-client"
+version = "0.1.0"
+dependencies = [
+ "axum 0.8.9",
+ "futures",
+ "hex",
+ "http-wire",
+ "reqwest 0.12.28",
+ "serde",
+ "tokio",
+ "tokio-tungstenite 0.28.0",
+ "tracing",
+ "url",
+ "vbs",
+]
+
+[[package]]
+name = "http-client"
 version = "6.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1947510dc91e2bf586ea5ffb412caad7673264e14bb39fb9078da114a94ce1a5"
@@ -7064,6 +7082,22 @@ dependencies = [
  "serde_qs 0.8.5",
  "serde_urlencoded",
  "url",
+]
+
+[[package]]
+name = "http-wire"
+version = "0.1.0"
+dependencies = [
+ "axum 0.8.9",
+ "futures",
+ "hex",
+ "http 1.4.2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tower-http",
+ "vbs",
 ]
 
 [[package]]
@@ -8766,12 +8800,12 @@ dependencies = [
  "anyhow",
  "axum 0.8.9",
  "clap 4.6.1",
- "espresso-api",
  "espresso-node",
  "espresso-types",
  "futures",
  "hotshot-query-service",
  "hotshot-types",
+ "http-wire",
  "light-client",
  "log-panics",
  "serde",
@@ -9306,7 +9340,6 @@ dependencies = [
  "bitvec 1.1.0",
  "circular-buffer",
  "clap 4.6.1",
- "espresso-api",
  "espresso-types",
  "espresso-utils",
  "futures",
@@ -9314,6 +9347,7 @@ dependencies = [
  "hotshot-example-types",
  "hotshot-query-service",
  "hotshot-types",
+ "http-wire",
  "indexmap 2.14.0",
  "node-metrics",
  "prometheus-parse",
@@ -13081,7 +13115,7 @@ dependencies = [
  "encoding_rs",
  "futures-util",
  "getrandom 0.2.17",
- "http-client",
+ "http-client 6.5.3",
  "http-types",
  "log",
  "mime_guess",
@@ -13481,7 +13515,7 @@ dependencies = [
  "async-std",
  "async-trait",
  "futures-util",
- "http-client",
+ "http-client 6.5.3",
  "http-types",
  "kv-log-macro",
  "log",

@@ -18,12 +18,12 @@ genesis = []
 anyhow = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }
-espresso-api = { workspace = true }
 espresso-node = { workspace = true, default-features = false }
 espresso-types = { workspace = true }
 futures = { workspace = true }
 hotshot-query-service = { workspace = true }
 hotshot-types = { workspace = true }
+http-wire = { workspace = true, features = ["server"] }
 light-client = { workspace = true }
 log-panics = { workspace = true }
 serde = { workspace = true }

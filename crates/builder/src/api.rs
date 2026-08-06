@@ -17,10 +17,6 @@ use axum::{
     routing::{get, post},
 };
 use committable::Committable;
-use espresso_api::{
-    body_limit_layer, cors_layer, healthcheck_response,
-    wire::{self, DecodeFailure, WireFormat},
-};
 use espresso_types::SeqTypes;
 use hotshot_builder_api::v0_1::{
     block_info::{
@@ -35,6 +31,9 @@ use hotshot_types::{
     data::VidCommitment,
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
     utils::BuilderCommitment,
+};
+use http_wire::{
+    self as wire, DecodeFailure, WireFormat, body_limit_layer, cors_layer, healthcheck_response,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use surf_disco::{Error as _, StatusCode};

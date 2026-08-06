@@ -14,7 +14,6 @@ alloy = { workspace = true }
 anyhow = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }
-espresso-api = { workspace = true }
 espresso-contract-deployer = { workspace = true }
 espresso-node = { path = "../node", features = ["testing", "embedded-db"] }
 espresso-types = { workspace = true, features = ["node"] }
@@ -23,6 +22,7 @@ futures = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-state-prover = { workspace = true }
 hotshot-types = { workspace = true }
+http-wire = { workspace = true, features = ["server"] }
 itertools = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
