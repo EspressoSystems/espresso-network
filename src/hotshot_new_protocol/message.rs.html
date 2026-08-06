@@ -64,7 +64,7 @@
 <a href=#64 id=64 data-nosnippet>64</a>}
 <a href=#65 id=65 data-nosnippet>65</a>
 <a href=#66 id=66 data-nosnippet>66</a><span class="kw">impl</span>&lt;T: NodeType, S&gt; ProposalMessage&lt;T, S&gt; {
-<a href=#67 id=67 data-nosnippet>67</a>    <span class="attr">#[cfg(test)]
+<a href=#67 id=67 data-nosnippet>67</a>    <span class="attr">#[cfg(any(test, feature = <span class="string">"testing"</span>))]
 <a href=#68 id=68 data-nosnippet>68</a>    </span><span class="kw">pub fn </span>into_unchecked(<span class="self">self</span>) -&gt; ProposalMessage&lt;T, Unchecked&gt; {
 <a href=#69 id=69 data-nosnippet>69</a>        ProposalMessage {
 <a href=#70 id=70 data-nosnippet>70</a>            proposal: <span class="self">self</span>.proposal,
@@ -204,7 +204,7 @@
 <a href=#204 id=204 data-nosnippet>204</a>        <span class="prelude-val">Ok</span>(())
 <a href=#205 id=205 data-nosnippet>205</a>    }
 <a href=#206 id=206 data-nosnippet>206</a>
-<a href=#207 id=207 data-nosnippet>207</a>    <span class="attr">#[cfg(test)]
+<a href=#207 id=207 data-nosnippet>207</a>    <span class="attr">#[cfg(any(test, feature = <span class="string">"testing"</span>))]
 <a href=#208 id=208 data-nosnippet>208</a>    </span><span class="kw">pub fn </span>into_unchecked(<span class="self">self</span>) -&gt; EpochChangeMessage&lt;T, Unchecked&gt; {
 <a href=#209 id=209 data-nosnippet>209</a>        EpochChangeMessage {
 <a href=#210 id=210 data-nosnippet>210</a>            cert1: <span class="self">self</span>.cert1,
@@ -293,7 +293,7 @@
 <a href=#293 id=293 data-nosnippet>293</a>}
 <a href=#294 id=294 data-nosnippet>294</a>
 <a href=#295 id=295 data-nosnippet>295</a><span class="kw">impl</span>&lt;T: NodeType, S&gt; ConsensusMessage&lt;T, S&gt; {
-<a href=#296 id=296 data-nosnippet>296</a>    <span class="attr">#[cfg(test)]
+<a href=#296 id=296 data-nosnippet>296</a>    <span class="attr">#[cfg(any(test, feature = <span class="string">"testing"</span>))]
 <a href=#297 id=297 data-nosnippet>297</a>    </span><span class="kw">pub fn </span>into_unchecked(<span class="self">self</span>) -&gt; ConsensusMessage&lt;T, Unchecked&gt; {
 <a href=#298 id=298 data-nosnippet>298</a>        <span class="kw">match </span><span class="self">self </span>{
 <a href=#299 id=299 data-nosnippet>299</a>            <span class="self">Self</span>::Proposal(p) =&gt; ConsensusMessage::Proposal(p.into_unchecked()),
@@ -348,16 +348,16 @@
 <a href=#348 id=348 data-nosnippet>348</a><span class="attr">#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 <a href=#349 id=349 data-nosnippet>349</a>#[serde(bound(deserialize = <span class="string">""</span>))]
 <a href=#350 id=350 data-nosnippet>350</a></span><span class="kw">pub struct </span>DedupManifest&lt;T: NodeType&gt; {
-<a href=#351 id=351 data-nosnippet>351</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) view: ViewNumber,
-<a href=#352 id=352 data-nosnippet>352</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) epoch: EpochNumber,
-<a href=#353 id=353 data-nosnippet>353</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) hashes: Vec&lt;Commitment&lt;T::Transaction&gt;&gt;,
+<a href=#351 id=351 data-nosnippet>351</a>    <span class="kw">pub </span>view: ViewNumber,
+<a href=#352 id=352 data-nosnippet>352</a>    <span class="kw">pub </span>epoch: EpochNumber,
+<a href=#353 id=353 data-nosnippet>353</a>    <span class="kw">pub </span>hashes: Vec&lt;Commitment&lt;T::Transaction&gt;&gt;,
 <a href=#354 id=354 data-nosnippet>354</a>}
 <a href=#355 id=355 data-nosnippet>355</a>
 <a href=#356 id=356 data-nosnippet>356</a><span class="attr">#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 <a href=#357 id=357 data-nosnippet>357</a>#[serde(bound(deserialize = <span class="string">""</span>))]
 <a href=#358 id=358 data-nosnippet>358</a></span><span class="kw">pub struct </span>TransactionMessage&lt;T: NodeType&gt; {
-<a href=#359 id=359 data-nosnippet>359</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) view: ViewNumber,
-<a href=#360 id=360 data-nosnippet>360</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) transactions: Vec&lt;T::Transaction&gt;,
+<a href=#359 id=359 data-nosnippet>359</a>    <span class="kw">pub </span>view: ViewNumber,
+<a href=#360 id=360 data-nosnippet>360</a>    <span class="kw">pub </span>transactions: Vec&lt;T::Transaction&gt;,
 <a href=#361 id=361 data-nosnippet>361</a>}
 <a href=#362 id=362 data-nosnippet>362</a>
 <a href=#363 id=363 data-nosnippet>363</a><span class="attr">#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
@@ -387,7 +387,7 @@
 <a href=#387 id=387 data-nosnippet>387</a>}
 <a href=#388 id=388 data-nosnippet>388</a>
 <a href=#389 id=389 data-nosnippet>389</a><span class="kw">impl</span>&lt;T: NodeType, S&gt; MessageType&lt;T, S&gt; {
-<a href=#390 id=390 data-nosnippet>390</a>    <span class="attr">#[cfg(test)]
+<a href=#390 id=390 data-nosnippet>390</a>    <span class="attr">#[cfg(any(test, feature = <span class="string">"testing"</span>))]
 <a href=#391 id=391 data-nosnippet>391</a>    </span><span class="kw">pub fn </span>into_unchecked(<span class="self">self</span>) -&gt; MessageType&lt;T, Unchecked&gt; {
 <a href=#392 id=392 data-nosnippet>392</a>        <span class="kw">match </span><span class="self">self </span>{
 <a href=#393 id=393 data-nosnippet>393</a>            <span class="self">Self</span>::Consensus(c) =&gt; MessageType::Consensus(c.into_unchecked()),
@@ -410,7 +410,7 @@
 <a href=#410 id=410 data-nosnippet>410</a>        <span class="macro">matches!</span>(<span class="self">self</span>.message_type, MessageType::External(<span class="kw">_</span>))
 <a href=#411 id=411 data-nosnippet>411</a>    }
 <a href=#412 id=412 data-nosnippet>412</a>
-<a href=#413 id=413 data-nosnippet>413</a>    <span class="attr">#[cfg(test)]
+<a href=#413 id=413 data-nosnippet>413</a>    <span class="attr">#[cfg(any(test, feature = <span class="string">"testing"</span>))]
 <a href=#414 id=414 data-nosnippet>414</a>    </span><span class="kw">pub fn </span>into_unchecked(<span class="self">self</span>) -&gt; Message&lt;T, Unchecked&gt; {
 <a href=#415 id=415 data-nosnippet>415</a>        Message {
 <a href=#416 id=416 data-nosnippet>416</a>            sender: <span class="self">self</span>.sender,
