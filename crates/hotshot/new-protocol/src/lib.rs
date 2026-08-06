@@ -18,5 +18,8 @@ pub mod vote;
 
 pub mod proposal;
 
+#[cfg(any(test, feature = "trace"))]
+pub mod trace;
+
 #[cfg(test)]
 mod tests;

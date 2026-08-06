@@ -25,6 +25,7 @@ use crate::{
     proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
     tests::common::mock::MockCoordinator,
+    trace,
     vid::{VidDisperser, VidReconstructor},
     vote::VoteCollector,
 };
@@ -37,6 +38,8 @@ const HARNESS_EPOCH_HEIGHT: u64 = 10;
 pub(crate) struct TestHarness {
     coordinator: MockCoordinator,
     outputs: Outbox<ConsensusOutput<TestTypes>>,
+    /// Records this run when `NP_TRACE_DIR` is set; inert otherwise
+    trace: trace::Recorder,
 }
 
 impl TestHarness {
@@ -161,6 +164,7 @@ impl TestHarness {
         Self {
             coordinator,
             outputs: Outbox::new(),
+            trace: trace::Recorder::for_current_test(),
         }
     }
 
@@ -171,7 +175,13 @@ impl TestHarness {
     }
 
     pub fn apply_and_process(&mut self, input: ConsensusInput<TestTypes>) {
-        self.coordinator.apply_consensus(input);
+        let consensus = self.coordinator.consensus();
+        self.trace
+            .preamble(consensus.public_key(), consensus.last_decided_leaf());
+        self.coordinator.apply_consensus(input.clone());
+        // The outbox was drained at the end of the previous call, so it now holds
+        // exactly what this input drew — which is what a trace step is.
+        self.trace.record(&input, self.coordinator.outbox().iter());
         self.outputs
             .extend(self.coordinator.outbox().iter().cloned());
         for out in self.coordinator.outbox_mut().take() {
