@@ -105,6 +105,8 @@ async fn test_combined_network_reup() {
         },
         overall_safety_properties: OverallSafetyPropertiesDescription {
             num_successful_views: 35,
+            // CDN reup after the outage can fail a few views during libp2p fallback handoff
+            max_unexpected_view_failures: 5,
             ..Default::default()
         },
         // allow more time to pass in CI

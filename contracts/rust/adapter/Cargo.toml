@@ -14,7 +14,12 @@ name = "eval-domain"
 path = "src/bin/eval_domain.rs"
 
 [dependencies]
-alloy = { workspace = true }
+# Direct declaration (not workspace) so SP1 zkVM builds can drop the default
+# reqwest/ws transports; node builds restore them via feature unification.
+alloy = { version = "1.0", default-features = false, features = [
+    "contract",
+    "serde",
+] }
 anyhow = { workspace = true }
 ark-bn254 = { workspace = true }
 ark-ec = { workspace = true }
@@ -40,6 +45,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+alloy = { workspace = true }
 bincode = { workspace = true }
 proptest = { workspace = true }
 serde_json = { workspace = true }

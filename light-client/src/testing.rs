@@ -391,6 +391,8 @@ struct InnerTestClient {
     upgrade: Option<(u64, Version)>,
     /// `Certificate2` finality proofs for new-protocol leaves, by height.
     cert2s: HashMap<usize, Certificate2<SeqTypes>>,
+    /// If set, fail leaf proof requests whose `finalized` hint exceeds this distance.
+    max_finalized_hint_distance: Option<u64>,
 }
 
 impl InnerTestClient {
@@ -455,26 +457,31 @@ impl InnerTestClient {
         state.commit()
     }
 
-    async fn leaf(&mut self, height: usize, epoch_height: u64) -> LeafQueryData<SeqTypes> {
-        let epoch = epoch_from_block_number(height as u64, epoch_height);
-        let (quorum, stake_table): (Vec<_>, Vec<_>) =
-            self.quorum_for_epoch(epoch).iter().cloned().unzip();
-        let mut stake_entries = vec![];
-        let mut total_stake = U256::ZERO;
-        for validator in &stake_table {
-            stake_entries.push(StakeTableEntry {
-                stake_key: *validator.stake_table_key(),
-                stake_amount: validator.stake,
-            });
-            total_stake += validator.stake;
-        }
-
-        let pp = PubKey::public_parameter(&stake_entries, supermajority_threshold(total_stake));
-
+    async fn leaf(
+        &mut self,
+        height: usize,
+        epoch_height: u64,
+        mut payload: Option<Vec<Transaction>>,
+    ) -> LeafQueryData<SeqTypes> {
         for i in self.leaves.len()..=height {
             let epoch = EpochNumber::new(epoch_from_block_number(i as u64, epoch_height));
             let view_offset = self.view_gaps.iter().filter(|&&g| g < i).count() as u64;
             let view_number = ViewNumber::new(i as u64 + view_offset);
+
+            let (quorum, stake_table): (Vec<_>, Vec<_>) =
+                self.quorum_for_epoch(*epoch).iter().cloned().unzip();
+
+            let mut stake_entries = vec![];
+            let mut total_stake = U256::ZERO;
+            for validator in &stake_table {
+                stake_entries.push(StakeTableEntry {
+                    stake_key: *validator.stake_table_key(),
+                    stake_amount: validator.stake,
+                });
+                total_stake += validator.stake;
+            }
+
+            let pp = PubKey::public_parameter(&stake_entries, supermajority_threshold(total_stake));
 
             let upgrade = Upgrade::trivial(self.version_at(i as u64));
             let node_state = NodeState::mock_v3().with_genesis_version(upgrade.base);
@@ -490,7 +497,13 @@ impl InnerTestClient {
                 (parent.qc().clone(), mt)
             };
 
-            let transactions = vec![Transaction::random(&mut rand::thread_rng())];
+            let random_transactions = vec![Transaction::random(&mut rand::thread_rng())];
+            let transactions = if i == height {
+                payload.take().unwrap_or(random_transactions)
+            } else {
+                random_transactions
+            };
+            tracing::debug!(?transactions, "generated block {i}");
             let (payload, ns_table) =
                 Payload::from_transactions_sync(transactions, node_state.chain_config).unwrap();
             let payload_comm = vid_commitment(
@@ -513,19 +526,32 @@ impl InnerTestClient {
             {
                 assert!(block_header.set_next_stake_table_hash(self.stake_table_hash(*epoch + 1)));
             }
-            let next_epoch_justify_qc = if i > 0 && is_epoch_transition(i as u64, epoch_height) {
+            // As in production, a leaf carries a next-epoch justify QC exactly when the block
+            // justified by its QC (the parent) is part of an epoch transition, and that QC is
+            // signed by the epoch after the parent's. New-protocol leaves never carry one:
+            // epoch changes there are justified by `Certificate2`, and the `Leaf2`
+            // representation always has `next_epoch_justify_qc: None`.
+            let next_epoch_justify_qc = if i > 0
+                && self.version_at(i as u64) < NEW_PROTOCOL_VERSION
+                && is_epoch_transition(i as u64 - 1, epoch_height)
+            {
                 let parent_qc = self.leaves[i - 1].qc().clone();
+                let parent_epoch = epoch_from_block_number(i as u64 - 1, epoch_height);
+                let parent_upgrade = Upgrade::trivial(self.version_at(i as u64 - 1));
                 let data: NextEpochQuorumData2<SeqTypes> = parent_qc.data.into();
                 let versioned_commit = VersionedVoteData::new_infallible(
                     data.clone(),
                     parent_qc.view_number,
-                    &UpgradeLock::<SeqTypes>::new(upgrade),
+                    &UpgradeLock::<SeqTypes>::new(parent_upgrade),
                 )
                 .commit();
                 let commit_bytes: [u8; 32] = versioned_commit.into();
 
-                let (next_keys, next_validators): (Vec<_>, Vec<_>) =
-                    self.quorum_for_epoch(*epoch + 1).iter().cloned().unzip();
+                let (next_keys, next_validators): (Vec<_>, Vec<_>) = self
+                    .quorum_for_epoch(parent_epoch + 1)
+                    .iter()
+                    .cloned()
+                    .unzip();
                 let mut next_entries = vec![];
                 let mut next_total = U256::ZERO;
                 for validator in &next_validators {
@@ -716,14 +742,25 @@ impl TestClient {
         }
     }
 
+    pub async fn add_block(&self, height: usize, transactions: Vec<Transaction>) {
+        let mut inner = self.inner.lock().await;
+        assert!(
+            inner.leaves.len() <= height,
+            "cannot add transactions for a block which has already been generated"
+        );
+        inner
+            .leaf(height, self.epoch_height, Some(transactions))
+            .await;
+    }
+
     pub async fn leaf(&self, height: usize) -> LeafQueryData<SeqTypes> {
         let mut inner = self.inner.lock().await;
-        inner.leaf(height, self.epoch_height).await
+        inner.leaf(height, self.epoch_height, None).await
     }
 
     pub async fn payload(&self, height: usize) -> Payload {
         let mut inner = self.inner.lock().await;
-        inner.leaf(height, self.epoch_height).await;
+        inner.leaf(height, self.epoch_height, None).await;
         inner.payloads[height].clone()
     }
 
@@ -737,13 +774,13 @@ impl TestClient {
         inner.missing_leaves.remove(&height);
         inner.invalid_proofs.remove(&height);
         inner.swapped_leaves.remove(&height);
-        inner.leaf(height, self.epoch_height).await
+        inner.leaf(height, self.epoch_height, None).await
     }
 
     pub async fn forget_leaf(&self, height: usize) -> LeafQueryData<SeqTypes> {
         let mut inner = self.inner.lock().await;
         inner.missing_leaves.insert(height);
-        inner.leaf(height, self.epoch_height).await
+        inner.leaf(height, self.epoch_height, None).await
     }
 
     pub async fn return_invalid_proof(&self, for_height: usize) {
@@ -792,6 +829,13 @@ impl TestClient {
         let mut inner = self.inner.lock().await;
         inner.mock_block_height = Some(height);
     }
+
+    /// Fail leaf proof requests whose `finalized` hint is more than `max_distance` past the
+    /// requested leaf.
+    pub async fn reject_distant_finalized_hints(&self, max_distance: u64) {
+        let mut inner = self.inner.lock().await;
+        inner.max_finalized_hint_distance = Some(max_distance);
+    }
 }
 
 impl Client for TestClient {
@@ -823,7 +867,17 @@ impl Client for TestClient {
             height = *sub;
         };
 
-        let leaf = inner.leaf(height, self.epoch_height).await;
+        if let (Some(finalized), Some(max_distance)) =
+            (finalized, inner.max_finalized_hint_distance)
+            && finalized.saturating_sub(height as u64) > max_distance
+        {
+            bail!(
+                "finalized hint ({finalized}) is more than {max_distance} blocks past the \
+                 requested leaf ({height})"
+            );
+        }
+
+        let leaf = inner.leaf(height, self.epoch_height, None).await;
 
         let mut proof = LeafProof::default();
         proof.push(leaf.clone());
@@ -856,7 +910,7 @@ impl Client for TestClient {
         const MAX_PROOF_LEAVES: usize = 16;
         let mut next = height + 1;
         loop {
-            let leaf = inner.leaf(next, self.epoch_height).await;
+            let leaf = inner.leaf(next, self.epoch_height, None).await;
             next += 1;
             if proof.push(leaf) {
                 break;
@@ -882,7 +936,7 @@ impl Client for TestClient {
         );
         if inner.invalid_proofs.contains(&height) {
             tracing::info!(root, height, "return mock invalid proof");
-            let leaf = inner.leaf(height, self.epoch_height).await;
+            let leaf = inner.leaf(height, self.epoch_height, None).await;
             // Construct a proof using a Merkle tree of the wrong height.
             let mt = BlockMerkleTree::from_elems(
                 Some(BLOCK_MERKLE_TREE_HEIGHT + 1),
@@ -902,7 +956,11 @@ impl Client for TestClient {
         let mt = &inner.merkle_trees[root];
         tracing::info!(height, root = %mt.commitment(), "get proof from Merkle tree");
         let proof = mt.lookup(height as u64).expect_ok().unwrap().1;
-        let header = inner.leaf(height, self.epoch_height).await.header().clone();
+        let header = inner
+            .leaf(height, self.epoch_height, None)
+            .await
+            .header()
+            .clone();
         Ok(HeaderProof::new(header, proof))
     }
 
@@ -915,7 +973,7 @@ impl Client for TestClient {
         let mut inner = self.inner.lock().await;
         for h in start_height..end_height {
             let height = *inner.swapped_leaves.get(&h).unwrap_or(&h);
-            leaves.push(inner.leaf(height, self.epoch_height).await);
+            leaves.push(inner.leaf(height, self.epoch_height, None).await);
         }
         Ok(leaves)
     }

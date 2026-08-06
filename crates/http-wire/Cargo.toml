@@ -1,0 +1,28 @@
+[package]
+name = "http-wire"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+description = "Wire protocol shared by the HTTP APIs' servers and clients: content negotiation, error envelope, health types, body and WebSocket frame codecs."
+publish = false
+
+[features]
+default = ["server"]
+# Axum glue for serving the protocol. Clients turn this off so they don't build a server stack
+# for code they never call.
+server = ["dep:axum", "dep:futures", "dep:tokio", "dep:tower-http"]
+
+[dependencies]
+axum = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
+hex = { workspace = true }
+http = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, optional = true }
+tower-http = { workspace = true, features = ["cors"], optional = true }
+vbs = { workspace = true }
+
+[lints]
+workspace = true

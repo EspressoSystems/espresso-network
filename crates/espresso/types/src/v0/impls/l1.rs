@@ -1,50 +1,63 @@
-use std::{
-    cmp::{Ordering, min},
-    num::NonZeroUsize,
-    pin::Pin,
-    result::Result as StdResult,
-    sync::Arc,
-    time::Instant,
-};
+use std::{cmp::Ordering, sync::Arc};
+#[cfg(feature = "node")]
+use std::{cmp::min, num::NonZeroUsize, pin::Pin, result::Result as StdResult, time::Instant};
 
+#[cfg(feature = "node")]
 use alloy::{
     eips::BlockId,
     hex,
-    primitives::{Address, B256, U256},
+    primitives::Address,
     providers::{Provider, ProviderBuilder, WsConnect},
     rpc::{
         client::RpcClient,
         json_rpc::{RequestPacket, ResponsePacket},
-        types::Block,
     },
     transports::{RpcError, TransportErrorKind, http::Http},
 };
+use alloy::{
+    primitives::{B256, U256},
+    rpc::types::Block,
+};
+#[cfg(feature = "node")]
 use anyhow::Context;
+#[cfg(feature = "node")]
 use async_trait::async_trait;
 use clap::Parser;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
+#[cfg(feature = "node")]
 use futures::{
     future::{Future, TryFuture, TryFutureExt},
     stream::{self, StreamExt},
 };
+#[cfg(feature = "node")]
 use hotshot_contract_adapter::sol_types::FeeContract;
 use hotshot_types::traits::metrics::Metrics;
+#[cfg(feature = "node")]
 use lru::LruCache;
+#[cfg(feature = "node")]
 use parking_lot::RwLock;
+#[cfg(feature = "node")]
 use tokio::{
     spawn,
     sync::{Mutex, MutexGuard, Notify},
     time::{Duration, sleep},
 };
+#[cfg(feature = "node")]
 use tower_service::Service;
+#[cfg(feature = "node")]
 use tracing::Instrument;
+#[cfg(feature = "node")]
 use url::Url;
 
+use super::{L1BlockInfo, v0_1::L1BlockInfoWithParent};
+#[cfg(feature = "node")]
 use super::{
-    L1BlockInfo, L1ClientMetrics, L1State, L1UpdateTask,
-    v0_1::{L1BlockInfoWithParent, SingleTransport, SingleTransportStatus, SwitchingTransport},
+    L1ClientMetrics, L1State, L1UpdateTask,
+    v0_1::{SingleTransport, SingleTransportStatus, SwitchingTransport},
 };
-use crate::{FeeInfo, L1Client, L1ClientOptions, L1Event, L1Snapshot};
+use crate::L1ClientOptions;
+#[cfg(feature = "node")]
+use crate::{FeeInfo, L1Client, L1Event, L1Snapshot};
 
 impl PartialOrd for L1BlockInfo {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
@@ -110,6 +123,7 @@ impl L1BlockInfo {
     }
 }
 
+#[cfg(feature = "node")]
 impl Drop for L1UpdateTask {
     fn drop(&mut self) {
         if let Some(task) = self.0.get_mut().take() {
@@ -132,6 +146,7 @@ impl L1ClientOptions {
     }
 
     /// Instantiate an `L1Client` for a given list of provider `Url`s.
+    #[cfg(feature = "node")]
     pub fn connect(self, urls: Vec<Url>) -> anyhow::Result<L1Client> {
         // create custom transport
         let t = SwitchingTransport::new(self, urls)
@@ -140,11 +155,13 @@ impl L1ClientOptions {
         Ok(L1Client::with_transport(t))
     }
 
+    #[cfg(feature = "node")]
     fn rate_limit_delay(&self) -> Duration {
         self.l1_rate_limit_delay.unwrap_or(self.l1_retry_delay)
     }
 }
 
+#[cfg(feature = "node")]
 impl L1ClientMetrics {
     fn new(metrics: &(impl Metrics + ?Sized), num_urls: usize) -> Self {
         // Create a counter family for the failures per URL
@@ -168,6 +185,7 @@ impl L1ClientMetrics {
     }
 }
 
+#[cfg(feature = "node")]
 impl SwitchingTransport {
     /// Create a new `SwitchingTransport` with the given options and URLs
     pub fn new(opt: L1ClientOptions, urls: Vec<Url>) -> anyhow::Result<Self> {
@@ -205,6 +223,7 @@ impl SwitchingTransport {
     }
 }
 
+#[cfg(feature = "node")]
 impl SingleTransportStatus {
     /// Log a successful call to the inner transport
     fn log_success(&mut self) {
@@ -269,6 +288,7 @@ impl SingleTransportStatus {
     }
 }
 
+#[cfg(feature = "node")]
 impl SingleTransport {
     /// Create a new `SingleTransport` with the given URL
     fn new(url: &Url, generation: usize, revert_at: Option<Instant>) -> Self {
@@ -285,6 +305,7 @@ impl SingleTransport {
 /// which by implementing `tower_service::Service`, traits like [`Transport`](https://docs.rs/alloy/0.12.5/alloy/transports/trait.Transport.html)
 /// are auto-derived, thus can be used as an alt [`RpcClient`](https://docs.rs/alloy/0.12.5/alloy/rpc/client/struct.RpcClient.html#method.new)
 /// that can be further hooked with `Provider` via `Provider::on_client()`.
+#[cfg(feature = "node")]
 #[async_trait]
 impl Service<RequestPacket> for SwitchingTransport {
     type Error = RpcError<TransportErrorKind>;
@@ -389,6 +410,7 @@ impl Service<RequestPacket> for SwitchingTransport {
     }
 }
 
+#[cfg(feature = "node")]
 impl SwitchingTransport {
     fn switch_to(&self, next_gen: usize, current_transport: SingleTransport) -> SingleTransport {
         let next_index = next_gen % self.urls.len();
@@ -420,6 +442,7 @@ impl SwitchingTransport {
     }
 }
 
+#[cfg(feature = "node")]
 impl L1Client {
     fn with_transport(transport: SwitchingTransport) -> Self {
         // Create a new provider with that RPC client using the custom transport
@@ -1057,6 +1080,7 @@ impl L1Client {
     }
 }
 
+#[cfg(feature = "node")]
 impl L1State {
     fn new(cache_size: NonZeroUsize) -> Self {
         Self {
@@ -1092,6 +1116,7 @@ impl L1State {
     }
 }
 
+#[cfg(feature = "node")]
 async fn fetch_finalized_block_from_rpc(
     rpc: &impl Provider,
 ) -> anyhow::Result<Option<L1BlockInfoWithParent>> {

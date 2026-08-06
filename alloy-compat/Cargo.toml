@@ -6,12 +6,18 @@ authors = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
-alloy = { workspace = true }
+# Direct declaration (not workspace) so SP1 zkVM builds can drop the default
+# reqwest/ws transports; node builds restore them via feature unification.
+alloy = { version = "1.0", default-features = false, features = [
+    "serde",
+    "signers",
+] }
 ethers-core = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 
 [dev-dependencies]
+alloy = { workspace = true }
 bincode = { workspace = true }
 
 [lints]

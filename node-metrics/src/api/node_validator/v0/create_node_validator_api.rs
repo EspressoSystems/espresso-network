@@ -121,7 +121,7 @@ pub async fn create_node_validator_processing(
 ) -> Result<NodeValidatorAPI<Sender<Url>>, CreateNodeValidatorProcessingError> {
     let client_thread_state: ClientThreadState<Sender<ServerMessage>> = Default::default();
 
-    let hotshot_client = surf_disco::Client::new(config.stake_table_url_base.clone());
+    let hotshot_client = http_client::Client::new(config.stake_table_url_base.clone());
 
     let hotshot_config = get_config_stake_table_from_sequencer(hotshot_client.clone())
         .await

@@ -12,6 +12,7 @@
 mod accumulate;
 
 use std::{
+    any::{type_name, type_name_of_val},
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     marker::PhantomData,
     mem,
@@ -30,9 +31,9 @@ use hotshot_types::{
     vote::{Certificate, HasViewNumber, LightClientStateUpdateVoteAccumulator, Vote},
 };
 use tokio_util::task::JoinMap;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
-use crate::message::Vote1;
+use crate::{cert_verifier::ValidCert, message::Vote1};
 
 /// Information about a vote.
 ///
@@ -102,16 +103,21 @@ impl<T, V, C> Tally<T> for SimpleTally<T, V, C>
 where
     T: NodeType,
     V: Vote<T> + Send + 'static,
-    C: Certificate<T, V::Commitment, Voteable = V::Commitment> + Send + 'static,
+    C: Certificate<T, V::Commitment, Voteable = V::Commitment> + HasEpoch + Send + 'static,
 {
     type Vote = V;
-    type Output = C;
+    type Output = ValidCert<C>;
 
     fn tally(r: Receiver<V>, m: EpochMembership<T>, l: UpgradeLock<T>) -> Option<Self::Output> {
-        let mut a = CheckedAccumulator::new(m, l);
+        let mut a = CheckedAccumulator::<T, V, C>::new(m, l);
         while let Ok(v) = r.recv() {
             if let Some(c) = a.add(v) {
-                return Some(c);
+                if let Some(e) = c.epoch() {
+                    return Some(ValidCert::new(c, e));
+                } else {
+                    warn!(cert = type_name::<C>(), "certificate has no epoch number");
+                    break;
+                }
             }
         }
         None
@@ -120,7 +126,7 @@ where
 
 /// The quorum and light-client state certificates formed at an epoch-root view.
 pub type EpochRootCerts<T> = (
-    QuorumCertificate2<T>,
+    ValidCert<QuorumCertificate2<T>>,
     LightClientStateUpdateCertificateV2<T>,
 );
 
@@ -169,7 +175,15 @@ impl<T: NodeType> Tally<T> for EpochRootTally<T> {
 
             if let (Some(q), Some(s)) = (&quorum_cert, &state_cert) {
                 info!(view = %q.view_number(), epoch = %s.epoch, "epoch-root certificates formed");
-                return Some((q.clone(), s.clone()));
+                if let Some(e) = q.epoch() {
+                    return Some((ValidCert::new(q.clone(), e), s.clone()));
+                } else {
+                    warn!(
+                        cert = type_name_of_val(q),
+                        "certificate has no epoch number"
+                    );
+                    break;
+                }
             }
         }
 
@@ -308,7 +322,7 @@ impl<T, V, C> VoteCollector<T, SimpleTally<T, V, C>>
 where
     T: NodeType,
     V: Vote<T> + Send + 'static,
-    C: Certificate<T, V::Commitment, Voteable = V::Commitment> + Send + 'static,
+    C: Certificate<T, V::Commitment, Voteable = V::Commitment> + HasEpoch + Send + 'static,
 {
     /// Compute the accumulated stake.
     ///
@@ -351,6 +365,7 @@ mod tests {
     use committable::Committable;
     use hotshot::types::BLSPubKey;
     use hotshot_example_types::node_types::TestTypes;
+    use hotshot_testing::{node_stake::TestNodeStakes, test_builder::gen_node_lists};
     use hotshot_types::{
         data::{EpochNumber, ViewNumber},
         epoch_membership::EpochMembership,
@@ -459,7 +474,11 @@ mod tests {
             + Send
             + Sync
             + 'static,
-        C: Certificate<TestTypes, V::Commitment, Voteable = V::Commitment> + Send + Sync + 'static,
+        C: Certificate<TestTypes, V::Commitment, Voteable = V::Commitment>
+            + HasEpoch
+            + Send
+            + Sync
+            + 'static,
     >() -> VoteCollector<TestTypes, SimpleTally<TestTypes, V, C>> {
         let membership = mock_membership();
         VoteCollector::new(membership, test_upgrade_lock())
@@ -490,6 +509,7 @@ mod tests {
             + Sync
             + 'static,
         C: Certificate<TestTypes, V::Commitment, Voteable = V::Commitment>
+            + HasEpoch
             + Debug
             + Send
             + Sync
@@ -553,7 +573,7 @@ mod tests {
 
         let membership = mock_membership();
         let epoch_membership = membership.membership_for_epoch(Some(epoch)).unwrap();
-        verify_cert(&cert, &expected_data, &epoch_membership);
+        verify_cert(cert.cert(), &expected_data, &epoch_membership);
     }
 
     /// Sending votes for multiple views produces a valid certificate for each view,
@@ -594,7 +614,7 @@ mod tests {
         let membership = mock_membership();
         let epoch_membership = membership.membership_for_epoch(Some(epoch)).unwrap();
         for cert in &certs {
-            verify_cert(cert, &expected_data, &epoch_membership);
+            verify_cert(cert.cert(), &expected_data, &epoch_membership);
         }
     }
 
@@ -618,7 +638,7 @@ mod tests {
 
         let membership = mock_membership();
         let epoch_membership = membership.membership_for_epoch(Some(epoch)).unwrap();
-        verify_cert(&cert, &expected_data, &epoch_membership);
+        verify_cert(cert.cert(), &expected_data, &epoch_membership);
     }
 
     /// Sending votes for multiple views in parallel produces valid certificates for each,
@@ -653,7 +673,7 @@ mod tests {
         let membership = mock_membership();
         let epoch_membership = membership.membership_for_epoch(Some(epoch)).unwrap();
         for cert in &certs {
-            verify_cert(cert, &expected_data, &epoch_membership);
+            verify_cert(cert.cert(), &expected_data, &epoch_membership);
         }
     }
 
@@ -766,7 +786,7 @@ mod tests {
         assert_no_certs(&mut task).await;
         let membership = mock_membership();
         let epoch_membership = membership.membership_for_epoch(Some(epoch)).unwrap();
-        verify_cert(&cert, &vote_2_data(), &epoch_membership);
+        verify_cert(cert.cert(), &vote_2_data(), &epoch_membership);
     }
 
     /// Channel closed before threshold means no certificate is produced.
@@ -859,5 +879,57 @@ mod tests {
             task.accumulate_vote(vote);
         }
         assert_no_certs(&mut task).await;
+    }
+
+    /// Collector over a membership where node 9 is removed from the quorum
+    /// committee starting at epoch 3 (9 members of stake 1, threshold 7).
+    fn setup_cert1_task_with_removed_node() -> VoteCollector<
+        TestTypes,
+        SimpleTally<TestTypes, QuorumVote2<TestTypes>, Certificate1<TestTypes>>,
+    > {
+        let membership = mock_membership();
+        let committee = gen_node_lists::<TestTypes>(9, 9, &TestNodeStakes::default()).0;
+        membership
+            .membership()
+            .add_quorum_committee(EpochNumber::new(3), committee);
+        membership
+            .membership()
+            .register_epoch(EpochNumber::new(3), [0u8; 32]);
+        VoteCollector::new(membership, test_upgrade_lock())
+    }
+
+    /// A vote from a validator that was removed from the quorum committee in
+    /// a later epoch does not count toward that epoch's certificate.
+    #[tokio::test]
+    async fn test_vote_from_removed_validator_ignored() {
+        let mut task = setup_cert1_task_with_removed_node();
+        let view = ViewNumber::new(21);
+        let epoch = EpochNumber::new(3);
+
+        for i in 0..6 {
+            task.accumulate_vote(make_quorum_vote(i, view, epoch));
+        }
+        task.accumulate_vote(make_quorum_vote(9, view, epoch));
+        assert_no_certs(&mut task).await;
+
+        task.accumulate_vote(make_quorum_vote(6, view, epoch));
+        let cert = timeout(CERT_TIMEOUT, task.next()).await.unwrap().unwrap();
+        assert_eq!(cert.view_number(), view);
+    }
+
+    /// The same membership still counts node 9's vote in an epoch where it
+    /// is a member: committee resolution is per-epoch.
+    #[tokio::test]
+    async fn test_vote_counts_in_epoch_before_removal() {
+        let mut task = setup_cert1_task_with_removed_node();
+        let view = ViewNumber::new(11);
+        let epoch = EpochNumber::new(2);
+
+        for i in 0..6 {
+            task.accumulate_vote(make_quorum_vote(i, view, epoch));
+        }
+        task.accumulate_vote(make_quorum_vote(9, view, epoch));
+        let cert = timeout(CERT_TIMEOUT, task.next()).await.unwrap().unwrap();
+        assert_eq!(cert.view_number(), view);
     }
 }

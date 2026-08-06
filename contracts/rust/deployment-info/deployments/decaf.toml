@@ -1,4 +1,4 @@
-# fetched at block 11227768 (2026-07-08T06:56:00Z)
+# fetched at block 11278487 (2026-07-15T14:53:12Z)
 network = "decaf"
 
 [multisigs.espresso_labs]
@@ -7,7 +7,7 @@ version = "1.4.1"
 owners = [
     "0x74560e14de4426d1aa461801edc782ad653d9847",
     "0x3f3662e0b1d652cb6ddcd2dc31dfe5d762bbd3f2",
-    "0x53d5385d897872bb8199309be70810fc09e58ce5",
+    "0x1584f9d22ba5c56ac0bb6496c447a95a721eb709",
     "0xf4b7676d9ec86d2011ab87855424219a97deb40c",
 ]
 threshold = 2

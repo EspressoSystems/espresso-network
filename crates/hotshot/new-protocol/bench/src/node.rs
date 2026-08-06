@@ -6,10 +6,10 @@ use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
     node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
-    storage_types::TestStorage,
 };
 use hotshot_new_protocol::{
     block::{BlockAndHeaderRequest, BlockBuilder, BlockBuilderConfig},
+    cert_verifier::CertVerifiers,
     client::CoordinatorClient,
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     coordinator::{Coordinator, error::Severity, timer::Timer},
@@ -42,10 +42,10 @@ use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
 use crate::{
     config::NodeConfig, cpu_sampler::CpuSampler, leader_trace::CsvLeaderTracer,
-    membership::make_membership, metrics::MetricsCollector,
+    membership::make_membership, metrics::MetricsCollector, null_storage::NullStorage,
 };
 
-type BenchCoordinator = Coordinator<TestTypes, TestStorage<TestTypes>>;
+type BenchCoordinator = Coordinator<TestTypes, NullStorage<TestTypes>>;
 
 /// State the bench keeps to disperse injected blocks itself.
 ///
@@ -266,13 +266,14 @@ async fn build_coordinator(
         .timeout_collector(timeout_collector)
         .timeout_one_honest_collector(timeout_one_honest_collector)
         .epoch_root_collector(epoch_root_collector)
+        .cert_verifiers(CertVerifiers::new(membership.clone(), upgrade_lock.clone()))
         .vid_reconstructor(vid_reconstructor)
         .epoch_manager(epoch_manager)
         .block_builder(block_builder)
         .proposal_validator(proposal_validator)
         .share_validator(share_validator)
         .storage(hotshot_new_protocol::storage::Storage::new(
-            TestStorage::default(),
+            NullStorage::default(),
             private_key,
         ))
         .client(client)

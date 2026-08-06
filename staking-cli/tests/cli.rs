@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use alloy::{
     primitives::{
@@ -12,7 +12,7 @@ use anyhow::Result;
 use common::{MetadataCommand, Signer, TestSystemExt, base_cmd};
 use espresso_contract_deployer::build_signer;
 use espresso_types::{L1Client, v0_3::Fetcher};
-use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
+use hotshot_contract_adapter::{sol_types::StakeTableV3, stake_table::StakeTableContractVersion};
 use hotshot_types::{addr::NetAddr, signature_key::BLSPubKey, x25519};
 use predicates::{prelude::PredicateBooleanExt, str};
 use rand::{SeedableRng as _, rngs::StdRng};
@@ -841,6 +841,88 @@ async fn test_cli_stake_for_demo_three_validators(
     Ok(())
 }
 
+/// Assert that a `--metadata-network milk --metadata-hosts query-1,query-2,...` demo run registered
+/// `https://query-{i+1}.milk.devnet.espresso.network/v1/status/metrics` for validator `i`.
+///
+/// V1's `registerValidator` takes no metadataUri, so the URI is dropped rather than recorded; there
+/// only the registration count can be asserted.
+async fn assert_demo_metadata_uris(
+    system: &TestSystem,
+    version: StakeTableContractVersion,
+    num_validators: u16,
+) -> Result<()> {
+    let stake_table = StakeTableV3::new(system.stake_table, &system.provider);
+    let registered: HashMap<Address, String> = match version {
+        StakeTableContractVersion::V1 => {
+            let events = stake_table
+                .ValidatorRegistered_filter()
+                .from_block(0)
+                .query()
+                .await?;
+            assert_eq!(events.len(), num_validators as usize);
+            return Ok(());
+        },
+        StakeTableContractVersion::V2 => stake_table
+            .ValidatorRegisteredV2_filter()
+            .from_block(0)
+            .query()
+            .await?
+            .into_iter()
+            .map(|(event, _)| (event.account, event.metadataUri))
+            .collect(),
+        StakeTableContractVersion::V3 => stake_table
+            .ValidatorRegisteredV3_filter()
+            .from_block(0)
+            .query()
+            .await?
+            .into_iter()
+            .map(|(event, _)| (event.account, event.metadataUri))
+            .collect(),
+    };
+
+    assert_eq!(registered.len(), num_validators as usize);
+    for i in 0..num_validators {
+        let address = build_signer(DEV_MNEMONIC, DEMO_VALIDATOR_START_INDEX + i as u32).address();
+        let expected = format!(
+            "https://query-{}.milk.devnet.espresso.network/v1/status/metrics",
+            i + 1
+        );
+        assert_eq!(
+            registered.get(&address),
+            Some(&expected),
+            "metadata URI mismatch for validator {i}"
+        );
+    }
+    Ok(())
+}
+
+/// `--metadata-network` + `--metadata-hosts` register a distinct metadata URI per validator,
+/// shaped like `https://{host}.{network}.devnet.espresso.network/v1/status/metrics` and assigned to
+/// validators in order. Asserted against the registration events, since a `.success()`-only check
+/// also passes when every validator silently gets the placeholder URI.
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
+async fn test_cli_stake_for_demo_with_metadata_uris(
+    #[case] version: StakeTableContractVersion,
+) -> Result<()> {
+    let system = TestSystem::deploy_version(version).await?;
+    let num_validators = 3u16;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("demo")
+        .arg("stake")
+        .arg("--num-validators")
+        .arg(num_validators.to_string())
+        .arg("--metadata-network")
+        .arg("milk")
+        .arg("--metadata-hosts")
+        .arg("query-1,query-2,query-3")
+        .assert()
+        .success();
+
+    assert_demo_metadata_uris(&system, version, num_validators).await
+}
+
 #[test_log::test(rstest_reuse::apply(stake_table_versions))]
 async fn test_cli_stake_for_demo_with_mnemonic_env(
     #[case] version: StakeTableContractVersion,
@@ -969,6 +1051,30 @@ async fn test_cli_deprecated_stake_for_demo_three_validators(
         .assert()
         .success();
     Ok(())
+}
+
+/// The deprecated `stake-for-demo` command accepts the same per-validator metadata URI options as
+/// `demo stake`, and registers the same URIs.
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
+async fn test_cli_deprecated_stake_for_demo_with_metadata_uris(
+    #[case] version: StakeTableContractVersion,
+) -> Result<()> {
+    let system = TestSystem::deploy_version(version).await?;
+    let num_validators = 3u16;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("stake-for-demo")
+        .arg("--num-validators")
+        .arg(num_validators.to_string())
+        .arg("--metadata-network")
+        .arg("milk")
+        .arg("--metadata-hosts")
+        .arg("query-1,query-2,query-3")
+        .assert()
+        .success();
+
+    assert_demo_metadata_uris(&system, version, num_validators).await
 }
 
 #[test_log::test(rstest_reuse::apply(stake_table_versions))]

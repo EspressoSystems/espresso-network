@@ -150,6 +150,50 @@ async fn test_state_request_missing_parent_inserts_empty() {
     );
 }
 
+/// A state request whose parent is entirely unknown is retried once the
+/// parent is seeded from its header — the ordering where a first-of-epoch
+/// proposal arrives before the boundary leaf's `EpochChangeMessage`.
+#[tokio::test]
+async fn test_state_request_missing_parent_retried_after_seed() {
+    let mut manager =
+        StateManager::new(Arc::new(TestInstanceState::default()), test_upgrade_lock());
+    let test_data = TestData::new(3).await;
+
+    // View 2 arrives while view 1 (its parent) is entirely unknown.
+    manager.request_state(make_state_request(&test_data.views[1]));
+
+    let view_1_commit = proposal_commitment(&test_data.views[0].proposal.data.clone());
+    assert!(
+        manager.pending_contains_commitment(&view_1_commit),
+        "View 2 should be queued on its missing parent's commitment"
+    );
+    assert!(
+        manager.validated_contains_view(test_data.views[1].view_number),
+        "A from_header stub should be inserted for view 2"
+    );
+
+    // The parent becomes final (e.g. via a verified EpochChangeMessage):
+    // seeding it must restart the queued request.
+    manager.seed_from_header(test_data.views[0].proposal.data.clone());
+
+    assert!(
+        !manager.pending_contains_commitment(&view_1_commit),
+        "the queued request should be consumed, not re-queued"
+    );
+
+    let output = manager.next().await.expect("view 2 should complete");
+    assert!(
+        matches!(
+            output,
+            StateManagerOutput::State {
+                validated: true,
+                ..
+            }
+        ),
+        "View 2 should validate against the seeded parent state"
+    );
+}
+
 /// State request with seeded genesis parent spawns validation and produces output.
 #[tokio::test]
 async fn test_state_request_with_genesis_parent() {

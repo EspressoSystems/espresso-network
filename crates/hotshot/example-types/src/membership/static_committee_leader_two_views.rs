@@ -18,7 +18,7 @@ use hotshot_types::{
     },
 };
 
-use crate::membership::stake_table::{TestDaCommittees, TestStakeTable, TestStakeTableEntry};
+use crate::membership::stake_table::{TestCommitteeSchedule, TestStakeTable, TestStakeTableEntry};
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 /// Static stake table that doesn't use DRB results for leader election, where every leader leads for 2 views
@@ -36,7 +36,7 @@ pub struct StaticStakeTableLeaderForTwoViews<
 
     first_epoch: Option<u64>,
 
-    da_committees: TestDaCommittees<PubKey, StatePubKey>,
+    da_committees: TestCommitteeSchedule<PubKey, StatePubKey>,
 }
 
 impl<PubKey, StatePubKey> TestStakeTable<PubKey, StatePubKey>
@@ -56,7 +56,7 @@ where
             first_epoch: None,
             epochs: BTreeSet::new(),
             drb_results: BTreeMap::new(),
-            da_committees: TestDaCommittees::new(),
+            da_committees: TestCommitteeSchedule::new(),
         }
     }
 

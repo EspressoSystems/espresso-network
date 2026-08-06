@@ -1,31 +1,35 @@
 //! This module contains all the traits used for building the sequencer types.
 //! It also includes some trait implementations that cannot be implemented in an external crate.
-use std::{cmp::max, collections::BTreeMap, fmt::Debug, ops::Range, sync::Arc};
+#[cfg(feature = "node")]
+use std::{cmp::max, collections::BTreeMap};
+use std::{fmt::Debug, ops::Range, sync::Arc};
 
 use alloy::primitives::Address;
+#[cfg(feature = "node")]
 use anyhow::{Context, bail, ensure};
 use async_trait::async_trait;
 use committable::Commitment;
 use futures::{FutureExt, TryFutureExt};
+#[cfg(feature = "node")]
 use hotshot::{HotShotInitializer, InitializerEpochInfo, types::EventType};
+#[cfg(feature = "node")]
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
-use hotshot_new_protocol::{
-    message::{Certificate1, Certificate2},
-    storage::NewProtocolStorage,
-};
+#[cfg(feature = "node")]
+use hotshot_new_protocol::storage::NewProtocolStorage;
+#[cfg(feature = "node")]
+use hotshot_types::simple_certificate::{Certificate1, Certificate2};
+#[cfg(feature = "node")]
 use hotshot_types::{
     data::{
-        DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposal2,
-        QuorumProposalWrapper, VidCommitment, VidDisperseShare, ViewNumber,
+        DaProposal, DaProposal2, QuorumProposal, QuorumProposal2, QuorumProposalWrapper,
+        VidCommitment, VidDisperseShare,
     },
-    drb::{DrbInput, DrbResult},
-    epoch_membership::EpochMembershipCoordinator,
+    drb::DrbInput,
     event::{HotShotAction, LeafInfo},
     message::{Proposal, convert_proposal},
-    new_protocol::CoordinatorEvent,
     simple_certificate::{
-        CertificatePair, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
-        QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
+        CertificatePair, NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2,
+        UpgradeCertificate,
     },
     traits::{
         ValidatedState as HotShotState, metrics::Metrics, node_implementation::NodeType,
@@ -34,8 +38,16 @@ use hotshot_types::{
     utils::genesis_epoch_from_version,
     vote::HasViewNumber,
 };
+use hotshot_types::{
+    data::{EpochNumber, ViewNumber},
+    drb::DrbResult,
+    epoch_membership::EpochMembershipCoordinator,
+    new_protocol::CoordinatorEvent,
+    simple_certificate::LightClientStateUpdateCertificateV2,
+};
 use indexmap::IndexMap;
 use serde::{Serialize, de::DeserializeOwned};
+#[cfg(feature = "node")]
 use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
 use super::{
@@ -45,14 +57,16 @@ use super::{
 };
 use crate::{
     AuthenticatedValidatorMap, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
-    Leaf2, NetworkConfig, PubKey, SeqTypes,
-    v0::impls::{StakeTableHash, ValidatedState},
+    Header, Leaf2, PubKey, SeqTypes,
+    v0::impls::StakeTableHash,
     v0_3::{
         ChainConfig, RegisteredValidator, RewardAccountProofV1, RewardAccountV1, RewardAmount,
         RewardMerkleCommitmentV1,
     },
     v0_4::{PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleCommitmentV2},
 };
+#[cfg(feature = "node")]
+use crate::{NetworkConfig, v0::impls::ValidatedState};
 
 #[async_trait]
 pub trait StateCatchup: Send + Sync {
@@ -473,6 +487,7 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
     }
 }
 
+#[cfg(feature = "node")]
 #[async_trait]
 pub trait PersistenceOptions: Clone + Send + Sync + Debug + 'static {
     type Persistence: SequencerPersistence + MembershipPersistence;
@@ -506,6 +521,12 @@ pub trait MembershipPersistence: Send + Sync + 'static {
 
     /// Load stake tables for storage for latest `n` known epochs
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>>;
+
+    /// Load the DRB result for `epoch`.
+    async fn load_drb_result(&self, epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>>;
+
+    /// Load the epoch root block header for `epoch`.
+    async fn load_epoch_root(&self, epoch: EpochNumber) -> anyhow::Result<Option<Header>>;
 
     /// Store stake table at `epoch` in the persistence layer
     async fn store_stake(
@@ -547,6 +568,7 @@ pub trait MembershipPersistence: Send + Sync + 'static {
     ) -> anyhow::Result<Vec<RegisteredValidator<PubKey>>>;
 }
 
+#[cfg(feature = "node")]
 #[async_trait]
 pub trait SequencerPersistence:
     Sized + Send + Sync + Clone + 'static + DhtPersistentStorage + MembershipPersistence
@@ -1027,28 +1049,6 @@ pub trait SequencerPersistence:
         decided_upgrade_certificate: Option<UpgradeCertificate<SeqTypes>>,
     ) -> anyhow::Result<()>;
 
-    async fn migrate_storage(&self) -> anyhow::Result<()> {
-        tracing::warn!("migrating consensus data...");
-
-        self.migrate_anchor_leaf().await?;
-        self.migrate_da_proposals().await?;
-        self.migrate_vid_shares().await?;
-        self.migrate_quorum_proposals().await?;
-        self.migrate_quorum_certificates().await?;
-        self.migrate_x25519_keys().await?;
-        tracing::warn!("consensus storage has been migrated to new types");
-
-        Ok(())
-    }
-
-    async fn migrate_x25519_keys(&self) -> anyhow::Result<()>;
-
-    async fn migrate_anchor_leaf(&self) -> anyhow::Result<()>;
-    async fn migrate_da_proposals(&self) -> anyhow::Result<()>;
-    async fn migrate_vid_shares(&self) -> anyhow::Result<()>;
-    async fn migrate_quorum_proposals(&self) -> anyhow::Result<()>;
-    async fn migrate_quorum_certificates(&self) -> anyhow::Result<()>;
-
     async fn load_anchor_view(&self) -> anyhow::Result<ViewNumber> {
         match self.load_anchor_leaf().await? {
             Some((leaf, _)) => Ok(leaf.view_number()),
@@ -1123,6 +1123,7 @@ impl EventConsumer for NullEventConsumer {
     }
 }
 
+#[cfg(feature = "node")]
 #[async_trait]
 impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
     async fn append_vid(
@@ -1246,6 +1247,7 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
     }
 }
 
+#[cfg(feature = "node")]
 #[async_trait]
 impl<P: SequencerPersistence> NewProtocolStorage<SeqTypes> for Arc<P> {
     async fn append_cert2(

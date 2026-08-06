@@ -13,6 +13,7 @@ use espresso_types::{
     v0_4::{RewardAccountV2, RewardMerkleTreeV2},
 };
 use hotshot::traits::NodeImplementation;
+use hotshot_new_protocol::storage::NewProtocolStorage;
 use hotshot_query_service::{
     data_source::{
         VersionedDataSource,
@@ -67,6 +68,8 @@ pub struct DataSource<
 #[async_trait]
 impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerPersistence>
     DataSourceTrait<Request> for DataSource<I, N, P>
+where
+    I::Storage: NewProtocolStorage<SeqTypes>,
 {
     async fn derive_response_for(&self, request: &Request) -> Result<Response> {
         match request {
@@ -367,7 +370,10 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
 async fn legacy_leaf_chain_from_memory<I: NodeImplementation<SeqTypes>>(
     consensus_handle: &ConsensusHandle<SeqTypes, I>,
     height: u64,
-) -> anyhow::Result<Vec<espresso_types::Leaf2>> {
+) -> anyhow::Result<Vec<espresso_types::Leaf2>>
+where
+    I::Storage: NewProtocolStorage<SeqTypes>,
+{
     let mut leaves = consensus_handle.undecided_leaves().await;
     leaves.sort_by_key(|l| l.view_number());
 

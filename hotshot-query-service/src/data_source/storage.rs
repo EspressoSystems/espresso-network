@@ -249,6 +249,8 @@ where
         &mut self,
         hash: TransactionHash<Types>,
     ) -> QueryResult<BlockQueryData<Types>>;
+
+    async fn load_cert2(&mut self, height: u64) -> QueryResult<Option<Certificate2<Types>>>;
 }
 
 pub trait UpdateAvailabilityStorage<Types>: Send
@@ -347,8 +349,6 @@ where
     ) -> QueryResult<TimeWindowQueryData<Header<Types>>>;
 
     async fn latest_qc_chain(&mut self) -> QueryResult<Option<[CertificatePair<Types>; 2]>>;
-
-    async fn load_cert2(&mut self, height: u64) -> QueryResult<Option<Certificate2<Types>>>;
 
     /// Load the earliest cert2 whose finalized block height is at or above `height`.
     ///

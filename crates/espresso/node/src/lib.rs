@@ -54,6 +54,7 @@ pub(crate) fn default_telemetry_endpoint(chain_id: ChainId) -> Option<&'static s
     }
 }
 
+pub use espresso_types::RECENT_STAKE_TABLES_LIMIT;
 use genesis::L1Finalized;
 pub use genesis::{Genesis, GenesisSource};
 use hotshot::{
@@ -97,8 +98,6 @@ use url::Url;
 use vbs::version::StaticVersion;
 
 use crate::request_response::data_source::Storage as RequestResponseStorage;
-
-pub const RECENT_STAKE_TABLES_LIMIT: u64 = 20;
 
 /// The Sequencer node is generic over the hotshot CommChannel.
 #[derive(Derivative, Serialize, Deserialize)]
@@ -826,15 +825,20 @@ where
 
         info!("Libp2p network initialized");
 
-        tracing::warn!("Waiting for at least one connection to be initialized");
-        select! {
-            _ = cdn_network.wait_for_ready() => {
-                tracing::warn!("CDN connection initialized");
-            },
-            _ = p2p_network.wait_for_ready() => {
-                tracing::warn!("P2P connection initialized");
-            },
-        };
+        // From `NEW_PROTOCOL_VERSION` on, all consensus traffic runs on
+        // cliquenet and the legacy stack is torn down at startup, so don't
+        // hold up boot waiting for legacy connectivity.
+        if genesis.base_version < versions::NEW_PROTOCOL_VERSION {
+            tracing::warn!("Waiting for at least one connection to be initialized");
+            select! {
+                _ = cdn_network.wait_for_ready() => {
+                    tracing::warn!("CDN connection initialized");
+                },
+                _ = p2p_network.wait_for_ready() => {
+                    tracing::warn!("P2P connection initialized");
+                },
+            };
+        }
 
         // Combine the CDN and P2P networks
         CombinedNetworks::new(cdn_network, p2p_network, Some(Duration::from_secs(1)))
@@ -951,7 +955,7 @@ async fn check_cliquenet_info_registered(
 pub mod testing {
     use std::{
         cmp::max,
-        collections::{BTreeMap, HashMap},
+        collections::{BTreeMap, HashMap, HashSet},
         net::Ipv4Addr,
         time::Duration,
     };
@@ -961,7 +965,7 @@ pub mod testing {
         node_bindings::{Anvil, AnvilInstance},
         primitives::{Address, U256},
         providers::{
-            Provider, ProviderBuilder, RootProvider,
+            Provider, ProviderBuilder, RootProvider, WalletProvider,
             fillers::{
                 BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller,
             },
@@ -972,7 +976,8 @@ pub mod testing {
     use catchup::NullStateCatchup;
     use committable::Committable;
     use espresso_contract_deployer::{
-        Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS, builder::DeployerArgsBuilder,
+        Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS,
+        builder::{DeployerArgs, DeployerArgsBuilder},
         network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
@@ -995,6 +1000,7 @@ pub mod testing {
     use hotshot_builder_refactored::service::{
         BuilderConfig as LegacyBuilderConfig, GlobalState as LegacyGlobalState,
     };
+    use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
     use hotshot_testing::block_builder::{
         BuilderTask, SimpleBuilderImplementation, TestBuilderImplementation,
     };
@@ -1013,7 +1019,7 @@ pub mod testing {
     use rand_chacha::ChaCha20Rng;
     use staking_cli::demo::{DelegationConfig, StakingKeySet, StakingTransactions};
     use test_utils::reserve_tcp_port;
-    use tokio::spawn;
+    use tokio::{spawn, time::timeout};
     use vbs::version::{StaticVersionType, Version};
     use versions::EPOCH_VERSION;
 
@@ -1146,6 +1152,38 @@ pub mod testing {
         builder_port: Option<u16>,
         upgrades: BTreeMap<Version, Upgrade>,
         coordinator_addrs: Vec<NetAddr>,
+        contracts: Option<Contracts>,
+    }
+
+    /// Picks the key sets at `indices` out of the full deterministic sequence,
+    /// preserving the order of `indices`. Panics on duplicate or out-of-range
+    /// indices.
+    fn select_staking_key_sets(all: Vec<StakingKeySet>, indices: &[usize]) -> Vec<StakingKeySet> {
+        let mut by_index: Vec<Option<StakingKeySet>> = all.into_iter().map(Some).collect();
+        indices
+            .iter()
+            .map(|&i| {
+                by_index
+                    .get_mut(i)
+                    .unwrap_or_else(|| panic!("validator index {i} out of range"))
+                    .take()
+                    .unwrap_or_else(|| panic!("duplicate validator index {i}"))
+            })
+            .collect()
+    }
+
+    /// Deploys the contract suite up to and including the requested stake
+    /// table version, recording addresses in `contracts`.
+    pub async fn deploy_stake_table(
+        args: &DeployerArgs<impl Provider + WalletProvider>,
+        version: StakeTableContractVersion,
+        contracts: &mut Contracts,
+    ) -> anyhow::Result<()> {
+        match version {
+            StakeTableContractVersion::V1 => args.deploy_to_stake_table_v1(contracts).await,
+            StakeTableContractVersion::V2 => args.deploy_to_stake_table_v2(contracts).await,
+            StakeTableContractVersion::V3 => args.deploy_to_stake_table_v3(contracts).await,
+        }
     }
 
     pub fn staking_priv_keys(
@@ -1173,6 +1211,7 @@ pub mod testing {
                     .get(i)
                     .cloned()
                     .unwrap_or_else(|| "127.0.0.1:8080".parse().unwrap()),
+                metadata_uri: None,
             })
             .collect()
     }
@@ -1227,7 +1266,22 @@ pub mod testing {
 
         /// Version specific upgrade setup. Extend to future upgrades
         /// by adding a branch to the `match` statement.
-        pub async fn set_upgrades(mut self, version: Version) -> Self {
+        pub async fn set_upgrades(self, version: Version) -> Self {
+            let registered: Vec<usize> = (0..NUM_NODES).collect();
+            self.set_upgrades_with(version, StakeTableContractVersion::V3, &registered)
+                .await
+        }
+
+        /// Like [`Self::set_upgrades`], but deploys the requested stake table
+        /// contract version and registers only the validators at the
+        /// `registered` node indices. The deployed [`Contracts`] registry is
+        /// retained and available via [`TestConfig::contracts`].
+        pub async fn set_upgrades_with(
+            mut self,
+            version: Version,
+            stake_table_version: StakeTableContractVersion,
+            registered: &[usize],
+        ) -> Self {
             let upgrade = match version {
                 version if version >= EPOCH_VERSION => {
                     tracing::debug!(?version, "upgrade version");
@@ -1240,11 +1294,14 @@ pub mod testing {
                     )
                     .unwrap();
 
-                    let validators = staking_priv_keys(
-                        &self.priv_keys,
-                        &self.state_key_pairs,
-                        &self.coordinator_addrs,
-                        NUM_NODES,
+                    let validators = select_staking_key_sets(
+                        staking_priv_keys(
+                            &self.priv_keys,
+                            &self.state_key_pairs,
+                            &self.coordinator_addrs,
+                            NUM_NODES,
+                        ),
+                        registered,
                     );
 
                     let deployer = ProviderBuilder::new()
@@ -1278,7 +1335,7 @@ pub mod testing {
                         .safe_exit_timelock_executors(vec![self.signer.address()])
                         .build()
                         .unwrap();
-                    args.deploy_to_stake_table_v3(&mut contracts)
+                    deploy_stake_table(&args, stake_table_version, &mut contracts)
                         .await
                         .expect("failed to deploy all contracts");
 
@@ -1298,6 +1355,8 @@ pub mod testing {
                     .apply_all()
                     .await
                     .expect("send all txns failed");
+
+                    self.contracts = Some(contracts);
 
                     Upgrade::pos_view_based(st_addr)
                 },
@@ -1361,6 +1420,7 @@ pub mod testing {
                 upgrades: self.upgrades,
                 anvil_provider: self.anvil_provider,
                 coordinator_addrs: self.coordinator_addrs,
+                contracts: self.contracts,
             }
         }
 
@@ -1478,6 +1538,7 @@ pub mod testing {
                 builder_port: None,
                 upgrades: Default::default(),
                 coordinator_addrs,
+                contracts: None,
             }
         }
     }
@@ -1497,6 +1558,8 @@ pub mod testing {
         upgrades: BTreeMap<Version, Upgrade>,
         /// Per-node cliquenet coordinator bind addresses, indexed by node.
         coordinator_addrs: Vec<NetAddr>,
+        /// Contracts deployed by [`TestConfigBuilder::set_upgrades_with`], if any.
+        contracts: Option<Contracts>,
     }
 
     impl<const NUM_NODES: usize> TestConfig<NUM_NODES> {
@@ -1543,6 +1606,20 @@ pub mod testing {
                 &self.coordinator_addrs,
                 self.num_nodes(),
             )
+        }
+
+        /// Key sets for the given node indices, aligned with
+        /// [`Self::staking_priv_keys`]: the full deterministic sequence is
+        /// generated first and then filtered, so a subset keeps the same keys
+        /// per node index.
+        pub fn staking_key_sets(&self, indices: &[usize]) -> Vec<StakingKeySet> {
+            select_staking_key_sets(self.staking_priv_keys(), indices)
+        }
+
+        /// Contracts deployed by [`TestConfigBuilder::set_upgrades_with`], if
+        /// that was used to set up this config.
+        pub fn contracts(&self) -> Option<Contracts> {
+            self.contracts.clone()
         }
 
         pub fn validator_providers(
@@ -1775,75 +1852,116 @@ pub mod testing {
         }
     }
 
-    // Wait for decide event, make sure it matches submitted transaction. Return the block number
-    // containing the transaction and the block payload size
+    // Wait for the submitted transaction to be sequenced in a decided block. Return the block
+    // number containing the transaction and the block payload size.
     pub async fn wait_for_decide_on_handle(
         events: &mut (impl Stream<Item = CoordinatorEvent<SeqTypes>> + Unpin),
         submitted_txn: &Transaction,
     ) -> (u64, usize) {
         let commitment = submitted_txn.commit();
 
-        // Keep getting events until we see a Decide event
-        loop {
-            let event = events.next().await.unwrap();
-            tracing::info!("Received event from handle: {event:?}");
+        // At 0.6 a decide carries the block payload only on the node that
+        // built the block; every other node receives the payload through a
+        // separate `BlockPayloadReconstructed` event, which can arrive before
+        // or after the decide. Pair the two by view so the transaction is
+        // only reported once its block is decided.
+        let mut reconstructed = HashMap::new();
+        let mut decided_without_payload = HashSet::new();
 
-            if let CoordinatorEvent::LegacyEvent(Event {
-                event: EventType::Decide { leaf_chain, .. },
-                ..
-            }) = event
-            {
-                if let Some((height, size)) =
-                    leaf_chain.iter().find_map(|LeafInfo { leaf, .. }| {
-                        if leaf
-                            .block_payload()
-                            .as_ref()?
-                            .transaction_commitments(leaf.block_header().metadata())
-                            .contains(&commitment)
-                        {
-                            let size = leaf.block_payload().unwrap().encode().len();
-                            Some((leaf.block_header().block_number(), size))
-                        } else {
-                            None
-                        }
-                    })
+        let (height, size) = timeout(Duration::from_secs(120), async {
+            loop {
+                let event = events.next().await.unwrap();
+                tracing::info!("Received event from handle: {event:?}");
+
+                if let CoordinatorEvent::BlockPayloadReconstructed {
+                    view,
+                    header,
+                    payload,
+                } = &event
                 {
-                    tracing::info!(height, "transaction {commitment} sequenced");
-                    return (height, size);
+                    if payload
+                        .transaction_commitments(header.metadata())
+                        .contains(&commitment)
+                    {
+                        let found = (header.block_number(), payload.encode().len());
+                        if decided_without_payload.contains(view) {
+                            return found;
+                        }
+                        reconstructed.insert(*view, found);
+                    }
+                    continue;
                 }
-            } else {
-                // Keep waiting
+
+                // Decides arrive as `LegacyEvent` before the new protocol and
+                // as `NewDecide` after.
+                let leaf_chain: &[LeafInfo<SeqTypes>] = match &event {
+                    CoordinatorEvent::LegacyEvent(Event {
+                        event: EventType::Decide { leaf_chain, .. },
+                        ..
+                    }) => leaf_chain,
+                    CoordinatorEvent::NewDecide { leaf_infos, .. } => leaf_infos,
+                    _ => continue,
+                };
+                for LeafInfo { leaf, .. } in leaf_chain {
+                    let Some(payload) = leaf.block_payload() else {
+                        let view = leaf.view_number();
+                        if let Some(found) = reconstructed.remove(&view) {
+                            return found;
+                        }
+                        decided_without_payload.insert(view);
+                        continue;
+                    };
+                    if payload
+                        .transaction_commitments(leaf.block_header().metadata())
+                        .contains(&commitment)
+                    {
+                        return (leaf.block_header().block_number(), payload.encode().len());
+                    }
+                }
             }
-        }
+        })
+        .await
+        .unwrap_or_else(|_| {
+            panic!("transaction {commitment} was not sequenced within the timeout")
+        });
+        tracing::info!(height, "transaction {commitment} sequenced");
+        (height, size)
     }
 
     /// Waits until a node has reached the given target epoch (exclusive).
     /// The function returns once the first event indicates an epoch higher than `target_epoch`.
+    /// Panics if the event stream ends before reaching `target_epoch`.
     pub async fn wait_for_epochs(
         events: &mut (impl futures::Stream<Item = CoordinatorEvent<SeqTypes>> + std::marker::Unpin),
         epoch_height: u64,
         target_epoch: u64,
     ) {
         tracing::info!(target_epoch, "waiting for epoch");
+        let mut last_seen = None;
         while let Some(event) = events.next().await {
-            if let CoordinatorEvent::LegacyEvent(Event {
-                event: EventType::Decide { leaf_chain, .. },
-                ..
-            }) = event
-            {
-                let leaf = leaf_chain[0].leaf.clone();
-                let epoch = leaf.epoch(epoch_height);
-                tracing::debug!(
-                    "Node decided at height: {}, epoch: {epoch:?}",
-                    leaf.height(),
-                );
+            // Decides arrive as `LegacyEvent` before the new protocol and as
+            // `NewDecide` after; both carry the most recent leaf first.
+            let leaf = match event {
+                CoordinatorEvent::LegacyEvent(Event {
+                    event: EventType::Decide { leaf_chain, .. },
+                    ..
+                }) => leaf_chain[0].leaf.clone(),
+                CoordinatorEvent::NewDecide { leaf_infos, .. } => leaf_infos[0].leaf.clone(),
+                _ => continue,
+            };
+            let epoch = leaf.epoch(epoch_height);
+            tracing::debug!(
+                "Node decided at height: {}, epoch: {epoch:?}",
+                leaf.height(),
+            );
 
-                if epoch > Some(EpochNumber::new(target_epoch)) {
-                    break;
-                }
+            if epoch > Some(EpochNumber::new(target_epoch)) {
+                tracing::info!(target_epoch, "epoch started");
+                return;
             }
+            last_seen = Some((leaf.height(), epoch));
         }
-        tracing::info!(target_epoch, "epoch started");
+        panic!("event stream ended before target epoch {target_epoch}, last decide: {last_seen:?}");
     }
 }
 

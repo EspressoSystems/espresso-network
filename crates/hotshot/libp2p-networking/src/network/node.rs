@@ -15,6 +15,7 @@ use std::{
     collections::{HashMap, HashSet},
     iter,
     num::{NonZeroU32, NonZeroUsize},
+    pin::pin,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -26,7 +27,7 @@ use hotshot_types::{
     constants::KAD_DEFAULT_REPUB_INTERVAL_SEC, traits::node_implementation::NodeType,
 };
 use libp2p::{
-    Multiaddr, StreamProtocol, Swarm, SwarmBuilder, autonat,
+    Multiaddr, StreamProtocol, Swarm, SwarmBuilder,
     core::{transport::ListenerId, upgrade::Version::V1Lazy},
     gossipsub::{
         Behaviour as Gossipsub, ConfigBuilder as GossipsubConfigBuilder, Event as GossipEvent,
@@ -50,6 +51,7 @@ use tokio::{
     select, spawn,
     sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
     task::JoinHandle,
+    time::sleep,
 };
 use tracing::{Instrument, debug, error, info, info_span, instrument, warn};
 
@@ -92,10 +94,8 @@ pub const ESTABLISHED_LIMIT: NonZeroU32 = NonZeroU32::new(ESTABLISHED_LIMIT_UNWR
 /// Number of connections to a single peer before logging an error
 pub const ESTABLISHED_LIMIT_UNWR: u32 = 10;
 
-/// AutoNAT confidence at which we treat a Private status as definitive enough
-/// to escalate from a transient warning to a loud operator-facing error.
-/// Matches libp2p-autonat's default `confidence_max`.
-const AUTONAT_CONFIDENCE_MAX: usize = 3;
+/// How long to wait for the first inbound connection.
+const NO_INBOUND_CONNECTION_GRACE_PERIOD: Duration = Duration::from_secs(300);
 
 /// Mainnet libp2p protocol identifiers. The snapshot tests below lock these down so a
 /// change that would partition mainnet (e.g. a stray `protocol_id_prefix` call) is caught.
@@ -188,9 +188,11 @@ pub struct NetworkNode<T: NodeType, D: DhtPersistentStorage> {
     dht_handler: DHTBehaviour<T::SignatureKey, D>,
     /// Channel to resend requests, set to Some when we call `spawn_listeners`
     resend_tx: Option<UnboundedSender<ClientRequest>>,
-    /// Whether we've already emitted the loud "not publicly reachable" error for the
-    /// current Private episode. Reset whenever AutoNAT leaves Private status.
-    autonat_private_logged: bool,
+    /// Whether a peer ever connected to us.
+    ///
+    /// Used to warn the operator when the advertised address is likely not
+    /// publicly reachable.
+    saw_inbound_connection: bool,
     /// Kademlia `StreamProtocol` expected from same-network peers.
     expected_kad_protocol: StreamProtocol,
     /// Peers confirmed via identify to share our network discriminator. Gates
@@ -244,7 +246,6 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
         for (peer_id, addr) in shuffled {
             if *peer_id != self.peer_id {
                 behaviour.dht.add_address(peer_id, addr.clone());
-                behaviour.autonat.add_server(*peer_id, Some(addr.clone()));
                 bs_nodes.insert(*peer_id, iter::once(addr.clone()).collect());
             }
         }
@@ -407,18 +408,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                     rrconfig.clone(),
                 );
 
-            let autonat_config = autonat::Config {
-                only_global_ips: false,
-                ..Default::default()
-            };
-
-            let network = NetworkDef::new(
-                gossipsub,
-                kadem,
-                identify,
-                direct_message,
-                autonat::Behaviour::new(peer_id, autonat_config),
-            );
+            let network = NetworkDef::new(gossipsub, kadem, identify, direct_message);
 
             // build swarm
             let swarm = SwarmBuilder::with_existing_identity(keypair.clone());
@@ -461,7 +451,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                     .unwrap_or(NonZeroUsize::new(4).unwrap()),
             ),
             resend_tx: None,
-            autonat_private_logged: false,
+            saw_inbound_connection: false,
             expected_kad_protocol,
             same_network_peers: HashSet::new(),
             dht_put_quorum: config.dht_put_quorum,
@@ -701,6 +691,10 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                     );
                 }
 
+                if endpoint.is_listener() {
+                    self.saw_inbound_connection = true;
+                }
+
                 // Send the number of connected peers to the client
                 send_to_client
                     .send(NetworkEvent::ConnectedPeersUpdate(self.num_connected()))
@@ -809,59 +803,6 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                     NetworkEventInternal::DMEvent(e) => self
                         .direct_message_state
                         .handle_dm_event(e, self.resend_tx.clone()),
-                    NetworkEventInternal::AutonatEvent(e) => {
-                        match e {
-                            autonat::Event::InboundProbe(_) => {},
-                            autonat::Event::OutboundProbe(e) => match e {
-                                autonat::OutboundProbeEvent::Request { .. }
-                                | autonat::OutboundProbeEvent::Response { .. } => {},
-                                autonat::OutboundProbeEvent::Error {
-                                    probe_id: _,
-                                    peer,
-                                    error,
-                                } => {
-                                    debug!("AutoNAT outbound probe to {peer:?} failed: {error:?}");
-                                },
-                            },
-                            autonat::Event::StatusChanged { old, new } => match &new {
-                                autonat::NatStatus::Public(addr) => {
-                                    info!(
-                                        "AutoNAT: this node is publicly reachable at {addr} (was \
-                                         {old:?})"
-                                    );
-                                    self.autonat_private_logged = false;
-                                },
-                                autonat::NatStatus::Private => {
-                                    warn!(
-                                        "AutoNAT: probe reports this node may not be publicly \
-                                         reachable (was {old:?}). Treating as transient until \
-                                         confirmed by repeated probes."
-                                    );
-                                },
-                                autonat::NatStatus::Unknown => {
-                                    debug!("AutoNAT status: {old:?} -> Unknown");
-                                    self.autonat_private_logged = false;
-                                },
-                            },
-                        };
-                        let autonat = &self.swarm.behaviour().autonat;
-                        if matches!(autonat.nat_status(), autonat::NatStatus::Private)
-                            && autonat.confidence() >= AUTONAT_CONFIDENCE_MAX
-                            && !self.autonat_private_logged
-                        {
-                            error!(
-                                "AutoNAT: this node is NOT publicly reachable (confirmed by \
-                                 repeated probes). Peers cannot direct-message us, so leader \
-                                 views may fail and we may accumulate missed slots. Verify \
-                                 --libp2p-advertise-address (env \
-                                 ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS) is set a publicly \
-                                 reachable host:port, and ensure inbound UDP at that port is open \
-                                 from the public internet (firewall/NAT/security group)."
-                            );
-                            self.autonat_private_logged = true;
-                        }
-                        None
-                    },
                 };
 
                 if let Some(event) = maybe_event {
@@ -945,6 +886,8 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
         // ending on shutdown, ensuring the listening socket is released.
         let task = spawn(
             async move {
+                let mut inbound_check = pin!(sleep(NO_INBOUND_CONNECTION_GRACE_PERIOD));
+                let mut inbound_check_pending = true;
                 loop {
                     select! {
                         event = self.swarm.next() => {
@@ -961,6 +904,10 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                                 let _ = bootstrap_tx.send(InputEvent::ShutdownBootstrap).await;
                                 break
                             }
+                        },
+                        () = &mut inbound_check, if inbound_check_pending => {
+                            inbound_check_pending = false;
+                            self.warn_if_unreachable();
                         }
                     }
                 }
@@ -975,6 +922,36 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
     /// Get a reference to the network node's peer id.
     pub fn peer_id(&self) -> PeerId {
         self.peer_id
+    }
+
+    /// One-shot reachability check.
+    ///
+    /// Run [`NO_INBOUND_CONNECTION_GRACE_PERIOD`] after the swarm loop starts.
+    /// A healthy, publicly reachable node receives inbound connections shortly
+    /// after joining. If we are listening but no peer has connected to us by
+    /// now, the advertised address is likely wrong or blocked, so point the
+    /// operator at it. If we have no connections at all, not even outbound,
+    /// the problem is more fundamental than the advertised address.
+    fn warn_if_unreachable(&self) {
+        if self.listener_id.is_none() || self.saw_inbound_connection {
+            return;
+        }
+        if self.num_connected() == 0 {
+            error!(
+                "No connections at all within {NO_INBOUND_CONNECTION_GRACE_PERIOD:?} of startup. \
+                 This node could not reach any peer. Check the bootstrap node configuration and \
+                 that outbound UDP traffic is allowed (firewall/NAT/security group)."
+            );
+        } else {
+            error!(
+                "No peer has connected to us within {NO_INBOUND_CONNECTION_GRACE_PERIOD:?} of \
+                 startup. This node is likely not publicly reachable: peers cannot direct-message \
+                 us, so leader views may fail and we may accumulate missed slots. Verify \
+                 --libp2p-advertise-address (env ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS) is set \
+                 to a publicly reachable host:port, and ensure inbound UDP at that port is open \
+                 from the public internet (firewall/NAT/security group)."
+            );
+        }
     }
 }
 

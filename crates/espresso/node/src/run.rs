@@ -1,7 +1,6 @@
-use anyhow::Context;
 use clap::Parser;
 use espresso_telemetry as telemetry;
-use espresso_types::traits::{NullEventConsumer, SequencerPersistence};
+use espresso_types::traits::NullEventConsumer;
 use futures::future::FutureExt;
 use hotshot_types::traits::metrics::NoMetrics;
 use url::Url;
@@ -17,6 +16,7 @@ use super::{
 use crate::{default_telemetry_endpoint, keyset::KeySet};
 
 pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
+    espresso_types::assert_node_feature();
     let opt = Options::parse();
 
     // Genesis carries the chain ID, which selects the default telemetry
@@ -215,10 +215,6 @@ where
     let proposal_fetcher_config = opt.proposal_fetcher_config;
 
     let persistence = storage_opt.create().await?;
-    persistence
-        .migrate_storage()
-        .await
-        .context("failed to migrate consensus data")?;
 
     // Initialize HotShot. If the user requested the HTTP module, we must initialize the handle in
     // a special way, in order to populate the API with consensus metrics. Otherwise, we initialize
@@ -305,7 +301,7 @@ mod test {
         v0_1::{UpgradeMode, ViewBasedUpgrade},
     };
     use hotshot_types::{light_client::StateKeyPair, traits::signature_key::SignatureKey, x25519};
-    use surf_disco::{Client, Url, error::ClientError};
+    use http_client::{Client, Url, error::ClientErr};
     use tagged_base64::TaggedBase64;
     use tempfile::TempDir;
     use test_utils::reserve_tcp_port;
@@ -422,15 +418,18 @@ mod test {
         // orchestrator.
         tracing::info!("waiting for API to start");
         let url: Url = format!("http://localhost:{port1}").parse().unwrap();
-        let client = Client::<ClientError, SequencerApiVersion>::new(url.clone());
+        let client = Client::<ClientErr, SequencerApiVersion>::new(url.clone());
         assert!(client.connect(Some(Duration::from_secs(60))).await);
         client.get::<()>("healthcheck").send().await.unwrap();
 
-        // The metrics should include information about the node and software version. surf-disco
-        // doesn't currently support fetching a plaintext file, so we use a raw reqwest client.
-        let res = reqwest::get(url.join("/status/metrics").unwrap())
-            .await
-            .unwrap();
+        // The metrics should include information about the node and software version. The
+        // client doesn't support fetching a plaintext file, so we use a raw reqwest client.
+        let res = reqwest::get(
+            url.join(&espresso_api::routes::v1::status_metrics())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
         assert!(res.status().is_success(), "{}", res.status());
         let metrics = res.text().await.unwrap();
         let lines = metrics.lines().collect::<Vec<_>>();
@@ -484,10 +483,13 @@ mod test {
         );
 
         // The /config/runtime endpoint should be available and reflect CLI overrides. Use a raw
-        // reqwest client to fetch JSON, since surf-disco defaults to bincode encoding which can't
+        // reqwest client to fetch JSON, since our client defaults to VBS encoding which can't
         // round-trip arbitrary JSON via `serde_json::Value`.
         let res = reqwest::Client::new()
-            .get(url.join("/config/runtime").unwrap())
+            .get(
+                url.join(&espresso_api::routes::v1::config_runtime())
+                    .unwrap(),
+            )
             .header(reqwest::header::ACCEPT, "application/json")
             .send()
             .await

@@ -296,7 +296,6 @@ where
     api.with_version(api_ver.clone());
 
     // `LeafQueryData` now contains `Leaf2` and `QC2``, which is a breaking change.
-    // On node startup, all leaves are migrated to `Leaf2`.
     //
     // To maintain compatibility with nodes running an older version
     // (which expect `LeafQueryData` with `Leaf1` and `QC1`),
@@ -708,10 +707,18 @@ where
         }
         .boxed()
     })?
-    .get("get_cert2", |req, state| {
+    .get("get_cert2", move |req, state| {
         async move {
             let height: u64 = req.integer_param("height")?;
-            state.get_cert2(height).await.map_err(|err| err.into())
+            state
+                .get_cert2(height)
+                .await
+                .with_timeout(timeout)
+                .await
+                .ok_or(Error::Custom {
+                    message: format!("no cert2 available for height {height}"),
+                    status: StatusCode::NOT_FOUND,
+                })
         }
         .boxed()
     })?;
@@ -782,11 +789,11 @@ mod test {
     use futures::future::FutureExt;
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::{data::Leaf2, simple_certificate::QuorumCertificate2};
+    use http_client::Client;
     use serde::de::DeserializeOwned;
-    use surf_disco::{Client, Error as _};
     use tempfile::TempDir;
     use test_utils::reserve_tcp_port;
-    use tide_disco::App;
+    use tide_disco::{App, Error as _};
     use toml::toml;
 
     use super::*;

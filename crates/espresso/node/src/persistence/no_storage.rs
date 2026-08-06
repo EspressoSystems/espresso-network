@@ -4,7 +4,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use anyhow::bail;
 use async_trait::async_trait;
 use espresso_types::{
-    AuthenticatedValidatorMap, Leaf2, NetworkConfig, PubKey, RegisteredValidatorMap,
+    AuthenticatedValidatorMap, Header, Leaf2, NetworkConfig, PubKey, RegisteredValidatorMap,
     StakeTableHash,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
@@ -222,30 +222,6 @@ impl SequencerPersistence for NoStorage {
         Ok(())
     }
 
-    async fn migrate_anchor_leaf(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn migrate_da_proposals(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn migrate_vid_shares(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn migrate_quorum_proposals(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn migrate_quorum_certificates(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn migrate_x25519_keys(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-
     async fn store_drb_result(
         &self,
         _epoch: EpochNumber,
@@ -311,6 +287,14 @@ impl MembershipPersistence for NoStorage {
     }
 
     async fn load_latest_stake(&self, _limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
+        Ok(None)
+    }
+
+    async fn load_drb_result(&self, _epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
+        Ok(None)
+    }
+
+    async fn load_epoch_root(&self, _epoch: EpochNumber) -> anyhow::Result<Option<Header>> {
         Ok(None)
     }
 

@@ -1,4 +1,4 @@
-use std::{num::NonZeroUsize, sync::Arc};
+use std::{collections::HashMap, num::NonZeroUsize, sync::Arc};
 
 use async_trait::async_trait;
 use committable::Commitment;
@@ -7,10 +7,13 @@ use hotshot_types::{
     message::Proposal as SignedProposal,
     simple_certificate::QuorumCertificate2,
     simple_vote::TimeoutVote2,
-    traits::{leaf_fetcher_network::LeafFetcherNetwork, node_implementation::NodeType},
+    traits::{
+        leaf_fetcher_network::LeafFetcherNetwork, node_implementation::NodeType,
+        signature_key::SignatureKey,
+    },
     utils::StateAndDelta,
 };
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, mpsc::error::TrySendError, oneshot};
 
 use crate::{coordinator::error::CoordinatorError, message::Proposal, state::UpdateLeaf};
 
@@ -112,26 +115,45 @@ impl<T: NodeType> ClientApi<T> {
         .await?
     }
 
-    /// Forward a legacy `TimeoutVote2` into the new-protocol timeout collectors.
-    pub async fn submit_timeout_vote(&self, vote: TimeoutVote2<T>) -> Result<(), QueryError> {
+    /// Proposal participation ratios; `None` queries the current epoch.
+    pub async fn proposal_participation(
+        &self,
+        epoch: Option<EpochNumber>,
+    ) -> Result<HashMap<T::SignatureKey, f64>, QueryError> {
         let (respond, rx) = oneshot::channel();
-        self.call(ClientRequest::SubmitTimeoutVote { vote, respond }, rx)
+        self.call(ClientRequest::ProposalParticipation { epoch, respond }, rx)
             .await
+    }
+
+    /// Vote participation ratios; `None` queries the current epoch.
+    pub async fn vote_participation(
+        &self,
+        epoch: Option<EpochNumber>,
+    ) -> Result<HashMap<<T::SignatureKey as SignatureKey>::VerificationKeyType, f64>, QueryError>
+    {
+        let (respond, rx) = oneshot::channel();
+        self.call(ClientRequest::VoteParticipation { epoch, respond }, rx)
+            .await
+    }
+
+    /// Forward a legacy `TimeoutVote2` into the new-protocol timeout collectors.
+    pub fn try_submit_legacy_timeout_vote(&self, vote: TimeoutVote2<T>) -> Result<(), QueryError> {
+        self.try_send(ClientRequest::SubmitTimeoutVote { vote })
     }
 
     /// Forward the last legacy view's QC so the first new-protocol leader can
     /// propose on it even if the cutover seed was snapshotted before it formed.
-    pub async fn submit_legacy_high_qc(&self, qc: QuorumCertificate2<T>) -> Result<(), QueryError> {
-        let (respond, rx) = oneshot::channel();
-        self.call(ClientRequest::SubmitLegacyHighQc { qc, respond }, rx)
-            .await
+    pub fn try_submit_legacy_high_qc(&self, qc: QuorumCertificate2<T>) -> Result<(), QueryError> {
+        self.try_send(ClientRequest::SubmitLegacyHighQc { qc })
     }
 
-    /// Refresh the coordinator network's peer set for `epoch`.
-    pub async fn bump_network_epoch(&self, epoch: EpochNumber) -> Result<(), QueryError> {
-        let (respond, rx) = oneshot::channel();
-        self.call(ClientRequest::BumpNetworkEpoch { epoch, respond }, rx)
-            .await
+    /// Bridge sends must never block on a coordinator that hasn't started:
+    /// requests queue in the bounded channel and are dropped when it is full.
+    fn try_send(&self, request: ClientRequest<T>) -> Result<(), QueryError> {
+        self.tx.try_send(request).map_err(|err| match err {
+            TrySendError::Closed(_) => QueryError::ChannelClosed,
+            TrySendError::Full(_) => QueryError::ChannelFull,
+        })
     }
 
     async fn call<A>(
@@ -195,6 +217,15 @@ pub(crate) enum ClientRequest<T: NodeType> {
         view: ViewNumber,
         respond: oneshot::Sender<StateAndDelta<T>>,
     },
+    ProposalParticipation {
+        epoch: Option<EpochNumber>,
+        respond: oneshot::Sender<HashMap<T::SignatureKey, f64>>,
+    },
+    VoteParticipation {
+        epoch: Option<EpochNumber>,
+        respond:
+            oneshot::Sender<HashMap<<T::SignatureKey as SignatureKey>::VerificationKeyType, f64>>,
+    },
     UpdateLeaf {
         update: UpdateLeaf<T>,
         respond: oneshot::Sender<()>,
@@ -215,15 +246,9 @@ pub(crate) enum ClientRequest<T: NodeType> {
     },
     SubmitTimeoutVote {
         vote: TimeoutVote2<T>,
-        respond: oneshot::Sender<()>,
     },
     SubmitLegacyHighQc {
         qc: QuorumCertificate2<T>,
-        respond: oneshot::Sender<()>,
-    },
-    BumpNetworkEpoch {
-        epoch: EpochNumber,
-        respond: oneshot::Sender<()>,
     },
 }
 
@@ -235,6 +260,9 @@ pub enum QueryError {
 
     #[error("coordinator dropped the response")]
     ResponseDropped,
+
+    #[error("request dropped: coordinator request queue is full")]
+    ChannelFull,
 
     #[error("coordinator error: {0}")]
     Coordinator(#[from] CoordinatorError),

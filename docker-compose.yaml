@@ -777,8 +777,8 @@ services:
       - RUST_LOG
       - RUST_LOG_FORMAT
       - ESPRESSO_NODE_VALIDATOR_PORT
-      - ESPRESSO_NODE_VALIDATOR_STAKE_TABLE_SOURCE_BASE_URL=http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT/v0/
-      - ESPRESSO_NODE_VALIDATOR_LEAF_STREAM_SOURCE_BASE_URL=http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT/v0/
+      - ESPRESSO_NODE_VALIDATOR_STAKE_TABLE_SOURCE_BASE_URL=http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT/v1/
+      - ESPRESSO_NODE_VALIDATOR_LEAF_STREAM_SOURCE_BASE_URL=http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT/v1/
       - ESPRESSO_NODE_VALIDATOR_INITIAL_NODE_PUBLIC_BASE_URLS=http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT/,http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT/,http://espresso-node-2:$ESPRESSO_NODE_2_API_PORT/,http://espresso-node-3:$ESPRESSO_NODE_3_API_PORT/,http://espresso-node-4:$ESPRESSO_NODE_4_API_PORT/
     depends_on:
       espresso-node-0:
@@ -831,7 +831,7 @@ services:
     ports:
       - "$ESPRESSO_BLOCK_EXPLORER_PORT:3000"
     environment:
-      - QUERY_SERVICE_URI=http://localhost:$ESPRESSO_NODE_1_API_PORT/v0/
+      - QUERY_SERVICE_URI=http://localhost:$ESPRESSO_NODE_1_API_PORT/v1/
       - NODE_VALIDATOR_URI=ws://localhost:$ESPRESSO_NODE_VALIDATOR_PORT/v0/
     depends_on:
       espresso-node-1:

@@ -13,6 +13,7 @@ use hotshot_contract_adapter::{
     sol_types::{LightClientStateSol, StakeTableStateSol},
 };
 use hotshot_types::{PeerConfig, data::EpochNumber, stake_table::HSStakeTable};
+use http_client::{Client, error::ClientErr};
 use tokio::time::sleep;
 use vbs::version::StaticVersion;
 
@@ -39,24 +40,23 @@ pub async fn fetch_stake_table_from_sequencer(
 
     for i in 0..NUM_RETRIES {
         match epoch {
-            Some(epoch) => match surf_disco::Client::<
-                tide_disco::error::ServerError,
-                StaticVersion<0, 1>,
-            >::new(sequencer_url.clone())
-            .get::<Vec<PeerConfig<SeqTypes>>>(&format!("node/stake-table/{}", epoch.u64()))
-            .send()
-            .await
-            {
-                Ok(resp) => return Ok(resp.into()),
-                Err(e) => {
-                    let url = sequencer_url
-                        .join(&format!("node/stake-table/{}", epoch.u64()))
-                        .unwrap();
-                    tracing::warn!(%url, "Failed to fetch the stake table: {e}, num_retries left: {}", NUM_RETRIES - i - 1);
-                    if NUM_RETRIES - i > 1 {
-                        sleep(Duration::from_secs(5)).await;
-                    }
-                },
+            Some(epoch) => {
+                match Client::<ClientErr, StaticVersion<0, 1>>::new(sequencer_url.clone())
+                    .get::<Vec<PeerConfig<SeqTypes>>>(&format!("node/stake-table/{}", epoch.u64()))
+                    .send()
+                    .await
+                {
+                    Ok(resp) => return Ok(resp.into()),
+                    Err(e) => {
+                        let url = sequencer_url
+                            .join(&format!("node/stake-table/{}", epoch.u64()))
+                            .unwrap();
+                        tracing::warn!(%url, "Failed to fetch the stake table: {e}, num_retries left: {}", NUM_RETRIES - i - 1);
+                        if NUM_RETRIES - i > 1 {
+                            sleep(Duration::from_secs(5)).await;
+                        }
+                    },
+                }
             },
             None => {
                 let url = sequencer_url.join("config/hotshot").unwrap();
