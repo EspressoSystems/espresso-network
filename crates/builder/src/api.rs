@@ -98,8 +98,7 @@ where
 }
 
 /// Parses a key/signature path parameter, mirroring `try_extract_param`: a wrong-type value is a
-/// `Custom` error carrying 422. Note `BuilderApiError::status()` returns 500 for every `Custom`,
-/// so the wire status is 500, as it was under tide.
+/// `Custom` error carrying 422.
 fn parse_key_param<T>(value: &str, field: &str) -> Result<T, BuilderApiError>
 where
     T: for<'a> TryFrom<&'a TaggedBase64>,

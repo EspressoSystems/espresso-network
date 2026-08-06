@@ -76,7 +76,7 @@ impl tide_disco::error::Error for Error {
                 EventError::Missing => StatusCode::NOT_FOUND,
                 EventError::Error { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             },
-            Error::Custom { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            Error::Custom { status, .. } => *status,
         }
     }
 }
