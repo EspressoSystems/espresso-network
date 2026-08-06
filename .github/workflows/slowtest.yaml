@@ -68,7 +68,10 @@ jobs:
 
       - name: Run slow test
         run: ${{ matrix.run-cmd }}
-        timeout-minutes: 90
+        # The stake-table-change tests alone can take a couple of hours in
+        # the worst case: they are serialized (threads-required = num-cpus)
+        # with terminate-after budgets of 16 or 30 minutes each.
+        timeout-minutes: 180
 
       - name: Show available disk space
         if: always()
