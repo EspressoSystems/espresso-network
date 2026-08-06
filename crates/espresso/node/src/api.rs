@@ -1965,6 +1965,8 @@ pub mod test_helpers {
         // todo (abdul): remove this when fs storage is removed
         pub temp_dir: Option<TempDir>,
         pub contracts: Option<Contracts>,
+        /// Deferred node indices not yet started (see [`Self::start_deferred_node`]).
+        deferred: Vec<usize>,
     }
 
     pub struct TestNetworkConfig<const NUM_NODES: usize, P, C>
@@ -1978,6 +1980,7 @@ pub mod test_helpers {
         network_config: TestConfig<{ NUM_NODES }>,
         api_config: Options,
         contracts: Option<Contracts>,
+        deferred_start: Vec<usize>,
     }
 
     impl<const NUM_NODES: usize, P, C> TestNetworkConfig<{ NUM_NODES }, P, C>
@@ -2003,6 +2006,7 @@ pub mod test_helpers {
         network_config: Option<TestConfig<{ NUM_NODES }>>,
         contracts: Option<Contracts>,
         initial_token_supply: Option<U256>,
+        deferred_start: Vec<usize>,
     }
 
     impl Default for TestNetworkConfigBuilder<5, no_storage::Options, NullStateCatchup> {
@@ -2015,6 +2019,7 @@ pub mod test_helpers {
                 api_config: None,
                 contracts: None,
                 initial_token_supply: None,
+                deferred_start: Vec::new(),
             }
         }
     }
@@ -2032,6 +2037,7 @@ pub mod test_helpers {
                 api_config: None,
                 contracts: None,
                 initial_token_supply: None,
+                deferred_start: Vec::new(),
             }
         }
     }
@@ -2063,6 +2069,7 @@ pub mod test_helpers {
                 persistence: Some(persistence),
                 contracts: self.contracts,
                 initial_token_supply: self.initial_token_supply,
+                deferred_start: self.deferred_start,
             }
         }
 
@@ -2083,7 +2090,15 @@ pub mod test_helpers {
                 persistence: self.persistence,
                 contracts: self.contracts,
                 initial_token_supply: self.initial_token_supply,
+                deferred_start: self.deferred_start,
             }
+        }
+
+        /// Defers starting the nodes at the given (trailing) indices; they
+        /// join later via [`TestNetwork::start_deferred_node`].
+        pub fn deferred_start(mut self, indices: &[usize]) -> Self {
+            self.deferred_start = indices.to_vec();
+            self
         }
 
         pub fn network_config(mut self, network_config: TestConfig<{ NUM_NODES }>) -> Self {
@@ -2244,6 +2259,7 @@ pub mod test_helpers {
                 network_config: self.network_config.unwrap(),
                 api_config: self.api_config.unwrap(),
                 contracts: self.contracts,
+                deferred_start: self.deferred_start,
             }
         }
     }
@@ -2282,9 +2298,21 @@ pub mod test_helpers {
                 None
             };
 
+            let deferred = cfg.deferred_start.clone();
+            assert!(
+                deferred.len() < NUM_NODES,
+                "node 0 runs the API server and cannot be deferred"
+            );
+            assert_eq!(
+                deferred,
+                (NUM_NODES - deferred.len()..NUM_NODES).collect::<Vec<_>>(),
+                "deferred_start must be the trailing indices so `node(i)` stays aligned"
+            );
+
             let mut nodes = join_all(
                 izip!(cfg.state, cfg.persistence, cfg.catchup)
                     .enumerate()
+                    .filter(|(i, _)| !deferred.contains(i))
                     .map(|(i, (state, persistence, state_peers))| {
                         let opt = opt.clone();
                         let cfg = &cfg.network_config;
@@ -2361,7 +2389,46 @@ pub mod test_helpers {
                 cfg: cfg.network_config,
                 temp_dir,
                 contracts: cfg.contracts,
+                deferred,
             }
+        }
+
+        /// Initializes and starts a node deferred at construction (see
+        /// [`TestNetworkConfigBuilder::deferred_start`]), in ascending index
+        /// order; the node is then reachable via [`Self::node`] as usual.
+        pub async fn start_deferred_node<C: StateCatchup + 'static>(
+            &mut self,
+            i: usize,
+            state: ValidatedState,
+            persistence: P,
+            catchup: C,
+            upgrade: versions::Upgrade,
+        ) -> &SequencerContext<network::Memory, P::Persistence> {
+            assert_eq!(
+                self.deferred.first(),
+                Some(&i),
+                "deferred nodes must be started in ascending index order"
+            );
+            self.deferred.remove(0);
+
+            let ctx = self
+                .cfg
+                .init_node(
+                    i,
+                    state,
+                    persistence,
+                    Some(catchup),
+                    None,
+                    &NoMetrics,
+                    STAKE_TABLE_CAPACITY_FOR_TEST,
+                    NullEventConsumer,
+                    upgrade,
+                    self.cfg.upgrades(),
+                )
+                .await;
+            ctx.start_consensus().await;
+            self.peers.push(ctx);
+            self.peers.last().unwrap()
         }
 
         pub async fn stop_consensus(&mut self) {

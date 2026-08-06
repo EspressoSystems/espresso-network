@@ -82,6 +82,36 @@ async fn validator_set_replaced_at_epoch_boundary() {
         .unwrap();
 }
 
+/// The replacement schedule of [`validator_set_replaced_at_epoch_boundary`],
+/// but node 5 — in the incoming epoch-4 cohort — restarts from blank storage
+/// mid-epoch-3, losing the followed chain and the seeded boundary states.
+/// It must rebuild through catchup as a non-member and then lead and vote
+/// in epoch 4. Since it is a non-member when it crashes, the restart must
+/// be invisible to the chain: every view is required to decide.
+#[tokio::test(flavor = "multi_thread")]
+async fn incoming_validator_restarts_before_replacement_boundary() {
+    TestRunner::builder()
+        .num_nodes(10)
+        .target_decisions(55)
+        .max_runtime(Duration::from_secs(500))
+        .epoch_height(15)
+        .stake_table_schedule(StakeTableSchedule {
+            initial: (0..10).collect(),
+            changes: vec![(3, vec![0, 1, 2, 3, 4]), (4, vec![5, 6, 7, 8, 9])],
+        })
+        .node_changes(vec![(
+            35,
+            vec![NodeChange {
+                idx: 5,
+                action: NodeAction::Restart,
+            }],
+        )])
+        .build()
+        .run()
+        .await
+        .unwrap();
+}
+
 /// 6 nodes, epoch_height=10; all form epochs 1-2, node 5 is removed from
 /// the committee at epoch 3 (blocks 21-30).
 ///
