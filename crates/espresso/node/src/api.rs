@@ -1930,16 +1930,16 @@ pub mod test_helpers {
         event::LeafInfo, light_client::LCV3StateSignatureRequestBody,
         new_protocol::CoordinatorEvent, traits::metrics::NoMetrics,
     };
+    use http_client::{Client, error::ClientErr};
     use itertools::izip;
     use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme};
     use staking_cli::{
         Transaction as StakingTransaction,
         demo::{DelegationConfig, StakingTransactions},
     };
-    use surf_disco::Client;
     use tempfile::TempDir;
     use test_utils::reserve_tcp_port;
-    use tide_disco::{Api, App, Error, StatusCode, error::ServerError};
+    use tide_disco::{Api, App, Error, StatusCode};
     use tokio::{spawn, task::JoinHandle, time::sleep};
     use url::Url;
     use vbs::version::{StaticVersion, StaticVersionType};
@@ -1965,6 +1965,8 @@ pub mod test_helpers {
         // todo (abdul): remove this when fs storage is removed
         pub temp_dir: Option<TempDir>,
         pub contracts: Option<Contracts>,
+        /// Deferred node indices not yet started (see [`Self::start_deferred_node`]).
+        deferred: Vec<usize>,
     }
 
     pub struct TestNetworkConfig<const NUM_NODES: usize, P, C>
@@ -1978,6 +1980,7 @@ pub mod test_helpers {
         network_config: TestConfig<{ NUM_NODES }>,
         api_config: Options,
         contracts: Option<Contracts>,
+        deferred_start: Vec<usize>,
     }
 
     impl<const NUM_NODES: usize, P, C> TestNetworkConfig<{ NUM_NODES }, P, C>
@@ -2003,6 +2006,7 @@ pub mod test_helpers {
         network_config: Option<TestConfig<{ NUM_NODES }>>,
         contracts: Option<Contracts>,
         initial_token_supply: Option<U256>,
+        deferred_start: Vec<usize>,
     }
 
     impl Default for TestNetworkConfigBuilder<5, no_storage::Options, NullStateCatchup> {
@@ -2015,6 +2019,7 @@ pub mod test_helpers {
                 api_config: None,
                 contracts: None,
                 initial_token_supply: None,
+                deferred_start: Vec::new(),
             }
         }
     }
@@ -2032,6 +2037,7 @@ pub mod test_helpers {
                 api_config: None,
                 contracts: None,
                 initial_token_supply: None,
+                deferred_start: Vec::new(),
             }
         }
     }
@@ -2063,6 +2069,7 @@ pub mod test_helpers {
                 persistence: Some(persistence),
                 contracts: self.contracts,
                 initial_token_supply: self.initial_token_supply,
+                deferred_start: self.deferred_start,
             }
         }
 
@@ -2083,7 +2090,15 @@ pub mod test_helpers {
                 persistence: self.persistence,
                 contracts: self.contracts,
                 initial_token_supply: self.initial_token_supply,
+                deferred_start: self.deferred_start,
             }
+        }
+
+        /// Defers starting the nodes at the given (trailing) indices; they
+        /// join later via [`TestNetwork::start_deferred_node`].
+        pub fn deferred_start(mut self, indices: &[usize]) -> Self {
+            self.deferred_start = indices.to_vec();
+            self
         }
 
         pub fn network_config(mut self, network_config: TestConfig<{ NUM_NODES }>) -> Self {
@@ -2244,6 +2259,7 @@ pub mod test_helpers {
                 network_config: self.network_config.unwrap(),
                 api_config: self.api_config.unwrap(),
                 contracts: self.contracts,
+                deferred_start: self.deferred_start,
             }
         }
     }
@@ -2282,9 +2298,21 @@ pub mod test_helpers {
                 None
             };
 
+            let deferred = cfg.deferred_start.clone();
+            assert!(
+                deferred.len() < NUM_NODES,
+                "node 0 runs the API server and cannot be deferred"
+            );
+            assert_eq!(
+                deferred,
+                (NUM_NODES - deferred.len()..NUM_NODES).collect::<Vec<_>>(),
+                "deferred_start must be the trailing indices so `node(i)` stays aligned"
+            );
+
             let mut nodes = join_all(
                 izip!(cfg.state, cfg.persistence, cfg.catchup)
                     .enumerate()
+                    .filter(|(i, _)| !deferred.contains(i))
                     .map(|(i, (state, persistence, state_peers))| {
                         let opt = opt.clone();
                         let cfg = &cfg.network_config;
@@ -2361,7 +2389,46 @@ pub mod test_helpers {
                 cfg: cfg.network_config,
                 temp_dir,
                 contracts: cfg.contracts,
+                deferred,
             }
+        }
+
+        /// Initializes and starts a node deferred at construction (see
+        /// [`TestNetworkConfigBuilder::deferred_start`]), in ascending index
+        /// order; the node is then reachable via [`Self::node`] as usual.
+        pub async fn start_deferred_node<C: StateCatchup + 'static>(
+            &mut self,
+            i: usize,
+            state: ValidatedState,
+            persistence: P,
+            catchup: C,
+            upgrade: versions::Upgrade,
+        ) -> &SequencerContext<network::Memory, P::Persistence> {
+            assert_eq!(
+                self.deferred.first(),
+                Some(&i),
+                "deferred nodes must be started in ascending index order"
+            );
+            self.deferred.remove(0);
+
+            let ctx = self
+                .cfg
+                .init_node(
+                    i,
+                    state,
+                    persistence,
+                    Some(catchup),
+                    None,
+                    &NoMetrics,
+                    STAKE_TABLE_CAPACITY_FOR_TEST,
+                    NullEventConsumer,
+                    upgrade,
+                    self.cfg.upgrades(),
+                )
+                .await;
+            ctx.start_consensus().await;
+            self.peers.push(ctx);
+            self.peers.last().unwrap()
         }
 
         pub async fn stop_consensus(&mut self) {
@@ -2486,7 +2553,7 @@ pub mod test_helpers {
     /// first matching epoch and its committee; panics after `max_epochs`
     /// epochs without a match.
     pub async fn wait_for_committee(
-        client: &Client<ServerError, SequencerApiVersion>,
+        client: &Client<ClientErr, SequencerApiVersion>,
         events: &mut (impl Stream<Item = CoordinatorEvent<SeqTypes>> + Unpin),
         epoch_height: u64,
         start_epoch: u64,
@@ -2626,7 +2693,7 @@ pub mod test_helpers {
     pub async fn status_test_helper(opt: impl FnOnce(Options) -> Options) {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url = format!("http://localhost:{port}").parse().unwrap();
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
 
         let options = opt(Options::with_port(port));
         let network_config = TestConfigBuilder::default().build();
@@ -2692,7 +2759,7 @@ pub mod test_helpers {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let url = format!("http://localhost:{port}").parse().unwrap();
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
 
         let options = opt(Options::with_port(port).submit(Default::default()));
         let network_config = TestConfigBuilder::default().build();
@@ -2724,7 +2791,7 @@ pub mod test_helpers {
 
         let url = format!("http://localhost:{port}").parse().unwrap();
 
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
 
         let options = opt(Options::with_port(port));
         let network_config = TestConfigBuilder::default().build();
@@ -2762,7 +2829,7 @@ pub mod test_helpers {
     pub async fn catchup_test_helper(opt: impl FnOnce(Options) -> Options) {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url = format!("http://localhost:{port}").parse().unwrap();
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
 
         let options = opt(Options::with_port(port));
         let network_config = TestConfigBuilder::default().build();
@@ -2934,13 +3001,12 @@ mod api_tests {
         utils::EpochTransitionIndicator,
         vid::avidm::{AvidMScheme, init_avidm_param},
     };
-    use surf_disco::Client;
+    use http_client::{Client, error::ClientErr};
     use test_helpers::{
         TestNetwork, TestNetworkConfigBuilder, catchup_test_helper, state_signature_test_helper,
         status_test_helper, submit_test_helper,
     };
     use test_utils::reserve_tcp_port;
-    use tide_disco::error::ServerError;
     use vbs::version::StaticVersion;
 
     use super::{update::ApiEventConsumer, *};
@@ -3002,7 +3068,7 @@ mod api_tests {
         let mut events = network.server.event_stream();
 
         // Connect client.
-        let client: Client<ServerError, StaticVersion<0, 1>> =
+        let client: Client<ClientErr, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{port}").parse().unwrap());
         client.connect(None).await;
 
@@ -3559,6 +3625,7 @@ mod test {
         utils::epoch_from_block_number,
         x25519,
     };
+    use http_client::{Client, StatusCode, error::ClientErr};
     use jf_merkle_tree_compat::{
         MerkleTreeScheme,
         prelude::{MerkleProof, Sha3Node},
@@ -3570,15 +3637,12 @@ mod test {
         Transaction as StakingTransaction, demo::DelegationConfig, fetch_commission,
         update_commission, update_network_config,
     };
-    use surf_disco::Client;
     use test_helpers::{
         TestNetwork, TestNetworkConfigBuilder, catchup_test_helper, state_signature_test_helper,
         status_test_helper, submit_test_helper,
     };
     use test_utils::reserve_tcp_port;
-    use tide_disco::{
-        Error, StatusCode, Url, app::AppHealth, error::ServerError, healthcheck::HealthStatus,
-    };
+    use tide_disco::{app::AppHealth, healthcheck::HealthStatus};
     use tokio::time::sleep;
     use vbs::version::StaticVersion;
     use versions::{
@@ -3593,7 +3657,7 @@ mod test {
     use super::*;
 
     async fn wait_until_block_height(
-        client: &Client<ServerError, StaticVersion<0, 1>>,
+        client: &Client<ClientErr, StaticVersion<0, 1>>,
         endpoint: &str,
         height: u64,
     ) {
@@ -3629,7 +3693,7 @@ mod test {
     async fn test_healthcheck() {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url = format!("http://localhost:{port}").parse().unwrap();
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
         let options = Options::with_port(port);
         let network_config = TestConfigBuilder::default().build();
         let config = TestNetworkConfigBuilder::<5, _, NullStateCatchup>::default()
@@ -3678,7 +3742,7 @@ mod test {
             .build();
         let _network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
         let url = format!("http://localhost:{port}").parse().unwrap();
-        let client: Client<ServerError, SequencerApiVersion> = Client::new(url);
+        let client: Client<ClientErr, SequencerApiVersion> = Client::new(url);
 
         tracing::info!("waiting for blocks");
         client.connect(Some(Duration::from_secs(15))).await;
@@ -3764,7 +3828,7 @@ mod test {
             .build();
         let _network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
         let url = format!("http://localhost:{port}").parse().unwrap();
-        let client: Client<ServerError, SequencerApiVersion> = Client::new(url);
+        let client: Client<ClientErr, SequencerApiVersion> = Client::new(url);
         client.connect(Some(Duration::from_secs(15))).await;
 
         let table_sizes = client
@@ -4445,7 +4509,7 @@ mod test {
         let mut network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
 
         // Connect client.
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{port}").parse().unwrap());
         client.connect(None).await;
         tracing::info!(port, "server running");
@@ -4515,7 +4579,7 @@ mod test {
             .network_config(TestConfigBuilder::default().build())
             .build();
         let _network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
-        let client: Client<ServerError, StaticVersion<0, 1>> =
+        let client: Client<ClientErr, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{port}").parse().unwrap());
         client.connect(None).await;
         tracing::info!(port, "server running");
@@ -4553,8 +4617,8 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_config() {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
-        let url: surf_disco::Url = format!("http://localhost:{port}").parse().unwrap();
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url.clone());
+        let url: Url = format!("http://localhost:{port}").parse().unwrap();
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url.clone());
 
         let options = Options::with_port(port).config(Default::default());
         let network_config = TestConfigBuilder::default().build();
@@ -4601,7 +4665,7 @@ mod test {
             .parse()
             .unwrap();
 
-        let client: Client<ServerError, SequencerApiVersion> = Client::new(url);
+        let client: Client<ClientErr, SequencerApiVersion> = Client::new(url);
 
         let options = Options::with_port(query_service_port).hotshot_events(HotshotEvents);
 
@@ -4666,7 +4730,7 @@ mod test {
             .parse()
             .unwrap();
 
-        let client: Client<ServerError, SequencerApiVersion> = Client::new(hotshot_url);
+        let client: Client<ClientErr, SequencerApiVersion> = Client::new(hotshot_url);
         let options = Options::with_port(query_service_port).hotshot_events(HotshotEvents);
 
         let config = TestNetworkConfigBuilder::default()
@@ -4783,7 +4847,7 @@ mod test {
             .build();
 
         let network = TestNetwork::new(config, POS_V4).await;
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         // first two epochs will be 1 and 2
@@ -4882,7 +4946,7 @@ mod test {
 
         let network = TestNetwork::new(config, POS_V4).await;
         let node_state = network.server.node_state();
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         // wait for atleast 75 blocks
@@ -5017,7 +5081,7 @@ mod test {
             .connect(vec![l1_url])
             .expect("failed to connect to l1");
 
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         let mut headers = client
@@ -5125,7 +5189,7 @@ mod test {
             .build();
 
         let network = TestNetwork::new(config, POS_V4).await;
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         // Wait for the chain to progress beyond epoch 3 so rewards start being distributed.
@@ -5387,11 +5451,11 @@ mod test {
             .build();
 
         let _network = TestNetwork::new(config, V5).await;
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         // Wait for chain to reach epoch 5
-        let height_client: Client<ServerError, StaticVersion<0, 1>> =
+        let height_client: Client<ClientErr, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         wait_until_block_height(&height_client, "node/block-height", EPOCH_HEIGHT * 5).await;
 
@@ -5497,7 +5561,7 @@ mod test {
 
         let _network = TestNetwork::new(config, NEW_PROTOCOL).await;
 
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         client.connect(Some(Duration::from_secs(30))).await;
 
@@ -5592,7 +5656,7 @@ mod test {
 
         let network = TestNetwork::new(config, NEW_PROTOCOL).await;
 
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         client.connect(Some(Duration::from_secs(30))).await;
 
@@ -5707,7 +5771,7 @@ mod test {
             .pop()
             .expect("at least one validator");
 
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         client.connect(Some(Duration::from_secs(30))).await;
 
@@ -5907,8 +5971,8 @@ mod test {
 
         let mut query_node = start_query_node(tmp_options(&storage[1])).await;
 
-        let api_client: Client<ServerError, SequencerApiVersion> = Client::new(api_url);
-        let query_client: Client<ServerError, SequencerApiVersion> = Client::new(query_url);
+        let api_client: Client<ClientErr, SequencerApiVersion> = Client::new(api_url);
+        let query_client: Client<ClientErr, SequencerApiVersion> = Client::new(query_url);
         assert!(
             api_client.connect(Some(Duration::from_secs(60))).await,
             "node 0 query API did not come up"
@@ -6016,8 +6080,7 @@ mod test {
         // actually decided. Streaming also forces the restarted node to backfill
         // every leaf in the range, since the stream endpoint fetches on demand.
         let wiped_range = (height_before_restart - 1) as usize;
-        let stream_leaves = |client: Client<ServerError, SequencerApiVersion>,
-                             who: &'static str| async move {
+        let stream_leaves = |client: Client<ClientErr, SequencerApiVersion>, who: &'static str| async move {
             let leaves: Vec<LeafQueryData<SeqTypes>> = client
                 .socket("availability/stream/leaves/1")
                 .subscribe()
@@ -6184,10 +6247,10 @@ mod test {
             .build();
 
         let _network = TestNetwork::new(config, V5).await;
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
-        let height_client: Client<ServerError, StaticVersion<0, 1>> =
+        let height_client: Client<ClientErr, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         wait_until_block_height(&height_client, "node/block-height", EPOCH_HEIGHT * 5).await;
 
@@ -6301,7 +6364,7 @@ mod test {
             .build();
 
         let network = TestNetwork::new(config, V5).await;
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         let node_state = network.server.node_state();
@@ -6400,7 +6463,7 @@ mod test {
             .build();
 
         let network = TestNetwork::new(config, V5).await;
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         let node_state = network.server.node_state();
@@ -6530,7 +6593,7 @@ mod test {
 
         let _network = TestNetwork::new(config, upgrade).await;
 
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         // wait for atleast 2 epochs
@@ -7027,7 +7090,7 @@ mod test {
             .await
             .unwrap();
 
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{node_0_port}").parse().unwrap());
         client.connect(None).await;
 
@@ -7260,7 +7323,7 @@ mod test {
             _ => panic!("invalid version"),
         };
 
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{node_0_port}").parse().unwrap());
         client.connect(Some(Duration::from_secs(10))).await;
 
@@ -7491,7 +7554,7 @@ mod test {
             .build();
 
         let _network = TestNetwork::new(config, upgrade).await;
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         let _blocks = client
@@ -7591,7 +7654,7 @@ mod test {
             .build();
 
         let _network = TestNetwork::new(config, upgrade).await;
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         let _blocks = client
@@ -7772,7 +7835,7 @@ mod test {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let url = format!("http://localhost:{port}").parse().unwrap();
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
 
         let storage = SqlDataSource::create_storage().await;
         let network_config = TestConfigBuilder::default().build();
@@ -7853,7 +7916,7 @@ mod test {
 
         let url = format!("http://localhost:{port}").parse().unwrap();
         tracing::info!("Sequencer URL = {url}");
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
 
         let options = Options::with_port(port).submit(Default::default());
         const NUM_NODES: usize = 2;
@@ -8055,7 +8118,7 @@ mod test {
 
         let url = format!("http://localhost:{port}").parse().unwrap();
         tracing::info!("Sequencer URL = {url}");
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
 
         let options = Options::with_port(port).submit(Default::default());
         const NUM_NODES: usize = 2;
@@ -8324,7 +8387,7 @@ mod test {
         }
 
         // Connect client.
-        let client: Client<ServerError, StaticVersion<0, 1>> =
+        let client: Client<ClientErr, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         client.connect(Some(Duration::from_secs(10))).await;
 
@@ -8491,7 +8554,7 @@ mod test {
         // Wait until at least 5 epochs have passed
         wait_for_epochs(&mut events, EPOCH_HEIGHT, 5).await;
 
-        let client: Client<ServerError, StaticVersion<0, 1>> =
+        let client: Client<ClientErr, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{node_0_port}").parse().unwrap());
         client.connect(Some(Duration::from_secs(60))).await;
 
@@ -8603,7 +8666,7 @@ mod test {
         wait_for_epochs(&mut events, EPOCH_HEIGHT, target_epoch).await;
 
         // the last epoch with the old commissions
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         let validators = client
             .get::<AuthenticatedValidatorMap>(&format!("node/validators/{}", target_epoch - 1))
@@ -8616,7 +8679,7 @@ mod test {
         }
 
         // the first epoch with the new commissions
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         let validators = client
             .get::<AuthenticatedValidatorMap>(&format!("node/validators/{target_epoch}"))
@@ -8734,7 +8797,7 @@ mod test {
         let mut events = network.peers[0].event_stream();
         wait_for_epochs(&mut events, EPOCH_HEIGHT, target_epoch).await;
 
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         let validators = client
             .get::<AuthenticatedValidatorMap>(&format!("node/validators/{target_epoch}"))
@@ -8865,7 +8928,7 @@ mod test {
     /// POST a VBS-binary body to both servers and assert their responses are byte-equal.
     ///
     /// VBS (Versioned Binary Serialization) is what production peer-catchup and
-    /// `submit-transactions` clients use via `surf-disco::Request::body_binary`. This helper
+    /// `submit-transactions` clients use via `http_client::Request::body_binary`. This helper
     /// catches regressions where the axum handler accepts only JSON.
     async fn compare_post_binary<B: serde::Serialize>(
         http: &reqwest::Client,
@@ -8954,7 +9017,7 @@ mod test {
     }
 
     /// Same as `compare_ws_endpoints` but exercises the binary (`Accept: application/octet-stream`)
-    /// path that surf-disco clients use by default. Asserts both servers send `Message::Binary`
+    /// path that our clients use by default. Asserts both servers send `Message::Binary`
     /// frames carrying VBS-encoded payloads.
     async fn compare_ws_endpoints_binary(
         api_port: u16,
@@ -9069,7 +9132,7 @@ mod test {
             wait_for_epochs(&mut events, EPOCH_HEIGHT, 4).await;
 
             let url = format!("http://localhost:{api_port}").parse().unwrap();
-            let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+            let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
 
             let validated_state = network.server.decided_state().await.unwrap();
             let decided_leaf = network.server.decided_leaf().await;
@@ -9231,7 +9294,7 @@ mod test {
                         .send()
                         .await
                         .unwrap_err();
-                    assert_matches!(err, ServerError { status, .. } if status == StatusCode::NOT_FOUND);
+                    assert_matches!(err, ClientErr { status, .. } if status == StatusCode::NOT_FOUND);
 
                     // Both servers share the same underlying SQL data source; compare responses
                     // for each per-address endpoint under reward-state-v2.
@@ -9705,9 +9768,9 @@ mod test {
                 )
                 .await?;
 
-                // surf-disco clients default to `Accept: application/octet-stream`, so the
-                // server must emit `Message::Binary` (VBS-encoded) frames on that path.
-                // Verify both servers do so on a representative stream.
+                // Our clients default to `Accept: application/octet-stream`, so the server must
+                // emit `Message::Binary` (VBS-encoded) frames on that path. Verify both servers
+                // do so on a representative stream.
                 compare_ws_endpoints_binary(
                     api_port,
                     axum_port,
@@ -9999,7 +10062,7 @@ mod test {
                 )
                 .await?;
 
-                // Production peer-catchup posts VBS-binary bodies via surf-disco.
+                // Production peer-catchup posts VBS-binary bodies via http-client.
                 // Exercise the bulk-account POST endpoints in that exact wire format so any
                 // regression to "JSON-only body" is caught here.
                 // Reuse the account sampled above; `validated_state.fee_merkle_tree` was
@@ -10278,7 +10341,7 @@ mod test {
             .build();
 
         let network = TestNetwork::new(config, POS_V4).await;
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         let err = client
@@ -10288,7 +10351,7 @@ mod test {
             .await
             .unwrap_err();
 
-        assert_matches!(err, ServerError { status, message} if
+        assert_matches!(err, ClientErr { status, message} if
                 status == StatusCode::BAD_REQUEST
                 && message.contains("Limit cannot be greater than 1000")
         );
@@ -10372,7 +10435,7 @@ mod test {
 
         let mut network = TestNetwork::new(config, POS_V4).await;
 
-        let client: Client<ServerError, StaticVersion<0, 1>> =
+        let client: Client<ClientErr, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         client.connect(None).await;
@@ -10392,7 +10455,7 @@ mod test {
             .await
             .unwrap_err();
 
-        assert_matches!(err, ServerError { status, .. } if
+        assert_matches!(err, ClientErr { status, .. } if
             status == StatusCode::BAD_REQUEST
 
         );
@@ -10472,7 +10535,7 @@ mod test {
         let block = wait_for_decide_on_handle(&mut events, &tx).await.0;
 
         // Check namespace proof queries.
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
         client.connect(None).await;
 
         let (header, common): (Header, VidCommonQueryData<SeqTypes>) = try_join!(
@@ -10566,7 +10629,7 @@ mod test {
     /// Only checks that proofs verify, not which `FinalityProof` variant they
     /// use
     async fn check_light_client_proofs(
-        client: &Client<ServerError, StaticVersion<0, 1>>,
+        client: &Client<ClientErr, StaticVersion<0, 1>>,
         actual_leaves: &[LeafQueryData<SeqTypes>],
         actual_blocks: &[BlockQueryData<SeqTypes>],
         heights: impl IntoIterator<Item = u64>,
@@ -10650,7 +10713,7 @@ mod test {
     /// reproduces the validator set loaded from storage, and an earlier epoch
     /// is a `BAD_REQUEST`.
     async fn check_light_client_stake_table<N, P>(
-        client: &Client<ServerError, StaticVersion<0, 1>>,
+        client: &Client<ClientErr, StaticVersion<0, 1>>,
         server: &SequencerContext<N, P>,
         first_epoch: EpochNumber,
     ) where
@@ -10686,7 +10749,7 @@ mod test {
             .send()
             .await
             .unwrap_err();
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -10734,7 +10797,7 @@ mod test {
             .build();
 
         let mut network = TestNetwork::new(config, upgrade).await;
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
         client.connect(None).await;
 
         // Get a leaf stream so that we can wait for various events. Also keep track of each leaf
@@ -10901,7 +10964,7 @@ mod test {
             .build();
 
         let mut network = TestNetwork::new(config, UPGRADE).await;
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
         client.connect(None).await;
 
         // Track each leaf and block served by the query service; they are the
@@ -11086,7 +11149,7 @@ mod test {
         let network = TestNetwork::new(config, POS_V4).await;
 
         // Wait for chain to advance past our target height
-        let height_client: Client<ServerError, StaticVersion<0, 1>> =
+        let height_client: Client<ClientErr, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{port}").parse().unwrap());
         wait_until_block_height(&height_client, "node/block-height", TARGET_HEIGHT + 5).await;
 

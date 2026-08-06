@@ -78,6 +78,7 @@ hotshot-new-protocol = { workspace = true }
 hotshot-query-service-types = { workspace = true, features = ["sqlx", "web"] }
 hotshot-testing = { workspace = true }
 hotshot-types = { workspace = true }
+http-client = { workspace = true }
 
 # Dependencies enabled by feature "sql-data-source".
 include_dir = { workspace = true, optional = true }
@@ -96,7 +97,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 snafu = { workspace = true }
 sqlx = { workspace = true, optional = true }
-surf-disco = { workspace = true }
 tagged-base64 = { workspace = true }
 tempfile = { workspace = true, optional = true }
 test-utils = { workspace = true, optional = true }

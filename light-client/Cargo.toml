@@ -10,9 +10,9 @@ default = []
 # for constrained targets (e.g. SP1 zkVM).
 client = [
     "dep:hotshot-query-service",
+    "dep:http-client",
     "dep:serde_json",
     "dep:sqlx",
-    "dep:surf-disco",
     "dep:tempfile",
     "dep:tokio",
     "espresso-types/node",
@@ -46,13 +46,13 @@ hotshot-query-service = { workspace = true, features = [
 ], optional = true }
 hotshot-query-service-types = { workspace = true }
 hotshot-types = { workspace = true }
+http-client = { workspace = true, optional = true }
 jf-advz = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true, optional = true }
 sqlx = { workspace = true, optional = true }
 static_assertions = { workspace = true }
-surf-disco = { workspace = true, optional = true }
 tagged-base64 = { workspace = true }
 tempfile = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }

@@ -30,10 +30,6 @@ use axum::{
 };
 use client::{BenchResults, BenchResultsDownloadConfig};
 use csv::Writer;
-use espresso_api::{
-    cors_layer, healthcheck_response,
-    wire::{self, WireFormat},
-};
 use futures::{StreamExt, stream::FuturesUnordered};
 use hotshot_types::{
     PeerConfig,
@@ -43,13 +39,14 @@ use hotshot_types::{
         signature_key::{SignatureKey, StakeTableEntryType},
     },
 };
+use http_client::{Url, error::ClientErr};
+use http_wire::{self as wire, WireFormat, cors_layer, healthcheck_response};
 use libp2p_identity::{
     Keypair, PeerId,
     ed25519::{Keypair as EdKeypair, SecretKey},
 };
 use multiaddr::Multiaddr;
 use serde::{Serialize, de::DeserializeOwned};
-use surf_disco::Url;
 use tide_disco::error::ServerError;
 use tokio::net::TcpListener;
 use vbs::{BinarySerializer, Serializer, version::StaticVersion};
@@ -851,8 +848,8 @@ async fn post_builder<TYPES: NodeType>(
             let mut reachable = urls
                 .into_iter()
                 .map(|url| async {
-                    let client: surf_disco::Client<ServerError, OrchestratorVersion> =
-                        surf_disco::Client::builder(url.clone()).build();
+                    let client: http_client::Client<ClientErr, OrchestratorVersion> =
+                        http_client::Client::builder(url.clone()).build();
                     client
                         .connect(Some(Duration::from_secs(2)))
                         .await

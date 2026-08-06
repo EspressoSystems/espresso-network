@@ -70,9 +70,9 @@ use hotshot_types::{
     traits::signature_key::SignatureKey,
     x25519,
 };
+use http_client::{Client, Url, error::ClientErr};
 use itertools::Itertools;
 use staking_cli::demo::{DelegationConfig, StakingKeySet, StakingTransactions};
-use surf_disco::{Url, error::ClientError};
 use tagged_base64::TaggedBase64;
 use tempfile::TempDir;
 use test_utils::reserve_tcp_port;
@@ -121,8 +121,8 @@ async fn wait_for_query_node_at_tip(network: &TestNetwork, restarted: usize, hea
     let url: Url = format!("http://127.0.0.1:{restarted_port}")
         .parse()
         .unwrap();
-    let tip_client = surf_disco::Client::<ClientError, SequencerApiVersion>::new(tip_url);
-    let client = surf_disco::Client::<ClientError, SequencerApiVersion>::new(url);
+    let tip_client = Client::<ClientErr, SequencerApiVersion>::new(tip_url);
+    let client = Client::<ClientErr, SequencerApiVersion>::new(url);
 
     let tip = timeout(RECOVERY_TIMEOUT, async {
         loop {
@@ -755,7 +755,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         })));
 
         // Wait for the API to start serving.
-        let client = surf_disco::Client::<ClientError, SequencerApiVersion>::new(url);
+        let client = Client::<ClientErr, SequencerApiVersion>::new(url);
         assert!(
             client.connect(Some(Duration::from_secs(60))).await,
             "timed out connecting to builder API"
