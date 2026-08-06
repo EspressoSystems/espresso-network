@@ -202,6 +202,11 @@ pub struct Consensus<T: NodeType> {
 
     voted_1_views: BTreeSet<ViewNumber>,
     voted_2_views: BTreeSet<ViewNumber>,
+    /// Views whose own VID share we have already broadcast, so the broadcast
+    /// fires once per view whether it is triggered at proposal validation
+    /// (the common path) or in the vote1 path (the restart fallback, since
+    /// seeded proposals are not re-validated on restart).
+    broadcast_vid_views: BTreeSet<ViewNumber>,
 
     /// Storage confirmations; sends are gated on these facts.
     stored_proposals: BTreeMap<ViewNumber, Vec<Commitment<Leaf2<T>>>>,
@@ -344,6 +349,7 @@ impl<T: NodeType> Consensus<T> {
             stake_table_coordinator: membership_coordinator,
             voted_1_views: BTreeSet::new(),
             voted_2_views: BTreeSet::new(),
+            broadcast_vid_views: BTreeSet::new(),
             stored_proposals: BTreeMap::new(),
             stored_vids: BTreeSet::new(),
             stored_actions: BTreeSet::new(),
@@ -933,6 +939,7 @@ impl<T: NodeType> Consensus<T> {
                 self.timeout_certs = self.timeout_certs.split_off(&view);
                 self.voted_1_views = self.voted_1_views.split_off(&view);
                 self.voted_2_views = self.voted_2_views.split_off(&view);
+                self.broadcast_vid_views = self.broadcast_vid_views.split_off(&view);
             },
             GcScope::Decided(view) => {
                 let vc = VidCommitment2::default();
@@ -1067,6 +1074,10 @@ impl<T: NodeType> Consensus<T> {
         self.signed_proposals.insert(view, signed_proposal.clone());
         self.leaves.insert(view, proposal.clone().into());
         self.vid_shares.insert(view, vid_share);
+        // Disseminate our own share as soon as it is verified and tied to this
+        // validated proposal, so reconstruction runs in parallel with the vote
+        // chain instead of waiting for vote1. See `broadcast_own_vid_share`.
+        self.broadcast_own_vid_share(view, outbox);
 
         self.request_parent_proposal_if_missing(&proposal, outbox);
 
@@ -1997,12 +2008,26 @@ impl<T: NodeType> Consensus<T> {
             debug!(%view, "dropping pending vote1 for timed-out view");
             return;
         }
-        let vid_share = self.vid_shares.get(&view).cloned();
         outbox.push_back(ConsensusOutput::SendVote1(vote1));
-        if let Some(vid_share) = vid_share {
-            outbox.push_back(ConsensusOutput::BroadcastVidShare(vid_share));
-        } else {
-            debug!(%view, "vid share gone for released vote1; skipping broadcast");
+        // Restart fallback: seeded proposals are not re-validated, so re-fire
+        // the (idempotent) share broadcast when re-casting vote1.
+        self.broadcast_own_vid_share(view, outbox);
+    }
+
+    /// Broadcast our own VID share for `view` once, so the committee can
+    /// reconstruct in parallel with the vote chain rather than waiting for
+    /// vote1. Fired at proposal validation (common path) and re-fired in the
+    /// vote1 path (restart fallback, since seeded proposals are not
+    /// re-validated); the per-view guard keeps it to one broadcast per view.
+    fn broadcast_own_vid_share(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
+        // Disjoint borrows: `vid_shares` (read) and `broadcast_vid_views`
+        // (insert) are different fields. Insert is only reached once we have the
+        // share, so a not-yet-received share doesn't consume the once-per-view
+        // slot.
+        if let Some(vid_share) = self.vid_shares.get(&view)
+            && self.broadcast_vid_views.insert(view)
+        {
+            outbox.push_back(ConsensusOutput::BroadcastVidShare(vid_share.clone()));
         }
     }
 
@@ -2081,10 +2106,10 @@ impl<T: NodeType> Consensus<T> {
             debug!(%view, "proposal not available");
             return;
         };
-        let Some(vid_share) = self.vid_shares.get(&view) else {
+        if !self.vid_shares.contains_key(&view) {
             debug!(%view, "vid share not available");
             return;
-        };
+        }
 
         let block_number = proposal.block_header.block_number();
         let epoch = proposal.epoch;
@@ -2219,11 +2244,12 @@ impl<T: NodeType> Consensus<T> {
         };
         let can_send = self.stored_actions.contains(&(view, ActionKind::Vote))
             && self.is_proposal_stored(view, &proposal_commit);
-        let vid_share = can_send.then(|| vid_share.clone());
         self.voted_1_views.insert(view);
-        if let Some(vid_share) = vid_share {
+        // Share broadcast happens at proposal validation; re-fire here as the
+        // restart fallback (idempotent per view).
+        self.broadcast_own_vid_share(view, outbox);
+        if can_send {
             outbox.push_back(ConsensusOutput::SendVote1(vote));
-            outbox.push_back(ConsensusOutput::BroadcastVidShare(vid_share));
         } else {
             self.request_action(view, Some(epoch), ActionKind::Vote, outbox);
             self.pending_vote1.insert(view, vote);

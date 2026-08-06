@@ -22,10 +22,10 @@ use crate::{
     storage::{ActionKind, StorageOutput},
     tests::common::{
         assertions::{
-            any, count_matching, decides_view, is_leaf_decided, is_persist_proposal, is_proposal,
-            is_record_action, is_request_block_and_header, is_request_state, is_send_cert2,
-            is_send_timeout_cert, is_send_timeout_vote, is_view_changed, is_vote1, is_vote2,
-            node_index_for_key,
+            any, count_matching, decides_view, is_broadcast_vid_share, is_leaf_decided,
+            is_persist_proposal, is_proposal, is_record_action, is_request_block_and_header,
+            is_request_state, is_send_cert2, is_send_timeout_cert, is_send_timeout_vote,
+            is_view_changed, is_vote1, is_vote2, node_index_for_key,
         },
         utils::{ConsensusHarness, MockBlock, state_verified_input},
     },
@@ -608,6 +608,37 @@ async fn test_vote2_without_block_reconstructed() {
     assert!(
         any(harness.outputs(), is_leaf_decided),
         "decide should fire once the block is available"
+    );
+}
+
+/// A replica disseminates its own VID share as soon as it validates the
+/// proposal — independent of Vote1 — so reconstruction can run in parallel with
+/// the vote chain. The broadcast fires exactly once per view.
+#[tokio::test]
+async fn test_vid_share_broadcast_on_proposal() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(2).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    // Validating the proposal alone (no cert1, no reconstruction) broadcasts
+    // our own share — and does not require or imply a Vote1.
+    harness
+        .apply(test_data.views[0].proposal_input_consensus(&node_key))
+        .await;
+    assert_eq!(
+        count_matching(harness.outputs(), is_broadcast_vid_share),
+        1,
+        "share should be broadcast once at proposal validation, before vote1"
+    );
+
+    // Re-applying the same proposal must not re-broadcast (idempotent per view).
+    harness
+        .apply(test_data.views[0].proposal_input_consensus(&node_key))
+        .await;
+    assert_eq!(
+        count_matching(harness.outputs(), is_broadcast_vid_share),
+        1,
+        "share broadcast is idempotent per view"
     );
 }
 

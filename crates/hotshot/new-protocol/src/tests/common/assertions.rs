@@ -12,6 +12,10 @@ pub(crate) fn is_vote2(output: &ConsensusOutput<TestTypes>) -> bool {
     matches!(output, ConsensusOutput::SendVote2(_))
 }
 
+pub(crate) fn is_broadcast_vid_share(output: &ConsensusOutput<TestTypes>) -> bool {
+    matches!(output, ConsensusOutput::BroadcastVidShare(_))
+}
+
 pub(crate) fn is_leaf_decided(output: &ConsensusOutput<TestTypes>) -> bool {
     matches!(output, ConsensusOutput::LeafDecided { .. })
 }
