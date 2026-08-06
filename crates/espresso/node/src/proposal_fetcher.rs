@@ -7,6 +7,7 @@ use committable::Commitment;
 use derivative::Derivative;
 use espresso_types::{PubKey, ValidatedState, parse_duration, v0::traits::SequencerPersistence};
 use futures::stream::StreamExt;
+use hotshot_new_protocol::client::QueryError;
 use hotshot_types::{
     data::{Leaf2, QuorumProposalWrapper, ViewNumber},
     event::{Event, EventType},
@@ -233,7 +234,16 @@ where
         .instrument(span)
         .await;
         if let Err(err) = res {
-            tracing::warn!(?view, err = %format!("{err:#}"), "failed to fetch proposal");
+            // A dropped response usually means the coordinator GCed the
+            // pending fetch when the view was decided
+            if matches!(
+                err.downcast_ref::<QueryError>(),
+                Some(QueryError::ResponseDropped)
+            ) {
+                tracing::debug!(?view, err = %format!("{err:#}"), "failed to fetch proposal");
+            } else {
+                tracing::warn!(?view, err = %format!("{err:#}"), "failed to fetch proposal");
+            }
             self.metrics.failed.add(1);
 
             // Avoid busy loop when operations are failing.
