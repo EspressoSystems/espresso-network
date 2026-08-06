@@ -17,6 +17,7 @@ use axum::{
     routing::{get, post},
 };
 use committable::Committable;
+use disco_types::{error::Error as _, status::StatusCode};
 use espresso_types::SeqTypes;
 use hotshot_builder_api::v0_1::{
     block_info::{
@@ -37,7 +38,6 @@ use http_wire::{
 };
 use serde::{Serialize, de::DeserializeOwned};
 use tagged_base64::TaggedBase64;
-use tide_disco::{Error as _, StatusCode};
 use vbs::version::StaticVersion;
 
 /// Binary framing version for VBS-negotiated responses, matching `hotshot_builder_api::v0_1`'s
