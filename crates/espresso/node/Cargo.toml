@@ -21,6 +21,7 @@ testing = [
     "light-client/testing",
     "espresso-utils/testing",
     "hotshot-query-service/testing",
+    "hotshot-new-protocol/testing",
 ]
 benchmarking = []
 embedded-db = ["hotshot-query-service/embedded-db", "sqlx/sqlite"]
@@ -130,6 +131,7 @@ vergen = { workspace = true }
 vergen-gitcl = { workspace = true }
 
 [dev-dependencies]
+bitvec = { workspace = true }
 escargot = { workspace = true }
 espresso-macros = { workspace = true }
 # Enable "testing" feature when running tests
