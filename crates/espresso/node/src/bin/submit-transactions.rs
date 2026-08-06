@@ -23,11 +23,11 @@ use futures::{
     stream::StreamExt,
 };
 use hotshot_query_service::{Error, availability::BlockQueryData, types::HeightIndexed};
+use http_client::{Client, Url, WebSocketConfig};
 use http_wire::{cors_layer, healthcheck_response};
 use rand::{Rng, RngCore, SeedableRng};
 use rand_chacha::ChaChaRng;
 use rand_distr::Distribution;
-use surf_disco::{Client, Url, reexports::WebSocketConfig};
 use tokio::{net::TcpListener, task::spawn, time::sleep};
 use vbs::version::StaticVersionType;
 
@@ -210,11 +210,9 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) {
 
     // Create a new [`WebSocketConfig`]. We trust the events service on our nodes to not
     // send us malicious messages.
-    let websocket_config = WebSocketConfig {
-        max_message_size: None,
-        max_frame_size: None,
-        ..Default::default()
-    };
+    let websocket_config = WebSocketConfig::default()
+        .max_message_size(None)
+        .max_frame_size(None);
 
     let mut blocks = client
         .socket_with_config(

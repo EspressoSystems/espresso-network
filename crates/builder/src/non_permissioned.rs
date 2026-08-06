@@ -254,7 +254,7 @@ mod test {
     };
     use espresso_types::MOCK_SEQUENCER_VERSIONS;
     use futures::StreamExt;
-    use surf_disco::Client;
+    use http_client::Client;
     use tempfile::TempDir;
 
     use super::*;

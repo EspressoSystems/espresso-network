@@ -30,4 +30,6 @@ pub use error::ClientError;
 pub use request::Request;
 pub use reqwest::StatusCode;
 pub use socket::SocketRequest;
+/// Re-exported so [`Client::socket_with_config`] callers don't link `tokio-tungstenite` directly.
+pub use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 pub use url::Url;

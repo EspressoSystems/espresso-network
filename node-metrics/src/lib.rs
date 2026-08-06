@@ -99,7 +99,7 @@
 pub mod api;
 pub mod service;
 
-use api::node_validator::v0::SurfDiscoAvailabilityAPIStream;
+use api::node_validator::v0::AvailabilityAPIStream;
 use axum::Router;
 use clap::Parser;
 use futures::{
@@ -236,7 +236,7 @@ pub async fn run_standalone_service(options: Options) {
 
     let (leaf_and_block_pair_sender, leaf_and_block_pair_receiver) = mpsc::channel(10);
 
-    let client = surf_disco::Client::new(options.leaf_stream_base_url().clone());
+    let client = http_client::Client::new(options.leaf_stream_base_url().clone());
 
     // Let's get the current starting block height.
     let block_height = {
@@ -272,8 +272,8 @@ pub async fn run_standalone_service(options: Options) {
 
     tracing::debug!("creating stream starting at block height: {}", block_height);
 
-    let leaf_stream = SurfDiscoAvailabilityAPIStream::new_leaf_stream(client.clone(), block_height);
-    let block_stream = SurfDiscoAvailabilityAPIStream::new_block_stream(client, block_height);
+    let leaf_stream = AvailabilityAPIStream::new_leaf_stream(client.clone(), block_height);
+    let block_stream = AvailabilityAPIStream::new_block_stream(client, block_height);
 
     let zipped_stream = leaf_stream.zip(block_stream);
 

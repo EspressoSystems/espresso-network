@@ -14,6 +14,7 @@ use axum::{
     response::Response,
     routing::get,
 };
+use disco_types::error::Error as _;
 use espresso_node::api::sql::DataSource;
 use espresso_types::SeqTypes;
 use futures::{StreamExt as _, TryStreamExt as _, stream::BoxStream};
@@ -34,7 +35,6 @@ use http_wire::{
     self as wire, ContentType, WireFormat, cors_layer, drive_ws_stream, healthcheck_response,
 };
 use serde::Serialize;
-use surf_disco::Error as _;
 use vbs::version::StaticVersion;
 
 /// Binary framing version for VBS-negotiated responses, matching the wire version this service
@@ -87,7 +87,7 @@ where
 {
     value.parse().map_err(|e| availability::Error::Custom {
         message: format!("invalid {field}: {e}"),
-        status: surf_disco::StatusCode::BAD_REQUEST,
+        status: disco_types::status::StatusCode::BAD_REQUEST,
     })
 }
 
@@ -98,7 +98,7 @@ where
 {
     value.parse().map_err(|e| node::Error::Custom {
         message: format!("invalid {field}: {e}"),
-        status: surf_disco::StatusCode::BAD_REQUEST,
+        status: disco_types::status::StatusCode::BAD_REQUEST,
     })
 }
 
@@ -767,7 +767,7 @@ async fn get_cert2(
         .await
         .ok_or(availability::Error::Custom {
             message: format!("no cert2 available for height {height}"),
-            status: surf_disco::StatusCode::NOT_FOUND,
+            status: disco_types::status::StatusCode::NOT_FOUND,
         });
     respond(&headers, result.map_err(ApiError::from))
 }

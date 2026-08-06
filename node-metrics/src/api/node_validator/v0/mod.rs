@@ -245,12 +245,12 @@ where
 }
 
 /// [get_config_stake_table_from_sequencer] retrieves the stake table from the
-/// Sequencer.  It expects a [surf_disco::Client] to be provided so that it can
+/// Sequencer.  It expects a [http_client::Client] to be provided so that it can
 /// make the request to the Hotshot Query Service.  It will return a
 /// [StakeTable] that is populated with the data retrieved from the Hotshot
 /// Query Service.
 pub async fn get_config_stake_table_from_sequencer(
-    client: surf_disco::Client<hotshot_query_service::Error, Version01>,
+    client: http_client::Client<hotshot_query_service::Error, Version01>,
 ) -> Result<PublicHotShotConfig, hotshot_query_service::Error> {
     let request = client
         .get("config/hotshot")
@@ -275,7 +275,7 @@ pub async fn get_config_stake_table_from_sequencer(
 // [get_config_stake_table_from_sequencer], but it retrieves the stake table,
 // and only the stake table from a sequencer for a given epoch.
 pub async fn get_node_stake_table_from_sequencer(
-    client: surf_disco::Client<hotshot_query_service::Error, Version01>,
+    client: http_client::Client<hotshot_query_service::Error, Version01>,
     epoch: u64,
 ) -> Result<Vec<PeerConfig<SeqTypes>>, hotshot_query_service::Error> {
     let path = format!("node/stake-table/{epoch}");
@@ -301,7 +301,7 @@ pub async fn get_node_stake_table_from_sequencer(
 // [get_node_validators_from_sequencer] retrieves the validators from the
 // Sequencer for a given epoch.
 pub async fn get_node_validators_from_sequencer(
-    client: surf_disco::Client<hotshot_query_service::Error, Version01>,
+    client: http_client::Client<hotshot_query_service::Error, Version01>,
     epoch: u64,
 ) -> Result<IndexMap<Address, AuthenticatedValidator<BLSPubKey>>, hotshot_query_service::Error> {
     let path = format!("node/validators/{epoch}");
@@ -417,11 +417,11 @@ pub async fn get_node_identity_from_url(url: url::Url) -> anyhow::Result<NodeIde
 }
 
 /// [AvailabilityConnection] is a simple short-hand type alias for a
-/// surf-disco [Connection] that is used to retrieve data from the
+/// http-client [Connection] that is used to retrieve data from the
 /// Availability API.
-type AvailabilityConnection<T> = surf_disco::socket::Connection<
+type AvailabilityConnection<T> = http_client::socket::Connection<
     T,
-    surf_disco::socket::Unsupported,
+    http_client::socket::Unsupported,
     hotshot_query_service::Error,
     Version01,
 >;
@@ -431,9 +431,9 @@ type AvailabilityConnection<T> = surf_disco::socket::Connection<
 type BoxFutureConnection<'a, T> =
     BoxFuture<'a, Result<AvailabilityConnection<T>, hotshot_query_service::Error>>;
 
-pub struct SurfDiscoAvailabilityAPIStream<'a, T> {
+pub struct AvailabilityAPIStream<'a, T> {
     // path_url: Url,
-    client: surf_disco::Client<hotshot_query_service::Error, Version01>,
+    client: http_client::Client<hotshot_query_service::Error, Version01>,
 
     connection: Option<AvailabilityConnection<T>>,
 
@@ -446,7 +446,7 @@ pub struct SurfDiscoAvailabilityAPIStream<'a, T> {
 
 const MAX_STREAM_RECONNECT_ATTEMPTS: usize = 100;
 
-/// [SurfDiscoAvailabilityAPIPathResolver] is a trait that allows for the
+/// [AvailabilityAPIPathResolver] is a trait that allows for the
 /// specification of a sub path to the base URL that will resolve in a
 /// URL to point to the correct endpoint for the desired Stream type.
 ///
@@ -454,24 +454,20 @@ const MAX_STREAM_RECONNECT_ATTEMPTS: usize = 100;
 /// specific type of data you are wanting to stream, and the block height
 /// to start retrieving that data for.  This trait allows for us to
 /// abstract out these endpoints.
-pub trait SurfDiscoAvailabilityAPIPathResolver {
+pub trait AvailabilityAPIPathResolver {
     /// [resolve_path_for_height] resolves the path for the given height.
     /// It is expected that the path will be appended to the base URL
     /// to create a full URL that can be used to connect to the stream.
     fn resolve_path_for_height(&self, height: u64) -> String;
 }
 
-impl SurfDiscoAvailabilityAPIPathResolver
-    for SurfDiscoAvailabilityAPIStream<'_, Leaf1QueryData<SeqTypes>>
-{
+impl AvailabilityAPIPathResolver for AvailabilityAPIStream<'_, Leaf1QueryData<SeqTypes>> {
     fn resolve_path_for_height(&self, height: u64) -> String {
         format!("availability/stream/leaves/{height}")
     }
 }
 
-impl SurfDiscoAvailabilityAPIPathResolver
-    for SurfDiscoAvailabilityAPIStream<'_, BlockQueryData<SeqTypes>>
-{
+impl AvailabilityAPIPathResolver for AvailabilityAPIStream<'_, BlockQueryData<SeqTypes>> {
     fn resolve_path_for_height(&self, height: u64) -> String {
         format!("availability/stream/blocks/{height}")
     }
@@ -492,7 +488,7 @@ pub trait UpdateBlockHeightForEntry<T> {
 }
 
 impl UpdateBlockHeightForEntry<Leaf1QueryData<SeqTypes>>
-    for SurfDiscoAvailabilityAPIStream<'_, Leaf1QueryData<SeqTypes>>
+    for AvailabilityAPIStream<'_, Leaf1QueryData<SeqTypes>>
 {
     fn block_height_for_entry(&self, entry: &Leaf1QueryData<SeqTypes>) -> u64 {
         entry.leaf().height()
@@ -504,7 +500,7 @@ impl UpdateBlockHeightForEntry<Leaf1QueryData<SeqTypes>>
 }
 
 impl UpdateBlockHeightForEntry<BlockQueryData<SeqTypes>>
-    for SurfDiscoAvailabilityAPIStream<'_, BlockQueryData<SeqTypes>>
+    for AvailabilityAPIStream<'_, BlockQueryData<SeqTypes>>
 {
     fn block_height_for_entry(&self, entry: &BlockQueryData<SeqTypes>) -> u64 {
         entry.height()
@@ -515,9 +511,9 @@ impl UpdateBlockHeightForEntry<BlockQueryData<SeqTypes>>
     }
 }
 
-impl SurfDiscoAvailabilityAPIStream<'_, Leaf1QueryData<SeqTypes>> {
+impl AvailabilityAPIStream<'_, Leaf1QueryData<SeqTypes>> {
     pub fn new_leaf_stream(
-        client: surf_disco::Client<hotshot_query_service::Error, Version01>,
+        client: http_client::Client<hotshot_query_service::Error, Version01>,
         starting_block: u64,
     ) -> Self {
         Self {
@@ -530,9 +526,9 @@ impl SurfDiscoAvailabilityAPIStream<'_, Leaf1QueryData<SeqTypes>> {
     }
 }
 
-impl SurfDiscoAvailabilityAPIStream<'_, BlockQueryData<SeqTypes>> {
+impl AvailabilityAPIStream<'_, BlockQueryData<SeqTypes>> {
     pub fn new_block_stream(
-        client: surf_disco::Client<hotshot_query_service::Error, Version01>,
+        client: http_client::Client<hotshot_query_service::Error, Version01>,
         starting_block: u64,
     ) -> Self {
         Self {
@@ -545,17 +541,17 @@ impl SurfDiscoAvailabilityAPIStream<'_, BlockQueryData<SeqTypes>> {
     }
 }
 
-impl<T> SurfDiscoAvailabilityAPIStream<'_, T>
+impl<T> AvailabilityAPIStream<'_, T>
 where
     T: serde::de::DeserializeOwned,
-    Self: SurfDiscoAvailabilityAPIPathResolver + UpdateBlockHeightForEntry<T>,
+    Self: AvailabilityAPIPathResolver + UpdateBlockHeightForEntry<T>,
 {
 }
 
-impl<T> Stream for SurfDiscoAvailabilityAPIStream<'_, T>
+impl<T> Stream for AvailabilityAPIStream<'_, T>
 where
     T: serde::de::DeserializeOwned,
-    Self: SurfDiscoAvailabilityAPIPathResolver + UpdateBlockHeightForEntry<T>,
+    Self: AvailabilityAPIPathResolver + UpdateBlockHeightForEntry<T>,
 {
     type Item = T;
 

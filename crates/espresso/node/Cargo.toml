@@ -74,6 +74,7 @@ hotshot-state-prover = { workspace = true }
 hotshot-task-impls = { workspace = true }
 hotshot-testing = { workspace = true, optional = true }
 hotshot-types = { workspace = true }
+http-client = { workspace = true }
 http-wire = { workspace = true, features = ["server"] }
 include_dir = { workspace = true }
 indexmap = { workspace = true }
@@ -109,7 +110,6 @@ sqlx = { workspace = true }
 staking-cli = { workspace = true }
 static_assertions = { workspace = true }
 strum = { workspace = true }
-surf-disco = { workspace = true }
 tagged-base64 = { workspace = true }
 tempfile = { workspace = true }
 test-utils = { workspace = true }
@@ -148,7 +148,7 @@ rand = { workspace = true }
 reqwest = { workspace = true }
 tempfile = { workspace = true }
 test-log = { workspace = true }
-tokio-tungstenite = "0.28"
+tokio-tungstenite = { workspace = true }
 
 [lints]
 workspace = true
