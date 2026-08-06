@@ -18,8 +18,6 @@ use async_broadcast::{InactiveReceiver, Sender};
 use clap::Parser;
 #[cfg(feature = "node")]
 use derive_more::Deref;
-#[cfg(feature = "node")]
-use espresso_utils::redact::redact_url;
 use espresso_utils::redact::redact_urls;
 #[cfg(feature = "node")]
 use hotshot_types::traits::metrics::{Counter, Gauge};
@@ -308,8 +306,7 @@ pub struct SwitchingTransport {
 #[derive(derive_more::Debug, Clone)]
 pub(crate) struct SingleTransport {
     pub(crate) generation: usize,
-    #[debug("{}", redact_url(url))]
-    pub(crate) url: Url,
+    pub(crate) redacted_url: String,
     #[debug(skip)]
     pub(crate) client: Http<Client>,
     pub(crate) status: Arc<RwLock<SingleTransportStatus>>,

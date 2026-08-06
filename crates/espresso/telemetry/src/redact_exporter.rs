@@ -128,7 +128,12 @@ fn scrub_str(s: &str) -> String {
 
 #[cfg(test)]
 mod test {
-    use opentelemetry::Key;
+    use std::time::SystemTime;
+
+    use opentelemetry::{
+        Key,
+        trace::{SpanId, TraceFlags, TraceId},
+    };
 
     use super::*;
 
@@ -176,10 +181,23 @@ mod test {
         );
     }
 
+    /// Guards against `scrub_record` dropping a field: every field it copies is populated here, so
+    /// the equality fails if one goes missing after an SDK upgrade.
     #[test]
     fn passes_through_record_without_url_unchanged() {
         let logger = logger();
         let mut record = logger.create_log_record();
+        record.set_event_name("event");
+        record.set_target("target");
+        record.set_timestamp(SystemTime::UNIX_EPOCH + Duration::from_secs(1));
+        record.set_observed_timestamp(SystemTime::UNIX_EPOCH + Duration::from_secs(2));
+        record.set_severity_text("WARN");
+        record.set_severity_number(Severity::Warn);
+        record.set_trace_context(
+            TraceId::from(1u128),
+            SpanId::from(2u64),
+            Some(TraceFlags::SAMPLED),
+        );
         record.set_body(AnyValue::String("no url here".into()));
         record.add_attribute("k", "v");
 

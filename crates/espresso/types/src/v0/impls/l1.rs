@@ -25,6 +25,8 @@ use async_trait::async_trait;
 use clap::Parser;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 #[cfg(feature = "node")]
+use espresso_utils::redact::redact_url;
+#[cfg(feature = "node")]
 use futures::{
     future::{Future, TryFuture, TryFutureExt},
     stream::{self, StreamExt},
@@ -294,7 +296,7 @@ impl SingleTransport {
     fn new(url: &Url, generation: usize, revert_at: Option<Instant>) -> Self {
         Self {
             generation,
-            url: url.clone(),
+            redacted_url: redact_url(url),
             client: Http::new(url.clone()),
             status: Default::default(),
             revert_at,
@@ -391,7 +393,7 @@ impl Service<RequestPacket> for SwitchingTransport {
 
                     // Log the error and indicate a failure
                     tracing::warn!(
-                        url = %current_transport.url,
+                        url = %current_transport.redacted_url,
                         ?err,
                         "L1 client error"
                     );
@@ -420,7 +422,7 @@ impl SwitchingTransport {
     fn switch_to(&self, next_gen: usize, current_transport: SingleTransport) -> SingleTransport {
         let next_index = next_gen % self.urls.len();
         let url = self.urls[next_index].clone();
-        tracing::info!(%url, next_gen, "switch L1 transport");
+        tracing::info!(url = %redact_url(&url), next_gen, "switch L1 transport");
 
         let revert_at = if next_gen.is_multiple_of(self.urls.len()) {
             // If we are reverting to the primary transport, clear our scheduled revert time.

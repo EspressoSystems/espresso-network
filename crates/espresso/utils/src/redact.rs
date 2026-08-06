@@ -11,8 +11,9 @@ use url::Url;
 const REDACTED: &str = "***";
 
 /// Characters `Url::as_str()` percent-encodes in every component, so they cannot occur inside a
-/// rendered URL. Nothing may be added here without that guarantee: `)`, `,`, `|`, `^`, `` ` ``, `{`
-/// and `}` are legal in a path, and ending the token on one leaks the tail after it.
+/// rendered URL. Nothing may be added here without that guarantee: `)`, `,`, `|` and `^` are legal
+/// in a path, and `` ` ``, `{` and `}` are legal in a query or fragment; ending the token on any of
+/// them leaks the tail after it.
 fn ends_url_token(c: char) -> bool {
     c == ' ' || c.is_control() || matches!(c, '"' | '<' | '>')
 }
@@ -98,10 +99,34 @@ pub fn scrub_url_debug(text: &str) -> String {
     let mut pos = 0;
 
     while let Some(rel) = text[pos..].find(URL_DEBUG_PREFIX) {
-        let body_start = pos + rel + URL_DEBUG_PREFIX.len();
+        let start = pos + rel;
+        let body_start = start + URL_DEBUG_PREFIX.len();
+        // Require a type-name boundary, so `BaseUrl {` and friends keep their bodies.
+        if text[..start]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_')
+        {
+            out.push_str(&text[pos..body_start]);
+            pos = body_start;
+            continue;
+        }
         out.push_str(&text[pos..body_start]);
-        // `Url`'s Debug body contains no nested braces, so the next `}` closes it.
-        let Some(k) = text[body_start..].find('}') else {
+        // Field values are quoted and `"` is percent-encoded in every URL component, so a `}`
+        // outside quotes closes the body. Braces are legal in a query or fragment, so the first
+        // `}` in the text may sit inside one.
+        let mut in_quotes = false;
+        let end = text[body_start..]
+            .char_indices()
+            .find_map(|(i, c)| match c {
+                '"' => {
+                    in_quotes = !in_quotes;
+                    None
+                },
+                '}' if !in_quotes => Some(i),
+                _ => None,
+            });
+        let Some(k) = end else {
             // Truncated: drop the remainder rather than emit an unterminated body.
             pos = text.len();
             break;
@@ -118,7 +143,7 @@ pub fn scrub(text: &str) -> String {
     scrub_url_debug(&scrub_urls(text))
 }
 
-/// Wraps a value so its `Debug`/`Display` output passes through [`scrub_urls`].
+/// Wraps a value so its `Debug`/`Display` output passes through [`scrub`].
 ///
 /// Forwards `{:#}`/`{:#?}`, so an `anyhow` chain rendered with `{:#}` keeps every context level.
 pub struct Redacted<T>(pub T);
@@ -130,7 +155,7 @@ impl<T: fmt::Debug> fmt::Debug for Redacted<T> {
         } else {
             format!("{:?}", self.0)
         };
-        f.write_str(&scrub_urls(&rendered))
+        f.write_str(&scrub(&rendered))
     }
 }
 
@@ -141,7 +166,7 @@ impl<T: fmt::Display> fmt::Display for Redacted<T> {
         } else {
             format!("{}", self.0)
         };
-        f.write_str(&scrub_urls(&rendered))
+        f.write_str(&scrub(&rendered))
     }
 }
 
@@ -269,6 +294,27 @@ mod test {
         assert!(!scrubbed.contains("FAKEKEY"));
         assert!(!scrubbed.contains("user"));
         assert_eq!(scrub_url_debug(&scrubbed), scrubbed);
+    }
+
+    /// Braces are legal in a query or fragment, so the first `}` may sit inside a field value.
+    #[test]
+    fn test_scrub_url_debug_brace_in_query_or_fragment() {
+        for raw in [
+            "https://rpc.example.com/v1?filter={a}&apikey=FAKEKEY",
+            "https://rpc.example.com/v1#{a}FAKEKEY",
+        ] {
+            let dbg = format!("{:?}", Url::parse(raw).unwrap());
+            assert!(dbg.contains("FAKEKEY"), "{dbg}");
+            let scrubbed = scrub_url_debug(&dbg);
+            assert_eq!(scrubbed, "Url { *** }", "input: {raw}");
+        }
+    }
+
+    /// Only `url::Url` is collapsed; a type whose name merely ends in `Url` keeps its body.
+    #[test]
+    fn test_scrub_url_debug_requires_type_boundary() {
+        let text = r#"BaseUrl { host: "keep.me" }"#;
+        assert_eq!(scrub_url_debug(text), text);
     }
 
     #[test]

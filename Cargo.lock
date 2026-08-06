@@ -5188,7 +5188,6 @@ dependencies = [
  "hotshot",
  "log-panics",
  "serde",
- "serde_json",
  "surf",
  "test-log",
  "tokio",

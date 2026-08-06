@@ -47,7 +47,6 @@ vergen = { workspace = true }
 vergen-gitcl = { workspace = true }
 
 [dev-dependencies]
-serde_json = { workspace = true }
 test-log = { workspace = true }
 
 [lints]
