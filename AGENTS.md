@@ -131,9 +131,9 @@ Useful paths (append to either base URL):
 - `/v0/config/hotshot` - HotShot config including `libp2p_config.bootstrap_nodes`
 - `/catchup/{height}/...` - state proofs (schema: `crates/espresso/node/api/catchup.toml`)
 
-## Logs
+## Logs and metrics
 
-See ./nix/pup/README.md
+To investigate logs and metrics of Espresso's own infrastructure, use the `pup` Datadog CLI: `doc/pup.md`.
 
 ## Key files
 
