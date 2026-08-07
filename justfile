@@ -169,9 +169,6 @@ test-slow *args:
     @echo 'Only slow tests are included. Use `test` for those deemed not slow. Or `test-all` for all tests.'
     cargo nextest run --profile slow --locked -p slow-tests --verbose {{args}}
 
-nextest-archive-slow archive-file *args:
-    cargo nextest archive --locked -p slow-tests --tests --archive-file {{archive-file}} {{args}}
-
 build-dev-node *args:
     cargo build -p espresso-dev-node {{args}}
 

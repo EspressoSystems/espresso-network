@@ -25,12 +25,14 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
-  build-slow-test-archive:
-    name: Build slow test archive (${{ matrix.db }})
-    runs-on: ubuntu-24.04-8core
+  slow-tests:
+    name: slow-tests-${{ matrix.db }}-${{ matrix.partition }}
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
+        db: [postgres, sqlite]
+        partition: [1, 2, 3, 4, 5, 6, 7, 8]
         include:
           - db: postgres
             features: ""
@@ -39,63 +41,31 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
-      - uses: rui314/setup-mold@v1
+      - uses: ./.github/actions/free-disk-space
 
       - name: Install Protoc
         run: |
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
 
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: nextest,just
+      - uses: ./.github/actions/install-foundry
+      - uses: ./.github/actions/install-postgres
+      - uses: taiki-e/install-action@just
+      - uses: taiki-e/install-action@nextest
+      - uses: rui314/setup-mold@v1
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: slow-tests-${{ matrix.db }}
-          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
+          # All 8 shards share a key, so only one of them saves it.
+          save-if: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-')) && matrix.partition == 1 }}
 
-      - name: Build and archive slow tests
-        run: just nextest-archive-slow nextest-archive-slow-${{ matrix.db }}.tar.zst ${{ matrix.features }}
-
-      - name: Upload archive to workflow
-        uses: actions/upload-artifact@v7
-        with:
-          name: nextest-archive-slow-${{ matrix.db }}
-          if-no-files-found: error
-          path: nextest-archive-slow-${{ matrix.db }}.tar.zst
-          retention-days: 1
-
-  slow-tests:
-    name: slow-tests-${{ matrix.db }}-${{ matrix.partition }}
-    needs: build-slow-test-archive
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        db: [postgres, sqlite]
-        partition: [1, 2, 3, 4, 5, 6, 7, 8]
-
-    steps:
-      - uses: actions/checkout@v6
-      - uses: ./.github/actions/free-disk-space
-      - uses: ./.github/actions/install-foundry
-      - uses: ./.github/actions/install-postgres
-        if: matrix.db == 'postgres'
-      - uses: taiki-e/install-action@nextest
-
-      - name: Download archive
-        uses: actions/download-artifact@v8
-        with:
-          name: nextest-archive-slow-${{ matrix.db }}
+      - name: Build slow test
+        run: just test-slow ${{ matrix.features }} --no-run
 
       - name: Run slow test
-        run: |
-          cargo nextest run --verbose --no-fail-fast \
-          --archive-file nextest-archive-slow-${{ matrix.db }}.tar.zst \
-          --workspace-remap $PWD \
-          --partition hash:${{ matrix.partition }}/8
+        run: just test-slow ${{ matrix.features }} --no-fail-fast --partition hash:${{ matrix.partition }}/8
         # Tests are serialized within a shard (threads-required = num-cpus) and
         # hash partitioning is not cost-aware, so shard cost varies widely.
         timeout-minutes: 60
