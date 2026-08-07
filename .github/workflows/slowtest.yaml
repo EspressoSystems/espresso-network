@@ -25,24 +25,87 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
-  slow-tests:
-    runs-on: ubuntu-latest
+  build-slow-test-archive:
+    name: Build slow test archive (${{ matrix.db }})
+    runs-on: ubuntu-24.04-8core
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: slow-tests-sqlite
-            build-cmd: just test-slow --features embedded-db --no-run
-            run-cmd: just test-slow --features embedded-db --no-fail-fast
-          - name: slow-tests-postgres
-            build-cmd: just test-slow --no-run
-            run-cmd: just test-slow --no-fail-fast
-          - name: espresso-dev-node-tests
-            build-cmd: just test-dev-node --no-run
-            run-cmd: just test-dev-node --no-fail-fast
+          - db: postgres
+            features: ""
+          - db: sqlite
+            features: --features embedded-db
 
-    name: ${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: rui314/setup-mold@v1
 
+      - name: Install Protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest,just
+
+      - name: Enable Rust Caching
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: slow-tests-${{ matrix.db }}
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
+
+      - name: Build and archive slow tests
+        run: just nextest-archive-slow nextest-archive-slow-${{ matrix.db }}.tar.zst ${{ matrix.features }}
+
+      - name: Upload archive to workflow
+        uses: actions/upload-artifact@v7
+        with:
+          name: nextest-archive-slow-${{ matrix.db }}
+          if-no-files-found: error
+          path: nextest-archive-slow-${{ matrix.db }}.tar.zst
+          retention-days: 1
+
+  slow-tests:
+    name: slow-tests-${{ matrix.db }}-${{ matrix.partition }}
+    needs: build-slow-test-archive
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        db: [postgres, sqlite]
+        partition: [1, 2, 3, 4, 5, 6, 7, 8]
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/free-disk-space
+      - uses: ./.github/actions/install-foundry
+      - uses: ./.github/actions/install-postgres
+        if: matrix.db == 'postgres'
+      - uses: taiki-e/install-action@nextest
+
+      - name: Download archive
+        uses: actions/download-artifact@v8
+        with:
+          name: nextest-archive-slow-${{ matrix.db }}
+
+      - name: Run slow test
+        run: |
+          cargo nextest run --verbose --no-fail-fast \
+          --archive-file nextest-archive-slow-${{ matrix.db }}.tar.zst \
+          --workspace-remap $PWD \
+          --partition hash:${{ matrix.partition }}/8
+        # Tests are serialized within a shard (threads-required = num-cpus) and
+        # hash partitioning is not cost-aware, so shard cost varies widely.
+        timeout-minutes: 60
+
+      - name: Show available disk space
+        if: always()
+        run: df -h
+
+  espresso-dev-node-tests:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/free-disk-space
@@ -61,20 +124,16 @@ jobs:
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ${{ matrix.name }}
+          shared-key: espresso-dev-node-tests
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
 
       - name: Build slow test
-        run: ${{ matrix.build-cmd }}
+        run: just test-dev-node --no-run
 
       - name: Run slow test
-        run: ${{ matrix.run-cmd }}
-        # The stake-table-change tests alone can take a couple of hours in
-        # the worst case: they are serialized (threads-required = num-cpus)
-        # with terminate-after budgets of 16 or 30 minutes each.
-        timeout-minutes: 180
+        run: just test-dev-node --no-fail-fast
+        timeout-minutes: 60
 
       - name: Show available disk space
         if: always()
-        run: |
-          df -h
+        run: df -h
