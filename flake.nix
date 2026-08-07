@@ -73,7 +73,6 @@
         dregs.overlays.default
         (final: prev: {
           solhint = prev.callPackage ./nix/solhint { };
-          pup = prev.callPackage ./nix/pup { };
         })
 
         (final: prev: {
@@ -237,7 +236,7 @@
             prek
             prek-as-pre-commit # compat to allow running pre-commit
             entr
-            pup
+            datadog-pup
             process-compose
             lazydocker # a docker compose TUI
             keydb
