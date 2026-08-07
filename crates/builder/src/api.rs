@@ -9,14 +9,16 @@
 use std::sync::Arc;
 
 use axum::{
-    Json, Router,
+    Router,
     body::Bytes,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode as AxumStatusCode, header},
-    response::{IntoResponse, Response},
+    http::{HeaderMap, StatusCode as AxumStatusCode},
+    response::Response,
     routing::{get, post},
 };
 use committable::Committable;
+use disco_types::{error::Error as _, status::StatusCode};
+use espresso_types::SeqTypes;
 use hotshot_builder_api::v0_1::{
     block_info::{
         AvailableBlockData, AvailableBlockHeaderInputV1, AvailableBlockHeaderInputV2,
@@ -31,86 +33,51 @@ use hotshot_types::{
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
     utils::BuilderCommitment,
 };
-use http_client::healthcheck::HealthStatus;
+use http_wire::{
+    self as wire, DecodeFailure, WireFormat, body_limit_layer, cors_layer, healthcheck_response,
+};
 use serde::{Serialize, de::DeserializeOwned};
 use tagged_base64::TaggedBase64;
-use tide_disco::{Error as _, StatusCode};
-use vbs::{BinarySerializer, Serializer, version::StaticVersion};
+use vbs::version::StaticVersion;
 
 /// Binary framing version for VBS-negotiated responses, matching `hotshot_builder_api::v0_1`'s
 /// framing, which is what `BuilderClient` sends/expects.
 type WireVersion = StaticVersion<0, 1>;
 
-type SharedState = Arc<ProxyGlobalState<espresso_types::SeqTypes>>;
+type SharedState = Arc<ProxyGlobalState<SeqTypes>>;
 
-fn wants_binary(headers: &HeaderMap) -> bool {
-    headers
-        .get(header::ACCEPT)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.contains("application/octet-stream"))
-}
+/// Wire format of the builder API: [`WireVersion`] VBS framing and the [`BuilderApiError`]
+/// envelope.
+struct BuilderWireFormat;
 
-/// Maps tide-disco's `StatusCode` (what `BuilderApiError::status()` returns) onto axum's.
-fn wire_status(status: StatusCode) -> AxumStatusCode {
-    AxumStatusCode::from_u16(u16::from(status)).unwrap_or(AxumStatusCode::INTERNAL_SERVER_ERROR)
-}
+impl WireFormat for BuilderWireFormat {
+    type Error = BuilderApiError;
+    type Version = WireVersion;
 
-fn encode_ok<T: Serialize>(headers: &HeaderMap, value: T) -> Response {
-    if wants_binary(headers) {
-        match Serializer::<WireVersion>::serialize(&value) {
-            Ok(bytes) => {
-                ([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response()
-            },
-            Err(err) => encode_err(
-                headers,
-                BuilderApiError::Custom {
-                    message: err.to_string(),
-                    status: StatusCode::INTERNAL_SERVER_ERROR,
-                },
-            ),
-        }
-    } else {
-        Json(value).into_response()
+    fn status(err: &BuilderApiError) -> AxumStatusCode {
+        // Maps tide-disco's `StatusCode` (what `BuilderApiError::status()` returns) onto axum's.
+        AxumStatusCode::from_u16(u16::from(err.status()))
+            .unwrap_or(AxumStatusCode::INTERNAL_SERVER_ERROR)
     }
-}
 
-fn encode_err(headers: &HeaderMap, err: BuilderApiError) -> Response {
-    let status = wire_status(err.status());
-    if wants_binary(headers) {
-        match Serializer::<WireVersion>::serialize(&err) {
-            Ok(bytes) => (
-                status,
-                [(header::CONTENT_TYPE, "application/octet-stream")],
-                bytes,
-            )
-                .into_response(),
-            Err(_) => (status, Json(err)).into_response(),
+    fn serialize_failure(message: String) -> BuilderApiError {
+        BuilderApiError::Custom {
+            message,
+            status: StatusCode::INTERNAL_SERVER_ERROR,
         }
-    } else {
-        (status, Json(err)).into_response()
     }
 }
 
 fn respond<T: Serialize>(headers: &HeaderMap, result: Result<T, BuilderApiError>) -> Response {
-    match result {
-        Ok(v) => encode_ok(headers, v),
-        Err(e) => encode_err(headers, e),
-    }
+    wire::respond::<BuilderWireFormat, _>(headers, result)
 }
 
-/// Decodes a request body the way tide-disco's `body_auto` did: VBS for
-/// `application/octet-stream`, JSON for `application/json`.
 fn decode_body<T: DeserializeOwned>(headers: &HeaderMap, body: &[u8]) -> Result<T, RequestError> {
-    match headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-    {
-        Some("application/json") => serde_json::from_slice(body).map_err(|_| RequestError::Json),
-        Some("application/octet-stream") => {
-            Serializer::<WireVersion>::deserialize(body).map_err(|_| RequestError::Binary)
-        },
-        _ => Err(RequestError::UnsupportedContentType),
-    }
+    wire::decode_body::<WireVersion, T>(headers, body).map_err(|failure| match failure {
+        DecodeFailure::Json(_) => RequestError::Json,
+        DecodeFailure::Binary(_) => RequestError::Binary,
+        DecodeFailure::UnsupportedContentType => RequestError::UnsupportedContentType,
+    })
 }
 
 fn tb64_request_error(field: &str) -> BuilderApiError {
@@ -131,8 +98,7 @@ where
 }
 
 /// Parses a key/signature path parameter, mirroring `try_extract_param`: a wrong-type value is a
-/// `Custom` error carrying 422. Note `BuilderApiError::status()` returns 500 for every `Custom`,
-/// so the wire status is 500, as it was under tide.
+/// `Custom` error carrying 422.
 fn parse_key_param<T>(value: &str, field: &str) -> Result<T, BuilderApiError>
 where
     T: for<'a> TryFrom<&'a TaggedBase64>,
@@ -144,7 +110,7 @@ where
     })
 }
 
-type Sender = <espresso_types::SeqTypes as NodeType>::SignatureKey;
+type Sender = <SeqTypes as NodeType>::SignatureKey;
 type Signature = <Sender as SignatureKey>::PureAssembledSignatureType;
 
 fn parse_sender_signature(
@@ -156,13 +122,9 @@ fn parse_sender_signature(
     Ok((sender, signature))
 }
 
-/// Tide-disco-compatible singleton-app healthcheck: a bare [`HealthStatus`], so
-/// `BuilderClient::connect` can decode it in both JSON and binary form.
 async fn healthcheck(headers: HeaderMap) -> Response {
-    encode_ok(&headers, HealthStatus::Available)
+    healthcheck_response(&headers)
 }
-
-// --- block_info -----------------------------------------------------------------------------
 
 async fn available_blocks(
     State(state): State<SharedState>,
@@ -255,23 +217,22 @@ async fn claim_header_input_v2(
     headers: HeaderMap,
     Path((block_hash, view_number, sender, signature)): Path<(String, u64, String, String)>,
 ) -> Response {
-    let result: Result<AvailableBlockHeaderInputV2<espresso_types::SeqTypes>, BuilderApiError> =
-        async {
-            let hash = parse_hash_param::<BuilderCommitment>(&block_hash, "block_hash")?;
-            let (sender, signature) = parse_sender_signature(&sender, &signature)?;
-            let input = state
-                .claim_block_header_input(&hash, view_number, sender, &signature)
-                .await
-                .map_err(|source| BuilderApiError::BlockClaim {
-                    source,
-                    resource: hash.to_string(),
-                })?;
-            Ok(AvailableBlockHeaderInputV2 {
-                fee_signature: input.fee_signature,
-                sender: input.sender,
-            })
-        }
-        .await;
+    let result: Result<AvailableBlockHeaderInputV2<SeqTypes>, BuilderApiError> = async {
+        let hash = parse_hash_param::<BuilderCommitment>(&block_hash, "block_hash")?;
+        let (sender, signature) = parse_sender_signature(&sender, &signature)?;
+        let input = state
+            .claim_block_header_input(&hash, view_number, sender, &signature)
+            .await
+            .map_err(|source| BuilderApiError::BlockClaim {
+                source,
+                resource: hash.to_string(),
+            })?;
+        Ok(AvailableBlockHeaderInputV2 {
+            fee_signature: input.fee_signature,
+            sender: input.sender,
+        })
+    }
+    .await;
     respond(&headers, result)
 }
 
@@ -280,11 +241,9 @@ async fn builder_address(State(state): State<SharedState>, headers: HeaderMap) -
     respond(&headers, result)
 }
 
-// --- txn_submit -------------------------------------------------------------------------------
-
 async fn submit_txn(State(state): State<SharedState>, headers: HeaderMap, body: Bytes) -> Response {
     let result = async {
-        let tx: <espresso_types::SeqTypes as NodeType>::Transaction =
+        let tx: <SeqTypes as NodeType>::Transaction =
             decode_body(&headers, &body).map_err(BuilderApiError::TxnUnpack)?;
         let hash = tx.commit();
         state
@@ -303,7 +262,7 @@ async fn submit_batch(
     body: Bytes,
 ) -> Response {
     let result = async {
-        let txns: Vec<<espresso_types::SeqTypes as NodeType>::Transaction> =
+        let txns: Vec<<SeqTypes as NodeType>::Transaction> =
             decode_body(&headers, &body).map_err(BuilderApiError::TxnUnpack)?;
         let hashes = txns.iter().map(|tx| tx.commit()).collect::<Vec<_>>();
         state
@@ -368,15 +327,109 @@ fn txn_submit_router(state: SharedState) -> Router {
 
 /// Builds the full router: `healthcheck`, plus `block_info` and `txn_submit`, served both
 /// unversioned and under `/v0` (both modules were registered with API version major `0`, tide's
-/// convention for the module's only registered major version).
-pub fn router(state: ProxyGlobalState<espresso_types::SeqTypes>) -> Router {
+/// convention for the module's only registered major version). Like tide-disco, every response
+/// carries permissive CORS headers.
+pub fn router(state: ProxyGlobalState<SeqTypes>) -> Router {
     let state: SharedState = Arc::new(state);
-    let block_info = block_info_router(state.clone());
-    let txn_submit = txn_submit_router(state);
+    let api = Router::new()
+        .nest("/block_info", block_info_router(state.clone()))
+        .nest("/txn_submit", txn_submit_router(state));
     Router::new()
         .route("/healthcheck", get(healthcheck))
-        .nest("/block_info", block_info.clone())
-        .nest("/block_info/v0", block_info)
-        .nest("/txn_submit", txn_submit.clone())
-        .nest("/txn_submit/v0", txn_submit)
+        .merge(api.clone())
+        .nest("/v0", api)
+        .layer(body_limit_layer())
+        .layer(cors_layer())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use async_lock::RwLock;
+    use axum::http::{Method, Request, header};
+    use hotshot_builder_legacy::service::GlobalState;
+    use hotshot_types::{data::ViewNumber, traits::signature_key::BuilderSignatureKey as _};
+
+    use super::*;
+
+    fn test_router() -> Router {
+        let (bootstrap_sender, _bootstrap_receiver) = async_broadcast::broadcast(10);
+        let (tx_sender, _tx_receiver) = async_broadcast::broadcast(10);
+        let keys =
+            <SeqTypes as NodeType>::BuilderSignatureKey::generated_from_seed_indexed([0; 32], 0);
+        router(ProxyGlobalState::new(
+            Arc::new(RwLock::new(GlobalState::new(
+                bootstrap_sender,
+                tx_sender,
+                VidCommitment::default(),
+                ViewNumber::new(0),
+                ViewNumber::new(0),
+                Duration::from_secs(60),
+                1024,
+                1,
+                1,
+            ))),
+            keys,
+            Duration::from_millis(100),
+        ))
+    }
+
+    async fn request(method: Method, uri: &str) -> axum::http::Response<axum::body::Body> {
+        let req = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::ORIGIN, "https://example.com")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        tower::ServiceExt::oneshot(test_router(), req)
+            .await
+            .unwrap()
+    }
+
+    /// tide-disco served both modules at `/v0/<module>/...` and redirected the unversioned paths
+    /// there, so both forms must route. Nesting the version after the module path instead
+    /// (`/block_info/v0/...`) silently 404s the canonical versioned URLs.
+    #[tokio::test]
+    async fn versioned_and_unversioned_module_paths_route() {
+        for uri in [
+            "/block_info/builderaddress",
+            "/v0/block_info/builderaddress",
+            "/txn_submit/status/abc",
+            "/v0/txn_submit/status/abc",
+        ] {
+            assert_ne!(
+                request(Method::GET, uri).await.status(),
+                AxumStatusCode::NOT_FOUND,
+                "{uri} did not route"
+            );
+        }
+        assert_eq!(
+            request(Method::GET, "/block_info/v0/builderaddress")
+                .await
+                .status(),
+            AxumStatusCode::NOT_FOUND,
+            "the version belongs before the module path, not after"
+        );
+    }
+
+    /// Like tide-disco, every response carries permissive CORS headers; the node's builder client
+    /// is not a browser, but the demo tooling and dashboards are.
+    #[tokio::test]
+    async fn responses_carry_cors_headers() {
+        for (method, uri) in [
+            (Method::GET, "/healthcheck"),
+            (Method::GET, "/v0/block_info/builderaddress"),
+            (Method::GET, "/no/such/route"),
+        ] {
+            let resp = request(method.clone(), uri).await;
+            assert_eq!(
+                resp.headers()
+                    .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                    .unwrap_or_else(|| panic!("no CORS header on {uri}")),
+                "*",
+                "{uri}"
+            );
+        }
+    }
 }

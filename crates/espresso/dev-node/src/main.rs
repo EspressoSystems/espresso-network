@@ -57,6 +57,7 @@ use hotshot_types::{
     stake_table::{HSStakeTable, one_honest_threshold},
     utils::epoch_from_block_number,
 };
+use http_wire::{cors_layer, healthcheck_response};
 use itertools::izip;
 use serde::{Deserialize, Serialize};
 use staking_cli::demo::{DelegationConfig, StakingTransactions};
@@ -933,23 +934,27 @@ async fn set_hotshot_up(
 }
 
 async fn healthcheck(headers: HeaderMap) -> Response {
-    espresso_api::healthcheck_response(&headers)
+    healthcheck_response(&headers)
 }
 
 /// Serves the dev-info/set-hotshot-down/set-hotshot-up routes at both the `/v0/api/...` forms
 /// tide-disco served directly and the unversioned `/api/...` forms it served via a redirect
 /// (used by the Go SDK and our HTTP clients, respectively).
 fn dev_node_router(state: DevNodeState) -> Router {
-    let api = Router::new()
-        .route("/dev-info", get(get_dev_info))
-        .route("/set-hotshot-down", post(set_hotshot_down))
-        .route("/set-hotshot-up", post(set_hotshot_up))
-        .with_state(state);
+    let api = Router::new().nest(
+        "/api",
+        Router::new()
+            .route("/dev-info", get(get_dev_info))
+            .route("/set-hotshot-down", post(set_hotshot_down))
+            .route("/set-hotshot-up", post(set_hotshot_up))
+            .with_state(state),
+    );
 
     Router::new()
-        .nest("/api", api.clone())
-        .nest("/v0/api", api)
+        .merge(api.clone())
+        .nest("/v0", api)
         .route("/healthcheck", get(healthcheck))
+        .layer(cors_layer())
 }
 
 async fn run_dev_node_server<ApiVer: StaticVersionType + 'static>(

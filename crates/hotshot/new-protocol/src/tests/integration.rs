@@ -7,7 +7,7 @@ use hotshot_types::{traits::signature_key::SignatureKey, vote::HasViewNumber};
 use super::common::{harness::TestHarness, utils::TestData};
 use crate::{
     consensus::ConsensusInput,
-    message::{CatchupEvidence, ConsensusMessage, EpochChangeMessage, Proposal},
+    message::{CatchupEvidence, ConsensusMessage, EpochChangeMessage, Proposal, Validated},
     tests::common::assertions::{
         any, count_matching, is_block_built, is_block_reconstructed, is_cert1, is_cert2,
         is_drb_result, is_header_created, is_header_created_for_view, is_leaf_decided, is_proposal,
@@ -89,9 +89,7 @@ async fn send_timeout_votes(
             any(inputs, is_timeout_cert)
         })
         .await;
-    harness.apply_and_process(ConsensusInput::TimeoutCertificate(
-        test_view.timeout_cert.clone(),
-    ));
+    harness.apply_and_process(test_view.timeout_cert_input());
 }
 
 /// Integration: sequential views both produce Vote1 through real state validation.
@@ -332,14 +330,10 @@ async fn test_leader_proposes_after_timeout() {
 const EPOCH_HEIGHT: u64 = 10;
 
 /// Helper to build an EpochChangeMessage from test data at the epoch boundary view.
-fn epoch_change_message(test_data: &TestData) -> EpochChangeMessage<TestTypes> {
+fn epoch_change_message(test_data: &TestData) -> EpochChangeMessage<TestTypes, Validated> {
     let epoch_view = &test_data.views[9]; // view 10, last block of epoch 1
     let proposal: Proposal<TestTypes> = epoch_view.proposal.data.clone();
-    EpochChangeMessage {
-        cert1: epoch_view.cert1.clone(),
-        cert2: epoch_view.cert2.clone(),
-        proposal,
-    }
+    EpochChangeMessage::validated(epoch_view.cert1.clone(), epoch_view.cert2.clone(), proposal)
 }
 
 /// Run views through the full integration pipeline.
@@ -435,11 +429,11 @@ async fn cross_epoch_boundary(
 ) {
     let boundary_view = &test_data.views[boundary_idx];
     let proposal: Proposal<TestTypes> = boundary_view.proposal.data.clone();
-    let epoch_change = EpochChangeMessage {
-        cert1: boundary_view.cert1.clone(),
-        cert2: boundary_view.cert2.clone(),
+    let epoch_change = EpochChangeMessage::validated(
+        boundary_view.cert1.clone(),
+        boundary_view.cert2.clone(),
         proposal,
-    };
+    );
     harness.apply_and_process(ConsensusInput::EpochChange(epoch_change));
 
     // Send vote1s and vote2s through the normal pipeline.
@@ -613,6 +607,15 @@ async fn test_timeout_vote_lock_advances_view() {
     let high_qc = CatchupEvidence::Qc(test_data.views[0].cert1.clone());
     harness.message(test_data.views[1].timeout_vote_input(1, Some(high_qc.clone())));
 
+    harness
+        .process_until_output(|outputs| {
+            any(
+                outputs,
+                |o| matches!(o, ConsensusOutput::ViewChanged(view, _) if **view == 2),
+            )
+        })
+        .await;
+
     assert_eq!(
         view_changed_to(harness.outputs(), 2),
         1,
@@ -644,6 +647,10 @@ async fn test_timeout_vote_tc_advances_view() {
     // timeout certificate for view 2 that formed without us.
     let tc = CatchupEvidence::Tc(test_data.views[1].timeout_cert.clone());
     harness.message(test_data.views[2].timeout_vote_input(1, Some(tc)));
+
+    harness
+        .process_until(|inputs| any(inputs, is_timeout_cert))
+        .await;
 
     assert_eq!(
         *harness.current_view(),
@@ -716,6 +723,10 @@ async fn test_timeout_vote_evidence_overrides_distance_check() {
     // certificate for view 31.
     let tc = CatchupEvidence::Tc(test_data.views[30].timeout_cert.clone());
     harness.message(test_data.views[31].timeout_vote_input(1, Some(tc)));
+
+    harness
+        .process_until(|inputs| any(inputs, is_timeout_cert))
+        .await;
 
     assert_eq!(
         *harness.current_view(),

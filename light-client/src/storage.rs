@@ -1,17 +1,14 @@
-use std::future::Future;
 #[cfg(feature = "client")]
 use std::{
     collections::HashMap,
     path::PathBuf,
     str::FromStr,
-    sync::{
-        Arc,
-        atomic::{AtomicI64, Ordering},
-    },
+    sync::atomic::{AtomicI64, Ordering},
     time::Duration,
 };
 #[cfg(all(unix, feature = "client"))]
 use std::{fs::Permissions, os::unix::fs::PermissionsExt};
+use std::{future::Future, sync::Arc};
 
 #[cfg(feature = "client")]
 use alloy::primitives::Address;
@@ -216,6 +213,59 @@ pub trait Storage: Sized + Send + Sync + 'static {
         epoch_root_protocol_version: Version,
         next_epoch_root_protocol_version: Version,
     ) -> impl Send + Future<Output = Result<()>>;
+}
+
+impl<T: Storage> Storage for Arc<T> {
+    async fn default() -> Result<Self> {
+        Ok(Arc::new(T::default().await?))
+    }
+
+    async fn block_height(&self) -> Result<u64> {
+        (**self).block_height().await
+    }
+
+    async fn leaf_upper_bound(
+        &self,
+        leaf: impl Into<LeafRequest> + Send,
+    ) -> Result<Option<LeafQueryData<SeqTypes>>> {
+        (**self).leaf_upper_bound(leaf).await
+    }
+
+    async fn get_leaves_in_range(
+        &self,
+        start: u32,
+        end: u32,
+    ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
+        (**self).get_leaves_in_range(start, end).await
+    }
+
+    async fn insert_leaf(&self, leaf: LeafQueryData<SeqTypes>) -> Result<()> {
+        (**self).insert_leaf(leaf).await
+    }
+
+    async fn stake_table_lower_bound(
+        &self,
+        epoch: EpochNumber,
+    ) -> Result<Option<(EpochNumber, StakeTableState, Version, Version)>> {
+        (**self).stake_table_lower_bound(epoch).await
+    }
+
+    async fn insert_stake_table(
+        &self,
+        epoch: EpochNumber,
+        stake_table: &StakeTableState,
+        epoch_root_protocol_version: Version,
+        next_epoch_root_protocol_version: Version,
+    ) -> Result<()> {
+        (**self)
+            .insert_stake_table(
+                epoch,
+                stake_table,
+                epoch_root_protocol_version,
+                next_epoch_root_protocol_version,
+            )
+            .await
+    }
 }
 
 #[cfg(feature = "client")]

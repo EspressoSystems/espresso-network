@@ -21,11 +21,11 @@ use std::{
 use alloy::primitives::U256;
 use async_lock::RwLock;
 use axum::{
-    Json, Router,
+    Router,
     body::Bytes,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode, header},
-    response::{IntoResponse, Response},
+    http::{HeaderMap, StatusCode},
+    response::Response,
     routing::{get, post},
 };
 use client::{BenchResults, BenchResultsDownloadConfig};
@@ -40,7 +40,8 @@ use hotshot_types::{
         signature_key::{SignatureKey, StakeTableEntryType},
     },
 };
-use http_client::{Url, error::ClientErr, healthcheck::HealthStatus};
+use http_client::{Url, error::ClientErr};
+use http_wire::{self as wire, WireFormat, cors_layer, healthcheck_response};
 use libp2p_identity::{
     Keypair, PeerId,
     ed25519::{Keypair as EdKeypair, SecretKey},
@@ -674,62 +675,28 @@ where
 /// Shared, lock-guarded orchestrator state, cloned into every axum handler via `State`.
 type SharedOrchestratorState<TYPES> = Arc<RwLock<OrchestratorState<TYPES>>>;
 
-fn wants_binary(headers: &HeaderMap) -> bool {
-    headers
-        .get(header::ACCEPT)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.contains("application/octet-stream"))
-}
+/// Wire format of the orchestrator: [`OrchestratorVersion`] VBS framing and tide-disco's
+/// `ServerError` envelope, which `OrchestratorClient` decodes.
+struct OrchestratorWireFormat;
 
-fn axum_status(status: disco_types::status::StatusCode) -> StatusCode {
-    StatusCode::from_u16(u16::from(status)).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
-}
+impl WireFormat for OrchestratorWireFormat {
+    type Error = ServerError;
+    type Version = OrchestratorVersion;
 
-/// Encode a successful response body, negotiating VBS binary vs JSON from the `Accept` header, to
-/// match tide-disco's content negotiation for `OrchestratorClient`, whose http-client client
-/// defaults to `Accept: application/octet-stream`.
-fn encode_ok<T: Serialize>(headers: &HeaderMap, value: T) -> Response {
-    if wants_binary(headers) {
-        match Serializer::<OrchestratorVersion>::serialize(&value) {
-            Ok(bytes) => {
-                ([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response()
-            },
-            Err(err) => encode_err(
-                headers,
-                ServerError {
-                    status: disco_types::status::StatusCode::INTERNAL_SERVER_ERROR,
-                    message: err.to_string(),
-                },
-            ),
-        }
-    } else {
-        Json(value).into_response()
+    fn status(err: &ServerError) -> StatusCode {
+        StatusCode::from_u16(u16::from(err.status)).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
     }
-}
 
-/// Encode an error response using the same content negotiation as [`encode_ok`].
-fn encode_err(headers: &HeaderMap, err: ServerError) -> Response {
-    let status = axum_status(err.status);
-    if wants_binary(headers) {
-        match Serializer::<OrchestratorVersion>::serialize(&err) {
-            Ok(bytes) => (
-                status,
-                [(header::CONTENT_TYPE, "application/octet-stream")],
-                bytes,
-            )
-                .into_response(),
-            Err(_) => (status, Json(err)).into_response(),
+    fn serialize_failure(message: String) -> ServerError {
+        ServerError {
+            status: disco_types::status::StatusCode::INTERNAL_SERVER_ERROR,
+            message,
         }
-    } else {
-        (status, Json(err)).into_response()
     }
 }
 
 fn respond<T: Serialize>(headers: &HeaderMap, result: Result<T, ServerError>) -> Response {
-    match result {
-        Ok(value) => encode_ok(headers, value),
-        Err(err) => encode_err(headers, err),
-    }
+    wire::respond::<OrchestratorWireFormat, _>(headers, result)
 }
 
 fn malformed_body() -> ServerError {
@@ -761,10 +728,8 @@ fn decode_wrapped_peer_config<TYPES: NodeType>(
         .ok_or_else(malformed_body)
 }
 
-/// Tide-disco-compatible module healthcheck: a bare [`HealthStatus`], negotiated JSON or vbs
-/// binary from `Accept`.
 async fn healthcheck(headers: HeaderMap) -> Response {
-    encode_ok(&headers, HealthStatus::Available)
+    healthcheck_response(&headers)
 }
 
 async fn post_identity<TYPES: NodeType>(
@@ -915,7 +880,7 @@ async fn get_builders<TYPES: NodeType>(
 
 /// Builds the `api` module's routes. tide-disco served these both directly (e.g. `api/identity`)
 /// and under a major-version prefix (`v0/api/identity`), redirecting the former to the latter; we
-/// serve both forms directly instead, by nesting this router at both `/api` and `/v0/api`.
+/// serve both forms directly instead, by mounting the `/api` tree at the root and under `/v0`.
 fn api_router<TYPES: NodeType>() -> Router<SharedOrchestratorState<TYPES>> {
     Router::new()
         .route("/healthcheck", get(healthcheck))
@@ -934,6 +899,18 @@ fn api_router<TYPES: NodeType>() -> Router<SharedOrchestratorState<TYPES>> {
         .route("/manual_start", post(post_manual_start::<TYPES>))
         .route("/builders", get(get_builders::<TYPES>))
         .route("/builder", post(post_builder::<TYPES>))
+}
+
+/// Builds the full router: the app-level `healthcheck`, plus the `api` module served both
+/// unversioned and under `/v0`. Like tide-disco, every response carries permissive CORS headers.
+fn app<TYPES: NodeType>(state: SharedOrchestratorState<TYPES>) -> Router {
+    let api = Router::new().nest("/api", api_router::<TYPES>());
+    Router::new()
+        .route("/healthcheck", get(healthcheck))
+        .merge(api.clone())
+        .nest("/v0", api)
+        .with_state(state)
+        .layer(cors_layer())
 }
 
 /// Runs the orchestrator
@@ -999,16 +976,7 @@ pub async fn run_orchestrator<TYPES: NodeType>(
 
     let state: SharedOrchestratorState<TYPES> =
         Arc::new(RwLock::new(OrchestratorState::new(network_config)));
-
-    let api = api_router::<TYPES>();
-    let app = Router::new()
-        // tide-disco's app-level `healthcheck` isn't actually reachable for a singleton app like
-        // this one (it only registers the `api` module's own `healthcheck`), but we serve it
-        // anyway for parity with other axum conversions in this repo; no client depends on it.
-        .route("/healthcheck", get(healthcheck))
-        .nest("/api", api.clone())
-        .nest("/v0/api", api)
-        .with_state(state);
+    let app = app::<TYPES>(state);
 
     let host = url
         .host_str()
@@ -1020,4 +988,52 @@ pub async fn run_orchestrator<TYPES: NodeType>(
 
     tracing::error!("listening on {url:?}");
     axum::serve(listener, app).await
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::{Request, header};
+    use hotshot_example_types::node_types::TestTypes;
+
+    use super::*;
+
+    fn test_app() -> Router {
+        app::<TestTypes>(Arc::new(RwLock::new(OrchestratorState::new(
+            NetworkConfig::default(),
+        ))))
+    }
+
+    /// Like tide-disco, every response carries permissive CORS headers.
+    #[tokio::test]
+    async fn responses_carry_cors_headers() {
+        for uri in ["/healthcheck", "/api/peer_pub_ready", "/no/such/route"] {
+            let req = Request::builder()
+                .uri(uri)
+                .header(header::ORIGIN, "https://example.com")
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let resp = tower::ServiceExt::oneshot(test_app(), req).await.unwrap();
+            assert_eq!(
+                resp.headers()
+                    .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                    .unwrap_or_else(|| panic!("no CORS header on {uri}")),
+                "*",
+                "{uri}"
+            );
+        }
+    }
+
+    /// tide-disco served the `api` module both unversioned and under `/v0`, redirecting the former
+    /// to the latter; both forms must route here.
+    #[tokio::test]
+    async fn versioned_and_unversioned_api_paths_route() {
+        for uri in ["/api/peer_pub_ready", "/v0/api/peer_pub_ready"] {
+            let req = Request::builder()
+                .uri(uri)
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let resp = tower::ServiceExt::oneshot(test_app(), req).await.unwrap();
+            assert_ne!(resp.status(), StatusCode::NOT_FOUND, "{uri} did not route");
+        }
+    }
 }

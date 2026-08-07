@@ -52,6 +52,7 @@ use hotshot_types::traits::{
     metrics::{Counter, Gauge, Histogram, Metrics as _},
 };
 use http_client::{StatusCode, Url, error::ClientErr, socket};
+use http_wire::{cors_layer, healthcheck_response};
 use jf_merkle_tree_compat::{
     ForgetableMerkleTreeScheme, MerkleTreeScheme, UniversalMerkleTreeScheme,
 };
@@ -1385,7 +1386,8 @@ async fn serve(port: u16, metrics: PrometheusMetrics) {
         .route("/healthcheck", get(healthcheck))
         .route("/status/metrics", get(status_metrics))
         .route("/v0/status/metrics", get(status_metrics))
-        .with_state(metrics);
+        .with_state(metrics)
+        .layer(cors_layer());
 
     let addr = format!("0.0.0.0:{port}");
     let listener = match TcpListener::bind(&addr).await {
@@ -1401,7 +1403,7 @@ async fn serve(port: u16, metrics: PrometheusMetrics) {
 }
 
 async fn healthcheck(headers: HeaderMap) -> Response {
-    espresso_api::healthcheck_response(&headers)
+    healthcheck_response(&headers)
 }
 
 /// Prometheus text exposition of `metrics`, matching the `text/plain; charset=utf-8` content type

@@ -32,6 +32,7 @@ hotshot-query-service = { workspace = true }
 hotshot-task-impls = { workspace = true }
 hotshot-types = { workspace = true }
 http-client = { workspace = true }
+http-wire = { workspace = true, features = ["server"] }
 itertools = { workspace = true }
 jf-crhf = { workspace = true }
 jf-pcs = { workspace = true }
@@ -58,6 +59,7 @@ vbs = { workspace = true }
 espresso-utils = { workspace = true, features = ["full", "testing"] }
 rstest = { workspace = true }
 test-log = { workspace = true }
+tower = { workspace = true, features = ["util"] }
 
 [lints]
 workspace = true

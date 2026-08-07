@@ -67,9 +67,9 @@ use super::{
     RewardMerkleTreeDataSource, RewardMerkleTreeV2Data as InternalRewardTreeData,
     data_source::{
         CatchupDataSource as _, DatabaseMetadataSource as _, HotShotConfigDataSource as _,
-        NodeStateDataSource as _, PruningDataSource as _, RequestResponseDataSource as _,
-        StakeTableDataSource, StateCertDataSource, StateCertFetchingDataSource,
-        StateSignatureDataSource, TokenDataSource as _,
+        NodeKeysDataSource, NodePublicKeys, NodeStateDataSource as _, PruningDataSource as _,
+        RequestResponseDataSource as _, StakeTableDataSource, StateCertDataSource,
+        StateCertFetchingDataSource, StateSignatureDataSource, TokenDataSource as _,
     },
 };
 
@@ -2013,10 +2013,12 @@ where
     }
 
     async fn get_cert2(&self, height: u64) -> anyhow::Result<Option<Self::Cert2>> {
-        self.data_source
+        Ok(self
+            .data_source
             .get_cert2(height)
             .await
-            .map_err(|e| anyhow::anyhow!("{}", e))
+            .with_timeout(Duration::from_millis(500))
+            .await)
     }
 
     async fn stream_leaves(&self, from: usize) -> anyhow::Result<BoxStream<'static, Self::Leaf>> {
@@ -2283,8 +2285,10 @@ where
 impl<D> espresso_api::v1::StatusApi for NodeApiStateImpl<D>
 where
     D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target: hotshot_query_service::status::StatusDataSource + Send + Sync,
+    D::Target: hotshot_query_service::status::StatusDataSource + NodeKeysDataSource + Send + Sync,
 {
+    type Keys = NodePublicKeys;
+
     async fn block_height(&self) -> anyhow::Result<u64> {
         let ds = &*self.data_source;
         let h = hotshot_query_service::status::StatusDataSource::block_height(ds)
@@ -2313,6 +2317,10 @@ where
         let mut buffer = Vec::new();
         prometheus::TextEncoder::new().encode(&ds.metrics().registry().gather(), &mut buffer)?;
         Ok(String::from_utf8(buffer)?)
+    }
+
+    async fn keys(&self) -> anyhow::Result<NodePublicKeys> {
+        Ok(self.data_source.node_public_keys().await)
     }
 }
 
@@ -3089,26 +3097,15 @@ where
             .await
             .ok_or_else(|| not_found(format!("unknown leaf {requested}")))?;
 
-        let proof_result = if let Some(finalized) = finalized {
-            crate::api::light_client::get_leaf_proof_with_finalized_assumption(
-                ds,
-                requested_leaf,
-                finalized as usize,
-                fetch_timeout,
-            )
-            .await
-        } else if requested_leaf.header().version() >= versions::NEW_PROTOCOL_VERSION {
-            crate::api::light_client::get_leaf_proof_with_cert2(ds, requested_leaf, fetch_timeout)
-                .await
-        } else {
-            crate::api::light_client::get_leaf_proof_with_qc_chain(
-                ds,
-                requested_leaf,
-                fetch_timeout,
-            )
-            .await
-        };
-        proof_result.map_err(|err| anyhow::anyhow!("{err}"))
+        crate::api::light_client::get_leaf_proof(
+            ds,
+            requested_leaf,
+            finalized.map(|f| f as usize),
+            fetch_timeout,
+            lc_leaf_proof_chain_limit(),
+        )
+        .await
+        .map_err(|err| anyhow::anyhow!("{err}"))
     }
 
     async fn get_header_proof(
@@ -3334,6 +3331,11 @@ pub(crate) fn lc_error(err: hotshot_query_service::Error) -> anyhow::Error {
         StatusCode::BAD_REQUEST => bad_request(err.to_string()),
         _ => anyhow::anyhow!("{err}"),
     }
+}
+
+/// Bounds the leaves in a single leaf proof, and so the memory to build and serialize it.
+fn lc_leaf_proof_chain_limit() -> usize {
+    hotshot_query_service::availability::Options::default().small_object_range_limit
 }
 
 // ============================================================================

@@ -73,7 +73,6 @@
         dregs.overlays.default
         (final: prev: {
           solhint = prev.callPackage ./nix/solhint { };
-          pup = prev.callPackage ./nix/pup { };
         })
 
         (final: prev: {
@@ -97,6 +96,7 @@
         })
       ];
       pkgs = import nixpkgs { inherit system overlays; };
+      keydb = pkgs.callPackage ./nix/keydb.nix { };
       myShell = pkgs.mkShellNoCC.override (pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
         # The mold linker is around 50% faster on Linux than the default linker.
         stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.clangStdenv;
@@ -199,6 +199,8 @@
           };
         };
       };
+      packages.keydb = keydb;
+
       devShells.default =
         let
           stableToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
@@ -234,12 +236,11 @@
             prek
             prek-as-pre-commit # compat to allow running pre-commit
             entr
-            pup
+            datadog-pup
             process-compose
             lazydocker # a docker compose TUI
-            # `postgresql` defaults to an older version (15), so we select the latest version (16)
-            # explicitly.
-            postgresql_16
+            keydb
+            postgresql_18
 
             # Figures
             graphviz

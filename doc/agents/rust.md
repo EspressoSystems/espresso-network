@@ -108,8 +108,8 @@ Migrations (all three backends required when adding storage):
 - Locations: `crates/espresso/node/api/migrations/{postgres,sqlite}/`,
   `hotshot-query-service/migrations/{postgres,sqlite}/`.
 - hotshot-query-service uses multiples of 100 (V100, V200...) leaving gaps for applications.
-- Filesystem (`crates/espresso/node/src/persistence/fs.rs`): code-based, tracked via `migrated` HashSet. Must be
-  recoverable and atomic.
+- Filesystem (`crates/espresso/node/src/persistence/fs.rs`): no migration framework. Handle older on-disk formats with
+  read-time fallbacks (see `load_stake` and `legacy_anchor_leaf_path`), and keep writes atomic via `Inner::replace`.
 - Update `SequencerPersistence` for all backends; test with `cargo test -p espresso-node persistence`.
 
 Refinery migrations run synchronously at startup before the node joins consensus, so they must be fast and schema-only.

@@ -9,7 +9,7 @@ use async_trait::async_trait;
 #[cfg(feature = "node")]
 use hotshot_contract_adapter::sol_types::{LightClientV3, StakeTableV3};
 use hotshot_types::{
-    HotShotConfig, data::EpochNumber, epoch_membership::EpochMembershipCoordinator,
+    HotShotConfig, data::EpochNumber, drb::DrbResult, epoch_membership::EpochMembershipCoordinator,
     traits::states::InstanceState,
 };
 use moka::future::Cache;
@@ -25,7 +25,7 @@ use super::{
 #[cfg(feature = "node")]
 use crate::v0::L1Client;
 use crate::{
-    AuthenticatedValidatorMap, PubKey, RegisteredValidatorMap,
+    AuthenticatedValidatorMap, Header, PubKey, RegisteredValidatorMap,
     v0::{
         GenesisHeader, L1BlockInfo, Timestamp, Upgrade, UpgradeMode,
         impls::{StakeTableHash, fetch_and_calculate_block_reward, reward::EpochRewardsCalculator},
@@ -175,6 +175,14 @@ impl MembershipPersistence for NoStorage {
     }
 
     async fn load_latest_stake(&self, _limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
+        Ok(None)
+    }
+
+    async fn load_drb_result(&self, _epoch: EpochNumber) -> anyhow::Result<Option<DrbResult>> {
+        Ok(None)
+    }
+
+    async fn load_epoch_root(&self, _epoch: EpochNumber) -> anyhow::Result<Option<Header>> {
         Ok(None)
     }
 

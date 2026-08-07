@@ -108,15 +108,13 @@ impl tide_disco::error::Error for Error {
             },
             Error::TxnUnpack { .. } => StatusCode::BAD_REQUEST,
             Error::TxnSubmit { .. } => StatusCode::INTERNAL_SERVER_ERROR,
-            Error::Custom { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            Error::Custom { status, .. } => *status,
             Error::BuilderAddress { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             Error::TxnStat { .. } => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 }
 
-/// Mirrors the `tide_disco::error::Error` impl above, converting between `tide_disco::StatusCode`
-/// and `reqwest::StatusCode` (the wire status carried by `http_client`).
 impl http_client::ClientError for Error {
     fn catch_all(status: http_client::StatusCode, msg: String) -> Self {
         Error::Custom {
@@ -126,21 +124,7 @@ impl http_client::ClientError for Error {
     }
 
     fn status(&self) -> http_client::StatusCode {
-        let status = match self {
-            Error::Request { .. } => StatusCode::BAD_REQUEST,
-            Error::BlockAvailable { source, .. } | Error::BlockClaim { source, .. } => match source
-            {
-                BuildError::NotFound => StatusCode::NOT_FOUND,
-                BuildError::Missing => StatusCode::NOT_FOUND,
-                BuildError::Error { .. } => StatusCode::INTERNAL_SERVER_ERROR,
-            },
-            Error::TxnUnpack { .. } => StatusCode::BAD_REQUEST,
-            Error::TxnSubmit { .. } => StatusCode::INTERNAL_SERVER_ERROR,
-            Error::Custom { .. } => StatusCode::INTERNAL_SERVER_ERROR,
-            Error::BuilderAddress { .. } => StatusCode::INTERNAL_SERVER_ERROR,
-            Error::TxnStat { .. } => StatusCode::INTERNAL_SERVER_ERROR,
-        };
-        status.into()
+        disco_types::error::Error::status(self).into()
     }
 }
 

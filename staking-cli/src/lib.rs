@@ -491,6 +491,14 @@ pub(crate) enum Commands {
         #[clap(long, value_enum, env = "DELEGATION_CONFIG", default_value_t = demo::DelegationConfig::default())]
         delegation_config: demo::DelegationConfig,
 
+        /// Network label embedded in per-validator metadata URIs.
+        #[clap(long, env = "ESPRESSO_DEMO_METADATA_NETWORK")]
+        metadata_network: Option<String>,
+
+        /// Per-validator host labels for metadata URIs (e.g. `query-1,query-2`).
+        #[clap(long, value_delimiter = ',', env = "ESPRESSO_DEMO_METADATA_HOSTS")]
+        metadata_hosts: Vec<String>,
+
         /// Number of concurrent transaction submissions
         #[clap(long, default_value_t = tx_log::DEFAULT_CONCURRENCY)]
         concurrency: usize,

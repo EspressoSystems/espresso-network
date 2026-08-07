@@ -23,12 +23,12 @@ use futures::{
     stream::StreamExt,
 };
 use hotshot_query_service::{Error, availability::BlockQueryData, types::HeightIndexed};
-use http_client::{Client, Url};
+use http_client::{Client, Url, WebSocketConfig};
+use http_wire::{cors_layer, healthcheck_response};
 use rand::{Rng, RngCore, SeedableRng};
 use rand_chacha::ChaChaRng;
 use rand_distr::Distribution;
 use tokio::{net::TcpListener, task::spawn, time::sleep};
-use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use vbs::version::StaticVersionType;
 
 /// Submit random transactions to an Espresso Sequencer.
@@ -509,7 +509,9 @@ async fn submit_transactions<ApiVer: StaticVersionType>(
 }
 
 async fn server(port: u16) {
-    let app = axum::Router::new().route("/healthcheck", get(healthcheck));
+    let app = axum::Router::new()
+        .route("/healthcheck", get(healthcheck))
+        .layer(cors_layer());
     let addr = format!("0.0.0.0:{port}");
     let listener = match TcpListener::bind(&addr).await {
         Ok(listener) => listener,
@@ -524,7 +526,7 @@ async fn server(port: u16) {
 }
 
 async fn healthcheck(headers: HeaderMap) -> Response {
-    espresso_api::healthcheck_response(&headers)
+    healthcheck_response(&headers)
 }
 
 fn random_transaction(opt: &Options, rng: &mut ChaChaRng) -> Transaction {

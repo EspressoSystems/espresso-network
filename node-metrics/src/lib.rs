@@ -99,13 +99,14 @@
 pub mod api;
 pub mod service;
 
-use api::node_validator::v0::SurfDiscoAvailabilityAPIStream;
+use api::node_validator::v0::AvailabilityAPIStream;
 use axum::Router;
 use clap::Parser;
 use futures::{
     StreamExt,
     channel::mpsc::{self, Sender},
 };
+use http_wire::cors_layer;
 use service::data_state::MAX_VOTERS_HISTORY;
 use tokio::{net::TcpListener, spawn};
 use url::Url;
@@ -204,6 +205,22 @@ impl StateClientMessageSender<Sender<ServerMessage>> for MainState {
     }
 }
 
+/// Builds the full router. tide-disco served `details` both directly (e.g.
+/// `node-validator/details`) and under a major-version prefix (`v0/node-validator/details`),
+/// redirecting the former to the latter; we serve both forms directly instead. Like tide-disco,
+/// every response carries permissive CORS headers, which the dashboard this API feeds needs.
+fn app(state: MainState) -> Router {
+    let api = Router::new().nest(
+        "/node-validator",
+        api::node_validator::v0::router::<MainState>(),
+    );
+    Router::new()
+        .merge(api.clone())
+        .nest("/v0", api)
+        .with_state(state)
+        .layer(cors_layer())
+}
+
 /// Run the service by itself.
 ///
 /// This function will run the node validator as its own service.  It has some
@@ -215,14 +232,7 @@ pub async fn run_standalone_service(options: Options) {
         internal_client_message_sender,
     };
 
-    // tide-disco served `details` both directly (e.g. `node-validator/details`) and under a
-    // major-version prefix (`v0/node-validator/details`), redirecting the former to the latter;
-    // we serve both forms directly instead.
-    let node_validator_api = api::node_validator::v0::router::<MainState>();
-    let app = Router::new()
-        .nest("/node-validator", node_validator_api.clone())
-        .nest("/v0/node-validator", node_validator_api)
-        .with_state(state);
+    let app = app(state);
 
     let (leaf_and_block_pair_sender, leaf_and_block_pair_receiver) = mpsc::channel(10);
 
@@ -262,8 +272,8 @@ pub async fn run_standalone_service(options: Options) {
 
     tracing::debug!("creating stream starting at block height: {}", block_height);
 
-    let leaf_stream = SurfDiscoAvailabilityAPIStream::new_leaf_stream(client.clone(), block_height);
-    let block_stream = SurfDiscoAvailabilityAPIStream::new_block_stream(client, block_height);
+    let leaf_stream = AvailabilityAPIStream::new_leaf_stream(client.clone(), block_height);
+    let block_stream = AvailabilityAPIStream::new_block_stream(client, block_height);
 
     let zipped_stream = leaf_stream.zip(block_stream);
 
@@ -303,4 +313,52 @@ pub async fn run_standalone_service(options: Options) {
     });
 
     let _ = app_serve_handle.await;
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::{Request, StatusCode, header};
+
+    use super::*;
+
+    fn test_app() -> Router {
+        let (internal_client_message_sender, _receiver) = mpsc::channel(32);
+        app(MainState {
+            internal_client_message_sender,
+        })
+    }
+
+    /// Like tide-disco, every response carries permissive CORS headers; this API is read straight
+    /// from a browser dashboard.
+    #[tokio::test]
+    async fn responses_carry_cors_headers() {
+        for uri in ["/node-validator/details", "/no/such/route"] {
+            let req = Request::builder()
+                .uri(uri)
+                .header(header::ORIGIN, "https://example.com")
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let resp = tower::ServiceExt::oneshot(test_app(), req).await.unwrap();
+            assert_eq!(
+                resp.headers()
+                    .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                    .unwrap_or_else(|| panic!("no CORS header on {uri}")),
+                "*",
+                "{uri}"
+            );
+        }
+    }
+
+    /// tide-disco served the module both unversioned and under `/v0`; both forms must route.
+    #[tokio::test]
+    async fn versioned_and_unversioned_module_paths_route() {
+        for uri in ["/node-validator/details", "/v0/node-validator/details"] {
+            let req = Request::builder()
+                .uri(uri)
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let resp = tower::ServiceExt::oneshot(test_app(), req).await.unwrap();
+            assert_ne!(resp.status(), StatusCode::NOT_FOUND, "{uri} did not route");
+        }
+    }
 }

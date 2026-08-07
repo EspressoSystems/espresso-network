@@ -38,6 +38,7 @@ members = [
     "crates/hotshot/types",
     "crates/hotshot/utils",
     "crates/http-client",
+    "crates/http-wire",
     "crates/process-metrics",
     "crates/serialization/api",
     "crates/versions",
@@ -255,7 +256,9 @@ hotshot-task-impls = { path = "crates/hotshot/task-impls" }
 hotshot-testing = { path = "crates/hotshot/testing" }
 hotshot-types = { path = "crates/hotshot/types" }
 hotshot-utils = { path = "crates/hotshot/utils" }
+http = "1"
 http-client = { path = "crates/http-client" }
+http-wire = { path = "crates/http-wire", default-features = false }
 humantime = "2"
 include_dir = "0.7"
 indexmap = { version = "2", features = ["serde"] }
@@ -313,7 +316,6 @@ jf-utils = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-uti
 lazy_static = "1"
 libp2p = { package = "libp2p", version = "0.56", default-features = false, features = [
     "macros",
-    "autonat",
     "cbor",
     "dns",
     "gossipsub",
@@ -401,7 +403,7 @@ snafu = "0.8"
 snap = "1"
 snow = { version = "0.10.0", features = ["ring-accelerated"] }
 socket2 = "0.6.4"
-sqlx = { version = "=0.8.3", features = [
+sqlx = { version = "0.8.6", features = [
     "bit-vec",
     "chrono",
     "postgres",
@@ -431,6 +433,7 @@ tonic-prost = "0.14"
 tonic-prost-build = "0.14"
 tonic-reflection = "0.14"
 tower = "0.4"
+tower-http = "0.6"
 tower-service = "0.3"
 tracing = "0.1"
 tracing-subscriber = "0.3"

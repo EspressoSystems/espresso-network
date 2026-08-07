@@ -2,11 +2,11 @@ use std::{fmt, sync::Arc};
 
 use async_lock::RwLock;
 use axum::{
-    Json, Router,
+    Router,
     body::Bytes,
     extract::State,
-    http::{HeaderMap, StatusCode, header},
-    response::{IntoResponse, Response},
+    http::{HeaderMap, StatusCode},
+    response::Response,
     routing::{get, post},
 };
 use hotshot_types::{
@@ -16,17 +16,14 @@ use hotshot_types::{
     },
     traits::signature_key::LCV1StateSignatureKey,
 };
-use http_client::healthcheck::HealthStatus;
+use http_wire::{self as wire, DecodeFailure, WireFormat, cors_layer, healthcheck_response};
 use lcv1_relay::{LCV1StateRelayServerDataSource, LCV1StateRelayServerState};
 use lcv2_relay::{LCV2StateRelayServerDataSource, LCV2StateRelayServerState};
 use lcv3_relay::{LCV3StateRelayServerDataSource, LCV3StateRelayServerState};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::{net::TcpListener, sync::oneshot};
 use url::Url;
-use vbs::{
-    BinarySerializer, Serializer,
-    version::{StaticVersion, StaticVersionType},
-};
+use vbs::version::{StaticVersion, StaticVersionType};
 
 pub mod lcv1_relay;
 pub mod lcv2_relay;
@@ -63,70 +60,44 @@ impl fmt::Display for RelayError {
 
 impl std::error::Error for RelayError {}
 
-fn wants_binary(headers: &HeaderMap) -> bool {
-    headers
-        .get(header::ACCEPT)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.contains("application/octet-stream"))
+/// Wire format of the relay server: [`WireVersion`] VBS framing and the [`RelayError`]
+/// envelope.
+struct RelayWireFormat;
+
+impl WireFormat for RelayWireFormat {
+    type Error = RelayError;
+    type Version = WireVersion;
+
+    fn status(err: &RelayError) -> StatusCode {
+        StatusCode::from_u16(err.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
+    }
+
+    fn serialize_failure(message: String) -> RelayError {
+        RelayError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, message)
+    }
 }
 
-/// Encode a successful response body, negotiating VBS binary vs JSON from the `Accept` header,
-/// matching the content negotiation of the real (default-binary) `http-client` clients.
 fn encode_ok<T: Serialize>(headers: &HeaderMap, value: T) -> Response {
-    if wants_binary(headers) {
-        match Serializer::<WireVersion>::serialize(&value) {
-            Ok(bytes) => {
-                ([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response()
-            },
-            Err(err) => encode_err(
-                headers,
-                RelayError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
-            ),
-        }
-    } else {
-        Json(value).into_response()
-    }
+    wire::encode_ok::<RelayWireFormat, _>(headers, value)
 }
 
-/// Encode an error response using the same content negotiation as [`encode_ok`].
 fn encode_err(headers: &HeaderMap, err: RelayError) -> Response {
-    let status = StatusCode::from_u16(err.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    if wants_binary(headers) {
-        match Serializer::<WireVersion>::serialize(&err) {
-            Ok(bytes) => (
-                status,
-                [(header::CONTENT_TYPE, "application/octet-stream")],
-                bytes,
-            )
-                .into_response(),
-            Err(_) => (status, Json(err)).into_response(),
-        }
-    } else {
-        (status, Json(err)).into_response()
-    }
+    wire::encode_err::<RelayWireFormat>(headers, err)
 }
 
-/// Decode a request body, matching tide-disco's `body_auto` (VBS for
-/// `application/octet-stream`, JSON for `application/json`).
 fn decode_body<T: DeserializeOwned>(headers: &HeaderMap, body: &[u8]) -> Result<T, RelayError> {
-    let content_type = headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or_default();
-    if content_type.starts_with("application/octet-stream") {
-        Serializer::<WireVersion>::deserialize(body).map_err(|e| {
+    wire::decode_body::<WireVersion, T>(headers, body).map_err(|failure| match failure {
+        DecodeFailure::Binary(e) => {
             RelayError::catch_all(StatusCode::BAD_REQUEST, format!("invalid binary body: {e}"))
-        })
-    } else if content_type.starts_with("application/json") {
-        serde_json::from_slice(body).map_err(|e| {
+        },
+        DecodeFailure::Json(e) => {
             RelayError::catch_all(StatusCode::BAD_REQUEST, format!("invalid json body: {e}"))
-        })
-    } else {
-        Err(RelayError::catch_all(
+        },
+        DecodeFailure::UnsupportedContentType => RelayError::catch_all(
             StatusCode::BAD_REQUEST,
             "missing or unsupported Content-Type",
-        ))
-    }
+        ),
+    })
 }
 
 /// State that checks the light client state update and the signature collection
@@ -299,10 +270,8 @@ async fn get_latest_state_v3(state: &SharedState) -> Result<LCV3StateSignaturesB
     LCV3StateRelayServerDataSource::get_latest_signature_bundle(&*state)
 }
 
-/// Tide-disco-compatible singleton-app healthcheck: a bare [`HealthStatus`], negotiated JSON or
-/// vbs binary from `Accept`.
 async fn healthcheck(headers: HeaderMap) -> Response {
-    encode_ok(&headers, HealthStatus::Available)
+    healthcheck_response(&headers)
 }
 
 async fn post_state(State(state): State<SharedState>, headers: HeaderMap, body: Bytes) -> Response {
@@ -390,7 +359,7 @@ fn router(state: SharedState) -> Router {
                 post(post_legacy_state).get(get_legacy_state),
             );
     }
-    router.with_state(state)
+    router.with_state(state).layer(cors_layer())
 }
 
 async fn serve(server_url: Url, state: StateRelayServerState) -> anyhow::Result<()> {
@@ -430,6 +399,7 @@ pub async fn run_relay_server_with_state<BindVer: StaticVersionType + 'static>(
 #[cfg(test)]
 mod test {
     use alloy::primitives::{FixedBytes, U256};
+    use axum::Json;
     use espresso_types::SeqTypes;
     use hotshot::types::SchnorrPubKey;
     use hotshot_contract_adapter::light_client::derive_signed_state_digest;
@@ -542,5 +512,30 @@ mod test {
         assert_eq!(bundle.state, light_client_state);
         assert_eq!(bundle.signatures.len(), 1);
         assert!(bundle.signatures.contains_key(&validator.state_public_key));
+    }
+
+    /// Like tide-disco, every response carries permissive CORS headers. The light client prover
+    /// reads `lateststate` over surf-disco, but the staking UI reads it from a browser.
+    #[tokio::test]
+    async fn responses_carry_cors_headers() {
+        let relay_url = spawn_relay(StateRelayServerState::new(
+            "http://127.0.0.1:1".parse().unwrap(),
+        ))
+        .await;
+        for path in ["healthcheck", "api/lateststate", "no/such/route"] {
+            let resp = reqwest::Client::new()
+                .get(relay_url.join(path).unwrap())
+                .header("Origin", "https://example.com")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                resp.headers()
+                    .get("access-control-allow-origin")
+                    .unwrap_or_else(|| panic!("no CORS header on {path}")),
+                "*",
+                "{path}"
+            );
+        }
     }
 }

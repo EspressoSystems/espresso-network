@@ -1,13 +1,19 @@
 # pup
 
-CLI companion for Datadog. Packaged here so it's available in the dev shell.
+CLI companion for Datadog, available in the dev shell as the nixpkgs `datadog-pup` package.
 
-Upstream: https://github.com/datadog-labs/pup
+Upstream: https://github.com/DataDog/pup
 
 ## Authentication (read-only)
 
 Log in with read-only scopes only. This is enough for logs/metrics/monitors/dashboards exploration and cannot modify
 Datadog state:
+
+```bash
+pup auth login --read-only
+```
+
+To narrow further, list scopes explicitly (replaces the whole scope set):
 
 ```bash
 pup auth login --scopes metrics_read,logs_read_data,monitors_read,dashboards_read

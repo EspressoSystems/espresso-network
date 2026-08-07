@@ -21,6 +21,7 @@ testing = [
     "light-client/testing",
     "espresso-utils/testing",
     "hotshot-query-service/testing",
+    "hotshot-new-protocol/testing",
 ]
 benchmarking = []
 embedded-db = ["hotshot-query-service/embedded-db", "sqlx/sqlite"]
@@ -75,6 +76,7 @@ hotshot-task-impls = { workspace = true }
 hotshot-testing = { workspace = true, optional = true }
 hotshot-types = { workspace = true }
 http-client = { workspace = true }
+http-wire = { workspace = true, features = ["server"] }
 include_dir = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true }
@@ -114,7 +116,6 @@ test-utils = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }
-tokio-tungstenite = { workspace = true }
 tokio-util = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
@@ -131,6 +132,7 @@ vergen = { workspace = true }
 vergen-gitcl = { workspace = true }
 
 [dev-dependencies]
+bitvec = { workspace = true }
 escargot = { workspace = true }
 espresso-macros = { workspace = true }
 # Enable "testing" feature when running tests
@@ -145,6 +147,7 @@ rand = { workspace = true }
 reqwest = { workspace = true }
 tempfile = { workspace = true }
 test-log = { workspace = true }
+tokio-tungstenite = { workspace = true }
 
 [lints]
 workspace = true

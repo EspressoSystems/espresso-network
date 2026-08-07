@@ -55,21 +55,10 @@ impl disco_types::error::Error for Error {
     }
 }
 
-/// Mirrors the `disco_types::error::Error` impl above, converting between
-/// `disco_types::status::StatusCode` and `reqwest::StatusCode` (the wire status carried by
-/// `http_client`).
 #[cfg(feature = "web")]
 impl ClientError for Error {
     fn status(&self) -> http_client::StatusCode {
-        let status = match self {
-            Self::Availability { source } => source.status(),
-            Self::Node { source } => source.status(),
-            Self::Status { source } => source.status(),
-            Self::MerklizedState { source } => source.status(),
-            Self::Explorer { source } => source.status(),
-            Self::Custom { status, .. } => *status,
-        };
-        status.into()
+        disco_types::error::Error::status(self).into()
     }
 
     fn catch_all(status: http_client::StatusCode, message: String) -> Self {

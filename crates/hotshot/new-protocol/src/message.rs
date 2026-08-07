@@ -11,9 +11,11 @@ use hotshot_types::{
         OneHonestThreshold, SimpleCertificate, SuccessThreshold, TimeoutCertificate2,
     },
     simple_vote::{
-        LightClientStateUpdateVote2, QuorumVote2, SimpleVote, TimeoutData2, TimeoutVote2, Vote2Data,
+        HasEpoch, LightClientStateUpdateVote2, QuorumVote2, SimpleVote, TimeoutData2, TimeoutVote2,
+        Vote2Data,
     },
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
+    utils::is_last_block,
     vote::HasViewNumber,
 };
 pub use hotshot_types::{
@@ -21,6 +23,8 @@ pub use hotshot_types::{
     simple_certificate::{Certificate1, Certificate2},
 };
 use serde::{Deserialize, Serialize};
+
+use crate::helpers::proposal_commitment;
 
 pub type Vote2<T> = SimpleVote<T, Vote2Data<T>>;
 pub type TimeoutCertificate<T> = SimpleCertificate<T, TimeoutData2, SuccessThreshold>;
@@ -60,7 +64,7 @@ impl<T: NodeType> ProposalMessage<T, Unchecked> {
 }
 
 impl<T: NodeType, S> ProposalMessage<T, S> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn into_unchecked(self) -> ProposalMessage<T, Unchecked> {
         ProposalMessage {
             proposal: self.proposal,
@@ -142,11 +146,98 @@ impl<T: NodeType> HasViewNumber for CatchupEvidence<T> {
 /// We include the proposal because the new leader in the next epoch
 /// will need it to build a header for the first block of the next epoch.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
-#[serde(bound(deserialize = ""))]
-pub struct EpochChangeMessage<T: NodeType> {
+#[serde(bound(deserialize = "S: Deserialize<'de>"))]
+pub struct EpochChangeMessage<T: NodeType, S> {
     pub cert1: Certificate1<T>,
     pub cert2: Certificate2<T>,
     pub proposal: Proposal<T>,
+    #[serde(skip)]
+    _marker: PhantomData<fn() -> S>,
+}
+
+impl<T: NodeType> EpochChangeMessage<T, Validated> {
+    /// Wrap certificates this node has verified (or formed itself).
+    pub fn validated(
+        cert1: Certificate1<T>,
+        cert2: Certificate2<T>,
+        proposal: Proposal<T>,
+    ) -> Self {
+        Self {
+            cert1,
+            cert2,
+            proposal,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<T: NodeType> EpochChangeMessage<T, Unchecked> {
+    /// Mark this message's certificates as verified.
+    pub(crate) fn into_validated(self) -> EpochChangeMessage<T, Validated> {
+        EpochChangeMessage {
+            cert1: self.cert1,
+            cert2: self.cert2,
+            proposal: self.proposal,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<T: NodeType, S> EpochChangeMessage<T, S> {
+    /// Structural validity of the message, independent of signatures.
+    pub fn well_formed(&self, epoch_height: u64) -> Result<(), EpochChangeError> {
+        if self.cert1.view_number() != self.cert2.view_number()
+            || self.cert1.epoch() != self.cert2.epoch()
+            || self.cert1.data.leaf_commit != self.cert2.data.leaf_commit
+        {
+            return Err(EpochChangeError::CertificateMismatch);
+        }
+        if !is_last_block(self.cert2.data.block_number, epoch_height) {
+            return Err(EpochChangeError::NotLastBlock);
+        }
+        if self.cert2.data.block_number / epoch_height != *self.cert2.data.epoch {
+            return Err(EpochChangeError::WrongEpoch);
+        }
+        if proposal_commitment(&self.proposal) != self.cert1.data.leaf_commit {
+            return Err(EpochChangeError::ProposalMismatch);
+        }
+        Ok(())
+    }
+
+    #[cfg(any(test, feature = "testing"))]
+    pub fn into_unchecked(self) -> EpochChangeMessage<T, Unchecked> {
+        EpochChangeMessage {
+            cert1: self.cert1,
+            cert2: self.cert2,
+            proposal: self.proposal,
+            _marker: PhantomData,
+        }
+    }
+}
+
+/// Reason an [`EpochChangeMessage`] is not [well-formed](EpochChangeMessage::well_formed).
+#[derive(Copy, Clone, Debug, thiserror::Error)]
+pub enum EpochChangeError {
+    #[error("certificates differ in view, epoch or leaf commitment")]
+    CertificateMismatch,
+    #[error("certificate2 is not for the last block of an epoch")]
+    NotLastBlock,
+    #[error("certificate2's block number does not match its epoch")]
+    WrongEpoch,
+    #[error("proposal commitment does not match certificate1's leaf commitment")]
+    ProposalMismatch,
+}
+
+impl<T: NodeType, S> HasViewNumber for EpochChangeMessage<T, S> {
+    fn view_number(&self) -> ViewNumber {
+        self.cert1.view_number()
+    }
+}
+
+impl<T: NodeType, S> HasEpoch for EpochChangeMessage<T, S> {
+    fn epoch(&self) -> Option<EpochNumber> {
+        self.cert1.epoch()
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
@@ -193,7 +284,7 @@ pub enum ConsensusMessage<T: NodeType, S> {
     Certificate2(Certificate2<T>, T::SignatureKey),
     TimeoutVote(TimeoutVoteMessage<T>),
     TimeoutCertificate(TimeoutCertificate2<T>),
-    EpochChange(EpochChangeMessage<T>),
+    EpochChange(EpochChangeMessage<T, S>),
     /// The leader's unicast of a per-namespace VID share fragment.
     VidShareFragment(VidShareFragmentMessage<T>),
     /// A node's own VID share, broadcast independently of Vote1.
@@ -202,7 +293,7 @@ pub enum ConsensusMessage<T: NodeType, S> {
 }
 
 impl<T: NodeType, S> ConsensusMessage<T, S> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn into_unchecked(self) -> ConsensusMessage<T, Unchecked> {
         match self {
             Self::Proposal(p) => ConsensusMessage::Proposal(p.into_unchecked()),
@@ -212,7 +303,7 @@ impl<T: NodeType, S> ConsensusMessage<T, S> {
             Self::Certificate2(c, k) => ConsensusMessage::Certificate2(c, k),
             Self::TimeoutVote(v) => ConsensusMessage::TimeoutVote(v),
             Self::TimeoutCertificate(c) => ConsensusMessage::TimeoutCertificate(c),
-            Self::EpochChange(c) => ConsensusMessage::EpochChange(c),
+            Self::EpochChange(c) => ConsensusMessage::EpochChange(c.into_unchecked()),
             Self::VidShareFragment(v) => ConsensusMessage::VidShareFragment(v),
             Self::VidShareBroadcast(v) => ConsensusMessage::VidShareBroadcast(v),
             Self::HighQc(c) => ConsensusMessage::HighQc(c),
@@ -257,16 +348,16 @@ impl<T: NodeType> HasViewNumber for ProposalFetchMessage<T> {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
 pub struct DedupManifest<T: NodeType> {
-    pub(crate) view: ViewNumber,
-    pub(crate) epoch: EpochNumber,
-    pub(crate) hashes: Vec<Commitment<T::Transaction>>,
+    pub view: ViewNumber,
+    pub epoch: EpochNumber,
+    pub hashes: Vec<Commitment<T::Transaction>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
 pub struct TransactionMessage<T: NodeType> {
-    pub(crate) view: ViewNumber,
-    pub(crate) transactions: Vec<T::Transaction>,
+    pub view: ViewNumber,
+    pub transactions: Vec<T::Transaction>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
@@ -296,7 +387,7 @@ pub enum MessageType<T: NodeType, S> {
 }
 
 impl<T: NodeType, S> MessageType<T, S> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn into_unchecked(self) -> MessageType<T, Unchecked> {
         match self {
             Self::Consensus(c) => MessageType::Consensus(c.into_unchecked()),
@@ -319,7 +410,7 @@ impl<T: NodeType, S> Message<T, S> {
         matches!(self.message_type, MessageType::External(_))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn into_unchecked(self) -> Message<T, Unchecked> {
         Message {
             sender: self.sender,

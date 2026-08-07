@@ -17,6 +17,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     simple_certificate::TimeoutCertificate2,
+    simple_vote::HasEpoch,
     traits::{metrics::NoMetrics, signature_key::SignatureKey},
     vote::HasViewNumber,
     x25519::Keypair,
@@ -33,6 +34,7 @@ use tokio::{
 use tracing::{debug, info};
 
 use crate::{
+    cert_verifier::ValidCert,
     client::CoordinatorClient,
     consensus::{ConsensusInput, ConsensusOutput, PreCutoverSeed},
     coordinator::{Coordinator, error::Severity},
@@ -372,7 +374,9 @@ impl TestRunner {
 
             if let Some(certs) = self.initial_timeout_certs.get(&i) {
                 for tc in certs {
-                    coord.apply_consensus(ConsensusInput::TimeoutCertificate(tc.clone()));
+                    let epoch = tc.epoch().expect("seeded timeout cert has an epoch");
+                    let tc = ValidCert::new(tc.clone(), epoch);
+                    coord.apply_consensus(ConsensusInput::TimeoutCertificate(tc));
                     for output in coord.outbox_mut().take() {
                         // Keep the seeded certs local to this node; the
                         // real network never delivered them to the others.

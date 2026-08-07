@@ -8,13 +8,10 @@
 use std::{ops::Bound, time::Duration};
 
 use axum::{
-    Json, Router,
-    extract::{
-        Path, State,
-        ws::{Message, WebSocket, WebSocketUpgrade},
-    },
-    http::{HeaderMap, StatusCode, header},
-    response::{IntoResponse, Response},
+    Router,
+    extract::{Path, State, ws::WebSocketUpgrade},
+    http::{HeaderMap, StatusCode},
+    response::Response,
     routing::get,
 };
 use disco_types::error::Error as _;
@@ -34,9 +31,11 @@ use hotshot_query_service::{
     types::HeightIndexed as _,
 };
 use hotshot_types::data::VidCommitment;
-use http_client::healthcheck::HealthStatus;
+use http_wire::{
+    self as wire, ContentType, WireFormat, cors_layer, drive_ws_stream, healthcheck_response,
+};
 use serde::Serialize;
-use vbs::{BinarySerializer, Serializer, version::StaticVersion};
+use vbs::version::StaticVersion;
 
 /// Binary framing version for VBS-negotiated responses, matching the wire version this service
 /// used under tide-disco.
@@ -49,58 +48,31 @@ const SMALL_OBJECT_RANGE_LIMIT: usize = 500;
 const LARGE_OBJECT_RANGE_LIMIT: usize = 100;
 const WINDOW_LIMIT: usize = 500;
 
-fn wants_binary(headers: &HeaderMap) -> bool {
-    headers
-        .get(header::ACCEPT)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.contains("application/octet-stream"))
+/// Wire format of this service: [`WireVersion`] VBS framing and the [`ApiError`] envelope.
+/// `ApiError` is `hotshot_query_service::Error`, the exact type the old tide-disco `App` used, so
+/// both its status mapping and its wire shape (externally tagged enum) match byte-for-byte.
+struct QueryServiceWireFormat;
+
+impl WireFormat for QueryServiceWireFormat {
+    type Error = ApiError;
+    type Version = WireVersion;
+
+    fn status(err: &ApiError) -> StatusCode {
+        // Maps `hotshot_query_service`'s wrapped `reqwest`-based status code onto axum's.
+        StatusCode::from_u16(u16::from(err.status())).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
+    }
+
+    fn serialize_failure(message: String) -> ApiError {
+        ApiError::internal(message)
+    }
 }
 
-/// Maps `hotshot_query_service`'s wrapped `reqwest`-based status code onto axum's.
-fn wire_status(status: disco_types::status::StatusCode) -> StatusCode {
-    StatusCode::from_u16(u16::from(status)).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
-}
-
-/// Encode a successful response, negotiating VBS binary vs JSON from the `Accept` header, just
-/// as tide-disco did for `surf-disco` clients (which default to `application/octet-stream`).
 fn encode_ok<T: Serialize>(headers: &HeaderMap, value: T) -> Response {
-    if wants_binary(headers) {
-        match Serializer::<WireVersion>::serialize(&value) {
-            Ok(bytes) => {
-                ([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response()
-            },
-            Err(err) => encode_err(headers, ApiError::internal(err)),
-        }
-    } else {
-        Json(value).into_response()
-    }
-}
-
-/// Encode an error response using the same content negotiation as [`encode_ok`]. `err` is
-/// `hotshot_query_service::Error`, the exact type the old tide-disco `App` used, so both its
-/// status mapping and its wire shape (externally tagged enum) match byte-for-byte.
-fn encode_err(headers: &HeaderMap, err: ApiError) -> Response {
-    let status = wire_status(err.status());
-    if wants_binary(headers) {
-        match Serializer::<WireVersion>::serialize(&err) {
-            Ok(bytes) => (
-                status,
-                [(header::CONTENT_TYPE, "application/octet-stream")],
-                bytes,
-            )
-                .into_response(),
-            Err(_) => (status, Json(err)).into_response(),
-        }
-    } else {
-        (status, Json(err)).into_response()
-    }
+    wire::encode_ok::<QueryServiceWireFormat, _>(headers, value)
 }
 
 fn respond<T: Serialize>(headers: &HeaderMap, result: Result<T, ApiError>) -> Response {
-    match result {
-        Ok(v) => encode_ok(headers, v),
-        Err(e) => encode_err(headers, e),
-    }
+    wire::respond::<QueryServiceWireFormat, _>(headers, result)
 }
 
 /// Parses a path parameter the way tide-disco's `TaggedBase64`/`Integer` param types did,
@@ -137,36 +109,9 @@ fn enforce_range_limit(from: usize, until: usize, limit: usize) -> Result<(), av
     Ok(())
 }
 
-/// Tide-disco-compatible singleton-app healthcheck: a bare [`HealthStatus`], negotiated JSON or
-/// vbs binary from `Accept`.
 async fn healthcheck(headers: HeaderMap) -> Response {
-    encode_ok(&headers, HealthStatus::Available)
+    healthcheck_response(&headers)
 }
-
-async fn drive_ws_stream<T: Serialize + Send + 'static>(
-    mut socket: WebSocket,
-    mut stream: BoxStream<'static, T>,
-    binary: bool,
-) {
-    while let Some(item) = stream.next().await {
-        let msg = if binary {
-            match Serializer::<WireVersion>::serialize(&item) {
-                Ok(bytes) => Message::Binary(bytes.into()),
-                Err(_) => break,
-            }
-        } else {
-            match serde_json::to_string(&item) {
-                Ok(text) => Message::Text(text.into()),
-                Err(_) => break,
-            }
-        };
-        if socket.send(msg).await.is_err() {
-            break;
-        }
-    }
-}
-
-// --- availability -----------------------------------------------------------------------------
 
 async fn fetch_leaf(
     ds: &DataSource,
@@ -475,10 +420,10 @@ async fn stream_leaves(
     headers: HeaderMap,
     Path(height): Path<usize>,
 ) -> Response {
-    let binary = wants_binary(&headers);
+    let format = ContentType::negotiate(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = ds.subscribe_leaves(height).await;
-        drive_ws_stream(socket, stream, binary).await;
+        drive_ws_stream::<WireVersion, _>(socket, stream, format).await;
     })
 }
 
@@ -527,10 +472,10 @@ async fn stream_headers(
     headers: HeaderMap,
     Path(height): Path<usize>,
 ) -> Response {
-    let binary = wants_binary(&headers);
+    let format = ContentType::negotiate(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = ds.subscribe_headers(height).await;
-        drive_ws_stream(socket, stream, binary).await;
+        drive_ws_stream::<WireVersion, _>(socket, stream, format).await;
     })
 }
 
@@ -579,10 +524,10 @@ async fn stream_blocks(
     headers: HeaderMap,
     Path(height): Path<usize>,
 ) -> Response {
-    let binary = wants_binary(&headers);
+    let format = ContentType::negotiate(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = ds.subscribe_blocks(height).await;
-        drive_ws_stream(socket, stream, binary).await;
+        drive_ws_stream::<WireVersion, _>(socket, stream, format).await;
     })
 }
 
@@ -631,10 +576,10 @@ async fn stream_payloads(
     headers: HeaderMap,
     Path(height): Path<usize>,
 ) -> Response {
-    let binary = wants_binary(&headers);
+    let format = ContentType::negotiate(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = ds.subscribe_payloads(height).await;
-        drive_ws_stream(socket, stream, binary).await;
+        drive_ws_stream::<WireVersion, _>(socket, stream, format).await;
     })
 }
 
@@ -683,10 +628,10 @@ async fn stream_vid_common(
     headers: HeaderMap,
     Path(height): Path<usize>,
 ) -> Response {
-    let binary = wants_binary(&headers);
+    let format = ContentType::negotiate(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = ds.subscribe_vid_common(height).await;
-        drive_ws_stream(socket, stream, binary).await;
+        drive_ws_stream::<WireVersion, _>(socket, stream, format).await;
     })
 }
 
@@ -744,10 +689,10 @@ async fn stream_transactions(
     headers: HeaderMap,
     Path(height): Path<usize>,
 ) -> Response {
-    let binary = wants_binary(&headers);
+    let format = ContentType::negotiate(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = transactions_stream(ds.subscribe_blocks(height).await, None);
-        drive_ws_stream(socket, stream, binary).await;
+        drive_ws_stream::<WireVersion, _>(socket, stream, format).await;
     })
 }
 
@@ -757,10 +702,10 @@ async fn stream_transactions_ns(
     headers: HeaderMap,
     Path((height, namespace)): Path<(usize, i64)>,
 ) -> Response {
-    let binary = wants_binary(&headers);
+    let format = ContentType::negotiate(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = transactions_stream(ds.subscribe_blocks(height).await, Some(namespace));
-        drive_ws_stream(socket, stream, binary).await;
+        drive_ws_stream::<WireVersion, _>(socket, stream, format).await;
     })
 }
 
@@ -818,7 +763,12 @@ async fn get_cert2(
     let result = ds
         .get_cert2(height)
         .await
-        .map_err(availability::Error::from);
+        .with_timeout(FETCH_TIMEOUT)
+        .await
+        .ok_or(availability::Error::Custom {
+            message: format!("no cert2 available for height {height}"),
+            status: disco_types::status::StatusCode::NOT_FOUND,
+        });
     respond(&headers, result.map_err(ApiError::from))
 }
 
@@ -908,8 +858,6 @@ fn availability_router(ds: DataSource) -> Router {
         .route("/limits", get(get_availability_limits))
         .with_state(ds)
 }
-
-// --- node ---------------------------------------------------------------------------------------
 
 fn range_bounds(from: Option<u64>, to: Option<u64>) -> (Bound<usize>, Bound<usize>) {
     (
@@ -1219,12 +1167,12 @@ fn node_router(ds: DataSource) -> Router {
 /// unversioned and under `/v1`, matching the paths tide-disco exposed for this service (which
 /// only ever registered API version `1.0.0`).
 pub fn router(ds: DataSource) -> Router {
-    let availability = availability_router(ds.clone());
-    let node = node_router(ds);
+    let api = Router::new()
+        .nest("/availability", availability_router(ds.clone()))
+        .nest("/node", node_router(ds));
     Router::new()
         .route("/healthcheck", get(healthcheck))
-        .nest("/availability", availability.clone())
-        .nest("/v1/availability", availability)
-        .nest("/node", node.clone())
-        .nest("/v1/node", node)
+        .merge(api.clone())
+        .nest("/v1", api)
+        .layer(cors_layer())
 }
