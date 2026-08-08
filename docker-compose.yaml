@@ -633,9 +633,11 @@ services:
     image: ghcr.io/espressosystems/espresso-network/espresso-node:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_NODE_4_API_PORT:$ESPRESSO_NODE_4_API_PORT"
-    command: espresso-node -- http -- config -- query -- storage-fs
+    command: espresso-node -- http -- config -- query
     environment:
       - ESPRESSO_NODE_EMBEDDED_DB=true
+      - ESPRESSO_NODE_STORAGE_PROFILE=compact
+      - ESPRESSO_NODE_STORAGE_PATH=/store/seq4
       - LIGHT_CLIENT_DB_PATH=/store/lc
       - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/demo.toml}
       - ESPRESSO_NODE_ORCHESTRATOR_URL=http://orchestrator:${ESPRESSO_ORCHESTRATOR_PORT}

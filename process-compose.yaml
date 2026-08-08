@@ -465,7 +465,7 @@ processes:
   espresso-node-4:
     command: espresso-node-sqlite -- storage-sql -- http -- config -- query
     environment:
-      - ESPRESSO_NODE_LIGHTWEIGHT=true
+      - ESPRESSO_NODE_STORAGE_PROFILE=compact
       - ESPRESSO_NODE_API_PORT=${ESPRESSO_NODE_4_API_PORT}
       - ESPRESSO_NODE_TONIC_PORT=${ESPRESSO_NODE_4_TONIC_PORT}
       - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT},http://localhost:${ESPRESSO_NODE_1_API_PORT}
