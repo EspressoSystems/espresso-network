@@ -342,7 +342,7 @@ mod test {
     use std::{cmp::min, time::Duration};
 
     use futures::StreamExt;
-    use surf_disco::Client;
+    use http_client::Client;
     use test_utils::reserve_tcp_port;
     use tide_disco::App;
 

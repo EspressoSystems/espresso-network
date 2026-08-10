@@ -177,7 +177,7 @@ mod test {
             block_contents::{BlockHeader, BlockPayload},
         },
     };
-    use surf_disco::Client;
+    use http_client::Client;
     use tempfile::TempDir;
     use test_utils::reserve_tcp_port;
     use tide_disco::{App, Error as _, StatusCode};

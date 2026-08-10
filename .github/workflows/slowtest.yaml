@@ -26,22 +26,18 @@ env:
 
 jobs:
   slow-tests:
+    name: slow-tests-${{ matrix.db }}-${{ matrix.partition }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
+        db: [postgres, sqlite]
+        partition: [1, 2, 3, 4, 5, 6, 7, 8]
         include:
-          - name: slow-tests-sqlite
-            build-cmd: just test-slow --features embedded-db --no-run
-            run-cmd: just test-slow --features embedded-db --no-fail-fast
-          - name: slow-tests-postgres
-            build-cmd: just test-slow --no-run
-            run-cmd: just test-slow --no-fail-fast
-          - name: espresso-dev-node-tests
-            build-cmd: just test-dev-node --no-run
-            run-cmd: just test-dev-node --no-fail-fast
-
-    name: ${{ matrix.name }}
+          - db: postgres
+            features: ""
+          - db: sqlite
+            features: --features embedded-db
 
     steps:
       - uses: actions/checkout@v6
@@ -61,17 +57,53 @@ jobs:
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ${{ matrix.name }}
-          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
+          shared-key: slow-tests-${{ matrix.db }}
+          # All 8 shards share a key, so only one of them saves it.
+          save-if: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-')) && matrix.partition == 1 }}
 
       - name: Build slow test
-        run: ${{ matrix.build-cmd }}
+        run: just test-slow ${{ matrix.features }} --no-run
 
       - name: Run slow test
-        run: ${{ matrix.run-cmd }}
-        timeout-minutes: 90
+        run: just test-slow ${{ matrix.features }} --no-fail-fast --partition hash:${{ matrix.partition }}/8
+        # Tests are serialized within a shard (threads-required = num-cpus) and
+        # hash partitioning is not cost-aware, so shard cost varies widely.
+        timeout-minutes: 60
 
       - name: Show available disk space
         if: always()
+        run: df -h
+
+  espresso-dev-node-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/free-disk-space
+
+      - name: Install Protoc
         run: |
-          df -h
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - uses: ./.github/actions/install-foundry
+      - uses: ./.github/actions/install-postgres
+      - uses: taiki-e/install-action@just
+      - uses: taiki-e/install-action@nextest
+      - uses: rui314/setup-mold@v1
+
+      - name: Enable Rust Caching
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: espresso-dev-node-tests
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
+
+      - name: Build slow test
+        run: just test-dev-node --no-run
+
+      - name: Run slow test
+        run: just test-dev-node --no-fail-fast
+        timeout-minutes: 60
+
+      - name: Show available disk space
+        if: always()
+        run: df -h

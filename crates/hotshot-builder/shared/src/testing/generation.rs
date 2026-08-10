@@ -18,8 +18,8 @@ use hotshot_testing::{
     test_task::{AnyTestTaskState, TestResult, TestTaskState, TestTaskStateSeed},
 };
 use hotshot_types::traits::node_implementation::NodeType;
+use http_client::Client;
 use rand::{Rng, seq::SliceRandom, thread_rng};
-use surf_disco::Client;
 use url::Url;
 use vec1::Vec1;
 

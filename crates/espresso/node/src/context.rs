@@ -454,6 +454,10 @@ where
         self.consensus_handle.clone()
     }
 
+    pub fn validator_config(&self) -> &ValidatorConfig<SeqTypes> {
+        &self.validator_config
+    }
+
     pub async fn upgrade_lock(&self) -> UpgradeLock<SeqTypes> {
         self.consensus_handle.upgrade_lock().await
     }

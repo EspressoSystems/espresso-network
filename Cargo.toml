@@ -37,6 +37,8 @@ members = [
     "crates/hotshot/testing",
     "crates/hotshot/types",
     "crates/hotshot/utils",
+    "crates/http-client",
+    "crates/http-wire",
     "crates/process-metrics",
     "crates/serialization/api",
     "crates/versions",
@@ -215,6 +217,7 @@ ed25519-compact = "2.2.0"
 either = "1"
 es-version = { git = "https://github.com/EspressoSystems/es-version.git", branch = "main" }
 escargot = "0.5.10"
+espresso-api = { path = "crates/espresso/api" }
 espresso-contract-deployer = { path = "contracts/rust/deployer" }
 espresso-keyset = { path = "crates/espresso/keyset" }
 espresso-macros = { git = "https://github.com/EspressoSystems/espresso-macros.git", tag = "0.1.0" }
@@ -253,6 +256,9 @@ hotshot-task-impls = { path = "crates/hotshot/task-impls" }
 hotshot-testing = { path = "crates/hotshot/testing" }
 hotshot-types = { path = "crates/hotshot/types" }
 hotshot-utils = { path = "crates/hotshot/utils" }
+http = "1"
+http-client = { path = "crates/http-client" }
+http-wire = { path = "crates/http-wire", default-features = false }
 humantime = "2"
 include_dir = "0.7"
 indexmap = { version = "2", features = ["serde"] }
@@ -397,7 +403,7 @@ snafu = "0.8"
 snap = "1"
 snow = { version = "0.10.0", features = ["ring-accelerated"] }
 socket2 = "0.6.4"
-sqlx = { version = "=0.8.3", features = [
+sqlx = { version = "0.8.6", features = [
     "bit-vec",
     "chrono",
     "postgres",
@@ -408,7 +414,6 @@ staking-cli = { path = "staking-cli" }
 static_assertions = "1.1"
 strum = { version = "0.26", features = ["derive"] }
 surf = "2.3.2"
-surf-disco = "0.9"
 syn = { version = "2", features = ["full", "extra-traits"] }
 sysinfo = "0.33.1"
 tagged-base64 = "0.4.1"
@@ -419,6 +424,7 @@ thiserror = "2"
 tide-disco = "0.9"
 time = "0.3"
 tokio = { version = "1", features = ["macros", "time", "rt-multi-thread"] }
+tokio-tungstenite = "0.28"
 tokio-util = { version = "0.7", features = ["rt"] }
 toml = "0.8"
 tonic = { version = "0.14.5", features = ["transport"] }
@@ -427,6 +433,7 @@ tonic-prost = "0.14"
 tonic-prost-build = "0.14"
 tonic-reflection = "0.14"
 tower = "0.4"
+tower-http = "0.6"
 tower-service = "0.3"
 tracing = "0.1"
 tracing-subscriber = "0.3"

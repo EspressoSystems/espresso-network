@@ -257,6 +257,15 @@ where
         self.vid_common_range_providers.push(Arc::new(provider));
         self
     }
+
+    /// Add a sub provider which fetches cert2s.
+    pub fn with_cert2_provider<P>(mut self, provider: P) -> Self
+    where
+        P: Provider<Types, Certificate2Request> + Debug + 'static,
+    {
+        self.cert2_providers.push(Arc::new(provider));
+        self
+    }
 }
 
 async fn any_fetch<Types, P, T>(providers: &[Arc<P>], req: T) -> Option<T::Response>

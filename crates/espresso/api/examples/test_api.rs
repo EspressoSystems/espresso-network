@@ -398,6 +398,8 @@ impl v1::FeeStateApi for TestApi {
 
 #[async_trait]
 impl v1::StatusApi for TestApi {
+    type Keys = serde_json::Value;
+
     async fn block_height(&self) -> Result<u64> {
         Ok(0)
     }
@@ -409,6 +411,9 @@ impl v1::StatusApi for TestApi {
     }
     async fn metrics(&self) -> Result<String> {
         Ok(String::new())
+    }
+    async fn keys(&self) -> Result<Self::Keys> {
+        Ok(serde_json::Value::Null)
     }
 }
 

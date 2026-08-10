@@ -24,25 +24,34 @@
 use std::{fmt::Debug, path::Path, str::FromStr};
 
 use alloy::primitives::{Address, U160, U256};
+use alloy_rlp::Encodable;
 use committable::Committable;
 use espresso_types::{StateCertQueryDataV1, StateCertQueryDataV2};
 use espresso_utils::commitment_to_u256;
+use hotshot::types::BLSPubKey;
+use hotshot_contract_adapter::sol_types::StakeTableV3::{ValidatorExitV2, ValidatorRegisteredV3};
 use hotshot_example_types::node_types::TEST_VERSIONS;
 use hotshot_query_service::availability::{
     BlockQueryData, LeafQueryData, LeafQueryDataLegacy, PayloadQueryData, TransactionQueryData,
     TransactionWithProofQueryData, VidCommonQueryData,
 };
 use hotshot_types::{
+    addr::NetAddr,
     data::{VidCommon, vid_commitment},
+    light_client::StateVerKey,
     simple_certificate::{
         LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
     },
-    traits::{BlockPayload, EncodeBytes, signature_key::BuilderSignatureKey},
+    traits::{
+        BlockPayload, EncodeBytes,
+        signature_key::{BuilderSignatureKey, StateSignatureKey},
+    },
     vid::{
         advz::advz_scheme,
         avidm::init_avidm_param,
         avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
     },
+    x25519,
 };
 use jf_advz::VidScheme;
 use jf_merkle_tree_compat::{MerkleTreeScheme, UniversalMerkleTreeScheme};
@@ -60,10 +69,10 @@ use versions::{EPOCH_REWARD_VERSION, EPOCH_VERSION, version};
 use crate::{
     ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId,
     NamespaceProofQueryData, NodeState, NsProof, NsTable, Payload, SeqTypes, StakeTableHash,
-    Transaction, ValidatedState, ValidatorSet,
+    StakeTableState, Transaction, ValidatedState, ValidatorSet,
     v0_1::{self, ADVZNsProof},
     v0_2,
-    v0_3::{EventKey, RewardAmount, StakeTableEvent},
+    v0_3::{COMMISSION_BASIS_POINTS, EventKey, RegisteredValidator, RewardAmount, StakeTableEvent},
     v0_4::{
         REWARD_MERKLE_TREE_V2_HEIGHT, RewardAccountProofV2, RewardAccountQueryDataV2,
         RewardAccountV2, RewardMerkleTreeV2,
@@ -76,6 +85,7 @@ type V2Serializer = vbs::Serializer<StaticVersion<0, 2>>;
 type V3Serializer = vbs::Serializer<StaticVersion<0, 3>>;
 type V4Serializer = vbs::Serializer<StaticVersion<0, 4>>;
 type V5Serializer = vbs::Serializer<StaticVersion<0, 5>>;
+type V6Serializer = vbs::Serializer<StaticVersion<0, 6>>;
 
 const REFERENCE_NAMESPACE_ID: u32 = 12648430;
 
@@ -284,6 +294,7 @@ const REFERENCE_V2_HEADER_COMMITMENT: &str = "BLOCK~V0GJjL19nCrlm9n1zZ6gaOKEekSM
 const REFERENCE_V3_HEADER_COMMITMENT: &str = "BLOCK~qKb0axY9NwpusJn5ZFhjJAyG8IYpJpHN2-BDIsIkhrEd";
 const REFERENCE_V4_HEADER_COMMITMENT: &str = "BLOCK~hPVq9NasWW1vVYGGGr0PSRv1TV3nUV_8ARw5fWHlQLx3";
 const REFERENCE_V5_HEADER_COMMITMENT: &str = "BLOCK~yYZmWrTIWJerGV7VA-EeKWL4tnsdJya1BpK4HWdvnwAA";
+const REFERENCE_V6_HEADER_COMMITMENT: &str = "BLOCK~nAVIoY9ekw8WPwzHnLwTgsPZ1qvBox-WQev4nhcrLoZP";
 
 fn reference_transaction<R>(ns_id: NamespaceId, rng: &mut R) -> Transaction
 where
@@ -359,6 +370,7 @@ change in the serialization of this data structure.
         "v3" => V3Serializer::serialize(&reference).unwrap(),
         "v4" => V4Serializer::serialize(&reference).unwrap(),
         "v5" => V5Serializer::serialize(&reference).unwrap(),
+        "v6" => V6Serializer::serialize(&reference).unwrap(),
         _ => panic!("invalid version"),
     };
     if actual != expected {
@@ -390,6 +402,7 @@ change in the serialization of this data structure.
         "v3" => V3Serializer::deserialize(&expected).unwrap(),
         "v4" => V4Serializer::deserialize(&expected).unwrap(),
         "v5" => V5Serializer::deserialize(&expected).unwrap(),
+        "v6" => V6Serializer::deserialize(&expected).unwrap(),
         _ => panic!("invalid version"),
     };
 
@@ -545,6 +558,16 @@ async fn test_reference_header_v5() {
         "header",
         reference_header(version(0, 5)).await,
         REFERENCE_V5_HEADER_COMMITMENT,
+    );
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_reference_header_v6() {
+    reference_test(
+        "v6",
+        "header",
+        reference_header(version(0, 6)).await,
+        REFERENCE_V6_HEADER_COMMITMENT,
     );
 }
 
@@ -750,5 +773,144 @@ async fn test_reward_proof_endpoint_serialization() {
 
     settings.bind(|| {
         insta::assert_yaml_snapshot!("reward_claim_input_v2", reward_claim_input);
+    });
+}
+
+#[test_log::test]
+fn test_registered_validator_serialization() {
+    let mut settings = insta::Settings::clone_current();
+    let data_dir = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
+        .join("../../../data/insta_snapshots");
+    settings.set_snapshot_path(data_dir);
+
+    let seed = [0; 32];
+    let validator = RegisteredValidator {
+        account: FeeAccount::generated_from_seed_indexed(seed, 0).0.0,
+        stake_table_key: Some(BLSPubKey::generated_from_seed_indexed(seed, 0).0),
+        state_ver_key: Some(StateVerKey::generated_from_seed_indexed(seed, 0).0),
+        stake: U256::MAX,
+        commission: u16::MAX,
+        delegators: [
+            (
+                FeeAccount::generated_from_seed_indexed(seed, 1).0.0,
+                U256::ZERO,
+            ),
+            (
+                FeeAccount::generated_from_seed_indexed(seed, 2).0.0,
+                U256::MAX,
+            ),
+        ]
+        .into_iter()
+        .collect(),
+        authenticated: true,
+        x25519_key: Some(
+            x25519::Keypair::generated_from_seed_indexed(seed, 0)
+                .unwrap()
+                .public_key(),
+        ),
+        p2p_addr: Some(NetAddr::named("localhost", 8080)),
+    };
+    let mut bytes = vec![];
+    validator.encode(&mut bytes);
+    settings.bind(|| {
+        insta::assert_binary_snapshot!("registered_validator.bin", bytes);
+    });
+
+    // Test serialization with missing optional fields.
+    let validator = RegisteredValidator::<BLSPubKey> {
+        account: FeeAccount::generated_from_seed_indexed(seed, 0).0.0,
+        stake_table_key: None,
+        state_ver_key: None,
+        stake: U256::ZERO,
+        commission: 0,
+        delegators: Default::default(),
+        authenticated: false,
+        x25519_key: None,
+        p2p_addr: None,
+    };
+    let mut bytes = vec![];
+    validator.encode(&mut bytes);
+    settings.bind(|| {
+        insta::assert_binary_snapshot!("registered_validator_empty.bin", bytes);
+    });
+}
+
+#[test_log::test]
+fn test_stake_table_state_serialization() {
+    let mut settings = insta::Settings::clone_current();
+    let data_dir = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
+        .join("../../../data/insta_snapshots");
+    settings.set_snapshot_path(data_dir);
+
+    let seed = [0; 32];
+    let mut state = StakeTableState::default();
+    state
+        .apply_event(
+            ValidatorRegisteredV3 {
+                account: FeeAccount::generated_from_seed_indexed(seed, 0).0.0,
+                blsVK: BLSPubKey::generated_from_seed_indexed(seed, 0).0.into(),
+                schnorrVK: StateVerKey::generated_from_seed_indexed(seed, 0).0.into(),
+                commission: COMMISSION_BASIS_POINTS,
+                blsSig: Default::default(),
+                schnorrSig: Default::default(),
+                metadataUri: "https://example.com".to_string(),
+                x25519Key: x25519::Keypair::generated_from_seed_indexed(seed, 0)
+                    .unwrap()
+                    .public_key()
+                    .as_bytes()
+                    .into(),
+                p2pAddr: "localhost:8080".to_string(),
+            }
+            .into(),
+        )
+        .unwrap()
+        .unwrap();
+
+    // Register a second validator, then have them exit. This ensures all the fields of the state
+    // get exercised.
+    let account = FeeAccount::generated_from_seed_indexed(seed, 1).0.0;
+    state
+        .apply_event(
+            ValidatorRegisteredV3 {
+                account,
+                blsVK: BLSPubKey::generated_from_seed_indexed(seed, 1).0.into(),
+                schnorrVK: StateVerKey::generated_from_seed_indexed(seed, 1).0.into(),
+                commission: COMMISSION_BASIS_POINTS,
+                blsSig: Default::default(),
+                schnorrSig: Default::default(),
+                metadataUri: "https://example.com".to_string(),
+                x25519Key: x25519::Keypair::generated_from_seed_indexed(seed, 1)
+                    .unwrap()
+                    .public_key()
+                    .as_bytes()
+                    .into(),
+                p2pAddr: "localhost:8080".to_string(),
+            }
+            .into(),
+        )
+        .unwrap()
+        .unwrap();
+    state
+        .apply_event(
+            ValidatorExitV2 {
+                validator: account,
+                unlocksAt: U256::MAX,
+            }
+            .into(),
+        )
+        .unwrap()
+        .unwrap();
+
+    assert!(!state.validators().is_empty());
+    assert!(!state.validator_exits().is_empty());
+    assert!(!state.used_bls_keys().is_empty());
+    assert!(!state.used_schnorr_keys().is_empty());
+    assert!(!state.used_x25519_keys().is_empty());
+
+    let mut bytes = vec![];
+    state.encode(&mut bytes);
+
+    settings.bind(|| {
+        insta::assert_binary_snapshot!("stake_table_state.bin", bytes);
     });
 }

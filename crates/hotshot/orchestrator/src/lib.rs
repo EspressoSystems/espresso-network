@@ -14,14 +14,23 @@ use std::{
     fs,
     fs::OpenOptions,
     io,
+    sync::Arc,
     time::Duration,
 };
 
 use alloy::primitives::U256;
 use async_lock::RwLock;
+use axum::{
+    Router,
+    body::Bytes,
+    extract::{Path, State},
+    http::{HeaderMap, StatusCode},
+    response::Response,
+    routing::{get, post},
+};
 use client::{BenchResults, BenchResultsDownloadConfig};
 use csv::Writer;
-use futures::{FutureExt, StreamExt, stream::FuturesUnordered};
+use futures::{StreamExt, stream::FuturesUnordered};
 use hotshot_types::{
     PeerConfig,
     network::{BuilderType, NetworkConfig, PublicKeysFile},
@@ -30,22 +39,17 @@ use hotshot_types::{
         signature_key::{SignatureKey, StakeTableEntryType},
     },
 };
+use http_client::{Url, error::ClientErr};
+use http_wire::{self as wire, WireFormat, cors_layer, healthcheck_response};
 use libp2p_identity::{
     Keypair, PeerId,
     ed25519::{Keypair as EdKeypair, SecretKey},
 };
 use multiaddr::Multiaddr;
-use surf_disco::Url;
-use tide_disco::{
-    Api, App, RequestError,
-    api::ApiError,
-    error::ServerError,
-    method::{ReadState, WriteState},
-};
-use vbs::{
-    BinarySerializer,
-    version::{StaticVersion, StaticVersionType},
-};
+use serde::{Serialize, de::DeserializeOwned};
+use tide_disco::error::ServerError;
+use tokio::net::TcpListener;
+use vbs::{BinarySerializer, Serializer, version::StaticVersion};
 
 /// Orchestrator is not, strictly speaking, bound to the network; it can have its own versioning.
 /// Orchestrator Version (major)
@@ -668,176 +672,254 @@ where
     }
 }
 
-/// Sets up all API routes
-#[allow(clippy::too_many_lines)]
-fn define_api<TYPES, State, VER>() -> Result<Api<State, ServerError, VER>, ApiError>
-where
-    TYPES: NodeType,
-    State: 'static + Send + Sync + ReadState + WriteState,
-    <State as ReadState>::State: Send + Sync + OrchestratorApi<TYPES>,
-    TYPES::SignatureKey: serde::Serialize,
-    VER: StaticVersionType + 'static,
-{
-    let api_toml = toml::from_str::<toml::Value>(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/api.toml"
-    )))
-    .expect("API file is not valid toml");
-    let mut api = Api::<State, ServerError, VER>::new(api_toml)?;
-    api.post("post_identity", |req, state| {
-        async move {
-            // Read the bytes from the body
-            let mut body_bytes = req.body_bytes();
-            body_bytes.drain(..12);
+/// Shared, lock-guarded orchestrator state, cloned into every axum handler via `State`.
+type SharedOrchestratorState<TYPES> = Arc<RwLock<OrchestratorState<TYPES>>>;
 
-            // Decode the libp2p data so we can add to our bootstrap nodes (if supplied)
-            let Ok((libp2p_address, libp2p_public_key)) =
-                vbs::Serializer::<OrchestratorVersion>::deserialize(&body_bytes)
-            else {
-                return Err(ServerError {
-                    status: tide_disco::StatusCode::BAD_REQUEST,
-                    message: "Malformed body".to_string(),
-                });
-            };
+/// Wire format of the orchestrator: [`OrchestratorVersion`] VBS framing and tide-disco's
+/// `ServerError` envelope, which `OrchestratorClient` decodes.
+struct OrchestratorWireFormat;
 
-            // Call our state function to process the request
-            state.post_identity(libp2p_address, libp2p_public_key)
+impl WireFormat for OrchestratorWireFormat {
+    type Error = ServerError;
+    type Version = OrchestratorVersion;
+
+    fn status(err: &ServerError) -> StatusCode {
+        StatusCode::from_u16(u16::from(err.status)).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
+    }
+
+    fn serialize_failure(message: String) -> ServerError {
+        ServerError {
+            status: tide_disco::StatusCode::INTERNAL_SERVER_ERROR,
+            message,
         }
-        .boxed()
-    })?
-    .post("post_getconfig", |req, state| {
-        async move {
-            let node_index = req.integer_param("node_index")?;
-            state.post_getconfig(node_index)
-        }
-        .boxed()
-    })?
-    .post("get_tmp_node_index", |_req, state| {
-        async move { state.get_tmp_node_index() }.boxed()
-    })?
-    .post("post_pubkey", |req, state| {
-        async move {
-            let is_da = req.boolean_param("is_da")?;
-            // Read the bytes from the body
-            let mut body_bytes = req.body_bytes();
-            body_bytes.drain(..12);
+    }
+}
 
-            // Decode the libp2p data so we can add to our bootstrap nodes (if supplied)
-            let Ok((mut pubkey, libp2p_address, libp2p_public_key)) =
-                vbs::Serializer::<OrchestratorVersion>::deserialize(&body_bytes)
-            else {
-                return Err(ServerError {
-                    status: tide_disco::StatusCode::BAD_REQUEST,
-                    message: "Malformed body".to_string(),
-                });
-            };
+fn respond<T: Serialize>(headers: &HeaderMap, result: Result<T, ServerError>) -> Response {
+    wire::respond::<OrchestratorWireFormat, _>(headers, result)
+}
 
-            state.register_public_key(&mut pubkey, is_da, libp2p_address, libp2p_public_key)
-        }
-        .boxed()
-    })?
-    .get("peer_pubconfig_ready", |_req, state| {
-        async move { state.peer_pub_ready() }.boxed()
-    })?
-    .post("post_config_after_peer_collected", |_req, state| {
-        async move { state.post_config_after_peer_collected() }.boxed()
-    })?
-    .post(
-        "post_ready",
-        |req, state: &mut <State as ReadState>::State| {
-            async move {
-                let mut body_bytes = req.body_bytes();
-                body_bytes.drain(..12);
-                // Decode the payload-supplied pubkey
-                let Some(pubkey) = PeerConfig::<TYPES>::from_bytes(&body_bytes) else {
-                    return Err(ServerError {
-                        status: tide_disco::StatusCode::BAD_REQUEST,
-                        message: "Malformed body".to_string(),
-                    });
-                };
-                state.post_ready(&pubkey)
-            }
-            .boxed()
-        },
-    )?
-    .post(
-        "post_manual_start",
-        |req, state: &mut <State as ReadState>::State| {
-            async move {
-                let password = req.body_bytes();
-                state.post_manual_start(password)
-            }
-            .boxed()
-        },
-    )?
-    .get("get_start", |_req, state| {
-        async move { state.get_start() }.boxed()
-    })?
-    .post("post_results", |req, state| {
-        async move {
-            let metrics: Result<BenchResults, RequestError> = req.body_json();
-            state.post_run_results(metrics.unwrap())
-        }
-        .boxed()
-    })?
-    .post("post_builder", |req, state| {
-        async move {
-            // Read the bytes from the body
-            let mut body_bytes = req.body_bytes();
-            body_bytes.drain(..12);
+fn malformed_body() -> ServerError {
+    ServerError {
+        status: tide_disco::StatusCode::BAD_REQUEST,
+        message: "Malformed body".to_string(),
+    }
+}
 
-            let Ok(urls) =
-                vbs::Serializer::<OrchestratorVersion>::deserialize::<Vec<Url>>(&body_bytes)
-            else {
-                return Err(ServerError {
-                    status: tide_disco::StatusCode::BAD_REQUEST,
-                    message: "Malformed body".to_string(),
-                });
-            };
+/// Decode a POST body from `OrchestratorClient`.
+///
+/// `client.rs` builds these bodies by calling `body_binary` on an already vbs-serialized
+/// `Vec<u8>`, so the wire body is `[4-byte version][8-byte bincode `Vec<u8>` length][inner
+/// vbs-serialized payload]`; the first 12 bytes are an artifact of that double encoding and must
+/// be stripped before decoding the inner payload.
+fn decode_wrapped_body<T: DeserializeOwned>(body: &[u8]) -> Result<T, ServerError> {
+    body.get(12..)
+        .and_then(|inner| Serializer::<OrchestratorVersion>::deserialize(inner).ok())
+        .ok_or_else(malformed_body)
+}
 
-            let mut futures = urls
+/// Like [`decode_wrapped_body`], but for the `ready` route, whose inner payload is a raw
+/// [`PeerConfig::to_bytes`] blob rather than a second vbs-serialized value.
+fn decode_wrapped_peer_config<TYPES: NodeType>(
+    body: &[u8],
+) -> Result<PeerConfig<TYPES>, ServerError> {
+    body.get(12..)
+        .and_then(PeerConfig::<TYPES>::from_bytes)
+        .ok_or_else(malformed_body)
+}
+
+async fn healthcheck(headers: HeaderMap) -> Response {
+    healthcheck_response(&headers)
+}
+
+async fn post_identity<TYPES: NodeType>(
+    State(state): State<SharedOrchestratorState<TYPES>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let result = match decode_wrapped_body::<(Option<Multiaddr>, Option<PeerId>)>(&body) {
+        Ok((libp2p_address, libp2p_public_key)) => state
+            .write()
+            .await
+            .post_identity(libp2p_address, libp2p_public_key),
+        Err(err) => Err(err),
+    };
+    respond(&headers, result)
+}
+
+async fn post_getconfig<TYPES: NodeType>(
+    State(state): State<SharedOrchestratorState<TYPES>>,
+    Path(node_index): Path<u16>,
+    headers: HeaderMap,
+) -> Response {
+    let result = state.write().await.post_getconfig(node_index);
+    respond(&headers, result)
+}
+
+async fn get_tmp_node_index<TYPES: NodeType>(
+    State(state): State<SharedOrchestratorState<TYPES>>,
+    headers: HeaderMap,
+) -> Response {
+    let result = state.write().await.get_tmp_node_index();
+    respond(&headers, result)
+}
+
+async fn post_pubkey<TYPES: NodeType>(
+    State(state): State<SharedOrchestratorState<TYPES>>,
+    Path(is_da): Path<bool>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let result = match decode_wrapped_body::<(Vec<u8>, Option<Multiaddr>, Option<PeerId>)>(&body) {
+        Ok((mut pubkey, libp2p_address, libp2p_public_key)) => state
+            .write()
+            .await
+            .register_public_key(&mut pubkey, is_da, libp2p_address, libp2p_public_key),
+        Err(err) => Err(err),
+    };
+    respond(&headers, result)
+}
+
+async fn peer_pubconfig_ready<TYPES: NodeType>(
+    State(state): State<SharedOrchestratorState<TYPES>>,
+    headers: HeaderMap,
+) -> Response {
+    let result = state.read().await.peer_pub_ready();
+    respond(&headers, result)
+}
+
+async fn post_config_after_peer_collected<TYPES: NodeType>(
+    State(state): State<SharedOrchestratorState<TYPES>>,
+    headers: HeaderMap,
+) -> Response {
+    let result = state.write().await.post_config_after_peer_collected();
+    respond(&headers, result)
+}
+
+async fn post_ready<TYPES: NodeType>(
+    State(state): State<SharedOrchestratorState<TYPES>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let result = match decode_wrapped_peer_config::<TYPES>(&body) {
+        Ok(peer_config) => state.write().await.post_ready(&peer_config),
+        Err(err) => Err(err),
+    };
+    respond(&headers, result)
+}
+
+async fn post_manual_start<TYPES: NodeType>(
+    State(state): State<SharedOrchestratorState<TYPES>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    // Mirrors tide-disco's handler: the raw body is used as-is, with no framing.
+    let result = state.write().await.post_manual_start(body.to_vec());
+    respond(&headers, result)
+}
+
+async fn get_start<TYPES: NodeType>(
+    State(state): State<SharedOrchestratorState<TYPES>>,
+    headers: HeaderMap,
+) -> Response {
+    let result = state.read().await.get_start();
+    respond(&headers, result)
+}
+
+async fn post_results<TYPES: NodeType>(
+    State(state): State<SharedOrchestratorState<TYPES>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    // Mirrors tide-disco's handler, which also panics on a malformed body: the only production
+    // caller (`client.rs`'s `post_bench_results`) always sends well-formed JSON.
+    let metrics: BenchResults = serde_json::from_slice(&body).unwrap();
+    let result = state.write().await.post_run_results(metrics);
+    respond(&headers, result)
+}
+
+async fn post_builder<TYPES: NodeType>(
+    State(state): State<SharedOrchestratorState<TYPES>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let result = match decode_wrapped_body::<Vec<Url>>(&body) {
+        Ok(urls) => {
+            let mut reachable = urls
                 .into_iter()
                 .map(|url| async {
-                    let client: surf_disco::Client<ServerError, OrchestratorVersion> =
-                        surf_disco::client::Client::builder(url.clone()).build();
-                    if client.connect(Some(Duration::from_secs(2))).await {
-                        Some(url)
-                    } else {
-                        None
-                    }
+                    let client: http_client::Client<ClientErr, OrchestratorVersion> =
+                        http_client::Client::builder(url.clone()).build();
+                    client
+                        .connect(Some(Duration::from_secs(2)))
+                        .await
+                        .then_some(url)
                 })
                 .collect::<FuturesUnordered<_>>()
                 .filter_map(futures::future::ready);
-
-            if let Some(url) = futures.next().await {
-                state.post_builder(url)
-            } else {
-                Err(ServerError {
+            match reachable.next().await {
+                Some(url) => state.write().await.post_builder(url),
+                None => Err(ServerError {
                     status: tide_disco::StatusCode::BAD_REQUEST,
                     message: "No reachable addresses".to_string(),
-                })
+                }),
             }
-        }
-        .boxed()
-    })?
-    .get("get_builders", |_req, state| {
-        async move { state.get_builders() }.boxed()
-    })?;
-    Ok(api)
+        },
+        Err(err) => Err(err),
+    };
+    respond(&headers, result)
+}
+
+async fn get_builders<TYPES: NodeType>(
+    State(state): State<SharedOrchestratorState<TYPES>>,
+    headers: HeaderMap,
+) -> Response {
+    let result = state.read().await.get_builders();
+    respond(&headers, result)
+}
+
+/// Builds the `api` module's routes. tide-disco served these both directly (e.g. `api/identity`)
+/// and under a major-version prefix (`v0/api/identity`), redirecting the former to the latter; we
+/// serve both forms directly instead, by mounting the `/api` tree at the root and under `/v0`.
+fn api_router<TYPES: NodeType>() -> Router<SharedOrchestratorState<TYPES>> {
+    Router::new()
+        .route("/healthcheck", get(healthcheck))
+        .route("/identity", post(post_identity::<TYPES>))
+        .route("/config/{node_index}", post(post_getconfig::<TYPES>))
+        .route("/get_tmp_node_index", post(get_tmp_node_index::<TYPES>))
+        .route("/pubkey/{is_da}", post(post_pubkey::<TYPES>))
+        .route("/peer_pub_ready", get(peer_pubconfig_ready::<TYPES>))
+        .route(
+            "/post_config_after_peer_collected",
+            post(post_config_after_peer_collected::<TYPES>),
+        )
+        .route("/ready", post(post_ready::<TYPES>))
+        .route("/start", get(get_start::<TYPES>))
+        .route("/results", post(post_results::<TYPES>))
+        .route("/manual_start", post(post_manual_start::<TYPES>))
+        .route("/builders", get(get_builders::<TYPES>))
+        .route("/builder", post(post_builder::<TYPES>))
+}
+
+/// Builds the full router: the app-level `healthcheck`, plus the `api` module served both
+/// unversioned and under `/v0`. Like tide-disco, every response carries permissive CORS headers.
+fn app<TYPES: NodeType>(state: SharedOrchestratorState<TYPES>) -> Router {
+    let api = Router::new().nest("/api", api_router::<TYPES>());
+    Router::new()
+        .route("/healthcheck", get(healthcheck))
+        .merge(api.clone())
+        .nest("/v0", api)
+        .with_state(state)
+        .layer(cors_layer())
 }
 
 /// Runs the orchestrator
 /// # Errors
-/// This errors if tide disco runs into an issue during serving
-/// # Panics
-/// This panics if unable to register the api with tide disco
+/// This errors if axum runs into an issue during serving
 pub async fn run_orchestrator<TYPES: NodeType>(
     mut network_config: NetworkConfig<TYPES>,
     url: Url,
-) -> io::Result<()>
-where
-    TYPES::SignatureKey: 'static + serde::Serialize,
-{
+) -> io::Result<()> {
     let env_password = std::env::var("ORCHESTRATOR_MANUAL_START_PASSWORD");
 
     if env_password.is_ok() {
@@ -892,14 +974,66 @@ where
         })
         .collect();
 
-    let web_api = define_api().map_err(|_e| io::Error::other("Failed to define api"));
+    let state: SharedOrchestratorState<TYPES> =
+        Arc::new(RwLock::new(OrchestratorState::new(network_config)));
+    let app = app::<TYPES>(state);
 
-    let state: RwLock<OrchestratorState<TYPES>> =
-        RwLock::new(OrchestratorState::new(network_config));
+    let host = url
+        .host_str()
+        .ok_or_else(|| io::Error::other(format!("orchestrator url missing host: {url}")))?;
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| io::Error::other(format!("orchestrator url missing port: {url}")))?;
+    let listener = TcpListener::bind((host, port)).await?;
 
-    let mut app = App::<RwLock<OrchestratorState<TYPES>>, ServerError>::with_state(state);
-    app.register_module::<ServerError, OrchestratorVersion>("api", web_api.unwrap())
-        .expect("Error registering api");
     tracing::error!("listening on {url:?}");
-    app.serve(url, ORCHESTRATOR_VERSION).await
+    axum::serve(listener, app).await
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::{Request, header};
+    use hotshot_example_types::node_types::TestTypes;
+
+    use super::*;
+
+    fn test_app() -> Router {
+        app::<TestTypes>(Arc::new(RwLock::new(OrchestratorState::new(
+            NetworkConfig::default(),
+        ))))
+    }
+
+    /// Like tide-disco, every response carries permissive CORS headers.
+    #[tokio::test]
+    async fn responses_carry_cors_headers() {
+        for uri in ["/healthcheck", "/api/peer_pub_ready", "/no/such/route"] {
+            let req = Request::builder()
+                .uri(uri)
+                .header(header::ORIGIN, "https://example.com")
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let resp = tower::ServiceExt::oneshot(test_app(), req).await.unwrap();
+            assert_eq!(
+                resp.headers()
+                    .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                    .unwrap_or_else(|| panic!("no CORS header on {uri}")),
+                "*",
+                "{uri}"
+            );
+        }
+    }
+
+    /// tide-disco served the `api` module both unversioned and under `/v0`, redirecting the former
+    /// to the latter; both forms must route here.
+    #[tokio::test]
+    async fn versioned_and_unversioned_api_paths_route() {
+        for uri in ["/api/peer_pub_ready", "/v0/api/peer_pub_ready"] {
+            let req = Request::builder()
+                .uri(uri)
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let resp = tower::ServiceExt::oneshot(test_app(), req).await.unwrap();
+            assert_ne!(resp.status(), StatusCode::NOT_FOUND, "{uri} did not route");
+        }
+    }
 }

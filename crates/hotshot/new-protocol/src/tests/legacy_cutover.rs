@@ -70,6 +70,7 @@ const DEFAULT_NEW_PROTO_VIEW_TIMEOUT: Duration = Duration::from_secs(6);
 async fn spawn_legacy_cluster(
     num_nodes: usize,
     upgrade_view: u64,
+    non_upgrading: &BTreeSet<usize>,
 ) -> Vec<SystemContextHandle<TestTypes, MemoryImpl>> {
     let pre_cliquenet = version(NEW_PROTOCOL_VERSION.major, NEW_PROTOCOL_VERSION.minor - 1);
     let mut metadata: TestDescription<TestTypes, MemoryImpl> =
@@ -102,7 +103,16 @@ async fn spawn_legacy_cluster(
     for node_id in 0..num_nodes as u64 {
         let network = (launcher.resource_generators.channel_generator)(node_id).await;
         let storage = (launcher.resource_generators.storage)(node_id);
-        let hotshot_config = (launcher.resource_generators.hotshot_config)(node_id);
+        let mut hotshot_config = (launcher.resource_generators.hotshot_config)(node_id);
+        if non_upgrading.contains(&(node_id as usize)) {
+            // An operator that never configured the upgrade: the node runs
+            // legacy consensus normally but never proposes or votes on the
+            // upgrade (`UpgradeConfig::default()` semantics).
+            hotshot_config.start_proposing_view = u64::MAX;
+            hotshot_config.stop_proposing_view = 0;
+            hotshot_config.start_voting_view = u64::MAX;
+            hotshot_config.stop_voting_view = 0;
+        }
 
         let is_da = node_id < hotshot_config.da_staked_committee_size as u64;
         let validator_config: ValidatorConfig<TestTypes> =
@@ -487,6 +497,11 @@ struct SilentNode {
 /// gaps inside each node's decided range are exactly
 /// `expected_failed_views`: every gap must be listed, and every listed
 /// view that falls inside the range must actually be a gap.
+///
+/// Nodes in `non_upgrading` model operators that never configured the
+/// upgrade: their legacy node runs normally but never votes on the
+/// upgrade, and no new-protocol stack is spawned for them at all.
+#[allow(clippy::too_many_arguments)]
 async fn run_cutover_test(
     num_nodes: usize,
     target_decisions: usize,
@@ -494,22 +509,28 @@ async fn run_cutover_test(
     deadline: Duration,
     view_timeout: Duration,
     silent_nodes: Vec<SilentNode>,
+    non_upgrading: BTreeSet<usize>,
+    upgrade_view: u64,
 ) {
     crate::logging::init_test_logging();
 
     let parties = build_parties(num_nodes);
     let new_proto_lock = test_upgrade_lock();
 
-    let legacy_handles = spawn_legacy_cluster(num_nodes, UPGRADE_VIEW).await;
+    let legacy_handles = spawn_legacy_cluster(num_nodes, upgrade_view, &non_upgrading).await;
     let legacy_arcs: Vec<Arc<RwLock<SystemContextHandle<TestTypes, MemoryImpl>>>> = legacy_handles
         .into_iter()
         .map(|h| Arc::new(RwLock::new(h)))
         .collect();
 
     let mut bg_handles: Vec<AbortHandle> = Vec::new();
-    let mut node_state: Vec<NodeState> = Vec::with_capacity(num_nodes);
+    let mut node_state: Vec<Option<NodeState>> = Vec::with_capacity(num_nodes);
     for (i, legacy_arc) in legacy_arcs.iter().enumerate() {
-        node_state.push(
+        if non_upgrading.contains(&i) {
+            node_state.push(None);
+            continue;
+        }
+        node_state.push(Some(
             spawn_node(
                 i,
                 num_nodes,
@@ -520,19 +541,27 @@ async fn run_cutover_test(
                 &mut bg_handles,
             )
             .await,
-        );
+        ));
     }
 
     let new_proto_views: Vec<Arc<AtomicU64>> = node_state
         .iter()
-        .map(|ns| ns.new_proto_view.clone())
+        .map(|ns| match ns {
+            Some(ns) => ns.new_proto_view.clone(),
+            // Never advances: a non-upgrading node has no coordinator.
+            None => Arc::new(AtomicU64::new(0)),
+        })
         .collect();
     for silent in &silent_nodes {
         bg_handles.push(spawn_silence_at_view(
             &legacy_arcs,
             &new_proto_views,
             silent,
-            node_state[silent.idx].runner_abort.clone(),
+            node_state[silent.idx]
+                .as_ref()
+                .expect("cannot silence a non-upgrading node")
+                .runner_abort
+                .clone(),
         ));
     }
 
@@ -542,7 +571,7 @@ async fn run_cutover_test(
 
     let silent_idxs: BTreeSet<usize> = silent_nodes.iter().map(|s| s.idx).collect();
     let live_indices: Vec<usize> = (0..num_nodes)
-        .filter(|i| !silent_idxs.contains(i))
+        .filter(|i| !silent_idxs.contains(i) && !non_upgrading.contains(i))
         .collect();
     let mut decided_per_node: Vec<BTreeMap<ViewNumber, [u8; 32]>> =
         vec![BTreeMap::new(); num_nodes];
@@ -563,6 +592,7 @@ async fn run_cutover_test(
             panic!("live nodes did not reach the post-cutover decision target in time");
         }
         for (i, ns) in node_state.iter_mut().enumerate() {
+            let Some(ns) = ns else { continue };
             while let Ok(ev) = ns.decision_rx.try_recv() {
                 if decided_per_node[i].insert(ev.view, ev.commit).is_none() {
                     tracing::info!(node = i, view = *ev.view, "new-protocol decided leaf");
@@ -638,7 +668,7 @@ async fn run_cutover_test(
     for w in bg_handles {
         w.abort();
     }
-    for ns in &node_state {
+    for ns in node_state.iter().flatten() {
         ns.runner_abort.abort();
     }
     for legacy in legacy_arcs {
@@ -726,6 +756,8 @@ async fn legacy_runs_upgrade_then_new_protocol_takes_over() {
         Duration::from_secs(180),
         DEFAULT_NEW_PROTO_VIEW_TIMEOUT,
         Vec::new(),
+        BTreeSet::new(),
+        UPGRADE_VIEW,
     )
     .await;
 }
@@ -746,6 +778,8 @@ async fn legacy_last_view_times_out_then_new_protocol_takes_over() {
             idx: silent_idx,
             at_view: ViewNumber::new(PREDICTED_CUTOVER_VIEW - 2),
         }],
+        BTreeSet::new(),
+        UPGRADE_VIEW,
     )
     .await;
 }
@@ -779,6 +813,8 @@ async fn legacy_two_views_view_sync_then_new_protocol_takes_over() {
                 at_view: trigger,
             },
         ],
+        BTreeSet::new(),
+        UPGRADE_VIEW,
     )
     .await;
 }
@@ -798,8 +834,121 @@ async fn new_protocol_first_leader_offline_then_recovers() {
             idx: silent_idx,
             at_view: ViewNumber::new(PREDICTED_CUTOVER_VIEW),
         }],
+        BTreeSet::new(),
+        UPGRADE_VIEW,
     )
     .await;
+}
+
+// ============================================================
+// Non-upgrading sweep: one test per node in a 7-node cluster.
+//
+// The chosen node never configures the upgrade: its legacy node runs
+// normally the whole time (so its pre-cutover leader slots succeed),
+// but it never votes on the upgrade and no new-protocol stack is
+// spawned for it. The other six nodes meet the upgrade threshold
+// (9/10 of stake, i.e. 6 of 7) exactly, so the certificate still
+// forms without it, and the network cuts over. Post-cutover, the
+// non-upgrading node's leader slots time out into TC2s; every other
+// view must be decided.
+//
+// Distinguished cases:
+// - node 4 leads the cutover view: the last legacy view fails too,
+//   because its vote1s are unicast to the non-upgrading node as the
+//   next legacy leader, and the QC it forms never reaches the new
+//   protocol (the offline-first-leader failure shape).
+// - node 3 is the leader that would send the upgrade proposal
+//   (`leader(UPGRADE_VIEW + propose_offset)`), so its test shifts the
+//   upgrade one view later and a configured leader proposes instead.
+//   Production proposing windows span many views, so the next
+//   configured leader always picks it up; the single-view window here
+//   is a harness artifact.
+
+/// Bound for enumerating the non-upgrading node's failed leader slots;
+/// only needs to exceed the highest view a live node decides before the
+/// collection loop exits.
+const SWEEP_MAX_VIEW: u64 = 50;
+
+async fn run_non_upgrading_test(node: usize) {
+    const NUM_NODES: usize = 7;
+    let propose_offset = hotshot_types::constants::TEST_UPGRADE_CONSTANTS.propose_offset;
+    let finish_offset = hotshot_types::constants::TEST_UPGRADE_CONSTANTS.finish_offset;
+
+    // Only `leader(upgrade_view + propose_offset)` sends the upgrade
+    // proposal; if that is the non-upgrading node, shift the window one
+    // view later so a configured leader proposes.
+    let mut upgrade_view = UPGRADE_VIEW;
+    if (upgrade_view + propose_offset) as usize % NUM_NODES == node {
+        upgrade_view += 1;
+        assert_ne!(
+            (upgrade_view + propose_offset) as usize % NUM_NODES,
+            node,
+            "shifted upgrade proposer is still the non-upgrading node",
+        );
+    }
+    let cutover_view = upgrade_view + finish_offset;
+
+    // The node's post-cutover leader slots fail: it never proposes in
+    // the new protocol.
+    let mut expected: BTreeSet<ViewNumber> = (cutover_view..=SWEEP_MAX_VIEW)
+        .filter(|v| *v as usize % NUM_NODES == node)
+        .map(ViewNumber::new)
+        .collect();
+    // If it leads the cutover view itself, the last legacy view fails
+    // too (see the sweep header).
+    if cutover_view as usize % NUM_NODES == node {
+        expected.insert(ViewNumber::new(cutover_view - 1));
+    }
+
+    run_cutover_test(
+        NUM_NODES,
+        6,
+        expected,
+        Duration::from_secs(240),
+        DEFAULT_NEW_PROTO_VIEW_TIMEOUT,
+        Vec::new(),
+        BTreeSet::from([node]),
+        upgrade_view,
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn non_upgrading_node_0() {
+    run_non_upgrading_test(0).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn non_upgrading_node_1() {
+    run_non_upgrading_test(1).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn non_upgrading_node_2() {
+    run_non_upgrading_test(2).await;
+}
+
+/// The would-be upgrade proposer; the upgrade shifts one view later.
+#[tokio::test(flavor = "multi_thread")]
+async fn non_upgrading_node_3() {
+    run_non_upgrading_test(3).await;
+}
+
+/// The leader of the cutover view.
+#[tokio::test(flavor = "multi_thread")]
+async fn non_upgrading_node_4() {
+    run_non_upgrading_test(4).await;
+}
+
+/// The leader of the first view after the cutover view.
+#[tokio::test(flavor = "multi_thread")]
+async fn non_upgrading_node_5() {
+    run_non_upgrading_test(5).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn non_upgrading_node_6() {
+    run_non_upgrading_test(6).await;
 }
 
 /// Non-terminal legacy timeout: silence a pre-cutover leader several
@@ -821,6 +970,8 @@ async fn legacy_view_before_last_times_out_then_new_protocol_takes_over() {
             idx: silent_idx,
             at_view: ViewNumber::new(PREDICTED_CUTOVER_VIEW - 3),
         }],
+        BTreeSet::new(),
+        UPGRADE_VIEW,
     )
     .await;
 }
@@ -916,6 +1067,8 @@ async fn run_perm_test(views_to_silence: Vec<u64>) {
         perm_deadline(n_silent),
         DEFAULT_NEW_PROTO_VIEW_TIMEOUT,
         silent_nodes,
+        BTreeSet::new(),
+        UPGRADE_VIEW,
     )
     .await;
 }
