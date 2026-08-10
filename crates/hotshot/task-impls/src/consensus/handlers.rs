@@ -397,6 +397,16 @@ pub(crate) async fn handle_view_change<TYPES: NodeType, I: NodeImplementation<TY
     // Cancel the old timeout task
     std::mem::replace(&mut task_state.timeout_task, new_timeout_task).abort();
 
+    // Before the leader lookup below, which fails while catchup for the current
+    // epoch is in flight: exactly when this gauge is worth reading.
+    task_state
+        .consensus
+        .read()
+        .await
+        .metrics
+        .catchups_in_progress
+        .set(task_state.membership_coordinator.catchup_count());
+
     let old_view_leader_key = task_state
         .membership_coordinator
         .membership_for_epoch(task_state.cur_epoch)
@@ -408,10 +418,6 @@ pub(crate) async fn handle_view_change<TYPES: NodeType, I: NodeImplementation<TY
         .metrics
         .current_view
         .set(usize::try_from(task_state.cur_view.u64()).unwrap());
-    consensus_reader
-        .metrics
-        .catchups_in_progress
-        .set(task_state.membership_coordinator.catchup_count());
     let cur_view_time = Utc::now().timestamp();
     if old_view_leader_key == task_state.public_key {
         #[allow(clippy::cast_precision_loss)]
