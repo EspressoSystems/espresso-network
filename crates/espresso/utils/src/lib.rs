@@ -35,7 +35,7 @@ pub async fn wait_for_http(
     max_retries: usize,
 ) -> Result<usize, String> {
     for i in 0..(max_retries + 1) {
-        let res = surf::get(url).await;
+        let res = reqwest::get(url.clone()).await;
         if res.is_ok() {
             tracing::debug!("Connected to {url}");
             return Ok(i);

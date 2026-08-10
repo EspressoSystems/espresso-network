@@ -24,7 +24,7 @@ use hotshot_types::{
     traits::{node_implementation::NodeType, signature_key::StakeTableEntryType},
 };
 use hotshot_utils::anytrace::*;
-use tide_disco::Url;
+use url::Url;
 use vec1::Vec1;
 use versions::{MIN_SUPPORTED_VERSION, Upgrade};
 
