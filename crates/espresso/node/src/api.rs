@@ -3573,7 +3573,6 @@ mod test {
         primitives::{Address, U256},
         providers::{ProviderBuilder, ext::AnvilApi},
     };
-    use async_lock::Mutex;
     use committable::{Commitment, Committable};
     use espresso_contract_deployer::{
         Contract, Contracts, builder::DeployerArgsBuilder,
@@ -7770,7 +7769,7 @@ mod test {
 
         let fetcher = Fetcher::new(
             Arc::new(NullStateCatchup::default()),
-            Arc::new(Mutex::new(persistence.clone())),
+            Arc::new(persistence.clone()),
             l1_client.clone(),
             ChainConfig {
                 stake_table_contract: Some(st_addr),
