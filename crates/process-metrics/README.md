@@ -16,25 +16,57 @@ detected once at startup and logged at `info`.
 
 ### Process (`/proc/self/*`)
 
-| Name                            | Type    | Unit    | Source                                          |
-| ------------------------------- | ------- | ------- | ----------------------------------------------- |
-| `process_resident_memory_bytes` | gauge   | bytes   | `sysinfo::Process::memory()`                    |
-| `process_virtual_memory_bytes`  | gauge   | bytes   | `sysinfo::Process::virtual_memory()`            |
-| `process_open_fds`              | gauge   | -       | `/proc/self/fd` entry count                     |
-| `process_threads`               | gauge   | -       | `/proc/self/task` entry count                   |
-| `process_uptime_seconds`        | gauge   | seconds | wall clock since startup                        |
-| `process_cpu_seconds_total`     | counter | seconds | `/proc/self/stat` `utime + stime` / `CLK_TCK`   |
-| `process_read_bytes_total`      | counter | bytes   | `/proc/self/io` `read_bytes`                    |
-| `process_write_bytes_total`     | counter | bytes   | `/proc/self/io` `write_bytes`                   |
+| Name                                 | Type    | Unit    | Source                                                                     |
+| ------------------------------------ | ------- | ------- | -------------------------------------------------------------------------- |
+| `process_resident_memory_bytes`      | gauge   | bytes   | `sysinfo::Process::memory()`                                               |
+| `process_virtual_memory_bytes`       | gauge   | bytes   | `sysinfo::Process::virtual_memory()`                                       |
+| `process_open_fds`                   | gauge   | -       | `/proc/self/fd` entry count                                                |
+| `process_threads`                    | gauge   | -       | `/proc/self/task` entry count                                              |
+| `process_uptime_seconds`             | gauge   | seconds | wall clock since startup                                                   |
+| `process_cpu_seconds_total`          | counter | seconds | `/proc/self/stat` `utime + stime` / `CLK_TCK`                              |
+| `process_read_bytes_total`           | counter | bytes   | `/proc/self/io` `read_bytes`                                               |
+| `process_write_bytes_total`          | counter | bytes   | `/proc/self/io` `write_bytes`                                              |
+| `process_tcp_recv_queue_max_bytes`   | gauge   | bytes   | `/proc/self/net/tcp{,6}` `rx_queue`, max over owned established sockets    |
+| `process_tcp_recv_queue_total_bytes` | gauge   | bytes   | `/proc/self/net/tcp{,6}` `rx_queue`, summed over owned established sockets |
+| `process_tcp_send_queue_max_bytes`   | gauge   | bytes   | `/proc/self/net/tcp{,6}` `tx_queue`, max over owned established sockets    |
+| `process_tcp_send_queue_total_bytes` | gauge   | bytes   | `/proc/self/net/tcp{,6}` `tx_queue`, summed over owned established sockets |
+| `process_tcp_established_sockets`    | gauge   | -       | count of owned established sockets in `/proc/self/net/tcp{,6}`             |
+
+#### TCP socket queues
+
+`/proc/self/net/tcp` and `/proc/self/net/tcp6` are netns-wide: they list every socket in the network namespace, not just
+this process's. Each sample first walks `/proc/self/fd` to collect the inodes of sockets this process actually holds an
+fd for, then keeps only TCP table entries whose inode is in that set. That inode filter is what makes the aggregate ours
+instead of the whole netns's.
+
+Only `Established` sockets are counted. A `Listen` socket reuses the same two columns for the accept backlog (`rx_queue`
+= completed connections awaiting `accept()`, `tx_queue` = backlog limit), which is not buffer occupancy and would
+corrupt both the max and the total if included.
+
+Limits:
+
+- The aggregate mixes cliquenet peer sockets with postgres, L1 RPC and query-API client sockets. A high `recv_queue_max`
+  localises the problem to "this process's sockets", not a specific connection; follow up with `ss` on the host to find
+  which peer it is.
+- Send-side is the noisy pair: a query node serving a slow HTTP client shows a large `tx_queue` in normal operation.
+  Receive-side is the signal here; do not alert on send-side queue metrics.
+- A stall shorter than the Prometheus scrape interval can be missed: `sample()` runs every 5s and each gauge is
+  last-write-wins, while scrapes happen on their own, coarser interval.
+- Cost: one `readlink` per fd on the fd walk, plus an O(netns sockets) parse of the TCP table under a kernel lock.
+  Negligible at ~100 peers; measurable on a host with tens of thousands of sockets.
+
+Pairs with `consensus_coordinator_event_queue_len`: internal queue high + recv queue high means socket draining has
+stopped and backpressure has reached the wire; internal queue high + recv queue near zero means an internal bottleneck
+while reads keep up; internal queue near zero + recv queue high means the read path itself is stuck.
 
 ### Host
 
-| Name               | Type  | Unit | Source                                                |
-| ------------------ | ----- | ---- | ----------------------------------------------------- |
-| `node_cpu_count`   | gauge | -    | `sysinfo::System::cpus().len()` (set once at startup) |
-| `node_load1_milli` | gauge | -    | `/proc/loadavg` 1-min average ×1000 (so 1.25=1250)    |
-| `node_load5_milli` | gauge | -    | `/proc/loadavg` 5-min average ×1000                   |
-| `node_load15_milli`| gauge | -    | `/proc/loadavg` 15-min average ×1000                  |
+| Name                | Type  | Unit | Source                                                |
+| ------------------- | ----- | ---- | ----------------------------------------------------- |
+| `node_cpu_count`    | gauge | -    | `sysinfo::System::cpus().len()` (set once at startup) |
+| `node_load1_milli`  | gauge | -    | `/proc/loadavg` 1-min average ×1000 (so 1.25=1250)    |
+| `node_load5_milli`  | gauge | -    | `/proc/loadavg` 5-min average ×1000                   |
+| `node_load15_milli` | gauge | -    | `/proc/loadavg` 15-min average ×1000                  |
 
 `node_load*_milli` reports the loadavg multiplied by 1000 because the HotShot `Gauge` trait stores `usize`. Divide by
 1000 when graphing.
@@ -46,13 +78,13 @@ PSI requires Linux 4.20+ with `CONFIG_PSI=y`. At startup, cgroup v2 pressure fil
 `/proc/pressure/{cpu,memory,io}` is used. If neither exists, these counters stay at zero. Kernel `total` is in
 microseconds; counters accumulate whole-second deltas while preserving sub-second remainder across ticks.
 
-| Name                                            | Type    | Unit    | Source             |
-| ----------------------------------------------- | ------- | ------- | ------------------ |
-| `node_pressure_cpu_waiting_seconds_total`       | counter | seconds | PSI `some total=`  |
-| `node_pressure_memory_waiting_seconds_total`    | counter | seconds | PSI `some total=`  |
-| `node_pressure_memory_stalled_seconds_total`    | counter | seconds | PSI `full total=`  |
-| `node_pressure_io_waiting_seconds_total`        | counter | seconds | PSI `some total=`  |
-| `node_pressure_io_stalled_seconds_total`        | counter | seconds | PSI `full total=`  |
+| Name                                         | Type    | Unit    | Source            |
+| -------------------------------------------- | ------- | ------- | ----------------- |
+| `node_pressure_cpu_waiting_seconds_total`    | counter | seconds | PSI `some total=` |
+| `node_pressure_memory_waiting_seconds_total` | counter | seconds | PSI `some total=` |
+| `node_pressure_memory_stalled_seconds_total` | counter | seconds | PSI `full total=` |
+| `node_pressure_io_waiting_seconds_total`     | counter | seconds | PSI `some total=` |
+| `node_pressure_io_stalled_seconds_total`     | counter | seconds | PSI `full total=` |
 
 ### Cgroup v2 (only emitted when detected)
 
@@ -60,13 +92,13 @@ Requires `/sys/fs/cgroup/cpu.stat` and `/sys/fs/cgroup/memory.current` to be rea
 emitted when `memory.max` is finite (skipped entirely when the file reads the literal `max`, i.e. unlimited) and is set
 once at startup since container memory limits don't change at runtime.
 
-| Name                                  | Type    | Unit    | Source                                  |
-| ------------------------------------- | ------- | ------- | --------------------------------------- |
-| `cgroup_cpu_periods_total`            | counter | -       | `cpu.stat` `nr_periods`                 |
-| `cgroup_cpu_throttled_periods_total`  | counter | -       | `cpu.stat` `nr_throttled`               |
-| `cgroup_cpu_throttled_seconds_total`  | counter | seconds | `cpu.stat` `throttled_usec` / 1_000_000 |
-| `cgroup_memory_current_bytes`         | gauge   | bytes   | `memory.current`                        |
-| `cgroup_memory_max_bytes`             | gauge   | bytes   | `memory.max` (only when finite)         |
+| Name                                 | Type    | Unit    | Source                                  |
+| ------------------------------------ | ------- | ------- | --------------------------------------- |
+| `cgroup_cpu_periods_total`           | counter | -       | `cpu.stat` `nr_periods`                 |
+| `cgroup_cpu_throttled_periods_total` | counter | -       | `cpu.stat` `nr_throttled`               |
+| `cgroup_cpu_throttled_seconds_total` | counter | seconds | `cpu.stat` `throttled_usec` / 1_000_000 |
+| `cgroup_memory_current_bytes`        | gauge   | bytes   | `memory.current`                        |
+| `cgroup_memory_max_bytes`            | gauge   | bytes   | `memory.max` (only when finite)         |
 
 ## Library usage
 
