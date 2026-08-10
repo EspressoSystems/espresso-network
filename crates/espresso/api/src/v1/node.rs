@@ -1,7 +1,6 @@
 //! V1 node API.
 //!
-//! Mirrors the tide-disco endpoints defined in `hotshot-query-service/api/node.toml`
-//! and `crates/espresso/node/api/node.toml`.
+//! Mirrors the endpoints defined in `hotshot-query-service/api/node.toml`.
 
 use async_trait::async_trait;
 use serde::Serialize;

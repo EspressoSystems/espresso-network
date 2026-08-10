@@ -61,12 +61,13 @@ while reads keep up; internal queue near zero + recv queue high means the read p
 
 ### Host
 
-| Name                | Type  | Unit | Source                                                |
-| ------------------- | ----- | ---- | ----------------------------------------------------- |
-| `node_cpu_count`    | gauge | -    | `sysinfo::System::cpus().len()` (set once at startup) |
-| `node_load1_milli`  | gauge | -    | `/proc/loadavg` 1-min average ×1000 (so 1.25=1250)    |
-| `node_load5_milli`  | gauge | -    | `/proc/loadavg` 5-min average ×1000                   |
-| `node_load15_milli` | gauge | -    | `/proc/loadavg` 15-min average ×1000                  |
+| Name                          | Type    | Unit    | Source                                                                                                                                                                                                                                |
+| ----------------------------- | ------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `node_cpu_count`              | gauge   | -       | `sysinfo::System::cpus().len()` (set once at startup)                                                                                                                                                                                 |
+| `node_load1_milli`            | gauge   | -       | `/proc/loadavg` 1-min average ×1000 (so 1.25=1250)                                                                                                                                                                                    |
+| `node_load5_milli`            | gauge   | -       | `/proc/loadavg` 5-min average ×1000                                                                                                                                                                                                   |
+| `node_load15_milli`           | gauge   | -       | `/proc/loadavg` 15-min average ×1000                                                                                                                                                                                                  |
+| `node_cpu_mode_seconds_total` | counter | seconds | `/proc/stat` aggregate `cpu` line, ticks / `CLK_TCK`, labeled `mode` (`user`, `nice`, `system`, `idle`, `iowait`, `irq`, `softirq`, `steal`, `guest`, `guest_nice`); `guest`/`guest_nice` ticks are already included in `user`/`nice` |
 
 `node_load*_milli` reports the loadavg multiplied by 1000 because the HotShot `Gauge` trait stores `usize`. Divide by
 1000 when graphing.

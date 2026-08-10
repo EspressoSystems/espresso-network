@@ -1,5 +1,5 @@
 //! Axum port of the `availability` and `node` API modules that this service used to serve via
-//! `hotshot_query_service::{availability, node}::define_api` on a `tide_disco::App`.
+//! `hotshot_query_service::{availability, node}::define_api` on a tide-disco `App`.
 //!
 //! Route paths, status codes and the wire error type are all taken directly from
 //! `hotshot-query-service` (see `availability.rs`/`node.rs` there and their handler bodies) so
