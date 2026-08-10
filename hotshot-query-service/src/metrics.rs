@@ -113,7 +113,7 @@ impl PrometheusMetrics {
     ///
     /// Useful for callers that need to scrape the full set of metric families
     /// (e.g. a remote-write push task) instead of going through the text-format
-    /// [`Metrics::export`] path. The registry is `Clone` (it shares state via
+    /// [`Self::export`] path. The registry is `Clone` (it shares state via
     /// `Arc` internally), so callers can take an owned copy if needed.
     pub fn registry(&self) -> &Registry {
         &self.metrics
@@ -174,10 +174,9 @@ impl PrometheusMetrics {
     }
 }
 
-impl tide_disco::metrics::Metrics for PrometheusMetrics {
-    type Error = MetricsError;
-
-    fn export(&self) -> Result<String, Self::Error> {
+impl PrometheusMetrics {
+    /// Export all registered metrics in the Prometheus text format.
+    pub fn export(&self) -> Result<String, MetricsError> {
         let encoder = TextEncoder::new();
         let metric_families = self.metrics.gather();
         let mut buffer = vec![];
@@ -480,7 +479,6 @@ impl metrics::MetricsFamily<()> for TextFamily {
 #[cfg(test)]
 mod test {
     use metrics::Metrics;
-    use tide_disco::metrics::Metrics as _;
 
     use super::*;
 

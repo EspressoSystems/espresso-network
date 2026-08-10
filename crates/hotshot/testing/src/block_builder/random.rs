@@ -18,7 +18,7 @@ use std::{
 use async_broadcast::{Sender, broadcast};
 use async_lock::RwLock;
 use async_trait::async_trait;
-use futures::{Stream, StreamExt, future::BoxFuture};
+use futures::{Stream, StreamExt};
 use hotshot::types::{Event, EventType, SignatureKey};
 use hotshot_builder_api::{
     v0_1::{
@@ -37,12 +37,10 @@ use hotshot_types::{
 };
 use lru::LruCache;
 use rand::{Rng, RngCore, SeedableRng, rngs::SmallRng};
-use tide_disco::{Url, method::ReadState};
 use tokio::{spawn, time::sleep};
+use url::Url;
 
-use super::{
-    BlockEntry, BuilderTask, TestBuilderImplementation, build_block, run_builder_source_0_1,
-};
+use super::{BlockEntry, BuilderTask, TestBuilderImplementation, build_block, run_builder_source};
 use crate::test_builder::BuilderChange;
 
 pub struct RandomBuilderImplementation;
@@ -96,7 +94,7 @@ where
         let (change_sender, change_receiver) = broadcast(128);
 
         let (task, source) = Self::create(num_nodes, config, changes, change_sender).await;
-        run_builder_source_0_1(url, change_receiver, source);
+        run_builder_source(url, change_receiver, source);
         Box::new(task)
     }
 }
@@ -243,18 +241,6 @@ where
             num_nodes,
             should_fail_claims: Arc::new(AtomicBool::new(false)),
         }
-    }
-}
-
-#[async_trait]
-impl<TYPES: NodeType> ReadState for RandomBuilderSource<TYPES> {
-    type State = Self;
-
-    async fn read<T>(
-        &self,
-        op: impl Send + for<'a> FnOnce(&'a Self::State) -> BoxFuture<'a, T> + 'async_trait,
-    ) -> T {
-        op(self).await
     }
 }
 

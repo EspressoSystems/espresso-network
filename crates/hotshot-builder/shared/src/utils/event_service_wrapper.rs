@@ -140,10 +140,10 @@ mod tests {
     };
 
     use async_trait::async_trait;
-    use futures::{StreamExt, future::BoxFuture, stream};
+    use futures::{StreamExt, stream};
     use hotshot::types::{Event, EventType};
     use hotshot_events_service::{
-        events::define_api,
+        events,
         events_source::{EventFilterSet, EventsSource, StartupInfo},
     };
     use hotshot_example_types::node_types::TestTypes;
@@ -151,8 +151,7 @@ mod tests {
         data::ViewNumber,
         event::{LegacyEvent, LegacyEventType},
     };
-    use tide_disco::{App, method::ReadState};
-    use tokio::{spawn, task::JoinHandle, time::timeout};
+    use tokio::{task::JoinHandle, time::timeout};
     use tracing::debug;
     use url::Url;
     use vbs::version::StaticVersion;
@@ -161,8 +160,9 @@ mod tests {
 
     type MockVersion = StaticVersion<0, 1>;
 
+    #[derive(Clone)]
     struct MockEventsSource {
-        counter: AtomicU64,
+        counter: Arc<AtomicU64>,
     }
 
     #[async_trait]
@@ -205,34 +205,15 @@ mod tests {
         }
     }
 
-    #[async_trait]
-    impl ReadState for MockEventsSource {
-        type State = Self;
-
-        async fn read<T>(
-            &self,
-            op: impl Send + for<'a> FnOnce(&'a Self::State) -> BoxFuture<'a, T> + 'async_trait,
-        ) -> T {
-            op(self).await
-        }
-    }
-
     fn run_app(path: &'static str, bind_url: Url) -> JoinHandle<()> {
         let source = MockEventsSource {
-            counter: AtomicU64::new(0),
+            counter: Arc::new(AtomicU64::new(0)),
         };
-        let api = define_api::<MockEventsSource, _, MockVersion>(
-            &Default::default(),
-            "1.0.0".parse().unwrap(),
-        )
-        .unwrap();
-
-        let mut app: App<MockEventsSource, hotshot_events_service::events::Error> =
-            App::with_state(source);
-
-        app.register_module(path, api).unwrap();
-
-        spawn(async move { app.serve(bind_url, MockVersion {}).await.unwrap() })
+        let router = events::app(axum::Router::new().nest(
+            &format!("/{path}"),
+            events::events_router::<TestTypes, _, MockVersion>(source),
+        ));
+        events::serve(&bind_url, router)
     }
 
     #[tokio::test(flavor = "multi_thread")]

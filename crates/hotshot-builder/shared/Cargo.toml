@@ -41,5 +41,5 @@ vec1 = { workspace = true }
 
 [dev-dependencies]
 test-utils = { workspace = true }
-tide-disco = { workspace = true }
+axum = { workspace = true }
 tracing-test = { workspace = true }

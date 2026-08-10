@@ -10,21 +10,20 @@ alloy = { workspace = true }
 async-broadcast = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
-clap = { workspace = true }
+axum = { workspace = true }
 derive_more = { workspace = true }
 disco-types = { workspace = true }
 futures = { workspace = true }
 hotshot-types = { workspace = true }
 http-client = { workspace = true }
+http-wire = { workspace = true, features = ["server"] }
 rand = { workspace = true }
-semver = { workspace = true }
 serde = { workspace = true }
 snafu = { workspace = true }
-tide-disco = { workspace = true }
 tokio = { workspace = true }
-toml = { workspace = true }
 tracing = { workspace = true }
 tracing-test = { workspace = true }
+url = { workspace = true }
 vbs = { workspace = true }
 
 [dev-dependencies]

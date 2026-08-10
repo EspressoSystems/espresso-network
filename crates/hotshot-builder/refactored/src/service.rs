@@ -10,20 +10,19 @@ use std::{
 pub use async_broadcast::{RecvError, TryRecvError, broadcast};
 use async_lock::RwLock;
 use async_trait::async_trait;
+use axum::Router;
 use committable::Commitment;
 use futures::{
     Stream, TryStreamExt,
-    future::BoxFuture,
     stream::{FuturesOrdered, FuturesUnordered, StreamExt},
 };
 use hotshot::types::Event;
 use hotshot_builder_api::{
     v0_1::{
         block_info::{AvailableBlockData, AvailableBlockInfo},
-        builder::{
-            BuildError, Error as BuilderApiError, TransactionStatus, define_api, submit_api,
-        },
+        builder::{BuildError, TransactionStatus},
         data_source::{AcceptsTxnSubmits, BuilderDataSource},
+        router,
     },
     v0_2::block_info::AvailableBlockHeaderInputV1,
 };
@@ -46,14 +45,12 @@ use hotshot_types::{
     utils::BuilderCommitment,
 };
 use tagged_base64::TaggedBase64;
-use tide_disco::{App, app::AppError, method::ReadState};
 use tokio::{
     spawn,
     task::JoinHandle,
     time::{sleep, timeout},
 };
 use tracing::{error, info, instrument, trace, warn};
-use vbs::version::StaticVersion;
 
 use crate::{
     block_size_limits::BlockSizeLimits,
@@ -245,24 +242,18 @@ where
         }
     }
 
-    /// Consumes `self` and returns a `tide_disco` [`App`] with builder and private mempool APIs registered
-    pub fn into_app(
-        self: Arc<Self>,
-    ) -> Result<App<ProxyGlobalState<Types>, BuilderApiError>, AppError> {
+    /// Consumes `self` and returns an axum [`Router`] with builder and private mempool APIs
+    /// registered
+    pub fn into_router(self: Arc<Self>) -> Router {
         let proxy = ProxyGlobalState(self);
-        let builder_api = define_api::<ProxyGlobalState<Types>, Types>(&Default::default())?;
-
-        // TODO: Replace StaticVersion with proper constant when added in HotShot
-        let private_mempool_api =
-            submit_api::<ProxyGlobalState<Types>, Types, StaticVersion<0, 1>>(&Default::default())?;
-
-        let mut app: App<ProxyGlobalState<Types>, BuilderApiError> = App::with_state(proxy);
-
-        app.register_module(hotshot_types::constants::LEGACY_BUILDER_MODULE, builder_api)?;
-
-        app.register_module("txn_submit", private_mempool_api)?;
-
-        Ok(app)
+        router::app(
+            Router::new()
+                .nest(
+                    &format!("/{}", hotshot_types::constants::LEGACY_BUILDER_MODULE),
+                    router::block_info_router::<Types, _>(proxy.clone()),
+                )
+                .nest("/txn_submit", router::txn_submit_router::<Types, _>(proxy)),
+        )
     }
 
     async fn handle_transaction(&self, tx: ReceivedTransaction<Types>) -> Result<(), Error<Types>> {
@@ -603,6 +594,12 @@ where
 #[deref_mut(forward)]
 pub struct ProxyGlobalState<Types: NodeType>(pub Arc<GlobalState<Types>>);
 
+impl<Types: NodeType> Clone for ProxyGlobalState<Types> {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
 /*
 Handling Builder API responses
 */
@@ -779,17 +776,5 @@ where
         txn_hash: Commitment<<Types as NodeType>::Transaction>,
     ) -> Result<TransactionStatus, BuildError> {
         Ok(self.coordinator.tx_status(&txn_hash))
-    }
-}
-
-#[async_trait]
-impl<Types: NodeType> ReadState for ProxyGlobalState<Types> {
-    type State = ProxyGlobalState<Types>;
-
-    async fn read<T>(
-        &self,
-        op: impl Send + for<'a> FnOnce(&'a Self::State) -> BoxFuture<'a, T> + 'async_trait,
-    ) -> T {
-        op(self).await
     }
 }

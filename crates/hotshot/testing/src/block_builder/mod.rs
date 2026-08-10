@@ -8,13 +8,14 @@ use std::collections::HashMap;
 
 use async_broadcast::Receiver;
 use async_trait::async_trait;
+use axum::Router;
 use futures::Stream;
 use hotshot::{traits::BlockPayload, types::Event};
 use hotshot_builder_api::{
     v0_1::{
         self,
         block_info::{AvailableBlockData, AvailableBlockInfo},
-        builder::{Error, Options},
+        router,
     },
     v0_2::block_info::AvailableBlockHeaderInputV1,
 };
@@ -25,9 +26,8 @@ use hotshot_types::{
         signature_key::BuilderSignatureKey,
     },
 };
-use tide_disco::{App, Url, method::ReadState};
 use tokio::spawn;
-use vbs::version::StaticVersionType;
+use url::Url;
 
 use crate::test_builder::BuilderChange;
 
@@ -67,7 +67,8 @@ struct BlockEntry<TYPES: NodeType> {
     header_input: Option<AvailableBlockHeaderInputV1<TYPES>>,
 }
 
-/// Construct a tide disco app that mocks the builder API 0.1 + 0.3.
+/// Serve the builder API 0.1 over `source`, restarting or stopping the server on
+/// [`BuilderChange`] events.
 ///
 /// # Panics
 /// If constructing and launching the builder fails for any reason
@@ -78,20 +79,11 @@ pub fn run_builder_source<TYPES, Source>(
 ) where
     TYPES: NodeType,
     <TYPES as NodeType>::InstanceState: Default,
-    Source: Clone + Send + Sync + tide_disco::method::ReadState + 'static,
-    <Source as ReadState>::State: Sync + Send + v0_1::data_source::BuilderDataSource<TYPES>,
+    Source: Clone + Send + Sync + v0_1::data_source::BuilderDataSource<TYPES> + 'static,
 {
     spawn(async move {
         let start_builder = |url: Url, source: Source| -> _ {
-            let builder_api_0_1 = hotshot_builder_api::v0_1::builder::define_api::<Source, TYPES>(
-                &Options::default(),
-            )
-            .expect("Failed to construct the builder API");
-
-            let mut app: App<Source, Error> = App::with_state(source);
-            app.register_module(LEGACY_BUILDER_MODULE, builder_api_0_1)
-                .expect("Failed to register the builder API 0.1");
-            spawn(app.serve(url, hotshot_builder_api::v0_1::Version::instance()))
+            router::serve(&url, builder_source_router::<TYPES, Source>(source))
         };
 
         let mut handle = Some(start_builder(url.clone(), source.clone()));
@@ -112,48 +104,16 @@ pub fn run_builder_source<TYPES, Source>(
     });
 }
 
-/// Construct a tide disco app that mocks the builder API 0.1.
-///
-/// # Panics
-/// If constructing and launching the builder fails for any reason
-pub fn run_builder_source_0_1<TYPES, Source>(
-    url: Url,
-    mut change_receiver: Receiver<BuilderChange>,
-    source: Source,
-) where
+/// The builder API 0.1 app router over `source`.
+pub(crate) fn builder_source_router<TYPES, Source>(source: Source) -> Router
+where
     TYPES: NodeType,
-    <TYPES as NodeType>::InstanceState: Default,
-    Source: Clone + Send + Sync + tide_disco::method::ReadState + 'static,
-    <Source as ReadState>::State: Sync + Send + v0_1::data_source::BuilderDataSource<TYPES>,
+    Source: Clone + Send + Sync + v0_1::data_source::BuilderDataSource<TYPES> + 'static,
 {
-    spawn(async move {
-        let start_builder = |url: Url, source: Source| -> _ {
-            let builder_api = hotshot_builder_api::v0_1::builder::define_api::<Source, TYPES>(
-                &Options::default(),
-            )
-            .expect("Failed to construct the builder API");
-            let mut app: App<Source, Error> = App::with_state(source);
-            app.register_module(LEGACY_BUILDER_MODULE, builder_api)
-                .expect("Failed to register the builder API");
-            spawn(app.serve(url, hotshot_builder_api::v0_1::Version::instance()))
-        };
-
-        let mut handle = Some(start_builder(url.clone(), source.clone()));
-
-        while let Ok(event) = change_receiver.recv().await {
-            match event {
-                BuilderChange::Up if handle.is_none() => {
-                    handle = Some(start_builder(url.clone(), source.clone()));
-                },
-                BuilderChange::Down => {
-                    if let Some(handle) = handle.take() {
-                        handle.abort();
-                    }
-                },
-                _ => {},
-            }
-        }
-    });
+    router::app(Router::new().nest(
+        &format!("/{LEGACY_BUILDER_MODULE}"),
+        router::block_info_router::<TYPES, Source>(source),
+    ))
 }
 
 /// Helper function to construct all builder data structures from a list of transactions

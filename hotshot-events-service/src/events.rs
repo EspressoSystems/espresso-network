@@ -1,35 +1,24 @@
-use std::path::PathBuf;
-
-use clap::Args;
+use axum::{
+    Router,
+    extract::{State, WebSocketUpgrade},
+    http::{HeaderMap, StatusCode as HttpStatusCode},
+    response::Response,
+    routing::get,
+};
 use derive_more::From;
-use futures::{FutureExt, StreamExt, TryFutureExt};
+use disco_types::{request::RequestError, status::StatusCode};
+use futures::StreamExt;
 use hotshot_types::traits::node_implementation::NodeType;
+use http_wire::{
+    self as wire, ContentType, WireFormat, body_limit_layer, cors_layer, drive_ws_stream,
+    healthcheck_response,
+};
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
-use tide_disco::{Api, RequestError, StatusCode, api::ApiError, method::ReadState};
+use url::Url;
 use vbs::version::StaticVersionType;
 
-use crate::{api::load_api, events_source::EventsSource};
-
-#[derive(Args, Default, Debug)]
-pub struct Options {
-    #[arg(
-        long = "hotshot-events-service-api-path",
-        env = "HOTSHOT_EVENTS_SERVICE_API_PATH"
-    )]
-    pub api_path: Option<PathBuf>,
-
-    /// Additional API specification files to merge with `hotshot-events-service-api-path`.
-    ///
-    /// These optional files may contain route definitions for application-specific routes that have
-    /// been added as extensions to the basic hotshot-events-service API.
-    #[arg(
-        long = "hotshot-events-extension",
-        env = "HOTSHOT_EVENTS_SERVICE_EXTENSIONS",
-        value_delimiter = ','
-    )]
-    pub extensions: Vec<toml::Value>,
-}
+use crate::events_source::EventsSource;
 
 #[derive(Clone, Debug, Snafu, Deserialize, Serialize)]
 #[snafu(visibility(pub))]
@@ -61,7 +50,7 @@ pub enum Error {
     },
 }
 
-impl tide_disco::error::Error for Error {
+impl disco_types::error::Error for Error {
     fn catch_all(status: StatusCode, msg: String) -> Self {
         Error::Custom {
             message: msg,
@@ -94,55 +83,103 @@ impl http_client::ClientError for Error {
     }
 }
 
-pub fn define_api<State, Types, Ver>(
-    options: &Options,
-    api_ver: semver::Version,
-) -> Result<Api<State, Error, Ver>, ApiError>
-where
-    State: 'static + Send + Sync + ReadState,
-    <State as ReadState>::State: Send + Sync + EventsSource<Types>,
-    Types: NodeType,
-    Ver: StaticVersionType + 'static,
-{
-    let mut api = load_api::<State, Error, Ver>(
-        options.api_path.as_ref(),
-        include_str!("../api/hotshot_events.toml"),
-        options.extensions.clone(),
-    )?;
+/// Wire format of the events API: `Ver` VBS framing and the [`Error`] envelope.
+struct EventsWireFormat<Ver>(std::marker::PhantomData<Ver>);
 
-    api.with_version(api_ver.clone());
+impl<Ver: StaticVersionType + 'static> WireFormat for EventsWireFormat<Ver> {
+    type Error = Error;
+    type Version = Ver;
 
-    if api_ver.major == 0 {
-        api.stream("events", move |_, state| {
-            async move {
-                tracing::info!("client subscribed to legacy events");
-                state
-                    .read(|state| {
-                        async move { Ok(state.get_legacy_event_stream(None).await.map(Ok)) }.boxed()
-                    })
-                    .await
-            }
-            .try_flatten_stream()
-            .boxed()
-        })?;
-    } else {
-        api.stream("events", move |_, state| {
-            async move {
-                tracing::info!("client subscribed to events");
-                state
-                    .read(|state| {
-                        async move { Ok(state.get_event_stream(None).await.map(Ok)) }.boxed()
-                    })
-                    .await
-            }
-            .try_flatten_stream()
-            .boxed()
-        })?;
+    fn status(err: &Error) -> HttpStatusCode {
+        HttpStatusCode::from_u16(u16::from(disco_types::error::Error::status(err)))
+            .unwrap_or(HttpStatusCode::INTERNAL_SERVER_ERROR)
     }
 
-    api.get("startup_info", |_, state| {
-        async move { Ok(state.get_startup_info().await) }.boxed()
-    })?;
+    fn serialize_failure(message: String) -> Error {
+        Error::Custom {
+            message,
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+}
 
-    Ok(api)
+async fn startup_info<Types, S, Ver>(State(state): State<S>, headers: HeaderMap) -> Response
+where
+    Types: NodeType,
+    S: EventsSource<Types> + Send + Sync + 'static,
+    Ver: StaticVersionType + 'static,
+{
+    let info = state.get_startup_info().await;
+    wire::respond::<EventsWireFormat<Ver>, _>(&headers, Ok::<_, Error>(info))
+}
+
+/// The events module's routes with current (v1+) semantics: WS `events` streaming [`Event`]s
+/// and GET `startup_info`.
+///
+/// [`Event`]: hotshot_types::event::Event
+pub fn events_router<Types, S, Ver>(state: S) -> Router
+where
+    Types: NodeType,
+    S: EventsSource<Types> + Clone + Send + Sync + 'static,
+    Ver: StaticVersionType + 'static,
+{
+    let events = |ws: WebSocketUpgrade, State(state): State<S>, headers: HeaderMap| async move {
+        let format = ContentType::negotiate(&headers);
+        ws.on_upgrade(move |socket| async move {
+            tracing::info!("client subscribed to events");
+            let stream = state.get_event_stream(None).await;
+            drive_ws_stream::<Ver, _>(socket, stream.boxed(), format).await;
+        })
+    };
+    Router::new()
+        .route("/events", get(events))
+        .route("/startup_info", get(startup_info::<Types, S, Ver>))
+        .with_state(state)
+}
+
+/// The events module's routes with v0 semantics: WS `events` streaming [`LegacyEvent`]s and
+/// GET `startup_info`.
+///
+/// [`LegacyEvent`]: hotshot_types::event::LegacyEvent
+pub fn legacy_events_router<Types, S, Ver>(state: S) -> Router
+where
+    Types: NodeType,
+    S: EventsSource<Types> + Clone + Send + Sync + 'static,
+    Ver: StaticVersionType + 'static,
+{
+    let events = |ws: WebSocketUpgrade, State(state): State<S>, headers: HeaderMap| async move {
+        let format = ContentType::negotiate(&headers);
+        ws.on_upgrade(move |socket| async move {
+            tracing::info!("client subscribed to legacy events");
+            let stream = state.get_legacy_event_stream(None).await;
+            drive_ws_stream::<Ver, _>(socket, stream.boxed(), format).await;
+        })
+    };
+    Router::new()
+        .route("/events", get(events))
+        .route("/startup_info", get(startup_info::<Types, S, Ver>))
+        .with_state(state)
+}
+
+async fn healthcheck(headers: HeaderMap) -> Response {
+    healthcheck_response(&headers)
+}
+
+/// Wraps module routers with the app-level `healthcheck`, a request body limit, and permissive
+/// CORS headers. Version mounting is up to the caller, because the events module's semantics
+/// depend on the mounted version (v0 streams legacy events).
+pub fn app(api: Router) -> Router {
+    Router::new()
+        .route("/healthcheck", get(healthcheck))
+        .merge(api)
+        .layer(body_limit_layer())
+        .layer(cors_layer())
+}
+
+/// Binds `url`'s host and port and serves `router` until the returned handle is aborted.
+///
+/// # Panics
+/// If `url` has no port or the port cannot be bound.
+pub fn serve(url: &Url, router: Router) -> tokio::task::JoinHandle<()> {
+    wire::spawn_serve(url, router)
 }

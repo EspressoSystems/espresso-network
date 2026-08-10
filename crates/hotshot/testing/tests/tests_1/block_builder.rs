@@ -24,8 +24,8 @@ use hotshot_types::{
     traits::{BlockPayload, node_implementation::NodeType, signature_key::SignatureKey},
 };
 use test_utils::reserve_tcp_port;
-use tide_disco::Url;
 use tokio::time::sleep;
+use url::Url;
 use vbs::version::StaticVersion;
 use versions::VERSION_0_0;
 

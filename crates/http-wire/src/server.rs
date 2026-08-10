@@ -165,6 +165,26 @@ pub async fn drive_ws_stream<Ver: StaticVersionType, T: Serialize>(
     let _ = socket.send(Message::Close(None)).await;
 }
 
+/// Binds `url`'s host and port and serves `router` until the returned handle is aborted.
+///
+/// # Panics
+/// If `url` has no port or the port cannot be bound.
+pub fn spawn_serve(url: &url::Url, router: axum::Router) -> tokio::task::JoinHandle<()> {
+    let addr = format!(
+        "{}:{}",
+        url.host_str().unwrap_or("0.0.0.0"),
+        url.port().expect("server URL must carry a port")
+    );
+    tokio::spawn(async move {
+        let listener = tokio::net::TcpListener::bind(&addr)
+            .await
+            .unwrap_or_else(|err| panic!("failed to bind listener on {addr}: {err}"));
+        axum::serve(listener, router)
+            .await
+            .expect("server exited with an error");
+    })
+}
+
 /// All services frame binary healthcheck responses with v0.1; the shape predates per-service
 /// versioning.
 type HealthcheckVersion = StaticVersion<0, 1>;

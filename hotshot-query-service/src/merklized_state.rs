@@ -15,77 +15,10 @@
 //! The state API provides an interface for serving queries against arbitrarily old snapshots of the state.
 //! This allows a full Merkle tree to be reconstructed from storage.
 //! If any parent state is missing then the partial snapshot can not be queried.
-use std::{fmt::Display, path::PathBuf};
-
-use futures::FutureExt;
-use hotshot_types::traits::node_implementation::NodeType;
-use snafu::ResultExt;
-use tagged_base64::TaggedBase64;
-use tide_disco::{Api, StatusCode, api::ApiError, method::ReadState};
-use vbs::version::StaticVersionType;
-
-use crate::api::load_api;
 
 pub(crate) mod data_source;
 pub use data_source::*;
 pub use hotshot_query_service_types::merklized_state::*;
 
 #[derive(Default)]
-pub struct Options {
-    pub api_path: Option<PathBuf>,
-
-    /// Additional API specification files to merge with `merklized-state-api-path`.
-    ///
-    /// These optional files may contain route definitions for application-specific routes that have
-    /// been added as extensions to the basic status API.
-    pub extensions: Vec<toml::Value>,
-}
-
-pub fn define_api<
-    State,
-    Types: NodeType,
-    M: MerklizedState<Types, ARITY>,
-    Ver: StaticVersionType + 'static,
-    const ARITY: usize,
->(
-    options: &Options,
-    api_ver: semver::Version,
-) -> Result<Api<State, Error, Ver>, ApiError>
-where
-    State: 'static + Send + Sync + ReadState,
-    <State as ReadState>::State:
-        MerklizedStateDataSource<Types, M, ARITY> + MerklizedStateHeightPersistence + Send + Sync,
-    for<'a> <M::Commit as TryFrom<&'a TaggedBase64>>::Error: Display,
-{
-    let mut api = load_api::<State, Error, Ver>(
-        options.api_path.as_ref(),
-        include_str!("../api/state.toml"),
-        options.extensions.clone(),
-    )?;
-
-    api.with_version(api_ver)
-        .get("get_path", move |req, state| {
-            async move {
-                // Determine the snapshot type based on request parameters, either index or commit
-                let snapshot = if let Some(height) = req.opt_integer_param("height")? {
-                    Snapshot::Index(height)
-                } else {
-                    Snapshot::Commit(req.blob_param("commit")?)
-                };
-
-                let key = req.string_param("key")?;
-                let key = key.parse::<M::Key>().map_err(|_| Error::Custom {
-                    message: "failed to parse Key param".to_string(),
-                    status: StatusCode::INTERNAL_SERVER_ERROR,
-                })?;
-
-                state.get_path(snapshot, key).await.context(QuerySnafu)
-            }
-            .boxed()
-        })?
-        .get("get_height", move |_, state| {
-            async move { state.get_last_state_height().await.context(QuerySnafu) }.boxed()
-        })?;
-
-    Ok(api)
-}
+pub struct Options {}
