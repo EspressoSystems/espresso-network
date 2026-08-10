@@ -108,8 +108,20 @@ pub struct LightClient<P, S> {
     stake_tables: RwLock<BTreeMap<EpochNumber, Arc<StakeTable>>>,
 }
 
-impl<P, S> AsRef<S> for LightClient<P, S> {
-    fn as_ref(&self) -> &S {
+impl<P, S> LightClient<P, S> {
+    pub fn into_storage(self) -> P {
+        self.db
+    }
+
+    pub fn storage(&self) -> &P {
+        &self.db
+    }
+
+    pub fn into_inner(self) -> S {
+        self.server
+    }
+
+    pub fn inner(&self) -> &S {
         &self.server
     }
 }

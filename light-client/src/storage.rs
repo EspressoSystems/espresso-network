@@ -1,5 +1,6 @@
 #[cfg(feature = "client")]
 use std::{
+    cmp::min,
     collections::HashMap,
     path::PathBuf,
     str::FromStr,
@@ -556,12 +557,17 @@ impl Storage for SqliteStorage {
     ) -> Result<Option<(EpochNumber, StakeTableState, Version, Version)>> {
         let mut tx = self.pool.begin().await?;
 
+        // The largest epoch number the database can represent is `i64::MAX`. Since we are only
+        // looking for a lower bound, if requested for an epoch number that can overflow, we can
+        // simply return the lower bound of `i64::MAX`.
+        let epoch = min(*epoch, i64::MAX as u64) as i64;
+
         let Some((epoch, epoch_root_protocol_version, next_epoch_root_protocol_version)) =
             query_as::<_, (i64, String, String)>(
                 "SELECT epoch, epoch_root_protocol_version, next_epoch_root_protocol_version FROM \
                  stake_table_epoch WHERE epoch <= $1 ORDER BY epoch DESC LIMIT 1",
             )
-            .bind(*epoch as i64)
+            .bind(epoch)
             .fetch_optional(tx.as_mut())
             .await
             .context("loading epoch lower bound")?
