@@ -408,6 +408,10 @@ pub(crate) async fn handle_view_change<TYPES: NodeType, I: NodeImplementation<TY
         .metrics
         .current_view
         .set(usize::try_from(task_state.cur_view.u64()).unwrap());
+    consensus_reader
+        .metrics
+        .catchups_in_progress
+        .set(task_state.membership_coordinator.catchup_count());
     let cur_view_time = Utc::now().timestamp();
     if old_view_leader_key == task_state.public_key {
         #[allow(clippy::cast_precision_loss)]
