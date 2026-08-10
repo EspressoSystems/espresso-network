@@ -6615,7 +6615,6 @@ dependencies = [
  "blake3",
  "clap 4.6.1",
  "csv",
- "disco-types",
  "futures",
  "hotshot-example-types",
  "hotshot-types",

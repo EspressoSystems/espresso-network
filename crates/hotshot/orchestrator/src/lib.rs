@@ -24,13 +24,12 @@ use axum::{
     Router,
     body::Bytes,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode as HttpStatusCode},
+    http::{HeaderMap, StatusCode},
     response::Response,
     routing::{get, post},
 };
 use client::{BenchResults, BenchResultsDownloadConfig};
 use csv::Writer;
-use disco_types::{error::ServerError, status::StatusCode};
 use futures::{StreamExt, stream::FuturesUnordered};
 use hotshot_types::{
     PeerConfig,
@@ -41,7 +40,7 @@ use hotshot_types::{
     },
 };
 use http_client::{Url, error::ClientErr};
-use http_wire::{self as wire, WireFormat, cors_layer, healthcheck_response};
+use http_wire::{self as wire, ServerError, WireFormat, cors_layer, healthcheck_response};
 use libp2p_identity::{
     Keypair, PeerId,
     ed25519::{Keypair as EdKeypair, SecretKey},
@@ -683,9 +682,8 @@ impl WireFormat for OrchestratorWireFormat {
     type Error = ServerError;
     type Version = OrchestratorVersion;
 
-    fn status(err: &ServerError) -> HttpStatusCode {
-        HttpStatusCode::from_u16(u16::from(err.status))
-            .unwrap_or(HttpStatusCode::INTERNAL_SERVER_ERROR)
+    fn status(err: &ServerError) -> StatusCode {
+        err.status
     }
 
     fn serialize_failure(message: String) -> ServerError {
@@ -1033,11 +1031,7 @@ mod tests {
                 .body(axum::body::Body::empty())
                 .unwrap();
             let resp = tower::ServiceExt::oneshot(test_app(), req).await.unwrap();
-            assert_ne!(
-                resp.status(),
-                HttpStatusCode::NOT_FOUND,
-                "{uri} did not route"
-            );
+            assert_ne!(resp.status(), StatusCode::NOT_FOUND, "{uri} did not route");
         }
     }
 }

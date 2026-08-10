@@ -12,10 +12,6 @@ axum = { workspace = true }
 blake3 = { workspace = true }
 clap = { workspace = true }
 csv = { workspace = true }
-# Only used for its `error::ServerError` wire-error type and its `StatusCode`: the
-# `OrchestratorApi` trait's handler methods are still expressed in terms of them. The HTTP
-# server itself is axum.
-disco-types = { workspace = true }
 futures = { workspace = true }
 hotshot-types = { workspace = true }
 http-client = { workspace = true }
