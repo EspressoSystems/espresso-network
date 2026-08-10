@@ -1,10 +1,6 @@
 //! Sequencer-specific API options and initialization.
 
-use std::{
-    collections::{BTreeSet, HashMap},
-    env,
-    sync::Arc,
-};
+use std::{collections::BTreeSet, env, sync::Arc};
 
 use ::light_client::{state::LightClientOptions, storage::LightClientSqliteOptions};
 use anyhow::{Context, bail};
@@ -24,7 +20,6 @@ use hotshot_types::traits::{
     network::ConnectedNetwork,
 };
 use process_metrics::ProcessMetrics;
-use serde::de::Error as _;
 use url::Url;
 
 use super::{
@@ -525,12 +520,16 @@ pub struct Explorer;
 #[derive(Parser, Clone, Copy, Debug, Default)]
 pub struct LightClient;
 
-/// Metrics handle plus the wrapped query data source shared by the axum server and update loops.
-type QueryModuleState<N, P, D> = (Box<dyn Metrics>, Arc<StorageState<N, P, D>>);
-
 /// Populate consensus metrics on `ds`, deposit its prometheus registry for the in-process
 /// telemetry push task (idempotent), and wrap it with the API state.
-fn init_query_data_source<N, P, D>(ds: D, state: ApiState<N, P>) -> QueryModuleState<N, P, D>
+///
+/// Returns the metrics handle plus the wrapped query data source shared by the axum server and
+/// update loops.
+#[allow(clippy::type_complexity)]
+fn init_query_data_source<N, P, D>(
+    ds: D,
+    state: ApiState<N, P>,
+) -> (Box<dyn Metrics>, Arc<StorageState<N, P, D>>)
 where
     N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
@@ -544,24 +543,18 @@ where
 
 /// The environment variables listed in `api/public-env-vars.toml`, as `KEY=value` strings.
 fn get_public_env_vars() -> anyhow::Result<Vec<String>> {
-    let toml: toml::Value = toml::from_str(include_str!("../../api/public-env-vars.toml"))?;
-
-    let keys = toml
-        .get("variables")
-        .ok_or_else(|| toml::de::Error::custom("variables not found"))?
-        .as_array()
-        .ok_or_else(|| toml::de::Error::custom("variables is not an array"))?
-        .clone()
-        .into_iter()
-        .map(|v| v.try_into())
-        .collect::<Result<BTreeSet<String>, toml::de::Error>>()?;
-
-    let hashmap: HashMap<String, String> = env::vars().collect();
-    let mut public_env_vars: Vec<String> = Vec::new();
-    for key in keys {
-        let value = hashmap.get(&key).cloned().unwrap_or_default();
-        public_env_vars.push(format!("{key}={value}"));
+    #[derive(serde::Deserialize)]
+    struct PublicEnvVars {
+        variables: BTreeSet<String>,
     }
 
-    Ok(public_env_vars)
+    let PublicEnvVars { variables } =
+        toml::from_str(include_str!("../../api/public-env-vars.toml"))?;
+    Ok(variables
+        .into_iter()
+        .map(|key| {
+            let value = env::var(&key).unwrap_or_default();
+            format!("{key}={value}")
+        })
+        .collect())
 }

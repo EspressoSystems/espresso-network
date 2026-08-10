@@ -129,7 +129,7 @@ Useful paths (append to either base URL):
 - `/availability/leaf/{height}` - leaf at height
 - `/node/transactions/count` - total tx count
 - `/v0/config/hotshot` - HotShot config including `libp2p_config.bootstrap_nodes`
-- `/catchup/{height}/...` - state proofs (schema: `crates/espresso/node/api/catchup.toml`)
+- `/catchup/{height}/...` - state proofs (routes: `crates/espresso/api/src/v1/catchup.rs`)
 
 ## Logs and metrics
 
@@ -141,4 +141,4 @@ To investigate logs and metrics of Espresso's own infrastructure, use the `pup` 
 - `data/genesis/*.toml` - genesis configurations
 - `data/v1/`, `data/v2/`, etc. - reference serialization test vectors
 - `doc/upgrades.md` - upgrade mechanism
-- `crates/espresso/node/api/*.toml` - API schemas
+- `crates/espresso/api/src/v1/`, `crates/espresso/api/src/v2/` - API trait and route definitions
