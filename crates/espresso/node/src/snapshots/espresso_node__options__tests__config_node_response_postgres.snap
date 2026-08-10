@@ -113,9 +113,6 @@ catchup_backoff:
   jitter:
     numerator: 1
     denominator: 10
-  max_duration:
-    secs: 1200
-    nanos: 0
   disable: false
 proposal_fetcher:
   num_workers: 2

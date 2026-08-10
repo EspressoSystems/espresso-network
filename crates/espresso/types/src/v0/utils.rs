@@ -24,7 +24,7 @@ use thiserror::Error;
 use time::{
     Date, OffsetDateTime, format_description::well_known::Rfc3339 as TimestampFormat, macros::time,
 };
-use tokio::time::{Instant, sleep};
+use tokio::time::sleep;
 
 use crate::ChainConfig;
 
@@ -274,34 +274,9 @@ pub struct BackoffParams {
     )]
     jitter: Ratio,
 
-    /// Total time to keep retrying a catchup operation before giving up. Checked
-    /// between attempts; a single hanging attempt is bounded by the fetcher's
-    /// per-request timeout instead. A value below `base` returns on the first
-    /// failure, the same as `disable`.
-    ///
-    /// This applies to every `StateCatchup` fetch, including the startup config
-    /// fetch, which previously retried forever: a node whose config peers are
-    /// unreachable for longer than this now fails to boot instead of waiting.
-    #[clap(
-        long = "catchup-max-retry-duration",
-        env = "ESPRESSO_NODE_CATCHUP_MAX_RETRY_DURATION",
-        default_value = "20m",
-        value_parser = parse_duration
-    )]
-    #[serde(default = "default_max_retry_duration")]
-    max_duration: Duration,
-
     /// Disable retries and just fail after one failed attempt.
     #[clap(short, long, env = "ESPRESSO_NODE_CATCHUP_BACKOFF_DISABLE")]
     disable: bool,
-}
-
-/// Kept in sync with `max_duration`'s clap default by
-/// `max_retry_duration_default_matches_clap`.
-const DEFAULT_MAX_RETRY_DURATION: Duration = Duration::from_secs(20 * 60);
-
-fn default_max_retry_duration() -> Duration {
-    DEFAULT_MAX_RETRY_DURATION
 }
 
 impl Default for BackoffParams {
@@ -317,7 +292,6 @@ impl BackoffParams {
             max,
             factor,
             jitter,
-            max_duration: DEFAULT_MAX_RETRY_DURATION,
             disable: false,
         }
     }
@@ -334,19 +308,12 @@ impl BackoffParams {
         mut state: S,
         f: impl for<'a> Fn(&'a mut S, usize) -> BoxFuture<'a, anyhow::Result<T>>,
     ) -> anyhow::Result<T> {
-        let start = Instant::now();
         let mut delay = self.base;
         for i in 0.. {
             match f(&mut state, i).await {
                 Ok(res) => return Ok(res),
                 Err(err) if self.disable => {
                     return Err(err.context("Retryable operation failed; retries disabled"));
-                },
-                Err(err) if start.elapsed() + delay >= self.max_duration => {
-                    return Err(err.context(format!(
-                        "Retryable operation failed after {:?}",
-                        start.elapsed()
-                    )));
                 },
                 Err(err) => {
                     tracing::warn!(
@@ -416,18 +383,5 @@ impl BackoffParams {
 
         // Bound the delay by the maximum.
         min(delay, self.max)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn max_retry_duration_default_matches_clap() {
-        assert_eq!(
-            BackoffParams::default().max_duration,
-            DEFAULT_MAX_RETRY_DURATION
-        );
     }
 }
