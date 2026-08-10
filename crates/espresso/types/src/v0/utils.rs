@@ -276,11 +276,16 @@ pub struct BackoffParams {
 
     /// Total time to keep retrying a catchup operation before giving up. Checked
     /// between attempts; a single hanging attempt is bounded by the fetcher's
-    /// per-request timeout instead.
+    /// per-request timeout instead. A value below `base` returns on the first
+    /// failure, the same as `disable`.
+    ///
+    /// This applies to every `StateCatchup` fetch, including the startup config
+    /// fetch, which previously retried forever: a node whose config peers are
+    /// unreachable for longer than this now fails to boot instead of waiting.
     #[clap(
         long = "catchup-max-retry-duration",
         env = "ESPRESSO_NODE_CATCHUP_MAX_RETRY_DURATION",
-        default_value = "5m",
+        default_value = "20m",
         value_parser = parse_duration
     )]
     #[serde(default = "default_max_retry_duration")]
@@ -291,8 +296,9 @@ pub struct BackoffParams {
     disable: bool,
 }
 
-/// Keep in sync with `max_duration`'s clap default.
-const DEFAULT_MAX_RETRY_DURATION: Duration = Duration::from_secs(300);
+/// Kept in sync with `max_duration`'s clap default by
+/// `max_retry_duration_default_matches_clap`.
+const DEFAULT_MAX_RETRY_DURATION: Duration = Duration::from_secs(20 * 60);
 
 fn default_max_retry_duration() -> Duration {
     DEFAULT_MAX_RETRY_DURATION
@@ -410,5 +416,18 @@ impl BackoffParams {
 
         // Bound the delay by the maximum.
         min(delay, self.max)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn max_retry_duration_default_matches_clap() {
+        assert_eq!(
+            BackoffParams::default().max_duration,
+            DEFAULT_MAX_RETRY_DURATION
+        );
     }
 }
