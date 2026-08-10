@@ -25,7 +25,7 @@
 <a href=#25 id=25 data-nosnippet>25</a>    /// ([`TxProof::new`](crate::block::namespace_payload::TxProof::new)
 <a href=#26 id=26 data-nosnippet>26</a>    /// conforms to this convention.) In the future we should change this API to
 <a href=#27 id=27 data-nosnippet>27</a>    /// conform to convention. But that would require a change to our RPC
-<a href=#28 id=28 data-nosnippet>28</a>    /// endpoint API at [`endpoints`](crate::api::endpoints), which is a hassle.
+<a href=#28 id=28 data-nosnippet>28</a>    /// endpoint API, which is a hassle.
 <a href=#29 id=29 data-nosnippet>29</a>    </span><span class="kw">pub fn </span>new(payload: <span class="kw-2">&amp;</span>Payload, index: <span class="kw-2">&amp;</span>NsIndex, common: <span class="kw-2">&amp;</span>ADVZCommon) -&gt; <span class="prelude-ty">Option</span>&lt;ADVZNsProof&gt; {
 <a href=#30 id=30 data-nosnippet>30</a>        <span class="kw">let </span>payload_byte_len = payload.byte_len();
 <a href=#31 id=31 data-nosnippet>31</a>        <span class="kw">if </span>!payload_byte_len.is_consistent(common) {

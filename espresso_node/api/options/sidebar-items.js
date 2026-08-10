@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["register_api"],"struct":["Catchup","Config","Explorer","HotshotEvents","Http","LightClient","Options","Query","State","Status","Submit"]};
+window.SIDEBAR_ITEMS = {"fn":["get_public_env_vars","init_query_data_source"],"struct":["Catchup","Config","Explorer","HotshotEvents","Http","LightClient","Options","Query","State","Status","Submit"]};
