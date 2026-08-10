@@ -469,59 +469,20 @@ fn reconstruct<T: NodeType>(
     metadata: Metadata<T>,
     tracer: Option<crate::leader_trace::LeaderTracerHandle>,
 ) -> ReconstructResult<T> {
-    let (keys, shares): (Vec<_>, Vec<_>) = shares.into_iter().unzip();
-    if let Some(bytes) =
-        decode_and_recommit::<T>(view, &common, &shares, &payload_commitment, &metadata)
-    {
-        // Split the trace span: everything before this is the parallel AvidM
-        // decode over namespaces; the tail below does the single-threaded
-        // `from_bytes` + Keccak256-of-every-transaction work.
-        crate::trace_leader_event!(
-            tracer,
-            view,
-            crate::leader_trace::LeaderEvent::RecoverVMinus1DecodeEnd
-        );
-        let payload = T::BlockPayload::from_bytes(&bytes, &metadata);
-        let tx_commitments = payload.transaction_commitments(&metadata);
-        let output = VidReconstructOutput {
-            view,
-            epoch,
-            payload_commitment,
-            payload,
-            metadata,
-            tx_commitments,
-        };
-        return Ok(output);
-    }
-
-    let bad_share_keys: Vec<_> = keys
-        .into_iter()
-        .zip(&shares)
-        .filter(|(_, share)| !share_verifies(&common, share))
-        .map(|(key, _)| key)
-        .collect();
-
-    let kind = if bad_share_keys.is_empty() {
-        warn!(
-            %view,
-            %payload_commitment,
-            "verified shares cannot decode to a payload matching the commitment"
-        );
-        VidReconstructErrorKind::Unrecoverable
-    } else {
-        warn!(
-            %view,
-            %payload_commitment,
-            ?bad_share_keys,
-            "weeded out VID shares that failed verification"
-        );
-        VidReconstructErrorKind::AwaitingShares
-    };
-    Err(VidReconstructError {
+    // BENCH: dummy VID reconstruction — always succeeds, no decode.
+    // Skips the erasure decode and transaction-commitment recompute and
+    // returns an empty payload. `payload_commitment` stays the proposal's, so
+    // the downstream `BlockReconstructed` / `parent_block_reconstructed` path
+    // still matches and consensus keeps deciding; recovered payload contents
+    // are intentionally sacrificed on this branch.
+    let _ = (common, shares, tracer);
+    Ok(VidReconstructOutput {
         view,
+        epoch,
         payload_commitment,
-        kind,
-        bad_share_keys,
+        payload: T::BlockPayload::from_bytes(&[], &metadata),
+        metadata,
+        tx_commitments: Vec::new(),
     })
 }
 
@@ -529,6 +490,8 @@ fn reconstruct<T: NodeType>(
 /// `payload_commitment`. Recovery alone does not bind the decoded bytes
 /// to the commitment: a Byzantine disperser can commit to a non-codeword,
 /// and a bad share poisons the erasure decoding.
+// BENCH: retained but unused — `reconstruct` short-circuits the decode.
+#[allow(dead_code)]
 fn decode_and_recommit<T: NodeType>(
     view: ViewNumber,
     common: &AvidmGf2Common,
