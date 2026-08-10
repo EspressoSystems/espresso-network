@@ -420,9 +420,9 @@ impl LinuxMetrics {
         // `cgroup_memory_max_bytes` is set once at startup in `new()`.
     }
 
-    /// Aggregates queue occupancy over `owned`'s established TCP sockets. `tcp()`/`tcp6()`
-    /// read the whole netns's socket table, so `owned` (this process's fd inodes) is what
-    /// scopes the result down to sockets this process actually holds.
+    /// Detects a stalled read path: unread bytes pile up in the receive buffer until TCP
+    /// advertises a zero window and peers' writes block, while the process stays up, idle on
+    /// CPU, and still sending. `owned` scopes the netns-wide tables to our sockets.
     fn sample_tcp(&self, p: &Process, owned: &HashSet<u64>) {
         let tcp4 = read_or_debug("/proc/self/net/tcp", || p.tcp()).unwrap_or_default();
         let tcp6 = read_or_debug("/proc/self/net/tcp6", || p.tcp6()).unwrap_or_default();
@@ -446,8 +446,7 @@ fn milli(v: f32) -> usize {
     (v * 1000.0).max(0.0) as usize
 }
 
-/// Total fd count and the inodes of the sockets among them, from a single walk of
-/// `/proc/self/fd`. Folded into one pass so this doubles as the source for `open_fds`.
+/// One walk of `/proc/self/fd`: total count for `open_fds`, socket inodes for `sample_tcp`.
 fn own_socket_inodes(p: &Process) -> Option<(usize, HashSet<u64>)> {
     let fds = read_or_debug("/proc/self/fd", || p.fd())?;
     let mut total = 0;
@@ -474,19 +473,14 @@ struct TcpQueues {
     sockets: usize,
 }
 
-/// Aggregates `(state, rx_queue, tx_queue, inode)` tuples over sockets this process owns.
-///
-/// Takes tuples rather than `TcpNetEntry` directly because that type is `#[non_exhaustive]`
-/// and unconstructible outside `procfs`, which would make this untestable.
+/// Tuples rather than `TcpNetEntry`: that type is `#[non_exhaustive]`, so tests can't build one.
 fn aggregate_tcp(
     entries: impl Iterator<Item = (TcpState, u32, u32, u64)>,
     owned: &HashSet<u64>,
 ) -> TcpQueues {
     let mut out = TcpQueues::default();
     for (state, rx_queue, tx_queue, inode) in entries {
-        // On a listening socket the kernel reuses these columns for the accept backlog:
-        // `rx_queue` is the count of completed connections awaiting `accept()`, `tx_queue`
-        // is the backlog limit. Neither is buffer occupancy, so listeners are excluded.
+        // On a listener these columns hold the accept backlog, not buffer occupancy.
         if state != TcpState::Established || !owned.contains(&inode) {
             continue;
         }

@@ -34,30 +34,29 @@ detected once at startup and logged at `info`.
 
 #### TCP socket queues
 
-`/proc/self/net/tcp` and `/proc/self/net/tcp6` are netns-wide: they list every socket in the network namespace, not just
-this process's. Each sample first walks `/proc/self/fd` to collect the inodes of sockets this process actually holds an
-fd for, then keeps only TCP table entries whose inode is in that set. That inode filter is what makes the aggregate ours
-instead of the whole netns's.
+Covers the failure class where a process is up and idle on CPU but not processing. When it stops reading its sockets,
+`rx_queue` climbs, the receive buffer fills, TCP advertises a zero window, and peers' writes block. Its own sends keep
+working, so nothing else exported here shows it.
 
-Only `Established` sockets are counted. A `Listen` socket reuses the same two columns for the accept backlog (`rx_queue`
-= completed connections awaiting `accept()`, `tx_queue` = backlog limit), which is not buffer occupancy and would
-corrupt both the max and the total if included.
+`/proc/self/net/tcp{,6}` is netns-wide, so each sample walks `/proc/self/fd` for socket inodes and keeps only matching
+entries. `Established` only: a listener reuses the columns for the accept backlog.
 
 Limits:
 
-- The aggregate mixes cliquenet peer sockets with postgres, L1 RPC and query-API client sockets. A high `recv_queue_max`
-  localises the problem to "this process's sockets", not a specific connection; follow up with `ss` on the host to find
-  which peer it is.
-- Send-side is the noisy pair: a query node serving a slow HTTP client shows a large `tx_queue` in normal operation.
-  Receive-side is the signal here; do not alert on send-side queue metrics.
-- A stall shorter than the Prometheus scrape interval can be missed: `sample()` runs every 5s and each gauge is
-  last-write-wins, while scrapes happen on their own, coarser interval.
-- Cost: one `readlink` per fd on the fd walk, plus an O(netns sockets) parse of the TCP table under a kernel lock.
-  Negligible at ~100 peers; measurable on a host with tens of thousands of sockets.
+- Mixes cliquenet peers with postgres, L1 RPC and query-API sockets. Localises the layer, not the connection; follow up
+  with `ss` on the host.
+- Send-side is noisy: serving a slow HTTP client shows a large `tx_queue` in normal operation. Alert on receive only.
+- Stalls shorter than the scrape interval can be missed: 5s samples, last-write-wins gauges.
+- Cost: one `readlink` per fd, plus an O(netns sockets) table parse under a kernel lock. Measurable only at tens of
+  thousands of sockets.
 
-Pairs with `consensus_coordinator_event_queue_len`: internal queue high + recv queue high means socket draining has
-stopped and backpressure has reached the wire; internal queue high + recv queue near zero means an internal bottleneck
-while reads keep up; internal queue near zero + recv queue high means the read path itself is stuck.
+Pairs with `consensus_coordinator_event_queue_len`:
+
+| internal queue | recv queue | reading                                         |
+| -------------- | ---------- | ----------------------------------------------- |
+| high           | high       | draining stopped, backpressure reached the wire |
+| high           | ~0         | internal bottleneck, sockets still drained      |
+| ~0             | high       | read path itself is stuck                       |
 
 ### Host
 
