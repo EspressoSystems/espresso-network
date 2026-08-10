@@ -197,8 +197,8 @@ impl LinuxMetrics {
             process_cpu_seconds_total: metrics
                 .create_counter("process_cpu_seconds_total".into(), seconds()),
             cpu_mode_seconds_total: {
-                let family =
-                    metrics.counter_family("node_cpu_seconds_total".into(), vec!["mode".into()]);
+                let family = metrics
+                    .counter_family("node_cpu_mode_seconds_total".into(), vec!["mode".into()]);
                 CpuModeCounters {
                     user: family.create(vec!["user".into()]),
                     nice: family.create(vec!["nice".into()]),
@@ -312,48 +312,31 @@ impl LinuxMetrics {
 
     /// Host-wide CPU time by mode, aggregated across all CPUs. Unlike `process_cpu_seconds_total`,
     /// this exposes time (e.g. `steal`) the process itself never sees but that still explains why
-    /// the host is slow.
+    /// the host is slow. `guest`/`guest_nice` ticks are already included in `user`/`nice`
+    /// respectively (the kernel's `account_guest_time()` double-books them), so summing all modes
+    /// over-counts the denominator on hypervisors and understates utilization.
     fn sample_cpu_stat(&mut self, ticks_per_second: u64) {
         let Some(cpu) = read_or_debug("/proc/stat", KernelStats::current).map(|s| s.total) else {
             return;
         };
         let counters = &self.cpu_mode_seconds_total;
         let prev = &mut self.prev.cpu_modes;
-        counters
-            .user
-            .add(prev.user.observe(cpu.user, ticks_per_second));
-        counters
-            .nice
-            .add(prev.nice.observe(cpu.nice, ticks_per_second));
-        counters
-            .system
-            .add(prev.system.observe(cpu.system, ticks_per_second));
-        counters
-            .idle
-            .add(prev.idle.observe(cpu.idle, ticks_per_second));
-        if let Some(v) = cpu.iowait {
-            counters
-                .iowait
-                .add(prev.iowait.observe(v, ticks_per_second));
-        }
-        if let Some(v) = cpu.irq {
-            counters.irq.add(prev.irq.observe(v, ticks_per_second));
-        }
-        if let Some(v) = cpu.softirq {
-            counters
-                .softirq
-                .add(prev.softirq.observe(v, ticks_per_second));
-        }
-        if let Some(v) = cpu.steal {
-            counters.steal.add(prev.steal.observe(v, ticks_per_second));
-        }
-        if let Some(v) = cpu.guest {
-            counters.guest.add(prev.guest.observe(v, ticks_per_second));
-        }
-        if let Some(v) = cpu.guest_nice {
-            counters
-                .guest_nice
-                .add(prev.guest_nice.observe(v, ticks_per_second));
+        let modes: [(&dyn Counter, &mut SecondsAccumulator, Option<u64>); 10] = [
+            (&*counters.user, &mut prev.user, Some(cpu.user)),
+            (&*counters.nice, &mut prev.nice, Some(cpu.nice)),
+            (&*counters.system, &mut prev.system, Some(cpu.system)),
+            (&*counters.idle, &mut prev.idle, Some(cpu.idle)),
+            (&*counters.iowait, &mut prev.iowait, cpu.iowait),
+            (&*counters.irq, &mut prev.irq, cpu.irq),
+            (&*counters.softirq, &mut prev.softirq, cpu.softirq),
+            (&*counters.steal, &mut prev.steal, cpu.steal),
+            (&*counters.guest, &mut prev.guest, cpu.guest),
+            (&*counters.guest_nice, &mut prev.guest_nice, cpu.guest_nice),
+        ];
+        for (counter, acc, ticks) in modes {
+            if let Some(ticks) = ticks {
+                counter.add(acc.observe(ticks, ticks_per_second));
+            }
         }
     }
 
