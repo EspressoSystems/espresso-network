@@ -347,9 +347,8 @@ pub struct Options {
 
     /// Per-step timeout for the startup stake-table catchup walk.
     ///
-    /// Bounds a single `wait_for_stake_table` call during `bootstrap_epoch_window`
-    /// (the underlying `fetch_leaf` retries forever); a step that exceeds this
-    /// terminates the walk
+    /// Bounds a single `wait_for_stake_table` call during `bootstrap_epoch_window`;
+    /// a step that exceeds this terminates the walk
     #[clap(long, env = "ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT", default_value = "30s", value_parser = parse_duration)]
     pub bootstrap_epoch_catchup_timeout: Duration,
 
