@@ -87,9 +87,10 @@ async fn stalled_catchup_releases_its_epoch() {
 }
 
 /// `wait_for_catchup` is awaited on the proposal validation and reward paths, so it
-/// must resolve when the catchup it waits on stalls.
+/// must return when the catchup it waits on cannot finish, rather than parking for
+/// the lifetime of the process.
 #[test_log::test(tokio::test(start_paused = true))]
-async fn wait_for_catchup_resolves_when_catchup_stalls() {
+async fn wait_for_catchup_returns_instead_of_parking() {
     let coordinator = build_coordinator();
     let gate = coordinator.membership().load_gate();
     let _stall = gate.lock().await;

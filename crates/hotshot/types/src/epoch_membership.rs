@@ -454,6 +454,11 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
 
     /// Claim `epoch` for this catchup task, or wait for the task that already owns
     /// it. `Ok(true)` means another task delivered the stake table.
+    ///
+    /// A failed owner releases its claim before the failure reaches us, so one
+    /// retry takes the epoch over in process. `wait_for_catchup` callers do not
+    /// retry, so without this a peer's failure becomes a failed proposal or reward
+    /// computation.
     // False positive: the guard drops at the end of its block, before the await.
     // https://github.com/rust-lang/rust-clippy/issues/6446
     #[allow(clippy::await_holding_lock)]
@@ -462,34 +467,46 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         epoch: EpochNumber,
         guard: &mut CatchupGuard<TYPES>,
     ) -> Result<bool> {
-        let owned_elsewhere = {
-            let mut map_lock = self.catchup_map.lock();
-            match map_lock.entry(epoch) {
-                Entry::Occupied(entry) => Some(entry.get().activate_cloned()),
-                Entry::Vacant(entry) => {
-                    let (mut tx, rx) = broadcast(1);
-                    tx.set_overflow(true);
-                    entry.insert(rx.deactivate());
-                    guard.claim(epoch, tx);
-                    None
+        for attempt in 0..2 {
+            let owned_elsewhere = {
+                let mut map_lock = self.catchup_map.lock();
+                match map_lock.entry(epoch) {
+                    Entry::Occupied(entry) => Some(entry.get().activate_cloned()),
+                    Entry::Vacant(entry) => {
+                        let (mut tx, rx) = broadcast(1);
+                        tx.set_overflow(true);
+                        entry.insert(rx.deactivate());
+                        guard.claim(epoch, tx);
+                        None
+                    },
+                }
+            };
+            let Some(mut rx) = owned_elsewhere else {
+                return Ok(false);
+            };
+            match timeout(CATCHUP_WAIT_TIMEOUT, rx.recv_direct()).await {
+                Ok(Ok(Ok(_))) => return Ok(true),
+                Ok(_) if attempt == 0 => {
+                    tracing::warn!(
+                        "catchup for epoch {epoch}, owned by another task, failed; taking it over"
+                    );
+                },
+                Ok(_) => {
+                    return Err(anytrace::warn!(
+                        "catchup for epoch {epoch}, owned by another task, failed twice"
+                    ));
+                },
+                Err(_) => {
+                    return Err(anytrace::warn!(
+                        "waiting for the catchup of epoch {epoch}, owned by another task, timed \
+                         out after {CATCHUP_WAIT_TIMEOUT:?}"
+                    ));
                 },
             }
-        };
-        let Some(mut rx) = owned_elsewhere else {
-            return Ok(false);
-        };
-        match timeout(CATCHUP_WAIT_TIMEOUT, rx.recv_direct()).await {
-            Ok(Ok(Ok(_))) => Ok(true),
-            // Don't re-claim the epoch here: the caller retries, by which point
-            // the failed owner has released the entry.
-            Ok(_) => Err(anytrace::warn!(
-                "catchup for epoch {epoch}, owned by another task, failed"
-            )),
-            Err(_) => Err(anytrace::warn!(
-                "waiting for the catchup of epoch {epoch}, owned by another task, timed out after \
-                 {CATCHUP_WAIT_TIMEOUT:?}"
-            )),
         }
+        Err(anytrace::warn!(
+            "gave up claiming epoch {epoch} from another task"
+        ))
     }
 
     /// Put the DRB result for `epoch` in membership, from peers if available and by
@@ -556,22 +573,13 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                 "No catchup in progress for epoch {epoch} and we don't have a stake table for it"
             ));
         };
-        let err = match timeout(CATCHUP_WAIT_TIMEOUT, rx.recv_direct()).await {
-            Ok(Ok(Ok(mem))) => return Ok(mem),
-            Ok(_) => anytrace::error!("Catchup for epoch {epoch} failed"),
-            Err(_) => anytrace::error!(
+        match timeout(CATCHUP_WAIT_TIMEOUT, rx.recv_direct()).await {
+            Ok(Ok(Ok(mem))) => Ok(mem),
+            Ok(_) => Err(anytrace::error!("Catchup for epoch {epoch} failed")),
+            Err(_) => Err(anytrace::error!(
                 "Waiting for the catchup of epoch {epoch} timed out after {CATCHUP_WAIT_TIMEOUT:?}"
-            ),
-        };
-        // A catchup that failed on the DRB still leaves a usable stake table, which
-        // is all this method promises.
-        let Some(snapshot) = self.membership.snapshot(epoch) else {
-            return Err(err);
-        };
-        Ok(EpochMembership {
-            coordinator: self.clone(),
-            snapshot: EpochMembershipSnapshot::Epoch { epoch, snapshot },
-        })
+            )),
+        }
     }
 
     pub fn is_catching_up(&self, epoch: EpochNumber) -> bool {
