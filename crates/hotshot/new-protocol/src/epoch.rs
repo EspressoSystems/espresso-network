@@ -144,6 +144,13 @@ impl<T: NodeType> EpochManager<T> {
         }
     }
 
+    /// Catchup and DRB tasks in flight. Intake tests read this to tell an epoch
+    /// request that was admitted from one dropped at the intake boundary.
+    #[cfg(test)]
+    pub(crate) fn pending_count(&self) -> usize {
+        self.tasks.len()
+    }
+
     pub fn gc(&mut self, epoch: EpochNumber) {
         let mut tmp = self.handles.split_off(&epoch);
         swap(&mut tmp, &mut self.handles);

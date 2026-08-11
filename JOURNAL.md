@@ -87,3 +87,58 @@ belonging to `tail` rather than to nextest - the Method's own rule against that,
 re-issued with redirection.
 
 Next: NP-1, the intake admission guards.
+
+## iter 2/10 | 29c94e91-175223 | 2026-08-11 | NP-1 | done
+
+Task: NP-1 (High, runtime, security) - an unverified, peer-chosen epoch number reaching a stake-table lookup, whose cost
+is linear in that number. Closed.
+
+Changed: crates/hotshot/new-protocol/src/{message.rs,coordinator.rs,utils.rs} (the fix),
+{cert_verifier.rs,vote.rs,epoch.rs,proposal.rs} (test-only `pending_count` accessors), tests.rs and the new
+tests/intake.rs (acceptance), PLAN.md, BACKLOG.md, JOURNAL.md.
+
+Checkpoint: pending
+
+Verification: three acceptance checks, each first run against the unfixed code. (1)
+`tests::intake::intake_drops_messages_claiming_an_epoch_past_the_ceiling` and
+`intake_drops_proposals_too_far_ahead_in_view` fail on the unfixed tree -
+`proposal: message claiming epoch 5 was admitted past the ceiling` and `proposal 31 views ahead was admitted` - and pass
+on the fixed one; their controls `intake_admits_messages_claiming_an_epoch_at_the_ceiling` and
+`intake_admits_proposals_within_the_view_bound` pass both ways, which is what makes the pair a discrimination rather
+than a blanket drop. (2) `utils::test::test_verify_new_protocol_leaf_chain_rejects_unreachable_height_before_lookup`
+fails unfixed with the defect stated in its own words -
+`no stake table available for epoch 1001: ": Stake table for epoch EpochNumber(1001) unavailable. Starting catchup"` -
+i.e. a peer-supplied cert2 had just started catchup for epoch 1001 on a chain 10 blocks long. (3) The enumeration
+`grep -rn 'membership_for_epoch\|stake_table_for_epoch' crates/hotshot/new-protocol/src --include='*.rs' | grep -v tests`
+returns 14 call sites, each now either fed a locally-derived epoch or bounded at one of the two boundaries; recorded
+under Settled classes with the split. To run the checks against unfixed code the fixed files were copied aside and
+restored afterwards, never `git checkout`. Verify command green: 192 tests run, 192 passed, 15 skipped, exit 0.
+
+Contract preserved. `Coordinator::on_network_message`: within the ceiling every arm behaves exactly as before; the
+boundary only extends to all message kinds the rule `Certificate1`, `Certificate2` and `EpochChange` already followed,
+and it is deliberately computed over _every_ epoch a message carries rather than its top-level one, because a proposal's
+`justify_qc`, `view_change_evidence` and `state_cert` are each resolved against their own epoch's committee. That
+widened the fix past the sites the finding listed: `VidShareFragment`, `VidShareBroadcast`, `DedupManifest` and
+`ProposalFetch::Response` reach `Coordinator::leader` or the proposal validator with an epoch too, and are now covered.
+`verify_new_protocol_leaf_chain`: the accept set is unchanged. The walk steps down exactly one height per accepted leaf,
+so a chain failing the new bound could never have reached `expected_height` and already returned "expected height was
+not found"; the bound only moves that rejection ahead of the stake-table lookup. Moving the three cert2-to-chain binding
+checks above the signature check likewise preserves the accept set and only changes which error a bad input gets.
+
+Docs updated in the same iteration, per change discipline: `EPOCH_CHANGE_LOOKAHEAD` said "epoch changes claiming an
+epoch further ahead than this are dropped" and now describes every message, and `verify_new_protocol_leaf_chain` gained
+its new precondition. Surface inventory: coordinator:network-intake, message and utils flipped back to unswept, because
+their production code changed. cert_verifier, vote, epoch and proposal did not flip: they gained only `#[cfg(test)]`
+accessors, so the earlier sweep still certifies their production behaviour - the rule exists so a sweep never certifies
+code it did not see, and no production code changed there. 19 of 26 rows swept.
+
+Correction to the previous entry, recorded here rather than by rewriting it: that entry says 21 of 26 rows swept with 5
+unswept, but it was written before the logging and utils rows were swept later in the same iteration; the true figure at
+that checkpoint was 22 of 26 with 4 unswept, which is what the loop state reported at the start of this iteration.
+
+Learnings: `EpochNumber::genesis()` is 1 while `ViewNumber::genesis()` is 0 (`data.rs:142` and `161`), so a bound
+computed from 0 is off by one - the first version of the intake test offered epoch 4 as "past the ceiling" when the
+ceiling was exactly 4, and the guard correctly admitted it. Deriving the constant from `EpochNumber::genesis()` in the
+test rather than writing a literal is what caught it.
+
+Next: NP-2, the DRB re-request lever that is permanently a no-op once an epoch is marked completed.

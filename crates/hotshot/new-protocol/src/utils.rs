@@ -23,6 +23,12 @@ use crate::message::Certificate2;
 /// leaves that are not on the certified ancestry path. Those leaves are ignored;
 /// every accepted step must match the current leaf's justify QC, parent
 /// commitment, and block height.
+///
+/// `leaf_chain` must be able to reach `expected_height`: the walk steps down one
+/// height per accepted leaf, so its newest leaf may be at most `leaf_chain.len()
+/// - 1` above `expected_height`. A chain that cannot reach it is rejected before
+/// any stake table is resolved, because the epoch resolved here is derived from
+/// `cert2`'s block number and resolving an epoch costs work linear in it.
 pub async fn verify_new_protocol_leaf_chain<T: NodeType>(
     mut leaf_chain: Vec<Leaf2<T>>,
     coordinator: &EpochMembershipCoordinator<T>,
@@ -40,6 +46,37 @@ pub async fn verify_new_protocol_leaf_chain<T: NodeType>(
         cert2.view_number() > ViewNumber::genesis(),
         "cert2 must not be the genesis view"
     );
+
+    // Bind cert2 to the supplied chain before looking up any stake table: the
+    // lookup's epoch is derived from `cert2.data.block_number`, and resolving an
+    // epoch costs work linear in it, so a peer answering a catchup request could
+    // otherwise name an arbitrary epoch. These checks are all required for
+    // success anyway; running them first only moves the cheap rejections ahead
+    // of the expensive one.
+    ensure!(
+        cert2.data.leaf_commit == newest.commit(),
+        "cert2 does not match the newest leaf in the chain"
+    );
+    ensure!(
+        cert2.data.block_number == newest.height(),
+        "cert2 block number does not match the newest leaf"
+    );
+    ensure!(
+        cert2.view_number() == newest.view_number(),
+        "cert2 view does not match the newest leaf"
+    );
+    // The walk below steps down exactly one height per accepted leaf, so a chain
+    // whose newest leaf is further than its own length above `expected_height`
+    // can never reach it. Rejecting that here bounds the claimed epoch by the
+    // size of the message that claimed it.
+    ensure!(
+        newest.height() >= expected_height
+            && newest.height() - expected_height < leaf_chain.len() as u64,
+        "chain of {} leaves ending at height {} cannot reach expected height {expected_height}",
+        leaf_chain.len(),
+        newest.height()
+    );
+
     let epoch = EpochNumber::new(epoch_from_block_number(
         cert2.data.block_number,
         *coordinator.epoch_height(),
@@ -56,19 +93,6 @@ pub async fn verify_new_protocol_leaf_chain<T: NodeType>(
         .map_err(|err| anyhow!("no stake table available for epoch {epoch}: {err:?}"))?;
     let entries = StakeTableEntries::<T>::from_iter(membership.stake_table()).0;
     cert2.is_valid_cert(&entries, membership.success_threshold(), upgrade_lock)?;
-
-    ensure!(
-        cert2.data.leaf_commit == newest.commit(),
-        "cert2 does not match the newest leaf in the chain"
-    );
-    ensure!(
-        cert2.data.block_number == newest.height(),
-        "cert2 block number does not match the newest leaf"
-    );
-    ensure!(
-        cert2.view_number() == newest.view_number(),
-        "cert2 view does not match the newest leaf"
-    );
 
     if newest.height() == expected_height {
         return Ok(newest.clone());
@@ -515,6 +539,38 @@ mod test {
         verify_new_protocol_leaf_chain(chain, &coordinator, 10, &upgrade_lock, cert2)
             .await
             .unwrap_err();
+    }
+
+    /// A chain that cannot reach `expected_height` is rejected before any stake
+    /// table is looked up.
+    ///
+    /// The lookup's epoch comes from `cert2.data.block_number`, and resolving an
+    /// epoch costs work linear in it, so a peer answering a catchup request must
+    /// not be able to name an arbitrary one. The walk steps down exactly one
+    /// height per leaf, so a two-leaf chain ending 9991 blocks above the
+    /// requested height is unusable however it is signed.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_verify_new_protocol_leaf_chain_rejects_unreachable_height_before_lookup() {
+        let quorum1 = quorum(0..5);
+        let quorum2 = quorum(5..10);
+        let upgrade_lock = UpgradeLock::<TestTypes>::new(Upgrade::trivial(NEW_PROTOCOL_VERSION));
+
+        // Heights 10000 and 10001, so cert2 claims epoch 1001.
+        let (chain, cert2) = boundary_cert2_chain(1000, &quorum1, &quorum2, &upgrade_lock);
+        assert_eq!(chain.len(), 2);
+
+        let coordinator = coordinator(&quorum1, &quorum2);
+        let err = verify_new_protocol_leaf_chain(chain, &coordinator, 10, &upgrade_lock, cert2)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("cannot reach expected height"),
+            "{err:#}"
+        );
+        assert!(
+            !err.to_string().contains("no stake table available"),
+            "epoch 1001's stake table was looked up before the chain was bounded: {err:#}"
+        );
     }
 
     /// A cert2 belonging to an epoch with no available stake table must fail verification

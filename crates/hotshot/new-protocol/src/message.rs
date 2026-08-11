@@ -430,6 +430,94 @@ impl<T: NodeType, S> HasViewNumber for Message<T, S> {
     }
 }
 
+/// The greatest epoch number `proposal` claims, over every certificate it
+/// carries. Each is resolved against its own epoch's committee, not the
+/// proposal's, so all of them must be bounded.
+fn proposal_claimed_epoch<T: NodeType>(proposal: &Proposal<T>) -> Option<EpochNumber> {
+    [
+        Some(proposal.epoch),
+        proposal.justify_qc.epoch(),
+        proposal
+            .next_epoch_justify_qc
+            .as_ref()
+            .and_then(HasEpoch::epoch),
+        proposal
+            .view_change_evidence
+            .as_ref()
+            .and_then(HasEpoch::epoch),
+        proposal.state_cert.as_ref().and_then(HasEpoch::epoch),
+    ]
+    .into_iter()
+    .flatten()
+    .max()
+}
+
+impl<T: NodeType, S> ConsensusMessage<T, S> {
+    /// The greatest epoch number claimed anywhere in this message.
+    fn max_claimed_epoch(&self) -> Option<EpochNumber> {
+        match self {
+            Self::Proposal(p) => proposal_claimed_epoch(&p.proposal.data),
+            Self::Vote1(v) => [v.vote.epoch(), v.state_vote.as_ref().map(|s| s.epoch)]
+                .into_iter()
+                .flatten()
+                .max(),
+            Self::Vote2(v) => v.epoch(),
+            Self::Certificate1(c, _) => c.epoch(),
+            Self::Certificate2(c, _) => c.epoch(),
+            Self::TimeoutVote(m) => [
+                m.vote.epoch(),
+                m.evidence.as_ref().and_then(|e| match e {
+                    CatchupEvidence::Qc(qc) => qc.epoch(),
+                    CatchupEvidence::Tc(tc) => tc.epoch(),
+                }),
+            ]
+            .into_iter()
+            .flatten()
+            .max(),
+            Self::TimeoutCertificate(c) => c.epoch(),
+            Self::EpochChange(e) => [
+                e.cert1.epoch(),
+                e.cert2.epoch(),
+                proposal_claimed_epoch(&e.proposal),
+            ]
+            .into_iter()
+            .flatten()
+            .max(),
+            Self::VidShareFragment(f) => [f.data.epoch, f.data.target_epoch]
+                .into_iter()
+                .flatten()
+                .max(),
+            Self::VidShareBroadcast(s) => [s.epoch, s.target_epoch].into_iter().flatten().max(),
+            Self::HighQc(c) => c.epoch(),
+        }
+    }
+}
+
+impl<T: NodeType, S> Message<T, S> {
+    /// The greatest epoch number claimed anywhere in this message, or `None`
+    /// when it claims no epoch at all.
+    ///
+    /// Intake bounds a message on this before any of its epoch fields can reach
+    /// `EpochMembershipCoordinator::{membership_for_epoch,stake_table_for_epoch}`.
+    /// Those spawn a catchup that walks back one epoch at a time from the epoch
+    /// it is handed, awaiting a stake-table load and allocating per step, so an
+    /// unbounded claim from a peer is unbounded work for this node. The claim is
+    /// unverified by construction: it is read off the wire to decide which
+    /// committee would verify the message in the first place.
+    pub fn max_claimed_epoch(&self) -> Option<EpochNumber> {
+        match &self.message_type {
+            MessageType::Consensus(m) => m.max_claimed_epoch(),
+            MessageType::Block(BlockMessage::DedupManifest(m)) => Some(m.epoch),
+            MessageType::Block(BlockMessage::Transactions(_)) => None,
+            MessageType::ProposalFetch(ProposalFetchMessage::Response(p)) => {
+                proposal_claimed_epoch(&p.data)
+            },
+            MessageType::ProposalFetch(ProposalFetchMessage::Request(_)) => None,
+            MessageType::External(_) => None,
+        }
+    }
+}
+
 pub struct OpaqueMessage<K> {
     pub sender: K,
     pub data: Vec<u8>,

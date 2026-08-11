@@ -15,29 +15,6 @@ Rules:
 
 ## Now
 
-- [ ] NP-1 (High, runtime, security): an unverified, peer-chosen epoch number reaches
-      `EpochMembershipCoordinator::{membership_for_epoch,stake_table_for_epoch}`, which bound the epoch from below
-      (`epoch < first_epoch`) but not from above (`crates/hotshot/types/src/epoch_membership.rs:157-186, 198-232`) and
-      spawn a catchup whose first loop walks back one epoch at a time from the claimed epoch, awaiting a
-      `load_stake_table` and inserting a `catchup_map` entry plus a broadcast channel per iteration
-      (`epoch_membership.rs:339-385`); one message claiming a far-future epoch therefore costs work and memory linear in
-      the claimed epoch. Reachable sites: `ConsensusMessage::Proposal` (`coordinator.rs:1053`, the only view-keyed arm
-      also missing `is_view_too_far_ahead`) via `proposal.rs:315-327`; `TimeoutCertificate` (`coordinator.rs:1279`),
-      `HighQc` (`coordinator.rs:1295`) and the `CatchupEvidence` inside `TimeoutVote` (`coordinator.rs:1230-1254`) via
-      `cert_verifier.rs:210, 373`; the `Vote1`/`Vote2`/`TimeoutVote` arms via `vote.rs:315-318`; and peer catchup
-      responses via `utils.rs:54-56`, which derives the epoch from an unverified `cert2.data.block_number` and looks up
-      its stake table before validating the certificate at `utils.rs:58`. `Certificate1`/`Certificate2`/`EpochChange`
-      already carry `is_epoch_too_far_ahead` and are the model. This is one class, so fix it at the boundaries rather
-      than per call site. Acceptance: (1) a test feeds `Proposal`, `TimeoutCertificate`, `HighQc`, a `TimeoutVote`
-      carrying evidence, and a `Vote1` with `epoch = current_epoch + EPOCH_CHANGE_LOOKAHEAD + 1` (and, for the proposal,
-      `view = current_view + MAX_VIEWS_AHEAD + 1`) into `Coordinator::on_network_message` and asserts none starts
-      catchup for that epoch; (2) a test calls `verify_new_protocol_leaf_chain` with a cert2 whose `block_number`
-      implies a far-future epoch and asserts it is rejected without a stake-table lookup for that epoch; (3) the
-      enumeration
-      `grep -rn 'membership_for_epoch\|stake_table_for_epoch' crates/hotshot/new-protocol/src --include='*.rs' | grep -v tests`
-      lists every site and each is either fed a locally-derived epoch, bounded before the call, or recorded under
-      Settled classes with its reason. Each acceptance test must fail on the unfixed code.
-
 ## Next
 
 - [ ] NP-2 (Medium, runtime, correctness): `EpochManager::request_drb_result` returns without spawning anything when
@@ -78,6 +55,15 @@ convergence.
 One line per class: the idiom or defect class, the surface it applies to, and how it was settled - fixed class-complete
 with its enumerating check, or declined with the reason. Audits must not file findings inside a settled class unless its
 implementing code changed after settlement.
+
+- unbounded peer-claimed epoch reaching a stake-table lookup, on every `hotshot-new-protocol` path that reads an epoch
+  off the wire: fixed class-complete at two boundaries, `Coordinator::on_network_message` (via
+  `Message::max_claimed_epoch`, which covers every epoch a message carries, not just its top-level one) and
+  `verify_new_protocol_leaf_chain` (chain-reachability bound before the lookup). Enumerating check:
+  `grep -rn 'membership_for_epoch\|stake_table_for_epoch' crates/hotshot/new-protocol/src --include='*.rs' | grep -v tests`;
+  its 14 call sites are each either fed a locally-derived epoch (block.rs:177, coordinator.rs:1478 and 1522,
+  vote.rs:347, consensus.rs:1851/2321/2335/2354, utils.rs:134) or bounded at one of those two boundaries
+  (cert_verifier.rs:210 and 387, proposal.rs:325, vote.rs:317, epoch.rs:186, utils.rs:86).
 
 ## Declined
 

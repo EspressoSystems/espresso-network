@@ -78,13 +78,15 @@ pub(crate) const VID_RECONSTRUCT_GC_MARGIN: u64 = 5;
 /// storage writes for recent views aren't aborted before they persist.
 const STORAGE_GC_MARGIN: u64 = 5;
 
-/// Epoch changes claiming an epoch further ahead than this are dropped at
-/// intake. We could not verify them anyway: an epoch's stake table only
-/// materializes by walking the DRB chain, so parking such a message and
-/// driving catchup for an arbitrary claimed epoch just burns resources.
-/// Within the ceiling, deferred changes verify progressively as catchup
-/// advances ([`CertVerifiers::retry_pending`] runs on every DRB arrival).
-const EPOCH_CHANGE_LOOKAHEAD: u64 = 3;
+/// A message claiming any epoch further ahead than this is dropped at intake.
+/// We could not verify it anyway: an epoch's stake table only materializes by
+/// walking the DRB chain, so parking such a message and driving catchup for an
+/// arbitrary claimed epoch just burns resources - resolving an epoch walks back
+/// one epoch at a time from the one it is handed, so the cost is linear in a
+/// number a peer chose. Within the ceiling, deferred messages verify
+/// progressively as catchup advances ([`CertVerifiers::retry_pending`] runs on
+/// every DRB arrival).
+pub(crate) const EPOCH_CHANGE_LOOKAHEAD: u64 = 3;
 
 pub(crate) const MAX_VIEWS_AHEAD: ViewNumber = ViewNumber::new(30);
 
@@ -1020,6 +1022,22 @@ where
         self.consensus.current_view()
     }
 
+    /// Work the intake path is holding on behalf of received messages, across
+    /// every subsystem a message can reach an epoch lookup through: spawned
+    /// tasks plus items parked on an unresolved epoch. Zero means nothing this
+    /// node received got past the intake boundary.
+    #[cfg(test)]
+    pub(crate) fn pending_intake_work(&self) -> usize {
+        self.proposal_validator.pending_count()
+            + self.cert_verifiers.pending_count()
+            + self.vote1_collector.pending_count()
+            + self.vote2_collector.pending_count()
+            + self.timeout_collector.pending_count()
+            + self.timeout_one_honest_collector.pending_count()
+            + self.epoch_root_collector.pending_count()
+            + self.epoch_manager.pending_count()
+    }
+
     pub fn state(&self, v: ViewNumber) -> Option<&StateEntry<T>> {
         self.state_manager.get_state(v)
     }
@@ -1048,6 +1066,19 @@ where
     ) -> Option<ConsensusInput<T>> {
         let sender = KeyPrefix::from(&message.sender);
         let node = self.node_id;
+        // One boundary for every epoch a message claims. Each of them is read
+        // off the wire to pick the committee that would verify the message, so
+        // each reaches a stake-table lookup before anything has been verified,
+        // and those lookups cost work linear in the epoch they are handed.
+        if self.is_epoch_too_far_ahead(message.max_claimed_epoch()) {
+            warn!(
+                %node, %sender,
+                view = %message.view_number(),
+                epoch = ?message.max_claimed_epoch().map(|e| *e),
+                "message claims an epoch too far ahead"
+            );
+            return None;
+        }
         match message.message_type {
             MessageType::Consensus(msg) => match msg {
                 ConsensusMessage::Proposal(p) => {
@@ -1055,9 +1086,11 @@ where
                     let epoch = p.proposal.data.epoch;
                     let block = p.proposal.data.block_header.block_number();
                     debug!(%node, %sender, %view, %epoch, %block, "recv proposal");
-                    if !self.is_view_too_far_ahead(view)
-                        && self.proposal_received_at.is_none_or(|(v, _)| v < view)
-                    {
+                    if self.is_view_too_far_ahead(view) {
+                        warn!(%node, %sender, %view, "proposal is too far ahead");
+                        return None;
+                    }
+                    if self.proposal_received_at.is_none_or(|(v, _)| v < view) {
                         self.proposal_received_at = Some((view, Instant::now()));
                     }
                     if self.consensus.wants_proposal_for_view(&view) {

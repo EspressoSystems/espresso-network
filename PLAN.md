@@ -132,9 +132,11 @@ stands for a whole subsystem.
       `new`/`seed_parent`/`seed_proposals`/`seed_locked_cert`/`seed_state_cert`/`apply_pre_cutover_seed`/`register_legacy_qc`/`resume_from_restart`/`gc`/`decide_floor` -
       swept at 64c5cdc6d0a - full read of the restart and cutover seeding paths and all three GC scopes; battery
       `tests::restarts`, `tests::cutover`, `tests::legacy_cutover`.
-- [x] coordinator:network-intake: `NP/coordinator.rs` `on_network_message` and its guards
-      `is_view_too_far_ahead`/`is_epoch_too_far_ahead`/`send_catchup_evidence` - swept at 64c5cdc6d0a - read every
-      message arm and enumerated which arms carry the view and epoch admission guards; this sweep produced NP-1.
+- [ ] coordinator:network-intake: `NP/coordinator.rs` `on_network_message` and its guards
+      `is_view_too_far_ahead`/`is_epoch_too_far_ahead`/`send_catchup_evidence` - re-opened: NP-1 added the claimed-epoch
+      boundary and the proposal view guard here, so the sweep at 64c5cdc6d0a no longer certifies it. That sweep
+      exercised read every message arm and enumerated which arms carry the view and epoch admission guards; this sweep
+      produced NP-1.
 - [ ] coordinator:event-loop: `NP/coordinator.rs` `start`/`run`/`next_input`/`go`/shutdown/timer handling/`GcScope`
       dispatch - not yet swept.
 - [ ] coordinator:consensus-output: `NP/coordinator.rs` `process_consensus_output` and the per-output side effects -
@@ -176,17 +178,19 @@ stands for a whole subsystem.
       leader buffers, dedup window, and byte accounting; this sweep produced NP-4.
 - [x] proposal: `NP/proposal.rs` `ProposalValidator`/`VidShareValidator`/`Validator` - swept at 64c5cdc6d0a - full read
       of all five validation steps; contributed to NP-1.
-- [x] message: `NP/message.rs` wire types + `EpochChangeMessage::well_formed`/`ProposalFetchRequest::validate_sender` -
-      swept at 64c5cdc6d0a - full read; confirmed `well_formed` binds the carried proposal to `cert1.data.leaf_commit`,
-      so a validated epoch change cannot carry a mismatched proposal.
+- [ ] message: `NP/message.rs` wire types + `EpochChangeMessage::well_formed`/`ProposalFetchRequest::validate_sender` -
+      re-opened: NP-1 added `Message::max_claimed_epoch`, so the sweep at 64c5cdc6d0a no longer certifies it. That sweep
+      exercised full read; confirmed `well_formed` binds the carried proposal to `cert1.data.leaf_commit`, so a
+      validated epoch change cannot carry a mismatched proposal.
 - [x] cutover: `NP/cutover.rs` `extract_pre_cutover_seed`/`forward_legacy_timeout_votes`/`forward_legacy_high_qc` -
       swept at 64c5cdc6d0a - full read; battery `tests::cutover`, `tests::legacy_cutover`.
 - [x] misc-small: `NP/lib.rs`, `NP/helpers.rs`, `NP/outbox.rs`, `NP/vid.rs` - swept at 64c5cdc6d0a - full read of all
       four; they are re-exports, one commitment helper, and a `VecDeque` wrapper.
-- [x] utils: `NP/utils.rs` `verify_new_protocol_leaf_chain` - swept at 64c5cdc6d0a - full read; its own tests are
-      known-answer cases over epoch-boundary quorum binding (right quorum accepted, wrong quorum rejected, stale-epoch
-      claim rejected, missing stake table rejected), which is the property that matters here; this sweep added the
-      catchup-response instance to NP-1.
+- [ ] utils: `NP/utils.rs` `verify_new_protocol_leaf_chain` - re-opened: NP-1 added the chain-reachability bound and
+      reordered the checks in `verify_new_protocol_leaf_chain`, so the sweep at 64c5cdc6d0a no longer certifies it. That
+      sweep exercised full read; its own tests are known-answer cases over epoch-boundary quorum binding (right quorum
+      accepted, wrong quorum rejected, stale-epoch claim rejected, missing stake table rejected), which is the property
+      that matters here; this sweep added the catchup-response instance to NP-1.
 - [x] logging: `NP/logging.rs` `init_logging`/`init_test_logging`/`KeyPrefix` - swept at 64c5cdc6d0a - full read;
       `KeyPrefix` truncates a key's string to 19 bytes into a zero-filled buffer, so a key type whose string were
       shorter than 19 bytes would render trailing NUL bytes into logs, but every `SignatureKey` in this repo prints a
@@ -316,6 +320,8 @@ decide: a rule that had to be written twice is a rule this text is not enforcing
   disabled.
 - The `prettier-fmt` hook rewraps every markdown file it sees, so the first commit touching PLAN/BACKLOG/JOURNAL always
   fails with "files were modified by this hook"; re-run `git add -A && git commit` to accept the reformatting.
+- `EpochNumber::genesis()` is 1 while `ViewNumber::genesis()` is 0, so any epoch bound or test computed from 0 is off by
+  one; derive it from `EpochNumber::genesis()` instead of writing a literal.
 
 ## Definition of done
 
