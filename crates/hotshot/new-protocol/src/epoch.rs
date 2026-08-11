@@ -43,7 +43,9 @@ pub struct EpochManager<T: NodeType> {
     /// Prevents duplicate fetch/compute tasks while the first is running.
     pending_drb_requests: BTreeSet<EpochNumber>,
     /// Epochs whose DRB has already been computed and added to membership.
-    /// Subsequent `request_drb_result` calls for these epochs are no-ops.
+    /// Stops [`Self::handle_leaf_decided`] recomputing or re-supplying one it
+    /// has already handled. It deliberately does *not* gate
+    /// [`Self::request_drb_result`]: see that method.
     completed_drb_requests: BTreeSet<EpochNumber>,
 }
 
@@ -163,11 +165,19 @@ impl<T: NodeType> EpochManager<T> {
         self.completed_drb_requests = self.completed_drb_requests.split_off(&epoch);
     }
 
+    /// Ask for `epoch`'s DRB, delivering it through [`Self::next`].
+    ///
+    /// A request for an epoch this manager already resolved is honoured rather
+    /// than dropped. The manager's record of having resolved an epoch says
+    /// nothing about whether *consensus* still holds the result: consensus keeps
+    /// its own in-memory copy, `handle_leaf_decided` can mark an epoch resolved
+    /// while emitting nothing to consensus at all, and this is the only way a
+    /// `DrbResult` ever reaches consensus. Short-circuiting here left the retry
+    /// that `maybe_propose` and `maybe_vote_1` issue permanently unanswered, so
+    /// a node that lost the result could never build or vote on an
+    /// epoch-transition proposal again. Re-resolving is cheap when the epoch is
+    /// already known: membership answers immediately and the task ends.
     pub fn request_drb_result(&mut self, epoch: EpochNumber) {
-        // Already computed — caller can read the DRB from membership.
-        if self.completed_drb_requests.contains(&epoch) {
-            return;
-        }
         // In-flight task will deliver the result; avoid spawning a duplicate.
         if self.pending_drb_requests.contains(&epoch) {
             return;
@@ -212,4 +222,74 @@ pub enum EpochManagerError {
 
     #[error("failed to get drb: {0}")]
     DrbLookup(#[source] anytrace::Error),
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use hotshot_example_types::node_types::TestTypes;
+    use tokio::time::timeout;
+
+    use super::*;
+    use crate::tests::common::utils::mock_membership;
+
+    const EPOCH_HEIGHT: u64 = 10;
+    /// Resolved from membership, so each request settles at once; generous
+    /// enough not to flake under a loaded test suite.
+    const DELIVERY_TIMEOUT: Duration = Duration::from_secs(5);
+
+    fn manager() -> EpochManager<TestTypes> {
+        EpochManager::new(EPOCH_HEIGHT, mock_membership())
+    }
+
+    /// Await one delivery and return the epoch it carries.
+    async fn next_epoch(manager: &mut EpochManager<TestTypes>) -> EpochNumber {
+        let delivered = timeout(DELIVERY_TIMEOUT, manager.next())
+            .await
+            .expect("DRB delivery timed out");
+        match delivered {
+            Some(Ok(EpochRootResult::DrbResult(epoch, _))) => epoch,
+            Some(Err(failure)) => panic!("DRB request failed: {}", failure.error),
+            None => panic!("no DRB delivered: the request was dropped, not answered"),
+        }
+    }
+
+    /// A DRB already delivered once is delivered again when asked again.
+    ///
+    /// Consensus holds its own in-memory copy of every DRB and re-issues
+    /// `RequestDrbResult` whenever it finds one missing; that retry is the only
+    /// route back, so the manager having resolved the epoch before must not
+    /// silence it.
+    #[tokio::test]
+    async fn repeated_request_is_answered_again() {
+        let epoch = EpochNumber::genesis();
+        let mut manager = manager();
+
+        manager.request_drb_result(epoch);
+        assert_eq!(next_epoch(&mut manager).await, epoch);
+
+        manager.request_drb_result(epoch);
+        assert_eq!(
+            next_epoch(&mut manager).await,
+            epoch,
+            "a re-request for an already-resolved epoch was dropped"
+        );
+    }
+
+    /// Concurrent requests for one epoch still collapse into a single task, so
+    /// answering repeats does not mean answering duplicates.
+    #[tokio::test]
+    async fn concurrent_requests_are_deduplicated() {
+        let epoch = EpochNumber::genesis();
+        let mut manager = manager();
+
+        manager.request_drb_result(epoch);
+        manager.request_drb_result(epoch);
+        manager.request_drb_result(epoch);
+        assert_eq!(manager.pending_count(), 1, "duplicate in-flight requests");
+
+        assert_eq!(next_epoch(&mut manager).await, epoch);
+        assert_eq!(manager.pending_count(), 0);
+    }
 }

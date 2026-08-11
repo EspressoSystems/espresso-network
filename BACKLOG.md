@@ -17,17 +17,6 @@ Rules:
 
 ## Next
 
-- [ ] NP-2 (Medium, runtime, correctness): `EpochManager::request_drb_result` returns without spawning anything when
-      `completed_drb_requests` already holds the epoch (`epoch.rs:161-163`), and that set is only pruned below the
-      current epoch by `gc`. `ConsensusInput::DrbResult` is produced solely from `EpochManager::next()`
-      (`coordinator.rs:632-640`), so once an epoch is marked completed the re-request lever consensus relies on is
-      permanently a no-op: `maybe_propose` and `maybe_vote_1` emit `RequestDrbResult` on every retry
-      (`consensus.rs:1131`, `consensus.rs:1661`, whose own comment expects the retry to kick catchup) and never receive
-      the result, leaving the node unable to build or vote on an epoch-transition proposal. `handle_leaf_decided` marks
-      an epoch completed while emitting nothing to consensus (`epoch.rs:134-144`), so the two views of the DRB can
-      diverge. Acceptance: a unit test that delivers a `DrbResult` for epoch E once, then calls `request_drb_result(E)`
-      again and asserts `next()` yields a `DrbResult` for E within a bounded wait; it must fail on the unfixed code.
-
 ## Later
 
 - [ ] NP-3 (Low, runtime, correctness): `VidFragmentAccumulator::accept` inserts each namespace piece into the pending

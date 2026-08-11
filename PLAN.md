@@ -172,7 +172,7 @@ stands for a whole subsystem.
 - [x] network: `NP/network.rs` `Cliquenet`/`Sender`/`apply_epoch`/`deserialize` - swept at 64c5cdc6d0a - full read;
       confirmed sender authentication binds the declared signature key to the transport x25519 key, which is what fixes
       the envelope's trust classes.
-- [x] epoch: `NP/epoch.rs` `EpochManager` - swept at 64c5cdc6d0a - full read of dedup state, the epoch-root and
+- [ ] epoch: `NP/epoch.rs` `EpochManager` - swept at 64c5cdc6d0a - full read of dedup state, the epoch-root and
       transition-block triggers, and GC; this sweep produced NP-2.
 - [x] block: `NP/block.rs` `BlockBuilder`/`BlockBuilderConfig` - swept at 64c5cdc6d0a - full read of the retry and
       leader buffers, dedup window, and byte accounting; this sweep produced NP-4.

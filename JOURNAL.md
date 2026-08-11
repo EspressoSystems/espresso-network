@@ -142,3 +142,44 @@ ceiling was exactly 4, and the guard correctly admitted it. Deriving the constan
 test rather than writing a literal is what caught it.
 
 Next: NP-2, the DRB re-request lever that is permanently a no-op once an epoch is marked completed.
+
+## iter 3/10 | 29c94e91-175223 | 2026-08-11 | NP-2 | done
+
+Task: NP-2 (Medium, runtime, correctness) - `EpochManager::request_drb_result` short-circuiting on
+`completed_drb_requests`, which left consensus's only DRB retry lever permanently unanswered. Closed.
+
+Changed: crates/hotshot/new-protocol/src/epoch.rs (the short-circuit removed, both affected doc comments rewritten, and
+an inline test module added), PLAN.md, BACKLOG.md, JOURNAL.md.
+
+Checkpoint: pending
+
+Verification: acceptance check `epoch::tests::repeated_request_is_answered_again` run first against the unfixed code,
+where it fails with the defect stated plainly - `no DRB delivered: the request was dropped, not answered` - and passes
+against the fixed one. Its control `epoch::tests::concurrent_requests_are_deduplicated` passes both ways, which is what
+shows the fix removed the wrong dedup and not the right one: three back-to-back requests for the same epoch still
+collapse into a single in-flight task. To run the check against unfixed code the fixed file was copied aside and
+restored afterwards, never `git checkout`. Verify command green: 194 tests run, 194 passed, 15 skipped, exit 0.
+
+Contract preserved. Two dedup guards lived here and they are not interchangeable. `pending_drb_requests` collapses
+_concurrent_ callers and is untouched, so no caller can spawn a duplicate task while one is in flight.
+`completed_drb_requests` records that this manager once resolved an epoch, and it still gates `handle_leaf_decided` so a
+decided epoch root is never recomputed and a transition block never re-supplies a DRB; what it must not do is answer for
+consensus, which keeps its own in-memory copy and is the party actually asking. Honouring repeats cannot flood: the
+intake arms only call `request_drb_result` when `CertVerifier::verify` failed to resolve the epoch's membership, which
+cannot be true for an epoch whose DRB is already in membership, and the consensus retry only fires while
+`Consensus::drb_results` lacks the entry, so each answered request stops the caller that made it. When the epoch is
+already known the spawned task resolves from membership immediately and ends, which is what both new tests observe.
+
+Both doc comments that stated the old behaviour were rewritten in the same iteration: the `completed_drb_requests` field
+comment said "Subsequent `request_drb_result` calls for these epochs are no-ops", which is now exactly wrong, and
+`request_drb_result` gained a comment explaining why a repeat is honoured, so a future reader does not reinstate the
+short-circuit as an obvious optimisation.
+
+Surface inventory: the epoch row flipped back to unswept, because its production behaviour changed. 18 of 26 rows swept,
+8 unswept. The unswept set is now the four coordinator rows plus message, utils, epoch and coordinator:network-intake;
+with two Low tasks left on the ledger there is budget to re-sweep them in a later audit iteration before any convergence
+claim.
+
+Learnings: none that generalise beyond this fix.
+
+Next: NP-3, the VID fragment accumulator mutating its pending entry before validating the whole fragment.
