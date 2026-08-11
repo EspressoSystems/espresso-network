@@ -52,8 +52,9 @@ fn window_limit() -> usize {
     hotshot_query_service::node::Options::default().window_limit
 }
 
-/// `ApiError` is `hotshot_query_service::Error`, the exact type the old tide-disco `App` used, so
-/// both its status mapping and its wire shape (externally tagged enum) match byte-for-byte.
+// Both helpers serve `ApiError` as the error envelope: it is `hotshot_query_service::Error`, the
+// exact type the old tide-disco `App` used, so its status mapping and its wire shape (externally
+// tagged enum) match byte-for-byte.
 fn encode_ok<T: Serialize>(headers: &HeaderMap, value: T) -> Response {
     wire::encode_ok::<ApiError, _>(headers, value)
 }
