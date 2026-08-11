@@ -165,15 +165,17 @@ pub async fn drive_ws_stream<Ver: StaticVersionType, T: Serialize>(
     let _ = socket.send(Message::Close(None)).await;
 }
 
-/// Binds `url`'s host and port and serves `router` until the returned handle is aborted.
+/// Binds `url`'s host and port (falling back to the scheme's default port) and serves `router`
+/// until the returned handle is aborted.
 ///
 /// # Panics
-/// If `url` has no port or the port cannot be bound.
+/// If `url` has no port and its scheme has no default, or the port cannot be bound.
 pub fn spawn_serve(url: &url::Url, router: axum::Router) -> tokio::task::JoinHandle<()> {
     let addr = format!(
         "{}:{}",
         url.host_str().unwrap_or("0.0.0.0"),
-        url.port().expect("server URL must carry a port")
+        url.port_or_known_default()
+            .expect("server URL must carry a port or a scheme with a default")
     );
     tokio::spawn(async move {
         let listener = tokio::net::TcpListener::bind(&addr)
