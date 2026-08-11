@@ -11,7 +11,7 @@ use futures::StreamExt;
 use hotshot_types::traits::node_implementation::NodeType;
 use http_wire::{
     self as wire, ContentType, WireFormat, body_limit_layer, cors_layer, drive_ws_stream,
-    healthcheck_response,
+    healthcheck_response, module_healthcheck_response,
 };
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
@@ -134,6 +134,7 @@ where
     Router::new()
         .route("/events", get(events))
         .route("/startup_info", get(startup_info::<Types, S, Ver>))
+        .route("/healthcheck", get(module_healthcheck))
         .with_state(state)
 }
 
@@ -158,11 +159,18 @@ where
     Router::new()
         .route("/events", get(events))
         .route("/startup_info", get(startup_info::<Types, S, Ver>))
+        .route("/healthcheck", get(module_healthcheck))
         .with_state(state)
 }
 
 async fn healthcheck(headers: HeaderMap) -> Response {
     healthcheck_response(&headers)
+}
+
+/// The legacy server answered `/<module>/healthcheck` for the events module; the route lives on
+/// the module router so it survives version mounting.
+async fn module_healthcheck(headers: HeaderMap) -> Response {
+    module_healthcheck_response(&headers)
 }
 
 /// Wraps module routers with the app-level `healthcheck`, a request body limit, and permissive

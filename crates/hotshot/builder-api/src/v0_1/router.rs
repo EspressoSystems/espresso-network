@@ -29,6 +29,7 @@ use hotshot_types::{
 };
 use http_wire::{
     self as wire, DecodeFailure, WireFormat, body_limit_layer, cors_layer, healthcheck_response,
+    module_healthcheck_response,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use tagged_base64::TaggedBase64;
@@ -131,6 +132,13 @@ fn parse_sender_signature<Types: NodeType>(
 
 async fn healthcheck(headers: HeaderMap) -> Response {
     healthcheck_response(&headers)
+}
+
+/// The legacy server answered `/<module>/healthcheck` for every registered module (a bare
+/// "Available", since neither module defined its own handler); each module router keeps that
+/// route so it survives version mounting.
+async fn module_healthcheck(headers: HeaderMap) -> Response {
+    module_healthcheck_response(&headers)
 }
 
 async fn available_blocks<Types: NodeType, S: BuilderDataSource<Types>>(
@@ -332,6 +340,7 @@ where
             get(claim_header_input_v2::<Types, S>),
         )
         .route("/builderaddress", get(builder_address::<Types, S>))
+        .route("/healthcheck", get(module_healthcheck))
         .with_state(state)
 }
 
@@ -345,6 +354,7 @@ where
         .route("/submit", post(submit_txn::<Types, S>))
         .route("/batch", post(submit_batch::<Types, S>))
         .route("/status/{transaction_hash}", get(get_status::<Types, S>))
+        .route("/healthcheck", get(module_healthcheck))
         .with_state(state)
 }
 
@@ -480,6 +490,10 @@ mod tests {
             "/v0/block_info/builderaddress",
             "/txn_submit/status/abc",
             "/v0/txn_submit/status/abc",
+            "/block_info/healthcheck",
+            "/txn_submit/healthcheck",
+            "/v0/block_info/healthcheck",
+            "/v0/txn_submit/healthcheck",
         ] {
             assert_ne!(
                 request(Method::GET, uri).await.status(),
