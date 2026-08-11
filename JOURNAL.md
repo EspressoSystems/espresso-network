@@ -97,7 +97,7 @@ Changed: crates/hotshot/new-protocol/src/{message.rs,coordinator.rs,utils.rs} (t
 {cert_verifier.rs,vote.rs,epoch.rs,proposal.rs} (test-only `pending_count` accessors), tests.rs and the new
 tests/intake.rs (acceptance), PLAN.md, BACKLOG.md, JOURNAL.md.
 
-Checkpoint: pending
+Checkpoint: 975205f1514e84887d2547c4f84fd96fa0a18f55
 
 Verification: three acceptance checks, each first run against the unfixed code. (1)
 `tests::intake::intake_drops_messages_claiming_an_epoch_past_the_ceiling` and
