@@ -7,7 +7,10 @@
 //! Axum routers serving the v0.1 builder API wire protocol.
 //!
 //! Route paths, status codes and the wire error type ([`Error`]) match the legacy `block_info`
-//! and `txn_submit` modules, so existing builder clients keep working unchanged.
+//! and `txn_submit` modules, so existing builder clients keep working unchanged, with one
+//! deliberate divergence: `txn_submit/status/{transaction_hash}` parses the path parameter its
+//! API definition always declared, where the legacy handler ignored it and decoded the request
+//! body as a transaction instead.
 
 use axum::{
     Router,
@@ -18,7 +21,7 @@ use axum::{
     routing::{get, post},
 };
 use committable::Committable;
-use disco_types::{error::Error as _, status::StatusCode};
+use disco_types::{error::Error as _, request::RequestParamType, status::StatusCode};
 use hotshot_types::{
     data::VidCommitment,
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
@@ -102,6 +105,18 @@ where
     })
 }
 
+/// Parses an integer path parameter (`view_number`, `num_nodes`). Reproduces the error the
+/// legacy `Integer` params produced for a bad value: axum's own `Path` rejection would be a
+/// plain-text 400, which clients expecting the [`Error`] envelope cannot decode.
+fn parse_int_param<T: std::str::FromStr>(value: &str) -> Result<T, Error> {
+    value.parse().map_err(|_| {
+        Error::Request(RequestError::IncorrectParamType {
+            actual: RequestParamType::Literal,
+            expected: RequestParamType::Integer,
+        })
+    })
+}
+
 type Sender<Types> = <Types as NodeType>::SignatureKey;
 type Signature<Types> = <Sender<Types> as SignatureKey>::PureAssembledSignatureType;
 
@@ -121,10 +136,11 @@ async fn healthcheck(headers: HeaderMap) -> Response {
 async fn available_blocks<Types: NodeType, S: BuilderDataSource<Types>>(
     State(state): State<S>,
     headers: HeaderMap,
-    Path((parent_hash, view_number, sender, signature)): Path<(String, u64, String, String)>,
+    Path((parent_hash, view_number, sender, signature)): Path<(String, String, String, String)>,
 ) -> Response {
     let result: Result<Vec<AvailableBlockInfo<Types>>, Error> = async {
         let hash = parse_hash_param::<VidCommitment>(&parent_hash, "parent_hash")?;
+        let view_number = parse_int_param(&view_number)?;
         let (sender, signature) = parse_sender_signature::<Types>(&sender, &signature)?;
         state
             .available_blocks(&hash, view_number, sender, &signature)
@@ -141,10 +157,11 @@ async fn available_blocks<Types: NodeType, S: BuilderDataSource<Types>>(
 async fn claim_block<Types: NodeType, S: BuilderDataSource<Types>>(
     State(state): State<S>,
     headers: HeaderMap,
-    Path((block_hash, view_number, sender, signature)): Path<(String, u64, String, String)>,
+    Path((block_hash, view_number, sender, signature)): Path<(String, String, String, String)>,
 ) -> Response {
     let result: Result<AvailableBlockData<Types>, Error> = async {
         let hash = parse_hash_param::<BuilderCommitment>(&block_hash, "block_hash")?;
+        let view_number = parse_int_param(&view_number)?;
         let (sender, signature) = parse_sender_signature::<Types>(&sender, &signature)?;
         state
             .claim_block(&hash, view_number, sender, &signature)
@@ -163,15 +180,17 @@ async fn claim_block_with_num_nodes<Types: NodeType, S: BuilderDataSource<Types>
     headers: HeaderMap,
     Path((block_hash, view_number, sender, signature, num_nodes)): Path<(
         String,
-        u64,
         String,
         String,
-        usize,
+        String,
+        String,
     )>,
 ) -> Response {
     let result: Result<AvailableBlockData<Types>, Error> = async {
         let hash = parse_hash_param::<BuilderCommitment>(&block_hash, "block_hash")?;
+        let view_number = parse_int_param(&view_number)?;
         let (sender, signature) = parse_sender_signature::<Types>(&sender, &signature)?;
+        let num_nodes = parse_int_param(&num_nodes)?;
         state
             .claim_block_with_num_nodes(&hash, view_number, sender, &signature, num_nodes)
             .await
@@ -187,10 +206,11 @@ async fn claim_block_with_num_nodes<Types: NodeType, S: BuilderDataSource<Types>
 async fn claim_header_input<Types: NodeType, S: BuilderDataSource<Types>>(
     State(state): State<S>,
     headers: HeaderMap,
-    Path((block_hash, view_number, sender, signature)): Path<(String, u64, String, String)>,
+    Path((block_hash, view_number, sender, signature)): Path<(String, String, String, String)>,
 ) -> Response {
     let result: Result<AvailableBlockHeaderInputV1<Types>, Error> = async {
         let hash = parse_hash_param::<BuilderCommitment>(&block_hash, "block_hash")?;
+        let view_number = parse_int_param(&view_number)?;
         let (sender, signature) = parse_sender_signature::<Types>(&sender, &signature)?;
         state
             .claim_block_header_input(&hash, view_number, sender, &signature)
@@ -207,10 +227,11 @@ async fn claim_header_input<Types: NodeType, S: BuilderDataSource<Types>>(
 async fn claim_header_input_v2<Types: NodeType, S: BuilderDataSource<Types>>(
     State(state): State<S>,
     headers: HeaderMap,
-    Path((block_hash, view_number, sender, signature)): Path<(String, u64, String, String)>,
+    Path((block_hash, view_number, sender, signature)): Path<(String, String, String, String)>,
 ) -> Response {
     let result: Result<AvailableBlockHeaderInputV2<Types>, Error> = async {
         let hash = parse_hash_param::<BuilderCommitment>(&block_hash, "block_hash")?;
+        let view_number = parse_int_param(&view_number)?;
         let (sender, signature) = parse_sender_signature::<Types>(&sender, &signature)?;
         let input = state
             .claim_block_header_input(&hash, view_number, sender, &signature)
@@ -473,6 +494,26 @@ mod tests {
             HttpStatusCode::NOT_FOUND,
             "the version belongs before the module path, not after"
         );
+    }
+
+    /// A non-numeric integer path parameter must produce a 400 carrying the [`Error`] envelope,
+    /// like the legacy `Integer` params did. Left to axum's own `Path` rejection, the body would
+    /// be plain text and clients decoding the envelope on error would fail to parse.
+    #[tokio::test]
+    async fn bad_integer_params_are_enveloped() {
+        let hash = TaggedBase64::new("HASH", &[0; 32]).unwrap();
+        let uri = format!("/block_info/availableblocks/{hash}/not-a-number/snd/sig");
+        let resp = request(Method::GET, &uri).await;
+        assert_eq!(resp.status(), HttpStatusCode::BAD_REQUEST, "{uri}");
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let err: Error = serde_json::from_slice(&body)
+            .unwrap_or_else(|_| panic!("error body is not the wire envelope: {body:?}"));
+        assert!(matches!(
+            err,
+            Error::Request(RequestError::IncorrectParamType { .. })
+        ));
     }
 
     /// Like the legacy server, every response carries permissive CORS headers; builder clients

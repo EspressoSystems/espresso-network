@@ -21,6 +21,7 @@ vbs = { workspace = true }
 
 [dev-dependencies]
 hotshot-example-types = { workspace = true }
+serde_json = { workspace = true }
 tower = { workspace = true, features = ["util"] }
 
 [lints]

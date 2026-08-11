@@ -5716,6 +5716,7 @@ dependencies = [
  "http-client",
  "http-wire",
  "serde",
+ "serde_json",
  "tagged-base64",
  "thiserror 2.0.18",
  "tokio",
