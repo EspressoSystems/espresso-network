@@ -22,6 +22,7 @@ use hotshot_example_types::{
 };
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
+    message::Proposal,
     stake_table::StakeTableEntries,
     traits::{block_contents::BlockHeader, signature_key::SignatureKey},
     vote::{Certificate, HasViewNumber, Vote},
@@ -204,7 +205,7 @@ async fn conflicting_quorums_cannot_both_reach_threshold() {
             proposal_commitment(&forked).as_ref(),
         )
         .expect("sign the competing proposal");
-        hotshot_types::message::Proposal::new(forked, signature)
+        Proposal::new(forked, signature)
     };
 
     let committed_commit = proposal_commitment(&committed.proposal.data);

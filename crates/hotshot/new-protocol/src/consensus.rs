@@ -898,13 +898,10 @@ impl<T: NodeType> Consensus<T> {
         // at or below the bar as one, this node may have voted for. Without that, a
         // vote2 re-cast after the restart could land in a view whose branch this node
         // had already left behind.
-        let may_have_voted: Vec<_> = self
-            .proposals
-            .range(..=last_barred)
-            .map(|(view, proposal)| (*view, proposal.justify_qc.view_number()))
-            .collect();
-        for (view, justify) in may_have_voted {
-            self.vote1_parent.entry(view).or_insert(justify);
+        for (&view, proposal) in self.proposals.range(..=last_barred) {
+            self.vote1_parent
+                .entry(view)
+                .or_insert(proposal.justify_qc.view_number());
         }
         // `Coordinator::start` enters `current_view + 1`, so parking the cursor
         // at the high QC makes the node re-enter at `high_qc + 1`.
