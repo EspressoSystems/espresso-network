@@ -2,10 +2,13 @@ use std::{
     cmp::min,
     collections::{HashMap, HashSet},
     str::FromStr,
-    time::{Duration, Instant},
 };
 #[cfg(feature = "node")]
-use std::{future::Future, sync::Arc};
+use std::{
+    future::Future,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 #[cfg(feature = "node")]
 use alloy::{
@@ -31,6 +34,7 @@ use async_lock::Mutex as AsyncMutex;
 use async_lock::RwLock as AsyncRwLock;
 use bigdecimal::BigDecimal;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
+#[cfg(feature = "node")]
 use futures::future::BoxFuture;
 #[cfg(feature = "node")]
 use hotshot_contract_adapter::sol_types::{
@@ -52,14 +56,14 @@ use hotshot_types::{
     traits::signature_key::SignatureKey as _,
     x25519,
 };
+#[cfg(feature = "node")]
 use humantime::format_duration;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use num_traits::{FromPrimitive, Zero};
 use thiserror::Error;
 #[cfg(feature = "node")]
-use tokio::spawn;
-use tokio::time::sleep;
+use tokio::{spawn, time::sleep};
 #[cfg(feature = "node")]
 use tracing::Instrument;
 use vbs::version::Version;
@@ -1416,8 +1420,8 @@ impl Fetcher {
                         Ok(init_block) => break init_block.to::<u64>(),
                         Err(err) => {
                             if start.elapsed() >= max_retry_duration {
-                                panic!(
-                                    "Failed to retrieve initial block after `{}`: {err}",
+                                espresso_utils::fatal!(
+                                    "failed to retrieve stake table initial block after {}: {err}",
                                     format_duration(max_retry_duration)
                                 );
                             }
@@ -1805,7 +1809,7 @@ impl Fetcher {
     }
 }
 
-#[cfg_attr(not(feature = "node"), allow(dead_code))]
+#[cfg(feature = "node")]
 async fn retry<F, T, E>(
     retry_delay: Duration,
     max_duration: Duration,
@@ -1822,23 +1826,12 @@ where
             Ok(result) => return result,
             Err(err) => {
                 if start.elapsed() >= max_duration {
-                    panic!(
-                        r#"
-                    Failed to complete operation `{operation_name}` after `{}`.
-                    error: {err}
-
-
-                    This might be caused by:
-                    - The current block range being too large for your RPC provider.
-                    - The event query returning more data than your RPC allows as
-                      some RPC providers limit the number of events returned.
-                    - RPC provider outage
-
-                    Suggested solution:
-                    - Reduce the value of the environment variable
-                      `ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE` to query smaller ranges.
-                    - Add multiple RPC providers
-                    - Use a different RPC provider with higher rate limits."#,
+                    espresso_utils::fatal!(
+                        "failed to complete operation `{operation_name}` after {}: {err}. Likely \
+                         causes: the block range is too large for the RPC provider, the event \
+                         query returns more results than the provider allows, or the provider is \
+                         down. Try lowering ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE, configuring \
+                         additional RPC providers, or a provider with higher rate limits.",
                         format_duration(max_duration)
                     );
                 }
@@ -2166,6 +2159,8 @@ pub mod testing {
 
 #[cfg(test)]
 mod tests {
+    use std::{env, process::Command};
+
     use alloy::{
         primitives::{Address, Bytes},
         rpc::types::Log,
@@ -4805,6 +4800,54 @@ mod tests {
                 .unwrap()
                 .stake_table_key,
             prior_v2
+        );
+    }
+
+    /// Marks the child process spawned by `test_retry_deadline_kills_process`.
+    const RUN_RETRY_DEADLINE: &str = "ESPRESSO_TEST_RUN_RETRY_DEADLINE";
+
+    /// Callers run `retry` in detached tasks, where a panic on the deadline is swallowed and the
+    /// node keeps running with the catchup silently dead. Only a real process exit is observable,
+    /// hence the re-exec: the child runs this same test with `RUN_RETRY_DEADLINE` set. With the
+    /// deadline back to `panic!` the child instead finishes its sleep and exits 0.
+    #[test]
+    fn test_retry_deadline_kills_process() {
+        if env::var_os(RUN_RETRY_DEADLINE).is_some() {
+            tokio::runtime::Runtime::new().unwrap().block_on(async {
+                tokio::spawn(retry(
+                    Duration::ZERO,
+                    Duration::ZERO,
+                    "deadline regression test",
+                    || Box::pin(async { Err::<(), &str>("always fails") }),
+                ));
+                sleep(Duration::from_secs(10)).await;
+            });
+            return;
+        }
+
+        // libtest names are crate-relative, so drop the crate segment of `module_path!`.
+        let filter = format!(
+            "{}::test_retry_deadline_kills_process",
+            module_path!().split_once("::").unwrap().1
+        );
+        // `--nocapture`: libtest's per-test capture buffer would otherwise hold the child's
+        // stderr, and exiting discards it before libtest prints it.
+        let child = Command::new(env::current_exe().unwrap())
+            .args([&filter, "--exact", "--nocapture"])
+            .env(RUN_RETRY_DEADLINE, "1")
+            .output()
+            .unwrap();
+
+        assert_eq!(
+            child.status.code(),
+            Some(1),
+            "child did not exit via `fatal`: {}",
+            child.status
+        );
+        let stderr = String::from_utf8_lossy(&child.stderr);
+        assert!(
+            stderr.contains("failed to complete operation `deadline regression test`"),
+            "operator-visible message missing from stderr: {stderr}"
         );
     }
 }
