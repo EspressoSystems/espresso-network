@@ -1,6 +1,7 @@
 //! V1 hotshot-events API.
 //!
-//! Mirrors the endpoints defined in `hotshot-events-service/api/hotshot_events.toml`.
+//! Mirrors the endpoints of the legacy `hotshot-events-service` API (its tide-disco
+//! `hotshot_events.toml`, since removed).
 
 use async_trait::async_trait;
 use futures::stream::BoxStream;
