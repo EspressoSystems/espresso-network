@@ -1420,10 +1420,10 @@ impl Fetcher {
                         Ok(init_block) => break init_block.to::<u64>(),
                         Err(err) => {
                             if start.elapsed() >= max_retry_duration {
-                                espresso_utils::fatal!(
-                                    "failed to retrieve stake table initial block after {}: {err}",
+                                return Err(StakeTableError::L1RetryBudgetExhausted(format!(
+                                    "Failed to retrieve initial block after `{}`: {err}",
                                     format_duration(max_retry_duration)
-                                );
+                                )));
                             }
                             tracing::warn!(%err, "Failed to retrieve initial block, retrying...");
                             sleep(retry_delay).await;
@@ -1478,7 +1478,7 @@ impl Fetcher {
                     })
                 },
             )
-            .await;
+            .await?;
 
             let chunk_events = logs
                 .into_iter()
@@ -1809,13 +1809,17 @@ impl Fetcher {
     }
 }
 
+/// Retry `operation` until it succeeds or `max_duration` elapses.
+///
+/// Exhausting the budget is terminal: the node cannot participate in consensus without the stake
+/// table, so the caller must surface this to the operator rather than retry in place.
 #[cfg(feature = "node")]
 async fn retry<F, T, E>(
     retry_delay: Duration,
     max_duration: Duration,
     operation_name: &str,
     mut operation: F,
-) -> T
+) -> Result<T, StakeTableError>
 where
     F: FnMut() -> BoxFuture<'static, Result<T, E>>,
     E: std::fmt::Display,
@@ -1823,17 +1827,28 @@ where
     let start = Instant::now();
     loop {
         match operation().await {
-            Ok(result) => return result,
+            Ok(result) => return Ok(result),
             Err(err) => {
                 if start.elapsed() >= max_duration {
-                    espresso_utils::fatal!(
-                        "failed to complete operation `{operation_name}` after {}: {err}. Likely \
-                         causes: the block range is too large for the RPC provider, the event \
-                         query returns more results than the provider allows, or the provider is \
-                         down. Try lowering ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE, configuring \
-                         additional RPC providers, or a provider with higher rate limits.",
+                    return Err(StakeTableError::L1RetryBudgetExhausted(format!(
+                        r#"
+                    Failed to complete operation `{operation_name}` after `{}`.
+                    error: {err}
+
+
+                    This might be caused by:
+                    - The current block range being too large for your RPC provider.
+                    - The event query returning more data than your RPC allows as
+                      some RPC providers limit the number of events returned.
+                    - RPC provider outage
+
+                    Suggested solution:
+                    - Reduce the value of the environment variable
+                      `ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE` to query smaller ranges.
+                    - Add multiple RPC providers
+                    - Use a different RPC provider with higher rate limits."#,
                         format_duration(max_duration)
-                    );
+                    )));
                 }
                 tracing::warn!(%err, "Retrying `{operation_name}` after error");
                 sleep(retry_delay).await;
@@ -2159,8 +2174,6 @@ pub mod testing {
 
 #[cfg(test)]
 mod tests {
-    use std::{env, process::Command};
-
     use alloy::{
         primitives::{Address, Bytes},
         rpc::types::Log,
@@ -4803,52 +4816,21 @@ mod tests {
         );
     }
 
-    /// Marks the child process spawned by `test_retry_deadline_kills_process`.
-    const RUN_RETRY_DEADLINE: &str = "ESPRESSO_TEST_RUN_RETRY_DEADLINE";
+    /// The deadline must be reported to the caller. It previously panicked, which callers run
+    /// inside a bare `tokio::spawn` swallowed at the task boundary, leaving the node up with the
+    /// stake table fetch silently dead.
+    #[test_log::test(tokio::test)]
+    async fn test_retry_reports_exhausted_budget() {
+        let err = retry(Duration::ZERO, Duration::ZERO, "deadline test", || {
+            Box::pin(async { Err::<(), &str>("rpc is down") })
+        })
+        .await
+        .unwrap_err();
 
-    /// Callers run `retry` in detached tasks, where a panic on the deadline is swallowed and the
-    /// node keeps running with the catchup silently dead. Only a real process exit is observable,
-    /// hence the re-exec: the child runs this same test with `RUN_RETRY_DEADLINE` set. With the
-    /// deadline back to `panic!` the child instead finishes its sleep and exits 0.
-    #[test]
-    fn test_retry_deadline_kills_process() {
-        if env::var_os(RUN_RETRY_DEADLINE).is_some() {
-            tokio::runtime::Runtime::new().unwrap().block_on(async {
-                tokio::spawn(retry(
-                    Duration::ZERO,
-                    Duration::ZERO,
-                    "deadline regression test",
-                    || Box::pin(async { Err::<(), &str>("always fails") }),
-                ));
-                sleep(Duration::from_secs(10)).await;
-            });
-            return;
-        }
-
-        // libtest names are crate-relative, so drop the crate segment of `module_path!`.
-        let filter = format!(
-            "{}::test_retry_deadline_kills_process",
-            module_path!().split_once("::").unwrap().1
-        );
-        // `--nocapture`: libtest's per-test capture buffer would otherwise hold the child's
-        // stderr, and exiting discards it before libtest prints it.
-        let child = Command::new(env::current_exe().unwrap())
-            .args([&filter, "--exact", "--nocapture"])
-            .env(RUN_RETRY_DEADLINE, "1")
-            .output()
-            .unwrap();
-
-        assert_eq!(
-            child.status.code(),
-            Some(1),
-            "child did not exit via `fatal`: {}",
-            child.status
-        );
-        let stderr = String::from_utf8_lossy(&child.stderr);
-        assert!(
-            stderr.contains("failed to complete operation `deadline regression test`"),
-            "operator-visible message missing from stderr: {stderr}"
-        );
+        assert_matches!(err, StakeTableError::L1RetryBudgetExhausted(_));
+        let msg = err.to_string();
+        assert!(msg.contains("rpc is down"), "{msg}");
+        assert!(msg.contains("ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE"), "{msg}");
     }
 }
 

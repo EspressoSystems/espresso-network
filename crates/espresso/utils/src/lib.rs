@@ -28,25 +28,6 @@ pub mod ser;
 pub mod shutdown;
 pub mod test_utils;
 
-/// Log a `format!`-style error, copy it to stderr, and exit with code 1. Diverges.
-///
-/// For failures that must take the node down so an operator notices. `panic!` does not do that
-/// from inside a detached `tokio::spawn` task: tokio catches the unwind at the task boundary, and
-/// when the `JoinHandle` is dropped the `JoinError` is never observed, so the process keeps
-/// running with that task's work silently dropped.
-///
-/// The stderr copy is the one output that survives a `RUST_LOG` filter excluding the call site, a
-/// process with no subscriber installed, and the OTel batch queue that exiting drops unflushed.
-/// Takes format arguments only; `tracing` field syntax is not supported.
-#[macro_export]
-macro_rules! fatal {
-    ($($arg:tt)*) => {{
-        ::tracing::error!($($arg)*);
-        ::std::eprintln!("fatal: {}", ::std::format_args!($($arg)*));
-        ::std::process::exit(1)
-    }};
-}
-
 #[cfg(feature = "full")]
 pub async fn wait_for_http(
     url: &Url,

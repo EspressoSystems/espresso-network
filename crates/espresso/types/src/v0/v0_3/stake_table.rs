@@ -490,6 +490,10 @@ pub enum StakeTableError {
     StakeTableEventDecodeError(#[from] alloy::sol_types::Error),
     #[error("Stake table events sorting error: {0}")]
     EventSortingError(#[from] EventSortingError),
+    /// An L1 operation kept failing until its retry budget ran out. Terminal: the caller has
+    /// already retried for `ESPRESSO_L1_EVENTS_MAX_RETRY_DURATION` and must not retry in place.
+    #[error("{0}")]
+    L1RetryBudgetExhausted(String),
 }
 
 #[derive(Debug, Error)]
