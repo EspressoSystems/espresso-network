@@ -40,7 +40,8 @@ protocol.
 Changed: PLAN.md (Operating envelope surfaces, Surface inventory, Verify command, Lessons), BACKLOG.md (4 findings),
 JOURNAL.md (this entry), .gitignore (loop state file).
 
-Checkpoint: pending
+Checkpoint: 4b54252cf130095b950e33f52684cba2b70d5eb2. This iteration changed only the three state files and .gitignore,
+which is what an audit iteration is: four BACKLOG.md items went from absent to open, so it is not a stall.
 
 Verification: Verify command green - `187 tests run: 187 passed, 15 skipped` in 236s, exit 0. The audit is read-based
 over `crates/hotshot/new-protocol/src/**` at 64c5cdc6d0a plus that battery as the executed check. Scope: the focus
