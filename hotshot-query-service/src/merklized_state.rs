@@ -19,6 +19,3 @@
 pub(crate) mod data_source;
 pub use data_source::*;
 pub use hotshot_query_service_types::merklized_state::*;
-
-#[derive(Default)]
-pub struct Options {}

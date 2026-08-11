@@ -27,6 +27,3 @@ pub(crate) mod data_source;
 
 pub use data_source::*;
 pub use hotshot_query_service_types::status::Error;
-
-#[derive(Default)]
-pub struct Options {}

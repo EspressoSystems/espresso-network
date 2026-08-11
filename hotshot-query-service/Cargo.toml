@@ -13,6 +13,7 @@
 [package]
 name = "hotshot-query-service"
 version = "0.1.76"
+publish = false
 authors = ["Espresso Systems <hello@espressosys.com>"]
 edition.workspace = true
 license = "GPL-3.0-or-later"
