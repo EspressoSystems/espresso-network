@@ -1,30 +1,15 @@
 //! V1 node API.
-//!
-//! Mirrors the endpoints defined in `hotshot-query-service/api/node.toml`.
 
 use async_trait::async_trait;
 use serde::Serialize;
 
-#[derive(Debug, Clone)]
-pub enum VidShareId {
-    Height(u64),
-    Hash(String),
-    PayloadHash(String),
-}
-
-#[derive(Debug, Clone)]
-pub enum HeaderWindowStart {
-    Time(u64),
-    Height(u64),
-    Hash(String),
-}
-
+/// Espresso's extensions to the node API.
+///
+/// The base node surface (block height, transaction counts, payload sizes, VID shares, sync
+/// status, header windows and limits) is served by `hotshot_query_service::node::router`, which the
+/// binary mounts alongside these routes; see [`crate::create_router_v1`].
 #[async_trait]
-pub trait NodeApi {
-    type VidShare: Serialize + Send + Sync + 'static;
-    type SyncStatus: Serialize + Send + Sync + 'static;
-    type HeaderWindow: Serialize + Send + Sync + 'static;
-    type Limits: Serialize + Send + Sync + 'static;
+pub trait NodeApiExtension {
     type StakeTable: Serialize + Send + Sync + 'static;
     type StakeTableCurrent: Serialize + Send + Sync + 'static;
     type Validators: Serialize + Send + Sync + 'static;
@@ -33,34 +18,6 @@ pub trait NodeApi {
     type BlockReward: Serialize + Send + Sync + 'static;
     type Block: Serialize + Send + Sync + 'static;
     type Leaf: Serialize + Send + Sync + 'static;
-
-    async fn block_height(&self) -> anyhow::Result<u64>;
-
-    async fn count_transactions(
-        &self,
-        from: Option<u64>,
-        to: Option<u64>,
-        namespace: Option<u64>,
-    ) -> anyhow::Result<u64>;
-
-    async fn payload_size(
-        &self,
-        from: Option<u64>,
-        to: Option<u64>,
-        namespace: Option<u64>,
-    ) -> anyhow::Result<u64>;
-
-    async fn get_vid_share(&self, id: VidShareId) -> anyhow::Result<Self::VidShare>;
-
-    async fn sync_status(&self) -> anyhow::Result<Self::SyncStatus>;
-
-    async fn get_header_window(
-        &self,
-        start: HeaderWindowStart,
-        end: u64,
-    ) -> anyhow::Result<Self::HeaderWindow>;
-
-    async fn limits(&self) -> anyhow::Result<Self::Limits>;
 
     async fn stake_table(&self, epoch: u64) -> anyhow::Result<Self::StakeTable>;
     async fn stake_table_current(&self) -> anyhow::Result<Self::StakeTableCurrent>;

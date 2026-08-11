@@ -60,7 +60,7 @@ where
         + v1::FeeStateApiExtension
         + v1::StatusApiExtension
         + v1::ConfigApi
-        + v1::NodeApi
+        + v1::NodeApiExtension
         + v1::CatchupApi
         + v1::SubmitApi
         + v1::StateSignatureApi
@@ -136,7 +136,7 @@ pub async fn serve_axum_fs<S>(
 where
     S: v1::StatusApiExtension
         + v1::AvailabilityApiExtension
-        + v1::NodeApi
+        + v1::NodeApiExtension
         + v1::TokenApi
         + v1::CatchupApi
         + v1::SubmitApi

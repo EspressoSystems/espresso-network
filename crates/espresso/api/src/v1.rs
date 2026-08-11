@@ -24,7 +24,7 @@ pub use database::DatabaseApi;
 pub use hotshot_events::HotShotEventsApi;
 pub use light_client::{HeaderQuery, LeafQuery, LightClientApi};
 pub use merklized_state::FeeStateApiExtension;
-pub use node::{HeaderWindowStart, NodeApi, VidShareId};
+pub use node::NodeApiExtension;
 pub use reward_state_v2::RewardApi;
 pub use state_signature::StateSignatureApi;
 pub use status::StatusApiExtension;

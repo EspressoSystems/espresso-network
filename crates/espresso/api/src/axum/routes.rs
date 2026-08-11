@@ -157,41 +157,8 @@ pub mod v1 {
     pub const CONFIG_ENV_ROUTE: &str = "/v1/config/env";
     pub const CONFIG_RUNTIME_ROUTE: &str = "/v1/config/runtime";
 
-    pub const NODE_BLOCK_HEIGHT_ROUTE: &str = "/v1/node/block-height";
-
-    pub const NODE_TRANSACTIONS_COUNT_ROUTE: &str = "/v1/node/transactions/count";
-    pub const NODE_TRANSACTIONS_COUNT_TO_ROUTE: &str = "/v1/node/transactions/count/{to}";
-    pub const NODE_TRANSACTIONS_COUNT_FROM_TO_ROUTE: &str =
-        "/v1/node/transactions/count/{from}/{to}";
-    pub const NODE_TRANSACTIONS_COUNT_NS_ROUTE: &str =
-        "/v1/node/transactions/count/namespace/{namespace}";
-    pub const NODE_TRANSACTIONS_COUNT_NS_TO_ROUTE: &str =
-        "/v1/node/transactions/count/namespace/{namespace}/{to}";
-    pub const NODE_TRANSACTIONS_COUNT_NS_FROM_TO_ROUTE: &str =
-        "/v1/node/transactions/count/namespace/{namespace}/{from}/{to}";
-
-    pub const NODE_PAYLOADS_SIZE_ROUTE: &str = "/v1/node/payloads/size";
-    pub const NODE_PAYLOADS_SIZE_TO_ROUTE: &str = "/v1/node/payloads/size/{to}";
-    pub const NODE_PAYLOADS_SIZE_FROM_TO_ROUTE: &str = "/v1/node/payloads/size/{from}/{to}";
-    pub const NODE_PAYLOADS_TOTAL_SIZE_ROUTE: &str = "/v1/node/payloads/total-size";
-    pub const NODE_PAYLOADS_SIZE_NS_ROUTE: &str = "/v1/node/payloads/size/namespace/{namespace}";
-    pub const NODE_PAYLOADS_SIZE_NS_TO_ROUTE: &str =
-        "/v1/node/payloads/size/namespace/{namespace}/{to}";
-    pub const NODE_PAYLOADS_SIZE_NS_FROM_TO_ROUTE: &str =
-        "/v1/node/payloads/size/namespace/{namespace}/{from}/{to}";
-
-    pub const NODE_VID_SHARE_BY_HEIGHT_ROUTE: &str = "/v1/node/vid/share/{height}";
-    pub const NODE_VID_SHARE_BY_HASH_ROUTE: &str = "/v1/node/vid/share/hash/{hash}";
-    pub const NODE_VID_SHARE_BY_PAYLOAD_HASH_ROUTE: &str =
-        "/v1/node/vid/share/payload-hash/{payload_hash}";
-
-    pub const NODE_SYNC_STATUS_ROUTE: &str = "/v1/node/sync-status";
-
-    pub const NODE_HEADER_WINDOW_TIME_ROUTE: &str = "/v1/node/header/window/{start}/{end}";
-    pub const NODE_HEADER_WINDOW_HEIGHT_ROUTE: &str = "/v1/node/header/window/from/{height}/{end}";
-    pub const NODE_HEADER_WINDOW_HASH_ROUTE: &str = "/v1/node/header/window/from/hash/{hash}/{end}";
-
-    pub const NODE_LIMITS_ROUTE: &str = "/v1/node/limits";
+    /// Mount point of the node module, whose base routes come from `hotshot-query-service`.
+    pub const NODE_PREFIX: &str = "/v1/node";
 
     pub const NODE_STAKE_TABLE_CURRENT_ROUTE: &str = "/v1/node/stake-table/current";
     pub const NODE_STAKE_TABLE_ROUTE: &str = "/v1/node/stake-table/{epoch_number}";
@@ -514,102 +481,6 @@ pub mod v1 {
     path_fn!(config_hotshot, CONFIG_HOTSHOT_ROUTE);
     path_fn!(config_env, CONFIG_ENV_ROUTE);
     path_fn!(config_runtime, CONFIG_RUNTIME_ROUTE);
-
-    // Node: block height / counts / sizes
-    path_fn!(node_block_height, NODE_BLOCK_HEIGHT_ROUTE);
-    path_fn!(node_transactions_count, NODE_TRANSACTIONS_COUNT_ROUTE);
-    path_fn!(
-        node_transactions_count_to,
-        NODE_TRANSACTIONS_COUNT_TO_ROUTE,
-        to
-    );
-    path_fn!(
-        node_transactions_count_from_to,
-        NODE_TRANSACTIONS_COUNT_FROM_TO_ROUTE,
-        from,
-        to
-    );
-    path_fn!(
-        node_transactions_count_ns,
-        NODE_TRANSACTIONS_COUNT_NS_ROUTE,
-        namespace
-    );
-    path_fn!(
-        node_transactions_count_ns_to,
-        NODE_TRANSACTIONS_COUNT_NS_TO_ROUTE,
-        namespace,
-        to
-    );
-    path_fn!(
-        node_transactions_count_ns_from_to,
-        NODE_TRANSACTIONS_COUNT_NS_FROM_TO_ROUTE,
-        namespace,
-        from,
-        to
-    );
-
-    path_fn!(node_payloads_size, NODE_PAYLOADS_SIZE_ROUTE);
-    path_fn!(node_payloads_size_to, NODE_PAYLOADS_SIZE_TO_ROUTE, to);
-    path_fn!(
-        node_payloads_size_from_to,
-        NODE_PAYLOADS_SIZE_FROM_TO_ROUTE,
-        from,
-        to
-    );
-    path_fn!(node_payloads_total_size, NODE_PAYLOADS_TOTAL_SIZE_ROUTE);
-    path_fn!(
-        node_payloads_size_ns,
-        NODE_PAYLOADS_SIZE_NS_ROUTE,
-        namespace
-    );
-    path_fn!(
-        node_payloads_size_ns_to,
-        NODE_PAYLOADS_SIZE_NS_TO_ROUTE,
-        namespace,
-        to
-    );
-    path_fn!(
-        node_payloads_size_ns_from_to,
-        NODE_PAYLOADS_SIZE_NS_FROM_TO_ROUTE,
-        namespace,
-        from,
-        to
-    );
-
-    // Node: VID shares
-    path_fn!(
-        node_vid_share_by_height,
-        NODE_VID_SHARE_BY_HEIGHT_ROUTE,
-        height
-    );
-    path_fn!(node_vid_share_by_hash, NODE_VID_SHARE_BY_HASH_ROUTE, hash);
-    path_fn!(
-        node_vid_share_by_payload_hash,
-        NODE_VID_SHARE_BY_PAYLOAD_HASH_ROUTE,
-        payload_hash
-    );
-
-    // Node: sync, header windows
-    path_fn!(node_sync_status, NODE_SYNC_STATUS_ROUTE);
-    path_fn!(
-        node_header_window_time,
-        NODE_HEADER_WINDOW_TIME_ROUTE,
-        start,
-        end
-    );
-    path_fn!(
-        node_header_window_height,
-        NODE_HEADER_WINDOW_HEIGHT_ROUTE,
-        height,
-        end
-    );
-    path_fn!(
-        node_header_window_hash,
-        NODE_HEADER_WINDOW_HASH_ROUTE,
-        hash,
-        end
-    );
-    path_fn!(node_limits, NODE_LIMITS_ROUTE);
 
     // Node: stake table / validators / participation
     path_fn!(node_stake_table_current, NODE_STAKE_TABLE_CURRENT_ROUTE);

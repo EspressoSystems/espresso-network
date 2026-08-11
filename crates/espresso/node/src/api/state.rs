@@ -3,7 +3,7 @@
 //! This module provides implementations for both v1::RewardApi (internal types)
 //! and v2::RewardApi (proto types), backed by the same data source.
 
-use std::{ops::Bound, time::Duration};
+use std::time::Duration;
 
 use alloy::primitives::U256;
 use async_trait::async_trait;
@@ -30,7 +30,7 @@ use hotshot_query_service::{
     merklized_state::{
         MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot as HsSnapshot,
     },
-    node::{NodeDataSource as _, WindowStart},
+    node::NodeDataSource as _,
     types::HeightIndexed as _,
 };
 use hotshot_types::{
@@ -1650,25 +1650,18 @@ where
 }
 
 // ============================================================================
-// v1::NodeApi implementation
+// v1::NodeApiExtension implementation
 // ============================================================================
 
 #[async_trait]
-impl<D> espresso_api::v1::NodeApi for NodeApiStateImpl<D>
+impl<D> espresso_api::v1::NodeApiExtension for NodeApiStateImpl<D>
 where
     D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target: hotshot_query_service::node::NodeDataSource<espresso_types::SeqTypes>
-        + super::data_source::StakeTableDataSource<espresso_types::SeqTypes>
+    D::Target: super::data_source::StakeTableDataSource<espresso_types::SeqTypes>
         + super::data_source::PruningDataSource
         + Send
         + Sync,
 {
-    type VidShare = hotshot_types::data::VidShare;
-    type SyncStatus = hotshot_query_service::node::SyncStatusQueryData;
-    type HeaderWindow = hotshot_query_service::node::TimeWindowQueryData<
-        hotshot_query_service::Header<espresso_types::SeqTypes>,
-    >;
-    type Limits = hotshot_query_service::node::Limits;
     type StakeTable = Vec<hotshot_types::PeerConfig<espresso_types::SeqTypes>>;
     type StakeTableCurrent =
         super::data_source::StakeTableWithEpochNumber<espresso_types::SeqTypes>;
@@ -1681,113 +1674,6 @@ where
     type BlockReward = Option<espresso_types::v0_3::RewardAmount>;
     type Block = hotshot_query_service::availability::BlockQueryData<espresso_types::SeqTypes>;
     type Leaf = hotshot_query_service::availability::LeafQueryData<espresso_types::SeqTypes>;
-
-    async fn block_height(&self) -> anyhow::Result<u64> {
-        let ds = &*self.data_source;
-        let h = hotshot_query_service::node::NodeDataSource::block_height(ds)
-            .await
-            .map_err(classify_query_error)?;
-        Ok(h as u64)
-    }
-
-    async fn count_transactions(
-        &self,
-        from: Option<u64>,
-        to: Option<u64>,
-        namespace: Option<u64>,
-    ) -> anyhow::Result<u64> {
-        let ds = &*self.data_source;
-        let from = match from {
-            Some(f) => Bound::Included(f as usize),
-            None => Bound::Unbounded,
-        };
-        let to = match to {
-            Some(t) => Bound::Included(t as usize),
-            None => Bound::Unbounded,
-        };
-        let ns = namespace.map(espresso_types::NamespaceId::from);
-        let count = ds
-            .count_transactions_in_range((from, to), ns)
-            .await
-            .map_err(classify_query_error)?;
-        Ok(count as u64)
-    }
-
-    async fn payload_size(
-        &self,
-        from: Option<u64>,
-        to: Option<u64>,
-        namespace: Option<u64>,
-    ) -> anyhow::Result<u64> {
-        let ds = &*self.data_source;
-        let from = match from {
-            Some(f) => Bound::Included(f as usize),
-            None => Bound::Unbounded,
-        };
-        let to = match to {
-            Some(t) => Bound::Included(t as usize),
-            None => Bound::Unbounded,
-        };
-        let ns = namespace.map(espresso_types::NamespaceId::from);
-        let size = ds
-            .payload_size_in_range((from, to), ns)
-            .await
-            .map_err(classify_query_error)?;
-        Ok(size as u64)
-    }
-
-    async fn get_vid_share(
-        &self,
-        id: espresso_api::v1::VidShareId,
-    ) -> anyhow::Result<Self::VidShare> {
-        let ds = &*self.data_source;
-        let node_id: HsBlockId<espresso_types::SeqTypes> = match id {
-            espresso_api::v1::VidShareId::Height(h) => HsBlockId::Number(h as usize),
-            espresso_api::v1::VidShareId::Hash(h) => HsBlockId::Hash(
-                h.parse()
-                    .map_err(|_| bad_request(format!("invalid block hash: {h}")))?,
-            ),
-            espresso_api::v1::VidShareId::PayloadHash(h) => HsBlockId::PayloadHash(
-                h.parse()
-                    .map_err(|_| bad_request(format!("invalid payload hash: {h}")))?,
-            ),
-        };
-        hotshot_query_service::node::NodeDataSource::vid_share(ds, node_id)
-            .await
-            .map_err(classify_query_error)
-    }
-
-    async fn sync_status(&self) -> anyhow::Result<Self::SyncStatus> {
-        let ds = &*self.data_source;
-        hotshot_query_service::node::NodeDataSource::sync_status(ds)
-            .await
-            .map_err(classify_query_error)
-    }
-
-    async fn get_header_window(
-        &self,
-        start: espresso_api::v1::HeaderWindowStart,
-        end: u64,
-    ) -> anyhow::Result<Self::HeaderWindow> {
-        let ds = &*self.data_source;
-        let start: WindowStart<espresso_types::SeqTypes> = match start {
-            espresso_api::v1::HeaderWindowStart::Time(t) => WindowStart::Time(t),
-            espresso_api::v1::HeaderWindowStart::Height(h) => WindowStart::Height(h),
-            espresso_api::v1::HeaderWindowStart::Hash(h) => WindowStart::Hash(
-                h.parse()
-                    .map_err(|err| bad_request(format!("invalid block hash {h}: {err}")))?,
-            ),
-        };
-        ds.get_header_window(start, end, node_window_limit())
-            .await
-            .map_err(classify_query_error)
-    }
-
-    async fn limits(&self) -> anyhow::Result<Self::Limits> {
-        Ok(hotshot_query_service::node::Limits {
-            window_limit: node_window_limit(),
-        })
-    }
 
     async fn stake_table(&self, epoch: u64) -> anyhow::Result<Self::StakeTable> {
         let ds = &*self.data_source;
@@ -1870,10 +1756,6 @@ where
         let ds = &*self.data_source;
         ds.get_oldest_leaf().await
     }
-}
-
-fn node_window_limit() -> usize {
-    hotshot_query_service::node::Options::default().window_limit
 }
 
 // ============================================================================

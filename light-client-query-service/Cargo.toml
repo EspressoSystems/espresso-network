@@ -18,7 +18,6 @@ genesis = []
 anyhow = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }
-disco-types = { workspace = true }
 espresso-node = { workspace = true, default-features = false }
 espresso-types = { workspace = true }
 hotshot-query-service = { workspace = true }

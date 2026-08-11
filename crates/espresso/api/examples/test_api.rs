@@ -238,11 +238,7 @@ impl v1::ConfigApi for TestApi {
 }
 
 #[async_trait]
-impl v1::NodeApi for TestApi {
-    type VidShare = serde_json::Value;
-    type SyncStatus = serde_json::Value;
-    type HeaderWindow = serde_json::Value;
-    type Limits = serde_json::Value;
+impl v1::NodeApiExtension for TestApi {
     type StakeTable = serde_json::Value;
     type StakeTableCurrent = serde_json::Value;
     type Validators = serde_json::Value;
@@ -252,41 +248,6 @@ impl v1::NodeApi for TestApi {
     type Block = serde_json::Value;
     type Leaf = serde_json::Value;
 
-    async fn block_height(&self) -> Result<u64> {
-        Ok(0)
-    }
-    async fn count_transactions(
-        &self,
-        _from: Option<u64>,
-        _to: Option<u64>,
-        _namespace: Option<u64>,
-    ) -> Result<u64> {
-        Ok(0)
-    }
-    async fn payload_size(
-        &self,
-        _from: Option<u64>,
-        _to: Option<u64>,
-        _namespace: Option<u64>,
-    ) -> Result<u64> {
-        Ok(0)
-    }
-    async fn get_vid_share(&self, _id: v1::VidShareId) -> Result<Self::VidShare> {
-        Ok(serde_json::Value::Null)
-    }
-    async fn sync_status(&self) -> Result<Self::SyncStatus> {
-        Ok(serde_json::Value::Null)
-    }
-    async fn get_header_window(
-        &self,
-        _start: v1::HeaderWindowStart,
-        _end: u64,
-    ) -> Result<Self::HeaderWindow> {
-        Ok(serde_json::Value::Null)
-    }
-    async fn limits(&self) -> Result<Self::Limits> {
-        Ok(serde_json::Value::Null)
-    }
     async fn stake_table(&self, _epoch: u64) -> Result<Self::StakeTable> {
         Ok(serde_json::Value::Null)
     }

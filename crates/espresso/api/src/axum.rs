@@ -295,7 +295,7 @@ where
         + v1::FeeStateApiExtension
         + v1::StatusApiExtension
         + v1::ConfigApi
-        + v1::NodeApi
+        + v1::NodeApiExtension
         + v1::CatchupApi
         + v1::SubmitApi
         + v1::StateSignatureApi
@@ -793,182 +793,15 @@ where
         .with_state(state)
 }
 
+/// Espresso's node extensions: the stake table, validators, participation rates, the block reward,
+/// and the oldest objects storage still holds. The module's base routes (block height, transaction
+/// counts, payload sizes, VID shares, sync status, header windows and limits) come from
+/// `hotshot_query_service::node`, which the caller builds from its concrete data source; see
+/// [`create_router_v1`].
 pub(crate) fn router_node<S>(state: S) -> ApiRouter
 where
-    S: v1::NodeApi + Clone + Send + Sync + 'static,
+    S: v1::NodeApiExtension + Clone + Send + Sync + 'static,
 {
-    let node_block_height = |State(state): State<S>| async move {
-        <S as v1::NodeApi>::block_height(&state)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let node_count_txs = |State(state): State<S>| async move {
-        state
-            .count_transactions(None, None, None)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let node_count_txs_ns = |State(state): State<S>, Path(namespace): Path<u64>| async move {
-        state
-            .count_transactions(None, None, Some(namespace))
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let node_count_txs_ns_to = |State(state): State<S>, Path((namespace, to)): Path<(u64, u64)>| async move {
-        state
-            .count_transactions(None, Some(to), Some(namespace))
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let node_count_txs_ns_from_to =
-        |State(state): State<S>, Path((namespace, from, to)): Path<(u64, u64, u64)>| async move {
-            state
-                .count_transactions(Some(from), Some(to), Some(namespace))
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let node_count_txs_to = |State(state): State<S>, Path(to): Path<u64>| async move {
-        state
-            .count_transactions(None, Some(to), None)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let node_count_txs_from_to = |State(state): State<S>, Path((from, to)): Path<(u64, u64)>| async move {
-        state
-            .count_transactions(Some(from), Some(to), None)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let node_payload_size = |State(state): State<S>| async move {
-        state
-            .payload_size(None, None, None)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let node_payload_size_ns = |State(state): State<S>, Path(namespace): Path<u64>| async move {
-        state
-            .payload_size(None, None, Some(namespace))
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let node_payload_size_ns_to =
-        |State(state): State<S>, Path((namespace, to)): Path<(u64, u64)>| async move {
-            state
-                .payload_size(None, Some(to), Some(namespace))
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let node_payload_size_ns_from_to =
-        |State(state): State<S>, Path((namespace, from, to)): Path<(u64, u64, u64)>| async move {
-            state
-                .payload_size(Some(from), Some(to), Some(namespace))
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let node_payload_size_to = |State(state): State<S>, Path(to): Path<u64>| async move {
-        state
-            .payload_size(None, Some(to), None)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let node_payload_size_from_to = |State(state): State<S>, Path((from, to)): Path<(u64, u64)>| async move {
-        state
-            .payload_size(Some(from), Some(to), None)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let node_vid_share_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
-        state
-            .get_vid_share(v1::VidShareId::Hash(hash))
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let node_vid_share_by_payload_hash =
-        |State(state): State<S>, Path(payload_hash): Path<String>| async move {
-            state
-                .get_vid_share(v1::VidShareId::PayloadHash(payload_hash))
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let node_vid_share_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
-        state
-            .get_vid_share(v1::VidShareId::Height(height))
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let node_sync_status = |State(state): State<S>| async move {
-        state
-            .sync_status()
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let node_header_window_hash =
-        |State(state): State<S>, Path((hash, end)): Path<(String, u64)>| async move {
-            state
-                .get_header_window(v1::HeaderWindowStart::Hash(hash), end)
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let node_header_window_height =
-        |State(state): State<S>, Path((height, end)): Path<(u64, u64)>| async move {
-            state
-                .get_header_window(v1::HeaderWindowStart::Height(height), end)
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let node_header_window_time = |State(state): State<S>, Path((start, end)): Path<(u64, u64)>| async move {
-        state
-            .get_header_window(v1::HeaderWindowStart::Time(start), end)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let node_limits = |State(state): State<S>| async move {
-        <S as v1::NodeApi>::limits(&state)
-            .await
-            .map(ApiJson)
-            .map_err(ApiError::Internal)
-    };
-
     let node_stake_table_current = |State(state): State<S>| async move {
         state
             .stake_table_current()
@@ -1083,200 +916,6 @@ where
     };
 
     ApiRouter::new()
-        .api_route(
-            routes::v1::NODE_BLOCK_HEIGHT_ROUTE,
-            get_with(node_block_height, |op| {
-                op.summary("Get node's block height")
-                    .description("The current height of the chain, as observed by this node.")
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_TRANSACTIONS_COUNT_ROUTE,
-            get_with(node_count_txs, |op| {
-                op.summary("Count transactions").description(
-                    "Get the number of transactions in the chain, optionally restricted by block \
-                     range and/or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_TRANSACTIONS_COUNT_NS_ROUTE,
-            get_with(node_count_txs_ns, |op| {
-                op.summary("Count transactions").description(
-                    "Get the number of transactions in the chain, optionally restricted by block \
-                     range and/or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_TRANSACTIONS_COUNT_NS_TO_ROUTE,
-            get_with(node_count_txs_ns_to, |op| {
-                op.summary("Count transactions").description(
-                    "Get the number of transactions in the chain, optionally restricted by block \
-                     range and/or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_TRANSACTIONS_COUNT_NS_FROM_TO_ROUTE,
-            get_with(node_count_txs_ns_from_to, |op| {
-                op.summary("Count transactions").description(
-                    "Get the number of transactions in the chain, optionally restricted by block \
-                     range and/or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_TRANSACTIONS_COUNT_TO_ROUTE,
-            get_with(node_count_txs_to, |op| {
-                op.summary("Count transactions").description(
-                    "Get the number of transactions in the chain, optionally restricted by block \
-                     range and/or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_TRANSACTIONS_COUNT_FROM_TO_ROUTE,
-            get_with(node_count_txs_from_to, |op| {
-                op.summary("Count transactions").description(
-                    "Get the number of transactions in the chain, optionally restricted by block \
-                     range and/or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_PAYLOADS_SIZE_ROUTE,
-            get_with(node_payload_size, |op| {
-                op.summary("Get payload size").description(
-                    "Get the cumulative size (bytes) of payload data in the chain, optionally \
-                     restricted by block range and/or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_PAYLOADS_TOTAL_SIZE_ROUTE,
-            get_with(node_payload_size, |op| {
-                op.summary("Get payload size")
-                    .description("Deprecated alias for payloads/size.")
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_PAYLOADS_SIZE_NS_ROUTE,
-            get_with(node_payload_size_ns, |op| {
-                op.summary("Get payload size").description(
-                    "Get the cumulative size (bytes) of payload data in the chain, optionally \
-                     restricted by block range and/or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_PAYLOADS_SIZE_NS_TO_ROUTE,
-            get_with(node_payload_size_ns_to, |op| {
-                op.summary("Get payload size").description(
-                    "Get the cumulative size (bytes) of payload data in the chain, optionally \
-                     restricted by block range and/or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_PAYLOADS_SIZE_NS_FROM_TO_ROUTE,
-            get_with(node_payload_size_ns_from_to, |op| {
-                op.summary("Get payload size").description(
-                    "Get the cumulative size (bytes) of payload data in the chain, optionally \
-                     restricted by block range and/or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_PAYLOADS_SIZE_TO_ROUTE,
-            get_with(node_payload_size_to, |op| {
-                op.summary("Get payload size").description(
-                    "Get the cumulative size (bytes) of payload data in the chain, optionally \
-                     restricted by block range and/or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_PAYLOADS_SIZE_FROM_TO_ROUTE,
-            get_with(node_payload_size_from_to, |op| {
-                op.summary("Get payload size").description(
-                    "Get the cumulative size (bytes) of payload data in the chain, optionally \
-                     restricted by block range and/or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_VID_SHARE_BY_HASH_ROUTE,
-            get_with(node_vid_share_by_hash, |op| {
-                op.summary("Get this node's VID share").description(
-                    "Get information needed to run the VID reconstruction protocol for a block: \
-                     this node's VID share, if available.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_VID_SHARE_BY_PAYLOAD_HASH_ROUTE,
-            get_with(node_vid_share_by_payload_hash, |op| {
-                op.summary("Get this node's VID share").description(
-                    "Get information needed to run the VID reconstruction protocol for a block: \
-                     this node's VID share, if available.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_VID_SHARE_BY_HEIGHT_ROUTE,
-            get_with(node_vid_share_by_height, |op| {
-                op.summary("Get this node's VID share").description(
-                    "Get information needed to run the VID reconstruction protocol for a block: \
-                     this node's VID share, if available.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_SYNC_STATUS_ROUTE,
-            get_with(node_sync_status, |op| {
-                op.summary("Get node sync status").description(
-                    "Get the node's progress syncing with the latest chain state \
-                     (missing/present/pruned ranges for blocks, leaves, and VID common).",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_HEADER_WINDOW_HASH_ROUTE,
-            get_with(node_header_window_hash, |op| {
-                op.summary("Get header window").description(
-                    "Get block headers whose timestamps fall in a time window, plus one header \
-                     before and after to prove completeness.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_HEADER_WINDOW_HEIGHT_ROUTE,
-            get_with(node_header_window_height, |op| {
-                op.summary("Get header window").description(
-                    "Get block headers whose timestamps fall in a time window, plus one header \
-                     before and after to prove completeness.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_HEADER_WINDOW_TIME_ROUTE,
-            get_with(node_header_window_time, |op| {
-                op.summary("Get header window").description(
-                    "Get block headers whose timestamps fall in a time window, plus one header \
-                     before and after to prove completeness.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_LIMITS_ROUTE,
-            get_with(node_limits, |op| {
-                op.summary("Get node limits").description(
-                    "Get implementation-defined limits restricting node API requests (e.g. \
-                     header/window query size).",
-                )
-            }),
-        )
         .api_route(
             routes::v1::NODE_STAKE_TABLE_CURRENT_ROUTE,
             get_with(node_stake_table_current, |op| {
@@ -2171,7 +1810,7 @@ where
         + v1::FeeStateApiExtension
         + v1::StatusApiExtension
         + v1::ConfigApi
-        + v1::NodeApi
+        + v1::NodeApiExtension
         + v1::CatchupApi
         + v1::SubmitApi
         + v1::StateSignatureApi
@@ -2637,6 +2276,22 @@ mod tests {
             )
     }
 
+    /// Stand-in for the `hotshot_query_service::node` router; see [`mock_availability_base`].
+    fn mock_node_base() -> ApiRouter {
+        ApiRouter::new()
+            .api_route(
+                "/block-height",
+                get_with(
+                    async || ApiJson(()),
+                    |op| op.summary("Get this node's block height"),
+                ),
+            )
+            .api_route(
+                "/limits",
+                get_with(async || ApiJson(()), |op| op.summary("Get node limits")),
+            )
+    }
+
     /// Stand-in for the `hotshot_query_service::explorer` router; see [`mock_availability_base`].
     fn mock_explorer_base() -> ApiRouter {
         ApiRouter::new()
@@ -2681,6 +2336,7 @@ mod tests {
         ApiRouter::new()
             .nest(routes::v1::AVAILABILITY_PREFIX, mock_availability_base())
             .nest(routes::v1::STATUS_PREFIX, mock_status_base())
+            .nest(routes::v1::NODE_PREFIX, mock_node_base())
             .nest(routes::v1::EXPLORER_PREFIX, mock_explorer_base())
             .nest(
                 routes::v1::BLOCK_STATE_PREFIX,
@@ -2941,11 +2597,7 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl v1::NodeApi for MockState {
-        type VidShare = ();
-        type SyncStatus = ();
-        type HeaderWindow = ();
-        type Limits = ();
+    impl v1::NodeApiExtension for MockState {
         type StakeTable = ();
         type StakeTableCurrent = ();
         type Validators = ();
@@ -2955,41 +2607,6 @@ mod tests {
         type Block = ();
         type Leaf = ();
 
-        async fn block_height(&self) -> anyhow::Result<u64> {
-            unimplemented!()
-        }
-        async fn count_transactions(
-            &self,
-            _from: Option<u64>,
-            _to: Option<u64>,
-            _namespace: Option<u64>,
-        ) -> anyhow::Result<u64> {
-            unimplemented!()
-        }
-        async fn payload_size(
-            &self,
-            _from: Option<u64>,
-            _to: Option<u64>,
-            _namespace: Option<u64>,
-        ) -> anyhow::Result<u64> {
-            unimplemented!()
-        }
-        async fn get_vid_share(&self, _id: v1::VidShareId) -> anyhow::Result<Self::VidShare> {
-            unimplemented!()
-        }
-        async fn sync_status(&self) -> anyhow::Result<Self::SyncStatus> {
-            unimplemented!()
-        }
-        async fn get_header_window(
-            &self,
-            _start: v1::HeaderWindowStart,
-            _end: u64,
-        ) -> anyhow::Result<Self::HeaderWindow> {
-            unimplemented!()
-        }
-        async fn limits(&self) -> anyhow::Result<Self::Limits> {
-            unimplemented!()
-        }
         async fn stake_table(&self, _epoch: u64) -> anyhow::Result<Self::StakeTable> {
             unimplemented!()
         }
@@ -3537,6 +3154,34 @@ mod tests {
         );
         // The extension is still there alongside the base.
         assert!(paths.contains_key(routes::v1::STATUS_KEYS_ROUTE));
+    }
+
+    /// The base node routes come from `hotshot-query-service` now, so the mount has to put them
+    /// (and their documentation) back on the paths this crate used to declare itself.
+    #[tokio::test]
+    async fn v1_openapi_spec_documents_mounted_node_base() {
+        let router = create_router_v1(MockState, mock_hqs_base());
+        let req = Request::builder()
+            .uri(routes::v1::OPENAPI_SPEC_ROUTE)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router, req).await.unwrap();
+        let spec: serde_json::Value =
+            serde_json::from_str(&body_string(resp).await).expect("valid JSON");
+        let paths = spec["paths"].as_object().expect("spec has paths");
+
+        for route in ["/v1/node/block-height", "/v1/node/limits"] {
+            let item = paths
+                .get(route)
+                .unwrap_or_else(|| panic!("{route} missing from spec: {:?}", paths.keys()));
+            assert_eq!(item["get"]["tags"][0], "node");
+        }
+        assert_eq!(
+            paths["/v1/node/block-height"]["get"]["summary"],
+            "Get this node's block height"
+        );
+        // The extensions are still there alongside the base.
+        assert!(paths.contains_key(routes::v1::NODE_STAKE_TABLE_CURRENT_ROUTE));
     }
 
     /// The explorer routes come from `hotshot-query-service` now, and this crate no longer serves

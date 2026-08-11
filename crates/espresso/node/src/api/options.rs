@@ -24,6 +24,7 @@ use hotshot_query_service::{
         MerklizedStateDataSource, MerklizedStateHeightPersistence,
         Options as MerklizedStateOptions, router::merklized_state_router,
     },
+    node::{NodeDataSource, Options as NodeOptions, router::node_router},
     status::{
         HasMetrics, Options as StatusOptions, StatusDataSource, UpdateStatusData,
         router::status_router,
@@ -582,15 +583,26 @@ where
 /// SQL storage can back them.
 ///
 /// The default availability options are the 500ms fetch timeout and the 500/100 small/large object
-/// range limits this API has always enforced.
+/// range limits this API has always enforced, and the default node options the 500-header window
+/// limit.
 fn hqs_base<D>(ds: D) -> ApiRouter
 where
-    D: AvailabilityDataSource<SeqTypes> + StatusDataSource + Clone + Send + Sync + 'static,
+    D: AvailabilityDataSource<SeqTypes>
+        + NodeDataSource<SeqTypes>
+        + StatusDataSource
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
     ApiRouter::new()
         .nest(
             routes::v1::AVAILABILITY_PREFIX,
             availability_router::<SeqTypes, _>(&AvailabilityOptions::default(), ds.clone()),
+        )
+        .nest(
+            routes::v1::NODE_PREFIX,
+            node_router::<SeqTypes, _>(&NodeOptions::default(), ds.clone()),
         )
         .nest(
             routes::v1::STATUS_PREFIX,
