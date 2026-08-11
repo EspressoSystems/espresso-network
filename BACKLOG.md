@@ -19,13 +19,6 @@ Rules:
 
 ## Later
 
-- [ ] NP-4 (Low, runtime, code quality): `BlockBuilder` decrements its byte counters with unchecked `-=` in
-      `on_dedup_manifest` (`block.rs:301`) and `on_view_changed` (`block.rs:329`) while `on_block_reconstructed` uses
-      `saturating_sub` (`block.rs:340`); the counters are what enforce `max_leader_bytes`/`max_retry_bytes`, so a wrap
-      would silently disable the caps rather than fail loudly. Acceptance:
-      `grep -n 'total_bytes -=' crates/hotshot/new-protocol/src/block.rs` prints nothing and the crate battery still
-      passes.
-
 ## Proposed
 
 Items needing a user decision before any work, one plain line each, never a checkbox task: envelope changes, audit

@@ -72,6 +72,15 @@ pub struct BlockBuilderConfig {
     pub dedup_window_size: u64,
 }
 
+/// The two byte counters (`retry_total_bytes`, `leader_total_bytes`) track the
+/// bytes held in `retry_pending` and `leader_buffer`, and admission is refused
+/// once adding a transaction would cross the matching cap. Every decrement is
+/// saturating: the counters are only ever reduced by an amount that was added to
+/// them, so a wrap should be impossible, and if that ever stopped holding a
+/// wrapped counter would sit just below `u64::MAX` and refuse every transaction
+/// from then on. Clamping at zero fails toward accepting work rather than
+/// silently starving the builder.
+
 impl Default for BlockBuilderConfig {
     fn default() -> Self {
         Self {
@@ -298,7 +307,9 @@ impl<T: NodeType> BlockBuilder<T> {
 
         for hash in &hashes {
             if let Some(tx) = self.leader_buffer.remove(hash) {
-                self.leader_total_bytes -= tx.minimum_block_size();
+                self.leader_total_bytes = self
+                    .leader_total_bytes
+                    .saturating_sub(tx.minimum_block_size());
             }
         }
 
@@ -326,7 +337,7 @@ impl<T: NodeType> BlockBuilder<T> {
                 true
             }
         });
-        self.retry_total_bytes -= expired_bytes;
+        self.retry_total_bytes = self.retry_total_bytes.saturating_sub(expired_bytes);
 
         self.retry_pending
             .values()

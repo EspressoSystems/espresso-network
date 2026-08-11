@@ -174,7 +174,7 @@ stands for a whole subsystem.
       the envelope's trust classes.
 - [ ] epoch: `NP/epoch.rs` `EpochManager` - swept at 64c5cdc6d0a - full read of dedup state, the epoch-root and
       transition-block triggers, and GC; this sweep produced NP-2.
-- [x] block: `NP/block.rs` `BlockBuilder`/`BlockBuilderConfig` - swept at 64c5cdc6d0a - full read of the retry and
+- [ ] block: `NP/block.rs` `BlockBuilder`/`BlockBuilderConfig` - swept at 64c5cdc6d0a - full read of the retry and
       leader buffers, dedup window, and byte accounting; this sweep produced NP-4.
 - [x] proposal: `NP/proposal.rs` `ProposalValidator`/`VidShareValidator`/`Validator` - swept at 64c5cdc6d0a - full read
       of all five validation steps; contributed to NP-1.
@@ -322,6 +322,10 @@ decide: a rule that had to be written twice is a rule this text is not enforcing
   fails with "files were modified by this hook"; re-run `git add -A && git commit` to accept the reformatting.
 - `EpochNumber::genesis()` is 1 while `ViewNumber::genesis()` is 0, so any epoch bound or test computed from 0 is off by
   one; derive it from `EpochNumber::genesis()` instead of writing a literal.
+- An acceptance check that is only a grep proves the code changed, not that the behaviour is right; pair it with a test
+  of the invariant the code exists to maintain.
+- A `spell-checking` pre-commit hook rejects invented hyphenated words; prefer plain wording in PLAN, BACKLOG and
+  JOURNAL prose.
 
 ## Definition of done
 

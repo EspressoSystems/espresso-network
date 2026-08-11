@@ -95,6 +95,96 @@ async fn test_leader_buffer_drain() {
     );
 }
 
+/// A transaction of exactly `n` bytes, so a test can count the cap in
+/// transactions rather than in bytes. `minimum_block_size` is the payload
+/// length, and `small_config` caps the leader buffer at 512 bytes, so five
+/// hundred-byte transactions fit and the sixth does not.
+fn sized_tx(id: u8, n: usize) -> TestTransaction {
+    let mut bytes = vec![0u8; n];
+    bytes[0] = id;
+    TestTransaction::new(bytes)
+}
+
+/// `max_leader_bytes` admits transactions up to the cap and refuses the one
+/// that would cross it.
+#[tokio::test]
+async fn test_leader_buffer_respects_max_bytes() {
+    let mut b = builder();
+    let txs: Vec<_> = (0..6).map(|i| sized_tx(i, 100)).collect();
+    b.on_transactions(tx_msg(view(1), txs.clone()));
+
+    let (kept, _) = b.drain(view(1), epoch());
+    assert_eq!(
+        kept.len(),
+        5,
+        "500 bytes fit under the 512-byte cap, 600 do not"
+    );
+}
+
+/// Dropping transactions from the leader buffer returns their bytes to the
+/// budget, so the freed room is reusable. This is what the buffer's byte
+/// counter is for: if the decrement were wrong in either direction, the second
+/// batch would be admitted in the wrong number.
+#[tokio::test]
+async fn test_dedup_returns_leader_budget() {
+    let mut b = builder();
+    let first: Vec<_> = (0..5).map(|i| sized_tx(i, 100)).collect();
+    b.on_transactions(tx_msg(view(1), first.clone()));
+
+    // The leader for view 1 took three of them, so 300 bytes come back.
+    let taken: Vec<_> = first.iter().take(3).map(Committable::commit).collect();
+    b.on_dedup_manifest(DedupManifest {
+        view: view(1),
+        epoch: epoch(),
+        hashes: taken,
+    });
+
+    // 200 bytes are still held, so three more hundred-byte transactions would
+    // reach 500 and fit, while a fourth would cross the cap.
+    let second: Vec<_> = (10..14).map(|i| sized_tx(i, 100)).collect();
+    b.on_transactions(tx_msg(view(2), second));
+
+    let (kept, _) = b.drain(view(2), epoch());
+    assert_eq!(
+        kept.len(),
+        5,
+        "two carried over plus three of the four new ones"
+    );
+}
+
+/// `max_retry_bytes` refuses the submission that would cross it, and expiry
+/// returns that budget.
+#[tokio::test]
+async fn test_retry_buffer_respects_max_bytes_and_frees_on_expiry() {
+    let mut b = builder();
+    for i in 0..11 {
+        b.on_submit_transaction(sized_tx(i, 100));
+    }
+    assert_eq!(
+        b.outstanding_transactions(),
+        (10, 1000),
+        "1000 bytes fit under the 1024-byte cap, 1100 do not"
+    );
+
+    // Every entry was submitted at view 0 with ttl 5, so all expire together.
+    let forwarded = b.on_view_changed(view(6));
+    assert!(
+        forwarded.is_empty(),
+        "expired transactions are not forwarded"
+    );
+    assert_eq!(
+        b.outstanding_transactions(),
+        (0, 0),
+        "expiry returns the whole budget"
+    );
+
+    // The budget really is reusable, not merely reported as zero.
+    for i in 20..31 {
+        b.on_submit_transaction(sized_tx(i, 100));
+    }
+    assert_eq!(b.outstanding_transactions(), (10, 1000));
+}
+
 /// Two paths can emit `RequestBlockAndHeader` for the same view N+1 with
 /// different parents:
 ///   1. `handle_proposal_with_vid_share(P_N)` — parent = P_N

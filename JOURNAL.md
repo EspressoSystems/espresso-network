@@ -227,3 +227,52 @@ Learnings: none that generalise beyond this fix.
 
 Next: NP-4, the unchecked byte-counter decrements in `BlockBuilder`, which is the last item on the ledger; after it the
 run needs an audit iteration to re-sweep the nine rows this run has re-opened before any convergence claim.
+
+## iter 5/10 | 29c94e91-175223 | 2026-08-11 | NP-4 | done
+
+Task: NP-4 (Low, runtime, code quality) - `BlockBuilder`'s two unchecked byte-counter decrements. Closed. The ledger is
+now empty.
+
+Changed: crates/hotshot/new-protocol/src/block.rs (both decrements made saturating, and the counters' contract
+documented on `BlockBuilderConfig`), crates/hotshot/new-protocol/src/tests/block.rs (three tests pinning the two caps),
+PLAN.md, BACKLOG.md, JOURNAL.md.
+
+Checkpoint: pending
+
+Verification: the acceptance check as filed is the enumeration
+`grep -n 'total_bytes -=' crates/hotshot/new-protocol/src/block.rs`, which prints two lines at the pre-fix commit (301
+and 329, read back with `git show HEAD:...`) and nothing now. That check discriminates, but it only proves the code
+changed, so I also added three tests for what the counters actually exist to enforce:
+`test_leader_buffer_respects_max_bytes` (five hundred-byte transactions fit under the 512-byte cap, the sixth does not),
+`test_dedup_returns_leader_budget` (dropping three of five returns exactly their bytes, so three of four new ones fit
+afterwards), and `test_retry_buffer_respects_max_bytes_and_frees_on_expiry` (ten fit under the 1024-byte cap, the
+eleventh does not; expiry returns the whole budget and it is reusable). Each exercises its documented cap on both sides
+of the limit. Verify command green: 199 tests run, 199 passed, 15 skipped, exit 0. The `LEAK` that nextest flagged on
+`test_leader_buffer_drain` in the previous iteration did not recur in this run, which took the same module and added
+three tests to it, so it was the timing artefact it looked like rather than anything in that test.
+
+These three tests pass against the unfixed code too, and that is the honest description of this task: no underflow is
+reachable today. Every decrement is by an amount that was added to the counter - `leader_buffer` and
+`leader_total_bytes` are reset together by `request_block`'s `mem::take`, and each `RetryEntry` stores the exact size
+that was added - so the change is hardening and consistency with the third site, which already used `saturating_sub`,
+rather than a bug fix. The tests are what make the contract enforceable from here, since nothing pinned the caps before.
+
+Correction to my own filing, which said a wrap "would silently disable the caps": that is the wrong direction and a
+future reader would misjudge the risk. A wrapped counter sits just below `u64::MAX`, so `total + size > cap` is true
+forever after and the builder refuses every transaction - it starves rather than over-admits. Clamping at zero fails the
+other way, toward accepting work, which is why saturating is the right choice here and why the new doc comment says so.
+
+Contract preserved: no behaviour changes on any reachable path, because no decrement can currently underflow; the caps,
+the admission rule and the expiry semantics are exactly as before, which is what the three new tests and the five
+pre-existing block tests jointly show.
+
+Surface inventory: the block row flipped back to unswept. 16 of 26 swept, 10 unswept - the four coordinator rows plus
+message, utils, epoch, vid:fragments, block, and coordinator:network-intake. Every one of those was re-opened by this
+run's own fixes, not by an unexamined remainder.
+
+Learnings: an acceptance check that is only a grep proves the code changed, not that the behaviour is right; pair it
+with a test of the invariant the code exists to maintain.
+
+Next: the ledger is empty, so the next iteration audits. Its first job is the ten re-opened rows, since convergence
+requires none left unswept, and the evaluator gate has not been run yet - iteration 1's audit found a High and a Medium,
+so the "clean full audit already recorded" precondition for running the gate early has never been met this run.
