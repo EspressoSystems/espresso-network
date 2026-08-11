@@ -1,0 +1,13 @@
+---
+source: tests/common/api_snapshot.rs
+---
+blocks:
+  missing: "<number>"
+  ranges: []
+leaves:
+  missing: "<number>"
+  ranges: []
+pruned_height: ~
+vid_common:
+  missing: "<number>"
+  ranges: []

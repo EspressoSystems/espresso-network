@@ -1,0 +1,8 @@
+---
+source: tests/common/api_snapshot.rs
+---
+- connect_info: ~
+  stake_table_entry:
+    stake_amount: "<string>"
+    stake_key: "<string>"
+  state_ver_key: "<string>"

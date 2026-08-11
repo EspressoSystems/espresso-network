@@ -1,0 +1,43 @@
+---
+source: tests/common/api_snapshot.rs
+---
+- hash: "<masked>"
+  header:
+    fields:
+      block_merkle_tree_root: MERKLE_COMM~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAQA
+      builder_commitment: BUILDER_COMMITMENT~tEvs0rxqOiMCvfe2R0omNNaphSlUiEDrb2q0IZpRcgA_
+      builder_signature: ~
+      chain_config:
+        chain_config:
+          Left:
+            base_fee: "1"
+            chain_id: "999999999"
+            fee_contract: "0x8ce361602b935680e8dec218b820ff5056beb7af"
+            fee_recipient: "0x0000000000000000000000000000000000000000"
+            max_block_size: "10000000"
+            stake_table_contract: "0xf7cd8fa9b94db2aa972023b379c7f72c65e4de9d"
+      fee_info:
+        account: "0x0000000000000000000000000000000000000000"
+        amount: "0"
+      fee_merkle_tree_root: MERKLE_COMM~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAUAAAAAAAAAAAAAAAAAAAAKA
+      height: 0
+      l1_finalized:
+        hash: "<masked>"
+        number: "<masked>"
+        timestamp: "<masked>"
+      l1_head: 0
+      next_stake_table_hash: ~
+      ns_table:
+        bytes: AAAAAA==
+      payload_commitment: AvidMCommit~8JNU_HGmIatiu1NdaEgDp-VIdiHrlYRz49Cq6TE3kzZf
+      reward_merkle_tree_root: MERKLE_COMM~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACgAAAAAAAAAAAAAAAAAAAARw
+      timestamp: 0
+      timestamp_millis: 0
+      total_reward_distributed: "0"
+    version:
+      Version:
+        major: 0
+        minor: 4
+  namespaces: {}
+  num_transactions: 0
+  size: 0

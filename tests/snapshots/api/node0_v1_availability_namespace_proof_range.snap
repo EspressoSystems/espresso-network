@@ -1,0 +1,11 @@
+---
+source: tests/common/api_snapshot.rs
+---
+- proof:
+    V1:
+      ns_index: "<number>"
+      ns_payload: "<string>"
+      ns_proof: "<string>"
+  transactions:
+    - namespace: "<number>"
+      payload: "<string>"

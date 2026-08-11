@@ -1,0 +1,46 @@
+---
+source: tests/common/api_snapshot.rs
+---
+hash: "<string>"
+header:
+  fields:
+    block_merkle_tree_root: "<string>"
+    builder_commitment: "<string>"
+    builder_signature: ~
+    chain_config:
+      chain_config:
+        Left:
+          base_fee: "<string>"
+          chain_id: "<string>"
+          fee_contract: "<string>"
+          fee_recipient: "<string>"
+          max_block_size: "<string>"
+          stake_table_contract: "<string>"
+    fee_info:
+      account: "<string>"
+      amount: "<string>"
+    fee_merkle_tree_root: "<string>"
+    height: "<number>"
+    l1_finalized:
+      hash: "<string>"
+      number: "<number>"
+      timestamp: "<string>"
+    l1_head: "<number>"
+    next_stake_table_hash: ~
+    ns_table:
+      bytes: "<string>"
+    payload_commitment: "<string>"
+    reward_merkle_tree_root: "<string>"
+    timestamp: "<number>"
+    timestamp_millis: "<number>"
+    total_reward_distributed: "<string>"
+  version:
+    Version:
+      major: "<number>"
+      minor: "<number>"
+num_transactions: "<number>"
+payload:
+  ns_table:
+    bytes: "<string>"
+  raw_payload: "<string>"
+size: "<number>"

@@ -1,0 +1,15 @@
+---
+source: tests/common/api_snapshot.rs
+---
+block_detail:
+  block_reward:
+    - "<string>"
+  fee_recipient:
+    - "<string>"
+  hash: "<string>"
+  height: "<number>"
+  num_transactions: "<number>"
+  proposer_id:
+    - "<string>"
+  size: "<number>"
+  time: "<string>"

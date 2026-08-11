@@ -1,0 +1,6 @@
+---
+source: tests/common/api_snapshot.rs
+---
+- row_count: "<number>"
+  table_name: "<string>"
+  total_size_bytes: "<number>"

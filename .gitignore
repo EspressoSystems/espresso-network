@@ -50,6 +50,9 @@ wake-coverage.cov
 data/*-actual.json
 data/*-actual.bin
 
+# pending insta snapshots, written when a snapshot test fails; accept them with `cargo insta review`
+**/*.snap.new
+
 # Secret environment variables
 .env.contracts
 .env.contracts.arbSepolia   

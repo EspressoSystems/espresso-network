@@ -1,0 +1,923 @@
+---
+source: tests/common/api_snapshot.rs
+---
+components:
+  schemas:
+    AddrType:
+      oneOf:
+        - additionalProperties: "<bool>"
+          properties:
+            Inet:
+              $ref: "<string>"
+          required:
+            - "<string>"
+          type: "<string>"
+        - additionalProperties: "<bool>"
+          properties:
+            Name:
+              $ref: "<string>"
+          required:
+            - "<string>"
+          type: "<string>"
+    AdvzNsProof:
+      description: "<string>"
+      properties:
+        namespace_id:
+          format: "<string>"
+          minimum: "<number>"
+          type: "<string>"
+        ns_payload:
+          type: "<string>"
+        ns_proof:
+          description: "<string>"
+          type:
+            - "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    AvidMIncorrectEncodingNsProof:
+      description: "<string>"
+      properties:
+        proof_data:
+          description: "<string>"
+          type: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    AvidMNsProof:
+      description: "<string>"
+      properties:
+        ns_index:
+          format: "<string>"
+          minimum: "<number>"
+          type: "<string>"
+        ns_payload:
+          type: "<string>"
+        ns_proof:
+          description: "<string>"
+          type: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    AvidmGf2NsProof:
+      description: "<string>"
+      properties:
+        ns_index:
+          format: "<string>"
+          minimum: "<number>"
+          type: "<string>"
+        ns_payload:
+          type: "<string>"
+        ns_proof:
+          description: "<string>"
+          type: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    BlsPublicKey:
+      description: "<string>"
+      properties:
+        key:
+          type: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    Branch:
+      description: "<string>"
+      properties:
+        children:
+          description: "<string>"
+          items:
+            $ref: "<string>"
+          type: "<string>"
+        value:
+          description: "<string>"
+          type: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    Empty:
+      description: "<string>"
+      type: "<string>"
+    ForgottenSubtree:
+      description: "<string>"
+      properties:
+        value:
+          description: "<string>"
+          type: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    GetIncorrectEncodingProofRequest:
+      description: "<string>"
+      properties:
+        block_height:
+          description: "<string>"
+          example: "<string>"
+          format: "<string>"
+          minimum: "<number>"
+          type: "<string>"
+        namespace_id:
+          description: "<string>"
+          example: "<string>"
+          format: "<string>"
+          minimum: "<number>"
+          type: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    GetNamespaceProofRequest:
+      description: "<string>"
+      properties:
+        block:
+          description: "<string>"
+          example: "<string>"
+          format: "<string>"
+          minimum: "<number>"
+          type:
+            - "<string>"
+        first:
+          description: "<string>"
+          example: "<string>"
+          format: "<string>"
+          minimum: "<number>"
+          type:
+            - "<string>"
+        last:
+          description: "<string>"
+          example: "<string>"
+          format: "<string>"
+          minimum: "<number>"
+          type:
+            - "<string>"
+        namespace_id:
+          description: "<string>"
+          example: "<string>"
+          format: "<string>"
+          minimum: "<number>"
+          type: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    GetNamespaceProofResponse:
+      description: "<string>"
+      properties:
+        response:
+          anyOf:
+            - $ref: "<string>"
+            - type: "<string>"
+      type: "<string>"
+    GetRewardAccountProofRequest:
+      description: "<string>"
+      properties:
+        address:
+          description: "<string>"
+          example: "<string>"
+          type: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    GetRewardBalanceRequest:
+      description: "<string>"
+      properties:
+        address:
+          description: "<string>"
+          example: "<string>"
+          type: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    GetRewardBalancesRequest:
+      description: "<string>"
+      properties:
+        height:
+          description: "<string>"
+          example: "<string>"
+          format: "<string>"
+          minimum: "<number>"
+          type: "<string>"
+        limit:
+          description: "<string>"
+          example: "<string>"
+          format: "<string>"
+          minimum: "<number>"
+          type: "<string>"
+        offset:
+          description: "<string>"
+          example: "<string>"
+          format: "<string>"
+          minimum: "<number>"
+          type: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    GetRewardClaimInputRequest:
+      description: "<string>"
+      properties:
+        address:
+          description: "<string>"
+          example: "<string>"
+          type: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    GetRewardMerkleTreeRequest:
+      description: "<string>"
+      properties:
+        height:
+          description: "<string>"
+          example: "<string>"
+          format: "<string>"
+          minimum: "<number>"
+          type: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    GetStakeTableRequest:
+      description: "<string>"
+      properties:
+        epoch:
+          description: "<string>"
+          example: "<string>"
+          format: "<string>"
+          minimum: "<number>"
+          type: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    GetStateCertificateRequest:
+      description: "<string>"
+      properties:
+        epoch:
+          description: "<string>"
+          example: "<string>"
+          format: "<string>"
+          minimum: "<number>"
+          type: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    IncorrectEncodingProofResponse:
+      description: "<string>"
+      properties:
+        proof:
+          anyOf:
+            - $ref: "<string>"
+            - type: "<string>"
+          description: "<string>"
+      type: "<string>"
+    InetAddr:
+      description: "<string>"
+      properties:
+        host:
+          type: "<string>"
+        port:
+          format: "<string>"
+          minimum: "<number>"
+          type: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    Leaf:
+      description: "<string>"
+      properties:
+        elem:
+          description: "<string>"
+          type: "<string>"
+        pos:
+          description: "<string>"
+          type: "<string>"
+        value:
+          description: "<string>"
+          type: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    LightClientStateUpdateCertificateV2:
+      description: "<string>"
+      properties:
+        auth_root:
+          description: "<string>"
+          type: "<string>"
+        epoch:
+          format: "<string>"
+          minimum: "<number>"
+          type: "<string>"
+        light_client_state:
+          description: "<string>"
+          type: "<string>"
+        next_stake_table_state:
+          description: "<string>"
+          type: "<string>"
+        signatures:
+          items:
+            $ref: "<string>"
+          type: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    MerkleNode:
+      description: "<string>"
+      properties:
+        node_type:
+          anyOf:
+            - $ref: "<string>"
+            - type: "<string>"
+      type: "<string>"
+    MerkleProof:
+      description: "<string>"
+      properties:
+        pos:
+          description: "<string>"
+          type: "<string>"
+        proof:
+          description: "<string>"
+          items:
+            $ref: "<string>"
+          type: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    NameAddr:
+      description: "<string>"
+      properties:
+        name:
+          description: "<string>"
+          type: "<string>"
+        port:
+          format: "<string>"
+          minimum: "<number>"
+          type: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    NamespaceProofRangeResponse:
+      description: "<string>"
+      properties:
+        proofs:
+          description: "<string>"
+          items:
+            $ref: "<string>"
+          type: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    NamespaceProofResponse:
+      description: "<string>"
+      properties:
+        proof:
+          anyOf:
+            - $ref: "<string>"
+            - type: "<string>"
+          description: "<string>"
+        transactions:
+          description: "<string>"
+          items:
+            $ref: "<string>"
+          type: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    NetAddr:
+      description: "<string>"
+      properties:
+        addr_type:
+          anyOf:
+            - $ref: "<string>"
+            - type: "<string>"
+      type: "<string>"
+    NodeType:
+      oneOf:
+        - additionalProperties: "<bool>"
+          properties:
+            Empty:
+              $ref: "<string>"
+          required:
+            - "<string>"
+          type: "<string>"
+        - additionalProperties: "<bool>"
+          properties:
+            Leaf:
+              $ref: "<string>"
+          required:
+            - "<string>"
+          type: "<string>"
+        - additionalProperties: "<bool>"
+          properties:
+            Branch:
+              $ref: "<string>"
+          required:
+            - "<string>"
+          type: "<string>"
+        - additionalProperties: "<bool>"
+          properties:
+            ForgottenSubtree:
+              $ref: "<string>"
+          required:
+            - "<string>"
+          type: "<string>"
+    NsProof:
+      description: "<string>"
+      properties:
+        proof_version:
+          anyOf:
+            - $ref: "<string>"
+            - type: "<string>"
+      type: "<string>"
+    PeerConfig:
+      description: "<string>"
+      properties:
+        connect_info:
+          anyOf:
+            - $ref: "<string>"
+            - type: "<string>"
+          description: "<string>"
+        stake_table_entry:
+          anyOf:
+            - $ref: "<string>"
+            - type: "<string>"
+          description: "<string>"
+        state_ver_key:
+          anyOf:
+            - $ref: "<string>"
+            - type: "<string>"
+          description: "<string>"
+      type: "<string>"
+    PeerConnectInfo:
+      description: "<string>"
+      properties:
+        p2p_addr:
+          anyOf:
+            - $ref: "<string>"
+            - type: "<string>"
+          description: "<string>"
+        x25519_key:
+          description: "<string>"
+          type: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    ProofType:
+      oneOf:
+        - additionalProperties: "<bool>"
+          properties:
+            Presence:
+              $ref: "<string>"
+          required:
+            - "<string>"
+          type: "<string>"
+        - additionalProperties: "<bool>"
+          properties:
+            Absence:
+              $ref: "<string>"
+          required:
+            - "<string>"
+          type: "<string>"
+    ProofVersion:
+      oneOf:
+        - additionalProperties: "<bool>"
+          properties:
+            V0:
+              $ref: "<string>"
+          required:
+            - "<string>"
+          type: "<string>"
+        - additionalProperties: "<bool>"
+          properties:
+            V1:
+              $ref: "<string>"
+          required:
+            - "<string>"
+          type: "<string>"
+        - additionalProperties: "<bool>"
+          properties:
+            V1IncorrectEncoding:
+              $ref: "<string>"
+          required:
+            - "<string>"
+          type: "<string>"
+        - additionalProperties: "<bool>"
+          properties:
+            V2:
+              $ref: "<string>"
+          required:
+            - "<string>"
+          type: "<string>"
+    Response:
+      oneOf:
+        - additionalProperties: "<bool>"
+          description: "<string>"
+          properties:
+            Single:
+              $ref: "<string>"
+          required:
+            - "<string>"
+          type: "<string>"
+        - additionalProperties: "<bool>"
+          description: "<string>"
+          properties:
+            Range:
+              $ref: "<string>"
+          required:
+            - "<string>"
+          type: "<string>"
+    RewardAccountProofV2:
+      description: "<string>"
+      properties:
+        account:
+          description: "<string>"
+          type: "<string>"
+        proof:
+          anyOf:
+            - $ref: "<string>"
+            - type: "<string>"
+          description: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    RewardAccountQueryDataV2:
+      description: "<string>"
+      properties:
+        balance:
+          description: "<string>"
+          type: "<string>"
+        proof:
+          anyOf:
+            - $ref: "<string>"
+            - type: "<string>"
+          description: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    RewardAmount:
+      description: "<string>"
+      properties:
+        address:
+          description: "<string>"
+          type: "<string>"
+        amount:
+          description: "<string>"
+          type: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    RewardBalance:
+      description: "<string>"
+      properties:
+        amount:
+          description: "<string>"
+          type: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    RewardBalances:
+      description: "<string>"
+      properties:
+        amounts:
+          description: "<string>"
+          items:
+            $ref: "<string>"
+          type: "<string>"
+        total:
+          description: "<string>"
+          format: "<string>"
+          minimum: "<number>"
+          type: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    RewardClaimInput:
+      description: "<string>"
+      properties:
+        address:
+          description: "<string>"
+          type: "<string>"
+        auth_data:
+          description: "<string>"
+          type: "<string>"
+        lifetime_rewards:
+          description: "<string>"
+          type: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    RewardMerkleProofV2:
+      description: "<string>"
+      properties:
+        proof_type:
+          anyOf:
+            - $ref: "<string>"
+            - type: "<string>"
+      type: "<string>"
+    RewardMerkleTreeV2Data:
+      description: "<string>"
+      properties:
+        data:
+          description: "<string>"
+          items:
+            format: "<string>"
+            maximum: "<number>"
+            minimum: "<number>"
+            type: "<string>"
+          type: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    SchnorrPublicKey:
+      description: "<string>"
+      properties:
+        key:
+          type: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    StakeTableEntry:
+      description: "<string>"
+      properties:
+        stake_amount:
+          description: "<string>"
+          type: "<string>"
+        stake_key:
+          anyOf:
+            - $ref: "<string>"
+            - type: "<string>"
+          description: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    StakeTableResponse:
+      description: "<string>"
+      properties:
+        peers:
+          description: "<string>"
+          items:
+            $ref: "<string>"
+          type: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    StateCertificateResponse:
+      description: "<string>"
+      properties:
+        certificate:
+          anyOf:
+            - $ref: "<string>"
+            - type: "<string>"
+          description: "<string>"
+      type: "<string>"
+    StateSignatureTuple:
+      description: "<string>"
+      properties:
+        lcv2_signature:
+          description: "<string>"
+          type: "<string>"
+        lcv3_signature:
+          description: "<string>"
+          type: "<string>"
+        state_signature_key:
+          anyOf:
+            - $ref: "<string>"
+            - type: "<string>"
+          description: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+    Transaction:
+      description: "<string>"
+      properties:
+        namespace:
+          format: "<string>"
+          minimum: "<number>"
+          type: "<string>"
+        payload:
+          description: "<string>"
+          type: "<string>"
+      required:
+        - "<string>"
+      type: "<string>"
+info:
+  title: "<string>"
+  version: "<string>"
+openapi: "<string>"
+paths:
+  /v2/consensus/stake-table:
+    get:
+      description: "<string>"
+      parameters:
+        - description: "<string>"
+          in: "<string>"
+          name: "<string>"
+          required: "<bool>"
+          schema:
+            description: "<string>"
+            example: "<string>"
+            format: "<string>"
+            minimum: "<number>"
+            type: "<string>"
+          style: "<string>"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "<string>"
+          description: "<string>"
+      tags:
+        - "<string>"
+  /v2/consensus/state-certificate:
+    get:
+      description: "<string>"
+      parameters:
+        - description: "<string>"
+          in: "<string>"
+          name: "<string>"
+          required: "<bool>"
+          schema:
+            description: "<string>"
+            example: "<string>"
+            format: "<string>"
+            minimum: "<number>"
+            type: "<string>"
+          style: "<string>"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "<string>"
+          description: "<string>"
+      tags:
+        - "<string>"
+  /v2/data/finalized/incorrect-encoding-proof:
+    get:
+      description: "<string>"
+      parameters:
+        - description: "<string>"
+          in: "<string>"
+          name: "<string>"
+          required: "<bool>"
+          schema:
+            description: "<string>"
+            example: "<string>"
+            format: "<string>"
+            minimum: "<number>"
+            type: "<string>"
+          style: "<string>"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "<string>"
+          description: "<string>"
+      tags:
+        - "<string>"
+  /v2/data/finalized/namespace-proof:
+    get:
+      description: "<string>"
+      parameters:
+        - description: "<string>"
+          in: "<string>"
+          name: "<string>"
+          schema:
+            description: "<string>"
+            example: "<string>"
+            format: "<string>"
+            minimum: "<number>"
+            type:
+              - "<string>"
+          style: "<string>"
+        - description: "<string>"
+          in: "<string>"
+          name: "<string>"
+          required: "<bool>"
+          schema:
+            description: "<string>"
+            example: "<string>"
+            format: "<string>"
+            minimum: "<number>"
+            type: "<string>"
+          style: "<string>"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "<string>"
+          description: "<string>"
+      tags:
+        - "<string>"
+  /v2/rewards/balance:
+    get:
+      description: "<string>"
+      parameters:
+        - description: "<string>"
+          in: "<string>"
+          name: "<string>"
+          required: "<bool>"
+          schema:
+            description: "<string>"
+            example: "<string>"
+            type: "<string>"
+          style: "<string>"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "<string>"
+          description: "<string>"
+      tags:
+        - "<string>"
+  /v2/rewards/balances:
+    get:
+      description: "<string>"
+      parameters:
+        - description: "<string>"
+          in: "<string>"
+          name: "<string>"
+          required: "<bool>"
+          schema:
+            description: "<string>"
+            example: "<string>"
+            format: "<string>"
+            minimum: "<number>"
+            type: "<string>"
+          style: "<string>"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "<string>"
+          description: "<string>"
+      tags:
+        - "<string>"
+  /v2/rewards/claim-input:
+    get:
+      description: "<string>"
+      parameters:
+        - description: "<string>"
+          in: "<string>"
+          name: "<string>"
+          required: "<bool>"
+          schema:
+            description: "<string>"
+            example: "<string>"
+            type: "<string>"
+          style: "<string>"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "<string>"
+          description: "<string>"
+      tags:
+        - "<string>"
+  /v2/rewards/proof:
+    get:
+      description: "<string>"
+      parameters:
+        - description: "<string>"
+          in: "<string>"
+          name: "<string>"
+          required: "<bool>"
+          schema:
+            description: "<string>"
+            example: "<string>"
+            type: "<string>"
+          style: "<string>"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "<string>"
+          description: "<string>"
+      tags:
+        - "<string>"
+  /v2/rewards/tree:
+    get:
+      description: "<string>"
+      parameters:
+        - description: "<string>"
+          in: "<string>"
+          name: "<string>"
+          required: "<bool>"
+          schema:
+            description: "<string>"
+            example: "<string>"
+            format: "<string>"
+            minimum: "<number>"
+            type: "<string>"
+          style: "<string>"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "<string>"
+          description: "<string>"
+      tags:
+        - "<string>"

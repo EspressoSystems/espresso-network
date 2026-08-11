@@ -137,6 +137,12 @@ slow-timeout = "2m"
 default-filter = 'package(tests)'
 retries = 2
 
+[[profile.integration.overrides]]
+# A snapshot mismatch is deterministic, so retrying only spends another demo startup to reach the
+# same diff, and the retry hides the first attempt's output.
+filter = 'test(test_api_snapshots)'
+retries = 0
+
 [profile.integration.junit]
 path = "junit.xml"
 store-failure-output = true

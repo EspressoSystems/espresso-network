@@ -1,0 +1,7 @@
+---
+source: tests/common/api_snapshot.rs
+---
+- completed_at: "<string>"
+  last_offset: "<number>"
+  name: "<string>"
+  started_at: "<string>"

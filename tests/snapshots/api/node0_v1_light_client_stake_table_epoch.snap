@@ -1,0 +1,25 @@
+---
+source: tests/common/api_snapshot.rs
+---
+- RegisterV3:
+    account: "<string>"
+    blsSig:
+      x: "<string>"
+      y: "<string>"
+    blsVK:
+      x0: "<string>"
+      x1: "<string>"
+      y0: "<string>"
+      y1: "<string>"
+    commission: "<number>"
+    metadataUri: "<string>"
+    p2pAddr: "<string>"
+    schnorrSig: "<string>"
+    schnorrVK:
+      x: "<string>"
+      y: "<string>"
+    x25519Key: "<string>"
+- Delegate:
+    amount: "<string>"
+    delegator: "<string>"
+    validator: "<string>"

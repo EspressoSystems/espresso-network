@@ -1,0 +1,5 @@
+---
+source: tests/common/api_snapshot.rs
+---
+auth_data: "<string>"
+lifetime_rewards: "<string>"

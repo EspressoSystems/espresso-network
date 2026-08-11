@@ -1,0 +1,11 @@
+---
+source: tests/common/api_snapshot.rs
+---
+- payload:
+    ns_table:
+      bytes: AAAAAA==
+    raw_payload: ""
+  vid_common:
+    V1:
+      recovery_threshold: 1
+      total_weights: 1
