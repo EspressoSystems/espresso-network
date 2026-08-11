@@ -978,11 +978,14 @@ where
                     .map_err(|e| e.context("unicast transactions"))?;
                 }
 
-                // Proactively fetch the DRB for the next epoch so
-                // late-starting nodes have it before they need it
+                // Proactively fetch the DRB for the next epoch so late-starting
+                // nodes have it before they need it. This runs on every view
+                // change, so it must be the prefetch and not the plain request:
+                // the latter is answered every time by design, which here would
+                // mean a task and a redundant delivery per view.
                 let next_epoch = epoch + 1;
                 if next_epoch > EpochNumber::genesis() + 1 {
-                    self.epoch_manager.request_drb_result(next_epoch);
+                    self.epoch_manager.prefetch_drb_result(next_epoch);
                 }
             },
             ConsensusOutput::ViewTimedOut(view) => {

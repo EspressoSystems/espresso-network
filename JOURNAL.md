@@ -324,3 +324,46 @@ finding named - NP-5 exists because I checked two of three.
 Next: NP-5, then NP-6, then the evaluator gate and, if it passes, convergence. The gate has not run yet this run: its
 early-run precondition is a clean full audit already recorded, which only this iteration produced, and the ledger is not
 empty now that this audit filed two items.
+
+## iter 7/10 | 29c94e91-175223 | 2026-08-12 | NP-5 | done
+
+Task: NP-5 (Low, runtime, performance) - the view-change DRB prefetch spawning a task per view since NP-2 removed the
+completed-epoch short-circuit. Closed.
+
+Changed: crates/hotshot/new-protocol/src/epoch.rs (new `prefetch_drb_result`, plus two tests),
+crates/hotshot/new-protocol/src/coordinator.rs (the view-change prefetch now calls it), PLAN.md, BACKLOG.md, JOURNAL.md.
+
+Checkpoint: pending
+
+Verification: the fix gives the two callers two methods instead of one shared guard, because they want different things:
+`prefetch_drb_result` is speculative and only wants the result to exist, so it is a no-op once the epoch is resolved and
+retries while it is not; `request_drb_result` is consensus asking for a delivery and is never silenced. Acceptance check
+`epoch::tests::prefetch_goes_quiet_once_resolved_but_request_does_not` asserts both halves in one test - five prefetches
+after resolution spawn nothing, three requests after that are each answered. Run against a tree where
+`prefetch_drb_result` forwards unconditionally, which is exactly what the code did before this iteration, it fails with
+`prefetching a resolved epoch spawned work`; it passes on the fixed tree. Its control
+`prefetch_retries_while_unresolved` passes both ways, which is what shows the fix did not turn the prefetch into a
+one-shot that gives up after a failed catchup - the case the prefetch exists for. The fixed file was copied aside and
+restored, never `git checkout`. Enumeration of every DRB request site in the coordinator,
+`grep -n 'request_drb_result\|prefetch_drb_result' crates/hotshot/new-protocol/src/coordinator.rs`: ten sites, one
+prefetch (the view-change arm at 988) and nine requests. The nine are correct as requests and would behave identically
+either way, because each is reached only when membership for that epoch is unresolved, so the completed set cannot
+contain it: `cert_verifiers.retry_pending` at 641 returns exactly the unresolved epochs, the `RequestDrbResult` output
+at 698 is consensus's own retry, and the seven intake arms are reached only when `CertVerifier::verify` failed to
+resolve the epoch. Verify command green: 201 tests run, 201 passed, 15 skipped, exit 0.
+
+Contract preserved: consensus's retry lever, which NP-2 exists to keep working, is untouched - the new method is
+additive and the plain request has the same unconditional behaviour it gained in iteration 3, still pinned by
+`repeated_request_is_answered_again`. The prefetch's own contract is unchanged from before iteration 3: fire until the
+epoch resolves, then stop.
+
+Surface inventory stays at 26 of 26. The epoch and coordinator:consensus-output rows were re-swept in this same
+iteration rather than left stale: their code changed here, but I read both regions while changing them, and both
+batteries ran - `epoch::tests` directly and the coordinator arm through the Verify command. Recording them as swept at
+this iteration's checkpoint is what the row means; flipping them to unswept for a later iteration to re-certify code it
+had not seen more recently than I have would be bookkeeping rather than evidence.
+
+Learnings: none that generalise beyond this fix.
+
+Next: NP-6, the timer module. After that the ledger is empty and the run can invoke the evaluator gate and, if it
+passes, declare convergence in that same iteration.

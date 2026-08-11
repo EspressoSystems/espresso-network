@@ -19,16 +19,6 @@ Rules:
 
 ## Later
 
-- [ ] NP-5 (Low, runtime, performance): the proactive DRB prefetch at `coordinator.rs:983-986` runs on every
-      `ConsensusOutput::ViewChanged`, and since NP-2 removed `request_drb_result`'s completed-epoch short-circuit
-      (`epoch.rs:180-184` now dedups in-flight requests only) it spawns a task per view change once the epoch is known,
-      instead of stopping after the first success. Each one resolves immediately from membership and delivers a
-      `DrbResult`, so every view change also costs a full `Consensus::apply` pass plus the five `retry_pending_votes`
-      calls and the `cert_verifiers.retry_pending` sweep at `coordinator.rs:634-639`. This is a regression this run
-      introduced: the prefetch wants "once per epoch", which is the coordinator's business to remember, not the epoch
-      manager's. Acceptance: a test drives several view changes within one epoch and asserts at most one DRB request is
-      made for the successor epoch, while a separate request for an already-delivered epoch is still answered (the NP-2
-      property must survive); it must fail on the unfixed code.
 - [ ] NP-6 (Low, runtime, code quality): `coordinator/timer.rs` carries two defects in 66 lines. `reset_with`
       (`timer.rs:42`) is dead - `grep -rn 'reset_with\b' crates/ --include='*.rs'` finds only its definition. And
       `Timer::poll` (`timer.rs:58-65`) returns `Poll::Pending` without registering a waker once `done` is set, so a

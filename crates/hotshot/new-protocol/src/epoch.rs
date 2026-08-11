@@ -165,6 +165,24 @@ impl<T: NodeType> EpochManager<T> {
         self.completed_drb_requests = self.completed_drb_requests.split_off(&epoch);
     }
 
+    /// Ask for `epoch`'s DRB only if this manager has not already resolved it.
+    ///
+    /// This is for the speculative caller that wants the result to *exist* -
+    /// the coordinator prefetches the successor epoch on every view change so a
+    /// late-starting node has it before it needs it. Such a caller has nothing
+    /// to do with a re-delivery, so once the epoch is resolved this is a no-op,
+    /// and while it is unresolved every call retries, which is what makes the
+    /// prefetch worth having after a failed catchup.
+    ///
+    /// A caller that needs the result *delivered* must use
+    /// [`Self::request_drb_result`] instead; that one is never silenced.
+    pub fn prefetch_drb_result(&mut self, epoch: EpochNumber) {
+        if self.completed_drb_requests.contains(&epoch) {
+            return;
+        }
+        self.request_drb_result(epoch)
+    }
+
     /// Ask for `epoch`'s DRB, delivering it through [`Self::next`].
     ///
     /// A request for an epoch this manager already resolved is honoured rather
@@ -274,6 +292,59 @@ mod tests {
             next_epoch(&mut manager).await,
             epoch,
             "a re-request for an already-resolved epoch was dropped"
+        );
+    }
+
+    /// The prefetch and the request differ exactly where their callers do: the
+    /// prefetch runs on every view change and only wants the result to exist,
+    /// so it goes quiet once the epoch is resolved; the request is consensus
+    /// asking for a delivery, and is answered every time.
+    #[tokio::test]
+    async fn prefetch_goes_quiet_once_resolved_but_request_does_not() {
+        let epoch = EpochNumber::genesis();
+        let mut manager = manager();
+
+        manager.prefetch_drb_result(epoch);
+        assert_eq!(next_epoch(&mut manager).await, epoch);
+
+        for _ in 0..5 {
+            manager.prefetch_drb_result(epoch);
+        }
+        assert_eq!(
+            manager.pending_count(),
+            0,
+            "prefetching a resolved epoch spawned work"
+        );
+
+        for _ in 0..3 {
+            manager.request_drb_result(epoch);
+            assert_eq!(next_epoch(&mut manager).await, epoch);
+        }
+    }
+
+    /// While the epoch is unresolved the prefetch keeps retrying, which is what
+    /// makes it worth running after a catchup failure.
+    #[tokio::test]
+    async fn prefetch_retries_while_unresolved() {
+        // No stake table is registered for this epoch, so catchup fails.
+        let epoch = EpochNumber::new(9);
+        let mut manager = manager();
+
+        manager.prefetch_drb_result(epoch);
+        assert_eq!(manager.pending_count(), 1);
+        let failure = timeout(DELIVERY_TIMEOUT, manager.next())
+            .await
+            .expect("failure delivery timed out");
+        assert!(
+            matches!(failure, Some(Err(f)) if f.epoch == epoch),
+            "expected the unresolved epoch's request to fail"
+        );
+
+        manager.prefetch_drb_result(epoch);
+        assert_eq!(
+            manager.pending_count(),
+            1,
+            "prefetch gave up on an epoch it never resolved"
         );
     }
 
