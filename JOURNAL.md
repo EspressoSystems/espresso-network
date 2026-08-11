@@ -237,7 +237,7 @@ Changed: crates/hotshot/new-protocol/src/block.rs (both decrements made saturati
 documented on `BlockBuilderConfig`), crates/hotshot/new-protocol/src/tests/block.rs (three tests pinning the two caps),
 PLAN.md, BACKLOG.md, JOURNAL.md.
 
-Checkpoint: pending
+Checkpoint: 1872c2ee84eaf4964748113f8a590d9aad5ab956
 
 Verification: the acceptance check as filed is the enumeration
 `grep -n 'total_bytes -=' crates/hotshot/new-protocol/src/block.rs`, which prints two lines at the pre-fix commit (301
