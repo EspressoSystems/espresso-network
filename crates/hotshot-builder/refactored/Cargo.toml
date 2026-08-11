@@ -19,7 +19,7 @@ committable = { workspace = true }
 derive_more = { workspace = true }
 futures = { workspace = true }
 hotshot = { workspace = true }
-hotshot-builder-api = { workspace = true }
+hotshot-builder-api = { workspace = true, features = ["server"] }
 hotshot-builder-shared = { workspace = true }
 hotshot-types = { workspace = true }
 jf-advz = { workspace = true }

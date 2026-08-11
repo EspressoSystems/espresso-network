@@ -18,7 +18,7 @@ futures = { workspace = true }
 hex = { workspace = true }
 hotshot = { workspace = true }
 hotshot-builder-api = { workspace = true }
-hotshot-events-service = { workspace = true }
+hotshot-events-service = { workspace = true, features = ["server"] }
 hotshot-example-types = { workspace = true }
 hotshot-task-impls = { workspace = true }
 hotshot-testing = { workspace = true }

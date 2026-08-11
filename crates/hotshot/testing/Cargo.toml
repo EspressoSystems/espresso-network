@@ -27,7 +27,7 @@ committable = { workspace = true }
 either = { workspace = true }
 futures = { workspace = true }
 hotshot = { workspace = true, features = ["hotshot-testing"] }
-hotshot-builder-api = { workspace = true }
+hotshot-builder-api = { workspace = true, features = ["server"] }
 hotshot-example-types = { workspace = true }
 hotshot-macros = { workspace = true }
 hotshot-task = { workspace = true }

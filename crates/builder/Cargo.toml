@@ -18,10 +18,10 @@ espresso-types = { workspace = true, features = ["node"] }
 espresso-utils = { workspace = true, features = ["full"] }
 futures = { workspace = true }
 hotshot = { workspace = true }
-hotshot-builder-api = { workspace = true }
+hotshot-builder-api = { workspace = true, features = ["server"] }
 hotshot-builder-legacy = { workspace = true }
 hotshot-builder-shared = { workspace = true }
-hotshot-events-service = { workspace = true }
+hotshot-events-service = { workspace = true, features = ["server"] }
 hotshot-example-types = { workspace = true }
 hotshot-state-prover = { workspace = true }
 hotshot-types = { workspace = true }
