@@ -26,18 +26,17 @@ use axum::{
     routing::get,
 };
 use http_wire::{
-    ContentType, DecodeFailure, WireFormat, body_limit_layer, cors_layer, drive_ws_stream,
-    healthcheck_response, module_healthcheck_response,
+    ContentType, DecodeFailure, WireError, body_limit_layer, cors_layer, drive_ws_stream,
+    encode_ok, healthcheck_response, module_healthcheck_response,
 };
 use schemars::transform::Transform;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serialization_api::v2::{
     GetIncorrectEncodingProofRequest, GetNamespaceProofRequest, GetRewardAccountProofRequest,
     GetRewardBalanceRequest, GetRewardBalancesRequest, GetRewardClaimInputRequest,
     GetRewardMerkleTreeRequest, GetStakeTableRequest, GetStateCertificateRequest,
 };
 use tokio::sync::Semaphore;
-use vbs::version::StaticVersion;
 
 use crate::{
     error::{ApiError, AvailabilityError},
@@ -51,13 +50,15 @@ use crate::{
 /// envelope is byte-identical with tide's error response for them. Endpoints that use a specific
 /// variant directly (e.g. `availability::Error::FetchLeaf`) emit their own shape on tide; those
 /// bytes are not matched here.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, thiserror::Error)]
+#[error("{custom}")]
 struct ErrorResponse {
     #[serde(rename = "Custom")]
     custom: CustomError,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, thiserror::Error)]
+#[error("error {status}: {message}")]
 struct CustomError {
     // Field order matches `node::Error::Custom { message, status }` declaration so serde_json
     // emits the same key order on the wire.
@@ -87,38 +88,14 @@ impl IntoResponse for ApiError {
     }
 }
 
-/// Binary framing version for VBS-negotiated bodies and websocket frames: every v1 endpoint in
-/// this codebase uses the V0_1 API version.
-type WireVersion = StaticVersion<0, 1>;
-
-/// Wire format of this API: [`WireVersion`] VBS framing and the [`ErrorResponse`] envelope. The
-/// negotiation itself lives in [`crate::wire`], shared with the other axum-migrated services.
-struct NodeApiWire;
-
-impl WireFormat for NodeApiWire {
-    type Error = ErrorResponse;
-    type Version = WireVersion;
-
-    fn status(err: &ErrorResponse) -> StatusCode {
-        StatusCode::from_u16(err.custom.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
+impl WireError for ErrorResponse {
+    fn status(&self) -> StatusCode {
+        StatusCode::from_u16(self.custom.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
     }
 
-    fn serialize_failure(message: String) -> ErrorResponse {
-        ErrorResponse::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("serialize: {message}"),
-        )
+    fn catch_all(status: StatusCode, message: String) -> Self {
+        Self::new(status, message)
     }
-}
-
-/// Encode a successful response body based on the request's `Accept` header, matching
-/// tide-disco's content negotiation.
-///
-/// surf-disco's default `Accept` is `application/octet-stream`, so production internal clients
-/// (peer-catchup, submit-transactions, light-client provider) expect VBS-encoded responses for
-/// the endpoints that flow large structured data. Falls back to JSON otherwise.
-fn encode_response<T: Serialize>(headers: &HeaderMap, value: T) -> Response {
-    http_wire::encode_ok::<NodeApiWire, _>(headers, value)
 }
 
 /// Decode a request body based on its `Content-Type`, matched by media-type essence.
@@ -130,7 +107,7 @@ fn decode_body<T: serde::de::DeserializeOwned>(
     headers: &HeaderMap,
     body: &[u8],
 ) -> Result<T, ApiError> {
-    http_wire::decode_body::<WireVersion, T>(headers, body).map_err(|err| {
+    http_wire::decode_body(headers, body).map_err(|err| {
         ApiError::BadRequest(match err {
             DecodeFailure::Binary(err) => anyhow::anyhow!("invalid binary body: {err}"),
             DecodeFailure::Json(err) => anyhow::anyhow!("invalid json body: {err}"),
@@ -308,23 +285,22 @@ impl<T: schemars::JsonSchema> aide::operation::OperationInput for SendQuery<T> {
     }
 }
 
-/// Create a combined router serving both v1 and v2 APIs
-pub fn create_combined_router<S>(state: S) -> Router
+/// Create a combined router serving both v1 and v2 APIs.
+///
+/// `hqs_base` is the `hotshot-query-service` router; see [`create_router_v1`].
+pub fn create_combined_router<S>(state: S, hqs_base: ApiRouter) -> Router
 where
     S: v1::RewardApi
-        + v1::AvailabilityApi
-        + v1::HotShotAvailabilityApi
-        + v1::BlockStateApi
-        + v1::FeeStateApi
-        + v1::StatusApi
+        + v1::AvailabilityApiExtension
+        + v1::FeeStateApiExtension
+        + v1::StatusApiExtension
         + v1::ConfigApi
-        + v1::NodeApi
+        + v1::NodeApiExtension
         + v1::CatchupApi
         + v1::SubmitApi
         + v1::StateSignatureApi
         + v1::HotShotEventsApi
         + v1::LightClientApi
-        + v1::ExplorerApi
         + v1::TokenApi
         + v1::DatabaseApi
         + v2::RewardApi
@@ -335,7 +311,7 @@ where
         + Sync
         + 'static,
 {
-    let router_v1 = create_router_v1(state.clone());
+    let router_v1 = create_router_v1(state.clone(), hqs_base);
     let router_v2 = create_router_v2(state);
 
     with_top_level_routes(router_v2.merge(router_v1))
@@ -345,25 +321,23 @@ where
 
 /// Add the routes that every mode serves regardless of which API modules are enabled:
 /// `/`, `/healthcheck`, `/v1/{module}/healthcheck`, and `/version`. Callers apply CORS.
+///
+/// `/v1/{module}/healthcheck` is reached by legacy clients via the `/{module}/healthcheck`
+/// rewrite. Divergence from tide-disco: it matches any `{module}` string, so unregistered module
+/// names report healthy instead of 404. Constraining it to the registered set would have to track
+/// which modules each serve mode mounts; not worth it for a liveness probe.
 pub(crate) fn with_top_level_routes(router: Router) -> Router {
     router
         .route("/", get(redirect_to_docs))
-        .route("/healthcheck", get(healthcheck))
-        .route("/v1/{module}/healthcheck", get(module_healthcheck))
+        .route(
+            "/healthcheck",
+            get(|headers: HeaderMap| async move { healthcheck_response(&headers) }),
+        )
+        .route(
+            "/v1/{module}/healthcheck",
+            get(|headers: HeaderMap| async move { module_healthcheck_response(&headers) }),
+        )
         .route("/version", get(version))
-}
-
-async fn healthcheck(headers: HeaderMap) -> Response {
-    healthcheck_response(&headers)
-}
-
-/// `/v1/{module}/healthcheck`, reached by legacy clients via the `/{module}/healthcheck` rewrite.
-///
-/// Divergence from tide-disco: matches any `{module}` string, so unregistered module names report
-/// healthy instead of 404. Constraining it to the registered set would have to track which
-/// modules each serve mode mounts; not worth it for a liveness probe.
-async fn module_healthcheck(headers: HeaderMap) -> Response {
-    module_healthcheck_response(&headers)
 }
 
 /// Tide-disco-compatible version response. Tide emits the binary's clap version; we emit the
@@ -374,6 +348,9 @@ async fn version() -> Json<serde_json::Value> {
     }))
 }
 
+/// Espresso's reward-state extensions, on both reward mounts. The merklized-state base routes
+/// each mount inherits come from `hotshot_query_service::merklized_state`, which the caller builds
+/// from its concrete data source; see [`create_router_v1`].
 pub(crate) fn router_reward<S>(state: S) -> ApiRouter
 where
     S: v1::RewardApi + Clone + Send + Sync + 'static,
@@ -438,22 +415,6 @@ where
             .map_err(classify_availability_error)
     };
 
-    let get_reward_state_height = |State(state): State<S>| async move {
-        state
-            .get_reward_state_height()
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let get_reward_state_v2_height = |State(state): State<S>| async move {
-        state
-            .get_reward_state_v2_height()
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
     // Same underlying V2-tree lookup as `reward-state-v2/reward-balance`; tide registers this
     // route unconditionally for both merklized-state modules regardless of tree version.
     let get_reward_balance_v1 =
@@ -472,57 +433,6 @@ where
                 .await
                 .map(ApiJson)
                 .map_err(classify_availability_error)
-        };
-
-    // Merklized-state `get_path` handlers, inherited by both reward mounts from
-    // `hotshot-query-service`'s base `state.toml` routes (mirrors router_block_state /
-    // router_fee_state below).
-    let get_reward_state_path_v1_by_height =
-        |State(state): State<S>, Path((height, key)): Path<(u64, String)>| async move {
-            <S as v1::RewardApi>::get_reward_state_path_v1(
-                &state,
-                v1::Snapshot::Height(height),
-                key,
-            )
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-        };
-
-    let get_reward_state_path_v1_by_commit =
-        |State(state): State<S>, Path((commit, key)): Path<(String, String)>| async move {
-            <S as v1::RewardApi>::get_reward_state_path_v1(
-                &state,
-                v1::Snapshot::Commit(commit),
-                key,
-            )
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-        };
-
-    let get_reward_state_path_v2_by_height =
-        |State(state): State<S>, Path((height, key)): Path<(u64, String)>| async move {
-            <S as v1::RewardApi>::get_reward_state_path_v2(
-                &state,
-                v1::Snapshot::Height(height),
-                key,
-            )
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-        };
-
-    let get_reward_state_path_v2_by_commit =
-        |State(state): State<S>, Path((commit, key)): Path<(String, String)>| async move {
-            <S as v1::RewardApi>::get_reward_state_path_v2(
-                &state,
-                v1::Snapshot::Commit(commit),
-                key,
-            )
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
         };
 
     ApiRouter::new()
@@ -569,18 +479,6 @@ where
             }),
         )
         .api_route(
-            routes::v1::REWARD_STATE_HEIGHT_ROUTE,
-            get_with(get_reward_state_height, |op| {
-                op.summary("Get reward-state block height").description("Latest block height for which the merklized reward state (V1) is available.")
-            }),
-        )
-        .api_route(
-            routes::v1::REWARD_STATE_V2_HEIGHT_ROUTE,
-            get_with(get_reward_state_v2_height, |op| {
-                op.summary("Get reward-state-v2 block height").description("Latest block height for which the merklized reward state (V2) is available.")
-            }),
-        )
-        .api_route(
             routes::v1::REWARD_V1_BALANCE_ROUTE,
             get_with(get_reward_balance_v1, |op| {
                 op.summary("Get reward balance at height (v1 mount)").description("Same handler as reward-state-v2/reward-balance, registered on the reward-state mount; tide-disco shared this handler across both merklized-state mounts.")
@@ -618,38 +516,17 @@ where
                 op.summary("Get RewardMerkleTreeV2 snapshot (v1 mount)").description("Same handler as reward-state-v2/reward-merkle-tree-v2, registered on the reward-state mount; tide-disco shared this handler across both merklized-state mounts.")
             }),
         )
-        .api_route(
-            routes::v1::REWARD_STATE_PATH_BY_HEIGHT_ROUTE,
-            get_with(get_reward_state_path_v1_by_height, |op| {
-                op.summary("Get reward-state Merkle path by height").description("Retrieve the Merkle path for the membership proof of a leaf in the reward-state (V1) tree, by block height and key.")
-            }),
-        )
-        .api_route(
-            routes::v1::REWARD_STATE_PATH_BY_COMMIT_ROUTE,
-            get_with(get_reward_state_path_v1_by_commit, |op| {
-                op.summary("Get reward-state Merkle path by commitment").description("Retrieve the Merkle path for the membership proof of a leaf in the reward-state (V1) tree, by tree commitment and key.")
-            }),
-        )
-        .api_route(
-            routes::v1::REWARD_STATE_V2_PATH_BY_HEIGHT_ROUTE,
-            get_with(get_reward_state_path_v2_by_height, |op| {
-                op.summary("Get reward-state-v2 Merkle path by height").description("Retrieve the Merkle path for the membership proof of a leaf in the reward-state-v2 tree, by block height and key.")
-            }),
-        )
-        .api_route(
-            routes::v1::REWARD_STATE_V2_PATH_BY_COMMIT_ROUTE,
-            get_with(get_reward_state_path_v2_by_commit, |op| {
-                op.summary("Get reward-state-v2 Merkle path by commitment").description("Retrieve the Merkle path for the membership proof of a leaf in the reward-state-v2 tree, by tree commitment and key.")
-            }),
-        )
         .with_state(state)
 }
 
+/// Espresso's availability extensions. The module's base routes come from
+/// `hotshot_query_service::availability`, which the caller builds from its concrete data source
+/// and passes to its serve entry point as part of the query-service router; see
+/// [`create_router_v1`].
 pub(crate) fn router_availability<S>(state: S) -> ApiRouter
 where
-    S: v1::AvailabilityApi + v1::HotShotAvailabilityApi + Clone + Send + Sync + 'static,
+    S: v1::AvailabilityApiExtension + Clone + Send + Sync + 'static,
 {
-    // Availability API handlers
     // Route: /v1/availability/block/{height}/namespace/{namespace}
     let get_namespace_proof_by_height =
         |State(state): State<S>, Path((height, namespace)): Path<(u64, u32)>| async move {
@@ -706,7 +583,7 @@ where
         };
 
     let get_state_cert_v1 = |State(state): State<S>, Path(epoch): Path<u64>| async move {
-        <S as v1::AvailabilityApi>::get_state_cert(&state, epoch)
+        <S as v1::AvailabilityApiExtension>::get_state_cert(&state, epoch)
             .await
             .map(ApiJson)
             .map_err(classify_availability_error)
@@ -720,323 +597,6 @@ where
             .map_err(classify_availability_error)
     };
 
-    // HotShot availability API handlers
-    let get_leaf_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
-        state
-            .get_leaf(v1::LeafId::Height(height))
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let get_leaf_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
-        state
-            .get_leaf(v1::LeafId::Hash(hash))
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let get_leaf_range = |State(state): State<S>, Path((from, until)): Path<(usize, usize)>| async move {
-        state
-            .get_leaf_range(from, until)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let get_header_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
-        state
-            .get_header(v1::BlockId::Height(height))
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let get_header_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
-        state
-            .get_header(v1::BlockId::Hash(hash))
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let get_header_by_payload_hash = |State(state): State<S>, Path(payload_hash): Path<String>| async move {
-        state
-            .get_header(v1::BlockId::PayloadHash(payload_hash))
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let get_header_range = |State(state): State<S>, Path((from, until)): Path<(usize, usize)>| async move {
-        state
-            .get_header_range(from, until)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let get_block_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
-        state
-            .get_block(v1::BlockId::Height(height))
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let get_block_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
-        state
-            .get_block(v1::BlockId::Hash(hash))
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let get_block_by_payload_hash = |State(state): State<S>, Path(payload_hash): Path<String>| async move {
-        state
-            .get_block(v1::BlockId::PayloadHash(payload_hash))
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let get_block_range = |State(state): State<S>, Path((from, until)): Path<(usize, usize)>| async move {
-        state
-            .get_block_range(from, until)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let get_payload_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
-        state
-            .get_payload(v1::PayloadId::Height(height))
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let get_payload_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
-        state
-            .get_payload(v1::PayloadId::Hash(hash))
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let get_payload_by_block_hash = |State(state): State<S>, Path(block_hash): Path<String>| async move {
-        state
-            .get_payload(v1::PayloadId::BlockHash(block_hash))
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let get_payload_range = |State(state): State<S>, Path((from, until)): Path<(usize, usize)>| async move {
-        state
-            .get_payload_range(from, until)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let get_vid_common_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
-        state
-            .get_vid_common(v1::BlockId::Height(height))
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let get_vid_common_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
-        state
-            .get_vid_common(v1::BlockId::Hash(hash))
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let get_vid_common_by_payload_hash =
-        |State(state): State<S>, Path(payload_hash): Path<String>| async move {
-            state
-                .get_vid_common(v1::BlockId::PayloadHash(payload_hash))
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let get_vid_common_range =
-        |State(state): State<S>, Path((from, until)): Path<(usize, usize)>| async move {
-            state
-                .get_vid_common_range(from, until)
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let get_transaction_by_position =
-        |State(state): State<S>, Path((height, index)): Path<(u64, u64)>| async move {
-            state
-                .get_transaction_by_position(height, index)
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let get_transaction_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
-        state
-            .get_transaction_by_hash(hash)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let get_transaction_proof_by_position =
-        |State(state): State<S>, Path((height, index)): Path<(u64, u64)>| async move {
-            state
-                .get_transaction_proof_by_position(height, index)
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let get_transaction_proof_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
-        state
-            .get_transaction_proof_by_hash(hash)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let get_block_summary_by_height = |State(state): State<S>, Path(height): Path<usize>| async move {
-        state
-            .get_block_summary(height)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let get_block_summary_range =
-        |State(state): State<S>, Path((from, until)): Path<(usize, usize)>| async move {
-            state
-                .get_block_summary_range(from, until)
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let get_limits = |State(state): State<S>| async move {
-        state
-            .get_limits()
-            .await
-            .map(ApiJson)
-            .map_err(ApiError::Internal)
-    };
-
-    let get_cert2 = |State(state): State<S>, Path(height): Path<u64>| async move {
-        match <S as v1::HotShotAvailabilityApi>::get_cert2(&state, height).await {
-            Ok(Some(cert2)) => Ok(ApiJson(cert2)),
-            Ok(None) => Err(ApiError::NotFound(anyhow::anyhow!(
-                "no cert2 available for height {height}"
-            ))),
-            Err(err) => Err(ApiError::Internal(err)),
-        }
-    };
-
-    // WebSocket streaming handlers
-    let stream_leaves = |ws: WebSocketUpgrade,
-                         State(state): State<S>,
-                         headers: HeaderMap,
-                         Path(height): Path<usize>| async move {
-        let format = ContentType::negotiate(&headers);
-        ws.on_upgrade(move |socket| async move {
-            match state.stream_leaves(height).await {
-                Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
-                Err(e) => tracing::warn!("stream_leaves: {e}"),
-            }
-        })
-    };
-
-    let stream_headers = |ws: WebSocketUpgrade,
-                          State(state): State<S>,
-                          headers: HeaderMap,
-                          Path(height): Path<usize>| async move {
-        let format = ContentType::negotiate(&headers);
-        ws.on_upgrade(move |socket| async move {
-            match state.stream_headers(height).await {
-                Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
-                Err(e) => tracing::warn!("stream_headers: {e}"),
-            }
-        })
-    };
-
-    let stream_blocks = |ws: WebSocketUpgrade,
-                         State(state): State<S>,
-                         headers: HeaderMap,
-                         Path(height): Path<usize>| async move {
-        let format = ContentType::negotiate(&headers);
-        ws.on_upgrade(move |socket| async move {
-            match state.stream_blocks(height).await {
-                Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
-                Err(e) => tracing::warn!("stream_blocks: {e}"),
-            }
-        })
-    };
-
-    let stream_payloads = |ws: WebSocketUpgrade,
-                           State(state): State<S>,
-                           headers: HeaderMap,
-                           Path(height): Path<usize>| async move {
-        let format = ContentType::negotiate(&headers);
-        ws.on_upgrade(move |socket| async move {
-            match state.stream_payloads(height).await {
-                Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
-                Err(e) => tracing::warn!("stream_payloads: {e}"),
-            }
-        })
-    };
-
-    let stream_vid_common = |ws: WebSocketUpgrade,
-                             State(state): State<S>,
-                             headers: HeaderMap,
-                             Path(height): Path<usize>| async move {
-        let format = ContentType::negotiate(&headers);
-        ws.on_upgrade(move |socket| async move {
-            match state.stream_vid_common(height).await {
-                Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
-                Err(e) => tracing::warn!("stream_vid_common: {e}"),
-            }
-        })
-    };
-
-    let stream_transactions = |ws: WebSocketUpgrade,
-                               State(state): State<S>,
-                               headers: HeaderMap,
-                               Path(height): Path<usize>| async move {
-        let format = ContentType::negotiate(&headers);
-        ws.on_upgrade(move |socket| async move {
-            match state.stream_transactions(height, None).await {
-                Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
-                Err(e) => tracing::warn!("stream_transactions: {e}"),
-            }
-        })
-    };
-
-    let stream_transactions_ns =
-        |ws: WebSocketUpgrade,
-         State(state): State<S>,
-         headers: HeaderMap,
-         Path((height, namespace)): Path<(usize, u32)>| async move {
-            let format = ContentType::negotiate(&headers);
-            ws.on_upgrade(move |socket| async move {
-                match state.stream_transactions(height, Some(namespace)).await {
-                    Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
-                    Err(e) => tracing::warn!("stream_transactions_ns: {e}"),
-                }
-            })
-        };
-
     let stream_namespace_proofs =
         |ws: WebSocketUpgrade,
          State(state): State<S>,
@@ -1045,7 +605,7 @@ where
             let format = ContentType::negotiate(&headers);
             ws.on_upgrade(move |socket| async move {
                 match state.stream_namespace_proofs(height, namespace).await {
-                    Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
+                    Ok(stream) => drive_ws_stream(socket, stream, format).await,
                     Err(e) => tracing::warn!("stream_namespace_proofs: {e}"),
                 }
             })
@@ -1115,321 +675,6 @@ where
             }),
         )
         .api_route(
-            routes::v1::LEAF_BY_HEIGHT_ROUTE,
-            get_with(get_leaf_by_height, |op| {
-                op.summary("Get leaf").description(
-                    "Get a leaf by its position in the ledger (0 is genesis) or its hash.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::LEAF_BY_HASH_ROUTE,
-            get_with(get_leaf_by_hash, |op| {
-                op.summary("Get leaf").description(
-                    "Get a leaf by its position in the ledger (0 is genesis) or its hash.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::LEAF_RANGE_ROUTE,
-            get_with(get_leaf_range, |op| {
-                op.summary("Get leaves in range").description(
-                    "Get leaves by position in the ledger, from the given `from` up to `until`.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::HEADER_BY_HEIGHT_ROUTE,
-            get_with(get_header_by_height, |op| {
-                op.summary("Get header").description(
-                    "Get a header by its position in the ledger (0 is genesis) or its hash.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::HEADER_BY_HASH_ROUTE,
-            get_with(get_header_by_hash, |op| {
-                op.summary("Get header").description(
-                    "Get a header by its position in the ledger (0 is genesis) or its hash.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::HEADER_BY_PAYLOAD_HASH_ROUTE,
-            get_with(get_header_by_payload_hash, |op| {
-                op.summary("Get header").description(
-                    "Get a header by its position in the ledger (0 is genesis) or its hash.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::HEADER_RANGE_ROUTE,
-            get_with(get_header_range, |op| {
-                op.summary("Get headers in range").description(
-                    "Get headers by position in the ledger, from the given `from` up to `until`.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::BLOCK_BY_HEIGHT_ROUTE,
-            get_with(get_block_by_height, |op| {
-                op.summary("Get block").description(
-                    "Get a block (header, payload, hash, size) by its position in the ledger or \
-                     its hash.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::BLOCK_BY_HASH_ROUTE,
-            get_with(get_block_by_hash, |op| {
-                op.summary("Get block").description(
-                    "Get a block (header, payload, hash, size) by its position in the ledger or \
-                     its hash.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::BLOCK_BY_PAYLOAD_HASH_ROUTE,
-            get_with(get_block_by_payload_hash, |op| {
-                op.summary("Get block").description(
-                    "Get a block (header, payload, hash, size) by its position in the ledger or \
-                     its hash.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::BLOCK_RANGE_ROUTE,
-            get_with(get_block_range, |op| {
-                op.summary("Get blocks in range").description(
-                    "Get blocks by position in the ledger, from the given `from` up to `until`.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::PAYLOAD_BY_HEIGHT_ROUTE,
-            get_with(get_payload_by_height, |op| {
-                op.summary("Get payload").description(
-                    "Get the payload of a block by its position in the ledger or its hash.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::PAYLOAD_BY_HASH_ROUTE,
-            get_with(get_payload_by_hash, |op| {
-                op.summary("Get payload").description(
-                    "Get the payload of a block by its position in the ledger or its hash.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::PAYLOAD_BY_BLOCK_HASH_ROUTE,
-            get_with(get_payload_by_block_hash, |op| {
-                op.summary("Get payload").description(
-                    "Get the payload of a block by its position in the ledger or its hash.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::PAYLOAD_RANGE_ROUTE,
-            get_with(get_payload_range, |op| {
-                op.summary("Get payloads in range").description(
-                    "Get payloads by block position, from the given `from` up to `until`.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::VID_COMMON_BY_HEIGHT_ROUTE,
-            get_with(get_vid_common_by_height, |op| {
-                op.summary("Get VID common data").description(
-                    "Get common VID data for a block; data shared by all storage nodes, not a VID \
-                     share.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::VID_COMMON_BY_HASH_ROUTE,
-            get_with(get_vid_common_by_hash, |op| {
-                op.summary("Get VID common data").description(
-                    "Get common VID data for a block; data shared by all storage nodes, not a VID \
-                     share.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::VID_COMMON_BY_PAYLOAD_HASH_ROUTE,
-            get_with(get_vid_common_by_payload_hash, |op| {
-                op.summary("Get VID common data").description(
-                    "Get common VID data for a block; data shared by all storage nodes, not a VID \
-                     share.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::VID_COMMON_RANGE_ROUTE,
-            get_with(get_vid_common_range, |op| {
-                op.summary("Get VID common data in range").description(
-                    "Get VID common objects by block position, from the given `from` up to \
-                     `until`.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::TRANSACTION_BY_POSITION_NOPROOF_ROUTE,
-            get_with(get_transaction_by_position, |op| {
-                op.summary("Get transaction (no proof)").description(
-                    "Get a transaction by its index in a block or by its hash, without an \
-                     inclusion proof.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::TRANSACTION_BY_HASH_NOPROOF_ROUTE,
-            get_with(get_transaction_by_hash, |op| {
-                op.summary("Get transaction (no proof)").description(
-                    "Get a transaction by its index in a block or by its hash, without an \
-                     inclusion proof.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::TRANSACTION_PROOF_BY_POSITION_ROUTE,
-            get_with(get_transaction_proof_by_position, |op| {
-                op.summary("Get transaction with inclusion proof")
-                    .description(
-                        "Get a transaction by its index in a block or by its hash, along with an \
-                         application-defined inclusion proof.",
-                    )
-            }),
-        )
-        .api_route(
-            routes::v1::TRANSACTION_PROOF_BY_HASH_ROUTE,
-            get_with(get_transaction_proof_by_hash, |op| {
-                op.summary("Get transaction with inclusion proof")
-                    .description(
-                        "Get a transaction by its index in a block or by its hash, along with an \
-                         application-defined inclusion proof.",
-                    )
-            }),
-        )
-        .api_route(
-            routes::v1::TRANSACTION_BY_POSITION_ROUTE,
-            get_with(get_transaction_proof_by_position, |op| {
-                op.summary("Get transaction with inclusion proof")
-                    .description(
-                        "Get a transaction by its index in a block or by its hash, along with an \
-                         application-defined inclusion proof.",
-                    )
-            }),
-        )
-        .api_route(
-            routes::v1::TRANSACTION_BY_HASH_ROUTE,
-            get_with(get_transaction_proof_by_hash, |op| {
-                op.summary("Get transaction with inclusion proof")
-                    .description(
-                        "Get a transaction by its index in a block or by its hash, along with an \
-                         application-defined inclusion proof.",
-                    )
-            }),
-        )
-        .api_route(
-            routes::v1::BLOCK_SUMMARY_BY_HEIGHT_ROUTE,
-            get_with(get_block_summary_by_height, |op| {
-                op.summary("Get block summary").description(
-                    "Get the block summary for a block based on its position in the ledger.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::BLOCK_SUMMARY_RANGE_ROUTE,
-            get_with(get_block_summary_range, |op| {
-                op.summary("Get block summaries in range").description(
-                    "Get block summaries by position, from the given `from` up to `until`.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::LIMITS_ROUTE,
-            get_with(get_limits, |op| {
-                op.summary("Get availability limits").description(
-                    "Get implementation-defined limits restricting availability range queries \
-                     (small/large object range limits).",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::CERT2_BY_HEIGHT_ROUTE,
-            get_with(get_cert2, |op| {
-                op.summary("Get finality certificate").description(
-                    "Get the finality certificate (Certificate2) at the given block height.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::STREAM_LEAVES_ROUTE,
-            get_with(stream_leaves, |op| {
-                op.summary("Stream leaves (websocket)").description(
-                    "Websocket endpoint: subscribe to a stream of leaves in sequence order, \
-                     starting at the given height.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::STREAM_HEADERS_ROUTE,
-            get_with(stream_headers, |op| {
-                op.summary("Stream headers (websocket)").description(
-                    "Websocket endpoint: subscribe to a stream of headers in sequence order, \
-                     starting at the given height.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::STREAM_BLOCKS_ROUTE,
-            get_with(stream_blocks, |op| {
-                op.summary("Stream blocks (websocket)").description(
-                    "Websocket endpoint: subscribe to a stream of blocks in sequence order, \
-                     starting at the given height.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::STREAM_PAYLOADS_ROUTE,
-            get_with(stream_payloads, |op| {
-                op.summary("Stream payloads (websocket)").description(
-                    "Websocket endpoint: subscribe to a stream of block payloads in sequence \
-                     order, starting at the given height.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::STREAM_VID_COMMON_ROUTE,
-            get_with(stream_vid_common, |op| {
-                op.summary("Stream VID common data (websocket)")
-                    .description(
-                        "Websocket endpoint: subscribe to a stream of VID common data in sequence \
-                         order, starting at the given height.",
-                    )
-            }),
-        )
-        .api_route(
-            routes::v1::STREAM_TRANSACTIONS_ROUTE,
-            get_with(stream_transactions, |op| {
-                op.summary("Stream transactions (websocket)").description(
-                    "Websocket endpoint: subscribe to a stream of all transactions starting at \
-                     the given height.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::STREAM_TRANSACTIONS_NS_ROUTE,
-            get_with(stream_transactions_ns, |op| {
-                op.summary("Stream namespace transactions (websocket)")
-                    .description(
-                        "Websocket endpoint: subscribe to a stream of transactions in one \
-                         namespace, starting at the given height.",
-                    )
-            }),
-        )
-        .api_route(
             routes::v1::STREAM_NAMESPACE_PROOFS_ROUTE,
             get_with(stream_namespace_proofs, |op| {
                 op.summary("Stream namespace proofs (websocket)")
@@ -1442,86 +687,13 @@ where
         .with_state(state)
 }
 
-pub(crate) fn router_block_state<S>(state: S) -> ApiRouter
-where
-    S: v1::BlockStateApi + Clone + Send + Sync + 'static,
-{
-    let get_block_state_height = |State(state): State<S>| async move {
-        <S as v1::BlockStateApi>::get_block_state_height(&state)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let get_block_state_path_by_commit =
-        |State(state): State<S>, Path((commit, key)): Path<(String, String)>| async move {
-            <S as v1::BlockStateApi>::get_block_state_path(
-                &state,
-                v1::Snapshot::Commit(commit),
-                key,
-            )
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-        };
-
-    // Merklized state handlers: block-state
-    let get_block_state_path_by_height =
-        |State(state): State<S>, Path((height, key)): Path<(u64, String)>| async move {
-            <S as v1::BlockStateApi>::get_block_state_path(
-                &state,
-                v1::Snapshot::Height(height),
-                key,
-            )
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-        };
-
-    ApiRouter::new()
-        .api_route(
-            routes::v1::BLOCK_STATE_HEIGHT_ROUTE,
-            get_with(get_block_state_height, |op| {
-                op.summary("Get block-state height").description(
-                    "Latest block height for which the merklized blocks-Merkle-tree state is \
-                     available.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::BLOCK_STATE_PATH_BY_COMMIT_ROUTE,
-            get_with(get_block_state_path_by_commit, |op| {
-                op.summary("Get block-state Merkle path by commitment")
-                    .description(
-                        "Retrieve the Merkle path for a leaf in the blocks Merkle tree, by tree \
-                         commitment and key.",
-                    )
-            }),
-        )
-        .api_route(
-            routes::v1::BLOCK_STATE_PATH_BY_HEIGHT_ROUTE,
-            get_with(get_block_state_path_by_height, |op| {
-                op.summary("Get block-state Merkle path by height")
-                    .description(
-                        "Retrieve the Merkle path for a leaf in the blocks Merkle tree, by block \
-                         height and key.",
-                    )
-            }),
-        )
-        .with_state(state)
-}
-
+/// Espresso's fee-state extension. The module's base routes (Merkle path by height and by
+/// commitment, snapshot height) come from `hotshot_query_service::merklized_state`, which the
+/// caller builds from its concrete data source; see [`create_router_v1`].
 pub(crate) fn router_fee_state<S>(state: S) -> ApiRouter
 where
-    S: v1::FeeStateApi + Clone + Send + Sync + 'static,
+    S: v1::FeeStateApiExtension + Clone + Send + Sync + 'static,
 {
-    let get_fee_state_height = |State(state): State<S>| async move {
-        <S as v1::FeeStateApi>::get_fee_state_height(&state)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
     let get_fee_balance_latest = |State(state): State<S>, Path(address): Path<String>| async move {
         state
             .get_fee_balance_latest(address)
@@ -1530,32 +702,7 @@ where
             .map_err(classify_availability_error)
     };
 
-    let get_fee_state_path_by_commit =
-        |State(state): State<S>, Path((commit, key)): Path<(String, String)>| async move {
-            <S as v1::FeeStateApi>::get_fee_state_path(&state, v1::Snapshot::Commit(commit), key)
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    // Merklized state handlers: fee-state
-    let get_fee_state_path_by_height =
-        |State(state): State<S>, Path((height, key)): Path<(u64, String)>| async move {
-            <S as v1::FeeStateApi>::get_fee_state_path(&state, v1::Snapshot::Height(height), key)
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
     ApiRouter::new()
-        .api_route(
-            routes::v1::FEE_STATE_HEIGHT_ROUTE,
-            get_with(get_fee_state_height, |op| {
-                op.summary("Get fee-state height").description(
-                    "Latest block height for which the merklized fee state is available.",
-                )
-            }),
-        )
         .api_route(
             routes::v1::FEE_STATE_BALANCE_LATEST_ROUTE,
             get_with(get_fee_balance_latest, |op| {
@@ -1564,104 +711,21 @@ where
                 )
             }),
         )
-        .api_route(
-            routes::v1::FEE_STATE_PATH_BY_COMMIT_ROUTE,
-            get_with(get_fee_state_path_by_commit, |op| {
-                op.summary("Get fee-state Merkle path by commitment")
-                    .description(
-                        "Retrieve the Merkle path for a leaf in the fee state tree, by tree \
-                         commitment and key.",
-                    )
-            }),
-        )
-        .api_route(
-            routes::v1::FEE_STATE_PATH_BY_HEIGHT_ROUTE,
-            get_with(get_fee_state_path_by_height, |op| {
-                op.summary("Get fee-state Merkle path by height")
-                    .description(
-                        "Retrieve the Merkle path for a leaf in the fee state tree, by block \
-                         height and key.",
-                    )
-            }),
-        )
         .with_state(state)
 }
 
+/// Espresso's status extension. The module's base routes (block height, success rate, time since
+/// last decide, Prometheus metrics) come from `hotshot_query_service::status`, which the caller
+/// builds from its concrete data source; see [`create_router_v1`].
 pub(crate) fn router_status<S>(state: S) -> ApiRouter
 where
-    S: v1::StatusApi + Clone + Send + Sync + 'static,
+    S: v1::StatusApiExtension + Clone + Send + Sync + 'static,
 {
-    let status_block_height = |State(state): State<S>| async move {
-        <S as v1::StatusApi>::block_height(&state)
-            .await
-            .map(ApiJson)
-            .map_err(ApiError::Internal)
-    };
-
-    let status_success_rate = |State(state): State<S>| async move {
-        <S as v1::StatusApi>::success_rate(&state)
-            .await
-            .map(ApiJson)
-            .map_err(ApiError::Internal)
-    };
-
-    let status_time_since_last_decide = |State(state): State<S>| async move {
-        <S as v1::StatusApi>::time_since_last_decide(&state)
-            .await
-            .map(ApiJson)
-            .map_err(ApiError::Internal)
-    };
-
-    let status_metrics = |State(state): State<S>| async move {
-        match <S as v1::StatusApi>::metrics(&state).await {
-            Ok(text) => (
-                [(
-                    axum::http::header::CONTENT_TYPE,
-                    "text/plain; charset=utf-8",
-                )],
-                text,
-            )
-                .into_response(),
-            Err(e) => ApiError::Internal(e).into_response(),
-        }
-    };
-
     let status_keys = |State(state): State<S>| async move {
-        <S as v1::StatusApi>::keys(&state)
-            .await
-            .map(ApiJson)
-            .map_err(ApiError::Internal)
+        state.keys().await.map(ApiJson).map_err(ApiError::Internal)
     };
 
     ApiRouter::new()
-        .api_route(
-            routes::v1::STATUS_BLOCK_HEIGHT_ROUTE,
-            get_with(status_block_height, |op| {
-                op.summary("Get latest committed block height")
-                    .description("Get the height of the latest committed block.")
-            }),
-        )
-        .api_route(
-            routes::v1::STATUS_SUCCESS_RATE_ROUTE,
-            get_with(status_success_rate, |op| {
-                op.summary("Get view success rate")
-                    .description("Get the fraction of views which resulted in a committed block.")
-            }),
-        )
-        .api_route(
-            routes::v1::STATUS_TIME_SINCE_LAST_DECIDE_ROUTE,
-            get_with(status_time_since_last_decide, |op| {
-                op.summary("Get time since last decide")
-                    .description("Get the time elapsed in seconds since the last decided view.")
-            }),
-        )
-        .api_route(
-            routes::v1::STATUS_METRICS_ROUTE,
-            get_with(status_metrics, |op| {
-                op.summary("Get Prometheus metrics")
-                    .description("Prometheus endpoint exposing consensus-related metrics.")
-            }),
-        )
         .api_route(
             routes::v1::STATUS_KEYS_ROUTE,
             get_with(status_keys, |op| {
@@ -1729,182 +793,15 @@ where
         .with_state(state)
 }
 
+/// Espresso's node extensions: the stake table, validators, participation rates, the block reward,
+/// and the oldest objects storage still holds. The module's base routes (block height, transaction
+/// counts, payload sizes, VID shares, sync status, header windows and limits) come from
+/// `hotshot_query_service::node`, which the caller builds from its concrete data source; see
+/// [`create_router_v1`].
 pub(crate) fn router_node<S>(state: S) -> ApiRouter
 where
-    S: v1::NodeApi + Clone + Send + Sync + 'static,
+    S: v1::NodeApiExtension + Clone + Send + Sync + 'static,
 {
-    let node_block_height = |State(state): State<S>| async move {
-        <S as v1::NodeApi>::block_height(&state)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let node_count_txs = |State(state): State<S>| async move {
-        state
-            .count_transactions(None, None, None)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let node_count_txs_ns = |State(state): State<S>, Path(namespace): Path<u64>| async move {
-        state
-            .count_transactions(None, None, Some(namespace))
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let node_count_txs_ns_to = |State(state): State<S>, Path((namespace, to)): Path<(u64, u64)>| async move {
-        state
-            .count_transactions(None, Some(to), Some(namespace))
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let node_count_txs_ns_from_to =
-        |State(state): State<S>, Path((namespace, from, to)): Path<(u64, u64, u64)>| async move {
-            state
-                .count_transactions(Some(from), Some(to), Some(namespace))
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let node_count_txs_to = |State(state): State<S>, Path(to): Path<u64>| async move {
-        state
-            .count_transactions(None, Some(to), None)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let node_count_txs_from_to = |State(state): State<S>, Path((from, to)): Path<(u64, u64)>| async move {
-        state
-            .count_transactions(Some(from), Some(to), None)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let node_payload_size = |State(state): State<S>| async move {
-        state
-            .payload_size(None, None, None)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let node_payload_size_ns = |State(state): State<S>, Path(namespace): Path<u64>| async move {
-        state
-            .payload_size(None, None, Some(namespace))
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let node_payload_size_ns_to =
-        |State(state): State<S>, Path((namespace, to)): Path<(u64, u64)>| async move {
-            state
-                .payload_size(None, Some(to), Some(namespace))
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let node_payload_size_ns_from_to =
-        |State(state): State<S>, Path((namespace, from, to)): Path<(u64, u64, u64)>| async move {
-            state
-                .payload_size(Some(from), Some(to), Some(namespace))
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let node_payload_size_to = |State(state): State<S>, Path(to): Path<u64>| async move {
-        state
-            .payload_size(None, Some(to), None)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let node_payload_size_from_to = |State(state): State<S>, Path((from, to)): Path<(u64, u64)>| async move {
-        state
-            .payload_size(Some(from), Some(to), None)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let node_vid_share_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
-        state
-            .get_vid_share(v1::VidShareId::Hash(hash))
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let node_vid_share_by_payload_hash =
-        |State(state): State<S>, Path(payload_hash): Path<String>| async move {
-            state
-                .get_vid_share(v1::VidShareId::PayloadHash(payload_hash))
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let node_vid_share_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
-        state
-            .get_vid_share(v1::VidShareId::Height(height))
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let node_sync_status = |State(state): State<S>| async move {
-        state
-            .sync_status()
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let node_header_window_hash =
-        |State(state): State<S>, Path((hash, end)): Path<(String, u64)>| async move {
-            state
-                .get_header_window(v1::HeaderWindowStart::Hash(hash), end)
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let node_header_window_height =
-        |State(state): State<S>, Path((height, end)): Path<(u64, u64)>| async move {
-            state
-                .get_header_window(v1::HeaderWindowStart::Height(height), end)
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let node_header_window_time = |State(state): State<S>, Path((start, end)): Path<(u64, u64)>| async move {
-        state
-            .get_header_window(v1::HeaderWindowStart::Time(start), end)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let node_limits = |State(state): State<S>| async move {
-        <S as v1::NodeApi>::limits(&state)
-            .await
-            .map(ApiJson)
-            .map_err(ApiError::Internal)
-    };
-
     let node_stake_table_current = |State(state): State<S>| async move {
         state
             .stake_table_current()
@@ -2019,200 +916,6 @@ where
     };
 
     ApiRouter::new()
-        .api_route(
-            routes::v1::NODE_BLOCK_HEIGHT_ROUTE,
-            get_with(node_block_height, |op| {
-                op.summary("Get node's block height")
-                    .description("The current height of the chain, as observed by this node.")
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_TRANSACTIONS_COUNT_ROUTE,
-            get_with(node_count_txs, |op| {
-                op.summary("Count transactions").description(
-                    "Get the number of transactions in the chain, optionally restricted by block \
-                     range and/or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_TRANSACTIONS_COUNT_NS_ROUTE,
-            get_with(node_count_txs_ns, |op| {
-                op.summary("Count transactions").description(
-                    "Get the number of transactions in the chain, optionally restricted by block \
-                     range and/or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_TRANSACTIONS_COUNT_NS_TO_ROUTE,
-            get_with(node_count_txs_ns_to, |op| {
-                op.summary("Count transactions").description(
-                    "Get the number of transactions in the chain, optionally restricted by block \
-                     range and/or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_TRANSACTIONS_COUNT_NS_FROM_TO_ROUTE,
-            get_with(node_count_txs_ns_from_to, |op| {
-                op.summary("Count transactions").description(
-                    "Get the number of transactions in the chain, optionally restricted by block \
-                     range and/or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_TRANSACTIONS_COUNT_TO_ROUTE,
-            get_with(node_count_txs_to, |op| {
-                op.summary("Count transactions").description(
-                    "Get the number of transactions in the chain, optionally restricted by block \
-                     range and/or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_TRANSACTIONS_COUNT_FROM_TO_ROUTE,
-            get_with(node_count_txs_from_to, |op| {
-                op.summary("Count transactions").description(
-                    "Get the number of transactions in the chain, optionally restricted by block \
-                     range and/or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_PAYLOADS_SIZE_ROUTE,
-            get_with(node_payload_size, |op| {
-                op.summary("Get payload size").description(
-                    "Get the cumulative size (bytes) of payload data in the chain, optionally \
-                     restricted by block range and/or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_PAYLOADS_TOTAL_SIZE_ROUTE,
-            get_with(node_payload_size, |op| {
-                op.summary("Get payload size")
-                    .description("Deprecated alias for payloads/size.")
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_PAYLOADS_SIZE_NS_ROUTE,
-            get_with(node_payload_size_ns, |op| {
-                op.summary("Get payload size").description(
-                    "Get the cumulative size (bytes) of payload data in the chain, optionally \
-                     restricted by block range and/or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_PAYLOADS_SIZE_NS_TO_ROUTE,
-            get_with(node_payload_size_ns_to, |op| {
-                op.summary("Get payload size").description(
-                    "Get the cumulative size (bytes) of payload data in the chain, optionally \
-                     restricted by block range and/or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_PAYLOADS_SIZE_NS_FROM_TO_ROUTE,
-            get_with(node_payload_size_ns_from_to, |op| {
-                op.summary("Get payload size").description(
-                    "Get the cumulative size (bytes) of payload data in the chain, optionally \
-                     restricted by block range and/or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_PAYLOADS_SIZE_TO_ROUTE,
-            get_with(node_payload_size_to, |op| {
-                op.summary("Get payload size").description(
-                    "Get the cumulative size (bytes) of payload data in the chain, optionally \
-                     restricted by block range and/or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_PAYLOADS_SIZE_FROM_TO_ROUTE,
-            get_with(node_payload_size_from_to, |op| {
-                op.summary("Get payload size").description(
-                    "Get the cumulative size (bytes) of payload data in the chain, optionally \
-                     restricted by block range and/or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_VID_SHARE_BY_HASH_ROUTE,
-            get_with(node_vid_share_by_hash, |op| {
-                op.summary("Get this node's VID share").description(
-                    "Get information needed to run the VID reconstruction protocol for a block: \
-                     this node's VID share, if available.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_VID_SHARE_BY_PAYLOAD_HASH_ROUTE,
-            get_with(node_vid_share_by_payload_hash, |op| {
-                op.summary("Get this node's VID share").description(
-                    "Get information needed to run the VID reconstruction protocol for a block: \
-                     this node's VID share, if available.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_VID_SHARE_BY_HEIGHT_ROUTE,
-            get_with(node_vid_share_by_height, |op| {
-                op.summary("Get this node's VID share").description(
-                    "Get information needed to run the VID reconstruction protocol for a block: \
-                     this node's VID share, if available.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_SYNC_STATUS_ROUTE,
-            get_with(node_sync_status, |op| {
-                op.summary("Get node sync status").description(
-                    "Get the node's progress syncing with the latest chain state \
-                     (missing/present/pruned ranges for blocks, leaves, and VID common).",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_HEADER_WINDOW_HASH_ROUTE,
-            get_with(node_header_window_hash, |op| {
-                op.summary("Get header window").description(
-                    "Get block headers whose timestamps fall in a time window, plus one header \
-                     before and after to prove completeness.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_HEADER_WINDOW_HEIGHT_ROUTE,
-            get_with(node_header_window_height, |op| {
-                op.summary("Get header window").description(
-                    "Get block headers whose timestamps fall in a time window, plus one header \
-                     before and after to prove completeness.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_HEADER_WINDOW_TIME_ROUTE,
-            get_with(node_header_window_time, |op| {
-                op.summary("Get header window").description(
-                    "Get block headers whose timestamps fall in a time window, plus one header \
-                     before and after to prove completeness.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::NODE_LIMITS_ROUTE,
-            get_with(node_limits, |op| {
-                op.summary("Get node limits").description(
-                    "Get implementation-defined limits restricting node API requests (e.g. \
-                     header/window query size).",
-                )
-            }),
-        )
         .api_route(
             routes::v1::NODE_STAKE_TABLE_CURRENT_ROUTE,
             get_with(node_stake_table_current, |op| {
@@ -2351,7 +1054,7 @@ where
             .get_accounts(height, view, accounts)
             .await
             .map_err(classify_availability_error)?;
-        Ok::<_, ApiError>(encode_response(&headers, tree))
+        Ok::<_, ApiError>(encode_ok::<ErrorResponse, _>(&headers, tree))
     };
 
     let catchup_blocks = |State(state): State<S>, Path((height, view)): Path<(u64, u64)>| async move {
@@ -2402,7 +1105,7 @@ where
             .get_reward_accounts_v1(height, view, accounts)
             .await
             .map_err(classify_availability_error)?;
-        Ok::<_, ApiError>(encode_response(&headers, tree))
+        Ok::<_, ApiError>(encode_ok::<ErrorResponse, _>(&headers, tree))
     };
 
     let catchup_reward_account_v2 =
@@ -2567,7 +1270,7 @@ where
     let submit_submit = |State(state): State<S>, headers: HeaderMap, body: Bytes| async move {
         let tx: <S as v1::SubmitApi>::Transaction = decode_body(&headers, &body)?;
         let hash = state.submit(tx).await.map_err(ApiError::Internal)?;
-        Ok::<_, ApiError>(encode_response(&headers, hash))
+        Ok::<_, ApiError>(encode_ok::<ErrorResponse, _>(&headers, hash))
     };
 
     ApiRouter::new()
@@ -2625,7 +1328,7 @@ where
             let format = ContentType::negotiate(&headers);
             match <S as v1::HotShotEventsApi>::events(&state).await {
                 Ok(stream) => ws.on_upgrade(move |socket| async move {
-                    drive_ws_stream::<WireVersion, _>(socket, stream, format).await
+                    drive_ws_stream(socket, stream, format).await
                 }),
                 Err(err) => ApiError::Internal(err).into_response(),
             }
@@ -2955,353 +1658,6 @@ where
         .with_state(state)
 }
 
-pub(crate) fn router_explorer<S>(state: S) -> ApiRouter
-where
-    S: v1::ExplorerApi + Clone + Send + Sync + 'static,
-{
-    // Explorer handlers
-    let explorer_block_detail_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
-        state
-            .get_block_detail(v1::BlockIdent::Height(height))
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let explorer_block_detail_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
-        state
-            .get_block_detail(v1::BlockIdent::Hash(hash))
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let explorer_block_summaries_latest = |State(state): State<S>, Path(limit): Path<u64>| async move {
-        state
-            .get_block_summaries(v1::BlockIdent::Latest, limit)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let explorer_block_summaries_from =
-        |State(state): State<S>, Path((from, limit)): Path<(u64, u64)>| async move {
-            state
-                .get_block_summaries(v1::BlockIdent::Height(from), limit)
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let explorer_tx_detail_by_position =
-        |State(state): State<S>, Path((height, offset)): Path<(u64, u64)>| async move {
-            state
-                .get_transaction_detail(v1::TxIdent::HeightAndOffset(height, offset))
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let explorer_tx_detail_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
-        state
-            .get_transaction_detail(v1::TxIdent::Hash(hash))
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let explorer_tx_summaries_latest_block =
-        |State(state): State<S>, Path((limit, block)): Path<(u64, u64)>| async move {
-            state
-                .get_transaction_summaries(
-                    v1::TxIdent::Latest,
-                    limit,
-                    v1::TxSummaryFilter::Block(block),
-                )
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let explorer_tx_summaries_from_block =
-        |State(state): State<S>,
-         Path((height, offset, limit, block)): Path<(u64, u64, u64, u64)>| async move {
-            state
-                .get_transaction_summaries(
-                    v1::TxIdent::HeightAndOffset(height, offset),
-                    limit,
-                    v1::TxSummaryFilter::Block(block),
-                )
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let explorer_tx_summaries_by_hash_block =
-        |State(state): State<S>, Path((hash, limit, block)): Path<(String, u64, u64)>| async move {
-            state
-                .get_transaction_summaries(
-                    v1::TxIdent::Hash(hash),
-                    limit,
-                    v1::TxSummaryFilter::Block(block),
-                )
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let explorer_tx_summaries_latest_ns =
-        |State(state): State<S>, Path((limit, namespace)): Path<(u64, i64)>| async move {
-            state
-                .get_transaction_summaries(
-                    v1::TxIdent::Latest,
-                    limit,
-                    v1::TxSummaryFilter::Namespace(namespace),
-                )
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let explorer_tx_summaries_from_ns =
-        |State(state): State<S>,
-         Path((height, offset, limit, namespace)): Path<(u64, u64, u64, i64)>| async move {
-            state
-                .get_transaction_summaries(
-                    v1::TxIdent::HeightAndOffset(height, offset),
-                    limit,
-                    v1::TxSummaryFilter::Namespace(namespace),
-                )
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let explorer_tx_summaries_by_hash_ns = |State(state): State<S>,
-                                            Path((hash, limit, namespace)): Path<(
-        String,
-        u64,
-        i64,
-    )>| async move {
-        state
-            .get_transaction_summaries(
-                v1::TxIdent::Hash(hash),
-                limit,
-                v1::TxSummaryFilter::Namespace(namespace),
-            )
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let explorer_tx_summaries_latest = |State(state): State<S>, Path(limit): Path<u64>| async move {
-        state
-            .get_transaction_summaries(v1::TxIdent::Latest, limit, v1::TxSummaryFilter::None)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let explorer_tx_summaries_from =
-        |State(state): State<S>, Path((height, offset, limit)): Path<(u64, u64, u64)>| async move {
-            state
-                .get_transaction_summaries(
-                    v1::TxIdent::HeightAndOffset(height, offset),
-                    limit,
-                    v1::TxSummaryFilter::None,
-                )
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let explorer_tx_summaries_by_hash =
-        |State(state): State<S>, Path((hash, limit)): Path<(String, u64)>| async move {
-            state
-                .get_transaction_summaries(
-                    v1::TxIdent::Hash(hash),
-                    limit,
-                    v1::TxSummaryFilter::None,
-                )
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let explorer_summary = |State(state): State<S>| async move {
-        state
-            .get_explorer_summary()
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let explorer_search = |State(state): State<S>, Path(query): Path<String>| async move {
-        state
-            .get_search_result(query)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    ApiRouter::new()
-        .api_route(
-            routes::v1::EXPLORER_BLOCK_DETAIL_BY_HEIGHT_ROUTE,
-            get_with(explorer_block_detail_by_height, |op| {
-                op.summary("Get block detail")
-                    .description("Get details for a block identified by height or hash.")
-            }),
-        )
-        .api_route(
-            routes::v1::EXPLORER_BLOCK_DETAIL_BY_HASH_ROUTE,
-            get_with(explorer_block_detail_by_hash, |op| {
-                op.summary("Get block detail")
-                    .description("Get details for a block identified by height or hash.")
-            }),
-        )
-        .api_route(
-            routes::v1::EXPLORER_BLOCK_SUMMARIES_LATEST_ROUTE,
-            get_with(explorer_block_summaries_latest, |op| {
-                op.summary("List block summaries").description(
-                    "Retrieve up to `limit` block summaries, targeting the latest block or a \
-                     block identified by height.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::EXPLORER_BLOCK_SUMMARIES_FROM_ROUTE,
-            get_with(explorer_block_summaries_from, |op| {
-                op.summary("List block summaries").description(
-                    "Retrieve up to `limit` block summaries, targeting the latest block or a \
-                     block identified by height.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::EXPLORER_TX_DETAIL_BY_POSITION_ROUTE,
-            get_with(explorer_tx_detail_by_position, |op| {
-                op.summary("Get transaction detail").description(
-                    "Get details for a transaction identified by height and offset, or by hash.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::EXPLORER_TX_DETAIL_BY_HASH_ROUTE,
-            get_with(explorer_tx_detail_by_hash, |op| {
-                op.summary("Get transaction detail").description(
-                    "Get details for a transaction identified by height and offset, or by hash.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::EXPLORER_TX_SUMMARIES_LATEST_BLOCK_ROUTE,
-            get_with(explorer_tx_summaries_latest_block, |op| {
-                op.summary("List transaction summaries").description(
-                    "Retrieve up to `limit` transaction summaries, targeting the latest \
-                     transaction, one identified by height/offset, or by hash; optionally \
-                     filtered by block or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::EXPLORER_TX_SUMMARIES_FROM_BLOCK_ROUTE,
-            get_with(explorer_tx_summaries_from_block, |op| {
-                op.summary("List transaction summaries").description(
-                    "Retrieve up to `limit` transaction summaries, targeting the latest \
-                     transaction, one identified by height/offset, or by hash; optionally \
-                     filtered by block or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::EXPLORER_TX_SUMMARIES_BY_HASH_BLOCK_ROUTE,
-            get_with(explorer_tx_summaries_by_hash_block, |op| {
-                op.summary("List transaction summaries").description(
-                    "Retrieve up to `limit` transaction summaries, targeting the latest \
-                     transaction, one identified by height/offset, or by hash; optionally \
-                     filtered by block or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::EXPLORER_TX_SUMMARIES_LATEST_NS_ROUTE,
-            get_with(explorer_tx_summaries_latest_ns, |op| {
-                op.summary("List transaction summaries").description(
-                    "Retrieve up to `limit` transaction summaries, targeting the latest \
-                     transaction, one identified by height/offset, or by hash; optionally \
-                     filtered by block or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::EXPLORER_TX_SUMMARIES_FROM_NS_ROUTE,
-            get_with(explorer_tx_summaries_from_ns, |op| {
-                op.summary("List transaction summaries").description(
-                    "Retrieve up to `limit` transaction summaries, targeting the latest \
-                     transaction, one identified by height/offset, or by hash; optionally \
-                     filtered by block or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::EXPLORER_TX_SUMMARIES_BY_HASH_NS_ROUTE,
-            get_with(explorer_tx_summaries_by_hash_ns, |op| {
-                op.summary("List transaction summaries").description(
-                    "Retrieve up to `limit` transaction summaries, targeting the latest \
-                     transaction, one identified by height/offset, or by hash; optionally \
-                     filtered by block or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::EXPLORER_TX_SUMMARIES_LATEST_ROUTE,
-            get_with(explorer_tx_summaries_latest, |op| {
-                op.summary("List transaction summaries").description(
-                    "Retrieve up to `limit` transaction summaries, targeting the latest \
-                     transaction, one identified by height/offset, or by hash; optionally \
-                     filtered by block or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::EXPLORER_TX_SUMMARIES_FROM_ROUTE,
-            get_with(explorer_tx_summaries_from, |op| {
-                op.summary("List transaction summaries").description(
-                    "Retrieve up to `limit` transaction summaries, targeting the latest \
-                     transaction, one identified by height/offset, or by hash; optionally \
-                     filtered by block or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::EXPLORER_TX_SUMMARIES_BY_HASH_ROUTE,
-            get_with(explorer_tx_summaries_by_hash, |op| {
-                op.summary("List transaction summaries").description(
-                    "Retrieve up to `limit` transaction summaries, targeting the latest \
-                     transaction, one identified by height/offset, or by hash; optionally \
-                     filtered by block or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::EXPLORER_SUMMARY_ROUTE,
-            get_with(explorer_summary, |op| {
-                op.summary("Get explorer summary")
-                    .description("Get the current chain explorer summary.")
-            }),
-        )
-        .api_route(
-            routes::v1::EXPLORER_SEARCH_ROUTE,
-            get_with(explorer_search, |op| {
-                op.summary("Search blocks and transactions").description(
-                    "Search for blocks or transactions matching the given query string; currently \
-                     matched against hash.",
-                )
-            }),
-        )
-        .with_state(state)
-}
-
 pub(crate) fn router_token<S>(state: S) -> ApiRouter
 where
     S: v1::TokenApi + Clone + Send + Sync + 'static,
@@ -3441,22 +1797,25 @@ where
 /// handlers return internal domain types that don't implement `schemars::JsonSchema` by design —
 /// see [`ApiJson`]. The generated spec therefore documents routes, parameters, and summaries, but
 /// response bodies are mostly untyped.
-pub fn create_router_v1<S>(state: S) -> Router
+///
+/// `hqs_base` carries the `hotshot-query-service` modules' own routes. This crate is deliberately
+/// agnostic of the concrete node types, so it cannot build them; the caller does, from its data
+/// source, and nests each at its `routes::v1::*_PREFIX` before passing them here as one router.
+/// Merging it puts those routes next to Espresso's extensions for the same modules, and brings
+/// their documentation into this spec.
+pub fn create_router_v1<S>(state: S, hqs_base: ApiRouter) -> Router
 where
     S: v1::RewardApi
-        + v1::AvailabilityApi
-        + v1::HotShotAvailabilityApi
-        + v1::BlockStateApi
-        + v1::FeeStateApi
-        + v1::StatusApi
+        + v1::AvailabilityApiExtension
+        + v1::FeeStateApiExtension
+        + v1::StatusApiExtension
         + v1::ConfigApi
-        + v1::NodeApi
+        + v1::NodeApiExtension
         + v1::CatchupApi
         + v1::SubmitApi
         + v1::StateSignatureApi
         + v1::HotShotEventsApi
         + v1::LightClientApi
-        + v1::ExplorerApi
         + v1::TokenApi
         + v1::DatabaseApi
         + Clone
@@ -3466,9 +1825,9 @@ where
 {
     // Each `router_*` function already calls `with_state`, so the merged router is already
     // stateless (`ApiRouter<()>`) by the time it reaches `finish_api`.
-    let router = router_reward(state.clone())
+    let router = hqs_base
+        .merge(router_reward(state.clone()))
         .merge(router_availability(state.clone()))
-        .merge(router_block_state(state.clone()))
         .merge(router_fee_state(state.clone()))
         .merge(router_status(state.clone()))
         .merge(router_config(state.clone()))
@@ -3478,7 +1837,6 @@ where
         .merge(router_state_signature(state.clone()))
         .merge(router_hotshot_events(state.clone()))
         .merge(router_light_client(state.clone()))
-        .merge(router_explorer(state.clone()))
         .merge(router_token(state.clone()))
         .merge(router_database(state));
 
@@ -3877,10 +2235,118 @@ mod tests {
     use std::collections::BTreeMap;
 
     use futures::stream::BoxStream;
+    use http_wire::WireVersion;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use vbs::{BinarySerializer, Serializer};
 
     use super::*;
+
+    /// Stand-in for the `hotshot_query_service::availability` router, registering two of the same
+    /// relative paths so the tests can check where mounting puts them. That crate is not a
+    /// dependency here (this one is deliberately agnostic of the node types), so the real router
+    /// cannot be built in these tests; its own tests cover the paths it declares.
+    fn mock_availability_base() -> ApiRouter {
+        ApiRouter::new()
+            .api_route(
+                "/leaf/{height}",
+                get_with(async || ApiJson(()), |op| op.summary("Get leaf")),
+            )
+            .api_route(
+                "/limits",
+                get_with(
+                    async || ApiJson(()),
+                    |op| op.summary("Get availability limits"),
+                ),
+            )
+    }
+
+    /// Stand-in for the `hotshot_query_service::status` router; see [`mock_availability_base`].
+    fn mock_status_base() -> ApiRouter {
+        ApiRouter::new()
+            .api_route(
+                "/block-height",
+                get_with(async || ApiJson(()), |op| op.summary("Get block height")),
+            )
+            .api_route(
+                "/metrics",
+                get_with(
+                    async || ApiJson(()),
+                    |op| op.summary("Get Prometheus metrics"),
+                ),
+            )
+    }
+
+    /// Stand-in for the `hotshot_query_service::node` router; see [`mock_availability_base`].
+    fn mock_node_base() -> ApiRouter {
+        ApiRouter::new()
+            .api_route(
+                "/block-height",
+                get_with(
+                    async || ApiJson(()),
+                    |op| op.summary("Get this node's block height"),
+                ),
+            )
+            .api_route(
+                "/limits",
+                get_with(async || ApiJson(()), |op| op.summary("Get node limits")),
+            )
+    }
+
+    /// Stand-in for the `hotshot_query_service::explorer` router; see [`mock_availability_base`].
+    fn mock_explorer_base() -> ApiRouter {
+        ApiRouter::new()
+            .api_route(
+                "/explorer-summary",
+                get_with(
+                    async || ApiJson(()),
+                    |op| op.summary("Get the explorer summary"),
+                ),
+            )
+            .api_route(
+                "/block/{height}",
+                get_with(
+                    async || ApiJson(()),
+                    |op| op.summary("Get block detail by height"),
+                ),
+            )
+    }
+
+    /// Stand-in for the `hotshot_query_service::merklized_state` router, which the query modes
+    /// mount once per merklized tree; see [`mock_availability_base`].
+    fn mock_merklized_state_base(tree: &str) -> ApiRouter {
+        let summary = format!("Get a {tree} Merkle path by height");
+        ApiRouter::new()
+            .api_route(
+                "/{height}/{key}",
+                get_with(async || ApiJson(()), move |op| op.summary(&summary)),
+            )
+            .api_route(
+                "/block-height",
+                get_with(
+                    async || ApiJson(()),
+                    |op| op.summary("Get the latest snapshot height"),
+                ),
+            )
+    }
+
+    /// The query-service router a query mode passes in: every base nested at its module prefix,
+    /// the way the binary assembles it. The merklized-state router appears twice, once per tree,
+    /// as the SQL mode mounts it four times.
+    fn mock_hqs_base() -> ApiRouter {
+        ApiRouter::new()
+            .nest(routes::v1::AVAILABILITY_PREFIX, mock_availability_base())
+            .nest(routes::v1::STATUS_PREFIX, mock_status_base())
+            .nest(routes::v1::NODE_PREFIX, mock_node_base())
+            .nest(routes::v1::EXPLORER_PREFIX, mock_explorer_base())
+            .nest(
+                routes::v1::BLOCK_STATE_PREFIX,
+                mock_merklized_state_base("block_merkle_tree_bigint"),
+            )
+            .nest(
+                routes::v1::REWARD_STATE_V2_PREFIX,
+                mock_merklized_state_base("reward_merkle_tree_v2"),
+            )
+    }
 
     fn rewritten_uri(uri: &str) -> String {
         let req = Request::builder()
@@ -3989,15 +2455,7 @@ mod tests {
         type RewardAmounts = ();
         type RewardMerkleTreeData = ();
         type RewardAccountQueryDataV1 = ();
-        type RewardStatePathV1 = ();
-        type RewardStatePathV2 = ();
 
-        async fn get_reward_state_height(&self) -> anyhow::Result<u64> {
-            unimplemented!()
-        }
-        async fn get_reward_state_v2_height(&self) -> anyhow::Result<u64> {
-            unimplemented!()
-        }
         async fn get_reward_account_proof_v1(
             &self,
             _height: u64,
@@ -4052,24 +2510,10 @@ mod tests {
         ) -> anyhow::Result<Self::RewardMerkleTreeData> {
             unimplemented!()
         }
-        async fn get_reward_state_path_v1(
-            &self,
-            _snapshot: v1::merklized_state::Snapshot,
-            _key: String,
-        ) -> anyhow::Result<Self::RewardStatePathV1> {
-            unimplemented!()
-        }
-        async fn get_reward_state_path_v2(
-            &self,
-            _snapshot: v1::merklized_state::Snapshot,
-            _key: String,
-        ) -> anyhow::Result<Self::RewardStatePathV2> {
-            unimplemented!()
-        }
     }
 
     #[async_trait::async_trait]
-    impl v1::AvailabilityApi for MockState {
+    impl v1::AvailabilityApiExtension for MockState {
         type NamespaceProofQueryData = ();
         type IncorrectEncodingProof = ();
         type StateCertQueryDataV1 = ();
@@ -4116,180 +2560,9 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl v1::HotShotAvailabilityApi for MockState {
-        type Leaf = ();
-        type Block = ();
-        type Header = ();
-        type Payload = ();
-        type VidCommon = ();
-        type Transaction = ();
-        type TransactionWithProof = ();
-        type BlockSummary = ();
-        type Limits = ();
-        type Cert2 = ();
-
-        async fn get_leaf(&self, _id: v1::LeafId) -> anyhow::Result<Self::Leaf> {
-            unimplemented!()
-        }
-        async fn get_leaf_range(
-            &self,
-            _from: usize,
-            _until: usize,
-        ) -> anyhow::Result<Vec<Self::Leaf>> {
-            unimplemented!()
-        }
-        async fn get_header(&self, _id: v1::BlockId) -> anyhow::Result<Self::Header> {
-            unimplemented!()
-        }
-        async fn get_header_range(
-            &self,
-            _from: usize,
-            _until: usize,
-        ) -> anyhow::Result<Vec<Self::Header>> {
-            unimplemented!()
-        }
-        async fn get_block(&self, _id: v1::BlockId) -> anyhow::Result<Self::Block> {
-            unimplemented!()
-        }
-        async fn get_block_range(
-            &self,
-            _from: usize,
-            _until: usize,
-        ) -> anyhow::Result<Vec<Self::Block>> {
-            unimplemented!()
-        }
-        async fn get_payload(&self, _id: v1::PayloadId) -> anyhow::Result<Self::Payload> {
-            unimplemented!()
-        }
-        async fn get_payload_range(
-            &self,
-            _from: usize,
-            _until: usize,
-        ) -> anyhow::Result<Vec<Self::Payload>> {
-            unimplemented!()
-        }
-        async fn get_vid_common(&self, _id: v1::BlockId) -> anyhow::Result<Self::VidCommon> {
-            unimplemented!()
-        }
-        async fn get_vid_common_range(
-            &self,
-            _from: usize,
-            _until: usize,
-        ) -> anyhow::Result<Vec<Self::VidCommon>> {
-            unimplemented!()
-        }
-        async fn get_transaction_by_position(
-            &self,
-            _height: u64,
-            _index: u64,
-        ) -> anyhow::Result<Self::Transaction> {
-            unimplemented!()
-        }
-        async fn get_transaction_by_hash(
-            &self,
-            _hash: String,
-        ) -> anyhow::Result<Self::Transaction> {
-            unimplemented!()
-        }
-        async fn get_transaction_proof_by_position(
-            &self,
-            _height: u64,
-            _index: u64,
-        ) -> anyhow::Result<Self::TransactionWithProof> {
-            unimplemented!()
-        }
-        async fn get_transaction_proof_by_hash(
-            &self,
-            _hash: String,
-        ) -> anyhow::Result<Self::TransactionWithProof> {
-            unimplemented!()
-        }
-        async fn get_block_summary(&self, _height: usize) -> anyhow::Result<Self::BlockSummary> {
-            unimplemented!()
-        }
-        async fn get_block_summary_range(
-            &self,
-            _from: usize,
-            _until: usize,
-        ) -> anyhow::Result<Vec<Self::BlockSummary>> {
-            unimplemented!()
-        }
-        async fn get_limits(&self) -> anyhow::Result<Self::Limits> {
-            unimplemented!()
-        }
-        async fn get_cert2(&self, _height: u64) -> anyhow::Result<Option<Self::Cert2>> {
-            unimplemented!()
-        }
-        async fn stream_leaves(
-            &self,
-            _from: usize,
-        ) -> anyhow::Result<BoxStream<'static, Self::Leaf>> {
-            unimplemented!()
-        }
-        async fn stream_headers(
-            &self,
-            _from: usize,
-        ) -> anyhow::Result<BoxStream<'static, Self::Header>> {
-            unimplemented!()
-        }
-        async fn stream_blocks(
-            &self,
-            _from: usize,
-        ) -> anyhow::Result<BoxStream<'static, Self::Block>> {
-            unimplemented!()
-        }
-        async fn stream_payloads(
-            &self,
-            _from: usize,
-        ) -> anyhow::Result<BoxStream<'static, Self::Payload>> {
-            unimplemented!()
-        }
-        async fn stream_vid_common(
-            &self,
-            _from: usize,
-        ) -> anyhow::Result<BoxStream<'static, Self::VidCommon>> {
-            unimplemented!()
-        }
-        async fn stream_transactions(
-            &self,
-            _from: usize,
-            _namespace: Option<u32>,
-        ) -> anyhow::Result<BoxStream<'static, Self::Transaction>> {
-            unimplemented!()
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl v1::BlockStateApi for MockState {
-        type MerkleProof = ();
-
-        async fn get_block_state_path(
-            &self,
-            _snapshot: v1::merklized_state::Snapshot,
-            _key: String,
-        ) -> anyhow::Result<Self::MerkleProof> {
-            unimplemented!()
-        }
-        async fn get_block_state_height(&self) -> anyhow::Result<u64> {
-            unimplemented!()
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl v1::FeeStateApi for MockState {
-        type MerkleProof = ();
+    impl v1::FeeStateApiExtension for MockState {
         type FeeAmount = ();
 
-        async fn get_fee_state_path(
-            &self,
-            _snapshot: v1::merklized_state::Snapshot,
-            _key: String,
-        ) -> anyhow::Result<Self::MerkleProof> {
-            unimplemented!()
-        }
-        async fn get_fee_state_height(&self) -> anyhow::Result<u64> {
-            unimplemented!()
-        }
         async fn get_fee_balance_latest(
             &self,
             _address: String,
@@ -4299,21 +2572,9 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl v1::StatusApi for MockState {
+    impl v1::StatusApiExtension for MockState {
         type Keys = ();
 
-        async fn block_height(&self) -> anyhow::Result<u64> {
-            unimplemented!()
-        }
-        async fn success_rate(&self) -> anyhow::Result<f64> {
-            unimplemented!()
-        }
-        async fn time_since_last_decide(&self) -> anyhow::Result<u64> {
-            unimplemented!()
-        }
-        async fn metrics(&self) -> anyhow::Result<String> {
-            unimplemented!()
-        }
         async fn keys(&self) -> anyhow::Result<Self::Keys> {
             unimplemented!()
         }
@@ -4336,11 +2597,7 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl v1::NodeApi for MockState {
-        type VidShare = ();
-        type SyncStatus = ();
-        type HeaderWindow = ();
-        type Limits = ();
+    impl v1::NodeApiExtension for MockState {
         type StakeTable = ();
         type StakeTableCurrent = ();
         type Validators = ();
@@ -4350,41 +2607,6 @@ mod tests {
         type Block = ();
         type Leaf = ();
 
-        async fn block_height(&self) -> anyhow::Result<u64> {
-            unimplemented!()
-        }
-        async fn count_transactions(
-            &self,
-            _from: Option<u64>,
-            _to: Option<u64>,
-            _namespace: Option<u64>,
-        ) -> anyhow::Result<u64> {
-            unimplemented!()
-        }
-        async fn payload_size(
-            &self,
-            _from: Option<u64>,
-            _to: Option<u64>,
-            _namespace: Option<u64>,
-        ) -> anyhow::Result<u64> {
-            unimplemented!()
-        }
-        async fn get_vid_share(&self, _id: v1::VidShareId) -> anyhow::Result<Self::VidShare> {
-            unimplemented!()
-        }
-        async fn sync_status(&self) -> anyhow::Result<Self::SyncStatus> {
-            unimplemented!()
-        }
-        async fn get_header_window(
-            &self,
-            _start: v1::HeaderWindowStart,
-            _end: u64,
-        ) -> anyhow::Result<Self::HeaderWindow> {
-            unimplemented!()
-        }
-        async fn limits(&self) -> anyhow::Result<Self::Limits> {
-            unimplemented!()
-        }
         async fn stake_table(&self, _epoch: u64) -> anyhow::Result<Self::StakeTable> {
             unimplemented!()
         }
@@ -4612,50 +2834,6 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl v1::ExplorerApi for MockState {
-        type BlockDetail = ();
-        type BlockSummaries = ();
-        type TransactionDetail = ();
-        type TransactionSummaries = ();
-        type ExplorerSummary = ();
-        type SearchResult = ();
-
-        async fn get_block_detail(
-            &self,
-            _ident: v1::BlockIdent,
-        ) -> anyhow::Result<Self::BlockDetail> {
-            unimplemented!()
-        }
-        async fn get_block_summaries(
-            &self,
-            _target: v1::BlockIdent,
-            _limit: u64,
-        ) -> anyhow::Result<Self::BlockSummaries> {
-            unimplemented!()
-        }
-        async fn get_transaction_detail(
-            &self,
-            _ident: v1::TxIdent,
-        ) -> anyhow::Result<Self::TransactionDetail> {
-            unimplemented!()
-        }
-        async fn get_transaction_summaries(
-            &self,
-            _target: v1::TxIdent,
-            _limit: u64,
-            _filter: v1::TxSummaryFilter,
-        ) -> anyhow::Result<Self::TransactionSummaries> {
-            unimplemented!()
-        }
-        async fn get_explorer_summary(&self) -> anyhow::Result<Self::ExplorerSummary> {
-            unimplemented!()
-        }
-        async fn get_search_result(&self, _query: String) -> anyhow::Result<Self::SearchResult> {
-            unimplemented!()
-        }
-    }
-
-    #[async_trait::async_trait]
     impl v1::TokenApi for MockState {
         async fn total_minted_supply(&self) -> anyhow::Result<String> {
             unimplemented!()
@@ -4878,7 +3056,7 @@ mod tests {
 
     #[tokio::test]
     async fn v1_swagger_ui_serves_html() {
-        let router = create_router_v1(MockState);
+        let router = create_router_v1(MockState, mock_hqs_base());
         let req = Request::builder()
             .uri("/v1")
             .body(axum::body::Body::empty())
@@ -4899,7 +3077,7 @@ mod tests {
 
     #[tokio::test]
     async fn v1_openapi_spec_contains_known_route() {
-        let router = create_router_v1(MockState);
+        let router = create_router_v1(MockState, mock_hqs_base());
         let req = Request::builder()
             .uri(routes::v1::OPENAPI_SPEC_ROUTE)
             .body(axum::body::Body::empty())
@@ -4916,6 +3094,162 @@ mod tests {
             "expected {} in spec paths: {}",
             routes::v1::STATUS_BLOCK_HEIGHT_ROUTE,
             body
+        );
+    }
+
+    /// The base availability routes come from `hotshot-query-service` now, so the mount has to
+    /// put them (and their documentation) back on the paths this crate used to declare itself.
+    #[tokio::test]
+    async fn v1_openapi_spec_documents_mounted_availability_base() {
+        let router = create_router_v1(MockState, mock_hqs_base());
+        let req = Request::builder()
+            .uri(routes::v1::OPENAPI_SPEC_ROUTE)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router, req).await.unwrap();
+        let spec: serde_json::Value =
+            serde_json::from_str(&body_string(resp).await).expect("valid JSON");
+        let paths = spec["paths"].as_object().expect("spec has paths");
+
+        for route in [routes::v1::LEAF_BY_HEIGHT_ROUTE, routes::v1::LIMITS_ROUTE] {
+            let item = paths
+                .get(route)
+                .unwrap_or_else(|| panic!("{route} missing from spec: {:?}", paths.keys()));
+            assert_eq!(item["get"]["tags"][0], "availability");
+        }
+        assert_eq!(
+            paths[routes::v1::LEAF_BY_HEIGHT_ROUTE]["get"]["summary"],
+            "Get leaf"
+        );
+        // The extensions are still there alongside the base.
+        assert!(paths.contains_key(routes::v1::STATE_CERT_V1_ROUTE));
+    }
+
+    /// The base status routes come from `hotshot-query-service` now, so the mount has to put them
+    /// (and their documentation) back on the paths this crate used to declare itself.
+    #[tokio::test]
+    async fn v1_openapi_spec_documents_mounted_status_base() {
+        let router = create_router_v1(MockState, mock_hqs_base());
+        let req = Request::builder()
+            .uri(routes::v1::OPENAPI_SPEC_ROUTE)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router, req).await.unwrap();
+        let spec: serde_json::Value =
+            serde_json::from_str(&body_string(resp).await).expect("valid JSON");
+        let paths = spec["paths"].as_object().expect("spec has paths");
+
+        for route in [
+            routes::v1::STATUS_BLOCK_HEIGHT_ROUTE,
+            routes::v1::STATUS_METRICS_ROUTE,
+        ] {
+            let item = paths
+                .get(route)
+                .unwrap_or_else(|| panic!("{route} missing from spec: {:?}", paths.keys()));
+            assert_eq!(item["get"]["tags"][0], "status");
+        }
+        assert_eq!(
+            paths[routes::v1::STATUS_BLOCK_HEIGHT_ROUTE]["get"]["summary"],
+            "Get block height"
+        );
+        // The extension is still there alongside the base.
+        assert!(paths.contains_key(routes::v1::STATUS_KEYS_ROUTE));
+    }
+
+    /// The base node routes come from `hotshot-query-service` now, so the mount has to put them
+    /// (and their documentation) back on the paths this crate used to declare itself.
+    #[tokio::test]
+    async fn v1_openapi_spec_documents_mounted_node_base() {
+        let router = create_router_v1(MockState, mock_hqs_base());
+        let req = Request::builder()
+            .uri(routes::v1::OPENAPI_SPEC_ROUTE)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router, req).await.unwrap();
+        let spec: serde_json::Value =
+            serde_json::from_str(&body_string(resp).await).expect("valid JSON");
+        let paths = spec["paths"].as_object().expect("spec has paths");
+
+        for route in ["/v1/node/block-height", "/v1/node/limits"] {
+            let item = paths
+                .get(route)
+                .unwrap_or_else(|| panic!("{route} missing from spec: {:?}", paths.keys()));
+            assert_eq!(item["get"]["tags"][0], "node");
+        }
+        assert_eq!(
+            paths["/v1/node/block-height"]["get"]["summary"],
+            "Get this node's block height"
+        );
+        // The extensions are still there alongside the base.
+        assert!(paths.contains_key(routes::v1::NODE_STAKE_TABLE_CURRENT_ROUTE));
+    }
+
+    /// The explorer routes come from `hotshot-query-service` now, and this crate no longer serves
+    /// any of its own, so the mount is all that puts them (and their documentation) in the spec.
+    #[tokio::test]
+    async fn v1_openapi_spec_documents_mounted_explorer_base() {
+        let router = create_router_v1(MockState, mock_hqs_base());
+        let req = Request::builder()
+            .uri(routes::v1::OPENAPI_SPEC_ROUTE)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router, req).await.unwrap();
+        let spec: serde_json::Value =
+            serde_json::from_str(&body_string(resp).await).expect("valid JSON");
+        let paths = spec["paths"].as_object().expect("spec has paths");
+
+        for route in [
+            "/v1/explorer/explorer-summary",
+            "/v1/explorer/block/{height}",
+        ] {
+            let item = paths
+                .get(route)
+                .unwrap_or_else(|| panic!("{route} missing from spec: {:?}", paths.keys()));
+            assert_eq!(item["get"]["tags"][0], "explorer");
+        }
+        assert_eq!(
+            paths["/v1/explorer/explorer-summary"]["get"]["summary"],
+            "Get the explorer summary"
+        );
+    }
+
+    /// The merklized-state routes come from `hotshot-query-service`, mounted once per tree, and
+    /// this crate serves only `fee-balance/latest` of its own. Two mounts of the same router must
+    /// document independently: one operation per prefix, tagged by its module, each summary naming
+    /// its own tree.
+    #[tokio::test]
+    async fn v1_openapi_spec_documents_mounted_merklized_state_bases() {
+        let router = create_router_v1(MockState, mock_hqs_base());
+        let req = Request::builder()
+            .uri(routes::v1::OPENAPI_SPEC_ROUTE)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router, req).await.unwrap();
+        let spec: serde_json::Value =
+            serde_json::from_str(&body_string(resp).await).expect("valid JSON");
+        let paths = spec["paths"].as_object().expect("spec has paths");
+
+        for (prefix, tree) in [
+            (routes::v1::BLOCK_STATE_PREFIX, "block_merkle_tree_bigint"),
+            (routes::v1::REWARD_STATE_V2_PREFIX, "reward_merkle_tree_v2"),
+        ] {
+            let module = prefix.strip_prefix("/v1/").unwrap();
+            for route in ["/{height}/{key}", "/block-height"] {
+                let route = format!("{prefix}{route}");
+                let item = paths
+                    .get(&route)
+                    .unwrap_or_else(|| panic!("{route} missing from spec: {:?}", paths.keys()));
+                assert_eq!(item["get"]["tags"][0], module, "{route}");
+                assert!(item["get"]["summary"].is_string(), "{route} has no summary");
+            }
+            let summary = paths[&format!("{prefix}/{{height}}/{{key}}")]["get"]["summary"]
+                .as_str()
+                .unwrap();
+            assert!(summary.contains(tree), "{prefix}: {summary}");
+        }
+        assert!(
+            paths.contains_key(routes::v1::FEE_STATE_BALANCE_LATEST_ROUTE),
+            "the fee-state extension must still be served alongside the mounted base"
         );
     }
 
@@ -5045,7 +3379,12 @@ mod tests {
     /// the mounted modules.
     #[tokio::test]
     async fn serve_mode_assembly_serves_v1_docs() {
-        let api_router = router_status(MockState).merge(router_state_signature(MockState));
+        // The status-only mode's query-service router carries the status base and nothing else: it
+        // has no availability data source.
+        let api_router = ApiRouter::new()
+            .nest(routes::v1::STATUS_PREFIX, mock_status_base())
+            .merge(router_status(MockState))
+            .merge(router_state_signature(MockState));
         let router = with_top_level_routes(finish_v1_docs(api_router));
         let app = tower::Layer::layer(
             &tower::util::MapRequestLayer::new(rewrite_legacy_uri),
@@ -5099,7 +3438,7 @@ mod tests {
     /// Multi-segment templates declare one parameter per `{name}`, in template order.
     #[tokio::test]
     async fn v1_spec_declares_all_template_parameters() {
-        let router = create_router_v1(MockState);
+        let router = create_router_v1(MockState, mock_hqs_base());
         let req = Request::builder()
             .uri(routes::v1::OPENAPI_SPEC_ROUTE)
             .body(axum::body::Body::empty())
@@ -5131,7 +3470,8 @@ mod tests {
         }
 
         // Numeric segments are typed integer, hash/key-like segments string.
-        let key_path = &paths[routes::v1::REWARD_STATE_PATH_BY_HEIGHT_ROUTE]["get"]["parameters"];
+        let key_path = &paths[&format!("{}/{{height}}/{{key}}", routes::v1::BLOCK_STATE_PREFIX)]
+            ["get"]["parameters"];
         assert_eq!(key_path[0]["name"], "height");
         assert_eq!(key_path[0]["schema"]["type"], "integer");
         assert_eq!(key_path[1]["name"], "key");

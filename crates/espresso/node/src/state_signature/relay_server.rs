@@ -16,23 +16,19 @@ use hotshot_types::{
     },
     traits::signature_key::LCV1StateSignatureKey,
 };
-use http_wire::{self as wire, DecodeFailure, WireFormat, cors_layer, healthcheck_response};
+use http_wire::{self as wire, DecodeFailure, WireError, cors_layer, healthcheck_response};
 use lcv1_relay::{LCV1StateRelayServerDataSource, LCV1StateRelayServerState};
 use lcv2_relay::{LCV2StateRelayServerDataSource, LCV2StateRelayServerState};
 use lcv3_relay::{LCV3StateRelayServerDataSource, LCV3StateRelayServerState};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::{net::TcpListener, sync::oneshot};
 use url::Url;
-use vbs::version::{StaticVersion, StaticVersionType};
+use vbs::version::StaticVersionType;
 
 pub mod lcv1_relay;
 pub mod lcv2_relay;
 pub mod lcv3_relay;
 pub mod stake_table_tracker;
-
-/// Binary framing version used by `state_signature.rs` and `hotshot-state-prover`, whose
-/// `http-client` clients default to `Accept`/`Content-Type: application/octet-stream`.
-type WireVersion = StaticVersion<0, 1>;
 
 /// Wire-compatible error envelope: mirrors `http_client::error::ClientErr`'s `{status, message}`
 /// JSON/VBS shape, since production clients (`state_signature.rs`, `hotshot-state-prover`)
@@ -60,33 +56,18 @@ impl fmt::Display for RelayError {
 
 impl std::error::Error for RelayError {}
 
-/// Wire format of the relay server: [`WireVersion`] VBS framing and the [`RelayError`]
-/// envelope.
-struct RelayWireFormat;
-
-impl WireFormat for RelayWireFormat {
-    type Error = RelayError;
-    type Version = WireVersion;
-
-    fn status(err: &RelayError) -> StatusCode {
-        StatusCode::from_u16(err.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
+impl WireError for RelayError {
+    fn status(&self) -> StatusCode {
+        StatusCode::from_u16(self.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
     }
 
-    fn serialize_failure(message: String) -> RelayError {
-        RelayError::catch_all(StatusCode::INTERNAL_SERVER_ERROR, message)
+    fn catch_all(status: StatusCode, message: String) -> Self {
+        RelayError::catch_all(status, message)
     }
-}
-
-fn encode_ok<T: Serialize>(headers: &HeaderMap, value: T) -> Response {
-    wire::encode_ok::<RelayWireFormat, _>(headers, value)
-}
-
-fn encode_err(headers: &HeaderMap, err: RelayError) -> Response {
-    wire::encode_err::<RelayWireFormat>(headers, err)
 }
 
 fn decode_body<T: DeserializeOwned>(headers: &HeaderMap, body: &[u8]) -> Result<T, RelayError> {
-    wire::decode_body::<WireVersion, T>(headers, body).map_err(|failure| match failure {
+    wire::decode_body(headers, body).map_err(|failure| match failure {
         DecodeFailure::Binary(e) => {
             RelayError::catch_all(StatusCode::BAD_REQUEST, format!("invalid binary body: {e}"))
         },
@@ -270,22 +251,15 @@ async fn get_latest_state_v3(state: &SharedState) -> Result<LCV3StateSignaturesB
     LCV3StateRelayServerDataSource::get_latest_signature_bundle(&*state)
 }
 
-async fn healthcheck(headers: HeaderMap) -> Response {
-    healthcheck_response(&headers)
-}
-
 async fn post_state(State(state): State<SharedState>, headers: HeaderMap, body: Bytes) -> Response {
-    match post_state_signature(&state, &headers, &body).await {
-        Ok(()) => encode_ok(&headers, ()),
-        Err(e) => encode_err(&headers, e),
-    }
+    wire::respond(
+        &headers,
+        post_state_signature(&state, &headers, &body).await,
+    )
 }
 
 async fn get_state(State(state): State<SharedState>, headers: HeaderMap) -> Response {
-    match get_latest_state(&state).await {
-        Ok(bundle) => encode_ok(&headers, bundle),
-        Err(e) => encode_err(&headers, e),
-    }
+    wire::respond(&headers, get_latest_state(&state).await)
 }
 
 async fn post_legacy_state(
@@ -293,38 +267,26 @@ async fn post_legacy_state(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    match post_legacy_state_signature(&state, &headers, &body).await {
-        Ok(()) => encode_ok(&headers, ()),
-        Err(e) => encode_err(&headers, e),
-    }
+    wire::respond(
+        &headers,
+        post_legacy_state_signature(&state, &headers, &body).await,
+    )
 }
 
 async fn get_legacy_state(State(state): State<SharedState>, headers: HeaderMap) -> Response {
-    match get_latest_legacy_state(&state).await {
-        Ok(bundle) => encode_ok(&headers, bundle),
-        Err(e) => encode_err(&headers, e),
-    }
+    wire::respond(&headers, get_latest_legacy_state(&state).await)
 }
 
 async fn get_lateststate_v1(State(state): State<SharedState>, headers: HeaderMap) -> Response {
-    match get_latest_state_v1(&state).await {
-        Ok(bundle) => encode_ok(&headers, bundle),
-        Err(e) => encode_err(&headers, e),
-    }
+    wire::respond(&headers, get_latest_state_v1(&state).await)
 }
 
 async fn get_lateststate_v2(State(state): State<SharedState>, headers: HeaderMap) -> Response {
-    match get_latest_state_v2(&state).await {
-        Ok(bundle) => encode_ok(&headers, bundle),
-        Err(e) => encode_err(&headers, e),
-    }
+    wire::respond(&headers, get_latest_state_v2(&state).await)
 }
 
 async fn get_lateststate_v3(State(state): State<SharedState>, headers: HeaderMap) -> Response {
-    match get_latest_state_v3(&state).await {
-        Ok(bundle) => encode_ok(&headers, bundle),
-        Err(e) => encode_err(&headers, e),
-    }
+    wire::respond(&headers, get_latest_state_v3(&state).await)
 }
 
 const STATE_PATH: &str = "/api/state";
@@ -338,7 +300,10 @@ const LATEST_STATE_PATH: &str = "/api/lateststate";
 /// `lateststate` per version.
 fn router(state: SharedState) -> Router {
     let mut router = Router::<SharedState>::new()
-        .route("/healthcheck", get(healthcheck))
+        .route(
+            "/healthcheck",
+            get(|headers: HeaderMap| async move { healthcheck_response(&headers) }),
+        )
         .route(STATE_PATH, post(post_state).get(get_state))
         .route(
             LEGACY_STATE_PATH,

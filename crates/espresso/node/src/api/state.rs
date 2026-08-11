@@ -3,46 +3,34 @@
 //! This module provides implementations for both v1::RewardApi (internal types)
 //! and v2::RewardApi (proto types), backed by the same data source.
 
-use std::{ops::Bound, time::Duration};
+use std::time::Duration;
 
 use alloy::primitives::U256;
 use async_trait::async_trait;
 use committable::Committable as _;
 use disco_types::{error::Error as _, status::StatusCode};
-use espresso_api::{error::AvailabilityError, v1::HotShotAvailabilityApi};
+use espresso_api::error::AvailabilityError;
 use espresso_types::{
-    NamespaceId, NamespaceProofQueryData, NsProof, SeqTypes,
+    NamespaceId, NamespaceProofQueryData, NsProof,
     v0::sparse_mt::KeccakNode,
-    v0_3::{RewardAccountV1, RewardAmount as InternalRewardAmount, RewardMerkleTreeV1},
+    v0_3::{RewardAccountV1, RewardAmount as InternalRewardAmount},
     v0_4::{
         RewardAccountProofV2 as InternalRewardAccountProofV2,
         RewardAccountQueryDataV2 as InternalRewardAccountQueryData, RewardAccountV2,
-        RewardMerkleProofV2 as InternalRewardMerkleProofV2, RewardMerkleTreeV2,
+        RewardMerkleProofV2 as InternalRewardMerkleProofV2,
     },
     v0_6::RewardClaimError,
 };
 use futures::{StreamExt as _, join, stream::BoxStream};
 use hotshot_contract_adapter::reward::RewardClaimInput as InternalRewardClaimInput;
 use hotshot_events_service::events_source::EventsSource as _;
-use hotshot_new_protocol::message::Certificate2;
 use hotshot_query_service::{
-    Header as HsHeader, QueryError,
-    availability::{
-        AvailabilityDataSource, BlockId as HsBlockId, BlockQueryData, BlockSummaryQueryData,
-        LeafId as HsLeafId, LeafQueryData, Limits as HsLimits, PayloadQueryData,
-        QueryablePayload as _, TransactionQueryData, TransactionWithProofQueryData,
-        VidCommonQueryData,
-    },
-    explorer::{
-        BlockIdentifier, BlockRange, ExplorerDataSource as _, GetBlockSummariesRequest,
-        GetTransactionSummariesRequest, TransactionIdentifier, TransactionRange,
-        TransactionSummaryFilter,
-    },
+    QueryError,
+    availability::{AvailabilityDataSource, BlockId as HsBlockId, LeafId as HsLeafId},
     merklized_state::{
         MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot as HsSnapshot,
     },
-    node::{NodeDataSource as _, WindowStart},
-    status::HasMetrics as _,
+    node::NodeDataSource as _,
     types::HeightIndexed as _,
 };
 use hotshot_types::{
@@ -54,7 +42,6 @@ use jf_merkle_tree_compat::prelude::{
     MerkleNode as InternalMerkleNode, MerkleProof as InternalMerkleProof,
     MerkleProof as JfMerkleProof,
 };
-use prometheus::Encoder as _;
 use serde_json;
 use serialization_api::v2::{
     self, RewardAccountProofV2, RewardAccountQueryDataV2, RewardBalance, RewardBalances,
@@ -709,36 +696,6 @@ where
     type RewardAmounts = Vec<(alloy::primitives::Address, InternalRewardAmount)>;
     type RewardMerkleTreeData = Vec<u8>;
     type RewardAccountQueryDataV1 = espresso_types::v0_3::RewardAccountQueryDataV1;
-    type RewardStatePathV1 = InternalMerkleProof<
-        InternalRewardAmount,
-        espresso_types::v0_3::RewardAccountV1,
-        jf_merkle_tree_compat::prelude::Sha3Node,
-        {
-            <espresso_types::v0_3::RewardMerkleTreeV1 as jf_merkle_tree_compat::MerkleTreeScheme>::ARITY
-        },
-    >;
-    type RewardStatePathV2 = InternalMerkleProof<
-        InternalRewardAmount,
-        RewardAccountV2,
-        KeccakNode,
-        {
-            <espresso_types::v0_4::RewardMerkleTreeV2 as jf_merkle_tree_compat::MerkleTreeScheme>::ARITY
-        },
-    >;
-
-    async fn get_reward_state_height(&self) -> anyhow::Result<u64> {
-        let ds = &*self.data_source;
-        ds.get_last_state_height()
-            .await
-            .map(|h| h as u64)
-            .map_err(classify_query_error)
-    }
-
-    async fn get_reward_state_v2_height(&self) -> anyhow::Result<u64> {
-        // `last_merklized_state_height` is the same row for every merklized-state module in
-        // this file (reward V1/V2, block-state, fee-state), not just these two.
-        self.get_reward_state_height().await
-    }
 
     async fn get_reward_account_proof_v1(
         &self,
@@ -957,58 +914,6 @@ where
                 height, err
             ))
         })
-    }
-
-    async fn get_reward_state_path_v1(
-        &self,
-        snapshot: espresso_api::v1::Snapshot,
-        key: String,
-    ) -> anyhow::Result<Self::RewardStatePathV1> {
-        let hs_snapshot = match snapshot {
-            espresso_api::v1::Snapshot::Height(h) => HsSnapshot::Index(h),
-            espresso_api::v1::Snapshot::Commit(c) => {
-                let tb64: TaggedBase64 = c
-                    .parse()
-                    .map_err(|_| bad_request("failed to parse commit param"))?;
-                let commit = (&tb64)
-                    .try_into()
-                    .map_err(|_| bad_request("failed to parse commit param"))?;
-                HsSnapshot::Commit(commit)
-            },
-        };
-        let key: RewardAccountV1 = key
-            .parse()
-            .map_err(|_| bad_request("failed to parse Key param"))?;
-        let ds = &*self.data_source;
-        MerklizedStateDataSource::<SeqTypes, RewardMerkleTreeV1, _>::get_path(ds, hs_snapshot, key)
-            .await
-            .map_err(classify_query_error)
-    }
-
-    async fn get_reward_state_path_v2(
-        &self,
-        snapshot: espresso_api::v1::Snapshot,
-        key: String,
-    ) -> anyhow::Result<Self::RewardStatePathV2> {
-        let hs_snapshot = match snapshot {
-            espresso_api::v1::Snapshot::Height(h) => HsSnapshot::Index(h),
-            espresso_api::v1::Snapshot::Commit(c) => {
-                let tb64: TaggedBase64 = c
-                    .parse()
-                    .map_err(|_| bad_request("failed to parse commit param"))?;
-                let commit = (&tb64)
-                    .try_into()
-                    .map_err(|_| bad_request("failed to parse commit param"))?;
-                HsSnapshot::Commit(commit)
-            },
-        };
-        let key: RewardAccountV2 = key
-            .parse()
-            .map_err(|_| bad_request("failed to parse Key param"))?;
-        let ds = &*self.data_source;
-        MerklizedStateDataSource::<SeqTypes, RewardMerkleTreeV2, _>::get_path(ds, hs_snapshot, key)
-            .await
-            .map_err(classify_query_error)
     }
 }
 
@@ -1280,11 +1185,11 @@ where
 }
 
 // ============================================================================
-// v1::AvailabilityApi implementation
+// v1::AvailabilityApiExtension implementation
 // ============================================================================
 
 #[async_trait]
-impl<D> espresso_api::v1::AvailabilityApi for NodeApiStateImpl<D>
+impl<D> espresso_api::v1::AvailabilityApiExtension for NodeApiStateImpl<D>
 where
     D: std::ops::Deref + Clone + Send + Sync + 'static,
     // No `RewardMerkleTreeDataSource` bound here: unlike `v1::RewardApi`, none of these methods
@@ -1634,10 +1539,6 @@ where
     }
 }
 
-// ============================================================================
-// v1::HotShotAvailabilityApi implementation
-// ============================================================================
-
 fn not_found(msg: impl Into<String>) -> anyhow::Error {
     AvailabilityError::NotFound(msg.into()).into()
 }
@@ -1650,488 +1551,6 @@ fn range_exceeded(msg: impl Into<String>) -> anyhow::Error {
     AvailabilityError::RangeExceeded(msg.into()).into()
 }
 
-fn enforce_range(from: usize, until: usize, limit: usize) -> anyhow::Result<()> {
-    if until.saturating_sub(from) > limit {
-        return Err(range_exceeded(format!(
-            "range {from}..{until} exceeds limit {limit}"
-        )));
-    }
-    Ok(())
-}
-
-#[async_trait]
-impl<D> HotShotAvailabilityApi for NodeApiStateImpl<D>
-where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target: AvailabilityDataSource<espresso_types::SeqTypes> + Send + Sync,
-{
-    type Leaf = LeafQueryData<espresso_types::SeqTypes>;
-    type Block = BlockQueryData<espresso_types::SeqTypes>;
-    type Header = HsHeader<espresso_types::SeqTypes>;
-    type Payload = PayloadQueryData<espresso_types::SeqTypes>;
-    type VidCommon = VidCommonQueryData<espresso_types::SeqTypes>;
-    type Transaction = TransactionQueryData<espresso_types::SeqTypes>;
-    type TransactionWithProof = TransactionWithProofQueryData<espresso_types::SeqTypes>;
-    type BlockSummary = BlockSummaryQueryData<espresso_types::SeqTypes>;
-    type Limits = HsLimits;
-    type Cert2 = Certificate2<espresso_types::SeqTypes>;
-
-    async fn get_leaf(
-        &self,
-        id: espresso_api::v1::availability::LeafId,
-    ) -> anyhow::Result<Self::Leaf> {
-        let hs_id = match id {
-            espresso_api::v1::availability::LeafId::Height(h) => HsLeafId::Number(h as usize),
-            espresso_api::v1::availability::LeafId::Hash(h) => {
-                HsLeafId::Hash(h.parse().map_err(|_| bad_request("invalid leaf hash"))?)
-            },
-        };
-        let ds = &*self.data_source;
-        ds.get_leaf(hs_id)
-            .await
-            .with_timeout(FETCH_TIMEOUT)
-            .await
-            .ok_or_else(|| not_found("leaf not found"))
-    }
-
-    async fn get_leaf_range(&self, from: usize, until: usize) -> anyhow::Result<Vec<Self::Leaf>> {
-        enforce_range(from, until, 500)?;
-        let timeout = FETCH_TIMEOUT;
-        let ds = &*self.data_source;
-        let stream = ds.get_leaf_range(from..until).await;
-        let mut results = Vec::new();
-        futures::pin_mut!(stream);
-        let mut i = from;
-        while let Some(fetch) = stream.next().await {
-            let item = fetch
-                .with_timeout(timeout)
-                .await
-                .ok_or_else(|| not_found(format!("leaf {} not found", i)))?;
-            results.push(item);
-            i += 1;
-        }
-        Ok(results)
-    }
-
-    async fn get_header(
-        &self,
-        id: espresso_api::v1::availability::BlockId,
-    ) -> anyhow::Result<Self::Header> {
-        let hs_id = block_id_to_hs(id)?;
-        let ds = &*self.data_source;
-        ds.get_header(hs_id)
-            .await
-            .with_timeout(FETCH_TIMEOUT)
-            .await
-            .ok_or_else(|| not_found(format!("header not found for {}", hs_id)))
-    }
-
-    async fn get_header_range(
-        &self,
-        from: usize,
-        until: usize,
-    ) -> anyhow::Result<Vec<Self::Header>> {
-        enforce_range(from, until, 100)?;
-        let timeout = FETCH_TIMEOUT;
-        let ds = &*self.data_source;
-        let stream = ds.get_header_range(from..until).await;
-        let mut results = Vec::new();
-        futures::pin_mut!(stream);
-        let mut i = from;
-        while let Some(fetch) = stream.next().await {
-            let item = fetch
-                .with_timeout(timeout)
-                .await
-                .ok_or_else(|| not_found(format!("header {} not found", i)))?;
-            results.push(item);
-            i += 1;
-        }
-        Ok(results)
-    }
-
-    async fn get_block(
-        &self,
-        id: espresso_api::v1::availability::BlockId,
-    ) -> anyhow::Result<Self::Block> {
-        let hs_id = block_id_to_hs(id)?;
-        let ds = &*self.data_source;
-        ds.get_block(hs_id)
-            .await
-            .with_timeout(FETCH_TIMEOUT)
-            .await
-            .ok_or_else(|| not_found(format!("block not found for {}", hs_id)))
-    }
-
-    async fn get_block_range(&self, from: usize, until: usize) -> anyhow::Result<Vec<Self::Block>> {
-        enforce_range(from, until, 100)?;
-        let timeout = FETCH_TIMEOUT;
-        let ds = &*self.data_source;
-        let stream = ds.get_block_range(from..until).await;
-        let mut results = Vec::new();
-        futures::pin_mut!(stream);
-        let mut i = from;
-        while let Some(fetch) = stream.next().await {
-            let item = fetch
-                .with_timeout(timeout)
-                .await
-                .ok_or_else(|| not_found(format!("block {} not found", i)))?;
-            results.push(item);
-            i += 1;
-        }
-        Ok(results)
-    }
-
-    async fn get_payload(
-        &self,
-        id: espresso_api::v1::availability::PayloadId,
-    ) -> anyhow::Result<Self::Payload> {
-        let hs_id = payload_id_to_hs(id)?;
-        let ds = &*self.data_source;
-        ds.get_payload(hs_id)
-            .await
-            .with_timeout(FETCH_TIMEOUT)
-            .await
-            .ok_or_else(|| not_found(format!("payload not found for {}", hs_id)))
-    }
-
-    async fn get_payload_range(
-        &self,
-        from: usize,
-        until: usize,
-    ) -> anyhow::Result<Vec<Self::Payload>> {
-        enforce_range(from, until, 100)?;
-        let timeout = FETCH_TIMEOUT;
-        let ds = &*self.data_source;
-        let stream = ds.get_payload_range(from..until).await;
-        let mut results = Vec::new();
-        futures::pin_mut!(stream);
-        let mut i = from;
-        while let Some(fetch) = stream.next().await {
-            let item = fetch
-                .with_timeout(timeout)
-                .await
-                .ok_or_else(|| not_found(format!("payload {} not found", i)))?;
-            results.push(item);
-            i += 1;
-        }
-        Ok(results)
-    }
-
-    async fn get_vid_common(
-        &self,
-        id: espresso_api::v1::availability::BlockId,
-    ) -> anyhow::Result<Self::VidCommon> {
-        let hs_id = block_id_to_hs(id)?;
-        let ds = &*self.data_source;
-        ds.get_vid_common(hs_id)
-            .await
-            .with_timeout(FETCH_TIMEOUT)
-            .await
-            .ok_or_else(|| not_found(format!("VID common not found for {}", hs_id)))
-    }
-
-    async fn get_vid_common_range(
-        &self,
-        from: usize,
-        until: usize,
-    ) -> anyhow::Result<Vec<Self::VidCommon>> {
-        enforce_range(from, until, 500)?;
-        let timeout = FETCH_TIMEOUT;
-        let ds = &*self.data_source;
-        let stream = ds.get_vid_common_range(from..until).await;
-        let mut results = Vec::new();
-        futures::pin_mut!(stream);
-        let mut i = from;
-        while let Some(fetch) = stream.next().await {
-            let item = fetch
-                .with_timeout(timeout)
-                .await
-                .ok_or_else(|| not_found(format!("VID common {} not found", i)))?;
-            results.push(item);
-            i += 1;
-        }
-        Ok(results)
-    }
-
-    async fn get_transaction_by_position(
-        &self,
-        height: u64,
-        index: u64,
-    ) -> anyhow::Result<Self::Transaction> {
-        let ds = &*self.data_source;
-        let block = ds
-            .get_block(HsBlockId::Number(height as usize))
-            .await
-            .with_timeout(FETCH_TIMEOUT)
-            .await
-            .ok_or_else(|| not_found(format!("block {} not found", height)))?;
-
-        let idx = block
-            .payload()
-            .nth(block.metadata(), index as usize)
-            .ok_or_else(|| {
-                not_found(format!(
-                    "transaction index {} out of bounds in block {}",
-                    index, height
-                ))
-            })?;
-        let tx = block
-            .transaction(&idx)
-            .ok_or_else(|| not_found(format!("transaction not found at index {}", index)))?;
-        TransactionQueryData::new(tx, &block, &idx, index)
-            .ok_or_else(|| anyhow::anyhow!("failed to build transaction query data"))
-    }
-
-    async fn get_transaction_by_hash(&self, hash: String) -> anyhow::Result<Self::Transaction> {
-        let ds = &*self.data_source;
-        let tx_hash: hotshot_query_service::availability::TransactionHash<
-            espresso_types::SeqTypes,
-        > = hash
-            .parse()
-            .map_err(|_| bad_request(format!("invalid transaction hash: {}", hash)))?;
-        let bwt = ds
-            .get_block_containing_transaction(tx_hash)
-            .await
-            .with_timeout(FETCH_TIMEOUT)
-            .await
-            .ok_or_else(|| not_found("transaction not found"))?;
-        Ok(bwt.transaction)
-    }
-
-    async fn get_transaction_proof_by_position(
-        &self,
-        height: u64,
-        index: u64,
-    ) -> anyhow::Result<Self::TransactionWithProof> {
-        let ds = &*self.data_source;
-        let timeout = FETCH_TIMEOUT;
-
-        let (block_fetch, vid_fetch) = futures::join!(
-            ds.get_block(HsBlockId::Number(height as usize)),
-            ds.get_vid_common(HsBlockId::Number(height as usize))
-        );
-        let (block, vid) = futures::join!(
-            block_fetch.with_timeout(timeout),
-            vid_fetch.with_timeout(timeout)
-        );
-
-        let block = block.ok_or_else(|| not_found(format!("block {} not found", height)))?;
-        let vid =
-            vid.ok_or_else(|| not_found(format!("VID common not found for block {}", height)))?;
-
-        let idx = block
-            .payload()
-            .nth(block.metadata(), index as usize)
-            .ok_or_else(|| {
-                not_found(format!(
-                    "transaction index {} out of bounds in block {}",
-                    index, height
-                ))
-            })?;
-        let tx = block
-            .transaction(&idx)
-            .ok_or_else(|| not_found(format!("transaction not found at index {}", index)))?;
-        let tx_data = TransactionQueryData::new(tx, &block, &idx, index)
-            .ok_or_else(|| anyhow::anyhow!("failed to build transaction query data"))?;
-        let proof = block
-            .transaction_proof(&vid, &idx)
-            .ok_or_else(|| anyhow::anyhow!("failed to build transaction proof"))?;
-        Ok(TransactionWithProofQueryData::new(tx_data, proof))
-    }
-
-    async fn get_transaction_proof_by_hash(
-        &self,
-        hash: String,
-    ) -> anyhow::Result<Self::TransactionWithProof> {
-        let ds = &*self.data_source;
-        let timeout = FETCH_TIMEOUT;
-
-        let tx_hash: hotshot_query_service::availability::TransactionHash<
-            espresso_types::SeqTypes,
-        > = hash
-            .parse()
-            .map_err(|_| bad_request(format!("invalid transaction hash: {}", hash)))?;
-        let bwt = ds
-            .get_block_containing_transaction(tx_hash)
-            .await
-            .with_timeout(timeout)
-            .await
-            .ok_or_else(|| not_found("transaction not found"))?;
-
-        let vid = ds
-            .get_vid_common(HsBlockId::Number(bwt.block.height() as usize))
-            .await
-            .with_timeout(timeout)
-            .await
-            .ok_or_else(|| {
-                not_found(format!(
-                    "VID common not found for block {}",
-                    bwt.block.height()
-                ))
-            })?;
-
-        let proof = bwt
-            .block
-            .transaction_proof(&vid, &bwt.index)
-            .ok_or_else(|| anyhow::anyhow!("failed to build transaction proof"))?;
-        Ok(TransactionWithProofQueryData::new(bwt.transaction, proof))
-    }
-
-    async fn get_block_summary(&self, height: usize) -> anyhow::Result<Self::BlockSummary> {
-        let ds = &*self.data_source;
-        let block = ds
-            .get_block(HsBlockId::Number(height))
-            .await
-            .with_timeout(FETCH_TIMEOUT)
-            .await
-            .ok_or_else(|| not_found(format!("block {} not found", height)))?;
-        Ok(BlockSummaryQueryData::from(block))
-    }
-
-    async fn get_block_summary_range(
-        &self,
-        from: usize,
-        until: usize,
-    ) -> anyhow::Result<Vec<Self::BlockSummary>> {
-        enforce_range(from, until, 100)?;
-        let timeout = FETCH_TIMEOUT;
-        let ds = &*self.data_source;
-        let stream = ds.get_block_range(from..until).await;
-        let mut results = Vec::new();
-        futures::pin_mut!(stream);
-        let mut i = from;
-        while let Some(fetch) = stream.next().await {
-            let block = fetch
-                .with_timeout(timeout)
-                .await
-                .ok_or_else(|| not_found(format!("block {} not found", i)))?;
-            results.push(BlockSummaryQueryData::from(block));
-            i += 1;
-        }
-        Ok(results)
-    }
-
-    async fn get_limits(&self) -> anyhow::Result<Self::Limits> {
-        Ok(HsLimits {
-            small_object_range_limit: 500,
-            large_object_range_limit: 100,
-        })
-    }
-
-    async fn get_cert2(&self, height: u64) -> anyhow::Result<Option<Self::Cert2>> {
-        Ok(self
-            .data_source
-            .get_cert2(height)
-            .await
-            .with_timeout(FETCH_TIMEOUT)
-            .await)
-    }
-
-    async fn stream_leaves(&self, from: usize) -> anyhow::Result<BoxStream<'static, Self::Leaf>> {
-        let ds = self.data_source.clone();
-        Ok((*ds).subscribe_leaves(from).await.boxed())
-    }
-
-    async fn stream_headers(
-        &self,
-        from: usize,
-    ) -> anyhow::Result<BoxStream<'static, Self::Header>> {
-        let ds = self.data_source.clone();
-        Ok((*ds).subscribe_headers(from).await.boxed())
-    }
-
-    async fn stream_blocks(&self, from: usize) -> anyhow::Result<BoxStream<'static, Self::Block>> {
-        let ds = self.data_source.clone();
-        Ok((*ds).subscribe_blocks(from).await.boxed())
-    }
-
-    async fn stream_payloads(
-        &self,
-        from: usize,
-    ) -> anyhow::Result<BoxStream<'static, Self::Payload>> {
-        let ds = self.data_source.clone();
-        Ok((*ds).subscribe_payloads(from).await.boxed())
-    }
-
-    async fn stream_vid_common(
-        &self,
-        from: usize,
-    ) -> anyhow::Result<BoxStream<'static, Self::VidCommon>> {
-        let ds = self.data_source.clone();
-        Ok((*ds).subscribe_vid_common(from).await.boxed())
-    }
-
-    async fn stream_transactions(
-        &self,
-        from: usize,
-        namespace: Option<u32>,
-    ) -> anyhow::Result<BoxStream<'static, Self::Transaction>> {
-        let ds = self.data_source.clone();
-        let stream = (*ds)
-            .subscribe_blocks(from)
-            .await
-            .flat_map(move |block| {
-                let ns_filter = namespace.map(NamespaceId::from);
-                let txs: Vec<Self::Transaction> = block
-                    .enumerate()
-                    .enumerate()
-                    .filter_map(|(position_in_block, (tx_index, _tx))| {
-                        let tx = block.transaction(&tx_index)?;
-                        if let Some(ns) = ns_filter
-                            && tx.namespace() != ns
-                        {
-                            return None;
-                        }
-                        TransactionQueryData::new(tx, &block, &tx_index, position_in_block as u64)
-                    })
-                    .collect();
-                futures::stream::iter(txs)
-            })
-            .boxed();
-        Ok(stream)
-    }
-}
-
-fn block_id_to_hs(
-    id: espresso_api::v1::availability::BlockId,
-) -> anyhow::Result<HsBlockId<SeqTypes>> {
-    match id {
-        espresso_api::v1::availability::BlockId::Height(h) => Ok(HsBlockId::Number(h as usize)),
-        espresso_api::v1::availability::BlockId::Hash(h) => {
-            let hash = h
-                .parse()
-                .map_err(|_| bad_request(format!("invalid block hash: {}", h)))?;
-            Ok(HsBlockId::Hash(hash))
-        },
-        espresso_api::v1::availability::BlockId::PayloadHash(h) => {
-            let payload_hash = h
-                .parse()
-                .map_err(|_| bad_request(format!("invalid payload hash: {}", h)))?;
-            Ok(HsBlockId::PayloadHash(payload_hash))
-        },
-    }
-}
-
-fn payload_id_to_hs(
-    id: espresso_api::v1::availability::PayloadId,
-) -> anyhow::Result<HsBlockId<SeqTypes>> {
-    match id {
-        espresso_api::v1::availability::PayloadId::Height(h) => Ok(HsBlockId::Number(h as usize)),
-        espresso_api::v1::availability::PayloadId::Hash(h) => {
-            let payload_hash = h
-                .parse()
-                .map_err(|_| bad_request(format!("invalid payload hash: {}", h)))?;
-            Ok(HsBlockId::PayloadHash(payload_hash))
-        },
-        espresso_api::v1::availability::PayloadId::BlockHash(h) => {
-            let hash = h
-                .parse()
-                .map_err(|_| bad_request(format!("invalid block hash: {}", h)))?;
-            Ok(HsBlockId::Hash(hash))
-        },
-    }
-}
-
 fn classify_query_error(err: hotshot_query_service::QueryError) -> anyhow::Error {
     match err {
         QueryError::NotFound | QueryError::Missing => not_found(err.to_string()),
@@ -2140,65 +1559,7 @@ fn classify_query_error(err: hotshot_query_service::QueryError) -> anyhow::Error
 }
 
 #[async_trait]
-impl<D> espresso_api::v1::BlockStateApi for NodeApiStateImpl<D>
-where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target: hotshot_query_service::merklized_state::MerklizedStateDataSource<
-            espresso_types::SeqTypes,
-            espresso_types::BlockMerkleTree,
-            { <espresso_types::BlockMerkleTree as jf_merkle_tree_compat::MerkleTreeScheme>::ARITY },
-        > + hotshot_query_service::merklized_state::MerklizedStateHeightPersistence
-        + Send
-        + Sync,
-{
-    type MerkleProof = InternalMerkleProof<
-        committable::Commitment<espresso_types::Header>,
-        u64,
-        jf_merkle_tree_compat::prelude::Sha3Node,
-        3,
-    >;
-
-    async fn get_block_state_path(
-        &self,
-        snapshot: espresso_api::v1::Snapshot,
-        key: String,
-    ) -> anyhow::Result<Self::MerkleProof> {
-        let hs_snapshot = match snapshot {
-            espresso_api::v1::Snapshot::Height(h) => HsSnapshot::Index(h),
-            espresso_api::v1::Snapshot::Commit(c) => {
-                let tb64: TaggedBase64 = c
-                    .parse()
-                    .map_err(|_| bad_request("failed to parse commit param"))?;
-                let commit = (&tb64)
-                    .try_into()
-                    .map_err(|_| bad_request("failed to parse commit param"))?;
-                HsSnapshot::Commit(commit)
-            },
-        };
-        let key: u64 = key
-            .parse()
-            .map_err(|_| bad_request("failed to parse Key param"))?;
-        let ds = &*self.data_source;
-        MerklizedStateDataSource::<
-            espresso_types::SeqTypes,
-            espresso_types::BlockMerkleTree,
-            _,
-        >::get_path(ds, hs_snapshot, key)
-        .await
-        .map_err(classify_query_error)
-    }
-
-    async fn get_block_state_height(&self) -> anyhow::Result<u64> {
-        let ds = &*self.data_source;
-        ds.get_last_state_height()
-            .await
-            .map(|h| h as u64)
-            .map_err(classify_query_error)
-    }
-}
-
-#[async_trait]
-impl<D> espresso_api::v1::FeeStateApi for NodeApiStateImpl<D>
+impl<D> espresso_api::v1::FeeStateApiExtension for NodeApiStateImpl<D>
 where
     D: std::ops::Deref + Clone + Send + Sync + 'static,
     D::Target: hotshot_query_service::merklized_state::MerklizedStateDataSource<
@@ -2209,51 +1570,7 @@ where
         + Send
         + Sync,
 {
-    type MerkleProof = InternalMerkleProof<
-        espresso_types::FeeAmount,
-        espresso_types::FeeAccount,
-        jf_merkle_tree_compat::prelude::Sha3Node,
-        256,
-    >;
     type FeeAmount = espresso_types::FeeAmount;
-
-    async fn get_fee_state_path(
-        &self,
-        snapshot: espresso_api::v1::Snapshot,
-        key: String,
-    ) -> anyhow::Result<Self::MerkleProof> {
-        let hs_snapshot = match snapshot {
-            espresso_api::v1::Snapshot::Height(h) => HsSnapshot::Index(h),
-            espresso_api::v1::Snapshot::Commit(c) => {
-                let tb64: TaggedBase64 = c
-                    .parse()
-                    .map_err(|_| bad_request("failed to parse commit param"))?;
-                let commit = (&tb64)
-                    .try_into()
-                    .map_err(|_| bad_request("failed to parse commit param"))?;
-                HsSnapshot::Commit(commit)
-            },
-        };
-        let key: espresso_types::FeeAccount = key
-            .parse()
-            .map_err(|_| bad_request("failed to parse Key param"))?;
-        let ds = &*self.data_source;
-        MerklizedStateDataSource::<
-            espresso_types::SeqTypes,
-            espresso_types::FeeMerkleTree,
-            _,
-        >::get_path(ds, hs_snapshot, key)
-        .await
-        .map_err(classify_query_error)
-    }
-
-    async fn get_fee_state_height(&self) -> anyhow::Result<u64> {
-        let ds = &*self.data_source;
-        ds.get_last_state_height()
-            .await
-            .map(|h| h as u64)
-            .map_err(classify_query_error)
-    }
 
     async fn get_fee_balance_latest(
         &self,
@@ -2284,46 +1601,16 @@ where
 }
 
 // ============================================================================
-// v1::StatusApi implementation
+// v1::StatusApiExtension implementation
 // ============================================================================
 
 #[async_trait]
-impl<D> espresso_api::v1::StatusApi for NodeApiStateImpl<D>
+impl<D> espresso_api::v1::StatusApiExtension for NodeApiStateImpl<D>
 where
     D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target: hotshot_query_service::status::StatusDataSource + NodeKeysDataSource + Send + Sync,
+    D::Target: NodeKeysDataSource + Send + Sync,
 {
     type Keys = NodePublicKeys;
-
-    async fn block_height(&self) -> anyhow::Result<u64> {
-        let ds = &*self.data_source;
-        let h = hotshot_query_service::status::StatusDataSource::block_height(ds)
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
-        Ok(h as u64)
-    }
-
-    async fn success_rate(&self) -> anyhow::Result<f64> {
-        let ds = &*self.data_source;
-        hotshot_query_service::status::StatusDataSource::success_rate(ds)
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))
-    }
-
-    async fn time_since_last_decide(&self) -> anyhow::Result<u64> {
-        let ds = &*self.data_source;
-        hotshot_query_service::status::StatusDataSource::elapsed_time_since_last_decide(ds)
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))
-    }
-
-    async fn metrics(&self) -> anyhow::Result<String> {
-        let ds = &*self.data_source;
-        // Standard prometheus text exposition of the registry.
-        let mut buffer = Vec::new();
-        prometheus::TextEncoder::new().encode(&ds.metrics().registry().gather(), &mut buffer)?;
-        Ok(String::from_utf8(buffer)?)
-    }
 
     async fn keys(&self) -> anyhow::Result<NodePublicKeys> {
         Ok(self.data_source.node_public_keys().await)
@@ -2363,25 +1650,18 @@ where
 }
 
 // ============================================================================
-// v1::NodeApi implementation
+// v1::NodeApiExtension implementation
 // ============================================================================
 
 #[async_trait]
-impl<D> espresso_api::v1::NodeApi for NodeApiStateImpl<D>
+impl<D> espresso_api::v1::NodeApiExtension for NodeApiStateImpl<D>
 where
     D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target: hotshot_query_service::node::NodeDataSource<espresso_types::SeqTypes>
-        + super::data_source::StakeTableDataSource<espresso_types::SeqTypes>
+    D::Target: super::data_source::StakeTableDataSource<espresso_types::SeqTypes>
         + super::data_source::PruningDataSource
         + Send
         + Sync,
 {
-    type VidShare = hotshot_types::data::VidShare;
-    type SyncStatus = hotshot_query_service::node::SyncStatusQueryData;
-    type HeaderWindow = hotshot_query_service::node::TimeWindowQueryData<
-        hotshot_query_service::Header<espresso_types::SeqTypes>,
-    >;
-    type Limits = hotshot_query_service::node::Limits;
     type StakeTable = Vec<hotshot_types::PeerConfig<espresso_types::SeqTypes>>;
     type StakeTableCurrent =
         super::data_source::StakeTableWithEpochNumber<espresso_types::SeqTypes>;
@@ -2394,113 +1674,6 @@ where
     type BlockReward = Option<espresso_types::v0_3::RewardAmount>;
     type Block = hotshot_query_service::availability::BlockQueryData<espresso_types::SeqTypes>;
     type Leaf = hotshot_query_service::availability::LeafQueryData<espresso_types::SeqTypes>;
-
-    async fn block_height(&self) -> anyhow::Result<u64> {
-        let ds = &*self.data_source;
-        let h = hotshot_query_service::node::NodeDataSource::block_height(ds)
-            .await
-            .map_err(classify_query_error)?;
-        Ok(h as u64)
-    }
-
-    async fn count_transactions(
-        &self,
-        from: Option<u64>,
-        to: Option<u64>,
-        namespace: Option<u64>,
-    ) -> anyhow::Result<u64> {
-        let ds = &*self.data_source;
-        let from = match from {
-            Some(f) => Bound::Included(f as usize),
-            None => Bound::Unbounded,
-        };
-        let to = match to {
-            Some(t) => Bound::Included(t as usize),
-            None => Bound::Unbounded,
-        };
-        let ns = namespace.map(espresso_types::NamespaceId::from);
-        let count = ds
-            .count_transactions_in_range((from, to), ns)
-            .await
-            .map_err(classify_query_error)?;
-        Ok(count as u64)
-    }
-
-    async fn payload_size(
-        &self,
-        from: Option<u64>,
-        to: Option<u64>,
-        namespace: Option<u64>,
-    ) -> anyhow::Result<u64> {
-        let ds = &*self.data_source;
-        let from = match from {
-            Some(f) => Bound::Included(f as usize),
-            None => Bound::Unbounded,
-        };
-        let to = match to {
-            Some(t) => Bound::Included(t as usize),
-            None => Bound::Unbounded,
-        };
-        let ns = namespace.map(espresso_types::NamespaceId::from);
-        let size = ds
-            .payload_size_in_range((from, to), ns)
-            .await
-            .map_err(classify_query_error)?;
-        Ok(size as u64)
-    }
-
-    async fn get_vid_share(
-        &self,
-        id: espresso_api::v1::VidShareId,
-    ) -> anyhow::Result<Self::VidShare> {
-        let ds = &*self.data_source;
-        let node_id: HsBlockId<espresso_types::SeqTypes> = match id {
-            espresso_api::v1::VidShareId::Height(h) => HsBlockId::Number(h as usize),
-            espresso_api::v1::VidShareId::Hash(h) => HsBlockId::Hash(
-                h.parse()
-                    .map_err(|_| bad_request(format!("invalid block hash: {h}")))?,
-            ),
-            espresso_api::v1::VidShareId::PayloadHash(h) => HsBlockId::PayloadHash(
-                h.parse()
-                    .map_err(|_| bad_request(format!("invalid payload hash: {h}")))?,
-            ),
-        };
-        hotshot_query_service::node::NodeDataSource::vid_share(ds, node_id)
-            .await
-            .map_err(classify_query_error)
-    }
-
-    async fn sync_status(&self) -> anyhow::Result<Self::SyncStatus> {
-        let ds = &*self.data_source;
-        hotshot_query_service::node::NodeDataSource::sync_status(ds)
-            .await
-            .map_err(classify_query_error)
-    }
-
-    async fn get_header_window(
-        &self,
-        start: espresso_api::v1::HeaderWindowStart,
-        end: u64,
-    ) -> anyhow::Result<Self::HeaderWindow> {
-        let ds = &*self.data_source;
-        let start: WindowStart<espresso_types::SeqTypes> = match start {
-            espresso_api::v1::HeaderWindowStart::Time(t) => WindowStart::Time(t),
-            espresso_api::v1::HeaderWindowStart::Height(h) => WindowStart::Height(h),
-            espresso_api::v1::HeaderWindowStart::Hash(h) => WindowStart::Hash(
-                h.parse()
-                    .map_err(|err| bad_request(format!("invalid block hash {h}: {err}")))?,
-            ),
-        };
-        ds.get_header_window(start, end, node_window_limit())
-            .await
-            .map_err(classify_query_error)
-    }
-
-    async fn limits(&self) -> anyhow::Result<Self::Limits> {
-        Ok(hotshot_query_service::node::Limits {
-            window_limit: node_window_limit(),
-        })
-    }
 
     async fn stake_table(&self, epoch: u64) -> anyhow::Result<Self::StakeTable> {
         let ds = &*self.data_source;
@@ -2583,10 +1756,6 @@ where
         let ds = &*self.data_source;
         ds.get_oldest_leaf().await
     }
-}
-
-fn node_window_limit() -> usize {
-    hotshot_query_service::node::Options::default().window_limit
 }
 
 // ============================================================================
@@ -2876,158 +2045,6 @@ where
         height: u64,
     ) -> Option<hotshot_types::light_client::LCV3StateSignatureRequestBody> {
         <Self as StateSignatureDataSource<N>>::get_state_signature(self, height).await
-    }
-}
-
-// ============================================================================
-// v1::ExplorerApi implementation
-// ============================================================================
-
-#[async_trait]
-impl<D> espresso_api::v1::ExplorerApi for NodeApiStateImpl<D>
-where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target:
-        hotshot_query_service::explorer::ExplorerDataSource<espresso_types::SeqTypes> + Send + Sync,
-{
-    type BlockDetail =
-        hotshot_query_service::explorer::BlockDetailResponse<espresso_types::SeqTypes>;
-    type BlockSummaries =
-        hotshot_query_service::explorer::BlockSummaryResponse<espresso_types::SeqTypes>;
-    type TransactionDetail =
-        hotshot_query_service::explorer::TransactionDetailResponse<espresso_types::SeqTypes>;
-    type TransactionSummaries =
-        hotshot_query_service::explorer::TransactionSummariesResponse<espresso_types::SeqTypes>;
-    type ExplorerSummary =
-        hotshot_query_service::explorer::ExplorerSummaryResponse<espresso_types::SeqTypes>;
-    type SearchResult =
-        hotshot_query_service::explorer::SearchResultResponse<espresso_types::SeqTypes>;
-
-    async fn get_block_detail(
-        &self,
-        ident: espresso_api::v1::BlockIdent,
-    ) -> anyhow::Result<Self::BlockDetail> {
-        let ds = &*self.data_source;
-        let target = match ident {
-            espresso_api::v1::BlockIdent::Height(h) => BlockIdentifier::Height(h as usize),
-            espresso_api::v1::BlockIdent::Hash(h) => BlockIdentifier::Hash(
-                h.parse()
-                    .map_err(|err| bad_request(format!("invalid block hash {h}: {err}")))?,
-            ),
-            espresso_api::v1::BlockIdent::Latest => BlockIdentifier::Latest,
-        };
-        ds.get_block_detail(target)
-            .await
-            .map(Into::into)
-            .map_err(|err| anyhow::anyhow!("{err}"))
-    }
-
-    async fn get_block_summaries(
-        &self,
-        target: espresso_api::v1::BlockIdent,
-        limit: u64,
-    ) -> anyhow::Result<Self::BlockSummaries> {
-        let ds = &*self.data_source;
-        let num_blocks = std::num::NonZeroUsize::new(limit as usize)
-            .ok_or_else(|| bad_request("limit must be greater than 0"))?;
-        if num_blocks.get() > 100 {
-            return Err(bad_request("limit must be <= 100"));
-        }
-        let target = match target {
-            espresso_api::v1::BlockIdent::Height(h) => BlockIdentifier::Height(h as usize),
-            espresso_api::v1::BlockIdent::Hash(h) => BlockIdentifier::Hash(
-                h.parse()
-                    .map_err(|err| bad_request(format!("invalid block hash {h}: {err}")))?,
-            ),
-            espresso_api::v1::BlockIdent::Latest => BlockIdentifier::Latest,
-        };
-        ds.get_block_summaries(GetBlockSummariesRequest(BlockRange { target, num_blocks }))
-            .await
-            .map(Into::into)
-            .map_err(|err| anyhow::anyhow!("{err}"))
-    }
-
-    async fn get_transaction_detail(
-        &self,
-        ident: espresso_api::v1::TxIdent,
-    ) -> anyhow::Result<Self::TransactionDetail> {
-        let ds = &*self.data_source;
-        let target = match ident {
-            espresso_api::v1::TxIdent::HeightAndOffset(h, o) => {
-                TransactionIdentifier::HeightAndOffset(h as usize, o as usize)
-            },
-            espresso_api::v1::TxIdent::Hash(h) => TransactionIdentifier::Hash(
-                h.parse()
-                    .map_err(|err| bad_request(format!("invalid tx hash {h}: {err}")))?,
-            ),
-            espresso_api::v1::TxIdent::Latest => TransactionIdentifier::Latest,
-        };
-        ds.get_transaction_detail(target)
-            .await
-            .map(Into::into)
-            .map_err(|err| anyhow::anyhow!("{err}"))
-    }
-
-    async fn get_transaction_summaries(
-        &self,
-        target: espresso_api::v1::TxIdent,
-        limit: u64,
-        filter: espresso_api::v1::TxSummaryFilter,
-    ) -> anyhow::Result<Self::TransactionSummaries> {
-        let ds = &*self.data_source;
-        let num_transactions = std::num::NonZeroUsize::new(limit as usize)
-            .ok_or_else(|| bad_request("limit must be greater than 0"))?;
-        if num_transactions.get() > 100 {
-            return Err(bad_request("limit must be <= 100"));
-        }
-        let target = match target {
-            espresso_api::v1::TxIdent::HeightAndOffset(h, o) => {
-                TransactionIdentifier::HeightAndOffset(h as usize, o as usize)
-            },
-            espresso_api::v1::TxIdent::Hash(h) => TransactionIdentifier::Hash(
-                h.parse()
-                    .map_err(|err| bad_request(format!("invalid tx hash {h}: {err}")))?,
-            ),
-            espresso_api::v1::TxIdent::Latest => TransactionIdentifier::Latest,
-        };
-        let filter = match filter {
-            espresso_api::v1::TxSummaryFilter::None => TransactionSummaryFilter::None,
-            espresso_api::v1::TxSummaryFilter::Block(b) => {
-                TransactionSummaryFilter::Block(b as usize)
-            },
-            espresso_api::v1::TxSummaryFilter::Namespace(n) => {
-                TransactionSummaryFilter::RollUp(n.into())
-            },
-        };
-        ds.get_transaction_summaries(GetTransactionSummariesRequest {
-            range: TransactionRange {
-                target,
-                num_transactions,
-            },
-            filter,
-        })
-        .await
-        .map(Into::into)
-        .map_err(|err| anyhow::anyhow!("{err}"))
-    }
-
-    async fn get_explorer_summary(&self) -> anyhow::Result<Self::ExplorerSummary> {
-        let ds = &*self.data_source;
-        ds.get_explorer_summary()
-            .await
-            .map(Into::into)
-            .map_err(|err| anyhow::anyhow!("{err}"))
-    }
-
-    async fn get_search_result(&self, query: String) -> anyhow::Result<Self::SearchResult> {
-        let ds = &*self.data_source;
-        let parsed: tagged_base64::TaggedBase64 = query
-            .parse()
-            .map_err(|err| bad_request(format!("invalid search query {query}: {err}")))?;
-        ds.get_search_results(parsed)
-            .await
-            .map(Into::into)
-            .map_err(|err| anyhow::anyhow!("{err}"))
     }
 }
 

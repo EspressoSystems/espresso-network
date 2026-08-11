@@ -1,8 +1,4 @@
-/// Generate a path-builder function from a route constant.
-///
-/// Substitutes each `{placeholder}` segment with the corresponding argument
-/// (formatted via `Display`). Used to keep request URLs in sync with the
-/// route definitions registered with the Axum router.
+/// Generate a path-builder function from a route constant, substituting each `{placeholder}`.
 macro_rules! path_fn {
     ($name:ident, $route:expr $(,)?) => {
         pub fn $name() -> String {
@@ -48,13 +44,9 @@ pub mod v1 {
         "/v1/reward-state-v2/reward-amounts/{height}/{offset}/{limit}";
     pub const REWARD_MERKLE_TREE_V2_ROUTE: &str =
         "/v1/reward-state-v2/reward-merkle-tree-v2/{height}";
-    pub const REWARD_STATE_HEIGHT_ROUTE: &str = "/v1/reward-state/block-height";
-    pub const REWARD_STATE_V2_HEIGHT_ROUTE: &str = "/v1/reward-state-v2/block-height";
     pub const REWARD_V1_ACCOUNT_PROOF_ROUTE: &str = "/v1/reward-state/proof/{height}/{address}";
     pub const REWARD_V1_BALANCE_ROUTE: &str = "/v1/reward-state/reward-balance/{height}/{address}";
-    // Tide registered the same reward.toml handlers on both the reward-state and
-    // reward-state-v2 mounts; these four mirror LATEST_REWARD_BALANCE_ROUTE,
-    // LATEST_REWARD_ACCOUNT_PROOF_ROUTE, REWARD_AMOUNTS_ROUTE, and REWARD_MERKLE_TREE_V2_ROUTE.
+    // The reward-state mount serves the same handlers as reward-state-v2, for compatibility.
     pub const REWARD_V1_LATEST_BALANCE_ROUTE: &str =
         "/v1/reward-state/reward-balance/latest/{address}";
     pub const REWARD_V1_LATEST_ACCOUNT_PROOF_ROUTE: &str =
@@ -64,13 +56,14 @@ pub mod v1 {
     pub const REWARD_V1_MERKLE_TREE_V2_ROUTE: &str =
         "/v1/reward-state/reward-merkle-tree-v2/{height}";
 
-    // Merklized-state `get_path` base routes, inherited from
-    // `hotshot-query-service`'s `merklized_state::define_api` for both reward mounts.
-    pub const REWARD_STATE_PATH_BY_HEIGHT_ROUTE: &str = "/v1/reward-state/{height}/{key}";
-    pub const REWARD_STATE_PATH_BY_COMMIT_ROUTE: &str = "/v1/reward-state/commit/{commit}/{key}";
-    pub const REWARD_STATE_V2_PATH_BY_HEIGHT_ROUTE: &str = "/v1/reward-state-v2/{height}/{key}";
-    pub const REWARD_STATE_V2_PATH_BY_COMMIT_ROUTE: &str =
-        "/v1/reward-state-v2/commit/{commit}/{key}";
+    /// Mount point of the reward-state (`RewardMerkleTreeV1`) merklized-state module.
+    pub const REWARD_STATE_PREFIX: &str = "/v1/reward-state";
+
+    /// Mount point of the reward-state-v2 (`RewardMerkleTreeV2`) merklized-state module.
+    pub const REWARD_STATE_V2_PREFIX: &str = "/v1/reward-state-v2";
+
+    /// Mount point of the availability module, whose base routes come from `hotshot-query-service`.
+    pub const AVAILABILITY_PREFIX: &str = "/v1/availability";
 
     pub const NAMESPACE_PROOF_BY_HEIGHT_ROUTE: &str =
         "/v1/availability/block/{height}/namespace/{namespace}";
@@ -143,14 +136,16 @@ pub mod v1 {
     pub const STREAM_NAMESPACE_PROOFS_ROUTE: &str =
         "/v1/availability/stream/blocks/{height}/namespace/{namespace}";
 
-    pub const BLOCK_STATE_PATH_BY_HEIGHT_ROUTE: &str = "/v1/block-state/{height}/{key}";
-    pub const BLOCK_STATE_PATH_BY_COMMIT_ROUTE: &str = "/v1/block-state/commit/{commit}/{key}";
-    pub const BLOCK_STATE_HEIGHT_ROUTE: &str = "/v1/block-state/block-height";
+    /// Mount point of the block-state (`BlockMerkleTree`) merklized-state module.
+    pub const BLOCK_STATE_PREFIX: &str = "/v1/block-state";
 
-    pub const FEE_STATE_PATH_BY_HEIGHT_ROUTE: &str = "/v1/fee-state/{height}/{key}";
-    pub const FEE_STATE_PATH_BY_COMMIT_ROUTE: &str = "/v1/fee-state/commit/{commit}/{key}";
-    pub const FEE_STATE_HEIGHT_ROUTE: &str = "/v1/fee-state/block-height";
+    /// Mount point of the fee-state (`FeeMerkleTree`) merklized-state module.
+    pub const FEE_STATE_PREFIX: &str = "/v1/fee-state";
+
     pub const FEE_STATE_BALANCE_LATEST_ROUTE: &str = "/v1/fee-state/fee-balance/latest/{address}";
+
+    /// Mount point of the status module, whose base routes come from `hotshot-query-service`.
+    pub const STATUS_PREFIX: &str = "/v1/status";
 
     pub const STATUS_BLOCK_HEIGHT_ROUTE: &str = "/v1/status/block-height";
     pub const STATUS_SUCCESS_RATE_ROUTE: &str = "/v1/status/success-rate";
@@ -162,41 +157,8 @@ pub mod v1 {
     pub const CONFIG_ENV_ROUTE: &str = "/v1/config/env";
     pub const CONFIG_RUNTIME_ROUTE: &str = "/v1/config/runtime";
 
-    pub const NODE_BLOCK_HEIGHT_ROUTE: &str = "/v1/node/block-height";
-
-    pub const NODE_TRANSACTIONS_COUNT_ROUTE: &str = "/v1/node/transactions/count";
-    pub const NODE_TRANSACTIONS_COUNT_TO_ROUTE: &str = "/v1/node/transactions/count/{to}";
-    pub const NODE_TRANSACTIONS_COUNT_FROM_TO_ROUTE: &str =
-        "/v1/node/transactions/count/{from}/{to}";
-    pub const NODE_TRANSACTIONS_COUNT_NS_ROUTE: &str =
-        "/v1/node/transactions/count/namespace/{namespace}";
-    pub const NODE_TRANSACTIONS_COUNT_NS_TO_ROUTE: &str =
-        "/v1/node/transactions/count/namespace/{namespace}/{to}";
-    pub const NODE_TRANSACTIONS_COUNT_NS_FROM_TO_ROUTE: &str =
-        "/v1/node/transactions/count/namespace/{namespace}/{from}/{to}";
-
-    pub const NODE_PAYLOADS_SIZE_ROUTE: &str = "/v1/node/payloads/size";
-    pub const NODE_PAYLOADS_SIZE_TO_ROUTE: &str = "/v1/node/payloads/size/{to}";
-    pub const NODE_PAYLOADS_SIZE_FROM_TO_ROUTE: &str = "/v1/node/payloads/size/{from}/{to}";
-    pub const NODE_PAYLOADS_TOTAL_SIZE_ROUTE: &str = "/v1/node/payloads/total-size";
-    pub const NODE_PAYLOADS_SIZE_NS_ROUTE: &str = "/v1/node/payloads/size/namespace/{namespace}";
-    pub const NODE_PAYLOADS_SIZE_NS_TO_ROUTE: &str =
-        "/v1/node/payloads/size/namespace/{namespace}/{to}";
-    pub const NODE_PAYLOADS_SIZE_NS_FROM_TO_ROUTE: &str =
-        "/v1/node/payloads/size/namespace/{namespace}/{from}/{to}";
-
-    pub const NODE_VID_SHARE_BY_HEIGHT_ROUTE: &str = "/v1/node/vid/share/{height}";
-    pub const NODE_VID_SHARE_BY_HASH_ROUTE: &str = "/v1/node/vid/share/hash/{hash}";
-    pub const NODE_VID_SHARE_BY_PAYLOAD_HASH_ROUTE: &str =
-        "/v1/node/vid/share/payload-hash/{payload_hash}";
-
-    pub const NODE_SYNC_STATUS_ROUTE: &str = "/v1/node/sync-status";
-
-    pub const NODE_HEADER_WINDOW_TIME_ROUTE: &str = "/v1/node/header/window/{start}/{end}";
-    pub const NODE_HEADER_WINDOW_HEIGHT_ROUTE: &str = "/v1/node/header/window/from/{height}/{end}";
-    pub const NODE_HEADER_WINDOW_HASH_ROUTE: &str = "/v1/node/header/window/from/hash/{hash}/{end}";
-
-    pub const NODE_LIMITS_ROUTE: &str = "/v1/node/limits";
+    /// Mount point of the node module, whose base routes come from `hotshot-query-service`.
+    pub const NODE_PREFIX: &str = "/v1/node";
 
     pub const NODE_STAKE_TABLE_CURRENT_ROUTE: &str = "/v1/node/stake-table/current";
     pub const NODE_STAKE_TABLE_ROUTE: &str = "/v1/node/stake-table/{epoch_number}";
@@ -280,37 +242,8 @@ pub mod v1 {
     pub const LC_NAMESPACES_RANGE_ROUTE: &str =
         "/v1/light-client/namespaces/{start}/{end}/{namespaces}";
 
-    // Explorer
-    pub const EXPLORER_BLOCK_DETAIL_BY_HEIGHT_ROUTE: &str = "/v1/explorer/block/{height}";
-    pub const EXPLORER_BLOCK_DETAIL_BY_HASH_ROUTE: &str = "/v1/explorer/block/hash/{hash}";
-    pub const EXPLORER_BLOCK_SUMMARIES_LATEST_ROUTE: &str = "/v1/explorer/blocks/latest/{limit}";
-    pub const EXPLORER_BLOCK_SUMMARIES_FROM_ROUTE: &str = "/v1/explorer/blocks/{from}/{limit}";
-    pub const EXPLORER_TX_DETAIL_BY_POSITION_ROUTE: &str =
-        "/v1/explorer/transaction/{height}/{offset}";
-    pub const EXPLORER_TX_DETAIL_BY_HASH_ROUTE: &str = "/v1/explorer/transaction/hash/{hash}";
-
-    pub const EXPLORER_TX_SUMMARIES_LATEST_ROUTE: &str = "/v1/explorer/transactions/latest/{limit}";
-    pub const EXPLORER_TX_SUMMARIES_FROM_ROUTE: &str =
-        "/v1/explorer/transactions/from/{height}/{offset}/{limit}";
-    pub const EXPLORER_TX_SUMMARIES_BY_HASH_ROUTE: &str =
-        "/v1/explorer/transactions/hash/{hash}/{limit}";
-
-    pub const EXPLORER_TX_SUMMARIES_LATEST_BLOCK_ROUTE: &str =
-        "/v1/explorer/transactions/latest/{limit}/block/{block}";
-    pub const EXPLORER_TX_SUMMARIES_FROM_BLOCK_ROUTE: &str =
-        "/v1/explorer/transactions/from/{height}/{offset}/{limit}/block/{block}";
-    pub const EXPLORER_TX_SUMMARIES_BY_HASH_BLOCK_ROUTE: &str =
-        "/v1/explorer/transactions/hash/{hash}/{limit}/block/{block}";
-
-    pub const EXPLORER_TX_SUMMARIES_LATEST_NS_ROUTE: &str =
-        "/v1/explorer/transactions/latest/{limit}/namespace/{namespace}";
-    pub const EXPLORER_TX_SUMMARIES_FROM_NS_ROUTE: &str =
-        "/v1/explorer/transactions/from/{height}/{offset}/{limit}/namespace/{namespace}";
-    pub const EXPLORER_TX_SUMMARIES_BY_HASH_NS_ROUTE: &str =
-        "/v1/explorer/transactions/hash/{hash}/{limit}/namespace/{namespace}";
-
-    pub const EXPLORER_SUMMARY_ROUTE: &str = "/v1/explorer/explorer-summary";
-    pub const EXPLORER_SEARCH_ROUTE: &str = "/v1/explorer/search/{query}";
+    /// Mount point of the explorer module, whose routes come from `hotshot-query-service`.
+    pub const EXPLORER_PREFIX: &str = "/v1/explorer";
 
     // Token
     pub const TOKEN_TOTAL_MINTED_SUPPLY_ROUTE: &str = "/v1/token/total-minted-supply";
@@ -329,14 +262,7 @@ pub mod v1 {
     pub const SWAGGER_ROUTE: &str = "/v1";
     pub const SCALAR_ROUTE: &str = "/v1/scalar";
 
-    // ---------------------------------------------------------------------
-    // Path builders
-    //
-    // For each constant above, generate a function that returns the path
-    // with `{placeholder}` segments substituted. Use these instead of
-    // hand-formatted URL strings so that the route definition and the
-    // request site stay in sync.
-    // ---------------------------------------------------------------------
+    // Path builders: use these at request sites instead of hand-formatted URL strings.
 
     // Reward state v2
     path_fn!(
@@ -360,8 +286,6 @@ pub mod v1 {
     );
     path_fn!(reward_amounts, REWARD_AMOUNTS_ROUTE, height, offset, limit);
     path_fn!(reward_merkle_tree_v2, REWARD_MERKLE_TREE_V2_ROUTE, height);
-    path_fn!(reward_state_height, REWARD_STATE_HEIGHT_ROUTE);
-    path_fn!(reward_state_v2_height, REWARD_STATE_V2_HEIGHT_ROUTE);
     path_fn!(
         reward_v1_account_proof,
         REWARD_V1_ACCOUNT_PROOF_ROUTE,
@@ -391,32 +315,7 @@ pub mod v1 {
         REWARD_V1_MERKLE_TREE_V2_ROUTE,
         height
     );
-    path_fn!(
-        reward_state_path_by_height,
-        REWARD_STATE_PATH_BY_HEIGHT_ROUTE,
-        height,
-        key
-    );
-    path_fn!(
-        reward_state_path_by_commit,
-        REWARD_STATE_PATH_BY_COMMIT_ROUTE,
-        commit,
-        key
-    );
-    path_fn!(
-        reward_state_v2_path_by_height,
-        REWARD_STATE_V2_PATH_BY_HEIGHT_ROUTE,
-        height,
-        key
-    );
-    path_fn!(
-        reward_state_v2_path_by_commit,
-        REWARD_STATE_V2_PATH_BY_COMMIT_ROUTE,
-        commit,
-        key
-    );
-
-    // Availability — namespace proofs
+    // Availability: namespace proofs
     path_fn!(
         namespace_proof_by_height,
         NAMESPACE_PROOF_BY_HEIGHT_ROUTE,
@@ -449,16 +348,16 @@ pub mod v1 {
         namespace
     );
 
-    // Availability — state certificates
+    // Availability: state certificates
     path_fn!(state_cert_v1, STATE_CERT_V1_ROUTE, epoch);
     path_fn!(state_cert_v2, STATE_CERT_V2_ROUTE, epoch);
 
-    // Availability — leaves
+    // Availability: leaves
     path_fn!(leaf_by_height, LEAF_BY_HEIGHT_ROUTE, height);
     path_fn!(leaf_by_hash, LEAF_BY_HASH_ROUTE, hash);
     path_fn!(leaf_range, LEAF_RANGE_ROUTE, from, until);
 
-    // Availability — headers
+    // Availability: headers
     path_fn!(header_by_height, HEADER_BY_HEIGHT_ROUTE, height);
     path_fn!(header_by_hash, HEADER_BY_HASH_ROUTE, hash);
     path_fn!(
@@ -468,7 +367,7 @@ pub mod v1 {
     );
     path_fn!(header_range, HEADER_RANGE_ROUTE, from, until);
 
-    // Availability — blocks
+    // Availability: blocks
     path_fn!(block_by_height, BLOCK_BY_HEIGHT_ROUTE, height);
     path_fn!(block_by_hash, BLOCK_BY_HASH_ROUTE, hash);
     path_fn!(
@@ -478,7 +377,7 @@ pub mod v1 {
     );
     path_fn!(block_range, BLOCK_RANGE_ROUTE, from, until);
 
-    // Availability — payloads
+    // Availability: payloads
     path_fn!(payload_by_height, PAYLOAD_BY_HEIGHT_ROUTE, height);
     path_fn!(payload_by_hash, PAYLOAD_BY_HASH_ROUTE, hash);
     path_fn!(
@@ -488,7 +387,7 @@ pub mod v1 {
     );
     path_fn!(payload_range, PAYLOAD_RANGE_ROUTE, from, until);
 
-    // Availability — VID common
+    // Availability: VID common
     path_fn!(vid_common_by_height, VID_COMMON_BY_HEIGHT_ROUTE, height);
     path_fn!(vid_common_by_hash, VID_COMMON_BY_HASH_ROUTE, hash);
     path_fn!(
@@ -498,7 +397,7 @@ pub mod v1 {
     );
     path_fn!(vid_common_range, VID_COMMON_RANGE_ROUTE, from, until);
 
-    // Availability — transactions
+    // Availability: transactions
     path_fn!(
         transaction_by_position_noproof,
         TRANSACTION_BY_POSITION_NOPROOF_ROUTE,
@@ -529,7 +428,7 @@ pub mod v1 {
     );
     path_fn!(transaction_by_hash, TRANSACTION_BY_HASH_ROUTE, hash);
 
-    // Availability — block summaries
+    // Availability: block summaries
     path_fn!(
         block_summary_by_height,
         BLOCK_SUMMARY_BY_HEIGHT_ROUTE,
@@ -537,11 +436,11 @@ pub mod v1 {
     );
     path_fn!(block_summary_range, BLOCK_SUMMARY_RANGE_ROUTE, from, until);
 
-    // Availability — misc
+    // Availability: misc
     path_fn!(limits, LIMITS_ROUTE);
     path_fn!(cert2_by_height, CERT2_BY_HEIGHT_ROUTE, height);
 
-    // Availability — streams
+    // Availability: streams
     path_fn!(stream_leaves, STREAM_LEAVES_ROUTE, height);
     path_fn!(stream_headers, STREAM_HEADERS_ROUTE, height);
     path_fn!(stream_blocks, STREAM_BLOCKS_ROUTE, height);
@@ -561,35 +460,7 @@ pub mod v1 {
         namespace
     );
 
-    // Block state
-    path_fn!(
-        block_state_path_by_height,
-        BLOCK_STATE_PATH_BY_HEIGHT_ROUTE,
-        height,
-        key
-    );
-    path_fn!(
-        block_state_path_by_commit,
-        BLOCK_STATE_PATH_BY_COMMIT_ROUTE,
-        commit,
-        key
-    );
-    path_fn!(block_state_height, BLOCK_STATE_HEIGHT_ROUTE);
-
     // Fee state
-    path_fn!(
-        fee_state_path_by_height,
-        FEE_STATE_PATH_BY_HEIGHT_ROUTE,
-        height,
-        key
-    );
-    path_fn!(
-        fee_state_path_by_commit,
-        FEE_STATE_PATH_BY_COMMIT_ROUTE,
-        commit,
-        key
-    );
-    path_fn!(fee_state_height, FEE_STATE_HEIGHT_ROUTE);
     path_fn!(
         fee_state_balance_latest,
         FEE_STATE_BALANCE_LATEST_ROUTE,
@@ -611,103 +482,7 @@ pub mod v1 {
     path_fn!(config_env, CONFIG_ENV_ROUTE);
     path_fn!(config_runtime, CONFIG_RUNTIME_ROUTE);
 
-    // Node — block height / counts / sizes
-    path_fn!(node_block_height, NODE_BLOCK_HEIGHT_ROUTE);
-    path_fn!(node_transactions_count, NODE_TRANSACTIONS_COUNT_ROUTE);
-    path_fn!(
-        node_transactions_count_to,
-        NODE_TRANSACTIONS_COUNT_TO_ROUTE,
-        to
-    );
-    path_fn!(
-        node_transactions_count_from_to,
-        NODE_TRANSACTIONS_COUNT_FROM_TO_ROUTE,
-        from,
-        to
-    );
-    path_fn!(
-        node_transactions_count_ns,
-        NODE_TRANSACTIONS_COUNT_NS_ROUTE,
-        namespace
-    );
-    path_fn!(
-        node_transactions_count_ns_to,
-        NODE_TRANSACTIONS_COUNT_NS_TO_ROUTE,
-        namespace,
-        to
-    );
-    path_fn!(
-        node_transactions_count_ns_from_to,
-        NODE_TRANSACTIONS_COUNT_NS_FROM_TO_ROUTE,
-        namespace,
-        from,
-        to
-    );
-
-    path_fn!(node_payloads_size, NODE_PAYLOADS_SIZE_ROUTE);
-    path_fn!(node_payloads_size_to, NODE_PAYLOADS_SIZE_TO_ROUTE, to);
-    path_fn!(
-        node_payloads_size_from_to,
-        NODE_PAYLOADS_SIZE_FROM_TO_ROUTE,
-        from,
-        to
-    );
-    path_fn!(node_payloads_total_size, NODE_PAYLOADS_TOTAL_SIZE_ROUTE);
-    path_fn!(
-        node_payloads_size_ns,
-        NODE_PAYLOADS_SIZE_NS_ROUTE,
-        namespace
-    );
-    path_fn!(
-        node_payloads_size_ns_to,
-        NODE_PAYLOADS_SIZE_NS_TO_ROUTE,
-        namespace,
-        to
-    );
-    path_fn!(
-        node_payloads_size_ns_from_to,
-        NODE_PAYLOADS_SIZE_NS_FROM_TO_ROUTE,
-        namespace,
-        from,
-        to
-    );
-
-    // Node — VID shares
-    path_fn!(
-        node_vid_share_by_height,
-        NODE_VID_SHARE_BY_HEIGHT_ROUTE,
-        height
-    );
-    path_fn!(node_vid_share_by_hash, NODE_VID_SHARE_BY_HASH_ROUTE, hash);
-    path_fn!(
-        node_vid_share_by_payload_hash,
-        NODE_VID_SHARE_BY_PAYLOAD_HASH_ROUTE,
-        payload_hash
-    );
-
-    // Node — sync, header windows
-    path_fn!(node_sync_status, NODE_SYNC_STATUS_ROUTE);
-    path_fn!(
-        node_header_window_time,
-        NODE_HEADER_WINDOW_TIME_ROUTE,
-        start,
-        end
-    );
-    path_fn!(
-        node_header_window_height,
-        NODE_HEADER_WINDOW_HEIGHT_ROUTE,
-        height,
-        end
-    );
-    path_fn!(
-        node_header_window_hash,
-        NODE_HEADER_WINDOW_HASH_ROUTE,
-        hash,
-        end
-    );
-    path_fn!(node_limits, NODE_LIMITS_ROUTE);
-
-    // Node — stake table / validators / participation
+    // Node: stake table / validators / participation
     path_fn!(node_stake_table_current, NODE_STAKE_TABLE_CURRENT_ROUTE);
     path_fn!(node_stake_table, NODE_STAKE_TABLE_ROUTE, epoch_number);
     path_fn!(
@@ -742,7 +517,7 @@ pub mod v1 {
         epoch
     );
 
-    // Node — block reward / oldest
+    // Node: block reward / oldest
     path_fn!(node_block_reward, NODE_BLOCK_REWARD_ROUTE);
     path_fn!(
         node_block_reward_epoch,
@@ -879,104 +654,6 @@ pub mod v1 {
         end,
         namespaces
     );
-
-    // Explorer — blocks
-    path_fn!(
-        explorer_block_detail_by_height,
-        EXPLORER_BLOCK_DETAIL_BY_HEIGHT_ROUTE,
-        height
-    );
-    path_fn!(
-        explorer_block_detail_by_hash,
-        EXPLORER_BLOCK_DETAIL_BY_HASH_ROUTE,
-        hash
-    );
-    path_fn!(
-        explorer_block_summaries_latest,
-        EXPLORER_BLOCK_SUMMARIES_LATEST_ROUTE,
-        limit
-    );
-    path_fn!(
-        explorer_block_summaries_from,
-        EXPLORER_BLOCK_SUMMARIES_FROM_ROUTE,
-        from,
-        limit
-    );
-
-    // Explorer — transactions
-    path_fn!(
-        explorer_tx_detail_by_position,
-        EXPLORER_TX_DETAIL_BY_POSITION_ROUTE,
-        height,
-        offset
-    );
-    path_fn!(
-        explorer_tx_detail_by_hash,
-        EXPLORER_TX_DETAIL_BY_HASH_ROUTE,
-        hash
-    );
-    path_fn!(
-        explorer_tx_summaries_latest,
-        EXPLORER_TX_SUMMARIES_LATEST_ROUTE,
-        limit
-    );
-    path_fn!(
-        explorer_tx_summaries_from,
-        EXPLORER_TX_SUMMARIES_FROM_ROUTE,
-        height,
-        offset,
-        limit
-    );
-    path_fn!(
-        explorer_tx_summaries_by_hash,
-        EXPLORER_TX_SUMMARIES_BY_HASH_ROUTE,
-        hash,
-        limit
-    );
-    path_fn!(
-        explorer_tx_summaries_latest_block,
-        EXPLORER_TX_SUMMARIES_LATEST_BLOCK_ROUTE,
-        limit,
-        block
-    );
-    path_fn!(
-        explorer_tx_summaries_from_block,
-        EXPLORER_TX_SUMMARIES_FROM_BLOCK_ROUTE,
-        height,
-        offset,
-        limit,
-        block
-    );
-    path_fn!(
-        explorer_tx_summaries_by_hash_block,
-        EXPLORER_TX_SUMMARIES_BY_HASH_BLOCK_ROUTE,
-        hash,
-        limit,
-        block
-    );
-    path_fn!(
-        explorer_tx_summaries_latest_ns,
-        EXPLORER_TX_SUMMARIES_LATEST_NS_ROUTE,
-        limit,
-        namespace
-    );
-    path_fn!(
-        explorer_tx_summaries_from_ns,
-        EXPLORER_TX_SUMMARIES_FROM_NS_ROUTE,
-        height,
-        offset,
-        limit,
-        namespace
-    );
-    path_fn!(
-        explorer_tx_summaries_by_hash_ns,
-        EXPLORER_TX_SUMMARIES_BY_HASH_NS_ROUTE,
-        hash,
-        limit,
-        namespace
-    );
-    path_fn!(explorer_summary, EXPLORER_SUMMARY_ROUTE);
-    path_fn!(explorer_search, EXPLORER_SEARCH_ROUTE, query);
 
     // Token
     path_fn!(token_total_minted_supply, TOKEN_TOTAL_MINTED_SUPPLY_ROUTE);

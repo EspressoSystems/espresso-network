@@ -12,9 +12,7 @@ use hotshot_testing::{
 };
 use hotshot_types::traits::node_implementation::NodeType;
 use tagged_base64::TaggedBase64;
-use tokio::spawn;
 use url::Url;
-use vbs::version::StaticVersion;
 
 use crate::service::{BuilderConfig, GlobalState};
 
@@ -70,14 +68,9 @@ where
             num_nodes,
         );
 
-        // Create tide-disco app based on global state
-        let app = Arc::clone(&service)
-            .into_app()
-            .expect("Failed to create builder tide-disco app");
-
-        let url_clone = url.clone();
-
-        spawn(app.serve(url_clone, StaticVersion::<0, 1> {}));
+        // Serve the builder API based on global state
+        let router = Arc::clone(&service).into_router();
+        http_wire::spawn_serve(&url, router);
 
         // Return the global state as a task that will be later started
         // by the test harness with event stream from one of HS nodes

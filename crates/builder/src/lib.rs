@@ -37,7 +37,7 @@ pub mod testing {
     };
     use async_lock::RwLock;
     use committable::Committable;
-    use espresso_node::{SequencerApiVersion, context::Consensus, network};
+    use espresso_node::{context::Consensus, network};
     use espresso_types::{
         Event, FeeAccount, NamespaceId, NodeState, PrivKey, PubKey, Transaction, ValidatedState,
         traits::SequencerPersistence, v0_3::ChainConfig,
@@ -55,7 +55,7 @@ pub mod testing {
         AvailableBlockData, AvailableBlockHeaderInputV1, AvailableBlockInfo,
     };
     use hotshot_events_service::{
-        events::{Error as EventStreamApiError, Options as EventStreamingApiOptions},
+        events,
         events_source::{EventConsumer, EventsStreamer},
     };
     use hotshot_types::{
@@ -69,9 +69,8 @@ pub mod testing {
         },
     };
     use http_client::Client;
-    use tide_disco::App;
     use tokio::time::sleep;
-    use vbs::version::{StaticVersion, StaticVersionType, Version};
+    use vbs::version::{StaticVersion, Version};
 
     use super::*;
     use crate::non_permissioned::BuilderConfig;
@@ -235,35 +234,17 @@ pub mod testing {
             url: Url,
             source: Arc<RwLock<EventsStreamer<SeqTypes>>>,
         ) {
-            // Start the web server.
-            let hotshot_events_api_v0 = hotshot_events_service::events::define_api::<
-                Arc<RwLock<EventsStreamer<SeqTypes>>>,
-                SeqTypes,
-                StaticVersion<0, 1>,
-            >(
-                &EventStreamingApiOptions::default(),
-                "0.0.1".parse().unwrap(),
-            )
-            .expect("Failed to define hotshot events API v0");
-
-            let hotshot_events_api_v1 = hotshot_events_service::events::define_api::<
-                Arc<RwLock<EventsStreamer<SeqTypes>>>,
-                SeqTypes,
-                StaticVersion<0, 1>,
-            >(
-                &EventStreamingApiOptions::default(),
-                "1.0.0".parse().unwrap(),
-            )
-            .expect("Failed to define hotshot events API v1");
-
-            let mut app = App::<_, EventStreamApiError>::with_state(source);
-
-            app.register_module("hotshot-events", hotshot_events_api_v0)
-                .expect("Failed to register hotshot events API v0")
-                .register_module("hotshot-events", hotshot_events_api_v1)
-                .expect("Failed to register hotshot events API v1");
-
-            tokio::spawn(app.serve(url, SequencerApiVersion::instance()));
+            // Start the web server. The unversioned mount serves the latest (v1) API, like the
+            // versioned app it replaces.
+            let events_v0 = events::legacy_events_router::<SeqTypes, _>(source.clone());
+            let events_v1 = events::events_router::<SeqTypes, _>(source);
+            let router = events::app(
+                axum::Router::new()
+                    .nest("/hotshot-events", events_v1.clone())
+                    .nest("/v0/hotshot-events", events_v0)
+                    .nest("/v1/hotshot-events", events_v1),
+            );
+            http_wire::spawn_serve(&url, router);
         }
         // enable hotshot event streaming
         pub fn enable_hotshot_node_event_streaming<P: SequencerPersistence>(

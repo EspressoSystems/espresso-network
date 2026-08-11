@@ -12,12 +12,12 @@ use axum::{
     Router,
     body::Bytes,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode as AxumStatusCode},
+    http::HeaderMap,
     response::Response,
     routing::{get, post},
 };
 use committable::Committable;
-use disco_types::{error::Error as _, status::StatusCode};
+use disco_types::status::StatusCode;
 use espresso_types::SeqTypes;
 use hotshot_builder_api::v0_1::{
     block_info::{
@@ -33,47 +33,14 @@ use hotshot_types::{
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
     utils::BuilderCommitment,
 };
-use http_wire::{
-    self as wire, DecodeFailure, WireFormat, body_limit_layer, cors_layer, healthcheck_response,
-};
-use serde::{Serialize, de::DeserializeOwned};
+use http_wire::{self as wire, DecodeFailure, body_limit_layer, cors_layer, healthcheck_response};
+use serde::de::DeserializeOwned;
 use tagged_base64::TaggedBase64;
-use vbs::version::StaticVersion;
-
-/// Binary framing version for VBS-negotiated responses, matching `hotshot_builder_api::v0_1`'s
-/// framing, which is what `BuilderClient` sends/expects.
-type WireVersion = StaticVersion<0, 1>;
 
 type SharedState = Arc<ProxyGlobalState<SeqTypes>>;
 
-/// Wire format of the builder API: [`WireVersion`] VBS framing and the [`BuilderApiError`]
-/// envelope.
-struct BuilderWireFormat;
-
-impl WireFormat for BuilderWireFormat {
-    type Error = BuilderApiError;
-    type Version = WireVersion;
-
-    fn status(err: &BuilderApiError) -> AxumStatusCode {
-        // Maps tide-disco's `StatusCode` (what `BuilderApiError::status()` returns) onto axum's.
-        AxumStatusCode::from_u16(u16::from(err.status()))
-            .unwrap_or(AxumStatusCode::INTERNAL_SERVER_ERROR)
-    }
-
-    fn serialize_failure(message: String) -> BuilderApiError {
-        BuilderApiError::Custom {
-            message,
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-        }
-    }
-}
-
-fn respond<T: Serialize>(headers: &HeaderMap, result: Result<T, BuilderApiError>) -> Response {
-    wire::respond::<BuilderWireFormat, _>(headers, result)
-}
-
 fn decode_body<T: DeserializeOwned>(headers: &HeaderMap, body: &[u8]) -> Result<T, RequestError> {
-    wire::decode_body::<WireVersion, T>(headers, body).map_err(|failure| match failure {
+    wire::decode_body(headers, body).map_err(|failure| match failure {
         DecodeFailure::Json(_) => RequestError::Json,
         DecodeFailure::Binary(_) => RequestError::Binary,
         DecodeFailure::UnsupportedContentType => RequestError::UnsupportedContentType,
@@ -122,10 +89,6 @@ fn parse_sender_signature(
     Ok((sender, signature))
 }
 
-async fn healthcheck(headers: HeaderMap) -> Response {
-    healthcheck_response(&headers)
-}
-
 async fn available_blocks(
     State(state): State<SharedState>,
     headers: HeaderMap,
@@ -143,7 +106,7 @@ async fn available_blocks(
             })
     }
     .await;
-    respond(&headers, result)
+    wire::respond::<BuilderApiError, _>(&headers, result)
 }
 
 async fn claim_block(
@@ -163,7 +126,7 @@ async fn claim_block(
             })
     }
     .await;
-    respond(&headers, result)
+    wire::respond::<BuilderApiError, _>(&headers, result)
 }
 
 async fn claim_block_with_num_nodes(
@@ -189,7 +152,7 @@ async fn claim_block_with_num_nodes(
             })
     }
     .await;
-    respond(&headers, result)
+    wire::respond::<BuilderApiError, _>(&headers, result)
 }
 
 async fn claim_header_input(
@@ -209,7 +172,7 @@ async fn claim_header_input(
             })
     }
     .await;
-    respond(&headers, result)
+    wire::respond::<BuilderApiError, _>(&headers, result)
 }
 
 async fn claim_header_input_v2(
@@ -233,12 +196,12 @@ async fn claim_header_input_v2(
         })
     }
     .await;
-    respond(&headers, result)
+    wire::respond::<BuilderApiError, _>(&headers, result)
 }
 
 async fn builder_address(State(state): State<SharedState>, headers: HeaderMap) -> Response {
     let result = state.builder_address().await.map_err(BuilderApiError::from);
-    respond(&headers, result)
+    wire::respond::<BuilderApiError, _>(&headers, result)
 }
 
 async fn submit_txn(State(state): State<SharedState>, headers: HeaderMap, body: Bytes) -> Response {
@@ -253,7 +216,7 @@ async fn submit_txn(State(state): State<SharedState>, headers: HeaderMap, body: 
         Ok(hash)
     }
     .await;
-    respond(&headers, result)
+    wire::respond::<BuilderApiError, _>(&headers, result)
 }
 
 async fn submit_batch(
@@ -272,7 +235,7 @@ async fn submit_batch(
         Ok(hashes)
     }
     .await;
-    respond(&headers, result)
+    wire::respond::<BuilderApiError, _>(&headers, result)
 }
 
 async fn get_status(
@@ -288,7 +251,7 @@ async fn get_status(
             .map_err(BuilderApiError::TxnStat)
     }
     .await;
-    respond(&headers, result)
+    wire::respond::<BuilderApiError, _>(&headers, result)
 }
 
 fn block_info_router(state: SharedState) -> Router {
@@ -335,7 +298,10 @@ pub fn router(state: ProxyGlobalState<SeqTypes>) -> Router {
         .nest("/block_info", block_info_router(state.clone()))
         .nest("/txn_submit", txn_submit_router(state));
     Router::new()
-        .route("/healthcheck", get(healthcheck))
+        .route(
+            "/healthcheck",
+            get(|headers: HeaderMap| async move { healthcheck_response(&headers) }),
+        )
         .merge(api.clone())
         .nest("/v0", api)
         .layer(body_limit_layer())
@@ -347,7 +313,7 @@ mod tests {
     use std::time::Duration;
 
     use async_lock::RwLock;
-    use axum::http::{Method, Request, header};
+    use axum::http::{Method, Request, StatusCode as AxumStatusCode, header};
     use hotshot_builder_legacy::service::GlobalState;
     use hotshot_types::{data::ViewNumber, traits::signature_key::BuilderSignatureKey as _};
 

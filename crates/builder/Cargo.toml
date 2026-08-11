@@ -45,7 +45,6 @@ espresso-node = { workspace = true, default-features = false, features = ["testi
 jf-signature = { workspace = true }
 tempfile = { workspace = true }
 test-log = { workspace = true }
-tide-disco = { workspace = true }
 tower = { workspace = true, features = ["util"] }
 
 [lints]

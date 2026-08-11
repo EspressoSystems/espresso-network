@@ -23,9 +23,7 @@ use hotshot_builder_shared::{
 use hotshot_example_types::{block_types::TestTransaction, node_types::TestTypes};
 use hotshot_task_impls::builder::v0_1::BuilderClient;
 use hotshot_types::{data::ViewNumber, traits::node_implementation::NodeType};
-use tokio::spawn;
 use url::Url;
-use vbs::version::StaticVersion;
 
 use crate::service::{GlobalState, ProxyGlobalState};
 
@@ -72,8 +70,8 @@ impl TestServiceWrapper {
     ) -> Self {
         let port = test_utils::reserve_tcp_port().unwrap();
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
-        let app = Arc::clone(&global_state).into_app().unwrap();
-        spawn(app.serve(url.clone(), StaticVersion::<0, 1> {}));
+        let router = Arc::clone(&global_state).into_router();
+        http_wire::spawn_serve(&url, router);
         let client = BuilderClient::new(url, Duration::from_secs(5));
         assert!(client.connect(Duration::from_secs(1)).await);
         Self {

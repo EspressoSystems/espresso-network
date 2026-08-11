@@ -5,20 +5,36 @@ use std::{collections::BTreeSet, env, sync::Arc};
 use ::light_client::{state::LightClientOptions, storage::LightClientSqliteOptions};
 use anyhow::{Context, bail};
 use clap::Parser;
+use espresso_api::{ApiRouter, routes};
 use espresso_telemetry as telemetry;
 use espresso_types::{
-    PubKey,
+    BlockMerkleTree, FeeMerkleTree, PubKey, SeqTypes,
     v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, SequencerPersistence},
+    v0_3::RewardMerkleTreeV1,
+    v0_4::RewardMerkleTreeV2,
 };
 use futures::{channel::oneshot, future::BoxFuture};
 use hotshot_query_service::{
+    availability::{
+        AvailabilityDataSource, Options as AvailabilityOptions, router::availability_router,
+    },
     data_source::{ExtensibleDataSource, MetricsDataSource},
-    status::{HasMetrics, UpdateStatusData},
+    explorer::{Options as ExplorerOptions, router::explorer_router},
+    merklized_state::{
+        MerklizedStateDataSource, MerklizedStateHeightPersistence,
+        Options as MerklizedStateOptions, router::merklized_state_router,
+    },
+    node::{NodeDataSource, Options as NodeOptions, router::node_router},
+    status::{
+        HasMetrics, Options as StatusOptions, StatusDataSource, UpdateStatusData,
+        router::status_router,
+    },
 };
 use hotshot_types::traits::{
     metrics::{Metrics, NoMetrics},
     network::ConnectedNetwork,
 };
+use jf_merkle_tree_compat::MerkleTreeScheme;
 use process_metrics::ProcessMetrics;
 use url::Url;
 
@@ -203,6 +219,12 @@ impl Options {
             telemetry::set_registry(Arc::new(ds.metrics().registry().clone()));
             tasks.spawn("process_metrics", ProcessMetrics::new(ds.metrics()).run());
             let axum_ds = Arc::new(ExtensibleDataSource::new(ds, state.clone()));
+            // A metrics data source backs the status module and nothing else, so this is the only
+            // query-service module this mode can serve.
+            let hqs_base = ApiRouter::new().nest(
+                routes::v1::STATUS_PREFIX,
+                status_router(&StatusOptions::default(), (*axum_ds).clone()),
+            );
 
             let port = self.http.port;
             let env_vars = get_public_env_vars().unwrap_or_default();
@@ -220,7 +242,8 @@ impl Options {
                     .with_env_vars(env_vars)
                     .with_public_node_config(node_cfg);
                 if let Err(e) =
-                    espresso_api::serve_axum_status(port, state, modules, max_connections).await
+                    espresso_api::serve_axum_status(port, state, hqs_base, modules, max_connections)
+                        .await
                 {
                     tracing::error!("Axum server error: {}", e);
                 }
@@ -311,6 +334,7 @@ impl Options {
 
         let port = self.http.port;
         let ds_for_axum = ds.clone();
+        let hqs_base = hqs_base((*ds).clone());
         let env_vars = get_public_env_vars().unwrap_or_default();
         let node_cfg = self.public_node_config.as_deref().cloned();
         let modules = espresso_api::OptionalModules {
@@ -324,7 +348,8 @@ impl Options {
             let state = NodeApiStateImpl::new(ds_for_axum)
                 .with_env_vars(env_vars)
                 .with_public_node_config(node_cfg);
-            if let Err(e) = espresso_api::serve_axum_fs(port, state, modules, max_connections).await
+            if let Err(e) =
+                espresso_api::serve_axum_fs(port, state, hqs_base, modules, max_connections).await
             {
                 tracing::error!("Axum server error: {}", e);
             }
@@ -392,12 +417,20 @@ impl Options {
 
         let port = self.http.port;
         let ds_for_axum = ds.clone();
+        // The explorer and merklized-state modules are answered by SQL storage only, so they are
+        // nested here rather than in the base every query mode shares.
+        let mut hqs_base = hqs_base((*ds).clone()).merge(merklized_state_base((*ds).clone()));
+        if self.explorer.is_some() {
+            hqs_base = hqs_base.nest(
+                routes::v1::EXPLORER_PREFIX,
+                explorer_router::<SeqTypes, _>(&ExplorerOptions::default(), (*ds).clone()),
+            );
+        }
         let env_vars = get_public_env_vars().unwrap_or_default();
         let node_cfg = self.public_node_config.as_deref().cloned();
         let modules = espresso_api::OptionalModules {
             submit: self.submit.is_some(),
             config: self.config.is_some(),
-            explorer: self.explorer.is_some(),
             light_client: self.light_client.is_some(),
             hotshot_events: self.hotshot_events.is_some(),
             ..Default::default()
@@ -407,7 +440,9 @@ impl Options {
             let state = NodeApiStateImpl::new(ds_for_axum)
                 .with_env_vars(env_vars)
                 .with_public_node_config(node_cfg);
-            if let Err(e) = espresso_api::serve_axum(port, state, modules, max_connections).await {
+            if let Err(e) =
+                espresso_api::serve_axum(port, state, hqs_base, modules, max_connections).await
+            {
                 tracing::error!("Axum server error: {}", e);
             }
             anyhow::Ok(())
@@ -539,6 +574,91 @@ where
     telemetry::set_registry(Arc::new(ds.metrics().registry().clone()));
     let ds = Arc::new(ExtensibleDataSource::new(ds, state));
     (metrics, ds)
+}
+
+/// The `hotshot-query-service` modules' own routes, each nested at the prefix `espresso-api`
+/// mounts that module on, ready to merge into the v1 router. `espresso-api` is agnostic of the
+/// node types, so it cannot build these; both query modes back every module here from the same
+/// data source. The explorer and merklized-state modules are nested by their caller, since only
+/// SQL storage can back them.
+///
+/// The default availability options are the 500ms fetch timeout and the 500/100 small/large object
+/// range limits this API has always enforced, and the default node options the 500-header window
+/// limit.
+fn hqs_base<D>(ds: D) -> ApiRouter
+where
+    D: AvailabilityDataSource<SeqTypes>
+        + NodeDataSource<SeqTypes>
+        + StatusDataSource
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+{
+    ApiRouter::new()
+        .nest(
+            routes::v1::AVAILABILITY_PREFIX,
+            availability_router::<SeqTypes, _>(&AvailabilityOptions::default(), ds.clone()),
+        )
+        .nest(
+            routes::v1::NODE_PREFIX,
+            node_router::<SeqTypes, _>(&NodeOptions::default(), ds.clone()),
+        )
+        .nest(
+            routes::v1::STATUS_PREFIX,
+            status_router(&StatusOptions::default(), ds),
+        )
+}
+
+/// The merklized-state module, once per tree Espresso stores: the block and fee trees the header
+/// commits to, and both reward trees. All four report the same snapshot height, since storage
+/// tracks one merklized-state height for every tree together.
+fn merklized_state_base<D>(ds: D) -> ApiRouter
+where
+    D: MerklizedStateDataSource<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>
+        + MerklizedStateDataSource<SeqTypes, FeeMerkleTree, { FeeMerkleTree::ARITY }>
+        + MerklizedStateDataSource<SeqTypes, RewardMerkleTreeV1, { RewardMerkleTreeV1::ARITY }>
+        + MerklizedStateDataSource<SeqTypes, RewardMerkleTreeV2, { RewardMerkleTreeV2::ARITY }>
+        + MerklizedStateHeightPersistence
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+{
+    let options = MerklizedStateOptions::default();
+    ApiRouter::new()
+        .nest(
+            routes::v1::BLOCK_STATE_PREFIX,
+            merklized_state_router::<SeqTypes, BlockMerkleTree, _, { BlockMerkleTree::ARITY }>(
+                &options,
+                ds.clone(),
+            ),
+        )
+        .nest(
+            routes::v1::FEE_STATE_PREFIX,
+            merklized_state_router::<SeqTypes, FeeMerkleTree, _, { FeeMerkleTree::ARITY }>(
+                &options,
+                ds.clone(),
+            ),
+        )
+        .nest(
+            routes::v1::REWARD_STATE_PREFIX,
+            merklized_state_router::<
+                SeqTypes,
+                RewardMerkleTreeV1,
+                _,
+                { RewardMerkleTreeV1::ARITY },
+            >(&options, ds.clone()),
+        )
+        .nest(
+            routes::v1::REWARD_STATE_V2_PREFIX,
+            merklized_state_router::<
+                SeqTypes,
+                RewardMerkleTreeV2,
+                _,
+                { RewardMerkleTreeV2::ARITY },
+            >(&options, ds),
+        )
 }
 
 /// The environment variables listed in `api/public-env-vars.toml`, as `KEY=value` strings.

@@ -11,7 +11,7 @@ use async_broadcast::{Sender as BroadcastSender, TrySendError};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
-use futures::{Stream, future::BoxFuture, stream::StreamExt};
+use futures::{Stream, stream::StreamExt};
 use hotshot::types::Event;
 use hotshot_builder_api::{
     v0_1::{
@@ -36,7 +36,6 @@ use hotshot_types::{
 use lru::LruCache;
 use sha2::{Digest, Sha256};
 use tagged_base64::TaggedBase64;
-use tide_disco::method::ReadState;
 use tokio::{
     sync::{mpsc::unbounded_channel, oneshot},
     time::{sleep, timeout},
@@ -1063,18 +1062,6 @@ impl<Types: NodeType> AcceptsTxnSubmits<Types> for ProxyGlobalState<Types> {
             .await
     }
 }
-#[async_trait]
-impl<Types: NodeType> ReadState for ProxyGlobalState<Types> {
-    type State = ProxyGlobalState<Types>;
-
-    async fn read<T>(
-        &self,
-        op: impl Send + for<'a> FnOnce(&'a Self::State) -> BoxFuture<'a, T> + 'async_trait,
-    ) -> T {
-        op(self).await
-    }
-}
-
 /*
 Running Non-Permissioned Builder Service
 */

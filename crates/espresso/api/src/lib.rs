@@ -16,6 +16,8 @@ pub mod proto {
 }
 
 // Re-exports
+pub use aide::axum::ApiRouter;
+
 pub use self::{
     axum::{create_combined_router, create_router_v1, create_router_v2, routes},
     tonic::create_reward_service,
@@ -38,29 +40,32 @@ pub fn url(base: &::url::Url, path: impl AsRef<str>) -> ::url::Url {
 ///
 /// `catchup`, like the query-service modules (`status`, `availability`, `node`, `token`,
 /// `block-state`, `fee-state`, `reward-state`, `database`) and `v2`, is always on: tide-disco's
-/// SQL mode registered it unconditionally. `submit`, `config`, `explorer`, `light-client`, and
+/// SQL mode registered it unconditionally. `submit`, `config`, `light-client`, and
 /// `hotshot-events` follow `Options`, matching `Options::init_with_query_module_sql`.
+///
+/// `hqs_base` carries the `hotshot-query-service` modules' own routes, built by the caller from
+/// its data source and already nested at their module prefixes; see [`create_router_v1`]. This
+/// mode's data source backs every migrated module, so the caller nests all of them, `explorer`
+/// among them when `Options::explorer` asks for it.
 pub async fn serve_axum<S>(
     port: u16,
     state: S,
+    hqs_base: ApiRouter,
     modules: OptionalModules,
     max_connections: Option<usize>,
 ) -> anyhow::Result<()>
 where
     S: v1::RewardApi
-        + v1::AvailabilityApi
-        + v1::HotShotAvailabilityApi
-        + v1::BlockStateApi
-        + v1::FeeStateApi
-        + v1::StatusApi
+        + v1::AvailabilityApiExtension
+        + v1::FeeStateApiExtension
+        + v1::StatusApiExtension
         + v1::ConfigApi
-        + v1::NodeApi
+        + v1::NodeApiExtension
         + v1::CatchupApi
         + v1::SubmitApi
         + v1::StateSignatureApi
         + v1::HotShotEventsApi
         + v1::LightClientApi
-        + v1::ExplorerApi
         + v1::TokenApi
         + v1::DatabaseApi
         + v2::RewardApi
@@ -72,9 +77,9 @@ where
         + 'static,
 {
     let listener = bind_api(port).await?;
-    let mut router = axum::router_reward(state.clone())
+    let mut router = hqs_base
+        .merge(axum::router_reward(state.clone()))
         .merge(axum::router_availability(state.clone()))
-        .merge(axum::router_block_state(state.clone()))
         .merge(axum::router_fee_state(state.clone()))
         .merge(axum::router_status(state.clone()))
         .merge(axum::router_node(state.clone()))
@@ -88,9 +93,6 @@ where
     if modules.config {
         router = router.merge(axum::router_config(state.clone()));
     }
-    if modules.explorer {
-        router = router.merge(axum::router_explorer(state.clone()));
-    }
     if modules.light_client {
         router = router.merge(axum::router_light_client(state.clone()));
     }
@@ -102,15 +104,17 @@ where
 }
 
 /// Which of the optional API modules to serve, for modes that make them conditional
-/// (mirroring `Options::submit`/`Options::config`/`Options::explorer`/`Options::light_client`/
+/// (mirroring `Options::submit`/`Options::config`/`Options::light_client`/
 /// `Options::hotshot_events`).
+///
+/// The explorer module is conditional too, but it is a `hotshot-query-service` module now: the
+/// caller decides whether to nest it in the router it passes as `hqs_base`.
 #[derive(Default, Clone, Copy, Debug)]
 pub struct OptionalModules {
     pub submit: bool,
     pub catchup: bool,
     pub config: bool,
     pub hotshot_events: bool,
-    pub explorer: bool,
     pub light_client: bool,
 }
 
@@ -119,17 +123,20 @@ pub struct OptionalModules {
 /// submit, config, and hotshot-events follow `Options`. Filesystem storage doesn't implement the
 /// reward/merklized-state/explorer/database traits, so those modules aren't served (a request to
 /// one of their routes 404s, matching tide).
+///
+/// `hqs_base` carries the `hotshot-query-service` modules' own routes, built by the caller from
+/// its data source and already nested at their module prefixes; see [`create_router_v1`].
 pub async fn serve_axum_fs<S>(
     port: u16,
     state: S,
+    hqs_base: ApiRouter,
     modules: OptionalModules,
     max_connections: Option<usize>,
 ) -> anyhow::Result<()>
 where
-    S: v1::StatusApi
-        + v1::AvailabilityApi
-        + v1::HotShotAvailabilityApi
-        + v1::NodeApi
+    S: v1::StatusApiExtension
+        + v1::AvailabilityApiExtension
+        + v1::NodeApiExtension
         + v1::TokenApi
         + v1::CatchupApi
         + v1::SubmitApi
@@ -142,7 +149,8 @@ where
         + 'static,
 {
     let listener = bind_api(port).await?;
-    let mut router = axum::router_status(state.clone())
+    let mut router = hqs_base
+        .merge(axum::router_status(state.clone()))
         .merge(axum::router_availability(state.clone()))
         .merge(axum::router_node(state.clone()))
         .merge(axum::router_token(state.clone()))
@@ -169,14 +177,18 @@ where
 /// Serve the status-only API: no availability/node/token data source is available, so only
 /// status and the HotShot modules (submit, catchup, state-signature, config, hotshot-events) can
 /// be served. State-signature is always on; the rest follow `Options`.
+///
+/// Status is the one query-service module a metrics-only data source can back, so `hqs_base`
+/// carries only that module's routes here: this mode serves no availability route.
 pub async fn serve_axum_status<S>(
     port: u16,
     state: S,
+    hqs_base: ApiRouter,
     modules: OptionalModules,
     max_connections: Option<usize>,
 ) -> anyhow::Result<()>
 where
-    S: v1::StatusApi
+    S: v1::StatusApiExtension
         + v1::SubmitApi
         + v1::CatchupApi
         + v1::StateSignatureApi
@@ -188,8 +200,9 @@ where
         + 'static,
 {
     let listener = bind_api(port).await?;
-    let router =
-        axum::router_status(state.clone()).merge(axum::router_state_signature(state.clone()));
+    let router = hqs_base
+        .merge(axum::router_status(state.clone()))
+        .merge(axum::router_state_signature(state.clone()));
     let router = merge_hotshot_modules(router, &state, modules);
     serve_router(
         listener,

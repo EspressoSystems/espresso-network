@@ -305,17 +305,13 @@ where
 #[cfg(all(test, not(target_os = "windows")))]
 mod test {
     use futures::stream::StreamExt;
-    use test_utils::reserve_tcp_port;
-    use tide_disco::App;
     use vbs::version::StaticVersionType;
 
     use super::*;
     use crate::{
-        ApiState, Error,
-        availability::{AvailabilityDataSource, UpdateAvailabilityData, define_api},
+        availability::{AvailabilityDataSource, UpdateAvailabilityData},
         data_source::storage::sql::testing::TmpDb,
-        fetching::provider::{NoFetching, TrustedQueryServiceProvider},
-        task::BackgroundTask,
+        fetching::provider::{NoFetching, TrustedQueryServiceProvider, test_fixtures},
         testing::{
             consensus::{MockDataSource, MockNetwork},
             mocks::{MockBase, MockTypes},
@@ -331,22 +327,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        let _server = BackgroundTask::spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = test_fixtures::serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let db = TmpDb::init().await;

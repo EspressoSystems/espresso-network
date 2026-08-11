@@ -1,18 +1,7 @@
 [advisories]
 ignore = [
-    # DoS in WebPKI that comes with tide_disco
-    "RUSTSEC-2023-0052",
-    # Tungstenite allows remote attackers to cause a denial of service
-    # Dependency of async-tungstenite -> tide-websockets / surf-disco
-    "RUSTSEC-2023-0065",
     # Unfixed "Marvin" vulnerability in `RSA`, unused in sqlite dependency
     "RUSTSEC-2023-0071",
-    # rustls is busted, dependency of unmaintained tide
-    "RUSTSEC-2024-0336",
-    # Some AES functions may panic when overflow checking is enabled.
-    # To upgrade async-tungstenite we need a new release of tide-websockets, which seems unlikely
-    # https://github.com/http-rs/tide-websockets
-    "RUSTSEC-2025-0009",
     # Still here because of `ark-relations` crate.
     "RUSTSEC-2025-0055",
     # hickory-proto NSEC3 loop. Only reachable via libp2p-mdns; mdns feature is not enabled in our

@@ -6,18 +6,17 @@ license = "MIT"
 
 [dependencies]
 async-trait = { workspace = true }
-clap = { workspace = true }
+axum = { workspace = true }
 committable = { workspace = true }
-derive_more = { workspace = true }
 disco-types = { workspace = true }
-futures = { workspace = true }
 hotshot-types = { workspace = true }
 http-client = { workspace = true }
+http-wire = { workspace = true, features = ["server"] }
 serde = { workspace = true }
 tagged-base64 = { workspace = true }
 thiserror = { workspace = true }
-tide-disco = { workspace = true }
-toml = { workspace = true }
+tokio = { workspace = true }
+url = { workspace = true }
 vbs = { workspace = true }
 
 [lints]

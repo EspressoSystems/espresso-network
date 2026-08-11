@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use axum::{http::HeaderMap, response::Response, routing::get};
+use axum::{http::HeaderMap, routing::get};
 use clap::Parser;
 use committable::{Commitment, Committable};
 #[cfg(feature = "benchmarking")]
@@ -510,7 +510,10 @@ async fn submit_transactions<ApiVer: StaticVersionType>(
 
 async fn server(port: u16) {
     let app = axum::Router::new()
-        .route("/healthcheck", get(healthcheck))
+        .route(
+            "/healthcheck",
+            get(|headers: HeaderMap| async move { healthcheck_response(&headers) }),
+        )
         .layer(cors_layer());
     let addr = format!("0.0.0.0:{port}");
     let listener = match TcpListener::bind(&addr).await {
@@ -523,10 +526,6 @@ async fn server(port: u16) {
     if let Err(err) = axum::serve(listener, app).await {
         tracing::error!("web server exited: {err}");
     }
-}
-
-async fn healthcheck(headers: HeaderMap) -> Response {
-    healthcheck_response(&headers)
 }
 
 fn random_transaction(opt: &Options, rng: &mut ChaChaRng) -> Transaction {

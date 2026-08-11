@@ -18,8 +18,8 @@
 //! JSON).
 //!
 //! The `server` feature, on by default, adds the axum glue every service needs regardless of its
-//! routes (`WireFormat`, `respond`, healthcheck responses, `drive_ws_stream`, `cors_layer`), so
-//! services depend on this leaf instead of on another service's API crate. Clients depend on the
+//! routes (`respond`, healthcheck responses, `drive_ws_stream`, `cors_layer`), so services depend
+//! on this leaf instead of on another service's API crate. Clients depend on the
 //! crate with `default-features = false` and get only the codecs, no server stack.
 //!
 //! [`StatusCode`]: http::StatusCode
@@ -38,7 +38,8 @@ pub use error::{ServerError, WireError};
 pub use health::{AppHealth, HealthCheck, HealthStatus};
 #[cfg(feature = "server")]
 pub use server::{
-    MAX_REQUEST_BODY_BYTES, WireFormat, body_limit_layer, cors_layer, decode_body, drive_ws_stream,
-    encode_err, encode_ok, healthcheck_response, module_healthcheck_response, respond,
+    MAX_REQUEST_BODY_BYTES, WireVersion, body_limit_layer, cors_layer, decode_body,
+    drive_ws_stream, encode_err, encode_ok, healthcheck_response, module_healthcheck_response,
+    respond, spawn_serve,
 };
 pub use ws::{decode_binary_frame, decode_text_frame, encode_binary_frame, encode_text_frame};

@@ -244,7 +244,6 @@ impl Config {
 /// ```
 /// # use futures::StreamExt;
 /// # use hotshot::types::SystemContextHandle;
-/// # use hotshot_query_service::Error;
 /// # use hotshot_query_service::data_source::{
 /// #   sql::Config, Transaction, SqlDataSource, UpdateDataSource, VersionedDataSource,
 /// # };
@@ -254,18 +253,16 @@ impl Config {
 /// # };
 /// # use hotshot_example_types::node_types::TestVersions;
 /// # use std::sync::Arc;
-/// # use tide_disco::App;
 /// # use tokio::spawn;
-/// # use vbs::version::StaticVersionType;
 /// struct AppState {
 ///     hotshot_qs: SqlDataSource<AppTypes, NoFetching>,
 ///     // additional state for other modules
 /// }
 ///
-/// async fn init_server<Ver: StaticVersionType + 'static>(
+/// async fn init_state(
 ///     config: Config,
 ///     hotshot: SystemContextHandle<AppTypes, AppNodeImpl, AppVersions>,
-/// ) -> anyhow::Result<App<Arc<AppState>, Error>> {
+/// ) -> anyhow::Result<Arc<AppState>> {
 ///     let mut hotshot_qs = config.connect(NoFetching).await?;
 ///     // Initialize storage for other modules, using `hotshot_qs` to access the database.
 ///     let tx = hotshot_qs.write().await?;
@@ -276,23 +273,25 @@ impl Config {
 ///         hotshot_qs,
 ///         // additional state for other modules
 ///     });
-///     let mut app = App::with_state(state.clone());
-///     // Register API modules.
 ///
-///     spawn(async move {
-///         let mut events = hotshot.event_stream();
-///         while let Some(event) = events.next().await {
-///             if state.hotshot_qs.update(&event).await.is_err() {
-///                 continue;
+///     spawn({
+///         let state = state.clone();
+///         async move {
+///             let mut events = hotshot.event_stream();
+///             while let Some(event) = events.next().await {
+///                 if state.hotshot_qs.update(&event).await.is_err() {
+///                     continue;
+///                 }
+///
+///                 let mut tx = state.hotshot_qs.write().await.unwrap();
+///                 // Update other modules' states based on `event`, using `tx` to access the
+///                 // database.
+///                 tx.commit().await.unwrap();
 ///             }
-///
-///             let mut tx = state.hotshot_qs.write().await.unwrap();
-///             // Update other modules' states based on `event`, using `tx` to access the database.
-///             tx.commit().await.unwrap();
 ///         }
 ///     });
 ///
-///     Ok(app)
+///     Ok(state)
 /// }
 /// ```
 pub type SqlDataSource<Types, P> = FetchingDataSource<Types, SqlStorage, P>;

@@ -1,41 +1,15 @@
-//! V1 merklized state APIs (block-state and fee-state).
+//! V1 fee-state API extension.
 //!
-//! Mirrors the endpoints defined in `hotshot-query-service/api/state.toml`.
+//! The merklized-state base routes (`get_path` by height and by commitment, and the snapshot
+//! height) come from `hotshot-query-service`'s `merklized_state` router, mounted once per tree.
+//! Only the fee balance lookup is Espresso's own.
 
 use async_trait::async_trait;
 use serde::Serialize;
 
-#[derive(Debug, Clone)]
-pub enum Snapshot {
-    Height(u64),
-    Commit(String),
-}
-
 #[async_trait]
-pub trait BlockStateApi {
-    type MerkleProof: Serialize + Send + Sync + 'static;
-
-    async fn get_block_state_path(
-        &self,
-        snapshot: Snapshot,
-        key: String,
-    ) -> anyhow::Result<Self::MerkleProof>;
-
-    async fn get_block_state_height(&self) -> anyhow::Result<u64>;
-}
-
-#[async_trait]
-pub trait FeeStateApi {
-    type MerkleProof: Serialize + Send + Sync + 'static;
+pub trait FeeStateApiExtension {
     type FeeAmount: Serialize + Send + Sync + 'static;
-
-    async fn get_fee_state_path(
-        &self,
-        snapshot: Snapshot,
-        key: String,
-    ) -> anyhow::Result<Self::MerkleProof>;
-
-    async fn get_fee_state_height(&self) -> anyhow::Result<u64>;
 
     async fn get_fee_balance_latest(
         &self,

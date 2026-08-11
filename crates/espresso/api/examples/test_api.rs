@@ -36,18 +36,6 @@ impl v1::RewardApi for TestApi {
     type RewardAmounts = (Vec<(u128, u128)>, u64);
     type RewardMerkleTreeData = Vec<u8>;
     type RewardAccountQueryDataV1 = (u128, Vec<u8>);
-    type RewardStatePathV1 = serde_json::Value;
-    type RewardStatePathV2 = serde_json::Value;
-
-    async fn get_reward_state_height(&self) -> Result<u64> {
-        tracing::info!("v1: get_reward_state_height()");
-        Ok(42)
-    }
-
-    async fn get_reward_state_v2_height(&self) -> Result<u64> {
-        tracing::info!("v1: get_reward_state_v2_height()");
-        Ok(42)
-    }
 
     async fn get_reward_account_proof_v1(
         &self,
@@ -145,27 +133,11 @@ impl v1::RewardApi for TestApi {
         tracing::info!("v1: get_reward_merkle_tree_v2(height={})", height);
         Ok(vec![0x00, 0x11, 0x22, 0x33, 0x44, 0x55])
     }
-
-    async fn get_reward_state_path_v1(
-        &self,
-        _snapshot: v1::Snapshot,
-        _key: String,
-    ) -> Result<Self::RewardStatePathV1> {
-        Ok(serde_json::Value::Null)
-    }
-
-    async fn get_reward_state_path_v2(
-        &self,
-        _snapshot: v1::Snapshot,
-        _key: String,
-    ) -> Result<Self::RewardStatePathV2> {
-        Ok(serde_json::Value::Null)
-    }
 }
 
-// Implement v1::AvailabilityApi with test data
+// Implement v1::AvailabilityApiExtension with test data
 #[async_trait]
-impl v1::AvailabilityApi for TestApi {
+impl v1::AvailabilityApiExtension for TestApi {
     type NamespaceProofQueryData = (Vec<u8>, Option<Vec<u8>>); // (transactions, proof)
     type IncorrectEncodingProof = Vec<u8>;
     type StateCertQueryDataV1 = Vec<u8>;
@@ -231,165 +203,9 @@ impl v1::AvailabilityApi for TestApi {
     }
 }
 
-// Stub HotShotAvailabilityApi for the example — returns empty/unit data.
 #[async_trait]
-impl v1::HotShotAvailabilityApi for TestApi {
-    type Leaf = serde_json::Value;
-    type Block = serde_json::Value;
-    type Header = serde_json::Value;
-    type Payload = serde_json::Value;
-    type VidCommon = serde_json::Value;
-    type Transaction = serde_json::Value;
-    type TransactionWithProof = serde_json::Value;
-    type BlockSummary = serde_json::Value;
-    type Limits = serde_json::Value;
-    type Cert2 = serde_json::Value;
-
-    async fn get_leaf(&self, _id: v1::LeafId) -> Result<Self::Leaf> {
-        Ok(serde_json::json!({}))
-    }
-    async fn get_leaf_range(&self, _from: usize, _until: usize) -> Result<Vec<Self::Leaf>> {
-        Ok(vec![])
-    }
-    async fn get_header(&self, _id: v1::BlockId) -> Result<Self::Header> {
-        Ok(serde_json::json!({}))
-    }
-    async fn get_header_range(&self, _from: usize, _until: usize) -> Result<Vec<Self::Header>> {
-        Ok(vec![])
-    }
-    async fn get_block(&self, _id: v1::BlockId) -> Result<Self::Block> {
-        Ok(serde_json::json!({}))
-    }
-    async fn get_block_range(&self, _from: usize, _until: usize) -> Result<Vec<Self::Block>> {
-        Ok(vec![])
-    }
-    async fn get_payload(&self, _id: v1::PayloadId) -> Result<Self::Payload> {
-        Ok(serde_json::json!({}))
-    }
-    async fn get_payload_range(&self, _from: usize, _until: usize) -> Result<Vec<Self::Payload>> {
-        Ok(vec![])
-    }
-    async fn get_vid_common(&self, _id: v1::BlockId) -> Result<Self::VidCommon> {
-        Ok(serde_json::json!({}))
-    }
-    async fn get_vid_common_range(
-        &self,
-        _from: usize,
-        _until: usize,
-    ) -> Result<Vec<Self::VidCommon>> {
-        Ok(vec![])
-    }
-    async fn get_transaction_by_position(
-        &self,
-        _height: u64,
-        _index: u64,
-    ) -> Result<Self::Transaction> {
-        Ok(serde_json::json!({}))
-    }
-    async fn get_transaction_by_hash(&self, _hash: String) -> Result<Self::Transaction> {
-        Ok(serde_json::json!({}))
-    }
-    async fn get_transaction_proof_by_position(
-        &self,
-        _height: u64,
-        _index: u64,
-    ) -> Result<Self::TransactionWithProof> {
-        Ok(serde_json::json!({}))
-    }
-    async fn get_transaction_proof_by_hash(
-        &self,
-        _hash: String,
-    ) -> Result<Self::TransactionWithProof> {
-        Ok(serde_json::json!({}))
-    }
-    async fn get_block_summary(&self, _height: usize) -> Result<Self::BlockSummary> {
-        Ok(serde_json::json!({}))
-    }
-    async fn get_block_summary_range(
-        &self,
-        _from: usize,
-        _until: usize,
-    ) -> Result<Vec<Self::BlockSummary>> {
-        Ok(vec![])
-    }
-    async fn get_limits(&self) -> Result<Self::Limits> {
-        Ok(serde_json::json!({"small_object_range_limit": 500, "large_object_range_limit": 100}))
-    }
-    async fn get_cert2(&self, _height: u64) -> Result<Option<Self::Cert2>> {
-        Ok(None)
-    }
-    async fn stream_leaves(
-        &self,
-        _from: usize,
-    ) -> Result<futures::stream::BoxStream<'static, Self::Leaf>> {
-        Ok(Box::pin(futures::stream::empty()))
-    }
-    async fn stream_headers(
-        &self,
-        _from: usize,
-    ) -> Result<futures::stream::BoxStream<'static, Self::Header>> {
-        Ok(Box::pin(futures::stream::empty()))
-    }
-    async fn stream_blocks(
-        &self,
-        _from: usize,
-    ) -> Result<futures::stream::BoxStream<'static, Self::Block>> {
-        Ok(Box::pin(futures::stream::empty()))
-    }
-    async fn stream_payloads(
-        &self,
-        _from: usize,
-    ) -> Result<futures::stream::BoxStream<'static, Self::Payload>> {
-        Ok(Box::pin(futures::stream::empty()))
-    }
-    async fn stream_vid_common(
-        &self,
-        _from: usize,
-    ) -> Result<futures::stream::BoxStream<'static, Self::VidCommon>> {
-        Ok(Box::pin(futures::stream::empty()))
-    }
-    async fn stream_transactions(
-        &self,
-        _from: usize,
-        _namespace: Option<u32>,
-    ) -> Result<futures::stream::BoxStream<'static, Self::Transaction>> {
-        Ok(Box::pin(futures::stream::empty()))
-    }
-}
-
-#[async_trait]
-impl v1::BlockStateApi for TestApi {
-    type MerkleProof = serde_json::Value;
-
-    async fn get_block_state_path(
-        &self,
-        _snapshot: v1::Snapshot,
-        _key: String,
-    ) -> Result<Self::MerkleProof> {
-        Ok(serde_json::Value::Null)
-    }
-
-    async fn get_block_state_height(&self) -> Result<u64> {
-        Ok(0)
-    }
-}
-
-#[async_trait]
-impl v1::FeeStateApi for TestApi {
-    type MerkleProof = serde_json::Value;
+impl v1::FeeStateApiExtension for TestApi {
     type FeeAmount = u128;
-
-    async fn get_fee_state_path(
-        &self,
-        _snapshot: v1::Snapshot,
-        _key: String,
-    ) -> Result<Self::MerkleProof> {
-        Ok(serde_json::Value::Null)
-    }
-
-    async fn get_fee_state_height(&self) -> Result<u64> {
-        Ok(0)
-    }
 
     async fn get_fee_balance_latest(&self, _address: String) -> Result<Option<Self::FeeAmount>> {
         Ok(None)
@@ -397,21 +213,9 @@ impl v1::FeeStateApi for TestApi {
 }
 
 #[async_trait]
-impl v1::StatusApi for TestApi {
+impl v1::StatusApiExtension for TestApi {
     type Keys = serde_json::Value;
 
-    async fn block_height(&self) -> Result<u64> {
-        Ok(0)
-    }
-    async fn success_rate(&self) -> Result<f64> {
-        Ok(1.0)
-    }
-    async fn time_since_last_decide(&self) -> Result<u64> {
-        Ok(0)
-    }
-    async fn metrics(&self) -> Result<String> {
-        Ok(String::new())
-    }
     async fn keys(&self) -> Result<Self::Keys> {
         Ok(serde_json::Value::Null)
     }
@@ -434,11 +238,7 @@ impl v1::ConfigApi for TestApi {
 }
 
 #[async_trait]
-impl v1::NodeApi for TestApi {
-    type VidShare = serde_json::Value;
-    type SyncStatus = serde_json::Value;
-    type HeaderWindow = serde_json::Value;
-    type Limits = serde_json::Value;
+impl v1::NodeApiExtension for TestApi {
     type StakeTable = serde_json::Value;
     type StakeTableCurrent = serde_json::Value;
     type Validators = serde_json::Value;
@@ -448,41 +248,6 @@ impl v1::NodeApi for TestApi {
     type Block = serde_json::Value;
     type Leaf = serde_json::Value;
 
-    async fn block_height(&self) -> Result<u64> {
-        Ok(0)
-    }
-    async fn count_transactions(
-        &self,
-        _from: Option<u64>,
-        _to: Option<u64>,
-        _namespace: Option<u64>,
-    ) -> Result<u64> {
-        Ok(0)
-    }
-    async fn payload_size(
-        &self,
-        _from: Option<u64>,
-        _to: Option<u64>,
-        _namespace: Option<u64>,
-    ) -> Result<u64> {
-        Ok(0)
-    }
-    async fn get_vid_share(&self, _id: v1::VidShareId) -> Result<Self::VidShare> {
-        Ok(serde_json::Value::Null)
-    }
-    async fn sync_status(&self) -> Result<Self::SyncStatus> {
-        Ok(serde_json::Value::Null)
-    }
-    async fn get_header_window(
-        &self,
-        _start: v1::HeaderWindowStart,
-        _end: u64,
-    ) -> Result<Self::HeaderWindow> {
-        Ok(serde_json::Value::Null)
-    }
-    async fn limits(&self) -> Result<Self::Limits> {
-        Ok(serde_json::Value::Null)
-    }
     async fn stake_table(&self, _epoch: u64) -> Result<Self::StakeTable> {
         Ok(serde_json::Value::Null)
     }
@@ -699,44 +464,6 @@ impl v1::LightClientApi for TestApi {
         _namespaces: String,
     ) -> Result<Vec<std::collections::HashMap<u64, Self::NamespaceProof>>> {
         Ok(vec![])
-    }
-}
-
-#[async_trait]
-impl v1::ExplorerApi for TestApi {
-    type BlockDetail = serde_json::Value;
-    type BlockSummaries = serde_json::Value;
-    type TransactionDetail = serde_json::Value;
-    type TransactionSummaries = serde_json::Value;
-    type ExplorerSummary = serde_json::Value;
-    type SearchResult = serde_json::Value;
-
-    async fn get_block_detail(&self, _ident: v1::BlockIdent) -> Result<Self::BlockDetail> {
-        Ok(serde_json::Value::Null)
-    }
-    async fn get_block_summaries(
-        &self,
-        _target: v1::BlockIdent,
-        _limit: u64,
-    ) -> Result<Self::BlockSummaries> {
-        Ok(serde_json::Value::Null)
-    }
-    async fn get_transaction_detail(&self, _ident: v1::TxIdent) -> Result<Self::TransactionDetail> {
-        Ok(serde_json::Value::Null)
-    }
-    async fn get_transaction_summaries(
-        &self,
-        _target: v1::TxIdent,
-        _limit: u64,
-        _filter: v1::TxSummaryFilter,
-    ) -> Result<Self::TransactionSummaries> {
-        Ok(serde_json::Value::Null)
-    }
-    async fn get_explorer_summary(&self) -> Result<Self::ExplorerSummary> {
-        Ok(serde_json::Value::Null)
-    }
-    async fn get_search_result(&self, _query: String) -> Result<Self::SearchResult> {
-        Ok(serde_json::Value::Null)
     }
 }
 
@@ -1154,10 +881,18 @@ async fn main() -> Result<()> {
         catchup: true,
         config: true,
         hotshot_events: true,
-        explorer: true,
         light_client: true,
     };
-    espresso_api::serve_axum(API_PORT, state, modules, None).await?;
+    // The example has no hotshot-query-service data source, so that crate's base routes are left
+    // unmounted; only Espresso's own extensions are served.
+    espresso_api::serve_axum(
+        API_PORT,
+        state,
+        espresso_api::ApiRouter::new(),
+        modules,
+        None,
+    )
+    .await?;
 
     Ok(())
 }
