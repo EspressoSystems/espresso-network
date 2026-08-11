@@ -11,12 +11,14 @@ runs:
   using: composite
   steps:
     - shell: bash
+      env:
+        PROCESS_COMPOSE_VERSION: ${{ inputs.version }}
       run: |
         set -euxo pipefail
-        if [ "${{ inputs.version }}" = "latest" ]; then
+        if [ "$PROCESS_COMPOSE_VERSION" = "latest" ]; then
           URL="https://github.com/F1bonacc1/process-compose/releases/latest/download/process-compose_linux_amd64.tar.gz"
         else
-          URL="https://github.com/F1bonacc1/process-compose/releases/download/${{ inputs.version }}/process-compose_linux_amd64.tar.gz"
+          URL="https://github.com/F1bonacc1/process-compose/releases/download/${PROCESS_COMPOSE_VERSION}/process-compose_linux_amd64.tar.gz"
         fi
         curl -L "$URL" -o /tmp/process-compose.tar.gz
         tar -xzf /tmp/process-compose.tar.gz -C /tmp
