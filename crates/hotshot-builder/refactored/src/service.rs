@@ -245,15 +245,7 @@ where
     /// Consumes `self` and returns an axum [`Router`] with builder and private mempool APIs
     /// registered
     pub fn into_router(self: Arc<Self>) -> Router {
-        let proxy = ProxyGlobalState(self);
-        router::app(
-            Router::new()
-                .nest(
-                    &format!("/{}", hotshot_types::constants::LEGACY_BUILDER_MODULE),
-                    router::block_info_router::<Types, _>(proxy.clone()),
-                )
-                .nest("/txn_submit", router::txn_submit_router::<Types, _>(proxy)),
-        )
+        router::builder_app::<Types, _>(ProxyGlobalState(self))
     }
 
     async fn handle_transaction(&self, tx: ReceivedTransaction<Types>) -> Result<(), Error<Types>> {

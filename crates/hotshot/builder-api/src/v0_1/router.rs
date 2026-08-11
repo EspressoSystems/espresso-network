@@ -23,6 +23,7 @@ use axum::{
 use committable::Committable;
 use disco_types::{error::Error as _, request::RequestParamType, status::StatusCode};
 use hotshot_types::{
+    constants::LEGACY_BUILDER_MODULE,
     data::VidCommitment,
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
     utils::BuilderCommitment,
@@ -370,6 +371,21 @@ pub fn app(api: Router) -> Router {
         .layer(cors_layer())
 }
 
+/// The full builder server: both modules mounted at their canonical paths, wrapped by [`app`].
+/// The single place the mount paths are spelled, so servers and tests cannot drift.
+pub fn builder_app<Types, S>(state: S) -> Router
+where
+    Types: NodeType,
+    S: BuilderDataSource<Types> + AcceptsTxnSubmits<Types> + Clone + Send + Sync + 'static,
+{
+    app(Router::new()
+        .nest(
+            &format!("/{LEGACY_BUILDER_MODULE}"),
+            block_info_router::<Types, S>(state.clone()),
+        )
+        .nest("/txn_submit", txn_submit_router::<Types, S>(state)))
+}
+
 /// Binds `url`'s host and port and serves `router` until the returned handle is aborted.
 ///
 /// # Panics
@@ -463,9 +479,7 @@ mod tests {
     }
 
     fn test_router() -> Router {
-        app(Router::new()
-            .nest("/block_info", block_info_router::<TestTypes, _>(StubSource))
-            .nest("/txn_submit", txn_submit_router::<TestTypes, _>(StubSource)))
+        builder_app::<TestTypes, _>(StubSource)
     }
 
     async fn request(method: Method, uri: &str) -> axum::http::Response<axum::body::Body> {
