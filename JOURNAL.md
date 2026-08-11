@@ -151,7 +151,7 @@ Task: NP-2 (Medium, runtime, correctness) - `EpochManager::request_drb_result` s
 Changed: crates/hotshot/new-protocol/src/epoch.rs (the short-circuit removed, both affected doc comments rewritten, and
 an inline test module added), PLAN.md, BACKLOG.md, JOURNAL.md.
 
-Checkpoint: pending
+Checkpoint: b9516d23682220a852c58e768e5feee990abcf01
 
 Verification: acceptance check `epoch::tests::repeated_request_is_answered_again` run first against the unfixed code,
 where it fails with the defect stated plainly - `no DRB delivered: the request was dropped, not answered` - and passes
