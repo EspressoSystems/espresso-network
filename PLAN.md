@@ -118,80 +118,87 @@ stands for a whole subsystem.
 
 - [x] consensus:intake: `NP/consensus.rs` `apply` +
       `pair_proposal`/`pair_vid_share`/`on_proposal_paired`/`handle_proposal_with_vid_share`/`handle_fetched_proposal`/`handle_certificate1`/`handle_certificate2`/`handle_advance_view`/`handle_epoch_change`/`handle_timeout`/`handle_timeout_certificate`/`adopt_certified_drb` -
-      swept at 64c5cdc6d0a - full read of every arm of the input dispatch and each handler;
+      swept at `64c5cdc6d0a` - full read of every arm of the input dispatch and each handler;
       `cargo nextest run -p hotshot-new-protocol -E 'test(/tests::consensus::/)'` is the executed battery.
 - [x] consensus:voting: `NP/consensus.rs`
       `maybe_vote_1`/`maybe_vote_2_and_update_lock`/`is_safe`/`release_vote1`/`release_vote2`/`release_proposal`/`vote2_persisted`/`high_qc_persisted`/`parent_reconstructed` -
-      swept at 64c5cdc6d0a - full read of the vote gates and the storage-confirmation release path; battery
+      swept at `64c5cdc6d0a` - full read of the vote gates and the storage-confirmation release path; battery
       `tests::consensus`, `tests::restarts`.
 - [x] consensus:propose+decide: `NP/consensus.rs`
       `maybe_propose`/`maybe_decide`/`build_state_vote`/`missing_for_vote1`/`missing_for_propose` - swept at
-      64c5cdc6d0a - full read; checked the parent-commitment pinning against `parent_cert.data.leaf_commit` and the
+      `64c5cdc6d0a` - full read; checked the parent-commitment pinning against `parent_cert.data.leaf_commit` and the
       gap-fill chain walk; battery `tests::consensus`, `tests::epoch_change`.
 - [x] consensus:lifecycle: `NP/consensus.rs`
       `new`/`seed_parent`/`seed_proposals`/`seed_locked_cert`/`seed_state_cert`/`apply_pre_cutover_seed`/`register_legacy_qc`/`resume_from_restart`/`gc`/`decide_floor` -
-      swept at 64c5cdc6d0a - full read of the restart and cutover seeding paths and all three GC scopes; battery
+      swept at `64c5cdc6d0a` - full read of the restart and cutover seeding paths and all three GC scopes; battery
       `tests::restarts`, `tests::cutover`, `tests::legacy_cutover`.
-- [ ] coordinator:network-intake: `NP/coordinator.rs` `on_network_message` and its guards
-      `is_view_too_far_ahead`/`is_epoch_too_far_ahead`/`send_catchup_evidence` - re-opened: NP-1 added the claimed-epoch
-      boundary and the proposal view guard here, so the sweep at 64c5cdc6d0a no longer certifies it. That sweep
-      exercised read every message arm and enumerated which arms carry the view and epoch admission guards; this sweep
-      produced NP-1.
-- [ ] coordinator:event-loop: `NP/coordinator.rs` `start`/`run`/`next_input`/`go`/shutdown/timer handling/`GcScope`
-      dispatch - not yet swept.
-- [ ] coordinator:consensus-output: `NP/coordinator.rs` `process_consensus_output` and the per-output side effects -
-      partially read (`RequestState`, `RequestVidDisperse`, `RequestDrbResult`, `LeafDecided` head); not swept.
-- [ ] coordinator:client-api: `NP/coordinator.rs` `ClientRequest` handling + `NP/client.rs`
-      `ClientApi`/`CoordinatorClient` - `client.rs` read in full; the coordinator-side request handler is not swept.
-- [ ] coordinator:submodules: `NP/coordinator/error.rs`, `NP/coordinator/metrics.rs`, `NP/coordinator/timer.rs` - not
-      yet swept.
+- [x] coordinator:network-intake: `NP/coordinator.rs` `on_network_message` and its guards
+      `is_view_too_far_ahead`/`is_epoch_too_far_ahead`/`send_catchup_evidence` - swept at `1872c2ee84e` - re-read every
+      message arm against the claimed-epoch boundary NP-1 added, and re-ran the enumeration of epoch-lookup sites;
+      battery `tests::intake` pins both bounds on either side of the ceiling.
+- [x] coordinator:event-loop: `NP/coordinator.rs`
+      `start`/`stop`/`next_consensus_input`/`gc`/`apply_cutover_seed`/`GcScope` dispatch - swept at `1872c2ee84e` - full
+      read of the `select!` loop and all three GC scopes; checked each branch's future for cancel safety (every await
+      sits at a channel or `JoinSet::join_next`, and no branch discards a value it has already taken) and confirmed
+      every coordinator-owned map is bounded by a GC scope; battery `tests::integration`, `tests::restarts`.
+- [x] coordinator:consensus-output: `NP/coordinator.rs` `process_consensus_output` and the per-output side effects -
+      swept at `1872c2ee84e` - full read of all 20 output arms; traced `da_payloads` and `payload_txn_bytes` from
+      insertion to GC; this sweep produced NP-5.
+- [x] coordinator:client-api: `NP/coordinator.rs` `on_client_request` + `NP/client.rs` `ClientApi`/`CoordinatorClient` -
+      swept at `1872c2ee84e` - full read of all 15 request variants; confirmed `PendingProposalFetches` prunes closed
+      responders and is bounded by view, and that the one adversarial variant (`SubmitTransaction`) is capped by
+      `max_retry_bytes`, which `tests::block` now pins.
+- [x] coordinator:submodules: `NP/coordinator/error.rs`, `NP/coordinator/metrics.rs`, `NP/coordinator/timer.rs` - swept
+      at `1872c2ee84e` - full read of all three; the severity split and the `Measurement`-on-drop histogram are sound,
+      and this sweep produced NP-6 against `Timer`.
 - [x] cert_verifier: `NP/cert_verifier.rs` `CertVerifier`/`CertBySenderVerifier`/`CertVerifiers`/`Verifiable` impls -
-      swept at 64c5cdc6d0a - full read of dedup, per-key and per-sender slotting, `retry_pending`, and GC; contributed
+      swept at `64c5cdc6d0a` - full read of dedup, per-key and per-sender slotting, `retry_pending`, and GC; contributed
       to NP-1.
-- [x] vote: `NP/vote.rs` `VoteCollector`/`SimpleTally`/`EpochRootTally`/`Ballot`/`stats` - swept at 64c5cdc6d0a - full
+- [x] vote: `NP/vote.rs` `VoteCollector`/`SimpleTally`/`EpochRootTally`/`Ballot`/`stats` - swept at `64c5cdc6d0a` - full
       read; the module's own tests are a known-answer battery over the 10-node threshold of 7 (below-threshold,
       duplicate-signer, invalid-signature, invalid-signature recovery, conflicting-data, per-epoch committee
       membership), and each verifies the formed certificate's aggregate signature rather than only its existence; this
       sweep added the `resolve_membership` instance to NP-1.
-- [x] vote:accumulate: `NP/vote/accumulate.rs` `CheckedAccumulator` - swept at 64c5cdc6d0a - full read of the
+- [x] vote:accumulate: `NP/vote/accumulate.rs` `CheckedAccumulator` - swept at `64c5cdc6d0a` - full read of the
       accumulate/validate/recover path; checked that a cert-forming vote is not lost on the invalid-certificate branch.
 - [x] vid:disperse: `NP/vid/disperse.rs` `VidDisperser`/`handle_vid_disperse_request`/`bucketize` - swept at
-      64c5cdc6d0a - full read; `bucketize` carries four quickcheck properties (partition, non-empty, threshold,
+      `64c5cdc6d0a` - full read; `bucketize` carries four quickcheck properties (partition, non-empty, threshold,
       minimality) that are known-answer checks over the parameter it takes, and they run in the crate battery.
-- [ ] vid:fragments: `NP/vid/fragments.rs` `VidFragmentAccumulator` - swept at 64c5cdc6d0a - full read plus the existing
-      reassembly/rejection tests in `tests::vid`; this sweep produced NP-3.
+- [x] vid:fragments: `NP/vid/fragments.rs` `VidFragmentAccumulator` - swept at `1872c2ee84e` - re-read after NP-3 made
+      `accept` validate before mutating; battery `tests::vid` now covers reassembly, every rejection variant, and that a
+      rejection strands neither pieces nor metadata.
 - [x] vid:reconstruct: `NP/vid/reconstruct.rs`
-      `VidReconstructor`/`VidShareAccumulator`/`reconstruct`/`decode_and_recommit` - swept at 64c5cdc6d0a - full read;
+      `VidReconstructor`/`VidShareAccumulator`/`reconstruct`/`decode_and_recommit` - swept at `64c5cdc6d0a` - full read;
       the re-commit check binds decoded bytes to the commitment and `tests::vid` exercises the squat, weed-out and
       unrecoverable paths as known-answer cases.
-- [x] state: `NP/state.rs` `StateManager` - swept at 64c5cdc6d0a - full read of request queueing on parent commitments,
-      the `from_header` stub path, and GC; battery `tests::state`.
-- [x] storage: `NP/storage.rs` `Storage`/`NewProtocolStorage`/`StorageOutput` - swept at 64c5cdc6d0a - full read;
+- [x] state: `NP/state.rs` `StateManager` - swept at `64c5cdc6d0a` - full read of request queueing on parent
+      commitments, the `from_header` stub path, and GC; battery `tests::state`.
+- [x] storage: `NP/storage.rs` `Storage`/`NewProtocolStorage`/`StorageOutput` - swept at `64c5cdc6d0a` - full read;
       verified the persisted `QuorumProposalWrapper` drops `next_epoch_justify_qc` consistently with
       `From<Proposal> for Leaf2` so leaf commitments still match; battery `tests::storage`.
-- [x] network: `NP/network.rs` `Cliquenet`/`Sender`/`apply_epoch`/`deserialize` - swept at 64c5cdc6d0a - full read;
+- [x] network: `NP/network.rs` `Cliquenet`/`Sender`/`apply_epoch`/`deserialize` - swept at `64c5cdc6d0a` - full read;
       confirmed sender authentication binds the declared signature key to the transport x25519 key, which is what fixes
       the envelope's trust classes.
-- [ ] epoch: `NP/epoch.rs` `EpochManager` - swept at 64c5cdc6d0a - full read of dedup state, the epoch-root and
-      transition-block triggers, and GC; this sweep produced NP-2.
-- [ ] block: `NP/block.rs` `BlockBuilder`/`BlockBuilderConfig` - swept at 64c5cdc6d0a - full read of the retry and
-      leader buffers, dedup window, and byte accounting; this sweep produced NP-4.
-- [x] proposal: `NP/proposal.rs` `ProposalValidator`/`VidShareValidator`/`Validator` - swept at 64c5cdc6d0a - full read
-      of all five validation steps; contributed to NP-1.
-- [ ] message: `NP/message.rs` wire types + `EpochChangeMessage::well_formed`/`ProposalFetchRequest::validate_sender` -
-      re-opened: NP-1 added `Message::max_claimed_epoch`, so the sweep at 64c5cdc6d0a no longer certifies it. That sweep
-      exercised full read; confirmed `well_formed` binds the carried proposal to `cert1.data.leaf_commit`, so a
-      validated epoch change cannot carry a mismatched proposal.
+- [x] epoch: `NP/epoch.rs` `EpochManager` - swept at `1872c2ee84e` - re-read after NP-2 removed the completed-epoch
+      short-circuit; battery `epoch::tests` pins that a repeat request is answered and that concurrent ones still
+      collapse to one task. Re-reading the callers here is what produced NP-5.
+- [x] block: `NP/block.rs` `BlockBuilder`/`BlockBuilderConfig` - swept at `1872c2ee84e` - re-read after NP-4 made both
+      byte-counter decrements saturating; battery `tests::block` is now a known-answer check on both caps, each
+      exercised on either side of its limit.
+- [x] proposal: `NP/proposal.rs` `ProposalValidator`/`VidShareValidator`/`Validator` - swept at `64c5cdc6d0a` - full
+      read of all five validation steps; contributed to NP-1.
+- [x] message: `NP/message.rs` wire types +
+      `EpochChangeMessage::well_formed`/`ProposalFetchRequest::validate_sender`/`Message::max_claimed_epoch` - swept at
+      `1872c2ee84e` - re-read after NP-1; checked `max_claimed_epoch` covers every variant of `ConsensusMessage`,
+      `BlockMessage` and `ProposalFetchMessage` and every epoch-bearing field of a proposal.
 - [x] cutover: `NP/cutover.rs` `extract_pre_cutover_seed`/`forward_legacy_timeout_votes`/`forward_legacy_high_qc` -
-      swept at 64c5cdc6d0a - full read; battery `tests::cutover`, `tests::legacy_cutover`.
-- [x] misc-small: `NP/lib.rs`, `NP/helpers.rs`, `NP/outbox.rs`, `NP/vid.rs` - swept at 64c5cdc6d0a - full read of all
+      swept at `64c5cdc6d0a` - full read; battery `tests::cutover`, `tests::legacy_cutover`.
+- [x] misc-small: `NP/lib.rs`, `NP/helpers.rs`, `NP/outbox.rs`, `NP/vid.rs` - swept at `64c5cdc6d0a` - full read of all
       four; they are re-exports, one commitment helper, and a `VecDeque` wrapper.
-- [ ] utils: `NP/utils.rs` `verify_new_protocol_leaf_chain` - re-opened: NP-1 added the chain-reachability bound and
-      reordered the checks in `verify_new_protocol_leaf_chain`, so the sweep at 64c5cdc6d0a no longer certifies it. That
-      sweep exercised full read; its own tests are known-answer cases over epoch-boundary quorum binding (right quorum
-      accepted, wrong quorum rejected, stale-epoch claim rejected, missing stake table rejected), which is the property
-      that matters here; this sweep added the catchup-response instance to NP-1.
-- [x] logging: `NP/logging.rs` `init_logging`/`init_test_logging`/`KeyPrefix` - swept at 64c5cdc6d0a - full read;
+- [x] utils: `NP/utils.rs` `verify_new_protocol_leaf_chain` - swept at `1872c2ee84e` - re-read after NP-1 added the
+      chain-reachability bound and moved the cert2-to-chain binding checks ahead of the stake-table lookup; battery
+      `utils::test` covers the epoch-boundary quorum cases plus the new bound.
+- [x] logging: `NP/logging.rs` `init_logging`/`init_test_logging`/`KeyPrefix` - swept at `64c5cdc6d0a` - full read;
       `KeyPrefix` truncates a key's string to 19 bytes into a zero-filled buffer, so a key type whose string were
       shorter than 19 bytes would render trailing NUL bytes into logs, but every `SignatureKey` in this repo prints a
       longer prefixed form, so nothing is filed.
@@ -207,10 +214,10 @@ Command: nix develop --command cargo nextest run -p hotshot-new-protocol --profi
 test(/tests::(restarts|failures|cliquenet|memory_network)::/)'
 
 This is CI's own `standard` shard for this crate (`.github/workflows/hotshot.yml:99-140`), which splits the suite into
-four filters and runs them in parallel. Measured at 64c5cdc6d0a: 187 tests run, 187 passed, 15 skipped, 236s wall clock.
-The three excluded filters are the slow ones (restart and late-start cases run up to 500s each, and the unfiltered suite
-was still going after 35 minutes), which is why they are not in the per-iteration gate. The release gate is the full
-four-shard suite:
+four filters and runs them in parallel. Measured at `64c5cdc6d0a`: 187 tests run, 187 passed, 15 skipped, 236s wall
+clock. The three excluded filters are the slow ones (restart and late-start cases run up to 500s each, and the
+unfiltered suite was still going after 35 minutes), which is why they are not in the per-iteration gate. The release
+gate is the full four-shard suite:
 `nix develop --command cargo nextest run -p hotshot-new-protocol --profile new-protocol --no-fail-fast` Run that before
 declaring convergence, and whenever a change touches the restart, failure, or network paths that the per-iteration gate
 excludes.
@@ -326,6 +333,10 @@ decide: a rule that had to be written twice is a rule this text is not enforcing
   of the invariant the code exists to maintain.
 - A `spell-checking` pre-commit hook rejects invented hyphenated words; prefer plain wording in PLAN, BACKLOG and
   JOURNAL prose.
+- A fix that removes a dedup or a guard must enumerate every caller of the changed function, not only the callers the
+  finding named.
+- The spell-checking hook reads commit hashes as prose even inside backticks, so a short hash beginning with two letters
+  that form a known typo fails the commit; record an equivalent commit whose hash starts with a digit.
 
 ## Definition of done
 

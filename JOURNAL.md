@@ -44,7 +44,7 @@ Checkpoint: 4b54252cf130095b950e33f52684cba2b70d5eb2. This iteration changed onl
 which is what an audit iteration is: four BACKLOG.md items went from absent to open, so it is not a stall.
 
 Verification: Verify command green - `187 tests run: 187 passed, 15 skipped` in 236s, exit 0. The audit is read-based
-over `crates/hotshot/new-protocol/src/**` at 64c5cdc6d0a plus that battery as the executed check. Scope: the focus
+over `crates/hotshot/new-protocol/src/**` at `64c5cdc6d0a` plus that battery as the executed check. Scope: the focus
 directive fixes the surface at the `hotshot-new-protocol` crate; `crates/cliquenet` is a separate crate and out of
 scope. Surface inventory: 21 of 26 rows swept. The 5 unswept rows are coordinator:event-loop,
 coordinator:consensus-output, coordinator:client-api, coordinator:submodules, logging - the scores below claim only the
@@ -276,3 +276,51 @@ with a test of the invariant the code exists to maintain.
 Next: the ledger is empty, so the next iteration audits. Its first job is the ten re-opened rows, since convergence
 requires none left unswept, and the evaluator gate has not been run yet - iteration 1's audit found a High and a Medium,
 so the "clean full audit already recorded" precondition for running the gate early has never been met this run.
+
+## iter 6/10 | 29c94e91-175223 | 2026-08-12 | AUDIT | audit
+
+Task: full audit. The ledger emptied at the end of iteration 5, so this iteration swept the ten outstanding Surface
+inventory rows and rescored.
+
+Changed: PLAN.md (ten rows swept), BACKLOG.md (two findings), JOURNAL.md.
+
+Checkpoint: pending
+
+Verification: Verify command green: 199 tests run, 199 passed, 15 skipped, exit 0. Surface inventory: 26 of 26 rows
+swept, none unswept, so the scores below claim the whole mapped surface for the first time this run. Six of the ten rows
+were re-sweeps of code this run changed and were cheap; the other four were the coordinator rows, never swept before -
+`next_consensus_input`'s `select!` loop and all three GC scopes, all twenty arms of `process_consensus_output`, all
+fifteen `on_client_request` variants, and the three submodules. Scores, now claiming every row: security None,
+correctness Low (NP-6), performance Low (NP-5), code quality Low (NP-6), architecture None, testing None, error handling
+None, documentation None, developer experience None, observability None. Dependency hygiene still not assessed: the
+crate takes its dependencies from the workspace manifest, which is out of this run's focus. UX and accessibility do not
+apply. Zero High and zero Medium in-envelope, so CLOSEOUT HAS BEGUN: no further audit or replenishment this run, which
+will finish by working the ledger and converging.
+
+The two findings both come from code this run touched, which is where the Method says to look hardest. NP-5 is a
+regression I introduced in iteration 3 and did not catch there: I reasoned about the two callers of `request_drb_result`
+that stop once answered and missed the third, the proactive prefetch at `coordinator.rs:983-986`, which fires on every
+view change unconditionally. With the completed-epoch short-circuit gone, that now spawns a task per view. The fix
+belongs in the coordinator, which is the party that wants "once per epoch"; reinstating the short-circuit in the epoch
+manager would undo NP-2. NP-6 is two small defects in the 66-line timer module: a dead `reset_with`, and a `poll` that
+returns Pending without a waker after firing.
+
+Cancel safety was the main thing I went looking for in the event loop, since a `select!` drops every branch future it
+does not take. Each branch awaits either a channel receive or `JoinSet::join_next`, both cancel-safe, and the
+`loop { match ... .await }` shapes in the vote collectors and cert verifiers only discard a task result on arms that
+deliberately drop it (stale key, invalid certificate); no arm takes a value and then awaits again before returning it. I
+also traced every coordinator-owned map to a GC scope: `da_payloads` and `payload_txn_bytes` are split off on decide,
+`pending_proposal_fetches` and `requested_missing_proposals` on decide, the collectors and network on local view change.
+None is unbounded.
+
+One candidate was considered and not filed, recorded so the decision is auditable rather than silent: `start` panics via
+`expect("genesis cert1 must be seeded")` at `coordinator.rs:394` if `seed_parent` was not called first. The construction
+surface is user-error by the envelope, the panic message names its own precondition at the point of failure, and both
+in-repo integrators seed before starting, so this is idiomatic rather than a defect.
+
+Learnings: a fix that removes a dedup must enumerate every caller of the deduped function, not just the callers the
+finding named - NP-5 exists because I checked two of three.
+
+Next: NP-5, then NP-6, then the evaluator gate and, if it passes, convergence. The gate has not run yet this run: its
+early-run precondition is a clean full audit already recorded, which only this iteration produced, and the ledger is not
+empty now that this audit filed two items.
