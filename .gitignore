@@ -87,3 +87,5 @@ mutants/
 
 # Personal project-specific preferences
 CLAUDE.local.md
+
+.claude/jeffy-loop.local.md
