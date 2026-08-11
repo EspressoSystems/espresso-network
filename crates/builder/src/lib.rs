@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use axum::Router;
 use espresso_types::SeqTypes;
 use hotshot_builder_api::v0_1::router;
@@ -11,7 +9,6 @@ pub mod non_permissioned;
 
 /// Runs the builder's `block_info` and `txn_submit` API service in the background.
 pub fn run_builder_api_service(url: Url, source: ProxyGlobalState<SeqTypes>) {
-    let source = Arc::new(source);
     let router = router::app(
         Router::new()
             .nest(

@@ -476,7 +476,8 @@ impl<Types: NodeType> GlobalState<Types> {
     }
 }
 
-#[derive(derive_more::Deref, derive_more::DerefMut)]
+// Clone so the axum routers can take it as state directly; every field is shared or cheap.
+#[derive(derive_more::Deref, derive_more::DerefMut, Clone)]
 pub struct ProxyGlobalState<Types: NodeType> {
     #[deref(forward)]
     #[deref_mut(forward)]
