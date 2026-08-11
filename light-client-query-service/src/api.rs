@@ -10,11 +10,10 @@ use std::{ops::Bound, time::Duration};
 use axum::{
     Router,
     extract::{Path, State, ws::WebSocketUpgrade},
-    http::{HeaderMap, StatusCode},
+    http::HeaderMap,
     response::Response,
     routing::get,
 };
-use disco_types::error::Error as _;
 use espresso_node::api::sql::DataSource;
 use espresso_types::SeqTypes;
 use futures::{StreamExt as _, TryStreamExt as _, stream::BoxStream};
@@ -31,15 +30,8 @@ use hotshot_query_service::{
     types::HeightIndexed as _,
 };
 use hotshot_types::data::VidCommitment;
-use http_wire::{
-    self as wire, ContentType, WireFormat, cors_layer, drive_ws_stream, healthcheck_response,
-};
+use http_wire::{self as wire, ContentType, cors_layer, drive_ws_stream, healthcheck_response};
 use serde::Serialize;
-use vbs::version::StaticVersion;
-
-/// Binary framing version for VBS-negotiated responses, matching the wire version this service
-/// used under tide-disco.
-type WireVersion = StaticVersion<0, 1>;
 
 // Timeout and range limits, read from `hotshot_query_service`'s `Options` (their only declaration)
 // so a dependency bump that changes the defaults changes this service too. These are the values
@@ -60,31 +52,14 @@ fn window_limit() -> usize {
     hotshot_query_service::node::Options::default().window_limit
 }
 
-/// Wire format of this service: [`WireVersion`] VBS framing and the [`ApiError`] envelope.
 /// `ApiError` is `hotshot_query_service::Error`, the exact type the old tide-disco `App` used, so
 /// both its status mapping and its wire shape (externally tagged enum) match byte-for-byte.
-struct QueryServiceWireFormat;
-
-impl WireFormat for QueryServiceWireFormat {
-    type Error = ApiError;
-    type Version = WireVersion;
-
-    fn status(err: &ApiError) -> StatusCode {
-        // Maps `hotshot_query_service`'s wrapped `reqwest`-based status code onto axum's.
-        StatusCode::from_u16(u16::from(err.status())).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
-    }
-
-    fn serialize_failure(message: String) -> ApiError {
-        ApiError::internal(message)
-    }
-}
-
 fn encode_ok<T: Serialize>(headers: &HeaderMap, value: T) -> Response {
-    wire::encode_ok::<QueryServiceWireFormat, _>(headers, value)
+    wire::encode_ok::<ApiError, _>(headers, value)
 }
 
 fn respond<T: Serialize>(headers: &HeaderMap, result: Result<T, ApiError>) -> Response {
-    wire::respond::<QueryServiceWireFormat, _>(headers, result)
+    wire::respond::<ApiError, _>(headers, result)
 }
 
 /// Parses a path parameter the way tide-disco's `TaggedBase64`/`Integer` param types did,
@@ -430,7 +405,7 @@ async fn stream_leaves(
     let format = ContentType::negotiate(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = ds.subscribe_leaves(height).await;
-        drive_ws_stream::<WireVersion, _>(socket, stream, format).await;
+        drive_ws_stream(socket, stream, format).await;
     })
 }
 
@@ -482,7 +457,7 @@ async fn stream_headers(
     let format = ContentType::negotiate(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = ds.subscribe_headers(height).await;
-        drive_ws_stream::<WireVersion, _>(socket, stream, format).await;
+        drive_ws_stream(socket, stream, format).await;
     })
 }
 
@@ -534,7 +509,7 @@ async fn stream_blocks(
     let format = ContentType::negotiate(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = ds.subscribe_blocks(height).await;
-        drive_ws_stream::<WireVersion, _>(socket, stream, format).await;
+        drive_ws_stream(socket, stream, format).await;
     })
 }
 
@@ -586,7 +561,7 @@ async fn stream_payloads(
     let format = ContentType::negotiate(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = ds.subscribe_payloads(height).await;
-        drive_ws_stream::<WireVersion, _>(socket, stream, format).await;
+        drive_ws_stream(socket, stream, format).await;
     })
 }
 
@@ -638,7 +613,7 @@ async fn stream_vid_common(
     let format = ContentType::negotiate(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = ds.subscribe_vid_common(height).await;
-        drive_ws_stream::<WireVersion, _>(socket, stream, format).await;
+        drive_ws_stream(socket, stream, format).await;
     })
 }
 
@@ -699,7 +674,7 @@ async fn stream_transactions(
     let format = ContentType::negotiate(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = transactions_stream(ds.subscribe_blocks(height).await, None);
-        drive_ws_stream::<WireVersion, _>(socket, stream, format).await;
+        drive_ws_stream(socket, stream, format).await;
     })
 }
 
@@ -712,7 +687,7 @@ async fn stream_transactions_ns(
     let format = ContentType::negotiate(&headers);
     ws.on_upgrade(move |socket| async move {
         let stream = transactions_stream(ds.subscribe_blocks(height).await, Some(namespace));
-        drive_ws_stream::<WireVersion, _>(socket, stream, format).await;
+        drive_ws_stream(socket, stream, format).await;
     })
 }
 

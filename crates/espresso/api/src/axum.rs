@@ -26,18 +26,17 @@ use axum::{
     routing::get,
 };
 use http_wire::{
-    ContentType, DecodeFailure, WireFormat, body_limit_layer, cors_layer, drive_ws_stream,
+    ContentType, DecodeFailure, WireError, body_limit_layer, cors_layer, drive_ws_stream,
     healthcheck_response, module_healthcheck_response,
 };
 use schemars::transform::Transform;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serialization_api::v2::{
     GetIncorrectEncodingProofRequest, GetNamespaceProofRequest, GetRewardAccountProofRequest,
     GetRewardBalanceRequest, GetRewardBalancesRequest, GetRewardClaimInputRequest,
     GetRewardMerkleTreeRequest, GetStakeTableRequest, GetStateCertificateRequest,
 };
 use tokio::sync::Semaphore;
-use vbs::version::StaticVersion;
 
 use crate::{
     error::{ApiError, AvailabilityError},
@@ -51,13 +50,15 @@ use crate::{
 /// envelope is byte-identical with tide's error response for them. Endpoints that use a specific
 /// variant directly (e.g. `availability::Error::FetchLeaf`) emit their own shape on tide; those
 /// bytes are not matched here.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, thiserror::Error)]
+#[error("{custom}")]
 struct ErrorResponse {
     #[serde(rename = "Custom")]
     custom: CustomError,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, thiserror::Error)]
+#[error("error {status}: {message}")]
 struct CustomError {
     // Field order matches `node::Error::Custom { message, status }` declaration so serde_json
     // emits the same key order on the wire.
@@ -87,27 +88,13 @@ impl IntoResponse for ApiError {
     }
 }
 
-/// Binary framing version for VBS-negotiated bodies and websocket frames: every v1 endpoint in
-/// this codebase uses the V0_1 API version.
-type WireVersion = StaticVersion<0, 1>;
-
-/// Wire format of this API: [`WireVersion`] VBS framing and the [`ErrorResponse`] envelope. The
-/// negotiation itself lives in [`crate::wire`], shared with the other axum-migrated services.
-struct NodeApiWire;
-
-impl WireFormat for NodeApiWire {
-    type Error = ErrorResponse;
-    type Version = WireVersion;
-
-    fn status(err: &ErrorResponse) -> StatusCode {
-        StatusCode::from_u16(err.custom.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
+impl WireError for ErrorResponse {
+    fn status(&self) -> StatusCode {
+        StatusCode::from_u16(self.custom.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
     }
 
-    fn serialize_failure(message: String) -> ErrorResponse {
-        ErrorResponse::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("serialize: {message}"),
-        )
+    fn catch_all(status: StatusCode, message: String) -> Self {
+        Self::new(status, message)
     }
 }
 
@@ -118,7 +105,7 @@ impl WireFormat for NodeApiWire {
 /// (peer-catchup, submit-transactions, light-client provider) expect VBS-encoded responses for
 /// the endpoints that flow large structured data. Falls back to JSON otherwise.
 fn encode_response<T: Serialize>(headers: &HeaderMap, value: T) -> Response {
-    http_wire::encode_ok::<NodeApiWire, _>(headers, value)
+    http_wire::encode_ok::<ErrorResponse, _>(headers, value)
 }
 
 /// Decode a request body based on its `Content-Type`, matched by media-type essence.
@@ -130,7 +117,7 @@ fn decode_body<T: serde::de::DeserializeOwned>(
     headers: &HeaderMap,
     body: &[u8],
 ) -> Result<T, ApiError> {
-    http_wire::decode_body::<WireVersion, T>(headers, body).map_err(|err| {
+    http_wire::decode_body(headers, body).map_err(|err| {
         ApiError::BadRequest(match err {
             DecodeFailure::Binary(err) => anyhow::anyhow!("invalid binary body: {err}"),
             DecodeFailure::Json(err) => anyhow::anyhow!("invalid json body: {err}"),
@@ -952,7 +939,7 @@ where
         let format = ContentType::negotiate(&headers);
         ws.on_upgrade(move |socket| async move {
             match state.stream_leaves(height).await {
-                Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
+                Ok(stream) => drive_ws_stream(socket, stream, format).await,
                 Err(e) => tracing::warn!("stream_leaves: {e}"),
             }
         })
@@ -965,7 +952,7 @@ where
         let format = ContentType::negotiate(&headers);
         ws.on_upgrade(move |socket| async move {
             match state.stream_headers(height).await {
-                Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
+                Ok(stream) => drive_ws_stream(socket, stream, format).await,
                 Err(e) => tracing::warn!("stream_headers: {e}"),
             }
         })
@@ -978,7 +965,7 @@ where
         let format = ContentType::negotiate(&headers);
         ws.on_upgrade(move |socket| async move {
             match state.stream_blocks(height).await {
-                Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
+                Ok(stream) => drive_ws_stream(socket, stream, format).await,
                 Err(e) => tracing::warn!("stream_blocks: {e}"),
             }
         })
@@ -991,7 +978,7 @@ where
         let format = ContentType::negotiate(&headers);
         ws.on_upgrade(move |socket| async move {
             match state.stream_payloads(height).await {
-                Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
+                Ok(stream) => drive_ws_stream(socket, stream, format).await,
                 Err(e) => tracing::warn!("stream_payloads: {e}"),
             }
         })
@@ -1004,7 +991,7 @@ where
         let format = ContentType::negotiate(&headers);
         ws.on_upgrade(move |socket| async move {
             match state.stream_vid_common(height).await {
-                Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
+                Ok(stream) => drive_ws_stream(socket, stream, format).await,
                 Err(e) => tracing::warn!("stream_vid_common: {e}"),
             }
         })
@@ -1017,7 +1004,7 @@ where
         let format = ContentType::negotiate(&headers);
         ws.on_upgrade(move |socket| async move {
             match state.stream_transactions(height, None).await {
-                Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
+                Ok(stream) => drive_ws_stream(socket, stream, format).await,
                 Err(e) => tracing::warn!("stream_transactions: {e}"),
             }
         })
@@ -1031,7 +1018,7 @@ where
             let format = ContentType::negotiate(&headers);
             ws.on_upgrade(move |socket| async move {
                 match state.stream_transactions(height, Some(namespace)).await {
-                    Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
+                    Ok(stream) => drive_ws_stream(socket, stream, format).await,
                     Err(e) => tracing::warn!("stream_transactions_ns: {e}"),
                 }
             })
@@ -1045,7 +1032,7 @@ where
             let format = ContentType::negotiate(&headers);
             ws.on_upgrade(move |socket| async move {
                 match state.stream_namespace_proofs(height, namespace).await {
-                    Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
+                    Ok(stream) => drive_ws_stream(socket, stream, format).await,
                     Err(e) => tracing::warn!("stream_namespace_proofs: {e}"),
                 }
             })
@@ -2625,7 +2612,7 @@ where
             let format = ContentType::negotiate(&headers);
             match <S as v1::HotShotEventsApi>::events(&state).await {
                 Ok(stream) => ws.on_upgrade(move |socket| async move {
-                    drive_ws_stream::<WireVersion, _>(socket, stream, format).await
+                    drive_ws_stream(socket, stream, format).await
                 }),
                 Err(err) => ApiError::Internal(err).into_response(),
             }
@@ -3877,6 +3864,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use futures::stream::BoxStream;
+    use http_wire::WireVersion;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use vbs::{BinarySerializer, Serializer};
 

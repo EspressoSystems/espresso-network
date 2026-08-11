@@ -213,16 +213,15 @@ pub mod testing {
         ) {
             // Start the web server. The unversioned mount serves the latest (v1) API, like the
             // versioned app it replaces.
-            let events_v0 =
-                events::legacy_events_router::<SeqTypes, _, StaticVersion<0, 1>>(source.clone());
-            let events_v1 = events::events_router::<SeqTypes, _, StaticVersion<0, 1>>(source);
+            let events_v0 = events::legacy_events_router::<SeqTypes, _>(source.clone());
+            let events_v1 = events::events_router::<SeqTypes, _>(source);
             let router = events::app(
                 axum::Router::new()
                     .nest("/hotshot-events", events_v1.clone())
                     .nest("/v0/hotshot-events", events_v0)
                     .nest("/v1/hotshot-events", events_v1),
             );
-            events::serve(&url, router);
+            http_wire::spawn_serve(&url, router);
         }
         // enable hotshot event streaming
         pub fn enable_hotshot_node_event_streaming<P: SequencerPersistence>(

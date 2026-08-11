@@ -2384,7 +2384,7 @@ mod test {
             )
             .await;
             common.height = height;
-            test_fixtures::respond::<StaticVersion<1, 0>, _>(&headers, Ok(common))
+            test_fixtures::respond(&headers, Ok(common))
         }
 
         let api = Router::new().route("/vid/common/{height}", get(get_vid_common));

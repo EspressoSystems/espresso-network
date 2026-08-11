@@ -8,7 +8,7 @@ license = "MIT"
 [features]
 # The axum routers; off by default so client-only consumers (e.g. error-type imports) do not
 # build the server stack.
-server = ["dep:axum", "dep:http-wire", "dep:url"]
+server = ["dep:axum", "dep:http-wire"]
 
 [dependencies]
 alloy = { workspace = true }
@@ -28,7 +28,6 @@ snafu = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-test = { workspace = true }
-url = { workspace = true, optional = true }
 vbs = { workspace = true }
 
 [dev-dependencies]

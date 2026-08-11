@@ -34,6 +34,7 @@ hotshot-task = { workspace = true }
 hotshot-task-impls = { workspace = true }
 hotshot-types = { workspace = true }
 hotshot-utils = { workspace = true }
+http-wire = { workspace = true, features = ["server"] }
 itertools = { workspace = true }
 jf-advz = { workspace = true }
 lru = { workspace = true }

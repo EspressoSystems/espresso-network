@@ -18,12 +18,12 @@
 //! TaggedBase64 payload-hash params, the default fetch timeout, missing data as 404, and the
 //! crate-level [`Error`] envelope on the wire.
 
-use std::{marker::PhantomData, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use axum::{
     Router,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode as HttpStatusCode, Uri},
+    http::{HeaderMap, Uri},
     response::Response,
     routing::get,
 };
@@ -31,7 +31,7 @@ use disco_types::status::StatusCode;
 use futures::{StreamExt, TryStreamExt};
 use hotshot_types::data::VidCommitment;
 use http_client::Client;
-use http_wire::{self as wire, WireFormat, healthcheck_response, spawn_serve};
+use http_wire::{self as wire, healthcheck_response, spawn_serve};
 use serde::Serialize;
 use snafu::OptionExt;
 use tagged_base64::TaggedBase64;
@@ -47,29 +47,10 @@ use crate::{
     testing::mocks::MockTypes,
 };
 
-/// Wire format of the fixture: `Ver` VBS framing and the crate-level [`Error`] envelope, the
-/// same envelope the old tide app served and the provider's client decodes.
-struct QueryServiceWireFormat<Ver>(PhantomData<Ver>);
-
-impl<Ver: StaticVersionType + 'static> WireFormat for QueryServiceWireFormat<Ver> {
-    type Error = Error;
-    type Version = Ver;
-
-    fn status(err: &Error) -> HttpStatusCode {
-        HttpStatusCode::from_u16(u16::from(disco_types::error::Error::status(err)))
-            .unwrap_or(HttpStatusCode::INTERNAL_SERVER_ERROR)
-    }
-
-    fn serialize_failure(message: String) -> Error {
-        Error::internal(message)
-    }
-}
-
-pub(crate) fn respond<Ver: StaticVersionType + 'static, T: Serialize>(
-    headers: &HeaderMap,
-    result: Result<T, Error>,
-) -> Response {
-    wire::respond::<QueryServiceWireFormat<Ver>, _>(headers, result)
+/// The fixture serves the crate-level [`Error`] envelope, the same envelope the old tide app
+/// served and the provider's client decodes.
+pub(crate) fn respond<T: Serialize>(headers: &HeaderMap, result: Result<T, Error>) -> Response {
+    wire::respond::<Error, _>(headers, result)
 }
 
 fn fetch_timeout() -> Duration {
@@ -102,7 +83,7 @@ where
             resource: height.to_string(),
         })
         .map_err(Error::from);
-    respond::<Ver, _>(&headers, result)
+    respond(&headers, result)
 }
 
 async fn get_leaf_range<Ver, D>(
@@ -128,7 +109,7 @@ where
         .try_collect::<Vec<_>>()
         .await
         .map_err(Error::from);
-    respond::<Ver, _>(&headers, result)
+    respond(&headers, result)
 }
 
 async fn get_block_range<Ver, D>(
@@ -154,7 +135,7 @@ where
         .try_collect::<Vec<_>>()
         .await
         .map_err(Error::from);
-    respond::<Ver, _>(&headers, result)
+    respond(&headers, result)
 }
 
 async fn get_block_by_payload_hash<Ver, D>(
@@ -177,7 +158,7 @@ where
             })?)
     }
     .await;
-    respond::<Ver, _>(&headers, result)
+    respond(&headers, result)
 }
 
 async fn get_cert2<Ver, D>(
@@ -201,7 +182,7 @@ where
             }
             .into()
         });
-    respond::<Ver, _>(&headers, result)
+    respond(&headers, result)
 }
 
 async fn get_vid_common<Ver, D>(
@@ -223,7 +204,7 @@ where
             resource: height.to_string(),
         })
         .map_err(Error::from);
-    respond::<Ver, _>(&headers, result)
+    respond(&headers, result)
 }
 
 async fn get_vid_common_range<Ver, D>(
@@ -249,7 +230,7 @@ where
         .try_collect::<Vec<_>>()
         .await
         .map_err(Error::from);
-    respond::<Ver, _>(&headers, result)
+    respond(&headers, result)
 }
 
 async fn get_vid_common_by_payload_hash<Ver, D>(
@@ -272,7 +253,7 @@ where
             })?)
     }
     .await;
-    respond::<Ver, _>(&headers, result)
+    respond(&headers, result)
 }
 
 async fn healthcheck(headers: HeaderMap) -> Response {
@@ -286,7 +267,7 @@ async fn no_route<Ver: StaticVersionType + 'static>(headers: HeaderMap, uri: Uri
         message: format!("No route matches {}", uri.path()),
         status: StatusCode::NOT_FOUND,
     };
-    wire::encode_err::<QueryServiceWireFormat<Ver>>(&headers, err)
+    wire::encode_err(&headers, err)
 }
 
 /// The availability routes the fetch provider client requests.

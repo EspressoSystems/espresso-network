@@ -7,7 +7,7 @@ license = "MIT"
 [features]
 # The axum router; off by default so client-only consumers (e.g. the node's BuilderClient) do
 # not build the server stack.
-server = ["dep:axum", "dep:http-wire", "dep:tokio", "dep:url"]
+server = ["dep:axum", "dep:http-wire", "dep:tokio"]
 
 [dependencies]
 async-trait = { workspace = true }
@@ -21,7 +21,6 @@ serde = { workspace = true }
 tagged-base64 = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, optional = true }
-url = { workspace = true, optional = true }
 vbs = { workspace = true }
 
 [dev-dependencies]

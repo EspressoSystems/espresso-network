@@ -206,7 +206,7 @@ impl BuilderConfig {
         );
 
         // start the hotshot api service
-        router::serve(
+        http_wire::spawn_serve(
             &hotshot_builder_apis_url,
             router::builder_app::<SeqTypes, _>(proxy_global_state),
         );

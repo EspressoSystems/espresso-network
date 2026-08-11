@@ -26,6 +26,7 @@ hotshot-example-types = { workspace = true }
 hotshot-state-prover = { workspace = true }
 hotshot-types = { workspace = true }
 http-client = { workspace = true }
+http-wire = { workspace = true, features = ["server"] }
 rand = { workspace = true }
 test-utils = { workspace = true }
 tokio = { workspace = true }

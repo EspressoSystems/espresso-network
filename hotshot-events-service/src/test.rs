@@ -52,11 +52,9 @@ mod tests {
         // Start the web server.
         let router = events::app(axum::Router::new().nest(
             "/hotshot_events",
-            events::legacy_events_router::<TestTypes, _, StaticVersion<0, 1>>(
-                events_streamer.clone(),
-            ),
+            events::legacy_events_router::<TestTypes, _>(events_streamer.clone()),
         ));
-        events::serve(&api_url, router);
+        http_wire::spawn_serve(&api_url, router);
         let total_count = 5;
         let send_handle = spawn(async move {
             let mut send_count = 0;
@@ -107,11 +105,9 @@ mod tests {
         // Start the web server.
         let router = events::app(axum::Router::new().nest(
             "/api",
-            events::legacy_events_router::<TestTypes, _, StaticVersion<0, 1>>(
-                events_streamer.clone(),
-            ),
+            events::legacy_events_router::<TestTypes, _>(events_streamer.clone()),
         ));
-        events::serve(&api_url, router);
+        http_wire::spawn_serve(&api_url, router);
 
         let client = Client::<Error, StaticVersion<0, 1>>::new(
             format!("http://localhost:{port}/api").parse().unwrap(),
@@ -146,9 +142,9 @@ mod tests {
         // Start the web server.
         let router = events::app(axum::Router::new().nest(
             "/hotshot_events",
-            events::events_router::<TestTypes, _, StaticVersion<0, 1>>(events_streamer.clone()),
+            events::events_router::<TestTypes, _>(events_streamer.clone()),
         ));
-        events::serve(&api_url, router);
+        http_wire::spawn_serve(&api_url, router);
 
         // Start Client 1
         let client_1 = Client::<Error, StaticVersion<0, 1>>::new(

@@ -2,9 +2,9 @@
 //!
 //! Everything a service needs regardless of its routes: content-negotiated responses,
 //! request-body decoding, the healthcheck response shapes, the permissive CORS layer, and one
-//! correct way to drive a WebSocket stream endpoint. Services describe their own error envelope
-//! with a [`WireFormat`] impl and share everything else here, so none of them needs to depend on
-//! another service's API crate.
+//! correct way to drive a WebSocket stream endpoint. Services bring their own error envelope as a
+//! [`WireError`] and share everything else here, so none of them needs to depend on another
+//! service's API crate.
 
 use axum::{
     Json,
@@ -18,44 +18,39 @@ use axum::{
 use futures::{StreamExt, stream::BoxStream};
 use serde::{Serialize, de::DeserializeOwned};
 use tower_http::cors::{Any, CorsLayer};
-use vbs::version::{StaticVersion, StaticVersionType};
+use vbs::version::StaticVersion;
 
 use crate::{
     body::{DecodeFailure, encode_body},
     content_type::ContentType,
+    error::WireError,
     health::{AppHealth, HealthStatus},
     ws::{encode_binary_frame, encode_text_frame},
 };
 
-/// Describes a service's wire protocol: its VBS framing version and its error envelope.
-pub trait WireFormat {
-    /// The service's wire error envelope, serialized in the negotiated format like any body.
-    type Error: Serialize;
-    /// VBS framing version for binary bodies.
-    type Version: StaticVersionType;
-
-    /// The HTTP status an error response is sent with.
-    fn status(err: &Self::Error) -> StatusCode;
-
-    /// The error reported when a response body fails to serialize. The message names the
-    /// format that failed.
-    fn serialize_failure(message: String) -> Self::Error;
-}
+/// The VBS framing version every encode and decode helper here speaks.
+///
+/// The API's own versioning lives in the URL (`/v1`, `/v2`); the framing version has always
+/// been 0.1 and is shared rather than re-declared per service.
+pub type WireVersion = StaticVersion<0, 1>;
 
 /// Encode a successful response body, negotiating VBS binary vs JSON from the `Accept` header.
-pub fn encode_ok<C: WireFormat, T: Serialize>(headers: &HeaderMap, value: T) -> Response {
+pub fn encode_ok<E: WireError, T: Serialize>(headers: &HeaderMap, value: T) -> Response {
     let format = ContentType::negotiate(headers);
-    match encode_body::<C::Version, _>(format, &value) {
+    match encode_body::<WireVersion, _>(format, &value) {
         Ok(bytes) => ([(header::CONTENT_TYPE, format.mime())], bytes).into_response(),
-        Err(err) => encode_err::<C>(headers, C::serialize_failure(err.to_string())),
+        Err(err) => encode_err::<E>(
+            headers,
+            E::catch_all(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
+        ),
     }
 }
 
 /// Encode an error response using the same content negotiation as [`encode_ok`].
-pub fn encode_err<C: WireFormat>(headers: &HeaderMap, err: C::Error) -> Response {
-    let status = C::status(&err);
+pub fn encode_err<E: WireError>(headers: &HeaderMap, err: E) -> Response {
+    let status = err.status();
     let format = ContentType::negotiate(headers);
-    match encode_body::<C::Version, _>(format, &err) {
+    match encode_body::<WireVersion, _>(format, &err) {
         Ok(bytes) => (status, [(header::CONTENT_TYPE, format.mime())], bytes).into_response(),
         // The envelope itself failed to serialize; fall back to JSON so the client at least
         // sees the status and a body (axum's `Json` degrades to a plain 500 if even that fails).
@@ -63,26 +58,23 @@ pub fn encode_err<C: WireFormat>(headers: &HeaderMap, err: C::Error) -> Response
     }
 }
 
-pub fn respond<C: WireFormat, T: Serialize>(
-    headers: &HeaderMap,
-    result: Result<T, C::Error>,
-) -> Response {
+pub fn respond<E: WireError, T: Serialize>(headers: &HeaderMap, result: Result<T, E>) -> Response {
     match result {
-        Ok(value) => encode_ok::<C, _>(headers, value),
-        Err(err) => encode_err::<C>(headers, err),
+        Ok(value) => encode_ok::<E, _>(headers, value),
+        Err(err) => encode_err(headers, err),
     }
 }
 
 /// Decode a request body: VBS for `application/octet-stream`, JSON for `application/json`.
 /// Content types are matched by media-type essence so parameters (e.g. a charset) are tolerated.
-pub fn decode_body<Ver: StaticVersionType, T: DeserializeOwned>(
+pub fn decode_body<T: DeserializeOwned>(
     headers: &HeaderMap,
     body: &[u8],
 ) -> Result<T, DecodeFailure> {
     let content_type = headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok());
-    crate::body::decode_body::<Ver, T>(content_type, body)
+    crate::body::decode_body::<WireVersion, T>(content_type, body)
 }
 
 /// App-level `/healthcheck` response, in JSON or vbs binary depending on `Accept`.
@@ -129,9 +121,8 @@ pub fn cors_layer() -> CorsLayer {
 /// leak the task and its data-source subscription whenever a client disconnects while the stream
 /// is quiet.
 ///
-/// `Ver` is the VBS framing version of binary frames, and must be the same version the service's
-/// [`WireFormat`] uses for its request/response bodies.
-pub async fn drive_ws_stream<Ver: StaticVersionType, T: Serialize>(
+/// Binary frames are framed with [`WireVersion`], like request and response bodies.
+pub async fn drive_ws_stream<T: Serialize>(
     mut socket: WebSocket,
     stream: BoxStream<'static, T>,
     format: ContentType,
@@ -149,9 +140,8 @@ pub async fn drive_ws_stream<Ver: StaticVersionType, T: Serialize>(
         };
         let Some(item) = item else { break };
         let frame = match format {
-            ContentType::Binary => {
-                encode_binary_frame::<Ver, _>(&item).map(|bytes| Message::Binary(bytes.into()))
-            },
+            ContentType::Binary => encode_binary_frame::<WireVersion, _>(&item)
+                .map(|bytes| Message::Binary(bytes.into())),
             ContentType::Json => encode_text_frame(&item).map(|json| Message::Text(json.into())),
         };
         let Ok(msg) = frame else { break };
@@ -189,13 +179,9 @@ pub fn spawn_serve(url: &url::Url, router: axum::Router) -> tokio::task::JoinHan
     })
 }
 
-/// All services frame binary healthcheck responses with v0.1; the shape predates per-service
-/// versioning.
-type HealthcheckVersion = StaticVersion<0, 1>;
-
 fn encode_health<T: Serialize>(headers: &HeaderMap, value: &T) -> Response {
     let format = ContentType::negotiate(headers);
-    match encode_body::<HealthcheckVersion, _>(format, value) {
+    match encode_body::<WireVersion, _>(format, value) {
         Ok(bytes) => ([(header::CONTENT_TYPE, format.mime())], bytes).into_response(),
         Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
     }
@@ -209,25 +195,21 @@ mod tests {
 
     use super::*;
 
-    #[derive(Debug, Serialize, Deserialize, PartialEq)]
+    #[derive(Debug, Serialize, Deserialize, PartialEq, thiserror::Error)]
+    #[error("Error {status}: {message}")]
     struct TestError {
         status: u16,
         message: String,
     }
 
-    struct TestFormat;
-
-    impl WireFormat for TestFormat {
-        type Error = TestError;
-        type Version = StaticVersion<0, 1>;
-
-        fn status(err: &Self::Error) -> StatusCode {
-            StatusCode::from_u16(err.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
+    impl WireError for TestError {
+        fn status(&self) -> StatusCode {
+            StatusCode::from_u16(self.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
         }
 
-        fn serialize_failure(message: String) -> Self::Error {
-            TestError {
-                status: 500,
+        fn catch_all(status: StatusCode, message: String) -> Self {
+            Self {
+                status: status.as_u16(),
                 message,
             }
         }
@@ -249,7 +231,7 @@ mod tests {
     #[tokio::test]
     async fn encode_negotiates_binary_and_json() {
         let binary = headers(header::ACCEPT, "application/octet-stream");
-        let resp = encode_ok::<TestFormat, _>(&binary, 42u64);
+        let resp = encode_ok::<TestError, _>(&binary, 42u64);
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(
             resp.headers().get(header::CONTENT_TYPE).unwrap(),
@@ -259,7 +241,7 @@ mod tests {
         let decoded: u64 = Serializer::<StaticVersion<0, 1>>::deserialize(&bytes).unwrap();
         assert_eq!(decoded, 42);
 
-        let resp = encode_ok::<TestFormat, _>(&HeaderMap::new(), 42u64);
+        let resp = encode_ok::<TestError, _>(&HeaderMap::new(), 42u64);
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(String::from_utf8(body_bytes(resp).await).unwrap(), "42");
     }
@@ -270,7 +252,7 @@ mod tests {
             status: 404,
             message: "no such thing".into(),
         };
-        let resp = encode_err::<TestFormat>(&HeaderMap::new(), err);
+        let resp = encode_err(&HeaderMap::new(), err);
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
         let decoded: TestError = serde_json::from_slice(&body_bytes(resp).await).unwrap();
         assert_eq!(decoded.message, "no such thing");
@@ -280,7 +262,7 @@ mod tests {
             status: 404,
             message: "no such thing".into(),
         };
-        let resp = encode_err::<TestFormat>(&binary, err);
+        let resp = encode_err(&binary, err);
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
         let decoded: TestError =
             Serializer::<StaticVersion<0, 1>>::deserialize(&body_bytes(resp).await).unwrap();
@@ -290,24 +272,24 @@ mod tests {
     #[test]
     fn decode_matches_content_type_by_essence() {
         let json = headers(header::CONTENT_TYPE, "application/json; charset=utf-8");
-        let decoded: u64 = decode_body::<StaticVersion<0, 1>, _>(&json, b"42").unwrap();
+        let decoded: u64 = decode_body(&json, b"42").unwrap();
         assert_eq!(decoded, 42);
 
         let binary = headers(header::CONTENT_TYPE, "application/octet-stream");
         let bytes = Serializer::<StaticVersion<0, 1>>::serialize(&42u64).unwrap();
-        let decoded: u64 = decode_body::<StaticVersion<0, 1>, _>(&binary, &bytes).unwrap();
+        let decoded: u64 = decode_body(&binary, &bytes).unwrap();
         assert_eq!(decoded, 42);
 
         assert!(matches!(
-            decode_body::<StaticVersion<0, 1>, u64>(&HeaderMap::new(), b"42"),
+            decode_body::<u64>(&HeaderMap::new(), b"42"),
             Err(DecodeFailure::UnsupportedContentType)
         ));
         assert!(matches!(
-            decode_body::<StaticVersion<0, 1>, u64>(&json, b"not json"),
+            decode_body::<u64>(&json, b"not json"),
             Err(DecodeFailure::Json(_))
         ));
         assert!(matches!(
-            decode_body::<StaticVersion<0, 1>, u64>(&binary, b""),
+            decode_body::<u64>(&binary, b""),
             Err(DecodeFailure::Binary(_))
         ));
     }

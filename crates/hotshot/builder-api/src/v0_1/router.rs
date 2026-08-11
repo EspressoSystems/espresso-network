@@ -16,12 +16,12 @@ use axum::{
     Router,
     body::Bytes,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode as HttpStatusCode},
+    http::HeaderMap,
     response::Response,
     routing::{get, post},
 };
 use committable::Committable;
-use disco_types::{error::Error as _, request::RequestParamType, status::StatusCode};
+use disco_types::{request::RequestParamType, status::StatusCode};
 use hotshot_types::{
     constants::LEGACY_BUILDER_MODULE,
     data::VidCommitment,
@@ -29,15 +29,13 @@ use hotshot_types::{
     utils::BuilderCommitment,
 };
 use http_wire::{
-    self as wire, DecodeFailure, WireFormat, body_limit_layer, cors_layer, healthcheck_response,
+    self as wire, DecodeFailure, body_limit_layer, cors_layer, healthcheck_response,
     module_healthcheck_response,
 };
-use serde::{Serialize, de::DeserializeOwned};
+use serde::de::DeserializeOwned;
 use tagged_base64::TaggedBase64;
-use url::Url;
 
 use super::{
-    Version,
     block_info::{
         AvailableBlockData, AvailableBlockHeaderInputV1, AvailableBlockHeaderInputV2,
         AvailableBlockInfo,
@@ -46,32 +44,8 @@ use super::{
     data_source::{AcceptsTxnSubmits, BuilderDataSource},
 };
 
-/// Wire format of the builder API: [`Version`] VBS framing and the [`Error`] envelope.
-struct BuilderWireFormat;
-
-impl WireFormat for BuilderWireFormat {
-    type Error = Error;
-    type Version = Version;
-
-    fn status(err: &Error) -> HttpStatusCode {
-        HttpStatusCode::from_u16(u16::from(err.status()))
-            .unwrap_or(HttpStatusCode::INTERNAL_SERVER_ERROR)
-    }
-
-    fn serialize_failure(message: String) -> Error {
-        Error::Custom {
-            message,
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-        }
-    }
-}
-
-fn respond<T: Serialize>(headers: &HeaderMap, result: Result<T, Error>) -> Response {
-    wire::respond::<BuilderWireFormat, _>(headers, result)
-}
-
 fn decode_body<T: DeserializeOwned>(headers: &HeaderMap, body: &[u8]) -> Result<T, RequestError> {
-    wire::decode_body::<Version, T>(headers, body).map_err(|failure| match failure {
+    wire::decode_body(headers, body).map_err(|failure| match failure {
         DecodeFailure::Json(_) => RequestError::Json,
         DecodeFailure::Binary(_) => RequestError::Binary,
         DecodeFailure::UnsupportedContentType => RequestError::UnsupportedContentType,
@@ -160,7 +134,7 @@ async fn available_blocks<Types: NodeType, S: BuilderDataSource<Types>>(
             })
     }
     .await;
-    respond(&headers, result)
+    wire::respond::<Error, _>(&headers, result)
 }
 
 async fn claim_block<Types: NodeType, S: BuilderDataSource<Types>>(
@@ -181,7 +155,7 @@ async fn claim_block<Types: NodeType, S: BuilderDataSource<Types>>(
             })
     }
     .await;
-    respond(&headers, result)
+    wire::respond::<Error, _>(&headers, result)
 }
 
 async fn claim_block_with_num_nodes<Types: NodeType, S: BuilderDataSource<Types>>(
@@ -209,7 +183,7 @@ async fn claim_block_with_num_nodes<Types: NodeType, S: BuilderDataSource<Types>
             })
     }
     .await;
-    respond(&headers, result)
+    wire::respond::<Error, _>(&headers, result)
 }
 
 async fn claim_header_input<Types: NodeType, S: BuilderDataSource<Types>>(
@@ -230,7 +204,7 @@ async fn claim_header_input<Types: NodeType, S: BuilderDataSource<Types>>(
             })
     }
     .await;
-    respond(&headers, result)
+    wire::respond::<Error, _>(&headers, result)
 }
 
 async fn claim_header_input_v2<Types: NodeType, S: BuilderDataSource<Types>>(
@@ -255,7 +229,7 @@ async fn claim_header_input_v2<Types: NodeType, S: BuilderDataSource<Types>>(
         })
     }
     .await;
-    respond(&headers, result)
+    wire::respond::<Error, _>(&headers, result)
 }
 
 async fn builder_address<Types: NodeType, S: BuilderDataSource<Types>>(
@@ -263,7 +237,7 @@ async fn builder_address<Types: NodeType, S: BuilderDataSource<Types>>(
     headers: HeaderMap,
 ) -> Response {
     let result = state.builder_address().await.map_err(Error::from);
-    respond(&headers, result)
+    wire::respond::<Error, _>(&headers, result)
 }
 
 async fn submit_txn<Types: NodeType, S: AcceptsTxnSubmits<Types>>(
@@ -281,7 +255,7 @@ async fn submit_txn<Types: NodeType, S: AcceptsTxnSubmits<Types>>(
         Ok(hash)
     }
     .await;
-    respond(&headers, result)
+    wire::respond::<Error, _>(&headers, result)
 }
 
 async fn submit_batch<Types: NodeType, S: AcceptsTxnSubmits<Types>>(
@@ -297,7 +271,7 @@ async fn submit_batch<Types: NodeType, S: AcceptsTxnSubmits<Types>>(
         Ok(hashes)
     }
     .await;
-    respond(&headers, result)
+    wire::respond::<Error, _>(&headers, result)
 }
 
 async fn get_status<Types: NodeType, S: AcceptsTxnSubmits<Types>>(
@@ -310,7 +284,7 @@ async fn get_status<Types: NodeType, S: AcceptsTxnSubmits<Types>>(
         state.txn_status(hash).await.map_err(Error::TxnStat)
     }
     .await;
-    respond(&headers, result)
+    wire::respond::<Error, _>(&headers, result)
 }
 
 /// The `block_info` module's routes, to be nested at `/block_info`.
@@ -386,18 +360,10 @@ where
         .nest("/txn_submit", txn_submit_router::<Types, S>(state)))
 }
 
-/// Binds `url`'s host and port and serves `router` until the returned handle is aborted.
-///
-/// # Panics
-/// If `url` has no port or the port cannot be bound.
-pub fn serve(url: &Url, router: Router) -> tokio::task::JoinHandle<()> {
-    wire::spawn_serve(url, router)
-}
-
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
-    use axum::http::{Method, Request, header};
+    use axum::http::{Method, Request, StatusCode as HttpStatusCode, header};
     use committable::Commitment;
     use hotshot_example_types::node_types::TestTypes;
     use hotshot_types::traits::signature_key::BuilderSignatureKey;

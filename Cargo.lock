@@ -2402,6 +2402,7 @@ dependencies = [
  "hotshot-state-prover",
  "hotshot-types",
  "http-client",
+ "http-wire",
  "jf-signature 0.4.2",
  "rand 0.8.6",
  "tempfile",
@@ -5722,7 +5723,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tower 0.4.13",
- "url",
  "vbs",
 ]
 
@@ -5787,6 +5787,7 @@ dependencies = [
  "hotshot-task-impls",
  "hotshot-testing",
  "hotshot-types",
+ "http-wire",
  "jf-advz",
  "lru 0.12.5",
  "num_cpus",
@@ -5827,6 +5828,7 @@ dependencies = [
  "hotshot-testing",
  "hotshot-types",
  "http-client",
+ "http-wire",
  "jf-advz",
  "nonempty-collections",
  "quick_cache",
@@ -5903,7 +5905,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-test",
- "url",
  "vbs",
 ]
 
@@ -6330,6 +6331,7 @@ dependencies = [
  "hotshot-task-impls",
  "hotshot-types",
  "hotshot-utils",
+ "http-wire",
  "itertools 0.14.0",
  "jf-advz",
  "lru 0.12.5",
