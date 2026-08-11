@@ -158,7 +158,7 @@ stands for a whole subsystem.
 - [x] vid:disperse: `NP/vid/disperse.rs` `VidDisperser`/`handle_vid_disperse_request`/`bucketize` - swept at
       64c5cdc6d0a - full read; `bucketize` carries four quickcheck properties (partition, non-empty, threshold,
       minimality) that are known-answer checks over the parameter it takes, and they run in the crate battery.
-- [x] vid:fragments: `NP/vid/fragments.rs` `VidFragmentAccumulator` - swept at 64c5cdc6d0a - full read plus the existing
+- [ ] vid:fragments: `NP/vid/fragments.rs` `VidFragmentAccumulator` - swept at 64c5cdc6d0a - full read plus the existing
       reassembly/rejection tests in `tests::vid`; this sweep produced NP-3.
 - [x] vid:reconstruct: `NP/vid/reconstruct.rs`
       `VidReconstructor`/`VidShareAccumulator`/`reconstruct`/`decode_and_recommit` - swept at 64c5cdc6d0a - full read;

@@ -41,6 +41,19 @@ struct PendingShare<T: NodeType> {
     pieces: BTreeMap<usize, AvidmGf2NamespacePiece>,
 }
 
+impl<T: NodeType> PendingShare<T> {
+    /// Whether `fragment` carries pieces of the same share this view is already
+    /// collecting. The first fragment pins these fields; later ones must agree.
+    fn describes_same_share_as(&self, fragment: &AvidmGf2DisperseShareFragment<T>) -> bool {
+        self.num_namespaces == fragment.num_namespaces
+            && self.epoch == fragment.epoch
+            && self.target_epoch == fragment.target_epoch
+            && self.payload_commitment == fragment.payload_commitment
+            && self.recipient_key == fragment.recipient_key
+            && self.param == fragment.param
+    }
+}
+
 impl<T: NodeType> Default for VidFragmentAccumulator<T> {
     fn default() -> Self {
         Self::new()
@@ -62,6 +75,12 @@ impl<T: NodeType> VidFragmentAccumulator<T> {
     /// `Ok(Some(share))` once the final namespace completes the view, and
     /// `Err` if the fragment is malformed or inconsistent with the view's
     /// already-pinned metadata.
+    ///
+    /// A rejected fragment leaves the view exactly as it found it. Admitting
+    /// part of a fragment before rejecting the rest would strand the pieces it
+    /// did insert - and, for the view's first fragment, pin its metadata - so
+    /// every honest fragment that followed would be turned away as a duplicate
+    /// or as inconsistent, and the view's share could never complete.
     pub fn accept(
         &mut self,
         fragment: AvidmGf2DisperseShareFragment<T>,
@@ -73,6 +92,28 @@ impl<T: NodeType> VidFragmentAccumulator<T> {
         if fragment.num_namespaces == 0 {
             return Err(VidFragmentError::Empty);
         }
+        let existing = self.pending.get(&view);
+        if let Some(pending) = existing
+            && !pending.describes_same_share_as(&fragment)
+        {
+            return Err(VidFragmentError::Inconsistent);
+        }
+        // Validate every piece before inserting any of them.
+        let mut incoming = BTreeSet::new();
+        for piece in &fragment.namespaces {
+            let ns_index = piece.ns_index;
+            if ns_index >= fragment.num_namespaces {
+                return Err(VidFragmentError::IndexOutOfRange {
+                    index: ns_index,
+                    num_namespaces: fragment.num_namespaces,
+                });
+            }
+            let buffered = existing.is_some_and(|p| p.pieces.contains_key(&ns_index));
+            if buffered || !incoming.insert(ns_index) {
+                return Err(VidFragmentError::DuplicateIndex(ns_index));
+            }
+        }
+
         let pending = self.pending.entry(view).or_insert_with(|| PendingShare {
             epoch: fragment.epoch,
             target_epoch: fragment.target_epoch,
@@ -82,27 +123,8 @@ impl<T: NodeType> VidFragmentAccumulator<T> {
             num_namespaces: fragment.num_namespaces,
             pieces: BTreeMap::new(),
         });
-        if pending.num_namespaces != fragment.num_namespaces
-            || pending.epoch != fragment.epoch
-            || pending.target_epoch != fragment.target_epoch
-            || pending.payload_commitment != fragment.payload_commitment
-            || pending.recipient_key != fragment.recipient_key
-            || pending.param != fragment.param
-        {
-            return Err(VidFragmentError::Inconsistent);
-        }
         for piece in fragment.namespaces {
-            let ns_index = piece.ns_index;
-            if ns_index >= pending.num_namespaces {
-                return Err(VidFragmentError::IndexOutOfRange {
-                    index: ns_index,
-                    num_namespaces: pending.num_namespaces,
-                });
-            }
-            if pending.pieces.contains_key(&ns_index) {
-                return Err(VidFragmentError::DuplicateIndex(ns_index));
-            }
-            pending.pieces.insert(ns_index, piece);
+            pending.pieces.insert(piece.ns_index, piece);
         }
         if pending.pieces.len() != pending.num_namespaces {
             return Ok(None);

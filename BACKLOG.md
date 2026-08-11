@@ -19,13 +19,6 @@ Rules:
 
 ## Later
 
-- [ ] NP-3 (Low, runtime, correctness): `VidFragmentAccumulator::accept` inserts each namespace piece into the pending
-      entry as it iterates and only then hits the out-of-range or duplicate check (`vid/fragments.rs:94-106`), so a
-      rejected multi-piece fragment leaves its earlier pieces buffered; a later honest fragment covering those indices
-      is then rejected as `DuplicateIndex` and the view's share can never complete. Only the view leader can send
-      fragments (`coordinator.rs:1080-1092`) and it can already withhold them, which is why this is Low rather than a
-      liveness attack. Acceptance: a test feeds a fragment whose pieces are `[index 0, out-of-range index]`, asserts the
-      error, then feeds the honest fragment for index 0 and asserts it is accepted; it must fail on the unfixed code.
 - [ ] NP-4 (Low, runtime, code quality): `BlockBuilder` decrements its byte counters with unchecked `-=` in
       `on_dedup_manifest` (`block.rs:301`) and `on_view_changed` (`block.rs:329`) while `on_block_reconstructed` uses
       `saturating_sub` (`block.rs:340`); the counters are what enforce `max_leader_bytes`/`max_retry_bytes`, so a wrap

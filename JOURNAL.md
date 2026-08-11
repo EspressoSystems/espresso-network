@@ -183,3 +183,47 @@ claim.
 Learnings: none that generalise beyond this fix.
 
 Next: NP-3, the VID fragment accumulator mutating its pending entry before validating the whole fragment.
+
+## iter 4/10 | 29c94e91-175223 | 2026-08-11 | NP-3 | done
+
+Task: NP-3 (Low, runtime, correctness) - `VidFragmentAccumulator::accept` mutating the view's pending entry before it
+had validated the whole fragment. Closed.
+
+Changed: crates/hotshot/new-protocol/src/vid/fragments.rs (validate-then-insert, plus a
+`PendingShare::describes_same_share_as` helper for the consistency check that was inline),
+crates/hotshot/new-protocol/src/tests/vid.rs (two acceptance tests), PLAN.md, BACKLOG.md, JOURNAL.md.
+
+Checkpoint: pending
+
+Verification: two acceptance checks, both run first against the unfixed code, where both fail, and both pass against the
+fixed one. `fragment_accumulator_rejection_strands_no_pieces` is the check as filed: a fragment carrying a good piece
+for index 0 followed by an out-of-range index is rejected, and the honest fragment covering both namespaces is then
+admitted and reassembles the original share - unfixed, index 0 came back as `DuplicateIndex` and the share could never
+complete. `fragment_accumulator_rejection_pins_no_metadata` covers the half the filing had missed: the entry was created
+from the fragment's own header _before_ the per-piece loop ran, so a rejected first fragment also pinned the view's
+`num_namespaces`, and every honest fragment afterwards was turned away as `Inconsistent`. The four pre-existing fragment
+tests pass unchanged in both trees, which is what shows the reordering did not weaken the rejections themselves. To run
+the checks against unfixed code the fixed file was copied aside and restored afterwards, never `git checkout`. Verify
+command green: 196 tests run, 196 passed, 15 skipped, exit 0. One of them, the pre-existing
+`tests::block::test_leader_buffer_drain`, was additionally flagged `LEAK` by nextest, which means it passed but left a
+handle open past the leak timeout; it is not in the code this iteration touched and it was not flagged in the previous
+run, so it reads as a timing artefact rather than a regression. Noted rather than chased, and worth a second look when
+NP-4 takes that module.
+
+Contract preserved. The accept set is unchanged: the same fragments are accepted and the same ones rejected, with the
+same error variants - the intra-fragment duplicate case still reports `DuplicateIndex`, now detected against a set of
+the fragment's own indices rather than as a side effect of a partial insert. What changed is only that a rejection is
+now total: `accept` either applies the whole fragment or leaves the view untouched. `IndexOutOfRange` now reports
+`fragment.num_namespaces` where it reported `pending.num_namespaces`; those are equal on every path that reaches the
+check, because the consistency comparison runs first and rejects a fragment whose count differs.
+
+Severity note: this stays Low and the envelope is why. Only the view's leader can send a fragment
+(`coordinator.rs:1080-1092` rejects any other sender), and a leader that wants to deny its own view its share can simply
+not send it, so the fix removes a self-inflicted footgun rather than an attack. It is still worth fixing: the
+pre-existing `fragment_accumulator_rejects_intra_fragment_duplicate` test shows the accumulator was already being handed
+rejectable fragments in its own test suite, and a partial insert there is silent.
+
+Learnings: none that generalise beyond this fix.
+
+Next: NP-4, the unchecked byte-counter decrements in `BlockBuilder`, which is the last item on the ledger; after it the
+run needs an audit iteration to re-sweep the nine rows this run has re-opened before any convergence claim.

@@ -748,6 +748,82 @@ async fn fragment_accumulator_reassembles_multi_piece_fragments() {
     assert_eq!(accumulator.accept(first).expect("accepted"), Some(original));
 }
 
+/// A rejected fragment leaves none of its pieces behind, so the honest
+/// fragment covering the same namespaces is still admitted afterwards.
+#[tokio::test]
+async fn fragment_accumulator_rejection_strands_no_pieces() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let original = multi_namespace_share(view, 0, 2);
+    let honest = vid_fragments(&original).next().expect("at least one piece");
+    let pieces: Vec<_> = vid_fragments(&original)
+        .flat_map(|f| f.namespaces)
+        .collect();
+    assert_eq!(honest.num_namespaces, 2);
+
+    // A good piece for index 0 followed by one whose index is out of range.
+    let mut poison = honest.clone();
+    let mut out_of_range = pieces[1].clone();
+    out_of_range.ns_index = 2;
+    poison.namespaces = vec![pieces[0].clone(), out_of_range];
+
+    let mut accumulator = VidFragmentAccumulator::<TestTypes>::new();
+    assert!(matches!(
+        accumulator.accept(poison),
+        Err(VidFragmentError::IndexOutOfRange {
+            index: 2,
+            num_namespaces: 2
+        })
+    ));
+
+    // The whole honest share now arrives; index 0 must not read as a duplicate.
+    let mut whole = honest;
+    whole.namespaces = pieces;
+    assert_eq!(
+        accumulator.accept(whole).expect("accepted"),
+        Some(original),
+        "a rejected fragment stranded its pieces and blocked the honest share"
+    );
+}
+
+/// A rejected fragment does not pin the view's metadata either, so it cannot
+/// turn every later fragment away as inconsistent.
+#[tokio::test]
+async fn fragment_accumulator_rejection_pins_no_metadata() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let original = multi_namespace_share(view, 0, 2);
+    let honest = vid_fragments(&original).next().expect("at least one piece");
+    let pieces: Vec<_> = vid_fragments(&original)
+        .flat_map(|f| f.namespaces)
+        .collect();
+
+    // First fragment for the view, claiming a different namespace count and
+    // carrying an index that is out of range even for that count.
+    let mut poison = honest.clone();
+    poison.num_namespaces = 3;
+    let mut out_of_range = pieces[0].clone();
+    out_of_range.ns_index = 3;
+    poison.namespaces = vec![out_of_range];
+
+    let mut accumulator = VidFragmentAccumulator::<TestTypes>::new();
+    assert!(matches!(
+        accumulator.accept(poison),
+        Err(VidFragmentError::IndexOutOfRange {
+            index: 3,
+            num_namespaces: 3
+        })
+    ));
+
+    let mut whole = honest;
+    whole.namespaces = pieces;
+    assert_eq!(
+        accumulator.accept(whole).expect("accepted"),
+        Some(original),
+        "a rejected fragment pinned the view's metadata and blocked the honest share"
+    );
+}
+
 /// Two pieces for the same namespace index within a single fragment are
 /// rejected as a duplicate (the existing case splits the duplicate across two
 /// fragments; this exercises the intra-fragment path).
