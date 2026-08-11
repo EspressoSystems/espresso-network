@@ -367,3 +367,44 @@ Learnings: none that generalise beyond this fix.
 
 Next: NP-6, the timer module. After that the ledger is empty and the run can invoke the evaluator gate and, if it
 passes, declare convergence in that same iteration.
+
+## iter 8/10 | 29c94e91-175223 | 2026-08-12 | NP-6 | done
+
+Task: NP-6 (Low, runtime, code quality) - the timer module's dead `reset_with` and its undocumented pending-after-firing
+behaviour. Closed. The ledger is now empty.
+
+Changed: crates/hotshot/new-protocol/src/coordinator/timer.rs (dead method deleted, contract documented on the type and
+on `poll`, inline test module added), PLAN.md, BACKLOG.md, JOURNAL.md.
+
+Checkpoint: pending
+
+Verification: the enumeration `grep -rn 'reset_with\b' crates/ --include='*.rs'` printed one line at the previous commit
+(`timer.rs:42`, read back with `git show HEAD:...`) and prints nothing now. Two tests pin what the module actually
+promises: `fires_once_per_arming` observes it fire, then stay pending across a bounded window, then fire again after
+`reset`, and `reset_carries_view_and_epoch` checks the view and epoch a reset installs survive the firing that reports
+them. Verify command green: 203 tests run, 203 passed, 15 skipped, exit 0.
+
+I filed the second half of this finding wrongly and want that on the record rather than quietly fixed. I wrote that
+`poll` "returns `Poll::Pending` without registering a waker, so a second await never wakes" and implied the remedy was
+to store the waker. Storing it cannot help: waking the task would require calling `reset`, which takes `&mut self`, and
+a task parked on the timer cannot hold that borrow. Nor can the type be narrowed to `pub(crate)`, the other obvious
+remedy, because `hotshot-new-protocol-bench` is a separate crate and constructs a `Timer` directly
+(`bench/src/node.rs:190`). What is left is the true statement: this is a one-firing-per-arming timer that must be driven
+by something that resets it, which is exactly how the coordinator's `select!` loop uses it. So the fix documents that
+contract on the type and on `poll`, explains why the waker is deliberately not registered, and pins the behaviour with
+tests. The dead-code half is a real deletion; the waker half turned out to be a documentation gap, not a defect, and
+calling it one would have been the more comfortable rather than the more accurate answer.
+
+Contract preserved: no behaviour changed. `reset_with` had no callers anywhere in the workspace, and the two tests pass
+identically before and after, since they document behaviour rather than alter it. I considered and rejected reshaping
+`Timer` into a `Stream` or an `async fn tick`, which would remove the trap by construction: that is a redesign of the
+consensus timeout path, and spending that risk on a Low is the wrong trade.
+
+Surface inventory stays at 26 of 26, with the coordinator:submodules row re-swept in this iteration for the same reason
+as iteration 7's two rows: its code changed here, I read it while changing it, and its battery ran.
+
+Learnings: when a finding proposes a remedy, re-derive that the remedy actually works before implementing it - two of
+the three remedies this one implied were impossible, and only writing the fix surfaced that.
+
+Next: the ledger is empty and the inventory has no unswept row, so the next iteration invokes the adversarial evaluator
+and, if it returns PASS, declares convergence in that same iteration.

@@ -19,15 +19,6 @@ Rules:
 
 ## Later
 
-- [ ] NP-6 (Low, runtime, code quality): `coordinator/timer.rs` carries two defects in 66 lines. `reset_with`
-      (`timer.rs:42`) is dead - `grep -rn 'reset_with\b' crates/ --include='*.rs'` finds only its definition. And
-      `Timer::poll` (`timer.rs:58-65`) returns `Poll::Pending` without registering a waker once `done` is set, so a
-      second await of the same `Timer` never wakes; the crate's only use is inside a `select!` whose other branches wake
-      the task, which is why nothing hangs today, but `Timer` is `pub` in a `pub mod`. Acceptance: the grep finds no
-      `reset_with`, and a test awaits an already-fired `Timer` under a short `tokio::time::timeout` and observes it
-      still pending rather than hanging the runtime, then resets it and observes it fire; it must fail on the unfixed
-      code.
-
 ## Proposed
 
 Items needing a user decision before any work, one plain line each, never a checkbox task: envelope changes, audit

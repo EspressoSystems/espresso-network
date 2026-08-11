@@ -151,8 +151,10 @@ stands for a whole subsystem.
       responders and is bounded by view, and that the one adversarial variant (`SubmitTransaction`) is capped by
       `max_retry_bytes`, which `tests::block` now pins.
 - [x] coordinator:submodules: `NP/coordinator/error.rs`, `NP/coordinator/metrics.rs`, `NP/coordinator/timer.rs` - swept
-      at `1872c2ee84e` - full read of all three; the severity split and the `Measurement`-on-drop histogram are sound,
-      and this sweep produced NP-6 against `Timer`.
+      at SWEEP_COMMIT - re-read after NP-6 removed the dead `reset_with` and documented `Timer`'s one-firing-per-arming
+      contract; battery `coordinator::timer::tests` now pins that contract, including the pending window the `done` flag
+      exists for. Earlier at `1872c2ee84e` a full read of all three found the severity split and the
+      `Measurement`-on-drop histogram sound; that sweep produced NP-6.
 - [x] cert_verifier: `NP/cert_verifier.rs` `CertVerifier`/`CertBySenderVerifier`/`CertVerifiers`/`Verifiable` impls -
       swept at `64c5cdc6d0a` - full read of dedup, per-key and per-sender slotting, `retry_pending`, and GC; contributed
       to NP-1.
@@ -340,6 +342,8 @@ decide: a rule that had to be written twice is a rule this text is not enforcing
   finding named.
 - The spell-checking hook reads commit hashes as prose even inside backticks, so a short hash beginning with two letters
   that form a known typo fails the commit; record an equivalent commit whose hash starts with a digit.
+- Before implementing the remedy a finding proposes, re-derive that it works; a filed remedy can be impossible for
+  reasons the filing did not see.
 
 ## Definition of done
 
