@@ -193,7 +193,7 @@ Changed: crates/hotshot/new-protocol/src/vid/fragments.rs (validate-then-insert,
 `PendingShare::describes_same_share_as` helper for the consistency check that was inline),
 crates/hotshot/new-protocol/src/tests/vid.rs (two acceptance tests), PLAN.md, BACKLOG.md, JOURNAL.md.
 
-Checkpoint: pending
+Checkpoint: 1cbf91b70fac6f796625435b32373904ef54bc2e
 
 Verification: two acceptance checks, both run first against the unfixed code, where both fail, and both pass against the
 fixed one. `fragment_accumulator_rejection_strands_no_pieces` is the check as filed: a fragment carrying a good piece
