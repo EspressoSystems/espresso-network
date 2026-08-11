@@ -5789,6 +5789,7 @@ dependencies = [
  "hotshot-task-impls",
  "hotshot-testing",
  "hotshot-types",
+ "http-wire",
  "jf-advz",
  "lru 0.12.5",
  "num_cpus",
@@ -5829,6 +5830,7 @@ dependencies = [
  "hotshot-testing",
  "hotshot-types",
  "http-client",
+ "http-wire",
  "jf-advz",
  "nonempty-collections",
  "quick_cache",
@@ -6116,6 +6118,7 @@ dependencies = [
 name = "hotshot-query-service"
 version = "0.1.76"
 dependencies = [
+ "aide",
  "alloy",
  "anyhow",
  "ark-serialize 0.5.0",
@@ -6331,6 +6334,7 @@ dependencies = [
  "hotshot-task-impls",
  "hotshot-types",
  "hotshot-utils",
+ "http-wire",
  "itertools 0.14.0",
  "jf-advz",
  "lru 0.12.5",
@@ -8130,7 +8134,6 @@ dependencies = [
  "disco-types",
  "espresso-node",
  "espresso-types",
- "futures",
  "hotshot-query-service",
  "hotshot-types",
  "http-client",

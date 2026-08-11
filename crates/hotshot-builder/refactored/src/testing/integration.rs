@@ -70,7 +70,7 @@ where
 
         // Serve the builder API based on global state
         let router = Arc::clone(&service).into_router();
-        hotshot_builder_api::v0_1::router::serve(&url, router);
+        http_wire::spawn_serve(&url, router);
 
         // Return the global state as a task that will be later started
         // by the test harness with event stream from one of HS nodes

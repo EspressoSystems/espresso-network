@@ -40,6 +40,7 @@ vbs = { workspace = true }
 vec1 = { workspace = true }
 
 [dev-dependencies]
-test-utils = { workspace = true }
 axum = { workspace = true }
+http-wire = { workspace = true, features = ["server"] }
+test-utils = { workspace = true }
 tracing-test = { workspace = true }

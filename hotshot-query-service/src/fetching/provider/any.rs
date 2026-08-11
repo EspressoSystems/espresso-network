@@ -327,8 +327,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let (port, _server) =
-            test_fixtures::serve_availability(MockBase::instance(), network.data_source()).await;
+        let (port, _server) = test_fixtures::serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let db = TmpDb::init().await;

@@ -28,7 +28,6 @@ use hotshot_builder_api::{
         self,
         block_info::{AvailableBlockData, AvailableBlockInfo},
         builder::BuildError,
-        router,
     },
     v0_2::block_info::AvailableBlockHeaderInputV1,
 };
@@ -241,7 +240,7 @@ impl<TYPES: NodeType> SimpleBuilderSource<TYPES> {
     where
         <TYPES as NodeType>::InstanceState: Default,
     {
-        router::serve(&url, builder_source_router::<TYPES, Self>(self));
+        http_wire::spawn_serve(&url, builder_source_router::<TYPES, Self>(self));
     }
 }
 

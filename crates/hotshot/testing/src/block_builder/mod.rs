@@ -83,7 +83,7 @@ pub fn run_builder_source<TYPES, Source>(
 {
     spawn(async move {
         let start_builder = |url: Url, source: Source| -> _ {
-            router::serve(&url, builder_source_router::<TYPES, Source>(source))
+            http_wire::spawn_serve(&url, builder_source_router::<TYPES, Source>(source))
         };
 
         let mut handle = Some(start_builder(url.clone(), source.clone()));

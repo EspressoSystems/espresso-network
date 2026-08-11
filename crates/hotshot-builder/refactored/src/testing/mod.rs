@@ -71,7 +71,7 @@ impl TestServiceWrapper {
         let port = test_utils::reserve_tcp_port().unwrap();
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
         let router = Arc::clone(&global_state).into_router();
-        hotshot_builder_api::v0_1::router::serve(&url, router);
+        http_wire::spawn_serve(&url, router);
         let client = BuilderClient::new(url, Duration::from_secs(5));
         assert!(client.connect(Duration::from_secs(1)).await);
         Self {

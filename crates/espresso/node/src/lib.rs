@@ -981,8 +981,8 @@ pub mod testing {
         network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
-        Event, FeeAccount, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction,
-        Upgrade, UpgradeMap, UpgradeMode,
+        Event, FeeAccount, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction, Upgrade,
+        UpgradeMap, UpgradeMode,
         eth_signature_key::EthKeyPair,
         v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
     };

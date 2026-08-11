@@ -40,13 +40,13 @@ use hotshot_types::{
     },
 };
 use http_client::{Url, error::ClientErr};
-use http_wire::{self as wire, ServerError, WireFormat, cors_layer, healthcheck_response};
+use http_wire::{self as wire, ServerError, cors_layer, healthcheck_response};
 use libp2p_identity::{
     Keypair, PeerId,
     ed25519::{Keypair as EdKeypair, SecretKey},
 };
 use multiaddr::Multiaddr;
-use serde::{Serialize, de::DeserializeOwned};
+use serde::de::DeserializeOwned;
 use tokio::net::TcpListener;
 use vbs::{BinarySerializer, Serializer, version::StaticVersion};
 
@@ -674,30 +674,6 @@ where
 /// Shared, lock-guarded orchestrator state, cloned into every axum handler via `State`.
 type SharedOrchestratorState<TYPES> = Arc<RwLock<OrchestratorState<TYPES>>>;
 
-/// Wire format of the orchestrator: [`OrchestratorVersion`] VBS framing and the `ServerError`
-/// envelope, which `OrchestratorClient` decodes.
-struct OrchestratorWireFormat;
-
-impl WireFormat for OrchestratorWireFormat {
-    type Error = ServerError;
-    type Version = OrchestratorVersion;
-
-    fn status(err: &ServerError) -> StatusCode {
-        err.status
-    }
-
-    fn serialize_failure(message: String) -> ServerError {
-        ServerError {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            message,
-        }
-    }
-}
-
-fn respond<T: Serialize>(headers: &HeaderMap, result: Result<T, ServerError>) -> Response {
-    wire::respond::<OrchestratorWireFormat, _>(headers, result)
-}
-
 fn malformed_body() -> ServerError {
     ServerError {
         status: StatusCode::BAD_REQUEST,
@@ -743,7 +719,7 @@ async fn post_identity<TYPES: NodeType>(
             .post_identity(libp2p_address, libp2p_public_key),
         Err(err) => Err(err),
     };
-    respond(&headers, result)
+    wire::respond::<ServerError, _>(&headers, result)
 }
 
 async fn post_getconfig<TYPES: NodeType>(
@@ -752,7 +728,7 @@ async fn post_getconfig<TYPES: NodeType>(
     headers: HeaderMap,
 ) -> Response {
     let result = state.write().await.post_getconfig(node_index);
-    respond(&headers, result)
+    wire::respond::<ServerError, _>(&headers, result)
 }
 
 async fn get_tmp_node_index<TYPES: NodeType>(
@@ -760,7 +736,7 @@ async fn get_tmp_node_index<TYPES: NodeType>(
     headers: HeaderMap,
 ) -> Response {
     let result = state.write().await.get_tmp_node_index();
-    respond(&headers, result)
+    wire::respond::<ServerError, _>(&headers, result)
 }
 
 async fn post_pubkey<TYPES: NodeType>(
@@ -776,7 +752,7 @@ async fn post_pubkey<TYPES: NodeType>(
             .register_public_key(&mut pubkey, is_da, libp2p_address, libp2p_public_key),
         Err(err) => Err(err),
     };
-    respond(&headers, result)
+    wire::respond::<ServerError, _>(&headers, result)
 }
 
 async fn peer_pubconfig_ready<TYPES: NodeType>(
@@ -784,7 +760,7 @@ async fn peer_pubconfig_ready<TYPES: NodeType>(
     headers: HeaderMap,
 ) -> Response {
     let result = state.read().await.peer_pub_ready();
-    respond(&headers, result)
+    wire::respond::<ServerError, _>(&headers, result)
 }
 
 async fn post_config_after_peer_collected<TYPES: NodeType>(
@@ -792,7 +768,7 @@ async fn post_config_after_peer_collected<TYPES: NodeType>(
     headers: HeaderMap,
 ) -> Response {
     let result = state.write().await.post_config_after_peer_collected();
-    respond(&headers, result)
+    wire::respond::<ServerError, _>(&headers, result)
 }
 
 async fn post_ready<TYPES: NodeType>(
@@ -804,7 +780,7 @@ async fn post_ready<TYPES: NodeType>(
         Ok(peer_config) => state.write().await.post_ready(&peer_config),
         Err(err) => Err(err),
     };
-    respond(&headers, result)
+    wire::respond::<ServerError, _>(&headers, result)
 }
 
 async fn post_manual_start<TYPES: NodeType>(
@@ -814,7 +790,7 @@ async fn post_manual_start<TYPES: NodeType>(
 ) -> Response {
     // The raw body is used as-is, with no framing.
     let result = state.write().await.post_manual_start(body.to_vec());
-    respond(&headers, result)
+    wire::respond::<ServerError, _>(&headers, result)
 }
 
 async fn get_start<TYPES: NodeType>(
@@ -822,7 +798,7 @@ async fn get_start<TYPES: NodeType>(
     headers: HeaderMap,
 ) -> Response {
     let result = state.read().await.get_start();
-    respond(&headers, result)
+    wire::respond::<ServerError, _>(&headers, result)
 }
 
 async fn post_results<TYPES: NodeType>(
@@ -834,7 +810,7 @@ async fn post_results<TYPES: NodeType>(
     // caller (`client.rs`'s `post_bench_results`) always sends well-formed JSON.
     let metrics: BenchResults = serde_json::from_slice(&body).unwrap();
     let result = state.write().await.post_run_results(metrics);
-    respond(&headers, result)
+    wire::respond::<ServerError, _>(&headers, result)
 }
 
 async fn post_builder<TYPES: NodeType>(
@@ -866,7 +842,7 @@ async fn post_builder<TYPES: NodeType>(
         },
         Err(err) => Err(err),
     };
-    respond(&headers, result)
+    wire::respond::<ServerError, _>(&headers, result)
 }
 
 async fn get_builders<TYPES: NodeType>(
@@ -874,7 +850,7 @@ async fn get_builders<TYPES: NodeType>(
     headers: HeaderMap,
 ) -> Response {
     let result = state.read().await.get_builders();
-    respond(&headers, result)
+    wire::respond::<ServerError, _>(&headers, result)
 }
 
 /// Builds the `api` module's routes. Existing clients call these both directly (e.g.

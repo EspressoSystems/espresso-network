@@ -10,8 +10,8 @@ anyhow = { workspace = true }
 async-broadcast = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
-axum = { workspace = true }
 atomic = { workspace = true }
+axum = { workspace = true }
 bincode = { workspace = true }
 bytemuck = { workspace = true }
 coarsetime = { workspace = true }
@@ -37,6 +37,7 @@ hotshot-example-types = { workspace = true }
 hotshot-macros = { workspace = true }
 hotshot-task-impls = { workspace = true }
 hotshot-testing = { workspace = true }
+http-wire = { workspace = true, features = ["server"] }
 num_cpus = { workspace = true }
 test-log = { workspace = true }
 test-utils = { workspace = true }

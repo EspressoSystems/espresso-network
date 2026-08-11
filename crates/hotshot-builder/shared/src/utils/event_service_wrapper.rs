@@ -211,9 +211,9 @@ mod tests {
         };
         let router = events::app(axum::Router::new().nest(
             &format!("/{path}"),
-            events::events_router::<TestTypes, _, MockVersion>(source),
+            events::events_router::<TestTypes, _>(source),
         ));
-        events::serve(&bind_url, router)
+        http_wire::spawn_serve(&bind_url, router)
     }
 
     #[tokio::test(flavor = "multi_thread")]

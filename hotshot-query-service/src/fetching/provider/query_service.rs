@@ -344,10 +344,10 @@ mod test {
     use axum::{Router, extract::Path, http::HeaderMap, response::Response, routing::get};
     use committable::Committable;
     use futures::{future::join, stream::StreamExt};
-    use hotshot_example_types::node_types::{EpochVersion, TEST_VERSIONS};
+    use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::data::ViewNumber;
+    use http_wire::respond;
     use tokio::{task::JoinHandle, time::timeout};
-    use vbs::version::StaticVersion;
 
     use super::*;
     use crate::{
@@ -378,7 +378,6 @@ mod test {
     };
 
     type Provider = TestProvider<TrustedQueryServiceProvider<MockBase>>;
-    type EpochProvider = TestProvider<TrustedQueryServiceProvider<EpochVersion>>;
 
     fn ignore<T>(_: T) {}
 
@@ -429,7 +428,7 @@ mod test {
     async fn serve_availability(
         data_source: impl AvailabilityDataSource<MockTypes> + Send + Sync + 'static,
     ) -> (u16, JoinHandle<()>) {
-        test_fixtures::serve_availability(MockBase::instance(), data_source).await
+        test_fixtures::serve_availability(data_source).await
     }
 
     fn trusted_provider(port: u16) -> TrustedQueryServiceProvider<MockBase> {
@@ -682,16 +681,14 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let (port, _server) =
-            test_fixtures::serve_availability(EpochVersion::instance(), network.data_source())
-                .await;
+        let (port, _server) = test_fixtures::serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         // Use our special test provider that handles epoch version transitions
         let db = TmpDb::init().await;
-        let provider = EpochProvider::new(TrustedQueryServiceProvider::new(
+        let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            EpochVersion::instance(),
+            MockBase::instance(),
         ));
         let data_source = data_source(&db, &provider).await;
 
@@ -2384,11 +2381,11 @@ mod test {
             )
             .await;
             common.height = height;
-            test_fixtures::respond::<StaticVersion<1, 0>, _>(&headers, Ok(common))
+            respond::<Error, _>(&headers, Ok(common))
         }
 
         let api = Router::new().route("/vid/common/{height}", get(get_vid_common));
-        test_fixtures::serve(test_fixtures::app::<StaticVersion<1, 0>>(api)).await
+        test_fixtures::serve(test_fixtures::app(api)).await
     }
 
     #[tokio::test]
@@ -2397,7 +2394,7 @@ mod test {
         let (port, _server) = old_server().await;
         let provider = TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            StaticVersion::<1, 0>::instance(),
+            MockBase::instance(),
         );
 
         // First fetch a range of VID common one by one, to get a ground truth.

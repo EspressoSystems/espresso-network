@@ -19,8 +19,8 @@ anyhow = { workspace = true }
 async-broadcast = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
-axum = { workspace = true }
 automod = { workspace = true }
+axum = { workspace = true }
 bincode = { workspace = true }
 bitvec = { workspace = true }
 committable = { workspace = true }
@@ -34,6 +34,7 @@ hotshot-task = { workspace = true }
 hotshot-task-impls = { workspace = true }
 hotshot-types = { workspace = true }
 hotshot-utils = { workspace = true }
+http-wire = { workspace = true, features = ["server"] }
 itertools = { workspace = true }
 jf-advz = { workspace = true }
 lru = { workspace = true }
