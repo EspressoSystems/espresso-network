@@ -15,7 +15,7 @@ pub enum BlockId {
 /// limits, cert2 and their streams) is served by `hotshot_query_service::availability::router`,
 /// which the binary mounts alongside these routes; see [`crate::create_router_v1`].
 #[async_trait]
-pub trait AvailabilityApi {
+pub trait AvailabilityApiExtension {
     type NamespaceProofQueryData: Serialize + Send + Sync + 'static;
 
     type IncorrectEncodingProof: Serialize + Send + Sync;

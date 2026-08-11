@@ -36,7 +36,6 @@ use hotshot_query_service::{
         MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot as HsSnapshot,
     },
     node::{NodeDataSource as _, WindowStart},
-    status::HasMetrics as _,
     types::HeightIndexed as _,
 };
 use hotshot_types::{
@@ -48,7 +47,6 @@ use jf_merkle_tree_compat::prelude::{
     MerkleNode as InternalMerkleNode, MerkleProof as InternalMerkleProof,
     MerkleProof as JfMerkleProof,
 };
-use prometheus::Encoder as _;
 use serde_json;
 use serialization_api::v2::{
     self, RewardAccountProofV2, RewardAccountQueryDataV2, RewardBalance, RewardBalances,
@@ -1274,11 +1272,11 @@ where
 }
 
 // ============================================================================
-// v1::AvailabilityApi implementation
+// v1::AvailabilityApiExtension implementation
 // ============================================================================
 
 #[async_trait]
-impl<D> espresso_api::v1::AvailabilityApi for NodeApiStateImpl<D>
+impl<D> espresso_api::v1::AvailabilityApiExtension for NodeApiStateImpl<D>
 where
     D: std::ops::Deref + Clone + Send + Sync + 'static,
     // No `RewardMerkleTreeDataSource` bound here: unlike `v1::RewardApi`, none of these methods
@@ -1792,46 +1790,16 @@ where
 }
 
 // ============================================================================
-// v1::StatusApi implementation
+// v1::StatusApiExtension implementation
 // ============================================================================
 
 #[async_trait]
-impl<D> espresso_api::v1::StatusApi for NodeApiStateImpl<D>
+impl<D> espresso_api::v1::StatusApiExtension for NodeApiStateImpl<D>
 where
     D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target: hotshot_query_service::status::StatusDataSource + NodeKeysDataSource + Send + Sync,
+    D::Target: NodeKeysDataSource + Send + Sync,
 {
     type Keys = NodePublicKeys;
-
-    async fn block_height(&self) -> anyhow::Result<u64> {
-        let ds = &*self.data_source;
-        let h = hotshot_query_service::status::StatusDataSource::block_height(ds)
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
-        Ok(h as u64)
-    }
-
-    async fn success_rate(&self) -> anyhow::Result<f64> {
-        let ds = &*self.data_source;
-        hotshot_query_service::status::StatusDataSource::success_rate(ds)
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))
-    }
-
-    async fn time_since_last_decide(&self) -> anyhow::Result<u64> {
-        let ds = &*self.data_source;
-        hotshot_query_service::status::StatusDataSource::elapsed_time_since_last_decide(ds)
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))
-    }
-
-    async fn metrics(&self) -> anyhow::Result<String> {
-        let ds = &*self.data_source;
-        // Standard prometheus text exposition of the registry.
-        let mut buffer = Vec::new();
-        prometheus::TextEncoder::new().encode(&ds.metrics().registry().gather(), &mut buffer)?;
-        Ok(String::from_utf8(buffer)?)
-    }
 
     async fn keys(&self) -> anyhow::Result<NodePublicKeys> {
         Ok(self.data_source.node_public_keys().await)

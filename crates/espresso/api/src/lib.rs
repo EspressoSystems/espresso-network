@@ -43,21 +43,22 @@ pub fn url(base: &::url::Url, path: impl AsRef<str>) -> ::url::Url {
 /// SQL mode registered it unconditionally. `submit`, `config`, `explorer`, `light-client`, and
 /// `hotshot-events` follow `Options`, matching `Options::init_with_query_module_sql`.
 ///
-/// `availability_base` is the `hotshot_query_service::availability` router, built by the caller
-/// from its data source; it is mounted unconditionally, alongside Espresso's extensions.
+/// `hqs_base` carries the `hotshot-query-service` modules' own routes, built by the caller from
+/// its data source and already nested at their module prefixes; see [`create_router_v1`]. This
+/// mode's data source backs every migrated module, so the caller nests all of them.
 pub async fn serve_axum<S>(
     port: u16,
     state: S,
-    availability_base: ApiRouter,
+    hqs_base: ApiRouter,
     modules: OptionalModules,
     max_connections: Option<usize>,
 ) -> anyhow::Result<()>
 where
     S: v1::RewardApi
-        + v1::AvailabilityApi
+        + v1::AvailabilityApiExtension
         + v1::BlockStateApi
         + v1::FeeStateApi
-        + v1::StatusApi
+        + v1::StatusApiExtension
         + v1::ConfigApi
         + v1::NodeApi
         + v1::CatchupApi
@@ -77,8 +78,9 @@ where
         + 'static,
 {
     let listener = bind_api(port).await?;
-    let mut router = axum::router_reward(state.clone())
-        .merge(axum::router_availability(state.clone(), availability_base))
+    let mut router = hqs_base
+        .merge(axum::router_reward(state.clone()))
+        .merge(axum::router_availability(state.clone()))
         .merge(axum::router_block_state(state.clone()))
         .merge(axum::router_fee_state(state.clone()))
         .merge(axum::router_status(state.clone()))
@@ -125,18 +127,18 @@ pub struct OptionalModules {
 /// reward/merklized-state/explorer/database traits, so those modules aren't served (a request to
 /// one of their routes 404s, matching tide).
 ///
-/// `availability_base` is the `hotshot_query_service::availability` router, built by the caller
-/// from its data source; it is mounted unconditionally, alongside Espresso's extensions.
+/// `hqs_base` carries the `hotshot-query-service` modules' own routes, built by the caller from
+/// its data source and already nested at their module prefixes; see [`create_router_v1`].
 pub async fn serve_axum_fs<S>(
     port: u16,
     state: S,
-    availability_base: ApiRouter,
+    hqs_base: ApiRouter,
     modules: OptionalModules,
     max_connections: Option<usize>,
 ) -> anyhow::Result<()>
 where
-    S: v1::StatusApi
-        + v1::AvailabilityApi
+    S: v1::StatusApiExtension
+        + v1::AvailabilityApiExtension
         + v1::NodeApi
         + v1::TokenApi
         + v1::CatchupApi
@@ -150,8 +152,9 @@ where
         + 'static,
 {
     let listener = bind_api(port).await?;
-    let mut router = axum::router_status(state.clone())
-        .merge(axum::router_availability(state.clone(), availability_base))
+    let mut router = hqs_base
+        .merge(axum::router_status(state.clone()))
+        .merge(axum::router_availability(state.clone()))
         .merge(axum::router_node(state.clone()))
         .merge(axum::router_token(state.clone()))
         .merge(axum::router_catchup(state.clone()))
@@ -177,14 +180,18 @@ where
 /// Serve the status-only API: no availability/node/token data source is available, so only
 /// status and the HotShot modules (submit, catchup, state-signature, config, hotshot-events) can
 /// be served. State-signature is always on; the rest follow `Options`.
+///
+/// Status is the one query-service module a metrics-only data source can back, so `hqs_base`
+/// carries only that module's routes here: this mode serves no availability route.
 pub async fn serve_axum_status<S>(
     port: u16,
     state: S,
+    hqs_base: ApiRouter,
     modules: OptionalModules,
     max_connections: Option<usize>,
 ) -> anyhow::Result<()>
 where
-    S: v1::StatusApi
+    S: v1::StatusApiExtension
         + v1::SubmitApi
         + v1::CatchupApi
         + v1::StateSignatureApi
@@ -196,8 +203,9 @@ where
         + 'static,
 {
     let listener = bind_api(port).await?;
-    let router =
-        axum::router_status(state.clone()).merge(axum::router_state_signature(state.clone()));
+    let router = hqs_base
+        .merge(axum::router_status(state.clone()))
+        .merge(axum::router_state_signature(state.clone()));
     let router = merge_hotshot_modules(router, &state, modules);
     serve_router(
         listener,

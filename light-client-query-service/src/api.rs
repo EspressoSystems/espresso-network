@@ -42,10 +42,6 @@ where
     })
 }
 
-async fn healthcheck(headers: HeaderMap) -> Response {
-    healthcheck_response(&headers)
-}
-
 fn range_bounds(from: Option<u64>, to: Option<u64>) -> (Bound<usize>, Bound<usize>) {
     (
         from.map_or(Bound::Unbounded, |f| Bound::Included(f as usize)),
@@ -365,7 +361,10 @@ pub fn router(ds: DataSource) -> Router {
         )
         .nest("/node", node_router(ds));
     Router::new()
-        .route("/healthcheck", get(healthcheck))
+        .route(
+            "/healthcheck",
+            get(|headers: HeaderMap| async move { healthcheck_response(&headers) }),
+        )
         .merge(api.clone())
         .nest("/v1", api)
         .layer(cors_layer())

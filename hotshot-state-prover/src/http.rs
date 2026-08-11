@@ -2,7 +2,7 @@
 //! prover services.
 
 use alloy::primitives::Address;
-use axum::{Json, Router, http::HeaderMap, response::Response, routing::get};
+use axum::{Json, Router, http::HeaderMap, routing::get};
 use http_wire::{cors_layer, healthcheck_response};
 
 /// Serves the light client contract address at the paths tide-disco used to expose it:
@@ -19,7 +19,10 @@ fn router(light_client_address: Address) -> Router {
             "/v0/api/lightclient_contract",
             get(move || async move { Json(light_client_address) }),
         )
-        .route("/healthcheck", get(healthcheck))
+        .route(
+            "/healthcheck",
+            get(|headers: HeaderMap| async move { healthcheck_response(&headers) }),
+        )
         .layer(cors_layer())
 }
 
@@ -41,10 +44,6 @@ pub(crate) fn start_light_client_contract_server(port: u16, light_client_address
             tracing::error!("Prover http server on http://{addr} stopped: {err}");
         }
     });
-}
-
-async fn healthcheck(headers: HeaderMap) -> Response {
-    healthcheck_response(&headers)
 }
 
 #[cfg(test)]

@@ -135,16 +135,15 @@ where
         .with_state(state)
 }
 
-async fn healthcheck(headers: HeaderMap) -> Response {
-    healthcheck_response(&headers)
-}
-
 /// Wraps module routers with the app-level `healthcheck`, a request body limit, and permissive
 /// CORS headers. Version mounting is up to the caller, because the events module's semantics
 /// depend on the mounted version (v0 streams legacy events).
 pub fn app(api: Router) -> Router {
     Router::new()
-        .route("/healthcheck", get(healthcheck))
+        .route(
+            "/healthcheck",
+            get(|headers: HeaderMap| async move { healthcheck_response(&headers) }),
+        )
         .merge(api)
         .layer(body_limit_layer())
         .layer(cors_layer())

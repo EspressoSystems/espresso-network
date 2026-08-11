@@ -156,7 +156,10 @@ where
 /// permissive CORS headers. Mounting the module prefix is up to the caller.
 pub fn app(api: Router) -> Router {
     Router::new()
-        .route("/healthcheck", get(healthcheck))
+        .route(
+            "/healthcheck",
+            get(|headers: HeaderMap| async move { healthcheck_response(&headers) }),
+        )
         .merge(api)
         .layer(body_limit_layer())
         .layer(cors_layer())
@@ -457,10 +460,6 @@ where
                 )
             }),
         )
-}
-
-async fn healthcheck(headers: HeaderMap) -> Response {
-    healthcheck_response(&headers)
 }
 
 /// Parses a TaggedBase64 path parameter the way tide-disco's `blob_param` did: any failure is a

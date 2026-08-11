@@ -25,7 +25,7 @@ use anyhow::{Context, bail, ensure};
 use axum::{
     extract::State,
     http::{HeaderMap, StatusCode as AxumStatusCode, header},
-    response::{IntoResponse, Response},
+    response::IntoResponse,
     routing::get,
 };
 use clap::Parser;
@@ -1383,7 +1383,10 @@ impl Client {
 async fn serve(port: u16, metrics: PrometheusMetrics) {
     let metrics = Arc::new(metrics);
     let app = axum::Router::new()
-        .route("/healthcheck", get(healthcheck))
+        .route(
+            "/healthcheck",
+            get(|headers: HeaderMap| async move { healthcheck_response(&headers) }),
+        )
         .route("/status/metrics", get(status_metrics))
         .route("/v0/status/metrics", get(status_metrics))
         .with_state(metrics)
@@ -1400,10 +1403,6 @@ async fn serve(port: u16, metrics: PrometheusMetrics) {
     if let Err(err) = axum::serve(listener, app).await {
         tracing::error!("web server exited unexpectedly: {err:#}");
     }
-}
-
-async fn healthcheck(headers: HeaderMap) -> Response {
-    healthcheck_response(&headers)
 }
 
 /// Prometheus text exposition of `metrics`, matching the `text/plain; charset=utf-8` content type

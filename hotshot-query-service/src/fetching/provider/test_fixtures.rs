@@ -38,10 +38,6 @@ use crate::{
     testing::mocks::MockTypes,
 };
 
-async fn healthcheck(headers: HeaderMap) -> Response {
-    healthcheck_response(&headers)
-}
-
 /// Unknown routes are reported the way tide-disco reported them: the provider's ranged-VID
 /// fallback keys off the "No route matches" message to detect old peers.
 async fn no_route(headers: HeaderMap, uri: Uri) -> Response {
@@ -56,7 +52,10 @@ async fn no_route(headers: HeaderMap, uri: Uri) -> Response {
 /// app-level healthcheck and the tide-style unknown-route error.
 pub(crate) fn app(api: Router) -> Router {
     Router::new()
-        .route("/healthcheck", get(healthcheck))
+        .route(
+            "/healthcheck",
+            get(|headers: HeaderMap| async move { healthcheck_response(&headers) }),
+        )
         .nest("/availability", api)
         .fallback(no_route)
 }

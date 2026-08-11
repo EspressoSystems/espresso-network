@@ -251,10 +251,6 @@ async fn get_latest_state_v3(state: &SharedState) -> Result<LCV3StateSignaturesB
     LCV3StateRelayServerDataSource::get_latest_signature_bundle(&*state)
 }
 
-async fn healthcheck(headers: HeaderMap) -> Response {
-    healthcheck_response(&headers)
-}
-
 async fn post_state(State(state): State<SharedState>, headers: HeaderMap, body: Bytes) -> Response {
     wire::respond(
         &headers,
@@ -304,7 +300,10 @@ const LATEST_STATE_PATH: &str = "/api/lateststate";
 /// `lateststate` per version.
 fn router(state: SharedState) -> Router {
     let mut router = Router::<SharedState>::new()
-        .route("/healthcheck", get(healthcheck))
+        .route(
+            "/healthcheck",
+            get(|headers: HeaderMap| async move { healthcheck_response(&headers) }),
+        )
         .route(STATE_PATH, post(post_state).get(get_state))
         .route(
             LEGACY_STATE_PATH,

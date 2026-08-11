@@ -89,10 +89,6 @@ fn parse_sender_signature(
     Ok((sender, signature))
 }
 
-async fn healthcheck(headers: HeaderMap) -> Response {
-    healthcheck_response(&headers)
-}
-
 async fn available_blocks(
     State(state): State<SharedState>,
     headers: HeaderMap,
@@ -302,7 +298,10 @@ pub fn router(state: ProxyGlobalState<SeqTypes>) -> Router {
         .nest("/block_info", block_info_router(state.clone()))
         .nest("/txn_submit", txn_submit_router(state));
     Router::new()
-        .route("/healthcheck", get(healthcheck))
+        .route(
+            "/healthcheck",
+            get(|headers: HeaderMap| async move { healthcheck_response(&headers) }),
+        )
         .merge(api.clone())
         .nest("/v0", api)
         .layer(body_limit_layer())

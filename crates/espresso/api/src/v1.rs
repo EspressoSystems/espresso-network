@@ -18,7 +18,7 @@ pub mod status;
 pub mod submit;
 pub mod token;
 
-pub use availability::{AvailabilityApi, BlockId};
+pub use availability::{AvailabilityApiExtension, BlockId};
 pub use catchup::CatchupApi;
 pub use config::ConfigApi;
 pub use database::DatabaseApi;
@@ -29,6 +29,6 @@ pub use merklized_state::{BlockStateApi, FeeStateApi, Snapshot};
 pub use node::{HeaderWindowStart, NodeApi, VidShareId};
 pub use reward_state_v2::RewardApi;
 pub use state_signature::StateSignatureApi;
-pub use status::StatusApi;
+pub use status::StatusApiExtension;
 pub use submit::SubmitApi;
 pub use token::TokenApi;

@@ -86,10 +86,6 @@ fn parse_sender_signature<Types: NodeType>(
     Ok((sender, signature))
 }
 
-async fn healthcheck(headers: HeaderMap) -> Response {
-    healthcheck_response(&headers)
-}
-
 async fn available_blocks<Types: NodeType, S: BuilderDataSource<Types>>(
     State(state): State<S>,
     headers: HeaderMap,
@@ -304,7 +300,10 @@ where
 /// body limit, and permissive CORS headers.
 pub fn app(api: Router) -> Router {
     Router::new()
-        .route("/healthcheck", get(healthcheck))
+        .route(
+            "/healthcheck",
+            get(|headers: HeaderMap| async move { healthcheck_response(&headers) }),
+        )
         .merge(api.clone())
         .nest("/v0", api)
         .layer(body_limit_layer())

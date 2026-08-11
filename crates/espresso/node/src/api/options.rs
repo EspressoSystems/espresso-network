@@ -5,6 +5,7 @@ use std::{collections::BTreeSet, env, sync::Arc};
 use ::light_client::{state::LightClientOptions, storage::LightClientSqliteOptions};
 use anyhow::{Context, bail};
 use clap::Parser;
+use espresso_api::{ApiRouter, routes};
 use espresso_telemetry as telemetry;
 use espresso_types::{
     PubKey, SeqTypes,
@@ -12,9 +13,14 @@ use espresso_types::{
 };
 use futures::{channel::oneshot, future::BoxFuture};
 use hotshot_query_service::{
-    availability::{Options as AvailabilityOptions, router::availability_router},
+    availability::{
+        AvailabilityDataSource, Options as AvailabilityOptions, router::availability_router,
+    },
     data_source::{ExtensibleDataSource, MetricsDataSource},
-    status::{HasMetrics, UpdateStatusData},
+    status::{
+        HasMetrics, Options as StatusOptions, StatusDataSource, UpdateStatusData,
+        router::status_router,
+    },
 };
 use hotshot_types::traits::{
     metrics::{Metrics, NoMetrics},
@@ -204,6 +210,12 @@ impl Options {
             telemetry::set_registry(Arc::new(ds.metrics().registry().clone()));
             tasks.spawn("process_metrics", ProcessMetrics::new(ds.metrics()).run());
             let axum_ds = Arc::new(ExtensibleDataSource::new(ds, state.clone()));
+            // A metrics data source backs the status module and nothing else, so this is the only
+            // query-service module this mode can serve.
+            let hqs_base = ApiRouter::new().nest(
+                routes::v1::STATUS_PREFIX,
+                status_router(&StatusOptions::default(), (*axum_ds).clone()),
+            );
 
             let port = self.http.port;
             let env_vars = get_public_env_vars().unwrap_or_default();
@@ -221,7 +233,8 @@ impl Options {
                     .with_env_vars(env_vars)
                     .with_public_node_config(node_cfg);
                 if let Err(e) =
-                    espresso_api::serve_axum_status(port, state, modules, max_connections).await
+                    espresso_api::serve_axum_status(port, state, hqs_base, modules, max_connections)
+                        .await
                 {
                     tracing::error!("Axum server error: {}", e);
                 }
@@ -312,11 +325,7 @@ impl Options {
 
         let port = self.http.port;
         let ds_for_axum = ds.clone();
-        // `espresso-api` is agnostic of the node types, so the base availability routes are built
-        // here and mounted there. The default options are the 500ms fetch timeout and the 500/100
-        // small/large object range limits this API has always enforced.
-        let availability_base =
-            availability_router::<SeqTypes, _>(&AvailabilityOptions::default(), (*ds).clone());
+        let hqs_base = hqs_base((*ds).clone());
         let env_vars = get_public_env_vars().unwrap_or_default();
         let node_cfg = self.public_node_config.as_deref().cloned();
         let modules = espresso_api::OptionalModules {
@@ -330,14 +339,8 @@ impl Options {
             let state = NodeApiStateImpl::new(ds_for_axum)
                 .with_env_vars(env_vars)
                 .with_public_node_config(node_cfg);
-            if let Err(e) = espresso_api::serve_axum_fs(
-                port,
-                state,
-                availability_base,
-                modules,
-                max_connections,
-            )
-            .await
+            if let Err(e) =
+                espresso_api::serve_axum_fs(port, state, hqs_base, modules, max_connections).await
             {
                 tracing::error!("Axum server error: {}", e);
             }
@@ -405,11 +408,7 @@ impl Options {
 
         let port = self.http.port;
         let ds_for_axum = ds.clone();
-        // `espresso-api` is agnostic of the node types, so the base availability routes are built
-        // here and mounted there. The default options are the 500ms fetch timeout and the 500/100
-        // small/large object range limits this API has always enforced.
-        let availability_base =
-            availability_router::<SeqTypes, _>(&AvailabilityOptions::default(), (*ds).clone());
+        let hqs_base = hqs_base((*ds).clone());
         let env_vars = get_public_env_vars().unwrap_or_default();
         let node_cfg = self.public_node_config.as_deref().cloned();
         let modules = espresso_api::OptionalModules {
@@ -426,8 +425,7 @@ impl Options {
                 .with_env_vars(env_vars)
                 .with_public_node_config(node_cfg);
             if let Err(e) =
-                espresso_api::serve_axum(port, state, availability_base, modules, max_connections)
-                    .await
+                espresso_api::serve_axum(port, state, hqs_base, modules, max_connections).await
             {
                 tracing::error!("Axum server error: {}", e);
             }
@@ -560,6 +558,28 @@ where
     telemetry::set_registry(Arc::new(ds.metrics().registry().clone()));
     let ds = Arc::new(ExtensibleDataSource::new(ds, state));
     (metrics, ds)
+}
+
+/// The `hotshot-query-service` modules' own routes, each nested at the prefix `espresso-api`
+/// mounts that module on, ready to merge into the v1 router. `espresso-api` is agnostic of the
+/// node types, so it cannot build these; both query modes back every migrated module from the
+/// same data source.
+///
+/// The default availability options are the 500ms fetch timeout and the 500/100 small/large object
+/// range limits this API has always enforced.
+fn hqs_base<D>(ds: D) -> ApiRouter
+where
+    D: AvailabilityDataSource<SeqTypes> + StatusDataSource + Clone + Send + Sync + 'static,
+{
+    ApiRouter::new()
+        .nest(
+            routes::v1::AVAILABILITY_PREFIX,
+            availability_router::<SeqTypes, _>(&AvailabilityOptions::default(), ds.clone()),
+        )
+        .nest(
+            routes::v1::STATUS_PREFIX,
+            status_router(&StatusOptions::default(), ds),
+        )
 }
 
 /// The environment variables listed in `api/public-env-vars.toml`, as `KEY=value` strings.

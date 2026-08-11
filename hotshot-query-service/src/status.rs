@@ -24,6 +24,7 @@
 //! * summary statistics
 
 pub(crate) mod data_source;
+pub mod router;
 
 pub use data_source::*;
 pub use hotshot_query_service_types::status::Error;

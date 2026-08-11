@@ -287,15 +287,14 @@ impl<T: schemars::JsonSchema> aide::operation::OperationInput for SendQuery<T> {
 
 /// Create a combined router serving both v1 and v2 APIs.
 ///
-/// `availability_base` is the `hotshot_query_service::availability` router; see
-/// [`create_router_v1`].
-pub fn create_combined_router<S>(state: S, availability_base: ApiRouter) -> Router
+/// `hqs_base` is the `hotshot-query-service` router; see [`create_router_v1`].
+pub fn create_combined_router<S>(state: S, hqs_base: ApiRouter) -> Router
 where
     S: v1::RewardApi
-        + v1::AvailabilityApi
+        + v1::AvailabilityApiExtension
         + v1::BlockStateApi
         + v1::FeeStateApi
-        + v1::StatusApi
+        + v1::StatusApiExtension
         + v1::ConfigApi
         + v1::NodeApi
         + v1::CatchupApi
@@ -314,7 +313,7 @@ where
         + Sync
         + 'static,
 {
-    let router_v1 = create_router_v1(state.clone(), availability_base);
+    let router_v1 = create_router_v1(state.clone(), hqs_base);
     let router_v2 = create_router_v2(state);
 
     with_top_level_routes(router_v2.merge(router_v1))
@@ -324,25 +323,23 @@ where
 
 /// Add the routes that every mode serves regardless of which API modules are enabled:
 /// `/`, `/healthcheck`, `/v1/{module}/healthcheck`, and `/version`. Callers apply CORS.
+///
+/// `/v1/{module}/healthcheck` is reached by legacy clients via the `/{module}/healthcheck`
+/// rewrite. Divergence from tide-disco: it matches any `{module}` string, so unregistered module
+/// names report healthy instead of 404. Constraining it to the registered set would have to track
+/// which modules each serve mode mounts; not worth it for a liveness probe.
 pub(crate) fn with_top_level_routes(router: Router) -> Router {
     router
         .route("/", get(redirect_to_docs))
-        .route("/healthcheck", get(healthcheck))
-        .route("/v1/{module}/healthcheck", get(module_healthcheck))
+        .route(
+            "/healthcheck",
+            get(|headers: HeaderMap| async move { healthcheck_response(&headers) }),
+        )
+        .route(
+            "/v1/{module}/healthcheck",
+            get(|headers: HeaderMap| async move { module_healthcheck_response(&headers) }),
+        )
         .route("/version", get(version))
-}
-
-async fn healthcheck(headers: HeaderMap) -> Response {
-    healthcheck_response(&headers)
-}
-
-/// `/v1/{module}/healthcheck`, reached by legacy clients via the `/{module}/healthcheck` rewrite.
-///
-/// Divergence from tide-disco: matches any `{module}` string, so unregistered module names report
-/// healthy instead of 404. Constraining it to the registered set would have to track which
-/// modules each serve mode mounts; not worth it for a liveness probe.
-async fn module_healthcheck(headers: HeaderMap) -> Response {
-    module_healthcheck_response(&headers)
 }
 
 /// Tide-disco-compatible version response. Tide emits the binary's clap version; we emit the
@@ -624,13 +621,13 @@ where
         .with_state(state)
 }
 
-/// Espresso's availability extensions, mounted alongside `base`: the
-/// `hotshot_query_service::availability` router the caller builds from its concrete data source.
-/// `base` is nested at the module prefix, so its routes and their documentation land on the same
-/// `/v1/availability/...` paths they had when this crate re-declared them.
-pub(crate) fn router_availability<S>(state: S, base: ApiRouter) -> ApiRouter
+/// Espresso's availability extensions. The module's base routes come from
+/// `hotshot_query_service::availability`, which the caller builds from its concrete data source
+/// and passes to its serve entry point as part of the query-service router; see
+/// [`create_router_v1`].
+pub(crate) fn router_availability<S>(state: S) -> ApiRouter
 where
-    S: v1::AvailabilityApi + Clone + Send + Sync + 'static,
+    S: v1::AvailabilityApiExtension + Clone + Send + Sync + 'static,
 {
     // Route: /v1/availability/block/{height}/namespace/{namespace}
     let get_namespace_proof_by_height =
@@ -688,7 +685,7 @@ where
         };
 
     let get_state_cert_v1 = |State(state): State<S>, Path(epoch): Path<u64>| async move {
-        <S as v1::AvailabilityApi>::get_state_cert(&state, epoch)
+        <S as v1::AvailabilityApiExtension>::get_state_cert(&state, epoch)
             .await
             .map(ApiJson)
             .map_err(classify_availability_error)
@@ -790,7 +787,6 @@ where
             }),
         )
         .with_state(state)
-        .nest(routes::v1::AVAILABILITY_PREFIX, base)
 }
 
 pub(crate) fn router_block_state<S>(state: S) -> ApiRouter
@@ -938,81 +934,18 @@ where
         .with_state(state)
 }
 
+/// Espresso's status extension. The module's base routes (block height, success rate, time since
+/// last decide, Prometheus metrics) come from `hotshot_query_service::status`, which the caller
+/// builds from its concrete data source; see [`create_router_v1`].
 pub(crate) fn router_status<S>(state: S) -> ApiRouter
 where
-    S: v1::StatusApi + Clone + Send + Sync + 'static,
+    S: v1::StatusApiExtension + Clone + Send + Sync + 'static,
 {
-    let status_block_height = |State(state): State<S>| async move {
-        <S as v1::StatusApi>::block_height(&state)
-            .await
-            .map(ApiJson)
-            .map_err(ApiError::Internal)
-    };
-
-    let status_success_rate = |State(state): State<S>| async move {
-        <S as v1::StatusApi>::success_rate(&state)
-            .await
-            .map(ApiJson)
-            .map_err(ApiError::Internal)
-    };
-
-    let status_time_since_last_decide = |State(state): State<S>| async move {
-        <S as v1::StatusApi>::time_since_last_decide(&state)
-            .await
-            .map(ApiJson)
-            .map_err(ApiError::Internal)
-    };
-
-    let status_metrics = |State(state): State<S>| async move {
-        match <S as v1::StatusApi>::metrics(&state).await {
-            Ok(text) => (
-                [(
-                    axum::http::header::CONTENT_TYPE,
-                    "text/plain; charset=utf-8",
-                )],
-                text,
-            )
-                .into_response(),
-            Err(e) => ApiError::Internal(e).into_response(),
-        }
-    };
-
     let status_keys = |State(state): State<S>| async move {
-        <S as v1::StatusApi>::keys(&state)
-            .await
-            .map(ApiJson)
-            .map_err(ApiError::Internal)
+        state.keys().await.map(ApiJson).map_err(ApiError::Internal)
     };
 
     ApiRouter::new()
-        .api_route(
-            routes::v1::STATUS_BLOCK_HEIGHT_ROUTE,
-            get_with(status_block_height, |op| {
-                op.summary("Get latest committed block height")
-                    .description("Get the height of the latest committed block.")
-            }),
-        )
-        .api_route(
-            routes::v1::STATUS_SUCCESS_RATE_ROUTE,
-            get_with(status_success_rate, |op| {
-                op.summary("Get view success rate")
-                    .description("Get the fraction of views which resulted in a committed block.")
-            }),
-        )
-        .api_route(
-            routes::v1::STATUS_TIME_SINCE_LAST_DECIDE_ROUTE,
-            get_with(status_time_since_last_decide, |op| {
-                op.summary("Get time since last decide")
-                    .description("Get the time elapsed in seconds since the last decided view.")
-            }),
-        )
-        .api_route(
-            routes::v1::STATUS_METRICS_ROUTE,
-            get_with(status_metrics, |op| {
-                op.summary("Get Prometheus metrics")
-                    .description("Prometheus endpoint exposing consensus-related metrics.")
-            }),
-        )
         .api_route(
             routes::v1::STATUS_KEYS_ROUTE,
             get_with(status_keys, |op| {
@@ -2793,17 +2726,18 @@ where
 /// see [`ApiJson`]. The generated spec therefore documents routes, parameters, and summaries, but
 /// response bodies are mostly untyped.
 ///
-/// `availability_base` is the `hotshot_query_service::availability` router. This crate is
-/// deliberately agnostic of the concrete node types, so it cannot build that router itself; the
-/// caller does, from its data source, and this function mounts it under the availability prefix
-/// next to Espresso's own availability extensions.
-pub fn create_router_v1<S>(state: S, availability_base: ApiRouter) -> Router
+/// `hqs_base` carries the `hotshot-query-service` modules' own routes. This crate is deliberately
+/// agnostic of the concrete node types, so it cannot build them; the caller does, from its data
+/// source, and nests each at its `routes::v1::*_PREFIX` before passing them here as one router.
+/// Merging it puts those routes next to Espresso's extensions for the same modules, and brings
+/// their documentation into this spec.
+pub fn create_router_v1<S>(state: S, hqs_base: ApiRouter) -> Router
 where
     S: v1::RewardApi
-        + v1::AvailabilityApi
+        + v1::AvailabilityApiExtension
         + v1::BlockStateApi
         + v1::FeeStateApi
-        + v1::StatusApi
+        + v1::StatusApiExtension
         + v1::ConfigApi
         + v1::NodeApi
         + v1::CatchupApi
@@ -2821,8 +2755,9 @@ where
 {
     // Each `router_*` function already calls `with_state`, so the merged router is already
     // stateless (`ApiRouter<()>`) by the time it reaches `finish_api`.
-    let router = router_reward(state.clone())
-        .merge(router_availability(state.clone(), availability_base))
+    let router = hqs_base
+        .merge(router_reward(state.clone()))
+        .merge(router_availability(state.clone()))
         .merge(router_block_state(state.clone()))
         .merge(router_fee_state(state.clone()))
         .merge(router_status(state.clone()))
@@ -3257,6 +3192,30 @@ mod tests {
             )
     }
 
+    /// Stand-in for the `hotshot_query_service::status` router; see [`mock_availability_base`].
+    fn mock_status_base() -> ApiRouter {
+        ApiRouter::new()
+            .api_route(
+                "/block-height",
+                get_with(async || ApiJson(()), |op| op.summary("Get block height")),
+            )
+            .api_route(
+                "/metrics",
+                get_with(
+                    async || ApiJson(()),
+                    |op| op.summary("Get Prometheus metrics"),
+                ),
+            )
+    }
+
+    /// The query-service router a query mode passes in: every base nested at its module prefix,
+    /// the way the binary assembles it.
+    fn mock_hqs_base() -> ApiRouter {
+        ApiRouter::new()
+            .nest(routes::v1::AVAILABILITY_PREFIX, mock_availability_base())
+            .nest(routes::v1::STATUS_PREFIX, mock_status_base())
+    }
+
     fn rewritten_uri(uri: &str) -> String {
         let req = Request::builder()
             .uri(uri)
@@ -3444,7 +3403,7 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl v1::AvailabilityApi for MockState {
+    impl v1::AvailabilityApiExtension for MockState {
         type NamespaceProofQueryData = ();
         type IncorrectEncodingProof = ();
         type StateCertQueryDataV1 = ();
@@ -3530,21 +3489,9 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl v1::StatusApi for MockState {
+    impl v1::StatusApiExtension for MockState {
         type Keys = ();
 
-        async fn block_height(&self) -> anyhow::Result<u64> {
-            unimplemented!()
-        }
-        async fn success_rate(&self) -> anyhow::Result<f64> {
-            unimplemented!()
-        }
-        async fn time_since_last_decide(&self) -> anyhow::Result<u64> {
-            unimplemented!()
-        }
-        async fn metrics(&self) -> anyhow::Result<String> {
-            unimplemented!()
-        }
         async fn keys(&self) -> anyhow::Result<Self::Keys> {
             unimplemented!()
         }
@@ -4109,7 +4056,7 @@ mod tests {
 
     #[tokio::test]
     async fn v1_swagger_ui_serves_html() {
-        let router = create_router_v1(MockState, mock_availability_base());
+        let router = create_router_v1(MockState, mock_hqs_base());
         let req = Request::builder()
             .uri("/v1")
             .body(axum::body::Body::empty())
@@ -4130,7 +4077,7 @@ mod tests {
 
     #[tokio::test]
     async fn v1_openapi_spec_contains_known_route() {
-        let router = create_router_v1(MockState, mock_availability_base());
+        let router = create_router_v1(MockState, mock_hqs_base());
         let req = Request::builder()
             .uri(routes::v1::OPENAPI_SPEC_ROUTE)
             .body(axum::body::Body::empty())
@@ -4154,7 +4101,7 @@ mod tests {
     /// put them (and their documentation) back on the paths this crate used to declare itself.
     #[tokio::test]
     async fn v1_openapi_spec_documents_mounted_availability_base() {
-        let router = create_router_v1(MockState, mock_availability_base());
+        let router = create_router_v1(MockState, mock_hqs_base());
         let req = Request::builder()
             .uri(routes::v1::OPENAPI_SPEC_ROUTE)
             .body(axum::body::Body::empty())
@@ -4176,6 +4123,37 @@ mod tests {
         );
         // The extensions are still there alongside the base.
         assert!(paths.contains_key(routes::v1::STATE_CERT_V1_ROUTE));
+    }
+
+    /// The base status routes come from `hotshot-query-service` now, so the mount has to put them
+    /// (and their documentation) back on the paths this crate used to declare itself.
+    #[tokio::test]
+    async fn v1_openapi_spec_documents_mounted_status_base() {
+        let router = create_router_v1(MockState, mock_hqs_base());
+        let req = Request::builder()
+            .uri(routes::v1::OPENAPI_SPEC_ROUTE)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router, req).await.unwrap();
+        let spec: serde_json::Value =
+            serde_json::from_str(&body_string(resp).await).expect("valid JSON");
+        let paths = spec["paths"].as_object().expect("spec has paths");
+
+        for route in [
+            routes::v1::STATUS_BLOCK_HEIGHT_ROUTE,
+            routes::v1::STATUS_METRICS_ROUTE,
+        ] {
+            let item = paths
+                .get(route)
+                .unwrap_or_else(|| panic!("{route} missing from spec: {:?}", paths.keys()));
+            assert_eq!(item["get"]["tags"][0], "status");
+        }
+        assert_eq!(
+            paths[routes::v1::STATUS_BLOCK_HEIGHT_ROUTE]["get"]["summary"],
+            "Get block height"
+        );
+        // The extension is still there alongside the base.
+        assert!(paths.contains_key(routes::v1::STATUS_KEYS_ROUTE));
     }
 
     /// `submit` and the bulk `catchup` routes take bodies over axum's 2 MiB `Bytes` default, and
@@ -4304,7 +4282,12 @@ mod tests {
     /// the mounted modules.
     #[tokio::test]
     async fn serve_mode_assembly_serves_v1_docs() {
-        let api_router = router_status(MockState).merge(router_state_signature(MockState));
+        // The status-only mode's query-service router carries the status base and nothing else: it
+        // has no availability data source.
+        let api_router = ApiRouter::new()
+            .nest(routes::v1::STATUS_PREFIX, mock_status_base())
+            .merge(router_status(MockState))
+            .merge(router_state_signature(MockState));
         let router = with_top_level_routes(finish_v1_docs(api_router));
         let app = tower::Layer::layer(
             &tower::util::MapRequestLayer::new(rewrite_legacy_uri),
@@ -4358,7 +4341,7 @@ mod tests {
     /// Multi-segment templates declare one parameter per `{name}`, in template order.
     #[tokio::test]
     async fn v1_spec_declares_all_template_parameters() {
-        let router = create_router_v1(MockState, mock_availability_base());
+        let router = create_router_v1(MockState, mock_hqs_base());
         let req = Request::builder()
             .uri(routes::v1::OPENAPI_SPEC_ROUTE)
             .body(axum::body::Body::empty())

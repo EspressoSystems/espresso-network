@@ -163,9 +163,9 @@ impl v1::RewardApi for TestApi {
     }
 }
 
-// Implement v1::AvailabilityApi with test data
+// Implement v1::AvailabilityApiExtension with test data
 #[async_trait]
-impl v1::AvailabilityApi for TestApi {
+impl v1::AvailabilityApiExtension for TestApi {
     type NamespaceProofQueryData = (Vec<u8>, Option<Vec<u8>>); // (transactions, proof)
     type IncorrectEncodingProof = Vec<u8>;
     type StateCertQueryDataV1 = Vec<u8>;
@@ -271,21 +271,9 @@ impl v1::FeeStateApi for TestApi {
 }
 
 #[async_trait]
-impl v1::StatusApi for TestApi {
+impl v1::StatusApiExtension for TestApi {
     type Keys = serde_json::Value;
 
-    async fn block_height(&self) -> Result<u64> {
-        Ok(0)
-    }
-    async fn success_rate(&self) -> Result<f64> {
-        Ok(1.0)
-    }
-    async fn time_since_last_decide(&self) -> Result<u64> {
-        Ok(0)
-    }
-    async fn metrics(&self) -> Result<String> {
-        Ok(String::new())
-    }
     async fn keys(&self) -> Result<Self::Keys> {
         Ok(serde_json::Value::Null)
     }
@@ -1031,8 +1019,8 @@ async fn main() -> Result<()> {
         explorer: true,
         light_client: true,
     };
-    // The example has no hotshot-query-service data source, so the base availability routes
-    // are left unmounted; only Espresso's availability extensions are served.
+    // The example has no hotshot-query-service data source, so that crate's base routes are left
+    // unmounted; only Espresso's own extensions are served.
     espresso_api::serve_axum(
         API_PORT,
         state,

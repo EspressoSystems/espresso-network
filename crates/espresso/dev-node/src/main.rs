@@ -933,10 +933,6 @@ async fn set_hotshot_up(
     Ok(Json(()))
 }
 
-async fn healthcheck(headers: HeaderMap) -> Response {
-    healthcheck_response(&headers)
-}
-
 /// Serves the dev-info/set-hotshot-down/set-hotshot-up routes at both the `/v0/api/...` forms
 /// tide-disco served directly and the unversioned `/api/...` forms it served via a redirect
 /// (used by the Go SDK and our HTTP clients, respectively).
@@ -953,7 +949,10 @@ fn dev_node_router(state: DevNodeState) -> Router {
     Router::new()
         .merge(api.clone())
         .nest("/v0", api)
-        .route("/healthcheck", get(healthcheck))
+        .route(
+            "/healthcheck",
+            get(|headers: HeaderMap| async move { healthcheck_response(&headers) }),
+        )
         .layer(cors_layer())
 }
 

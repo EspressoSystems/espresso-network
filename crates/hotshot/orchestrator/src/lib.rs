@@ -703,10 +703,6 @@ fn decode_wrapped_peer_config<TYPES: NodeType>(
         .ok_or_else(malformed_body)
 }
 
-async fn healthcheck(headers: HeaderMap) -> Response {
-    healthcheck_response(&headers)
-}
-
 async fn post_identity<TYPES: NodeType>(
     State(state): State<SharedOrchestratorState<TYPES>>,
     headers: HeaderMap,
@@ -858,7 +854,10 @@ async fn get_builders<TYPES: NodeType>(
 /// mounted at the root and under `/v0`.
 fn api_router<TYPES: NodeType>() -> Router<SharedOrchestratorState<TYPES>> {
     Router::new()
-        .route("/healthcheck", get(healthcheck))
+        .route(
+            "/healthcheck",
+            get(|headers: HeaderMap| async move { healthcheck_response(&headers) }),
+        )
         .route("/identity", post(post_identity::<TYPES>))
         .route("/config/{node_index}", post(post_getconfig::<TYPES>))
         .route("/get_tmp_node_index", post(get_tmp_node_index::<TYPES>))
@@ -881,7 +880,10 @@ fn api_router<TYPES: NodeType>() -> Router<SharedOrchestratorState<TYPES>> {
 fn app<TYPES: NodeType>(state: SharedOrchestratorState<TYPES>) -> Router {
     let api = Router::new().nest("/api", api_router::<TYPES>());
     Router::new()
-        .route("/healthcheck", get(healthcheck))
+        .route(
+            "/healthcheck",
+            get(|headers: HeaderMap| async move { healthcheck_response(&headers) }),
+        )
         .merge(api.clone())
         .nest("/v0", api)
         .with_state(state)
