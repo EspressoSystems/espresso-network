@@ -44,8 +44,6 @@ pub mod v1 {
         "/v1/reward-state-v2/reward-amounts/{height}/{offset}/{limit}";
     pub const REWARD_MERKLE_TREE_V2_ROUTE: &str =
         "/v1/reward-state-v2/reward-merkle-tree-v2/{height}";
-    pub const REWARD_STATE_HEIGHT_ROUTE: &str = "/v1/reward-state/block-height";
-    pub const REWARD_STATE_V2_HEIGHT_ROUTE: &str = "/v1/reward-state-v2/block-height";
     pub const REWARD_V1_ACCOUNT_PROOF_ROUTE: &str = "/v1/reward-state/proof/{height}/{address}";
     pub const REWARD_V1_BALANCE_ROUTE: &str = "/v1/reward-state/reward-balance/{height}/{address}";
     // The reward-state mount serves the same handlers as reward-state-v2, for compatibility.
@@ -58,12 +56,11 @@ pub mod v1 {
     pub const REWARD_V1_MERKLE_TREE_V2_ROUTE: &str =
         "/v1/reward-state/reward-merkle-tree-v2/{height}";
 
-    // Merklized-state `get_path` base routes, on both reward mounts.
-    pub const REWARD_STATE_PATH_BY_HEIGHT_ROUTE: &str = "/v1/reward-state/{height}/{key}";
-    pub const REWARD_STATE_PATH_BY_COMMIT_ROUTE: &str = "/v1/reward-state/commit/{commit}/{key}";
-    pub const REWARD_STATE_V2_PATH_BY_HEIGHT_ROUTE: &str = "/v1/reward-state-v2/{height}/{key}";
-    pub const REWARD_STATE_V2_PATH_BY_COMMIT_ROUTE: &str =
-        "/v1/reward-state-v2/commit/{commit}/{key}";
+    /// Mount point of the reward-state (`RewardMerkleTreeV1`) merklized-state module.
+    pub const REWARD_STATE_PREFIX: &str = "/v1/reward-state";
+
+    /// Mount point of the reward-state-v2 (`RewardMerkleTreeV2`) merklized-state module.
+    pub const REWARD_STATE_V2_PREFIX: &str = "/v1/reward-state-v2";
 
     /// Mount point of the availability module, whose base routes come from `hotshot-query-service`.
     pub const AVAILABILITY_PREFIX: &str = "/v1/availability";
@@ -139,13 +136,12 @@ pub mod v1 {
     pub const STREAM_NAMESPACE_PROOFS_ROUTE: &str =
         "/v1/availability/stream/blocks/{height}/namespace/{namespace}";
 
-    pub const BLOCK_STATE_PATH_BY_HEIGHT_ROUTE: &str = "/v1/block-state/{height}/{key}";
-    pub const BLOCK_STATE_PATH_BY_COMMIT_ROUTE: &str = "/v1/block-state/commit/{commit}/{key}";
-    pub const BLOCK_STATE_HEIGHT_ROUTE: &str = "/v1/block-state/block-height";
+    /// Mount point of the block-state (`BlockMerkleTree`) merklized-state module.
+    pub const BLOCK_STATE_PREFIX: &str = "/v1/block-state";
 
-    pub const FEE_STATE_PATH_BY_HEIGHT_ROUTE: &str = "/v1/fee-state/{height}/{key}";
-    pub const FEE_STATE_PATH_BY_COMMIT_ROUTE: &str = "/v1/fee-state/commit/{commit}/{key}";
-    pub const FEE_STATE_HEIGHT_ROUTE: &str = "/v1/fee-state/block-height";
+    /// Mount point of the fee-state (`FeeMerkleTree`) merklized-state module.
+    pub const FEE_STATE_PREFIX: &str = "/v1/fee-state";
+
     pub const FEE_STATE_BALANCE_LATEST_ROUTE: &str = "/v1/fee-state/fee-balance/latest/{address}";
 
     /// Mount point of the status module, whose base routes come from `hotshot-query-service`.
@@ -323,8 +319,6 @@ pub mod v1 {
     );
     path_fn!(reward_amounts, REWARD_AMOUNTS_ROUTE, height, offset, limit);
     path_fn!(reward_merkle_tree_v2, REWARD_MERKLE_TREE_V2_ROUTE, height);
-    path_fn!(reward_state_height, REWARD_STATE_HEIGHT_ROUTE);
-    path_fn!(reward_state_v2_height, REWARD_STATE_V2_HEIGHT_ROUTE);
     path_fn!(
         reward_v1_account_proof,
         REWARD_V1_ACCOUNT_PROOF_ROUTE,
@@ -354,31 +348,6 @@ pub mod v1 {
         REWARD_V1_MERKLE_TREE_V2_ROUTE,
         height
     );
-    path_fn!(
-        reward_state_path_by_height,
-        REWARD_STATE_PATH_BY_HEIGHT_ROUTE,
-        height,
-        key
-    );
-    path_fn!(
-        reward_state_path_by_commit,
-        REWARD_STATE_PATH_BY_COMMIT_ROUTE,
-        commit,
-        key
-    );
-    path_fn!(
-        reward_state_v2_path_by_height,
-        REWARD_STATE_V2_PATH_BY_HEIGHT_ROUTE,
-        height,
-        key
-    );
-    path_fn!(
-        reward_state_v2_path_by_commit,
-        REWARD_STATE_V2_PATH_BY_COMMIT_ROUTE,
-        commit,
-        key
-    );
-
     // Availability: namespace proofs
     path_fn!(
         namespace_proof_by_height,
@@ -524,35 +493,7 @@ pub mod v1 {
         namespace
     );
 
-    // Block state
-    path_fn!(
-        block_state_path_by_height,
-        BLOCK_STATE_PATH_BY_HEIGHT_ROUTE,
-        height,
-        key
-    );
-    path_fn!(
-        block_state_path_by_commit,
-        BLOCK_STATE_PATH_BY_COMMIT_ROUTE,
-        commit,
-        key
-    );
-    path_fn!(block_state_height, BLOCK_STATE_HEIGHT_ROUTE);
-
     // Fee state
-    path_fn!(
-        fee_state_path_by_height,
-        FEE_STATE_PATH_BY_HEIGHT_ROUTE,
-        height,
-        key
-    );
-    path_fn!(
-        fee_state_path_by_commit,
-        FEE_STATE_PATH_BY_COMMIT_ROUTE,
-        commit,
-        key
-    );
-    path_fn!(fee_state_height, FEE_STATE_HEIGHT_ROUTE);
     path_fn!(
         fee_state_balance_latest,
         FEE_STATE_BALANCE_LATEST_ROUTE,

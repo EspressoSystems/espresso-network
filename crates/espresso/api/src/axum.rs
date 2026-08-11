@@ -292,8 +292,7 @@ pub fn create_combined_router<S>(state: S, hqs_base: ApiRouter) -> Router
 where
     S: v1::RewardApi
         + v1::AvailabilityApiExtension
-        + v1::BlockStateApi
-        + v1::FeeStateApi
+        + v1::FeeStateApiExtension
         + v1::StatusApiExtension
         + v1::ConfigApi
         + v1::NodeApi
@@ -349,6 +348,9 @@ async fn version() -> Json<serde_json::Value> {
     }))
 }
 
+/// Espresso's reward-state extensions, on both reward mounts. The merklized-state base routes
+/// each mount inherits come from `hotshot_query_service::merklized_state`, which the caller builds
+/// from its concrete data source; see [`create_router_v1`].
 pub(crate) fn router_reward<S>(state: S) -> ApiRouter
 where
     S: v1::RewardApi + Clone + Send + Sync + 'static,
@@ -413,22 +415,6 @@ where
             .map_err(classify_availability_error)
     };
 
-    let get_reward_state_height = |State(state): State<S>| async move {
-        state
-            .get_reward_state_height()
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let get_reward_state_v2_height = |State(state): State<S>| async move {
-        state
-            .get_reward_state_v2_height()
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
     // Same underlying V2-tree lookup as `reward-state-v2/reward-balance`; tide registers this
     // route unconditionally for both merklized-state modules regardless of tree version.
     let get_reward_balance_v1 =
@@ -447,57 +433,6 @@ where
                 .await
                 .map(ApiJson)
                 .map_err(classify_availability_error)
-        };
-
-    // Merklized-state `get_path` handlers, inherited by both reward mounts from
-    // `hotshot-query-service`'s base `state.toml` routes (mirrors router_block_state /
-    // router_fee_state below).
-    let get_reward_state_path_v1_by_height =
-        |State(state): State<S>, Path((height, key)): Path<(u64, String)>| async move {
-            <S as v1::RewardApi>::get_reward_state_path_v1(
-                &state,
-                v1::Snapshot::Height(height),
-                key,
-            )
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-        };
-
-    let get_reward_state_path_v1_by_commit =
-        |State(state): State<S>, Path((commit, key)): Path<(String, String)>| async move {
-            <S as v1::RewardApi>::get_reward_state_path_v1(
-                &state,
-                v1::Snapshot::Commit(commit),
-                key,
-            )
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-        };
-
-    let get_reward_state_path_v2_by_height =
-        |State(state): State<S>, Path((height, key)): Path<(u64, String)>| async move {
-            <S as v1::RewardApi>::get_reward_state_path_v2(
-                &state,
-                v1::Snapshot::Height(height),
-                key,
-            )
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-        };
-
-    let get_reward_state_path_v2_by_commit =
-        |State(state): State<S>, Path((commit, key)): Path<(String, String)>| async move {
-            <S as v1::RewardApi>::get_reward_state_path_v2(
-                &state,
-                v1::Snapshot::Commit(commit),
-                key,
-            )
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
         };
 
     ApiRouter::new()
@@ -544,18 +479,6 @@ where
             }),
         )
         .api_route(
-            routes::v1::REWARD_STATE_HEIGHT_ROUTE,
-            get_with(get_reward_state_height, |op| {
-                op.summary("Get reward-state block height").description("Latest block height for which the merklized reward state (V1) is available.")
-            }),
-        )
-        .api_route(
-            routes::v1::REWARD_STATE_V2_HEIGHT_ROUTE,
-            get_with(get_reward_state_v2_height, |op| {
-                op.summary("Get reward-state-v2 block height").description("Latest block height for which the merklized reward state (V2) is available.")
-            }),
-        )
-        .api_route(
             routes::v1::REWARD_V1_BALANCE_ROUTE,
             get_with(get_reward_balance_v1, |op| {
                 op.summary("Get reward balance at height (v1 mount)").description("Same handler as reward-state-v2/reward-balance, registered on the reward-state mount; tide-disco shared this handler across both merklized-state mounts.")
@@ -591,30 +514,6 @@ where
             routes::v1::REWARD_V1_MERKLE_TREE_V2_ROUTE,
             get_with(get_reward_merkle_tree_v2, |op| {
                 op.summary("Get RewardMerkleTreeV2 snapshot (v1 mount)").description("Same handler as reward-state-v2/reward-merkle-tree-v2, registered on the reward-state mount; tide-disco shared this handler across both merklized-state mounts.")
-            }),
-        )
-        .api_route(
-            routes::v1::REWARD_STATE_PATH_BY_HEIGHT_ROUTE,
-            get_with(get_reward_state_path_v1_by_height, |op| {
-                op.summary("Get reward-state Merkle path by height").description("Retrieve the Merkle path for the membership proof of a leaf in the reward-state (V1) tree, by block height and key.")
-            }),
-        )
-        .api_route(
-            routes::v1::REWARD_STATE_PATH_BY_COMMIT_ROUTE,
-            get_with(get_reward_state_path_v1_by_commit, |op| {
-                op.summary("Get reward-state Merkle path by commitment").description("Retrieve the Merkle path for the membership proof of a leaf in the reward-state (V1) tree, by tree commitment and key.")
-            }),
-        )
-        .api_route(
-            routes::v1::REWARD_STATE_V2_PATH_BY_HEIGHT_ROUTE,
-            get_with(get_reward_state_path_v2_by_height, |op| {
-                op.summary("Get reward-state-v2 Merkle path by height").description("Retrieve the Merkle path for the membership proof of a leaf in the reward-state-v2 tree, by block height and key.")
-            }),
-        )
-        .api_route(
-            routes::v1::REWARD_STATE_V2_PATH_BY_COMMIT_ROUTE,
-            get_with(get_reward_state_path_v2_by_commit, |op| {
-                op.summary("Get reward-state-v2 Merkle path by commitment").description("Retrieve the Merkle path for the membership proof of a leaf in the reward-state-v2 tree, by tree commitment and key.")
             }),
         )
         .with_state(state)
@@ -788,86 +687,13 @@ where
         .with_state(state)
 }
 
-pub(crate) fn router_block_state<S>(state: S) -> ApiRouter
-where
-    S: v1::BlockStateApi + Clone + Send + Sync + 'static,
-{
-    let get_block_state_height = |State(state): State<S>| async move {
-        <S as v1::BlockStateApi>::get_block_state_height(&state)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let get_block_state_path_by_commit =
-        |State(state): State<S>, Path((commit, key)): Path<(String, String)>| async move {
-            <S as v1::BlockStateApi>::get_block_state_path(
-                &state,
-                v1::Snapshot::Commit(commit),
-                key,
-            )
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-        };
-
-    // Merklized state handlers: block-state
-    let get_block_state_path_by_height =
-        |State(state): State<S>, Path((height, key)): Path<(u64, String)>| async move {
-            <S as v1::BlockStateApi>::get_block_state_path(
-                &state,
-                v1::Snapshot::Height(height),
-                key,
-            )
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-        };
-
-    ApiRouter::new()
-        .api_route(
-            routes::v1::BLOCK_STATE_HEIGHT_ROUTE,
-            get_with(get_block_state_height, |op| {
-                op.summary("Get block-state height").description(
-                    "Latest block height for which the merklized blocks-Merkle-tree state is \
-                     available.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::BLOCK_STATE_PATH_BY_COMMIT_ROUTE,
-            get_with(get_block_state_path_by_commit, |op| {
-                op.summary("Get block-state Merkle path by commitment")
-                    .description(
-                        "Retrieve the Merkle path for a leaf in the blocks Merkle tree, by tree \
-                         commitment and key.",
-                    )
-            }),
-        )
-        .api_route(
-            routes::v1::BLOCK_STATE_PATH_BY_HEIGHT_ROUTE,
-            get_with(get_block_state_path_by_height, |op| {
-                op.summary("Get block-state Merkle path by height")
-                    .description(
-                        "Retrieve the Merkle path for a leaf in the blocks Merkle tree, by block \
-                         height and key.",
-                    )
-            }),
-        )
-        .with_state(state)
-}
-
+/// Espresso's fee-state extension. The module's base routes (Merkle path by height and by
+/// commitment, snapshot height) come from `hotshot_query_service::merklized_state`, which the
+/// caller builds from its concrete data source; see [`create_router_v1`].
 pub(crate) fn router_fee_state<S>(state: S) -> ApiRouter
 where
-    S: v1::FeeStateApi + Clone + Send + Sync + 'static,
+    S: v1::FeeStateApiExtension + Clone + Send + Sync + 'static,
 {
-    let get_fee_state_height = |State(state): State<S>| async move {
-        <S as v1::FeeStateApi>::get_fee_state_height(&state)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
     let get_fee_balance_latest = |State(state): State<S>, Path(address): Path<String>| async move {
         state
             .get_fee_balance_latest(address)
@@ -876,58 +702,13 @@ where
             .map_err(classify_availability_error)
     };
 
-    let get_fee_state_path_by_commit =
-        |State(state): State<S>, Path((commit, key)): Path<(String, String)>| async move {
-            <S as v1::FeeStateApi>::get_fee_state_path(&state, v1::Snapshot::Commit(commit), key)
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    // Merklized state handlers: fee-state
-    let get_fee_state_path_by_height =
-        |State(state): State<S>, Path((height, key)): Path<(u64, String)>| async move {
-            <S as v1::FeeStateApi>::get_fee_state_path(&state, v1::Snapshot::Height(height), key)
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
     ApiRouter::new()
-        .api_route(
-            routes::v1::FEE_STATE_HEIGHT_ROUTE,
-            get_with(get_fee_state_height, |op| {
-                op.summary("Get fee-state height").description(
-                    "Latest block height for which the merklized fee state is available.",
-                )
-            }),
-        )
         .api_route(
             routes::v1::FEE_STATE_BALANCE_LATEST_ROUTE,
             get_with(get_fee_balance_latest, |op| {
                 op.summary("Get latest fee balance").description(
                     "Get the latest fee account balance for an address from the fee Merkle tree.",
                 )
-            }),
-        )
-        .api_route(
-            routes::v1::FEE_STATE_PATH_BY_COMMIT_ROUTE,
-            get_with(get_fee_state_path_by_commit, |op| {
-                op.summary("Get fee-state Merkle path by commitment")
-                    .description(
-                        "Retrieve the Merkle path for a leaf in the fee state tree, by tree \
-                         commitment and key.",
-                    )
-            }),
-        )
-        .api_route(
-            routes::v1::FEE_STATE_PATH_BY_HEIGHT_ROUTE,
-            get_with(get_fee_state_path_by_height, |op| {
-                op.summary("Get fee-state Merkle path by height")
-                    .description(
-                        "Retrieve the Merkle path for a leaf in the fee state tree, by block \
-                         height and key.",
-                    )
             }),
         )
         .with_state(state)
@@ -2387,8 +2168,7 @@ pub fn create_router_v1<S>(state: S, hqs_base: ApiRouter) -> Router
 where
     S: v1::RewardApi
         + v1::AvailabilityApiExtension
-        + v1::BlockStateApi
-        + v1::FeeStateApi
+        + v1::FeeStateApiExtension
         + v1::StatusApiExtension
         + v1::ConfigApi
         + v1::NodeApi
@@ -2409,7 +2189,6 @@ where
     let router = hqs_base
         .merge(router_reward(state.clone()))
         .merge(router_availability(state.clone()))
-        .merge(router_block_state(state.clone()))
         .merge(router_fee_state(state.clone()))
         .merge(router_status(state.clone()))
         .merge(router_config(state.clone()))
@@ -2877,13 +2656,40 @@ mod tests {
             )
     }
 
+    /// Stand-in for the `hotshot_query_service::merklized_state` router, which the query modes
+    /// mount once per merklized tree; see [`mock_availability_base`].
+    fn mock_merklized_state_base(tree: &str) -> ApiRouter {
+        let summary = format!("Get a {tree} Merkle path by height");
+        ApiRouter::new()
+            .api_route(
+                "/{height}/{key}",
+                get_with(async || ApiJson(()), move |op| op.summary(&summary)),
+            )
+            .api_route(
+                "/block-height",
+                get_with(
+                    async || ApiJson(()),
+                    |op| op.summary("Get the latest snapshot height"),
+                ),
+            )
+    }
+
     /// The query-service router a query mode passes in: every base nested at its module prefix,
-    /// the way the binary assembles it.
+    /// the way the binary assembles it. The merklized-state router appears twice, once per tree,
+    /// as the SQL mode mounts it four times.
     fn mock_hqs_base() -> ApiRouter {
         ApiRouter::new()
             .nest(routes::v1::AVAILABILITY_PREFIX, mock_availability_base())
             .nest(routes::v1::STATUS_PREFIX, mock_status_base())
             .nest(routes::v1::EXPLORER_PREFIX, mock_explorer_base())
+            .nest(
+                routes::v1::BLOCK_STATE_PREFIX,
+                mock_merklized_state_base("block_merkle_tree_bigint"),
+            )
+            .nest(
+                routes::v1::REWARD_STATE_V2_PREFIX,
+                mock_merklized_state_base("reward_merkle_tree_v2"),
+            )
     }
 
     fn rewritten_uri(uri: &str) -> String {
@@ -2993,15 +2799,7 @@ mod tests {
         type RewardAmounts = ();
         type RewardMerkleTreeData = ();
         type RewardAccountQueryDataV1 = ();
-        type RewardStatePathV1 = ();
-        type RewardStatePathV2 = ();
 
-        async fn get_reward_state_height(&self) -> anyhow::Result<u64> {
-            unimplemented!()
-        }
-        async fn get_reward_state_v2_height(&self) -> anyhow::Result<u64> {
-            unimplemented!()
-        }
         async fn get_reward_account_proof_v1(
             &self,
             _height: u64,
@@ -3056,20 +2854,6 @@ mod tests {
         ) -> anyhow::Result<Self::RewardMerkleTreeData> {
             unimplemented!()
         }
-        async fn get_reward_state_path_v1(
-            &self,
-            _snapshot: v1::merklized_state::Snapshot,
-            _key: String,
-        ) -> anyhow::Result<Self::RewardStatePathV1> {
-            unimplemented!()
-        }
-        async fn get_reward_state_path_v2(
-            &self,
-            _snapshot: v1::merklized_state::Snapshot,
-            _key: String,
-        ) -> anyhow::Result<Self::RewardStatePathV2> {
-            unimplemented!()
-        }
     }
 
     #[async_trait::async_trait]
@@ -3120,36 +2904,9 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl v1::BlockStateApi for MockState {
-        type MerkleProof = ();
-
-        async fn get_block_state_path(
-            &self,
-            _snapshot: v1::merklized_state::Snapshot,
-            _key: String,
-        ) -> anyhow::Result<Self::MerkleProof> {
-            unimplemented!()
-        }
-        async fn get_block_state_height(&self) -> anyhow::Result<u64> {
-            unimplemented!()
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl v1::FeeStateApi for MockState {
-        type MerkleProof = ();
+    impl v1::FeeStateApiExtension for MockState {
         type FeeAmount = ();
 
-        async fn get_fee_state_path(
-            &self,
-            _snapshot: v1::merklized_state::Snapshot,
-            _key: String,
-        ) -> anyhow::Result<Self::MerkleProof> {
-            unimplemented!()
-        }
-        async fn get_fee_state_height(&self) -> anyhow::Result<u64> {
-            unimplemented!()
-        }
         async fn get_fee_balance_latest(
             &self,
             _address: String,
@@ -3811,6 +3568,46 @@ mod tests {
         );
     }
 
+    /// The merklized-state routes come from `hotshot-query-service`, mounted once per tree, and
+    /// this crate serves only `fee-balance/latest` of its own. Two mounts of the same router must
+    /// document independently: one operation per prefix, tagged by its module, each summary naming
+    /// its own tree.
+    #[tokio::test]
+    async fn v1_openapi_spec_documents_mounted_merklized_state_bases() {
+        let router = create_router_v1(MockState, mock_hqs_base());
+        let req = Request::builder()
+            .uri(routes::v1::OPENAPI_SPEC_ROUTE)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router, req).await.unwrap();
+        let spec: serde_json::Value =
+            serde_json::from_str(&body_string(resp).await).expect("valid JSON");
+        let paths = spec["paths"].as_object().expect("spec has paths");
+
+        for (prefix, tree) in [
+            (routes::v1::BLOCK_STATE_PREFIX, "block_merkle_tree_bigint"),
+            (routes::v1::REWARD_STATE_V2_PREFIX, "reward_merkle_tree_v2"),
+        ] {
+            let module = prefix.strip_prefix("/v1/").unwrap();
+            for route in ["/{height}/{key}", "/block-height"] {
+                let route = format!("{prefix}{route}");
+                let item = paths
+                    .get(&route)
+                    .unwrap_or_else(|| panic!("{route} missing from spec: {:?}", paths.keys()));
+                assert_eq!(item["get"]["tags"][0], module, "{route}");
+                assert!(item["get"]["summary"].is_string(), "{route} has no summary");
+            }
+            let summary = paths[&format!("{prefix}/{{height}}/{{key}}")]["get"]["summary"]
+                .as_str()
+                .unwrap();
+            assert!(summary.contains(tree), "{prefix}: {summary}");
+        }
+        assert!(
+            paths.contains_key(routes::v1::FEE_STATE_BALANCE_LATEST_ROUTE),
+            "the fee-state extension must still be served alongside the mounted base"
+        );
+    }
+
     /// `submit` and the bulk `catchup` routes take bodies over axum's 2 MiB `Bytes` default, and
     /// the chain's `max_block_size` is what decides whether a transaction is too big, so the body
     /// has to reach the handler. Drives the real `serve_router`.
@@ -4028,7 +3825,8 @@ mod tests {
         }
 
         // Numeric segments are typed integer, hash/key-like segments string.
-        let key_path = &paths[routes::v1::REWARD_STATE_PATH_BY_HEIGHT_ROUTE]["get"]["parameters"];
+        let key_path = &paths[&format!("{}/{{height}}/{{key}}", routes::v1::BLOCK_STATE_PREFIX)]
+            ["get"]["parameters"];
         assert_eq!(key_path[0]["name"], "height");
         assert_eq!(key_path[0]["schema"]["type"], "integer");
         assert_eq!(key_path[1]["name"], "key");

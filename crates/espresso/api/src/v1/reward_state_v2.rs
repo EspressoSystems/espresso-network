@@ -6,8 +6,6 @@
 use async_trait::async_trait;
 use serde::Serialize;
 
-use crate::v1::merklized_state::Snapshot;
-
 /// Reward API trait - returns internal types
 ///
 /// Uses associated types to avoid importing espresso-types in this crate.
@@ -31,18 +29,6 @@ pub trait RewardApi {
 
     /// Type for reward account proof queries against the V1 (RewardMerkleTreeV1) tree
     type RewardAccountQueryDataV1: Serialize + Send + Sync;
-
-    /// Type for a raw Merkle path into the reward-state (RewardMerkleTreeV1) tree
-    type RewardStatePathV1: Serialize + Send + Sync;
-
-    /// Type for a raw Merkle path into the reward-state-v2 (RewardMerkleTreeV2) tree
-    type RewardStatePathV2: Serialize + Send + Sync;
-
-    /// Get the height of the last persisted reward-state-v1 merklized state snapshot
-    async fn get_reward_state_height(&self) -> anyhow::Result<u64>;
-
-    /// Get the height of the last persisted reward-state-v2 merklized state snapshot
-    async fn get_reward_state_v2_height(&self) -> anyhow::Result<u64>;
 
     /// Get Merkle proof for a reward account against the V1 (RewardMerkleTreeV1) tree
     ///
@@ -136,29 +122,4 @@ pub trait RewardApi {
         &self,
         height: u64,
     ) -> anyhow::Result<Self::RewardMerkleTreeData>;
-
-    /// Get the Merkle path for a key in the reward-state (RewardMerkleTreeV1) tree
-    ///
-    /// Mirrors `merklized_state::get_path`, inherited by the reward-state mount from
-    /// `hotshot-query-service`'s base `state.toml` routes (same as block-state/fee-state).
-    ///
-    /// # Arguments
-    /// * `snapshot` - Height or commitment identifying the tree snapshot
-    /// * `key` - Reward account address to query
-    async fn get_reward_state_path_v1(
-        &self,
-        snapshot: Snapshot,
-        key: String,
-    ) -> anyhow::Result<Self::RewardStatePathV1>;
-
-    /// Get the Merkle path for a key in the reward-state-v2 (RewardMerkleTreeV2) tree
-    ///
-    /// # Arguments
-    /// * `snapshot` - Height or commitment identifying the tree snapshot
-    /// * `key` - Reward account address to query
-    async fn get_reward_state_path_v2(
-        &self,
-        snapshot: Snapshot,
-        key: String,
-    ) -> anyhow::Result<Self::RewardStatePathV2>;
 }

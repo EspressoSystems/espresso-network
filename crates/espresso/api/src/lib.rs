@@ -57,8 +57,7 @@ pub async fn serve_axum<S>(
 where
     S: v1::RewardApi
         + v1::AvailabilityApiExtension
-        + v1::BlockStateApi
-        + v1::FeeStateApi
+        + v1::FeeStateApiExtension
         + v1::StatusApiExtension
         + v1::ConfigApi
         + v1::NodeApi
@@ -81,7 +80,6 @@ where
     let mut router = hqs_base
         .merge(axum::router_reward(state.clone()))
         .merge(axum::router_availability(state.clone()))
-        .merge(axum::router_block_state(state.clone()))
         .merge(axum::router_fee_state(state.clone()))
         .merge(axum::router_status(state.clone()))
         .merge(axum::router_node(state.clone()))

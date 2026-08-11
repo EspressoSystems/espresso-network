@@ -11,13 +11,13 @@ use committable::Committable as _;
 use disco_types::{error::Error as _, status::StatusCode};
 use espresso_api::error::AvailabilityError;
 use espresso_types::{
-    NamespaceId, NamespaceProofQueryData, NsProof, SeqTypes,
+    NamespaceId, NamespaceProofQueryData, NsProof,
     v0::sparse_mt::KeccakNode,
-    v0_3::{RewardAccountV1, RewardAmount as InternalRewardAmount, RewardMerkleTreeV1},
+    v0_3::{RewardAccountV1, RewardAmount as InternalRewardAmount},
     v0_4::{
         RewardAccountProofV2 as InternalRewardAccountProofV2,
         RewardAccountQueryDataV2 as InternalRewardAccountQueryData, RewardAccountV2,
-        RewardMerkleProofV2 as InternalRewardMerkleProofV2, RewardMerkleTreeV2,
+        RewardMerkleProofV2 as InternalRewardMerkleProofV2,
     },
     v0_6::RewardClaimError,
 };
@@ -696,36 +696,6 @@ where
     type RewardAmounts = Vec<(alloy::primitives::Address, InternalRewardAmount)>;
     type RewardMerkleTreeData = Vec<u8>;
     type RewardAccountQueryDataV1 = espresso_types::v0_3::RewardAccountQueryDataV1;
-    type RewardStatePathV1 = InternalMerkleProof<
-        InternalRewardAmount,
-        espresso_types::v0_3::RewardAccountV1,
-        jf_merkle_tree_compat::prelude::Sha3Node,
-        {
-            <espresso_types::v0_3::RewardMerkleTreeV1 as jf_merkle_tree_compat::MerkleTreeScheme>::ARITY
-        },
-    >;
-    type RewardStatePathV2 = InternalMerkleProof<
-        InternalRewardAmount,
-        RewardAccountV2,
-        KeccakNode,
-        {
-            <espresso_types::v0_4::RewardMerkleTreeV2 as jf_merkle_tree_compat::MerkleTreeScheme>::ARITY
-        },
-    >;
-
-    async fn get_reward_state_height(&self) -> anyhow::Result<u64> {
-        let ds = &*self.data_source;
-        ds.get_last_state_height()
-            .await
-            .map(|h| h as u64)
-            .map_err(classify_query_error)
-    }
-
-    async fn get_reward_state_v2_height(&self) -> anyhow::Result<u64> {
-        // `last_merklized_state_height` is the same row for every merklized-state module in
-        // this file (reward V1/V2, block-state, fee-state), not just these two.
-        self.get_reward_state_height().await
-    }
 
     async fn get_reward_account_proof_v1(
         &self,
@@ -944,58 +914,6 @@ where
                 height, err
             ))
         })
-    }
-
-    async fn get_reward_state_path_v1(
-        &self,
-        snapshot: espresso_api::v1::Snapshot,
-        key: String,
-    ) -> anyhow::Result<Self::RewardStatePathV1> {
-        let hs_snapshot = match snapshot {
-            espresso_api::v1::Snapshot::Height(h) => HsSnapshot::Index(h),
-            espresso_api::v1::Snapshot::Commit(c) => {
-                let tb64: TaggedBase64 = c
-                    .parse()
-                    .map_err(|_| bad_request("failed to parse commit param"))?;
-                let commit = (&tb64)
-                    .try_into()
-                    .map_err(|_| bad_request("failed to parse commit param"))?;
-                HsSnapshot::Commit(commit)
-            },
-        };
-        let key: RewardAccountV1 = key
-            .parse()
-            .map_err(|_| bad_request("failed to parse Key param"))?;
-        let ds = &*self.data_source;
-        MerklizedStateDataSource::<SeqTypes, RewardMerkleTreeV1, _>::get_path(ds, hs_snapshot, key)
-            .await
-            .map_err(classify_query_error)
-    }
-
-    async fn get_reward_state_path_v2(
-        &self,
-        snapshot: espresso_api::v1::Snapshot,
-        key: String,
-    ) -> anyhow::Result<Self::RewardStatePathV2> {
-        let hs_snapshot = match snapshot {
-            espresso_api::v1::Snapshot::Height(h) => HsSnapshot::Index(h),
-            espresso_api::v1::Snapshot::Commit(c) => {
-                let tb64: TaggedBase64 = c
-                    .parse()
-                    .map_err(|_| bad_request("failed to parse commit param"))?;
-                let commit = (&tb64)
-                    .try_into()
-                    .map_err(|_| bad_request("failed to parse commit param"))?;
-                HsSnapshot::Commit(commit)
-            },
-        };
-        let key: RewardAccountV2 = key
-            .parse()
-            .map_err(|_| bad_request("failed to parse Key param"))?;
-        let ds = &*self.data_source;
-        MerklizedStateDataSource::<SeqTypes, RewardMerkleTreeV2, _>::get_path(ds, hs_snapshot, key)
-            .await
-            .map_err(classify_query_error)
     }
 }
 
@@ -1641,65 +1559,7 @@ fn classify_query_error(err: hotshot_query_service::QueryError) -> anyhow::Error
 }
 
 #[async_trait]
-impl<D> espresso_api::v1::BlockStateApi for NodeApiStateImpl<D>
-where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target: hotshot_query_service::merklized_state::MerklizedStateDataSource<
-            espresso_types::SeqTypes,
-            espresso_types::BlockMerkleTree,
-            { <espresso_types::BlockMerkleTree as jf_merkle_tree_compat::MerkleTreeScheme>::ARITY },
-        > + hotshot_query_service::merklized_state::MerklizedStateHeightPersistence
-        + Send
-        + Sync,
-{
-    type MerkleProof = InternalMerkleProof<
-        committable::Commitment<espresso_types::Header>,
-        u64,
-        jf_merkle_tree_compat::prelude::Sha3Node,
-        3,
-    >;
-
-    async fn get_block_state_path(
-        &self,
-        snapshot: espresso_api::v1::Snapshot,
-        key: String,
-    ) -> anyhow::Result<Self::MerkleProof> {
-        let hs_snapshot = match snapshot {
-            espresso_api::v1::Snapshot::Height(h) => HsSnapshot::Index(h),
-            espresso_api::v1::Snapshot::Commit(c) => {
-                let tb64: TaggedBase64 = c
-                    .parse()
-                    .map_err(|_| bad_request("failed to parse commit param"))?;
-                let commit = (&tb64)
-                    .try_into()
-                    .map_err(|_| bad_request("failed to parse commit param"))?;
-                HsSnapshot::Commit(commit)
-            },
-        };
-        let key: u64 = key
-            .parse()
-            .map_err(|_| bad_request("failed to parse Key param"))?;
-        let ds = &*self.data_source;
-        MerklizedStateDataSource::<
-            espresso_types::SeqTypes,
-            espresso_types::BlockMerkleTree,
-            _,
-        >::get_path(ds, hs_snapshot, key)
-        .await
-        .map_err(classify_query_error)
-    }
-
-    async fn get_block_state_height(&self) -> anyhow::Result<u64> {
-        let ds = &*self.data_source;
-        ds.get_last_state_height()
-            .await
-            .map(|h| h as u64)
-            .map_err(classify_query_error)
-    }
-}
-
-#[async_trait]
-impl<D> espresso_api::v1::FeeStateApi for NodeApiStateImpl<D>
+impl<D> espresso_api::v1::FeeStateApiExtension for NodeApiStateImpl<D>
 where
     D: std::ops::Deref + Clone + Send + Sync + 'static,
     D::Target: hotshot_query_service::merklized_state::MerklizedStateDataSource<
@@ -1710,51 +1570,7 @@ where
         + Send
         + Sync,
 {
-    type MerkleProof = InternalMerkleProof<
-        espresso_types::FeeAmount,
-        espresso_types::FeeAccount,
-        jf_merkle_tree_compat::prelude::Sha3Node,
-        256,
-    >;
     type FeeAmount = espresso_types::FeeAmount;
-
-    async fn get_fee_state_path(
-        &self,
-        snapshot: espresso_api::v1::Snapshot,
-        key: String,
-    ) -> anyhow::Result<Self::MerkleProof> {
-        let hs_snapshot = match snapshot {
-            espresso_api::v1::Snapshot::Height(h) => HsSnapshot::Index(h),
-            espresso_api::v1::Snapshot::Commit(c) => {
-                let tb64: TaggedBase64 = c
-                    .parse()
-                    .map_err(|_| bad_request("failed to parse commit param"))?;
-                let commit = (&tb64)
-                    .try_into()
-                    .map_err(|_| bad_request("failed to parse commit param"))?;
-                HsSnapshot::Commit(commit)
-            },
-        };
-        let key: espresso_types::FeeAccount = key
-            .parse()
-            .map_err(|_| bad_request("failed to parse Key param"))?;
-        let ds = &*self.data_source;
-        MerklizedStateDataSource::<
-            espresso_types::SeqTypes,
-            espresso_types::FeeMerkleTree,
-            _,
-        >::get_path(ds, hs_snapshot, key)
-        .await
-        .map_err(classify_query_error)
-    }
-
-    async fn get_fee_state_height(&self) -> anyhow::Result<u64> {
-        let ds = &*self.data_source;
-        ds.get_last_state_height()
-            .await
-            .map(|h| h as u64)
-            .map_err(classify_query_error)
-    }
 
     async fn get_fee_balance_latest(
         &self,

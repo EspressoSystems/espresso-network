@@ -36,18 +36,6 @@ impl v1::RewardApi for TestApi {
     type RewardAmounts = (Vec<(u128, u128)>, u64);
     type RewardMerkleTreeData = Vec<u8>;
     type RewardAccountQueryDataV1 = (u128, Vec<u8>);
-    type RewardStatePathV1 = serde_json::Value;
-    type RewardStatePathV2 = serde_json::Value;
-
-    async fn get_reward_state_height(&self) -> Result<u64> {
-        tracing::info!("v1: get_reward_state_height()");
-        Ok(42)
-    }
-
-    async fn get_reward_state_v2_height(&self) -> Result<u64> {
-        tracing::info!("v1: get_reward_state_v2_height()");
-        Ok(42)
-    }
 
     async fn get_reward_account_proof_v1(
         &self,
@@ -145,22 +133,6 @@ impl v1::RewardApi for TestApi {
         tracing::info!("v1: get_reward_merkle_tree_v2(height={})", height);
         Ok(vec![0x00, 0x11, 0x22, 0x33, 0x44, 0x55])
     }
-
-    async fn get_reward_state_path_v1(
-        &self,
-        _snapshot: v1::Snapshot,
-        _key: String,
-    ) -> Result<Self::RewardStatePathV1> {
-        Ok(serde_json::Value::Null)
-    }
-
-    async fn get_reward_state_path_v2(
-        &self,
-        _snapshot: v1::Snapshot,
-        _key: String,
-    ) -> Result<Self::RewardStatePathV2> {
-        Ok(serde_json::Value::Null)
-    }
 }
 
 // Implement v1::AvailabilityApiExtension with test data
@@ -232,38 +204,8 @@ impl v1::AvailabilityApiExtension for TestApi {
 }
 
 #[async_trait]
-impl v1::BlockStateApi for TestApi {
-    type MerkleProof = serde_json::Value;
-
-    async fn get_block_state_path(
-        &self,
-        _snapshot: v1::Snapshot,
-        _key: String,
-    ) -> Result<Self::MerkleProof> {
-        Ok(serde_json::Value::Null)
-    }
-
-    async fn get_block_state_height(&self) -> Result<u64> {
-        Ok(0)
-    }
-}
-
-#[async_trait]
-impl v1::FeeStateApi for TestApi {
-    type MerkleProof = serde_json::Value;
+impl v1::FeeStateApiExtension for TestApi {
     type FeeAmount = u128;
-
-    async fn get_fee_state_path(
-        &self,
-        _snapshot: v1::Snapshot,
-        _key: String,
-    ) -> Result<Self::MerkleProof> {
-        Ok(serde_json::Value::Null)
-    }
-
-    async fn get_fee_state_height(&self) -> Result<u64> {
-        Ok(0)
-    }
 
     async fn get_fee_balance_latest(&self, _address: String) -> Result<Option<Self::FeeAmount>> {
         Ok(None)
