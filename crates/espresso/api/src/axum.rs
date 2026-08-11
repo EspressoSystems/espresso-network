@@ -302,7 +302,6 @@ where
         + v1::StateSignatureApi
         + v1::HotShotEventsApi
         + v1::LightClientApi
-        + v1::ExplorerApi
         + v1::TokenApi
         + v1::DatabaseApi
         + v2::RewardApi
@@ -2239,353 +2238,6 @@ where
         .with_state(state)
 }
 
-pub(crate) fn router_explorer<S>(state: S) -> ApiRouter
-where
-    S: v1::ExplorerApi + Clone + Send + Sync + 'static,
-{
-    // Explorer handlers
-    let explorer_block_detail_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
-        state
-            .get_block_detail(v1::BlockIdent::Height(height))
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let explorer_block_detail_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
-        state
-            .get_block_detail(v1::BlockIdent::Hash(hash))
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let explorer_block_summaries_latest = |State(state): State<S>, Path(limit): Path<u64>| async move {
-        state
-            .get_block_summaries(v1::BlockIdent::Latest, limit)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let explorer_block_summaries_from =
-        |State(state): State<S>, Path((from, limit)): Path<(u64, u64)>| async move {
-            state
-                .get_block_summaries(v1::BlockIdent::Height(from), limit)
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let explorer_tx_detail_by_position =
-        |State(state): State<S>, Path((height, offset)): Path<(u64, u64)>| async move {
-            state
-                .get_transaction_detail(v1::TxIdent::HeightAndOffset(height, offset))
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let explorer_tx_detail_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
-        state
-            .get_transaction_detail(v1::TxIdent::Hash(hash))
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let explorer_tx_summaries_latest_block =
-        |State(state): State<S>, Path((limit, block)): Path<(u64, u64)>| async move {
-            state
-                .get_transaction_summaries(
-                    v1::TxIdent::Latest,
-                    limit,
-                    v1::TxSummaryFilter::Block(block),
-                )
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let explorer_tx_summaries_from_block =
-        |State(state): State<S>,
-         Path((height, offset, limit, block)): Path<(u64, u64, u64, u64)>| async move {
-            state
-                .get_transaction_summaries(
-                    v1::TxIdent::HeightAndOffset(height, offset),
-                    limit,
-                    v1::TxSummaryFilter::Block(block),
-                )
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let explorer_tx_summaries_by_hash_block =
-        |State(state): State<S>, Path((hash, limit, block)): Path<(String, u64, u64)>| async move {
-            state
-                .get_transaction_summaries(
-                    v1::TxIdent::Hash(hash),
-                    limit,
-                    v1::TxSummaryFilter::Block(block),
-                )
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let explorer_tx_summaries_latest_ns =
-        |State(state): State<S>, Path((limit, namespace)): Path<(u64, i64)>| async move {
-            state
-                .get_transaction_summaries(
-                    v1::TxIdent::Latest,
-                    limit,
-                    v1::TxSummaryFilter::Namespace(namespace),
-                )
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let explorer_tx_summaries_from_ns =
-        |State(state): State<S>,
-         Path((height, offset, limit, namespace)): Path<(u64, u64, u64, i64)>| async move {
-            state
-                .get_transaction_summaries(
-                    v1::TxIdent::HeightAndOffset(height, offset),
-                    limit,
-                    v1::TxSummaryFilter::Namespace(namespace),
-                )
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let explorer_tx_summaries_by_hash_ns = |State(state): State<S>,
-                                            Path((hash, limit, namespace)): Path<(
-        String,
-        u64,
-        i64,
-    )>| async move {
-        state
-            .get_transaction_summaries(
-                v1::TxIdent::Hash(hash),
-                limit,
-                v1::TxSummaryFilter::Namespace(namespace),
-            )
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let explorer_tx_summaries_latest = |State(state): State<S>, Path(limit): Path<u64>| async move {
-        state
-            .get_transaction_summaries(v1::TxIdent::Latest, limit, v1::TxSummaryFilter::None)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let explorer_tx_summaries_from =
-        |State(state): State<S>, Path((height, offset, limit)): Path<(u64, u64, u64)>| async move {
-            state
-                .get_transaction_summaries(
-                    v1::TxIdent::HeightAndOffset(height, offset),
-                    limit,
-                    v1::TxSummaryFilter::None,
-                )
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let explorer_tx_summaries_by_hash =
-        |State(state): State<S>, Path((hash, limit)): Path<(String, u64)>| async move {
-            state
-                .get_transaction_summaries(
-                    v1::TxIdent::Hash(hash),
-                    limit,
-                    v1::TxSummaryFilter::None,
-                )
-                .await
-                .map(ApiJson)
-                .map_err(classify_availability_error)
-        };
-
-    let explorer_summary = |State(state): State<S>| async move {
-        state
-            .get_explorer_summary()
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    let explorer_search = |State(state): State<S>, Path(query): Path<String>| async move {
-        state
-            .get_search_result(query)
-            .await
-            .map(ApiJson)
-            .map_err(classify_availability_error)
-    };
-
-    ApiRouter::new()
-        .api_route(
-            routes::v1::EXPLORER_BLOCK_DETAIL_BY_HEIGHT_ROUTE,
-            get_with(explorer_block_detail_by_height, |op| {
-                op.summary("Get block detail")
-                    .description("Get details for a block identified by height or hash.")
-            }),
-        )
-        .api_route(
-            routes::v1::EXPLORER_BLOCK_DETAIL_BY_HASH_ROUTE,
-            get_with(explorer_block_detail_by_hash, |op| {
-                op.summary("Get block detail")
-                    .description("Get details for a block identified by height or hash.")
-            }),
-        )
-        .api_route(
-            routes::v1::EXPLORER_BLOCK_SUMMARIES_LATEST_ROUTE,
-            get_with(explorer_block_summaries_latest, |op| {
-                op.summary("List block summaries").description(
-                    "Retrieve up to `limit` block summaries, targeting the latest block or a \
-                     block identified by height.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::EXPLORER_BLOCK_SUMMARIES_FROM_ROUTE,
-            get_with(explorer_block_summaries_from, |op| {
-                op.summary("List block summaries").description(
-                    "Retrieve up to `limit` block summaries, targeting the latest block or a \
-                     block identified by height.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::EXPLORER_TX_DETAIL_BY_POSITION_ROUTE,
-            get_with(explorer_tx_detail_by_position, |op| {
-                op.summary("Get transaction detail").description(
-                    "Get details for a transaction identified by height and offset, or by hash.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::EXPLORER_TX_DETAIL_BY_HASH_ROUTE,
-            get_with(explorer_tx_detail_by_hash, |op| {
-                op.summary("Get transaction detail").description(
-                    "Get details for a transaction identified by height and offset, or by hash.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::EXPLORER_TX_SUMMARIES_LATEST_BLOCK_ROUTE,
-            get_with(explorer_tx_summaries_latest_block, |op| {
-                op.summary("List transaction summaries").description(
-                    "Retrieve up to `limit` transaction summaries, targeting the latest \
-                     transaction, one identified by height/offset, or by hash; optionally \
-                     filtered by block or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::EXPLORER_TX_SUMMARIES_FROM_BLOCK_ROUTE,
-            get_with(explorer_tx_summaries_from_block, |op| {
-                op.summary("List transaction summaries").description(
-                    "Retrieve up to `limit` transaction summaries, targeting the latest \
-                     transaction, one identified by height/offset, or by hash; optionally \
-                     filtered by block or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::EXPLORER_TX_SUMMARIES_BY_HASH_BLOCK_ROUTE,
-            get_with(explorer_tx_summaries_by_hash_block, |op| {
-                op.summary("List transaction summaries").description(
-                    "Retrieve up to `limit` transaction summaries, targeting the latest \
-                     transaction, one identified by height/offset, or by hash; optionally \
-                     filtered by block or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::EXPLORER_TX_SUMMARIES_LATEST_NS_ROUTE,
-            get_with(explorer_tx_summaries_latest_ns, |op| {
-                op.summary("List transaction summaries").description(
-                    "Retrieve up to `limit` transaction summaries, targeting the latest \
-                     transaction, one identified by height/offset, or by hash; optionally \
-                     filtered by block or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::EXPLORER_TX_SUMMARIES_FROM_NS_ROUTE,
-            get_with(explorer_tx_summaries_from_ns, |op| {
-                op.summary("List transaction summaries").description(
-                    "Retrieve up to `limit` transaction summaries, targeting the latest \
-                     transaction, one identified by height/offset, or by hash; optionally \
-                     filtered by block or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::EXPLORER_TX_SUMMARIES_BY_HASH_NS_ROUTE,
-            get_with(explorer_tx_summaries_by_hash_ns, |op| {
-                op.summary("List transaction summaries").description(
-                    "Retrieve up to `limit` transaction summaries, targeting the latest \
-                     transaction, one identified by height/offset, or by hash; optionally \
-                     filtered by block or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::EXPLORER_TX_SUMMARIES_LATEST_ROUTE,
-            get_with(explorer_tx_summaries_latest, |op| {
-                op.summary("List transaction summaries").description(
-                    "Retrieve up to `limit` transaction summaries, targeting the latest \
-                     transaction, one identified by height/offset, or by hash; optionally \
-                     filtered by block or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::EXPLORER_TX_SUMMARIES_FROM_ROUTE,
-            get_with(explorer_tx_summaries_from, |op| {
-                op.summary("List transaction summaries").description(
-                    "Retrieve up to `limit` transaction summaries, targeting the latest \
-                     transaction, one identified by height/offset, or by hash; optionally \
-                     filtered by block or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::EXPLORER_TX_SUMMARIES_BY_HASH_ROUTE,
-            get_with(explorer_tx_summaries_by_hash, |op| {
-                op.summary("List transaction summaries").description(
-                    "Retrieve up to `limit` transaction summaries, targeting the latest \
-                     transaction, one identified by height/offset, or by hash; optionally \
-                     filtered by block or namespace.",
-                )
-            }),
-        )
-        .api_route(
-            routes::v1::EXPLORER_SUMMARY_ROUTE,
-            get_with(explorer_summary, |op| {
-                op.summary("Get explorer summary")
-                    .description("Get the current chain explorer summary.")
-            }),
-        )
-        .api_route(
-            routes::v1::EXPLORER_SEARCH_ROUTE,
-            get_with(explorer_search, |op| {
-                op.summary("Search blocks and transactions").description(
-                    "Search for blocks or transactions matching the given query string; currently \
-                     matched against hash.",
-                )
-            }),
-        )
-        .with_state(state)
-}
-
 pub(crate) fn router_token<S>(state: S) -> ApiRouter
 where
     S: v1::TokenApi + Clone + Send + Sync + 'static,
@@ -2745,7 +2397,6 @@ where
         + v1::StateSignatureApi
         + v1::HotShotEventsApi
         + v1::LightClientApi
-        + v1::ExplorerApi
         + v1::TokenApi
         + v1::DatabaseApi
         + Clone
@@ -2768,7 +2419,6 @@ where
         .merge(router_state_signature(state.clone()))
         .merge(router_hotshot_events(state.clone()))
         .merge(router_light_client(state.clone()))
-        .merge(router_explorer(state.clone()))
         .merge(router_token(state.clone()))
         .merge(router_database(state));
 
@@ -3208,12 +2858,32 @@ mod tests {
             )
     }
 
+    /// Stand-in for the `hotshot_query_service::explorer` router; see [`mock_availability_base`].
+    fn mock_explorer_base() -> ApiRouter {
+        ApiRouter::new()
+            .api_route(
+                "/explorer-summary",
+                get_with(
+                    async || ApiJson(()),
+                    |op| op.summary("Get the explorer summary"),
+                ),
+            )
+            .api_route(
+                "/block/{height}",
+                get_with(
+                    async || ApiJson(()),
+                    |op| op.summary("Get block detail by height"),
+                ),
+            )
+    }
+
     /// The query-service router a query mode passes in: every base nested at its module prefix,
     /// the way the binary assembles it.
     fn mock_hqs_base() -> ApiRouter {
         ApiRouter::new()
             .nest(routes::v1::AVAILABILITY_PREFIX, mock_availability_base())
             .nest(routes::v1::STATUS_PREFIX, mock_status_base())
+            .nest(routes::v1::EXPLORER_PREFIX, mock_explorer_base())
     }
 
     fn rewritten_uri(uri: &str) -> String {
@@ -3790,50 +3460,6 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl v1::ExplorerApi for MockState {
-        type BlockDetail = ();
-        type BlockSummaries = ();
-        type TransactionDetail = ();
-        type TransactionSummaries = ();
-        type ExplorerSummary = ();
-        type SearchResult = ();
-
-        async fn get_block_detail(
-            &self,
-            _ident: v1::BlockIdent,
-        ) -> anyhow::Result<Self::BlockDetail> {
-            unimplemented!()
-        }
-        async fn get_block_summaries(
-            &self,
-            _target: v1::BlockIdent,
-            _limit: u64,
-        ) -> anyhow::Result<Self::BlockSummaries> {
-            unimplemented!()
-        }
-        async fn get_transaction_detail(
-            &self,
-            _ident: v1::TxIdent,
-        ) -> anyhow::Result<Self::TransactionDetail> {
-            unimplemented!()
-        }
-        async fn get_transaction_summaries(
-            &self,
-            _target: v1::TxIdent,
-            _limit: u64,
-            _filter: v1::TxSummaryFilter,
-        ) -> anyhow::Result<Self::TransactionSummaries> {
-            unimplemented!()
-        }
-        async fn get_explorer_summary(&self) -> anyhow::Result<Self::ExplorerSummary> {
-            unimplemented!()
-        }
-        async fn get_search_result(&self, _query: String) -> anyhow::Result<Self::SearchResult> {
-            unimplemented!()
-        }
-    }
-
-    #[async_trait::async_trait]
     impl v1::TokenApi for MockState {
         async fn total_minted_supply(&self) -> anyhow::Result<String> {
             unimplemented!()
@@ -4154,6 +3780,35 @@ mod tests {
         );
         // The extension is still there alongside the base.
         assert!(paths.contains_key(routes::v1::STATUS_KEYS_ROUTE));
+    }
+
+    /// The explorer routes come from `hotshot-query-service` now, and this crate no longer serves
+    /// any of its own, so the mount is all that puts them (and their documentation) in the spec.
+    #[tokio::test]
+    async fn v1_openapi_spec_documents_mounted_explorer_base() {
+        let router = create_router_v1(MockState, mock_hqs_base());
+        let req = Request::builder()
+            .uri(routes::v1::OPENAPI_SPEC_ROUTE)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router, req).await.unwrap();
+        let spec: serde_json::Value =
+            serde_json::from_str(&body_string(resp).await).expect("valid JSON");
+        let paths = spec["paths"].as_object().expect("spec has paths");
+
+        for route in [
+            "/v1/explorer/explorer-summary",
+            "/v1/explorer/block/{height}",
+        ] {
+            let item = paths
+                .get(route)
+                .unwrap_or_else(|| panic!("{route} missing from spec: {:?}", paths.keys()));
+            assert_eq!(item["get"]["tags"][0], "explorer");
+        }
+        assert_eq!(
+            paths["/v1/explorer/explorer-summary"]["get"]["summary"],
+            "Get the explorer summary"
+        );
     }
 
     /// `submit` and the bulk `catchup` routes take bodies over axum's 2 MiB `Bytes` default, and

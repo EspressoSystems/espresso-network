@@ -17,6 +17,7 @@ use hotshot_query_service::{
         AvailabilityDataSource, Options as AvailabilityOptions, router::availability_router,
     },
     data_source::{ExtensibleDataSource, MetricsDataSource},
+    explorer::{Options as ExplorerOptions, router::explorer_router},
     status::{
         HasMetrics, Options as StatusOptions, StatusDataSource, UpdateStatusData,
         router::status_router,
@@ -408,13 +409,20 @@ impl Options {
 
         let port = self.http.port;
         let ds_for_axum = ds.clone();
-        let hqs_base = hqs_base((*ds).clone());
+        // The explorer module is optional and only SQL storage answers its queries, so it is
+        // nested here rather than in the base every query mode shares.
+        let mut hqs_base = hqs_base((*ds).clone());
+        if self.explorer.is_some() {
+            hqs_base = hqs_base.nest(
+                routes::v1::EXPLORER_PREFIX,
+                explorer_router::<SeqTypes, _>(&ExplorerOptions::default(), (*ds).clone()),
+            );
+        }
         let env_vars = get_public_env_vars().unwrap_or_default();
         let node_cfg = self.public_node_config.as_deref().cloned();
         let modules = espresso_api::OptionalModules {
             submit: self.submit.is_some(),
             config: self.config.is_some(),
-            explorer: self.explorer.is_some(),
             light_client: self.light_client.is_some(),
             hotshot_events: self.hotshot_events.is_some(),
             ..Default::default()
@@ -562,8 +570,9 @@ where
 
 /// The `hotshot-query-service` modules' own routes, each nested at the prefix `espresso-api`
 /// mounts that module on, ready to merge into the v1 router. `espresso-api` is agnostic of the
-/// node types, so it cannot build these; both query modes back every migrated module from the
-/// same data source.
+/// node types, so it cannot build these; both query modes back every module here from the same
+/// data source. The optional explorer module is nested by its caller, since only SQL storage can
+/// back it.
 ///
 /// The default availability options are the 500ms fetch timeout and the 500/100 small/large object
 /// range limits this API has always enforced.

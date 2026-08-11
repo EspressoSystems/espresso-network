@@ -565,44 +565,6 @@ impl v1::LightClientApi for TestApi {
 }
 
 #[async_trait]
-impl v1::ExplorerApi for TestApi {
-    type BlockDetail = serde_json::Value;
-    type BlockSummaries = serde_json::Value;
-    type TransactionDetail = serde_json::Value;
-    type TransactionSummaries = serde_json::Value;
-    type ExplorerSummary = serde_json::Value;
-    type SearchResult = serde_json::Value;
-
-    async fn get_block_detail(&self, _ident: v1::BlockIdent) -> Result<Self::BlockDetail> {
-        Ok(serde_json::Value::Null)
-    }
-    async fn get_block_summaries(
-        &self,
-        _target: v1::BlockIdent,
-        _limit: u64,
-    ) -> Result<Self::BlockSummaries> {
-        Ok(serde_json::Value::Null)
-    }
-    async fn get_transaction_detail(&self, _ident: v1::TxIdent) -> Result<Self::TransactionDetail> {
-        Ok(serde_json::Value::Null)
-    }
-    async fn get_transaction_summaries(
-        &self,
-        _target: v1::TxIdent,
-        _limit: u64,
-        _filter: v1::TxSummaryFilter,
-    ) -> Result<Self::TransactionSummaries> {
-        Ok(serde_json::Value::Null)
-    }
-    async fn get_explorer_summary(&self) -> Result<Self::ExplorerSummary> {
-        Ok(serde_json::Value::Null)
-    }
-    async fn get_search_result(&self, _query: String) -> Result<Self::SearchResult> {
-        Ok(serde_json::Value::Null)
-    }
-}
-
-#[async_trait]
 impl v1::TokenApi for TestApi {
     async fn total_minted_supply(&self) -> Result<String> {
         Ok("0".to_string())
@@ -1016,7 +978,6 @@ async fn main() -> Result<()> {
         catchup: true,
         config: true,
         hotshot_events: true,
-        explorer: true,
         light_client: true,
     };
     // The example has no hotshot-query-service data source, so that crate's base routes are left

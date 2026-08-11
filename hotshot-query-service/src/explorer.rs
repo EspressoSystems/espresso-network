@@ -12,6 +12,7 @@
 
 pub(crate) mod data_source;
 pub(crate) mod query_data;
+pub mod router;
 
 pub use currency::*;
 pub use data_source::*;
@@ -22,6 +23,9 @@ use serde::{Deserialize, Serialize};
 pub use traits::*;
 
 use crate::{Header, Transaction};
+
+#[derive(Default)]
+pub struct Options {}
 
 /// [BlockDetailResponse] is a struct that represents the response from the
 /// `get_block_detail` endpoint.

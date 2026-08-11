@@ -40,12 +40,13 @@ pub fn url(base: &::url::Url, path: impl AsRef<str>) -> ::url::Url {
 ///
 /// `catchup`, like the query-service modules (`status`, `availability`, `node`, `token`,
 /// `block-state`, `fee-state`, `reward-state`, `database`) and `v2`, is always on: tide-disco's
-/// SQL mode registered it unconditionally. `submit`, `config`, `explorer`, `light-client`, and
+/// SQL mode registered it unconditionally. `submit`, `config`, `light-client`, and
 /// `hotshot-events` follow `Options`, matching `Options::init_with_query_module_sql`.
 ///
 /// `hqs_base` carries the `hotshot-query-service` modules' own routes, built by the caller from
 /// its data source and already nested at their module prefixes; see [`create_router_v1`]. This
-/// mode's data source backs every migrated module, so the caller nests all of them.
+/// mode's data source backs every migrated module, so the caller nests all of them, `explorer`
+/// among them when `Options::explorer` asks for it.
 pub async fn serve_axum<S>(
     port: u16,
     state: S,
@@ -66,7 +67,6 @@ where
         + v1::StateSignatureApi
         + v1::HotShotEventsApi
         + v1::LightClientApi
-        + v1::ExplorerApi
         + v1::TokenApi
         + v1::DatabaseApi
         + v2::RewardApi
@@ -95,9 +95,6 @@ where
     if modules.config {
         router = router.merge(axum::router_config(state.clone()));
     }
-    if modules.explorer {
-        router = router.merge(axum::router_explorer(state.clone()));
-    }
     if modules.light_client {
         router = router.merge(axum::router_light_client(state.clone()));
     }
@@ -109,15 +106,17 @@ where
 }
 
 /// Which of the optional API modules to serve, for modes that make them conditional
-/// (mirroring `Options::submit`/`Options::config`/`Options::explorer`/`Options::light_client`/
+/// (mirroring `Options::submit`/`Options::config`/`Options::light_client`/
 /// `Options::hotshot_events`).
+///
+/// The explorer module is conditional too, but it is a `hotshot-query-service` module now: the
+/// caller decides whether to nest it in the router it passes as `hqs_base`.
 #[derive(Default, Clone, Copy, Debug)]
 pub struct OptionalModules {
     pub submit: bool,
     pub catchup: bool,
     pub config: bool,
     pub hotshot_events: bool,
-    pub explorer: bool,
     pub light_client: bool,
 }
 

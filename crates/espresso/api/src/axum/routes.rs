@@ -279,37 +279,8 @@ pub mod v1 {
     pub const LC_NAMESPACES_RANGE_ROUTE: &str =
         "/v1/light-client/namespaces/{start}/{end}/{namespaces}";
 
-    // Explorer
-    pub const EXPLORER_BLOCK_DETAIL_BY_HEIGHT_ROUTE: &str = "/v1/explorer/block/{height}";
-    pub const EXPLORER_BLOCK_DETAIL_BY_HASH_ROUTE: &str = "/v1/explorer/block/hash/{hash}";
-    pub const EXPLORER_BLOCK_SUMMARIES_LATEST_ROUTE: &str = "/v1/explorer/blocks/latest/{limit}";
-    pub const EXPLORER_BLOCK_SUMMARIES_FROM_ROUTE: &str = "/v1/explorer/blocks/{from}/{limit}";
-    pub const EXPLORER_TX_DETAIL_BY_POSITION_ROUTE: &str =
-        "/v1/explorer/transaction/{height}/{offset}";
-    pub const EXPLORER_TX_DETAIL_BY_HASH_ROUTE: &str = "/v1/explorer/transaction/hash/{hash}";
-
-    pub const EXPLORER_TX_SUMMARIES_LATEST_ROUTE: &str = "/v1/explorer/transactions/latest/{limit}";
-    pub const EXPLORER_TX_SUMMARIES_FROM_ROUTE: &str =
-        "/v1/explorer/transactions/from/{height}/{offset}/{limit}";
-    pub const EXPLORER_TX_SUMMARIES_BY_HASH_ROUTE: &str =
-        "/v1/explorer/transactions/hash/{hash}/{limit}";
-
-    pub const EXPLORER_TX_SUMMARIES_LATEST_BLOCK_ROUTE: &str =
-        "/v1/explorer/transactions/latest/{limit}/block/{block}";
-    pub const EXPLORER_TX_SUMMARIES_FROM_BLOCK_ROUTE: &str =
-        "/v1/explorer/transactions/from/{height}/{offset}/{limit}/block/{block}";
-    pub const EXPLORER_TX_SUMMARIES_BY_HASH_BLOCK_ROUTE: &str =
-        "/v1/explorer/transactions/hash/{hash}/{limit}/block/{block}";
-
-    pub const EXPLORER_TX_SUMMARIES_LATEST_NS_ROUTE: &str =
-        "/v1/explorer/transactions/latest/{limit}/namespace/{namespace}";
-    pub const EXPLORER_TX_SUMMARIES_FROM_NS_ROUTE: &str =
-        "/v1/explorer/transactions/from/{height}/{offset}/{limit}/namespace/{namespace}";
-    pub const EXPLORER_TX_SUMMARIES_BY_HASH_NS_ROUTE: &str =
-        "/v1/explorer/transactions/hash/{hash}/{limit}/namespace/{namespace}";
-
-    pub const EXPLORER_SUMMARY_ROUTE: &str = "/v1/explorer/explorer-summary";
-    pub const EXPLORER_SEARCH_ROUTE: &str = "/v1/explorer/search/{query}";
+    /// Mount point of the explorer module, whose routes come from `hotshot-query-service`.
+    pub const EXPLORER_PREFIX: &str = "/v1/explorer";
 
     // Token
     pub const TOKEN_TOTAL_MINTED_SUPPLY_ROUTE: &str = "/v1/token/total-minted-supply";
@@ -871,104 +842,6 @@ pub mod v1 {
         end,
         namespaces
     );
-
-    // Explorer: blocks
-    path_fn!(
-        explorer_block_detail_by_height,
-        EXPLORER_BLOCK_DETAIL_BY_HEIGHT_ROUTE,
-        height
-    );
-    path_fn!(
-        explorer_block_detail_by_hash,
-        EXPLORER_BLOCK_DETAIL_BY_HASH_ROUTE,
-        hash
-    );
-    path_fn!(
-        explorer_block_summaries_latest,
-        EXPLORER_BLOCK_SUMMARIES_LATEST_ROUTE,
-        limit
-    );
-    path_fn!(
-        explorer_block_summaries_from,
-        EXPLORER_BLOCK_SUMMARIES_FROM_ROUTE,
-        from,
-        limit
-    );
-
-    // Explorer: transactions
-    path_fn!(
-        explorer_tx_detail_by_position,
-        EXPLORER_TX_DETAIL_BY_POSITION_ROUTE,
-        height,
-        offset
-    );
-    path_fn!(
-        explorer_tx_detail_by_hash,
-        EXPLORER_TX_DETAIL_BY_HASH_ROUTE,
-        hash
-    );
-    path_fn!(
-        explorer_tx_summaries_latest,
-        EXPLORER_TX_SUMMARIES_LATEST_ROUTE,
-        limit
-    );
-    path_fn!(
-        explorer_tx_summaries_from,
-        EXPLORER_TX_SUMMARIES_FROM_ROUTE,
-        height,
-        offset,
-        limit
-    );
-    path_fn!(
-        explorer_tx_summaries_by_hash,
-        EXPLORER_TX_SUMMARIES_BY_HASH_ROUTE,
-        hash,
-        limit
-    );
-    path_fn!(
-        explorer_tx_summaries_latest_block,
-        EXPLORER_TX_SUMMARIES_LATEST_BLOCK_ROUTE,
-        limit,
-        block
-    );
-    path_fn!(
-        explorer_tx_summaries_from_block,
-        EXPLORER_TX_SUMMARIES_FROM_BLOCK_ROUTE,
-        height,
-        offset,
-        limit,
-        block
-    );
-    path_fn!(
-        explorer_tx_summaries_by_hash_block,
-        EXPLORER_TX_SUMMARIES_BY_HASH_BLOCK_ROUTE,
-        hash,
-        limit,
-        block
-    );
-    path_fn!(
-        explorer_tx_summaries_latest_ns,
-        EXPLORER_TX_SUMMARIES_LATEST_NS_ROUTE,
-        limit,
-        namespace
-    );
-    path_fn!(
-        explorer_tx_summaries_from_ns,
-        EXPLORER_TX_SUMMARIES_FROM_NS_ROUTE,
-        height,
-        offset,
-        limit,
-        namespace
-    );
-    path_fn!(
-        explorer_tx_summaries_by_hash_ns,
-        EXPLORER_TX_SUMMARIES_BY_HASH_NS_ROUTE,
-        hash,
-        limit,
-        namespace
-    );
-    path_fn!(explorer_summary, EXPLORER_SUMMARY_ROUTE);
-    path_fn!(explorer_search, EXPLORER_SEARCH_ROUTE, query);
 
     // Token
     path_fn!(token_total_minted_supply, TOKEN_TOTAL_MINTED_SUPPLY_ROUTE);
