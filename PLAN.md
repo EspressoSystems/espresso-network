@@ -151,7 +151,7 @@ stands for a whole subsystem.
       responders and is bounded by view, and that the one adversarial variant (`SubmitTransaction`) is capped by
       `max_retry_bytes`, which `tests::block` now pins.
 - [x] coordinator:submodules: `NP/coordinator/error.rs`, `NP/coordinator/metrics.rs`, `NP/coordinator/timer.rs` - swept
-      at SWEEP_COMMIT - re-read after NP-6 removed the dead `reset_with` and documented `Timer`'s one-firing-per-arming
+      at `7952ee8c6dc` - re-read after NP-6 removed the dead `reset_with` and documented `Timer`'s one-firing-per-arming
       contract; battery `coordinator::timer::tests` now pins that contract, including the pending window the `done` flag
       exists for. Earlier at `1872c2ee84e` a full read of all three found the severity split and the
       `Measurement`-on-drop histogram sound; that sweep produced NP-6.

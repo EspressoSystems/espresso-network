@@ -376,7 +376,7 @@ behaviour. Closed. The ledger is now empty.
 Changed: crates/hotshot/new-protocol/src/coordinator/timer.rs (dead method deleted, contract documented on the type and
 on `poll`, inline test module added), PLAN.md, BACKLOG.md, JOURNAL.md.
 
-Checkpoint: pending
+Checkpoint: 7952ee8c6dcee6416f6bb568abb09c9a3af49203
 
 Verification: the enumeration `grep -rn 'reset_with\b' crates/ --include='*.rs'` printed one line at the previous commit
 (`timer.rs:42`, read back with `git show HEAD:...`) and prints nothing now. Two tests pin what the module actually
