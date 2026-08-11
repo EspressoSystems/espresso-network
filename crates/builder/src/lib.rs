@@ -1,14 +1,28 @@
+use std::sync::Arc;
+
+use axum::Router;
 use espresso_types::SeqTypes;
+use hotshot_builder_api::v0_1::router;
 use hotshot_builder_legacy::service::ProxyGlobalState;
 use tokio::{net::TcpListener, spawn};
 use url::Url;
 
-pub mod api;
 pub mod non_permissioned;
 
 /// Runs the builder's `block_info` and `txn_submit` API service in the background.
 pub fn run_builder_api_service(url: Url, source: ProxyGlobalState<SeqTypes>) {
-    let router = api::router(source);
+    let source = Arc::new(source);
+    let router = router::app(
+        Router::new()
+            .nest(
+                "/block_info",
+                router::block_info_router::<SeqTypes, _>(source.clone()),
+            )
+            .nest(
+                "/txn_submit",
+                router::txn_submit_router::<SeqTypes, _>(source),
+            ),
+    );
     spawn(async move {
         let host = url.host_str().expect("builder API url missing host");
         let port = url
