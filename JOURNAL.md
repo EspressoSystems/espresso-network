@@ -284,7 +284,7 @@ inventory rows and rescored.
 
 Changed: PLAN.md (ten rows swept), BACKLOG.md (two findings), JOURNAL.md.
 
-Checkpoint: pending
+Checkpoint: c9b8e106c14d77af0adf1ee8f507d57a81365022
 
 Verification: Verify command green: 199 tests run, 199 passed, 15 skipped, exit 0. Surface inventory: 26 of 26 rows
 swept, none unswept, so the scores below claim the whole mapped surface for the first time this run. Six of the ten rows
