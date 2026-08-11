@@ -1,6 +1,4 @@
 //! V1 light-client API.
-//!
-//! Mirrors the tide-disco endpoints defined in `crates/espresso/node/api/light-client.toml`.
 
 use std::collections::HashMap;
 

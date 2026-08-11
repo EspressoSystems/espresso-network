@@ -1,6 +1,6 @@
 //! V1 status API.
 //!
-//! Mirrors the tide-disco endpoints defined in `hotshot-query-service/api/status.toml`.
+//! Mirrors the endpoints defined in `hotshot-query-service/api/status.toml`.
 
 use async_trait::async_trait;
 use serde::Serialize;

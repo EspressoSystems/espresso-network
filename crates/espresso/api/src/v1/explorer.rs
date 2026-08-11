@@ -1,6 +1,6 @@
 //! V1 explorer API.
 //!
-//! Mirrors the tide-disco endpoints defined in `hotshot-query-service/api/explorer.toml`.
+//! Mirrors the endpoints defined in `hotshot-query-service/api/explorer.toml`.
 
 use async_trait::async_trait;
 use serde::Serialize;
