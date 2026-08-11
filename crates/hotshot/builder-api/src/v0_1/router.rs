@@ -346,3 +346,152 @@ pub fn app(api: Router) -> Router {
 pub fn serve(url: &Url, router: Router) -> tokio::task::JoinHandle<()> {
     wire::spawn_serve(url, router)
 }
+
+#[cfg(test)]
+mod tests {
+    use async_trait::async_trait;
+    use axum::http::{Method, Request, header};
+    use committable::Commitment;
+    use hotshot_example_types::node_types::TestTypes;
+    use hotshot_types::traits::signature_key::BuilderSignatureKey;
+
+    use super::*;
+    use crate::v0_1::builder::BuildError;
+
+    /// The tests below pin routing shape and response headers, not handler bodies, so a stub
+    /// source is all they need.
+    #[derive(Clone)]
+    struct StubSource;
+
+    #[async_trait]
+    impl BuilderDataSource<TestTypes> for StubSource {
+        async fn available_blocks(
+            &self,
+            _for_parent: &VidCommitment,
+            _view_number: u64,
+            _sender: Sender<TestTypes>,
+            _signature: &Signature<TestTypes>,
+        ) -> Result<Vec<AvailableBlockInfo<TestTypes>>, BuildError> {
+            Ok(vec![])
+        }
+
+        async fn claim_block(
+            &self,
+            _block_hash: &BuilderCommitment,
+            _view_number: u64,
+            _sender: Sender<TestTypes>,
+            _signature: &Signature<TestTypes>,
+        ) -> Result<AvailableBlockData<TestTypes>, BuildError> {
+            Err(BuildError::NotFound)
+        }
+
+        async fn claim_block_with_num_nodes(
+            &self,
+            _block_hash: &BuilderCommitment,
+            _view_number: u64,
+            _sender: Sender<TestTypes>,
+            _signature: &Signature<TestTypes>,
+            _num_nodes: usize,
+        ) -> Result<AvailableBlockData<TestTypes>, BuildError> {
+            Err(BuildError::NotFound)
+        }
+
+        async fn claim_block_header_input(
+            &self,
+            _block_hash: &BuilderCommitment,
+            _view_number: u64,
+            _sender: Sender<TestTypes>,
+            _signature: &Signature<TestTypes>,
+        ) -> Result<AvailableBlockHeaderInputV1<TestTypes>, BuildError> {
+            Err(BuildError::NotFound)
+        }
+
+        async fn builder_address(
+            &self,
+        ) -> Result<<TestTypes as NodeType>::BuilderSignatureKey, BuildError> {
+            type Key = <TestTypes as NodeType>::BuilderSignatureKey;
+            Ok(<Key as BuilderSignatureKey>::generated_from_seed_indexed([0; 32], 0).0)
+        }
+    }
+
+    #[async_trait]
+    impl AcceptsTxnSubmits<TestTypes> for StubSource {
+        async fn submit_txns(
+            &self,
+            txns: Vec<<TestTypes as NodeType>::Transaction>,
+        ) -> Result<Vec<Commitment<<TestTypes as NodeType>::Transaction>>, BuildError> {
+            Ok(txns.iter().map(Committable::commit).collect())
+        }
+
+        async fn txn_status(
+            &self,
+            _txn_hash: Commitment<<TestTypes as NodeType>::Transaction>,
+        ) -> Result<TransactionStatus, BuildError> {
+            Ok(TransactionStatus::Unknown)
+        }
+    }
+
+    fn test_router() -> Router {
+        app(Router::new()
+            .nest("/block_info", block_info_router::<TestTypes, _>(StubSource))
+            .nest("/txn_submit", txn_submit_router::<TestTypes, _>(StubSource)))
+    }
+
+    async fn request(method: Method, uri: &str) -> axum::http::Response<axum::body::Body> {
+        let req = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::ORIGIN, "https://example.com")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        tower::ServiceExt::oneshot(test_router(), req)
+            .await
+            .unwrap()
+    }
+
+    /// The legacy server served both modules at `/v0/<module>/...` and redirected the unversioned
+    /// paths there, so both forms must route. Nesting the version after the module path instead
+    /// (`/block_info/v0/...`) silently 404s the canonical versioned URLs.
+    #[tokio::test]
+    async fn versioned_and_unversioned_module_paths_route() {
+        for uri in [
+            "/block_info/builderaddress",
+            "/v0/block_info/builderaddress",
+            "/txn_submit/status/abc",
+            "/v0/txn_submit/status/abc",
+        ] {
+            assert_ne!(
+                request(Method::GET, uri).await.status(),
+                HttpStatusCode::NOT_FOUND,
+                "{uri} did not route"
+            );
+        }
+        assert_eq!(
+            request(Method::GET, "/block_info/v0/builderaddress")
+                .await
+                .status(),
+            HttpStatusCode::NOT_FOUND,
+            "the version belongs before the module path, not after"
+        );
+    }
+
+    /// Like the legacy server, every response carries permissive CORS headers; builder clients
+    /// are not browsers, but demo tooling and dashboards are.
+    #[tokio::test]
+    async fn responses_carry_cors_headers() {
+        for (method, uri) in [
+            (Method::GET, "/healthcheck"),
+            (Method::GET, "/v0/block_info/builderaddress"),
+            (Method::GET, "/no/such/route"),
+        ] {
+            let resp = request(method.clone(), uri).await;
+            assert_eq!(
+                resp.headers()
+                    .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                    .unwrap_or_else(|| panic!("no CORS header on {uri}")),
+                "*",
+                "{uri}"
+            );
+        }
+    }
+}

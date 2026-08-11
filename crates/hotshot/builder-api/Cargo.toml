@@ -19,5 +19,9 @@ tokio = { workspace = true }
 url = { workspace = true }
 vbs = { workspace = true }
 
+[dev-dependencies]
+hotshot-example-types = { workspace = true }
+tower = { workspace = true, features = ["util"] }
+
 [lints]
 workspace = true
