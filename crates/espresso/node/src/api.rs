@@ -71,7 +71,10 @@ use tokio::time::timeout;
 use url::Url;
 use vbs::version::Version;
 
-use self::data_source::{HotShotConfigDataSource, NodeStateDataSource, StateSignatureDataSource};
+use self::data_source::{
+    HotShotConfigDataSource, NodeKeysDataSource, NodePublicKeys, NodeStateDataSource,
+    StateSignatureDataSource,
+};
 use crate::{
     SeqTypes, SequencerApiVersion, SequencerContext,
     api::data_source::TokenDataSource,
@@ -90,7 +93,6 @@ use crate::{
 };
 
 pub mod data_source;
-pub mod endpoints;
 pub mod fs;
 pub mod light_client;
 pub mod options;
@@ -1268,6 +1270,34 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> HotShotConfigDataSour
     }
 }
 
+impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> NodeKeysDataSource
+    for StorageState<N, P, D>
+{
+    async fn node_public_keys(&self) -> NodePublicKeys {
+        self.as_ref().node_public_keys().await
+    }
+}
+
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> NodeKeysDataSource for ApiState<N, P> {
+    async fn node_public_keys(&self) -> NodePublicKeys {
+        let ctx = self.sequencer_context.as_ref().get().await.get_ref();
+        let config = ctx.validator_config();
+        let consensus_key = config.public_key;
+        let eth_account = ctx
+            .consensus_handle()
+            .membership_coordinator()
+            .await
+            .membership()
+            .latest_account(&consensus_key);
+        NodePublicKeys {
+            eth_account,
+            consensus_key,
+            state_ver_key: config.state_public_key.clone(),
+            x25519_key: config.x25519_keypair.as_ref().map(|kp| kp.public_key()),
+        }
+    }
+}
+
 #[async_trait]
 impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> StateSignatureDataSource<N>
     for StorageState<N, P, D>
@@ -1376,7 +1406,7 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
                 .context("reward tree gc requires an epoch height")?;
             // EPOCH_REWARD_VERSION (V5)+ only persists a tree at each epoch boundary,
             // so 5 epochs = 5 trees on disk. Earlier versions persist a tree at
-            // every block, so 1 epoch is already epoch_height trees — keeping more
+            // every block, so 1 epoch is already epoch_height trees; keeping more
             // would be expensive. We only need 1 epoch for both, but the extra
             // trees are cheap for V5+ so it doesn't make much of a difference.
             let epochs_to_retain = if version >= versions::EPOCH_REWARD_VERSION {
@@ -1899,19 +1929,17 @@ pub mod test_helpers {
         event::LeafInfo, light_client::LCV3StateSignatureRequestBody,
         new_protocol::CoordinatorEvent, traits::metrics::NoMetrics,
     };
+    use http_client::{Client, error::ClientErr};
     use itertools::izip;
     use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme};
     use staking_cli::{
         Transaction as StakingTransaction,
         demo::{DelegationConfig, StakingTransactions},
     };
-    use surf_disco::Client;
     use tempfile::TempDir;
     use test_utils::reserve_tcp_port;
-    use tide_disco::{Api, App, Error, StatusCode, error::ServerError};
-    use tokio::{spawn, task::JoinHandle, time::sleep};
-    use url::Url;
-    use vbs::version::{StaticVersion, StaticVersionType};
+    use tokio::time::sleep;
+    use vbs::version::StaticVersion;
     use versions::{EPOCH_VERSION, Upgrade};
 
     use super::*;
@@ -1934,6 +1962,8 @@ pub mod test_helpers {
         // todo (abdul): remove this when fs storage is removed
         pub temp_dir: Option<TempDir>,
         pub contracts: Option<Contracts>,
+        /// Deferred node indices not yet started (see [`Self::start_deferred_node`]).
+        deferred: Vec<usize>,
     }
 
     pub struct TestNetworkConfig<const NUM_NODES: usize, P, C>
@@ -1947,6 +1977,7 @@ pub mod test_helpers {
         network_config: TestConfig<{ NUM_NODES }>,
         api_config: Options,
         contracts: Option<Contracts>,
+        deferred_start: Vec<usize>,
     }
 
     impl<const NUM_NODES: usize, P, C> TestNetworkConfig<{ NUM_NODES }, P, C>
@@ -1972,6 +2003,7 @@ pub mod test_helpers {
         network_config: Option<TestConfig<{ NUM_NODES }>>,
         contracts: Option<Contracts>,
         initial_token_supply: Option<U256>,
+        deferred_start: Vec<usize>,
     }
 
     impl Default for TestNetworkConfigBuilder<5, no_storage::Options, NullStateCatchup> {
@@ -1984,6 +2016,7 @@ pub mod test_helpers {
                 api_config: None,
                 contracts: None,
                 initial_token_supply: None,
+                deferred_start: Vec::new(),
             }
         }
     }
@@ -2001,6 +2034,7 @@ pub mod test_helpers {
                 api_config: None,
                 contracts: None,
                 initial_token_supply: None,
+                deferred_start: Vec::new(),
             }
         }
     }
@@ -2032,6 +2066,7 @@ pub mod test_helpers {
                 persistence: Some(persistence),
                 contracts: self.contracts,
                 initial_token_supply: self.initial_token_supply,
+                deferred_start: self.deferred_start,
             }
         }
 
@@ -2052,7 +2087,15 @@ pub mod test_helpers {
                 persistence: self.persistence,
                 contracts: self.contracts,
                 initial_token_supply: self.initial_token_supply,
+                deferred_start: self.deferred_start,
             }
+        }
+
+        /// Defers starting the nodes at the given (trailing) indices; they
+        /// join later via [`TestNetwork::start_deferred_node`].
+        pub fn deferred_start(mut self, indices: &[usize]) -> Self {
+            self.deferred_start = indices.to_vec();
+            self
         }
 
         pub fn network_config(mut self, network_config: TestConfig<{ NUM_NODES }>) -> Self {
@@ -2213,6 +2256,7 @@ pub mod test_helpers {
                 network_config: self.network_config.unwrap(),
                 api_config: self.api_config.unwrap(),
                 contracts: self.contracts,
+                deferred_start: self.deferred_start,
             }
         }
     }
@@ -2251,9 +2295,21 @@ pub mod test_helpers {
                 None
             };
 
+            let deferred = cfg.deferred_start.clone();
+            assert!(
+                deferred.len() < NUM_NODES,
+                "node 0 runs the API server and cannot be deferred"
+            );
+            assert_eq!(
+                deferred,
+                (NUM_NODES - deferred.len()..NUM_NODES).collect::<Vec<_>>(),
+                "deferred_start must be the trailing indices so `node(i)` stays aligned"
+            );
+
             let mut nodes = join_all(
                 izip!(cfg.state, cfg.persistence, cfg.catchup)
                     .enumerate()
+                    .filter(|(i, _)| !deferred.contains(i))
                     .map(|(i, (state, persistence, state_peers))| {
                         let opt = opt.clone();
                         let cfg = &cfg.network_config;
@@ -2330,7 +2386,46 @@ pub mod test_helpers {
                 cfg: cfg.network_config,
                 temp_dir,
                 contracts: cfg.contracts,
+                deferred,
             }
+        }
+
+        /// Initializes and starts a node deferred at construction (see
+        /// [`TestNetworkConfigBuilder::deferred_start`]), in ascending index
+        /// order; the node is then reachable via [`Self::node`] as usual.
+        pub async fn start_deferred_node<C: StateCatchup + 'static>(
+            &mut self,
+            i: usize,
+            state: ValidatedState,
+            persistence: P,
+            catchup: C,
+            upgrade: versions::Upgrade,
+        ) -> &SequencerContext<network::Memory, P::Persistence> {
+            assert_eq!(
+                self.deferred.first(),
+                Some(&i),
+                "deferred nodes must be started in ascending index order"
+            );
+            self.deferred.remove(0);
+
+            let ctx = self
+                .cfg
+                .init_node(
+                    i,
+                    state,
+                    persistence,
+                    Some(catchup),
+                    None,
+                    &NoMetrics,
+                    STAKE_TABLE_CAPACITY_FOR_TEST,
+                    NullEventConsumer,
+                    upgrade,
+                    self.cfg.upgrades(),
+                )
+                .await;
+            ctx.start_consensus().await;
+            self.peers.push(ctx);
+            self.peers.last().unwrap()
         }
 
         pub async fn stop_consensus(&mut self) {
@@ -2455,7 +2550,7 @@ pub mod test_helpers {
     /// first matching epoch and its committee; panics after `max_epochs`
     /// epochs without a match.
     pub async fn wait_for_committee(
-        client: &Client<ServerError, SequencerApiVersion>,
+        client: &Client<ClientErr, SequencerApiVersion>,
         events: &mut (impl Stream<Item = CoordinatorEvent<SeqTypes>> + Unpin),
         epoch_height: u64,
         start_epoch: u64,
@@ -2501,8 +2596,8 @@ pub mod test_helpers {
     }
 
     /// Asserts the node is live: it must advance `epochs_ahead` epochs (at
-    /// least 1) past its current decided epoch, and — when the chain runs the
-    /// self-building new protocol — sequence a newly submitted transaction.
+    /// least 1) past its current decided epoch, and, when the chain runs the
+    /// self-building new protocol, sequence a newly submitted transaction.
     /// Inclusion is not asserted on legacy versions because the test-only
     /// legacy builder stops producing non-empty blocks after roughly a
     /// hundred views, independent of any stake table activity.
@@ -2595,7 +2690,7 @@ pub mod test_helpers {
     pub async fn status_test_helper(opt: impl FnOnce(Options) -> Options) {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url = format!("http://localhost:{port}").parse().unwrap();
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
 
         let options = opt(Options::with_port(port));
         let network_config = TestConfigBuilder::default().build();
@@ -2603,7 +2698,7 @@ pub mod test_helpers {
             .api_config(options)
             .network_config(network_config)
             .build();
-        let _network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
+        let network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
         client.connect(None).await;
 
         // The status API is well tested in the query service repo. Here we are just smoke testing
@@ -2628,6 +2723,24 @@ pub mod test_helpers {
         assert!(success_rate.is_finite(), "{success_rate}");
         // We know at least some views have been successful, since we finalized a block.
         assert!(success_rate > 0.0, "{success_rate}");
+
+        let keys: NodePublicKeys = client.get("status/keys").send().await.unwrap();
+        let expected = network.server.validator_config();
+        assert_eq!(keys.consensus_key, expected.public_key);
+        assert_eq!(keys.state_ver_key, expected.state_public_key);
+        assert_eq!(
+            keys.x25519_key,
+            expected.x25519_keypair.as_ref().map(|kp| kp.public_key())
+        );
+        assert_eq!(keys.eth_account, None);
+
+        let json: serde_json::Value = client.get("status/keys").send().await.unwrap();
+        let bls = json["consensus_key"].as_str().unwrap();
+        assert!(bls.starts_with("BLS_VER_KEY~"), "{bls}");
+        let schnorr = json["state_ver_key"].as_str().unwrap();
+        assert!(schnorr.starts_with("SCHNORR_VER_KEY~"), "{schnorr}");
+        let x25519 = json["x25519_key"].as_str().unwrap();
+        assert!(x25519.starts_with("X25519_PK~"), "{x25519}");
     }
 
     /// Test the submit API with custom options.
@@ -2643,7 +2756,7 @@ pub mod test_helpers {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let url = format!("http://localhost:{port}").parse().unwrap();
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
 
         let options = opt(Options::with_port(port).submit(Default::default()));
         let network_config = TestConfigBuilder::default().build();
@@ -2675,7 +2788,7 @@ pub mod test_helpers {
 
         let url = format!("http://localhost:{port}").parse().unwrap();
 
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
 
         let options = opt(Options::with_port(port));
         let network_config = TestConfigBuilder::default().build();
@@ -2713,7 +2826,7 @@ pub mod test_helpers {
     pub async fn catchup_test_helper(opt: impl FnOnce(Options) -> Options) {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url = format!("http://localhost:{port}").parse().unwrap();
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
 
         let options = opt(Options::with_port(port));
         let network_config = TestConfigBuilder::default().build();
@@ -2791,70 +2904,6 @@ pub mod test_helpers {
             .unwrap()
             .unwrap();
     }
-
-    pub async fn spawn_dishonest_peer_catchup_api() -> anyhow::Result<(Url, JoinHandle<()>)> {
-        let toml = toml::from_str::<toml::Value>(include_str!("../api/catchup.toml")).unwrap();
-        let mut api =
-            Api::<(), hotshot_query_service::Error, SequencerApiVersion>::new(toml).unwrap();
-
-        api.get("account", |_req, _state: &()| {
-            async move {
-                Result::<AccountQueryData, _>::Err(hotshot_query_service::Error::catch_all(
-                    StatusCode::BAD_REQUEST,
-                    "no account found".to_string(),
-                ))
-            }
-            .boxed()
-        })?
-        .get("blocks", |_req, _state| {
-            async move {
-                Result::<BlocksFrontier, _>::Err(hotshot_query_service::Error::catch_all(
-                    StatusCode::BAD_REQUEST,
-                    "no block found".to_string(),
-                ))
-            }
-            .boxed()
-        })?
-        .get("chainconfig", |_req, _state| {
-            async move {
-                Result::<ChainConfig, _>::Ok(ChainConfig {
-                    max_block_size: 300.into(),
-                    base_fee: 1.into(),
-                    fee_recipient: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
-                        .parse()
-                        .unwrap(),
-                    ..Default::default()
-                })
-            }
-            .boxed()
-        })?
-        .get("leafchain", |_req, _state| {
-            async move {
-                Result::<Vec<Leaf2>, _>::Err(hotshot_query_service::Error::catch_all(
-                    StatusCode::BAD_REQUEST,
-                    "No leafchain found".to_string(),
-                ))
-            }
-            .boxed()
-        })?;
-
-        let mut app = App::<_, hotshot_query_service::Error>::with_state(());
-        app.with_version(env!("CARGO_PKG_VERSION").parse().unwrap());
-
-        app.register_module::<_, _>("catchup", api).unwrap();
-
-        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
-        let url: Url = Url::parse(&format!("http://localhost:{port}")).unwrap();
-
-        let handle = spawn({
-            let url = url.clone();
-            async move {
-                let _ = app.serve(url, SequencerApiVersion::instance()).await;
-            }
-        });
-
-        Ok((url, handle))
-    }
 }
 
 #[cfg(test)]
@@ -2885,13 +2934,12 @@ mod api_tests {
         utils::EpochTransitionIndicator,
         vid::avidm::{AvidMScheme, init_avidm_param},
     };
-    use surf_disco::Client;
+    use http_client::{Client, error::ClientErr};
     use test_helpers::{
         TestNetwork, TestNetworkConfigBuilder, catchup_test_helper, state_signature_test_helper,
         status_test_helper, submit_test_helper,
     };
     use test_utils::reserve_tcp_port;
-    use tide_disco::error::ServerError;
     use vbs::version::StaticVersion;
 
     use super::{update::ApiEventConsumer, *};
@@ -2953,7 +3001,7 @@ mod api_tests {
         let mut events = network.server.event_stream();
 
         // Connect client.
-        let client: Client<ServerError, StaticVersion<0, 1>> =
+        let client: Client<ClientErr, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{port}").parse().unwrap());
         client.connect(None).await;
 
@@ -3510,6 +3558,11 @@ mod test {
         utils::epoch_from_block_number,
         x25519,
     };
+    use http_client::{
+        Client, StatusCode,
+        error::ClientErr,
+        healthcheck::{AppHealth, HealthStatus},
+    };
     use jf_merkle_tree_compat::{
         MerkleTreeScheme,
         prelude::{MerkleProof, Sha3Node},
@@ -3521,15 +3574,11 @@ mod test {
         Transaction as StakingTransaction, demo::DelegationConfig, fetch_commission,
         update_commission, update_network_config,
     };
-    use surf_disco::Client;
     use test_helpers::{
         TestNetwork, TestNetworkConfigBuilder, catchup_test_helper, state_signature_test_helper,
         status_test_helper, submit_test_helper,
     };
     use test_utils::reserve_tcp_port;
-    use tide_disco::{
-        Error, StatusCode, Url, app::AppHealth, error::ServerError, healthcheck::HealthStatus,
-    };
     use tokio::time::sleep;
     use vbs::version::StaticVersion;
     use versions::{
@@ -3544,7 +3593,7 @@ mod test {
     use super::*;
 
     async fn wait_until_block_height(
-        client: &Client<ServerError, StaticVersion<0, 1>>,
+        client: &Client<ClientErr, StaticVersion<0, 1>>,
         endpoint: &str,
         height: u64,
     ) {
@@ -3580,7 +3629,7 @@ mod test {
     async fn test_healthcheck() {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let url = format!("http://localhost:{port}").parse().unwrap();
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
         let options = Options::with_port(port);
         let network_config = TestConfigBuilder::default().build();
         let config = TestNetworkConfigBuilder::<5, _, NullStateCatchup>::default()
@@ -3629,7 +3678,7 @@ mod test {
             .build();
         let _network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
         let url = format!("http://localhost:{port}").parse().unwrap();
-        let client: Client<ServerError, SequencerApiVersion> = Client::new(url);
+        let client: Client<ClientErr, SequencerApiVersion> = Client::new(url);
 
         tracing::info!("waiting for blocks");
         client.connect(Some(Duration::from_secs(15))).await;
@@ -3715,7 +3764,7 @@ mod test {
             .build();
         let _network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
         let url = format!("http://localhost:{port}").parse().unwrap();
-        let client: Client<ServerError, SequencerApiVersion> = Client::new(url);
+        let client: Client<ClientErr, SequencerApiVersion> = Client::new(url);
         client.connect(Some(Duration::from_secs(15))).await;
 
         let table_sizes = client
@@ -4396,7 +4445,7 @@ mod test {
         let mut network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
 
         // Connect client.
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{port}").parse().unwrap());
         client.connect(None).await;
         tracing::info!(port, "server running");
@@ -4466,7 +4515,7 @@ mod test {
             .network_config(TestConfigBuilder::default().build())
             .build();
         let _network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
-        let client: Client<ServerError, StaticVersion<0, 1>> =
+        let client: Client<ClientErr, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{port}").parse().unwrap());
         client.connect(None).await;
         tracing::info!(port, "server running");
@@ -4504,8 +4553,8 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_config() {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
-        let url: surf_disco::Url = format!("http://localhost:{port}").parse().unwrap();
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url.clone());
+        let url: Url = format!("http://localhost:{port}").parse().unwrap();
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url.clone());
 
         let options = Options::with_port(port).config(Default::default());
         let network_config = TestConfigBuilder::default().build();
@@ -4552,7 +4601,7 @@ mod test {
             .parse()
             .unwrap();
 
-        let client: Client<ServerError, SequencerApiVersion> = Client::new(url);
+        let client: Client<ClientErr, SequencerApiVersion> = Client::new(url);
 
         let options = Options::with_port(query_service_port).hotshot_events(HotshotEvents);
 
@@ -4617,7 +4666,7 @@ mod test {
             .parse()
             .unwrap();
 
-        let client: Client<ServerError, SequencerApiVersion> = Client::new(hotshot_url);
+        let client: Client<ClientErr, SequencerApiVersion> = Client::new(hotshot_url);
         let options = Options::with_port(query_service_port).hotshot_events(HotshotEvents);
 
         let config = TestNetworkConfigBuilder::default()
@@ -4734,7 +4783,7 @@ mod test {
             .build();
 
         let network = TestNetwork::new(config, POS_V4).await;
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         // first two epochs will be 1 and 2
@@ -4833,7 +4882,7 @@ mod test {
 
         let network = TestNetwork::new(config, POS_V4).await;
         let node_state = network.server.node_state();
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         // wait for atleast 75 blocks
@@ -4968,7 +5017,7 @@ mod test {
             .connect(vec![l1_url])
             .expect("failed to connect to l1");
 
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         let mut headers = client
@@ -5076,7 +5125,7 @@ mod test {
             .build();
 
         let network = TestNetwork::new(config, POS_V4).await;
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         // Wait for the chain to progress beyond epoch 3 so rewards start being distributed.
@@ -5338,11 +5387,11 @@ mod test {
             .build();
 
         let _network = TestNetwork::new(config, V5).await;
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         // Wait for chain to reach epoch 5
-        let height_client: Client<ServerError, StaticVersion<0, 1>> =
+        let height_client: Client<ClientErr, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         wait_until_block_height(&height_client, "node/block-height", EPOCH_HEIGHT * 5).await;
 
@@ -5448,7 +5497,7 @@ mod test {
 
         let _network = TestNetwork::new(config, NEW_PROTOCOL).await;
 
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         client.connect(Some(Duration::from_secs(30))).await;
 
@@ -5488,9 +5537,9 @@ mod test {
 
     /// Run entirely without the legacy consensus stack: with base version
     /// `NEW_PROTOCOL_VERSION` it is torn down at startup, and the explicit
-    /// mid-run `shut_down_legacy` calls below — what the decide-count trigger
+    /// mid-run `shut_down_legacy` calls below (what the decide-count trigger
     /// in `handle_events` does after `LEGACY_SHUTDOWN_DECIDE_COUNT` decides
-    /// on an upgraded network — must be harmless to repeat. The network has
+    /// on an upgraded network) must be harmless to repeat. The network has
     /// to keep deciding across epoch boundaries: DRB computations on the
     /// shared membership coordinator must survive the teardown.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -5543,7 +5592,7 @@ mod test {
 
         let network = TestNetwork::new(config, NEW_PROTOCOL).await;
 
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         client.connect(Some(Duration::from_secs(30))).await;
 
@@ -5658,7 +5707,7 @@ mod test {
             .pop()
             .expect("at least one validator");
 
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         client.connect(Some(Duration::from_secs(30))).await;
 
@@ -5858,8 +5907,8 @@ mod test {
 
         let mut query_node = start_query_node(tmp_options(&storage[1])).await;
 
-        let api_client: Client<ServerError, SequencerApiVersion> = Client::new(api_url);
-        let query_client: Client<ServerError, SequencerApiVersion> = Client::new(query_url);
+        let api_client: Client<ClientErr, SequencerApiVersion> = Client::new(api_url);
+        let query_client: Client<ClientErr, SequencerApiVersion> = Client::new(query_url);
         assert!(
             api_client.connect(Some(Duration::from_secs(60))).await,
             "node 0 query API did not come up"
@@ -5967,8 +6016,7 @@ mod test {
         // actually decided. Streaming also forces the restarted node to backfill
         // every leaf in the range, since the stream endpoint fetches on demand.
         let wiped_range = (height_before_restart - 1) as usize;
-        let stream_leaves = |client: Client<ServerError, SequencerApiVersion>,
-                             who: &'static str| async move {
+        let stream_leaves = |client: Client<ClientErr, SequencerApiVersion>, who: &'static str| async move {
             let leaves: Vec<LeafQueryData<SeqTypes>> = client
                 .socket("availability/stream/leaves/1")
                 .subscribe()
@@ -6135,10 +6183,10 @@ mod test {
             .build();
 
         let _network = TestNetwork::new(config, V5).await;
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
-        let height_client: Client<ServerError, StaticVersion<0, 1>> =
+        let height_client: Client<ClientErr, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         wait_until_block_height(&height_client, "node/block-height", EPOCH_HEIGHT * 5).await;
 
@@ -6252,7 +6300,7 @@ mod test {
             .build();
 
         let network = TestNetwork::new(config, V5).await;
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         let node_state = network.server.node_state();
@@ -6351,7 +6399,7 @@ mod test {
             .build();
 
         let network = TestNetwork::new(config, V5).await;
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         let node_state = network.server.node_state();
@@ -6481,7 +6529,7 @@ mod test {
 
         let _network = TestNetwork::new(config, upgrade).await;
 
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         // wait for atleast 2 epochs
@@ -6978,7 +7026,7 @@ mod test {
             .await
             .unwrap();
 
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{node_0_port}").parse().unwrap());
         client.connect(None).await;
 
@@ -7211,7 +7259,7 @@ mod test {
             _ => panic!("invalid version"),
         };
 
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{node_0_port}").parse().unwrap());
         client.connect(Some(Duration::from_secs(10))).await;
 
@@ -7442,7 +7490,7 @@ mod test {
             .build();
 
         let _network = TestNetwork::new(config, upgrade).await;
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         let _blocks = client
@@ -7542,7 +7590,7 @@ mod test {
             .build();
 
         let _network = TestNetwork::new(config, upgrade).await;
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         let _blocks = client
@@ -7723,7 +7771,7 @@ mod test {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let url = format!("http://localhost:{port}").parse().unwrap();
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
 
         let storage = SqlDataSource::create_storage().await;
         let network_config = TestConfigBuilder::default().build();
@@ -7804,7 +7852,7 @@ mod test {
 
         let url = format!("http://localhost:{port}").parse().unwrap();
         tracing::info!("Sequencer URL = {url}");
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
 
         let options = Options::with_port(port).submit(Default::default());
         const NUM_NODES: usize = 2;
@@ -8006,7 +8054,7 @@ mod test {
 
         let url = format!("http://localhost:{port}").parse().unwrap();
         tracing::info!("Sequencer URL = {url}");
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
 
         let options = Options::with_port(port).submit(Default::default());
         const NUM_NODES: usize = 2;
@@ -8275,7 +8323,7 @@ mod test {
         }
 
         // Connect client.
-        let client: Client<ServerError, StaticVersion<0, 1>> =
+        let client: Client<ClientErr, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         client.connect(Some(Duration::from_secs(10))).await;
 
@@ -8442,7 +8490,7 @@ mod test {
         // Wait until at least 5 epochs have passed
         wait_for_epochs(&mut events, EPOCH_HEIGHT, 5).await;
 
-        let client: Client<ServerError, StaticVersion<0, 1>> =
+        let client: Client<ClientErr, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{node_0_port}").parse().unwrap());
         client.connect(Some(Duration::from_secs(60))).await;
 
@@ -8554,7 +8602,7 @@ mod test {
         wait_for_epochs(&mut events, EPOCH_HEIGHT, target_epoch).await;
 
         // the last epoch with the old commissions
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         let validators = client
             .get::<AuthenticatedValidatorMap>(&format!("node/validators/{}", target_epoch - 1))
@@ -8567,7 +8615,7 @@ mod test {
         }
 
         // the first epoch with the new commissions
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         let validators = client
             .get::<AuthenticatedValidatorMap>(&format!("node/validators/{target_epoch}"))
@@ -8685,7 +8733,7 @@ mod test {
         let mut events = network.peers[0].event_stream();
         wait_for_epochs(&mut events, EPOCH_HEIGHT, target_epoch).await;
 
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         let validators = client
             .get::<AuthenticatedValidatorMap>(&format!("node/validators/{target_epoch}"))
@@ -8699,219 +8747,173 @@ mod test {
         Ok(())
     }
 
-    async fn compare_endpoints(
+    /// Assert the endpoint returns a 2xx status and a valid JSON body.
+    async fn assert_json_endpoint(
         http: &reqwest::Client,
         api_port: u16,
-        axum_port: u16,
         path: &str,
     ) -> anyhow::Result<()> {
-        let tide: serde_json::Value = http
+        let resp = http
             .get(format!("http://localhost:{api_port}/v1/{path}"))
             .send()
-            .await?
-            .json()
             .await?;
-        let axum: serde_json::Value = http
-            .get(format!("http://localhost:{axum_port}/v1/{path}"))
-            .send()
-            .await?
-            .json()
-            .await?;
-        assert_eq!(tide, axum, "v1/{path}: tide and axum v1 responses differ");
+        let status = resp.status();
+        assert!(
+            status.is_success(),
+            "v1/{path}: returned {status}, expected 2xx"
+        );
+        resp.json::<serde_json::Value>().await?;
         Ok(())
     }
 
-    /// Assert both tide-disco and the Axum endpoint return the same HTTP error status code.
-    async fn compare_error_endpoints(
+    /// Assert the endpoint returns a well-formed JSON body, without constraining the status.
+    /// For routes where an error response is the expected outcome but its exact status is not
+    /// part of the contract.
+    async fn assert_json_body(
         http: &reqwest::Client,
         api_port: u16,
-        axum_port: u16,
+        path: &str,
+    ) -> anyhow::Result<()> {
+        http.get(format!("http://localhost:{api_port}/v1/{path}"))
+            .send()
+            .await?
+            .json::<serde_json::Value>()
+            .await?;
+        Ok(())
+    }
+
+    /// Assert the endpoint returns the expected HTTP status code.
+    async fn assert_endpoint_status(
+        http: &reqwest::Client,
+        api_port: u16,
         path: &str,
         expected_status: u16,
     ) -> anyhow::Result<()> {
-        let tide_status = http
+        let status = http
             .get(format!("http://localhost:{api_port}/v1/{path}"))
             .send()
             .await?
             .status()
             .as_u16();
-        let axum_status = http
-            .get(format!("http://localhost:{axum_port}/v1/{path}"))
-            .send()
-            .await?
-            .status()
-            .as_u16();
         assert_eq!(
-            tide_status, expected_status,
-            "v1/{path}: tide should return {expected_status}, got {tide_status}"
-        );
-        assert_eq!(
-            axum_status, expected_status,
-            "v1/{path}: axum should return {expected_status}, got {axum_status}"
+            status, expected_status,
+            "v1/{path}: should return {expected_status}, got {status}"
         );
         Ok(())
     }
 
-    /// Assert both tide-disco and axum return a 2xx for the path. Used for endpoints whose
-    /// content varies between calls (e.g. wall-clock-dependent fields, live metrics).
-    async fn compare_endpoints_ok(
+    /// Assert the endpoint returns a 2xx status, without requiring a JSON body. Used for
+    /// endpoints whose content is not JSON or varies between calls (e.g. live metrics).
+    async fn assert_endpoint_ok(
         http: &reqwest::Client,
         api_port: u16,
-        axum_port: u16,
         path: &str,
     ) -> anyhow::Result<()> {
-        let tide = http
+        let status = http
             .get(format!("http://localhost:{api_port}/v1/{path}"))
             .send()
             .await?
             .status();
-        let axum = http
-            .get(format!("http://localhost:{axum_port}/v1/{path}"))
-            .send()
-            .await?
-            .status();
         assert!(
-            tide.is_success(),
-            "v1/{path}: tide returned {tide}, expected 2xx"
-        );
-        assert!(
-            axum.is_success(),
-            "v1/{path}: axum returned {axum}, expected 2xx"
+            status.is_success(),
+            "v1/{path}: returned {status}, expected 2xx"
         );
         Ok(())
     }
 
-    /// Byte-compare error response bodies between tide and axum for an endpoint that uses
-    /// `Error::catch_all` (which emits `{"Custom":{"message","status"}}` on tide). Axum's
-    /// `ErrorResponse` is shaped to match that envelope, so the JSON bytes are equal modulo
-    /// minor whitespace differences — comparing parsed JSON values neutralizes those.
-    async fn compare_error_body(
+    /// Assert an endpoint that fails via `ApiError` returns the expected status and the
+    /// `{"Custom":{"message","status"}}` error envelope that existing clients parse.
+    async fn assert_error_body(
         http: &reqwest::Client,
         api_port: u16,
-        axum_port: u16,
         path: &str,
         expected_status: u16,
     ) -> anyhow::Result<()> {
-        let fetch = |port: u16| async move {
-            let resp = http
-                .get(format!("http://localhost:{port}/v1/{path}"))
-                .send()
-                .await?;
-            let status = resp.status().as_u16();
-            let body: serde_json::Value = resp.json().await?;
-            anyhow::Ok((status, body))
-        };
-        let (tide_status, tide_body) = fetch(api_port).await?;
-        let (axum_status, axum_body) = fetch(axum_port).await?;
-        assert_eq!(tide_status, expected_status, "v1/{path}: tide status");
-        assert_eq!(axum_status, expected_status, "v1/{path}: axum status");
+        let resp = http
+            .get(format!("http://localhost:{api_port}/v1/{path}"))
+            .send()
+            .await?;
+        let status = resp.status().as_u16();
+        let body: serde_json::Value = resp.json().await?;
+        assert_eq!(status, expected_status, "v1/{path}: status");
+        let custom = body
+            .get("Custom")
+            .unwrap_or_else(|| panic!("v1/{path}: error body missing Custom envelope: {body}"));
         assert_eq!(
-            tide_body, axum_body,
-            "v1/{path}: tide and axum error bodies differ\n  tide: {tide_body}\n  axum: \
-             {axum_body}"
+            custom.get("status").and_then(|s| s.as_u64()),
+            Some(u64::from(expected_status)),
+            "v1/{path}: envelope status: {body}"
+        );
+        assert!(
+            custom.get("message").is_some_and(|m| m.is_string()),
+            "v1/{path}: envelope message missing: {body}"
         );
         Ok(())
     }
 
-    /// POST a VBS-binary body to both servers and assert their responses are byte-equal.
+    /// POST a VBS-binary body and assert the server accepts it.
     ///
     /// VBS (Versioned Binary Serialization) is what production peer-catchup and
-    /// `submit-transactions` clients use via `surf-disco::Request::body_binary`. This helper
-    /// catches regressions where the axum handler accepts only JSON.
-    async fn compare_post_binary<B: serde::Serialize>(
+    /// `submit-transactions` clients use via `http_client::Request::body_binary`. This helper
+    /// catches regressions where the handler accepts only JSON.
+    async fn assert_post_binary<B: serde::Serialize>(
         http: &reqwest::Client,
         api_port: u16,
-        axum_port: u16,
         path: &str,
         body: &B,
     ) -> anyhow::Result<()> {
         use vbs::{BinarySerializer, Serializer, version::StaticVersion};
         let payload = Serializer::<StaticVersion<0, 1>>::serialize(body)?;
-        let send = |port: u16| {
-            let payload = payload.clone();
-            http.post(format!("http://localhost:{port}/v1/{path}"))
-                .header("Content-Type", "application/octet-stream")
-                .header("Accept", "application/octet-stream")
-                .body(payload)
-                .send()
-        };
-        let (tide_resp, axum_resp) = tokio::join!(send(api_port), send(axum_port));
-        let tide_resp = tide_resp?;
-        let axum_resp = axum_resp?;
-        assert_eq!(
-            tide_resp.status(),
-            axum_resp.status(),
-            "v1/{path}: tide status {} != axum status {}",
-            tide_resp.status(),
-            axum_resp.status(),
-        );
-        // Compare raw bytes — VBS responses aren't JSON.
-        let tide_body = tide_resp.bytes().await?;
-        let axum_body = axum_resp.bytes().await?;
-        assert_eq!(
-            tide_body, axum_body,
-            "v1/{path}: tide and axum binary POST responses differ"
+        let resp = http
+            .post(format!("http://localhost:{api_port}/v1/{path}"))
+            .header("Content-Type", "application/octet-stream")
+            .header("Accept", "application/octet-stream")
+            .body(payload)
+            .send()
+            .await?;
+        let status = resp.status();
+        assert!(
+            status.is_success(),
+            "v1/{path}: binary POST returned {status}, expected 2xx"
         );
         Ok(())
     }
 
-    /// Connect to both tide-disco and axum WebSocket endpoints, collect up to 10 messages each,
-    /// and assert that at least 2 messages appear in both streams.
-    async fn compare_ws_endpoints(api_port: u16, axum_port: u16, path: &str) -> anyhow::Result<()> {
-        use std::{collections::HashSet, time::Duration};
+    /// Connect to the WebSocket endpoint, collect up to 10 messages, and assert that at least 2
+    /// of them are valid JSON.
+    async fn assert_ws_endpoint(api_port: u16, path: &str) -> anyhow::Result<()> {
+        use std::time::Duration;
 
         use futures::StreamExt as _;
         use tokio::time::timeout;
         use tokio_tungstenite::{connect_async, tungstenite::Message};
 
-        async fn collect_messages(port: u16, path: &str) -> anyhow::Result<Vec<serde_json::Value>> {
-            let url = format!("ws://localhost:{port}/v1/{path}");
-            let (mut ws, _) = connect_async(&url).await?;
-            let mut messages = Vec::new();
-            while messages.len() < 10 {
-                match timeout(Duration::from_millis(500), ws.next()).await {
-                    Ok(Some(Ok(Message::Text(text)))) => {
-                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-                            messages.push(v);
-                        }
-                    },
-                    _ => break,
-                }
+        let url = format!("ws://localhost:{api_port}/v1/{path}");
+        let (mut ws, _) = connect_async(&url).await?;
+        let mut messages = Vec::new();
+        while messages.len() < 10 {
+            match timeout(Duration::from_millis(500), ws.next()).await {
+                Ok(Some(Ok(Message::Text(text)))) => {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                        messages.push(v);
+                    }
+                },
+                _ => break,
             }
-            Ok(messages)
         }
 
-        let (tide_msgs, axum_msgs) = tokio::join!(
-            collect_messages(api_port, path),
-            collect_messages(axum_port, path)
-        );
-        let tide_msgs = tide_msgs?;
-        let axum_msgs = axum_msgs?;
-
-        let tide_set: HashSet<String> = tide_msgs.iter().map(|v| v.to_string()).collect();
-        let common = axum_msgs
-            .iter()
-            .filter(|v| tide_set.contains(&v.to_string()))
-            .count();
-
         assert!(
-            common >= 2,
-            "v1/{path}: expected ≥2 messages in common between tide ({} msgs) and axum ({} msgs), \
-             got {common}",
-            tide_msgs.len(),
-            axum_msgs.len(),
+            messages.len() >= 2,
+            "v1/{path}: expected >=2 JSON messages from the stream, got {}",
+            messages.len(),
         );
         Ok(())
     }
 
-    /// Same as `compare_ws_endpoints` but exercises the binary (`Accept: application/octet-stream`)
-    /// path that surf-disco clients use by default. Asserts both servers send `Message::Binary`
-    /// frames carrying VBS-encoded payloads.
-    async fn compare_ws_endpoints_binary(
-        api_port: u16,
-        axum_port: u16,
-        path: &str,
-    ) -> anyhow::Result<()> {
+    /// Same as `assert_ws_endpoint` but exercises the binary (`Accept: application/octet-stream`)
+    /// path that our clients use by default. Asserts the server sends `Message::Binary` frames
+    /// carrying VBS-encoded payloads.
+    async fn assert_ws_endpoint_binary(api_port: u16, path: &str) -> anyhow::Result<()> {
         use std::time::Duration;
 
         use futures::StreamExt as _;
@@ -8921,39 +8923,25 @@ mod test {
             tungstenite::{client::IntoClientRequest, http::HeaderValue, protocol::Message},
         };
 
-        async fn collect_binary(port: u16, path: &str) -> anyhow::Result<Vec<Vec<u8>>> {
-            let url = format!("ws://localhost:{port}/v1/{path}");
-            let mut req = url.as_str().into_client_request()?;
-            req.headers_mut().insert(
-                "Accept",
-                HeaderValue::from_static("application/octet-stream"),
-            );
-            let (mut ws, _) = connect_async(req).await?;
-            let mut frames = Vec::new();
-            while frames.len() < 3 {
-                match timeout(Duration::from_millis(500), ws.next()).await {
-                    Ok(Some(Ok(Message::Binary(bytes)))) => frames.push(bytes.to_vec()),
-                    _ => break,
-                }
+        let url = format!("ws://localhost:{api_port}/v1/{path}");
+        let mut req = url.as_str().into_client_request()?;
+        req.headers_mut().insert(
+            "Accept",
+            HeaderValue::from_static("application/octet-stream"),
+        );
+        let (mut ws, _) = connect_async(req).await?;
+        let mut frames = Vec::new();
+        while frames.len() < 3 {
+            match timeout(Duration::from_millis(500), ws.next()).await {
+                Ok(Some(Ok(Message::Binary(bytes)))) => frames.push(bytes.to_vec()),
+                _ => break,
             }
-            Ok(frames)
         }
 
-        let (tide_frames, axum_frames) = tokio::join!(
-            collect_binary(api_port, path),
-            collect_binary(axum_port, path)
-        );
-        let tide_frames = tide_frames?;
-        let axum_frames = axum_frames?;
-
         assert!(
-            !tide_frames.is_empty(),
-            "v1/{path}: tide sent no binary frames (Accept: application/octet-stream)"
-        );
-        assert!(
-            !axum_frames.is_empty(),
-            "v1/{path}: axum sent no binary frames (Accept: application/octet-stream); handler \
-             likely always sends text",
+            !frames.is_empty(),
+            "v1/{path}: no binary frames (Accept: application/octet-stream); handler likely \
+             always sends text",
         );
         Ok(())
     }
@@ -8971,10 +8959,6 @@ mod test {
                 .build();
 
             let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
-            // After the tide-disco cutover the single `port` field serves the Axum API.
-            // The parity-test helpers still accept two ports — wire both to the same Axum
-            // server so the existing call sites remain unchanged.
-            let axum_port = api_port;
             println!("API PORT = {api_port}");
 
             let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
@@ -9020,7 +9004,7 @@ mod test {
             wait_for_epochs(&mut events, EPOCH_HEIGHT, 4).await;
 
             let url = format!("http://localhost:{api_port}").parse().unwrap();
-            let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+            let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
 
             let validated_state = network.server.decided_state().await.unwrap();
             let decided_leaf = network.server.decided_leaf().await;
@@ -9028,7 +9012,7 @@ mod test {
 
             // validate proof returned from the api
             if upgrade.base == EPOCH_VERSION {
-                // V1 case — axum only implements the v2 reward tree, so no axum comparison here
+                // V1 case: only the legacy v1 reward tree endpoints apply here
                 wait_until_block_height(&client, "reward-state/block-height", height).await;
 
                 network.stop_consensus().await;
@@ -9164,7 +9148,7 @@ mod test {
 
                     assert_eq!(reward_claim_input, res.to_reward_claim_input()?);
 
-                    // Tide contract relied on by scripts/claim-rewards-loop: an account with no
+                    // Behavior relied on by scripts/claim-rewards-loop: an account with no
                     // rewards yields 404; any other error status makes the claim loop exit and
                     // process-compose tear down the whole demo.
                     let absent = alloy::primitives::Address::with_last_byte(0xaa);
@@ -9182,90 +9166,78 @@ mod test {
                         .send()
                         .await
                         .unwrap_err();
-                    assert_matches!(err, ServerError { status, .. } if status == StatusCode::NOT_FOUND);
+                    assert_matches!(err, ClientErr { status, .. } if status == StatusCode::NOT_FOUND);
 
-                    // Both servers share the same underlying SQL data source; compare responses
-                    // for each per-address endpoint under reward-state-v2.
-                    compare_endpoints(
+                    // Smoke-check each per-address endpoint under reward-state-v2.
+                    assert_json_endpoint(
                         &http,
                         api_port,
-                        axum_port,
                         &format!("reward-state-v2/proof/{height}/{address}"),
                     )
                     .await?;
-                    compare_endpoints(
+                    assert_json_endpoint(
                         &http,
                         api_port,
-                        axum_port,
                         &format!("reward-state-v2/reward-claim-input/{height}/{address}"),
                     )
                     .await?;
-                    compare_endpoints(
+                    assert_json_endpoint(
                         &http,
                         api_port,
-                        axum_port,
                         &format!("reward-state-v2/reward-balance/{height}/{address}"),
                     )
                     .await?;
-                    compare_endpoints(
+                    assert_json_endpoint(
                         &http,
                         api_port,
-                        axum_port,
                         &format!("reward-state-v2/proof/latest/{address}"),
                     )
                     .await?;
-                    compare_endpoints(
+                    assert_json_endpoint(
                         &http,
                         api_port,
-                        axum_port,
                         &format!("reward-state-v2/reward-balance/latest/{address}"),
                     )
                     .await?;
 
-                    // Tide-disco registered the same reward.toml handlers on both the
-                    // reward-state and reward-state-v2 mounts, so these two routes hit the
-                    // same v2-tree-backed handlers as the pair above, just under reward-state.
-                    compare_endpoints(
+                    // The reward-state mount shares its handlers with reward-state-v2 for
+                    // backwards compatibility, so these two routes hit the same v2-tree-backed
+                    // handlers as the pair above, just under reward-state.
+                    assert_json_endpoint(
                         &http,
                         api_port,
-                        axum_port,
                         &format!("reward-state/proof/latest/{address}"),
                     )
                     .await?;
-                    compare_endpoints(
+                    assert_json_endpoint(
                         &http,
                         api_port,
-                        axum_port,
                         &format!("reward-state/reward-balance/latest/{address}"),
                     )
                     .await?;
                 }
 
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("reward-state-v2/reward-amounts/{height}/0/1000"),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("reward-state-v2/reward-merkle-tree-v2/{height}"),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("reward-state/reward-amounts/{height}/0/1000"),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("reward-state/reward-merkle-tree-v2/{height}"),
                 )
                 .await?;
@@ -9275,9 +9247,8 @@ mod test {
                 // fee-state checks below). Nothing in this codebase populates the generic
                 // merklized-state tables for the reward trees today; the reward-state modules
                 // persist snapshots via the separate `persist_tree`/`load_tree` bincode-blob
-                // mechanism instead, so these routes 404 in practice. We only assert that both
-                // mounts, in both height and commit form, return well-formed (and identical
-                // between the two "servers") JSON.
+                // mechanism instead, so these routes fail in practice. We only assert that both
+                // mounts, in both height and commit form, return well-formed JSON.
                 let reward_address = validated_state
                     .reward_merkle_tree_v2
                     .iter()
@@ -9294,29 +9265,26 @@ mod test {
                     either::Either::Right(commit) => commit.to_string(),
                 };
                 for mount in ["reward-state", "reward-state-v2"] {
-                    compare_endpoints(
+                    assert_json_body(
                         &http,
                         api_port,
-                        axum_port,
                         &format!("{mount}/{height}/{reward_address}"),
                     )
                     .await?;
-                    compare_endpoints(
+                    assert_json_body(
                         &http,
                         api_port,
-                        axum_port,
                         &format!("{mount}/commit/{reward_mt_commit}/{reward_address}"),
                     )
                     .await?;
                 }
 
-                // Availability v1 parity: verify the axum v1 routes return the same JSON as tide.
+                // Availability v1 routes.
 
                 // Namespace proof by height
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("availability/block/{avail_block}/namespace/{avail_ns}"),
                 )
                 .await?;
@@ -9327,20 +9295,18 @@ mod test {
                     .send()
                     .await
                     .unwrap();
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!(
                         "availability/block/hash/{}/namespace/{avail_ns}",
                         avail_header.commit()
                     ),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!(
                         "availability/block/payload-hash/{}/namespace/{avail_ns}",
                         avail_header.payload_commitment()
@@ -9349,10 +9315,9 @@ mod test {
                 .await?;
 
                 // Namespace proof range
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!(
                         "availability/block/{avail_block}/{}/namespace/{avail_ns}",
                         avail_block + 1
@@ -9360,12 +9325,11 @@ mod test {
                 )
                 .await?;
 
-                // State certificate parity (epoch 1 is complete after 4 epochs)
-                compare_endpoints(&http, api_port, axum_port, "availability/state-cert/1").await?;
-                compare_endpoints(&http, api_port, axum_port, "availability/state-cert-v2/1")
-                    .await?;
+                // State certificate endpoints (epoch 1 is complete after 4 epochs)
+                assert_json_endpoint(&http, api_port, "availability/state-cert/1").await?;
+                assert_json_endpoint(&http, api_port, "availability/state-cert-v2/1").await?;
 
-                // HotShot availability parity: leaf, header, block, payload, vid/common, etc.
+                // HotShot availability endpoints: leaf, header, block, payload, vid/common, etc.
                 let avail_leaf: LeafQueryData<SeqTypes> = client
                     .get(&format!("availability/leaf/{avail_block}"))
                     .send()
@@ -9376,205 +9340,174 @@ mod test {
                 let payload_hash = avail_header.payload_commitment();
 
                 // Leaf endpoints
-                compare_endpoints(
+                assert_json_endpoint(&http, api_port, &format!("availability/leaf/{avail_block}"))
+                    .await?;
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
-                    &format!("availability/leaf/{avail_block}"),
-                )
-                .await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
                     &format!("availability/leaf/hash/{leaf_hash}"),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("availability/leaf/{avail_block}/{}", avail_block + 1),
                 )
                 .await?;
 
                 // Header endpoints
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("availability/header/{avail_block}"),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("availability/header/hash/{block_hash}"),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("availability/header/payload-hash/{payload_hash}"),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("availability/header/{avail_block}/{}", avail_block + 1),
                 )
                 .await?;
 
                 // Block endpoints
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("availability/block/{avail_block}"),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("availability/block/hash/{block_hash}"),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("availability/block/payload-hash/{payload_hash}"),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("availability/block/{avail_block}/{}", avail_block + 1),
                 )
                 .await?;
 
                 // Payload endpoints
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("availability/payload/{avail_block}"),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("availability/payload/hash/{payload_hash}"),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("availability/payload/block-hash/{block_hash}"),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("availability/payload/{avail_block}/{}", avail_block + 1),
                 )
                 .await?;
 
                 // VID common endpoints
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("availability/vid/common/{avail_block}"),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("availability/vid/common/hash/{block_hash}"),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("availability/vid/common/payload-hash/{payload_hash}"),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("availability/vid/common/{avail_block}/{}", avail_block + 1),
                 )
                 .await?;
 
                 // Transaction endpoints
                 let tx_hash = avail_tx.commit();
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("availability/transaction/{avail_block}/0/noproof"),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("availability/transaction/hash/{tx_hash}/noproof"),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("availability/transaction/{avail_block}/0/proof"),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("availability/transaction/hash/{tx_hash}/proof"),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("availability/transaction/{avail_block}/0"),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("availability/transaction/hash/{tx_hash}"),
                 )
                 .await?;
 
                 // Block summary endpoints
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("availability/block/summary/{avail_block}"),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!(
                         "availability/block/summaries/{avail_block}/{}",
                         avail_block + 1
@@ -9583,105 +9516,83 @@ mod test {
                 .await?;
 
                 // Limits endpoint (static response)
-                compare_endpoints(&http, api_port, axum_port, "availability/limits").await?;
+                assert_json_endpoint(&http, api_port, "availability/limits").await?;
 
                 // Cert2 endpoint: `avail_block` is a mid-chain block with no cert2, so both APIs
                 // return 404. Compare status only, since the two error bodies differ by design.
-                compare_error_endpoints(
+                assert_endpoint_status(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("availability/cert2/{avail_block}"),
                     404,
                 )
                 .await?;
 
-                // WebSocket streaming parity: both servers share the same data source, so their
-                // streams must produce the same items. We collect up to 10 messages from each and
-                // verify ≥2 appear in both.
+                // WebSocket streaming endpoints.
                 //
                 // For unfiltered streams, start 10 blocks before avail_block so there are at
                 // least 10 committed blocks ready to stream (consensus has already stopped).
                 // For namespace-filtered streams, start at avail_block where the two submitted
-                // transactions were included, giving ≥2 matching messages.
+                // transactions were included, giving >=2 matching messages.
                 let ws_start = avail_block.saturating_sub(10);
-                compare_ws_endpoints(
+                assert_ws_endpoint(api_port, &format!("availability/stream/leaves/{ws_start}"))
+                    .await?;
+                assert_ws_endpoint(api_port, &format!("availability/stream/headers/{ws_start}"))
+                    .await?;
+                assert_ws_endpoint(api_port, &format!("availability/stream/blocks/{ws_start}"))
+                    .await?;
+                assert_ws_endpoint(
                     api_port,
-                    axum_port,
-                    &format!("availability/stream/leaves/{ws_start}"),
-                )
-                .await?;
-                compare_ws_endpoints(
-                    api_port,
-                    axum_port,
-                    &format!("availability/stream/headers/{ws_start}"),
-                )
-                .await?;
-                compare_ws_endpoints(
-                    api_port,
-                    axum_port,
-                    &format!("availability/stream/blocks/{ws_start}"),
-                )
-                .await?;
-                compare_ws_endpoints(
-                    api_port,
-                    axum_port,
                     &format!("availability/stream/payloads/{ws_start}"),
                 )
                 .await?;
-                compare_ws_endpoints(
+                assert_ws_endpoint(
                     api_port,
-                    axum_port,
                     &format!("availability/stream/vid/common/{ws_start}"),
                 )
                 .await?;
-                compare_ws_endpoints(
+                assert_ws_endpoint(
                     api_port,
-                    axum_port,
                     &format!("availability/stream/transactions/{ws_start}"),
                 )
                 .await?;
                 // Namespace-filtered streams: start at avail_block; two transactions were
                 // submitted so the stream produces ≥2 messages.
-                compare_ws_endpoints(
+                assert_ws_endpoint(
                     api_port,
-                    axum_port,
                     &format!("availability/stream/transactions/{avail_block}/namespace/{avail_ns}"),
                 )
                 .await?;
-                compare_ws_endpoints(
+                assert_ws_endpoint(
                     api_port,
-                    axum_port,
                     &format!("availability/stream/blocks/{avail_block}/namespace/{avail_ns}"),
                 )
                 .await?;
 
-                // surf-disco clients default to `Accept: application/octet-stream`, so the
-                // server must emit `Message::Binary` (VBS-encoded) frames on that path.
-                // Verify both servers do so on a representative stream.
-                compare_ws_endpoints_binary(
+                // Our clients default to `Accept: application/octet-stream`, so the server must
+                // emit `Message::Binary` (VBS-encoded) frames on that path. Verify it does so
+                // on a representative stream.
+                assert_ws_endpoint_binary(
                     api_port,
-                    axum_port,
                     &format!("availability/stream/leaves/{ws_start}"),
                 )
                 .await?;
 
-                // Merklized state parity (block-state and fee-state). Wait for
-                // both backends to have indexed the snapshot we'll query.
+                // Merklized state endpoints (block-state and fee-state). Wait for
+                // the backend to have indexed the snapshot we'll query.
                 wait_until_block_height(&client, "block-state/block-height", avail_block).await;
                 wait_until_block_height(&client, "fee-state/block-height", avail_block).await;
 
                 // block-state/block-height and fee-state/block-height (latest
                 // height for which merklized state is available).
-                compare_endpoints(&http, api_port, axum_port, "block-state/block-height").await?;
-                compare_endpoints(&http, api_port, axum_port, "fee-state/block-height").await?;
+                assert_json_endpoint(&http, api_port, "block-state/block-height").await?;
+                assert_json_endpoint(&http, api_port, "fee-state/block-height").await?;
 
                 // block-state path by height: the merkle tree at height H
                 // contains the headers of blocks [0, H), so a valid key is H-1.
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!(
                         "block-state/{avail_block}/{}",
                         avail_block.saturating_sub(1)
@@ -9692,10 +9603,9 @@ mod test {
                 // block-state path by commit. Use the tree commitment from
                 // the header at avail_block.
                 let block_mt_commit = avail_header.block_merkle_tree_root().to_string();
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!(
                         "block-state/commit/{block_mt_commit}/{}",
                         avail_block.saturating_sub(1)
@@ -9705,260 +9615,203 @@ mod test {
 
                 // fee-state path by height for a known fee account (sampled above while
                 // consensus was running), and fee-balance/latest for the same account.
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("fee-state/{avail_block}/{fee_account}"),
                 )
                 .await?;
                 let fee_mt_commit = avail_header.fee_merkle_tree_root().to_string();
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("fee-state/commit/{fee_mt_commit}/{fee_account}"),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("fee-state/fee-balance/latest/{fee_account}"),
                 )
                 .await?;
 
-                // Status parity. Block height and success rate are stable since consensus is
+                // Status endpoints. Block height and success rate are stable since consensus is
                 // stopped; time-since-last-decide and metrics vary by wall-clock so we only
-                // check that both servers return 2xx.
-                compare_endpoints(&http, api_port, axum_port, "status/block-height").await?;
-                compare_endpoints(&http, api_port, axum_port, "status/success-rate").await?;
-                compare_endpoints_ok(&http, api_port, axum_port, "status/time-since-last-decide")
-                    .await?;
-                compare_endpoints_ok(&http, api_port, axum_port, "status/metrics").await?;
+                // check for a 2xx.
+                assert_json_endpoint(&http, api_port, "status/block-height").await?;
+                assert_json_endpoint(&http, api_port, "status/success-rate").await?;
+                assert_endpoint_ok(&http, api_port, "status/time-since-last-decide").await?;
+                assert_endpoint_ok(&http, api_port, "status/metrics").await?;
 
-                // Config parity. /hotshot and /env are derived from process-level state shared
-                // by both servers; /runtime returns 404 in both because no PublicNodeConfig was
+                // Config endpoints. /runtime returns 404 because no PublicNodeConfig was
                 // configured for this test.
-                compare_endpoints(&http, api_port, axum_port, "config/hotshot").await?;
-                compare_endpoints(&http, api_port, axum_port, "config/env").await?;
-                compare_error_endpoints(&http, api_port, axum_port, "config/runtime", 404).await?;
+                assert_json_endpoint(&http, api_port, "config/hotshot").await?;
+                assert_json_endpoint(&http, api_port, "config/env").await?;
+                assert_endpoint_status(&http, api_port, "config/runtime", 404).await?;
 
-                // Node parity. All endpoints share the same data source so byte-equal responses
-                // are expected once consensus is stopped.
-                compare_endpoints(&http, api_port, axum_port, "node/block-height").await?;
-                compare_endpoints(&http, api_port, axum_port, "node/transactions/count").await?;
-                compare_endpoints(
+                // Node endpoints.
+                assert_json_endpoint(&http, api_port, "node/block-height").await?;
+                assert_json_endpoint(&http, api_port, "node/transactions/count").await?;
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("node/transactions/count/{avail_block}"),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("node/transactions/count/0/{avail_block}"),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("node/transactions/count/namespace/{avail_ns}"),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("node/transactions/count/namespace/{avail_ns}/{avail_block}"),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("node/transactions/count/namespace/{avail_ns}/0/{avail_block}"),
                 )
                 .await?;
 
-                compare_endpoints(&http, api_port, axum_port, "node/payloads/size").await?;
-                compare_endpoints(&http, api_port, axum_port, "node/payloads/total-size").await?;
-                compare_endpoints(
+                assert_json_endpoint(&http, api_port, "node/payloads/size").await?;
+                assert_json_endpoint(&http, api_port, "node/payloads/total-size").await?;
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("node/payloads/size/{avail_block}"),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("node/payloads/size/0/{avail_block}"),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("node/payloads/size/namespace/{avail_ns}"),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("node/payloads/size/namespace/{avail_ns}/{avail_block}"),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("node/payloads/size/namespace/{avail_ns}/0/{avail_block}"),
                 )
                 .await?;
 
-                compare_endpoints(
+                assert_json_endpoint(&http, api_port, &format!("node/vid/share/{avail_block}"))
+                    .await?;
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
-                    &format!("node/vid/share/{avail_block}"),
-                )
-                .await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
                     &format!("node/vid/share/hash/{block_hash}"),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("node/vid/share/payload-hash/{payload_hash}"),
                 )
                 .await?;
 
-                compare_endpoints(&http, api_port, axum_port, "node/sync-status").await?;
-                compare_endpoints(&http, api_port, axum_port, "node/limits").await?;
+                assert_json_endpoint(&http, api_port, "node/sync-status").await?;
+                assert_json_endpoint(&http, api_port, "node/limits").await?;
 
                 // Header window: cover all three start variants (time, height, hash). `end` is
                 // an exclusive Unix-second cutoff; using the block's own timestamp + 1 yields
-                // a deterministic single-block window on both servers.
+                // a deterministic single-block window.
                 let avail_ts = avail_header.timestamp();
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("node/header/window/{avail_ts}/{}", avail_ts + 1),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("node/header/window/from/{avail_block}/{}", avail_ts + 1),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("node/header/window/from/hash/{block_hash}/{}", avail_ts + 1),
                 )
                 .await?;
 
-                compare_endpoints(&http, api_port, axum_port, "node/stake-table/current").await?;
-                compare_endpoints(&http, api_port, axum_port, "node/stake-table/1").await?;
-                compare_endpoints(&http, api_port, axum_port, "node/da-stake-table/current")
+                assert_json_endpoint(&http, api_port, "node/stake-table/current").await?;
+                assert_json_endpoint(&http, api_port, "node/stake-table/1").await?;
+                assert_json_endpoint(&http, api_port, "node/da-stake-table/current").await?;
+                assert_json_endpoint(&http, api_port, "node/da-stake-table/1").await?;
+
+                assert_json_endpoint(&http, api_port, "node/validators/1").await?;
+                assert_json_endpoint(&http, api_port, "node/all-validators/1/0/100").await?;
+
+                assert_json_endpoint(&http, api_port, "node/participation/proposal/current")
                     .await?;
-                compare_endpoints(&http, api_port, axum_port, "node/da-stake-table/1").await?;
+                assert_json_endpoint(&http, api_port, "node/participation/proposal/1").await?;
+                assert_json_endpoint(&http, api_port, "node/participation/vote/current").await?;
+                assert_json_endpoint(&http, api_port, "node/participation/vote/1").await?;
 
-                compare_endpoints(&http, api_port, axum_port, "node/validators/1").await?;
-                compare_endpoints(&http, api_port, axum_port, "node/all-validators/1/0/100")
-                    .await?;
+                assert_json_endpoint(&http, api_port, "node/block-reward").await?;
+                assert_json_endpoint(&http, api_port, "node/block-reward/epoch/1").await?;
 
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    "node/participation/proposal/current",
-                )
-                .await?;
-                compare_endpoints(&http, api_port, axum_port, "node/participation/proposal/1")
-                    .await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    "node/participation/vote/current",
-                )
-                .await?;
-                compare_endpoints(&http, api_port, axum_port, "node/participation/vote/1").await?;
+                assert_json_endpoint(&http, api_port, "node/oldest-block").await?;
+                assert_json_endpoint(&http, api_port, "node/oldest-leaf").await?;
 
-                compare_endpoints(&http, api_port, axum_port, "node/block-reward").await?;
-                compare_endpoints(&http, api_port, axum_port, "node/block-reward/epoch/1").await?;
-
-                compare_endpoints(&http, api_port, axum_port, "node/oldest-block").await?;
-                compare_endpoints(&http, api_port, axum_port, "node/oldest-leaf").await?;
-
-                // Catchup parity. View number and height for in-memory state aren't readily
-                // available after stopping consensus, so we compare error semantics on
+                // Catchup endpoints. View number and height for in-memory state aren't readily
+                // available after stopping consensus, so we check error semantics on
                 // intentionally invalid lookups and the deprecated routes.
                 let decided_view = decided_leaf.view_number().u64();
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("catchup/{height}/{decided_view}/blocks"),
                 )
                 .await?;
                 // chain-config: a malformed TaggedBase64 commitment (bad checksum) parses-fails
-                // on the request path and yields 400 from both servers.
-                compare_error_endpoints(
+                // on the request path and yields 400.
+                assert_endpoint_status(
                     &http,
                     api_port,
-                    axum_port,
                     "catchup/chain-config/CHAINCONFIG~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
                     400,
                 )
                 .await?;
                 // leafchain: undecided height returns 404 from both.
-                compare_error_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    "catchup/999999/leafchain",
-                    404,
-                )
-                .await?;
+                assert_endpoint_status(&http, api_port, "catchup/999999/leafchain", 404).await?;
                 // cert2: missing cert returns 404.
-                compare_error_endpoints(&http, api_port, axum_port, "catchup/999999/cert2", 404)
-                    .await?;
+                assert_endpoint_status(&http, api_port, "catchup/999999/cert2", 404).await?;
                 // Deprecated catchup routes still respond 404.
-                compare_error_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    "catchup/1/reward-amounts/100/0",
-                    404,
-                )
-                .await?;
+                assert_endpoint_status(&http, api_port, "catchup/1/reward-amounts/100/0", 404)
+                    .await?;
 
-                // Production peer-catchup posts VBS-binary bodies via surf-disco.
+                // Production peer-catchup posts VBS-binary bodies via http-client.
                 // Exercise the bulk-account POST endpoints in that exact wire format so any
                 // regression to "JSON-only body" is caught here.
                 // Reuse the account sampled above; `validated_state.fee_merkle_tree` was
                 // captured before the fee-paying blocks and can be empty.
-                compare_post_binary(
+                assert_post_binary(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("catchup/{height}/{decided_view}/accounts"),
                     &vec![fee_account],
                 )
@@ -9966,118 +9819,79 @@ mod test {
                 // reward-accounts V1 takes a Vec<RewardAccountV1>. We send empty since the V2
                 // tree may not have V1-shaped entries in this test, but the wire format is what
                 // we're validating.
-                compare_post_binary(
+                assert_post_binary(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("catchup/{height}/{decided_view}/reward-accounts"),
                     &Vec::<espresso_types::v0_3::RewardAccountV1>::new(),
                 )
                 .await?;
 
-                // State signature parity. Heights that have a signature should return matching
-                // JSON; missing heights should 404 from both servers.
-                compare_error_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    "state-signature/block/999999",
-                    404,
-                )
-                .await?;
-
-                // Error body parity for endpoints that use `Error::catch_all` — both servers
-                // must emit byte-identical `{"Custom":{"message","status"}}` JSON. Availability
-                // endpoints (`availability/leaf/...`, etc.) are excluded because tide-disco
-                // returns specific variants like `{"FetchLeaf":{...}}` there; their status-code
-                // parity is still enforced by `compare_error_endpoints` above.
-                compare_error_body(&http, api_port, axum_port, "catchup/999999/cert2", 404).await?;
-                compare_error_body(&http, api_port, axum_port, "catchup/999999/leafchain", 404)
+                // State signature: missing heights should 404.
+                assert_endpoint_status(&http, api_port, "state-signature/block/999999", 404)
                     .await?;
-                compare_error_body(
-                    &http,
-                    api_port,
-                    axum_port,
-                    "state-signature/block/999999",
-                    404,
-                )
-                .await?;
 
-                // Explorer parity.
-                compare_endpoints(&http, api_port, axum_port, "explorer/explorer-summary").await?;
-                compare_endpoints(
+                // Error bodies for endpoints that fail via `ApiError` must keep the
+                // `{"Custom":{"message","status"}}` JSON envelope that existing clients parse.
+                // Availability endpoints (`availability/leaf/...`, etc.) are excluded because
+                // they use per-endpoint error variants like `{"FetchLeaf":{...}}`; their status
+                // codes are still checked by `assert_endpoint_status` above.
+                assert_error_body(&http, api_port, "catchup/999999/cert2", 404).await?;
+                assert_error_body(&http, api_port, "catchup/999999/leafchain", 404).await?;
+                assert_error_body(&http, api_port, "state-signature/block/999999", 404).await?;
+
+                // Explorer endpoints.
+                assert_json_endpoint(&http, api_port, "explorer/explorer-summary").await?;
+                assert_json_endpoint(&http, api_port, &format!("explorer/block/{avail_block}"))
+                    .await?;
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
-                    &format!("explorer/block/{avail_block}"),
-                )
-                .await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
                     &format!("explorer/block/hash/{block_hash}"),
                 )
                 .await?;
-                compare_endpoints(&http, api_port, axum_port, "explorer/blocks/latest/10").await?;
-                compare_endpoints(
+                assert_json_endpoint(&http, api_port, "explorer/blocks/latest/10").await?;
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("explorer/blocks/{avail_block}/10"),
                 )
                 .await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    "explorer/transactions/latest/10",
-                )
-                .await?;
+                assert_json_endpoint(&http, api_port, "explorer/transactions/latest/10").await?;
 
-                // Light-client parity. Use the same block we used for availability tests.
-                compare_endpoints(
+                // Light-client endpoints. Use the same block we used for availability tests.
+                assert_json_endpoint(&http, api_port, &format!("light-client/leaf/{avail_block}"))
+                    .await?;
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
-                    &format!("light-client/leaf/{avail_block}"),
-                )
-                .await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
                     &format!("light-client/leaf/hash/{leaf_hash}"),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("light-client/payload/{avail_block}"),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("light-client/payload/{avail_block}/{}", avail_block + 1),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!(
                         "light-client/namespace/{avail_block}/{}",
                         u64::from(avail_ns)
                     ),
                 )
                 .await?;
-                compare_endpoints(
+                assert_json_endpoint(
                     &http,
                     api_port,
-                    axum_port,
                     &format!(
                         "light-client/namespace/{avail_block}/{}/{}",
                         avail_block + 1,
@@ -10092,10 +9906,9 @@ mod test {
                     ::light_client::client::NAMESPACES_PARAM_TAG,
                     &serde_json::to_vec(&vec![u64::from(avail_ns)])?,
                 )?;
-                compare_error_endpoints(
+                assert_endpoint_status(
                     &http,
                     api_port,
-                    axum_port,
                     &format!(
                         "light-client/namespaces/{avail_block}/{}/{encoded_ns}",
                         avail_block + 200
@@ -10104,56 +9917,37 @@ mod test {
                 )
                 .await?;
 
-                // hotshot-events startup info: both must return matching JSON.
-                compare_endpoints(&http, api_port, axum_port, "hotshot-events/startup_info")
-                    .await?;
+                // hotshot-events startup info.
+                assert_json_endpoint(&http, api_port, "hotshot-events/startup_info").await?;
 
-                // Token parity. Both servers share the same data source, so the cached
-                // L1 supply values must match across calls.
-                compare_endpoints(&http, api_port, axum_port, "token/total-minted-supply").await?;
-                compare_endpoints(&http, api_port, axum_port, "token/circulating-supply").await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    "token/circulating-supply-ethereum",
-                )
-                .await?;
-                compare_endpoints(&http, api_port, axum_port, "token/total-issued-supply").await?;
-                compare_endpoints(&http, api_port, axum_port, "token/total-reward-distributed")
-                    .await?;
+                // Token endpoints.
+                assert_json_endpoint(&http, api_port, "token/total-minted-supply").await?;
+                assert_json_endpoint(&http, api_port, "token/circulating-supply").await?;
+                assert_json_endpoint(&http, api_port, "token/circulating-supply-ethereum").await?;
+                assert_json_endpoint(&http, api_port, "token/total-issued-supply").await?;
+                assert_json_endpoint(&http, api_port, "token/total-reward-distributed").await?;
 
-                // Error equivalence: both tide-disco and Axum must return the same
-                // HTTP status codes for common failure cases that clients encounter.
+                // HTTP status codes for common failure cases that clients depend on.
 
                 // Requesting a leaf far ahead of the chain tip times out and returns
-                // 404 Not Found from both servers.
-                compare_error_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    "availability/leaf/999999",
-                    404,
-                )
-                .await?;
+                // 404 Not Found.
+                assert_endpoint_status(&http, api_port, "availability/leaf/999999", 404).await?;
 
                 // Requesting a block range that exceeds the per-request limit
-                // returns 400 Bad Request from both servers.
-                compare_error_endpoints(
+                // returns 400 Bad Request.
+                assert_endpoint_status(
                     &http,
                     api_port,
-                    axum_port,
                     &format!("availability/block/{avail_block}/{}", avail_block + 200),
                     400,
                 )
                 .await?;
 
                 // Requesting a namespace proof range that exceeds the limit also
-                // returns 400 Bad Request from both servers.
-                compare_error_endpoints(
+                // returns 400 Bad Request.
+                assert_endpoint_status(
                     &http,
                     api_port,
-                    axum_port,
                     &format!(
                         "availability/block/{avail_block}/{}/namespace/{avail_ns}",
                         avail_block + 200
@@ -10229,7 +10023,7 @@ mod test {
             .build();
 
         let network = TestNetwork::new(config, POS_V4).await;
-        let client: Client<ServerError, SequencerApiVersion> =
+        let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         let err = client
@@ -10239,7 +10033,7 @@ mod test {
             .await
             .unwrap_err();
 
-        assert_matches!(err, ServerError { status, message} if
+        assert_matches!(err, ClientErr { status, message} if
                 status == StatusCode::BAD_REQUEST
                 && message.contains("Limit cannot be greater than 1000")
         );
@@ -10323,7 +10117,7 @@ mod test {
 
         let mut network = TestNetwork::new(config, POS_V4).await;
 
-        let client: Client<ServerError, StaticVersion<0, 1>> =
+        let client: Client<ClientErr, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
         client.connect(None).await;
@@ -10343,7 +10137,7 @@ mod test {
             .await
             .unwrap_err();
 
-        assert_matches!(err, ServerError { status, .. } if
+        assert_matches!(err, ClientErr { status, .. } if
             status == StatusCode::BAD_REQUEST
 
         );
@@ -10423,7 +10217,7 @@ mod test {
         let block = wait_for_decide_on_handle(&mut events, &tx).await.0;
 
         // Check namespace proof queries.
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
         client.connect(None).await;
 
         let (header, common): (Header, VidCommonQueryData<SeqTypes>) = try_join!(
@@ -10517,7 +10311,7 @@ mod test {
     /// Only checks that proofs verify, not which `FinalityProof` variant they
     /// use
     async fn check_light_client_proofs(
-        client: &Client<ServerError, StaticVersion<0, 1>>,
+        client: &Client<ClientErr, StaticVersion<0, 1>>,
         actual_leaves: &[LeafQueryData<SeqTypes>],
         actual_blocks: &[BlockQueryData<SeqTypes>],
         heights: impl IntoIterator<Item = u64>,
@@ -10601,7 +10395,7 @@ mod test {
     /// reproduces the validator set loaded from storage, and an earlier epoch
     /// is a `BAD_REQUEST`.
     async fn check_light_client_stake_table<N, P>(
-        client: &Client<ServerError, StaticVersion<0, 1>>,
+        client: &Client<ClientErr, StaticVersion<0, 1>>,
         server: &SequencerContext<N, P>,
         first_epoch: EpochNumber,
     ) where
@@ -10637,7 +10431,7 @@ mod test {
             .send()
             .await
             .unwrap_err();
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -10685,7 +10479,7 @@ mod test {
             .build();
 
         let mut network = TestNetwork::new(config, upgrade).await;
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
         client.connect(None).await;
 
         // Get a leaf stream so that we can wait for various events. Also keep track of each leaf
@@ -10852,7 +10646,7 @@ mod test {
             .build();
 
         let mut network = TestNetwork::new(config, UPGRADE).await;
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+        let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
         client.connect(None).await;
 
         // Track each leaf and block served by the query service; they are the
@@ -11037,7 +10831,7 @@ mod test {
         let network = TestNetwork::new(config, POS_V4).await;
 
         // Wait for chain to advance past our target height
-        let height_client: Client<ServerError, StaticVersion<0, 1>> =
+        let height_client: Client<ClientErr, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{port}").parse().unwrap());
         wait_until_block_height(&height_client, "node/block-height", TARGET_HEIGHT + 5).await;
 

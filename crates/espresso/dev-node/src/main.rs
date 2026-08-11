@@ -27,7 +27,6 @@ use axum::{
     routing::{get, post},
 };
 use clap::{Parser, ValueEnum};
-use espresso_api::{cors_layer, healthcheck_response};
 use espresso_contract_deployer::{
     self as deployer, Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS, DeployedContracts,
     HttpProviderWithWallet, network_config::light_client_genesis_from_stake_table,
@@ -58,6 +57,7 @@ use hotshot_types::{
     stake_table::{HSStakeTable, one_honest_threshold},
     utils::epoch_from_block_number,
 };
+use http_wire::{cors_layer, healthcheck_response};
 use itertools::izip;
 use serde::{Deserialize, Serialize};
 use staking_cli::demo::{DelegationConfig, StakingTransactions};
@@ -939,7 +939,7 @@ async fn healthcheck(headers: HeaderMap) -> Response {
 
 /// Serves the dev-info/set-hotshot-down/set-hotshot-up routes at both the `/v0/api/...` forms
 /// tide-disco served directly and the unversioned `/api/...` forms it served via a redirect
-/// (used by the Go SDK and surf-disco clients, respectively).
+/// (used by the Go SDK and our HTTP clients, respectively).
 fn dev_node_router(state: DevNodeState) -> Router {
     let api = Router::new().nest(
         "/api",

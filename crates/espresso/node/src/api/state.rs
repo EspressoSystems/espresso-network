@@ -8,6 +8,7 @@ use std::{ops::Bound, time::Duration};
 use alloy::primitives::U256;
 use async_trait::async_trait;
 use committable::Committable as _;
+use disco_types::{error::Error as _, status::StatusCode};
 use espresso_api::{error::AvailabilityError, v1::HotShotAvailabilityApi};
 use espresso_types::{
     NamespaceId, NamespaceProofQueryData, NsProof, SeqTypes,
@@ -41,7 +42,7 @@ use hotshot_query_service::{
         MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot as HsSnapshot,
     },
     node::{NodeDataSource as _, WindowStart},
-    status::HasMetrics,
+    status::HasMetrics as _,
     types::HeightIndexed as _,
 };
 use hotshot_types::{
@@ -53,6 +54,7 @@ use jf_merkle_tree_compat::prelude::{
     MerkleNode as InternalMerkleNode, MerkleProof as InternalMerkleProof,
     MerkleProof as JfMerkleProof,
 };
+use prometheus::Encoder as _;
 use serde_json;
 use serialization_api::v2::{
     self, RewardAccountProofV2, RewardAccountQueryDataV2, RewardBalance, RewardBalances,
@@ -60,17 +62,25 @@ use serialization_api::v2::{
     reward_merkle_proof_v2::ProofType,
 };
 use tagged_base64::TaggedBase64;
-use tide_disco::{Error as _, StatusCode, metrics::Metrics as _};
 
 use super::{
     RewardMerkleTreeDataSource, RewardMerkleTreeV2Data as InternalRewardTreeData,
     data_source::{
         CatchupDataSource as _, DatabaseMetadataSource as _, HotShotConfigDataSource as _,
-        NodeStateDataSource as _, PruningDataSource as _, RequestResponseDataSource as _,
-        StakeTableDataSource, StateCertDataSource, StateCertFetchingDataSource,
-        StateSignatureDataSource, TokenDataSource as _,
+        NodeKeysDataSource, NodePublicKeys, NodeStateDataSource as _, PruningDataSource as _,
+        RequestResponseDataSource as _, StakeTableDataSource, StateCertDataSource,
+        StateCertFetchingDataSource, StateSignatureDataSource, TokenDataSource as _,
     },
 };
+
+/// Timeout for failing requests due to missing data.
+///
+/// If data needed to respond to a request is missing, it can (in some cases) be fetched from an
+/// external provider. This parameter controls how long the request handler will wait for
+/// missing data to be fetched before giving up and failing the request.
+///
+/// Matches the `hotshot_query_service` availability API default.
+const FETCH_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Node API state implementation
 ///
@@ -606,7 +616,6 @@ where
         offset: u64,
         limit: u64,
     ) -> anyhow::Result<Self::RewardBalances> {
-        // Validate limit (from reward.toml: limit <= 10000)
         if limit > 10000 {
             return Err(bad_request(format!(
                 "limit {} exceeds maximum allowed value of 10000",
@@ -643,7 +652,7 @@ where
         let end = std::cmp::min(offset_usize + limit_usize, tree_data.balances.len());
         let slice = &tree_data.balances[offset_usize..end];
 
-        // Reverse order (matching Tide implementation) and return internal type with total
+        // Newest first, and return internal type with total
         let reversed: Vec<_> = slice.iter().rev().copied().collect();
         Ok((reversed, total))
     }
@@ -727,8 +736,7 @@ where
 
     async fn get_reward_state_v2_height(&self) -> anyhow::Result<u64> {
         // `last_merklized_state_height` is the same row for every merklized-state module in
-        // this file (reward V1/V2, block-state, fee-state), not just these two; mirrors tide
-        // registering the height route once per module against the same data source.
+        // this file (reward V1/V2, block-state, fee-state), not just these two.
         self.get_reward_state_height().await
     }
 
@@ -895,7 +903,6 @@ where
         offset: u64,
         limit: u64,
     ) -> anyhow::Result<Self::RewardAmounts> {
-        // Validate limit (from reward.toml: limit <= 10000)
         if limit > 10000 {
             return Err(bad_request(format!(
                 "limit {} exceeds maximum allowed value of 10000",
@@ -1030,7 +1037,7 @@ where
 
         // Fetch block and VID common data concurrently
         let ds = &*self.data_source;
-        let timeout = std::time::Duration::from_millis(500);
+        let timeout = FETCH_TIMEOUT;
         let (block_fetch, vid_fetch) = join!(ds.get_block(block_id), ds.get_vid_common(block_id));
         let (block_opt, vid_opt) = join!(
             block_fetch.with_timeout(timeout),
@@ -1086,7 +1093,7 @@ where
         }
 
         let range_size = until - from;
-        const MAX_RANGE: u64 = 100; // Match limit from availability.toml
+        const MAX_RANGE: u64 = 100; // Match the query service default large-object range limit
         if range_size > MAX_RANGE {
             return Err(anyhow::anyhow!(
                 "range too large: {} blocks (max {})",
@@ -1160,7 +1167,7 @@ where
         let block_id = HsBlockId::Number(block_height as usize);
 
         let ds = &*self.data_source;
-        let timeout = std::time::Duration::from_millis(500);
+        let timeout = FETCH_TIMEOUT;
         let (block_fetch, vid_fetch) = join!(ds.get_block(block_id), ds.get_vid_common(block_id));
         let (block, vid_common) = join!(
             block_fetch.with_timeout(timeout),
@@ -1188,7 +1195,7 @@ where
             ));
         }
 
-        // Block has incorrect encoding — fetch VID shares to construct the proof.
+        // Block has incorrect encoding: fetch VID shares to construct the proof.
         let vid_shares_future = ds
             .request_vid_shares(block_height, vid_common.clone(), Duration::from_secs(40))
             .await;
@@ -1322,7 +1329,7 @@ where
 
         // Fetch block and VID common data
         let ds = &*self.data_source;
-        let timeout = std::time::Duration::from_millis(500);
+        let timeout = FETCH_TIMEOUT;
         let (block_fetch, vid_fetch) =
             join!(ds.get_block(hs_block_id), ds.get_vid_common(hs_block_id));
         let (block, vid_common) = join!(
@@ -1339,7 +1346,7 @@ where
             ))
         })?;
 
-        // Namespace absent from the block: matches tide's empty-result semantics.
+        // Namespace absent from the block: an empty result, not an error.
         let ns_table = block.payload().ns_table();
         let Some(ns_index) = ns_table.find_ns_id(&ns_id) else {
             return Ok(espresso_types::NamespaceProofQueryData {
@@ -1509,7 +1516,7 @@ where
         };
 
         let ds = &*self.data_source;
-        let timeout = std::time::Duration::from_millis(500);
+        let timeout = FETCH_TIMEOUT;
         let (block_fetch, vid_fetch) =
             join!(ds.get_block(hs_block_id), ds.get_vid_common(hs_block_id));
         let (block, vid_common) = join!(
@@ -1529,7 +1536,7 @@ where
             return Err(anyhow::anyhow!("block was correctly encoded"));
         }
 
-        // Block has incorrect encoding — fetch VID shares to construct the proof.
+        // Block has incorrect encoding: fetch VID shares to construct the proof.
         let vid_shares_future = ds
             .request_vid_shares(block.height(), vid_common.clone(), Duration::from_secs(40))
             .await;
@@ -1682,14 +1689,14 @@ where
         let ds = &*self.data_source;
         ds.get_leaf(hs_id)
             .await
-            .with_timeout(Duration::from_millis(500))
+            .with_timeout(FETCH_TIMEOUT)
             .await
             .ok_or_else(|| not_found("leaf not found"))
     }
 
     async fn get_leaf_range(&self, from: usize, until: usize) -> anyhow::Result<Vec<Self::Leaf>> {
         enforce_range(from, until, 500)?;
-        let timeout = Duration::from_millis(500);
+        let timeout = FETCH_TIMEOUT;
         let ds = &*self.data_source;
         let stream = ds.get_leaf_range(from..until).await;
         let mut results = Vec::new();
@@ -1714,7 +1721,7 @@ where
         let ds = &*self.data_source;
         ds.get_header(hs_id)
             .await
-            .with_timeout(Duration::from_millis(500))
+            .with_timeout(FETCH_TIMEOUT)
             .await
             .ok_or_else(|| not_found(format!("header not found for {}", hs_id)))
     }
@@ -1725,7 +1732,7 @@ where
         until: usize,
     ) -> anyhow::Result<Vec<Self::Header>> {
         enforce_range(from, until, 100)?;
-        let timeout = Duration::from_millis(500);
+        let timeout = FETCH_TIMEOUT;
         let ds = &*self.data_source;
         let stream = ds.get_header_range(from..until).await;
         let mut results = Vec::new();
@@ -1750,14 +1757,14 @@ where
         let ds = &*self.data_source;
         ds.get_block(hs_id)
             .await
-            .with_timeout(Duration::from_millis(500))
+            .with_timeout(FETCH_TIMEOUT)
             .await
             .ok_or_else(|| not_found(format!("block not found for {}", hs_id)))
     }
 
     async fn get_block_range(&self, from: usize, until: usize) -> anyhow::Result<Vec<Self::Block>> {
         enforce_range(from, until, 100)?;
-        let timeout = Duration::from_millis(500);
+        let timeout = FETCH_TIMEOUT;
         let ds = &*self.data_source;
         let stream = ds.get_block_range(from..until).await;
         let mut results = Vec::new();
@@ -1782,7 +1789,7 @@ where
         let ds = &*self.data_source;
         ds.get_payload(hs_id)
             .await
-            .with_timeout(Duration::from_millis(500))
+            .with_timeout(FETCH_TIMEOUT)
             .await
             .ok_or_else(|| not_found(format!("payload not found for {}", hs_id)))
     }
@@ -1793,7 +1800,7 @@ where
         until: usize,
     ) -> anyhow::Result<Vec<Self::Payload>> {
         enforce_range(from, until, 100)?;
-        let timeout = Duration::from_millis(500);
+        let timeout = FETCH_TIMEOUT;
         let ds = &*self.data_source;
         let stream = ds.get_payload_range(from..until).await;
         let mut results = Vec::new();
@@ -1818,7 +1825,7 @@ where
         let ds = &*self.data_source;
         ds.get_vid_common(hs_id)
             .await
-            .with_timeout(Duration::from_millis(500))
+            .with_timeout(FETCH_TIMEOUT)
             .await
             .ok_or_else(|| not_found(format!("VID common not found for {}", hs_id)))
     }
@@ -1829,7 +1836,7 @@ where
         until: usize,
     ) -> anyhow::Result<Vec<Self::VidCommon>> {
         enforce_range(from, until, 500)?;
-        let timeout = Duration::from_millis(500);
+        let timeout = FETCH_TIMEOUT;
         let ds = &*self.data_source;
         let stream = ds.get_vid_common_range(from..until).await;
         let mut results = Vec::new();
@@ -1855,7 +1862,7 @@ where
         let block = ds
             .get_block(HsBlockId::Number(height as usize))
             .await
-            .with_timeout(Duration::from_millis(500))
+            .with_timeout(FETCH_TIMEOUT)
             .await
             .ok_or_else(|| not_found(format!("block {} not found", height)))?;
 
@@ -1885,7 +1892,7 @@ where
         let bwt = ds
             .get_block_containing_transaction(tx_hash)
             .await
-            .with_timeout(Duration::from_millis(500))
+            .with_timeout(FETCH_TIMEOUT)
             .await
             .ok_or_else(|| not_found("transaction not found"))?;
         Ok(bwt.transaction)
@@ -1897,7 +1904,7 @@ where
         index: u64,
     ) -> anyhow::Result<Self::TransactionWithProof> {
         let ds = &*self.data_source;
-        let timeout = Duration::from_millis(500);
+        let timeout = FETCH_TIMEOUT;
 
         let (block_fetch, vid_fetch) = futures::join!(
             ds.get_block(HsBlockId::Number(height as usize)),
@@ -1937,7 +1944,7 @@ where
         hash: String,
     ) -> anyhow::Result<Self::TransactionWithProof> {
         let ds = &*self.data_source;
-        let timeout = Duration::from_millis(500);
+        let timeout = FETCH_TIMEOUT;
 
         let tx_hash: hotshot_query_service::availability::TransactionHash<
             espresso_types::SeqTypes,
@@ -1975,7 +1982,7 @@ where
         let block = ds
             .get_block(HsBlockId::Number(height))
             .await
-            .with_timeout(Duration::from_millis(500))
+            .with_timeout(FETCH_TIMEOUT)
             .await
             .ok_or_else(|| not_found(format!("block {} not found", height)))?;
         Ok(BlockSummaryQueryData::from(block))
@@ -1987,7 +1994,7 @@ where
         until: usize,
     ) -> anyhow::Result<Vec<Self::BlockSummary>> {
         enforce_range(from, until, 100)?;
-        let timeout = Duration::from_millis(500);
+        let timeout = FETCH_TIMEOUT;
         let ds = &*self.data_source;
         let stream = ds.get_block_range(from..until).await;
         let mut results = Vec::new();
@@ -2016,7 +2023,7 @@ where
             .data_source
             .get_cert2(height)
             .await
-            .with_timeout(Duration::from_millis(500))
+            .with_timeout(FETCH_TIMEOUT)
             .await)
     }
 
@@ -2284,8 +2291,10 @@ where
 impl<D> espresso_api::v1::StatusApi for NodeApiStateImpl<D>
 where
     D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target: hotshot_query_service::status::StatusDataSource + Send + Sync,
+    D::Target: hotshot_query_service::status::StatusDataSource + NodeKeysDataSource + Send + Sync,
 {
+    type Keys = NodePublicKeys;
+
     async fn block_height(&self) -> anyhow::Result<u64> {
         let ds = &*self.data_source;
         let h = hotshot_query_service::status::StatusDataSource::block_height(ds)
@@ -2310,7 +2319,14 @@ where
 
     async fn metrics(&self) -> anyhow::Result<String> {
         let ds = &*self.data_source;
-        ds.metrics().export().map_err(|e| anyhow::anyhow!("{e}"))
+        // Standard prometheus text exposition of the registry.
+        let mut buffer = Vec::new();
+        prometheus::TextEncoder::new().encode(&ds.metrics().registry().gather(), &mut buffer)?;
+        Ok(String::from_utf8(buffer)?)
+    }
+
+    async fn keys(&self) -> anyhow::Result<NodePublicKeys> {
+        Ok(self.data_source.node_public_keys().await)
     }
 }
 
@@ -2733,8 +2749,8 @@ where
             .get_reward_merkle_tree_v2(height, view)
             .await
             .map_err(|err| not_found(format!("{err:#}")))?;
-        // tide-disco returns the raw Vec<u8> from `get_reward_merkle_tree_v2`. To preserve
-        // identical wire output, re-encode the bytes themselves as the JSON body.
+        // The wire format is the raw Vec<u8> from `get_reward_merkle_tree_v2` encoded as the
+        // JSON body; keep it that way for existing clients.
         Ok(serde_json::to_value(bytes)?)
     }
 
@@ -3049,7 +3065,7 @@ where
         finalized: Option<u64>,
     ) -> anyhow::Result<Self::LeafProof> {
         let ds = &*self.data_source;
-        let fetch_timeout = lc_fetch_timeout();
+        let fetch_timeout = FETCH_TIMEOUT;
 
         let requested = match query {
             espresso_api::v1::LeafQuery::Height(h) => HsLeafId::Number(h as usize),
@@ -3104,7 +3120,7 @@ where
         requested: espresso_api::v1::HeaderQuery,
     ) -> anyhow::Result<Self::HeaderProof> {
         let ds = &*self.data_source;
-        let fetch_timeout = lc_fetch_timeout();
+        let fetch_timeout = FETCH_TIMEOUT;
         let requested = match requested {
             espresso_api::v1::HeaderQuery::Height(h) => HsBlockId::Number(h as usize),
             espresso_api::v1::HeaderQuery::Hash(h) => HsBlockId::Hash(
@@ -3126,7 +3142,7 @@ where
         epoch: u64,
     ) -> anyhow::Result<Self::StakeTableEvents> {
         let ds = &*self.data_source;
-        let fetch_timeout = lc_fetch_timeout();
+        let fetch_timeout = FETCH_TIMEOUT;
 
         let node_state = super::data_source::NodeStateDataSource::node_state(ds).await;
         let epoch_height = node_state
@@ -3184,7 +3200,7 @@ where
 
     async fn get_payload_proof(&self, height: u64) -> anyhow::Result<Self::PayloadProof> {
         let ds = &*self.data_source;
-        let fetch_timeout = lc_fetch_timeout();
+        let fetch_timeout = FETCH_TIMEOUT;
         let height = height as usize;
         let payload = AvailabilityDataSource::get_payload(ds, height)
             .await
@@ -3208,7 +3224,7 @@ where
         end: u64,
     ) -> anyhow::Result<Vec<Self::PayloadProof>> {
         let ds = &*self.data_source;
-        let fetch_timeout = lc_fetch_timeout();
+        let fetch_timeout = FETCH_TIMEOUT;
         let start = start as usize;
         let end = end as usize;
 
@@ -3245,7 +3261,7 @@ where
         namespace: u64,
     ) -> anyhow::Result<Self::NamespaceProof> {
         let ds = &*self.data_source;
-        let fetch_timeout = lc_fetch_timeout();
+        let fetch_timeout = FETCH_TIMEOUT;
         let mut proofs = crate::api::light_client::get_namespace_proof_range(
             ds,
             height as usize,
@@ -3269,7 +3285,7 @@ where
         namespace: u64,
     ) -> anyhow::Result<Vec<Self::NamespaceProof>> {
         let ds = &*self.data_source;
-        let fetch_timeout = lc_fetch_timeout();
+        let fetch_timeout = FETCH_TIMEOUT;
         crate::api::light_client::get_namespace_proof_range(
             ds,
             start as usize,
@@ -3291,7 +3307,7 @@ where
         let namespaces = crate::api::light_client::parse_namespaces_str(&namespaces)
             .map_err(|err| bad_request(err.to_string()))?;
         let ds = &*self.data_source;
-        let fetch_timeout = lc_fetch_timeout();
+        let fetch_timeout = FETCH_TIMEOUT;
         crate::api::light_client::get_namespaces_proof_range(
             ds,
             start as usize,
@@ -3305,16 +3321,12 @@ where
     }
 }
 
-fn lc_fetch_timeout() -> std::time::Duration {
-    std::time::Duration::from_millis(500)
-}
-
 fn lc_large_object_range_limit() -> usize {
     hotshot_query_service::availability::Options::default().large_object_range_limit
 }
 
 /// Convert a query-service error to an [`AvailabilityError`]-carrying anyhow error so the HTTP
-/// layer returns the status tide-disco returned (400/404) instead of 500.
+/// layer returns the status carried by the error (400/404) instead of 500.
 pub(crate) fn lc_error(err: hotshot_query_service::Error) -> anyhow::Error {
     match err.status() {
         StatusCode::NOT_FOUND => not_found(err.to_string()),
@@ -3323,8 +3335,12 @@ pub(crate) fn lc_error(err: hotshot_query_service::Error) -> anyhow::Error {
     }
 }
 
+/// Bounds the leaves in a single leaf proof, and so the memory to build and serialize it.
+///
+/// Tracks the `hotshot_query_service` small-object range limit, so a dependency bump that
+/// changes that default changes this bound too.
 fn lc_leaf_proof_chain_limit() -> usize {
-    crate::api::light_client::Options::default().leaf_proof_chain_limit
+    hotshot_query_service::availability::Options::default().small_object_range_limit
 }
 
 // ============================================================================

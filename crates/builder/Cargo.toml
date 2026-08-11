@@ -13,7 +13,7 @@ async-lock = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }
 committable = { workspace = true }
-espresso-api = { workspace = true }
+disco-types = { workspace = true }
 espresso-node = { workspace = true, default-features = false }
 espresso-types = { workspace = true, features = ["node"] }
 espresso-utils = { workspace = true, features = ["full"] }
@@ -26,10 +26,11 @@ hotshot-events-service = { workspace = true }
 hotshot-example-types = { workspace = true }
 hotshot-state-prover = { workspace = true }
 hotshot-types = { workspace = true }
+http-client = { workspace = true }
+http-wire = { workspace = true, features = ["server"] }
 rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-surf-disco = { workspace = true }
 tagged-base64 = { workspace = true }
 test-utils = { workspace = true }
 tokio = { workspace = true }

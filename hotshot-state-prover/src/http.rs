@@ -3,7 +3,7 @@
 
 use alloy::primitives::Address;
 use axum::{Json, Router, http::HeaderMap, response::Response, routing::get};
-use espresso_api::{cors_layer, healthcheck_response};
+use http_wire::{cors_layer, healthcheck_response};
 
 /// Serves the light client contract address at the paths tide-disco used to expose it:
 /// `/v0/api/lightclient_contract` directly, and `/api/lightclient_contract` (which tide-disco

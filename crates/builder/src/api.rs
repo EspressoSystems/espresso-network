@@ -17,10 +17,7 @@ use axum::{
     routing::{get, post},
 };
 use committable::Committable;
-use espresso_api::{
-    cors_layer, healthcheck_response,
-    wire::{self, DecodeFailure, WireFormat},
-};
+use disco_types::{error::Error as _, status::StatusCode};
 use espresso_types::SeqTypes;
 use hotshot_builder_api::v0_1::{
     block_info::{
@@ -36,8 +33,10 @@ use hotshot_types::{
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
     utils::BuilderCommitment,
 };
+use http_wire::{
+    self as wire, DecodeFailure, WireFormat, body_limit_layer, cors_layer, healthcheck_response,
+};
 use serde::{Serialize, de::DeserializeOwned};
-use surf_disco::{Error as _, StatusCode};
 use tagged_base64::TaggedBase64;
 use vbs::version::StaticVersion;
 
@@ -99,8 +98,7 @@ where
 }
 
 /// Parses a key/signature path parameter, mirroring `try_extract_param`: a wrong-type value is a
-/// `Custom` error carrying 422. Note `BuilderApiError::status()` returns 500 for every `Custom`,
-/// so the wire status is 500, as it was under tide.
+/// `Custom` error carrying 422.
 fn parse_key_param<T>(value: &str, field: &str) -> Result<T, BuilderApiError>
 where
     T: for<'a> TryFrom<&'a TaggedBase64>,
@@ -340,6 +338,7 @@ pub fn router(state: ProxyGlobalState<SeqTypes>) -> Router {
         .route("/healthcheck", get(healthcheck))
         .merge(api.clone())
         .nest("/v0", api)
+        .layer(body_limit_layer())
         .layer(cors_layer())
 }
 

@@ -85,6 +85,7 @@ type V2Serializer = vbs::Serializer<StaticVersion<0, 2>>;
 type V3Serializer = vbs::Serializer<StaticVersion<0, 3>>;
 type V4Serializer = vbs::Serializer<StaticVersion<0, 4>>;
 type V5Serializer = vbs::Serializer<StaticVersion<0, 5>>;
+type V6Serializer = vbs::Serializer<StaticVersion<0, 6>>;
 
 const REFERENCE_NAMESPACE_ID: u32 = 12648430;
 
@@ -293,6 +294,7 @@ const REFERENCE_V2_HEADER_COMMITMENT: &str = "BLOCK~V0GJjL19nCrlm9n1zZ6gaOKEekSM
 const REFERENCE_V3_HEADER_COMMITMENT: &str = "BLOCK~qKb0axY9NwpusJn5ZFhjJAyG8IYpJpHN2-BDIsIkhrEd";
 const REFERENCE_V4_HEADER_COMMITMENT: &str = "BLOCK~hPVq9NasWW1vVYGGGr0PSRv1TV3nUV_8ARw5fWHlQLx3";
 const REFERENCE_V5_HEADER_COMMITMENT: &str = "BLOCK~yYZmWrTIWJerGV7VA-EeKWL4tnsdJya1BpK4HWdvnwAA";
+const REFERENCE_V6_HEADER_COMMITMENT: &str = "BLOCK~nAVIoY9ekw8WPwzHnLwTgsPZ1qvBox-WQev4nhcrLoZP";
 
 fn reference_transaction<R>(ns_id: NamespaceId, rng: &mut R) -> Transaction
 where
@@ -368,6 +370,7 @@ change in the serialization of this data structure.
         "v3" => V3Serializer::serialize(&reference).unwrap(),
         "v4" => V4Serializer::serialize(&reference).unwrap(),
         "v5" => V5Serializer::serialize(&reference).unwrap(),
+        "v6" => V6Serializer::serialize(&reference).unwrap(),
         _ => panic!("invalid version"),
     };
     if actual != expected {
@@ -399,6 +402,7 @@ change in the serialization of this data structure.
         "v3" => V3Serializer::deserialize(&expected).unwrap(),
         "v4" => V4Serializer::deserialize(&expected).unwrap(),
         "v5" => V5Serializer::deserialize(&expected).unwrap(),
+        "v6" => V6Serializer::deserialize(&expected).unwrap(),
         _ => panic!("invalid version"),
     };
 
@@ -554,6 +558,16 @@ async fn test_reference_header_v5() {
         "header",
         reference_header(version(0, 5)).await,
         REFERENCE_V5_HEADER_COMMITMENT,
+    );
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_reference_header_v6() {
+    reference_test(
+        "v6",
+        "header",
+        reference_header(version(0, 6)).await,
+        REFERENCE_V6_HEADER_COMMITMENT,
     );
 }
 

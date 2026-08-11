@@ -12,8 +12,10 @@ async-lock = { workspace = true }
 async-trait = { workspace = true }
 clap = { workspace = true }
 derive_more = { workspace = true }
+disco-types = { workspace = true }
 futures = { workspace = true }
 hotshot-types = { workspace = true }
+http-client = { workspace = true }
 rand = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
@@ -27,7 +29,6 @@ vbs = { workspace = true }
 
 [dev-dependencies]
 hotshot-example-types = { workspace = true }
-surf-disco = { workspace = true }
 test-utils = { workspace = true }
 
 [lints]

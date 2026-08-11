@@ -2,7 +2,7 @@
 
 pub mod routes;
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 
 use aide::{
     axum::{
@@ -25,7 +25,10 @@ use axum::{
     response::{Html, IntoResponse, Response},
     routing::get,
 };
-use futures::{StreamExt, stream::BoxStream};
+use http_wire::{
+    ContentType, DecodeFailure, WireFormat, body_limit_layer, cors_layer, drive_ws_stream,
+    healthcheck_response, module_healthcheck_response,
+};
 use schemars::transform::Transform;
 use serde::Serialize;
 use serialization_api::v2::{
@@ -34,16 +37,11 @@ use serialization_api::v2::{
     GetRewardMerkleTreeRequest, GetStakeTableRequest, GetStateCertificateRequest,
 };
 use tokio::sync::Semaphore;
-use tower_http::cors::{Any, CorsLayer};
-use vbs::{
-    BinarySerializer, Serializer,
-    version::{StaticVersion, StaticVersionType},
-};
+use vbs::version::StaticVersion;
 
 use crate::{
     error::{ApiError, AvailabilityError},
     handlers, v1, v2,
-    wire::{self, DecodeFailure, WireFormat},
 };
 
 /// API error response — wire-compatible with the `Custom` variant of the per-module error enums
@@ -68,10 +66,13 @@ struct CustomError {
 }
 
 impl ErrorResponse {
+    /// Every node API error body is built here, so this is where credentials embedded in a provider
+    /// URL are removed. These bodies are served to unauthenticated callers and never pass the OTLP
+    /// exporter that scrubs the logging path.
     fn new(status: StatusCode, message: String) -> Self {
         Self {
             custom: CustomError {
-                message,
+                message: espresso_utils::redact::scrub(&message),
                 status: status.as_u16(),
             },
         }
@@ -108,7 +109,7 @@ impl WireFormat for NodeApiWire {
     fn serialize_failure(message: String) -> ErrorResponse {
         ErrorResponse::new(
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("vbs serialize: {message}"),
+            format!("serialize: {message}"),
         )
     }
 }
@@ -120,19 +121,19 @@ impl WireFormat for NodeApiWire {
 /// (peer-catchup, submit-transactions, light-client provider) expect VBS-encoded responses for
 /// the endpoints that flow large structured data. Falls back to JSON otherwise.
 fn encode_response<T: Serialize>(headers: &HeaderMap, value: T) -> Response {
-    wire::encode_ok::<NodeApiWire, _>(headers, value)
+    http_wire::encode_ok::<NodeApiWire, _>(headers, value)
 }
 
-/// Decode a request body based on its `Content-Type`, matching tide-disco's `body_auto` behavior.
+/// Decode a request body based on its `Content-Type`, matched by media-type essence.
 ///
-/// - `application/octet-stream`: VBS (versioned binary) — what `surf-disco::Request::body_binary`
+/// - `application/octet-stream`: VBS (versioned binary) — what `Request::body_binary`
 ///   sends, and what production peer-catchup / submit-transactions clients use.
 /// - `application/json`: serde_json.
 fn decode_body<T: serde::de::DeserializeOwned>(
     headers: &HeaderMap,
     body: &[u8],
 ) -> Result<T, ApiError> {
-    wire::decode_body::<WireVersion, T>(headers, body).map_err(|err| {
+    http_wire::decode_body::<WireVersion, T>(headers, body).map_err(|err| {
         ApiError::BadRequest(match err {
             DecodeFailure::Binary(err) => anyhow::anyhow!("invalid binary body: {err}"),
             DecodeFailure::Json(err) => anyhow::anyhow!("invalid json body: {err}"),
@@ -310,72 +311,6 @@ impl<T: schemars::JsonSchema> aide::operation::OperationInput for SendQuery<T> {
     }
 }
 
-/// Wire format for a WebSocket stream, negotiated from the upgrade request's `Accept` header
-/// to match tide-disco. surf-disco clients default to `application/octet-stream`, so production
-/// stream consumers expect VBS-encoded `Message::Binary` frames.
-#[derive(Clone, Copy)]
-pub enum WsFormat {
-    Binary,
-    Json,
-}
-
-pub fn ws_format(headers: &HeaderMap) -> WsFormat {
-    let accept = headers
-        .get(header::ACCEPT)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    if accept.contains("application/octet-stream") {
-        WsFormat::Binary
-    } else {
-        WsFormat::Json
-    }
-}
-
-/// Forwards `stream` over `socket` in the negotiated [`WsFormat`] until the stream ends or the
-/// client disconnects, then performs the close handshake. This is the one shared way to serve a
-/// tide-disco-style socket stream endpoint; hand-rolled write-only loops leak the task and its
-/// data-source subscription whenever a client disconnects while the stream is quiet.
-///
-/// `Ver` is the VBS framing version of binary frames, and must be the same version the service's
-/// [`WireFormat`](crate::wire::WireFormat) uses for its request/response bodies.
-pub async fn drive_ws_stream<Ver: StaticVersionType, T: Serialize>(
-    mut socket: axum::extract::ws::WebSocket,
-    stream: BoxStream<'static, T>,
-    format: WsFormat,
-) {
-    use axum::extract::ws::Message;
-    futures::pin_mut!(stream);
-    loop {
-        // Also poll the client side: a disconnect must end this task even while the stream is
-        // quiet, or the socket's connection slot and the stream task leak until the next send.
-        let item = tokio::select! {
-            item = stream.next() => item,
-            msg = socket.recv() => match msg {
-                None | Some(Err(_)) | Some(Ok(Message::Close(_))) => return,
-                Some(Ok(_)) => continue,
-            },
-        };
-        let Some(item) = item else { break };
-        let msg = match format {
-            WsFormat::Binary => match Serializer::<Ver>::serialize(&item) {
-                Ok(bytes) => Message::Binary(bytes.into()),
-                Err(_) => break,
-            },
-            WsFormat::Json => match serde_json::to_string(&item) {
-                Ok(json) => Message::Text(json.into()),
-                Err(_) => break,
-            },
-        };
-        if socket.send(msg).await.is_err() {
-            return;
-        }
-    }
-    // Close handshake, like tide-disco's socket handler. Without it, dropping the socket resets
-    // the connection and clients see an error instead of end-of-stream — the finite v0 streams
-    // rely on a clean close to signal completion.
-    let _ = socket.send(Message::Close(None)).await;
-}
-
 /// Create a combined router serving both v1 and v2 APIs
 pub fn create_combined_router<S>(state: S) -> Router
 where
@@ -406,23 +341,9 @@ where
     let router_v1 = create_router_v1(state.clone());
     let router_v2 = create_router_v2(state);
 
-    with_top_level_routes(router_v2.merge(router_v1)).layer(cors_layer())
-}
-
-/// The permissive CORS policy tide-disco applied to every response it served, which browser
-/// clients (the explorer, the staking UI) depend on. Every axum-migrated service layers this on
-/// its router; without it, a browser rejects the response before the page ever sees it.
-///
-/// Apply it as the outermost layer, so it also covers responses generated by middleware rather
-/// than a handler (the connection limit's 429 would otherwise skip it).
-///
-/// `allow_methods` and `allow_headers` are only echoed on the `OPTIONS` preflight, which is where
-/// a browser reads them; `allow_origin` goes out on every response.
-pub fn cors_layer() -> CorsLayer {
-    CorsLayer::new()
-        .allow_methods(Any)
-        .allow_headers(Any)
-        .allow_origin(Any)
+    with_top_level_routes(router_v2.merge(router_v1))
+        .layer(body_limit_layer())
+        .layer(cors_layer())
 }
 
 /// Add the routes that every mode serves regardless of which API modules are enabled:
@@ -433,51 +354,6 @@ pub(crate) fn with_top_level_routes(router: Router) -> Router {
         .route("/healthcheck", get(healthcheck))
         .route("/v1/{module}/healthcheck", get(module_healthcheck))
         .route("/version", get(version))
-}
-
-/// Health status of an application.
-///
-/// Wire-compatible with `tide_disco::healthcheck::HealthStatus` 0.9.6: `Available` is its first
-/// variant, so JSON emits the same name and vbs/bincode the same ordinal. The server only ever
-/// reports `Available`; the remaining tide variants are omitted until a client-side type exists.
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum HealthStatus {
-    Available,
-}
-
-/// Wire-compatible with `tide_disco::app::AppHealth`: JSON keys, variant casing, and the
-/// vbs/bincode field order (status ordinal, then modules map) must not change.
-#[derive(Serialize)]
-struct AppHealth {
-    status: HealthStatus,
-    // Tide populated this with each module's versioned health status; the axum modules don't
-    // report individual health, so it stays empty.
-    modules: BTreeMap<String, BTreeMap<u64, u16>>,
-}
-
-/// App-level `/healthcheck` response, in JSON or vbs binary depending on `Accept`.
-///
-/// Every service migrated to axum registered at least one *named* tide-disco module, so none of
-/// them was a singleton app and all of them served the app-level [`AppHealth`] object here rather
-/// than a bare [`HealthStatus`] (`tide-disco-0.9.6/src/app.rs`, `App::serve` skips the app-level
-/// routes only when `modules.is_singleton()`). The standalone axum servers (builder, orchestrator,
-/// light client query service, relay server, prover, dev-node, submit-transactions, nasty-client)
-/// all share this, so each reports the shape its tide predecessor did.
-pub fn healthcheck_response(headers: &HeaderMap) -> Response {
-    encode_response(
-        headers,
-        AppHealth {
-            status: HealthStatus::Available,
-            modules: BTreeMap::new(),
-        },
-    )
-}
-
-/// Per-module `/healthcheck` response: a bare [`HealthStatus`], which is what tide-disco served
-/// for a module without an explicit healthcheck handler.
-fn module_healthcheck_response(headers: &HeaderMap) -> Response {
-    encode_response(headers, HealthStatus::Available)
 }
 
 async fn healthcheck(headers: HeaderMap) -> Response {
@@ -494,7 +370,7 @@ async fn module_healthcheck(headers: HeaderMap) -> Response {
 }
 
 /// Tide-disco-compatible version response. Tide emits the binary's clap version; we emit the
-/// crate version so `surf_disco::Client::connect` and similar polling helpers succeed.
+/// crate version so `http_client::Client::connect` and similar polling helpers succeed.
 async fn version() -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
@@ -1076,7 +952,7 @@ where
                          State(state): State<S>,
                          headers: HeaderMap,
                          Path(height): Path<usize>| async move {
-        let format = ws_format(&headers);
+        let format = ContentType::negotiate(&headers);
         ws.on_upgrade(move |socket| async move {
             match state.stream_leaves(height).await {
                 Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
@@ -1089,7 +965,7 @@ where
                           State(state): State<S>,
                           headers: HeaderMap,
                           Path(height): Path<usize>| async move {
-        let format = ws_format(&headers);
+        let format = ContentType::negotiate(&headers);
         ws.on_upgrade(move |socket| async move {
             match state.stream_headers(height).await {
                 Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
@@ -1102,7 +978,7 @@ where
                          State(state): State<S>,
                          headers: HeaderMap,
                          Path(height): Path<usize>| async move {
-        let format = ws_format(&headers);
+        let format = ContentType::negotiate(&headers);
         ws.on_upgrade(move |socket| async move {
             match state.stream_blocks(height).await {
                 Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
@@ -1115,7 +991,7 @@ where
                            State(state): State<S>,
                            headers: HeaderMap,
                            Path(height): Path<usize>| async move {
-        let format = ws_format(&headers);
+        let format = ContentType::negotiate(&headers);
         ws.on_upgrade(move |socket| async move {
             match state.stream_payloads(height).await {
                 Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
@@ -1128,7 +1004,7 @@ where
                              State(state): State<S>,
                              headers: HeaderMap,
                              Path(height): Path<usize>| async move {
-        let format = ws_format(&headers);
+        let format = ContentType::negotiate(&headers);
         ws.on_upgrade(move |socket| async move {
             match state.stream_vid_common(height).await {
                 Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
@@ -1141,7 +1017,7 @@ where
                                State(state): State<S>,
                                headers: HeaderMap,
                                Path(height): Path<usize>| async move {
-        let format = ws_format(&headers);
+        let format = ContentType::negotiate(&headers);
         ws.on_upgrade(move |socket| async move {
             match state.stream_transactions(height, None).await {
                 Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
@@ -1155,7 +1031,7 @@ where
          State(state): State<S>,
          headers: HeaderMap,
          Path((height, namespace)): Path<(usize, u32)>| async move {
-            let format = ws_format(&headers);
+            let format = ContentType::negotiate(&headers);
             ws.on_upgrade(move |socket| async move {
                 match state.stream_transactions(height, Some(namespace)).await {
                     Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
@@ -1169,7 +1045,7 @@ where
          State(state): State<S>,
          headers: HeaderMap,
          Path((height, namespace)): Path<(usize, u32)>| async move {
-            let format = ws_format(&headers);
+            let format = ContentType::negotiate(&headers);
             ws.on_upgrade(move |socket| async move {
                 match state.stream_namespace_proofs(height, namespace).await {
                     Ok(stream) => drive_ws_stream::<WireVersion, _>(socket, stream, format).await,
@@ -1753,6 +1629,13 @@ where
         }
     };
 
+    let status_keys = |State(state): State<S>| async move {
+        <S as v1::StatusApi>::keys(&state)
+            .await
+            .map(ApiJson)
+            .map_err(ApiError::Internal)
+    };
+
     ApiRouter::new()
         .api_route(
             routes::v1::STATUS_BLOCK_HEIGHT_ROUTE,
@@ -1780,6 +1663,17 @@ where
             get_with(status_metrics, |op| {
                 op.summary("Get Prometheus metrics")
                     .description("Prometheus endpoint exposing consensus-related metrics.")
+            }),
+        )
+        .api_route(
+            routes::v1::STATUS_KEYS_ROUTE,
+            get_with(status_keys, |op| {
+                op.summary("Get node public keys").description(
+                    "Get this node's public keys (Ethereum account, BLS, Schnorr, x25519). The \
+                     BLS and Schnorr keys are formatted as in stake-table responses; the x25519 \
+                     key is tagged base64. The Ethereum account is taken from the node's \
+                     stake-table registration and is null if the node is not registered.",
+                )
             }),
         )
         .with_state(state)
@@ -2731,7 +2625,7 @@ where
 
     let hotshot_events_stream =
         |State(state): State<S>, headers: HeaderMap, ws: WebSocketUpgrade| async move {
-            let format = ws_format(&headers);
+            let format = ContentType::negotiate(&headers);
             match <S as v1::HotShotEventsApi>::events(&state).await {
                 Ok(stream) => ws.on_upgrade(move |socket| async move {
                     drive_ws_stream::<WireVersion, _>(socket, stream, format).await
@@ -3983,7 +3877,11 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
+    use futures::stream::BoxStream;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use vbs::{BinarySerializer, Serializer};
 
     use super::*;
 
@@ -4078,6 +3976,24 @@ mod tests {
             rewritten_uri("/availability/leaf/1?foo=bar"),
             "/v1/availability/leaf/1?foo=bar"
         );
+    }
+
+    /// Error bodies go to unauthenticated callers, so an L1 provider URL in the message must not
+    /// reach them. Covers both rendered forms.
+    #[test]
+    fn error_response_redacts_provider_credentials() {
+        let msg = format!(
+            "failed to get total supply. err=reqwest::Error {{ url: \
+             \"https://rpc.invalid/v1/FAKEKEY\" }} via {:?}",
+            url::Url::parse("https://u:p@rpc.invalid/v2/OTHERKEY").unwrap()
+        );
+
+        let body = ErrorResponse::new(StatusCode::NOT_FOUND, msg);
+
+        assert!(!body.custom.message.contains("FAKEKEY"), "{body:?}");
+        assert!(!body.custom.message.contains("OTHERKEY"), "{body:?}");
+        assert!(!body.custom.message.contains("u:p"), "{body:?}");
+        assert!(body.custom.message.contains("rpc.invalid"), "{body:?}");
     }
 
     /// Implements every v1 API trait with `unimplemented!()` bodies, purely so `create_router_v1`
@@ -4405,6 +4321,8 @@ mod tests {
 
     #[async_trait::async_trait]
     impl v1::StatusApi for MockState {
+        type Keys = ();
+
         async fn block_height(&self) -> anyhow::Result<u64> {
             unimplemented!()
         }
@@ -4415,6 +4333,9 @@ mod tests {
             unimplemented!()
         }
         async fn metrics(&self) -> anyhow::Result<String> {
+            unimplemented!()
+        }
+        async fn keys(&self) -> anyhow::Result<Self::Keys> {
             unimplemented!()
         }
     }
@@ -5017,6 +4938,80 @@ mod tests {
             routes::v1::STATUS_BLOCK_HEIGHT_ROUTE,
             body
         );
+    }
+
+    /// `submit` and the bulk `catchup` routes take bodies over axum's 2 MiB `Bytes` default, and
+    /// the chain's `max_block_size` is what decides whether a transaction is too big, so the body
+    /// has to reach the handler. Drives the real `serve_router`.
+    #[tokio::test]
+    async fn served_router_admits_bodies_over_the_axum_default() {
+        const LEN: usize = 3 * 1024 * 1024;
+        let router = Router::new().route(
+            "/v1/submit/submit",
+            axum::routing::post(|body: Bytes| async move { body.len().to_string() }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(crate::serve_router(listener, "test", router, None));
+
+        let mut sock = tokio::net::TcpStream::connect(addr).await.unwrap();
+        sock.write_all(
+            format!(
+                "POST /v1/submit/submit HTTP/1.1\r\nHost: localhost\r\nContent-Type: \
+                 application/octet-stream\r\nContent-Length: {LEN}\r\n\r\n"
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+        // The server may reset the connection mid-write if it rejects the body early; the asserts
+        // below report that legibly.
+        let _ = sock.write_all(&vec![b'x'; LEN]).await;
+
+        let mut resp = String::new();
+        let read = async {
+            loop {
+                let mut buf = [0u8; 1024];
+                // A read error is end-of-input too: the server resets the connection after an
+                // early rejection, and whatever arrived before the reset belongs in the asserts.
+                let Ok(n) = sock.read(&mut buf).await else {
+                    break;
+                };
+                if n == 0 {
+                    break;
+                }
+                resp.push_str(&String::from_utf8_lossy(&buf[..n]));
+                if resp.contains(&LEN.to_string()) || resp.len() > 4096 {
+                    break;
+                }
+            }
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(30), read)
+            .await
+            .expect("server never answered; a 413 would produce no matching body");
+        assert!(resp.starts_with("HTTP/1.1 200 OK"), "{resp}");
+        let body = resp.split_once("\r\n\r\n").map_or("", |(_, body)| body);
+        assert!(
+            body.contains(&LEN.to_string()),
+            "handler saw a truncated body: {resp}"
+        );
+    }
+
+    /// The control: the same handler without the layer, pinning that the test above can fail.
+    #[tokio::test]
+    async fn axum_default_body_limit_rejects_the_same_request() {
+        let router = Router::new().route(
+            "/v1/submit/submit",
+            axum::routing::post(|body: Bytes| async move { body.len().to_string() }),
+        );
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/submit/submit")
+            .header(header::CONTENT_TYPE, "application/octet-stream")
+            .body(axum::body::Body::from(vec![b'x'; 3 * 1024 * 1024]))
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router, req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 
     #[tokio::test]

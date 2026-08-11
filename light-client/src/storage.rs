@@ -1,17 +1,15 @@
-use std::future::Future;
 #[cfg(feature = "client")]
 use std::{
+    cmp::min,
     collections::HashMap,
     path::PathBuf,
     str::FromStr,
-    sync::{
-        Arc,
-        atomic::{AtomicI64, Ordering},
-    },
+    sync::atomic::{AtomicI64, Ordering},
     time::Duration,
 };
 #[cfg(all(unix, feature = "client"))]
 use std::{fs::Permissions, os::unix::fs::PermissionsExt};
+use std::{future::Future, sync::Arc};
 
 #[cfg(feature = "client")]
 use alloy::primitives::Address;
@@ -216,6 +214,59 @@ pub trait Storage: Sized + Send + Sync + 'static {
         epoch_root_protocol_version: Version,
         next_epoch_root_protocol_version: Version,
     ) -> impl Send + Future<Output = Result<()>>;
+}
+
+impl<T: Storage> Storage for Arc<T> {
+    async fn default() -> Result<Self> {
+        Ok(Arc::new(T::default().await?))
+    }
+
+    async fn block_height(&self) -> Result<u64> {
+        (**self).block_height().await
+    }
+
+    async fn leaf_upper_bound(
+        &self,
+        leaf: impl Into<LeafRequest> + Send,
+    ) -> Result<Option<LeafQueryData<SeqTypes>>> {
+        (**self).leaf_upper_bound(leaf).await
+    }
+
+    async fn get_leaves_in_range(
+        &self,
+        start: u32,
+        end: u32,
+    ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
+        (**self).get_leaves_in_range(start, end).await
+    }
+
+    async fn insert_leaf(&self, leaf: LeafQueryData<SeqTypes>) -> Result<()> {
+        (**self).insert_leaf(leaf).await
+    }
+
+    async fn stake_table_lower_bound(
+        &self,
+        epoch: EpochNumber,
+    ) -> Result<Option<(EpochNumber, StakeTableState, Version, Version)>> {
+        (**self).stake_table_lower_bound(epoch).await
+    }
+
+    async fn insert_stake_table(
+        &self,
+        epoch: EpochNumber,
+        stake_table: &StakeTableState,
+        epoch_root_protocol_version: Version,
+        next_epoch_root_protocol_version: Version,
+    ) -> Result<()> {
+        (**self)
+            .insert_stake_table(
+                epoch,
+                stake_table,
+                epoch_root_protocol_version,
+                next_epoch_root_protocol_version,
+            )
+            .await
+    }
 }
 
 #[cfg(feature = "client")]
@@ -506,12 +557,17 @@ impl Storage for SqliteStorage {
     ) -> Result<Option<(EpochNumber, StakeTableState, Version, Version)>> {
         let mut tx = self.pool.begin().await?;
 
+        // The largest epoch number the database can represent is `i64::MAX`. Since we are only
+        // looking for a lower bound, if requested for an epoch number that can overflow, we can
+        // simply return the lower bound of `i64::MAX`.
+        let epoch = min(*epoch, i64::MAX as u64) as i64;
+
         let Some((epoch, epoch_root_protocol_version, next_epoch_root_protocol_version)) =
             query_as::<_, (i64, String, String)>(
                 "SELECT epoch, epoch_root_protocol_version, next_epoch_root_protocol_version FROM \
                  stake_table_epoch WHERE epoch <= $1 ORDER BY epoch DESC LIMIT 1",
             )
-            .bind(*epoch as i64)
+            .bind(epoch)
             .fetch_optional(tx.as_mut())
             .await
             .context("loading epoch lower bound")?

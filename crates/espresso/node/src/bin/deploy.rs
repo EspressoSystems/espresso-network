@@ -22,7 +22,7 @@ use espresso_contract_deployer::{
 use espresso_types::{config::PublicNetworkConfig, parse_duration};
 use espresso_utils::logging;
 use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
-use tide_disco::error::ServerError;
+use http_client::{Client, error::ClientErr};
 use url::Url;
 use vbs::version::StaticVersion;
 
@@ -629,12 +629,10 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
             // fetch epoch length from HotShot config
             // Request the configuration until it is successful
             loop {
-                match surf_disco::Client::<ServerError, StaticVersion<0, 1>>::new(
-                    opt.sequencer_url.clone(),
-                )
-                .get::<PublicNetworkConfig>("config/hotshot")
-                .send()
-                .await
+                match Client::<ClientErr, StaticVersion<0, 1>>::new(opt.sequencer_url.clone())
+                    .get::<PublicNetworkConfig>("config/hotshot")
+                    .send()
+                    .await
                 {
                     Ok(resp) => {
                         let config = resp.hotshot_config();

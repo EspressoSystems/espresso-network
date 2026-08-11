@@ -18,7 +18,7 @@ use crate::consensus::quorum::StakeTableQuorum;
 ///
 /// There are different types of proofs for different scenarios and protocol versions. New proof
 /// types can be added while remaining compatible with old serialized proofs.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub enum FinalityProof {
     /// The client has stated that they already trust the finality of this particular leaf.
     #[default]
@@ -91,7 +91,7 @@ impl<'a> LeafProofHint<'a, StakeTableQuorum<EpochMembership<SeqTypes>>> {
 }
 
 /// A proof that a leaf is finalized.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct LeafProof {
     /// A chain of leaves from the requested leaf to a provably finalized leaf.
     ///
