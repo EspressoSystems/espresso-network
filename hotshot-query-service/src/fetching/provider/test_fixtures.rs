@@ -37,7 +37,7 @@ use snafu::OptionExt;
 use tagged_base64::TaggedBase64;
 use test_utils::reserve_tcp_port;
 use tokio::task::JoinHandle;
-use vbs::version::{StaticVersion, StaticVersionType};
+use vbs::version::StaticVersion;
 
 use crate::{
     Error,
@@ -66,13 +66,12 @@ fn payload_hash_param(value: &str) -> Result<VidCommitment, Error> {
     VidCommitment::try_from(&tb64).map_err(|_| err())
 }
 
-async fn get_leaf<Ver, D>(
+async fn get_leaf<D>(
     State(ds): State<Arc<D>>,
     headers: HeaderMap,
     Path(height): Path<usize>,
 ) -> Response
 where
-    Ver: StaticVersionType + 'static,
     D: AvailabilityDataSource<MockTypes> + Send + Sync + 'static,
 {
     let fetch = ds.get_leaf(LeafId::<MockTypes>::Number(height)).await;
@@ -86,13 +85,12 @@ where
     respond(&headers, result)
 }
 
-async fn get_leaf_range<Ver, D>(
+async fn get_leaf_range<D>(
     State(ds): State<Arc<D>>,
     headers: HeaderMap,
     Path((from, until)): Path<(usize, usize)>,
 ) -> Response
 where
-    Ver: StaticVersionType + 'static,
     D: AvailabilityDataSource<MockTypes> + Send + Sync + 'static,
 {
     let leaves = ds.get_leaf_range(from..until).await;
@@ -112,13 +110,12 @@ where
     respond(&headers, result)
 }
 
-async fn get_block_range<Ver, D>(
+async fn get_block_range<D>(
     State(ds): State<Arc<D>>,
     headers: HeaderMap,
     Path((from, until)): Path<(usize, usize)>,
 ) -> Response
 where
-    Ver: StaticVersionType + 'static,
     D: AvailabilityDataSource<MockTypes> + Send + Sync + 'static,
 {
     let blocks = ds.get_block_range(from..until).await;
@@ -138,13 +135,12 @@ where
     respond(&headers, result)
 }
 
-async fn get_block_by_payload_hash<Ver, D>(
+async fn get_block_by_payload_hash<D>(
     State(ds): State<Arc<D>>,
     headers: HeaderMap,
     Path(hash): Path<String>,
 ) -> Response
 where
-    Ver: StaticVersionType + 'static,
     D: AvailabilityDataSource<MockTypes> + Send + Sync + 'static,
 {
     let result = async {
@@ -161,13 +157,12 @@ where
     respond(&headers, result)
 }
 
-async fn get_cert2<Ver, D>(
+async fn get_cert2<D>(
     State(ds): State<Arc<D>>,
     headers: HeaderMap,
     Path(height): Path<u64>,
 ) -> Response
 where
-    Ver: StaticVersionType + 'static,
     D: AvailabilityDataSource<MockTypes> + Send + Sync + 'static,
 {
     let result = ds
@@ -185,13 +180,12 @@ where
     respond(&headers, result)
 }
 
-async fn get_vid_common<Ver, D>(
+async fn get_vid_common<D>(
     State(ds): State<Arc<D>>,
     headers: HeaderMap,
     Path(height): Path<usize>,
 ) -> Response
 where
-    Ver: StaticVersionType + 'static,
     D: AvailabilityDataSource<MockTypes> + Send + Sync + 'static,
 {
     let fetch = ds
@@ -207,13 +201,12 @@ where
     respond(&headers, result)
 }
 
-async fn get_vid_common_range<Ver, D>(
+async fn get_vid_common_range<D>(
     State(ds): State<Arc<D>>,
     headers: HeaderMap,
     Path((from, until)): Path<(usize, usize)>,
 ) -> Response
 where
-    Ver: StaticVersionType + 'static,
     D: AvailabilityDataSource<MockTypes> + Send + Sync + 'static,
 {
     let vid = ds.get_vid_common_range(from..until).await;
@@ -233,13 +226,12 @@ where
     respond(&headers, result)
 }
 
-async fn get_vid_common_by_payload_hash<Ver, D>(
+async fn get_vid_common_by_payload_hash<D>(
     State(ds): State<Arc<D>>,
     headers: HeaderMap,
     Path(hash): Path<String>,
 ) -> Response
 where
-    Ver: StaticVersionType + 'static,
     D: AvailabilityDataSource<MockTypes> + Send + Sync + 'static,
 {
     let result = async {
@@ -262,7 +254,7 @@ async fn healthcheck(headers: HeaderMap) -> Response {
 
 /// Unknown routes are reported the way tide-disco reported them: the provider's ranged-VID
 /// fallback keys off the "No route matches" message to detect old peers.
-async fn no_route<Ver: StaticVersionType + 'static>(headers: HeaderMap, uri: Uri) -> Response {
+async fn no_route(headers: HeaderMap, uri: Uri) -> Response {
     let err = Error::Custom {
         message: format!("No route matches {}", uri.path()),
         status: StatusCode::NOT_FOUND,
@@ -271,39 +263,35 @@ async fn no_route<Ver: StaticVersionType + 'static>(headers: HeaderMap, uri: Uri
 }
 
 /// The availability routes the fetch provider client requests.
-fn availability_routes<Ver, D>(data_source: D) -> Router
+fn availability_routes<D>(data_source: D) -> Router
 where
-    Ver: StaticVersionType + 'static,
     D: AvailabilityDataSource<MockTypes> + Send + Sync + 'static,
 {
     Router::new()
-        .route("/leaf/{height}", get(get_leaf::<Ver, D>))
-        .route("/leaf/{from}/{until}", get(get_leaf_range::<Ver, D>))
+        .route("/leaf/{height}", get(get_leaf::<D>))
+        .route("/leaf/{from}/{until}", get(get_leaf_range::<D>))
         .route(
             "/block/payload-hash/{hash}",
-            get(get_block_by_payload_hash::<Ver, D>),
+            get(get_block_by_payload_hash::<D>),
         )
-        .route("/block/{from}/{until}", get(get_block_range::<Ver, D>))
-        .route("/cert2/{height}", get(get_cert2::<Ver, D>))
+        .route("/block/{from}/{until}", get(get_block_range::<D>))
+        .route("/cert2/{height}", get(get_cert2::<D>))
         .route(
             "/vid/common/payload-hash/{hash}",
-            get(get_vid_common_by_payload_hash::<Ver, D>),
+            get(get_vid_common_by_payload_hash::<D>),
         )
-        .route("/vid/common/{height}", get(get_vid_common::<Ver, D>))
-        .route(
-            "/vid/common/{from}/{until}",
-            get(get_vid_common_range::<Ver, D>),
-        )
+        .route("/vid/common/{height}", get(get_vid_common::<D>))
+        .route("/vid/common/{from}/{until}", get(get_vid_common_range::<D>))
         .with_state(Arc::new(data_source))
 }
 
 /// Mounts `api` under `/availability` (the module prefix the old tide app registered) with the
 /// app-level healthcheck and the tide-style unknown-route error.
-pub(crate) fn app<Ver: StaticVersionType + 'static>(api: Router) -> Router {
+pub(crate) fn app(api: Router) -> Router {
     Router::new()
         .route("/healthcheck", get(healthcheck))
         .nest("/availability", api)
-        .fallback(no_route::<Ver>)
+        .fallback(no_route)
 }
 
 /// Bind `router` on a fresh port and serve it for the rest of the test process. Waits for the
@@ -320,10 +308,9 @@ pub(crate) async fn serve(router: Router) -> (u16, JoinHandle<()>) {
 
 /// Serve the availability fixture for `data_source` on a fresh port. Returns the port and the
 /// server task.
-pub(crate) async fn serve_availability<Ver, D>(_: Ver, data_source: D) -> (u16, JoinHandle<()>)
+pub(crate) async fn serve_availability<D>(data_source: D) -> (u16, JoinHandle<()>)
 where
-    Ver: StaticVersionType + 'static,
     D: AvailabilityDataSource<MockTypes> + Send + Sync + 'static,
 {
-    serve(app::<Ver>(availability_routes::<Ver, _>(data_source))).await
+    serve(app(availability_routes(data_source))).await
 }
