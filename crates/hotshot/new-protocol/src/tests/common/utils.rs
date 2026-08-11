@@ -25,6 +25,7 @@ use hotshot_testing::{
 };
 use hotshot_types::{
     PeerConnectInfo,
+    addr::NetAddr,
     data::{
         EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperse, VidDisperse2,
         VidDisperseShare2, ViewNumber, vid_commitment,
@@ -618,7 +619,7 @@ pub fn mock_membership_with_client(
 
 /// Per-epoch stake table schedule, by node index into the seed-indexed key
 /// space (`BLSPubKey::generated_from_seed_indexed([0u8; 32], i)`).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct StakeTableSchedule {
     /// Committee for the genesis epochs (1 and 2 at minimum).
     pub initial: Vec<usize>,
@@ -626,6 +627,11 @@ pub struct StakeTableSchedule {
     /// DA tables. `first_epoch` must be >= 3: epochs 1 and 2 are fixed at
     /// genesis by `set_first_epoch`.
     pub changes: Vec<(u64, Vec<usize>)>,
+    /// `(first_epoch, node, addr)` p2p address rotations applied to the
+    /// committees registered via `changes` for epochs >= `first_epoch`.
+    /// An override does not register a committee by itself, so `first_epoch`
+    /// must appear in `changes`.
+    pub addr_overrides: Vec<(u64, usize, NetAddr)>,
 }
 
 /// Like `mock_membership_with_client`, but with a per-epoch stake table
@@ -717,7 +723,25 @@ fn mock_membership_core(
     );
     if let Some((s, _)) = schedule {
         for (first_epoch, committee) in &s.changes {
-            let committee: Vec<_> = committee.iter().map(|&i| members[i].clone()).collect();
+            let committee: Vec<_> = committee
+                .iter()
+                .map(|&i| {
+                    let mut member = members[i].clone();
+                    if let Some((_, _, addr)) = s
+                        .addr_overrides
+                        .iter()
+                        .filter(|(e, n, _)| *n == i && e <= first_epoch)
+                        .max_by_key(|(e, ..)| *e)
+                    {
+                        member
+                            .connect_info
+                            .as_mut()
+                            .expect("scheduled members carry connect info")
+                            .p2p_addr = addr.clone();
+                    }
+                    member
+                })
+                .collect();
             membership.add_quorum_committee(EpochNumber::new(*first_epoch), committee.clone());
             membership.add_da_committee(EpochNumber::new(*first_epoch), committee);
         }

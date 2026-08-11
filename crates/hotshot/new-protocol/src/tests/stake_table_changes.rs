@@ -10,7 +10,9 @@
 //! scenarios would need a per-epoch-aware `TestData` (cert signers, VID
 //! recipients, leader keys) and are not covered here.
 
-use std::{collections::BTreeMap, time::Duration};
+use std::{collections::BTreeMap, net::Ipv4Addr, time::Duration};
+
+use hotshot_types::addr::NetAddr;
 
 use crate::tests::common::{
     runner::{NodeAction, NodeChange, TestRunner},
@@ -35,6 +37,7 @@ async fn validator_joins_at_epoch_boundary() {
         .stake_table_schedule(StakeTableSchedule {
             initial: vec![0, 1, 2, 3, 4],
             changes: vec![(3, vec![0, 1, 2, 3, 4, 5])],
+            ..Default::default()
         })
         .node_changes(vec![(
             17,
@@ -75,6 +78,7 @@ async fn validator_set_replaced_at_epoch_boundary() {
         .stake_table_schedule(StakeTableSchedule {
             initial: (0..10).collect(),
             changes: vec![(3, vec![0, 1, 2, 3, 4]), (4, vec![5, 6, 7, 8, 9])],
+            ..Default::default()
         })
         .build()
         .run()
@@ -98,6 +102,7 @@ async fn incoming_validator_restarts_before_replacement_boundary() {
         .stake_table_schedule(StakeTableSchedule {
             initial: (0..10).collect(),
             changes: vec![(3, vec![0, 1, 2, 3, 4]), (4, vec![5, 6, 7, 8, 9])],
+            ..Default::default()
         })
         .node_changes(vec![(
             35,
@@ -106,6 +111,44 @@ async fn incoming_validator_restarts_before_replacement_boundary() {
                 action: NodeAction::Restart,
             }],
         )])
+        .build()
+        .run()
+        .await
+        .unwrap();
+}
+
+/// 6 nodes, epoch_height=10; node 5 is a member of every epoch, but the
+/// epoch-3 stake table (blocks 21-30) registers a new p2p address for it.
+///
+/// Peers adopt the new address when they enter epoch 2: `apply_epoch`
+/// eagerly merges the next epoch's connect info, so crossing into epoch 2
+/// at block 11 already re-points node 5's peers at the epoch-3 address.
+/// Node 5 restarts bound to the new port at view 11; from then on it can
+/// only be reached via the rotated address. It leads views 17, 23, 29 and
+/// 35, every view is required to decide, and its post-restart decisions
+/// (target 20) must match the other nodes' chain.
+#[tokio::test(flavor = "multi_thread")]
+async fn validator_rotates_address_at_epoch_boundary() {
+    let port = test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
+    let new_addr = NetAddr::Inet(Ipv4Addr::LOCALHOST.into(), port);
+    TestRunner::builder()
+        .num_nodes(6)
+        .target_decisions(35)
+        .max_runtime(Duration::from_secs(500))
+        .epoch_height(10)
+        .stake_table_schedule(StakeTableSchedule {
+            initial: vec![0, 1, 2, 3, 4, 5],
+            changes: vec![(3, vec![0, 1, 2, 3, 4, 5])],
+            addr_overrides: vec![(3, 5, new_addr.clone())],
+        })
+        .node_changes(vec![(
+            11,
+            vec![NodeChange {
+                idx: 5,
+                action: NodeAction::RestartAt(new_addr),
+            }],
+        )])
+        .node_decision_targets(BTreeMap::from([(5, 20)]))
         .build()
         .run()
         .await
@@ -132,6 +175,7 @@ async fn validator_leaves_at_epoch_boundary() {
         .stake_table_schedule(StakeTableSchedule {
             initial: vec![0, 1, 2, 3, 4, 5],
             changes: vec![(3, vec![0, 1, 2, 3, 4])],
+            ..Default::default()
         })
         .node_decision_targets(BTreeMap::from([(5, 12)]))
         .build();

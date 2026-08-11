@@ -66,6 +66,10 @@ pub enum NodeAction {
     /// anchor and action records; otherwise it starts from genesis
     /// (blank state).
     Restart,
+    /// Like `Restart`, but rebind the node's cliquenet listener to the
+    /// given address. Other nodes must learn the new address through the
+    /// stake table (`StakeTableSchedule::addr_overrides`).
+    RestartAt(NetAddr),
     /// Start: bring a node that was initially offline into the network
     /// with a fresh coordinator from genesis.
     Start,
@@ -129,6 +133,13 @@ pub struct TestRunner {
     /// `num_nodes` are members of every epoch.  Incompatible with
     /// `down_nodes`: failed-view prediction assumes the full committee leads.
     stake_table_schedule: Option<StakeTableSchedule>,
+
+    /// Pairs of nodes that cannot connect to each other: both sides get an
+    /// unreachable address for their counterpart.  Order within a pair does
+    /// not matter.  Incompatible with `stake_table_schedule`, whose connect
+    /// infos would heal the partition.
+    #[builder(default)]
+    blocked_pairs: BTreeSet<(usize, usize)>,
 
     /// Per-node overrides of `target_decisions` for the completion check.
     /// A validator removed from the stake table stops deciding once its
@@ -313,6 +324,11 @@ impl TestRunner {
             "stake table schedules are incompatible with down_nodes: failed_views_from_down_nodes \
              assumes the full committee leads"
         );
+        assert!(
+            self.stake_table_schedule.is_none() || self.blocked_pairs.is_empty(),
+            "stake table schedules are incompatible with blocked_pairs: scheduled connect infos \
+             are applied at epoch changes and would heal the partition"
+        );
 
         self.node_storages = (0..self.num_nodes)
             .map(|_| TestStorage::default())
@@ -326,7 +342,7 @@ impl TestRunner {
         let mut cancels = HashMap::new();
 
         // Generate keys and addresses for all nodes.
-        let parties = (0..self.num_nodes)
+        let mut parties = (0..self.num_nodes)
             .map(|i| {
                 let (public_key, private_key) =
                     BLSPubKey::generated_from_seed_indexed([0u8; 32], i as u64);
@@ -345,6 +361,13 @@ impl TestRunner {
             })
             .collect();
 
+        // Nothing ever listens here; even if another test later reuses the
+        // port, the handshake fails on the unexpected peer key.
+        let unreachable_addr = NetAddr::Inet(
+            std::net::Ipv4Addr::LOCALHOST.into(),
+            test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available"),
+        );
+
         // Spawn one coordinator task per live node.  Each node gets its
         // own membership instance so they don't share internal state.
         for (i, (_, public_key, _)) in parties.iter().enumerate() {
@@ -355,7 +378,14 @@ impl TestRunner {
                 node_handles.push(None);
                 continue;
             }
-            let network = create_network(i, &parties, &self.upgrade_lock).await;
+            let network = create_network(
+                i,
+                &parties,
+                &self.blocked_pairs,
+                &unreachable_addr,
+                &self.upgrade_lock,
+            )
+            .await;
 
             let (membership, storage, client, external_events_tx) =
                 self.make_membership(*public_key, self.node_storages[i].clone(), &connect_infos);
@@ -473,8 +503,8 @@ impl TestRunner {
                             action = ?change.action,
                             "applying node change"
                         );
-                        match change.action {
-                            NodeAction::Restart | NodeAction::Start => {
+                        match &change.action {
+                            NodeAction::Restart | NodeAction::RestartAt(_) | NodeAction::Start => {
                                 if let Some(tx) = cancels.remove(&change.idx) {
                                     let (a, b) = oneshot::channel();
                                     if tx.send(a).is_ok() {
@@ -486,11 +516,20 @@ impl TestRunner {
                                     handle.abort();
                                     let _ = handle.await;
                                 }
+                                if let NodeAction::RestartAt(addr) = &change.action {
+                                    parties[change.idx].2 = addr.clone();
+                                }
                                 // Create a fresh coordinator; it resumes
                                 // from the persisted anchor when storage is
                                 // persistent, from genesis otherwise.
-                                let net =
-                                    create_network(change.idx, &parties, &self.upgrade_lock).await;
+                                let net = create_network(
+                                    change.idx,
+                                    &parties,
+                                    &self.blocked_pairs,
+                                    &unreachable_addr,
+                                    &self.upgrade_lock,
+                                )
+                                .await;
                                 if !self.persistent_storage {
                                     self.node_storages[change.idx] = TestStorage::default();
                                 }
@@ -664,16 +703,24 @@ impl TestRunner {
 async fn create_network(
     i: usize,
     parties: &[(Keypair, BLSPubKey, NetAddr)],
+    blocked_pairs: &BTreeSet<(usize, usize)>,
+    unreachable_addr: &NetAddr,
     lock: &UpgradeLock<TestTypes>,
 ) -> Cliquenet<TestTypes> {
     let peer_infos: Vec<(BLSPubKey, PeerConnectInfo)> = parties
         .iter()
-        .map(|(kp, pk, addr)| {
+        .enumerate()
+        .map(|(j, (kp, pk, addr))| {
+            let blocked = blocked_pairs.contains(&(i, j)) || blocked_pairs.contains(&(j, i));
             (
                 *pk,
                 PeerConnectInfo {
                     x25519_key: kp.public_key(),
-                    p2p_addr: addr.clone(),
+                    p2p_addr: if blocked {
+                        unreachable_addr.clone()
+                    } else {
+                        addr.clone()
+                    },
                 },
             )
         })
