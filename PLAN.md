@@ -142,7 +142,7 @@ stands for a whole subsystem.
       sits at a channel or `JoinSet::join_next`, and no branch discards a value it has already taken) and confirmed
       every coordinator-owned map is bounded by a GC scope; battery `tests::integration`, `tests::restarts`.
 - [x] coordinator:consensus-output: `NP/coordinator.rs` `process_consensus_output` and the per-output side effects -
-      swept at SWEEP_COMMIT - re-read after NP-5 pointed the view-change prefetch at `prefetch_drb_result`, and re-ran
+      swept at `f8cc068af94` - re-read after NP-5 pointed the view-change prefetch at `prefetch_drb_result`, and re-ran
       the enumeration of every DRB request site in the file: one prefetch, nine requests, each of the nine reached only
       when membership is unresolved. Earlier at `1872c2ee84e` a full read of all 20 output arms traced `da_payloads` and
       `payload_txn_bytes` from insertion to GC; that sweep produced NP-5.
@@ -181,7 +181,7 @@ stands for a whole subsystem.
 - [x] network: `NP/network.rs` `Cliquenet`/`Sender`/`apply_epoch`/`deserialize` - swept at `64c5cdc6d0a` - full read;
       confirmed sender authentication binds the declared signature key to the transport x25519 key, which is what fixes
       the envelope's trust classes.
-- [x] epoch: `NP/epoch.rs` `EpochManager` - swept at SWEEP_COMMIT - re-read after NP-5 split the speculative prefetch
+- [x] epoch: `NP/epoch.rs` `EpochManager` - swept at `f8cc068af94` - re-read after NP-5 split the speculative prefetch
       from the delivering request; battery `epoch::tests` pins that the prefetch goes quiet once the epoch is resolved,
       that it retries while unresolved, that a repeat request is always answered, and that concurrent requests still
       collapse to one task.

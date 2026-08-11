@@ -333,7 +333,7 @@ completed-epoch short-circuit. Closed.
 Changed: crates/hotshot/new-protocol/src/epoch.rs (new `prefetch_drb_result`, plus two tests),
 crates/hotshot/new-protocol/src/coordinator.rs (the view-change prefetch now calls it), PLAN.md, BACKLOG.md, JOURNAL.md.
 
-Checkpoint: pending
+Checkpoint: f8cc068af94844927d4dcb1711f13063462d8636
 
 Verification: the fix gives the two callers two methods instead of one shared guard, because they want different things:
 `prefetch_drb_result` is speculative and only wants the result to exist, so it is a no-op once the epoch is resolved and
