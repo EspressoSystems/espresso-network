@@ -72,9 +72,8 @@ pub mod v1 {
     pub const REWARD_STATE_V2_PATH_BY_COMMIT_ROUTE: &str =
         "/v1/reward-state-v2/commit/{commit}/{key}";
 
-    /// Mount point of the availability module. The base routes come from
-    /// `hotshot_query_service::availability::router`, which declares them relative to this
-    /// prefix; the `*_ROUTE` constants below spell out the resulting absolute paths.
+    /// Mount point of `hotshot_query_service::availability::router`; the `*_ROUTE` constants
+    /// below are the resulting absolute paths.
     pub const AVAILABILITY_PREFIX: &str = "/v1/availability";
 
     pub const NAMESPACE_PROOF_BY_HEIGHT_ROUTE: &str =
