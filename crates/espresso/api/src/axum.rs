@@ -843,6 +843,12 @@ where
             Err(e) => Err(ApiError::Internal(e)),
         }
     };
+    let status_keys = |State(state): State<S>| async move {
+        <S as v1::StatusApi>::keys(&state)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
 
     let config_hotshot = |State(state): State<S>| async move {
         <S as v1::ConfigApi>::hotshot_config(&state)
@@ -1780,6 +1786,7 @@ where
             get(status_time_since_last_decide),
         )
         .route(routes::v1::STATUS_METRICS_ROUTE, get(status_metrics))
+        .route(routes::v1::STATUS_KEYS_ROUTE, get(status_keys))
         // Config routes
         .route(routes::v1::CONFIG_HOTSHOT_ROUTE, get(config_hotshot))
         .route(routes::v1::CONFIG_ENV_ROUTE, get(config_env))

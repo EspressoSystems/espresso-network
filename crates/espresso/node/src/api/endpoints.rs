@@ -33,6 +33,7 @@ use hotshot_query_service::{
         self, MerklizedState, MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot,
     },
     node::{self, NodeDataSource},
+    status::{self, StatusDataSource},
 };
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
@@ -45,8 +46,9 @@ use tide_disco::{Api, Error as _, RequestParams, StatusCode, method::ReadState};
 use vbs::version::{StaticVersion, StaticVersionType};
 
 use super::data_source::{
-    CatchupDataSource, DatabaseMetadataSource, HotShotConfigDataSource, NodeStateDataSource,
-    PruningDataSource, StakeTableDataSource, StateSignatureDataSource, SubmitDataSource,
+    CatchupDataSource, DatabaseMetadataSource, HotShotConfigDataSource, NodeKeysDataSource,
+    NodeStateDataSource, PruningDataSource, StakeTableDataSource, StateSignatureDataSource,
+    SubmitDataSource,
 };
 use crate::{
     SeqTypes, SequencerApiVersion, SequencerPersistence, api::RewardMerkleTreeDataSource,
@@ -504,6 +506,29 @@ where
         total_supply_l1,
         total_reward_distributed,
     ))
+}
+
+pub(super) fn status<S>(
+    api_ver: semver::Version,
+) -> Result<Api<S, status::Error, StaticVersion<0, 1>>>
+where
+    S: 'static + Send + Sync + ReadState,
+    <S as ReadState>::State: Send + Sync + StatusDataSource + NodeKeysDataSource,
+{
+    // Extend the base API
+    let mut options = status::Options::default();
+    let extension = toml::from_str(include_str!("../../api/status.toml"))?;
+    options.extensions.push(extension);
+
+    // Create the base API with our extensions
+    let mut api = status::define_api::<S, _>(&options, SequencerApiVersion::instance(), api_ver)?;
+
+    // Tack on the application logic
+    api.get("keys", |_, state| {
+        async move { Ok(state.node_public_keys().await) }.boxed()
+    })?;
+
+    Ok(api)
 }
 
 pub(super) fn node<S>(api_ver: semver::Version) -> Result<Api<S, node::Error, StaticVersion<0, 1>>>

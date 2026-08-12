@@ -1,0 +1,11 @@
+# Extensions to the status API defined in `hotshot-query-service/api/status.toml`.
+
+[route.keys]
+PATH = ["/keys"]
+DOC = """
+Get this node's public keys (Ethereum account, BLS, Schnorr, x25519).
+
+The BLS and Schnorr keys are formatted as in stake-table responses; the x25519 key is tagged
+base64. The Ethereum account is taken from the node's stake-table registration and is null if the
+node is not registered.
+"""
