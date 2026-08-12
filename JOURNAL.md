@@ -535,7 +535,7 @@ Task: final iteration. Tidy the ledger and hand off; the run ends out of budget,
 Changed: JOURNAL.md (this entry and the SALVAGE entry above it). BACKLOG.md needed no tidying: Now is empty, NP-7 sits
 in Next and NP-8, NP-9 in Later, each with an acceptance check, and nothing stale is left behind.
 
-Checkpoint: pending
+Checkpoint: 2fa0c596b3245c4f6d9f0fd3007284dbc08cfd6d
 
 Verification: Verify command green on a quiet machine - 202 tests run, 202 passed, 15 skipped, exit 0. Two other
 failures seen during iterations 9 and 10 were both wall-clock timeouts from running suites concurrently, and both were
