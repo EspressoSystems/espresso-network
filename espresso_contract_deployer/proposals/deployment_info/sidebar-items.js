@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["DECAF_TOML","HOODI_TOML","MAINNET_TOML"],"fn":["deployment_info","parse_deployment_info"],"struct":["DeploymentInfo","RawContractSection","RawDeploymentInfo","RawMember","RawTimelockSection","TimelockInfo"]};
+window.SIDEBAR_ITEMS = {"constant":["DECAF_TOML","HOODI_TOML","MAINNET_TOML"],"enum":["Multisig"],"fn":["deployment_info","member_address","member_addresses","member_name","member_names","parse_deployment_info"],"struct":["DeploymentInfo","Member","RawContractSection","RawDeploymentInfo","RawTimelockSection","TimelockInfo"]};
