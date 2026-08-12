@@ -1,6 +1,9 @@
+use std::future::Future;
+
 use clap::Parser;
 use espresso_telemetry as telemetry;
 use espresso_types::traits::NullEventConsumer;
+use espresso_utils::fatal::{self, Subscriber};
 use futures::future::FutureExt;
 use hotshot_types::traits::metrics::NoMetrics;
 use url::Url;
@@ -128,6 +131,10 @@ async fn run_with_storage<S>(
 where
     S: DataSourceOptions,
 {
+    // Subscribe before any library task can report a fatal failure; early
+    // reports are buffered until `wait_for_exit` observes them.
+    let mut fatal = fatal::subscribe();
+
     let mut ctx = init_with_storage(genesis, modules, opt, storage_opt, public_node_config).await?;
 
     // The API setup deposited the prometheus Registry into `telemetry::REGISTRY`
@@ -140,12 +147,35 @@ where
     // Start doing consensus.
     ctx.start_consensus().await;
 
-    tokio::select! {
-        () = ctx.join() => tracing::warn!("consensus stopped; exiting"),
-        _ = espresso_utils::shutdown::wait_for_shutdown_signal() => ctx.shut_down().await,
+    match wait_for_exit(ctx.join(), &mut fatal).await {
+        Exit::ConsensusStopped => tracing::warn!("consensus stopped; exiting"),
+        Exit::ShutdownSignal => ctx.shut_down().await,
+        Exit::Fatal(err) => {
+            // `main`'s `Err` prints after the telemetry flush, so it never reaches OTel.
+            tracing::error!(%err, "node exiting on an unrecoverable failure");
+            // Skip graceful shutdown: it can hang while consensus is wedged.
+            return Err(err);
+        },
     }
 
     Ok(())
+}
+
+/// Why the node stopped waiting on consensus.
+enum Exit {
+    ConsensusStopped,
+    ShutdownSignal,
+    /// An unrecoverable failure was reported from a detached task.
+    Fatal(anyhow::Error),
+}
+
+/// Wait for consensus to stop, a shutdown signal, or a reported fatal failure.
+async fn wait_for_exit(consensus: impl Future<Output = ()>, fatal: &mut Subscriber) -> Exit {
+    tokio::select! {
+        () = consensus => Exit::ConsensusStopped,
+        _ = espresso_utils::shutdown::wait_for_shutdown_signal() => Exit::ShutdownSignal,
+        err = fatal.failure() => Exit::Fatal(err),
+    }
 }
 
 pub async fn init_with_storage<S>(
@@ -294,7 +324,10 @@ where
 
 #[cfg(test)]
 mod test {
-    use std::time::Duration;
+    use std::{
+        future::{pending, ready},
+        time::Duration,
+    };
 
     use espresso_types::{
         PubKey, Upgrade, UpgradeType,
@@ -315,6 +348,28 @@ mod test {
         genesis::{L1Finalized, StakeTableConfig},
         persistence::fs,
     };
+
+    /// A reported fatal failure must end the wait on consensus with an error, which
+    /// `run_with_storage` propagates so the process exits nonzero. This is the node-level
+    /// counterpart of the library-level `test_retry_reports_exhausted_budget` in
+    /// `espresso-types`, whose error a bare `tokio::spawn` would otherwise swallow.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_fatal_report_terminates_node() {
+        let mut fatal = fatal::subscribe();
+
+        let exit = wait_for_exit(ready(()), &mut fatal).await;
+        assert!(matches!(exit, Exit::ConsensusStopped));
+
+        // `pending()` models the incident: consensus wedged, never joining.
+        fatal::report("stake table catchup dead");
+        let Exit::Fatal(err) = wait_for_exit(pending(), &mut fatal).await else {
+            panic!("expected fatal exit");
+        };
+        assert!(
+            err.to_string().contains("stake table catchup dead"),
+            "{err}"
+        );
+    }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_startup_before_orchestrator() {

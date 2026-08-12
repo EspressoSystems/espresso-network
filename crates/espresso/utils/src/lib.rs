@@ -22,6 +22,8 @@ use url::Url;
 pub mod build_info;
 pub mod env_compat;
 #[cfg(feature = "full")]
+pub mod fatal;
+#[cfg(feature = "full")]
 pub mod logging;
 pub mod ser;
 #[cfg(feature = "full")]

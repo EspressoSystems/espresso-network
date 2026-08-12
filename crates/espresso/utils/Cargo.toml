@@ -23,6 +23,7 @@ full = [
     "dep:tracing-subscriber",
     "dep:url",
     "tokio/signal",
+    "tokio/sync",
 ]
 testing = []
 
@@ -49,6 +50,7 @@ vergen-gitcl = { workspace = true }
 
 [dev-dependencies]
 test-log = { workspace = true }
+tokio = { workspace = true }
 
 [lints]
 workspace = true

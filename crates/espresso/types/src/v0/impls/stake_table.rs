@@ -1420,7 +1420,7 @@ impl Fetcher {
                         Ok(init_block) => break init_block.to::<u64>(),
                         Err(err) => {
                             if start.elapsed() >= max_retry_duration {
-                                return Err(StakeTableError::L1RetryBudgetExhausted(format!(
+                                return Err(l1_retry_budget_exhausted(format!(
                                     "Failed to retrieve initial block after `{}`: {err}",
                                     format_duration(max_retry_duration)
                                 )));
@@ -1809,6 +1809,16 @@ impl Fetcher {
     }
 }
 
+/// Exhausting an L1 retry budget leaves the node unable to follow the stake table, so it cannot
+/// participate in consensus. Report the failure as fatal (the node binary subscribes and exits;
+/// tests and CLIs have no subscriber and only see the returned error) and hand the error to the
+/// caller.
+#[cfg(feature = "node")]
+fn l1_retry_budget_exhausted(reason: String) -> StakeTableError {
+    espresso_utils::fatal::report(reason.as_str());
+    StakeTableError::L1RetryBudgetExhausted(reason)
+}
+
 /// Retry `operation` until it succeeds or `max_duration` elapses.
 ///
 /// Exhausting the budget is terminal: the node cannot participate in consensus without the stake
@@ -1830,7 +1840,7 @@ where
             Ok(result) => return Ok(result),
             Err(err) => {
                 if start.elapsed() >= max_duration {
-                    return Err(StakeTableError::L1RetryBudgetExhausted(format!(
+                    return Err(l1_retry_budget_exhausted(format!(
                         r#"
                     Failed to complete operation `{operation_name}` after `{}`.
                     error: {err}
@@ -4831,6 +4841,31 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("rpc is down"), "{msg}");
         assert!(msg.contains("ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE"), "{msg}");
+    }
+
+    /// An exhausted budget must reach the process-wide fatal subscriber, which is how the node
+    /// binary learns to exit. Library callers still only see the returned error.
+    #[test_log::test(tokio::test)]
+    async fn test_retry_budget_exhaustion_reports_fatal() {
+        let mut fatal = espresso_utils::fatal::subscribe();
+
+        let err = retry(
+            Duration::ZERO,
+            Duration::ZERO,
+            "fatal report marker",
+            || Box::pin(async { Err::<(), &str>("rpc is down") }),
+        )
+        .await
+        .unwrap_err();
+        assert_matches!(err, StakeTableError::L1RetryBudgetExhausted(_));
+
+        // Other tests in this binary also exhaust retry budgets; skip their reports.
+        loop {
+            let reported = fatal.failure().await.to_string();
+            if reported.contains("fatal report marker") {
+                break;
+            }
+        }
     }
 }
 
