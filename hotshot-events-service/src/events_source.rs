@@ -1,15 +1,18 @@
 use std::{marker::PhantomData, sync::Arc};
 
 use async_broadcast::{InactiveReceiver, Sender as BroadcastSender, broadcast};
-use async_lock::RwLock;
 use async_trait::async_trait;
-use futures::stream::{BoxStream, Stream, StreamExt};
+use futures::{
+    future::BoxFuture,
+    stream::{BoxStream, Stream, StreamExt},
+};
 use hotshot_types::{
     PeerConfig,
     event::{Event, EventType, LegacyEvent},
     traits::node_implementation::NodeType,
 };
 use serde::{Deserialize, Serialize};
+use tide_disco::method::ReadState;
 const RETAINED_EVENTS_COUNT: usize = 4096;
 
 #[async_trait]
@@ -210,29 +213,14 @@ impl<Types: NodeType> EventsStreamer<Types> {
     }
 }
 
-/// Serving an [`EventsSource`] guarded by a lock: each request takes the read lock only for as
-/// long as it needs to subscribe or snapshot.
 #[async_trait]
-impl<Types, T> EventsSource<Types> for Arc<RwLock<T>>
-where
-    Types: NodeType,
-    T: EventsSource<Types> + Send + Sync,
-{
-    type EventStream = T::EventStream;
-    type LegacyEventStream = T::LegacyEventStream;
+impl<Types: NodeType> ReadState for EventsStreamer<Types> {
+    type State = Self;
 
-    async fn get_event_stream(&self, filter: Option<EventFilterSet<Types>>) -> Self::EventStream {
-        self.read().await.get_event_stream(filter).await
-    }
-
-    async fn get_legacy_event_stream(
+    async fn read<T>(
         &self,
-        filter: Option<EventFilterSet<Types>>,
-    ) -> Self::LegacyEventStream {
-        self.read().await.get_legacy_event_stream(filter).await
-    }
-
-    async fn get_startup_info(&self) -> StartupInfo<Types> {
-        self.read().await.get_startup_info().await
+        op: impl Send + for<'a> FnOnce(&'a Self::State) -> BoxFuture<'a, T> + 'async_trait,
+    ) -> T {
+        op(self).await
     }
 }

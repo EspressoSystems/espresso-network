@@ -981,8 +981,8 @@ pub mod testing {
         network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
-        Event, FeeAccount, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction, Upgrade,
-        UpgradeMap, UpgradeMode,
+        EpochVersion, Event, FeeAccount, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction,
+        Upgrade, UpgradeMap, UpgradeMode,
         eth_signature_key::EthKeyPair,
         v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
     };
@@ -1020,7 +1020,7 @@ pub mod testing {
     use staking_cli::demo::{DelegationConfig, StakingKeySet, StakingTransactions};
     use test_utils::reserve_tcp_port;
     use tokio::{spawn, time::timeout};
-    use vbs::version::Version;
+    use vbs::version::{StaticVersionType, Version};
     use versions::EPOCH_VERSION;
 
     use super::*;
@@ -1093,14 +1093,20 @@ pub mod testing {
             NUM_NODES,
         );
 
-        // Serve the builder APIs
-        let router = Arc::clone(&global_state).into_router();
-        http_wire::spawn_serve(
-            &format!("http://0.0.0.0:{port}")
-                .parse::<Url>()
-                .expect("Failed to parse builder listener"),
-            router,
-        );
+        // Create and spawn the tide-disco app to serve the builder APIs
+        let app = Arc::clone(&global_state)
+            .into_app()
+            .expect("Failed to create builder tide-disco app");
+
+        spawn(async move {
+            app.serve(
+                format!("http://0.0.0.0:{port}")
+                    .parse::<Url>()
+                    .expect("Failed to parse builder listener"),
+                EpochVersion::instance(),
+            )
+            .await
+        });
 
         // Pass on the builder task to be injected in the testing harness
         (Box::new(LegacyBuilderImplementation { global_state }), url)

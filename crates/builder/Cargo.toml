@@ -13,20 +13,25 @@ async-lock = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }
 committable = { workspace = true }
+disco-types = { workspace = true }
 espresso-node = { workspace = true, default-features = false }
 espresso-types = { workspace = true, features = ["node"] }
 espresso-utils = { workspace = true, features = ["full"] }
 futures = { workspace = true }
 hotshot = { workspace = true }
-hotshot-builder-api = { workspace = true, features = ["server"] }
+hotshot-builder-api = { workspace = true }
 hotshot-builder-legacy = { workspace = true }
 hotshot-builder-shared = { workspace = true }
-hotshot-events-service = { workspace = true, features = ["server"] }
+hotshot-events-service = { workspace = true }
 hotshot-example-types = { workspace = true }
 hotshot-state-prover = { workspace = true }
 hotshot-types = { workspace = true }
 http-client = { workspace = true }
+http-wire = { workspace = true, features = ["server"] }
 rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tagged-base64 = { workspace = true }
 test-utils = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
@@ -40,6 +45,8 @@ espresso-node = { workspace = true, default-features = false, features = ["testi
 jf-signature = { workspace = true }
 tempfile = { workspace = true }
 test-log = { workspace = true }
+tide-disco = { workspace = true }
+tower = { workspace = true, features = ["util"] }
 
 [lints]
 workspace = true

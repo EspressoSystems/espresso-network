@@ -1,0 +1,108 @@
+# Copyright (c) 2024 Espresso Systems (espressosys.com)
+# This file is part of the HotShot Builder Protocol.
+#
+# MIT License
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+[meta]
+NAME = "hs-builder-get"
+DESCRIPTION = ""
+FORMAT_VERSION = "0.1.0"
+
+[route.available_blocks]
+PATH = ["availableblocks/:parent_hash/:view_number/:sender/:signature"]
+":parent_hash" = "TaggedBase64"
+":view_number" = "Integer"
+":sender" = "TaggedBase64"
+":signature" = "TaggedBase64"
+DOC = """
+Get descriptions for all block candidates based on a specific parent block.
+
+Returns
+```
+[
+    "block_metadata": {
+        "block_hash":  TaggedBase64,
+        "block_size":  integer,
+        "offered_fee": integer,
+    },
+]
+```
+"""
+
+[route.claim_block]
+PATH = ["claimblock/:block_hash/:view_number/:sender/:signature"]
+":block_hash" = "TaggedBase64"
+":view_number" = "Integer"
+":sender" = "TaggedBase64"
+":signature" = "TaggedBase64"
+DOC = """
+Get the specified block candidate.
+
+Returns application-specific encoded transactions type
+"""
+
+[route.claim_block_with_num_nodes]
+PATH = [
+    "claimblockwithnumnodes/:block_hash/:view_number/:sender/:signature/:num_nodes",
+]
+":block_hash" = "TaggedBase64"
+":view_number" = "Integer"
+":sender" = "TaggedBase64"
+":signature" = "TaggedBase64"
+":num_nodes" = "Integer"
+DOC = """
+Get the specified block candidate and provide the number of nodes.
+
+Returns application-specific encoded transactions type
+"""
+
+[route.claim_header_input]
+PATH = ["claimheaderinput/:block_hash/:view_number/:sender/:signature"]
+":block_hash" = "TaggedBase64"
+":view_number" = "Integer"
+":sender" = "TaggedBase64"
+":signature" = "TaggedBase64"
+DOC = """
+Get the specified block candidate.
+
+Returns application-specific block header type
+"""
+
+
+[route.claim_header_input_v2]
+PATH = ["claimheaderinput/v2/:block_hash/:view_number/:sender/:signature"]
+":block_hash" = "TaggedBase64"
+":view_number" = "Integer"
+":sender" = "TaggedBase64"
+":signature" = "TaggedBase64"
+DOC = """
+Get the specified block candidate.
+
+Returns application-specific block header type
+"""
+
+[route.builder_address]
+PATH = ["builderaddress"]
+DOC = """
+Get the builder's address.
+
+Returns the builder's public key
+"""

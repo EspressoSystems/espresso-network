@@ -18,7 +18,7 @@ use async_broadcast::{Sender, broadcast};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
-use futures::{Stream, StreamExt};
+use futures::{Stream, StreamExt, future::BoxFuture};
 use hotshot::{
     traits::BlockPayload,
     types::{Event, EventType, SignatureKey},
@@ -27,12 +27,12 @@ use hotshot_builder_api::{
     v0_1::{
         self,
         block_info::{AvailableBlockData, AvailableBlockInfo},
-        builder::BuildError,
-        router,
+        builder::{BuildError, Error, Options},
     },
     v0_2::block_info::AvailableBlockHeaderInputV1,
 };
 use hotshot_types::{
+    constants::LEGACY_BUILDER_MODULE,
     data::VidCommitment,
     traits::{
         block_contents::BlockHeader, node_implementation::NodeType,
@@ -41,13 +41,11 @@ use hotshot_types::{
     utils::BuilderCommitment,
 };
 use lru::LruCache;
+use tide_disco::{App, Url, method::ReadState};
 use tokio::spawn;
-use url::Url;
+use vbs::version::StaticVersionType;
 
-use super::{
-    BlockEntry, BuilderTask, TestBuilderImplementation, build_block, builder_source_router,
-    run_builder_source,
-};
+use super::{BlockEntry, BuilderTask, TestBuilderImplementation, build_block, run_builder_source};
 use crate::test_builder::BuilderChange;
 
 pub struct SimpleBuilderImplementation;
@@ -120,6 +118,18 @@ pub struct SimpleBuilderSource<TYPES: NodeType> {
 }
 
 #[async_trait]
+impl<TYPES: NodeType> ReadState for SimpleBuilderSource<TYPES> {
+    type State = Self;
+
+    async fn read<T>(
+        &self,
+        op: impl Send + for<'a> FnOnce(&'a Self::State) -> BoxFuture<'a, T> + 'async_trait,
+    ) -> T {
+        op(self).await
+    }
+}
+
+#[async_trait]
 impl<TYPES: NodeType> v0_1::data_source::BuilderDataSource<TYPES> for SimpleBuilderSource<TYPES>
 where
     <TYPES as NodeType>::InstanceState: Default,
@@ -133,19 +143,23 @@ where
     ) -> Result<Vec<AvailableBlockInfo<TYPES>>, BuildError> {
         let transactions = self
             .transactions
-            .read()
-            .await
-            .values()
-            .filter(|txn| {
-                // We want transactions that are either unclaimed, or claimed long ago
-                // and thus probably not included, or they would've been decided on
-                // already and removed from the queue
-                txn.claimed
-                    .map(|claim_time| claim_time.elapsed() > Duration::from_secs(30))
-                    .unwrap_or(true)
+            .read(|txns| {
+                Box::pin(async {
+                    txns.values()
+                        .filter(|txn| {
+                            // We want transactions that are either unclaimed, or claimed long ago
+                            // and thus probably not included, or they would've been decided on
+                            // already and removed from the queue
+                            txn.claimed
+                                .map(|claim_time| claim_time.elapsed() > Duration::from_secs(30))
+                                .unwrap_or(true)
+                        })
+                        .cloned()
+                        .map(|txn| txn.transaction)
+                        .collect::<Vec<TYPES::Transaction>>()
+                })
             })
-            .map(|txn| txn.transaction.clone())
-            .collect::<Vec<TYPES::Transaction>>();
+            .await;
 
         if transactions.is_empty() {
             // We don't want to return an empty block if we have no transactions, as we would end up
@@ -241,7 +255,17 @@ impl<TYPES: NodeType> SimpleBuilderSource<TYPES> {
     where
         <TYPES as NodeType>::InstanceState: Default,
     {
-        router::serve(&url, builder_source_router::<TYPES, Self>(self));
+        let builder_api_0_1 = hotshot_builder_api::v0_1::builder::define_api::<
+            SimpleBuilderSource<TYPES>,
+            TYPES,
+        >(&Options::default())
+        .expect("Failed to construct the builder API");
+
+        let mut app: App<SimpleBuilderSource<TYPES>, Error> = App::with_state(self);
+        app.register_module::<Error, _>(LEGACY_BUILDER_MODULE, builder_api_0_1)
+            .expect("Failed to register builder API 0.1");
+
+        spawn(app.serve(url, hotshot_builder_api::v0_1::Version::instance()));
     }
 }
 

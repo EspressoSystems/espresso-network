@@ -16,14 +16,14 @@ mod tests {
     };
     use http_client::{Client, Url};
     use test_utils::reserve_tcp_port;
+    use tide_disco::App;
     use tokio::{spawn, time::sleep};
     use tracing_test::traced_test;
-    use vbs::version::StaticVersion;
+    use vbs::version::{StaticVersion, StaticVersionType};
 
-    use crate::{
-        events::{self, Error},
-        events_source::{EventConsumer, EventsStreamer, StartupInfo},
-    };
+    //use crate::fetch::Fetch;
+    use crate::events::{Error, Options, define_api};
+    use crate::events_source::{EventConsumer, EventsStreamer, StartupInfo}; // EventsUpdater};
 
     // return a empty transaction event
     fn generate_event<Types: NodeType>(view_number: u64) -> Event<Types> {
@@ -50,13 +50,19 @@ mod tests {
         )));
 
         // Start the web server.
-        let router = events::app(axum::Router::new().nest(
-            "/hotshot_events",
-            events::legacy_events_router::<TestTypes, _, StaticVersion<0, 1>>(
-                events_streamer.clone(),
-            ),
-        ));
-        events::serve(&api_url, router);
+        let mut app = App::<_, Error>::with_state(events_streamer.clone());
+
+        let hotshot_events_api = define_api::<
+            Arc<RwLock<EventsStreamer<TestTypes>>>,
+            TestTypes,
+            StaticVersion<0, 1>,
+        >(&Options::default(), "0.0.1".parse().unwrap())
+        .expect("Failed to define hotshot eventsAPI");
+
+        app.register_module("hotshot_events", hotshot_events_api)
+            .expect("Failed to register hotshot events API");
+
+        spawn(app.serve(api_url, StaticVersion::<0, 1>::instance()));
         let total_count = 5;
         let send_handle = spawn(async move {
             let mut send_count = 0;
@@ -105,13 +111,19 @@ mod tests {
         )));
 
         // Start the web server.
-        let router = events::app(axum::Router::new().nest(
-            "/api",
-            events::legacy_events_router::<TestTypes, _, StaticVersion<0, 1>>(
-                events_streamer.clone(),
-            ),
-        ));
-        events::serve(&api_url, router);
+        let mut app = App::<_, Error>::with_state(events_streamer.clone());
+
+        let hotshot_events_api = define_api::<
+            Arc<RwLock<EventsStreamer<TestTypes>>>,
+            TestTypes,
+            StaticVersion<0, 1>,
+        >(&Options::default(), "0.0.1".parse().unwrap())
+        .expect("Failed to define hotshot eventsAPI");
+
+        app.register_module("api", hotshot_events_api)
+            .expect("Failed to register hotshot events API");
+
+        spawn(app.serve(api_url.clone(), StaticVersion::<0, 1>::instance()));
 
         let client = Client::<Error, StaticVersion<0, 1>>::new(
             format!("http://localhost:{port}/api").parse().unwrap(),
@@ -144,11 +156,19 @@ mod tests {
         )));
 
         // Start the web server.
-        let router = events::app(axum::Router::new().nest(
-            "/hotshot_events",
-            events::events_router::<TestTypes, _, StaticVersion<0, 1>>(events_streamer.clone()),
-        ));
-        events::serve(&api_url, router);
+        let mut app = App::<_, Error>::with_state(events_streamer.clone());
+
+        let hotshot_events_api = define_api::<
+            Arc<RwLock<EventsStreamer<TestTypes>>>,
+            TestTypes,
+            StaticVersion<0, 1>,
+        >(&Options::default(), "1.0.0".parse().unwrap())
+        .expect("Failed to define hotshot eventsAPI");
+
+        app.register_module("hotshot_events", hotshot_events_api)
+            .expect("Failed to register hotshot events API");
+
+        spawn(app.serve(api_url, StaticVersion::<0, 1>::instance()));
 
         // Start Client 1
         let client_1 = Client::<Error, StaticVersion<0, 1>>::new(
