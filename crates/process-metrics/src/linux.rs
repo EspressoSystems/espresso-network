@@ -420,9 +420,9 @@ impl LinuxMetrics {
         // `cgroup_memory_max_bytes` is set once at startup in `new()`.
     }
 
-    /// Detects a stalled read path: unread bytes pile up in the receive buffer until TCP
-    /// advertises a zero window and peers' writes block, while the process stays up, idle on
-    /// CPU, and still sending. `owned` scopes the netns-wide tables to our sockets.
+    /// Whether this process is draining its sockets, so a networking problem can be attributed
+    /// to the application or ruled out before an operator is asked to check their infrastructure.
+    /// `owned` scopes the netns-wide tables to our sockets.
     fn sample_tcp(&self, p: &Process, owned: &HashSet<u64>) {
         let tcp4 = read_or_debug("/proc/self/net/tcp", || p.tcp()).unwrap_or_default();
         let tcp6 = read_or_debug("/proc/self/net/tcp6", || p.tcp6()).unwrap_or_default();

@@ -34,29 +34,18 @@ detected once at startup and logged at `info`.
 
 #### TCP socket queues
 
-Covers the failure class where a process is up and idle on CPU but not processing. When it stops reading its sockets,
-`rx_queue` climbs, the receive buffer fills, TCP advertises a zero window, and peers' writes block. Its own sends keep
-working, so nothing else exported here shows it.
+Shows whether the process is draining its sockets. `rx_queue` is what the kernel has received but the application has
+not read yet. The purpose is to attribute a networking problem to the application or rule it out before asking an
+operator to check their own infrastructure.
 
 `/proc/self/net/tcp{,6}` is netns-wide, so each sample walks `/proc/self/fd` for socket inodes and keeps only matching
 entries. `Established` only: a listener reuses the columns for the accept backlog.
 
 Limits:
 
-- Mixes cliquenet peers with postgres, L1 RPC and query-API sockets. Localises the layer, not the connection; follow up
-  with `ss` on the host.
-- Send-side is noisy: serving a slow HTTP client shows a large `tx_queue` in normal operation. Alert on receive only.
-- Stalls shorter than the scrape interval can be missed: 5s samples, last-write-wins gauges.
-- Cost: one `readlink` per fd, plus an O(netns sockets) table parse under a kernel lock. Measurable only at tens of
-  thousands of sockets.
-
-Pairs with `consensus_coordinator_event_queue_len`:
-
-| internal queue | recv queue | reading                                         |
-| -------------- | ---------- | ----------------------------------------------- |
-| high           | high       | draining stopped, backpressure reached the wire |
-| high           | ~0         | internal bottleneck, sockets still drained      |
-| ~0             | high       | read path itself is stuck                       |
+- Aggregate over every TCP socket the process holds, with no breakdown by peer or purpose. It answers whether the
+  process is reading, not which connection is affected. Use `ss` on the host for that.
+- Gauges, sampled every 5s and last-write-wins, so a stall shorter than the scrape interval can be missed.
 
 ### Host
 
