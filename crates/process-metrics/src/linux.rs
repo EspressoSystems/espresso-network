@@ -1,9 +1,10 @@
-use std::{fs, io::BufReader, path::Path};
+use std::{collections::HashSet, fs, io::BufReader, path::Path};
 
 use hotshot_types::traits::metrics::{Counter, Gauge, Metrics};
 use procfs::{
     Current, CurrentSI, KernelStats, LoadAverage, PressureRecord, get_pressure,
-    process::{Io, Process},
+    net::TcpState,
+    process::{FDInfo, FDTarget, Io, Process},
 };
 
 const CGROUP_ROOT: &str = "/sys/fs/cgroup";
@@ -169,6 +170,12 @@ pub struct LinuxMetrics {
 
     env: Option<Env>,
     prev: Previous,
+
+    tcp_recv_queue_max_bytes: Box<dyn Gauge>,
+    tcp_recv_queue_total_bytes: Box<dyn Gauge>,
+    tcp_send_queue_max_bytes: Box<dyn Gauge>,
+    tcp_send_queue_total_bytes: Box<dyn Gauge>,
+    tcp_established_sockets: Box<dyn Gauge>,
 }
 
 impl LinuxMetrics {
@@ -245,6 +252,17 @@ impl LinuxMetrics {
 
             env: None,
             prev: Previous::default(),
+
+            tcp_recv_queue_max_bytes: metrics
+                .create_gauge("process_tcp_recv_queue_max_bytes".into(), bytes()),
+            tcp_recv_queue_total_bytes: metrics
+                .create_gauge("process_tcp_recv_queue_total_bytes".into(), bytes()),
+            tcp_send_queue_max_bytes: metrics
+                .create_gauge("process_tcp_send_queue_max_bytes".into(), bytes()),
+            tcp_send_queue_total_bytes: metrics
+                .create_gauge("process_tcp_send_queue_total_bytes".into(), bytes()),
+            tcp_established_sockets: metrics
+                .create_gauge("process_tcp_established_sockets".into(), None),
         }
     }
 
@@ -269,7 +287,6 @@ impl LinuxMetrics {
             return;
         };
 
-        self.open_fds.set(count_dir_entries("/proc/self/fd"));
         self.threads.set(count_dir_entries("/proc/self/task"));
 
         if let Some(load) = read_or_debug("loadavg", LoadAverage::current) {
@@ -297,6 +314,11 @@ impl LinuxMetrics {
                     .add(self.prev.read_bytes.observe(read_bytes));
                 self.process_write_bytes_total
                     .add(self.prev.write_bytes.observe(write_bytes));
+            }
+
+            if let Some((fd_count, sockets)) = own_socket_inodes(&p) {
+                self.open_fds.set(fd_count);
+                self.sample_tcp(&p, &sockets);
             }
         }
 
@@ -397,10 +419,78 @@ impl LinuxMetrics {
         }
         // `cgroup_memory_max_bytes` is set once at startup in `new()`.
     }
+
+    /// Whether this process is draining its sockets, so a networking problem can be attributed
+    /// to the application or ruled out before an operator is asked to check their infrastructure.
+    /// `owned` scopes the netns-wide tables to our sockets.
+    fn sample_tcp(&self, p: &Process, owned: &HashSet<u64>) {
+        let tcp4 = read_or_debug("/proc/self/net/tcp", || p.tcp()).unwrap_or_default();
+        let tcp6 = read_or_debug("/proc/self/net/tcp6", || p.tcp6()).unwrap_or_default();
+        let queues = aggregate_tcp(
+            tcp4.into_iter()
+                .chain(tcp6)
+                .map(|e| (e.state, e.rx_queue, e.tx_queue, e.inode)),
+            owned,
+        );
+        self.tcp_recv_queue_max_bytes.set(queues.recv_max as usize);
+        self.tcp_recv_queue_total_bytes
+            .set(queues.recv_total as usize);
+        self.tcp_send_queue_max_bytes.set(queues.send_max as usize);
+        self.tcp_send_queue_total_bytes
+            .set(queues.send_total as usize);
+        self.tcp_established_sockets.set(queues.sockets);
+    }
 }
 
 fn milli(v: f32) -> usize {
     (v * 1000.0).max(0.0) as usize
+}
+
+/// One walk of `/proc/self/fd`: total count for `open_fds`, socket inodes for `sample_tcp`.
+fn own_socket_inodes(p: &Process) -> Option<(usize, HashSet<u64>)> {
+    let fds = read_or_debug("/proc/self/fd", || p.fd())?;
+    let mut total = 0;
+    let mut sockets = HashSet::new();
+    for fd in fds {
+        total += 1;
+        if let Ok(FDInfo {
+            target: FDTarget::Socket(inode),
+            ..
+        }) = fd
+        {
+            sockets.insert(inode);
+        }
+    }
+    Some((total, sockets))
+}
+
+#[derive(Debug, Default)]
+struct TcpQueues {
+    recv_max: u32,
+    recv_total: u64,
+    send_max: u32,
+    send_total: u64,
+    sockets: usize,
+}
+
+/// Tuples rather than `TcpNetEntry`: that type is `#[non_exhaustive]`, so tests can't build one.
+fn aggregate_tcp(
+    entries: impl Iterator<Item = (TcpState, u32, u32, u64)>,
+    owned: &HashSet<u64>,
+) -> TcpQueues {
+    let mut out = TcpQueues::default();
+    for (state, rx_queue, tx_queue, inode) in entries {
+        // On a listener these columns hold the accept backlog, not buffer occupancy.
+        if state != TcpState::Established || !owned.contains(&inode) {
+            continue;
+        }
+        out.recv_max = out.recv_max.max(rx_queue);
+        out.recv_total += u64::from(rx_queue);
+        out.send_max = out.send_max.max(tx_queue);
+        out.send_total += u64::from(tx_queue);
+        out.sockets += 1;
+    }
+    out
 }
 
 fn count_dir_entries(path: &str) -> usize {
@@ -559,5 +649,49 @@ mod tests {
         assert_eq!(milli(0.0), 0);
         assert_eq!(milli(1.25), 1250);
         assert_eq!(milli(-0.1), 0);
+    }
+
+    #[test]
+    fn aggregate_tcp_excludes_listening_backlog_columns() {
+        let owned = HashSet::from([1]);
+        let entries = [(TcpState::Listen, 5, 128, 1)];
+        let out = aggregate_tcp(entries.into_iter(), &owned);
+        assert_eq!(out.sockets, 0);
+        assert_eq!(out.recv_max, 0);
+        assert_eq!(out.send_max, 0);
+    }
+
+    #[test]
+    fn aggregate_tcp_excludes_unowned_inode() {
+        let owned = HashSet::from([1]);
+        let entries = [(TcpState::Established, 100, 200, 2)];
+        let out = aggregate_tcp(entries.into_iter(), &owned);
+        assert_eq!(out.sockets, 0);
+    }
+
+    #[test]
+    fn aggregate_tcp_computes_max_and_total_across_owned_established() {
+        let owned = HashSet::from([1, 2, 3]);
+        let entries = [
+            (TcpState::Established, 100, 10, 1),
+            (TcpState::Established, 400, 5, 2),
+            (TcpState::Established, 50, 900, 3),
+        ];
+        let out = aggregate_tcp(entries.into_iter(), &owned);
+        assert_eq!(out.recv_max, 400);
+        assert_eq!(out.recv_total, 550);
+        assert_eq!(out.send_max, 900);
+        assert_eq!(out.send_total, 915);
+        assert_eq!(out.sockets, 3);
+    }
+
+    #[test]
+    fn aggregate_tcp_empty_input_yields_zeros() {
+        let out = aggregate_tcp(std::iter::empty(), &HashSet::new());
+        assert_eq!(out.recv_max, 0);
+        assert_eq!(out.recv_total, 0);
+        assert_eq!(out.send_max, 0);
+        assert_eq!(out.send_total, 0);
+        assert_eq!(out.sockets, 0);
     }
 }
