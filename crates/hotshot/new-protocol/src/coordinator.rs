@@ -1089,11 +1089,16 @@ where
                     let epoch = p.proposal.data.epoch;
                     let block = p.proposal.data.block_header.block_number();
                     debug!(%node, %sender, %view, %epoch, %block, "recv proposal");
-                    if self.is_view_too_far_ahead(view) {
-                        warn!(%node, %sender, %view, "proposal is too far ahead");
-                        return None;
-                    }
-                    if self.proposal_received_at.is_none_or(|(v, _)| v < view) {
+                    // Deliberately not bounded by view, unlike every other
+                    // view-keyed message. A node that is far behind advances
+                    // only by accepting a proposal - every other message that
+                    // could move it is itself view-bounded - so bounding this
+                    // one strands any node more than `MAX_VIEWS_AHEAD` back,
+                    // which is exactly what a late-starting node is. The
+                    // claimed-epoch bound above still applies here.
+                    if !self.is_view_too_far_ahead(view)
+                        && self.proposal_received_at.is_none_or(|(v, _)| v < view)
+                    {
                         self.proposal_received_at = Some((view, Instant::now()));
                     }
                     if self.consensus.wants_proposal_for_view(&view) {

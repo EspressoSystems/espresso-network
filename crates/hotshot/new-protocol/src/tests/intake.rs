@@ -5,13 +5,11 @@
 //! about the message has been checked. Resolving an epoch costs work linear in
 //! the epoch number, so intake bounds the claim first. These tests pin that
 //! boundary: the same message is admitted at the ceiling and dropped one epoch
-//! past it.
+//! past it. Views are bounded separately and proposals are deliberately exempt;
+//! see `intake_admits_proposals_far_ahead_in_view`.
 
 use hotshot_example_types::node_types::TestTypes;
-use hotshot_types::{
-    data::{EpochNumber, ViewNumber},
-    vote::HasViewNumber,
-};
+use hotshot_types::{data::EpochNumber, vote::HasViewNumber};
 
 use super::common::{harness::TestHarness, utils::TestData};
 use crate::{
@@ -141,9 +139,18 @@ async fn intake_admits_messages_claiming_an_epoch_at_the_ceiling() {
     }
 }
 
-/// A proposal is bounded in view like every other view-keyed message.
+/// A proposal far ahead in view is admitted, unlike every other view-keyed
+/// message, and that asymmetry is load-bearing.
+///
+/// A node that is far behind advances its view only by accepting a proposal:
+/// `maybe_vote_2_and_update_lock` moves `current_view` past the proposal it
+/// accepts, and every other message that could move it - votes, certificates,
+/// catchup evidence - is itself bounded by `MAX_VIEWS_AHEAD`. Bounding
+/// proposals too therefore strands any node further behind than that, which is
+/// what a late-starting node is; `tests::restarts::late_start_f_nodes_with_epochs`
+/// is where that shows up, as a cluster-wide failure to decide.
 #[tokio::test]
-async fn intake_drops_proposals_too_far_ahead_in_view() {
+async fn intake_admits_proposals_far_ahead_in_view() {
     let data = TestData::new(1).await;
     let mut message = data.views[0].proposal_input();
     let MessageType::Consensus(ConsensusMessage::Proposal(p)) = &mut message.message_type else {
@@ -156,27 +163,8 @@ async fn intake_drops_proposals_too_far_ahead_in_view() {
     assert_eq!(message.view_number(), far);
 
     harness.message(message);
-    assert_eq!(
-        harness.coordinator().pending_intake_work(),
-        0,
-        "proposal {far} views ahead was admitted"
-    );
-}
-
-/// A proposal within the view bound is still admitted.
-#[tokio::test]
-async fn intake_admits_proposals_within_the_view_bound() {
-    let data = TestData::new(1).await;
-    let message = data.views[0].proposal_input();
-    assert!(
-        message.view_number() <= ViewNumber::genesis() + *MAX_VIEWS_AHEAD,
-        "test data should be within the view bound"
-    );
-
-    let mut harness = TestHarness::new(0).await;
-    harness.message(message);
     assert!(
         harness.coordinator().pending_intake_work() > 0,
-        "proposal within the view bound should be admitted"
+        "a proposal {far} views ahead was dropped, leaving a lagging node no way to catch up"
     );
 }

@@ -133,9 +133,11 @@ stands for a whole subsystem.
       swept at `64c5cdc6d0a` - full read of the restart and cutover seeding paths and all three GC scopes; battery
       `tests::restarts`, `tests::cutover`, `tests::legacy_cutover`.
 - [x] coordinator:network-intake: `NP/coordinator.rs` `on_network_message` and its guards
-      `is_view_too_far_ahead`/`is_epoch_too_far_ahead`/`send_catchup_evidence` - swept at `1872c2ee84e` - re-read every
-      message arm against the claimed-epoch boundary NP-1 added, and re-ran the enumeration of epoch-lookup sites;
-      battery `tests::intake` pins both bounds on either side of the ceiling.
+      `is_view_too_far_ahead`/`is_epoch_too_far_ahead`/`send_catchup_evidence` - swept at SWEEP_COMMIT - re-read after
+      the proposal view bound was reverted as a liveness regression; the claimed-epoch bound remains, and
+      `tests::intake` plus `tests::restarts::late_start_f_nodes_with_epochs` now pin both the bound and the proposal
+      exemption from it. Earlier at `1872c2ee84e` every message arm was read against the claimed-epoch boundary and the
+      epoch-lookup enumeration re-run.
 - [x] coordinator:event-loop: `NP/coordinator.rs`
       `start`/`stop`/`next_consensus_input`/`gc`/`apply_cutover_seed`/`GcScope` dispatch - swept at `1872c2ee84e` - full
       read of the `select!` loop and all three GC scopes; checked each branch's future for cancel safety (every await
@@ -344,6 +346,9 @@ decide: a rule that had to be written twice is a rule this text is not enforcing
   that form a known typo fails the commit; record an equivalent commit whose hash starts with a digit.
 - Before implementing the remedy a finding proposes, re-derive that it works; a filed remedy can be impossible for
   reasons the filing did not see.
+- Run the excluded shards, not only the per-iteration shard, whenever a change touches intake, restart, failure or
+  network paths; that is where liveness regressions surface. Run them as CI's four separate filtered runs: all 217 tests
+  in one unfiltered run saturate this machine and restart tests then fail on wall-clock timeouts alone.
 
 ## Definition of done
 
