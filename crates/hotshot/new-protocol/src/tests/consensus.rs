@@ -850,7 +850,7 @@ async fn test_timeout_proposal_chains_from_lock_not_timed_out_cert1() {
 
     // Lock on cert1(1).
     harness
-        .apply(test_data.views[0].proposal_input_consensus(&leader_for_view_3))
+        .apply_pair(test_data.views[0].proposal_input_consensus(&leader_for_view_3))
         .await;
     harness
         .apply(test_data.views[0].block_reconstructed_input())
@@ -909,7 +909,7 @@ async fn test_bridged_legacy_qc_adopts_lock_and_reproposes() {
 
     // Lock on cert1(1); hold view 2's proposal but no cert for it.
     harness
-        .apply(test_data.views[0].proposal_input_consensus(&leader_for_view_3))
+        .apply_pair(test_data.views[0].proposal_input_consensus(&leader_for_view_3))
         .await;
     harness
         .apply(test_data.views[0].block_reconstructed_input())
