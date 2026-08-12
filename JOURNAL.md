@@ -527,3 +527,47 @@ Verification: none of its own; the salvaged content was verified in iteration 9 
 Learnings: none.
 
 Next: the WRAPUP entry for this final iteration.
+
+## iter 10/10 | 29c94e91-175223 | 2026-08-12 | WRAPUP | done
+
+Task: final iteration. Tidy the ledger and hand off; the run ends out of budget, not converged.
+
+Changed: JOURNAL.md (this entry and the SALVAGE entry above it). BACKLOG.md needed no tidying: Now is empty, NP-7 sits
+in Next and NP-8, NP-9 in Later, each with an acceptance check, and nothing stale is left behind.
+
+Checkpoint: pending
+
+Verification: Verify command green on a quiet machine - 202 tests run, 202 passed, 15 skipped, exit 0. Two other
+failures seen during iterations 9 and 10 were both wall-clock timeouts from running suites concurrently, and both were
+confirmed by isolation rather than assumed: `tests::restarts::restart_all_nodes_at_epoch_boundary` timed out at 305s
+inside the 217-test unfiltered run and passes alone in 71s; `tests::legacy_cutover::perm_silence_m2_m1_p2` timed out at
+307s while another suite overlapped and passes alone in 42s. The one failure that was real,
+`tests::restarts::late_start_f_nodes_with_epochs`, is fixed and now passes both alone and inside the full suite.
+Evaluator: REJECT, recorded in the iteration 9 entry; 1 of 2 invocations used, and no second invocation was made because
+the ledger did not empty again.
+
+Handoff for the next run. Start it in a fresh session: the state files carry everything forward, and a clean context is
+the point.
+
+The run closed six findings (1 High, 1 Medium, 4 Low) and left three open, all filed by the evaluator gate. Take them in
+ledger order: NP-7 first, because it is the one that protects work already done - the four message kinds NP-1 widened
+the epoch bound to cover have no test, so a wrong arm in `Message::max_claimed_epoch` would silently reopen a High. NP-8
+next, and treat it as the run's most valuable item despite its Low severity: the reason NP-1's liveness regression
+survived seven iterations is that the per-iteration Verify command excludes the restart shard where it surfaces, and
+PLAN.md already said to run the full suite on intake changes. That instruction existed and was not followed, so the fix
+has to be mechanical rather than another sentence. Note while doing it that the four shards must run as CI's separate
+filtered runs; unfiltered, all 217 saturate one machine and restart tests fail on timeouts alone, which is a false red
+that will waste a later iteration if nobody knows it. NP-9 last: no actual hole, but the settled-class enumeration does
+not establish what a settled class is supposed to establish.
+
+The next run's fresh audit should look hardest at the intake boundary, since that is this run's largest change and the
+site of its one regression. Two things there are worth a second opinion rather than trust: the proposal exemption from
+the view bound is now load-bearing for catchup and is pinned only by one unit test plus one slow restart test, and
+`Message::max_claimed_epoch` is a hand-written match over every wire variant, which is exactly the shape that rots when
+a variant is added. A test that fails when a new variant is added without an arm would be worth more than any of the
+three open items.
+
+Learnings: an unfiltered run of a sharded suite on one machine produces failures that are only contention; confirm every
+red by isolation before treating it as a regression, and equally before treating it as noise.
+
+Next: nothing in this run. The budget is spent.

@@ -349,6 +349,7 @@ decide: a rule that had to be written twice is a rule this text is not enforcing
 - Run the excluded shards, not only the per-iteration shard, whenever a change touches intake, restart, failure or
   network paths; that is where liveness regressions surface. Run them as CI's four separate filtered runs: all 217 tests
   in one unfiltered run saturate this machine and restart tests then fail on wall-clock timeouts alone.
+- Confirm every red by running the test alone before calling it a regression, and equally before calling it noise.
 
 ## Definition of done
 
