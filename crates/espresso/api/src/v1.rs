@@ -18,7 +18,7 @@ pub mod status;
 pub mod submit;
 pub mod token;
 
-pub use availability::{AvailabilityApi, BlockId, HotShotAvailabilityApi, LeafId, PayloadId};
+pub use availability::{AvailabilityApi, BlockId};
 pub use catchup::CatchupApi;
 pub use config::ConfigApi;
 pub use database::DatabaseApi;

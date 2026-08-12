@@ -346,6 +346,7 @@ mod test {
     use futures::{future::join, stream::StreamExt};
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::data::ViewNumber;
+    use http_wire::respond;
     use tokio::{task::JoinHandle, time::timeout};
 
     use super::*;
@@ -2380,7 +2381,7 @@ mod test {
             )
             .await;
             common.height = height;
-            test_fixtures::respond(&headers, Ok(common))
+            respond::<Error, _>(&headers, Ok(common))
         }
 
         let api = Router::new().route("/vid/common/{height}", get(get_vid_common));

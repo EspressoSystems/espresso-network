@@ -12,241 +12,31 @@
 
 //! Axum test fixture standing in for a peer query service.
 //!
-//! Provider tests fetch from a second data source over HTTP. This fixture serves exactly the
-//! availability routes [`TrustedQueryServiceProvider`](super::TrustedQueryServiceProvider)
-//! requests, replicating the semantics of the old tide-disco handlers: integer height params,
-//! TaggedBase64 payload-hash params, the default fetch timeout, missing data as 404, and the
-//! crate-level [`Error`] envelope on the wire.
+//! Provider tests fetch from a second data source over HTTP. The routes come from the real
+//! availability router ([`availability::router`]); this module adds the glue those tests need:
+//! the `/availability` module prefix the old tide app registered, the app-level healthcheck, the
+//! tide-style unknown-route error, and a serve helper that waits for the server to come up.
 
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 use axum::{
     Router,
-    extract::{Path, State},
     http::{HeaderMap, Uri},
     response::Response,
     routing::get,
 };
 use disco_types::status::StatusCode;
-use futures::{StreamExt, TryStreamExt};
-use hotshot_types::data::VidCommitment;
 use http_client::Client;
 use http_wire::{self as wire, healthcheck_response, spawn_serve};
-use serde::Serialize;
-use snafu::OptionExt;
-use tagged_base64::TaggedBase64;
 use test_utils::reserve_tcp_port;
 use tokio::task::JoinHandle;
 use vbs::version::StaticVersion;
 
 use crate::{
     Error,
-    availability::{
-        self, AvailabilityDataSource, BlockId, FetchBlockSnafu, FetchLeafSnafu, LeafId,
-    },
+    availability::{self, AvailabilityDataSource, router::availability_router},
     testing::mocks::MockTypes,
 };
-
-/// The fixture serves the crate-level [`Error`] envelope, the same envelope the old tide app
-/// served and the provider's client decodes.
-pub(crate) fn respond<T: Serialize>(headers: &HeaderMap, result: Result<T, Error>) -> Response {
-    wire::respond::<Error, _>(headers, result)
-}
-
-fn fetch_timeout() -> Duration {
-    availability::Options::default().fetch_timeout
-}
-
-fn payload_hash_param(value: &str) -> Result<VidCommitment, Error> {
-    let err = || Error::Custom {
-        message: format!("invalid payload hash {value}"),
-        status: StatusCode::BAD_REQUEST,
-    };
-    let tb64: TaggedBase64 = value.parse().map_err(|_| err())?;
-    VidCommitment::try_from(&tb64).map_err(|_| err())
-}
-
-async fn get_leaf<D>(
-    State(ds): State<Arc<D>>,
-    headers: HeaderMap,
-    Path(height): Path<usize>,
-) -> Response
-where
-    D: AvailabilityDataSource<MockTypes> + Send + Sync + 'static,
-{
-    let fetch = ds.get_leaf(LeafId::<MockTypes>::Number(height)).await;
-    let result = fetch
-        .with_timeout(fetch_timeout())
-        .await
-        .context(FetchLeafSnafu {
-            resource: height.to_string(),
-        })
-        .map_err(Error::from);
-    respond(&headers, result)
-}
-
-async fn get_leaf_range<D>(
-    State(ds): State<Arc<D>>,
-    headers: HeaderMap,
-    Path((from, until)): Path<(usize, usize)>,
-) -> Response
-where
-    D: AvailabilityDataSource<MockTypes> + Send + Sync + 'static,
-{
-    let leaves = ds.get_leaf_range(from..until).await;
-    let result = leaves
-        .enumerate()
-        .then(|(index, fetch)| async move {
-            fetch
-                .with_timeout(fetch_timeout())
-                .await
-                .context(FetchLeafSnafu {
-                    resource: (index + from).to_string(),
-                })
-        })
-        .try_collect::<Vec<_>>()
-        .await
-        .map_err(Error::from);
-    respond(&headers, result)
-}
-
-async fn get_block_range<D>(
-    State(ds): State<Arc<D>>,
-    headers: HeaderMap,
-    Path((from, until)): Path<(usize, usize)>,
-) -> Response
-where
-    D: AvailabilityDataSource<MockTypes> + Send + Sync + 'static,
-{
-    let blocks = ds.get_block_range(from..until).await;
-    let result = blocks
-        .enumerate()
-        .then(|(index, fetch)| async move {
-            fetch
-                .with_timeout(fetch_timeout())
-                .await
-                .context(FetchBlockSnafu {
-                    resource: (index + from).to_string(),
-                })
-        })
-        .try_collect::<Vec<_>>()
-        .await
-        .map_err(Error::from);
-    respond(&headers, result)
-}
-
-async fn get_block_by_payload_hash<D>(
-    State(ds): State<Arc<D>>,
-    headers: HeaderMap,
-    Path(hash): Path<String>,
-) -> Response
-where
-    D: AvailabilityDataSource<MockTypes> + Send + Sync + 'static,
-{
-    let result = async {
-        let id = BlockId::<MockTypes>::PayloadHash(payload_hash_param(&hash)?);
-        let fetch = ds.get_block(id).await;
-        Ok(fetch
-            .with_timeout(fetch_timeout())
-            .await
-            .context(FetchBlockSnafu {
-                resource: id.to_string(),
-            })?)
-    }
-    .await;
-    respond(&headers, result)
-}
-
-async fn get_cert2<D>(
-    State(ds): State<Arc<D>>,
-    headers: HeaderMap,
-    Path(height): Path<u64>,
-) -> Response
-where
-    D: AvailabilityDataSource<MockTypes> + Send + Sync + 'static,
-{
-    let result = ds
-        .get_cert2(height)
-        .await
-        .with_timeout(fetch_timeout())
-        .await
-        .ok_or_else(|| {
-            availability::Error::Custom {
-                message: format!("no cert2 available for height {height}"),
-                status: StatusCode::NOT_FOUND,
-            }
-            .into()
-        });
-    respond(&headers, result)
-}
-
-async fn get_vid_common<D>(
-    State(ds): State<Arc<D>>,
-    headers: HeaderMap,
-    Path(height): Path<usize>,
-) -> Response
-where
-    D: AvailabilityDataSource<MockTypes> + Send + Sync + 'static,
-{
-    let fetch = ds
-        .get_vid_common(BlockId::<MockTypes>::Number(height))
-        .await;
-    let result = fetch
-        .with_timeout(fetch_timeout())
-        .await
-        .context(FetchBlockSnafu {
-            resource: height.to_string(),
-        })
-        .map_err(Error::from);
-    respond(&headers, result)
-}
-
-async fn get_vid_common_range<D>(
-    State(ds): State<Arc<D>>,
-    headers: HeaderMap,
-    Path((from, until)): Path<(usize, usize)>,
-) -> Response
-where
-    D: AvailabilityDataSource<MockTypes> + Send + Sync + 'static,
-{
-    let vid = ds.get_vid_common_range(from..until).await;
-    let result = vid
-        .enumerate()
-        .then(|(index, fetch)| async move {
-            fetch
-                .with_timeout(fetch_timeout())
-                .await
-                .context(FetchBlockSnafu {
-                    resource: (index + from).to_string(),
-                })
-        })
-        .try_collect::<Vec<_>>()
-        .await
-        .map_err(Error::from);
-    respond(&headers, result)
-}
-
-async fn get_vid_common_by_payload_hash<D>(
-    State(ds): State<Arc<D>>,
-    headers: HeaderMap,
-    Path(hash): Path<String>,
-) -> Response
-where
-    D: AvailabilityDataSource<MockTypes> + Send + Sync + 'static,
-{
-    let result = async {
-        let id = BlockId::<MockTypes>::PayloadHash(payload_hash_param(&hash)?);
-        let fetch = ds.get_vid_common(id).await;
-        Ok(fetch
-            .with_timeout(fetch_timeout())
-            .await
-            .context(FetchBlockSnafu {
-                resource: id.to_string(),
-            })?)
-    }
-    .await;
-    respond(&headers, result)
-}
 
 async fn healthcheck(headers: HeaderMap) -> Response {
     healthcheck_response(&headers)
@@ -260,29 +50,6 @@ async fn no_route(headers: HeaderMap, uri: Uri) -> Response {
         status: StatusCode::NOT_FOUND,
     };
     wire::encode_err(&headers, err)
-}
-
-/// The availability routes the fetch provider client requests.
-fn availability_routes<D>(data_source: D) -> Router
-where
-    D: AvailabilityDataSource<MockTypes> + Send + Sync + 'static,
-{
-    Router::new()
-        .route("/leaf/{height}", get(get_leaf::<D>))
-        .route("/leaf/{from}/{until}", get(get_leaf_range::<D>))
-        .route(
-            "/block/payload-hash/{hash}",
-            get(get_block_by_payload_hash::<D>),
-        )
-        .route("/block/{from}/{until}", get(get_block_range::<D>))
-        .route("/cert2/{height}", get(get_cert2::<D>))
-        .route(
-            "/vid/common/payload-hash/{hash}",
-            get(get_vid_common_by_payload_hash::<D>),
-        )
-        .route("/vid/common/{height}", get(get_vid_common::<D>))
-        .route("/vid/common/{from}/{until}", get(get_vid_common_range::<D>))
-        .with_state(Arc::new(data_source))
 }
 
 /// Mounts `api` under `/availability` (the module prefix the old tide app registered) with the
@@ -306,11 +73,15 @@ pub(crate) async fn serve(router: Router) -> (u16, JoinHandle<()>) {
     (port, task)
 }
 
-/// Serve the availability fixture for `data_source` on a fresh port. Returns the port and the
-/// server task.
+/// Serve the real availability router (default [`Options`](availability::Options)) for
+/// `data_source` on a fresh port. Returns the port and the server task.
 pub(crate) async fn serve_availability<D>(data_source: D) -> (u16, JoinHandle<()>)
 where
     D: AvailabilityDataSource<MockTypes> + Send + Sync + 'static,
 {
-    serve(app(availability_routes(data_source))).await
+    let api = Router::from(availability_router::<MockTypes, D>(
+        &availability::Options::default(),
+        data_source,
+    ));
+    serve(app(api)).await
 }
