@@ -214,6 +214,9 @@ pub struct Consensus<T: NodeType> {
     voted_1_views: BTreeSet<ViewNumber>,
     voted_2_views: BTreeSet<ViewNumber>,
 
+    /// For each view this node cast a vote1 in, the view its proposal was justified at.
+    vote1_parent: BTreeMap<ViewNumber, ViewNumber>,
+
     /// Storage confirmations; sends are gated on these facts.
     stored_proposals: BTreeMap<ViewNumber, Vec<Commitment<Leaf2<T>>>>,
     stored_vids: BTreeSet<ViewNumber>,
@@ -351,6 +354,7 @@ impl<T: NodeType> Consensus<T> {
             stake_table_coordinator: membership_coordinator,
             voted_1_views: BTreeSet::new(),
             voted_2_views: BTreeSet::new(),
+            vote1_parent: BTreeMap::new(),
             stored_proposals: BTreeMap::new(),
             stored_vids: BTreeSet::new(),
             stored_actions: BTreeSet::new(),
@@ -495,6 +499,7 @@ impl<T: NodeType> Consensus<T> {
         for leaf in seed.undecided {
             let view = leaf.view_number();
             let justify_qc = leaf.justify_qc().clone();
+            let parent_view = justify_qc.view_number();
             self.register_legacy_qc(&justify_qc);
 
             let block_number = leaf.block_header().block_number();
@@ -526,6 +531,7 @@ impl<T: NodeType> Consensus<T> {
             self.proposed_views.insert(view);
             self.voted_1_views.insert(view);
             self.voted_2_views.insert(view);
+            self.vote1_parent.insert(view, parent_view);
         }
 
         if let Some(high_qc) = &seed.high_qc {
@@ -912,6 +918,16 @@ impl<T: NodeType> Consensus<T> {
         if anchor_view > self.decide_floor_view {
             self.decide_floor_view = anchor_view;
         }
+        // Which views this node submitted its vote1 in is not persisted, only how far
+        // it acted. A vote1 needs its proposal stored, so treat every seeded proposal
+        // at or below the bar as one, this node may have voted for. Without that, a
+        // vote2 re-cast after the restart could land in a view whose branch this node
+        // had already left behind.
+        for (&view, proposal) in self.proposals.range(..=last_barred) {
+            self.vote1_parent
+                .entry(view)
+                .or_insert(proposal.justify_qc.view_number());
+        }
         // `Coordinator::start` enters `current_view + 1`, so parking the cursor
         // at the high QC makes the node re-enter at `high_qc + 1`.
         let resume_view = self.stored_high_qc.unwrap_or(anchor_view + 1);
@@ -964,6 +980,7 @@ impl<T: NodeType> Consensus<T> {
                 self.pending_certs1 = self.pending_certs1.split_off(&keep_from);
                 self.pending_certs2 = self.pending_certs2.split_off(&keep_from);
                 self.proposals = self.proposals.split_off(&keep_from);
+                self.vote1_parent = self.vote1_parent.split_off(&keep_from);
                 self.leaves = self.leaves.split_off(&view);
                 self.signed_proposals = self.signed_proposals.split_off(&view);
                 self.vid_shares = self.vid_shares.split_off(&view);
@@ -2015,6 +2032,10 @@ impl<T: NodeType> Consensus<T> {
             return;
         }
         let (vote2, _) = self.pending_vote2.remove(&view).expect("checked above");
+        if self.voted_for_branch_excluding(view) {
+            warn!(%view, "dropping pending vote2 for a view a later vote1 skips");
+            return;
+        }
         outbox.push_back(ConsensusOutput::SendVote2(vote2));
     }
 
@@ -2025,6 +2046,22 @@ impl<T: NodeType> Consensus<T> {
         view <= self.restart_barred_view
             || (self.stored_actions.contains(&(view, ActionKind::Vote))
                 && self.stored_vids.contains(&view))
+    }
+
+    /// Whether a vote1 in a later view endorsed a branch with no block at `view`.
+    ///
+    /// This is what keeps one node out of two conflicting quorums. A vote2 certifies
+    /// `view` for good, but the certificate and the reconstructed block it waits on
+    /// can arrive after the node has submitted vote1 elsewhere. Casting it anyway
+    /// would count the node towards a quorum committing `view` and towards one
+    /// certifying a branch without it.
+    ///
+    /// This covers the order vote1-then-vote2. The reverse is the `is_safe`
+    /// re-check in `maybe_vote_1`; neither alone is enough.
+    fn voted_for_branch_excluding(&self, view: ViewNumber) -> bool {
+        self.vote1_parent
+            .range(view + 1..)
+            .any(|(_, justified_at)| *justified_at < view)
     }
 
     fn release_proposal(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
@@ -2084,6 +2121,20 @@ impl<T: NodeType> Consensus<T> {
         let epoch = proposal.epoch;
         let qc_view = proposal.justify_qc.view_number();
         let qc_epoch = proposal.justify_qc.epoch();
+
+        // The counterpart of `voted_for_branch_excluding`, for the other order.
+        // `handle_proposal_with_vid_share` checked this proposal against the lock
+        // as it stood on arrival, and state validation can complete after that.
+        // A vote2 in the meantime locks this node on a view the proposal's
+        // branch may skip, and voting here would then count it towards a quorum
+        // certifying that branch and towards the one committing the view.
+        if let Err(err) = self.is_safe(proposal) {
+            warn!(
+                %view, block = %block_number, %epoch, %qc_view, ?qc_epoch, %err,
+                "proposal no longer safe against the current lock; refusing to vote1"
+            );
+            return;
+        }
 
         // Don't vote for epoch-transition proposals until we can verify
         // the attached DRB result.  Same guard as `maybe_propose`:
@@ -2215,6 +2266,7 @@ impl<T: NodeType> Consensus<T> {
             && self.is_proposal_stored(view, &proposal_commit);
         let vid_share = can_send.then(|| vid_share.clone());
         self.voted_1_views.insert(view);
+        self.vote1_parent.insert(view, qc_view);
         if let Some(vid_share) = vid_share {
             outbox.push_back(ConsensusOutput::SendVote1(vote));
             outbox.push_back(ConsensusOutput::BroadcastVidShare(vid_share));
@@ -2300,6 +2352,11 @@ impl<T: NodeType> Consensus<T> {
             || self.decided_views.contains(&view)
             || view <= self.decide_floor()
         {
+            return;
+        }
+
+        if self.voted_for_branch_excluding(view) {
+            warn!(%view, %qc_view, %block, "a later vote1 skips this view; refusing to vote2");
             return;
         }
 

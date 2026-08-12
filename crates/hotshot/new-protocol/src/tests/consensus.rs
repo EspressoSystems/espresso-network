@@ -8,10 +8,12 @@ use hotshot_example_types::{
 };
 use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
+    message::Proposal as SignedProposal,
+    simple_certificate::TimeoutCertificate2,
     traits::signature_key::SignatureKey,
 };
 
-use super::common::utils::TestData;
+use super::common::utils::{TestData, TestView};
 use crate::{
     consensus::{ConsensusInput, ConsensusOutput},
     coordinator::GcScope,
@@ -1669,5 +1671,264 @@ async fn test_seed_proposals_populates_undecided_chain() {
             .map(|v| v.view_number)
             .collect::<Vec<_>>(),
         "every seeded proposal should surface as an undecided leaf"
+    );
+}
+
+/// `template`'s proposal re-parented onto `parent` and re-signed by `template`'s
+/// leader, with `evidence` as the view-change certificate for the gap.
+///
+/// The payload is `template`'s, so the VID shares dispersed for that view still
+/// match it and only the ancestry differs. That is what makes a competing branch
+/// out of material the honest nodes already hold.
+fn reparented_proposal(
+    template: &TestView,
+    parent: &TestView,
+    evidence: TimeoutCertificate2<TestTypes>,
+) -> SignedProposal<TestTypes, Proposal<TestTypes>> {
+    let parent_leaf: Leaf2<TestTypes> = parent.proposal.data.clone().into();
+    let mut proposal = template.proposal.data.clone();
+    proposal.block_header = TestBlockHeader::new(
+        &parent_leaf,
+        template.proposal.data.block_header.payload_commitment,
+        template
+            .proposal
+            .data
+            .block_header
+            .builder_commitment
+            .clone(),
+        template.proposal.data.block_header.metadata,
+        TEST_VERSIONS.test.base,
+    );
+    proposal.justify_qc = parent.cert1.clone();
+    proposal.view_change_evidence = Some(evidence);
+
+    let signature = <BLSPubKey as SignatureKey>::sign(
+        &template.leader_private_key,
+        proposal_commitment(&proposal).as_ref(),
+    )
+    .expect("sign re-parented proposal");
+    SignedProposal::new(proposal, signature)
+}
+
+/// One node does not vote for both sides of a fork.
+///
+/// A single-node version of `tests::safety`, which builds the same conflict out
+/// of a whole committee. The two commits of a fork need two quorums, and two
+/// quorums drawn from `3f + 1` nodes meet in an honest node, so a fork needs one
+/// node to vote on both sides. This drives exactly that node.
+///
+/// The setup is what makes the second vote reachable at all. The lock is the
+/// only thing that rejects a proposal reaching back past view 3, and it advances
+/// only on a phase-2 vote, which needs the block. So a node holding view 3's
+/// *certificate* but not its *block* is past view 3 and still unlocked: it
+/// accepts a proposal parented at view 1 and votes phase-1 for it. When view 3's
+/// block finally lands, everything a phase-2 vote there requires is present.
+///
+/// `Consensus::voted_for_branch_excluding` is what refuses it — the phase-1 vote
+/// at view 6 was justified at view 1, so the branch it endorsed holds no block
+/// for view 3.
+#[tokio::test]
+async fn test_no_fork_votes_from_one_node() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(6).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    // View 1 arrives in full, so the node locks there. The fork's proposal is
+    // parented here, which is what lets it pass the admission check.
+    harness
+        .apply_pair(test_data.views[0].proposal_input_consensus(&node_key))
+        .await;
+    harness
+        .apply(test_data.views[0].block_reconstructed_input())
+        .await;
+    harness.apply(test_data.views[0].cert1_input()).await;
+    assert_eq!(
+        harness.consensus.locked_view(),
+        Some(ViewNumber::new(1)),
+        "view 1 arrived in full, so it should be locked"
+    );
+
+    // The certificate for view 3 arrives but its block does not: the node
+    // leaves view 3 behind without locking on it.
+    harness
+        .apply(ConsensusInput::AdvanceView(
+            crate::cert_verifier::ValidCert::new(
+                test_data.views[2].cert1.clone(),
+                test_data.views[2].epoch_number,
+            ),
+        ))
+        .await;
+    assert_eq!(
+        (
+            harness.consensus.current_view(),
+            harness.consensus.locked_view()
+        ),
+        (ViewNumber::new(4), Some(ViewNumber::new(1))),
+        "past view 3, still locked at view 1"
+    );
+
+    // The competing proposal: view 6, parented at view 1, so it skips view 3
+    // entirely. The timeout certificate for view 5 is what lets it reach back.
+    let signed = reparented_proposal(
+        &test_data.views[5],
+        &test_data.views[0],
+        test_data.views[4].timeout_cert.clone(),
+    );
+
+    harness
+        .apply(ConsensusInput::Proposal(
+            test_data.views[5].leader_public_key,
+            crate::message::ProposalMessage::validated(signed),
+        ))
+        .await;
+    harness
+        .apply(ConsensusInput::VidShare(
+            test_data.views[5].vid_share_for(&node_key),
+        ))
+        .await;
+
+    // The phase-1 vote is parked pending persistence, so the recorded action is
+    // the decision to vote; counting sends alone understates it. At view 6 that
+    // action can only be the phase-1 vote, since no `Certificate1` for view 6 is
+    // ever supplied.
+    let voted_fork = harness.outputs().iter().any(|o| {
+        matches!(o, ConsensusOutput::RecordAction(v, _, ActionKind::Vote)
+            if *v == ViewNumber::new(6))
+    });
+    assert!(
+        voted_fork,
+        "the forked proposal should have been admitted and voted on"
+    );
+
+    // The block for view 3 lands at last. Phase-2 votes are sent directly, so
+    // `SendVote2` at view 3 is unambiguous — unlike the recorded action, which
+    // view 3's phase-1 vote also produces.
+    harness
+        .apply_pair(test_data.views[2].proposal_input_consensus(&node_key))
+        .await;
+    harness
+        .apply(test_data.views[2].block_reconstructed_input())
+        .await;
+    harness.apply(test_data.views[2].cert1_input()).await;
+
+    let view3_commit = proposal_commitment(&test_data.views[2].proposal.data);
+    let voted_committed = harness.outputs().iter().any(|o| {
+        matches!(o, ConsensusOutput::SendVote2(v)
+            if v.data.leaf_commit == view3_commit)
+    });
+
+    assert!(
+        !voted_committed,
+        "one node voted for both sides of a fork: phase-1 at view 6 on a branch parented at view \
+         1, and phase-2 at view 3"
+    );
+}
+
+/// The same fork with the two votes in the opposite order.
+///
+/// [`test_no_fork_votes_from_one_node`] has the phase-1 vote on the competing
+/// branch come first, and `Consensus::voted_for_branch_excluding` refuses the
+/// phase-2 vote that would follow. Swapping the order gives the node the same
+/// pair of votes by a different route, and nothing about a fork says which
+/// arrives first.
+///
+/// What separates the two orders is when a proposal is measured against the
+/// lock. `handle_proposal_with_vid_share` checks it on arrival, once, and the
+/// phase-1 vote can be cast much later: it waits on state validation, which a
+/// real node runs asynchronously. A phase-2 vote in that window takes the lock,
+/// and the check that would have caught the competing proposal has already
+/// passed. `maybe_vote_1` re-checks for that reason.
+///
+/// The harness answers `RequestState` inline, so the window has to be opened
+/// deliberately with [`ConsensusHarness::defer_state`].
+#[tokio::test]
+async fn test_no_fork_votes_from_one_node_reversed() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(6).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    // View 1 in full, as before: the lock the competing proposal is parented on.
+    harness
+        .apply_pair(test_data.views[0].proposal_input_consensus(&node_key))
+        .await;
+    harness
+        .apply(test_data.views[0].block_reconstructed_input())
+        .await;
+    harness.apply(test_data.views[0].cert1_input()).await;
+    assert_eq!(
+        harness.consensus.locked_view(),
+        Some(ViewNumber::new(1)),
+        "view 1 arrived in full, so it should be locked"
+    );
+
+    // The competing proposal arrives while the node is still locked at view 1,
+    // so it is admitted. Its state validation is withheld, which is the only
+    // thing keeping the phase-1 vote from being cast right here.
+    let signed = reparented_proposal(
+        &test_data.views[5],
+        &test_data.views[0],
+        test_data.views[4].timeout_cert.clone(),
+    );
+    let fork_commit = proposal_commitment(&signed.data);
+
+    harness.defer_state(ViewNumber::new(6));
+    harness
+        .apply(ConsensusInput::Proposal(
+            test_data.views[5].leader_public_key,
+            crate::message::ProposalMessage::validated(signed),
+        ))
+        .await;
+    harness
+        .apply(ConsensusInput::VidShare(
+            test_data.views[5].vid_share_for(&node_key),
+        ))
+        .await;
+    let acted_at_6 = |harness: &ConsensusHarness| {
+        harness.outputs().iter().any(|o| {
+            matches!(o, ConsensusOutput::RecordAction(v, _, ActionKind::Vote)
+                if *v == ViewNumber::new(6))
+        })
+    };
+    assert!(
+        !acted_at_6(&harness),
+        "the phase-1 vote should still be waiting on state validation"
+    );
+
+    // View 3 arrives in full and the node commits to it, taking the lock.
+    harness
+        .apply_pair(test_data.views[2].proposal_input_consensus(&node_key))
+        .await;
+    harness
+        .apply(test_data.views[2].block_reconstructed_input())
+        .await;
+    harness.apply(test_data.views[2].cert1_input()).await;
+
+    let view3_commit = proposal_commitment(&test_data.views[2].proposal.data);
+    let voted_committed = harness.outputs().iter().any(|o| {
+        matches!(o, ConsensusOutput::SendVote2(v)
+            if v.data.leaf_commit == view3_commit)
+    });
+    assert!(
+        voted_committed,
+        "view 3 arrived in full, so the node should have voted phase-2 there"
+    );
+    assert_eq!(
+        harness.consensus.locked_view(),
+        Some(ViewNumber::new(3)),
+        "the phase-2 vote should have taken the lock at view 3"
+    );
+
+    // Only now does view 6's state validation come back. The proposal skips
+    // view 3, which the node has since committed to.
+    harness.release_state(ViewNumber::new(6)).await;
+
+    let sent_fork_vote1 = harness.outputs().iter().any(|o| {
+        matches!(o, ConsensusOutput::SendVote1(v)
+            if v.vote.data.leaf_commit == fork_commit)
+    });
+    assert!(
+        !(acted_at_6(&harness) || sent_fork_vote1),
+        "one node voted for both sides of a fork: phase-2 at view 3, and phase-1 at view 6 on a \
+         branch parented at view 1"
     );
 }
