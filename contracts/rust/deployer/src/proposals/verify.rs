@@ -1023,7 +1023,7 @@ pub async fn run_verify(
     // Safe validation: assert toml Safes match deployment-info.
     let safe_rows = safe_address_rows(&toml, &kind);
     rows.extend(safe_rows);
-    timelock_role_rows(provider, &toml, &mut rows).await;
+    timelock_role_rows(provider, &toml, &kind, &mut rows).await;
 
     // Recompute Safe hashes for both phases and assert against toml.
     let phase_hashes =
@@ -1303,12 +1303,34 @@ fn compute_and_validate_phase_hashes(
 ///
 /// `safe_address_rows` only proves the Safes match the embedded deployment-info, which is a
 /// snapshot; roles can be granted or revoked after it was written.
+///
+/// Queries the deployment-info timelock, never `toml.timelock`: the proposal is untrusted input,
+/// so roles read from an address it supplies would prove nothing.
 async fn timelock_role_rows(
     provider: &impl Provider,
     toml: &ProposalToml,
+    kind: &ContractKind,
     rows: &mut Vec<CheckRow>,
 ) {
-    let timelock = OpsTimelock::new(toml.timelock, provider);
+    let timelock_addr = match deployment_info(&toml.network) {
+        Err(e) => {
+            rows.push(fail(
+                "schedule.role",
+                format!("deployment-info unavailable: {e}"),
+            ));
+            rows.push(fail(
+                "execute.role",
+                format!("deployment-info unavailable: {e}"),
+            ));
+            return;
+        },
+        Ok(info) => match kind.timelock_kind {
+            TimelockKind::Ops => info.ops_timelock.address,
+            TimelockKind::SafeExit => info.safe_exit_timelock.address,
+        },
+    };
+
+    let timelock = OpsTimelock::new(timelock_addr, provider);
     let roles = [
         (
             "schedule.role",
@@ -1332,10 +1354,7 @@ async fn timelock_role_rows(
                 Ok(true) => pass(label, format!("{safe} holds {role_name} on chain")),
                 Ok(false) => fail(
                     label,
-                    format!(
-                        "{safe} does not hold {role_name} on timelock {}",
-                        toml.timelock
-                    ),
+                    format!("{safe} does not hold {role_name} on timelock {timelock_addr}"),
                 ),
             },
         };
