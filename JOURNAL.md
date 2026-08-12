@@ -512,3 +512,18 @@ cannot see regressions in it.
 
 Next: one iteration remains, so it is a WRAPUP that tidies the ledger and writes a handoff. NP-7, NP-8 and NP-9 stay
 open for the next run, which begins with a fresh audit in any case.
+
+## iter 10/10 | 29c94e91-175223 | 2026-08-12 | SALVAGE | salvage
+
+Task: iteration 9 ended without a checkpoint, so its work was salvaged before this iteration began.
+
+Changed: nothing new; committed what iteration 9 left in the tree - the NP-1 proposal view-bound revert in
+coordinator.rs, the replaced intake test, and the PLAN/BACKLOG/JOURNAL updates recording the evaluator's REJECT.
+
+Checkpoint: db7c581a163
+
+Verification: none of its own; the salvaged content was verified in iteration 9 and is described in that entry.
+
+Learnings: none.
+
+Next: the WRAPUP entry for this final iteration.
