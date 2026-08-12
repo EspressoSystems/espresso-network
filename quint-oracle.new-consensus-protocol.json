@@ -1,0 +1,115 @@
+{
+  "components": {
+    "new-consensus-protocol": {
+      "name": "New Consensus Protocol",
+      "observations": [
+        "proposal_accepted",
+        "unsafe_proposal_rejected",
+        "vote1_sent",
+        "vote1_deferred_on_storage",
+        "vote1_lost_to_timeout",
+        "lock_taken",
+        "lock_advanced_repeatedly",
+        "vote2_sent",
+        "vote2_deferred_on_high_qc",
+        "view_decided",
+        "two_views_decided",
+        "chain_decided_in_one_step",
+        "older_view_decided_late",
+        "cert2_before_cert1",
+        "timeout_vote_sent",
+        "view_advanced_by_timeout_certificate",
+        "proposal_made",
+        "proposed_after_timeout_certificate"
+      ]
+    }
+  },
+  "eventScope": "new-consensus-protocol",
+  "format": "quint-oracle-config",
+  "main": "new_consensus_protocol",
+  "observationGroups": {
+    "deciding": {
+      "name": "Deciding",
+      "observations": [
+        "view_decided",
+        "two_views_decided",
+        "chain_decided_in_one_step",
+        "older_view_decided_late",
+        "cert2_before_cert1"
+      ]
+    },
+    "liveness": {
+      "name": "Timeouts and proposing",
+      "observations": [
+        "timeout_vote_sent",
+        "view_advanced_by_timeout_certificate",
+        "proposal_made",
+        "proposed_after_timeout_certificate"
+      ]
+    },
+    "locking": {
+      "name": "Locking and safety",
+      "observations": [
+        "proposal_accepted",
+        "unsafe_proposal_rejected",
+        "lock_taken",
+        "lock_advanced_repeatedly"
+      ]
+    },
+    "voting": {
+      "name": "Two-phase voting",
+      "observations": [
+        "vote1_sent",
+        "vote1_deferred_on_storage",
+        "vote1_lost_to_timeout",
+        "vote2_sent",
+        "vote2_deferred_on_high_qc"
+      ]
+    }
+  },
+  "observations": [
+    "proposal_accepted",
+    "unsafe_proposal_rejected",
+    "vote1_sent",
+    "vote1_deferred_on_storage",
+    "vote1_lost_to_timeout",
+    "lock_taken",
+    "lock_advanced_repeatedly",
+    "vote2_sent",
+    "vote2_deferred_on_high_qc",
+    "view_decided",
+    "two_views_decided",
+    "chain_decided_in_one_step",
+    "older_view_decided_late",
+    "cert2_before_cert1",
+    "timeout_vote_sent",
+    "view_advanced_by_timeout_certificate",
+    "proposal_made",
+    "proposed_after_timeout_certificate"
+  ],
+  "reportDir": "mc-out-new-consensus-protocol",
+  "spec": "quint-specs/new-consensus-protocol.qnt",
+  "stepReplayBudget": 600,
+  "studio": {
+    "broadTestCommand": [
+      "cargo",
+      "nextest",
+      "run",
+      "-p",
+      "hotshot-new-protocol",
+      "--test-threads=1"
+    ],
+    "model": "quint-specs/new-consensus-protocol.qnt",
+    "system": "New Consensus Protocol"
+  },
+  "testCommand": [
+    "cargo",
+    "nextest",
+    "run",
+    "-p",
+    "hotshot-new-protocol",
+    "--test-threads=1"
+  ],
+  "unguidedStepBudget": 20,
+  "version": 1
+}

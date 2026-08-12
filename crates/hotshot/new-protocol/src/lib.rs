@@ -17,6 +17,7 @@ pub mod vid;
 pub mod vote;
 
 pub mod proposal;
+pub mod quint_oracle;
 
 #[cfg(test)]
 mod tests;

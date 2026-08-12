@@ -985,6 +985,10 @@ pub(crate) struct ConsensusHarness {
     pub consensus: Consensus<TestTypes>,
     pub membership_coordinator: EpochMembershipCoordinator<TestTypes>,
     pub collected: Outbox<ConsensusOutput<TestTypes>>,
+    /// Quint oracle trace boundary for the running test. Held for the harness's
+    /// lifetime so every test reports without being edited individually; inert
+    /// unless `QUINT_ORACLE_URL` is set.
+    _oracle: quint_oracle_client::TestGuard,
 }
 
 impl ConsensusHarness {
@@ -1020,6 +1024,7 @@ impl ConsensusHarness {
             consensus,
             membership_coordinator: membership,
             collected: Outbox::new(),
+            _oracle: crate::quint_oracle::start_test(),
         }
     }
 
@@ -1069,6 +1074,7 @@ impl ConsensusHarness {
             consensus,
             membership_coordinator: membership,
             collected: Outbox::new(),
+            _oracle: crate::quint_oracle::start_test(),
         }
     }
 

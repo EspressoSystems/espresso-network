@@ -49,6 +49,7 @@ use crate::{
         ProposalFetchRequest, ProposalMessage, Validated, Vote1, Vote2,
     },
     outbox::Outbox,
+    quint_oracle,
     state::{StateRequest, StateResponse},
     storage::{ActionKind, StorageOutput},
 };
@@ -440,6 +441,12 @@ impl<T: NodeType> Consensus<T> {
         self.stored_high_qc.is_some_and(|stored| stored >= required)
     }
 
+    /// Whether no payload for `view` is held yet. The Quint spec tracks
+    /// reconstruction per view, so only the first payload at a view is reported.
+    fn first_payload_for_view(&self, view: ViewNumber) -> bool {
+        !self.blocks_reconstructed.iter().any(|(v, _)| *v == view)
+    }
+
     /// Whether the parent block counts as reconstructed for voting: either we
     /// hold its payload, or our locked QC certifies exactly this parent leaf.
     /// A lock is only ever taken on a reconstructed block, so a lock matching
@@ -723,6 +730,9 @@ impl<T: NodeType> Consensus<T> {
             },
             ConsensusInput::BlockReconstructed(view, vid_commitment) => {
                 debug!(%view, "apply: block reconstructed");
+                if self.first_payload_for_view(view) {
+                    quint_oracle::block_reconstructed(*view);
+                }
                 self.blocks_reconstructed.insert((view, vid_commitment));
                 // Retry the child whose vote1 is gated on this parent reconstruction.
                 self.maybe_vote_1(view + 1, outbox);
@@ -730,8 +740,11 @@ impl<T: NodeType> Consensus<T> {
             },
             ConsensusInput::StateValidated(state_response) => {
                 debug!(view = %state_response.view, "apply: state validated");
-                self.states_verified
-                    .insert(state_response.view, state_response.commitment);
+                let (view, commitment) = (state_response.view, state_response.commitment);
+                if self.states_verified.get(&view) != Some(&commitment) {
+                    quint_oracle::state_validated(quint_oracle::leaf_id(*view, &commitment));
+                }
+                self.states_verified.insert(view, commitment);
                 Protocol::Continue
             },
             ConsensusInput::HeaderCreated(view, commitment, header) => {
@@ -803,6 +816,9 @@ impl<T: NodeType> Consensus<T> {
             },
             ConsensusInput::VidDisperseCreated(view, payload_commitment) => {
                 debug!(%view, "apply: vid disperse created");
+                if self.first_payload_for_view(view) {
+                    quint_oracle::block_reconstructed(*view);
+                }
                 self.blocks_reconstructed.insert((view, payload_commitment));
                 Protocol::Continue
             },
@@ -1078,11 +1094,15 @@ impl<T: NodeType> Consensus<T> {
             return Protocol::Abort;
         };
 
+        let oracle_leaf = quint_oracle::leaf_id(*view, &proposal_commitment(&proposal));
+        let oracle_parent =
+            quint_oracle::leaf_id(*qc_view, &proposal.justify_qc.data().leaf_commit);
         if let Err(err) = self.is_safe(&proposal) {
             warn!(
                 %view, %proposer, block = %block_number, %epoch, %qc_view, %qc_epoch, %err,
                 "proposal not safe"
             );
+            quint_oracle::reject_unsafe_proposal(oracle_leaf, oracle_parent);
             return Protocol::Abort;
         }
 
@@ -1163,6 +1183,7 @@ impl<T: NodeType> Consensus<T> {
             ));
         }
 
+        quint_oracle::receive_proposal(oracle_leaf, oracle_parent);
         Protocol::Continue
     }
 
@@ -1215,6 +1236,9 @@ impl<T: NodeType> Consensus<T> {
         if view <= self.decide_floor() {
             return Protocol::Continue;
         }
+        if !self.certs.contains_key(&view) {
+            quint_oracle::receive_cert1(quint_oracle::leaf_id(*view, &certificate.data.leaf_commit));
+        }
         self.certs.entry(view).or_insert(certificate.into_cert());
         self.adopt_certified_drb(view);
         Protocol::Continue
@@ -1248,6 +1272,7 @@ impl<T: NodeType> Consensus<T> {
                 leaf_commit: certificate.data.leaf_commit,
             });
         }
+        quint_oracle::receive_cert2(quint_oracle::leaf_id(*view, &certificate.data.leaf_commit));
         self.certs2.insert(view, certificate.into_cert());
         Protocol::Continue
     }
@@ -1402,6 +1427,9 @@ impl<T: NodeType> Consensus<T> {
                 },
             }
         }
+        if view > self.timeout_view {
+            quint_oracle::timeout(*view);
+        }
         self.timeout_view = max(self.timeout_view, view);
         let data = TimeoutData2 {
             view,
@@ -1446,6 +1474,7 @@ impl<T: NodeType> Consensus<T> {
             return Protocol::Continue;
         }
         let epoch = certificate.epoch();
+        quint_oracle::timeout_certificate(*certificate.view_number());
         self.timeout_certs.insert(view, certificate.cert().clone());
         self.current_view = self.current_view.max(view);
         self.current_epoch = Some(epoch);
@@ -1731,6 +1760,7 @@ impl<T: NodeType> Consensus<T> {
         };
 
         self.proposed_views.insert(view);
+        quint_oracle::propose(*view);
         outbox.push_back(ConsensusOutput::PersistProposal(message.clone()));
         self.request_action(view, Some(proposal_epoch), ActionKind::Propose, outbox);
         self.pending_proposal.insert(view, message);
@@ -1819,6 +1849,7 @@ impl<T: NodeType> Consensus<T> {
             self.last_decided_view = view;
             self.last_decided_leaf = decided[0].clone();
         }
+        quint_oracle::decide(*view);
         outbox.push_back(ConsensusOutput::LeafDecided {
             leaves: decided,
             cert1,
@@ -1880,8 +1911,19 @@ impl<T: NodeType> Consensus<T> {
         })
     }
 
+    /// Whether every durability fact a vote is gated on is confirmed for `view`.
+    /// The Quint spec collapses the three confirmations into one `stored` fact,
+    /// which is reported when this first becomes true.
+    fn storage_complete(&self, view: ViewNumber) -> bool {
+        self.proposals.contains_key(&view)
+            && self.stored_proposals.contains_key(&view)
+            && self.stored_vids.contains(&view)
+            && self.stored_actions.contains(&(view, ActionKind::Vote))
+    }
+
     fn handle_stored(&mut self, stored: StorageOutput<T>, outbox: &mut Outbox<ConsensusOutput<T>>) {
         let view = stored.view_number();
+        let storage_was_complete = self.storage_complete(view);
         match stored {
             StorageOutput::Proposal(view, commitment) => {
                 self.stored_proposals
@@ -1896,6 +1938,9 @@ impl<T: NodeType> Consensus<T> {
                 self.stored_actions.insert((view, kind));
             },
             StorageOutput::HighQc(view) => {
+                if self.stored_high_qc.is_none_or(|stored| stored < view) {
+                    quint_oracle::stored_high_qc(*view);
+                }
                 self.bump_stored_high_qc(view);
                 // A newly persisted lock can unblock vote2 across many views; re-check all.
                 let pending: Vec<ViewNumber> = self.pending_vote2.keys().copied().collect();
@@ -1904,6 +1949,9 @@ impl<T: NodeType> Consensus<T> {
                 }
                 return;
             },
+        }
+        if !storage_was_complete && self.storage_complete(view) {
+            quint_oracle::stored(*view);
         }
         self.release_vote1(view, outbox);
         self.release_vote2(view, outbox);
@@ -2146,6 +2194,7 @@ impl<T: NodeType> Consensus<T> {
             && self.is_proposal_stored(view, &proposal_commit);
         let vid_share = can_send.then(|| vid_share.clone());
         self.voted_1_views.insert(view);
+        quint_oracle::vote_1(*view);
         if let Some(vid_share) = vid_share {
             outbox.push_back(ConsensusOutput::SendVote1(vote));
             outbox.push_back(ConsensusOutput::BroadcastVidShare(vid_share));
@@ -2213,11 +2262,11 @@ impl<T: NodeType> Consensus<T> {
 
         // We have a valid certificate, proposal, and reconstructed block
         // We can now update the lock, change view and vote
-        if self
+        let lock_advanced = self
             .locked_cert
-            .as_mut()
-            .is_none_or(|locked_cert| locked_cert.view_number() < cert1.view_number())
-        {
+            .as_ref()
+            .is_none_or(|locked_cert| locked_cert.view_number() < cert1.view_number());
+        if lock_advanced {
             self.locked_cert = Some(cert1.clone());
             self.current_view = self.current_view.max(view + 1);
             self.current_epoch = Some(proposal_epoch);
@@ -2231,10 +2280,16 @@ impl<T: NodeType> Consensus<T> {
             || self.decided_views.contains(&view)
             || view <= self.decide_floor()
         {
+            if lock_advanced {
+                quint_oracle::vote_2_and_update_lock(*view);
+            }
             return;
         }
 
         if !self.staked_in_epoch(proposal_epoch) {
+            if lock_advanced {
+                quint_oracle::vote_2_and_update_lock(*view);
+            }
             return;
         }
 
@@ -2252,10 +2307,14 @@ impl<T: NodeType> Consensus<T> {
             Ok(vote) => vote,
             Err(err) => {
                 warn!(%view, %err, "failed to created signed vote2");
+                if lock_advanced {
+                    quint_oracle::vote_2_and_update_lock(*view);
+                }
                 return;
             },
         };
         self.voted_2_views.insert(view);
+        quint_oracle::vote_2_and_update_lock(*view);
         // Lock is set above and >= view; the vote waits until it is persisted.
         let required = self
             .locked_view()

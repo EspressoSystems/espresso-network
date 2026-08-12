@@ -37,6 +37,10 @@ const HARNESS_EPOCH_HEIGHT: u64 = 10;
 pub(crate) struct TestHarness {
     coordinator: MockCoordinator,
     outputs: Outbox<ConsensusOutput<TestTypes>>,
+    /// Quint oracle trace boundary for the running test. Held for the harness's
+    /// lifetime so every test reports without being edited individually; inert
+    /// unless `QUINT_ORACLE_URL` is set.
+    _oracle: quint_oracle_client::TestGuard,
 }
 
 impl TestHarness {
@@ -49,6 +53,7 @@ impl TestHarness {
     }
 
     pub async fn new_with_timer(node_index: u64, timer_duration: Duration) -> Self {
+        let oracle = crate::quint_oracle::start_test();
         let epoch_height = 10;
         crate::logging::init_test_logging();
         let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
@@ -161,6 +166,7 @@ impl TestHarness {
         Self {
             coordinator,
             outputs: Outbox::new(),
+            _oracle: oracle,
         }
     }
 

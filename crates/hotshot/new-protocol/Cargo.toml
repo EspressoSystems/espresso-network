@@ -29,6 +29,7 @@ hotshot-testing = { workspace = true }
 hotshot-types = { workspace = true }
 hotshot-utils = { workspace = true }
 parking_lot = { workspace = true }
+quint-oracle-client = { path = "../../../quint-specs/oracle-client/rust" }
 rand = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }

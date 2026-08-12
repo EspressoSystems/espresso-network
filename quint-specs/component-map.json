@@ -1,0 +1,45 @@
+{
+  "components": [
+    {
+      "dependencies": [],
+      "description": "One node's fast-finality BFT state machine: two-phase voting (Cert1 then Cert2), the safety-or-liveness lock rule, storage-gated vote release, timeouts, and the decide rule with its ancestor gap-fill walk.",
+      "headlineProperties": [
+        "decided leaves form a single chain: two conflicting proposals are never both decided",
+        "a view decides only when a Cert1 and a Cert2 for that view both exist and match the proposal commitment",
+        "a node casts at most one phase-1 vote and one phase-2 vote per view",
+        "the locked certificate view is non-decreasing, and phase-2 votes are only cast for proposals passing is_safe (safety or liveness rule) against the lock",
+        "last_decided_view is non-decreasing: a gap-fill decide of an older view never moves the watermark backward",
+        "a phase-2 vote is released only after the new lock (high_qc) is persisted",
+        "after a timeout certificate for view v, the leader of v+1 can propose and views advance (liveness)"
+      ],
+      "key": "new-consensus-protocol",
+      "name": "New Consensus Protocol",
+      "paths": [
+        "crates/hotshot/new-protocol/src/consensus.rs",
+        "crates/hotshot/new-protocol/src/vote.rs",
+        "crates/hotshot/new-protocol/src/vote/accumulate.rs",
+        "crates/hotshot/new-protocol/src/cert_verifier.rs",
+        "crates/hotshot/new-protocol/src/message.rs",
+        "crates/hotshot/new-protocol/src/coordinator.rs"
+      ],
+      "role": "user",
+      "specHints": "Single state machine: `Consensus<T>` (consensus.rs:202) driven by `Consensus::apply(ConsensusInput, &mut Outbox<ConsensusOutput>)` (consensus.rs:637) — one input dispatcher, all effects pushed as outputs, so it maps directly to guarded Quint actions over pure defs. Input/output alphabets are the enums `ConsensusInput` (consensus.rs:82) and `ConsensusOutput` (consensus.rs:124). State to model: proposals, certs (Cert1), certs2 (Cert2), timeout_certs, locked_cert, decided_views, last_decided_view, voted_2_views, blocks_reconstructed, current_view/current_epoch. Rules: maybe_propose (1548), maybe_vote_1 (1993), maybe_vote_2_and_update_lock (2159), is_safe (2274, safety-or-liveness lock rule), maybe_decide (1740, decide + ancestor gap-fill walk), handle_timeout (1320), handle_timeout_certificate (1431), handle_epoch_change (1487), release_vote1/release_vote2 persistence gating (1913/1936). Vote tally and certificate formation are per-view in vote.rs via the `Ballot`/`Tally` traits and `CheckedAccumulator` (vote/accumulate.rs); certificate validity is established in cert_verifier.rs (`ValidCert`), so a spec can treat certificates as abstract stake-threshold facts. Deliberate scope cut: VID dispersal/reconstruction (vid/), cliquenet networking (network.rs), storage (storage.rs), state/header validation (state.rs), and legacy cutover (cutover.rs, apply_pre_cutover_seed at consensus.rs:477) are adjacent components — model them as abstract inputs (BlockReconstructed, Stored, StateValidated) rather than in this spec. Tests run as in-crate Rust tests via the harness in tests/common/harness.rs; the crate is excluded from the default nextest run (justfile:149,154) and tested in CI's hotshot.yml. Protocol context: doc/stake-table-fast-finality.md.",
+      "tests": [
+        "crates/hotshot/new-protocol/src/tests/consensus.rs",
+        "crates/hotshot/new-protocol/src/tests/integration.rs",
+        "crates/hotshot/new-protocol/src/tests/failures.rs",
+        "crates/hotshot/new-protocol/src/tests/epoch_change.rs",
+        "crates/hotshot/new-protocol/src/tests/restarts.rs",
+        "crates/hotshot/new-protocol/src/tests/cutover.rs",
+        "crates/hotshot/new-protocol/src/tests/legacy_cutover.rs",
+        "crates/hotshot/new-protocol/src/tests/common/harness.rs"
+      ]
+    }
+  ],
+  "surveyedAt": {
+    "commit": "",
+    "date": "",
+    "dirty": false
+  },
+  "version": 1
+}
