@@ -26,8 +26,7 @@ use hotshot_types::data::VidCommitment;
 use http_wire::{self as wire, cors_layer, healthcheck_response};
 
 // Read from `hotshot_query_service`'s `Options` (their only declaration) so a dependency bump
-// that changes the default changes this service too. The availability limits live with the
-// router now; this module only serves `node`.
+// that changes the default changes this service too.
 fn window_limit() -> usize {
     hotshot_query_service::node::Options::default().window_limit
 }

@@ -485,8 +485,8 @@ fn enforce_range_limit(from: usize, until: usize, limit: usize) -> Result<(), Er
     Ok(())
 }
 
-// Loaders shared by handlers: resolve a fetch against the configured timeout and report missing
-// data with the same error variants (and hence status codes) as the old handlers.
+// The `load_*` helpers report missing data with the same error variants (and hence status codes)
+// as the old handlers.
 
 async fn load_leaf<Types, S>(
     state: &RouterState<S>,
@@ -779,8 +779,6 @@ where
     Ok(TransactionWithProofQueryData::new(tx.transaction, proof))
 }
 
-// Leaf handlers (v1 semantics).
-
 async fn get_leaf<Types, S>(
     State(state): State<Arc<RouterState<S>>>,
     headers: HeaderMap,
@@ -846,8 +844,6 @@ where
         drive_ws_stream(socket, stream, format).await;
     })
 }
-
-// Header handlers.
 
 async fn get_header<Types, S>(
     State(state): State<Arc<RouterState<S>>>,
@@ -933,8 +929,6 @@ where
         drive_ws_stream(socket, stream, format).await;
     })
 }
-
-// Block handlers.
 
 async fn get_block<Types, S>(
     State(state): State<Arc<RouterState<S>>>,
@@ -1056,8 +1050,6 @@ where
     respond(&headers, result)
 }
 
-// Payload handlers.
-
 async fn get_payload<Types, S>(
     State(state): State<Arc<RouterState<S>>>,
     headers: HeaderMap,
@@ -1146,8 +1138,6 @@ where
     })
 }
 
-// VID common handlers (v1 semantics).
-
 async fn get_vid_common<Types, S>(
     State(state): State<Arc<RouterState<S>>>,
     headers: HeaderMap,
@@ -1235,8 +1225,6 @@ where
         drive_ws_stream(socket, stream, format).await;
     })
 }
-
-// Transaction handlers.
 
 async fn get_transaction<Types, S>(
     State(state): State<Arc<RouterState<S>>>,
@@ -1396,8 +1384,6 @@ where
     })
 }
 
-// Miscellaneous handlers.
-
 async fn get_limits<S>(State(state): State<Arc<RouterState<S>>>, headers: HeaderMap) -> Response
 where
     S: Send + Sync + 'static,
@@ -1508,7 +1494,6 @@ mod test {
     }
 
     async fn validate(client: &Client<AppError, MockBase>, height: u64) {
-        // Check the consistency of every block/leaf pair.
         for i in 0..height {
             // Limit the number of blocks we validate in order to
             // speed up the tests.
@@ -1517,7 +1502,6 @@ mod test {
             }
             tracing::info!("validate block {i}/{height}");
 
-            // Check that looking up the leaf various ways returns the correct leaf.
             let leaf: LeafQueryData<MockTypes> =
                 client.get(&format!("leaf/{i}")).send().await.unwrap();
             assert_eq!(leaf.height(), i);
@@ -1530,7 +1514,6 @@ mod test {
                     .unwrap()
             );
 
-            // Check that looking up the block various ways returns the correct block.
             let block: BlockQueryData<MockTypes> =
                 client.get(&format!("block/{i}")).send().await.unwrap();
             let expected_payload = PayloadQueryData::from(block.clone());
@@ -1568,7 +1551,6 @@ mod test {
                     .await
                     .unwrap(),
             );
-            // Look up the common VID data.
             let common: VidCommonQueryData<MockTypes> = client
                 .get(&format!("vid/common/{}", block.height()))
                 .send()
@@ -1660,8 +1642,6 @@ mod test {
                     .common()
             );
 
-            // Check that looking up each transaction in the block various ways returns the correct
-            // transaction.
             for (j, txn_from_block) in block.enumerate() {
                 let txn: TransactionQueryData<MockTypes> = client
                     .get(&format!("transaction/{}/{}/noproof", i, j.position))
@@ -1768,11 +1748,9 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_api() {
-        // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource>::init().await;
         network.start().await;
 
-        // Start the web server.
         let options = Options {
             small_object_range_limit: 500,
             large_object_range_limit: 500,
@@ -1847,19 +1825,16 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_api_epochs() {
-        // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource>::init().await;
         let epoch_height = network.epoch_height();
         network.start().await;
 
-        // Start the web server.
         let client = start_client(availability_router::<MockTypes, _>(
             &Default::default(),
             network.data_source(),
         ))
         .await;
 
-        // Watch consensus progress through several epoch boundaries via the header stream.
         let headers = client
             .socket("stream/headers/0")
             .subscribe::<Header<MockTypes>>()
@@ -1884,11 +1859,9 @@ mod test {
         let large_object_range_limit = 2;
         let small_object_range_limit = 3;
 
-        // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource>::init().await;
         network.start().await;
 
-        // Start the web server.
         let client = start_client(availability_router::<MockTypes, _>(
             &Options {
                 large_object_range_limit,
@@ -1899,7 +1872,6 @@ mod test {
         ))
         .await;
 
-        // Check reported limits.
         assert_eq!(
             client.get::<Limits>("limits").send().await.unwrap(),
             Limits {
@@ -1908,7 +1880,6 @@ mod test {
             }
         );
 
-        // Wait for enough blocks to be produced.
         client
             .socket("stream/blocks/0")
             .subscribe::<BlockQueryData<MockTypes>>()

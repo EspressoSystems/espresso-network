@@ -11,9 +11,8 @@ pub enum BlockId {
 
 /// Espresso's extensions to the availability API.
 ///
-/// The base availability surface (leaves, headers, blocks, payloads, VID common, transactions,
-/// limits, cert2 and their streams) is served by `hotshot_query_service::availability::router`,
-/// which the binary mounts alongside these routes; see [`crate::create_router_v1`].
+/// The base availability surface is served by `hotshot_query_service::availability::router`,
+/// mounted alongside these routes; see [`crate::create_router_v1`].
 #[async_trait]
 pub trait AvailabilityApi {
     type NamespaceProofQueryData: Serialize + Send + Sync + 'static;

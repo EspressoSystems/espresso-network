@@ -634,10 +634,9 @@ where
         .with_state(state)
 }
 
-/// Espresso's availability extensions, mounted alongside `base`: the
-/// `hotshot_query_service::availability` router the caller builds from its concrete data source.
-/// `base` is nested at the module prefix, so its routes and their documentation land on the same
-/// `/v1/availability/...` paths they had when this crate re-declared them.
+/// Espresso's availability extensions plus `base`, the `hotshot_query_service::availability`
+/// router. Nesting `base` at the module prefix keeps its routes (and their documentation) on the
+/// `/v1/availability/...` paths this crate used to declare itself.
 pub(crate) fn router_availability<S>(state: S, base: ApiRouter) -> ApiRouter
 where
     S: v1::AvailabilityApi + Clone + Send + Sync + 'static,
@@ -3248,10 +3247,8 @@ mod tests {
 
     use super::*;
 
-    /// Stand-in for the `hotshot_query_service::availability` router, registering two of the same
-    /// relative paths so the tests can check where mounting puts them. That crate is not a
-    /// dependency here (this one is deliberately agnostic of the node types), so the real router
-    /// cannot be built in these tests; its own tests cover the paths it declares.
+    /// Stand-in registering two of the real availability router's paths so the tests can check
+    /// where mounting puts them; the real router's crate is not a dependency here.
     fn mock_availability_base() -> ApiRouter {
         ApiRouter::new()
             .api_route(
@@ -4184,7 +4181,6 @@ mod tests {
             paths[routes::v1::LEAF_BY_HEIGHT_ROUTE]["get"]["summary"],
             "Get leaf"
         );
-        // The extensions are still there alongside the base.
         assert!(paths.contains_key(routes::v1::STATE_CERT_V1_ROUTE));
     }
 

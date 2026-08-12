@@ -43,8 +43,8 @@ pub fn url(base: &::url::Url, path: impl AsRef<str>) -> ::url::Url {
 /// SQL mode registered it unconditionally. `submit`, `config`, `explorer`, `light-client`, and
 /// `hotshot-events` follow `Options`, matching `Options::init_with_query_module_sql`.
 ///
-/// `availability_base` is the `hotshot_query_service::availability` router, built by the caller
-/// from its data source; it is mounted unconditionally, alongside Espresso's extensions.
+/// `availability_base` is the `hotshot_query_service::availability` router; see
+/// [`create_router_v1`].
 pub async fn serve_axum<S>(
     port: u16,
     state: S,
@@ -125,8 +125,8 @@ pub struct OptionalModules {
 /// reward/merklized-state/explorer/database traits, so those modules aren't served (a request to
 /// one of their routes 404s, matching tide).
 ///
-/// `availability_base` is the `hotshot_query_service::availability` router, built by the caller
-/// from its data source; it is mounted unconditionally, alongside Espresso's extensions.
+/// `availability_base` is the `hotshot_query_service::availability` router; see
+/// [`create_router_v1`].
 pub async fn serve_axum_fs<S>(
     port: u16,
     state: S,

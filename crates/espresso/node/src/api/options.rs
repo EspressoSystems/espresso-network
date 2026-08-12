@@ -312,9 +312,8 @@ impl Options {
 
         let port = self.http.port;
         let ds_for_axum = ds.clone();
-        // `espresso-api` is agnostic of the node types, so the base availability routes are built
-        // here and mounted there. The default options are the 500ms fetch timeout and the 500/100
-        // small/large object range limits this API has always enforced.
+        // Built here because `espresso-api` cannot (it is agnostic of the node types); the
+        // default `Options` are the limits this API has always enforced.
         let availability_base =
             availability_router::<SeqTypes, _>(&AvailabilityOptions::default(), (*ds).clone());
         let env_vars = get_public_env_vars().unwrap_or_default();
@@ -405,9 +404,8 @@ impl Options {
 
         let port = self.http.port;
         let ds_for_axum = ds.clone();
-        // `espresso-api` is agnostic of the node types, so the base availability routes are built
-        // here and mounted there. The default options are the 500ms fetch timeout and the 500/100
-        // small/large object range limits this API has always enforced.
+        // Built here because `espresso-api` cannot (it is agnostic of the node types); the
+        // default `Options` are the limits this API has always enforced.
         let availability_base =
             availability_router::<SeqTypes, _>(&AvailabilityOptions::default(), (*ds).clone());
         let env_vars = get_public_env_vars().unwrap_or_default();
