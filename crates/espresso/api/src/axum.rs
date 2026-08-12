@@ -26,8 +26,8 @@ use axum::{
     routing::get,
 };
 use http_wire::{
-    ContentType, DecodeFailure, WireError, body_limit_layer, cors_layer, drive_ws_stream,
-    healthcheck_response, module_healthcheck_response,
+    ContentType, DecodeFailure, WireError, drive_ws_stream, healthcheck_response,
+    module_healthcheck_response,
 };
 use schemars::transform::Transform;
 use serde::{Deserialize, Serialize};
@@ -293,43 +293,6 @@ impl<T: schemars::JsonSchema> aide::operation::OperationInput for SendQuery<T> {
         );
         aide::operation::add_parameters(ctx, operation, params);
     }
-}
-
-/// Create a combined router serving both v1 and v2 APIs.
-///
-/// `availability_base` is the `hotshot_query_service::availability` router; see
-/// [`create_router_v1`].
-pub fn create_combined_router<S>(state: S, availability_base: ApiRouter) -> Router
-where
-    S: v1::RewardApi
-        + v1::AvailabilityApi
-        + v1::BlockStateApi
-        + v1::FeeStateApi
-        + v1::StatusApi
-        + v1::ConfigApi
-        + v1::NodeApi
-        + v1::CatchupApi
-        + v1::SubmitApi
-        + v1::StateSignatureApi
-        + v1::HotShotEventsApi
-        + v1::LightClientApi
-        + v1::ExplorerApi
-        + v1::TokenApi
-        + v1::DatabaseApi
-        + v2::RewardApi
-        + v2::DataApi
-        + v2::ConsensusApi
-        + Clone
-        + Send
-        + Sync
-        + 'static,
-{
-    let router_v1 = create_router_v1(state.clone(), availability_base);
-    let router_v2 = create_router_v2(state);
-
-    with_top_level_routes(router_v2.merge(router_v1))
-        .layer(body_limit_layer())
-        .layer(cors_layer())
 }
 
 /// Add the routes that every mode serves regardless of which API modules are enabled:
@@ -3241,7 +3204,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use futures::stream::BoxStream;
-    use http_wire::WireVersion;
+    use http_wire::{WireVersion, cors_layer};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use vbs::{BinarySerializer, Serializer};
 

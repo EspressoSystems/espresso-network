@@ -19,7 +19,7 @@ pub mod proto {
 pub use aide::axum::ApiRouter;
 
 pub use self::{
-    axum::{create_combined_router, create_router_v1, create_router_v2, routes},
+    axum::{create_router_v1, create_router_v2, routes},
     tonic::create_reward_service,
 };
 

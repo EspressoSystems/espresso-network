@@ -8138,8 +8138,6 @@ dependencies = [
  "http-wire",
  "light-client",
  "log-panics",
- "serde",
- "serde_json",
  "tokio",
  "toml",
  "tracing",

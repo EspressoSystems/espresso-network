@@ -24,18 +24,14 @@ use std::{sync::Arc, time::Duration};
 
 use aide::axum::{ApiRouter, routing::get_with};
 use axum::{
-    Router,
     extract::{Path, State, WebSocketUpgrade},
     http::HeaderMap,
     response::Response,
-    routing::get,
 };
 use disco_types::{request::RequestError, status::StatusCode};
 use futures::{StreamExt, TryStreamExt};
 use hotshot_types::{data::VidCommitment, traits::node_implementation::NodeType};
-use http_wire::{
-    self as wire, ContentType, body_limit_layer, cors_layer, drive_ws_stream, healthcheck_response,
-};
+use http_wire::{self as wire, ContentType, drive_ws_stream};
 use serde::Serialize;
 use snafu::OptionExt;
 use tagged_base64::TaggedBase64;
@@ -150,16 +146,6 @@ where
         )
         .merge(common_router::<Types, S>())
         .with_state(RouterState::new(options, data_source))
-}
-
-/// Wraps an availability router with the app-level `healthcheck`, a request body limit, and
-/// permissive CORS headers. Mounting the module prefix is up to the caller.
-pub fn app(api: Router) -> Router {
-    Router::new()
-        .route("/healthcheck", get(healthcheck))
-        .merge(api)
-        .layer(body_limit_layer())
-        .layer(cors_layer())
 }
 
 /// Encode a handler result, wrapping the module error in the crate-level
@@ -457,10 +443,6 @@ where
                 )
             }),
         )
-}
-
-async fn healthcheck(headers: HeaderMap) -> Response {
-    healthcheck_response(&headers)
 }
 
 /// Parses a TaggedBase64 path parameter the way tide-disco's `blob_param` did: any failure is a
@@ -1425,8 +1407,10 @@ where
 mod test {
     use std::fmt::Debug;
 
+    use axum::{Router, routing::get};
     use committable::Committable;
     use http_client::{Client, ClientError};
+    use http_wire::{body_limit_layer, cors_layer, healthcheck_response};
     use serde::de::DeserializeOwned;
     use test_utils::reserve_tcp_port;
 
@@ -1439,15 +1423,26 @@ mod test {
         },
     };
 
+    async fn healthcheck(headers: HeaderMap) -> Response {
+        healthcheck_response(&headers)
+    }
+
+    /// The app-level wrapper the real services provide themselves: `/healthcheck`, the module
+    /// mount, body limit and CORS.
+    fn app(api: ApiRouter) -> Router {
+        Router::new()
+            .route("/healthcheck", get(healthcheck))
+            .nest("/availability", Router::from(api))
+            .layer(body_limit_layer())
+            .layer(cors_layer())
+    }
+
     /// Serve `api` under the `/availability` prefix on a fresh port and return a connected
     /// client rooted at that prefix.
     async fn start_client(api: ApiRouter) -> Client<AppError, MockBase> {
         let port = reserve_tcp_port().unwrap();
         let url = format!("http://0.0.0.0:{port}").parse().unwrap();
-        let _server = wire::spawn_serve(
-            &url,
-            app(Router::new().nest("/availability", Router::from(api))),
-        );
+        let _server = wire::spawn_serve(&url, app(api));
 
         let client = Client::new(
             format!("http://localhost:{port}/availability")
@@ -1458,39 +1453,21 @@ mod test {
         client
     }
 
-    /// Get the current ledger height and a list of non-empty leaf/block pairs.
-    async fn get_non_empty_blocks(
-        client: &Client<AppError, MockBase>,
-    ) -> (
-        u64,
-        Vec<(LeafQueryData<MockTypes>, BlockQueryData<MockTypes>)>,
-    ) {
-        let mut blocks = vec![];
-        // Ignore the genesis block (start from height 1).
+    /// Assert every block in the ledger so far is empty (the genesis block is ignored).
+    async fn assert_all_blocks_empty(client: &Client<AppError, MockBase>) {
         for i in 1.. {
             match client
                 .get::<BlockQueryData<MockTypes>>(&format!("block/{i}"))
                 .send()
                 .await
             {
-                Ok(block) => {
-                    if !block.is_empty() {
-                        let leaf = client.get(&format!("leaf/{i}")).send().await.unwrap();
-                        blocks.push((leaf, block));
-                    }
-                },
+                Ok(block) => assert!(block.is_empty(), "unexpected non-empty block {i}"),
                 Err(AppError::Availability {
                     source: Error::FetchBlock { .. },
-                }) => {
-                    tracing::info!(
-                        "found end of ledger at height {i}, non-empty blocks are {blocks:?}",
-                    );
-                    return (i, blocks);
-                },
+                }) => break,
                 Err(err) => panic!("unexpected error {err}"),
             }
         }
-        unreachable!()
     }
 
     async fn validate(client: &Client<AppError, MockBase>, height: u64) {
@@ -1761,7 +1738,7 @@ mod test {
             network.data_source(),
         ))
         .await;
-        assert_eq!(get_non_empty_blocks(&client).await.1, vec![]);
+        assert_all_blocks_empty(&client).await;
 
         // Submit a few blocks and make sure each one gets reflected in the query service and
         // preserves the consistency of the data and indices.
