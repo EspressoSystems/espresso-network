@@ -1867,25 +1867,31 @@ where
 
 #[cfg(any(test, feature = "testing"))]
 pub mod test_helpers {
-    use std::{cmp::max, time::Duration};
+    use std::{
+        cmp::max,
+        collections::HashSet,
+        sync::atomic::{AtomicU32, Ordering},
+        time::Duration,
+    };
 
     use alloy::{
         network::EthereumWallet,
-        primitives::{Address, U256},
-        providers::{ProviderBuilder, ext::AnvilApi},
+        primitives::{Address, U256, utils::parse_ether},
+        providers::{Provider, ProviderBuilder, ext::AnvilApi},
+        signers::local::PrivateKeySigner,
     };
-    use committable::Committable;
+    use committable::{Commitment, Committable};
     use espresso_contract_deployer::{
         Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS, builder::DeployerArgsBuilder,
         network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
         MOCK_SEQUENCER_VERSIONS, NamespaceId, ValidatedState,
-        v0::traits::{NullEventConsumer, PersistenceOptions, StateCatchup},
+        v0::traits::{NullEventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
     };
     use futures::{
         future::{FutureExt, join_all},
-        stream::StreamExt,
+        stream::{Stream, StreamExt},
     };
     use hotshot::types::{Event, EventType};
     use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
@@ -1895,7 +1901,10 @@ pub mod test_helpers {
     };
     use itertools::izip;
     use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme};
-    use staking_cli::demo::{DelegationConfig, StakingTransactions};
+    use staking_cli::{
+        Transaction as StakingTransaction,
+        demo::{DelegationConfig, StakingTransactions},
+    };
     use surf_disco::Client;
     use tempfile::TempDir;
     use test_utils::reserve_tcp_port;
@@ -1910,7 +1919,10 @@ pub mod test_helpers {
         catchup::NullStateCatchup,
         network,
         persistence::no_storage,
-        testing::{TestConfig, TestConfigBuilder, run_legacy_builder, wait_for_decide_on_handle},
+        testing::{
+            TestConfig, TestConfigBuilder, deploy_stake_table, run_legacy_builder,
+            wait_for_decide_on_handle, wait_for_epochs,
+        },
     };
 
     pub const STAKE_TABLE_CAPACITY_FOR_TEST: usize = 10;
@@ -1922,6 +1934,8 @@ pub mod test_helpers {
         // todo (abdul): remove this when fs storage is removed
         pub temp_dir: Option<TempDir>,
         pub contracts: Option<Contracts>,
+        /// Deferred node indices not yet started (see [`Self::start_deferred_node`]).
+        deferred: Vec<usize>,
     }
 
     pub struct TestNetworkConfig<const NUM_NODES: usize, P, C>
@@ -1935,6 +1949,7 @@ pub mod test_helpers {
         network_config: TestConfig<{ NUM_NODES }>,
         api_config: Options,
         contracts: Option<Contracts>,
+        deferred_start: Vec<usize>,
     }
 
     impl<const NUM_NODES: usize, P, C> TestNetworkConfig<{ NUM_NODES }, P, C>
@@ -1960,6 +1975,7 @@ pub mod test_helpers {
         network_config: Option<TestConfig<{ NUM_NODES }>>,
         contracts: Option<Contracts>,
         initial_token_supply: Option<U256>,
+        deferred_start: Vec<usize>,
     }
 
     impl Default for TestNetworkConfigBuilder<5, no_storage::Options, NullStateCatchup> {
@@ -1972,6 +1988,7 @@ pub mod test_helpers {
                 api_config: None,
                 contracts: None,
                 initial_token_supply: None,
+                deferred_start: Vec::new(),
             }
         }
     }
@@ -1989,6 +2006,7 @@ pub mod test_helpers {
                 api_config: None,
                 contracts: None,
                 initial_token_supply: None,
+                deferred_start: Vec::new(),
             }
         }
     }
@@ -2020,6 +2038,7 @@ pub mod test_helpers {
                 persistence: Some(persistence),
                 contracts: self.contracts,
                 initial_token_supply: self.initial_token_supply,
+                deferred_start: self.deferred_start,
             }
         }
 
@@ -2040,7 +2059,15 @@ pub mod test_helpers {
                 persistence: self.persistence,
                 contracts: self.contracts,
                 initial_token_supply: self.initial_token_supply,
+                deferred_start: self.deferred_start,
             }
+        }
+
+        /// Defers starting the nodes at the given (trailing) indices; they
+        /// join later via [`TestNetwork::start_deferred_node`].
+        pub fn deferred_start(mut self, indices: &[usize]) -> Self {
+            self.deferred_start = indices.to_vec();
+            self
         }
 
         pub fn network_config(mut self, network_config: TestConfig<{ NUM_NODES }>) -> Self {
@@ -2060,6 +2087,27 @@ pub mod test_helpers {
             delegation_config: DelegationConfig,
             stake_table_version: StakeTableContractVersion,
             upgrade: Upgrade,
+        ) -> anyhow::Result<Self> {
+            let registered: Vec<usize> = (0..NUM_NODES).collect();
+            self.pos_hook_with_registered(
+                delegation_config,
+                stake_table_version,
+                upgrade,
+                &registered,
+            )
+            .await
+        }
+
+        /// Like [`Self::pos_hook`], but registers only the validators at the
+        /// `registered` node indices on the stake table contract. The other
+        /// nodes still run from genesis (which seeds the first two epochs)
+        /// and can be registered mid-test via [`register_validators`].
+        pub async fn pos_hook_with_registered(
+            self,
+            delegation_config: DelegationConfig,
+            stake_table_version: StakeTableContractVersion,
+            upgrade: Upgrade,
+            registered: &[usize],
         ) -> anyhow::Result<Self> {
             if upgrade.base < EPOCH_VERSION && upgrade.target < EPOCH_VERSION {
                 panic!("given version does not require pos deployment");
@@ -2112,18 +2160,9 @@ pub mod test_helpers {
                 .build()
                 .unwrap();
 
-            match stake_table_version {
-                StakeTableContractVersion::V1 => {
-                    args.deploy_to_stake_table_v1(&mut contracts).await
-                },
-                StakeTableContractVersion::V2 => {
-                    args.deploy_to_stake_table_v2(&mut contracts).await
-                },
-                StakeTableContractVersion::V3 => {
-                    args.deploy_to_stake_table_v3(&mut contracts).await
-                },
-            }
-            .context("failed to deploy contracts")?;
+            deploy_stake_table(&args, stake_table_version, &mut contracts)
+                .await
+                .context("failed to deploy contracts")?;
 
             let stake_table_address = contracts
                 .address(Contract::StakeTableProxy)
@@ -2133,7 +2172,7 @@ pub mod test_helpers {
                 l1_url.clone(),
                 &deployer,
                 stake_table_address,
-                network_config.staking_priv_keys(),
+                network_config.staking_key_sets(registered),
                 None,
                 delegation_config,
             )
@@ -2189,6 +2228,7 @@ pub mod test_helpers {
                 network_config: self.network_config.unwrap(),
                 api_config: self.api_config.unwrap(),
                 contracts: self.contracts,
+                deferred_start: self.deferred_start,
             }
         }
     }
@@ -2227,9 +2267,21 @@ pub mod test_helpers {
                 None
             };
 
+            let deferred = cfg.deferred_start.clone();
+            assert!(
+                deferred.len() < NUM_NODES,
+                "node 0 runs the API server and cannot be deferred"
+            );
+            assert_eq!(
+                deferred,
+                (NUM_NODES - deferred.len()..NUM_NODES).collect::<Vec<_>>(),
+                "deferred_start must be the trailing indices so `node(i)` stays aligned"
+            );
+
             let mut nodes = join_all(
                 izip!(cfg.state, cfg.persistence, cfg.catchup)
                     .enumerate()
+                    .filter(|(i, _)| !deferred.contains(i))
                     .map(|(i, (state, persistence, state_peers))| {
                         let opt = opt.clone();
                         let cfg = &cfg.network_config;
@@ -2306,7 +2358,46 @@ pub mod test_helpers {
                 cfg: cfg.network_config,
                 temp_dir,
                 contracts: cfg.contracts,
+                deferred,
             }
+        }
+
+        /// Initializes and starts a node deferred at construction (see
+        /// [`TestNetworkConfigBuilder::deferred_start`]), in ascending index
+        /// order; the node is then reachable via [`Self::node`] as usual.
+        pub async fn start_deferred_node<C: StateCatchup + 'static>(
+            &mut self,
+            i: usize,
+            state: ValidatedState,
+            persistence: P,
+            catchup: C,
+            upgrade: versions::Upgrade,
+        ) -> &SequencerContext<network::Memory, P::Persistence> {
+            assert_eq!(
+                self.deferred.first(),
+                Some(&i),
+                "deferred nodes must be started in ascending index order"
+            );
+            self.deferred.remove(0);
+
+            let ctx = self
+                .cfg
+                .init_node(
+                    i,
+                    state,
+                    persistence,
+                    Some(catchup),
+                    None,
+                    &NoMetrics,
+                    STAKE_TABLE_CAPACITY_FOR_TEST,
+                    NullEventConsumer,
+                    upgrade,
+                    self.cfg.upgrades(),
+                )
+                .await;
+            ctx.start_consensus().await;
+            self.peers.push(ctx);
+            self.peers.last().unwrap()
         }
 
         pub async fn stop_consensus(&mut self) {
@@ -2314,6 +2405,249 @@ pub mod test_helpers {
 
             for ctx in &mut self.peers {
                 ctx.shutdown_consensus().await;
+            }
+        }
+
+        /// The context of the node at index `i` (node 0 is the API server).
+        pub fn node(&self, i: usize) -> &SequencerContext<network::Memory, P::Persistence> {
+            if i == 0 {
+                &self.server
+            } else {
+                &self.peers[i - 1]
+            }
+        }
+    }
+
+    /// Registers and delegates to a batch of new validators mid-run, funding
+    /// their L1 accounts from the network's deployer signer.
+    pub async fn register_validators<const NUM_NODES: usize>(
+        cfg: &TestConfig<NUM_NODES>,
+        stake_table: Address,
+        indices: &[usize],
+        delegation_config: DelegationConfig,
+    ) -> anyhow::Result<()> {
+        let deployer = ProviderBuilder::new()
+            .wallet(EthereumWallet::from(cfg.signer()))
+            .connect_http(cfg.l1_url());
+        StakingTransactions::create(
+            cfg.l1_url(),
+            &deployer,
+            stake_table,
+            cfg.staking_key_sets(indices),
+            None,
+            delegation_config,
+        )
+        .await?
+        .apply_all()
+        .await?;
+        Ok(())
+    }
+
+    /// Deregisters the validators at the given node indices, each exit sent
+    /// from that validator's own funded provider.
+    pub async fn deregister_validators<const NUM_NODES: usize>(
+        cfg: &TestConfig<NUM_NODES>,
+        stake_table: Address,
+        indices: &[usize],
+    ) -> anyhow::Result<()> {
+        let providers = cfg.validator_providers();
+        for &i in indices {
+            let (address, provider) = &providers[i];
+            let receipt = StakingTransaction::DeregisterValidator { stake_table }
+                .send(provider)
+                .await?
+                .get_receipt()
+                .await?;
+            anyhow::ensure!(
+                receipt.status(),
+                "deregistration of validator {i} ({address}) reverted"
+            );
+        }
+        Ok(())
+    }
+
+    /// Funds a fresh delegator account (ETH via anvil, ESP from the deployer)
+    /// and delegates `amount` to `validator`. Returns the delegator's provider
+    /// so the test can later undelegate.
+    pub async fn delegate_new<const NUM_NODES: usize>(
+        cfg: &TestConfig<NUM_NODES>,
+        token: Address,
+        stake_table: Address,
+        validator: Address,
+        amount: U256,
+    ) -> anyhow::Result<impl Provider + Clone + use<NUM_NODES>> {
+        let deployer = ProviderBuilder::new()
+            .wallet(EthereumWallet::from(cfg.signer()))
+            .connect_http(cfg.l1_url());
+        let signer = PrivateKeySigner::random();
+        let delegator = signer.address();
+        let provider = ProviderBuilder::new()
+            .wallet(EthereumWallet::from(signer))
+            .connect_http(cfg.l1_url());
+
+        deployer
+            .anvil_set_balance(delegator, parse_ether("10").unwrap())
+            .await?;
+        let funding = StakingTransaction::Transfer {
+            token,
+            to: delegator,
+            amount,
+        }
+        .send(&deployer)
+        .await?
+        .get_receipt()
+        .await?;
+        anyhow::ensure!(funding.status(), "ESP transfer to delegator reverted");
+
+        for tx in [
+            StakingTransaction::Approve {
+                token,
+                spender: stake_table,
+                amount,
+            },
+            StakingTransaction::Delegate {
+                stake_table,
+                validator,
+                amount,
+            },
+        ] {
+            let receipt = tx.send(&provider).await?.get_receipt().await?;
+            anyhow::ensure!(receipt.status(), "delegator transaction reverted");
+        }
+        Ok(provider)
+    }
+
+    /// Waits epoch by epoch, starting at `start_epoch`, until the committee
+    /// reported by `node/validators/{epoch}` satisfies `pred`. Returns the
+    /// first matching epoch and its committee; panics after `max_epochs`
+    /// epochs without a match.
+    pub async fn wait_for_committee(
+        client: &Client<ServerError, SequencerApiVersion>,
+        events: &mut (impl Stream<Item = CoordinatorEvent<SeqTypes>> + Unpin),
+        epoch_height: u64,
+        start_epoch: u64,
+        max_epochs: u64,
+        pred: impl Fn(&AuthenticatedValidatorMap) -> bool,
+    ) -> (u64, AuthenticatedValidatorMap) {
+        let mut last = None;
+        for epoch in start_epoch..start_epoch + max_epochs {
+            wait_for_epochs(events, epoch_height, epoch).await;
+            let validators = client
+                .get::<AuthenticatedValidatorMap>(&format!("node/validators/{epoch}"))
+                .send()
+                .await
+                .expect("validators for a decided epoch");
+            if pred(&validators) {
+                return (epoch, validators);
+            }
+            last = Some((epoch, validators));
+        }
+        let last =
+            last.map(|(epoch, validators)| (epoch, validators.keys().copied().collect::<Vec<_>>()));
+        panic!(
+            "committee predicate not satisfied within {max_epochs} epochs starting at \
+             {start_epoch}; last committee: {last:?}"
+        );
+    }
+
+    /// The L1 accounts of the validators at the given node indices.
+    pub fn staking_addresses<const NUM_NODES: usize>(
+        cfg: &TestConfig<NUM_NODES>,
+        indices: &[usize],
+    ) -> HashSet<Address> {
+        cfg.staking_key_sets(indices)
+            .iter()
+            .map(|keys| keys.signer.address())
+            .collect()
+    }
+
+    /// Predicate for [`wait_for_committee`]: the committee is exactly the
+    /// expected set of validator accounts.
+    pub fn committee_is(expected: HashSet<Address>) -> impl Fn(&AuthenticatedValidatorMap) -> bool {
+        move |validators| validators.keys().copied().collect::<HashSet<_>>() == expected
+    }
+
+    /// Asserts the node is live: it must advance `epochs_ahead` epochs (at
+    /// least 1) past its current decided epoch, and — when the chain runs the
+    /// self-building new protocol — sequence a newly submitted transaction.
+    /// Inclusion is not asserted on legacy versions because the test-only
+    /// legacy builder stops producing non-empty blocks after roughly a
+    /// hundred views, independent of any stake table activity.
+    pub async fn assert_node_live<P: SequencerPersistence>(
+        node: &SequencerContext<network::Memory, P>,
+        epoch_height: u64,
+        epochs_ahead: u64,
+    ) {
+        assert!(epochs_ahead > 0, "epochs_ahead must be at least 1");
+        let mut events = node.event_stream();
+        let leaf = node.decided_leaf().await;
+        let current = leaf
+            .epoch(epoch_height)
+            .map(|epoch| epoch.u64())
+            .unwrap_or_default();
+        // `wait_for_epochs` returns on the first epoch strictly greater than
+        // its target.
+        wait_for_epochs(&mut events, epoch_height, current + epochs_ahead - 1).await;
+
+        if node.decided_leaf().await.block_header().version() < versions::NEW_PROTOCOL_VERSION {
+            tracing::info!("legacy version: skipping transaction-inclusion liveness check");
+            return;
+        }
+        // Detect inclusion via the header's namespace table: the namespace is
+        // unique to this call, and decide events at 0.6 do not always carry
+        // payloads.
+        static NAMESPACE_COUNTER: AtomicU32 = AtomicU32::new(10_101);
+        let namespace = NamespaceId::from(NAMESPACE_COUNTER.fetch_add(1, Ordering::Relaxed));
+        let tx = Transaction::new(namespace, vec![7; 8]);
+        node.submit_transaction(tx)
+            .await
+            .expect("live node accepts transactions");
+        tokio::time::timeout(Duration::from_secs(120), async {
+            loop {
+                let leaf = match events.next().await.unwrap() {
+                    CoordinatorEvent::LegacyEvent(Event {
+                        event: EventType::Decide { leaf_chain, .. },
+                        ..
+                    }) => leaf_chain[0].leaf.clone(),
+                    CoordinatorEvent::NewDecide { leaf_infos, .. } => leaf_infos[0].leaf.clone(),
+                    _ => continue,
+                };
+                if leaf
+                    .block_header()
+                    .ns_table()
+                    .find_ns_id(&namespace)
+                    .is_some()
+                {
+                    tracing::info!(height = leaf.height(), "transaction namespace sequenced");
+                    return;
+                }
+            }
+        })
+        .await
+        .expect("submitted transaction was not sequenced in time");
+    }
+
+    /// Asserts every node has decided at least `min_height`, and that nodes
+    /// which have decided the same height agree on the leaf.
+    pub async fn assert_nodes_agree<P: SequencerPersistence>(
+        nodes: &[&SequencerContext<network::Memory, P>],
+        min_height: u64,
+    ) {
+        let leaves = join_all(nodes.iter().map(|node| node.decided_leaf())).await;
+        let mut by_height: std::collections::BTreeMap<u64, Commitment<Leaf2>> = Default::default();
+        for (i, leaf) in leaves.iter().enumerate() {
+            assert!(
+                leaf.height() >= min_height,
+                "node {i} decided height {} is below {min_height}",
+                leaf.height()
+            );
+            if let Some(other) = by_height.insert(leaf.height(), leaf.commit()) {
+                assert_eq!(
+                    other,
+                    leaf.commit(),
+                    "decided-leaf divergence at height {}",
+                    leaf.height()
+                );
             }
         }
     }
@@ -5420,6 +5754,371 @@ mod test {
         // The reduced committee must keep deciding across further epoch
         // boundaries.
         wait_for_epochs(&mut events, EPOCH_HEIGHT, activation_epoch + 2).await;
+
+        Ok(())
+    }
+
+    /// A query node whose database is wiped has to rebuild itself from its peer
+    /// and rejoin consensus.
+    ///
+    /// Six nodes run the new protocol from genesis. Nodes 0 and 1 both serve the
+    /// query API and are peered at each other so either can backfill from the
+    /// other; nodes 2 through 5 are plain validators. Once the network decides
+    /// past epoch seven, node 1 is taken down and started again on an empty
+    /// database: no consensus state, no archive, no merklized state. To recover
+    /// it has to bootstrap its stake-table window, resync consensus, backfill
+    /// the chain it lost from node 0 (including the new protocol's cert2
+    /// finality certificates), and resume proposing.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_new_protocol_query_node_restart_with_fresh_storage() -> anyhow::Result<()> {
+        const NUM_NODES: usize = 6;
+        const EPOCH_HEIGHT: u64 = 10;
+        const EPOCHS_BEFORE_RESTART: u64 = 7;
+        const NEW_PROTOCOL: Upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
+        /// Bound on each stage of the restarted node's recovery.
+        const RECOVERY_TIMEOUT: Duration = Duration::from_secs(240);
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .epoch_start_block(0)
+            .build();
+
+        let api_port = reserve_tcp_port().expect("No ports free for query service");
+        let query_port = reserve_tcp_port().expect("No ports free for query service");
+        let api_url: Url = format!("http://localhost:{api_port}").parse()?;
+        let query_url: Url = format!("http://localhost:{query_port}").parse()?;
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        // Both query nodes need the catchup and light client modules: state
+        // catchup is served over the former, and the query service validates
+        // leaves fetched from a peer with light client proofs served over the
+        // latter. Every node can catch up from either query node.
+        let query_urls = vec![api_url.clone(), query_url.clone()];
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(
+                Options::with_port(api_port)
+                    .catchup(Default::default())
+                    .light_client(Default::default())
+                    .query_sql(
+                        Query {
+                            peers: vec![query_url.clone()],
+                            ..Default::default()
+                        },
+                        tmp_options(&storage[0]),
+                    ),
+            )
+            .network_config(network_config)
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<SequencerApiVersion>::from_urls(
+                    query_urls.clone(),
+                    Default::default(),
+                    Duration::from_secs(2),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                StakeTableContractVersion::V3,
+                NEW_PROTOCOL,
+            )
+            .await?
+            .build();
+
+        let genesis_state = config.states()[0].clone();
+        let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
+
+        // `TestNetwork` only gives node 0 an API, so node 1 has to be served
+        // separately to become the second query node. Its keys are already in the
+        // config, so it rejoins under the same index.
+        network.peers[0].shut_down().await;
+        network.peers.remove(0);
+
+        let cfg = network.cfg.clone();
+        let peer_url = api_url.clone();
+        let start_query_node = move |db: persistence::sql::Options| {
+            let cfg = cfg.clone();
+            let genesis_state = genesis_state.clone();
+            let peer_url = peer_url.clone();
+            async move {
+                let opt = Options::with_port(query_port)
+                    .catchup(Default::default())
+                    .light_client(Default::default())
+                    .query_sql(
+                        Query {
+                            peers: vec![peer_url.clone()],
+                            ..Default::default()
+                        },
+                        db.clone(),
+                    );
+                let ctx = opt
+                    .serve(move |metrics, consumer, storage| {
+                        async move {
+                            Ok(cfg
+                                .init_node(
+                                    1,
+                                    genesis_state,
+                                    db,
+                                    Some(StatePeers::<SequencerApiVersion>::from_urls(
+                                        vec![peer_url],
+                                        Default::default(),
+                                        Duration::from_secs(2),
+                                        &NoMetrics,
+                                    )),
+                                    storage,
+                                    &*metrics,
+                                    test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
+                                    consumer,
+                                    NEW_PROTOCOL,
+                                    Default::default(),
+                                )
+                                .await)
+                        }
+                        .boxed()
+                    })
+                    .await
+                    .expect("second query node should start");
+                ctx.start_consensus().await;
+                ctx
+            }
+        };
+
+        let mut query_node = start_query_node(tmp_options(&storage[1])).await;
+
+        let api_client: Client<ServerError, SequencerApiVersion> = Client::new(api_url);
+        let query_client: Client<ServerError, SequencerApiVersion> = Client::new(query_url);
+        assert!(
+            api_client.connect(Some(Duration::from_secs(60))).await,
+            "node 0 query API did not come up"
+        );
+        assert!(
+            query_client.connect(Some(Duration::from_secs(60))).await,
+            "node 1 query API did not come up"
+        );
+
+        // Run the network for seven epochs, watching a validator that stays up
+        // for the whole test.
+        let mut events = network.peers[0].event_stream();
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, EPOCHS_BEFORE_RESTART).await;
+
+        // The node about to be wiped must be healthy first, otherwise the test
+        // would prove nothing about recovering from a wipe.
+        let height_before_restart = query_node.decided_leaf().await.height();
+        timeout(
+            RECOVERY_TIMEOUT,
+            wait_until_block_height(
+                &query_client,
+                "block-state/block-height",
+                height_before_restart,
+            ),
+        )
+        .await
+        .context("second query node was not caught up before the restart")?;
+
+        // Pick a height the new protocol finalized with a cert2 to check the
+        // restarted node backfills those too. A cert2 is only stored at the
+        // height it finalizes, so scan back from the tip for one.
+        let mut finalized_height = None;
+        for height in (1..height_before_restart).rev() {
+            if api_client
+                .get::<espresso_types::Certificate2<SeqTypes>>(&format!(
+                    "availability/cert2/{height}"
+                ))
+                .send()
+                .await
+                .is_ok()
+            {
+                finalized_height = Some(height);
+                break;
+            }
+        }
+        let finalized_height =
+            finalized_height.context("no cert2 stored on a new protocol chain")?;
+
+        tracing::info!(
+            height_before_restart,
+            finalized_height,
+            "restarting the second query node with fresh storage"
+        );
+        query_node.shut_down().await;
+        // The node has to come back on the same ports: node 0 dials the query
+        // API at the peer URL baked in at network construction, and cliquenet
+        // peers dial the address registered in the stake table. `shut_down`
+        // aborts the server tasks without waiting for them to finish, so poll
+        // until the old listeners are actually gone before rebinding.
+        let cliquenet_port = network.cfg.known_nodes_with_stake()[1]
+            .connect_info
+            .as_ref()
+            .expect("node 1 registered cliquenet connect info")
+            .p2p_addr
+            .port();
+        timeout(RECOVERY_TIMEOUT, async {
+            for port in [query_port, cliquenet_port] {
+                while std::net::TcpListener::bind(("127.0.0.1", port)).is_err() {
+                    sleep(Duration::from_millis(100)).await;
+                }
+            }
+        })
+        .await
+        .context("shut-down node did not release its ports")?;
+
+        let fresh_storage = SqlDataSource::create_storage().await;
+        let query_node = start_query_node(tmp_options(&fresh_storage)).await;
+        assert!(
+            query_client.connect(Some(Duration::from_secs(60))).await,
+            "restarted query API did not come up"
+        );
+
+        // First it has to get back to the height it lost, in both the archive and
+        // the merklized state derived from it.
+        timeout(
+            RECOVERY_TIMEOUT,
+            wait_until_block_height(&query_client, "status/block-height", height_before_restart),
+        )
+        .await
+        .context("restarted node did not rebuild its archive")?;
+        timeout(
+            RECOVERY_TIMEOUT,
+            wait_until_block_height(
+                &query_client,
+                "block-state/block-height",
+                height_before_restart,
+            ),
+        )
+        .await
+        .context("restarted node did not rebuild its merklized state")?;
+
+        // Reaching the tip only proves it is following consensus again, so stream
+        // the whole range it lost from both nodes: the restarted node's copy can
+        // only have come from node 0, and it has to be the chain the network
+        // actually decided. Streaming also forces the restarted node to backfill
+        // every leaf in the range, since the stream endpoint fetches on demand.
+        let wiped_range = (height_before_restart - 1) as usize;
+        let stream_leaves = |client: Client<ServerError, SequencerApiVersion>,
+                             who: &'static str| async move {
+            let leaves: Vec<LeafQueryData<SeqTypes>> = client
+                .socket("availability/stream/leaves/1")
+                .subscribe()
+                .await
+                .with_context(|| format!("subscribing to {who}'s leaf stream"))?
+                .take(wiped_range)
+                .try_collect()
+                .await
+                .with_context(|| format!("{who}'s leaf stream errored"))?;
+            anyhow::Ok(leaves)
+        };
+        // Node 0's stream returns immediately, so the shared timeout is in
+        // practice a bound on the restarted node's backfill.
+        let (ours, theirs) = timeout(
+            RECOVERY_TIMEOUT,
+            future::try_join(
+                stream_leaves(query_client.clone(), "the restarted node"),
+                stream_leaves(api_client.clone(), "node 0"),
+            ),
+        )
+        .await
+        .context("streaming the wiped range stalled")??;
+        assert_eq!(
+            ours.len(),
+            wiped_range,
+            "restarted node's leaf stream ended early"
+        );
+        assert_eq!(
+            theirs.len(),
+            wiped_range,
+            "node 0's leaf stream ended early"
+        );
+        for (ours, theirs) in ours.iter().zip(&theirs) {
+            assert_eq!(
+                ours.hash(),
+                theirs.hash(),
+                "restarted node's leaf at height {} diverges from node 0",
+                ours.height(),
+            );
+            assert_eq!(
+                ours.header().version(),
+                NEW_PROTOCOL_VERSION,
+                "block {} should have been produced under the new protocol",
+                ours.height(),
+            );
+        }
+
+        let cert2 = timeout(RECOVERY_TIMEOUT, async {
+            loop {
+                match query_client
+                    .get::<espresso_types::Certificate2<SeqTypes>>(&format!(
+                        "availability/cert2/{finalized_height}"
+                    ))
+                    .send()
+                    .await
+                {
+                    Ok(cert2) => break cert2,
+                    Err(err) => {
+                        tracing::info!(finalized_height, %err, "cert2 not backfilled yet")
+                    },
+                }
+                sleep(Duration::from_secs(2)).await;
+            }
+        })
+        .await
+        .context("restarted node did not backfill the cert2")?;
+        assert_eq!(cert2.data.block_number, finalized_height);
+
+        // Tracking decides is not enough to call the node a participant: wait for
+        // a block it proposed itself to be decided after the restart.
+        let node_1_key = network.cfg.known_nodes_with_stake()[1]
+            .stake_table_entry
+            .stake_key;
+        let coordinator = query_node.node_state().coordinator;
+        let mut events = query_node.event_stream();
+        let proposed = timeout(RECOVERY_TIMEOUT, async {
+            while let Some(event) = events.next().await {
+                let leaf_infos: &[LeafInfo<SeqTypes>] = match &event {
+                    CoordinatorEvent::LegacyEvent(Event {
+                        event: EventType::Decide { leaf_chain, .. },
+                        ..
+                    }) => leaf_chain,
+                    CoordinatorEvent::NewDecide { leaf_infos, .. } => leaf_infos,
+                    _ => continue,
+                };
+                for LeafInfo { leaf, .. } in leaf_infos {
+                    if leaf.height() <= height_before_restart {
+                        continue;
+                    }
+                    let membership =
+                        match coordinator.membership_for_epoch(leaf.epoch(EPOCH_HEIGHT)) {
+                            Ok(membership) => membership,
+                            Err(err) => {
+                                tracing::warn!(
+                                    height = leaf.height(),
+                                    %err,
+                                    "no membership for epoch",
+                                );
+                                continue;
+                            },
+                        };
+                    match membership.leader(leaf.view_number()) {
+                        Ok(leader) if leader == node_1_key => return Some(leaf.height()),
+                        Ok(_) => {},
+                        Err(err) => {
+                            tracing::warn!(view = ?leaf.view_number(), %err, "leader unresolved");
+                        },
+                    }
+                }
+            }
+            None
+        })
+        .await
+        .context("restarted node's event stream stalled")?;
+        let proposed = proposed.context("restarted node's event stream ended")?;
+        tracing::info!(proposed, "restarted node proposed a decided block");
 
         Ok(())
     }
