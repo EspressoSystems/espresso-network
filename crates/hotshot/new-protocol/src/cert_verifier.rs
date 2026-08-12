@@ -303,6 +303,20 @@ impl<T: NodeType, C: Verifiable<T> + Send + 'static> CertVerifier<T, C> {
         self.invalid_certs
     }
 
+    /// Items this verifier is holding: spawned checks plus those parked behind
+    /// another sender's check or an unresolved epoch. Intake tests read this to
+    /// tell a certificate that was admitted from one dropped at the boundary.
+    #[cfg(test)]
+    pub(crate) fn pending_count(&self) -> usize {
+        self.tasks.len()
+            + self.pending_task.values().map(HashMap::len).sum::<usize>()
+            + self
+                .pending_membership
+                .values()
+                .map(HashMap::len)
+                .sum::<usize>()
+    }
+
     fn next_pending_sender(&mut self, k: C::Key) -> Option<(T::SignatureKey, C)> {
         let map = self.pending_task.get_mut(&k)?;
         let sender = map.keys().next().cloned()?;
@@ -444,6 +458,13 @@ where
     pub fn num_invalid_certs(&self) -> u64 {
         self.invalid_certs
     }
+
+    /// Items this verifier is holding: spawned checks plus those parked on an
+    /// unresolved epoch. See [`CertVerifier::pending_count`].
+    #[cfg(test)]
+    pub(crate) fn pending_count(&self) -> usize {
+        self.tasks.len() + self.pending.len()
+    }
 }
 
 /// The coordinator's network-certificate verifiers, one per certificate type.
@@ -502,5 +523,15 @@ impl<T: NodeType> CertVerifiers<T> {
             .saturating_add(self.timeout.num_invalid_certs())
             .saturating_add(self.advance.num_invalid_certs())
             .saturating_add(self.epoch_change.num_invalid_certs())
+    }
+
+    /// Items held across all five verifiers. See [`CertVerifier::pending_count`].
+    #[cfg(test)]
+    pub(crate) fn pending_count(&self) -> usize {
+        self.cert1.pending_count()
+            + self.cert2.pending_count()
+            + self.timeout.pending_count()
+            + self.advance.pending_count()
+            + self.epoch_change.pending_count()
     }
 }

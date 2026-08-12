@@ -316,6 +316,14 @@ where
         let epoch = vote.epoch()?;
         self.membership.membership_for_epoch(Some(epoch)).ok()
     }
+
+    /// Votes this collector is holding: per-view tally tasks plus votes parked
+    /// on an unresolved epoch. Intake tests read this to tell a vote that was
+    /// admitted from one dropped at the boundary.
+    #[cfg(test)]
+    pub(crate) fn pending_count(&self) -> usize {
+        self.accumulators.len() + self.pending.values().map(HashMap::len).sum::<usize>()
+    }
 }
 
 impl<T, V, C> VoteCollector<T, SimpleTally<T, V, C>>

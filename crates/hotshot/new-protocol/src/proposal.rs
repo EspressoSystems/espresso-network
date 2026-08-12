@@ -113,6 +113,13 @@ impl<T: NodeType> ProposalValidator<T> {
             }
         }
     }
+
+    /// Validation tasks not yet joined. Intake tests read this to tell a
+    /// proposal that was admitted from one dropped at the boundary.
+    #[cfg(test)]
+    pub(crate) fn pending_count(&self) -> usize {
+        self.tasks.len()
+    }
 }
 
 impl<T: NodeType> VidShareValidator<T> {

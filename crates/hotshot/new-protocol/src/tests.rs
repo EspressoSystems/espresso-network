@@ -6,6 +6,7 @@ mod consensus;
 mod cutover;
 mod epoch_change;
 mod failures;
+mod intake;
 mod integration;
 mod legacy_cutover;
 mod restarts;
