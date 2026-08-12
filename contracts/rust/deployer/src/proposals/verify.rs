@@ -25,7 +25,7 @@ use serde::Deserialize;
 use url::Url;
 
 use crate::proposals::{
-    deployment_info::deployment_info,
+    deployment_info::{deployment_info, member_addresses, member_name},
     proposal_toml::ProposalToml,
     safe_hash::{SafeTxHashes, safe_tx_hashes},
     write::{ISafe, default_rpc_url},
@@ -1023,6 +1023,7 @@ pub async fn run_verify(
     // Safe validation: assert toml Safes match deployment-info.
     let safe_rows = safe_address_rows(&toml, &kind);
     rows.extend(safe_rows);
+    timelock_role_rows(provider, &toml, &mut rows).await;
 
     // Recompute Safe hashes for both phases and assert against toml.
     let phase_hashes =
@@ -1190,36 +1191,34 @@ fn safe_address_rows(toml: &ProposalToml, kind: &ContractKind) -> Vec<CheckRow> 
         TimelockKind::SafeExit => &info.safe_exit_timelock,
     };
 
-    let proposer_match = signers.proposers.contains(&toml.schedule.safe);
-    rows.push(if proposer_match {
-        pass(
+    rows.push(match member_name(&signers.proposers, toml.schedule.safe) {
+        Some(name) => pass(
             "toml:schedule.safe",
-            format!("{} is a known proposer", toml.schedule.safe),
-        )
-    } else {
-        fail(
+            format!("{} is proposer {name}", toml.schedule.safe),
+        ),
+        None => fail(
             "toml:schedule.safe",
             format!(
-                "{} not in proposers {:?}",
-                toml.schedule.safe, signers.proposers
+                "{} not in proposers {}",
+                toml.schedule.safe,
+                member_addresses(&signers.proposers)
             ),
-        )
+        ),
     });
 
-    let executor_match = signers.executors.contains(&toml.execute.safe);
-    rows.push(if executor_match {
-        pass(
+    rows.push(match member_name(&signers.executors, toml.execute.safe) {
+        Some(name) => pass(
             "toml:execute.safe",
-            format!("{} is a known executor", toml.execute.safe),
-        )
-    } else {
-        fail(
+            format!("{} is executor {name}", toml.execute.safe),
+        ),
+        None => fail(
             "toml:execute.safe",
             format!(
-                "{} not in executors {:?}",
-                toml.execute.safe, signers.executors
+                "{} not in executors {}",
+                toml.execute.safe,
+                member_addresses(&signers.executors)
             ),
-        )
+        ),
     });
 
     rows
@@ -1297,6 +1296,50 @@ fn compute_and_validate_phase_hashes(
             message: toml.execute.message,
             safe_tx: toml.execute.safe_tx,
         },
+    }
+}
+
+/// Assert on chain that each phase Safe holds the role it needs on the timelock.
+///
+/// `safe_address_rows` only proves the Safes match the embedded deployment-info, which is a
+/// snapshot; roles can be granted or revoked after it was written.
+async fn timelock_role_rows(
+    provider: &impl Provider,
+    toml: &ProposalToml,
+    rows: &mut Vec<CheckRow>,
+) {
+    let timelock = OpsTimelock::new(toml.timelock, provider);
+    let roles = [
+        (
+            "schedule.role",
+            "proposer",
+            timelock.PROPOSER_ROLE().call().await,
+            toml.schedule.safe,
+        ),
+        (
+            "execute.role",
+            "executor",
+            timelock.EXECUTOR_ROLE().call().await,
+            toml.execute.safe,
+        ),
+    ];
+
+    for (label, role_name, role_id, safe) in roles {
+        let row = match role_id {
+            Err(e) => fail(label, format!("{role_name} role query failed: {e}")),
+            Ok(role) => match timelock.hasRole(role, safe).call().await {
+                Err(e) => fail(label, format!("hasRole query failed: {e}")),
+                Ok(true) => pass(label, format!("{safe} holds {role_name} on chain")),
+                Ok(false) => fail(
+                    label,
+                    format!(
+                        "{safe} does not hold {role_name} on timelock {}",
+                        toml.timelock
+                    ),
+                ),
+            },
+        };
+        rows.push(row);
     }
 }
 

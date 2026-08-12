@@ -12,7 +12,7 @@ use chrono::Local;
 use url::Url;
 
 use crate::proposals::{
-    deployment_info::deployment_info,
+    deployment_info::{Member, Multisig, deployment_info, member_address, member_names},
     proposal_toml::{PhaseToml, ProposalToml},
     safe_hash::safe_tx_hashes,
 };
@@ -109,8 +109,12 @@ pub struct WriteProposalParams {
     pub schedule_calldata: Bytes,
     /// Outer execute calldata (timelock.execute(...)) for hash computation.
     pub execute_calldata: Bytes,
-    /// Optional Safe address override (bypasses deployment-info resolution).
-    pub safe_override: Option<Address>,
+    /// Multisig submitting the `schedule` phase. Required when the timelock has more
+    /// than one proposer.
+    pub schedule_safe: Option<Multisig>,
+    /// Multisig submitting the `execute` phase. Required when the timelock has more
+    /// than one executor.
+    pub execute_safe: Option<Multisig>,
 }
 
 /// Query the Safe nonce on-chain.
@@ -123,6 +127,31 @@ async fn safe_nonce(provider: &impl Provider, safe: Address) -> Result<u64> {
     n.try_into().context("Safe nonce overflows u64")
 }
 
+/// Pick the Safe for one phase: the named multisig must hold the role, and without a
+/// name the role set must contain exactly one member.
+fn resolve_phase_safe(
+    name: Option<Multisig>,
+    role_holders: &[Member],
+    role: &str,
+    flag: &str,
+    network: &str,
+) -> Result<Address> {
+    match (name, role_holders) {
+        (Some(name), _) => member_address(role_holders, name).ok_or_else(|| {
+            anyhow::anyhow!(
+                "{flag} {name} does not hold the {role} role on {network}; holders: {}",
+                member_names(role_holders),
+            )
+        }),
+        (None, []) => anyhow::bail!("no {role} in deployment-info for {network}"),
+        (None, [only]) => Ok(only.address),
+        (None, many) => anyhow::bail!(
+            "several {role}s for {network}: {}; pass {flag}",
+            member_names(many),
+        ),
+    }
+}
+
 /// Resolve schedule/execute Safe addresses and nonces, then compute all hashes.
 ///
 /// Fails loudly if the signer set is ambiguous or the nonce query fails; a
@@ -131,27 +160,35 @@ async fn resolve_toml_phases(
     provider: &impl Provider,
     params: &WriteProposalParams,
 ) -> Result<(PhaseToml, PhaseToml)> {
-    let (schedule_safe, execute_safe) = if let Some(safe) = params.safe_override {
-        (safe, safe)
-    } else {
-        let info = deployment_info(&params.network).with_context(|| {
-            format!(
-                "deployment-info unavailable for network {:?}",
-                params.network
-            )
-        })?;
-        let signers = &info.ops_timelock;
-        if signers.proposers.len() != 1 || signers.executors.len() != 1 {
-            anyhow::bail!(
-                "ambiguous signer set for network {:?}: {} proposer(s), {} executor(s); pass \
-                 --safe to override",
-                params.network,
-                signers.proposers.len(),
-                signers.executors.len(),
-            );
-        }
-        (signers.proposers[0], signers.executors[0])
-    };
+    let info = deployment_info(&params.network).with_context(|| {
+        format!(
+            "deployment-info unavailable for network {:?}",
+            params.network
+        )
+    })?;
+    let signers = &info.ops_timelock;
+    anyhow::ensure!(
+        params.timelock == signers.address,
+        "timelock {:#x} is not the {} ops timelock {:#x}; phase Safes would be resolved from the \
+         wrong role sets",
+        params.timelock,
+        params.network,
+        signers.address,
+    );
+    let schedule_safe = resolve_phase_safe(
+        params.schedule_safe,
+        &signers.proposers,
+        "proposer",
+        "--schedule-safe",
+        &params.network,
+    )?;
+    let execute_safe = resolve_phase_safe(
+        params.execute_safe,
+        &signers.executors,
+        "executor",
+        "--execute-safe",
+        &params.network,
+    )?;
 
     let schedule_nonce = safe_nonce(provider, schedule_safe).await?;
     let execute_nonce = if execute_safe == schedule_safe {
@@ -244,10 +281,115 @@ pub async fn write_stake_table_v3_proposal_dir(
 mod tests {
     use std::str::FromStr;
 
-    use alloy::{node_bindings::Anvil, providers::ProviderBuilder};
+    use alloy::{
+        node_bindings::Anvil,
+        providers::{ProviderBuilder, ext::AnvilApi},
+    };
 
     use super::*;
     use crate::proposals::proposal_toml::ProposalToml;
+
+    /// Runtime code for a `nonce()` stub returning `n`:
+    /// PUSH1 n, PUSH1 0, MSTORE, PUSH1 32, PUSH1 0, RETURN.
+    fn nonce_stub(n: u8) -> Bytes {
+        Bytes::from(vec![
+            0x60, n, 0x60, 0x00, 0x52, 0x60, 0x20, 0x60, 0x00, 0xf3,
+        ])
+    }
+
+    fn write_params(root: PathBuf, network: &str, timelock: Address) -> WriteProposalParams {
+        WriteProposalParams {
+            proposals_root: root,
+            network: network.to_owned(),
+            slug: "stake-table-v3".to_owned(),
+            chain_id: 1,
+            proxy: Address::from_str("0xcef474d372b5b09defe2af187bf17338dc704451").unwrap(),
+            new_impl: Address::from_str("0x5a6250dd35d875c0529573d9d934629a1b2778db").unwrap(),
+            timelock,
+            salt: B256::repeat_byte(0x11),
+            delay: U256::from(172800u64),
+            schedule_calldata: Bytes::from(vec![0xaa]),
+            execute_calldata: Bytes::from(vec![0xbb]),
+            schedule_safe: None,
+            execute_safe: None,
+        }
+    }
+
+    /// Split Safes: each phase records its own Safe and that Safe's own nonce.
+    #[tokio::test]
+    async fn test_write_proposal_dir_split_safes() {
+        let anvil = Anvil::new().spawn();
+        let provider = ProviderBuilder::new().connect_http(anvil.endpoint_url());
+
+        let ops = mainnet_ops_timelock();
+        let labs = member_address(&ops.proposers, Multisig::EspressoLabs).unwrap();
+        let serviceco = member_address(&ops.executors, Multisig::ServiceCo).unwrap();
+        provider.anvil_set_code(labs, nonce_stub(41)).await.unwrap();
+        provider
+            .anvil_set_code(serviceco, nonce_stub(7))
+            .await
+            .unwrap();
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut params = write_params(tmp.path().to_path_buf(), "mainnet", ops.address);
+        params.schedule_safe = Some(Multisig::EspressoLabs);
+        params.execute_safe = Some(Multisig::ServiceCo);
+
+        let dir = write_stake_table_v3_proposal_dir(params, &provider)
+            .await
+            .unwrap();
+        let toml = ProposalToml::load(&dir).unwrap();
+        assert_eq!(toml.schedule.safe, labs);
+        assert_eq!(toml.schedule.nonce, 41);
+        assert_eq!(toml.execute.safe, serviceco);
+        assert_eq!(toml.execute.nonce, 7);
+        assert_ne!(toml.schedule.safe_tx, toml.execute.safe_tx);
+    }
+
+    /// One Safe for both phases: execute signs right after schedule, so nonce + 1.
+    #[tokio::test]
+    async fn test_write_proposal_dir_single_safe_nonce_increments() {
+        let anvil = Anvil::new().spawn();
+        let provider = ProviderBuilder::new().connect_http(anvil.endpoint_url());
+
+        let ops = deployment_info("decaf").unwrap().ops_timelock;
+        let labs = member_address(&ops.proposers, Multisig::EspressoLabs).unwrap();
+        provider.anvil_set_code(labs, nonce_stub(24)).await.unwrap();
+
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = write_stake_table_v3_proposal_dir(
+            write_params(tmp.path().to_path_buf(), "decaf", ops.address),
+            &provider,
+        )
+        .await
+        .unwrap();
+
+        let toml = ProposalToml::load(&dir).unwrap();
+        assert_eq!(toml.schedule.safe, labs);
+        assert_eq!(toml.execute.safe, labs);
+        assert_eq!(toml.schedule.nonce, 24);
+        assert_eq!(toml.execute.nonce, 25);
+    }
+
+    /// A timelock that is not the network's ops timelock must not silently borrow its role sets.
+    #[tokio::test]
+    async fn test_write_proposal_dir_rejects_foreign_timelock() {
+        let anvil = Anvil::new().spawn();
+        let provider = ProviderBuilder::new().connect_http(anvil.endpoint_url());
+
+        let tmp = tempfile::tempdir().unwrap();
+        let safe_exit = deployment_info("mainnet")
+            .unwrap()
+            .safe_exit_timelock
+            .address;
+        let err = write_stake_table_v3_proposal_dir(
+            write_params(tmp.path().to_path_buf(), "mainnet", safe_exit),
+            &provider,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("ops timelock"), "{err}");
+    }
 
     #[test]
     fn test_network_name_known() {
@@ -374,6 +516,77 @@ mod tests {
         assert_eq!(original, loaded);
     }
 
+    fn mainnet_ops_timelock() -> crate::proposals::deployment_info::TimelockInfo {
+        deployment_info("mainnet").unwrap().ops_timelock
+    }
+
+    #[test]
+    fn test_resolve_phase_safe_by_name() {
+        let ops = mainnet_ops_timelock();
+        let safe = resolve_phase_safe(
+            Some(Multisig::EspressoLabs),
+            &ops.proposers,
+            "proposer",
+            "--schedule-safe",
+            "mainnet",
+        )
+        .unwrap();
+        assert_eq!(
+            safe,
+            Address::from_str("0x34f5af5158171ffd2475d21db5fc3b311f221982").unwrap()
+        );
+    }
+
+    #[test]
+    fn test_resolve_phase_safe_wrong_role_errors() {
+        let ops = mainnet_ops_timelock();
+        let err = resolve_phase_safe(
+            Some(Multisig::EspressoLabs),
+            &ops.executors,
+            "executor",
+            "--execute-safe",
+            "mainnet",
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("does not hold the executor role"),
+            "{err}"
+        );
+        assert!(err.to_string().contains("serviceco"), "{err}");
+    }
+
+    #[test]
+    fn test_resolve_phase_safe_ambiguous_without_name() {
+        let ops = mainnet_ops_timelock();
+        let err = resolve_phase_safe(
+            None,
+            &ops.proposers,
+            "proposer",
+            "--schedule-safe",
+            "mainnet",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("several proposers"), "{err}");
+        assert!(err.to_string().contains("--schedule-safe"), "{err}");
+    }
+
+    #[test]
+    fn test_resolve_phase_safe_single_holder_needs_no_name() {
+        let ops = mainnet_ops_timelock();
+        let safe = resolve_phase_safe(
+            None,
+            &ops.executors,
+            "executor",
+            "--execute-safe",
+            "mainnet",
+        )
+        .unwrap();
+        assert_eq!(
+            safe,
+            Address::from_str("0x5e37b8038615ef3d75cf28b5982c4cbf065401fb").unwrap()
+        );
+    }
+
     /// The "already exists" guard fires before any on-chain call.
     #[tokio::test]
     async fn test_write_proposal_dir_rejects_existing() {
@@ -382,8 +595,6 @@ mod tests {
 
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_path_buf();
-        let safe: Address =
-            Address::from_str("0xb76834e371b666feee48e5d7d9a97ca08b5a0620").unwrap();
 
         let make_params = |root: PathBuf| WriteProposalParams {
             proposals_root: root,
@@ -397,7 +608,8 @@ mod tests {
             delay: U256::from(300u64),
             schedule_calldata: Bytes::new(),
             execute_calldata: Bytes::new(),
-            safe_override: Some(safe),
+            schedule_safe: Some(Multisig::EspressoLabs),
+            execute_safe: Some(Multisig::EspressoLabs),
         };
 
         // Pre-create the dir and plant a schedule.json so the guard fires immediately.
