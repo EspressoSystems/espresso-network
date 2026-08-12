@@ -169,7 +169,9 @@ pub async fn drive_ws_stream<Ver: StaticVersionType, T: Serialize>(
 /// until the returned handle is aborted.
 ///
 /// # Panics
-/// If `url` has no port and its scheme has no default, or the port cannot be bound.
+/// If `url` has no port and its scheme has no default. Bind and serve failures happen on the
+/// spawned task, so they abort that task rather than the caller: the handle resolves to a join
+/// error and the server never comes up.
 pub fn spawn_serve(url: &url::Url, router: axum::Router) -> tokio::task::JoinHandle<()> {
     let addr = format!(
         "{}:{}",

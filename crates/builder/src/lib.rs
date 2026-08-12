@@ -1,27 +1,4 @@
-use espresso_types::SeqTypes;
-use hotshot_builder_api::v0_1::router;
-use hotshot_builder_legacy::service::ProxyGlobalState;
-use tokio::{net::TcpListener, spawn};
-use url::Url;
-
 pub mod non_permissioned;
-
-/// Runs the builder's `block_info` and `txn_submit` API service in the background.
-pub fn run_builder_api_service(url: Url, source: ProxyGlobalState<SeqTypes>) {
-    let router = router::builder_app::<SeqTypes, _>(source);
-    spawn(async move {
-        let host = url.host_str().expect("builder API url missing host");
-        let port = url
-            .port_or_known_default()
-            .expect("builder API url missing port");
-        let listener = TcpListener::bind((host, port))
-            .await
-            .expect("failed to bind builder API port");
-        axum::serve(listener, router)
-            .await
-            .expect("builder API server failed");
-    });
-}
 
 #[cfg(test)]
 pub mod testing {
@@ -39,8 +16,8 @@ pub mod testing {
     use committable::Committable;
     use espresso_node::{context::Consensus, network};
     use espresso_types::{
-        Event, FeeAccount, NamespaceId, NodeState, PrivKey, PubKey, Transaction, ValidatedState,
-        traits::SequencerPersistence, v0_3::ChainConfig,
+        Event, FeeAccount, NamespaceId, NodeState, PrivKey, PubKey, SeqTypes, Transaction,
+        ValidatedState, traits::SequencerPersistence, v0_3::ChainConfig,
     };
     use futures::stream::{Stream, StreamExt};
     use hotshot::{
@@ -70,9 +47,9 @@ pub mod testing {
     };
     use http_client::Client;
     use tokio::time::sleep;
+    use url::Url;
     use vbs::version::{StaticVersion, Version};
 
-    use super::*;
     use crate::non_permissioned::BuilderConfig;
 
     #[derive(Clone)]
