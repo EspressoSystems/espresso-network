@@ -7,7 +7,7 @@ use jf_merkle_tree_compat::MerkleTreeScheme;
 use serde::{Deserialize, Serialize};
 
 /// A proof that a header is finalized, relative to some known-finalized leaf.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct HeaderProof {
     header: Header,
     proof: <BlockMerkleTree as MerkleTreeScheme>::MembershipProof,
