@@ -4,8 +4,12 @@
 //!
 //! [`scrub`] works on already-rendered text, which is the only handle available when the URL is
 //! baked into someone else's `Debug`/`Display` (`reqwest` prints the full request URL in both).
-//! [`redact_url`] takes a [`Url`] directly. Neither can reach `Url`'s own field-wise `Debug`
-//! (`path: "/v2/KEY"`, no `://` anywhere); structs holding a [`Url`] redact that field themselves.
+//! [`redact_url`] takes a [`Url`] directly.
+//!
+//! It handles two shapes that share no common substring. `Url`'s own `Debug` is field-wise, with the
+//! host and `path: "/v2/KEY"` as separate fields and no `://` between them, so URL-shaped matching
+//! misses it entirely. Structs holding a [`Url`] redact that field themselves; [`scrub_url_debug`]
+//! is the net for one that does not.
 use url::Url;
 
 const REDACTED: &str = "***";
@@ -23,7 +27,7 @@ fn ends_url_token(c: char) -> bool {
 /// Assumes the text was rendered from a parsed [`Url`], which percent-encodes the boundary
 /// characters above. Credential-bearing URLs satisfy this by entering as clap-parsed [`Url`]s, so a
 /// malformed one is rejected at startup rather than reaching a log line.
-pub fn scrub(text: &str) -> String {
+fn scrub_urls(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut pos = 0;
 
@@ -51,6 +55,60 @@ pub fn scrub(text: &str) -> String {
 
     out.push_str(&text[pos..]);
     out
+}
+
+const URL_DEBUG_PREFIX: &str = "Url {";
+
+/// Collapses the body of every `url::Url` field-wise `Debug` in `text`, host included. Reaching
+/// this means a struct failed to redact a `Url` field, so `Url { *** }` is a signal to fix that
+/// struct rather than output to read a host out of.
+fn scrub_url_debug(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut pos = 0;
+
+    while let Some(rel) = text[pos..].find(URL_DEBUG_PREFIX) {
+        let start = pos + rel;
+        let body_start = start + URL_DEBUG_PREFIX.len();
+        // Require a type-name boundary, so `BaseUrl {` and friends keep their bodies.
+        if text[..start]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_')
+        {
+            out.push_str(&text[pos..body_start]);
+            pos = body_start;
+            continue;
+        }
+        out.push_str(&text[pos..body_start]);
+        // Field values are quoted and `"` is percent-encoded in every URL component, so a `}`
+        // outside quotes closes the body. Braces are legal in a query or fragment, so the first
+        // `}` in the text may sit inside one.
+        let mut in_quotes = false;
+        let end = text[body_start..]
+            .char_indices()
+            .find_map(|(i, c)| match c {
+                '"' => {
+                    in_quotes = !in_quotes;
+                    None
+                },
+                '}' if !in_quotes => Some(i),
+                _ => None,
+            });
+        let Some(k) = end else {
+            // Truncated: drop the remainder rather than emit an unterminated body.
+            pos = text.len();
+            break;
+        };
+        out.push_str(" *** ");
+        pos = body_start + k;
+    }
+
+    out.push_str(&text[pos..]);
+    out
+}
+
+pub fn scrub(text: &str) -> String {
+    scrub_url_debug(&scrub_urls(text))
 }
 
 /// `scheme://host[:port]`, with `/***` appended when anything was removed.
@@ -125,6 +183,45 @@ mod test {
             let once = scrub(input);
             assert_eq!(scrub(&once), once, "not idempotent: {input:?}");
         }
+    }
+
+    /// The dominant shape in real telemetry: host and path are separate fields with no `://`, so
+    /// URL-shaped matching misses it.
+    #[test]
+    fn test_scrub_url_debug() {
+        let raw = format!(
+            "urls: [{:?}]",
+            Url::parse("https://rpc.example.com/v3/FAKEKEY").unwrap()
+        );
+        assert!(raw.contains("FAKEKEY"), "{raw}");
+        assert!(!raw.contains("://"), "{raw}");
+
+        let scrubbed = scrub(&raw);
+        assert_eq!(scrubbed, "urls: [Url { *** }]");
+        assert_eq!(scrub(&scrubbed), scrubbed);
+    }
+
+    /// Braces are legal in a query or fragment, so the first `}` may sit inside a field value.
+    #[test]
+    fn test_scrub_url_debug_brace_in_query_or_fragment() {
+        for raw in [
+            "https://rpc.example.com/v1?filter={a}&apikey=FAKEKEY",
+            "https://rpc.example.com/v1#{a}FAKEKEY",
+        ] {
+            let dbg = format!("{:?}", Url::parse(raw).unwrap());
+            assert_eq!(scrub_url_debug(&dbg), "Url { *** }", "input: {raw}");
+        }
+    }
+
+    /// Only `url::Url` is collapsed; a type whose name merely ends in `Url` keeps its body.
+    #[test]
+    fn test_scrub_url_debug_requires_type_boundary() {
+        let text = r#"BaseUrl { host: "keep.me" }"#;
+        assert_eq!(scrub_url_debug(text), text);
+
+        // Truncated debug output must not emit the partial body.
+        let cut = r#"urls: [Url { scheme: "https", path: "/v3/FAKEKEY""#;
+        assert!(!scrub_url_debug(cut).contains("FAKEKEY"));
     }
 
     #[test]
