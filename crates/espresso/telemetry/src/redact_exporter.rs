@@ -119,7 +119,7 @@ fn scrub_any_value(value: &AnyValue) -> AnyValue {
 }
 
 fn scrub_str(s: &str) -> String {
-    if s.contains("://") || s.contains("Url {") {
+    if s.contains("://") {
         scrub(s)
     } else {
         s.to_owned()
