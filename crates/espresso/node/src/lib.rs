@@ -58,6 +58,7 @@ pub use espresso_types::RECENT_STAKE_TABLES_LIMIT;
 use genesis::L1Finalized;
 pub use genesis::{Genesis, GenesisSource};
 use hotshot::{
+    HotShotInitializer,
     traits::implementations::{
         CdnMetricsValue, CdnTopic, CombinedNetworks, GossipConfig, KeyPair, Libp2pNetwork,
         MemoryNetwork, PushCdnNetwork, RequestResponseConfig, WrappedSignatureKey,
@@ -834,8 +835,14 @@ where
 
         // From `NEW_PROTOCOL_VERSION` on, all consensus traffic runs on
         // cliquenet and the legacy stack is torn down at startup, so don't
-        // hold up boot waiting for legacy connectivity.
-        if genesis.base_version < versions::NEW_PROTOCOL_VERSION {
+        // hold up boot waiting for legacy connectivity. The same applies when
+        // the configured base version predates the cutover but the network has
+        // already upgraded (a decided upgrade certificate is persisted): the
+        // legacy network may be gone entirely, so waiting could block boot
+        // forever.
+        if genesis.base_version < versions::NEW_PROTOCOL_VERSION
+            && !new_protocol_cutover_complete(&initializer)
+        {
             tracing::warn!("Waiting for at least one connection to be initialized");
             select! {
                 _ = cdn_network.wait_for_ready() => {
@@ -957,6 +964,26 @@ async fn check_cliquenet_info_registered(
          --out keys.env`), then (2) register it on-chain (`staking-cli update-network-config \
          --x25519-key <ESPRESSO_NODE_PUBLIC_X25519_KEY> --p2p-addr <host:port>`)."
     );
+}
+
+/// Whether the loaded consensus state shows the network has already upgraded
+/// to `NEW_PROTOCOL_VERSION`, even though the configured base version predates
+/// it: a decided upgrade certificate to the new protocol is stored and the
+/// view we restart from is past the cutover view.
+fn new_protocol_cutover_complete(initializer: &HotShotInitializer<SeqTypes>) -> bool {
+    let Some(cert) = &initializer.decided_upgrade_certificate else {
+        return false;
+    };
+    let complete = cert.data.new_version >= versions::NEW_PROTOCOL_VERSION
+        && initializer.start_view >= cert.data.new_version_first_view;
+    if complete {
+        tracing::info!(
+            start_view = %initializer.start_view,
+            cutover_view = %cert.data.new_version_first_view,
+            "network already upgraded to the new protocol, not waiting for the legacy network"
+        );
+    }
+    complete
 }
 
 #[cfg(any(test, feature = "testing"))]
