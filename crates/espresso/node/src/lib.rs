@@ -795,6 +795,13 @@ where
             .build(),
     };
 
+    // Load saved consensus state from storage. It is loaded once here, both to
+    // seed consensus in `SequencerContext::init` below and to tell whether the
+    // network has already cut over to the new protocol.
+    let (initializer, anchor_view) = persistence
+        .load_consensus_state(instance_state, version_upgrade)
+        .await?;
+
     let combined_network = {
         info!("Initializing Libp2p network");
         // Mainnet keeps today's libp2p protocol strings byte-identical.
@@ -859,7 +866,8 @@ where
         version_upgrade,
         validator_config,
         coordinator,
-        instance_state,
+        initializer,
+        anchor_view,
         storage,
         state_catchup_providers,
         persistence,
@@ -1820,6 +1828,11 @@ pub mod testing {
                 }
             };
 
+            let (initializer, anchor_view) = persistence
+                .load_consensus_state(node_state, upgrade)
+                .await
+                .unwrap();
+
             SequencerContext::init(
                 NetworkConfig {
                     config,
@@ -1830,7 +1843,8 @@ pub mod testing {
                 upgrade,
                 validator_config,
                 coordinator,
-                node_state,
+                initializer,
+                anchor_view,
                 storage,
                 catchup_providers,
                 persistence,
