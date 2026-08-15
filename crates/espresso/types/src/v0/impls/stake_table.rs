@@ -2435,8 +2435,7 @@ mod tests {
             ((20, 0), register_2),
             ((30, 1), delegate.clone()),
         ];
-        let (_, expected_hash) =
-            validators_from_l1_events(events.iter().map(|(_, e)| e.clone()))?;
+        let (_, expected_hash) = validators_from_l1_events(events.iter().map(|(_, e)| e.clone()))?;
 
         // The full event set in one fetched range verifies.
         verify_stake_table_events(&[], &events, 0, 100, expected_hash)?;
@@ -2811,8 +2810,7 @@ mod tests {
                 .into(),
             ),
         ];
-        let (_, expected_hash) =
-            validators_from_l1_events(events.iter().map(|(_, e)| e.clone()))?;
+        let (_, expected_hash) = validators_from_l1_events(events.iter().map(|(_, e)| e.clone()))?;
 
         let header = v4_epoch_root_header(TO_L1_BLOCK, expected_hash).await;
 

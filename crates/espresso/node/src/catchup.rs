@@ -13,8 +13,7 @@ use committable::{Commitment, Committable};
 use espresso_api::routes::v1 as paths;
 use espresso_types::{
     BackoffParams, BlockMerkleTree, Certificate2, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
-    FeeMerkleTree, Leaf2, NodeState, SeqTypes, ValidatedState,
-    StakeTableHash,
+    FeeMerkleTree, Leaf2, NodeState, SeqTypes, StakeTableHash, ValidatedState,
     config::PublicNetworkConfig,
     v0::traits::StateCatchup,
     v0_3::{

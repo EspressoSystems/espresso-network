@@ -374,12 +374,8 @@ where
                 // Only respond when the store covers the full requested range: a partial
                 // response can never pass the requester's stake table hash verification.
                 match read {
-                    Some(EventsPersistenceRead::Complete) => {
-                        Ok(Response::StakeTableEvents(events))
-                    },
-                    _ => bail!(
-                        "stake table events not available up to L1 block {to_l1_block}"
-                    ),
+                    Some(EventsPersistenceRead::Complete) => Ok(Response::StakeTableEvents(events)),
+                    _ => bail!("stake table events not available up to L1 block {to_l1_block}"),
                 }
             },
         }

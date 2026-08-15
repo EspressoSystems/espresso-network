@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
     BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
-    NodeState, PubKey, SeqTypes, StakeTableHash, verify_stake_table_events,
+    NodeState, PubKey, SeqTypes, StakeTableHash,
     traits::{SequencerPersistence, StateCatchup},
     v0_3::{
         ChainConfig, EventKey, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1,
@@ -15,6 +15,7 @@ use espresso_types::{
         PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleCommitmentV2,
         forgotten_accounts_include,
     },
+    verify_stake_table_events,
 };
 use hotshot::traits::NodeImplementation;
 use hotshot_new_protocol::{storage::NewProtocolStorage, utils::verify_new_protocol_leaf_chain};
