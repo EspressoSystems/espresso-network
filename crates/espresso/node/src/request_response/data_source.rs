@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use espresso_types::{
     NodeState, PubKey, SeqTypes, retain_accounts,
-    traits::SequencerPersistence,
+    traits::{EventsPersistenceRead, SequencerPersistence},
     v0_3::{RewardAccountV1, RewardMerkleTreeV1},
     v0_4::{RewardAccountV2, RewardMerkleTreeV2},
 };
@@ -358,6 +358,29 @@ where
                 };
 
                 Ok(Response::RewardMerkleTreeV2(merkle_tree_bytes))
+            },
+            Request::StakeTableEvents {
+                from_l1_block,
+                to_l1_block,
+            } => {
+                // Serve the events from the local stake table event store, which is populated
+                // from the L1 by the stake table update loop.
+                let (read, events) = self
+                    .persistence
+                    .load_events(*from_l1_block, *to_l1_block)
+                    .await
+                    .with_context(|| "failed to load stake table events from persistence")?;
+
+                // Only respond when the store covers the full requested range: a partial
+                // response can never pass the requester's stake table hash verification.
+                match read {
+                    Some(EventsPersistenceRead::Complete) => {
+                        Ok(Response::StakeTableEvents(events))
+                    },
+                    _ => bail!(
+                        "stake table events not available up to L1 block {to_l1_block}"
+                    ),
+                }
             },
         }
     }

@@ -297,6 +297,32 @@ pub trait StateCatchup: Send + Sync {
             .await
     }
 
+    /// Fetch stake table events from peers, without retrying on transient errors.
+    ///
+    /// This is a fallback for when the events cannot be fetched from the L1. Requests the
+    /// events with L1 block numbers in `[from_l1_block, to_l1_block]`. `local_prefix` holds
+    /// the already-trusted events before `from_l1_block` (loaded from local persistence, where
+    /// only verified events are stored). Implementations must verify the response before
+    /// returning it: replaying `local_prefix` followed by the fetched events must produce a
+    /// stake table whose hash equals `expected_stake_table_hash`, the hash committed to by
+    /// the epoch root header (see `verify_stake_table_events`).
+    ///
+    /// The default implementation returns an error; only providers that support stake table
+    /// event catchup override it.
+    async fn try_fetch_stake_table_events(
+        &self,
+        _retry: usize,
+        _from_l1_block: u64,
+        _to_l1_block: u64,
+        _local_prefix: Arc<Vec<(EventKey, StakeTableEvent)>>,
+        _expected_stake_table_hash: StakeTableHash,
+    ) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
+        Err(anyhow::anyhow!(
+            "stake table event catchup is not supported by provider {}",
+            self.name()
+        ))
+    }
+
     /// Returns true if the catchup provider is local (e.g. does not make calls to remote resources).
     fn is_local(&self) -> bool;
 
@@ -472,6 +498,25 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
         epoch: u64,
     ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
         (**self).fetch_state_cert(epoch).await
+    }
+
+    async fn try_fetch_stake_table_events(
+        &self,
+        retry: usize,
+        from_l1_block: u64,
+        to_l1_block: u64,
+        local_prefix: Arc<Vec<(EventKey, StakeTableEvent)>>,
+        expected_stake_table_hash: StakeTableHash,
+    ) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
+        (**self)
+            .try_fetch_stake_table_events(
+                retry,
+                from_l1_block,
+                to_l1_block,
+                local_prefix,
+                expected_stake_table_hash,
+            )
+            .await
     }
 
     fn backoff(&self) -> &BackoffParams {

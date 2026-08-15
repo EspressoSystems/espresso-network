@@ -490,6 +490,8 @@ pub enum StakeTableError {
     StakeTableEventDecodeError(#[from] alloy::sol_types::Error),
     #[error("Stake table events sorting error: {0}")]
     EventSortingError(#[from] EventSortingError),
+    #[error("Fetching stake table data from L1 failed after retries: {0}")]
+    L1Fetch(String),
 }
 
 #[derive(Debug, Error)]

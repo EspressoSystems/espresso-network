@@ -5,9 +5,12 @@ use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
     BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
-    NodeState, PubKey, SeqTypes,
+    NodeState, PubKey, SeqTypes, StakeTableHash, verify_stake_table_events,
     traits::{SequencerPersistence, StateCatchup},
-    v0_3::{ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1},
+    v0_3::{
+        ChainConfig, EventKey, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1,
+        StakeTableEvent,
+    },
     v0_4::{
         PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleCommitmentV2,
         forgotten_accounts_include,
@@ -172,6 +175,73 @@ where
         timeout(timeout_duration, self.fetch_state_cert(epoch))
             .await
             .with_context(|| "timed out while fetching state cert")?
+    }
+
+    async fn try_fetch_stake_table_events(
+        &self,
+        _retry: usize,
+        from_l1_block: u64,
+        to_l1_block: u64,
+        local_prefix: Arc<Vec<(EventKey, StakeTableEvent)>>,
+        expected_stake_table_hash: StakeTableHash,
+    ) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
+        tracing::info!(
+            from_l1_block,
+            to_l1_block,
+            "Fetching stake table events from peers"
+        );
+
+        // Create the response validation function. A response is only accepted if replaying
+        // the trusted local prefix followed by the peer's events reproduces the stake table
+        // hash committed to by the epoch root header, so a malicious peer cannot do worse
+        // than fail to respond.
+        let response_validation_fn = move |_request: &Request, response: Response| {
+            let local_prefix = local_prefix.clone();
+
+            async move {
+                // Make sure the response is a stake table events response
+                let Response::StakeTableEvents(events) = response else {
+                    return Err(anyhow::anyhow!("expected stake table events response"));
+                };
+
+                verify_stake_table_events(
+                    &local_prefix,
+                    &events,
+                    from_l1_block,
+                    to_l1_block,
+                    expected_stake_table_hash,
+                )?;
+
+                Ok(events)
+            }
+        };
+
+        // Timeout after a few batches
+        let timeout_duration = self.config.request_batch_interval * 3;
+
+        // Wait for the protocol to send us the events
+        let response = timeout(
+            timeout_duration,
+            self.request_indefinitely(
+                Request::StakeTableEvents {
+                    from_l1_block,
+                    to_l1_block,
+                },
+                RequestType::Batched,
+                response_validation_fn,
+            ),
+        )
+        .await
+        .with_context(|| "timed out while fetching stake table events")?
+        .with_context(|| "failed to request stake table events")?;
+
+        tracing::info!(
+            from_l1_block,
+            to_l1_block,
+            "Fetched stake table events from peers"
+        );
+
+        Ok(response)
     }
 
     fn backoff(&self) -> &BackoffParams {

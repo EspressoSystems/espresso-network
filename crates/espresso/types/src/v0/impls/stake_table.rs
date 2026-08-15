@@ -970,6 +970,59 @@ pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
     Ok((state.into_validators(), commit))
 }
 
+/// Verify stake table events fetched from an untrusted peer.
+///
+/// `fetched` must lie within the L1 block range `[from_l1_block, to_l1_block]` with strictly
+/// increasing event keys, and replaying `local_prefix` (already-trusted events preceding
+/// `from_l1_block`) followed by `fetched` must produce a stake table whose hash equals
+/// `expected_hash` — the hash the epoch root header commits to via `next_stake_table_hash`.
+///
+/// Note the hash does not commit to the event keys themselves, only to the resulting state.
+/// The range and ordering checks ensure that whatever keys the peer claims, the events are
+/// stored where subsequent incremental L1 fetches (which resume above `to_l1_block`) cannot
+/// overlap or reorder them.
+pub fn verify_stake_table_events(
+    local_prefix: &[(EventKey, StakeTableEvent)],
+    fetched: &[(EventKey, StakeTableEvent)],
+    from_l1_block: u64,
+    to_l1_block: u64,
+    expected_hash: StakeTableHash,
+) -> anyhow::Result<()> {
+    if let Some(((last_block, _), _)) = local_prefix.last() {
+        ensure!(
+            *last_block < from_l1_block,
+            "local prefix (up to L1 block {last_block}) overlaps fetched range starting at \
+             {from_l1_block}"
+        );
+    }
+
+    let mut prev_key: Option<EventKey> = None;
+    for (key, _) in fetched {
+        let (block, _) = key;
+        ensure!(
+            (from_l1_block..=to_l1_block).contains(block),
+            "event key {key:?} outside requested L1 block range [{from_l1_block}, {to_l1_block}]"
+        );
+        if let Some(prev) = prev_key {
+            ensure!(
+                *key > prev,
+                "event keys not strictly increasing: {key:?} after {prev:?}"
+            );
+        }
+        prev_key = Some(*key);
+    }
+
+    let events = local_prefix.iter().chain(fetched).map(|(_, e)| e.clone());
+    let (_, hash) =
+        validators_from_l1_events(events).context("replaying peer-provided stake table events")?;
+    ensure!(
+        hash == expected_hash,
+        "stake table hash mismatch: computed {hash}, expected {expected_hash}"
+    );
+
+    Ok(())
+}
+
 /// Select active validators
 ///
 /// Filters out unauthenticated validator candidates, those without stake, and selects
@@ -1341,6 +1394,171 @@ impl Fetcher {
         Ok(events)
     }
 
+    /// Fetch the stake table events for an epoch transition, racing the L1 against peer
+    /// catchup.
+    ///
+    /// The L1 fetch starts immediately. If the epoch root header commits to the expected
+    /// stake table hash (V4 onwards), a peer fetch also starts after a grace delay
+    /// (`ESPRESSO_STAKE_TABLE_PEER_FETCH_DELAY`, default a few seconds); whichever source
+    /// delivers first wins and the other is cancelled. A healthy L1 responds well within the
+    /// grace delay, so peers are only contacted when the L1 is slow or unavailable.
+    #[cfg(feature = "node")]
+    async fn fetch_events(
+        &self,
+        epoch: EpochNumber,
+        header: &Header,
+        contract: Address,
+        to_l1_block: u64,
+    ) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
+        use futures::future::Either;
+
+        let l1 = async {
+            self.fetch_and_store_stake_table_events(contract, to_l1_block)
+                .await
+                .map_err(GetStakeTablesError::L1ClientFetchError)
+                .inspect_err(|err| {
+                    tracing::error!(
+                        %epoch,
+                        to_l1_block,
+                        "failed to fetch stake table events from L1: {err:#}"
+                    );
+                })
+        };
+
+        // Without a stake table hash in the epoch root header (pre-V4), peer-provided events
+        // cannot be verified, so the L1 is the only viable source.
+        if header.next_stake_table_hash().is_none() {
+            return Ok(l1.await?);
+        }
+
+        let peers = async {
+            sleep(self.l1_client.options().stake_table_peer_fetch_delay).await;
+            self.fetch_and_store_events_from_peers(header, to_l1_block)
+                .await
+                .inspect_err(|err| {
+                    tracing::warn!(
+                        %epoch,
+                        to_l1_block,
+                        "failed to fetch stake table events from peers: {err:#}"
+                    );
+                })
+        };
+
+        // Race the two sources; if the first to finish failed, await the other.
+        let l1 = std::pin::pin!(l1);
+        let peers = std::pin::pin!(peers);
+        let combine = |l1_err, peer_err| {
+            anyhow::anyhow!(
+                "failed to fetch stake table events from L1 ({l1_err:#}) and from peers \
+                 ({peer_err:#})"
+            )
+        };
+        match futures::future::select(l1, peers).await {
+            Either::Left((Ok(events), _)) | Either::Right((Ok(events), _)) => Ok(events),
+            Either::Left((Err(l1_err), peers)) => peers
+                .await
+                .map_err(|peer_err| combine(anyhow::Error::from(l1_err), peer_err)),
+            Either::Right((Err(peer_err), l1)) => l1
+                .await
+                .map_err(|l1_err| combine(anyhow::Error::from(l1_err), peer_err)),
+        }
+    }
+
+    /// Fallback for [`Self::fetch_and_store_stake_table_events`] when the L1 is unavailable:
+    /// fetch the missing events from peers instead.
+    ///
+    /// Peer-provided events are only trusted because `header` (the epoch root) commits to the
+    /// stake table they must produce via `next_stake_table_hash`; catchup providers verify the
+    /// events against that hash before returning them (see [`verify_stake_table_events`]). On
+    /// headers without a `next_stake_table_hash` (pre-V4) there is nothing to verify against,
+    /// so no peer fallback is attempted.
+    ///
+    /// Returns the full event set `[contract init, to_l1_block]` (trusted local prefix plus
+    /// verified peer-fetched suffix), storing the fetched suffix in persistence like an L1
+    /// fetch would.
+    #[cfg(feature = "node")]
+    async fn fetch_and_store_events_from_peers(
+        &self,
+        header: &Header,
+        to_l1_block: u64,
+    ) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
+        let Some(expected_hash) = header.next_stake_table_hash() else {
+            bail!(
+                "epoch root header (version {}) does not commit to a stake table hash; cannot \
+                 verify peer-provided stake table events",
+                header.version()
+            );
+        };
+
+        // Events already in persistence are trusted: only events fetched from L1 or verified
+        // against a header hash are stored there.
+        let (read_offset, local_prefix) = {
+            let persistence_lock = self.persistence.lock().await;
+            persistence_lock.load_events(0, to_l1_block).await?
+        };
+        let from_l1_block = match read_offset {
+            // Everything we need is already local, e.g. because the racing L1 fetch stored
+            // the events concurrently.
+            Some(EventsPersistenceRead::Complete) => return Ok(local_prefix),
+            Some(EventsPersistenceRead::UntilL1Block(block)) => block + 1,
+            None => 0,
+        };
+
+        let local_prefix = Arc::new(local_prefix);
+        let mut fetched = Err(anyhow::anyhow!("no peer fetch attempted"));
+        for retry in 0..3 {
+            match self
+                .peers
+                .try_fetch_stake_table_events(
+                    retry,
+                    from_l1_block,
+                    to_l1_block,
+                    local_prefix.clone(),
+                    expected_hash,
+                )
+                .await
+            {
+                Ok(events) => {
+                    fetched = Ok(events);
+                    break;
+                },
+                Err(err) => {
+                    tracing::warn!(
+                        retry,
+                        from_l1_block,
+                        to_l1_block,
+                        "failed to fetch stake table events from peers: {err:#}"
+                    );
+                    fetched = Err(err);
+                },
+            }
+        }
+        let fetched = fetched?;
+
+        tracing::warn!(
+            from_l1_block,
+            to_l1_block,
+            num_events = fetched.len(),
+            "stake table events fetched from peers because the L1 was unavailable"
+        );
+
+        // Store the verified events just like an L1 fetch would. Failing to store is not
+        // fatal: the events are already verified, and the next update will re-fetch.
+        {
+            let persistence_lock = self.persistence.lock().await;
+            if let Err(err) = persistence_lock
+                .store_events(to_l1_block, fetched.clone())
+                .await
+            {
+                tracing::error!("failed to store peer-fetched stake table events: {err:#}");
+            }
+        }
+
+        let mut events = Arc::unwrap_or_clone(local_prefix);
+        events.extend(fetched);
+        Ok(events)
+    }
+
     /// Validate a stake table event.
     ///
     /// Returns:
@@ -1410,22 +1628,19 @@ impl Fetcher {
         let from_block = match from_block {
             Some(block) => block,
             None => {
-                let start = Instant::now();
-                loop {
-                    match stake_table_contract.initializedAtBlock().call().await {
-                        Ok(init_block) => break init_block.to::<u64>(),
-                        Err(err) => {
-                            if start.elapsed() >= max_retry_duration {
-                                panic!(
-                                    "Failed to retrieve initial block after `{}`: {err}",
-                                    format_duration(max_retry_duration)
-                                );
-                            }
-                            tracing::warn!(%err, "Failed to retrieve initial block, retrying...");
-                            sleep(retry_delay).await;
-                        },
-                    }
-                }
+                let init_block = retry(
+                    retry_delay,
+                    max_retry_duration,
+                    "stake table initial block fetch",
+                    move || {
+                        let stake_table_contract = stake_table_contract.clone();
+                        Box::pin(
+                            async move { stake_table_contract.initializedAtBlock().call().await },
+                        )
+                    },
+                )
+                .await?;
+                init_block.to::<u64>()
             },
         };
 
@@ -1474,7 +1689,7 @@ impl Fetcher {
                     })
                 },
             )
-            .await;
+            .await?;
 
             let chunk_events = logs
                 .into_iter()
@@ -1740,16 +1955,10 @@ impl Fetcher {
             );
         };
 
-        let events = match self
-            .fetch_and_store_stake_table_events(address, l1_finalized_block_info.number())
-            .await
-            .map_err(GetStakeTablesError::L1ClientFetchError)
-        {
-            Ok(events) => events,
-            Err(e) => {
-                bail!("failed to fetch stake table events {e:?}");
-            },
-        };
+        let to_l1_block = l1_finalized_block_info.number();
+        let events = self
+            .fetch_events(epoch, header, address, to_l1_block)
+            .await?;
 
         // Selection runs at the epoch root header's protocol version: that header's
         // `next_stake_table_hash` was computed under the active-set rules in effect at the root,
@@ -1805,13 +2014,17 @@ impl Fetcher {
     }
 }
 
+/// Retry `operation` every `retry_delay` until it succeeds or `max_duration` elapses.
+///
+/// Returns [`StakeTableError::L1Fetch`] on giving up, so callers can fall back to another
+/// source (e.g. peer catchup) instead of crashing the node.
 #[cfg_attr(not(feature = "node"), allow(dead_code))]
 async fn retry<F, T, E>(
     retry_delay: Duration,
     max_duration: Duration,
     operation_name: &str,
     mut operation: F,
-) -> T
+) -> Result<T, StakeTableError>
 where
     F: FnMut() -> BoxFuture<'static, Result<T, E>>,
     E: std::fmt::Display,
@@ -1819,14 +2032,12 @@ where
     let start = Instant::now();
     loop {
         match operation().await {
-            Ok(result) => return result,
+            Ok(result) => return Ok(result),
             Err(err) => {
                 if start.elapsed() >= max_duration {
-                    panic!(
-                        r#"
-                    Failed to complete operation `{operation_name}` after `{}`.
-                    error: {err}
-
+                    tracing::error!(
+                        %err,
+                        r#"Failed to complete operation `{operation_name}` after `{}`.
 
                     This might be caused by:
                     - The current block range being too large for your RPC provider.
@@ -1841,6 +2052,10 @@ where
                     - Use a different RPC provider with higher rate limits."#,
                         format_duration(max_duration)
                     );
+                    return Err(StakeTableError::L1Fetch(format!(
+                        "operation `{operation_name}` failed after {}: {err}",
+                        format_duration(max_duration)
+                    )));
                 }
                 tracing::warn!(%err, "Retrying `{operation_name}` after error");
                 sleep(retry_delay).await;
@@ -2198,6 +2413,469 @@ mod tests {
             x: U256::ZERO,
             y: U256::ZERO,
         }
+    }
+
+    #[test_log::test]
+    fn test_verify_stake_table_events() -> anyhow::Result<()> {
+        let val_1 = TestValidator::random();
+        let val_2 = TestValidator::random();
+        let delegator = Address::random();
+
+        let register_1: StakeTableEvent = ValidatorRegistered::from(&val_1).into();
+        let register_2: StakeTableEvent = ValidatorRegisteredV2::from(&val_2).into();
+        let delegate: StakeTableEvent = Delegated {
+            delegator,
+            validator: val_1.account,
+            amount: U256::from(10),
+        }
+        .into();
+
+        let events: Vec<(EventKey, StakeTableEvent)> = vec![
+            ((10, 0), register_1),
+            ((20, 0), register_2),
+            ((30, 1), delegate.clone()),
+        ];
+        let (_, expected_hash) =
+            validators_from_l1_events(events.iter().map(|(_, e)| e.clone()))?;
+
+        // The full event set in one fetched range verifies.
+        verify_stake_table_events(&[], &events, 0, 100, expected_hash)?;
+
+        // A trusted local prefix combined with a fetched suffix verifies.
+        verify_stake_table_events(&events[..1], &events[1..], 11, 100, expected_hash)?;
+
+        // An incomplete event set produces the wrong hash.
+        let err = verify_stake_table_events(&[], &events[..2], 0, 100, expected_hash)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("hash mismatch"), "unexpected error: {err}");
+
+        // A tampered event produces the wrong hash.
+        let mut tampered = events.clone();
+        tampered[2].1 = Delegated {
+            delegator,
+            validator: val_1.account,
+            amount: U256::from(999),
+        }
+        .into();
+        let err = verify_stake_table_events(&[], &tampered, 0, 100, expected_hash)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("hash mismatch"), "unexpected error: {err}");
+
+        // An event key outside the requested range is rejected.
+        let mut out_of_range = events.clone();
+        out_of_range[2].0 = (101, 0);
+        let err = verify_stake_table_events(&[], &out_of_range, 0, 100, expected_hash)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("outside requested"), "unexpected error: {err}");
+
+        // Keys below the requested range are rejected too: a peer cannot claim blocks the
+        // local prefix already covers.
+        let err = verify_stake_table_events(&events[..1], &events[1..], 25, 100, expected_hash)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("outside requested"), "unexpected error: {err}");
+
+        // Unsorted (or duplicate) event keys are rejected even if the replayed state matches.
+        let mut unsorted = events.clone();
+        unsorted.swap(1, 2);
+        let err = verify_stake_table_events(&[], &unsorted, 0, 100, expected_hash)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("strictly increasing"),
+            "unexpected error: {err}"
+        );
+
+        // A local prefix overlapping the fetched range is rejected.
+        let err = verify_stake_table_events(&events[..2], &events[2..], 20, 100, expected_hash)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("overlaps"), "unexpected error: {err}");
+
+        Ok(())
+    }
+
+    /// In-memory event store, mimicking the SQL store's offset semantics closely enough to
+    /// exercise `Fetcher::fetch`'s peer fallback.
+    #[derive(Debug, Clone, Default)]
+    struct MemEventsStorage {
+        #[allow(clippy::type_complexity)]
+        events: Arc<AsyncMutex<Option<(u64, Vec<(EventKey, StakeTableEvent)>)>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl MembershipPersistence for MemEventsStorage {
+        async fn load_stake(
+            &self,
+            _epoch: EpochNumber,
+        ) -> anyhow::Result<Option<crate::traits::StakeTuple>> {
+            Ok(None)
+        }
+
+        async fn load_latest_stake(
+            &self,
+            _limit: u64,
+        ) -> anyhow::Result<Option<Vec<crate::v0_3::IndexedStake>>> {
+            Ok(None)
+        }
+
+        async fn load_drb_result(
+            &self,
+            _epoch: EpochNumber,
+        ) -> anyhow::Result<Option<hotshot_types::drb::DrbResult>> {
+            Ok(None)
+        }
+
+        async fn load_epoch_root(&self, _epoch: EpochNumber) -> anyhow::Result<Option<Header>> {
+            Ok(None)
+        }
+
+        async fn store_stake(
+            &self,
+            _epoch: EpochNumber,
+            _stake: AuthenticatedValidatorMap,
+            _block_reward: Option<crate::v0_3::RewardAmount>,
+            _stake_table_hash: Option<StakeTableHash>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn store_events(
+            &self,
+            l1_finalized: u64,
+            events: Vec<(EventKey, StakeTableEvent)>,
+        ) -> anyhow::Result<()> {
+            let mut guard = self.events.lock().await;
+            match &mut *guard {
+                Some((offset, stored)) => {
+                    if l1_finalized > *offset {
+                        stored.extend(events);
+                        *offset = l1_finalized;
+                    }
+                },
+                None => *guard = Some((l1_finalized, events)),
+            }
+            Ok(())
+        }
+
+        async fn load_events(
+            &self,
+            from_l1_block: u64,
+            to_l1_block: u64,
+        ) -> anyhow::Result<(
+            Option<EventsPersistenceRead>,
+            Vec<(EventKey, StakeTableEvent)>,
+        )> {
+            let guard = self.events.lock().await;
+            let Some((offset, stored)) = &*guard else {
+                return Ok((None, Vec::new()));
+            };
+            let query_block = std::cmp::min(*offset, to_l1_block);
+            let events = stored
+                .iter()
+                .filter(|((block, _), _)| (from_l1_block..=query_block).contains(block))
+                .cloned()
+                .collect();
+            let read = if query_block == to_l1_block {
+                EventsPersistenceRead::Complete
+            } else {
+                EventsPersistenceRead::UntilL1Block(query_block)
+            };
+            Ok((Some(read), events))
+        }
+
+        async fn delete_stake_tables(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn store_all_validators(
+            &self,
+            _epoch: EpochNumber,
+            _all_validators: RegisteredValidatorMap,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn load_all_validators(
+            &self,
+            _epoch: EpochNumber,
+            _offset: u64,
+            _limit: u64,
+        ) -> anyhow::Result<Vec<RegisteredValidator<crate::PubKey>>> {
+            Ok(Vec::new())
+        }
+    }
+
+    /// A catchup provider serving canned stake table events, verifying them the same way the
+    /// real request-response provider does.
+    #[derive(Debug, Clone)]
+    struct MockEventsPeer {
+        events: Vec<(EventKey, StakeTableEvent)>,
+        fetched: Arc<std::sync::atomic::AtomicBool>,
+        backoff: crate::BackoffParams,
+    }
+
+    #[async_trait::async_trait]
+    impl StateCatchup for MockEventsPeer {
+        async fn try_fetch_leaf(
+            &self,
+            _retry: usize,
+            _coordinator: hotshot_types::epoch_membership::EpochMembershipCoordinator<
+                crate::SeqTypes,
+            >,
+            _height: u64,
+        ) -> anyhow::Result<crate::Leaf2> {
+            unimplemented!()
+        }
+
+        async fn try_fetch_accounts(
+            &self,
+            _retry: usize,
+            _instance: &crate::NodeState,
+            _height: u64,
+            _view: hotshot_types::data::ViewNumber,
+            _fee_merkle_tree_root: crate::FeeMerkleCommitment,
+            _accounts: &[crate::FeeAccount],
+        ) -> anyhow::Result<Vec<crate::FeeAccountProof>> {
+            unimplemented!()
+        }
+
+        async fn try_remember_blocks_merkle_tree(
+            &self,
+            _retry: usize,
+            _instance: &crate::NodeState,
+            _height: u64,
+            _view: hotshot_types::data::ViewNumber,
+            _mt: &mut crate::BlockMerkleTree,
+        ) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+
+        async fn try_fetch_chain_config(
+            &self,
+            _retry: usize,
+            _commitment: Commitment<ChainConfig>,
+        ) -> anyhow::Result<ChainConfig> {
+            unimplemented!()
+        }
+
+        async fn try_fetch_reward_merkle_tree_v2(
+            &self,
+            _retry: usize,
+            _height: u64,
+            _view: hotshot_types::data::ViewNumber,
+            _reward_merkle_tree_root: crate::v0_4::RewardMerkleCommitmentV2,
+            _accounts: Arc<Vec<crate::v0_4::RewardAccountV2>>,
+        ) -> anyhow::Result<crate::v0_4::PermittedRewardMerkleTreeV2> {
+            unimplemented!()
+        }
+
+        async fn try_fetch_reward_accounts_v1(
+            &self,
+            _retry: usize,
+            _instance: &crate::NodeState,
+            _height: u64,
+            _view: hotshot_types::data::ViewNumber,
+            _reward_merkle_tree_root: crate::v0_3::RewardMerkleCommitmentV1,
+            _accounts: &[crate::v0_3::RewardAccountV1],
+        ) -> anyhow::Result<Vec<crate::v0_3::RewardAccountProofV1>> {
+            unimplemented!()
+        }
+
+        async fn try_fetch_state_cert(
+            &self,
+            _retry: usize,
+            _epoch: u64,
+        ) -> anyhow::Result<
+            hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<crate::SeqTypes>,
+        > {
+            unimplemented!()
+        }
+
+        async fn try_fetch_stake_table_events(
+            &self,
+            _retry: usize,
+            from_l1_block: u64,
+            to_l1_block: u64,
+            local_prefix: Arc<Vec<(EventKey, StakeTableEvent)>>,
+            expected_stake_table_hash: StakeTableHash,
+        ) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
+            let fetched: Vec<_> = self
+                .events
+                .iter()
+                .filter(|((block, _), _)| (from_l1_block..=to_l1_block).contains(block))
+                .cloned()
+                .collect();
+            verify_stake_table_events(
+                &local_prefix,
+                &fetched,
+                from_l1_block,
+                to_l1_block,
+                expected_stake_table_hash,
+            )?;
+            self.fetched
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(fetched)
+        }
+
+        fn backoff(&self) -> &crate::BackoffParams {
+            &self.backoff
+        }
+
+        fn name(&self) -> String {
+            "MockEventsPeer".to_string()
+        }
+
+        fn is_local(&self) -> bool {
+            false
+        }
+    }
+
+    /// Build a V4 epoch root header with the given finalized L1 block and stake table hash,
+    /// the two fields the peer fallback relies on.
+    async fn v4_epoch_root_header(
+        to_l1_block: u64,
+        next_stake_table_hash: StakeTableHash,
+    ) -> Header {
+        use hotshot_types::traits::{
+            BlockPayload, ValidatedState as _, block_contents::BlockHeader,
+        };
+        use jf_merkle_tree_compat::MerkleTreeScheme as _;
+
+        use crate::{NodeState, Payload, Transaction, ValidatedState, v0_1::L1BlockInfo, v0_4};
+
+        let instance = NodeState::mock_v2();
+        let tx = Transaction::of_size(10);
+        let (payload, metadata) =
+            Payload::from_transactions([tx], &instance.genesis_state, &instance)
+                .await
+                .expect("payload");
+        let genesis = Header::genesis(
+            &instance,
+            payload,
+            &metadata,
+            DRB_AND_HEADER_UPGRADE_VERSION,
+        );
+        let Header::V2(g) = genesis else {
+            panic!("expected V2 header from NodeState::mock_v2, got {genesis:?}");
+        };
+        let reward_merkle_tree_root = ValidatedState::genesis(&instance)
+            .0
+            .reward_merkle_tree_v2
+            .commitment();
+        Header::V4(v0_4::Header {
+            chain_config: instance.chain_config.into(),
+            height: 95,
+            timestamp: g.timestamp,
+            timestamp_millis: crate::TimestampMillis::from_millis(g.timestamp * 1_000),
+            l1_head: g.l1_head,
+            l1_finalized: Some(L1BlockInfo {
+                number: to_l1_block,
+                ..Default::default()
+            }),
+            payload_commitment: g.payload_commitment,
+            builder_commitment: g.builder_commitment,
+            ns_table: g.ns_table,
+            block_merkle_tree_root: g.block_merkle_tree_root,
+            fee_merkle_tree_root: g.fee_merkle_tree_root,
+            fee_info: g.fee_info,
+            builder_signature: g.builder_signature,
+            reward_merkle_tree_root,
+            total_reward_distributed: Default::default(),
+            next_stake_table_hash: Some(next_stake_table_hash),
+        })
+    }
+
+    /// `Fetcher::fetch` must fall back to peer catchup when the L1 is unreachable, verify the
+    /// peer-provided events against the epoch root header's stake table hash, and persist
+    /// them so subsequent fetches are served locally without contacting peers again.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_fetch_falls_back_to_peers_when_l1_unavailable() -> anyhow::Result<()> {
+        const TO_L1_BLOCK: u64 = 100;
+
+        let val_1 = TestValidator::random();
+        let val_2 = TestValidator::random();
+        let events: Vec<(EventKey, StakeTableEvent)> = vec![
+            ((10, 0), ValidatorRegistered::from(&val_1).into()),
+            ((20, 0), ValidatorRegisteredV2::from(&val_2).into()),
+            (
+                (30, 1),
+                Delegated {
+                    delegator: Address::random(),
+                    validator: val_2.account,
+                    amount: U256::from(10),
+                }
+                .into(),
+            ),
+        ];
+        let (_, expected_hash) =
+            validators_from_l1_events(events.iter().map(|(_, e)| e.clone()))?;
+
+        let header = v4_epoch_root_header(TO_L1_BLOCK, expected_hash).await;
+
+        let peer = MockEventsPeer {
+            events: events.clone(),
+            fetched: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            backoff: crate::BackoffParams::disabled(),
+        };
+        let storage = MemEventsStorage::default();
+
+        // An L1 client pointing at an unreachable endpoint, with retry budgets small enough
+        // to keep the test fast. The peer fetch delay is shorter than the L1 retry budget so
+        // the peer fetch wins the race while the L1 is still failing.
+        let l1 = L1ClientOptions {
+            l1_events_max_retry_duration: Duration::from_millis(300),
+            l1_retry_delay: Duration::from_millis(10),
+            stake_table_peer_fetch_delay: Duration::from_millis(50),
+            ..Default::default()
+        }
+        .connect(vec!["http://localhost:9".parse().unwrap()])
+        .expect("unable to construct l1 client");
+
+        let fetcher = Fetcher::new(
+            Arc::new(peer.clone()),
+            Arc::new(AsyncMutex::new(storage.clone())),
+            l1,
+            ChainConfig {
+                stake_table_contract: Some(Address::random()),
+                ..Default::default()
+            },
+        );
+
+        // The L1 is unreachable, so the events must come from the peer.
+        let validator_set = fetcher.fetch(EpochNumber::new(1), &header).await?;
+        assert_eq!(validator_set.stake_table_hash(), Some(expected_hash));
+        assert!(
+            validator_set
+                .active_validators()
+                .contains_key(&val_2.account),
+            "delegated validator should be in the active set"
+        );
+        assert!(
+            peer.fetched.load(std::sync::atomic::Ordering::SeqCst),
+            "peer should have been contacted"
+        );
+
+        // The verified events were persisted with the requested L1 offset.
+        let (read, stored) = storage.load_events(0, TO_L1_BLOCK).await?;
+        assert_matches!(read, Some(EventsPersistenceRead::Complete));
+        assert_eq!(stored, events);
+
+        // A second fetch is served from local persistence: no peer contact this time, even
+        // though the L1 is still unreachable.
+        peer.fetched
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        let validator_set = fetcher.fetch(EpochNumber::new(1), &header).await?;
+        assert_eq!(validator_set.stake_table_hash(), Some(expected_hash));
+        assert!(
+            !peer.fetched.load(std::sync::atomic::Ordering::SeqCst),
+            "peer should not be contacted when persistence has all events"
+        );
+
+        Ok(())
     }
 
     #[test_log::test]
@@ -3202,14 +3880,14 @@ mod tests {
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    #[should_panic]
-    async fn test_large_max_events_range_panic() {
+    async fn test_large_max_events_range_error() {
         // decaf stake table contract address
         let contract_address = "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037";
 
         let l1 = L1ClientOptions {
             l1_events_max_retry_duration: Duration::from_secs(30),
-            // max block range for public node rpc is 50000 so this should result in a panic
+            // max block range for public node rpc is 50000 so this should result in an error
+            // once the retry duration is exhausted
             l1_events_max_block_range: 10_u64.pow(9),
             l1_retry_delay: Duration::from_secs(1),
             ..Default::default()
@@ -3220,14 +3898,15 @@ mod tests {
         .expect("unable to construct l1 client");
 
         let latest_block = l1.provider.get_block_number().await.unwrap();
-        let _events = Fetcher::fetch_events_from_contract(
+        let err = Fetcher::fetch_events_from_contract(
             l1,
             contract_address.parse().unwrap(),
             None,
             latest_block,
         )
         .await
-        .unwrap();
+        .expect_err("expected fetch to fail after exhausting retries");
+        assert_matches!(err, StakeTableError::L1Fetch(_));
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

@@ -179,7 +179,7 @@ pub use self::impls::{
 pub use crate::{
     v0::impls::{
         StakeTableHash, StakeTableState, calculate_proportion_staked_and_reward_rate,
-        to_registered_validator_map,
+        to_registered_validator_map, verify_stake_table_events,
     },
     v0_1::{
         BLOCK_MERKLE_TREE_HEIGHT, DECAF_CHAIN_ID, FEE_MERKLE_TREE_HEIGHT, NS_ID_BYTE_LEN,

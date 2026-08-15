@@ -14,11 +14,12 @@ use espresso_api::routes::v1 as paths;
 use espresso_types::{
     BackoffParams, BlockMerkleTree, Certificate2, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
     FeeMerkleTree, Leaf2, NodeState, SeqTypes, ValidatedState,
+    StakeTableHash,
     config::PublicNetworkConfig,
     v0::traits::StateCatchup,
     v0_3::{
-        ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1,
-        RewardMerkleTreeV1,
+        ChainConfig, EventKey, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1,
+        RewardMerkleTreeV1, StakeTableEvent,
     },
     v0_4::{
         PermittedRewardMerkleTreeV2, RewardAccountProofV2, RewardAccountV2,
@@ -1454,6 +1455,33 @@ impl StateCatchup for ParallelStateCatchup {
         self.on_remote_providers(move |provider| async move {
             provider.try_fetch_state_cert(retry, epoch).await
         })
+        .await
+    }
+
+    async fn try_fetch_stake_table_events(
+        &self,
+        retry: usize,
+        from_l1_block: u64,
+        to_l1_block: u64,
+        local_prefix: Arc<Vec<(EventKey, StakeTableEvent)>>,
+        expected_stake_table_hash: StakeTableHash,
+    ) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
+        // Local providers cannot serve stake table events: the requester has already
+        // exhausted its own persistence to build `local_prefix`. Go straight to the
+        // remote ones.
+        self.on_remote_providers(clone! {(local_prefix) move |provider| {
+            clone! {(local_prefix) async move {
+                provider
+                    .try_fetch_stake_table_events(
+                        retry,
+                        from_l1_block,
+                        to_l1_block,
+                        local_prefix,
+                        expected_stake_table_hash,
+                    )
+                    .await
+            }}
+        }})
         .await
     }
 
