@@ -25,6 +25,7 @@ fn node_config(
     node_id: u64,
     output_dir: &std::path::Path,
     block_size: usize,
+    namespaces: u32,
     ports: &[u16],
 ) -> NodeConfig {
     NodeConfig {
@@ -39,6 +40,8 @@ fn node_config(
             .to_string_lossy()
             .into_owned(),
         block_size,
+        namespaces,
+        sampler_tick_ms: 50,
     }
 }
 
@@ -49,7 +52,7 @@ async fn smoke_5_nodes_empty_blocks() {
     let tmp = TempDir::new().expect("failed to create temp dir");
     let ports = allocate_ports(NUM_NODES);
 
-    let result = timeout(TEST_TIMEOUT, run_benchmark(tmp.path(), 0, &ports)).await;
+    let result = timeout(TEST_TIMEOUT, run_benchmark(tmp.path(), 0, 1, &ports)).await;
 
     match result {
         Ok(Ok(())) => {},
@@ -65,7 +68,27 @@ async fn smoke_5_nodes_1kb_blocks() {
     let tmp = TempDir::new().expect("failed to create temp dir");
     let ports = allocate_ports(NUM_NODES);
 
-    let result = timeout(TEST_TIMEOUT, run_benchmark(tmp.path(), 1024, &ports)).await;
+    let result = timeout(TEST_TIMEOUT, run_benchmark(tmp.path(), 1024, 1, &ports)).await;
+
+    match result {
+        Ok(Ok(())) => {},
+        Ok(Err(e)) => panic!("benchmark failed: {e:#}"),
+        Err(_) => panic!("benchmark timed out after {TEST_TIMEOUT:?}"),
+    }
+}
+
+/// Multi-namespace blocks: the injected block's commitment is computed by
+/// `vid_commitment`, while the disperser re-derives it per namespace. A
+/// mismatch would make every replica reject the proposal and no view would
+/// decide, so a passing run pins the two paths together.
+#[tokio::test(flavor = "multi_thread")]
+async fn smoke_5_nodes_multi_namespace_blocks() {
+    hotshot_new_protocol::logging::init_logging();
+
+    let tmp = TempDir::new().expect("failed to create temp dir");
+    let ports = allocate_ports(NUM_NODES);
+
+    let result = timeout(TEST_TIMEOUT, run_benchmark(tmp.path(), 64 * 1024, 4, &ports)).await;
 
     match result {
         Ok(Ok(())) => {},
@@ -77,12 +100,13 @@ async fn smoke_5_nodes_1kb_blocks() {
 async fn run_benchmark(
     output_dir: &std::path::Path,
     block_size: usize,
+    namespaces: u32,
     ports: &[u16],
 ) -> anyhow::Result<()> {
     let mut node_handles = Vec::new();
 
     for i in 0..NUM_NODES as u64 {
-        let cfg = node_config(i, output_dir, block_size, ports);
+        let cfg = node_config(i, output_dir, block_size, namespaces, ports);
         node_handles.push(tokio::spawn(async move {
             hotshot_new_protocol_bench::node::run(cfg).await
         }));
@@ -133,6 +157,21 @@ async fn run_benchmark(
             decided_count > 0,
             "node {i} has no decided views in CSV ({} data rows)",
             lines.len() - 1
+        );
+
+        // The leader tracer is wired through consensus, the coordinator, the
+        // disperser and the reconstructor; every node leads at least one view
+        // over TARGET_VIEWS, so each must have emitted trace rows.
+        let trace_path = output_dir.join(format!("leader_trace_node{i}.csv"));
+        assert!(
+            trace_path.exists(),
+            "node {i} did not produce leader trace at {trace_path:?}"
+        );
+        let trace = std::fs::read_to_string(&trace_path)
+            .unwrap_or_else(|e| panic!("failed to read leader trace for node {i}: {e}"));
+        assert!(
+            trace.lines().count() >= 2,
+            "node {i} leader trace has no data rows"
         );
 
         eprintln!(

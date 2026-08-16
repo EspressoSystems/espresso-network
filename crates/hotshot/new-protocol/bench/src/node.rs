@@ -1,21 +1,21 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::Result;
-use hotshot::{traits::BlockPayload, types::BLSPubKey};
+use hotshot::types::BLSPubKey;
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
     node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
-    storage_types::TestStorage,
 };
 use hotshot_new_protocol::{
-    block::{BlockBuilder, BlockBuilderConfig},
+    block::{BlockAndHeaderRequest, BlockBuilder, BlockBuilderConfig},
     cert_verifier::CertVerifiers,
     client::CoordinatorClient,
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
-    coordinator::{Coordinator, timer::Timer},
+    coordinator::{Coordinator, error::Severity, timer::Timer},
     epoch::EpochManager,
     helpers::proposal_commitment,
+    leader_trace::LeaderTracerHandle,
     network::Cliquenet,
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
@@ -26,18 +26,25 @@ use hotshot_new_protocol::{
 use hotshot_types::{
     PeerConnectInfo,
     addr::NetAddr,
-    data::{EpochNumber, Leaf2, ViewNumber},
+    data::{EpochNumber, Leaf2, VidCommitment, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
-    traits::{metrics::NoMetrics, node_implementation::NodeType, signature_key::SignatureKey},
+    traits::{
+        EncodeBytes, metrics::NoMetrics, node_implementation::NodeType, signature_key::SignatureKey,
+    },
+    utils::BuilderCommitment,
     x25519::Keypair,
 };
+use tokio::task::JoinSet;
 use tracing::{error, info, warn};
 use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
-use crate::{config::NodeConfig, membership::make_membership, metrics::MetricsCollector};
+use crate::{
+    config::NodeConfig, cpu_sampler::CpuSampler, leader_trace::CsvLeaderTracer,
+    membership::make_membership, metrics::MetricsCollector, null_storage::NullStorage,
+};
 
-type BenchCoordinator = Coordinator<TestTypes, TestStorage<TestTypes>>;
+type BenchCoordinator = Coordinator<TestTypes, NullStorage<TestTypes>>;
 
 /// Build and run a single benchmark node.
 pub async fn run(cfg: NodeConfig) -> Result<()> {
@@ -47,10 +54,47 @@ pub async fn run(cfg: NodeConfig) -> Result<()> {
     let (membership, client) = make_membership(cfg.total_nodes, public_key).await;
     let network = create_network(cfg.node_id, &public_key, &private_key, &cfg).await?;
 
-    let coordinator =
-        build_coordinator(public_key, private_key, membership, network, client, &cfg).await;
+    // Per-node leader-event tracer. Production binaries leave this `None`; the
+    // bench wires it through `Consensus::set_tracer` (and the VID reconstructor
+    // and disperser) so every leader-duty call site emits a wall-clock-ns stamp
+    // to disk for offline reconstruction.
+    let tracer = Arc::new(CsvLeaderTracer::new(cfg.node_id, leader_trace_path(&cfg)));
 
-    run_instrumented(coordinator, &cfg).await
+    // Start the CPU sampler (no-op on non-Linux). Outputs land in the same
+    // directory as the leader-trace CSV so analysis scripts can pick them up.
+    let cpu_out_dir = PathBuf::from(&cfg.output_file)
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_default();
+    let cpu_sampler = CpuSampler::start(
+        cfg.node_id,
+        cpu_out_dir,
+        Duration::from_millis(cfg.sampler_tick_ms),
+    );
+
+    let coordinator = build_coordinator(
+        public_key,
+        private_key,
+        membership,
+        network,
+        client,
+        &cfg,
+        tracer.clone() as LeaderTracerHandle,
+    )
+    .await;
+
+    let result = run_instrumented(coordinator, &cfg).await;
+    if let Err(err) = tracer.flush() {
+        warn!(%err, "failed to flush leader trace");
+    }
+    cpu_sampler.stop().await;
+    result
+}
+
+fn leader_trace_path(cfg: &NodeConfig) -> PathBuf {
+    let out = PathBuf::from(&cfg.output_file);
+    let dir = out.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+    dir.join(format!("leader_trace_node{}.csv", cfg.node_id))
 }
 
 async fn create_network(
@@ -107,6 +151,7 @@ async fn build_coordinator(
     network: Cliquenet<TestTypes>,
     client: CoordinatorClient<TestTypes>,
     cfg: &NodeConfig,
+    tracer: LeaderTracerHandle,
 ) -> BenchCoordinator {
     let instance = Arc::new(TestInstanceState::default());
     let epoch_height = u64::MAX;
@@ -132,6 +177,7 @@ async fn build_coordinator(
         genesis_leaf.clone(),
         epoch_height,
     );
+    consensus.set_tracer(Some(tracer.clone()));
 
     let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
@@ -141,14 +187,16 @@ async fn build_coordinator(
 
     let epoch_manager = EpochManager::new(epoch_height, membership.clone());
 
-    let vid_disperser = VidDisperser::new(
+    let mut vid_disperser = VidDisperser::new(
         membership.clone(),
         network.sender().clone(),
         public_key,
         private_key.clone(),
     );
+    vid_disperser.set_tracer(Some(tracer.clone()));
 
-    let vid_reconstructor = VidReconstructor::new();
+    let mut vid_reconstructor = VidReconstructor::new();
+    vid_reconstructor.set_tracer(Some(tracer.clone()));
 
     let block_config = BlockBuilderConfig::default();
     let block_builder = BlockBuilder::new(
@@ -210,7 +258,7 @@ async fn build_coordinator(
         .proposal_validator(proposal_validator)
         .share_validator(share_validator)
         .storage(hotshot_new_protocol::storage::Storage::new(
-            TestStorage::default(),
+            NullStorage::default(),
             private_key,
         ))
         .client(client)
@@ -244,63 +292,56 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
         "entering event loop"
     );
 
+    // Test blocks are built off the event loop (as the real BlockBuilder is) and
+    // injected once ready, so the loop keeps serving consensus — votes, certs,
+    // messages — while a block is being built, rather than blocking on it.
+    let mut builds: JoinSet<BuiltBlock> = JoinSet::new();
+
     loop {
-        match coordinator.next_consensus_input().await {
-            Ok(input) => {
-                metrics.on_input(&input);
-                coordinator.apply_consensus(input);
+        tokio::select! {
+            biased;
+            Some(built) = builds.join_next() => match built {
+                Ok(built) => inject_test_block(&mut coordinator, &mut metrics, built),
+                Err(err) => error!(%err, "test block build task panicked"),
             },
-            Err(err)
-                if err.severity == hotshot_new_protocol::coordinator::error::Severity::Critical =>
-            {
-                error!(%err, "critical error in consensus input");
-                metrics.write_csv(&output_path)?;
-                return Err(anyhow::anyhow!("{err}"));
-            },
-            Err(err) => {
-                warn!(%err, "recoverable error in consensus input");
-                continue;
+            result = coordinator.next_consensus_input() => match result {
+                Ok(input) => {
+                    metrics.on_input(&input);
+                    coordinator.apply_consensus(input);
+                },
+                Err(err) if err.severity == Severity::Critical => {
+                    error!(%err, "critical error in consensus input");
+                    metrics.write_csv(&output_path)?;
+                    return Err(anyhow::anyhow!("{err}"));
+                },
+                Err(err) => {
+                    warn!(%err, "recoverable error in consensus input");
+                    continue;
+                },
             },
         }
 
         while let Some(output) = coordinator.outbox_mut().pop_front() {
             metrics.on_output(&output);
 
-            // Intercept block requests and inject test block (bypassing BlockBuilder).
+            // Intercept block requests: build + erasure-code on a blocking task
+            // (bypassing the real BlockBuilder), then inject the result once ready
+            // via the `builds` JoinSet (see `inject_test_block`).
             if let ConsensusOutput::RequestBlockAndHeader(ref req) = output
                 && cfg.block_size > 0
             {
-                let block = build_test_block(cfg.block_size, cfg.total_nodes);
-                let parent_leaf = req.parent_proposal.clone().into();
-                let version = bench_upgrade_lock().version_infallible(req.view);
-                let header = TestBlockHeader::new::<TestTypes>(
-                    &parent_leaf,
-                    block.payload_commitment,
-                    block.builder_commitment,
-                    block.metadata,
-                    version,
-                );
-                let header_input = ConsensusInput::HeaderCreated(
-                    req.view,
-                    proposal_commitment(&req.parent_proposal),
-                    header,
-                );
-                metrics.on_input(&header_input);
-                coordinator.apply_consensus(header_input);
-                let block_input = ConsensusInput::BlockBuilt {
-                    view: req.view,
-                    epoch: req.epoch,
-                    payload: block.block,
-                    metadata: block.metadata,
-                    payload_commitment: block.payload_commitment,
-                };
-                metrics.on_input(&block_input);
-                coordinator.apply_consensus(block_input);
+                let (size, namespaces, num_nodes) =
+                    (cfg.block_size, cfg.namespaces, cfg.total_nodes);
+                let req = req.clone();
+                builds.spawn_blocking(move || {
+                    let td = build_test_block(size, namespaces, num_nodes);
+                    BuiltBlock { req, td }
+                });
                 continue; // skip process_consensus_output for this one
             }
 
             if let Err(err) = coordinator.process_consensus_output(output) {
-                if err.severity == hotshot_new_protocol::coordinator::error::Severity::Critical {
+                if err.severity == Severity::Critical {
                     error!(%err, "critical error processing output");
                     metrics.write_csv(&output_path)?;
                     return Err(anyhow::anyhow!("{err}"));
@@ -323,39 +364,109 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
     }
 }
 
-/// Build a test block with a single transaction of the given size.
+/// A test block of the given size and its payload commitment.
 struct TestBlock {
     block: TestBlockPayload,
     metadata: TestMetadata,
-    payload_commitment: hotshot_types::data::VidCommitment,
-    builder_commitment: hotshot_types::utils::BuilderCommitment,
+    payload_commitment: VidCommitment,
 }
 
-fn build_test_block(size: usize, num_nodes: usize) -> TestBlock {
-    use hotshot_types::traits::EncodeBytes;
+/// A test block built off the event loop, paired with the request it answers,
+/// sent back to the loop for injection.
+struct BuiltBlock {
+    req: BlockAndHeaderRequest<TestTypes>,
+    td: TestBlock,
+}
 
-    let tx = TestTransaction::new(vec![0u8; size]);
-    let block = TestBlockPayload {
-        transactions: vec![tx],
+/// Inject a built test block as if the `BlockBuilder` had produced it, feeding
+/// the header and the block into the coordinator.
+fn inject_test_block(
+    coordinator: &mut BenchCoordinator,
+    metrics: &mut MetricsCollector,
+    built: BuiltBlock,
+) {
+    let BuiltBlock { req, td } = built;
+    // `builder_commitment` is being deprecated and the bench never checks it, so
+    // inject a dummy rather than computing it from the payload.
+    let builder_commitment = BuilderCommitment::from_bytes([]);
+
+    let parent_leaf = req.parent_proposal.clone().into();
+    let version = bench_upgrade_lock().version_infallible(req.view);
+    let header = TestBlockHeader::new::<TestTypes>(
+        &parent_leaf,
+        td.payload_commitment,
+        builder_commitment,
+        td.metadata,
+        version,
+    );
+    let header_input =
+        ConsensusInput::HeaderCreated(req.view, proposal_commitment(&req.parent_proposal), header);
+    metrics.on_input(&header_input);
+    coordinator.apply_consensus(header_input);
+
+    let block_input = ConsensusInput::BlockBuilt {
+        view: req.view,
+        epoch: req.epoch,
+        payload: td.block,
+        metadata: td.metadata,
+        payload_commitment: td.payload_commitment,
     };
+    metrics.on_input(&block_input);
+    coordinator.apply_consensus(block_input);
+    // We produced this block ourselves; don't reconstruct it from our own
+    // loopback share. The coordinator does this for BlockBuilder output, but the
+    // bench bypasses the BlockBuilder.
+    coordinator.retire_reconstruction(req.view);
+}
+
+/// Per-transaction byte size when splitting the configured `--block-size` into
+/// many small transactions. 1 KiB matches realistic rollup-style traffic and
+/// — critically — turns `transaction_commitments` into a long Vec of small
+/// Keccak256 calls that `TestBlockPayload::transaction_commitments` parallelizes
+/// over the rayon pool, instead of one giant single-threaded Keccak.
+const BENCH_TX_BYTES: usize = 1024;
+
+/// Build a test block and compute its payload commitment. Synchronous and
+/// CPU-bound (erasure coding); callers run it on a blocking task so it stays off
+/// the async runtime. Dispersal itself is left to the `VidDisperser`, which
+/// consensus drives from the injected `BlockBuilt`.
+fn build_test_block(size: usize, n_namespaces: u32, num_nodes: usize) -> TestBlock {
+    // Split the configured payload into many BENCH_TX_BYTES-byte transactions.
+    // At least one tx so an empty `--block-size=0` config still produces a
+    // valid (small) payload.
+    let num_txs = (size / BENCH_TX_BYTES).max(1);
+    let transactions: Vec<TestTransaction> = (0..num_txs)
+        .map(|_| TestTransaction::new(vec![0u8; BENCH_TX_BYTES]))
+        .collect();
+    let block = TestBlockPayload { transactions };
+    let encoded = block.encode();
+
+    // `TestMetadata` itself emits the namespace table when `num_transactions
+    // > 1` AND `payload_byte_len > 0`. The bench sets both so AvidM dispersal
+    // splits the payload into N evenly-sized namespaces and parallelizes
+    // per-namespace via rayon (same wire format as production `NsTable`).
+    //
+    // NOTE: `metadata.num_transactions` here is being repurposed as the
+    // namespace count for the wiring trick; it is independent of the actual
+    // `block.transactions.len()` (which is now ≈ size / 1 KiB).
+    let n = n_namespaces.max(1);
     let metadata = TestMetadata {
-        num_transactions: 1,
+        num_transactions: n as u64,
+        payload_byte_len: if n > 1 { encoded.len() as u64 } else { 0 },
     };
+
     // Use the actual committee size so the commitment matches what
     // VidDisperse::calculate_vid_disperse will produce.
     let payload_commitment = hotshot_types::data::vid_commitment(
-        &block.encode(),
+        &encoded,
         &metadata.encode(),
         num_nodes,
         versions::NEW_PROTOCOL_VERSION,
     );
-    let builder_commitment =
-        <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(&block, &metadata);
     TestBlock {
         block,
         metadata,
         payload_commitment,
-        builder_commitment,
     }
 }
 
