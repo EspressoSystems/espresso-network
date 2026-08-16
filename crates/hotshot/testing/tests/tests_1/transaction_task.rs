@@ -42,6 +42,7 @@ async fn test_transaction_task_leader_two_views_in_a_row() {
         vec![].into(),
         TestMetadata {
             num_transactions: 0,
+            payload_byte_len: 0,
         },
         current_view,
         Some(EpochNumber::new(1)),
