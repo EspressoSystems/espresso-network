@@ -491,10 +491,22 @@ where
                 }
                 Some(cert1) = self.vote1_collector.next() => {
                     self.cert_verifiers.cert1.mark_completed(cert1.view_number());
+                    let view = cert1.view_number();
+                    crate::trace_leader_event!(
+                        self.consensus.tracer,
+                        view,
+                        crate::leader_trace::LeaderEvent::Cert1VMinus1InputDispatched
+                    );
                     return Ok(ConsensusInput::Certificate1(cert1))
                 }
                 Some(cert2) = self.vote2_collector.next() => {
                     self.cert_verifiers.cert2.mark_completed(cert2.view_number());
+                    let view = cert2.view_number();
+                    crate::trace_leader_event!(
+                        self.consensus.tracer,
+                        view,
+                        crate::leader_trace::LeaderEvent::Cert2VMinus1InputDispatched
+                    );
                     return Ok(ConsensusInput::Certificate2(cert2))
                 }
                 Some(cert1) = self.cert_verifiers.cert1.next() => {
@@ -653,6 +665,14 @@ where
                 }
             }
         }
+    }
+
+    /// Stop tracking `view`'s reconstruction.
+    ///
+    /// The coordinator already does this for blocks the `BlockBuilder`
+    /// produced; the bench injects blocks directly and calls this itself.
+    pub fn retire_reconstruction(&mut self, view: ViewNumber) {
+        self.vid_reconstructor.retire_view(view);
     }
 
     pub fn apply_consensus(&mut self, input: ConsensusInput<T>) {
@@ -823,6 +843,11 @@ where
                         ProposalMessage::validated(proposal.clone()),
                     )),
                 };
+                crate::trace_leader_event!(
+                    self.consensus.tracer,
+                    view,
+                    crate::leader_trace::LeaderEvent::ProposalBroadcastStart
+                );
                 if let Err(err) = self
                     .network
                     .sender()
@@ -835,6 +860,11 @@ where
                         warn!(%node, %err, "network error while broadcasting proposal")
                     }
                 }
+                crate::trace_leader_event!(
+                    self.consensus.tracer,
+                    view,
+                    crate::leader_trace::LeaderEvent::ProposalBroadcastEnd
+                );
             },
             ConsensusOutput::SendTimeoutVote(vote, evidence) => {
                 let view = vote.view_number();
@@ -880,7 +910,18 @@ where
                 {
                     self.participation.leader_proposed(leader, epoch);
                 }
-                self.broadcast(ConsensusMessage::Vote1(vote1), "broadcast vote1")?
+                crate::trace_leader_event!(
+                    self.consensus.tracer,
+                    view,
+                    crate::leader_trace::LeaderEvent::Vote1BroadcastStart
+                );
+                let r = self.broadcast(ConsensusMessage::Vote1(vote1), "broadcast vote1");
+                crate::trace_leader_event!(
+                    self.consensus.tracer,
+                    view,
+                    crate::leader_trace::LeaderEvent::Vote1BroadcastEnd
+                );
+                r?
             },
             ConsensusOutput::BroadcastVidShare(share) => {
                 debug!(%node, view = %share.view_number(), "send vid share");
@@ -893,7 +934,18 @@ where
                 let view = vote2.view_number();
                 debug!(%node, %view, "send vote2");
                 self.record_voted_view(view);
-                self.broadcast(ConsensusMessage::Vote2(vote2), "broadcast vote2")?
+                crate::trace_leader_event!(
+                    self.consensus.tracer,
+                    view,
+                    crate::leader_trace::LeaderEvent::Vote2VMinus1BroadcastStart
+                );
+                let r = self.broadcast(ConsensusMessage::Vote2(vote2), "broadcast vote2");
+                crate::trace_leader_event!(
+                    self.consensus.tracer,
+                    view,
+                    crate::leader_trace::LeaderEvent::Vote2VMinus1BroadcastEnd
+                );
+                r?
             },
             ConsensusOutput::PersistHighQc(high_qc) => {
                 debug!(%node, view = %high_qc.view_number(), "persist high qc");
@@ -917,16 +969,28 @@ where
                 )?
             },
             ConsensusOutput::SendCertificate1(cert1) => {
+                let view = cert1.view_number();
                 debug!(
                     %node,
-                    view = %cert1.view_number(),
+                    %view,
                     epoch = ?cert1.epoch().map(|e| *e),
                     "send certificate1"
                 );
-                self.broadcast(
+                crate::trace_leader_event!(
+                    self.consensus.tracer,
+                    view,
+                    crate::leader_trace::LeaderEvent::Cert1VMinus1BroadcastStart
+                );
+                let r = self.broadcast(
                     ConsensusMessage::Certificate1(cert1, self.public_key.clone()),
                     "broadcast certificate1",
-                )?
+                );
+                crate::trace_leader_event!(
+                    self.consensus.tracer,
+                    view,
+                    crate::leader_trace::LeaderEvent::Cert1VMinus1BroadcastEnd
+                );
+                r?
             },
             ConsensusOutput::SendCertificate2(cert2) => {
                 debug!(
@@ -1119,6 +1183,11 @@ where
                         warn!(%node, %sender, %view, "vote1 signing key != sender");
                         return None;
                     }
+                    crate::trace_leader_event!(
+                        self.consensus.tracer,
+                        view,
+                        crate::leader_trace::LeaderEvent::Vote1VMinus1Arrived
+                    );
                     let bn = vote1.vote.data.block_number.unwrap_or(0);
                     let epoch_height = *self.consensus.epoch_height;
                     let is_epoch_root_vote = is_epoch_root(bn, epoch_height);
