@@ -441,7 +441,9 @@ mod test {
 // Solidity `validateP2pAddr` and Rust `NetAddr::from_str` both parse `host:port` strings.
 // If Solidity accepts an address that Rust rejects, the validator's p2p address is silently
 // dropped and they become unreachable for cliquenet. This proptest deploys StakeTableV3
-// on anvil and fuzzes the property: Solidity accepts => Rust accepts.
+// on anvil and fuzzes the property: Solidity accepts => Rust accepts, except the
+// malformed bracketed forms in `rejected_bracket_form`, which the node rejects by
+// design (see `NetAddr::from_str`).
 #[cfg(test)]
 mod proptest_p2p_addr {
     use alloy::providers::ProviderBuilder;
@@ -452,6 +454,16 @@ mod proptest_p2p_addr {
     };
 
     use crate::sol_types::StakeTableV3;
+
+    /// `[`-prefixed strings without a `]:<u16>` suffix or trailing `]`; the node
+    /// rejects exactly these even when the contract accepts them.
+    fn rejected_bracket_form(s: &str) -> bool {
+        s.starts_with('[')
+            && !s.ends_with(']')
+            && !s
+                .rfind("]:")
+                .is_some_and(|i| s[i + 2..].parse::<u16>().is_ok())
+    }
 
     fn p2p_addr_strategy() -> impl Strategy<Value = String> {
         prop_oneof![
@@ -480,6 +492,10 @@ mod proptest_p2p_addr {
             (1..65535u16).prop_map(|p| format!("::1:{p}")),
             // Bracketed IPv6
             (1..65535u16).prop_map(|p| format!("[::1]:{p}")),
+            // Malformed bracketed forms (contract accepts, node rejects)
+            ("[a-z]{1,10}", 1..65535u16, 1..65535u16)
+                .prop_map(|(h, p1, p2)| format!("[{h}]:{p1}:{p2}")),
+            ("[a-z]{1,10}", 1..65535u16).prop_map(|(h, p)| format!("[{h}:{p}")),
             // Two valid addresses concatenated
             (1..255u8, 1..255u8, 1..65535u16, 1..65535u16)
                 .prop_map(|(a, b, p1, p2)| format!("{a}.{b}.0.1:{p1},{a}.{b}.0.2:{p2}")),
@@ -530,9 +546,10 @@ mod proptest_p2p_addr {
                 });
 
                 if sol_valid {
-                    prop_assert!(
+                    prop_assert_eq!(
                         rust_valid,
-                        "Solidity accepted '{}' but Rust rejected it",
+                        !rejected_bracket_form(&addr_str),
+                        "Solidity accepted '{}'",
                         addr_str
                     );
                 }

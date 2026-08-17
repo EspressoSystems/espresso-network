@@ -156,10 +156,15 @@ impl std::str::FromStr for NetAddr {
         };
 
         // Handle bracketed IPv6 like `[::1]:8080` or `[::1]` (no port).
+        // Rejecting other `[`-prefixed strings deliberately diverges from
+        // `StakeTableV3.validateP2pAddr`, which accepts some of them: the
+        // fetcher then drops the address and the validator is ineligible
+        // at V0_6 until it calls `updateP2pAddr`.
         if s.starts_with('[') {
             return match s.rfind("]:") {
                 Some(i) => parse(&s[..i + 1], Some(&s[i + 2..])),
-                None => parse(s, None),
+                None if s.ends_with(']') => parse(s, None),
+                None => Err(InvalidNetAddr(())),
             };
         }
 
@@ -234,6 +239,27 @@ mod tests {
     #[test]
     fn empty_is_invalid() {
         assert!("".parse::<NetAddr>().is_err())
+    }
+
+    /// `[host]:1234:5678` and `[2001:db8::1:9000` are contract-accepted;
+    /// rejecting them is deliberate (see `FromStr::from_str`).
+    #[test]
+    fn from_str_cases() {
+        let ok: &[(&str, NetAddr)] = &[
+            ("[::1]:8080", NetAddr::Inet("::1".parse().unwrap(), 8080)),
+            ("[::1]", NetAddr::Inet("::1".parse().unwrap(), 0)),
+            ("example.com:80", NetAddr::named("example.com", 80)),
+            ("example.com", NetAddr::named("example.com", 0)),
+            ("::1:8080", NetAddr::Inet("::1".parse().unwrap(), 8080)),
+        ];
+        for (s, expected) in ok {
+            let a: NetAddr = s.parse().unwrap_or_else(|_| panic!("parse {s}"));
+            assert_eq!(&a, expected, "for input {s}");
+        }
+        let err: &[&str] = &["[host]:1234:5678", "[2001:db8::1:9000", "[abc", ""];
+        for s in err {
+            assert!(s.parse::<NetAddr>().is_err(), "expected error for {s:?}");
+        }
     }
 
     #[test]
