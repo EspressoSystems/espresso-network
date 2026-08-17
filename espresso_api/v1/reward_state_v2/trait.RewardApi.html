@@ -212,8 +212,8 @@ including lifetime rewards and the Merkle proof.</p>
 ) -&gt; <a class="struct" href="https://doc.rust-lang.org/1.97.1/core/pin/struct.Pin.html" title="struct core::pin::Pin">Pin</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.97.1/alloc/boxed/struct.Box.html" title="struct alloc::boxed::Box">Box</a>&lt;dyn <a class="trait" href="https://doc.rust-lang.org/1.97.1/core/future/future/trait.Future.html" title="trait core::future::future::Future">Future</a>&lt;Output = <a class="type" href="https://docs.rs/anyhow/1.0.102/anyhow/type.Result.html" title="type anyhow::Result">Result</a>&lt;Self::<a class="associatedtype" href="trait.RewardApi.html#associatedtype.RewardStatePathV1" title="type espresso_api::v1::reward_state_v2::RewardApi::RewardStatePathV1">RewardStatePathV1</a>&gt;&gt; + <a class="trait" href="https://doc.rust-lang.org/1.97.1/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a> + 'async_trait&gt;&gt;<div class="where">where
     Self: 'async_trait,
     'life0: 'async_trait,</div></h4></section></summary><div class="docblock"><p>Get the Merkle path for a key in the reward-state (RewardMerkleTreeV1) tree</p>
-<p>Mirrors <code>merklized_state::get_path</code>, inherited by the reward-state mount from
-<code>hotshot-query-service</code>’s base <code>state.toml</code> routes (same as block-state/fee-state).</p>
+<p>Mirrors the legacy <code>merklized_state</code> <code>get_path</code>, inherited by the reward-state mount
+from <code>hotshot-query-service</code>’s merklized-state base routes (same as block-state/fee-state).</p>
 <h5 id="arguments-8"><a class="doc-anchor" href="#arguments-8">§</a>Arguments</h5>
 <ul>
 <li><code>snapshot</code> - Height or commitment identifying the tree snapshot</li>

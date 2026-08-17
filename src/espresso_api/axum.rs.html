@@ -474,8 +474,8 @@
 <a href=#474 id=474 data-nosnippet>474</a>                .map_err(classify_availability_error)
 <a href=#475 id=475 data-nosnippet>475</a>        };
 <a href=#476 id=476 data-nosnippet>476</a>
-<a href=#477 id=477 data-nosnippet>477</a>    <span class="comment">// Merklized-state `get_path` handlers, inherited by both reward mounts from
-<a href=#478 id=478 data-nosnippet>478</a>    // `hotshot-query-service`'s base `state.toml` routes (mirrors router_block_state /
+<a href=#477 id=477 data-nosnippet>477</a>    <span class="comment">// Merklized-state `get_path` handlers, inherited by both reward mounts from the legacy
+<a href=#478 id=478 data-nosnippet>478</a>    // `hotshot-query-service` merklized-state base routes (mirrors router_block_state /
 <a href=#479 id=479 data-nosnippet>479</a>    // router_fee_state below).
 <a href=#480 id=480 data-nosnippet>480</a>    </span><span class="kw">let </span>get_reward_state_path_v1_by_height =
 <a href=#481 id=481 data-nosnippet>481</a>        |State(state): State&lt;S&gt;, Path((height, key)): Path&lt;(u64, String)&gt;| <span class="kw">async move </span>{
