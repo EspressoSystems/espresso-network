@@ -341,25 +341,19 @@ where
 mod test {
     use std::{future::IntoFuture, marker::PhantomData, time::Duration};
 
+    use axum::{Router, extract::Path, http::HeaderMap, response::Response, routing::get};
     use committable::Committable;
-    use futures::{
-        future::{FutureExt, join},
-        stream::StreamExt,
-    };
+    use futures::{future::join, stream::StreamExt};
     use hotshot_example_types::node_types::{EpochVersion, TEST_VERSIONS};
     use hotshot_types::data::ViewNumber;
-    use test_utils::reserve_tcp_port;
-    use tide_disco::{Api, App};
-    use tokio::time::timeout;
-    use toml::toml;
+    use tokio::{task::JoinHandle, time::timeout};
     use vbs::version::StaticVersion;
 
     use super::*;
     use crate::{
-        ApiState,
         availability::{
-            self, AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction,
-            Certificate2, Fetch, UpdateAvailabilityData, define_api,
+            AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction,
+            Certificate2, Fetch, UpdateAvailabilityData,
         },
         data_source::{
             AvailabilityProvider, FetchingDataSource, Transaction, VersionedDataSource,
@@ -371,9 +365,10 @@ mod test {
                 sql::testing::TmpDb,
             },
         },
-        fetching::provider::{AnyProvider, NoFetching, Provider as ProviderTrait, TestProvider},
+        fetching::provider::{
+            AnyProvider, NoFetching, Provider as ProviderTrait, TestProvider, test_fixtures,
+        },
         node::data_source::NodeDataSource,
-        task::BackgroundTask,
         testing::{
             consensus::{MockDataSource, MockNetwork},
             mocks::{MockBase, MockPayload, MockTypes, mock_transaction},
@@ -430,27 +425,11 @@ mod test {
     }
 
     /// Serve the availability API for `data_source` on a fresh port and return the port and the
-    /// background task running the server.
+    /// task running the server.
     async fn serve_availability(
         data_source: impl AvailabilityDataSource<MockTypes> + Send + Sync + 'static,
-    ) -> (u16, BackgroundTask) {
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(data_source));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        let task = BackgroundTask::spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
-        (port, task)
+    ) -> (u16, JoinHandle<()>) {
+        test_fixtures::serve_availability(MockBase::instance(), data_source).await
     }
 
     fn trusted_provider(port: u16) -> TrustedQueryServiceProvider<MockBase> {
@@ -488,22 +467,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let db = TmpDb::init().await;
@@ -718,22 +682,9 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                EpochVersion::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), EpochVersion::instance()),
-        );
+        let (port, _server) =
+            test_fixtures::serve_availability(EpochVersion::instance(), network.data_source())
+                .await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         // Use our special test provider that handles epoch version transitions
@@ -944,22 +895,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let db = TmpDb::init().await;
@@ -1005,22 +941,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let db = TmpDb::init().await;
@@ -1070,22 +991,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let db = TmpDb::init().await;
@@ -1132,22 +1038,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let db = TmpDb::init().await;
@@ -1190,23 +1081,10 @@ mod test {
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
-        // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        // Start a web server that the non-consensus node can use to fetch blocks. This test
+        // fetches passively, so nothing ever contacts the server; it is here only to mirror the
+        // other tests' setup.
+        let (_port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus. We don't give it a
         // fetcher since transactions are always fetched passively anyways.
@@ -1270,22 +1148,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus.
         let db = TmpDb::init().await;
@@ -1344,22 +1207,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer. The
         // data source is at first configured to aggressively prune data.
@@ -1499,22 +1347,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let provider = Provider::new(TrustedQueryServiceProvider::new(
@@ -1605,22 +1438,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let provider = Provider::new(TrustedQueryServiceProvider::new(
@@ -1704,22 +1522,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus.
         let db = TmpDb::init().await;
@@ -1940,7 +1743,7 @@ mod test {
 
     // A cert2 provider that cannot supply the cert2 must not short-circuit the backfill: the fetch
     // walks past it to a provider that has it. This covers both ways a provider fails to supply a
-    // cert2 — since a peer that responds "absent" 404s, `fetch_cert2` errors and the provider
+    // cert2: since a peer that responds "absent" 404s, `fetch_cert2` errors and the provider
     // returns `None`, the same outer-`None` a transport failure (`fail()`) produces here.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_cert2_fetch_walks_past_failing_peers() {
@@ -2078,22 +1881,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let provider = Provider::new(TrustedQueryServiceProvider::new(
@@ -2143,22 +1931,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let provider = Provider::new(TrustedQueryServiceProvider::new(
@@ -2226,22 +1999,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let provider = Provider::new(TrustedQueryServiceProvider::new(
@@ -2331,22 +2089,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let provider = Provider::new(TrustedQueryServiceProvider::new(
@@ -2405,22 +2148,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let provider = Provider::new(TrustedQueryServiceProvider::new(
@@ -2484,22 +2212,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let provider = Provider::new(TrustedQueryServiceProvider::new(
@@ -2599,22 +2312,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start consensus.
         network.start().await;
@@ -2677,41 +2375,26 @@ mod test {
     }
 
     /// A test server which does not support ranged VID common requests.
-    async fn old_server(port: u16) {
-        let mut api = Api::<(), availability::Error, StaticVersion<1, 0>>::new(toml! {
-            [route.get_vid_common]
-            PATH = ["vid/common/:height"]
-            ":height" = "Integer"
-        })
-        .unwrap();
+    async fn old_server() -> (u16, JoinHandle<()>) {
+        async fn get_vid_common(headers: HeaderMap, Path(height): Path<u64>) -> Response {
+            let mut common = VidCommonQueryData::<MockTypes>::genesis(
+                &Default::default(),
+                &Default::default(),
+                TEST_VERSIONS.test.base,
+            )
+            .await;
+            common.height = height;
+            test_fixtures::respond::<StaticVersion<1, 0>, _>(&headers, Ok(common))
+        }
 
-        api.get("get_vid_common", move |req, _| {
-            async move {
-                let mut common = VidCommonQueryData::<MockTypes>::genesis(
-                    &Default::default(),
-                    &Default::default(),
-                    TEST_VERSIONS.test.base,
-                )
-                .await;
-                common.height = req.integer_param("height")?;
-                Ok(common)
-            }
-            .boxed()
-        })
-        .unwrap();
-
-        let mut app = App::<(), Error>::with_state(());
-        app.register_module("availability", api).unwrap();
-        app.serve(format!("0.0.0.0:{port}"), MockBase::instance())
-            .await
-            .ok();
+        let api = Router::new().route("/vid/common/{height}", get(get_vid_common));
+        test_fixtures::serve(test_fixtures::app::<StaticVersion<1, 0>>(api)).await
     }
 
     #[tokio::test]
     #[test_log::test]
     async fn test_vid_common_fallback() {
-        let port = reserve_tcp_port().unwrap();
-        let _server = BackgroundTask::spawn("old server", old_server(port));
+        let (port, _server) = old_server().await;
         let provider = TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             StaticVersion::<1, 0>::instance(),

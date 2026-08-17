@@ -9243,7 +9243,7 @@ mod test {
                 .await?;
 
                 // Merklized-state `get_path` routes, inherited by both reward mounts from
-                // `hotshot-query-service`'s base `state.toml` (mirrors the block-state /
+                // the legacy `hotshot-query-service` merklized-state base routes (mirrors the block-state /
                 // fee-state checks below). Nothing in this codebase populates the generic
                 // merklized-state tables for the reward trees today; the reward-state modules
                 // persist snapshots via the separate `persist_tree`/`load_tree` bincode-blob

@@ -1659,6 +1659,16 @@ fn enforce_range(from: usize, until: usize, limit: usize) -> anyhow::Result<()> 
     Ok(())
 }
 
+// Range limits for list endpoints, read from `hotshot_query_service`'s `Options` (their only
+// remaining declaration) so a dependency bump that changes the defaults changes enforcement too.
+fn small_object_range_limit() -> usize {
+    hotshot_query_service::availability::Options::default().small_object_range_limit
+}
+
+fn large_object_range_limit() -> usize {
+    hotshot_query_service::availability::Options::default().large_object_range_limit
+}
+
 #[async_trait]
 impl<D> HotShotAvailabilityApi for NodeApiStateImpl<D>
 where
@@ -1695,7 +1705,7 @@ where
     }
 
     async fn get_leaf_range(&self, from: usize, until: usize) -> anyhow::Result<Vec<Self::Leaf>> {
-        enforce_range(from, until, 500)?;
+        enforce_range(from, until, small_object_range_limit())?;
         let timeout = FETCH_TIMEOUT;
         let ds = &*self.data_source;
         let stream = ds.get_leaf_range(from..until).await;
@@ -1731,7 +1741,7 @@ where
         from: usize,
         until: usize,
     ) -> anyhow::Result<Vec<Self::Header>> {
-        enforce_range(from, until, 100)?;
+        enforce_range(from, until, large_object_range_limit())?;
         let timeout = FETCH_TIMEOUT;
         let ds = &*self.data_source;
         let stream = ds.get_header_range(from..until).await;
@@ -1763,7 +1773,7 @@ where
     }
 
     async fn get_block_range(&self, from: usize, until: usize) -> anyhow::Result<Vec<Self::Block>> {
-        enforce_range(from, until, 100)?;
+        enforce_range(from, until, large_object_range_limit())?;
         let timeout = FETCH_TIMEOUT;
         let ds = &*self.data_source;
         let stream = ds.get_block_range(from..until).await;
@@ -1799,7 +1809,7 @@ where
         from: usize,
         until: usize,
     ) -> anyhow::Result<Vec<Self::Payload>> {
-        enforce_range(from, until, 100)?;
+        enforce_range(from, until, large_object_range_limit())?;
         let timeout = FETCH_TIMEOUT;
         let ds = &*self.data_source;
         let stream = ds.get_payload_range(from..until).await;
@@ -1835,7 +1845,7 @@ where
         from: usize,
         until: usize,
     ) -> anyhow::Result<Vec<Self::VidCommon>> {
-        enforce_range(from, until, 500)?;
+        enforce_range(from, until, small_object_range_limit())?;
         let timeout = FETCH_TIMEOUT;
         let ds = &*self.data_source;
         let stream = ds.get_vid_common_range(from..until).await;
@@ -1993,7 +2003,7 @@ where
         from: usize,
         until: usize,
     ) -> anyhow::Result<Vec<Self::BlockSummary>> {
-        enforce_range(from, until, 100)?;
+        enforce_range(from, until, large_object_range_limit())?;
         let timeout = FETCH_TIMEOUT;
         let ds = &*self.data_source;
         let stream = ds.get_block_range(from..until).await;
@@ -2013,8 +2023,8 @@ where
 
     async fn get_limits(&self) -> anyhow::Result<Self::Limits> {
         Ok(HsLimits {
-            small_object_range_limit: 500,
-            large_object_range_limit: 100,
+            small_object_range_limit: small_object_range_limit(),
+            large_object_range_limit: large_object_range_limit(),
         })
     }
 
@@ -3488,6 +3498,37 @@ mod tests {
             message: "boom".into(),
             status,
         }
+    }
+
+    // The only tests of the range limits since the query service's own API (and its
+    // `test_range_limit`) was deleted: an in-limit range passes, one past the limit is a
+    // RangeExceeded, which the HTTP layer serves as a 400.
+    #[test]
+    fn range_at_limit_is_allowed() {
+        let limit = small_object_range_limit();
+        enforce_range(0, limit, limit).unwrap();
+        enforce_range(3, limit + 3, limit).unwrap();
+    }
+
+    #[test]
+    fn range_past_limit_is_rejected() {
+        for limit in [small_object_range_limit(), large_object_range_limit()] {
+            let err = enforce_range(0, limit + 1, limit).unwrap_err();
+            assert!(matches!(
+                err.downcast_ref::<AvailabilityError>(),
+                Some(AvailabilityError::RangeExceeded(_))
+            ));
+        }
+    }
+
+    // Tripwire: the enforced and advertised limits come from `hotshot_query_service`'s
+    // `Options` defaults. If a dependency change moves them, this fails so the new bound is
+    // adopted deliberately rather than silently.
+    #[test]
+    fn range_limits_track_known_defaults() {
+        assert_eq!(small_object_range_limit(), 500);
+        assert_eq!(large_object_range_limit(), 100);
+        assert_eq!(node_window_limit(), 500);
     }
 
     // Regression: the light-client trait methods used to map query-service errors through
