@@ -10,8 +10,11 @@
 //! scenarios would need a per-epoch-aware `TestData` (cert signers, VID
 //! recipients, leader keys) and are not covered here.
 
-use std::{collections::BTreeMap, net::Ipv4Addr, time::Duration};
+#[cfg(target_os = "linux")]
+use std::net::Ipv4Addr;
+use std::{collections::BTreeMap, time::Duration};
 
+#[cfg(target_os = "linux")]
 use hotshot_types::addr::NetAddr;
 
 use crate::tests::common::{
@@ -120,22 +123,32 @@ async fn incoming_validator_restarts_before_replacement_boundary() {
 /// 6 nodes, epoch_height=10; node 5 is a member of every epoch, but the
 /// epoch-3 stake table (blocks 21-30) registers a new p2p address for it.
 ///
+/// Node 5 lives on its own loopback IPs — 127.0.0.2 initially, rotating to
+/// 127.0.0.3 — while its peers stay on 127.0.0.1 (hence Linux-only: macOS
+/// does not alias 127.0.0.0/8). Cliquenet validates inbound connections by
+/// source IP, and loopback dials always originate from 127.0.0.1, so node
+/// 5's own dials are rejected by its peers and it is reachable only when
+/// peers dial the address registered for it. If the rotated address did
+/// not propagate, node 5 would stay partitioned after its restart and the
+/// test fails.
+///
 /// Peers adopt the new address when they enter epoch 2: `apply_epoch`
 /// eagerly merges the next epoch's connect info, so crossing into epoch 2
 /// at block 11 already re-points node 5's peers at the epoch-3 address.
-/// Node 5 restarts bound to the new port at view 11; from then on it can
-/// only be reached via the rotated address. It leads views 17, 23, 29 and
-/// 35, every view is required to decide, and its post-restart decisions
-/// (target 20) must match the other nodes' chain.
+/// Node 5 restarts bound to the new address at view 11. It leads views 17,
+/// 23, 29 and 35, every view is required to decide, and its post-restart
+/// decisions (target 20) must match the other nodes' chain.
+#[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread")]
 async fn validator_rotates_address_at_epoch_boundary() {
     let port = test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
-    let new_addr = NetAddr::Inet(Ipv4Addr::LOCALHOST.into(), port);
+    let new_addr = NetAddr::Inet(Ipv4Addr::new(127, 0, 0, 3).into(), port);
     TestRunner::builder()
         .num_nodes(6)
         .target_decisions(35)
         .max_runtime(Duration::from_secs(500))
         .epoch_height(10)
+        .node_ips(BTreeMap::from([(5, Ipv4Addr::new(127, 0, 0, 2).into())]))
         .stake_table_schedule(StakeTableSchedule {
             initial: vec![0, 1, 2, 3, 4, 5],
             changes: vec![(3, vec![0, 1, 2, 3, 4, 5])],

@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     fmt,
+    net::IpAddr,
     time::Duration,
 };
 
@@ -140,6 +141,18 @@ pub struct TestRunner {
     /// infos would heal the partition.
     #[builder(default)]
     blocked_pairs: BTreeSet<(usize, usize)>,
+
+    /// Per-node listener IP overrides (default `127.0.0.1`).  Cliquenet
+    /// validates inbound connections by source IP only, and loopback dials
+    /// always originate from `127.0.0.1` regardless of the dialer's bind
+    /// address.  A node registered on a distinct loopback IP (Linux only;
+    /// macOS does not alias `127.0.0.0/8`) therefore has its own outbound
+    /// dials rejected by its peers and is reachable only when peers dial
+    /// the address registered for it — which makes address propagation
+    /// through the stake table load-bearing instead of being papered over
+    /// by the node's own dials.
+    #[builder(default)]
+    node_ips: BTreeMap<usize, IpAddr>,
 
     /// Per-node overrides of `target_decisions` for the completion check.
     /// A validator removed from the stake table stops deciding once its
@@ -349,7 +362,12 @@ impl TestRunner {
                 let keypair = Keypair::derive_from::<BLSPubKey>(&private_key).unwrap();
                 let port = test_utils::reserve_tcp_port()
                     .expect("OS should have ephemeral ports available");
-                let addr = NetAddr::Inet(std::net::Ipv4Addr::LOCALHOST.into(), port);
+                let ip = self
+                    .node_ips
+                    .get(&i)
+                    .copied()
+                    .unwrap_or_else(|| std::net::Ipv4Addr::LOCALHOST.into());
+                let addr = NetAddr::Inet(ip, port);
                 (keypair, public_key, addr)
             })
             .collect::<Vec<_>>();
