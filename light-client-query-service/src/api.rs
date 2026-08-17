@@ -1,8 +1,8 @@
 //! Axum port of the `availability` and `node` API modules that this service used to serve via
 //! `hotshot_query_service::{availability, node}::define_api` on a tide-disco `App`.
 //!
-//! Route paths, status codes and the wire error type are all taken directly from
-//! `hotshot-query-service` (see `availability.rs`/`node.rs` there and their handler bodies) so
+//! Route paths, status codes and the wire error type were taken directly from the legacy
+//! `hotshot-query-service` handler bodies (deleted with tide-disco) so
 //! that clients built against the old tide-disco server keep working unmodified.
 
 use std::{ops::Bound, time::Duration};
@@ -41,12 +41,24 @@ use vbs::version::StaticVersion;
 /// used under tide-disco.
 type WireVersion = StaticVersion<0, 1>;
 
-/// Mirrors `hotshot_query_service::availability::Options::default()` and
-/// `node::Options::default()`, which is what this service's tide-disco setup used.
-const FETCH_TIMEOUT: Duration = Duration::from_millis(500);
-const SMALL_OBJECT_RANGE_LIMIT: usize = 500;
-const LARGE_OBJECT_RANGE_LIMIT: usize = 100;
-const WINDOW_LIMIT: usize = 500;
+// Timeout and range limits, read from `hotshot_query_service`'s `Options` (their only declaration)
+// so a dependency bump that changes the defaults changes this service too. These are the values
+// its tide-disco setup used.
+fn fetch_timeout() -> Duration {
+    hotshot_query_service::availability::Options::default().fetch_timeout
+}
+
+fn small_object_range_limit() -> usize {
+    hotshot_query_service::availability::Options::default().small_object_range_limit
+}
+
+fn large_object_range_limit() -> usize {
+    hotshot_query_service::availability::Options::default().large_object_range_limit
+}
+
+fn window_limit() -> usize {
+    hotshot_query_service::node::Options::default().window_limit
+}
 
 /// Wire format of this service: [`WireVersion`] VBS framing and the [`ApiError`] envelope.
 /// `ApiError` is `hotshot_query_service::Error`, the exact type the old tide-disco `App` used, so
@@ -119,7 +131,7 @@ async fn fetch_leaf(
 ) -> Result<LeafQueryData<SeqTypes>, availability::Error> {
     ds.get_leaf(id)
         .await
-        .with_timeout(FETCH_TIMEOUT)
+        .with_timeout(fetch_timeout())
         .await
         .ok_or_else(|| availability::Error::FetchLeaf {
             resource: id.to_string(),
@@ -131,17 +143,16 @@ async fn fetch_leaf_range(
     from: usize,
     until: usize,
 ) -> Result<Vec<LeafQueryData<SeqTypes>>, availability::Error> {
-    enforce_range_limit(from, until, SMALL_OBJECT_RANGE_LIMIT)?;
+    enforce_range_limit(from, until, small_object_range_limit())?;
     ds.get_leaf_range(from..until)
         .await
         .enumerate()
         .then(|(index, fetch)| async move {
-            fetch
-                .with_timeout(FETCH_TIMEOUT)
-                .await
-                .ok_or_else(|| availability::Error::FetchLeaf {
+            fetch.with_timeout(fetch_timeout()).await.ok_or_else(|| {
+                availability::Error::FetchLeaf {
                     resource: (index + from).to_string(),
-                })
+                }
+            })
         })
         .try_collect()
         .await
@@ -153,7 +164,7 @@ async fn fetch_header(
 ) -> Result<Header<SeqTypes>, availability::Error> {
     ds.get_header(id)
         .await
-        .with_timeout(FETCH_TIMEOUT)
+        .with_timeout(fetch_timeout())
         .await
         .ok_or_else(|| availability::Error::FetchHeader {
             resource: id.to_string(),
@@ -165,12 +176,12 @@ async fn fetch_header_range(
     from: usize,
     until: usize,
 ) -> Result<Vec<Header<SeqTypes>>, availability::Error> {
-    enforce_range_limit(from, until, LARGE_OBJECT_RANGE_LIMIT)?;
+    enforce_range_limit(from, until, large_object_range_limit())?;
     ds.get_header_range(from..until)
         .await
         .enumerate()
         .then(|(index, fetch)| async move {
-            fetch.with_timeout(FETCH_TIMEOUT).await.ok_or_else(|| {
+            fetch.with_timeout(fetch_timeout()).await.ok_or_else(|| {
                 availability::Error::FetchHeader {
                     resource: (index + from).to_string(),
                 }
@@ -186,7 +197,7 @@ async fn fetch_block(
 ) -> Result<BlockQueryData<SeqTypes>, availability::Error> {
     ds.get_block(id)
         .await
-        .with_timeout(FETCH_TIMEOUT)
+        .with_timeout(fetch_timeout())
         .await
         .ok_or_else(|| availability::Error::FetchBlock {
             resource: id.to_string(),
@@ -198,17 +209,16 @@ async fn fetch_block_range(
     from: usize,
     until: usize,
 ) -> Result<Vec<BlockQueryData<SeqTypes>>, availability::Error> {
-    enforce_range_limit(from, until, LARGE_OBJECT_RANGE_LIMIT)?;
+    enforce_range_limit(from, until, large_object_range_limit())?;
     ds.get_block_range(from..until)
         .await
         .enumerate()
         .then(|(index, fetch)| async move {
-            fetch
-                .with_timeout(FETCH_TIMEOUT)
-                .await
-                .ok_or_else(|| availability::Error::FetchBlock {
+            fetch.with_timeout(fetch_timeout()).await.ok_or_else(|| {
+                availability::Error::FetchBlock {
                     resource: (index + from).to_string(),
-                })
+                }
+            })
         })
         .try_collect()
         .await
@@ -222,7 +232,7 @@ async fn fetch_payload(
     // no separate `FetchPayload` variant.
     ds.get_payload(id)
         .await
-        .with_timeout(FETCH_TIMEOUT)
+        .with_timeout(fetch_timeout())
         .await
         .ok_or_else(|| availability::Error::FetchBlock {
             resource: id.to_string(),
@@ -234,17 +244,16 @@ async fn fetch_payload_range(
     from: usize,
     until: usize,
 ) -> Result<Vec<PayloadQueryData<SeqTypes>>, availability::Error> {
-    enforce_range_limit(from, until, LARGE_OBJECT_RANGE_LIMIT)?;
+    enforce_range_limit(from, until, large_object_range_limit())?;
     ds.get_payload_range(from..until)
         .await
         .enumerate()
         .then(|(index, fetch)| async move {
-            fetch
-                .with_timeout(FETCH_TIMEOUT)
-                .await
-                .ok_or_else(|| availability::Error::FetchBlock {
+            fetch.with_timeout(fetch_timeout()).await.ok_or_else(|| {
+                availability::Error::FetchBlock {
                     resource: (index + from).to_string(),
-                })
+                }
+            })
         })
         .try_collect()
         .await
@@ -256,7 +265,7 @@ async fn fetch_vid_common(
 ) -> Result<VidCommonQueryData<SeqTypes>, availability::Error> {
     ds.get_vid_common(id)
         .await
-        .with_timeout(FETCH_TIMEOUT)
+        .with_timeout(fetch_timeout())
         .await
         .ok_or_else(|| availability::Error::FetchBlock {
             resource: id.to_string(),
@@ -268,17 +277,16 @@ async fn fetch_vid_common_range(
     from: usize,
     until: usize,
 ) -> Result<Vec<VidCommonQueryData<SeqTypes>>, availability::Error> {
-    enforce_range_limit(from, until, SMALL_OBJECT_RANGE_LIMIT)?;
+    enforce_range_limit(from, until, small_object_range_limit())?;
     ds.get_vid_common_range(from..until)
         .await
         .enumerate()
         .then(|(index, fetch)| async move {
-            fetch
-                .with_timeout(FETCH_TIMEOUT)
-                .await
-                .ok_or_else(|| availability::Error::FetchBlock {
+            fetch.with_timeout(fetch_timeout()).await.ok_or_else(|| {
+                availability::Error::FetchBlock {
                     resource: (index + from).to_string(),
-                })
+                }
+            })
         })
         .try_collect()
         .await
@@ -313,7 +321,7 @@ async fn fetch_transaction_by_hash(
     let hash = parse_availability_param::<TransactionHash<SeqTypes>>(hash, "hash")?;
     ds.get_block_containing_transaction(hash)
         .await
-        .with_timeout(FETCH_TIMEOUT)
+        .with_timeout(fetch_timeout())
         .await
         .ok_or_else(|| availability::Error::FetchTransaction {
             resource: hash.to_string(),
@@ -349,17 +357,16 @@ async fn fetch_block_summary_range(
     from: usize,
     until: usize,
 ) -> Result<Vec<BlockSummaryQueryData<SeqTypes>>, availability::Error> {
-    enforce_range_limit(from, until, LARGE_OBJECT_RANGE_LIMIT)?;
+    enforce_range_limit(from, until, large_object_range_limit())?;
     ds.get_block_range(from..until)
         .await
         .enumerate()
         .then(|(index, fetch)| async move {
-            fetch
-                .with_timeout(FETCH_TIMEOUT)
-                .await
-                .ok_or_else(|| availability::Error::FetchBlock {
+            fetch.with_timeout(fetch_timeout()).await.ok_or_else(|| {
+                availability::Error::FetchBlock {
                     resource: (index + from).to_string(),
-                })
+                }
+            })
         })
         .map(|result| result.map(BlockSummaryQueryData::from))
         .try_collect()
@@ -763,7 +770,7 @@ async fn get_cert2(
     let result = ds
         .get_cert2(height)
         .await
-        .with_timeout(FETCH_TIMEOUT)
+        .with_timeout(fetch_timeout())
         .await
         .ok_or(availability::Error::Custom {
             message: format!("no cert2 available for height {height}"),
@@ -776,8 +783,8 @@ async fn get_availability_limits(headers: HeaderMap) -> Response {
     encode_ok(
         &headers,
         AvailabilityLimits {
-            small_object_range_limit: SMALL_OBJECT_RANGE_LIMIT,
-            large_object_range_limit: LARGE_OBJECT_RANGE_LIMIT,
+            small_object_range_limit: small_object_range_limit(),
+            large_object_range_limit: large_object_range_limit(),
         },
     )
 }
@@ -905,7 +912,7 @@ async fn fetch_header_window(
     start: WindowStart<SeqTypes>,
     end: u64,
 ) -> Result<hotshot_query_service::node::TimeWindowQueryData<Header<SeqTypes>>, node::Error> {
-    ds.get_header_window(start, end, WINDOW_LIMIT)
+    ds.get_header_window(start, end, window_limit())
         .await
         .map_err(|source| node::Error::QueryWindow {
             source,
@@ -1101,7 +1108,7 @@ async fn node_limits(headers: HeaderMap) -> Response {
     encode_ok(
         &headers,
         NodeLimits {
-            window_limit: WINDOW_LIMIT,
+            window_limit: window_limit(),
         },
     )
 }

@@ -43,6 +43,8 @@ use super::Request;
 
 mod any;
 mod query_service;
+#[cfg(test)]
+pub(crate) mod test_fixtures;
 mod testing;
 
 pub use any::AnyProvider;

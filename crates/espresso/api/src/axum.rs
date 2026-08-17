@@ -474,8 +474,8 @@ where
                 .map_err(classify_availability_error)
         };
 
-    // Merklized-state `get_path` handlers, inherited by both reward mounts from
-    // `hotshot-query-service`'s base `state.toml` routes (mirrors router_block_state /
+    // Merklized-state `get_path` handlers, inherited by both reward mounts from the legacy
+    // `hotshot-query-service` merklized-state base routes (mirrors router_block_state /
     // router_fee_state below).
     let get_reward_state_path_v1_by_height =
         |State(state): State<S>, Path((height, key)): Path<(u64, String)>| async move {
