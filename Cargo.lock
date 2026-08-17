@@ -6444,7 +6444,6 @@ dependencies = [
  "hotshot-types",
  "hotshot-utils",
  "jf-advz",
- "p3-maybe-rayon",
  "parking_lot",
  "rand 0.8.6",
  "reqwest 0.12.28",
@@ -11060,7 +11059,8 @@ dependencies = [
 [[package]]
 name = "reed-solomon-simd"
 version = "3.1.0"
-source = "git+https://github.com/EspressoSystems/reed-solomon-simd#1c3020e8484915028306aa28a9b6fc2b1e789d96"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cffef0520d30fbd4151fb20e262947ae47fb0ab276a744a19b6398438105a072"
 dependencies = [
  "cpufeatures 0.2.17",
  "fixedbitset",

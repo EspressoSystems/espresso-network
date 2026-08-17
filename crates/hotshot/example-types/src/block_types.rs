@@ -94,11 +94,7 @@ impl TestTransaction {
     /// # Errors
     /// If the transaction length conversion fails.
     pub fn encode(transactions: &[Self]) -> Vec<u8> {
-        // Pre-size to the exact encoded length (4-byte size prefix per txn +
-        // payload) so a large multi-MiB block fills a single allocation instead
-        // of growing an empty Vec through ~log2(size) reallocating copies.
-        let total = transactions.iter().map(|txn| 4 + txn.0.len()).sum();
-        let mut encoded = Vec::with_capacity(total);
+        let mut encoded = Vec::new();
 
         for txn in transactions {
             // The transaction length is converted from `usize` to `u32` to ensure consistent
@@ -290,20 +286,6 @@ impl<TYPES: NodeType> BlockPayload<TYPES> for TestBlockPayload {
         _metadata: &'a Self::Metadata,
     ) -> impl 'a + Iterator<Item = Self::Transaction> {
         self.transactions.iter().cloned()
-    }
-
-    /// Parallel override of the default serial map-then-collect.  The default
-    /// `transaction_commitments` walks `self.transactions(metadata).map(commit)`
-    /// which serializes the per-tx Keccak256 — the dominant tail in the
-    /// recover spawn_blocking task (see `recover_v_minus_1_decode_end →
-    /// recover_v_minus_1_end` interval).  With many small transactions, par_iter
-    /// distributes the hashes across all rayon workers.
-    fn transaction_commitments(
-        &self,
-        _metadata: &Self::Metadata,
-    ) -> Vec<Commitment<Self::Transaction>> {
-        use p3_maybe_rayon::prelude::*;
-        self.transactions.par_iter().map(|tx| tx.commit()).collect()
     }
 
     fn txn_bytes(&self) -> usize {

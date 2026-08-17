@@ -1,7 +1,7 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::Result;
-use hotshot::types::BLSPubKey;
+use hotshot::{traits::BlockPayload, types::BLSPubKey};
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
     node_types::{TEST_VERSIONS, TestTypes},
@@ -369,6 +369,7 @@ struct TestBlock {
     block: TestBlockPayload,
     metadata: TestMetadata,
     payload_commitment: VidCommitment,
+    builder_commitment: BuilderCommitment,
 }
 
 /// A test block built off the event loop, paired with the request it answers,
@@ -386,16 +387,13 @@ fn inject_test_block(
     built: BuiltBlock,
 ) {
     let BuiltBlock { req, td } = built;
-    // `builder_commitment` is being deprecated and the bench never checks it, so
-    // inject a dummy rather than computing it from the payload.
-    let builder_commitment = BuilderCommitment::from_bytes([]);
 
     let parent_leaf = req.parent_proposal.clone().into();
     let version = bench_upgrade_lock().version_infallible(req.view);
     let header = TestBlockHeader::new::<TestTypes>(
         &parent_leaf,
         td.payload_commitment,
-        builder_commitment,
+        td.builder_commitment,
         td.metadata,
         version,
     );
@@ -463,10 +461,15 @@ fn build_test_block(size: usize, n_namespaces: u32, num_nodes: usize) -> TestBlo
         num_nodes,
         versions::NEW_PROTOCOL_VERSION,
     );
+    // Production's BlockBuilder computes this from the payload (a Keccak over
+    // every transaction); keep it so the leader pays what the deployed node pays.
+    let builder_commitment =
+        <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(&block, &metadata);
     TestBlock {
         block,
         metadata,
         payload_commitment,
+        builder_commitment,
     }
 }
 
