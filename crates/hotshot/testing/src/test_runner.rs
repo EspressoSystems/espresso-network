@@ -41,9 +41,9 @@ use hotshot_types::{
         node_implementation::{NodeImplementation, NodeType},
     },
 };
+use tide_disco::Url;
 #[allow(deprecated)]
 use tracing::info;
-use url::Url;
 
 use super::{
     completion_task::CompletionTask, consistency_task::ConsistencyTask, txn_task::TxnTask,

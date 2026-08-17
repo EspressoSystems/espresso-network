@@ -9,7 +9,6 @@ use espresso_types::{
     eth_signature_key::EthKeyPair, v0_1::NoStorage, v0_3::Fetcher,
 };
 use hotshot::traits::BlockPayload;
-use hotshot_builder_api::v0_1::router;
 use hotshot_builder_legacy::{
     builder_state::{BuilderState, MessageType},
     service::{
@@ -26,6 +25,8 @@ use hotshot_types::{
 use tokio::spawn;
 use url::Url;
 use vbs::version::Version;
+
+use crate::run_builder_api_service;
 
 #[derive(Clone, Debug)]
 pub struct BuilderConfig {
@@ -206,10 +207,7 @@ impl BuilderConfig {
         );
 
         // start the hotshot api service
-        http_wire::spawn_serve(
-            &hotshot_builder_apis_url,
-            router::builder_app::<SeqTypes, _>(proxy_global_state),
-        );
+        run_builder_api_service(hotshot_builder_apis_url.clone(), proxy_global_state);
 
         // spawn the builder service
         let events_url = sequencer_api_url.clone();

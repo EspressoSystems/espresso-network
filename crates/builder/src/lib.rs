@@ -1,4 +1,27 @@
+use espresso_types::SeqTypes;
+use hotshot_builder_legacy::service::ProxyGlobalState;
+use tokio::{net::TcpListener, spawn};
+use url::Url;
+
+pub mod api;
 pub mod non_permissioned;
+
+/// Runs the builder's `block_info` and `txn_submit` API service in the background.
+pub fn run_builder_api_service(url: Url, source: ProxyGlobalState<SeqTypes>) {
+    let router = api::router(source);
+    spawn(async move {
+        let host = url.host_str().expect("builder API url missing host");
+        let port = url
+            .port_or_known_default()
+            .expect("builder API url missing port");
+        let listener = TcpListener::bind((host, port))
+            .await
+            .expect("failed to bind builder API port");
+        axum::serve(listener, router)
+            .await
+            .expect("builder API server failed");
+    });
+}
 
 #[cfg(test)]
 pub mod testing {
@@ -14,10 +37,10 @@ pub mod testing {
     };
     use async_lock::RwLock;
     use committable::Committable;
-    use espresso_node::{context::Consensus, network};
+    use espresso_node::{SequencerApiVersion, context::Consensus, network};
     use espresso_types::{
-        Event, FeeAccount, NamespaceId, NodeState, PrivKey, PubKey, SeqTypes, Transaction,
-        ValidatedState, traits::SequencerPersistence, v0_3::ChainConfig,
+        Event, FeeAccount, NamespaceId, NodeState, PrivKey, PubKey, Transaction, ValidatedState,
+        traits::SequencerPersistence, v0_3::ChainConfig,
     };
     use futures::stream::{Stream, StreamExt};
     use hotshot::{
@@ -32,7 +55,7 @@ pub mod testing {
         AvailableBlockData, AvailableBlockHeaderInputV1, AvailableBlockInfo,
     };
     use hotshot_events_service::{
-        events,
+        events::{Error as EventStreamApiError, Options as EventStreamingApiOptions},
         events_source::{EventConsumer, EventsStreamer},
     };
     use hotshot_types::{
@@ -46,10 +69,11 @@ pub mod testing {
         },
     };
     use http_client::Client;
+    use tide_disco::App;
     use tokio::time::sleep;
-    use url::Url;
-    use vbs::version::{StaticVersion, Version};
+    use vbs::version::{StaticVersion, StaticVersionType, Version};
 
+    use super::*;
     use crate::non_permissioned::BuilderConfig;
 
     #[derive(Clone)]
@@ -211,17 +235,35 @@ pub mod testing {
             url: Url,
             source: Arc<RwLock<EventsStreamer<SeqTypes>>>,
         ) {
-            // Start the web server. The unversioned mount serves the latest (v1) API, like the
-            // versioned app it replaces.
-            let events_v0 = events::legacy_events_router::<SeqTypes, _>(source.clone());
-            let events_v1 = events::events_router::<SeqTypes, _>(source);
-            let router = events::app(
-                axum::Router::new()
-                    .nest("/hotshot-events", events_v1.clone())
-                    .nest("/v0/hotshot-events", events_v0)
-                    .nest("/v1/hotshot-events", events_v1),
-            );
-            http_wire::spawn_serve(&url, router);
+            // Start the web server.
+            let hotshot_events_api_v0 = hotshot_events_service::events::define_api::<
+                Arc<RwLock<EventsStreamer<SeqTypes>>>,
+                SeqTypes,
+                StaticVersion<0, 1>,
+            >(
+                &EventStreamingApiOptions::default(),
+                "0.0.1".parse().unwrap(),
+            )
+            .expect("Failed to define hotshot events API v0");
+
+            let hotshot_events_api_v1 = hotshot_events_service::events::define_api::<
+                Arc<RwLock<EventsStreamer<SeqTypes>>>,
+                SeqTypes,
+                StaticVersion<0, 1>,
+            >(
+                &EventStreamingApiOptions::default(),
+                "1.0.0".parse().unwrap(),
+            )
+            .expect("Failed to define hotshot events API v1");
+
+            let mut app = App::<_, EventStreamApiError>::with_state(source);
+
+            app.register_module("hotshot-events", hotshot_events_api_v0)
+                .expect("Failed to register hotshot events API v0")
+                .register_module("hotshot-events", hotshot_events_api_v1)
+                .expect("Failed to register hotshot events API v1");
+
+            tokio::spawn(app.serve(url, SequencerApiVersion::instance()));
         }
         // enable hotshot event streaming
         pub fn enable_hotshot_node_event_streaming<P: SequencerPersistence>(

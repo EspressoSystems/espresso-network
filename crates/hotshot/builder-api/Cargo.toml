@@ -4,30 +4,21 @@ version = "0.1.7"
 edition.workspace = true
 license = "MIT"
 
-[features]
-# The axum router; off by default so client-only consumers (e.g. the node's BuilderClient) do
-# not build the server stack.
-server = ["dep:axum", "dep:http-wire", "dep:tokio"]
-
 [dependencies]
 async-trait = { workspace = true }
-axum = { workspace = true, optional = true }
+clap = { workspace = true }
 committable = { workspace = true }
+derive_more = { workspace = true }
 disco-types = { workspace = true }
+futures = { workspace = true }
 hotshot-types = { workspace = true }
 http-client = { workspace = true }
-http-wire = { workspace = true, features = ["server"], optional = true }
 serde = { workspace = true }
 tagged-base64 = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, optional = true }
+tide-disco = { workspace = true }
+toml = { workspace = true }
 vbs = { workspace = true }
-
-[dev-dependencies]
-hotshot-builder-api = { path = ".", features = ["server"] }
-hotshot-example-types = { workspace = true }
-serde_json = { workspace = true }
-tower = { workspace = true, features = ["util"] }
 
 [lints]
 workspace = true

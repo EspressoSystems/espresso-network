@@ -37,7 +37,7 @@ use hotshot_query_service::availability::{
 };
 use hotshot_types::{
     addr::NetAddr,
-    data::{VidCommon, vid_commitment},
+    data::{VidCommitment, VidCommon, vid_commitment},
     light_client::StateVerKey,
     simple_certificate::{
         LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
@@ -177,6 +177,48 @@ async fn reference_ns_proof_enum_avidm() -> NamespaceProofQueryData {
         .export_all_txs(&REFERENCE_NAMESPACE_ID.into());
     NamespaceProofQueryData {
         proof,
+        transactions,
+    }
+}
+
+/// Commit to the reference payload with the AvidmGf2 (VID2) scheme.
+///
+/// Ports verifying the `ns_proof_V2` vector need this commitment. It is derivable from the
+/// `ns_commits` of the pinned `vid_common_v2` vector, but it is *not* the `payload_commitment` of
+/// `data/v6/header.json`, which is computed at a total weight of 1 rather than the 10 used here.
+fn reference_avidm_gf2_commit_and_common(payload: &Payload) -> (VidCommitment, VidCommon) {
+    let payload_byte_len = payload.byte_len();
+    let ns_table = payload.ns_table();
+    let ns_table = ns_table
+        .iter()
+        .map(|index| ns_table.ns_range(&index, &payload_byte_len).0)
+        .collect::<Vec<_>>();
+    let param = init_avidm_gf2_param(10).unwrap();
+    let (commit, common) = AvidmGf2Scheme::commit(&param, &payload.encode(), ns_table).unwrap();
+    (VidCommitment::V2(commit), VidCommon::V2(common))
+}
+
+async fn reference_ns_proof_enum_avidm_gf2() -> NamespaceProofQueryData {
+    let payload = reference_payload().await;
+    let ns_index = payload
+        .ns_table()
+        .find_ns_id(&(REFERENCE_NAMESPACE_ID.into()))
+        .unwrap();
+
+    let (commit, common) = reference_avidm_gf2_commit_and_common(&payload);
+    let proof = NsProof::new(&payload, &ns_index, &common).unwrap();
+    let transactions = proof.export_all_txs(&REFERENCE_NAMESPACE_ID.into());
+
+    // Pinning bytes that do not verify would be worse than pinning none, so check the proof
+    // against the commitment it was built for.
+    let (verified_transactions, ns_id) = proof
+        .verify(payload.ns_table(), &commit, &common)
+        .expect("reference V2 ns proof verifies");
+    assert_eq!(ns_id, REFERENCE_NAMESPACE_ID.into());
+    assert_eq!(verified_transactions, transactions);
+
+    NamespaceProofQueryData {
+        proof: Some(proof),
         transactions,
     }
 }
@@ -599,6 +641,17 @@ async fn test_reference_ns_proof_enum_avidm() {
     reference_test_without_committable("v3", "ns_proof_V1", &reference_ns_proof_enum_avidm().await);
 }
 
+// "V2" does not refer to the version scheme used in this crate but to the NsProof::V2 variant,
+// the AvidmGf2 (VID2) proof introduced with the new protocol.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_reference_ns_proof_enum_avidm_gf2() {
+    reference_test_without_committable(
+        "v6",
+        "ns_proof_V2",
+        &reference_ns_proof_enum_avidm_gf2().await,
+    );
+}
+
 // Legacy leaf query data
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_leaf_query_data_legacy_v1() {
@@ -679,16 +732,8 @@ async fn test_vid_common_v1_query_data() {
 async fn test_vid_common_v2_query_data() {
     let header = reference_header(version(0, 1)).await;
     let payload = reference_payload().await;
-    let encoded = payload.encode();
-    let payload_byte_len = payload.byte_len();
-    let ns_table = payload.ns_table();
-    let ns_table = ns_table
-        .iter()
-        .map(|index| ns_table.ns_range(&index, &payload_byte_len).0)
-        .collect::<Vec<_>>();
-    let param = init_avidm_gf2_param(10).unwrap();
-    let (_, common) = AvidmGf2Scheme::commit(&param, &encoded, ns_table).unwrap();
-    let vid = VidCommonQueryData::<SeqTypes>::new(header, VidCommon::V2(common));
+    let (_, common) = reference_avidm_gf2_commit_and_common(&payload);
+    let vid = VidCommonQueryData::<SeqTypes>::new(header, common);
 
     reference_test_without_committable("v2", "vid_common_v2", &vid);
 }

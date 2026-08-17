@@ -11,7 +11,6 @@ async-broadcast = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
 atomic = { workspace = true }
-axum = { workspace = true }
 bincode = { workspace = true }
 bytemuck = { workspace = true }
 coarsetime = { workspace = true }
@@ -19,7 +18,7 @@ committable = { workspace = true }
 derive_more = { workspace = true }
 futures = { workspace = true }
 hotshot = { workspace = true }
-hotshot-builder-api = { workspace = true, features = ["server"] }
+hotshot-builder-api = { workspace = true }
 hotshot-builder-shared = { workspace = true }
 hotshot-types = { workspace = true }
 jf-advz = { workspace = true }
@@ -27,6 +26,7 @@ lru = { workspace = true }
 serde = { workspace = true }
 sha2 = { workspace = true }
 tagged-base64 = { workspace = true }
+tide-disco = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -37,7 +37,6 @@ hotshot-example-types = { workspace = true }
 hotshot-macros = { workspace = true }
 hotshot-task-impls = { workspace = true }
 hotshot-testing = { workspace = true }
-http-wire = { workspace = true, features = ["server"] }
 num_cpus = { workspace = true }
 test-log = { workspace = true }
 test-utils = { workspace = true }
