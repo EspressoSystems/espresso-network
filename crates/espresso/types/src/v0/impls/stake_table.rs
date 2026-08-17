@@ -50,6 +50,7 @@ use hotshot_types::{
     data::{EpochNumber, vid_disperse::VID_TARGET_TOTAL_STAKE},
     signature_key::{BLSPubKey, SchnorrPubKey},
     traits::signature_key::SignatureKey as _,
+    utils::root_block_in_epoch,
     x25519,
 };
 use humantime::format_duration;
@@ -102,6 +103,38 @@ pub fn to_registered_validator_map(
 }
 
 pub type StakeTableHash = Commitment<StakeTableState>;
+
+/// Height of the epoch root whose `l1_finalized` bounds the L1 event range for `epoch`.
+///
+/// `add_epoch_root` builds the stake table for epoch `k + 2` from the epoch root at epoch `k`
+/// (`crates/espresso/types/src/v0/impls/committee.rs`), so the events that make up `epoch`'s
+/// stake table are bounded by the L1 block finalized at the root of epoch `epoch - 2`.
+pub fn stake_table_snapshot_root_height(
+    epoch: EpochNumber,
+    epoch_height: u64,
+) -> anyhow::Result<u64> {
+    let snapshot_epoch = epoch
+        .u64()
+        .checked_sub(2)
+        .with_context(|| format!("epoch {epoch} has no snapshot root (requires epoch >= 2)"))?;
+    Ok(root_block_in_epoch(snapshot_epoch, epoch_height))
+}
+
+/// Height of the epoch root whose `next_stake_table_hash` commits to `epoch`'s stake table.
+///
+/// `Header::new` sets `next_stake_table_hash` from `stake_table_for_epoch(epoch + 1)` when
+/// building the epoch root header for `epoch` (`crates/espresso/types/src/v0/impls/header.rs`),
+/// so the hash committing to `epoch`'s stake table is anchored at the root of epoch `epoch - 1`.
+pub fn stake_table_anchor_root_height(
+    epoch: EpochNumber,
+    epoch_height: u64,
+) -> anyhow::Result<u64> {
+    let anchor_epoch = epoch
+        .u64()
+        .checked_sub(1)
+        .with_context(|| format!("epoch {epoch} has no anchor root (requires epoch >= 1)"))?;
+    Ok(root_block_in_epoch(anchor_epoch, epoch_height))
+}
 
 /// The result of applying a stake table event:
 /// - `Ok(Ok(()))`: success
@@ -947,9 +980,11 @@ fn parse_x25519_key(bytes: [u8; 32]) -> anyhow::Result<x25519::PublicKey> {
     Ok(x25519::PublicKey::try_from(bytes.as_slice())?)
 }
 
-pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
-    events: I,
-) -> Result<(RegisteredValidatorMap, StakeTableHash), StakeTableError> {
+/// Replay stake table events into a fresh [`StakeTableState`].
+pub fn stake_table_state_from_l1_events<I>(events: I) -> Result<StakeTableState, StakeTableError>
+where
+    I: IntoIterator<Item = StakeTableEvent>,
+{
     let mut state = StakeTableState::default();
     for event in events {
         match state.apply_event(event.clone()) {
@@ -966,8 +1001,7 @@ pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
             },
         }
     }
-    let commit = state.commit();
-    Ok((state.into_validators(), commit))
+    Ok(state)
 }
 
 /// Verify stake table events fetched from an untrusted peer.
@@ -1013,8 +1047,9 @@ pub fn verify_stake_table_events(
     }
 
     let events = local_prefix.iter().chain(fetched).map(|(_, e)| e.clone());
-    let (_, hash) =
-        validators_from_l1_events(events).context("replaying peer-provided stake table events")?;
+    let hash = stake_table_state_from_l1_events(events)
+        .context("replaying peer-provided stake table events")?
+        .commit();
     ensure!(
         hash == expected_hash,
         "stake table hash mismatch: computed {hash}, expected {expected_hash}"
@@ -1147,14 +1182,8 @@ impl ValidatorSet {
         events: I,
         protocol_version: Version,
     ) -> Result<Self, StakeTableError> {
-        let (all_validators, stake_table_hash) = validators_from_l1_events(events)?;
-        let active_validators = select_active_validator_set(&all_validators, protocol_version)?;
-        Ok(Self {
-            all_validators,
-            active_validators,
-            stake_table_hash: Some(stake_table_hash),
-            protocol_version,
-        })
+        let state = stake_table_state_from_l1_events(events)?;
+        Self::from_state(&state, protocol_version)
     }
 
     /// All registered validators known when this set was derived.
@@ -1720,8 +1749,10 @@ impl Fetcher {
         let events = Self::fetch_events_from_contract(l1_client, contract, None, to_block).await?;
 
         // Process the sorted events and return the resulting stake table.
-        validators_from_l1_events(events.into_iter().map(|(_, e)| e))
-            .context("failed to construct validators set from l1 events")
+        let state = stake_table_state_from_l1_events(events.into_iter().map(|(_, e)| e))
+            .context("failed to construct validators set from l1 events")?;
+        let hash = state.commit();
+        Ok((state.into_validators(), hash))
     }
 
     /// Returns the initial token supply, fetching it from L1 if not yet known.
@@ -2415,6 +2446,41 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_stake_table_anchor_root_height_matches_root_block_in_epoch() {
+        let epoch_height = 100;
+        for e in 1..10 {
+            let epoch = EpochNumber::new(e);
+            assert_eq!(
+                stake_table_anchor_root_height(epoch, epoch_height).unwrap(),
+                root_block_in_epoch(e - 1, epoch_height)
+            );
+        }
+    }
+
+    #[test]
+    fn test_stake_table_snapshot_root_height_matches_root_block_in_epoch() {
+        let epoch_height = 100;
+        for e in 2..10 {
+            let epoch = EpochNumber::new(e);
+            assert_eq!(
+                stake_table_snapshot_root_height(epoch, epoch_height).unwrap(),
+                root_block_in_epoch(e - 2, epoch_height)
+            );
+        }
+    }
+
+    #[test]
+    fn test_stake_table_anchor_root_height_underflow_errors() {
+        assert!(stake_table_anchor_root_height(EpochNumber::new(0), 100).is_err());
+    }
+
+    #[test]
+    fn test_stake_table_snapshot_root_height_underflow_errors() {
+        assert!(stake_table_snapshot_root_height(EpochNumber::new(0), 100).is_err());
+        assert!(stake_table_snapshot_root_height(EpochNumber::new(1), 100).is_err());
+    }
+
     #[test_log::test]
     fn test_verify_stake_table_events() -> anyhow::Result<()> {
         let val_1 = TestValidator::random();
@@ -2435,7 +2501,8 @@ mod tests {
             ((20, 0), register_2),
             ((30, 1), delegate.clone()),
         ];
-        let (_, expected_hash) = validators_from_l1_events(events.iter().map(|(_, e)| e.clone()))?;
+        let expected_hash =
+            stake_table_state_from_l1_events(events.iter().map(|(_, e)| e.clone()))?.commit();
 
         // The full event set in one fetched range verifies.
         verify_stake_table_events(&[], &events, 0, 100, expected_hash)?;
@@ -2810,7 +2877,8 @@ mod tests {
                 .into(),
             ),
         ];
-        let (_, expected_hash) = validators_from_l1_events(events.iter().map(|(_, e)| e.clone()))?;
+        let expected_hash =
+            stake_table_state_from_l1_events(events.iter().map(|(_, e)| e.clone()))?.commit();
 
         let header = v4_epoch_root_header(TO_L1_BLOCK, expected_hash).await;
 
@@ -3002,7 +3070,7 @@ mod tests {
             // NOTE: not selecting the active validator set because we care about wrong sequences of
             // events being detected. If we compute the active set we will also get an error if the
             // set is empty but that's not what we want to test here.
-            let res = validators_from_l1_events(events.iter().cloned());
+            let res = stake_table_state_from_l1_events(events.iter().cloned());
             assert!(
                 res.is_err(),
                 "events {res:?}, not a valid sequence of events"
@@ -3108,7 +3176,7 @@ mod tests {
         let deregister1 = ValidatorExit::from(&val1).into();
         let register2 = ValidatorRegisteredV2::from(&val2).into();
         let events = [register1, deregister1, register2];
-        let error = validators_from_l1_events(events.iter().cloned()).unwrap_err();
+        let error = stake_table_state_from_l1_events(events.iter().cloned()).unwrap_err();
         assert_matches!(error, StakeTableError::ValidatorAlreadyExited(addr) if addr == account);
     }
 
@@ -3769,7 +3837,7 @@ mod tests {
         events_file.write_all(json_events.as_bytes()).await?;
 
         // Process into stake table
-        let stake_table = validators_from_l1_events(sorted_events.into_iter().map(|(_, e)| e))?;
+        let stake_table = stake_table_state_from_l1_events(sorted_events.into_iter().map(|(_, e)| e))?;
 
         // Serialize and write stake table
         let json_stake_table = serde_json::to_string_pretty(&stake_table)?;
@@ -4621,6 +4689,48 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_stake_table_state_from_l1_events_populates_all_fields() -> anyhow::Result<()> {
+        let registered = TestValidator::random();
+        let exited = TestValidator::random();
+
+        let events = [
+            StakeTableEvent::RegisterV3((&registered).into()),
+            StakeTableEvent::Register((&exited).into()),
+            StakeTableEvent::Deregister((&exited).into()),
+        ];
+
+        let state = stake_table_state_from_l1_events(events)?;
+
+        assert!(state.validators().contains_key(&registered.account));
+        assert!(!state.validators().contains_key(&exited.account));
+
+        assert_eq!(state.validator_exits(), &HashSet::from([exited.account]));
+
+        let registered_bls = BLSPubKey::try_from(registered.bls_vk).unwrap();
+        let exited_bls = BLSPubKey::try_from(exited.bls_vk).unwrap();
+        assert_eq!(
+            state.used_bls_keys(),
+            &HashSet::from([registered_bls, exited_bls])
+        );
+
+        let registered_schnorr = SchnorrPubKey::try_from(registered.schnorr_vk).unwrap();
+        let exited_schnorr = SchnorrPubKey::try_from(exited.schnorr_vk).unwrap();
+        assert_eq!(
+            state.used_schnorr_keys(),
+            &HashSet::from([registered_schnorr, exited_schnorr])
+        );
+
+        let registered_x25519 =
+            x25519::PublicKey::try_from(registered.x25519_key.as_slice()).unwrap();
+        assert_eq!(
+            state.used_x25519_keys(),
+            &HashSet::from([registered_x25519])
+        );
+
+        Ok(())
+    }
+
     // --- NEW_PROTOCOL_VERSION selection filter tests ---
 
     /// Construct a `RegisteredValidator` with both x25519_key and p2p_addr populated.
@@ -5212,7 +5322,9 @@ mod tests {
             }),
         ];
 
-        let (validators, _) = validators_from_l1_events(events.into_iter()).expect("must not fail");
+        let validators = stake_table_state_from_l1_events(events.into_iter())
+            .expect("must not fail")
+            .into_validators();
         let valid = validators
             .get(&valid_val.account)
             .expect("valid validator present");
@@ -5243,7 +5355,9 @@ mod tests {
             }),
         ];
 
-        let (validators, _) = validators_from_l1_events(events.into_iter()).expect("must not fail");
+        let validators = stake_table_state_from_l1_events(events.into_iter())
+            .expect("must not fail")
+            .into_validators();
         let valid = validators
             .get(&valid_val.account)
             .expect("valid validator present");

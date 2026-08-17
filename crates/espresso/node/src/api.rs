@@ -3519,10 +3519,10 @@ mod test {
         StakeTableState, StateCertQueryDataV1, StateCertQueryDataV2, ValidatedState,
         ValidatorLeaderCounts,
         config::PublicHotShotConfig,
+        stake_table_state_from_l1_events,
         traits::{NullEventConsumer, PersistenceOptions},
         v0_3::{COMMISSION_BASIS_POINTS, Fetcher, RewardAmount, RewardMerkleProofV1},
         v0_4::{RewardAccountV2, RewardMerkleProofV2},
-        validators_from_l1_events,
     };
     use futures::{
         future::{self, join_all, try_join_all},
@@ -5054,7 +5054,8 @@ mod test {
 
             // This also checks if there is a duplicate registration
             let stake_table =
-                validators_from_l1_events(sorted_events.into_iter().map(|(_, e)| e)).unwrap();
+                stake_table_state_from_l1_events(sorted_events.into_iter().map(|(_, e)| e))
+                    .unwrap();
             if let Some(prev_st) = prev_st {
                 assert_eq!(stake_table, prev_st);
             }
