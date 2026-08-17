@@ -40,11 +40,11 @@ use tracing::{error, info, warn};
 use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
 use crate::{
-    config::NodeConfig, cpu_sampler::CpuSampler, leader_trace::CsvLeaderTracer,
-    membership::make_membership, metrics::MetricsCollector, null_storage::NullStorage,
+    config::NodeConfig, cpu_sampler::CpuSampler, dummy_storage::DummyStorage,
+    leader_trace::CsvLeaderTracer, membership::make_membership, metrics::MetricsCollector,
 };
 
-type BenchCoordinator = Coordinator<TestTypes, NullStorage<TestTypes>>;
+type BenchCoordinator = Coordinator<TestTypes, DummyStorage<TestTypes>>;
 
 /// Build and run a single benchmark node.
 pub async fn run(cfg: NodeConfig) -> Result<()> {
@@ -258,7 +258,7 @@ async fn build_coordinator(
         .proposal_validator(proposal_validator)
         .share_validator(share_validator)
         .storage(hotshot_new_protocol::storage::Storage::new(
-            NullStorage::default(),
+            DummyStorage::default(),
             private_key,
         ))
         .client(client)

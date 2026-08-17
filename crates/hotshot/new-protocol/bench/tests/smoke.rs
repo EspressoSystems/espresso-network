@@ -27,10 +27,11 @@ fn node_config(
     block_size: usize,
     namespaces: u32,
     ports: &[u16],
+    num_nodes: usize,
 ) -> NodeConfig {
     NodeConfig {
         node_id,
-        total_nodes: NUM_NODES,
+        total_nodes: num_nodes,
         timeout_ms: TIMEOUT_MS,
         target_views: TARGET_VIEWS,
         bind_addr: format!("127.0.0.1:{}", ports[node_id as usize]),
@@ -88,12 +89,53 @@ async fn smoke_5_nodes_multi_namespace_blocks() {
     let tmp = TempDir::new().expect("failed to create temp dir");
     let ports = allocate_ports(NUM_NODES);
 
-    let result = timeout(TEST_TIMEOUT, run_benchmark(tmp.path(), 64 * 1024, 4, &ports)).await;
+    let result = timeout(
+        TEST_TIMEOUT,
+        run_benchmark(tmp.path(), 64 * 1024, 4, &ports),
+    )
+    .await;
 
     match result {
         Ok(Ok(())) => {},
         Ok(Err(e)) => panic!("benchmark failed: {e:#}"),
         Err(_) => panic!("benchmark timed out after {TEST_TIMEOUT:?}"),
+    }
+}
+
+/// Scaling check: run the bench at a committee size set by `BENCH_NODES`
+/// (default 100) to confirm nothing in the harness caps out before decaf's
+/// validator count. Ignored by default — 100 in-process nodes contend heavily
+/// for cores, so the timings it produces are not meaningful; only whether it
+/// runs is.
+///
+/// `cargo test -p hotshot-new-protocol-bench --test smoke -- --ignored --nocapture`
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "spawns BENCH_NODES (default 100) nodes in one process; run manually"]
+async fn scaling_many_nodes() {
+    hotshot_new_protocol::logging::init_logging();
+
+    let num_nodes: usize = std::env::var("BENCH_NODES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100);
+    let timeout_secs: u64 = std::env::var("BENCH_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(600);
+
+    let tmp = TempDir::new().expect("failed to create temp dir");
+    let ports = allocate_ports(num_nodes);
+
+    let result = timeout(
+        Duration::from_secs(timeout_secs),
+        run_sized(tmp.path(), 1024, 1, &ports, num_nodes),
+    )
+    .await;
+
+    match result {
+        Ok(Ok(())) => {},
+        Ok(Err(e)) => panic!("benchmark failed: {e:#}"),
+        Err(_) => panic!("benchmark timed out after {timeout_secs}s at {num_nodes} nodes"),
     }
 }
 
@@ -103,10 +145,20 @@ async fn run_benchmark(
     namespaces: u32,
     ports: &[u16],
 ) -> anyhow::Result<()> {
+    run_sized(output_dir, block_size, namespaces, ports, NUM_NODES).await
+}
+
+async fn run_sized(
+    output_dir: &std::path::Path,
+    block_size: usize,
+    namespaces: u32,
+    ports: &[u16],
+    num_nodes: usize,
+) -> anyhow::Result<()> {
     let mut node_handles = Vec::new();
 
-    for i in 0..NUM_NODES as u64 {
-        let cfg = node_config(i, output_dir, block_size, namespaces, ports);
+    for i in 0..num_nodes as u64 {
+        let cfg = node_config(i, output_dir, block_size, namespaces, ports, num_nodes);
         node_handles.push(tokio::spawn(async move {
             hotshot_new_protocol_bench::node::run(cfg).await
         }));
@@ -121,7 +173,7 @@ async fn run_benchmark(
     }
 
     // Verify each node produced a CSV with decided views.
-    for i in 0..NUM_NODES as u64 {
+    for i in 0..num_nodes as u64 {
         let csv_path = output_dir.join(format!("node_{i}.csv"));
         assert!(
             csv_path.exists(),
