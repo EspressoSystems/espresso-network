@@ -803,13 +803,6 @@ impl PersistenceOptions for Options {
         persistence.migrate_quorum_proposal_leaf_hashes().await?;
         self.pool = Some(persistence.db.pool());
 
-        #[cfg(not(feature = "embedded-db"))]
-        {
-            let registry = super::migrations::hash_bigint_migrations();
-            let db = persistence.db.clone();
-            tokio::spawn(registry.run_all_migrations(db));
-        }
-
         Ok(persistence)
     }
 
