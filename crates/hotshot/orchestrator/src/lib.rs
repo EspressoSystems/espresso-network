@@ -40,14 +40,13 @@ use hotshot_types::{
     },
 };
 use http_client::{Url, error::ClientErr};
-use http_wire::{self as wire, WireFormat, cors_layer, healthcheck_response};
+use http_wire::{self as wire, ServerError, WireFormat, cors_layer, healthcheck_response};
 use libp2p_identity::{
     Keypair, PeerId,
     ed25519::{Keypair as EdKeypair, SecretKey},
 };
 use multiaddr::Multiaddr;
 use serde::{Serialize, de::DeserializeOwned};
-use tide_disco::error::ServerError;
 use tokio::net::TcpListener;
 use vbs::{BinarySerializer, Serializer, version::StaticVersion};
 
@@ -265,7 +264,7 @@ where
 
         if !self.accepting_new_keys {
             return Err(ServerError {
-                status: tide_disco::StatusCode::FORBIDDEN,
+                status: StatusCode::FORBIDDEN,
                 message: "Network has been started manually, and is no longer registering new \
                           keys."
                     .to_string(),
@@ -352,7 +351,7 @@ where
             })
         else {
             return Err(ServerError {
-                status: tide_disco::StatusCode::FORBIDDEN,
+                status: StatusCode::FORBIDDEN,
                 message: "You are unauthorized to register with the orchestrator".to_string(),
             });
         };
@@ -360,7 +359,7 @@ where
         // Check that our recorded DA status for the node matches what the node actually requested
         if node_config.da != da_requested {
             return Err(ServerError {
-                status: tide_disco::StatusCode::BAD_REQUEST,
+                status: StatusCode::BAD_REQUEST,
                 message: format!(
                     "Mismatch in DA status in registration for node {}. DA requested: {}, \
                      expected: {}",
@@ -413,7 +412,7 @@ where
 
         if usize::from(node_index) >= self.config.config.num_nodes_with_stake.get() {
             return Err(ServerError {
-                status: tide_disco::StatusCode::BAD_REQUEST,
+                status: StatusCode::BAD_REQUEST,
                 message: "Network has reached capacity".to_string(),
             });
         }
@@ -448,7 +447,7 @@ where
 
         if usize::from(tmp_node_index) >= self.config.config.num_nodes_with_stake.get() {
             return Err(ServerError {
-                status: tide_disco::StatusCode::BAD_REQUEST,
+                status: StatusCode::BAD_REQUEST,
                 message: "Node index getter for key pair generation has reached capacity"
                     .to_string(),
             });
@@ -473,7 +472,7 @@ where
     fn peer_pub_ready(&self) -> Result<bool, ServerError> {
         if !self.peer_pub_ready {
             return Err(ServerError {
-                status: tide_disco::StatusCode::BAD_REQUEST,
+                status: StatusCode::BAD_REQUEST,
                 message: "Peer's public configs are not ready".to_string(),
             });
         }
@@ -483,7 +482,7 @@ where
     fn post_config_after_peer_collected(&mut self) -> Result<NetworkConfig<TYPES>, ServerError> {
         if !self.peer_pub_ready {
             return Err(ServerError {
-                status: tide_disco::StatusCode::BAD_REQUEST,
+                status: StatusCode::BAD_REQUEST,
                 message: "Peer's public configs are not ready".to_string(),
             });
         }
@@ -495,7 +494,7 @@ where
         // println!("{}", self.start);
         if !self.start {
             return Err(ServerError {
-                status: tide_disco::StatusCode::BAD_REQUEST,
+                status: StatusCode::BAD_REQUEST,
                 message: "Network is not ready to start".to_string(),
             });
         }
@@ -513,7 +512,7 @@ where
             .contains(peer_config)
         {
             return Err(ServerError {
-                status: tide_disco::StatusCode::FORBIDDEN,
+                status: StatusCode::FORBIDDEN,
                 message: "You are unauthorized to register with the orchestrator".to_string(),
             });
         }
@@ -543,7 +542,7 @@ where
     fn post_manual_start(&mut self, password_bytes: Vec<u8>) -> Result<(), ServerError> {
         if !self.manual_start_allowed {
             return Err(ServerError {
-                status: tide_disco::StatusCode::FORBIDDEN,
+                status: StatusCode::FORBIDDEN,
                 message: "Configs have already been distributed to nodes, and the network can no \
                           longer be started manually."
                     .to_string(),
@@ -556,7 +555,7 @@ where
         // Check that the password matches
         if self.config.manual_start_password != Some(password) {
             return Err(ServerError {
-                status: tide_disco::StatusCode::FORBIDDEN,
+                status: StatusCode::FORBIDDEN,
                 message: "Incorrect password.".to_string(),
             });
         }
@@ -572,7 +571,7 @@ where
             self.config.config.da_staked_committee_size = registered_da_nodes;
         } else {
             return Err(ServerError {
-                status: tide_disco::StatusCode::FORBIDDEN,
+                status: StatusCode::FORBIDDEN,
                 message: format!(
                     "We cannot manually start the network, because we only have \
                      {registered_nodes_with_stake} nodes with stake registered, with \
@@ -664,7 +663,7 @@ where
             && self.builders.len() != self.config.config.da_staked_committee_size
         {
             return Err(ServerError {
-                status: tide_disco::StatusCode::NOT_FOUND,
+                status: StatusCode::NOT_FOUND,
                 message: "Not all builders are registered yet".to_string(),
             });
         }
@@ -675,8 +674,8 @@ where
 /// Shared, lock-guarded orchestrator state, cloned into every axum handler via `State`.
 type SharedOrchestratorState<TYPES> = Arc<RwLock<OrchestratorState<TYPES>>>;
 
-/// Wire format of the orchestrator: [`OrchestratorVersion`] VBS framing and tide-disco's
-/// `ServerError` envelope, which `OrchestratorClient` decodes.
+/// Wire format of the orchestrator: [`OrchestratorVersion`] VBS framing and the `ServerError`
+/// envelope, which `OrchestratorClient` decodes.
 struct OrchestratorWireFormat;
 
 impl WireFormat for OrchestratorWireFormat {
@@ -684,12 +683,12 @@ impl WireFormat for OrchestratorWireFormat {
     type Version = OrchestratorVersion;
 
     fn status(err: &ServerError) -> StatusCode {
-        StatusCode::from_u16(u16::from(err.status)).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
+        err.status
     }
 
     fn serialize_failure(message: String) -> ServerError {
         ServerError {
-            status: tide_disco::StatusCode::INTERNAL_SERVER_ERROR,
+            status: StatusCode::INTERNAL_SERVER_ERROR,
             message,
         }
     }
@@ -701,7 +700,7 @@ fn respond<T: Serialize>(headers: &HeaderMap, result: Result<T, ServerError>) ->
 
 fn malformed_body() -> ServerError {
     ServerError {
-        status: tide_disco::StatusCode::BAD_REQUEST,
+        status: StatusCode::BAD_REQUEST,
         message: "Malformed body".to_string(),
     }
 }
@@ -813,7 +812,7 @@ async fn post_manual_start<TYPES: NodeType>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    // Mirrors tide-disco's handler: the raw body is used as-is, with no framing.
+    // The raw body is used as-is, with no framing.
     let result = state.write().await.post_manual_start(body.to_vec());
     respond(&headers, result)
 }
@@ -831,7 +830,7 @@ async fn post_results<TYPES: NodeType>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    // Mirrors tide-disco's handler, which also panics on a malformed body: the only production
+    // Panics on a malformed body: the only production
     // caller (`client.rs`'s `post_bench_results`) always sends well-formed JSON.
     let metrics: BenchResults = serde_json::from_slice(&body).unwrap();
     let result = state.write().await.post_run_results(metrics);
@@ -860,7 +859,7 @@ async fn post_builder<TYPES: NodeType>(
             match reachable.next().await {
                 Some(url) => state.write().await.post_builder(url),
                 None => Err(ServerError {
-                    status: tide_disco::StatusCode::BAD_REQUEST,
+                    status: StatusCode::BAD_REQUEST,
                     message: "No reachable addresses".to_string(),
                 }),
             }
@@ -878,9 +877,9 @@ async fn get_builders<TYPES: NodeType>(
     respond(&headers, result)
 }
 
-/// Builds the `api` module's routes. tide-disco served these both directly (e.g. `api/identity`)
-/// and under a major-version prefix (`v0/api/identity`), redirecting the former to the latter; we
-/// serve both forms directly instead, by mounting the `/api` tree at the root and under `/v0`.
+/// Builds the `api` module's routes. Existing clients call these both directly (e.g.
+/// `api/identity`) and under a major-version prefix (`v0/api/identity`), so the `/api` tree is
+/// mounted at the root and under `/v0`.
 fn api_router<TYPES: NodeType>() -> Router<SharedOrchestratorState<TYPES>> {
     Router::new()
         .route("/healthcheck", get(healthcheck))
@@ -902,7 +901,7 @@ fn api_router<TYPES: NodeType>() -> Router<SharedOrchestratorState<TYPES>> {
 }
 
 /// Builds the full router: the app-level `healthcheck`, plus the `api` module served both
-/// unversioned and under `/v0`. Like tide-disco, every response carries permissive CORS headers.
+/// unversioned and under `/v0`. Every response carries permissive CORS headers.
 fn app<TYPES: NodeType>(state: SharedOrchestratorState<TYPES>) -> Router {
     let api = Router::new().nest("/api", api_router::<TYPES>());
     Router::new()
@@ -1003,7 +1002,7 @@ mod tests {
         ))))
     }
 
-    /// Like tide-disco, every response carries permissive CORS headers.
+    /// Every response must carry permissive CORS headers.
     #[tokio::test]
     async fn responses_carry_cors_headers() {
         for uri in ["/healthcheck", "/api/peer_pub_ready", "/no/such/route"] {
@@ -1023,8 +1022,7 @@ mod tests {
         }
     }
 
-    /// tide-disco served the `api` module both unversioned and under `/v0`, redirecting the former
-    /// to the latter; both forms must route here.
+    /// The `api` module is served both unversioned and under `/v0`; both forms must route.
     #[tokio::test]
     async fn versioned_and_unversioned_api_paths_route() {
         for uri in ["/api/peer_pub_ready", "/v0/api/peer_pub_ready"] {

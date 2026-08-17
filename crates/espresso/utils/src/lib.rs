@@ -34,8 +34,11 @@ pub async fn wait_for_http(
     interval: Duration,
     max_retries: usize,
 ) -> Result<usize, String> {
+    // One client for the whole poll; `reqwest::get` would rebuild the client (and its TLS root
+    // store) on every retry.
+    let client = reqwest::Client::new();
     for i in 0..(max_retries + 1) {
-        let res = surf::get(url).await;
+        let res = client.get(url.clone()).send().await;
         if res.is_ok() {
             tracing::debug!("Connected to {url}");
             return Ok(i);

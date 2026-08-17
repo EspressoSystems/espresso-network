@@ -1,7 +1,7 @@
 //! V1 merklized state APIs (block-state and fee-state).
 //!
-//! Mirrors the tide-disco endpoints defined in `hotshot-query-service/api/state.toml`
-//! and `crates/espresso/node/api/fee.toml`.
+//! Mirrors the endpoints of the legacy `hotshot-query-service` merklized-state API (its
+//! tide-disco `state.toml`, since removed).
 
 use async_trait::async_trait;
 use serde::Serialize;

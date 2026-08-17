@@ -30,7 +30,8 @@ just demo-native                      # local network via process-compose
 ## Project conventions
 
 - Errors: `anyhow` for binaries, `thiserror` for libraries
-- HTTP API: `tide-disco` with TOML schemas (`crates/espresso/node/api/*.toml`, `hotshot-query-service/api/*.toml`)
+- HTTP API: axum routers in `crates/espresso/api/src/axum.rs`; per-version API traits in `crates/espresso/api/src/v1/`,
+  `v2/`, implemented on the node's state in `crates/espresso/node/src/api/state.rs`
 
 ## Type-driven design
 
@@ -119,7 +120,8 @@ startup) instead. Before writing a migration that touches existing rows, read
 
 ## Adding an API endpoint
 
-1. Add route to a `.toml` schema with `PATH`, parameter types, `METHOD`, `DOC`.
-2. Implement handler in the corresponding Rust module (e.g., `crates/espresso/node/src/api/endpoints.rs`).
-3. Register with `.get("route_name", handler)` or `.at("route_name", handler)`.
-4. Add the method to the data source trait.
+1. Add the method to the version's API trait (`crates/espresso/api/src/v1/<module>.rs`) and implement it on the node's
+   state (`crates/espresso/node/src/api/state.rs`).
+2. Add the path constant to `crates/espresso/api/src/axum/routes.rs`.
+3. Write the handler and register it on the module's `ApiRouter` in `crates/espresso/api/src/axum.rs` with
+   `.api_route(routes::v1::<ROUTE>, get_with(handler, docs))`.

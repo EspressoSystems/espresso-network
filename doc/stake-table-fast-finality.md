@@ -505,8 +505,13 @@ cargo run -p espresso-node --bin deploy -- \
     --use-timelock-owner \
     --timelock-operation-salt "0x$(openssl rand -hex 32)" \
     --timelock-operation-delay 172800 \
+    --schedule-safe espresso_labs \
+    --execute-safe serviceco \
     --calldata-out-dir ./tmp/st_v3_timelock/
 ```
+
+`--schedule-safe`/`--execute-safe` name the multisig submitting each phase; they are required when the timelock role has
+more than one holder, as on mainnet (proposers: `espresso_labs`, `serviceco`; executor: `serviceco`).
 
 ### Testing the Safe TX output against a mainnet fork
 
@@ -527,6 +532,8 @@ cargo run -p espresso-node --bin deploy -- \
     --use-timelock-owner \
     --timelock-operation-salt "0x$(openssl rand -hex 32)" \
     --timelock-operation-delay 172800 \
+    --schedule-safe espresso_labs \
+    --execute-safe serviceco \
     --calldata-out-dir ./tmp/st_v3_timelock_mainnet/
 ```
 

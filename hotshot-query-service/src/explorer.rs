@@ -13,25 +13,15 @@
 pub(crate) mod data_source;
 pub(crate) mod query_data;
 
-use std::{num::NonZeroUsize, path::Path};
-
 pub use currency::*;
 pub use data_source::*;
-use futures::FutureExt;
 pub use hotshot_query_service_types::explorer::Error;
 use hotshot_types::traits::node_implementation::NodeType;
 pub use query_data::*;
 use serde::{Deserialize, Serialize};
-use tide_disco::{Api, api::ApiError, method::ReadState};
 pub use traits::*;
-use vbs::version::StaticVersionType;
 
-use self::errors::InvalidLimit;
-use crate::{
-    Header, Payload, Transaction,
-    api::load_api,
-    availability::{QueryableHeader, QueryablePayload},
-};
+use crate::{Header, Transaction};
 
 /// [BlockDetailResponse] is a struct that represents the response from the
 /// `get_block_detail` endpoint.
@@ -157,208 +147,54 @@ where
     }
 }
 
-fn validate_limit(
-    limit: Result<usize, tide_disco::RequestError>,
-) -> Result<NonZeroUsize, InvalidLimit> {
-    let num_blocks = match limit {
-        Ok(limit) => Ok(limit),
-        _ => Err(InvalidLimit {}),
-    }?;
-
-    let num_blocks = match NonZeroUsize::new(num_blocks) {
-        Some(num_blocks) => Ok(num_blocks),
-        None => Err(InvalidLimit {}),
-    }?;
-
-    if num_blocks.get() > 100 {
-        return Err(InvalidLimit {});
-    }
-
-    Ok(num_blocks)
-}
-
-/// `define_api` is a function that defines the API endpoints for the Explorer
-/// module of the HotShot Query Service. It implements the specification
-/// defined in the `explorer.toml` file.
-pub fn define_api<State, Types: NodeType, Ver: StaticVersionType + 'static>(
-    _: Ver,
-    api_ver: semver::Version,
-) -> Result<Api<State, Error, Ver>, ApiError>
-where
-    State: 'static + Send + Sync + ReadState,
-    Header<Types>: ExplorerHeader<Types> + QueryableHeader<Types>,
-    Transaction<Types>: ExplorerTransaction<Types>,
-    Payload<Types>: QueryablePayload<Types>,
-    <State as ReadState>::State: ExplorerDataSource<Types> + Send + Sync,
-{
-    let mut api = load_api::<State, Error, Ver>(
-        Option::<Box<Path>>::None,
-        include_str!("../api/explorer.toml"),
-        None,
-    )?;
-
-    api.with_version(api_ver)
-        .get("get_block_detail", move |req, state| {
-            async move {
-                let target = match (
-                    req.opt_integer_param::<str, usize>("height"),
-                    req.opt_blob_param("hash"),
-                ) {
-                    (Ok(Some(from)), _) => BlockIdentifier::Height(from),
-                    (_, Ok(Some(hash))) => BlockIdentifier::Hash(hash),
-                    _ => BlockIdentifier::Latest,
-                };
-
-                state
-                    .get_block_detail(target)
-                    .await
-                    .map(BlockDetailResponse::from)
-                    .map_err(Error::GetBlockDetail)
-            }
-            .boxed()
-        })?
-        .get("get_block_summaries", move |req, state| {
-            async move {
-                let num_blocks = validate_limit(req.integer_param("limit"))
-                    .map_err(GetBlockSummariesError::InvalidLimit)
-                    .map_err(Error::GetBlockSummaries)?;
-
-                let target = match (
-                    req.opt_integer_param::<str, usize>("from"),
-                    req.opt_blob_param("hash"),
-                ) {
-                    (Ok(Some(from)), _) => BlockIdentifier::Height(from),
-                    (_, Ok(Some(hash))) => BlockIdentifier::Hash(hash),
-                    _ => BlockIdentifier::Latest,
-                };
-
-                state
-                    .get_block_summaries(GetBlockSummariesRequest(BlockRange {
-                        target,
-                        num_blocks,
-                    }))
-                    .await
-                    .map(BlockSummaryResponse::from)
-                    .map_err(Error::GetBlockSummaries)
-            }
-            .boxed()
-        })?
-        .get("get_transaction_detail", move |req, state| {
-            async move {
-                state
-                    .get_transaction_detail(
-                        match (
-                            req.opt_integer_param("height"),
-                            req.opt_integer_param("offset"),
-                            req.opt_blob_param("hash"),
-                        ) {
-                            (Ok(Some(height)), Ok(Some(offset)), _) => {
-                                TransactionIdentifier::HeightAndOffset(height, offset)
-                            },
-                            (_, _, Ok(Some(hash))) => TransactionIdentifier::Hash(hash),
-                            _ => TransactionIdentifier::Latest,
-                        },
-                    )
-                    .await
-                    .map(TransactionDetailResponse::from)
-                    .map_err(Error::GetTransactionDetail)
-            }
-            .boxed()
-        })?
-        .get("get_transaction_summaries", move |req, state| {
-            async move {
-                let num_transactions = validate_limit(req.integer_param("limit"))
-                    .map_err(GetTransactionSummariesError::InvalidLimit)
-                    .map_err(Error::GetTransactionSummaries)?;
-
-                let filter = match (
-                    req.opt_integer_param("block"),
-                    req.opt_integer_param::<_, i64>("namespace"),
-                ) {
-                    (Ok(Some(block)), _) => TransactionSummaryFilter::Block(block),
-                    (_, Ok(Some(namespace))) => TransactionSummaryFilter::RollUp(namespace.into()),
-                    _ => TransactionSummaryFilter::None,
-                };
-
-                let target = match (
-                    req.opt_integer_param::<str, usize>("height"),
-                    req.opt_integer_param::<str, usize>("offset"),
-                    req.opt_blob_param("hash"),
-                ) {
-                    (Ok(Some(height)), Ok(Some(offset)), _) => {
-                        TransactionIdentifier::HeightAndOffset(height, offset)
-                    },
-                    (_, _, Ok(Some(hash))) => TransactionIdentifier::Hash(hash),
-                    _ => TransactionIdentifier::Latest,
-                };
-
-                state
-                    .get_transaction_summaries(GetTransactionSummariesRequest {
-                        range: TransactionRange {
-                            target,
-                            num_transactions,
-                        },
-                        filter,
-                    })
-                    .await
-                    .map(TransactionSummariesResponse::from)
-                    .map_err(Error::GetTransactionSummaries)
-            }
-            .boxed()
-        })?
-        .get("get_explorer_summary", move |_req, state| {
-            async move {
-                state
-                    .get_explorer_summary()
-                    .await
-                    .map(ExplorerSummaryResponse::from)
-                    .map_err(Error::GetExplorerSummary)
-            }
-            .boxed()
-        })?
-        .get("get_search_result", move |req, state| {
-            async move {
-                let query = req
-                    .tagged_base64_param("query")
-                    .map_err(|err| {
-                        tracing::error!("query param error: {}", err);
-                        GetSearchResultsError::InvalidQuery(errors::BadQuery {})
-                    })
-                    .map_err(Error::GetSearchResults)?;
-
-                state
-                    .get_search_results(query.clone())
-                    .await
-                    .map(SearchResultResponse::from)
-                    .map_err(Error::GetSearchResults)
-            }
-            .boxed()
-        })?;
-    Ok(api)
-}
-
 #[cfg(test)]
 mod test {
-    use std::{cmp::min, time::Duration};
+    use std::{cmp::min, num::NonZeroUsize};
 
     use futures::StreamExt;
-    use http_client::Client;
-    use test_utils::reserve_tcp_port;
-    use tide_disco::App;
 
     use super::*;
     use crate::{
-        ApiState, Error, availability,
+        availability::AvailabilityDataSource,
         testing::{
             consensus::{MockNetwork, MockSqlDataSource},
-            mocks::{MockBase, MockTypes, mock_transaction},
+            mocks::{MockTypes, mock_transaction},
         },
     };
 
-    async fn validate(client: &Client<Error, MockBase>) {
-        let explorer_summary_response: ExplorerSummaryResponse<MockTypes> =
-            client.get("explorer-summary").send().await.unwrap();
+    fn num_blocks() -> usize {
+        10
+    }
 
+    fn num_txns_per_block() -> usize {
+        5
+    }
+
+    fn block_summaries(
+        target: BlockIdentifier<MockTypes>,
+        num_blocks: usize,
+    ) -> GetBlockSummariesRequest<MockTypes> {
+        GetBlockSummariesRequest(BlockRange {
+            target,
+            num_blocks: NonZeroUsize::new(num_blocks).unwrap(),
+        })
+    }
+
+    fn transaction_summaries(
+        target: TransactionIdentifier<MockTypes>,
+        num_transactions: usize,
+        filter: TransactionSummaryFilter<MockTypes>,
+    ) -> GetTransactionSummariesRequest<MockTypes> {
+        GetTransactionSummariesRequest {
+            range: TransactionRange {
+                target,
+                num_transactions: NonZeroUsize::new(num_transactions).unwrap(),
+            },
+            filter,
+        }
+    }
+
+    async fn validate(ds: &MockSqlDataSource) {
         let ExplorerSummary {
             histograms,
             latest_block,
@@ -366,7 +202,7 @@ mod test {
             latest_transactions,
             genesis_overview,
             ..
-        } = explorer_summary_response.explorer_summary;
+        } = ds.get_explorer_summary().await.unwrap();
 
         let GenesisOverview {
             blocks: num_blocks,
@@ -392,46 +228,41 @@ mod test {
 
         {
             // Retrieve Block Detail using the block height
-            let block_detail_response: BlockDetailResponse<MockTypes> = client
-                .get(format!("block/{}", latest_block.height).as_str())
-                .send()
+            let block_detail = ds
+                .get_block_detail(BlockIdentifier::Height(latest_block.height as usize))
                 .await
                 .unwrap();
-            assert_eq!(block_detail_response.block_detail, latest_block);
+            assert_eq!(block_detail, latest_block);
         }
 
         {
             // Retrieve Block Detail using the block hash
-            let block_detail_response: BlockDetailResponse<MockTypes> = client
-                .get(format!("block/hash/{}", latest_block.hash).as_str())
-                .send()
+            let block_detail = ds
+                .get_block_detail(BlockIdentifier::Hash(latest_block.hash))
                 .await
                 .unwrap();
-            assert_eq!(block_detail_response.block_detail, latest_block);
+            assert_eq!(block_detail, latest_block);
         }
 
         {
             // Retrieve 20 Block Summaries using the block height
-            let block_summaries_response: BlockSummaryResponse<MockTypes> = client
-                .get(format!("blocks/{}/{}", num_blocks - 1, 20).as_str())
-                .send()
+            let summaries = ds
+                .get_block_summaries(block_summaries(
+                    BlockIdentifier::Height((num_blocks - 1) as usize),
+                    20,
+                ))
                 .await
                 .unwrap();
-            for (a, b) in block_summaries_response
-                .block_summaries
-                .iter()
-                .zip(latest_blocks.iter())
-            {
+            for (a, b) in summaries.iter().zip(latest_blocks.iter()) {
                 assert_eq!(a, b);
             }
         }
 
         {
             let target_num = min(num_blocks as usize, 10);
-            // Retrieve the 20 latest block summaries
-            let block_summaries_response: BlockSummaryResponse<MockTypes> = client
-                .get(format!("blocks/latest/{target_num}").as_str())
-                .send()
+            // Retrieve the latest block summaries
+            let summaries = ds
+                .get_block_summaries(block_summaries(BlockIdentifier::Latest, target_num))
                 .await
                 .unwrap();
 
@@ -439,91 +270,52 @@ mod test {
             // been previously generated, so we don't know if we can check
             // equality of the set.  However, we **can** check to see if the
             // number of blocks we were asking for get returned.
-            assert_eq!(block_summaries_response.block_summaries.len(), target_num);
+            assert_eq!(summaries.len(), target_num);
 
             // We can also perform a check on the first block to ensure that it
             // is larger than or equal to our `num_blocks` variable.
-            assert!(
-                block_summaries_response
-                    .block_summaries
-                    .first()
-                    .unwrap()
-                    .height
-                    >= num_blocks - 1
-            );
+            assert!(summaries.first().unwrap().height >= num_blocks - 1);
         }
-        let get_search_response: SearchResultResponse<MockTypes> = client
-            .get(format!("search/{}", latest_block.hash).as_str())
-            .send()
+
+        let search_results = ds
+            .get_search_results(latest_block.hash.to_string().parse().unwrap())
             .await
             .unwrap();
-
-        assert!(!get_search_response.search_results.blocks.is_empty());
+        assert!(!search_results.blocks.is_empty());
 
         if num_transactions > 0 {
             let last_transaction = latest_transactions.first().unwrap();
-            let transaction_detail_response: TransactionDetailResponse<MockTypes> = client
-                .get(format!("transaction/hash/{}", last_transaction.hash).as_str())
-                .send()
+            let transaction_detail = ds
+                .get_transaction_detail(TransactionIdentifier::Hash(last_transaction.hash))
                 .await
                 .unwrap();
 
-            assert!(
-                transaction_detail_response
-                    .transaction_detail
-                    .details
-                    .block_confirmed
-            );
-
+            assert!(transaction_detail.details.block_confirmed);
+            assert_eq!(transaction_detail.details.hash, last_transaction.hash);
+            assert_eq!(transaction_detail.details.height, last_transaction.height);
             assert_eq!(
-                transaction_detail_response.transaction_detail.details.hash,
-                last_transaction.hash
-            );
-
-            assert_eq!(
-                transaction_detail_response
-                    .transaction_detail
-                    .details
-                    .height,
-                last_transaction.height
-            );
-
-            assert_eq!(
-                transaction_detail_response
-                    .transaction_detail
-                    .details
-                    .num_transactions,
+                transaction_detail.details.num_transactions,
                 last_transaction.num_transactions
             );
-
-            assert_eq!(
-                transaction_detail_response
-                    .transaction_detail
-                    .details
-                    .offset,
-                last_transaction.offset
-            );
-            // assert_eq!(transaction_detail_response.transaction_detail.details.size, last_transaction.size);
-
-            assert_eq!(
-                transaction_detail_response.transaction_detail.details.time,
-                last_transaction.time
-            );
+            assert_eq!(transaction_detail.details.offset, last_transaction.offset);
+            // assert_eq!(transaction_detail.details.size, last_transaction.size);
+            assert_eq!(transaction_detail.details.time, last_transaction.time);
 
             // Transactions Summaries - No Filter
             let n_txns = num_txns_per_block();
 
             {
                 // Retrieve transactions summaries via hash
-                let transaction_summaries_response: TransactionSummariesResponse<MockTypes> =
-                    client
-                        .get(format!("transactions/hash/{}/{}", last_transaction.hash, 20).as_str())
-                        .send()
-                        .await
-                        .unwrap();
+                let summaries = ds
+                    .get_transaction_summaries(transaction_summaries(
+                        TransactionIdentifier::Hash(last_transaction.hash),
+                        20,
+                        TransactionSummaryFilter::None,
+                    ))
+                    .await
+                    .unwrap();
 
-                for (a, b) in transaction_summaries_response
-                    .transaction_summaries
+                for (a, b) in summaries
                     .iter()
                     .zip(latest_transactions.iter().take(10).collect::<Vec<_>>())
                 {
@@ -535,18 +327,16 @@ mod test {
                 // Retrieve transactions summaries via height and offset
                 // No offset, which should indicate the most recent transaction
                 // within the targeted block.
-                let transaction_summaries_response: TransactionSummariesResponse<MockTypes> =
-                    client
-                        .get(
-                            format!("transactions/from/{}/{}/{}", last_transaction.height, 0, 20)
-                                .as_str(),
-                        )
-                        .send()
-                        .await
-                        .unwrap();
+                let summaries = ds
+                    .get_transaction_summaries(transaction_summaries(
+                        TransactionIdentifier::HeightAndOffset(last_transaction.height as usize, 0),
+                        20,
+                        TransactionSummaryFilter::None,
+                    ))
+                    .await
+                    .unwrap();
 
-                for (a, b) in transaction_summaries_response
-                    .transaction_summaries
+                for (a, b) in summaries
                     .iter()
                     .zip(latest_transactions.iter().take(10).collect::<Vec<_>>())
                 {
@@ -559,32 +349,25 @@ mod test {
                 // In this case since we're creating n_txns transactions per
                 // block, an offset of n_txns - 1 will ensure that we're still
                 // within the same starting target block.
-                let transaction_summaries_response: TransactionSummariesResponse<MockTypes> =
-                    client
-                        .get(
-                            format!(
-                                "transactions/from/{}/{}/{}",
-                                last_transaction.height,
-                                n_txns - 1,
-                                20
-                            )
-                            .as_str(),
-                        )
-                        .send()
-                        .await
-                        .unwrap();
+                let summaries = ds
+                    .get_transaction_summaries(transaction_summaries(
+                        TransactionIdentifier::HeightAndOffset(
+                            last_transaction.height as usize,
+                            n_txns - 1,
+                        ),
+                        20,
+                        TransactionSummaryFilter::None,
+                    ))
+                    .await
+                    .unwrap();
 
-                for (a, b) in transaction_summaries_response
-                    .transaction_summaries
-                    .iter()
-                    .zip(
-                        latest_transactions
-                            .iter()
-                            .skip(n_txns - 1)
-                            .take(10)
-                            .collect::<Vec<_>>(),
-                    )
-                {
+                for (a, b) in summaries.iter().zip(
+                    latest_transactions
+                        .iter()
+                        .skip(n_txns - 1)
+                        .take(10)
+                        .collect::<Vec<_>>(),
+                ) {
                     assert_eq!(a, b);
                 }
             }
@@ -594,46 +377,40 @@ mod test {
                 // In this case since we're creating n_txns transactions per
                 // block, an offset of n_txns + 1 will ensure that we're
                 // outside of the starting block
-                let transaction_summaries_response: TransactionSummariesResponse<MockTypes> =
-                    client
-                        .get(
-                            format!(
-                                "transactions/from/{}/{}/{}",
-                                last_transaction.height,
-                                n_txns + 1,
-                                20
-                            )
-                            .as_str(),
-                        )
-                        .send()
-                        .await
-                        .unwrap();
+                let summaries = ds
+                    .get_transaction_summaries(transaction_summaries(
+                        TransactionIdentifier::HeightAndOffset(
+                            last_transaction.height as usize,
+                            n_txns + 1,
+                        ),
+                        20,
+                        TransactionSummaryFilter::None,
+                    ))
+                    .await
+                    .unwrap();
 
-                for (a, b) in transaction_summaries_response
-                    .transaction_summaries
-                    .iter()
-                    .zip(
-                        latest_transactions
-                            .iter()
-                            .skip(6)
-                            .take(10)
-                            .collect::<Vec<_>>(),
-                    )
-                {
+                for (a, b) in summaries.iter().zip(
+                    latest_transactions
+                        .iter()
+                        .skip(6)
+                        .take(10)
+                        .collect::<Vec<_>>(),
+                ) {
                     assert_eq!(a, b);
                 }
             }
 
             {
-                let transaction_summaries_response: TransactionSummariesResponse<MockTypes> =
-                    client
-                        .get(format!("transactions/latest/{}", 20).as_str())
-                        .send()
-                        .await
-                        .unwrap();
+                let summaries = ds
+                    .get_transaction_summaries(transaction_summaries(
+                        TransactionIdentifier::Latest,
+                        20,
+                        TransactionSummaryFilter::None,
+                    ))
+                    .await
+                    .unwrap();
 
-                for (a, b) in transaction_summaries_response
-                    .transaction_summaries
+                for (a, b) in summaries
                     .iter()
                     .zip(latest_transactions.iter().take(10).collect::<Vec<_>>())
                 {
@@ -643,22 +420,19 @@ mod test {
 
             // Transactions Summaries - Block Filter
 
-            {
-                let transaction_summaries_response: TransactionSummariesResponse<MockTypes> =
-                    client
-                        .get(
-                            format!(
-                                "transactions/hash/{}/{}/block/{}",
-                                last_transaction.hash, 20, last_transaction.height
-                            )
-                            .as_str(),
-                        )
-                        .send()
-                        .await
-                        .unwrap();
+            let block_filter = TransactionSummaryFilter::Block(last_transaction.height as usize);
 
-                for (a, b) in transaction_summaries_response
-                    .transaction_summaries
+            {
+                let summaries = ds
+                    .get_transaction_summaries(transaction_summaries(
+                        TransactionIdentifier::Hash(last_transaction.hash),
+                        20,
+                        block_filter.clone(),
+                    ))
+                    .await
+                    .unwrap();
+
+                for (a, b) in summaries
                     .iter()
                     .take_while(|t: &&TransactionSummary<MockTypes>| {
                         t.height == last_transaction.height
@@ -672,21 +446,16 @@ mod test {
             {
                 // With an offset of 0, we should start at the most recent
                 // transaction within the specified block.
-                let transaction_summaries_response: TransactionSummariesResponse<MockTypes> =
-                    client
-                        .get(
-                            format!(
-                                "transactions/from/{}/{}/{}/block/{}",
-                                last_transaction.height, 0, 20, last_transaction.height
-                            )
-                            .as_str(),
-                        )
-                        .send()
-                        .await
-                        .unwrap();
+                let summaries = ds
+                    .get_transaction_summaries(transaction_summaries(
+                        TransactionIdentifier::HeightAndOffset(last_transaction.height as usize, 0),
+                        20,
+                        block_filter.clone(),
+                    ))
+                    .await
+                    .unwrap();
 
-                for (a, b) in transaction_summaries_response
-                    .transaction_summaries
+                for (a, b) in summaries
                     .iter()
                     .take_while(|t: &&TransactionSummary<MockTypes>| {
                         t.height == last_transaction.height
@@ -701,24 +470,19 @@ mod test {
                 // In this case, since we're creating n_txns transactions per
                 // block, an offset of n_txns - 1 will ensure that we're still
                 // within the same starting target block.
-                let transaction_summaries_response: TransactionSummariesResponse<MockTypes> =
-                    client
-                        .get(
-                            format!(
-                                "transactions/from/{}/{}/{}/block/{}",
-                                last_transaction.height,
-                                n_txns - 1,
-                                20,
-                                last_transaction.height
-                            )
-                            .as_str(),
-                        )
-                        .send()
-                        .await
-                        .unwrap();
+                let summaries = ds
+                    .get_transaction_summaries(transaction_summaries(
+                        TransactionIdentifier::HeightAndOffset(
+                            last_transaction.height as usize,
+                            n_txns - 1,
+                        ),
+                        20,
+                        block_filter.clone(),
+                    ))
+                    .await
+                    .unwrap();
 
-                for (a, b) in transaction_summaries_response
-                    .transaction_summaries
+                for (a, b) in summaries
                     .iter()
                     .skip(n_txns - 1)
                     .take_while(|t: &&TransactionSummary<MockTypes>| {
@@ -734,24 +498,19 @@ mod test {
                 // In this case, since we're creating n_txns transactions per
                 // block, an offset of n_txns + 1 will ensure that we're
                 // outside of the starting target block
-                let transaction_summaries_response: TransactionSummariesResponse<MockTypes> =
-                    client
-                        .get(
-                            format!(
-                                "transactions/from/{}/{}/{}/block/{}",
-                                last_transaction.height,
-                                n_txns + 1,
-                                20,
-                                last_transaction.height
-                            )
-                            .as_str(),
-                        )
-                        .send()
-                        .await
-                        .unwrap();
+                let summaries = ds
+                    .get_transaction_summaries(transaction_summaries(
+                        TransactionIdentifier::HeightAndOffset(
+                            last_transaction.height as usize,
+                            n_txns + 1,
+                        ),
+                        20,
+                        block_filter.clone(),
+                    ))
+                    .await
+                    .unwrap();
 
-                for (a, b) in transaction_summaries_response
-                    .transaction_summaries
+                for (a, b) in summaries
                     .iter()
                     .skip(n_txns + 1)
                     .take_while(|t: &&TransactionSummary<MockTypes>| {
@@ -764,21 +523,16 @@ mod test {
             }
 
             {
-                let transaction_summaries_response: TransactionSummariesResponse<MockTypes> =
-                    client
-                        .get(
-                            format!(
-                                "transactions/latest/{}/block/{}",
-                                20, last_transaction.height
-                            )
-                            .as_str(),
-                        )
-                        .send()
-                        .await
-                        .unwrap();
+                let summaries = ds
+                    .get_transaction_summaries(transaction_summaries(
+                        TransactionIdentifier::Latest,
+                        20,
+                        block_filter.clone(),
+                    ))
+                    .await
+                    .unwrap();
 
-                for (a, b) in transaction_summaries_response
-                    .transaction_summaries
+                for (a, b) in summaries
                     .iter()
                     .take_while(|t: &&TransactionSummary<MockTypes>| {
                         t.height == last_transaction.height
@@ -793,96 +547,32 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_api() {
-        test_api_helper().await;
-    }
-
-    fn num_blocks() -> usize {
-        10
-    }
-
-    fn num_txns_per_block() -> usize {
-        5
-    }
-
-    async fn test_api_helper() {
         // Create the consensus network.
         let mut network = MockNetwork::<MockSqlDataSource>::init().await;
         network.start().await;
 
-        // Start the web server.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "explorer",
-            define_api(MockBase::instance(), "0.0.1".parse().unwrap()).unwrap(),
-        )
-        .unwrap();
-        app.register_module(
-            "availability",
-            availability::define_api(
-                &availability::Options {
-                    fetch_timeout: Duration::from_secs(5),
-                    ..Default::default()
-                },
-                MockBase::instance(),
-                "0.0.1".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
-
-        // Start a client.
-        let availability_client = Client::<Error, MockBase>::new(
-            format!("http://localhost:{port}/availability")
-                .parse()
-                .unwrap(),
-        );
-        let explorer_client = Client::<Error, MockBase>::new(
-            format!("http://localhost:{port}/explorer").parse().unwrap(),
-        );
-
-        assert!(
-            availability_client
-                .connect(Some(Duration::from_secs(60)))
-                .await
-        );
-
-        let mut blocks = availability_client
-            .socket("stream/blocks/0")
-            .subscribe::<availability::BlockQueryData<MockTypes>>()
-            .await
-            .unwrap();
+        let ds = network.data_source();
+        let mut blocks = ds.subscribe_blocks(0).await;
 
         let n_blocks = num_blocks();
         let n_txns = num_txns_per_block();
         for b in 0..n_blocks {
             for t in 0..n_txns {
                 let nonce = b * n_txns + t;
-                let txn: hotshot_example_types::block_types::TestTransaction =
-                    mock_transaction(vec![nonce as u8]);
-                network.submit_transaction(txn).await;
+                network
+                    .submit_transaction(mock_transaction(vec![nonce as u8]))
+                    .await;
             }
 
-            // Wait for the transaction to be finalized.
+            // Wait for the transactions to be finalized.
             for _ in 0..10 {
-                let block = blocks.next().await.unwrap();
-                let block = block.unwrap();
-
-                if !block.is_empty() {
+                if !blocks.next().await.unwrap().is_empty() {
                     break;
                 }
             }
         }
 
-        assert!(explorer_client.connect(Some(Duration::from_secs(60))).await);
-
-        // sleep a little bit to give some chance for blocks to be generated.
-        validate(&explorer_client).await;
+        validate(&ds).await;
         network.shut_down().await;
     }
 }

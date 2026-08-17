@@ -8,7 +8,7 @@ features they need explicitly in their manifests.
 | --------------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | espresso-types              | `node`        | L1 client, persistence traits, Fetcher L1 methods, block proposal, full alloy                                                           |
 | hotshot-query-service-types | `sqlx`, `web` | sql storage types; events-service error conversion and `http_client::ClientError` impl (error types stay unconditional via disco-types) |
-| espresso-utils              | `full`        | node and tooling helpers (clap, tokio, surf, ...); the pure `ser` module stays                                                          |
+| espresso-utils              | `full`        | node and tooling helpers (clap, tokio, reqwest, ...); the pure `ser` module stays                                                       |
 | light-client                | `client`      | host query client, sqlite storage, query-service provider; `state.rs` and `consensus/` stay                                             |
 
 - `espresso-types/testing` implies `node`. `light-client/testing` implies `client` but not `rlp`.
