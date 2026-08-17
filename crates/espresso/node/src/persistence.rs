@@ -202,7 +202,7 @@ mod tests {
 
     use alloy::{
         network::EthereumWallet,
-        primitives::{Address, U256},
+        primitives::{Address, B256, U256},
         providers::{Provider, ProviderBuilder, ext::AnvilApi},
     };
     use anyhow::bail;
@@ -214,7 +214,9 @@ mod tests {
         network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
-        Event, L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, PubKey, SeqTypes, ValidatedState,
+        Event, Header, L1BlockInfo, L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, PubKey,
+        SeqTypes, StakeTableState, ValidatedState, stake_table_state_from_l1_events,
+        testing::TestValidator,
         traits::{
             EventConsumer, EventsPersistenceRead, MembershipPersistence, NullEventConsumer,
             PersistenceOptions, SequencerPersistence,
@@ -227,7 +229,8 @@ mod tests {
         types::{BLSPubKey, SignatureKey},
     };
     use hotshot_contract_adapter::{
-        sol_types::StakeTableV3::Delegated, stake_table::StakeTableContractVersion,
+        sol_types::StakeTableV3::{Delegated, ValidatorRegisteredV3},
+        stake_table::StakeTableContractVersion,
     };
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_new_protocol::message::Certificate2;
@@ -268,6 +271,7 @@ mod tests {
             test_helpers::{STAKE_TABLE_CAPACITY_FOR_TEST, TestNetwork, TestNetworkConfigBuilder},
         },
         catchup::NullStateCatchup,
+        request_response::data_source::stake_table_state_for_epoch,
         testing::{TestConfigBuilder, staking_priv_keys},
     };
 
@@ -2322,6 +2326,337 @@ mod tests {
             prev_l1_block = l1_block;
             prev_events_len = persisted_events.len();
         }
+
+        Ok(())
+    }
+
+    /// Fixed epoch geometry shared by the `stake_table_state_for_epoch` tests below: with
+    /// `epoch_height = 100` and `epoch_start_block = 0`, `epoch = 5` has snapshot root height
+    /// `root_block_in_epoch(3, 100) = 295` and its anchor (`epoch + 1 = 6`) has root height
+    /// `root_block_in_epoch(4, 100) = 395`.
+    const STAKE_TABLE_STATE_TEST_EPOCH_HEIGHT: u64 = 100;
+    const STAKE_TABLE_STATE_TEST_EPOCH: u64 = 5;
+    const STAKE_TABLE_STATE_TEST_SNAPSHOT_HEIGHT: u64 = 295;
+    const STAKE_TABLE_STATE_TEST_ANCHOR_HEIGHT: u64 = 395;
+
+    fn stake_table_state_test_node_state() -> NodeState {
+        let mut instance_state = NodeState::mock();
+        instance_state.epoch_height = Some(STAKE_TABLE_STATE_TEST_EPOCH_HEIGHT);
+        instance_state.epoch_start_block = 0;
+        // `Header::genesis` picks the header version from `genesis_version`, not from the
+        // version passed to `Leaf::genesis`; V4+ is required for `next_stake_table_hash`.
+        instance_state.genesis_version = version(0, 4);
+        instance_state
+    }
+
+    async fn stake_table_state_test_header(
+        instance_state: &NodeState,
+        height: u64,
+        l1_block: Option<u64>,
+    ) -> Header {
+        let validated_state = hotshot_types::traits::ValidatedState::genesis(instance_state).0;
+        let leaf: Leaf2 = Leaf::genesis(&validated_state, instance_state, version(0, 4))
+            .await
+            .into();
+        let mut header = leaf.block_header().clone();
+        *header.height_mut() = height;
+        if let Some(number) = l1_block {
+            *header.l1_finalized_mut() = Some(L1BlockInfo {
+                number,
+                timestamp: U256::ZERO,
+                hash: B256::default(),
+            });
+        }
+        header
+    }
+
+    fn stake_table_state_test_events(to_l1_block: u64) -> Vec<(EventKey, StakeTableEvent)> {
+        let val = TestValidator::random();
+        vec![(
+            (to_l1_block, 0),
+            StakeTableEvent::RegisterV3(ValidatorRegisteredV3::from(&val)),
+        )]
+    }
+
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_stake_table_state_for_epoch_full_coverage<P: TestablePersistence>(
+        _p: PhantomData<P>,
+    ) -> anyhow::Result<()> {
+        let tmp = P::tmp_storage().await;
+        let persistence = P::connect(&tmp).await;
+        let instance_state = stake_table_state_test_node_state();
+
+        let to_l1_block = 1_000;
+        let events = stake_table_state_test_events(to_l1_block);
+        persistence
+            .store_events(to_l1_block, events.clone())
+            .await?;
+
+        let snapshot_root = stake_table_state_test_header(
+            &instance_state,
+            STAKE_TABLE_STATE_TEST_SNAPSHOT_HEIGHT,
+            Some(to_l1_block),
+        )
+        .await;
+        persistence
+            .store_epoch_root(
+                EpochNumber::new(STAKE_TABLE_STATE_TEST_EPOCH),
+                snapshot_root,
+            )
+            .await?;
+
+        let cache = Arc::new(parking_lot::Mutex::new(BTreeMap::new()));
+        let state = stake_table_state_for_epoch(
+            STAKE_TABLE_STATE_TEST_EPOCH,
+            &instance_state,
+            &persistence,
+            None,
+            &cache,
+        )
+        .await?;
+
+        let expected =
+            stake_table_state_from_l1_events(events.into_iter().map(|(_, event)| event))?;
+        assert_eq!(state.commit(), expected.commit());
+
+        Ok(())
+    }
+
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_stake_table_state_for_epoch_partial_events<P: TestablePersistence>(
+        _p: PhantomData<P>,
+    ) -> anyhow::Result<()> {
+        let tmp = P::tmp_storage().await;
+        let persistence = P::connect(&tmp).await;
+        let instance_state = stake_table_state_test_node_state();
+
+        let to_l1_block = 1_000;
+        let events = stake_table_state_test_events(500);
+        // Only cover events up to L1 block 500, short of the snapshot root's L1 block.
+        persistence.store_events(500, events).await?;
+
+        let snapshot_root = stake_table_state_test_header(
+            &instance_state,
+            STAKE_TABLE_STATE_TEST_SNAPSHOT_HEIGHT,
+            Some(to_l1_block),
+        )
+        .await;
+        persistence
+            .store_epoch_root(
+                EpochNumber::new(STAKE_TABLE_STATE_TEST_EPOCH),
+                snapshot_root,
+            )
+            .await?;
+
+        let cache = Arc::new(parking_lot::Mutex::new(BTreeMap::new()));
+        let result = stake_table_state_for_epoch(
+            STAKE_TABLE_STATE_TEST_EPOCH,
+            &instance_state,
+            &persistence,
+            None,
+            &cache,
+        )
+        .await;
+        assert!(result.is_err());
+
+        Ok(())
+    }
+
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_stake_table_state_for_epoch_empty_events<P: TestablePersistence>(
+        _p: PhantomData<P>,
+    ) -> anyhow::Result<()> {
+        let tmp = P::tmp_storage().await;
+        let persistence = P::connect(&tmp).await;
+        let instance_state = stake_table_state_test_node_state();
+
+        let snapshot_root = stake_table_state_test_header(
+            &instance_state,
+            STAKE_TABLE_STATE_TEST_SNAPSHOT_HEIGHT,
+            Some(1_000),
+        )
+        .await;
+        persistence
+            .store_epoch_root(
+                EpochNumber::new(STAKE_TABLE_STATE_TEST_EPOCH),
+                snapshot_root,
+            )
+            .await?;
+
+        let cache = Arc::new(parking_lot::Mutex::new(BTreeMap::new()));
+        let result = stake_table_state_for_epoch(
+            STAKE_TABLE_STATE_TEST_EPOCH,
+            &instance_state,
+            &persistence,
+            None,
+            &cache,
+        )
+        .await;
+        assert!(result.is_err());
+
+        Ok(())
+    }
+
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_stake_table_state_for_epoch_missing_snapshot_root<P: TestablePersistence>(
+        _p: PhantomData<P>,
+    ) -> anyhow::Result<()> {
+        let tmp = P::tmp_storage().await;
+        let persistence = P::connect(&tmp).await;
+        let instance_state = stake_table_state_test_node_state();
+
+        let cache = Arc::new(parking_lot::Mutex::new(BTreeMap::new()));
+        let result = stake_table_state_for_epoch(
+            STAKE_TABLE_STATE_TEST_EPOCH,
+            &instance_state,
+            &persistence,
+            None,
+            &cache,
+        )
+        .await;
+        assert!(result.is_err());
+
+        Ok(())
+    }
+
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_stake_table_state_for_epoch_snapshot_root_missing_l1_finalized<
+        P: TestablePersistence,
+    >(
+        _p: PhantomData<P>,
+    ) -> anyhow::Result<()> {
+        let tmp = P::tmp_storage().await;
+        let persistence = P::connect(&tmp).await;
+        let instance_state = stake_table_state_test_node_state();
+
+        let snapshot_root = stake_table_state_test_header(
+            &instance_state,
+            STAKE_TABLE_STATE_TEST_SNAPSHOT_HEIGHT,
+            None,
+        )
+        .await;
+        persistence
+            .store_epoch_root(
+                EpochNumber::new(STAKE_TABLE_STATE_TEST_EPOCH),
+                snapshot_root,
+            )
+            .await?;
+
+        let cache = Arc::new(parking_lot::Mutex::new(BTreeMap::new()));
+        let result = stake_table_state_for_epoch(
+            STAKE_TABLE_STATE_TEST_EPOCH,
+            &instance_state,
+            &persistence,
+            None,
+            &cache,
+        )
+        .await;
+        assert!(result.is_err());
+
+        Ok(())
+    }
+
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_stake_table_state_for_epoch_anchor_mismatch<P: TestablePersistence>(
+        _p: PhantomData<P>,
+    ) -> anyhow::Result<()> {
+        let tmp = P::tmp_storage().await;
+        let persistence = P::connect(&tmp).await;
+        let instance_state = stake_table_state_test_node_state();
+
+        let to_l1_block = 1_000;
+        let events = stake_table_state_test_events(to_l1_block);
+        persistence.store_events(to_l1_block, events).await?;
+
+        let snapshot_root = stake_table_state_test_header(
+            &instance_state,
+            STAKE_TABLE_STATE_TEST_SNAPSHOT_HEIGHT,
+            Some(to_l1_block),
+        )
+        .await;
+        persistence
+            .store_epoch_root(
+                EpochNumber::new(STAKE_TABLE_STATE_TEST_EPOCH),
+                snapshot_root,
+            )
+            .await?;
+
+        // The anchor commits to a stake table hash that cannot match the replayed events above.
+        let mut anchor_root = stake_table_state_test_header(
+            &instance_state,
+            STAKE_TABLE_STATE_TEST_ANCHOR_HEIGHT,
+            None,
+        )
+        .await;
+        anchor_root.set_next_stake_table_hash(StakeTableState::default().commit());
+        persistence
+            .store_epoch_root(
+                EpochNumber::new(STAKE_TABLE_STATE_TEST_EPOCH + 1),
+                anchor_root,
+            )
+            .await?;
+
+        let cache = Arc::new(parking_lot::Mutex::new(BTreeMap::new()));
+        let result = stake_table_state_for_epoch(
+            STAKE_TABLE_STATE_TEST_EPOCH,
+            &instance_state,
+            &persistence,
+            None,
+            &cache,
+        )
+        .await;
+        assert!(result.is_err());
+
+        Ok(())
+    }
+
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_stake_table_state_for_epoch_cache_hit<P: TestablePersistence>(
+        _p: PhantomData<P>,
+    ) -> anyhow::Result<()> {
+        let tmp = P::tmp_storage().await;
+        let persistence = P::connect(&tmp).await;
+        let instance_state = stake_table_state_test_node_state();
+
+        let to_l1_block = 1_000;
+        let events = stake_table_state_test_events(to_l1_block);
+        persistence.store_events(to_l1_block, events).await?;
+
+        let snapshot_root = stake_table_state_test_header(
+            &instance_state,
+            STAKE_TABLE_STATE_TEST_SNAPSHOT_HEIGHT,
+            Some(to_l1_block),
+        )
+        .await;
+        persistence
+            .store_epoch_root(
+                EpochNumber::new(STAKE_TABLE_STATE_TEST_EPOCH),
+                snapshot_root,
+            )
+            .await?;
+
+        let cache = Arc::new(parking_lot::Mutex::new(BTreeMap::new()));
+        stake_table_state_for_epoch(
+            STAKE_TABLE_STATE_TEST_EPOCH,
+            &instance_state,
+            &persistence,
+            None,
+            &cache,
+        )
+        .await?;
+
+        // Wipe the event store; a cache hit must not need to touch it.
+        persistence.delete_stake_tables().await?;
+
+        let result = stake_table_state_for_epoch(
+            STAKE_TABLE_STATE_TEST_EPOCH,
+            &instance_state,
+            &persistence,
+            None,
+            &cache,
+        )
+        .await;
+        assert!(result.is_ok());
 
         Ok(())
     }

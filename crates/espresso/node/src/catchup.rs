@@ -13,12 +13,12 @@ use committable::{Commitment, Committable};
 use espresso_api::routes::v1 as paths;
 use espresso_types::{
     BackoffParams, BlockMerkleTree, Certificate2, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
-    FeeMerkleTree, Leaf2, NodeState, SeqTypes, StakeTableHash, ValidatedState,
+    FeeMerkleTree, Leaf2, NodeState, SeqTypes, StakeTableHash, StakeTableState, ValidatedState,
     config::PublicNetworkConfig,
     v0::traits::StateCatchup,
     v0_3::{
-        ChainConfig, EventKey, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1,
-        RewardMerkleTreeV1, StakeTableEvent,
+        ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1,
+        RewardMerkleTreeV1,
     },
     v0_4::{
         PermittedRewardMerkleTreeV2, RewardAccountProofV2, RewardAccountV2,
@@ -33,7 +33,7 @@ use futures::{
 use hotshot_new_protocol::{storage::NewProtocolStorage, utils::verify_new_protocol_leaf_chain};
 use hotshot_types::{
     ValidatorConfig,
-    data::ViewNumber,
+    data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     network::NetworkConfig,
@@ -1457,30 +1457,19 @@ impl StateCatchup for ParallelStateCatchup {
         .await
     }
 
-    async fn try_fetch_stake_table_events(
+    async fn try_fetch_stake_table_state(
         &self,
         retry: usize,
-        from_l1_block: u64,
-        to_l1_block: u64,
-        local_prefix: Arc<Vec<(EventKey, StakeTableEvent)>>,
+        epoch: EpochNumber,
         expected_stake_table_hash: StakeTableHash,
-    ) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
-        // Local providers cannot serve stake table events: the requester has already
-        // exhausted its own persistence to build `local_prefix`. Go straight to the
-        // remote ones.
-        self.on_remote_providers(clone! {(local_prefix) move |provider| {
-            clone! {(local_prefix) async move {
-                provider
-                    .try_fetch_stake_table_events(
-                        retry,
-                        from_l1_block,
-                        to_l1_block,
-                        local_prefix,
-                        expected_stake_table_hash,
-                    )
-                    .await
-            }}
-        }})
+    ) -> anyhow::Result<StakeTableState> {
+        // Local providers would replay the same local event store the caller has already
+        // exhausted, so they cannot help. Go straight to the remote ones.
+        self.on_remote_providers(move |provider| async move {
+            provider
+                .try_fetch_stake_table_state(retry, epoch, expected_stake_table_hash)
+                .await
+        })
         .await
     }
 

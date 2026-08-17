@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fmt::{Debug, Display},
     future::Future,
     marker::PhantomData,
@@ -296,6 +297,7 @@ where
                 node_state: instance_state.clone(),
                 storage,
                 persistence: persistence.clone(),
+                stake_table_state_cache: Arc::new(Mutex::new(BTreeMap::new())),
                 consensus_handle: consensus_handle.clone(),
                 phantom: PhantomData,
             },

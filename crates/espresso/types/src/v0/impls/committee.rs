@@ -869,7 +869,7 @@ impl Membership<SeqTypes> for EpochCommittees {
                     );
                     let set = self
                         .fetcher
-                        .fetch(epoch, &block_header)
+                        .fetch(epoch, &block_header, coordinator)
                         .await
                         .map_err(Self::Error::Fetcher)?;
                     (
@@ -884,7 +884,7 @@ impl Membership<SeqTypes> for EpochCommittees {
                 info!("Stake table missing for epoch {epoch}. Fetching from L1.");
                 let set = self
                     .fetcher
-                    .fetch(epoch, &block_header)
+                    .fetch(epoch, &block_header, coordinator)
                     .await
                     .map_err(Self::Error::Fetcher)?;
                 (

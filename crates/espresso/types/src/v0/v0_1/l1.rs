@@ -182,8 +182,8 @@ pub struct L1ClientOptions {
     /// the maximum duration. This is helpful in cases where the RPC block range limit or the event
     /// return limit is hit, or if there is an outage. The stake table is constructed from the
     /// fetched events and is required for the node to participate in consensus; when fetching for
-    /// an epoch transition, giving up on the L1 lets the node fall back to fetching the (verified)
-    /// events from its peers.
+    /// an epoch transition, giving up on the L1 lets the node fall back to fetching a (verified)
+    /// stake table state from its peers.
     #[clap(
         long,
         env = "ESPRESSO_L1_EVENTS_MAX_RETRY_DURATION",
@@ -191,21 +191,6 @@ pub struct L1ClientOptions {
         value_parser = parse_duration,
     )]
     pub l1_events_max_retry_duration: Duration,
-
-    /// How long to give the L1 exclusively before also trying to fetch stake table events from
-    /// peers during an epoch transition.
-    ///
-    /// When the stake table for a new epoch is needed, the L1 fetch starts immediately and a
-    /// peer fetch (verified against the stake table hash committed in the epoch root header)
-    /// starts after this delay; the first source to deliver wins. A healthy L1 responds well
-    /// within this delay, so peers are only contacted when the L1 is slow or unavailable.
-    #[clap(
-        long,
-        env = "ESPRESSO_STAKE_TABLE_PEER_FETCH_DELAY",
-        default_value = "5s",
-        value_parser = parse_duration,
-    )]
-    pub stake_table_peer_fetch_delay: Duration,
 
     /// A block range which is expected to contain the finalized heads of all L1 provider chains.
     ///

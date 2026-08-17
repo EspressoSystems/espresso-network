@@ -58,7 +58,7 @@ use super::{
 use crate::{
     AuthenticatedValidatorMap, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
     Header, Leaf2, PubKey, SeqTypes,
-    v0::impls::StakeTableHash,
+    v0::impls::{StakeTableHash, StakeTableState},
     v0_3::{
         ChainConfig, RegisteredValidator, RewardAccountProofV1, RewardAccountV1, RewardAmount,
         RewardMerkleCommitmentV1,
@@ -297,30 +297,46 @@ pub trait StateCatchup: Send + Sync {
             .await
     }
 
-    /// Fetch stake table events from peers, without retrying on transient errors.
+    /// Fetch the full consensus stake table state for `epoch` from peers, without retrying on
+    /// transient errors.
     ///
-    /// This is a fallback for when the events cannot be fetched from the L1. Requests the
-    /// events with L1 block numbers in `[from_l1_block, to_l1_block]`. `local_prefix` holds
-    /// the already-trusted events before `from_l1_block` (loaded from local persistence, where
-    /// only verified events are stored). Implementations must verify the response before
-    /// returning it: replaying `local_prefix` followed by the fetched events must produce a
-    /// stake table whose hash equals `expected_stake_table_hash`, the hash committed to by
-    /// the epoch root header (see `verify_stake_table_events`).
+    /// The response is only usable if `state.commit() == expected_stake_table_hash`. That hash
+    /// comes from `next_stake_table_hash()` of the QC-backed epoch root header at
+    /// `stake_table_anchor_root_height(epoch, epoch_height)`. Implementations SHOULD check it
+    /// inline so a bad peer is rejected and another is tried, but the caller re-checks and is
+    /// the authoritative gate.
     ///
     /// The default implementation returns an error; only providers that support stake table
-    /// event catchup override it.
-    async fn try_fetch_stake_table_events(
+    /// state catchup override it.
+    async fn try_fetch_stake_table_state(
         &self,
         _retry: usize,
-        _from_l1_block: u64,
-        _to_l1_block: u64,
-        _local_prefix: Arc<Vec<(EventKey, StakeTableEvent)>>,
+        _epoch: EpochNumber,
         _expected_stake_table_hash: StakeTableHash,
-    ) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
+    ) -> anyhow::Result<StakeTableState> {
         Err(anyhow::anyhow!(
-            "stake table event catchup is not supported by provider {}",
+            "stake table state catchup is not supported by provider {}",
             self.name()
         ))
+    }
+
+    /// Fetch the full consensus stake table state for `epoch` from peers, retrying on transient
+    /// errors.
+    async fn fetch_stake_table_state(
+        &self,
+        epoch: EpochNumber,
+        expected_stake_table_hash: StakeTableHash,
+    ) -> anyhow::Result<StakeTableState> {
+        self.backoff()
+            .retry(self, |provider, retry| {
+                provider
+                    .try_fetch_stake_table_state(retry, epoch, expected_stake_table_hash)
+                    .map_err(|err| {
+                        err.context(format!("fetching stake table state for epoch {epoch}"))
+                    })
+                    .boxed()
+            })
+            .await
     }
 
     /// Returns true if the catchup provider is local (e.g. does not make calls to remote resources).
@@ -500,22 +516,24 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
         (**self).fetch_state_cert(epoch).await
     }
 
-    async fn try_fetch_stake_table_events(
+    async fn try_fetch_stake_table_state(
         &self,
         retry: usize,
-        from_l1_block: u64,
-        to_l1_block: u64,
-        local_prefix: Arc<Vec<(EventKey, StakeTableEvent)>>,
+        epoch: EpochNumber,
         expected_stake_table_hash: StakeTableHash,
-    ) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
+    ) -> anyhow::Result<StakeTableState> {
         (**self)
-            .try_fetch_stake_table_events(
-                retry,
-                from_l1_block,
-                to_l1_block,
-                local_prefix,
-                expected_stake_table_hash,
-            )
+            .try_fetch_stake_table_state(retry, epoch, expected_stake_table_hash)
+            .await
+    }
+
+    async fn fetch_stake_table_state(
+        &self,
+        epoch: EpochNumber,
+        expected_stake_table_hash: StakeTableHash,
+    ) -> anyhow::Result<StakeTableState> {
+        (**self)
+            .fetch_stake_table_state(epoch, expected_stake_table_hash)
             .await
     }
 

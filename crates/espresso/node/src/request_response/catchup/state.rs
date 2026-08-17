@@ -5,23 +5,22 @@ use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
     BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
-    NodeState, PubKey, SeqTypes, StakeTableHash,
+    NodeState, PubKey, SeqTypes, StakeTableHash, StakeTableState,
     traits::{SequencerPersistence, StateCatchup},
-    v0_3::{
-        ChainConfig, EventKey, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1,
-        StakeTableEvent,
-    },
+    v0_3::{ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1},
     v0_4::{
         PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleCommitmentV2,
         forgotten_accounts_include,
     },
-    verify_stake_table_events,
 };
 use hotshot::traits::NodeImplementation;
 use hotshot_new_protocol::{storage::NewProtocolStorage, utils::verify_new_protocol_leaf_chain};
 use hotshot_types::{
-    data::ViewNumber, epoch_membership::EpochMembershipCoordinator, message::UpgradeLock,
-    simple_certificate::LightClientStateUpdateCertificateV2, traits::network::ConnectedNetwork,
+    data::{EpochNumber, ViewNumber},
+    epoch_membership::EpochMembershipCoordinator,
+    message::UpgradeLock,
+    simple_certificate::LightClientStateUpdateCertificateV2,
+    traits::network::ConnectedNetwork,
 };
 use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
 use request_response::RequestType;
@@ -178,71 +177,20 @@ where
             .with_context(|| "timed out while fetching state cert")?
     }
 
-    async fn try_fetch_stake_table_events(
+    async fn try_fetch_stake_table_state(
         &self,
         _retry: usize,
-        from_l1_block: u64,
-        to_l1_block: u64,
-        local_prefix: Arc<Vec<(EventKey, StakeTableEvent)>>,
+        epoch: EpochNumber,
         expected_stake_table_hash: StakeTableHash,
-    ) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
-        tracing::info!(
-            from_l1_block,
-            to_l1_block,
-            "Fetching stake table events from peers"
-        );
-
-        // Create the response validation function. A response is only accepted if replaying
-        // the trusted local prefix followed by the peer's events reproduces the stake table
-        // hash committed to by the epoch root header, so a malicious peer cannot do worse
-        // than fail to respond.
-        let response_validation_fn = move |_request: &Request, response: Response| {
-            let local_prefix = local_prefix.clone();
-
-            async move {
-                // Make sure the response is a stake table events response
-                let Response::StakeTableEvents(events) = response else {
-                    return Err(anyhow::anyhow!("expected stake table events response"));
-                };
-
-                verify_stake_table_events(
-                    &local_prefix,
-                    &events,
-                    from_l1_block,
-                    to_l1_block,
-                    expected_stake_table_hash,
-                )?;
-
-                Ok(events)
-            }
-        };
-
-        // Timeout after a few batches
+    ) -> anyhow::Result<StakeTableState> {
         let timeout_duration = self.config.request_batch_interval * 3;
 
-        // Wait for the protocol to send us the events
-        let response = timeout(
+        timeout(
             timeout_duration,
-            self.request_indefinitely(
-                Request::StakeTableEvents {
-                    from_l1_block,
-                    to_l1_block,
-                },
-                RequestType::Batched,
-                response_validation_fn,
-            ),
+            self.fetch_stake_table_state(epoch, expected_stake_table_hash),
         )
         .await
-        .with_context(|| "timed out while fetching stake table events")?
-        .with_context(|| "failed to request stake table events")?;
-
-        tracing::info!(
-            from_l1_block,
-            to_l1_block,
-            "Fetched stake table events from peers"
-        );
-
-        Ok(response)
+        .with_context(|| "timed out while fetching stake table state")?
     }
 
     fn backoff(&self) -> &BackoffParams {
@@ -608,6 +556,43 @@ where
             .with_context(|| "failed to request state cert")?;
 
         tracing::info!("Fetched state cert for epoch: {epoch}");
+
+        Ok(response)
+    }
+
+    async fn fetch_stake_table_state(
+        &self,
+        epoch: EpochNumber,
+        expected_stake_table_hash: StakeTableHash,
+    ) -> anyhow::Result<StakeTableState> {
+        tracing::info!("Fetching stake table state for epoch: {epoch}");
+
+        // The peer sends the resulting state directly, so validation is a single commit()
+        // rather than replaying the whole event history.
+        let response_validation_fn = move |_request: &Request, response: Response| async move {
+            let Response::StakeTableState(state) = response else {
+                return Err(anyhow::anyhow!("expected stake table state response"));
+            };
+
+            if state.commit() != expected_stake_table_hash {
+                return Err(anyhow::anyhow!(
+                    "stake table state commitment mismatch for epoch {epoch}"
+                ));
+            }
+
+            Ok(state)
+        };
+
+        let response = self
+            .request_indefinitely(
+                Request::StakeTableState { epoch: *epoch },
+                RequestType::Batched,
+                response_validation_fn,
+            )
+            .await
+            .with_context(|| "failed to request stake table state")?;
+
+        tracing::info!("Fetched stake table state for epoch: {epoch}");
 
         Ok(response)
     }

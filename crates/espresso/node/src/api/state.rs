@@ -11,7 +11,7 @@ use committable::Committable as _;
 use disco_types::{error::Error as _, status::StatusCode};
 use espresso_api::{error::AvailabilityError, v1::HotShotAvailabilityApi};
 use espresso_types::{
-    NamespaceId, NamespaceProofQueryData, NsProof, SeqTypes,
+    NamespaceId, NamespaceProofQueryData, NsProof, SeqTypes, stake_table_snapshot_root_height,
     v0::sparse_mt::KeccakNode,
     v0_3::{RewardAccountV1, RewardAmount as InternalRewardAmount, RewardMerkleTreeV1},
     v0_4::{
@@ -47,7 +47,7 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     data::{EpochNumber, VidShare},
-    utils::{epoch_from_block_number, root_block_in_epoch},
+    utils::epoch_from_block_number,
     vid::avidm::AvidMShare,
 };
 use jf_merkle_tree_compat::prelude::{
@@ -3156,7 +3156,8 @@ where
             )));
         }
 
-        let epoch_root_height = root_block_in_epoch(epoch - 2, epoch_height) as usize;
+        let epoch_root_height =
+            stake_table_snapshot_root_height(EpochNumber::new(epoch), epoch_height)? as usize;
         let epoch_root = AvailabilityDataSource::get_header::<HsBlockId<espresso_types::SeqTypes>>(
             ds,
             HsBlockId::Number(epoch_root_height),
@@ -3171,7 +3172,9 @@ where
             .number();
 
         let from_l1_block = if epoch >= first_epoch + 3 {
-            let prev_epoch_root_height = root_block_in_epoch(epoch - 3, epoch_height) as usize;
+            let prev_epoch_root_height =
+                stake_table_snapshot_root_height(EpochNumber::new(epoch - 1), epoch_height)?
+                    as usize;
             let prev_epoch_root = AvailabilityDataSource::get_header::<
                 HsBlockId<espresso_types::SeqTypes>,
             >(ds, HsBlockId::Number(prev_epoch_root_height))
