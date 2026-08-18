@@ -20,13 +20,19 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 pub struct Hostname(Cow<'static, str>);
 
 impl Hostname {
-    /// The hostname `name`, or `None` if that is not a hostname.
+    /// The hostname `name`, in lower case, or `None` if that is not a hostname.
     pub fn new<S>(name: S) -> Option<Self>
     where
         S: Into<Cow<'static, str>>,
     {
         let name = name.into();
-        is_hostname(&name).then_some(Self(name))
+        if !is_hostname(&name) {
+            return None;
+        }
+        if name.bytes().any(|b| b.is_ascii_uppercase()) {
+            return Some(Self(name.to_ascii_lowercase().into()));
+        }
+        Some(Self(name))
     }
 
     pub fn as_str(&self) -> &str {
@@ -77,11 +83,11 @@ fn parse_port(s: &str) -> Result<u16, InvalidNetAddr> {
     s.parse().map_err(|_| InvalidNetAddr(()))
 }
 
-/// An IP literal written in one, canonical way.
-fn canonical_ip(text: &str) -> Option<IpAddr> {
-    let ip = IpAddr::from_str(text).ok()?;
-    // Ipv4Addr's Display impl conforms to RFC 5952.
-    (ip.to_string() == text && ip.to_canonical() == ip).then_some(ip)
+/// Whether `text` is the one, canonical way to write `ip`.
+fn is_canonical(ip: IpAddr, text: &str) -> bool {
+    // Ipv6Addr's Display impl conforms to RFC 5952, and an IPv4-mapped address is
+    // written as the IPv4 address it maps to.
+    ip.to_canonical() == ip && ip.to_string() == text
 }
 
 /// A network address.
@@ -93,15 +99,15 @@ fn canonical_ip(text: &str) -> Option<IpAddr> {
 /// `host:port` where host = IPv4 literal | "[" IPv6 literal "]" | hostname
 ///
 /// The port is decimal with no sign and no leading zeros. An IP literal is written the
-/// one way ([`canonical_ip`]). Brackets are for IPv6 and required, so bare `::1:8080` is
+/// one way ([`is_canonical`]). Brackets are for IPv6 and required, so bare `::1:8080` is
 /// rejected along with `[1.2.3.4]:5`, `[node.example.com]:8080` and an unclosed bracket.
-/// A hostname is a [`Hostname`].
+/// A hostname is a [`Hostname`], and is held in lower case.
 ///
 /// # Printing
 ///
 /// [`fmt::Display`] brackets an IPv6 literal, so printing and parsing are inverse:
 /// every address prints to a string that parses back to it, and every string this
-/// accepts prints back to itself.
+/// accepts prints back to itself, up to the case of a hostname.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum NetAddr {
     Inet(IpAddr, u16),
@@ -114,14 +120,13 @@ impl NetAddr {
     /// An IP literal gives [`NetAddr::Inet`] and a hostname gives [`NetAddr::Name`];
     /// anything else is an error.
     pub fn host_port(host: &str, port: u16) -> Result<Self, InvalidNetAddr> {
-        if IpAddr::from_str(host).is_ok() {
-            return canonical_ip(host)
-                .map(|ip| Self::Inet(ip, port))
-                .ok_or(InvalidNetAddr(()));
+        match IpAddr::from_str(host) {
+            Ok(ip) if is_canonical(ip, host) => Ok(Self::Inet(ip, port)),
+            Ok(_) => Err(InvalidNetAddr(())),
+            Err(_) => Hostname::new(host.to_string())
+                .map(|h| Self::Name(h, port))
+                .ok_or(InvalidNetAddr(())),
         }
-        Hostname::new(host.to_string())
-            .map(|h| Self::Name(h, port))
-            .ok_or(InvalidNetAddr(()))
     }
 
     /// The address `name:port`, where `name` is a hostname.
@@ -187,7 +192,7 @@ impl NetAddr {
             Self::Inet(IpAddr::V6(v6), _) => {
                 !(v6.is_loopback() || v6.is_unspecified() || v6.is_multicast())
             },
-            Self::Name(host, _) => !host.as_str().eq_ignore_ascii_case("localhost"),
+            Self::Name(host, _) => host.as_str() != "localhost",
         }
     }
 }
@@ -241,15 +246,16 @@ impl FromStr for NetAddr {
         if let Some(rest) = s.strip_prefix('[') {
             let i = rest.rfind("]:").ok_or(InvalidNetAddr(()))?;
             let port = parse_port(&rest[i + 2..])?;
-            if let Some(ip @ IpAddr::V6(_)) = canonical_ip(&rest[..i]) {
-                Ok(Self::Inet(ip, port))
-            } else {
-                Err(InvalidNetAddr(()))
+            let host = &rest[..i];
+            match IpAddr::from_str(host) {
+                Ok(ip @ IpAddr::V6(_)) if is_canonical(ip, host) => Ok(Self::Inet(ip, port)),
+                _ => Err(InvalidNetAddr(())),
             }
         } else {
             let (host, port) = s.rsplit_once(':').ok_or(InvalidNetAddr(()))?;
             let port = parse_port(port)?;
-            if matches!(IpAddr::from_str(host), Ok(IpAddr::V6(_))) {
+            // Only an IPv6 literal has a colon in the host, and it must be bracketed.
+            if host.contains(':') {
                 return Err(InvalidNetAddr(()));
             }
             Self::host_port(host, port)
@@ -346,7 +352,7 @@ mod tests {
         /// No hostname is an IP literal, so a `Name` never prints as an address.
         fn prop_hostname_is_not_a_literal(a: NetAddr) -> bool {
             match a {
-                NetAddr::Name(h, _) => h.as_str().parse::<IpAddr>().is_err(),
+                NetAddr::Name(h, _) => h.parse::<IpAddr>().is_err(),
                 NetAddr::Inet(..) => true,
             }
         }
@@ -371,6 +377,9 @@ mod tests {
             ("a_b.example.com:80", "a_b.example.com:80"),
             ("_svc.example.com:80", "_svc.example.com:80"),
             ("a-b.c:80", "a-b.c:80"),
+            // a hostname is lower-cased
+            ("Node.Example.COM:8080", "node.example.com:8080"),
+            ("LOCALHOST:1234", "localhost:1234"),
             (
                 "crpk232f2b1uqepj3qmg.bdnodes.net:9977",
                 "crpk232f2b1uqepj3qmg.bdnodes.net:9977",
@@ -405,7 +414,6 @@ mod tests {
             "2001:db8::1:9000",
             ":::80",
             "2001:db8:::5",
-            "::ffff:1.2.3.4:80",
             "[weird",
             "[::1",
             "[a]b:1",
@@ -495,7 +503,7 @@ mod tests {
         assert_eq!(NetAddr::from((ip, 80)), v4);
         // An IPv4-translated address is not mapped, and stays IPv6.
         let translated: NetAddr = "[::ffff:0:102:304]:80".parse().unwrap();
-        assert!(!translated.is_ip() || translated.to_string() == "[::ffff:0:102:304]:80");
+        assert_eq!(translated.to_string(), "[::ffff:0:102:304]:80");
     }
 
     #[test]
@@ -507,6 +515,26 @@ mod tests {
         // has one spelling in both directions.
         assert!("::1:8080".parse::<std::net::SocketAddr>().is_err());
         assert!("::1:8080".parse::<NetAddr>().is_err());
+    }
+
+    /// One host, one address, one string: names differing only in case are one value.
+    #[test]
+    fn hostname_case_is_folded() {
+        let lower: NetAddr = "node.example.com:8080".parse().expect("parse");
+        for s in [
+            "NODE.EXAMPLE.COM:8080",
+            "Node.Example.Com:8080",
+            "nOdE.eXaMpLe.cOm:8080",
+        ] {
+            let a: NetAddr = s.parse().unwrap_or_else(|_| panic!("parse {s}"));
+            assert_eq!(a, lower, "{s} must be the same address");
+            assert_eq!(a.to_string(), lower.to_string(), "{s} must print the same");
+        }
+        assert_eq!(
+            Hostname::new("Example.COM").expect("hostname").as_str(),
+            "example.com"
+        );
+        assert_eq!(NetAddr::named("LOCALHOST", 80).to_string(), "localhost:80");
     }
 
     #[test]
