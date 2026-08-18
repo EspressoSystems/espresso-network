@@ -941,6 +941,15 @@ impl Membership<SeqTypes> for EpochCommittees {
 
         let persistence_lock = self.fetcher.persistence.lock().await;
 
+        // Keyed by `epoch`, unlike the previous-epoch stake table stored below; not
+        // gated behind the stake table consistency check, which doesn't apply here.
+        if let Err(e) = persistence_lock
+            .store_epoch_root(epoch, block_header.clone())
+            .await
+        {
+            error!(?e, ?epoch, "`add_epoch_root`, error storing epoch root");
+        }
+
         let decided_hash = block_header.next_stake_table_hash();
 
         // we store the information from the previous epoch's in-memory committeee
@@ -1577,10 +1586,13 @@ mod tests {
     }
 
     /// Persistence stub holding stake tables for epochs 7 and 8, plus a DRB
-    /// result and an epoch root header for epoch 7 only.
+    /// result and an epoch root header for epoch 7 only. `stored_headers`
+    /// records headers written via `store_epoch_root`, independent of
+    /// `header`.
     #[derive(Debug)]
     struct MockStakeStore {
         header: Header,
+        stored_headers: std::sync::Mutex<HashMap<EpochNumber, Header>>,
     }
 
     #[async_trait::async_trait]
@@ -1604,7 +1616,22 @@ mod tests {
         }
 
         async fn load_epoch_root(&self, epoch: EpochNumber) -> anyhow::Result<Option<Header>> {
+            if let Some(header) = self.stored_headers.lock().unwrap().get(&epoch) {
+                return Ok(Some(header.clone()));
+            }
             Ok((*epoch == 7).then(|| self.header.clone()))
+        }
+
+        async fn store_epoch_root(
+            &self,
+            epoch: EpochNumber,
+            block_header: Header,
+        ) -> anyhow::Result<()> {
+            self.stored_headers
+                .lock()
+                .unwrap()
+                .insert(epoch, block_header);
+            Ok(())
         }
 
         async fn store_stake(
@@ -1666,6 +1693,7 @@ mod tests {
     async fn restore_stake_table_from_persistence() {
         let store = MockStakeStore {
             header: build_epoch_root_header().await,
+            stored_headers: Default::default(),
         };
         let fetcher = Fetcher::new(
             Arc::new(crate::mock::MockStateCatchup::default()),
@@ -2173,6 +2201,64 @@ mod tests {
             round += 1;
         }
         assert!(round > 0, "test loop never executed a round");
+    }
+
+    // `add_epoch_root` is the only path by which a V0_6-native node (which
+    // never calls the legacy `decide_epoch_root`/`Storage::store_epoch_root`)
+    // persists the epoch root header. Regression test for that header being
+    // silently dropped.
+    #[tokio::test]
+    async fn add_epoch_root_persists_epoch_root_header() {
+        let header = build_epoch_root_header().await;
+        let epoch_height = 100u64;
+        let epoch = EpochNumber::new(epoch_from_block_number(header.height(), epoch_height) + 2);
+
+        let store = MockStakeStore {
+            header: header.clone(),
+            stored_headers: Default::default(),
+        };
+        let fetcher = Fetcher::new(
+            Arc::new(crate::mock::MockStateCatchup::default()),
+            Arc::new(AsyncMutex::new(store)),
+            crate::L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
+                .expect("Failed to create L1 client"),
+            crate::ChainConfig::default(),
+        );
+        let committees = build_committees_with_fetcher(4, fetcher);
+
+        // Prefill so `add_epoch_root` reuses the cached validators and skips the L1 fetch.
+        {
+            let mut inner = committees.inner.write();
+            let template = inner
+                .epoch_committee(EpochNumber::genesis())
+                .expect("genesis committee exists");
+            let prefilled = EpochCommittee {
+                block_reward: Some(RewardAmount::default()),
+                stake_table_hash: Some(StakeTableState::default().commit()),
+                header: None,
+                eligible_leaders: template.eligible_leaders.clone(),
+                stake_table: template.stake_table.clone(),
+                validators: template.validators.clone(),
+                address_mapping: template.address_mapping.clone(),
+            };
+            inner.put_epoch_committee(epoch, Arc::new(prefilled));
+        }
+
+        let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(
+            committees.clone(),
+            *committees.epoch_height(),
+            &hotshot_example_types::storage_types::TestStorage::default(),
+        );
+        coordinator
+            .add_epoch_root(header.clone())
+            .await
+            .expect("add_epoch_root should succeed for the prefilled state");
+
+        let persistence = committees.fetcher.persistence.lock().await;
+        assert_eq!(
+            persistence.load_epoch_root(epoch).await.unwrap(),
+            Some(header)
+        );
     }
 
     // `add_da_committee` updates the per-epoch `da_committees` map and

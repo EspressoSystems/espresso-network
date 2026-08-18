@@ -528,6 +528,13 @@ pub trait MembershipPersistence: Send + Sync + 'static {
     /// Load the epoch root block header for `epoch`.
     async fn load_epoch_root(&self, epoch: EpochNumber) -> anyhow::Result<Option<Header>>;
 
+    /// Store the epoch root block header for `epoch`.
+    async fn store_epoch_root(
+        &self,
+        epoch: EpochNumber,
+        block_header: Header,
+    ) -> anyhow::Result<()>;
+
     /// Store stake table at `epoch` in the persistence layer
     async fn store_stake(
         &self,
@@ -1085,11 +1092,6 @@ pub trait SequencerPersistence:
     ) -> anyhow::Result<()>;
     async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()>;
     async fn load_drb_input(&self, epoch: u64) -> anyhow::Result<DrbInput>;
-    async fn store_epoch_root(
-        &self,
-        epoch: EpochNumber,
-        block_header: <SeqTypes as NodeType>::BlockHeader,
-    ) -> anyhow::Result<()>;
     async fn add_state_cert(
         &self,
         state_cert: LightClientStateUpdateCertificateV2<SeqTypes>,

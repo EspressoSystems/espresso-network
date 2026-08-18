@@ -2193,29 +2193,6 @@ impl SequencerPersistence for Persistence {
         .await
     }
 
-    async fn store_epoch_root(
-        &self,
-        epoch: EpochNumber,
-        block_header: <SeqTypes as NodeType>::BlockHeader,
-    ) -> anyhow::Result<()> {
-        let epoch_i64 = epoch.u64() as i64;
-        let block_header_bytes =
-            bincode::serialize(&block_header).context("serializing block header")?;
-
-        serializable_retry!(self, || async {
-            let mut tx = self.db.write().await?;
-            tx.upsert(
-                "epoch_drb_and_root",
-                ["epoch", "block_header"],
-                ["epoch"],
-                [(epoch_i64, block_header_bytes.clone())],
-            )
-            .await?;
-            tx.commit().await
-        })
-        .await
-    }
-
     async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()> {
         if let Ok(loaded_drb_input) = self.load_drb_input(drb_input.epoch).await {
             if loaded_drb_input.difficulty_level != drb_input.difficulty_level {
@@ -2547,6 +2524,29 @@ impl MembershipPersistence for Persistence {
                 bincode::deserialize(&bytes).context("deserializing block header")
             })
             .transpose()
+    }
+
+    async fn store_epoch_root(
+        &self,
+        epoch: EpochNumber,
+        block_header: Header,
+    ) -> anyhow::Result<()> {
+        let epoch_i64 = epoch.u64() as i64;
+        let block_header_bytes =
+            bincode::serialize(&block_header).context("serializing block header")?;
+
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "epoch_drb_and_root",
+                ["epoch", "block_header"],
+                ["epoch"],
+                [(epoch_i64, block_header_bytes.clone())],
+            )
+            .await?;
+            tx.commit().await
+        })
+        .await
     }
 
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
