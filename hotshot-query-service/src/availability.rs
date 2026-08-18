@@ -36,6 +36,7 @@ use serde::{Deserialize, Serialize};
 pub(crate) mod data_source;
 mod fetch;
 pub(crate) mod query_data;
+pub mod router;
 pub use data_source::*;
 pub use fetch::Fetch;
 pub use hotshot_query_service_types::availability::Error;
@@ -109,31 +110,11 @@ mod test {
         data_source::{VersionedDataSource, storage::AvailabilityStorage},
         status::StatusDataSource,
         testing::{
-            consensus::{MockDataSource, MockNetwork, MockSqlDataSource},
+            consensus::{MockNetwork, MockSqlDataSource},
             mocks::MockTypes,
         },
         types::HeightIndexed,
     };
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_api_epochs() {
-        // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource>::init().await;
-        let epoch_height = network.epoch_height();
-        network.start().await;
-
-        // Watch consensus progress through several epoch boundaries via the data source.
-        let mut headers = network.data_source().subscribe_headers(0).await.enumerate();
-        loop {
-            let (i, header) = headers.next().await.unwrap();
-            assert_eq!(header.height(), i as u64);
-            if header.height() >= 3 * epoch_height {
-                break;
-            }
-        }
-
-        network.shut_down().await;
-    }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_header_endpoint() {

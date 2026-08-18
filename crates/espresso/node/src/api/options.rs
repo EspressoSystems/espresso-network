@@ -7,11 +7,12 @@ use anyhow::{Context, bail};
 use clap::Parser;
 use espresso_telemetry as telemetry;
 use espresso_types::{
-    PubKey,
+    PubKey, SeqTypes,
     v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, SequencerPersistence},
 };
 use futures::{channel::oneshot, future::BoxFuture};
 use hotshot_query_service::{
+    availability::{Options as AvailabilityOptions, router::availability_router},
     data_source::{ExtensibleDataSource, MetricsDataSource},
     status::{HasMetrics, UpdateStatusData},
 };
@@ -311,6 +312,10 @@ impl Options {
 
         let port = self.http.port;
         let ds_for_axum = ds.clone();
+        // Built here because `espresso-api` cannot (it is agnostic of the node types); the
+        // default `Options` are the limits this API has always enforced.
+        let availability_base =
+            availability_router::<SeqTypes, _>(&AvailabilityOptions::default(), (*ds).clone());
         let env_vars = get_public_env_vars().unwrap_or_default();
         let node_cfg = self.public_node_config.as_deref().cloned();
         let modules = espresso_api::OptionalModules {
@@ -324,7 +329,14 @@ impl Options {
             let state = NodeApiStateImpl::new(ds_for_axum)
                 .with_env_vars(env_vars)
                 .with_public_node_config(node_cfg);
-            if let Err(e) = espresso_api::serve_axum_fs(port, state, modules, max_connections).await
+            if let Err(e) = espresso_api::serve_axum_fs(
+                port,
+                state,
+                availability_base,
+                modules,
+                max_connections,
+            )
+            .await
             {
                 tracing::error!("Axum server error: {}", e);
             }
@@ -392,6 +404,10 @@ impl Options {
 
         let port = self.http.port;
         let ds_for_axum = ds.clone();
+        // Built here because `espresso-api` cannot (it is agnostic of the node types); the
+        // default `Options` are the limits this API has always enforced.
+        let availability_base =
+            availability_router::<SeqTypes, _>(&AvailabilityOptions::default(), (*ds).clone());
         let env_vars = get_public_env_vars().unwrap_or_default();
         let node_cfg = self.public_node_config.as_deref().cloned();
         let modules = espresso_api::OptionalModules {
@@ -407,7 +423,10 @@ impl Options {
             let state = NodeApiStateImpl::new(ds_for_axum)
                 .with_env_vars(env_vars)
                 .with_public_node_config(node_cfg);
-            if let Err(e) = espresso_api::serve_axum(port, state, modules, max_connections).await {
+            if let Err(e) =
+                espresso_api::serve_axum(port, state, availability_base, modules, max_connections)
+                    .await
+            {
                 tracing::error!("Axum server error: {}", e);
             }
             anyhow::Ok(())

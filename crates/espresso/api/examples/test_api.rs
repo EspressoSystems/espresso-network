@@ -231,132 +231,6 @@ impl v1::AvailabilityApi for TestApi {
     }
 }
 
-// Stub HotShotAvailabilityApi for the example — returns empty/unit data.
-#[async_trait]
-impl v1::HotShotAvailabilityApi for TestApi {
-    type Leaf = serde_json::Value;
-    type Block = serde_json::Value;
-    type Header = serde_json::Value;
-    type Payload = serde_json::Value;
-    type VidCommon = serde_json::Value;
-    type Transaction = serde_json::Value;
-    type TransactionWithProof = serde_json::Value;
-    type BlockSummary = serde_json::Value;
-    type Limits = serde_json::Value;
-    type Cert2 = serde_json::Value;
-
-    async fn get_leaf(&self, _id: v1::LeafId) -> Result<Self::Leaf> {
-        Ok(serde_json::json!({}))
-    }
-    async fn get_leaf_range(&self, _from: usize, _until: usize) -> Result<Vec<Self::Leaf>> {
-        Ok(vec![])
-    }
-    async fn get_header(&self, _id: v1::BlockId) -> Result<Self::Header> {
-        Ok(serde_json::json!({}))
-    }
-    async fn get_header_range(&self, _from: usize, _until: usize) -> Result<Vec<Self::Header>> {
-        Ok(vec![])
-    }
-    async fn get_block(&self, _id: v1::BlockId) -> Result<Self::Block> {
-        Ok(serde_json::json!({}))
-    }
-    async fn get_block_range(&self, _from: usize, _until: usize) -> Result<Vec<Self::Block>> {
-        Ok(vec![])
-    }
-    async fn get_payload(&self, _id: v1::PayloadId) -> Result<Self::Payload> {
-        Ok(serde_json::json!({}))
-    }
-    async fn get_payload_range(&self, _from: usize, _until: usize) -> Result<Vec<Self::Payload>> {
-        Ok(vec![])
-    }
-    async fn get_vid_common(&self, _id: v1::BlockId) -> Result<Self::VidCommon> {
-        Ok(serde_json::json!({}))
-    }
-    async fn get_vid_common_range(
-        &self,
-        _from: usize,
-        _until: usize,
-    ) -> Result<Vec<Self::VidCommon>> {
-        Ok(vec![])
-    }
-    async fn get_transaction_by_position(
-        &self,
-        _height: u64,
-        _index: u64,
-    ) -> Result<Self::Transaction> {
-        Ok(serde_json::json!({}))
-    }
-    async fn get_transaction_by_hash(&self, _hash: String) -> Result<Self::Transaction> {
-        Ok(serde_json::json!({}))
-    }
-    async fn get_transaction_proof_by_position(
-        &self,
-        _height: u64,
-        _index: u64,
-    ) -> Result<Self::TransactionWithProof> {
-        Ok(serde_json::json!({}))
-    }
-    async fn get_transaction_proof_by_hash(
-        &self,
-        _hash: String,
-    ) -> Result<Self::TransactionWithProof> {
-        Ok(serde_json::json!({}))
-    }
-    async fn get_block_summary(&self, _height: usize) -> Result<Self::BlockSummary> {
-        Ok(serde_json::json!({}))
-    }
-    async fn get_block_summary_range(
-        &self,
-        _from: usize,
-        _until: usize,
-    ) -> Result<Vec<Self::BlockSummary>> {
-        Ok(vec![])
-    }
-    async fn get_limits(&self) -> Result<Self::Limits> {
-        Ok(serde_json::json!({"small_object_range_limit": 500, "large_object_range_limit": 100}))
-    }
-    async fn get_cert2(&self, _height: u64) -> Result<Option<Self::Cert2>> {
-        Ok(None)
-    }
-    async fn stream_leaves(
-        &self,
-        _from: usize,
-    ) -> Result<futures::stream::BoxStream<'static, Self::Leaf>> {
-        Ok(Box::pin(futures::stream::empty()))
-    }
-    async fn stream_headers(
-        &self,
-        _from: usize,
-    ) -> Result<futures::stream::BoxStream<'static, Self::Header>> {
-        Ok(Box::pin(futures::stream::empty()))
-    }
-    async fn stream_blocks(
-        &self,
-        _from: usize,
-    ) -> Result<futures::stream::BoxStream<'static, Self::Block>> {
-        Ok(Box::pin(futures::stream::empty()))
-    }
-    async fn stream_payloads(
-        &self,
-        _from: usize,
-    ) -> Result<futures::stream::BoxStream<'static, Self::Payload>> {
-        Ok(Box::pin(futures::stream::empty()))
-    }
-    async fn stream_vid_common(
-        &self,
-        _from: usize,
-    ) -> Result<futures::stream::BoxStream<'static, Self::VidCommon>> {
-        Ok(Box::pin(futures::stream::empty()))
-    }
-    async fn stream_transactions(
-        &self,
-        _from: usize,
-        _namespace: Option<u32>,
-    ) -> Result<futures::stream::BoxStream<'static, Self::Transaction>> {
-        Ok(Box::pin(futures::stream::empty()))
-    }
-}
-
 #[async_trait]
 impl v1::BlockStateApi for TestApi {
     type MerkleProof = serde_json::Value;
@@ -1157,7 +1031,16 @@ async fn main() -> Result<()> {
         explorer: true,
         light_client: true,
     };
-    espresso_api::serve_axum(API_PORT, state, modules, None).await?;
+    // The example has no hotshot-query-service data source, so the base availability routes
+    // are left unmounted; only Espresso's availability extensions are served.
+    espresso_api::serve_axum(
+        API_PORT,
+        state,
+        espresso_api::ApiRouter::new(),
+        modules,
+        None,
+    )
+    .await?;
 
     Ok(())
 }

@@ -72,6 +72,14 @@ pub mod v1 {
     pub const REWARD_STATE_V2_PATH_BY_COMMIT_ROUTE: &str =
         "/v1/reward-state-v2/commit/{commit}/{key}";
 
+    /// Mount point of `hotshot_query_service::availability::router`, which declares the base
+    /// availability routes relative to this prefix. The two constants below spell out sample
+    /// absolute paths for the mount tests; `STREAM_BLOCKS_ROUTE` further down backs a client
+    /// path builder.
+    pub const AVAILABILITY_PREFIX: &str = "/v1/availability";
+    pub const LEAF_BY_HEIGHT_ROUTE: &str = "/v1/availability/leaf/{height}";
+    pub const LIMITS_ROUTE: &str = "/v1/availability/limits";
+
     pub const NAMESPACE_PROOF_BY_HEIGHT_ROUTE: &str =
         "/v1/availability/block/{height}/namespace/{namespace}";
     pub const NAMESPACE_PROOF_BY_HASH_ROUTE: &str =
@@ -86,59 +94,7 @@ pub mod v1 {
     pub const STATE_CERT_V1_ROUTE: &str = "/v1/availability/state-cert/{epoch}";
     pub const STATE_CERT_V2_ROUTE: &str = "/v1/availability/state-cert-v2/{epoch}";
 
-    pub const LEAF_BY_HEIGHT_ROUTE: &str = "/v1/availability/leaf/{height}";
-    pub const LEAF_BY_HASH_ROUTE: &str = "/v1/availability/leaf/hash/{hash}";
-    pub const LEAF_RANGE_ROUTE: &str = "/v1/availability/leaf/{from}/{until}";
-
-    pub const HEADER_BY_HEIGHT_ROUTE: &str = "/v1/availability/header/{height}";
-    pub const HEADER_BY_HASH_ROUTE: &str = "/v1/availability/header/hash/{hash}";
-    pub const HEADER_BY_PAYLOAD_HASH_ROUTE: &str =
-        "/v1/availability/header/payload-hash/{payload_hash}";
-    pub const HEADER_RANGE_ROUTE: &str = "/v1/availability/header/{from}/{until}";
-
-    pub const BLOCK_BY_HEIGHT_ROUTE: &str = "/v1/availability/block/{height}";
-    pub const BLOCK_BY_HASH_ROUTE: &str = "/v1/availability/block/hash/{hash}";
-    pub const BLOCK_BY_PAYLOAD_HASH_ROUTE: &str =
-        "/v1/availability/block/payload-hash/{payload_hash}";
-    pub const BLOCK_RANGE_ROUTE: &str = "/v1/availability/block/{from}/{until}";
-
-    pub const PAYLOAD_BY_HEIGHT_ROUTE: &str = "/v1/availability/payload/{height}";
-    pub const PAYLOAD_BY_HASH_ROUTE: &str = "/v1/availability/payload/hash/{hash}";
-    pub const PAYLOAD_BY_BLOCK_HASH_ROUTE: &str =
-        "/v1/availability/payload/block-hash/{block_hash}";
-    pub const PAYLOAD_RANGE_ROUTE: &str = "/v1/availability/payload/{from}/{until}";
-
-    pub const VID_COMMON_BY_HEIGHT_ROUTE: &str = "/v1/availability/vid/common/{height}";
-    pub const VID_COMMON_BY_HASH_ROUTE: &str = "/v1/availability/vid/common/hash/{hash}";
-    pub const VID_COMMON_BY_PAYLOAD_HASH_ROUTE: &str =
-        "/v1/availability/vid/common/payload-hash/{payload_hash}";
-    pub const VID_COMMON_RANGE_ROUTE: &str = "/v1/availability/vid/common/{from}/{until}";
-
-    pub const TRANSACTION_BY_POSITION_NOPROOF_ROUTE: &str =
-        "/v1/availability/transaction/{height}/{index}/noproof";
-    pub const TRANSACTION_BY_HASH_NOPROOF_ROUTE: &str =
-        "/v1/availability/transaction/hash/{hash}/noproof";
-    pub const TRANSACTION_PROOF_BY_POSITION_ROUTE: &str =
-        "/v1/availability/transaction/{height}/{index}/proof";
-    pub const TRANSACTION_PROOF_BY_HASH_ROUTE: &str =
-        "/v1/availability/transaction/hash/{hash}/proof";
-    pub const TRANSACTION_BY_POSITION_ROUTE: &str = "/v1/availability/transaction/{height}/{index}";
-    pub const TRANSACTION_BY_HASH_ROUTE: &str = "/v1/availability/transaction/hash/{hash}";
-
-    pub const BLOCK_SUMMARY_BY_HEIGHT_ROUTE: &str = "/v1/availability/block/summary/{height}";
-    pub const BLOCK_SUMMARY_RANGE_ROUTE: &str = "/v1/availability/block/summaries/{from}/{until}";
-
-    pub const LIMITS_ROUTE: &str = "/v1/availability/limits";
-    pub const CERT2_BY_HEIGHT_ROUTE: &str = "/v1/availability/cert2/{height}";
-
-    pub const STREAM_LEAVES_ROUTE: &str = "/v1/availability/stream/leaves/{height}";
-    pub const STREAM_HEADERS_ROUTE: &str = "/v1/availability/stream/headers/{height}";
     pub const STREAM_BLOCKS_ROUTE: &str = "/v1/availability/stream/blocks/{height}";
-    pub const STREAM_PAYLOADS_ROUTE: &str = "/v1/availability/stream/payloads/{height}";
-    pub const STREAM_VID_COMMON_ROUTE: &str = "/v1/availability/stream/vid/common/{height}";
-    pub const STREAM_TRANSACTIONS_ROUTE: &str = "/v1/availability/stream/transactions/{height}";
-    pub const STREAM_TRANSACTIONS_NS_ROUTE: &str =
-        "/v1/availability/stream/transactions/{height}/namespace/{namespace}";
 
     pub const STREAM_NAMESPACE_PROOFS_ROUTE: &str =
         "/v1/availability/stream/blocks/{height}/namespace/{namespace}";
@@ -453,107 +409,8 @@ pub mod v1 {
     path_fn!(state_cert_v1, STATE_CERT_V1_ROUTE, epoch);
     path_fn!(state_cert_v2, STATE_CERT_V2_ROUTE, epoch);
 
-    // Availability — leaves
-    path_fn!(leaf_by_height, LEAF_BY_HEIGHT_ROUTE, height);
-    path_fn!(leaf_by_hash, LEAF_BY_HASH_ROUTE, hash);
-    path_fn!(leaf_range, LEAF_RANGE_ROUTE, from, until);
-
-    // Availability — headers
-    path_fn!(header_by_height, HEADER_BY_HEIGHT_ROUTE, height);
-    path_fn!(header_by_hash, HEADER_BY_HASH_ROUTE, hash);
-    path_fn!(
-        header_by_payload_hash,
-        HEADER_BY_PAYLOAD_HASH_ROUTE,
-        payload_hash
-    );
-    path_fn!(header_range, HEADER_RANGE_ROUTE, from, until);
-
-    // Availability — blocks
-    path_fn!(block_by_height, BLOCK_BY_HEIGHT_ROUTE, height);
-    path_fn!(block_by_hash, BLOCK_BY_HASH_ROUTE, hash);
-    path_fn!(
-        block_by_payload_hash,
-        BLOCK_BY_PAYLOAD_HASH_ROUTE,
-        payload_hash
-    );
-    path_fn!(block_range, BLOCK_RANGE_ROUTE, from, until);
-
-    // Availability — payloads
-    path_fn!(payload_by_height, PAYLOAD_BY_HEIGHT_ROUTE, height);
-    path_fn!(payload_by_hash, PAYLOAD_BY_HASH_ROUTE, hash);
-    path_fn!(
-        payload_by_block_hash,
-        PAYLOAD_BY_BLOCK_HASH_ROUTE,
-        block_hash
-    );
-    path_fn!(payload_range, PAYLOAD_RANGE_ROUTE, from, until);
-
-    // Availability — VID common
-    path_fn!(vid_common_by_height, VID_COMMON_BY_HEIGHT_ROUTE, height);
-    path_fn!(vid_common_by_hash, VID_COMMON_BY_HASH_ROUTE, hash);
-    path_fn!(
-        vid_common_by_payload_hash,
-        VID_COMMON_BY_PAYLOAD_HASH_ROUTE,
-        payload_hash
-    );
-    path_fn!(vid_common_range, VID_COMMON_RANGE_ROUTE, from, until);
-
-    // Availability — transactions
-    path_fn!(
-        transaction_by_position_noproof,
-        TRANSACTION_BY_POSITION_NOPROOF_ROUTE,
-        height,
-        index
-    );
-    path_fn!(
-        transaction_by_hash_noproof,
-        TRANSACTION_BY_HASH_NOPROOF_ROUTE,
-        hash
-    );
-    path_fn!(
-        transaction_proof_by_position,
-        TRANSACTION_PROOF_BY_POSITION_ROUTE,
-        height,
-        index
-    );
-    path_fn!(
-        transaction_proof_by_hash,
-        TRANSACTION_PROOF_BY_HASH_ROUTE,
-        hash
-    );
-    path_fn!(
-        transaction_by_position,
-        TRANSACTION_BY_POSITION_ROUTE,
-        height,
-        index
-    );
-    path_fn!(transaction_by_hash, TRANSACTION_BY_HASH_ROUTE, hash);
-
-    // Availability — block summaries
-    path_fn!(
-        block_summary_by_height,
-        BLOCK_SUMMARY_BY_HEIGHT_ROUTE,
-        height
-    );
-    path_fn!(block_summary_range, BLOCK_SUMMARY_RANGE_ROUTE, from, until);
-
-    // Availability — misc
-    path_fn!(limits, LIMITS_ROUTE);
-    path_fn!(cert2_by_height, CERT2_BY_HEIGHT_ROUTE, height);
-
     // Availability — streams
-    path_fn!(stream_leaves, STREAM_LEAVES_ROUTE, height);
-    path_fn!(stream_headers, STREAM_HEADERS_ROUTE, height);
     path_fn!(stream_blocks, STREAM_BLOCKS_ROUTE, height);
-    path_fn!(stream_payloads, STREAM_PAYLOADS_ROUTE, height);
-    path_fn!(stream_vid_common, STREAM_VID_COMMON_ROUTE, height);
-    path_fn!(stream_transactions, STREAM_TRANSACTIONS_ROUTE, height);
-    path_fn!(
-        stream_transactions_ns,
-        STREAM_TRANSACTIONS_NS_ROUTE,
-        height,
-        namespace
-    );
     path_fn!(
         stream_namespace_proofs,
         STREAM_NAMESPACE_PROOFS_ROUTE,

@@ -6587,6 +6587,7 @@ dependencies = [
 name = "hotshot-query-service"
 version = "0.1.76"
 dependencies = [
+ "aide",
  "alloy",
  "anyhow",
  "ark-serialize 0.5.0",
@@ -8679,15 +8680,12 @@ dependencies = [
  "disco-types",
  "espresso-node",
  "espresso-types",
- "futures",
  "hotshot-query-service",
  "hotshot-types",
  "http-client 0.1.0",
  "http-wire",
  "light-client",
  "log-panics",
- "serde",
- "serde_json",
  "tokio",
  "toml",
  "tracing",

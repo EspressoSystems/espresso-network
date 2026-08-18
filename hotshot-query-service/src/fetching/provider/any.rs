@@ -307,11 +307,11 @@ mod test {
     use futures::stream::StreamExt;
     use vbs::version::StaticVersionType;
 
-    use super::*;
+    use super::{super::query_service::test::serve_availability, *};
     use crate::{
         availability::{AvailabilityDataSource, UpdateAvailabilityData},
         data_source::storage::sql::testing::TmpDb,
-        fetching::provider::{NoFetching, TrustedQueryServiceProvider, test_fixtures},
+        fetching::provider::{NoFetching, TrustedQueryServiceProvider},
         testing::{
             consensus::{MockDataSource, MockNetwork},
             mocks::{MockBase, MockTypes},
@@ -327,7 +327,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let (port, _server) = test_fixtures::serve_availability(network.data_source()).await;
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let db = TmpDb::init().await;

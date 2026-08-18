@@ -52,6 +52,7 @@ testing = [
 ]
 
 [dependencies]
+aide = { workspace = true }
 alloy = { workspace = true }
 anyhow = { workspace = true }
 ark-serialize = { workspace = true }
@@ -60,6 +61,7 @@ async-trait = { workspace = true }
 
 # Dependencies enabled by feature "file-system-data-source".
 atomic_store = { workspace = true, optional = true }
+axum = { workspace = true }
 backoff = { workspace = true }
 bincode = { workspace = true }
 chrono = { workspace = true }
@@ -67,6 +69,7 @@ committable = { workspace = true }
 custom_debug = { workspace = true }
 derivative = { workspace = true }
 derive_more = { workspace = true }
+disco-types = { workspace = true }
 either = { workspace = true }
 
 # Dependencies enabled by feature "testing".
@@ -80,6 +83,7 @@ hotshot-query-service-types = { workspace = true, features = ["sqlx", "web"] }
 hotshot-testing = { workspace = true }
 hotshot-types = { workspace = true }
 http-client = { workspace = true }
+http-wire = { workspace = true, features = ["server"] }
 
 # Dependencies enabled by feature "sql-data-source".
 include_dir = { workspace = true, optional = true }
@@ -122,12 +126,9 @@ versions = { workspace = true }
 backtrace-on-stack-overflow = { version = "0.3", optional = true }
 
 [dev-dependencies]
-axum = { workspace = true }
-disco-types = { workspace = true }
 generic-array = "0.14"
 # Enable our own `testing` feature when building tests.
 hotshot-query-service = { path = ".", features = ["testing"] }
-http-wire = { workspace = true, features = ["server"] }
 test-log = { workspace = true }
 
 [lints]

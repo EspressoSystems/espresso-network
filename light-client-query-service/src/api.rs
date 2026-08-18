@@ -1,85 +1,43 @@
-//! Axum port of the `availability` and `node` API modules that this service used to serve via
-//! `hotshot_query_service::{availability, node}::define_api` on a tide-disco `App`.
+//! Axum port of the `node` API module that this service used to serve via
+//! `hotshot_query_service::node::define_api` on a tide-disco `App`, plus the `availability`
+//! module served by `hotshot_query_service`'s own router.
 //!
-//! Route paths, status codes and the wire error type were taken directly from the legacy
-//! `hotshot-query-service` handler bodies (deleted with tide-disco) so
-//! that clients built against the old tide-disco server keep working unmodified.
+//! Route paths, status codes and the wire error type are all taken directly from
+//! `hotshot-query-service` (see `node.rs` there and its handler bodies) so that clients built
+//! against the old tide-disco server keep working unmodified.
 
-use std::{ops::Bound, time::Duration};
+use std::ops::Bound;
 
 use axum::{
     Router,
-    extract::{Path, State, ws::WebSocketUpgrade},
+    extract::{Path, State},
     http::HeaderMap,
     response::Response,
     routing::get,
 };
 use espresso_node::api::sql::DataSource;
 use espresso_types::SeqTypes;
-use futures::{StreamExt as _, TryStreamExt as _, stream::BoxStream};
 use hotshot_query_service::{
     Error as ApiError, Header,
-    availability::{
-        self, AvailabilityDataSource as _, BlockHash, BlockId, BlockQueryData,
-        BlockSummaryQueryData, BlockWithTransaction, LeafHash, LeafId, LeafQueryData,
-        Limits as AvailabilityLimits, PayloadQueryData, QueryableHeader as _,
-        QueryablePayload as _, TransactionHash, TransactionQueryData,
-        TransactionWithProofQueryData, VidCommonQueryData,
-    },
+    availability::{self, BlockHash, BlockId, router::availability_router},
     node::{self, Limits as NodeLimits, NodeDataSource as _, WindowStart},
-    types::HeightIndexed as _,
 };
 use hotshot_types::data::VidCommitment;
-use http_wire::{self as wire, ContentType, cors_layer, drive_ws_stream, healthcheck_response};
-use serde::Serialize;
+use http_wire::{self as wire, cors_layer, healthcheck_response};
 
-// Timeout and range limits, read from `hotshot_query_service`'s `Options` (their only declaration)
-// so a dependency bump that changes the defaults changes this service too. These are the values
-// its tide-disco setup used.
-fn fetch_timeout() -> Duration {
-    hotshot_query_service::availability::Options::default().fetch_timeout
-}
-
-fn small_object_range_limit() -> usize {
-    hotshot_query_service::availability::Options::default().small_object_range_limit
-}
-
-fn large_object_range_limit() -> usize {
-    hotshot_query_service::availability::Options::default().large_object_range_limit
-}
-
+// Read from `hotshot_query_service`'s `Options` (their only declaration) so a dependency bump
+// that changes the default changes this service too.
 fn window_limit() -> usize {
     hotshot_query_service::node::Options::default().window_limit
 }
 
-// Both helpers serve `ApiError` as the error envelope: it is `hotshot_query_service::Error`, the
-// exact type the old tide-disco `App` used, so its status mapping and its wire shape (externally
-// tagged enum) match byte-for-byte.
-fn encode_ok<T: Serialize>(headers: &HeaderMap, value: T) -> Response {
-    wire::encode_ok::<ApiError, _>(headers, value)
-}
-
-fn respond<T: Serialize>(headers: &HeaderMap, result: Result<T, ApiError>) -> Response {
-    wire::respond::<ApiError, _>(headers, result)
-}
+// The handlers below serve `ApiError` as the error envelope: it is
+// `hotshot_query_service::Error`, the exact type the old tide-disco `App` used, so its status
+// mapping and its wire shape (externally tagged enum) match byte-for-byte.
 
 /// Parses a path parameter the way tide-disco's `TaggedBase64`/`Integer` param types did,
 /// reporting failures the same way tide-disco's own request-parsing errors are surfaced: as a
 /// 400 with a descriptive message.
-fn parse_availability_param<T: std::str::FromStr>(
-    value: &str,
-    field: &str,
-) -> Result<T, availability::Error>
-where
-    T::Err: std::fmt::Display,
-{
-    value.parse().map_err(|e| availability::Error::Custom {
-        message: format!("invalid {field}: {e}"),
-        status: disco_types::status::StatusCode::BAD_REQUEST,
-    })
-}
-
-/// Same as [`parse_availability_param`], for handlers in the `node` module.
 fn parse_node_param<T: std::str::FromStr>(value: &str, field: &str) -> Result<T, node::Error>
 where
     T::Err: std::fmt::Display,
@@ -90,756 +48,8 @@ where
     })
 }
 
-fn enforce_range_limit(from: usize, until: usize, limit: usize) -> Result<(), availability::Error> {
-    if until.saturating_sub(from) > limit {
-        return Err(availability::Error::RangeLimit { from, until, limit });
-    }
-    Ok(())
-}
-
 async fn healthcheck(headers: HeaderMap) -> Response {
     healthcheck_response(&headers)
-}
-
-async fn fetch_leaf(
-    ds: &DataSource,
-    id: LeafId<SeqTypes>,
-) -> Result<LeafQueryData<SeqTypes>, availability::Error> {
-    ds.get_leaf(id)
-        .await
-        .with_timeout(fetch_timeout())
-        .await
-        .ok_or_else(|| availability::Error::FetchLeaf {
-            resource: id.to_string(),
-        })
-}
-
-async fn fetch_leaf_range(
-    ds: &DataSource,
-    from: usize,
-    until: usize,
-) -> Result<Vec<LeafQueryData<SeqTypes>>, availability::Error> {
-    enforce_range_limit(from, until, small_object_range_limit())?;
-    ds.get_leaf_range(from..until)
-        .await
-        .enumerate()
-        .then(|(index, fetch)| async move {
-            fetch.with_timeout(fetch_timeout()).await.ok_or_else(|| {
-                availability::Error::FetchLeaf {
-                    resource: (index + from).to_string(),
-                }
-            })
-        })
-        .try_collect()
-        .await
-}
-
-async fn fetch_header(
-    ds: &DataSource,
-    id: BlockId<SeqTypes>,
-) -> Result<Header<SeqTypes>, availability::Error> {
-    ds.get_header(id)
-        .await
-        .with_timeout(fetch_timeout())
-        .await
-        .ok_or_else(|| availability::Error::FetchHeader {
-            resource: id.to_string(),
-        })
-}
-
-async fn fetch_header_range(
-    ds: &DataSource,
-    from: usize,
-    until: usize,
-) -> Result<Vec<Header<SeqTypes>>, availability::Error> {
-    enforce_range_limit(from, until, large_object_range_limit())?;
-    ds.get_header_range(from..until)
-        .await
-        .enumerate()
-        .then(|(index, fetch)| async move {
-            fetch.with_timeout(fetch_timeout()).await.ok_or_else(|| {
-                availability::Error::FetchHeader {
-                    resource: (index + from).to_string(),
-                }
-            })
-        })
-        .try_collect()
-        .await
-}
-
-async fn fetch_block(
-    ds: &DataSource,
-    id: BlockId<SeqTypes>,
-) -> Result<BlockQueryData<SeqTypes>, availability::Error> {
-    ds.get_block(id)
-        .await
-        .with_timeout(fetch_timeout())
-        .await
-        .ok_or_else(|| availability::Error::FetchBlock {
-            resource: id.to_string(),
-        })
-}
-
-async fn fetch_block_range(
-    ds: &DataSource,
-    from: usize,
-    until: usize,
-) -> Result<Vec<BlockQueryData<SeqTypes>>, availability::Error> {
-    enforce_range_limit(from, until, large_object_range_limit())?;
-    ds.get_block_range(from..until)
-        .await
-        .enumerate()
-        .then(|(index, fetch)| async move {
-            fetch.with_timeout(fetch_timeout()).await.ok_or_else(|| {
-                availability::Error::FetchBlock {
-                    resource: (index + from).to_string(),
-                }
-            })
-        })
-        .try_collect()
-        .await
-}
-
-async fn fetch_payload(
-    ds: &DataSource,
-    id: BlockId<SeqTypes>,
-) -> Result<PayloadQueryData<SeqTypes>, availability::Error> {
-    // Matches tide: payloads are keyed by `BlockId` and report `FetchBlock` on a miss, there is
-    // no separate `FetchPayload` variant.
-    ds.get_payload(id)
-        .await
-        .with_timeout(fetch_timeout())
-        .await
-        .ok_or_else(|| availability::Error::FetchBlock {
-            resource: id.to_string(),
-        })
-}
-
-async fn fetch_payload_range(
-    ds: &DataSource,
-    from: usize,
-    until: usize,
-) -> Result<Vec<PayloadQueryData<SeqTypes>>, availability::Error> {
-    enforce_range_limit(from, until, large_object_range_limit())?;
-    ds.get_payload_range(from..until)
-        .await
-        .enumerate()
-        .then(|(index, fetch)| async move {
-            fetch.with_timeout(fetch_timeout()).await.ok_or_else(|| {
-                availability::Error::FetchBlock {
-                    resource: (index + from).to_string(),
-                }
-            })
-        })
-        .try_collect()
-        .await
-}
-
-async fn fetch_vid_common(
-    ds: &DataSource,
-    id: BlockId<SeqTypes>,
-) -> Result<VidCommonQueryData<SeqTypes>, availability::Error> {
-    ds.get_vid_common(id)
-        .await
-        .with_timeout(fetch_timeout())
-        .await
-        .ok_or_else(|| availability::Error::FetchBlock {
-            resource: id.to_string(),
-        })
-}
-
-async fn fetch_vid_common_range(
-    ds: &DataSource,
-    from: usize,
-    until: usize,
-) -> Result<Vec<VidCommonQueryData<SeqTypes>>, availability::Error> {
-    enforce_range_limit(from, until, small_object_range_limit())?;
-    ds.get_vid_common_range(from..until)
-        .await
-        .enumerate()
-        .then(|(index, fetch)| async move {
-            fetch.with_timeout(fetch_timeout()).await.ok_or_else(|| {
-                availability::Error::FetchBlock {
-                    resource: (index + from).to_string(),
-                }
-            })
-        })
-        .try_collect()
-        .await
-}
-
-async fn fetch_transaction_by_position(
-    ds: &DataSource,
-    height: u64,
-    index: u64,
-) -> Result<BlockWithTransaction<SeqTypes>, availability::Error> {
-    let block = fetch_block(ds, BlockId::Number(height as usize)).await?;
-    let ix = block
-        .payload()
-        .nth(block.metadata(), index as usize)
-        .ok_or(availability::Error::InvalidTransactionIndex { height, index })?;
-    let transaction = block
-        .transaction(&ix)
-        .ok_or(availability::Error::InvalidTransactionIndex { height, index })?;
-    let transaction = TransactionQueryData::new(transaction, &block, &ix, index)
-        .ok_or(availability::Error::InvalidTransactionIndex { height, index })?;
-    Ok(BlockWithTransaction {
-        block,
-        transaction,
-        index: ix,
-    })
-}
-
-async fn fetch_transaction_by_hash(
-    ds: &DataSource,
-    hash: &str,
-) -> Result<BlockWithTransaction<SeqTypes>, availability::Error> {
-    let hash = parse_availability_param::<TransactionHash<SeqTypes>>(hash, "hash")?;
-    ds.get_block_containing_transaction(hash)
-        .await
-        .with_timeout(fetch_timeout())
-        .await
-        .ok_or_else(|| availability::Error::FetchTransaction {
-            resource: hash.to_string(),
-        })
-}
-
-async fn fetch_transaction_with_proof(
-    ds: &DataSource,
-    bwt: BlockWithTransaction<SeqTypes>,
-) -> Result<TransactionWithProofQueryData<SeqTypes>, availability::Error> {
-    let height = bwt.block.height();
-    let vid = fetch_vid_common(ds, BlockId::Number(height as usize)).await?;
-    let proof = bwt.block.transaction_proof(&vid, &bwt.index).ok_or(
-        availability::Error::InvalidTransactionIndex {
-            height,
-            index: bwt.transaction.index(),
-        },
-    )?;
-    Ok(TransactionWithProofQueryData::new(bwt.transaction, proof))
-}
-
-async fn fetch_block_summary(
-    ds: &DataSource,
-    height: usize,
-) -> Result<BlockSummaryQueryData<SeqTypes>, availability::Error> {
-    fetch_block(ds, BlockId::Number(height))
-        .await
-        .map(BlockSummaryQueryData::from)
-}
-
-async fn fetch_block_summary_range(
-    ds: &DataSource,
-    from: usize,
-    until: usize,
-) -> Result<Vec<BlockSummaryQueryData<SeqTypes>>, availability::Error> {
-    enforce_range_limit(from, until, large_object_range_limit())?;
-    ds.get_block_range(from..until)
-        .await
-        .enumerate()
-        .then(|(index, fetch)| async move {
-            fetch.with_timeout(fetch_timeout()).await.ok_or_else(|| {
-                availability::Error::FetchBlock {
-                    resource: (index + from).to_string(),
-                }
-            })
-        })
-        .map(|result| result.map(BlockSummaryQueryData::from))
-        .try_collect()
-        .await
-}
-
-/// Dispatches a `BlockId`-keyed fetch once the id has been parsed from the path, matching the
-/// `respond`/error-conversion boilerplate every `availability` route needs.
-async fn respond_block_resource<T, F>(
-    headers: &HeaderMap,
-    id: Result<BlockId<SeqTypes>, availability::Error>,
-    fetch: F,
-) -> Response
-where
-    T: Serialize,
-    F: AsyncFnOnce(BlockId<SeqTypes>) -> Result<T, availability::Error>,
-{
-    let result = match id {
-        Ok(id) => fetch(id).await,
-        Err(e) => Err(e),
-    };
-    respond(headers, result.map_err(ApiError::from))
-}
-
-async fn get_leaf_by_height(
-    State(ds): State<DataSource>,
-    headers: HeaderMap,
-    Path(height): Path<u64>,
-) -> Response {
-    let result = fetch_leaf(&ds, LeafId::Number(height as usize)).await;
-    respond(&headers, result.map_err(ApiError::from))
-}
-
-async fn get_leaf_by_hash(
-    State(ds): State<DataSource>,
-    headers: HeaderMap,
-    Path(hash): Path<String>,
-) -> Response {
-    let result = match parse_availability_param::<LeafHash<SeqTypes>>(&hash, "hash") {
-        Ok(hash) => fetch_leaf(&ds, LeafId::Hash(hash)).await,
-        Err(e) => Err(e),
-    };
-    respond(&headers, result.map_err(ApiError::from))
-}
-
-async fn get_leaf_range(
-    State(ds): State<DataSource>,
-    headers: HeaderMap,
-    Path((from, until)): Path<(usize, usize)>,
-) -> Response {
-    let result = fetch_leaf_range(&ds, from, until).await;
-    respond(&headers, result.map_err(ApiError::from))
-}
-
-async fn stream_leaves(
-    ws: WebSocketUpgrade,
-    State(ds): State<DataSource>,
-    headers: HeaderMap,
-    Path(height): Path<usize>,
-) -> Response {
-    let format = ContentType::negotiate(&headers);
-    ws.on_upgrade(move |socket| async move {
-        let stream = ds.subscribe_leaves(height).await;
-        drive_ws_stream(socket, stream, format).await;
-    })
-}
-
-async fn get_header_by_height(
-    State(ds): State<DataSource>,
-    headers: HeaderMap,
-    Path(height): Path<u64>,
-) -> Response {
-    respond_block_resource(&headers, Ok(BlockId::Number(height as usize)), async |id| {
-        fetch_header(&ds, id).await
-    })
-    .await
-}
-
-async fn get_header_by_hash(
-    State(ds): State<DataSource>,
-    headers: HeaderMap,
-    Path(hash): Path<String>,
-) -> Response {
-    let id = parse_availability_param::<BlockHash<SeqTypes>>(&hash, "hash").map(BlockId::Hash);
-    respond_block_resource(&headers, id, async |id| fetch_header(&ds, id).await).await
-}
-
-async fn get_header_by_payload_hash(
-    State(ds): State<DataSource>,
-    headers: HeaderMap,
-    Path(payload_hash): Path<String>,
-) -> Response {
-    let id = parse_availability_param::<VidCommitment>(&payload_hash, "payload-hash")
-        .map(BlockId::PayloadHash);
-    respond_block_resource(&headers, id, async |id| fetch_header(&ds, id).await).await
-}
-
-async fn get_header_range(
-    State(ds): State<DataSource>,
-    headers: HeaderMap,
-    Path((from, until)): Path<(usize, usize)>,
-) -> Response {
-    let result = fetch_header_range(&ds, from, until).await;
-    respond(&headers, result.map_err(ApiError::from))
-}
-
-async fn stream_headers(
-    ws: WebSocketUpgrade,
-    State(ds): State<DataSource>,
-    headers: HeaderMap,
-    Path(height): Path<usize>,
-) -> Response {
-    let format = ContentType::negotiate(&headers);
-    ws.on_upgrade(move |socket| async move {
-        let stream = ds.subscribe_headers(height).await;
-        drive_ws_stream(socket, stream, format).await;
-    })
-}
-
-async fn get_block_by_height(
-    State(ds): State<DataSource>,
-    headers: HeaderMap,
-    Path(height): Path<u64>,
-) -> Response {
-    respond_block_resource(&headers, Ok(BlockId::Number(height as usize)), async |id| {
-        fetch_block(&ds, id).await
-    })
-    .await
-}
-
-async fn get_block_by_hash(
-    State(ds): State<DataSource>,
-    headers: HeaderMap,
-    Path(hash): Path<String>,
-) -> Response {
-    let id = parse_availability_param::<BlockHash<SeqTypes>>(&hash, "hash").map(BlockId::Hash);
-    respond_block_resource(&headers, id, async |id| fetch_block(&ds, id).await).await
-}
-
-async fn get_block_by_payload_hash(
-    State(ds): State<DataSource>,
-    headers: HeaderMap,
-    Path(payload_hash): Path<String>,
-) -> Response {
-    let id = parse_availability_param::<VidCommitment>(&payload_hash, "payload-hash")
-        .map(BlockId::PayloadHash);
-    respond_block_resource(&headers, id, async |id| fetch_block(&ds, id).await).await
-}
-
-async fn get_block_range(
-    State(ds): State<DataSource>,
-    headers: HeaderMap,
-    Path((from, until)): Path<(usize, usize)>,
-) -> Response {
-    let result = fetch_block_range(&ds, from, until).await;
-    respond(&headers, result.map_err(ApiError::from))
-}
-
-async fn stream_blocks(
-    ws: WebSocketUpgrade,
-    State(ds): State<DataSource>,
-    headers: HeaderMap,
-    Path(height): Path<usize>,
-) -> Response {
-    let format = ContentType::negotiate(&headers);
-    ws.on_upgrade(move |socket| async move {
-        let stream = ds.subscribe_blocks(height).await;
-        drive_ws_stream(socket, stream, format).await;
-    })
-}
-
-async fn get_payload_by_height(
-    State(ds): State<DataSource>,
-    headers: HeaderMap,
-    Path(height): Path<u64>,
-) -> Response {
-    respond_block_resource(&headers, Ok(BlockId::Number(height as usize)), async |id| {
-        fetch_payload(&ds, id).await
-    })
-    .await
-}
-
-async fn get_payload_by_payload_hash(
-    State(ds): State<DataSource>,
-    headers: HeaderMap,
-    Path(hash): Path<String>,
-) -> Response {
-    let id = parse_availability_param::<VidCommitment>(&hash, "hash").map(BlockId::PayloadHash);
-    respond_block_resource(&headers, id, async |id| fetch_payload(&ds, id).await).await
-}
-
-async fn get_payload_by_block_hash(
-    State(ds): State<DataSource>,
-    headers: HeaderMap,
-    Path(block_hash): Path<String>,
-) -> Response {
-    let id = parse_availability_param::<BlockHash<SeqTypes>>(&block_hash, "block-hash")
-        .map(BlockId::Hash);
-    respond_block_resource(&headers, id, async |id| fetch_payload(&ds, id).await).await
-}
-
-async fn get_payload_range(
-    State(ds): State<DataSource>,
-    headers: HeaderMap,
-    Path((from, until)): Path<(usize, usize)>,
-) -> Response {
-    let result = fetch_payload_range(&ds, from, until).await;
-    respond(&headers, result.map_err(ApiError::from))
-}
-
-async fn stream_payloads(
-    ws: WebSocketUpgrade,
-    State(ds): State<DataSource>,
-    headers: HeaderMap,
-    Path(height): Path<usize>,
-) -> Response {
-    let format = ContentType::negotiate(&headers);
-    ws.on_upgrade(move |socket| async move {
-        let stream = ds.subscribe_payloads(height).await;
-        drive_ws_stream(socket, stream, format).await;
-    })
-}
-
-async fn get_vid_common_by_height(
-    State(ds): State<DataSource>,
-    headers: HeaderMap,
-    Path(height): Path<u64>,
-) -> Response {
-    respond_block_resource(&headers, Ok(BlockId::Number(height as usize)), async |id| {
-        fetch_vid_common(&ds, id).await
-    })
-    .await
-}
-
-async fn get_vid_common_by_hash(
-    State(ds): State<DataSource>,
-    headers: HeaderMap,
-    Path(hash): Path<String>,
-) -> Response {
-    let id = parse_availability_param::<BlockHash<SeqTypes>>(&hash, "hash").map(BlockId::Hash);
-    respond_block_resource(&headers, id, async |id| fetch_vid_common(&ds, id).await).await
-}
-
-async fn get_vid_common_by_payload_hash(
-    State(ds): State<DataSource>,
-    headers: HeaderMap,
-    Path(payload_hash): Path<String>,
-) -> Response {
-    let id = parse_availability_param::<VidCommitment>(&payload_hash, "payload-hash")
-        .map(BlockId::PayloadHash);
-    respond_block_resource(&headers, id, async |id| fetch_vid_common(&ds, id).await).await
-}
-
-async fn get_vid_common_range(
-    State(ds): State<DataSource>,
-    headers: HeaderMap,
-    Path((from, until)): Path<(usize, usize)>,
-) -> Response {
-    let result = fetch_vid_common_range(&ds, from, until).await;
-    respond(&headers, result.map_err(ApiError::from))
-}
-
-async fn stream_vid_common(
-    ws: WebSocketUpgrade,
-    State(ds): State<DataSource>,
-    headers: HeaderMap,
-    Path(height): Path<usize>,
-) -> Response {
-    let format = ContentType::negotiate(&headers);
-    ws.on_upgrade(move |socket| async move {
-        let stream = ds.subscribe_vid_common(height).await;
-        drive_ws_stream(socket, stream, format).await;
-    })
-}
-
-async fn get_transaction_by_position(
-    State(ds): State<DataSource>,
-    headers: HeaderMap,
-    Path((height, index)): Path<(u64, u64)>,
-) -> Response {
-    let result = fetch_transaction_by_position(&ds, height, index)
-        .await
-        .map(|bwt| bwt.transaction);
-    respond(&headers, result.map_err(ApiError::from))
-}
-
-async fn get_transaction_by_hash(
-    State(ds): State<DataSource>,
-    headers: HeaderMap,
-    Path(hash): Path<String>,
-) -> Response {
-    let result = fetch_transaction_by_hash(&ds, &hash)
-        .await
-        .map(|bwt| bwt.transaction);
-    respond(&headers, result.map_err(ApiError::from))
-}
-
-async fn get_transaction_proof_by_position(
-    State(ds): State<DataSource>,
-    headers: HeaderMap,
-    Path((height, index)): Path<(u64, u64)>,
-) -> Response {
-    let result = async {
-        let bwt = fetch_transaction_by_position(&ds, height, index).await?;
-        fetch_transaction_with_proof(&ds, bwt).await
-    }
-    .await;
-    respond(&headers, result.map_err(ApiError::from))
-}
-
-async fn get_transaction_proof_by_hash(
-    State(ds): State<DataSource>,
-    headers: HeaderMap,
-    Path(hash): Path<String>,
-) -> Response {
-    let result = async {
-        let bwt = fetch_transaction_by_hash(&ds, &hash).await?;
-        fetch_transaction_with_proof(&ds, bwt).await
-    }
-    .await;
-    respond(&headers, result.map_err(ApiError::from))
-}
-
-async fn stream_transactions(
-    ws: WebSocketUpgrade,
-    State(ds): State<DataSource>,
-    headers: HeaderMap,
-    Path(height): Path<usize>,
-) -> Response {
-    let format = ContentType::negotiate(&headers);
-    ws.on_upgrade(move |socket| async move {
-        let stream = transactions_stream(ds.subscribe_blocks(height).await, None);
-        drive_ws_stream(socket, stream, format).await;
-    })
-}
-
-async fn stream_transactions_ns(
-    ws: WebSocketUpgrade,
-    State(ds): State<DataSource>,
-    headers: HeaderMap,
-    Path((height, namespace)): Path<(usize, i64)>,
-) -> Response {
-    let format = ContentType::negotiate(&headers);
-    ws.on_upgrade(move |socket| async move {
-        let stream = transactions_stream(ds.subscribe_blocks(height).await, Some(namespace));
-        drive_ws_stream(socket, stream, format).await;
-    })
-}
-
-/// Mirrors the filtering closure in tide's `stream_transactions` handler: pulls every
-/// transaction out of each block, optionally restricted to a single namespace.
-fn transactions_stream(
-    blocks: BoxStream<'static, BlockQueryData<SeqTypes>>,
-    namespace: Option<i64>,
-) -> BoxStream<'static, TransactionQueryData<SeqTypes>> {
-    blocks
-        .flat_map(move |block| {
-            let header = block.header().clone();
-            let filtered: Vec<_> = block
-                .enumerate()
-                .enumerate()
-                .filter_map(|(i, (index, _tx))| {
-                    if let Some(ns) = namespace {
-                        let ns_id = header.namespace_id(&index.ns_index)?;
-                        if i64::from(ns_id) != ns {
-                            return None;
-                        }
-                    }
-                    let tx = block.transaction(&index)?;
-                    TransactionQueryData::new(tx, &block, &index, i as u64)
-                })
-                .collect();
-            futures::stream::iter(filtered)
-        })
-        .boxed()
-}
-
-async fn get_block_summary_by_height(
-    State(ds): State<DataSource>,
-    headers: HeaderMap,
-    Path(height): Path<usize>,
-) -> Response {
-    let result = fetch_block_summary(&ds, height).await;
-    respond(&headers, result.map_err(ApiError::from))
-}
-
-async fn get_block_summary_range(
-    State(ds): State<DataSource>,
-    headers: HeaderMap,
-    Path((from, until)): Path<(usize, usize)>,
-) -> Response {
-    let result = fetch_block_summary_range(&ds, from, until).await;
-    respond(&headers, result.map_err(ApiError::from))
-}
-
-async fn get_cert2(
-    State(ds): State<DataSource>,
-    headers: HeaderMap,
-    Path(height): Path<u64>,
-) -> Response {
-    let result = ds
-        .get_cert2(height)
-        .await
-        .with_timeout(fetch_timeout())
-        .await
-        .ok_or(availability::Error::Custom {
-            message: format!("no cert2 available for height {height}"),
-            status: disco_types::status::StatusCode::NOT_FOUND,
-        });
-    respond(&headers, result.map_err(ApiError::from))
-}
-
-async fn get_availability_limits(headers: HeaderMap) -> Response {
-    encode_ok(
-        &headers,
-        AvailabilityLimits {
-            small_object_range_limit: small_object_range_limit(),
-            large_object_range_limit: large_object_range_limit(),
-        },
-    )
-}
-
-fn availability_router(ds: DataSource) -> Router {
-    Router::new()
-        .route("/leaf/{height}", get(get_leaf_by_height))
-        .route("/leaf/hash/{hash}", get(get_leaf_by_hash))
-        .route("/leaf/{from}/{until}", get(get_leaf_range))
-        .route("/stream/leaves/{height}", get(stream_leaves))
-        .route("/header/{height}", get(get_header_by_height))
-        .route("/header/hash/{hash}", get(get_header_by_hash))
-        .route(
-            "/header/payload-hash/{payload_hash}",
-            get(get_header_by_payload_hash),
-        )
-        .route("/header/{from}/{until}", get(get_header_range))
-        .route("/stream/headers/{height}", get(stream_headers))
-        .route("/block/{height}", get(get_block_by_height))
-        .route("/block/hash/{hash}", get(get_block_by_hash))
-        .route(
-            "/block/payload-hash/{payload_hash}",
-            get(get_block_by_payload_hash),
-        )
-        .route("/block/{from}/{until}", get(get_block_range))
-        .route("/stream/blocks/{height}", get(stream_blocks))
-        .route("/payload/{height}", get(get_payload_by_height))
-        .route("/payload/hash/{hash}", get(get_payload_by_payload_hash))
-        .route(
-            "/payload/block-hash/{block_hash}",
-            get(get_payload_by_block_hash),
-        )
-        .route("/payload/{from}/{until}", get(get_payload_range))
-        .route("/stream/payloads/{height}", get(stream_payloads))
-        .route("/vid/common/{height}", get(get_vid_common_by_height))
-        .route("/vid/common/hash/{hash}", get(get_vid_common_by_hash))
-        .route(
-            "/vid/common/payload-hash/{payload_hash}",
-            get(get_vid_common_by_payload_hash),
-        )
-        .route("/vid/common/{from}/{until}", get(get_vid_common_range))
-        .route("/stream/vid/common/{height}", get(stream_vid_common))
-        .route(
-            "/transaction/{height}/{index}/noproof",
-            get(get_transaction_by_position),
-        )
-        .route(
-            "/transaction/hash/{hash}/noproof",
-            get(get_transaction_by_hash),
-        )
-        .route(
-            "/transaction/{height}/{index}",
-            get(get_transaction_proof_by_position),
-        )
-        .route(
-            "/transaction/hash/{hash}",
-            get(get_transaction_proof_by_hash),
-        )
-        .route(
-            "/transaction/{height}/{index}/proof",
-            get(get_transaction_proof_by_position),
-        )
-        .route(
-            "/transaction/hash/{hash}/proof",
-            get(get_transaction_proof_by_hash),
-        )
-        .route(
-            "/stream/transactions/{height}/namespace/{namespace}",
-            get(stream_transactions_ns),
-        )
-        .route("/stream/transactions/{height}", get(stream_transactions))
-        .route("/block/summary/{height}", get(get_block_summary_by_height))
-        .route(
-            "/block/summaries/{from}/{until}",
-            get(get_block_summary_range),
-        )
-        .route("/cert2/{height}", get(get_cert2))
-        .route("/limits", get(get_availability_limits))
-        .with_state(ds)
 }
 
 fn range_bounds(from: Option<u64>, to: Option<u64>) -> (Bound<usize>, Bound<usize>) {
@@ -899,7 +109,7 @@ async fn fetch_header_window(
 
 async fn node_block_height(State(ds): State<DataSource>, headers: HeaderMap) -> Response {
     let result = ds.block_height().await.map_err(node::Error::from);
-    respond(&headers, result.map_err(ApiError::from))
+    wire::respond::<ApiError, _>(&headers, result.map_err(ApiError::from))
 }
 
 async fn node_count_transactions(
@@ -910,7 +120,7 @@ async fn node_count_transactions(
     namespace: Option<i64>,
 ) -> Response {
     let result = fetch_count_transactions(&ds, from, to, namespace).await;
-    respond(&headers, result.map_err(ApiError::from))
+    wire::respond::<ApiError, _>(&headers, result.map_err(ApiError::from))
 }
 
 async fn node_count_transactions_all(state: State<DataSource>, headers: HeaderMap) -> Response {
@@ -965,7 +175,7 @@ async fn node_payload_size(
     namespace: Option<i64>,
 ) -> Response {
     let result = fetch_payload_size(&ds, from, to, namespace).await;
-    respond(&headers, result.map_err(ApiError::from))
+    wire::respond::<ApiError, _>(&headers, result.map_err(ApiError::from))
 }
 
 async fn node_payload_size_all(state: State<DataSource>, headers: HeaderMap) -> Response {
@@ -1018,7 +228,7 @@ async fn node_vid_share_by_height(
     Path(height): Path<u64>,
 ) -> Response {
     let result = fetch_vid_share(&ds, BlockId::Number(height as usize)).await;
-    respond(&headers, result.map_err(ApiError::from))
+    wire::respond::<ApiError, _>(&headers, result.map_err(ApiError::from))
 }
 
 async fn node_vid_share_by_hash(
@@ -1030,7 +240,7 @@ async fn node_vid_share_by_hash(
         Ok(hash) => fetch_vid_share(&ds, BlockId::Hash(hash)).await,
         Err(e) => Err(e),
     };
-    respond(&headers, result.map_err(ApiError::from))
+    wire::respond::<ApiError, _>(&headers, result.map_err(ApiError::from))
 }
 
 async fn node_vid_share_by_payload_hash(
@@ -1042,12 +252,12 @@ async fn node_vid_share_by_payload_hash(
         Ok(hash) => fetch_vid_share(&ds, BlockId::PayloadHash(hash)).await,
         Err(e) => Err(e),
     };
-    respond(&headers, result.map_err(ApiError::from))
+    wire::respond::<ApiError, _>(&headers, result.map_err(ApiError::from))
 }
 
 async fn node_sync_status(State(ds): State<DataSource>, headers: HeaderMap) -> Response {
     let result = ds.sync_status().await.map_err(node::Error::from);
-    respond(&headers, result.map_err(ApiError::from))
+    wire::respond::<ApiError, _>(&headers, result.map_err(ApiError::from))
 }
 
 async fn node_header_window(
@@ -1056,7 +266,7 @@ async fn node_header_window(
     Path((start, end)): Path<(u64, u64)>,
 ) -> Response {
     let result = fetch_header_window(&ds, WindowStart::Time(start), end).await;
-    respond(&headers, result.map_err(ApiError::from))
+    wire::respond::<ApiError, _>(&headers, result.map_err(ApiError::from))
 }
 
 async fn node_header_window_from_height(
@@ -1065,7 +275,7 @@ async fn node_header_window_from_height(
     Path((height, end)): Path<(u64, u64)>,
 ) -> Response {
     let result = fetch_header_window(&ds, WindowStart::Height(height), end).await;
-    respond(&headers, result.map_err(ApiError::from))
+    wire::respond::<ApiError, _>(&headers, result.map_err(ApiError::from))
 }
 
 async fn node_header_window_from_hash(
@@ -1077,11 +287,11 @@ async fn node_header_window_from_hash(
         Ok(hash) => fetch_header_window(&ds, WindowStart::Hash(hash), end).await,
         Err(e) => Err(e),
     };
-    respond(&headers, result.map_err(ApiError::from))
+    wire::respond::<ApiError, _>(&headers, result.map_err(ApiError::from))
 }
 
 async fn node_limits(headers: HeaderMap) -> Response {
-    encode_ok(
+    wire::encode_ok::<ApiError, _>(
         &headers,
         NodeLimits {
             window_limit: window_limit(),
@@ -1151,7 +361,14 @@ fn node_router(ds: DataSource) -> Router {
 /// only ever registered API version `1.0.0`).
 pub fn router(ds: DataSource) -> Router {
     let api = Router::new()
-        .nest("/availability", availability_router(ds.clone()))
+        .nest(
+            "/availability",
+            // This service serves no OpenAPI spec, so drop the router's documentation.
+            Router::from(availability_router::<SeqTypes, DataSource>(
+                &availability::Options::default(),
+                ds.clone(),
+            )),
+        )
         .nest("/node", node_router(ds));
     Router::new()
         .route("/healthcheck", get(healthcheck))

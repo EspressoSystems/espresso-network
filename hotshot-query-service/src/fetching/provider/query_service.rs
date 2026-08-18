@@ -338,21 +338,30 @@ where
 
 // These tests run the `postgres` Docker image, which doesn't work on Windows.
 #[cfg(all(test, not(target_os = "windows")))]
-mod test {
+pub(crate) mod test {
     use std::{future::IntoFuture, marker::PhantomData, time::Duration};
 
-    use axum::{Router, extract::Path, http::HeaderMap, response::Response, routing::get};
+    use axum::{
+        Router,
+        extract::Path,
+        http::{HeaderMap, Uri},
+        response::Response,
+        routing::get,
+    };
     use committable::Committable;
+    use disco_types::status::StatusCode;
     use futures::{future::join, stream::StreamExt};
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::data::ViewNumber;
+    use http_wire::{self as wire, healthcheck_response, respond, spawn_serve};
+    use test_utils::reserve_tcp_port;
     use tokio::{task::JoinHandle, time::timeout};
 
     use super::*;
     use crate::{
         availability::{
-            AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction,
-            Certificate2, Fetch, UpdateAvailabilityData,
+            self, AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction,
+            Certificate2, Fetch, UpdateAvailabilityData, router::availability_router,
         },
         data_source::{
             AvailabilityProvider, FetchingDataSource, Transaction, VersionedDataSource,
@@ -364,9 +373,7 @@ mod test {
                 sql::testing::TmpDb,
             },
         },
-        fetching::provider::{
-            AnyProvider, NoFetching, Provider as ProviderTrait, TestProvider, test_fixtures,
-        },
+        fetching::provider::{AnyProvider, NoFetching, Provider as ProviderTrait, TestProvider},
         node::data_source::NodeDataSource,
         testing::{
             consensus::{MockDataSource, MockNetwork},
@@ -422,12 +429,47 @@ mod test {
         )
     }
 
-    /// Serve the availability API for `data_source` on a fresh port and return the port and the
-    /// task running the server.
-    async fn serve_availability(
-        data_source: impl AvailabilityDataSource<MockTypes> + Send + Sync + 'static,
-    ) -> (u16, JoinHandle<()>) {
-        test_fixtures::serve_availability(data_source).await
+    async fn healthcheck(headers: HeaderMap) -> Response {
+        healthcheck_response(&headers)
+    }
+
+    /// Unknown routes are reported the way tide-disco reported them: the provider's ranged-VID
+    /// fallback keys off the "No route matches" message to detect old peers.
+    async fn no_route(headers: HeaderMap, uri: Uri) -> Response {
+        let err = Error::Custom {
+            message: format!("No route matches {}", uri.path()),
+            status: StatusCode::NOT_FOUND,
+        };
+        wire::encode_err(&headers, err)
+    }
+
+    fn app(api: Router) -> Router {
+        Router::new()
+            .route("/healthcheck", get(healthcheck))
+            .nest("/availability", api)
+            .fallback(no_route)
+    }
+
+    /// Waits for the server to answer its healthcheck, so one-shot fetches do not race the bind.
+    async fn serve(router: Router) -> (u16, JoinHandle<()>) {
+        let port = reserve_tcp_port().unwrap();
+        let url = format!("http://0.0.0.0:{port}").parse().unwrap();
+        let task = spawn_serve(&url, router);
+        let client: Client<Error, MockBase> =
+            Client::new(format!("http://localhost:{port}").parse().unwrap());
+        assert!(client.connect(Some(Duration::from_secs(60))).await);
+        (port, task)
+    }
+
+    pub(crate) async fn serve_availability<D>(data_source: D) -> (u16, JoinHandle<()>)
+    where
+        D: AvailabilityDataSource<MockTypes> + Send + Sync + 'static,
+    {
+        let api = Router::from(availability_router::<MockTypes, D>(
+            &availability::Options::default(),
+            data_source,
+        ));
+        serve(app(api)).await
     }
 
     fn trusted_provider(port: u16) -> TrustedQueryServiceProvider<MockBase> {
@@ -680,7 +722,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let (port, _server) = test_fixtures::serve_availability(network.data_source()).await;
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         // Use our special test provider that handles epoch version transitions
@@ -2380,11 +2422,11 @@ mod test {
             )
             .await;
             common.height = height;
-            test_fixtures::respond(&headers, Ok(common))
+            respond::<Error, _>(&headers, Ok(common))
         }
 
         let api = Router::new().route("/vid/common/{height}", get(get_vid_common));
-        test_fixtures::serve(test_fixtures::app(api)).await
+        serve(app(api)).await
     }
 
     #[tokio::test]
