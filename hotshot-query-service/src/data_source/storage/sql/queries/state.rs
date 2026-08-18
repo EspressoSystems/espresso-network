@@ -92,7 +92,7 @@ where
             #[cfg(not(feature = "embedded-db"))]
             {
                 let hash_ids_arr: Vec<i64> = hash_ids.iter().copied().collect();
-                sqlx::query_as("SELECT id::BIGINT, value FROM hash WHERE id = ANY($1::BIGINT[])")
+                sqlx::query_as("SELECT id, value FROM hash WHERE id = ANY($1::BIGINT[])")
                     .bind(&hash_ids_arr)
                     .fetch_all(self.as_mut())
                     .await
@@ -390,9 +390,8 @@ pub(crate) async fn batch_insert_hashes(
     }
 
     // Use UNNEST-based batch insert (more efficient and avoids parameter limits).
-    // Cast id to BIGINT in RETURNING so the result maps directly to i64.
     let sql = "INSERT INTO hash(value) SELECT * FROM UNNEST($1::bytea[]) ON CONFLICT (value) DO \
-               UPDATE SET value = EXCLUDED.value RETURNING value, id::BIGINT";
+               UPDATE SET value = EXCLUDED.value RETURNING value, id";
 
     let result: HashMap<Vec<u8>, i64> = sqlx::query_as(sql)
         .bind(&hashes)
