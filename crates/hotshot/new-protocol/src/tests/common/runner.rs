@@ -749,6 +749,10 @@ async fn create_network(
         .keypair(parties[i].0.clone().into())
         .bind(parties[i].2.clone())
         .random_connect_delay(false)
+        // Keep redials dense: a peer that dials a rebinding node's address
+        // before its listener is up must retry within ~1s, not back off to
+        // the default 15-30s tail, or the node misses its next leader slot.
+        .connect_retry_delays([1, 1, 1, 2, 3, 5])
         .parties(
             peer_infos
                 .iter()

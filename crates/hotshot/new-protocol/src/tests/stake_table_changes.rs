@@ -120,8 +120,8 @@ async fn incoming_validator_restarts_before_replacement_boundary() {
         .unwrap();
 }
 
-/// 6 nodes, epoch_height=10; node 5 is a member of every epoch, but the
-/// epoch-3 stake table (blocks 21-30) registers a new p2p address for it.
+/// 6 nodes, epoch_height=12; node 5 is a member of every epoch, but the
+/// epoch-3 stake table (blocks 25-36) registers a new p2p address for it.
 ///
 /// Node 5 lives on its own loopback IPs — 127.0.0.2 initially, rotating to
 /// 127.0.0.3 — while its peers stay on 127.0.0.1 (hence Linux-only: macOS
@@ -134,10 +134,24 @@ async fn incoming_validator_restarts_before_replacement_boundary() {
 ///
 /// Peers adopt the new address when they enter epoch 2: `apply_epoch`
 /// eagerly merges the next epoch's connect info, so crossing into epoch 2
-/// at block 11 already re-points node 5's peers at the epoch-3 address.
-/// Node 5 restarts bound to the new address at view 11. It leads views 17,
-/// 23, 29 and 35, every view is required to decide, and its post-restart
-/// decisions (target 20) must match the other nodes' chain.
+/// at block 13 re-points node 5's peers at the epoch-3 address. Node 5
+/// restarts bound to the new address when view 11 decides (during view
+/// ~12), i.e. it is already listening there when its peers re-point.
+///
+/// The epoch boundary must not be a view node 5 leads: peers re-point the
+/// moment they validate the first epoch-2 proposal, and node 5 has not
+/// rebound yet if it is that proposal's leader (its restart is gated on
+/// the boundary view deciding). Cutting off the active leader mid-view
+/// splits its certificates across the committee and, with the zero-slack
+/// 5-of-6 quorum, can wedge the network for good. With epoch_height 12
+/// the boundary view 13 is led by node 1 while node 5 (views 5, 11, 17,
+/// ...) is idle through the handoff.
+///
+/// Node 5 leads views 17, 23, 29 and 35 after the rotation, every view is
+/// required to decide, and its post-restart decisions (target 20) must
+/// match the other nodes' chain. The 10s view timeout keeps a loaded CI
+/// runner from timing out a view (5-of-6 leaves no vote slack, so a
+/// single slow node fails the view).
 #[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread")]
 async fn validator_rotates_address_at_epoch_boundary() {
@@ -147,7 +161,8 @@ async fn validator_rotates_address_at_epoch_boundary() {
         .num_nodes(6)
         .target_decisions(35)
         .max_runtime(Duration::from_secs(500))
-        .epoch_height(10)
+        .epoch_height(12)
+        .view_timeout(Duration::from_secs(10))
         .node_ips(BTreeMap::from([(5, Ipv4Addr::new(127, 0, 0, 2).into())]))
         .stake_table_schedule(StakeTableSchedule {
             initial: vec![0, 1, 2, 3, 4, 5],
