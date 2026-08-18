@@ -89,14 +89,14 @@ header as part of `auth_root`.
 ### Protocol versions
 
 Defined in `crates/espresso/types/src/v0/mod.rs`. `SequencerVersions<Base, Upgrade>` pairs versions for network
-operation. **Mainnet currently runs V0_4.**
+operation. **Mainnet runs V0_5, decaf runs V0_6** (`data/genesis/mainnet.toml`, `data/genesis/decaf.toml`).
 
 - V0_1: base Header, ChainConfig, Transaction, ADVZ VID proofs (shipped)
 - V0_2, `FeeVersion`: fee support (shipped)
 - V0_3, `EpochVersion`: PoS, stake_table_contract, reward_merkle_tree, AvidM VID proofs (shipped)
 - V0_4, `DrbAndHeaderUpgradeVersion`: header adds timestamp_millis, total_reward_distributed, RewardMerkleTreeV2
-  (**mainnet**)
-- V0_5, `EpochRewardVersion`: per-epoch rewards (**next upgrade**)
+  (shipped)
+- V0_5, `EpochRewardVersion`: per-epoch rewards (**mainnet**)
 - V0_6, `NEW_PROTOCOL_VERSION`: DA upgrade + VID2 (AvidmGf2) proofs + cliquenet + new protocol (bundled at 0.6)
 
 **Fast finality** (V0_6, see `crates/hotshot/new-protocol/` and `doc/stake-table-fast-finality.md`): replaces CDN +

@@ -92,7 +92,10 @@ use super::{traits::MembershipPersistence, v0_3::StakeTableUpdateTask};
 #[cfg(feature = "node")]
 use crate::traits::EventsPersistenceRead;
 #[cfg(feature = "node")]
-use crate::v0_1::L1Provider;
+use crate::v0_1::{
+    ChainId, DECAF_CHAIN_ID, DECAF_INITIAL_SUPPLY_WEI, L1Provider, MAINNET_CHAIN_ID,
+    MAINNET_INITIAL_SUPPLY_WEI,
+};
 #[cfg(feature = "node")]
 use crate::v0_3::{BLOCKS_PER_YEAR, INFLATION_RATE};
 use crate::v0_3::{
@@ -1223,9 +1226,9 @@ const STAKE_TABLE_ANCHOR_POLL_INTERVAL: Duration = Duration::from_secs(30);
 #[cfg(feature = "node")]
 #[derive(Debug, Error)]
 enum PeerArmError {
-    /// The anchor exists but has no `next_stake_table_hash`: either a pre-V4 header, or a
-    /// legitimate `None` for `epoch - 1 <= first_epoch` (see
-    /// `crates/espresso/types/src/v0/impls/state.rs`, `validate_next_stake_table_hash`).
+    /// The anchor exists but has no `next_stake_table_hash`: a legitimate `None` for
+    /// `epoch - 1 <= first_epoch` (see `crates/espresso/types/src/v0/impls/state.rs`,
+    /// `validate_next_stake_table_hash`), or, historically, a pre-V4 header.
     /// Permanent for this epoch: there is nothing to verify a peer response against, ever, so
     /// the caller stops polling instead of spinning to the deadline.
     #[error(
@@ -1239,6 +1242,29 @@ enum PeerArmError {
     /// The anchor is known, but no peer served a state matching it. Retryable.
     #[error("{0}")]
     NoPeerData(anyhow::Error),
+}
+
+/// Returns the ESP token's initial supply for chains where the value is already known.
+///
+/// The initial supply is fixed at token deployment: `fetch_and_update_initial_supply` locates
+/// the one-time `Initialized` event and the matching mint `Transfer` from `address(0)`, which
+/// can only occur once and can never change afterwards. Hardcoding it for known networks
+/// removes the last L1 dependency on the epoch-root reward-calculation path, so a node whose
+/// L1 connection is down can still compute block rewards.
+///
+/// A wrong constant here has no local symptom: the node keeps computing rewards, just the
+/// wrong ones, diverging from the rest of the network and losing consensus.
+/// `assert_known_initial_supply_matches_l1` (below, in tests) guards against this by fetching
+/// the value from L1 and comparing it to the constant.
+#[cfg(feature = "node")]
+fn known_initial_supply(chain_id: ChainId) -> Option<U256> {
+    if chain_id == MAINNET_CHAIN_ID {
+        Some(U256::from(MAINNET_INITIAL_SUPPLY_WEI))
+    } else if chain_id == DECAF_CHAIN_ID {
+        Some(U256::from(DECAF_INITIAL_SUPPLY_WEI))
+    } else {
+        None
+    }
 }
 
 impl Fetcher {
@@ -1593,8 +1619,16 @@ impl Fetcher {
     }
 
     /// Returns the initial token supply, fetching it from L1 if not yet known.
+    ///
+    /// Known chains resolve immediately via `known_initial_supply`, without touching the cache
+    /// or L1. Unknown chains fall back to the cache, then an L1 fetch.
     #[cfg(feature = "node")]
     pub async fn initial_supply_or_fetch(&self) -> Result<U256, FetchRewardError> {
+        let chain_id = self.chain_config.lock().await.chain_id;
+        if let Some(supply) = known_initial_supply(chain_id) {
+            return Ok(supply);
+        }
+
         // `fetch_and_update_initial_supply` needs a write lock, create temporary to drop lock
         let supply = *self.initial_supply.read().await;
         match supply {
@@ -2555,150 +2589,6 @@ mod tests {
         assert!(stake_table_snapshot_root_height(EpochNumber::new(1), 100).is_err());
     }
 
-    /// A catchup provider serving a single stake table state, checking `expected_stake_table_hash`
-    /// inline as `try_fetch_stake_table_state`'s doc comment recommends.
-    #[derive(Debug, Clone)]
-    struct MockStatePeer {
-        state: StakeTableState,
-    }
-
-    #[async_trait::async_trait]
-    impl StateCatchup for MockStatePeer {
-        async fn try_fetch_leaf(
-            &self,
-            _retry: usize,
-            _coordinator: hotshot_types::epoch_membership::EpochMembershipCoordinator<
-                crate::SeqTypes,
-            >,
-            _height: u64,
-        ) -> anyhow::Result<crate::Leaf2> {
-            unimplemented!()
-        }
-
-        async fn try_fetch_accounts(
-            &self,
-            _retry: usize,
-            _instance: &crate::NodeState,
-            _height: u64,
-            _view: hotshot_types::data::ViewNumber,
-            _fee_merkle_tree_root: crate::FeeMerkleCommitment,
-            _accounts: &[crate::FeeAccount],
-        ) -> anyhow::Result<Vec<crate::FeeAccountProof>> {
-            unimplemented!()
-        }
-
-        async fn try_remember_blocks_merkle_tree(
-            &self,
-            _retry: usize,
-            _instance: &crate::NodeState,
-            _height: u64,
-            _view: hotshot_types::data::ViewNumber,
-            _mt: &mut crate::BlockMerkleTree,
-        ) -> anyhow::Result<()> {
-            unimplemented!()
-        }
-
-        async fn try_fetch_chain_config(
-            &self,
-            _retry: usize,
-            _commitment: Commitment<ChainConfig>,
-        ) -> anyhow::Result<ChainConfig> {
-            unimplemented!()
-        }
-
-        async fn try_fetch_reward_merkle_tree_v2(
-            &self,
-            _retry: usize,
-            _height: u64,
-            _view: hotshot_types::data::ViewNumber,
-            _reward_merkle_tree_root: crate::v0_4::RewardMerkleCommitmentV2,
-            _accounts: Arc<Vec<crate::v0_4::RewardAccountV2>>,
-        ) -> anyhow::Result<crate::v0_4::PermittedRewardMerkleTreeV2> {
-            unimplemented!()
-        }
-
-        async fn try_fetch_reward_accounts_v1(
-            &self,
-            _retry: usize,
-            _instance: &crate::NodeState,
-            _height: u64,
-            _view: hotshot_types::data::ViewNumber,
-            _reward_merkle_tree_root: crate::v0_3::RewardMerkleCommitmentV1,
-            _accounts: &[crate::v0_3::RewardAccountV1],
-        ) -> anyhow::Result<Vec<crate::v0_3::RewardAccountProofV1>> {
-            unimplemented!()
-        }
-
-        async fn try_fetch_state_cert(
-            &self,
-            _retry: usize,
-            _epoch: u64,
-        ) -> anyhow::Result<
-            hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<crate::SeqTypes>,
-        > {
-            unimplemented!()
-        }
-
-        async fn try_fetch_stake_table_state(
-            &self,
-            _retry: usize,
-            _epoch: EpochNumber,
-            expected_stake_table_hash: StakeTableHash,
-        ) -> anyhow::Result<StakeTableState> {
-            ensure!(
-                self.state.commit() == expected_stake_table_hash,
-                "stake table state commitment mismatch"
-            );
-            Ok(self.state.clone())
-        }
-
-        fn backoff(&self) -> &crate::BackoffParams {
-            unimplemented!()
-        }
-
-        fn name(&self) -> String {
-            "MockStatePeer".to_string()
-        }
-
-        fn is_local(&self) -> bool {
-            false
-        }
-    }
-
-    #[test_log::test(tokio::test)]
-    async fn test_try_fetch_stake_table_state_rejects_hash_mismatch() -> anyhow::Result<()> {
-        let val = TestValidator::random();
-        let state = stake_table_state_from_l1_events([ValidatorRegistered::from(&val).into()])?;
-        let peer = MockStatePeer { state };
-        let wrong_hash = StakeTableState::default().commit();
-
-        let err = peer
-            .try_fetch_stake_table_state(0, EpochNumber::new(1), wrong_hash)
-            .await
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("mismatch"), "unexpected error: {err}");
-
-        Ok(())
-    }
-
-    #[test_log::test(tokio::test)]
-    async fn test_try_fetch_stake_table_state_accepts_matching_hash() -> anyhow::Result<()> {
-        let val = TestValidator::random();
-        let state = stake_table_state_from_l1_events([ValidatorRegistered::from(&val).into()])?;
-        let expected_hash = state.commit();
-        let peer = MockStatePeer {
-            state: state.clone(),
-        };
-
-        let fetched = peer
-            .try_fetch_stake_table_state(0, EpochNumber::new(1), expected_hash)
-            .await?;
-        assert_eq!(fetched, state);
-
-        Ok(())
-    }
-
     /// In-memory event store, mimicking the SQL store's offset semantics closely enough to
     /// exercise `Fetcher::fetch`'s peer fallback.
     #[derive(Debug, Clone, Default)]
@@ -2971,9 +2861,9 @@ mod tests {
         }
     }
 
-    /// Build a V4 header at `height` with the given finalized L1 block and (epoch-root) stake
+    /// Build a V5 header at `height` with the given finalized L1 block and (epoch-root) stake
     /// table hash, the fields peer catchup relies on.
-    async fn mock_v4_header(
+    async fn mock_v5_header(
         height: u64,
         to_l1_block: u64,
         next_stake_table_hash: Option<StakeTableHash>,
@@ -2983,7 +2873,11 @@ mod tests {
         };
         use jf_merkle_tree_compat::MerkleTreeScheme as _;
 
-        use crate::{NodeState, Payload, Transaction, ValidatedState, v0_1::L1BlockInfo, v0_4};
+        use crate::{
+            NodeState, Payload, Transaction, ValidatedState,
+            v0_1::L1BlockInfo,
+            v0_5::{self, MAX_VALIDATORS},
+        };
 
         let instance = NodeState::mock_v2();
         let tx = Transaction::of_size(10);
@@ -2991,12 +2885,7 @@ mod tests {
             Payload::from_transactions([tx], &instance.genesis_state, &instance)
                 .await
                 .expect("payload");
-        let genesis = Header::genesis(
-            &instance,
-            payload,
-            &metadata,
-            DRB_AND_HEADER_UPGRADE_VERSION,
-        );
+        let genesis = Header::genesis(&instance, payload, &metadata, EPOCH_REWARD_VERSION);
         let Header::V2(g) = genesis else {
             panic!("expected V2 header from NodeState::mock_v2, got {genesis:?}");
         };
@@ -3004,7 +2893,7 @@ mod tests {
             .0
             .reward_merkle_tree_v2
             .commitment();
-        Header::V4(v0_4::Header {
+        Header::V5(v0_5::Header {
             chain_config: instance.chain_config.into(),
             height,
             timestamp: g.timestamp,
@@ -3024,6 +2913,7 @@ mod tests {
             reward_merkle_tree_root,
             total_reward_distributed: Default::default(),
             next_stake_table_hash,
+            leader_counts: [0; MAX_VALIDATORS],
         })
     }
 
@@ -3102,8 +2992,8 @@ mod tests {
 
         // The header handed to `fetch` carries a stake table hash for the *wrong* epoch, so a
         // regression to anchoring on it is caught by the mismatch instead of silently passing.
-        let snapshot_header = mock_v4_header(snapshot_height, B_SNAPSHOT, Some(wrong_hash)).await;
-        let anchor_header = mock_v4_header(anchor_height, B_ANCHOR, Some(epoch_hash)).await;
+        let snapshot_header = mock_v5_header(snapshot_height, B_SNAPSHOT, Some(wrong_hash)).await;
+        let anchor_header = mock_v5_header(anchor_height, B_ANCHOR, Some(epoch_hash)).await;
 
         let peer = MockPeer {
             anchor: Some(anchor_header),
@@ -3249,7 +3139,7 @@ mod tests {
         let epoch_height = *instance.coordinator.epoch_height();
         let anchor_height = stake_table_anchor_root_height(epoch, epoch_height)?;
 
-        let anchor_header = mock_v4_header(anchor_height, 200, None).await;
+        let anchor_header = mock_v5_header(anchor_height, 200, None).await;
         let peer = MockPeer {
             anchor: Some(anchor_header),
             ..Default::default()
@@ -3312,7 +3202,7 @@ mod tests {
             stake_table_state_from_l1_events([ValidatorRegistered::from(&wrong_val).into()])?;
         assert_ne!(wrong_state.commit(), expected_hash);
 
-        let anchor_header = mock_v4_header(100, 200, Some(expected_hash)).await;
+        let anchor_header = mock_v5_header(100, 200, Some(expected_hash)).await;
         let peer = MockPeer {
             state: Some(wrong_state),
             skip_hash_check: true,
@@ -3349,7 +3239,7 @@ mod tests {
         let epoch_height = *instance.coordinator.epoch_height();
         let anchor_height = stake_table_anchor_root_height(epoch, epoch_height)?;
 
-        let anchor_header = mock_v4_header(
+        let anchor_header = mock_v5_header(
             anchor_height,
             200,
             Some(StakeTableState::default().commit()),
@@ -3391,11 +3281,11 @@ mod tests {
         let epoch_height = *instance.coordinator.epoch_height();
         let anchor_height = stake_table_anchor_root_height(epoch, epoch_height)?;
 
-        let wrong_header = mock_v4_header(0, 1, None).await;
+        let wrong_header = mock_v5_header(0, 1, None).await;
         let storage = MemEventsStorage::default();
         storage.set_epoch_root(EpochNumber::new(*epoch + 1), wrong_header);
 
-        let anchor_header = mock_v4_header(
+        let anchor_header = mock_v5_header(
             anchor_height,
             200,
             Some(StakeTableState::default().commit()),
@@ -4423,6 +4313,82 @@ mod tests {
             "https://ethereum-rpc.publicnode.com",
             "0xcef474d372b5b09defe2af187bf17338dc704451",
             25_188_000,
+        )
+        .await;
+    }
+
+    /// Fetches the initial supply from L1 for `chain_id` and asserts it matches the constant
+    /// hardcoded in `known_initial_supply`.
+    ///
+    /// Guards against a wrong hardcoded constant: since `known_initial_supply` is consulted
+    /// before any L1 call, a wrong value would make this node compute different block rewards
+    /// from the rest of the network, a consensus fault.
+    async fn assert_known_initial_supply_matches_l1(
+        rpc_url: &str,
+        stake_table_contract: &str,
+        chain_id: ChainId,
+    ) {
+        let expected =
+            known_initial_supply(chain_id).expect("chain id must have a hardcoded initial supply");
+
+        let l1 = L1ClientOptions {
+            l1_events_max_retry_duration: Duration::from_secs(120),
+            l1_events_max_block_range: 10_000,
+            l1_retry_delay: Duration::from_secs(2),
+            ..Default::default()
+        }
+        .connect(vec![rpc_url.parse().unwrap()])
+        .expect("unable to construct l1 client");
+
+        let fetcher = Fetcher::new(
+            Arc::new(crate::mock::MockStateCatchup::default()),
+            Arc::new(AsyncMutex::new(MemEventsStorage::default())),
+            l1,
+            ChainConfig {
+                chain_id,
+                stake_table_contract: Some(stake_table_contract.parse().unwrap()),
+                ..Default::default()
+            },
+        );
+
+        let fetched = fetcher
+            .fetch_and_update_initial_supply()
+            .await
+            .expect("failed to fetch initial supply from L1");
+
+        assert_eq!(
+            fetched, expected,
+            "hardcoded initial supply for chain id {chain_id} does not match L1"
+        );
+    }
+
+    /// publicnode's free-tier mainnet endpoint rejects full-range `eth_getLogs` with "Archive
+    /// requests require a personal token", so this can only be run against an archival RPC.
+    #[ignore = "talks to public Ethereum mainnet RPC; requires an archival endpoint"]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn fetch_initial_supply_matches_mainnet_constant() {
+        assert_known_initial_supply_matches_l1(
+            "https://ethereum-rpc.publicnode.com",
+            "0xcef474d372b5b09defe2af187bf17338dc704451",
+            MAINNET_CHAIN_ID,
+        )
+        .await;
+    }
+
+    /// Confirmed by hand: `eth_getLogs` with a topic filter silently returns no results for this
+    /// block range on publicnode's free-tier Sepolia endpoint, even though an unfiltered query
+    /// over the same range and address returns the log (including the `Initialized` event). This
+    /// makes `EspToken::Initialized_filter` unusable here, so the scan fallback exhausts
+    /// `MAX_BLOCKS_SCANNED` without ever seeing the event. Needs an archival RPC with working
+    /// topic-indexed log queries.
+    #[ignore = "talks to public Sepolia RPC; topic-filtered eth_getLogs returns empty for this old \
+                block range on publicnode's free tier"]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn fetch_initial_supply_matches_decaf_constant() {
+        assert_known_initial_supply_matches_l1(
+            "https://ethereum-sepolia-rpc.publicnode.com",
+            "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037",
+            DECAF_CHAIN_ID,
         )
         .await;
     }

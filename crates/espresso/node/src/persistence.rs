@@ -2344,8 +2344,8 @@ mod tests {
         instance_state.epoch_height = Some(STAKE_TABLE_STATE_TEST_EPOCH_HEIGHT);
         instance_state.epoch_start_block = 0;
         // `Header::genesis` picks the header version from `genesis_version`, not from the
-        // version passed to `Leaf::genesis`; V4+ is required for `next_stake_table_hash`.
-        instance_state.genesis_version = version(0, 4);
+        // version passed to `Leaf::genesis`; `next_stake_table_hash` needs V4 or newer.
+        instance_state.genesis_version = version(0, 5);
         instance_state
     }
 
@@ -2355,7 +2355,7 @@ mod tests {
         l1_block: Option<u64>,
     ) -> Header {
         let validated_state = hotshot_types::traits::ValidatedState::genesis(instance_state).0;
-        let leaf: Leaf2 = Leaf::genesis(&validated_state, instance_state, version(0, 4))
+        let leaf: Leaf2 = Leaf::genesis(&validated_state, instance_state, version(0, 5))
             .await
             .into();
         let mut header = leaf.block_header().clone();
