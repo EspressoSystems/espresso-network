@@ -1,4 +1,4 @@
-use std::{collections::HashMap, mem, net::IpAddr, sync::Arc, time::Duration};
+use std::{collections::HashMap, mem, sync::Arc, time::Duration};
 
 use bytes::{Bytes, BytesMut};
 use tokio::{
@@ -175,24 +175,13 @@ impl Server {
                             self.spawn_hello(conn, Hello::BackOff(Duration::MAX));
                             continue
                         }
-                        let Some(party) = self.parties.get_mut(&conn.key) else {
+                        if !self.parties.contains_key(&conn.key) {
                             info!(
                                 name = %self.conf.name,
                                 node = %self.key,
                                 peer = %conn.key,
                                 addr = %conn.addr,
                                 "unknown party"
-                            );
-                            self.spawn_hello(conn, Hello::BackOff(self.conf.backoff_duration));
-                            continue
-                        };
-                        if party.ip_addr_mismatch(conn.addr.ip()) {
-                            warn!(
-                                name = %self.conf.name,
-                                node = %self.key,
-                                peer = %conn.key,
-                                addr = %conn.addr,
-                                "party has invalid ip addr"
                             );
                             self.spawn_hello(conn, Hello::BackOff(self.conf.backoff_duration));
                             continue
@@ -766,13 +755,6 @@ impl Party {
             retry: DelayQueue::new(c),
             peer: PeerState::None,
         }
-    }
-
-    fn ip_addr_mismatch(&self, addr: IpAddr) -> bool {
-        let NetAddr::Inet(ip, _) = &self.addr else {
-            return false;
-        };
-        *ip != addr
     }
 }
 
