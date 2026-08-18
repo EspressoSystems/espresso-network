@@ -250,6 +250,9 @@ pub struct Consensus<T: NodeType> {
     /// Skipped by `maybe_vote_2_and_update_lock` (V1 AvidM dispersal).
     pre_cutover_views: BTreeSet<ViewNumber>,
 
+    /// Highest view known to have timed out, by this node's own timer or by a
+    /// received timeout certificate. Bars vote1 and propose at or below it,
+    /// never vote2 — a timeout vote endorses no branch (see `tests/safety.rs`).
     timeout_view: ViewNumber,
     /// Highest view this node may have acted in before a restart (from the
     /// persisted action log). Bars re-*recording* a view's Vote action, not
@@ -1464,6 +1467,7 @@ impl<T: NodeType> Consensus<T> {
         }
         let epoch = certificate.epoch();
         self.timeout_certs.insert(view, certificate.cert().clone());
+        self.timeout_view = max(self.timeout_view, certificate.view_number());
         self.current_view = self.current_view.max(view);
         self.current_epoch = Some(epoch);
         outbox.push_back(ConsensusOutput::ViewChanged(view, epoch));

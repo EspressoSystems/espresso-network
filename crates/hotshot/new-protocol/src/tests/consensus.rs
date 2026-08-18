@@ -88,6 +88,31 @@ async fn test_timeout_filters_vote1_not_processing() {
     );
 }
 
+/// A received timeout certificate bars vote1 like a local timeout does:
+/// inputs for views at or below the certified view are still processed,
+/// but vote1 is suppressed there.
+#[tokio::test]
+async fn test_timeout_cert_filters_vote1_not_processing() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(6).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    // Timeout certificate for view 3 → enter view 4, bar vote1 at <= 3.
+    harness.apply(test_data.views[2].timeout_cert_input()).await;
+
+    // Send stale proposal (view 2, which is <= the certified view 3).
+    // It is still processed (state validation requested) but vote1 is suppressed.
+    harness
+        .apply_pair(test_data.views[1].proposal_input_consensus(&node_key))
+        .await;
+
+    assert_eq!(1, count_matching(harness.outputs(), is_request_state));
+    assert!(
+        !any(harness.outputs(), is_vote1),
+        "Vote1 should not fire in a view a timeout certificate abandoned"
+    );
+}
+
 /// Vote1 fires for sequential views when all preconditions are met.
 #[tokio::test]
 async fn test_vote1_for_sequential_views() {
@@ -1138,14 +1163,52 @@ async fn test_vote_after_timeout_cert() {
     );
 }
 
+/// A node that never timed out locally is still barred from vote1 in a view
+/// once a timeout certificate for it arrives: a quorum abandoned the view,
+/// so a vote coming due late — here, state validation finishing after the
+/// certificate — is suppressed. Without the certificate the same release
+/// casts the vote (cf. `test_vote1_for_sequential_views`).
+#[tokio::test]
+async fn test_timeout_cert_bars_late_vote1() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(3).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    // View 1 in full, so view 2's vote1 lacks nothing but its state validation.
+    harness
+        .apply_pair(test_data.views[0].proposal_input_consensus(&node_key))
+        .await;
+    harness
+        .apply(test_data.views[0].block_reconstructed_input())
+        .await;
+
+    // View 2's proposal arrives while its state validation is still running.
+    harness.defer_state(ViewNumber::new(2));
+    harness
+        .apply_pair(test_data.views[1].proposal_input_consensus(&node_key))
+        .await;
+    let vote1_count = count_matching(harness.outputs(), is_vote1);
+
+    // A quorum abandoned view 2 before validation finished.
+    harness.apply(test_data.views[1].timeout_cert_input()).await;
+    harness.release_state(ViewNumber::new(2)).await;
+
+    assert_eq!(
+        count_matching(harness.outputs(), is_vote1),
+        vote1_count,
+        "no vote1 in a view a timeout certificate abandoned"
+    );
+}
+
 /// After a timeout certificate advances the view, a proposal whose
 /// justify_qc references a view below the lock is rejected by the
 /// safety rule. This simulates a leader with a stale lock proposing
 /// after a timeout — the replica's higher lock prevents voting.
 ///
-/// The proposal's view (3) passes the stale filter (timeout_view is 0
-/// because no local Timeout fired), but is_safe rejects it because
-/// justify_qc.view (2) < locked_qc.view (3) and the commitments differ.
+/// The proposal sits at view 4, above the vote1 bar the timeout
+/// certificate for view 3 raises, so it is is_safe that rejects it:
+/// justify_qc.view (2) is not newer than locked_qc.view (3), and the
+/// commitments differ.
 #[tokio::test]
 async fn test_no_vote_after_timeout_for_proposal_below_lock() {
     let mut harness = ConsensusHarness::new(0).await;
@@ -1164,19 +1227,52 @@ async fn test_no_vote_after_timeout_for_proposal_below_lock() {
     }
 
     // Receive timeout cert for view 3 → view advances to 4.
-    // No local Timeout fires, so timeout_view stays at 0 and proposals
-    // are filtered only by the safety rule, not the stale filter.
     harness.apply(test_data.views[2].timeout_cert_input()).await;
 
     let vote1_count = count_matching(harness.outputs(), is_vote1);
 
-    // Re-send view 3's proposal. Its justify_qc is cert1 for view 2.
-    // Stale filter: view 3 > timeout_view (0) → passes.
+    // View 4's leader proposes from a stale lock: justify_qc is cert1 for
+    // view 2, with the timeout certificate as evidence for the gap. It
+    // reuses view 4's payload so the VID share still pairs with it.
+    // Stale filter: view 4 > timeout_view (3) → passes.
     // Safety:  justify_qc.view (2) > locked_qc.view (3) → false (liveness fails)
     //          justify_qc commitment ≠ locked_qc commitment → false (safety fails)
     // → Proposal rejected by is_safe.
+    let below_lock = {
+        let template = &test_data.views[3];
+        let parent_leaf: Leaf2<TestTypes> = test_data.views[1].proposal.data.clone().into();
+        let mut proposal = template.proposal.data.clone();
+        proposal.block_header = TestBlockHeader::new(
+            &parent_leaf,
+            template.proposal.data.block_header.payload_commitment,
+            template
+                .proposal
+                .data
+                .block_header
+                .builder_commitment
+                .clone(),
+            template.proposal.data.block_header.metadata,
+            TEST_VERSIONS.test.base,
+        );
+        proposal.justify_qc = test_data.views[1].cert1.clone();
+        proposal.view_change_evidence = Some(test_data.views[2].timeout_cert.clone());
+        proposal
+    };
+    let signature = <BLSPubKey as SignatureKey>::sign(
+        &test_data.views[3].leader_private_key,
+        proposal_commitment(&below_lock).as_ref(),
+    )
+    .expect("sign the below-lock proposal");
     harness
-        .apply_pair(test_data.views[2].proposal_input_consensus(&node_key))
+        .apply(ConsensusInput::Proposal(
+            test_data.views[3].leader_public_key,
+            crate::message::ProposalMessage::validated(SignedProposal::new(below_lock, signature)),
+        ))
+        .await;
+    harness
+        .apply(ConsensusInput::VidShare(
+            test_data.views[3].vid_share_for(&node_key),
+        ))
         .await;
 
     assert_eq!(
