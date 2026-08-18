@@ -110,7 +110,7 @@ impl TestHarness {
             .expect("keypair derivation should succeed");
         let port =
             test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
-        let addr = hotshot_types::addr::NetAddr::Inet(std::net::Ipv4Addr::LOCALHOST.into(), port);
+        let addr = hotshot_types::addr::NetAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
         let network = Cliquenet::create(
             "test-harness",
             public_key,

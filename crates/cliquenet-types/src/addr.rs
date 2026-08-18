@@ -109,22 +109,29 @@ fn is_canonical(ip: IpAddr, text: &str) -> bool {
 /// every address prints to a string that parses back to it, and every string this
 /// accepts prints back to itself, up to the case of a hostname.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum NetAddr {
-    Inet(IpAddr, u16),
-    Name(Hostname, u16),
+pub struct NetAddr {
+    host: Host,
+    port: u16,
+}
+
+/// The host part of a [`NetAddr`], to match on.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Host {
+    Inet(IpAddr),
+    Name(Hostname),
 }
 
 impl NetAddr {
     /// The address `host:port`, where `host` is not bracketed.
     ///
-    /// An IP literal gives [`NetAddr::Inet`] and a hostname gives [`NetAddr::Name`];
+    /// An IP literal gives [`Host::Inet`] and a hostname gives [`Host::Name`];
     /// anything else is an error.
     pub fn host_port(host: &str, port: u16) -> Result<Self, InvalidNetAddr> {
         match IpAddr::from_str(host) {
-            Ok(ip) if is_canonical(ip, host) => Ok(Self::Inet(ip, port)),
+            Ok(ip) if is_canonical(ip, host) => Ok(Self::inet(ip, port)),
             Ok(_) => Err(InvalidNetAddr(())),
             Err(_) => Hostname::new(host.to_string())
-                .map(|h| Self::Name(h, port))
+                .map(|h| Self::name(h, port))
                 .ok_or(InvalidNetAddr(())),
         }
     }
@@ -139,22 +146,27 @@ impl NetAddr {
         S: Into<Cow<'static, str>>,
     {
         Hostname::new(name)
-            .map(|h| Self::Name(h, port))
+            .map(|h| Self::name(h, port))
             .expect("valid hostname")
     }
 
-    pub fn port(&self) -> u16 {
-        match self {
-            Self::Inet(_, p) => *p,
-            Self::Name(_, p) => *p,
+    pub fn host(&self) -> &Host {
+        &self.host
+    }
+
+    pub fn ip(&self) -> Option<IpAddr> {
+        match self.host {
+            Host::Inet(ip) => Some(ip),
+            Host::Name(_) => None,
         }
     }
 
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
     pub fn set_port(&mut self, p: u16) {
-        match self {
-            Self::Inet(_, o) => *o = p,
-            Self::Name(_, o) => *o = p,
-        }
+        self.port = p;
     }
 
     pub fn with_port(mut self, p: u16) -> Self {
@@ -170,7 +182,7 @@ impl NetAddr {
     }
 
     pub fn is_ip(&self) -> bool {
-        matches!(self, Self::Inet(..))
+        matches!(self.host, Host::Inet(_))
     }
 
     /// Whether this address is plausibly publicly routable. Returns `false` for IP literals
@@ -180,8 +192,8 @@ impl NetAddr {
     /// using stable predicates; the IPv6 surface is incomplete (`fe80::/10` link-local and
     /// `fc00::/7` unique-local addresses are treated as global here).
     pub fn is_probably_global(&self) -> bool {
-        match self {
-            Self::Inet(IpAddr::V4(v4), _) => {
+        match &self.host {
+            Host::Inet(IpAddr::V4(v4)) => {
                 !(v4.is_loopback()
                     || v4.is_unspecified()
                     || v4.is_private()
@@ -189,33 +201,48 @@ impl NetAddr {
                     || v4.is_broadcast()
                     || v4.is_documentation())
             },
-            Self::Inet(IpAddr::V6(v6), _) => {
+            Host::Inet(IpAddr::V6(v6)) => {
                 !(v6.is_loopback() || v6.is_unspecified() || v6.is_multicast())
             },
-            Self::Name(host, _) => host.as_str() != "localhost",
+            Host::Name(host) => host.as_str() != "localhost",
+        }
+    }
+
+    fn inet(ip: IpAddr, port: u16) -> Self {
+        Self {
+            host: Host::Inet(ip.to_canonical()),
+            port,
+        }
+    }
+
+    fn name(host: Hostname, port: u16) -> Self {
+        Self {
+            host: Host::Name(host),
+            port,
         }
     }
 }
 
 impl fmt::Display for NetAddr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Inet(a @ IpAddr::V6(_), p) => write!(f, "[{a}]:{p}"),
-            Self::Inet(a, p) => write!(f, "{a}:{p}"),
-            Self::Name(h, p) => write!(f, "{h}:{p}"),
+        let p = self.port;
+        match &self.host {
+            Host::Inet(a @ IpAddr::V6(_)) => write!(f, "[{a}]:{p}"),
+            Host::Inet(a) => write!(f, "{a}:{p}"),
+            Host::Name(h) => write!(f, "{h}:{p}"),
         }
     }
 }
 
 impl From<(IpAddr, u16)> for NetAddr {
     fn from((ip, p): (IpAddr, u16)) -> Self {
-        Self::Inet(ip.to_canonical(), p)
+        Self::inet(ip, p)
     }
 }
 
 impl From<(Ipv4Addr, u16)> for NetAddr {
     fn from((ip, p): (Ipv4Addr, u16)) -> Self {
-        Self::Inet(IpAddr::V4(ip), p)
+        Self::inet(IpAddr::V4(ip), p)
     }
 }
 
@@ -248,7 +275,7 @@ impl FromStr for NetAddr {
             let port = parse_port(&rest[i + 2..])?;
             let host = &rest[..i];
             match IpAddr::from_str(host) {
-                Ok(ip @ IpAddr::V6(_)) if is_canonical(ip, host) => Ok(Self::Inet(ip, port)),
+                Ok(ip @ IpAddr::V6(_)) if is_canonical(ip, host) => Ok(Self::inet(ip, port)),
                 _ => Err(InvalidNetAddr(())),
             }
         } else {
@@ -299,13 +326,13 @@ mod tests {
 
     use quickcheck::{Arbitrary, Gen, quickcheck};
 
-    use super::{Hostname, NetAddr, is_hostname};
+    use super::{Host, Hostname, NetAddr, is_hostname};
 
     impl Arbitrary for NetAddr {
         fn arbitrary(g: &mut Gen) -> Self {
             let port = u16::arbitrary(g);
             if bool::arbitrary(g) {
-                NetAddr::Name(arbitrary_hostname(g), port)
+                NetAddr::name(arbitrary_hostname(g), port)
             } else {
                 NetAddr::from((IpAddr::arbitrary(g), port))
             }
@@ -351,10 +378,15 @@ mod tests {
 
         /// No hostname is an IP literal, so a `Name` never prints as an address.
         fn prop_hostname_is_not_a_literal(a: NetAddr) -> bool {
-            match a {
-                NetAddr::Name(h, _) => h.parse::<IpAddr>().is_err(),
-                NetAddr::Inet(..) => true,
+            match a.host() {
+                Host::Name(h) => h.parse::<IpAddr>().is_err(),
+                Host::Inet(_) => true,
             }
+        }
+
+        /// Every address holds a canonical IP, however it was built.
+        fn prop_ip_is_canonical(a: NetAddr) -> bool {
+            a.ip().is_none_or(|ip| ip.to_canonical() == ip)
         }
     }
 

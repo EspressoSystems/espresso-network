@@ -416,27 +416,28 @@ where
         };
 
         let connect_info = peer.connect_info.as_ref().map(|info| {
-            let p2p_addr = match &info.p2p_addr {
-                hotshot_types::addr::NetAddr::Inet(ip, port) => v2::NetAddr {
-                    addr_type: Some(v2::net_addr::AddrType::Inet(v2::InetAddr {
-                        host: match ip {
-                            std::net::IpAddr::V4(_) => ip.to_string(),
-                            std::net::IpAddr::V6(_) => format!("[{ip}]"),
-                        },
-                        port: *port as u32,
-                    })),
-                },
-                hotshot_types::addr::NetAddr::Name(name, port) => v2::NetAddr {
-                    addr_type: Some(v2::net_addr::AddrType::Name(v2::NameAddr {
+            let port = info.p2p_addr.port() as u32;
+            let addr_type = match info.p2p_addr.host() {
+                hotshot_types::addr::Host::Inet(ip) => v2::net_addr::AddrType::Inet(v2::InetAddr {
+                    host: match ip {
+                        std::net::IpAddr::V4(_) => ip.to_string(),
+                        std::net::IpAddr::V6(_) => format!("[{ip}]"),
+                    },
+                    port,
+                }),
+                hotshot_types::addr::Host::Name(name) => {
+                    v2::net_addr::AddrType::Name(v2::NameAddr {
                         name: name.to_string(),
-                        port: *port as u32,
-                    })),
+                        port,
+                    })
                 },
             };
 
             v2::PeerConnectInfo {
                 x25519_key: info.x25519_key.to_string(),
-                p2p_addr: Some(p2p_addr),
+                p2p_addr: Some(v2::NetAddr {
+                    addr_type: Some(addr_type),
+                }),
             }
         });
 

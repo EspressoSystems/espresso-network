@@ -1,1 +1,1 @@
-pub use cliquenet_types::addr::{Hostname, InvalidNetAddr, NetAddr};
+pub use cliquenet_types::addr::{Host, Hostname, InvalidNetAddr, NetAddr};
