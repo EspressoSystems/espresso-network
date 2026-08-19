@@ -177,16 +177,16 @@
 <a href=#177 id=177 data-nosnippet>177</a>            state_private_key,
 <a href=#178 id=178 data-nosnippet>178</a>            stake_table_capacity,
 <a href=#179 id=179 data-nosnippet>179</a>            upgrade_lock.clone(),
-<a href=#180 id=180 data-nosnippet>180</a>            initializer.anchor_leaf.clone(),
-<a href=#181 id=181 data-nosnippet>181</a>            initializer.epoch_height,
+<a href=#180 id=180 data-nosnippet>180</a>            initializer.anchor_leaf().clone(),
+<a href=#181 id=181 data-nosnippet>181</a>            initializer.epoch_height(),
 <a href=#182 id=182 data-nosnippet>182</a>        );
 <a href=#183 id=183 data-nosnippet>183</a>
-<a href=#184 id=184 data-nosnippet>184</a>        <span class="kw">let </span>anchor_leaf = <span class="kw-2">&amp;</span>initializer.anchor_leaf;
+<a href=#184 id=184 data-nosnippet>184</a>        <span class="kw">let </span>anchor_leaf = initializer.anchor_leaf();
 <a href=#185 id=185 data-nosnippet>185</a>        <span class="kw">let </span>anchor_view = anchor_leaf.view_number();
 <a href=#186 id=186 data-nosnippet>186</a>        <span class="kw">let </span>anchor_epoch = anchor_leaf
-<a href=#187 id=187 data-nosnippet>187</a>            .epoch(initializer.epoch_height)
+<a href=#187 id=187 data-nosnippet>187</a>            .epoch(initializer.epoch_height())
 <a href=#188 id=188 data-nosnippet>188</a>            .unwrap_or(EpochNumber::genesis());
-<a href=#189 id=189 data-nosnippet>189</a>        <span class="kw">let </span>cert1 = initializer.high_qc.clone();
+<a href=#189 id=189 data-nosnippet>189</a>        <span class="kw">let </span>cert1 = initializer.high_qc().clone();
 <a href=#190 id=190 data-nosnippet>190</a>        <span class="kw">let </span>parent_proposal = message::Proposal {
 <a href=#191 id=191 data-nosnippet>191</a>            block_header: anchor_leaf.block_header().clone(),
 <a href=#192 id=192 data-nosnippet>192</a>            view_number: anchor_view,
@@ -210,7 +210,7 @@
 <a href=#210 id=210 data-nosnippet>210</a>            .then(|| metrics::Metrics::new(consensus_metrics));
 <a href=#211 id=211 data-nosnippet>211</a>
 <a href=#212 id=212 data-nosnippet>212</a>        <span class="kw">let </span><span class="kw-2">mut </span>state_manager = StateManager::new(
-<a href=#213 id=213 data-nosnippet>213</a>            Arc::new(initializer.instance_state.clone()),
+<a href=#213 id=213 data-nosnippet>213</a>            Arc::new(initializer.instance_state().clone()),
 <a href=#214 id=214 data-nosnippet>214</a>            upgrade_lock.clone(),
 <a href=#215 id=215 data-nosnippet>215</a>        )
 <a href=#216 id=216 data-nosnippet>216</a>        .with_metrics(
@@ -226,12 +226,12 @@
 <a href=#226 id=226 data-nosnippet>226</a>        );
 <a href=#227 id=227 data-nosnippet>227</a>        <span class="comment">// Seed `from_header` stubs for restored undecided proposals so a child
 <a href=#228 id=228 data-nosnippet>228</a>        // proposal can be validated; anchor seeded last so its state wins.
-<a href=#229 id=229 data-nosnippet>229</a>        </span><span class="kw">for </span>p <span class="kw">in </span>initializer.saved_proposals.values() {
+<a href=#229 id=229 data-nosnippet>229</a>        </span><span class="kw">for </span>p <span class="kw">in </span>initializer.saved_proposals().values() {
 <a href=#230 id=230 data-nosnippet>230</a>            state_manager.seed_from_header(message::Proposal::from(p.data.clone()));
 <a href=#231 id=231 data-nosnippet>231</a>        }
 <a href=#232 id=232 data-nosnippet>232</a>        state_manager.seed_state(
 <a href=#233 id=233 data-nosnippet>233</a>            anchor_view,
-<a href=#234 id=234 data-nosnippet>234</a>            initializer.anchor_state.clone(),
+<a href=#234 id=234 data-nosnippet>234</a>            initializer.anchor_state().clone(),
 <a href=#235 id=235 data-nosnippet>235</a>            anchor_leaf.clone(),
 <a href=#236 id=236 data-nosnippet>236</a>        );
 <a href=#237 id=237 data-nosnippet>237</a>        <span class="comment">// The anchor leaf and persisted proposals are blocks this node had
@@ -241,7 +241,7 @@
 <a href=#241 id=241 data-nosnippet>241</a>            std::iter::once((anchor_view, anchor_leaf.block_header().clone()))
 <a href=#242 id=242 data-nosnippet>242</a>                .chain(
 <a href=#243 id=243 data-nosnippet>243</a>                    initializer
-<a href=#244 id=244 data-nosnippet>244</a>                        .saved_proposals
+<a href=#244 id=244 data-nosnippet>244</a>                        .saved_proposals()
 <a href=#245 id=245 data-nosnippet>245</a>                        .iter()
 <a href=#246 id=246 data-nosnippet>246</a>                        .map(|(view, p)| (<span class="kw-2">*</span>view, p.data.block_header().clone())),
 <a href=#247 id=247 data-nosnippet>247</a>                )
@@ -251,7 +251,7 @@
 <a href=#251 id=251 data-nosnippet>251</a>                });
 <a href=#252 id=252 data-nosnippet>252</a>        <span class="comment">// Seed every persisted proposal before `seed_parent` so its authoritative anchor wins.
 <a href=#253 id=253 data-nosnippet>253</a>        </span><span class="kw">let </span>saved_proposals = initializer
-<a href=#254 id=254 data-nosnippet>254</a>            .saved_proposals
+<a href=#254 id=254 data-nosnippet>254</a>            .saved_proposals()
 <a href=#255 id=255 data-nosnippet>255</a>            .values()
 <a href=#256 id=256 data-nosnippet>256</a>            .map(|p| message::Proposal::from(p.data.clone()));
 <a href=#257 id=257 data-nosnippet>257</a>        consensus.seed_proposals(saved_proposals);
@@ -267,10 +267,10 @@
 <a href=#267 id=267 data-nosnippet>267</a>        }
 <a href=#268 id=268 data-nosnippet>268</a>        consensus.resume_from_restart(
 <a href=#269 id=269 data-nosnippet>269</a>            anchor_view,
-<a href=#270 id=270 data-nosnippet>270</a>            initializer.start_view,
-<a href=#271 id=271 data-nosnippet>271</a>            initializer.last_actioned_view,
+<a href=#270 id=270 data-nosnippet>270</a>            initializer.start_view(),
+<a href=#271 id=271 data-nosnippet>271</a>            initializer.last_actioned_view(),
 <a href=#272 id=272 data-nosnippet>272</a>        );
-<a href=#273 id=273 data-nosnippet>273</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(state_cert) = initializer.state_cert.clone() {
+<a href=#273 id=273 data-nosnippet>273</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(state_cert) = initializer.state_cert().cloned() {
 <a href=#274 id=274 data-nosnippet>274</a>            consensus.seed_state_cert(state_cert);
 <a href=#275 id=275 data-nosnippet>275</a>        }
 <a href=#276 id=276 data-nosnippet>276</a>
@@ -320,23 +320,23 @@
 <a href=#320 id=320 data-nosnippet>320</a>                lock.clone(),
 <a href=#321 id=321 data-nosnippet>321</a>            ))
 <a href=#322 id=322 data-nosnippet>322</a>            .epoch_manager(EpochManager::new(
-<a href=#323 id=323 data-nosnippet>323</a>                initializer.epoch_height,
+<a href=#323 id=323 data-nosnippet>323</a>                initializer.epoch_height(),
 <a href=#324 id=324 data-nosnippet>324</a>                membership_coordinator.clone(),
 <a href=#325 id=325 data-nosnippet>325</a>            ))
 <a href=#326 id=326 data-nosnippet>326</a>            .block_builder(BlockBuilder::new(
-<a href=#327 id=327 data-nosnippet>327</a>                Arc::new(initializer.instance_state.clone()),
+<a href=#327 id=327 data-nosnippet>327</a>                Arc::new(initializer.instance_state().clone()),
 <a href=#328 id=328 data-nosnippet>328</a>                membership_coordinator.clone(),
 <a href=#329 id=329 data-nosnippet>329</a>                BlockBuilderConfig::default(),
 <a href=#330 id=330 data-nosnippet>330</a>                upgrade_lock.clone(),
 <a href=#331 id=331 data-nosnippet>331</a>            ))
 <a href=#332 id=332 data-nosnippet>332</a>            .proposal_validator(ProposalValidator::new(
 <a href=#333 id=333 data-nosnippet>333</a>                membership_coordinator.clone(),
-<a href=#334 id=334 data-nosnippet>334</a>                initializer.epoch_height,
+<a href=#334 id=334 data-nosnippet>334</a>                initializer.epoch_height(),
 <a href=#335 id=335 data-nosnippet>335</a>                upgrade_lock.clone(),
 <a href=#336 id=336 data-nosnippet>336</a>            ))
 <a href=#337 id=337 data-nosnippet>337</a>            .share_validator(VidShareValidator::new(
 <a href=#338 id=338 data-nosnippet>338</a>                membership_coordinator.clone(),
-<a href=#339 id=339 data-nosnippet>339</a>                initializer.epoch_height,
+<a href=#339 id=339 data-nosnippet>339</a>                initializer.epoch_height(),
 <a href=#340 id=340 data-nosnippet>340</a>                upgrade_lock,
 <a href=#341 id=341 data-nosnippet>341</a>            ))
 <a href=#342 id=342 data-nosnippet>342</a>            .storage(Storage::new(storage, private_key).with_metrics(metrics))
