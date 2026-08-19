@@ -177,13 +177,6 @@ impl SequencerPersistence for NoStorage {
         Ok(())
     }
 
-    async fn store_next_epoch_quorum_certificate(
-        &self,
-        _high_qc: NextEpochQuorumCertificate2<SeqTypes>,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-
     async fn load_next_epoch_quorum_certificate(
         &self,
     ) -> anyhow::Result<Option<NextEpochQuorumCertificate2<SeqTypes>>> {
