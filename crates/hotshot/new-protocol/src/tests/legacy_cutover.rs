@@ -60,6 +60,7 @@ use crate::{
     helpers::test_upgrade_lock,
     network::Cliquenet,
     outbox::Outbox,
+    payload_fetch::PayloadFetcher,
     tests::common::{utils::mock_membership_with_client, views},
 };
 
@@ -332,6 +333,7 @@ async fn build_cutover_coordinator(
             ViewNumber::genesis(),
             hotshot_types::data::EpochNumber::genesis(),
         ))
+        .payload_fetcher(PayloadFetcher::new(public_key, 10 * 1024 * 1024))
         .public_key(public_key)
         .build()
 }

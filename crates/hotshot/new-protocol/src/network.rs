@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    num::NonZeroUsize,
     sync::Arc,
 };
 
@@ -398,6 +399,10 @@ impl<T: NodeType> Sender<T> {
         let bytes = self.serialize(m)?;
         self.sender.broadcast(Slot::new(*v), bytes)?;
         Ok(())
+    }
+
+    pub fn max_message_size(&self) -> NonZeroUsize {
+        self.sender.config().max_message_size()
     }
 
     fn serialize(&self, m: &Message<T, Validated>) -> Result<Vec<u8>, NetworkError> {

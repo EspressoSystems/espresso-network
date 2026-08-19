@@ -22,6 +22,7 @@ use crate::{
     message::Message,
     network::Cliquenet,
     outbox::Outbox,
+    payload_fetch::PayloadFetcher,
     proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
     tests::common::mock::MockCoordinator,
@@ -155,6 +156,7 @@ impl TestHarness {
                 ViewNumber::genesis(),
                 EpochNumber::genesis(),
             ))
+            .payload_fetcher(PayloadFetcher::new(public_key, 10 * 1024 * 1024))
             .public_key(public_key)
             .node_id(KeyPrefix::from(&public_key))
             .build();

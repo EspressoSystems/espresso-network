@@ -30,6 +30,7 @@ use crate::{
     message::{Certificate1, Proposal},
     network::Cliquenet,
     outbox::Outbox,
+    payload_fetch::PayloadFetcher,
     proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
     vid::{VidDisperser, VidReconstructor},
@@ -265,6 +266,7 @@ pub async fn build_test_coordinator(
             ViewNumber::genesis(),
             EpochNumber::genesis(),
         ))
+        .payload_fetcher(PayloadFetcher::new(public_key, 10 * 1024 * 1024))
         .public_key(public_key)
         .build();
 

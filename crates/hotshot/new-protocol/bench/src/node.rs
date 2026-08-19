@@ -18,6 +18,7 @@ use hotshot_new_protocol::{
     helpers::proposal_commitment,
     network::Cliquenet,
     outbox::Outbox,
+    payload_fetch::PayloadFetcher,
     proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
     vid::{VidDisperser, VidReconstructor},
@@ -217,6 +218,7 @@ async fn build_coordinator(
         .membership_coordinator(membership)
         .outbox(Outbox::new())
         .timer(timer)
+        .payload_fetcher(PayloadFetcher::new(public_key, 10 * 1024 * 1024))
         .public_key(public_key)
         .build();
 

@@ -38,6 +38,11 @@ pub enum VidReconstructErrorKind {
     /// disperser committed to a non-codeword, so no subset can ever recover it.
     #[error("unrecoverable: verified shares cannot decode to a payload matching the commitment")]
     Unrecoverable,
+    /// A payload obtained whole from a peer does not re-commit. Says nothing
+    /// about the view's shares — share-based reconstruction continues — only
+    /// that this response was bad.
+    #[error("fetched payload does not match the commitment")]
+    FetchedPayloadMismatch,
 }
 
 /// A failed reconstruction attempt for one view and claimed commitment.
@@ -169,13 +174,83 @@ impl<T: NodeType> VidReconstructor<T> {
         self.try_reconstruct(view);
     }
 
+    /// Verify a payload obtained whole from a peer instead of decoded from
+    /// shares, and surface it through [`Self::next`] like any reconstruction.
+    ///
+    /// Nothing in the response is trusted: the bytes count only if they
+    /// re-commit to `payload_commitment` under the committee's `param` — the
+    /// same binding [`decode_and_recommit`] enforces for shares. The caller
+    /// pins commitment and metadata from its own validated proposal, so a
+    /// peer can at worst waste the verification.
+    ///
+    /// Runs outside `calculations` on purpose: a share-based attempt may be
+    /// in flight for the same view, and neither should wait for the other.
+    /// [`Self::next`] keeps the first success and drops the loser.
+    pub(crate) fn handle_fetched_payload(
+        &mut self,
+        view: ViewNumber,
+        epoch: EpochNumber,
+        payload_commitment: VidCommitment2,
+        metadata: Metadata<T>,
+        param: AvidmGf2Param,
+        payload: Vec<u8>,
+    ) {
+        if self.reconstructed.contains(&view) {
+            return;
+        }
+        self.tasks.spawn_blocking(move || {
+            let ns_table = parse_ns_table(payload.len(), &metadata.encode());
+            match AvidmGf2Scheme::commit(&param, &payload, ns_table) {
+                Ok((recomputed, _)) if recomputed == payload_commitment => {
+                    let payload = T::BlockPayload::from_bytes(&payload, &metadata);
+                    let tx_commitments = payload.transaction_commitments(&metadata);
+                    Ok(VidReconstructOutput {
+                        view,
+                        epoch,
+                        payload_commitment,
+                        payload,
+                        metadata,
+                        tx_commitments,
+                    })
+                },
+                Ok((recomputed, _)) => {
+                    warn!(
+                        %view,
+                        expected = %payload_commitment,
+                        %recomputed,
+                        "fetched payload does not match the payload commitment"
+                    );
+                    Err(VidReconstructError {
+                        view,
+                        payload_commitment,
+                        kind: VidReconstructErrorKind::FetchedPayloadMismatch,
+                        bad_share_keys: Vec::new(),
+                    })
+                },
+                Err(err) => {
+                    warn!(%view, %err, "failed to commit fetched payload");
+                    Err(VidReconstructError {
+                        view,
+                        payload_commitment,
+                        kind: VidReconstructErrorKind::FetchedPayloadMismatch,
+                        bad_share_keys: Vec::new(),
+                    })
+                },
+            }
+        });
+    }
+
     pub async fn next(&mut self) -> Option<ReconstructResult<T>> {
         loop {
             match self.tasks.join_next().await {
                 Some(Ok(Ok(out))) => {
                     self.calculations.remove(&out.view);
                     self.accumulators.remove(&out.view);
-                    self.reconstructed.insert(out.view);
+                    // A share-based attempt and a fetched-payload verification
+                    // may race; the first one out wins, the loser is dropped.
+                    if !self.reconstructed.insert(out.view) {
+                        continue;
+                    }
                     return Some(Ok(out));
                 },
                 Some(Ok(Err(err))) => {
@@ -209,6 +284,9 @@ impl<T: NodeType> VidReconstructor<T> {
         match err.kind {
             VidReconstructErrorKind::Unrecoverable => accumulator.exhausted = true,
             VidReconstructErrorKind::AwaitingShares => self.try_reconstruct(err.view),
+            VidReconstructErrorKind::FetchedPayloadMismatch => {
+                // A bad response indicts the responder, not the view's shares.
+            },
         }
     }
 

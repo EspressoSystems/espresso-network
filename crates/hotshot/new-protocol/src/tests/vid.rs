@@ -205,6 +205,74 @@ async fn test_no_duplicate_reconstruction_after_threshold() {
     .await;
 }
 
+/// A payload fetched whole from a peer counts as reconstructed only if it
+/// re-commits to the proposal's commitment; corrupted bytes are rejected with
+/// [`VidReconstructErrorKind::FetchedPayloadMismatch`] and leave share-based
+/// reconstruction untouched.
+#[tokio::test]
+async fn test_fetched_payload_verification() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let commitment = view.vid_shares[0].payload_commitment;
+    let metadata = view.proposal.data.block_header.metadata;
+    let epoch = view.proposal.data.epoch;
+    let param = view.vid_shares[0].common.param.clone();
+
+    // The genuine payload bytes, obtained by reconstructing once from shares —
+    // what a serving peer would answer a payload fetch with.
+    let mut source = VidReconstructor::<TestTypes>::new();
+    handle_proposal(&mut source, view);
+    for i in 0..view.vid_shares.len() as u64 {
+        feed(&mut source, honest_share(view, i));
+    }
+    let bytes = {
+        use hotshot_types::traits::block_contents::EncodeBytes;
+        let out = tokio::time::timeout(std::time::Duration::from_secs(5), source.next())
+            .await
+            .expect("reconstruction should complete in time")
+            .expect("should produce a result")
+            .expect("reconstruction should succeed");
+        out.payload.encode().to_vec()
+    };
+
+    // Genuine bytes verify and surface like any reconstruction.
+    let mut fetched = VidReconstructor::<TestTypes>::new();
+    fetched.handle_fetched_payload(
+        view.view_number,
+        epoch,
+        commitment,
+        metadata,
+        param.clone(),
+        bytes.clone(),
+    );
+    expect_reconstruction(&mut fetched, view).await;
+
+    // Corrupted bytes are rejected: the commitment does not recompute.
+    // (Appended, not flipped: the test payload may be empty.)
+    let mut corrupted = bytes.clone();
+    corrupted.push(0xb7);
+    let mut rejecting = VidReconstructor::<TestTypes>::new();
+    rejecting.handle_fetched_payload(
+        view.view_number,
+        epoch,
+        commitment,
+        metadata,
+        param,
+        corrupted,
+    );
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), rejecting.next())
+        .await
+        .expect("verification should complete in time")
+        .expect("should produce a result");
+    match result {
+        Ok(_) => panic!("corrupted bytes must not verify"),
+        Err(err) => {
+            assert_eq!(err.kind, VidReconstructErrorKind::FetchedPayloadMismatch);
+            assert!(err.bad_share_keys.is_empty());
+        },
+    }
+}
+
 /// `retire_view` should suppress reconstruction for the retired view
 /// even when the proposal and threshold-plus shares are fed in afterwards.
 #[tokio::test]

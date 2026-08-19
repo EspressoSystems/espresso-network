@@ -3,7 +3,8 @@ use std::marker::PhantomData;
 use committable::{Commitment, Committable};
 use hotshot_types::{
     data::{
-        EpochNumber, VidDisperseShare2, ViewNumber, vid_disperse::AvidmGf2DisperseShareFragment,
+        EpochNumber, VidCommitment2, VidDisperseShare2, ViewNumber,
+        vid_disperse::AvidmGf2DisperseShareFragment,
     },
     message::Proposal as SignedProposal,
     request_response::ProposalRequestPayload,
@@ -240,14 +241,21 @@ impl<T: NodeType, S> HasEpoch for EpochChangeMessage<T, S> {
     }
 }
 
+/// A signed request for one view's data, shared by every fetch kind: which
+/// data is asked for — proposal, whole payload, or the receiver's VID share —
+/// is carried by the enclosing [`MessageType`] variant, not the signature.
+/// That reuse is safe because senders are transport-authenticated and
+/// [`Self::validate_sender`] binds the signing key to the sender, so a
+/// request cannot be replayed by anyone else, and answering one kind in
+/// place of another serves nothing the peer would not serve anyway.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
-pub struct ProposalFetchRequest<T: NodeType> {
+pub struct FetchRequest<T: NodeType> {
     pub payload: ProposalRequestPayload<T>,
     pub signature: <T::SignatureKey as SignatureKey>::PureAssembledSignatureType,
 }
 
-impl<T: NodeType> ProposalFetchRequest<T> {
+impl<T: NodeType> FetchRequest<T> {
     pub fn new(
         view_number: ViewNumber,
         key: T::SignatureKey,
@@ -267,7 +275,7 @@ impl<T: NodeType> ProposalFetchRequest<T> {
     }
 }
 
-impl<T: NodeType> HasViewNumber for ProposalFetchRequest<T> {
+impl<T: NodeType> HasViewNumber for FetchRequest<T> {
     fn view_number(&self) -> ViewNumber {
         self.payload.view_number
     }
@@ -332,7 +340,7 @@ impl<T: NodeType, S> HasViewNumber for ConsensusMessage<T, S> {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
 pub enum ProposalFetchMessage<T: NodeType> {
-    Request(ProposalFetchRequest<T>),
+    Request(FetchRequest<T>),
     Response(Box<SignedProposal<T, Proposal<T>>>),
 }
 
@@ -343,6 +351,39 @@ impl<T: NodeType> HasViewNumber for ProposalFetchMessage<T> {
             Self::Response(proposal) => proposal.data.view_number(),
         }
     }
+}
+
+/// Fetch of a certified view's payload, whole, from a single peer.
+///
+/// Used for payloads small enough to fit one message; larger payloads
+/// go through [`MessageType::ShareFetch`].
+///
+/// The response carries the raw encoded bytes, which the receiver verifies
+/// by recomputing the VID commitment its own validated proposal pins —
+/// nothing in the response is trusted.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = ""))]
+pub enum PayloadFetchMessage<T: NodeType> {
+    Request(FetchRequest<T>),
+    Response(PayloadFetchResponse),
+}
+
+impl<T: NodeType> HasViewNumber for PayloadFetchMessage<T> {
+    fn view_number(&self) -> ViewNumber {
+        match self {
+            Self::Request(request) => request.view_number(),
+            Self::Response(response) => response.view,
+        }
+    }
+}
+
+/// The raw encoded payload of one view's block (see [`PayloadFetchMessage`]).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+pub struct PayloadFetchResponse {
+    pub view: ViewNumber,
+    pub payload_commitment: VidCommitment2,
+    #[serde(with = "serde_bytes")]
+    pub payload: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
@@ -383,6 +424,11 @@ pub enum MessageType<T: NodeType, S> {
     Consensus(ConsensusMessage<T, S>),
     Block(BlockMessage<T>),
     ProposalFetch(ProposalFetchMessage<T>),
+    PayloadFetch(PayloadFetchMessage<T>),
+    /// Request for the receiver's own VID share of a certified view, used for
+    /// payloads too large to fetch whole. There is no response variant: the
+    /// receiver answers with its regular [`ConsensusMessage::VidShareBroadcast`].
+    ShareFetch(FetchRequest<T>),
     External(#[serde(with = "serde_bytes")] Vec<u8>),
 }
 
@@ -393,6 +439,8 @@ impl<T: NodeType, S> MessageType<T, S> {
             Self::Consensus(c) => MessageType::Consensus(c.into_unchecked()),
             Self::Block(b) => MessageType::Block(b),
             Self::ProposalFetch(r) => MessageType::ProposalFetch(r),
+            Self::PayloadFetch(r) => MessageType::PayloadFetch(r),
+            Self::ShareFetch(r) => MessageType::ShareFetch(r),
             Self::External(v) => MessageType::External(v),
         }
     }
@@ -425,6 +473,8 @@ impl<T: NodeType, S> HasViewNumber for Message<T, S> {
             MessageType::Consensus(consensus_message) => consensus_message.view_number(),
             MessageType::Block(block_message) => block_message.view_number(),
             MessageType::ProposalFetch(message) => message.view_number(),
+            MessageType::PayloadFetch(message) => message.view_number(),
+            MessageType::ShareFetch(request) => request.view_number(),
             MessageType::External(_) => ViewNumber::new(1), // TODO: This can become a problem
         }
     }

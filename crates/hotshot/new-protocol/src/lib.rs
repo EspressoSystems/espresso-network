@@ -10,6 +10,7 @@ pub mod logging;
 pub mod message;
 pub mod network;
 pub mod outbox;
+pub mod payload_fetch;
 pub mod state;
 pub mod storage;
 pub mod utils;

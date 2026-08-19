@@ -45,8 +45,8 @@ use crate::{
     helpers::proposal_commitment,
     logging::KeyPrefix,
     message::{
-        CatchupEvidence, Certificate1, Certificate2, EpochChangeMessage, Proposal,
-        ProposalFetchRequest, ProposalMessage, Validated, Vote1, Vote2,
+        CatchupEvidence, Certificate1, Certificate2, EpochChangeMessage, FetchRequest, Proposal,
+        ProposalMessage, Validated, Vote1, Vote2,
     },
     outbox::Outbox,
     state::{StateRequest, StateResponse},
@@ -170,6 +170,12 @@ pub enum ConsensusOutput<T: NodeType> {
     RequestMissingProposal {
         view: ViewNumber,
         leaf_commit: Commitment<Leaf2<T>>,
+    },
+    /// The view is certified and its proposal held, but its payload never
+    /// reconstructed while the network moved on -- recover it from peers.
+    RequestMissingPayload {
+        view: ViewNumber,
+        payload_commitment: VidCommitment2,
     },
     /// Emitted when a node has reconstructed a block payload from VID shares.
     /// Notifies downstream consumers (e.g. the query service) so they can store
@@ -604,11 +610,11 @@ impl<T: NodeType> Consensus<T> {
             .to_proposal(&self.private_key)
     }
 
-    pub fn signed_proposal_fetch_request(
+    pub fn signed_fetch_request(
         &self,
         view: ViewNumber,
-    ) -> Result<ProposalFetchRequest<T>, <T::SignatureKey as SignatureKey>::SignError> {
-        ProposalFetchRequest::new(view, self.public_key.clone(), &self.private_key)
+    ) -> Result<FetchRequest<T>, <T::SignatureKey as SignatureKey>::SignError> {
+        FetchRequest::new(view, self.public_key.clone(), &self.private_key)
     }
 
     /// Return the Certificate2 stored at the given view, if any.
@@ -626,6 +632,20 @@ impl<T: NodeType> Consensus<T> {
     /// Return the view of the locked certificate, if set.
     pub fn locked_view(&self) -> Option<ViewNumber> {
         self.locked_cert.as_ref().map(|c| c.view_number())
+    }
+
+    /// This node's own VID share for `view`.
+    pub fn vid_share_at(&self, view: ViewNumber) -> Option<&VidDisperseShare2<T>> {
+        self.vid_shares.get(&view)
+    }
+
+    /// The payload this node built for `view` with this commitment, if any.
+    pub fn built_payload_at(
+        &self,
+        view: ViewNumber,
+        commitment: VidCommitment2,
+    ) -> Option<&T::BlockPayload> {
+        self.blocks.get(&(view, commitment))
     }
 
     /// Newest view that can no longer be decided (and below which decide
@@ -691,7 +711,7 @@ impl<T: NodeType> Consensus<T> {
             },
             ConsensusInput::Certificate1(certificate) => {
                 debug!(epoch = %certificate.epoch(), "apply: certificate1");
-                self.handle_certificate1(certificate)
+                self.handle_certificate1(certificate, outbox)
             },
             ConsensusInput::Certificate2(certificate) => {
                 debug!(epoch = %certificate.epoch(), "apply: certificate2");
@@ -714,7 +734,7 @@ impl<T: NodeType> Consensus<T> {
                 // proposer has it on hand. Atomicity invariant: this pair always
                 // arrives together; Consensus never sees the Cert1 alone.
                 self.state_certs.insert(state_cert.epoch, state_cert);
-                self.handle_certificate1(cert1)
+                self.handle_certificate1(cert1, outbox)
             },
             ConsensusInput::TimeoutCertificate(certificate) => {
                 let timed_out_view = certificate.view_number();
@@ -730,8 +750,21 @@ impl<T: NodeType> Consensus<T> {
             ConsensusInput::BlockReconstructed(view, vid_commitment) => {
                 debug!(%view, "apply: block reconstructed");
                 self.blocks_reconstructed.insert((view, vid_commitment));
-                // Retry the child whose vote1 is gated on this parent reconstruction.
-                self.maybe_vote_1(view + 1, outbox);
+                // Retry every votable child whose vote1 is gated on this
+                // parent's reconstruction. More than `view + 1` can be
+                // waiting: while a view's payload was missing, every later
+                // proposal extends it — but of those, only the ones above the
+                // timeout bar can still be voted, so the views between the
+                // parent and the bar are skipped outright.
+                let children: Vec<ViewNumber> = self
+                    .proposals
+                    .range(max(view, self.timeout_view) + 1..)
+                    .filter(|(_, p)| p.justify_qc.view_number() == view)
+                    .map(|(&child, _)| child)
+                    .collect();
+                for child in children {
+                    self.maybe_vote_1(child, outbox);
+                }
                 Protocol::Continue
             },
             ConsensusInput::StateValidated(state_response) => {
@@ -1207,6 +1240,75 @@ impl<T: NodeType> Consensus<T> {
         self.adopt_certified_drb(view);
     }
 
+    /// Ask peers for whatever keeps the certified `view` from being acted on.
+    ///
+    /// A Cert1 proves a quorum held the view's proposal and enough shares to
+    /// reconstruct its payload, so whatever this node is missing, peers have.
+    /// Nothing pushes it again — proposals and share broadcasts are sent once
+    /// and the transport's retries are garbage-collected a few views behind
+    /// the frontier — so a node that missed them can only pull. Without the
+    /// pull a single such node can halt certification for good: it cannot vote
+    /// on any proposal extending `view` ([`Self::parent_reconstructed`]), every
+    /// certifiable proposal must extend `view` while the other nodes' locks
+    /// are pinned there, and once the faulty nodes leave no vote to spare its
+    /// vote is the one that cannot be missed.
+    ///
+    /// Gated on the network having moved past the view: in healthy operation
+    /// a certificate precedes this node's reconstruction by moments and
+    /// fetching would be noise. Views at or below the lock need nothing —
+    /// locking implies reconstruction — and deciding needs no payload at all.
+    fn request_missing_certified_data(
+        &self,
+        view: ViewNumber,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) {
+        if self.locked_view().is_some_and(|locked| view <= locked) {
+            return;
+        }
+        if view > self.timeout_view && self.timeout_certs.range(view + 1..).next().is_none() {
+            return;
+        }
+        let Some(cert) = self.certs.get(&view) else {
+            return;
+        };
+        match self.proposals.get(&view) {
+            Some(proposal) if proposal_commitment(proposal) == cert.data.leaf_commit => {
+                if let VidCommitment::V2(payload_commitment) =
+                    proposal.block_header.payload_commitment()
+                    && !self
+                        .blocks_reconstructed
+                        .contains(&(view, payload_commitment))
+                {
+                    outbox.push_back(ConsensusOutput::RequestMissingPayload {
+                        view,
+                        payload_commitment,
+                    });
+                }
+            },
+            // Missing, or not the certified proposal (an equivocation kept
+            // the wrong one): fetch the one the certificate names.
+            _ => outbox.push_back(ConsensusOutput::RequestMissingProposal {
+                view,
+                leaf_commit: cert.data.leaf_commit,
+            }),
+        }
+    }
+
+    /// Re-check every certified view above the lock for missing data.
+    ///
+    /// Fired on the timeout path, where `Self::request_missing_certified_data`
+    /// can newly apply to a certificate this node already holds: the
+    /// certificate arrives once, but whether the network has moved past its
+    /// view changes with every timeout and timeout certificate.
+    fn request_all_missing_certified_data(&self, outbox: &mut Outbox<ConsensusOutput<T>>) {
+        let from = self
+            .locked_view()
+            .map_or(ViewNumber::genesis(), |locked| locked + 1);
+        for (&view, _) in self.certs.range(from..) {
+            self.request_missing_certified_data(view, outbox);
+        }
+    }
+
     fn request_parent_proposal_if_missing(
         &self,
         proposal: &Proposal<T>,
@@ -1227,13 +1329,18 @@ impl<T: NodeType> Consensus<T> {
     }
 
     #[instrument(level = "debug", skip_all)]
-    fn handle_certificate1(&mut self, certificate: ValidCert<Certificate1<T>>) -> Protocol {
+    fn handle_certificate1(
+        &mut self,
+        certificate: ValidCert<Certificate1<T>>,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) -> Protocol {
         let view = certificate.view_number();
         if view <= self.decide_floor() {
             return Protocol::Continue;
         }
         self.certs.entry(view).or_insert(certificate.into_cert());
         self.adopt_certified_drb(view);
+        self.request_missing_certified_data(view, outbox);
         Protocol::Continue
     }
 
@@ -1311,6 +1418,14 @@ impl<T: NodeType> Consensus<T> {
         let view = cert1.view_number();
 
         if view < self.current_view {
+            // A certificate for a view already left behind advances nothing,
+            // but it can be the missing link for a view the network is stuck
+            // on — the catchup evidence on timeout votes arrives exactly
+            // here. Keep it and ask for whatever is needed to act on it.
+            if view > self.decide_floor() {
+                self.certs.entry(view).or_insert(cert1.into_cert());
+                self.request_missing_certified_data(view, outbox);
+            }
             return Protocol::Continue;
         }
 
@@ -1318,6 +1433,7 @@ impl<T: NodeType> Consensus<T> {
 
         self.certs.entry(view).or_insert(cert1.into_cert());
         self.adopt_certified_drb(view);
+        self.request_missing_certified_data(view, outbox);
 
         // Ensure we submit a vote2 if we can:
         self.maybe_vote_2_and_update_lock(view, outbox);
@@ -1420,6 +1536,7 @@ impl<T: NodeType> Consensus<T> {
             }
         }
         self.timeout_view = max(self.timeout_view, view);
+        self.request_all_missing_certified_data(outbox);
         let data = TimeoutData2 {
             view,
             epoch: Some(epoch),
@@ -1464,6 +1581,7 @@ impl<T: NodeType> Consensus<T> {
         }
         let epoch = certificate.epoch();
         self.timeout_certs.insert(view, certificate.cert().clone());
+        self.request_all_missing_certified_data(outbox);
         self.current_view = self.current_view.max(view);
         self.current_epoch = Some(epoch);
         outbox.push_back(ConsensusOutput::ViewChanged(view, epoch));

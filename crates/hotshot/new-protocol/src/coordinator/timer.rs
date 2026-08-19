@@ -34,6 +34,10 @@ impl Timer {
         self.epoch
     }
 
+    pub fn duration(&self) -> Duration {
+        self.duration
+    }
+
     pub fn reset(&mut self) {
         self.done = false;
         self.sleep.as_mut().reset(Instant::now() + self.duration);
