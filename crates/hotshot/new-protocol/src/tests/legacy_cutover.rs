@@ -179,7 +179,7 @@ fn build_parties(num_nodes: usize) -> Vec<(Keypair, BLSPubKey, NetAddr)> {
             let (pk, sk) = BLSPubKey::generated_from_seed_indexed([0u8; 32], i as u64);
             let kp = Keypair::derive_from::<BLSPubKey>(&sk).unwrap();
             let port = test_utils::reserve_tcp_port().expect("port");
-            let addr = NetAddr::Inet(Ipv4Addr::LOCALHOST.into(), port);
+            let addr = NetAddr::from((Ipv4Addr::LOCALHOST, port));
             (kp, pk, addr)
         })
         .collect()

@@ -769,10 +769,7 @@ impl Party {
     }
 
     fn ip_addr_mismatch(&self, addr: IpAddr) -> bool {
-        let NetAddr::Inet(ip, _) = &self.addr else {
-            return false;
-        };
-        *ip != addr
+        self.addr.ip().is_some_and(|ip| ip != addr.to_canonical())
     }
 }
 

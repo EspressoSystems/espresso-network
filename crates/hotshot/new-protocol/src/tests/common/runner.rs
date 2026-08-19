@@ -333,7 +333,7 @@ impl TestRunner {
                 let keypair = Keypair::derive_from::<BLSPubKey>(&private_key).unwrap();
                 let port = test_utils::reserve_tcp_port()
                     .expect("OS should have ephemeral ports available");
-                let addr = NetAddr::Inet(std::net::Ipv4Addr::LOCALHOST.into(), port);
+                let addr = NetAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
                 (keypair, public_key, addr)
             })
             .collect::<Vec<_>>();

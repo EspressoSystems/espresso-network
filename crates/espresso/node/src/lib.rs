@@ -1448,7 +1448,7 @@ pub mod testing {
                 .map(|_| {
                     let port =
                         reserve_tcp_port().expect("OS should have ephemeral ports available");
-                    NetAddr::Inet(Ipv4Addr::LOCALHOST.into(), port)
+                    NetAddr::from((Ipv4Addr::LOCALHOST, port))
                 })
                 .collect();
 
