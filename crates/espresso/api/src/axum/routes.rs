@@ -64,8 +64,8 @@ pub mod v1 {
     pub const REWARD_V1_MERKLE_TREE_V2_ROUTE: &str =
         "/v1/reward-state/reward-merkle-tree-v2/{height}";
 
-    // Merklized-state `get_path` base routes, inherited from
-    // `hotshot-query-service`'s `merklized_state::define_api` for both reward mounts.
+    // Merklized-state `get_path` base routes, inherited from the legacy
+    // `hotshot-query-service` merklized-state API for both reward mounts.
     pub const REWARD_STATE_PATH_BY_HEIGHT_ROUTE: &str = "/v1/reward-state/{height}/{key}";
     pub const REWARD_STATE_PATH_BY_COMMIT_ROUTE: &str = "/v1/reward-state/commit/{commit}/{key}";
     pub const REWARD_STATE_V2_PATH_BY_HEIGHT_ROUTE: &str = "/v1/reward-state-v2/{height}/{key}";
@@ -156,6 +156,7 @@ pub mod v1 {
     pub const STATUS_SUCCESS_RATE_ROUTE: &str = "/v1/status/success-rate";
     pub const STATUS_TIME_SINCE_LAST_DECIDE_ROUTE: &str = "/v1/status/time-since-last-decide";
     pub const STATUS_METRICS_ROUTE: &str = "/v1/status/metrics";
+    pub const STATUS_KEYS_ROUTE: &str = "/v1/status/keys";
 
     pub const CONFIG_HOTSHOT_ROUTE: &str = "/v1/config/hotshot";
     pub const CONFIG_ENV_ROUTE: &str = "/v1/config/env";
@@ -603,6 +604,7 @@ pub mod v1 {
         STATUS_TIME_SINCE_LAST_DECIDE_ROUTE
     );
     path_fn!(status_metrics, STATUS_METRICS_ROUTE);
+    path_fn!(status_keys, STATUS_KEYS_ROUTE);
 
     // Config
     path_fn!(config_hotshot, CONFIG_HOTSHOT_ROUTE);

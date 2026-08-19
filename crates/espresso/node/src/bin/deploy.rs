@@ -14,6 +14,7 @@ use espresso_contract_deployer::{
     builder::DeployerArgsBuilder,
     network_config::{light_client_genesis, light_client_genesis_from_stake_table},
     proposals::{
+        deployment_info::Multisig,
         timelock::TimelockOperationType,
         verify::{VerifyProposalArgs, run_verify_standalone},
     },
@@ -22,7 +23,7 @@ use espresso_contract_deployer::{
 use espresso_types::{config::PublicNetworkConfig, parse_duration};
 use espresso_utils::logging;
 use hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY;
-use tide_disco::error::ServerError;
+use http_client::{Client, error::ClientErr};
 use url::Url;
 use vbs::version::StaticVersion;
 
@@ -273,6 +274,16 @@ struct Options {
     /// Root directory for written proposals (default: "contracts/deployments/proposals" relative to CWD).
     #[clap(long, name = "PROPOSALS_ROOT")]
     pub proposals_root: Option<PathBuf>,
+
+    /// Multisig that submits the timelock `schedule` phase of a generated proposal.
+    /// Required when the timelock has more than one proposer.
+    #[clap(long, env = "ESPRESSO_PROPOSAL_SCHEDULE_SAFE", value_enum)]
+    pub schedule_safe: Option<Multisig>,
+
+    /// Multisig that submits the timelock `execute` phase of a generated proposal.
+    /// Required when the timelock has more than one executor.
+    #[clap(long, env = "ESPRESSO_PROPOSAL_EXECUTE_SAFE", value_enum)]
+    pub execute_safe: Option<Multisig>,
 
     /// Stake table capacity for the prover circuit
     #[clap(short, long, env = "ESPRESSO_STAKE_TABLE_CAPACITY", default_value_t = DEFAULT_STAKE_TABLE_CAPACITY)]
@@ -594,6 +605,12 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     if let Some(root) = opt.proposals_root {
         args_builder.proposals_root(root);
     }
+    if let Some(safe) = opt.schedule_safe {
+        args_builder.schedule_safe(safe);
+    }
+    if let Some(safe) = opt.execute_safe {
+        args_builder.execute_safe(safe);
+    }
     if let Some(multisig) = opt.multisig_address {
         args_builder.multisig(multisig);
     }
@@ -629,12 +646,10 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
             // fetch epoch length from HotShot config
             // Request the configuration until it is successful
             loop {
-                match surf_disco::Client::<ServerError, StaticVersion<0, 1>>::new(
-                    opt.sequencer_url.clone(),
-                )
-                .get::<PublicNetworkConfig>("config/hotshot")
-                .send()
-                .await
+                match Client::<ClientErr, StaticVersion<0, 1>>::new(opt.sequencer_url.clone())
+                    .get::<PublicNetworkConfig>("config/hotshot")
+                    .send()
+                    .await
                 {
                     Ok(resp) => {
                         let config = resp.hotshot_config();

@@ -322,7 +322,7 @@ fn epoch_number_helper(
 
 async fn perform_stake_table_epoch_check_and_update<STSink, EVSink>(
     data_state: Arc<RwLock<DataState>>,
-    client: surf_disco::Client<hotshot_query_service::Error, Version01>,
+    client: http_client::Client<hotshot_query_service::Error, Version01>,
     hotshot_config: &PublicHotShotConfig,
     block_height: u64,
     mut stake_table_sender: STSink,
@@ -423,7 +423,7 @@ async fn process_incoming_leaf_and_block<BDSink, BVSink, STSink, EVSink>(
     leaf: Leaf1QueryData<SeqTypes>,
     block: BlockQueryData<SeqTypes>,
     data_state: Arc<RwLock<DataState>>,
-    client: surf_disco::Client<hotshot_query_service::Error, Version01>,
+    client: http_client::Client<hotshot_query_service::Error, Version01>,
     hotshot_config: &PublicHotShotConfig,
     senders: (BDSink, BVSink, STSink, EVSink),
 ) -> Result<(), ProcessLeafError>
@@ -549,7 +549,7 @@ impl ProcessLeafAndBlockPairStreamTask {
     pub fn new<S, K1, K2, K3, K4>(
         leaf_receiver: S,
         data_state: Arc<RwLock<DataState>>,
-        client: surf_disco::Client<hotshot_query_service::Error, Version01>,
+        client: http_client::Client<hotshot_query_service::Error, Version01>,
         hotshot_config: PublicHotShotConfig,
         senders: (K1, K2, K3, K4),
     ) -> Self
@@ -588,7 +588,7 @@ impl ProcessLeafAndBlockPairStreamTask {
     async fn process_leaf_stream<S, BDSink, BVSink, STSink, EVSink>(
         mut stream: S,
         data_state: Arc<RwLock<DataState>>,
-        client: surf_disco::Client<hotshot_query_service::Error, Version01>,
+        client: http_client::Client<hotshot_query_service::Error, Version01>,
         hotshot_config: PublicHotShotConfig,
         senders: (BDSink, BVSink, STSink, EVSink),
     ) where
@@ -888,7 +888,7 @@ mod tests {
         let mut process_leaf_stream_task_handle = ProcessLeafAndBlockPairStreamTask::new(
             leaf_receiver,
             data_state.clone(),
-            surf_disco::Client::new("http://localhost/".parse().unwrap()),
+            http_client::Client::new("http://localhost/".parse().unwrap()),
             PublicHotShotConfig {
                 epoch_start_block: None,
                 epoch_height: None,

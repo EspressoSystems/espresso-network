@@ -16,7 +16,7 @@ use anyhow::{Context, ensure};
 use async_trait::async_trait;
 use futures::{TryFutureExt, future::try_join_all};
 use hotshot_types::{data::VidCommon, traits::node_implementation::NodeType};
-use surf_disco::{Client, Url};
+use http_client::{Client, Url};
 use vbs::version::StaticVersionType;
 
 use super::Provider;
@@ -204,12 +204,21 @@ impl<Ver: StaticVersionType> TrustedQueryServiceProvider<Ver> {
     pub async fn fetch_cert2<Types: NodeType>(
         &self,
         height: u64,
-    ) -> anyhow::Result<Option<Certificate2<Types>>> {
-        self.client
+    ) -> anyhow::Result<Certificate2<Types>> {
+        let cert2: Certificate2<Types> = self
+            .client
             .get(&format!("availability/cert2/{height}"))
             .send()
             .await
-            .context("fetching cert2")
+            .context("fetching cert2")?;
+
+        ensure!(
+            cert2.data.block_number == height,
+            "received cert2 with the wrong height ({})",
+            cert2.data.block_number,
+        );
+
+        Ok(cert2)
     }
 }
 
@@ -220,7 +229,9 @@ where
     Types: NodeType,
 {
     async fn fetch(&self, req: Certificate2Request) -> Option<Option<Certificate2<Types>>> {
-        self.handle_result(req, self.fetch_cert2(req.height).await)
+        // A found cert2 is `Some(Some(_))`; a 404 (or other error) is `None`, which `any_fetch`
+        // skips so it tries the next provider instead of resolving as absent.
+        self.handle_result(req, self.fetch_cert2(req.height).await.map(Some))
     }
 }
 
@@ -328,25 +339,21 @@ where
 // These tests run the `postgres` Docker image, which doesn't work on Windows.
 #[cfg(all(test, not(target_os = "windows")))]
 mod test {
-    use std::{future::IntoFuture, time::Duration};
+    use std::{future::IntoFuture, marker::PhantomData, time::Duration};
 
+    use axum::{Router, extract::Path, http::HeaderMap, response::Response, routing::get};
     use committable::Committable;
-    use futures::{
-        future::{FutureExt, join},
-        stream::StreamExt,
-    };
+    use futures::{future::join, stream::StreamExt};
     use hotshot_example_types::node_types::{EpochVersion, TEST_VERSIONS};
-    use test_utils::reserve_tcp_port;
-    use tide_disco::{Api, App};
-    use toml::toml;
+    use hotshot_types::data::ViewNumber;
+    use tokio::{task::JoinHandle, time::timeout};
     use vbs::version::StaticVersion;
 
     use super::*;
     use crate::{
-        ApiState,
         availability::{
-            self, AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction,
-            Fetch, UpdateAvailabilityData, define_api,
+            AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction,
+            Certificate2, Fetch, UpdateAvailabilityData,
         },
         data_source::{
             AvailabilityProvider, FetchingDataSource, Transaction, VersionedDataSource,
@@ -358,12 +365,13 @@ mod test {
                 sql::testing::TmpDb,
             },
         },
-        fetching::provider::{NoFetching, Provider as ProviderTrait, TestProvider},
+        fetching::provider::{
+            AnyProvider, NoFetching, Provider as ProviderTrait, TestProvider, test_fixtures,
+        },
         node::data_source::NodeDataSource,
-        task::BackgroundTask,
         testing::{
             consensus::{MockDataSource, MockNetwork},
-            mocks::{MockBase, MockTypes, mock_transaction},
+            mocks::{MockBase, MockPayload, MockTypes, mock_transaction},
             sleep,
         },
         types::HeightIndexed,
@@ -373,6 +381,63 @@ mod test {
     type EpochProvider = TestProvider<TrustedQueryServiceProvider<EpochVersion>>;
 
     fn ignore<T>(_: T) {}
+
+    async fn v6_leaf(number: u64) -> LeafQueryData<MockTypes> {
+        use committable::Committable;
+        use hotshot_types::{data::Leaf2, simple_certificate::QuorumCertificate2};
+
+        let mut leaf = Leaf2::<MockTypes>::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        leaf.block_header_mut().block_number = number;
+        leaf.block_header_mut().version = versions::NEW_PROTOCOL_VERSION;
+        let mut qc = QuorumCertificate2::<MockTypes>::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test,
+        )
+        .await;
+        qc.view_number = ViewNumber::new(number);
+        qc.data.leaf_commit = Committable::commit(&leaf);
+        LeafQueryData::new(leaf, qc).unwrap()
+    }
+
+    /// A cert2 finalizing `leaf`.
+    fn cert2_for(leaf: &LeafQueryData<MockTypes>) -> Certificate2<MockTypes> {
+        use committable::Committable;
+        use hotshot_types::simple_vote::Vote2Data;
+
+        let data = Vote2Data {
+            leaf_commit: leaf.leaf().commit(),
+            epoch: Default::default(),
+            block_number: leaf.height(),
+        };
+        Certificate2::new(
+            data.clone(),
+            data.commit(),
+            leaf.leaf().view_number(),
+            None,
+            PhantomData,
+        )
+    }
+
+    /// Serve the availability API for `data_source` on a fresh port and return the port and the
+    /// task running the server.
+    async fn serve_availability(
+        data_source: impl AvailabilityDataSource<MockTypes> + Send + Sync + 'static,
+    ) -> (u16, JoinHandle<()>) {
+        test_fixtures::serve_availability(MockBase::instance(), data_source).await
+    }
+
+    fn trusted_provider(port: u16) -> TrustedQueryServiceProvider<MockBase> {
+        TrustedQueryServiceProvider::new(
+            format!("http://localhost:{port}").parse().unwrap(),
+            MockBase::instance(),
+        )
+    }
 
     /// Build a data source suitable for this suite of tests.
     async fn builder<P: AvailabilityProvider<MockTypes> + Clone>(
@@ -402,22 +467,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let db = TmpDb::init().await;
@@ -632,22 +682,9 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                EpochVersion::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), EpochVersion::instance()),
-        );
+        let (port, _server) =
+            test_fixtures::serve_availability(EpochVersion::instance(), network.data_source())
+                .await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         // Use our special test provider that handles epoch version transitions
@@ -858,22 +895,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let db = TmpDb::init().await;
@@ -919,22 +941,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let db = TmpDb::init().await;
@@ -984,22 +991,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let db = TmpDb::init().await;
@@ -1046,22 +1038,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let db = TmpDb::init().await;
@@ -1104,23 +1081,10 @@ mod test {
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
-        // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        // Start a web server that the non-consensus node can use to fetch blocks. This test
+        // fetches passively, so nothing ever contacts the server; it is here only to mirror the
+        // other tests' setup.
+        let (_port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus. We don't give it a
         // fetcher since transactions are always fetched passively anyways.
@@ -1184,22 +1148,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus.
         let db = TmpDb::init().await;
@@ -1258,22 +1207,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer. The
         // data source is at first configured to aggressively prune data.
@@ -1413,22 +1347,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let provider = Provider::new(TrustedQueryServiceProvider::new(
@@ -1519,22 +1438,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let provider = Provider::new(TrustedQueryServiceProvider::new(
@@ -1618,22 +1522,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus.
         let db = TmpDb::init().await;
@@ -1681,28 +1570,318 @@ mod test {
         assert_eq!(vid.block_hash(), leaf.block_hash());
     }
 
+    /// Test that fetching a leaf also backfills the leaf's cert2.
+    ///
+    /// A server node stores three V6 leaves and a cert2 for the first one. A client node fetches
+    /// the first leaf from the server and must automatically backfill its cert2, without an
+    /// explicit cert2 request. Fetching the second leaf, which has no cert2 (the common case,
+    /// since only the newest leaf of each decide batch carries one), must resolve as "absent"
+    /// and store nothing, rather than retrying forever.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_backfill_cert2_with_leaf() {
+        // A server that has V6 leaves and, at height 1, a cert2 in storage.
+        let server_db = TmpDb::init().await;
+        let server = data_source(&server_db, &NoFetching).await;
+
+        // The leaf at `height` is a decide head and carries a cert2. The leaf at `sparse_height`
+        // has none, the common case, since only the newest leaf of each decide batch carries one.
+        // The last leaf just seeds the client's block height.
+        let height = 1u64;
+        let leaf = v6_leaf(height).await;
+        let sparse_height = 2u64;
+        let sparse_leaf = v6_leaf(sparse_height).await;
+        let later_leaf = v6_leaf(3).await;
+        let cert2 = cert2_for(&leaf);
+
+        {
+            let mut tx = server.write().await.unwrap();
+            tx.insert_leaf(&leaf).await.unwrap();
+            tx.insert_leaf(&sparse_leaf).await.unwrap();
+            tx.insert_leaf(&later_leaf).await.unwrap();
+            tx.insert_cert2(height, cert2.clone()).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        let (port, _server_task) = serve_availability(server).await;
+
+        // A client with no cert2, fetching leaves from the server.
+        let client_db = TmpDb::init().await;
+        let provider = Provider::new(trusted_provider(port));
+        let client = builder(&client_db, &provider)
+            .await
+            .with_max_retry_interval(Duration::from_secs(1))
+            .build()
+            .await
+            .unwrap();
+
+        // Seed the client with the later leaf so it knows the block height and can actively fetch
+        // the earlier leaf. This carries no cert2, so it does not pre-populate what we are testing.
+        {
+            let mut tx = client.write().await.unwrap();
+            tx.insert_leaf(&later_leaf).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        // Fetching the earlier leaf triggers the cert2 backfill callback.
+        let fetched = client
+            .get_leaf(height as usize)
+            .await
+            .with_timeout(Duration::from_secs(30))
+            .await
+            .unwrap();
+        assert_eq!(fetched.height(), height);
+
+        // The cert2 is backfilled into the client's storage without an explicit cert2 request.
+        // Read it directly from storage so this check does not itself trigger a fetch.
+        let backfilled = timeout(Duration::from_secs(30), async {
+            loop {
+                {
+                    let mut tx = client.read().await.unwrap();
+                    if let Some(cert2) = tx.load_cert2(height).await.unwrap() {
+                        break cert2;
+                    }
+                }
+                sleep(Duration::from_millis(200)).await;
+            }
+        })
+        .await
+        .expect("cert2 was not backfilled");
+        assert_eq!(backfilled.data.leaf_commit, cert2.data.leaf_commit);
+
+        // Fetching a leaf with no cert2 (the sparse common case) resolves the backfill as
+        // "absent": the fetch completes and nothing is stored, rather than retrying forever.
+        let fetched = client
+            .get_leaf(sparse_height as usize)
+            .await
+            .with_timeout(Duration::from_secs(30))
+            .await
+            .unwrap();
+        assert_eq!(fetched.height(), sparse_height);
+        sleep(Duration::from_secs(1)).await;
+        {
+            let mut tx = client.read().await.unwrap();
+            let cert2: Option<Certificate2<MockTypes>> =
+                tx.load_cert2(sparse_height).await.unwrap();
+            assert!(cert2.is_none());
+        }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_backfill_cert2_with_scanner() {
+        // A server holding full blocks (so the scanner's block fetch succeeds) and, at height 1, a
+        // cert2. The scanner fetches missing blocks, which triggers the leaf fetch and hence the
+        // cert2 backfill.
+        let server_db = TmpDb::init().await;
+        let server = data_source(&server_db, &NoFetching).await;
+
+        // The scanner scans the whole range `[0, block_height)`, so the server needs a contiguous
+        // set of leaves and blocks from genesis. Only height 1 carries a cert2.
+        let height = 1u64;
+        let mut leaves = Vec::new();
+        for n in 0..=2 {
+            leaves.push(v6_leaf(n).await);
+        }
+        let leaf = leaves[height as usize].clone();
+        let tip = leaves.last().unwrap().clone();
+        let cert2 = cert2_for(&leaf);
+        {
+            let mut tx = server.write().await.unwrap();
+            for l in &leaves {
+                tx.insert_leaf(l).await.unwrap();
+                let block =
+                    BlockQueryData::<MockTypes>::new(l.header().clone(), MockPayload::genesis());
+                tx.insert_block(&block).await.unwrap();
+            }
+            tx.insert_cert2(height, cert2.clone()).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        let (port, _server_task) = serve_availability(server).await;
+
+        // A client that fetches from the server and runs the proactive scanner frequently. We do
+        // NOT call get_leaf/get_cert2 ourselves: the scanner alone should discover the missing
+        // history and backfill the cert2 as a side effect of fetching the leaf.
+        let client_db = TmpDb::init().await;
+        let provider = Provider::new(trusted_provider(port));
+        let client = client_db
+            .config()
+            .builder::<MockTypes, _>(provider)
+            .await
+            .unwrap()
+            .with_proactive_interval(Duration::from_secs(1))
+            .with_sync_status_ttl(Duration::from_secs(1))
+            .with_max_retry_interval(Duration::from_secs(1))
+            .build()
+            .await
+            .unwrap();
+
+        // Seed the tip so the scanner knows the block height and scans the range below it.
+        {
+            let mut tx = client.write().await.unwrap();
+            tx.insert_leaf(&tip).await.unwrap();
+            let tip_block =
+                BlockQueryData::<MockTypes>::new(tip.header().clone(), MockPayload::genesis());
+            tx.insert_block(&tip_block).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        let backfilled = timeout(Duration::from_secs(30), async {
+            loop {
+                {
+                    let mut tx = client.read().await.unwrap();
+                    if let Some(cert2) = tx.load_cert2(height).await.unwrap() {
+                        break cert2;
+                    }
+                }
+                sleep(Duration::from_millis(500)).await;
+            }
+        })
+        .await
+        .expect("scanner did not backfill cert2");
+        assert_eq!(backfilled.data.leaf_commit, cert2.data.leaf_commit);
+    }
+
+    // A cert2 provider that cannot supply the cert2 must not short-circuit the backfill: the fetch
+    // walks past it to a provider that has it. This covers both ways a provider fails to supply a
+    // cert2: since a peer that responds "absent" 404s, `fetch_cert2` errors and the provider
+    // returns `None`, the same outer-`None` a transport failure (`fail()`) produces here.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_cert2_fetch_walks_past_failing_peers() {
+        let server_db = TmpDb::init().await;
+        let server = data_source(&server_db, &NoFetching).await;
+        let leaf = v6_leaf(1).await;
+        let tip = v6_leaf(2).await;
+        let cert2 = cert2_for(&leaf);
+        {
+            let mut tx = server.write().await.unwrap();
+            tx.insert_leaf(&leaf).await.unwrap();
+            tx.insert_leaf(&tip).await.unwrap();
+            tx.insert_cert2(leaf.height(), cert2.clone()).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+        let (port, _server_task) = serve_availability(server).await;
+
+        // A healthy leaf provider (so the leaf fetch succeeds), and cert2 providers that are two
+        // failing then one healthy: the failures must not short-circuit the cert2 backfill.
+        let failing_a = TestProvider::new(trusted_provider(port));
+        let failing_b = TestProvider::new(trusted_provider(port));
+        failing_a.fail();
+        failing_b.fail();
+        let provider = AnyProvider::<MockTypes>::default()
+            .with_leaf_provider(TestProvider::new(trusted_provider(port)))
+            .with_cert2_provider(failing_a)
+            .with_cert2_provider(failing_b)
+            .with_cert2_provider(TestProvider::new(trusted_provider(port)));
+
+        let client_db = TmpDb::init().await;
+        let client = builder(&client_db, &provider)
+            .await
+            .with_max_retry_interval(Duration::from_secs(1))
+            .build()
+            .await
+            .unwrap();
+        {
+            let mut tx = client.write().await.unwrap();
+            tx.insert_leaf(&tip).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        client
+            .get_leaf(leaf.height() as usize)
+            .await
+            .with_timeout(Duration::from_secs(30))
+            .await
+            .unwrap();
+        let backfilled = timeout(Duration::from_secs(30), async {
+            loop {
+                {
+                    let mut tx = client.read().await.unwrap();
+                    if let Some(cert2) = tx.load_cert2(leaf.height()).await.unwrap() {
+                        break cert2;
+                    }
+                }
+                sleep(Duration::from_millis(200)).await;
+            }
+        })
+        .await
+        .expect("cert2 not backfilled while a peer had it");
+        assert_eq!(backfilled.data.leaf_commit, cert2.data.leaf_commit);
+    }
+
+    // When no cert2 provider can answer, the backfill resolves and
+    // stores nothing. The leaf is fetched from a healthy provider so its backfill callback fires
+    // while the cert2 providers all fail.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_cert2_fetch_resolves_when_no_peer_has_it() {
+        let server_db = TmpDb::init().await;
+        let server = data_source(&server_db, &NoFetching).await;
+        let leaf = v6_leaf(1).await;
+        let tip = v6_leaf(2).await;
+        {
+            let mut tx = server.write().await.unwrap();
+            tx.insert_leaf(&leaf).await.unwrap();
+            tx.insert_leaf(&tip).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+        let (port, _server_task) = serve_availability(server).await;
+
+        // Leaf provider is healthy; the only cert2 provider fails, so no cert2 fetch can be
+        // answered. (with_leaf_provider, not with_provider, so the failing cert2 provider is the
+        // sole entry in the cert2 list.)
+        let failing_cert2 = TestProvider::new(trusted_provider(port));
+        failing_cert2.fail();
+        let provider = AnyProvider::<MockTypes>::default()
+            .with_leaf_provider(TestProvider::new(trusted_provider(port)))
+            .with_cert2_provider(failing_cert2);
+
+        let client_db = TmpDb::init().await;
+        let client = builder(&client_db, &provider)
+            .await
+            .with_max_retry_interval(Duration::from_secs(1))
+            .build()
+            .await
+            .unwrap();
+        {
+            let mut tx = client.write().await.unwrap();
+            tx.insert_leaf(&tip).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        // Fetching the leaf succeeds (via the healthy leaf provider) and fires the cert2 backfill,
+        // whose providers all fail.
+        client
+            .get_leaf(leaf.height() as usize)
+            .await
+            .with_timeout(Duration::from_secs(30))
+            .await
+            .unwrap();
+
+        sleep(Duration::from_secs(2)).await;
+
+        // Nothing is stored, and the fetch resolved rather than dangling: no cert2 fetch is still in
+        // progress. If cert2 retried forever, this request would still be in progress here.
+        {
+            let mut tx = client.read().await.unwrap();
+            let cert2: Option<Certificate2<MockTypes>> =
+                tx.load_cert2(leaf.height()).await.unwrap();
+            assert!(
+                cert2.is_none(),
+                "no cert2 should be stored when no peer has it"
+            );
+        }
+        assert!(
+            !client.is_fetching_cert2(leaf.height()).await,
+            "cert2 fetch should have resolved, not be left retrying"
+        );
+    }
+
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_begin_failure() {
         // Create the consensus network.
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let provider = Provider::new(TrustedQueryServiceProvider::new(
@@ -1752,22 +1931,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let provider = Provider::new(TrustedQueryServiceProvider::new(
@@ -1835,22 +1999,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let provider = Provider::new(TrustedQueryServiceProvider::new(
@@ -1940,22 +2089,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let provider = Provider::new(TrustedQueryServiceProvider::new(
@@ -2014,22 +2148,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let provider = Provider::new(TrustedQueryServiceProvider::new(
@@ -2093,22 +2212,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let provider = Provider::new(TrustedQueryServiceProvider::new(
@@ -2208,22 +2312,7 @@ mod test {
         let mut network = MockNetwork::<MockDataSource>::init().await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
-        let port = reserve_tcp_port().unwrap();
-        let mut app = App::<_, Error>::with_state(ApiState::from(network.data_source()));
-        app.register_module(
-            "availability",
-            define_api(
-                &Default::default(),
-                MockBase::instance(),
-                "1.0.0".parse().unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        network.spawn(
-            "server",
-            app.serve(format!("0.0.0.0:{port}"), MockBase::instance()),
-        );
+        let (port, _server) = serve_availability(network.data_source()).await;
 
         // Start consensus.
         network.start().await;
@@ -2286,41 +2375,26 @@ mod test {
     }
 
     /// A test server which does not support ranged VID common requests.
-    async fn old_server(port: u16) {
-        let mut api = Api::<(), availability::Error, StaticVersion<1, 0>>::new(toml! {
-            [route.get_vid_common]
-            PATH = ["vid/common/:height"]
-            ":height" = "Integer"
-        })
-        .unwrap();
+    async fn old_server() -> (u16, JoinHandle<()>) {
+        async fn get_vid_common(headers: HeaderMap, Path(height): Path<u64>) -> Response {
+            let mut common = VidCommonQueryData::<MockTypes>::genesis(
+                &Default::default(),
+                &Default::default(),
+                TEST_VERSIONS.test.base,
+            )
+            .await;
+            common.height = height;
+            test_fixtures::respond::<StaticVersion<1, 0>, _>(&headers, Ok(common))
+        }
 
-        api.get("get_vid_common", move |req, _| {
-            async move {
-                let mut common = VidCommonQueryData::<MockTypes>::genesis(
-                    &Default::default(),
-                    &Default::default(),
-                    TEST_VERSIONS.test.base,
-                )
-                .await;
-                common.height = req.integer_param("height")?;
-                Ok(common)
-            }
-            .boxed()
-        })
-        .unwrap();
-
-        let mut app = App::<(), Error>::with_state(());
-        app.register_module("availability", api).unwrap();
-        app.serve(format!("0.0.0.0:{port}"), MockBase::instance())
-            .await
-            .ok();
+        let api = Router::new().route("/vid/common/{height}", get(get_vid_common));
+        test_fixtures::serve(test_fixtures::app::<StaticVersion<1, 0>>(api)).await
     }
 
     #[tokio::test]
     #[test_log::test]
     async fn test_vid_common_fallback() {
-        let port = reserve_tcp_port().unwrap();
-        let _server = BackgroundTask::spawn("old server", old_server(port));
+        let (port, _server) = old_server().await;
         let provider = TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             StaticVersion::<1, 0>::instance(),

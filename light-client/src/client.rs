@@ -18,9 +18,9 @@ use hotshot_query_service_types::availability::LeafId;
 use hotshot_query_service_types::{availability::LeafQueryData, node::BlockId};
 use hotshot_types::data::EpochNumber;
 #[cfg(feature = "client")]
-use serde::de::DeserializeOwned;
+use http_client::{StatusCode, Url, error::ClientError as _};
 #[cfg(feature = "client")]
-use surf_disco::Url;
+use serde::de::DeserializeOwned;
 #[cfg(feature = "client")]
 use tagged_base64::TaggedBase64;
 #[cfg(feature = "client")]
@@ -133,7 +133,7 @@ pub trait Client: Send + Sync + 'static {
 }
 
 #[cfg(feature = "client")]
-type HttpClient = surf_disco::Client<hotshot_query_service_types::Error, StaticVersion<0, 1>>;
+type HttpClient = http_client::Client<hotshot_query_service_types::Error, StaticVersion<0, 1>>;
 
 /// A [`Client`] connected to the HotShot query service.
 #[cfg(feature = "client")]
@@ -147,7 +147,7 @@ impl QueryServiceClient {
     /// Connect to a HotShot query service at the given base URL.
     pub fn new(url: Url) -> Self {
         Self {
-            client: surf_disco::Client::builder(url)
+            client: http_client::Client::builder(url)
                 .set_timeout(Some(Duration::from_secs(10)))
                 .build(),
         }
@@ -161,6 +161,15 @@ impl QueryServiceClient {
             .await
             .with_context(|| format!("fetching {path}"))
     }
+}
+
+#[cfg(feature = "client")]
+fn is_not_found(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<hotshot_query_service_types::Error>()
+            .is_some_and(|e| e.status() == StatusCode::NOT_FOUND)
+    })
 }
 
 #[cfg(feature = "client")]
@@ -248,7 +257,12 @@ impl Client for QueryServiceClient {
     }
 
     async fn cert2(&self, height: u64) -> Result<Option<Certificate2<SeqTypes>>> {
-        self.fetch(&format!("/availability/cert2/{height}")).await
+        // A peer that lacks the cert2 responds 404. We surface that as an error rather than
+        // `Ok(None)` so `FallbackClient` keeps trying other peers instead of stopping at the first
+        // one that lacks it; it resolves absent only once every peer has 404'd.
+        self.fetch::<Certificate2<SeqTypes>>(&format!("/availability/cert2/{height}"))
+            .await
+            .map(Some)
     }
 }
 
@@ -377,8 +391,17 @@ where
     }
 
     async fn cert2(&self, height: u64) -> Result<Option<Certificate2<SeqTypes>>> {
-        self.get_any(&self.clients, |client| client.cert2(height))
+        // Each peer 404s (an error) when it lacks the cert2, so `get_any` keeps trying peers until
+        // one has it. Once every peer has 404'd, `get_any` returns that not-found error, which we
+        // map back to `Ok(None)` (absent). Any other error propagates so the fetch is retried.
+        match self
+            .get_any(&self.clients, |client| client.cert2(height))
             .await
+        {
+            Ok(cert2) => Ok(cert2),
+            Err(err) if is_not_found(&err) => Ok(None),
+            Err(err) => Err(err),
+        }
     }
 }
 

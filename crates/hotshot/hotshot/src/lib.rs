@@ -191,10 +191,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
     /// well.
     ///
     /// Use this instead of `init` if you want to start the tasks manually
-    ///
-    /// # Panics
-    ///
-    /// Panics if storage migration fails.
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
         public_key: TYPES::SignatureKey,

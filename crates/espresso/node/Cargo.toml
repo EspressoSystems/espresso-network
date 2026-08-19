@@ -21,6 +21,7 @@ testing = [
     "light-client/testing",
     "espresso-utils/testing",
     "hotshot-query-service/testing",
+    "hotshot-new-protocol/testing",
 ]
 benchmarking = []
 embedded-db = ["hotshot-query-service/embedded-db", "sqlx/sqlite"]
@@ -35,6 +36,7 @@ async-channel = { workspace = true }
 async-lock = { workspace = true }
 async-once-cell = { workspace = true }
 async-trait = { workspace = true }
+axum = { workspace = true }
 base64 = { workspace = true }
 base64-bytes = { workspace = true }
 bincode = { workspace = true }
@@ -49,6 +51,7 @@ committable = { workspace = true }
 csv = { workspace = true }
 derivative = { workspace = true }
 derive_more = { workspace = true }
+disco-types = { workspace = true }
 dotenvy = { workspace = true }
 dyn-clone = { workspace = true }
 either = { workspace = true }
@@ -72,6 +75,8 @@ hotshot-state-prover = { workspace = true }
 hotshot-task-impls = { workspace = true }
 hotshot-testing = { workspace = true, optional = true }
 hotshot-types = { workspace = true }
+http-client = { workspace = true }
+http-wire = { workspace = true, features = ["server"] }
 include_dir = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true }
@@ -95,7 +100,6 @@ request-response = { workspace = true }
 reqwest = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = { workspace = true }
-semver = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 serde_json = { workspace = true }
@@ -106,12 +110,10 @@ sqlx = { workspace = true }
 staking-cli = { workspace = true }
 static_assertions = { workspace = true }
 strum = { workspace = true }
-surf-disco = { workspace = true }
 tagged-base64 = { workspace = true }
 tempfile = { workspace = true }
 test-utils = { workspace = true }
 thiserror = { workspace = true }
-tide-disco = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
@@ -130,6 +132,7 @@ vergen = { workspace = true }
 vergen-gitcl = { workspace = true }
 
 [dev-dependencies]
+bitvec = { workspace = true }
 escargot = { workspace = true }
 espresso-macros = { workspace = true }
 # Enable "testing" feature when running tests
@@ -144,7 +147,7 @@ rand = { workspace = true }
 reqwest = { workspace = true }
 tempfile = { workspace = true }
 test-log = { workspace = true }
-tokio-tungstenite = "0.28"
+tokio-tungstenite = { workspace = true }
 
 [lints]
 workspace = true
