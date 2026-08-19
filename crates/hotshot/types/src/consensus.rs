@@ -893,6 +893,8 @@ pub struct ConsensusMetricsValue {
     pub number_of_empty_blocks_proposed: Box<dyn Counter>,
     /// Number of events in the hotshot event queue
     pub internal_event_queue_len: Box<dyn Gauge>,
+    /// Number of epochs with a stake table catchup in progress
+    pub catchups_in_progress: Box<dyn Gauge>,
     /// Time from proposal creation to decide time
     pub proposal_to_decide_time: Box<dyn Histogram>,
     /// Time from proposal received to proposal creation
@@ -936,6 +938,7 @@ impl ConsensusMetricsValue {
                 .create_counter(String::from("number_of_empty_blocks_proposed"), None),
             internal_event_queue_len: metrics
                 .create_gauge(String::from("internal_event_queue_len"), None),
+            catchups_in_progress: metrics.create_gauge(String::from("catchups_in_progress"), None),
             proposal_to_decide_time: metrics
                 .create_histogram(String::from("proposal_to_decide_time"), None),
             previous_proposal_to_proposal_time: metrics
