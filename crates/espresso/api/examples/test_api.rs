@@ -8,10 +8,8 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use base64::{Engine, engine::general_purpose::STANDARD};
-use espresso_api::{v1, v2};
+use espresso_api::v1;
 use serde::Serialize;
-use serialization_api::ApiSerializations;
 
 /// Port for the test API server
 const API_PORT: u16 = 5001;
@@ -773,336 +771,238 @@ impl v1::DatabaseApi for TestApi {
     }
 }
 
-// Implement v2::RewardApi (simplified API - latest-only for claim/balance/proof)
-#[async_trait]
-impl v2::RewardApi for TestApi {
+// Implement the generated v2 tonic service traits with test data; the REST routes are
+// generated from the google.api.http annotations in the proto files.
+#[tonic::async_trait]
+impl espresso_api::proto::reward_service_server::RewardService for TestApi {
     async fn get_reward_claim_input(
         &self,
-        address: Self::Address,
-    ) -> Result<Self::RewardClaimInput> {
-        // Delegate to v1's latest implementation
-        <Self as v1::RewardApi>::get_latest_reward_balance(self, address.clone()).await?;
-        // Return claim input with dummy height
-        <Self as v1::RewardApi>::get_reward_claim_input(self, 9999, address).await
+        request: tonic::Request<serialization_api::v2::GetRewardClaimInputRequest>,
+    ) -> Result<tonic::Response<serialization_api::v2::RewardClaimInput>, tonic::Status> {
+        let request = request.into_inner();
+        tracing::info!("v2: get_reward_claim_input(address={})", request.address);
+        Ok(tonic::Response::new(
+            serialization_api::v2::RewardClaimInput {
+                address: request.address,
+                lifetime_rewards: "0x64".to_string(),
+                auth_data: format!("0x{}", hex::encode([0xab; 32])),
+            },
+        ))
     }
 
-    async fn get_reward_balance(&self, address: Self::Address) -> Result<Self::RewardBalance> {
-        <Self as v1::RewardApi>::get_latest_reward_balance(self, address).await
+    async fn get_reward_balance(
+        &self,
+        request: tonic::Request<serialization_api::v2::GetRewardBalanceRequest>,
+    ) -> Result<tonic::Response<serialization_api::v2::RewardBalance>, tonic::Status> {
+        let request = request.into_inner();
+        tracing::info!("v2: get_reward_balance(address={})", request.address);
+        Ok(tonic::Response::new(serialization_api::v2::RewardBalance {
+            amount: "1000000".to_string(),
+        }))
     }
 
     async fn get_reward_account_proof(
         &self,
-        address: Self::Address,
-    ) -> Result<Self::RewardAccountQueryData> {
-        <Self as v1::RewardApi>::get_latest_reward_account_proof(self, address).await
+        request: tonic::Request<serialization_api::v2::GetRewardAccountProofRequest>,
+    ) -> Result<tonic::Response<serialization_api::v2::RewardAccountQueryDataV2>, tonic::Status>
+    {
+        let request = request.into_inner();
+        tracing::info!("v2: get_reward_account_proof(address={})", request.address);
+        Ok(tonic::Response::new(
+            serialization_api::v2::RewardAccountQueryDataV2 {
+                balance: "1000000".to_string(),
+                proof: None,
+            },
+        ))
     }
 
     async fn get_reward_balances(
         &self,
-        height: u64,
-        offset: u64,
-        limit: u64,
-    ) -> Result<Self::RewardBalances> {
-        <Self as v1::RewardApi>::get_reward_amounts(self, height, offset, limit).await
+        request: tonic::Request<serialization_api::v2::GetRewardBalancesRequest>,
+    ) -> Result<tonic::Response<serialization_api::v2::RewardBalances>, tonic::Status> {
+        let request = request.into_inner();
+        tracing::info!(
+            "v2: get_reward_balances(height={}, offset={}, limit={})",
+            request.height,
+            request.offset,
+            request.limit
+        );
+        Ok(tonic::Response::new(
+            serialization_api::v2::RewardBalances {
+                amounts: vec![serialization_api::v2::RewardAmount {
+                    address: "0x0000000000000000000000000000000000000000".to_string(),
+                    amount: "1000000".to_string(),
+                }],
+                total: 1,
+            },
+        ))
     }
 
-    async fn get_reward_merkle_tree_v2(&self, height: u64) -> Result<Self::RewardMerkleTreeData> {
-        <Self as v1::RewardApi>::get_reward_merkle_tree_v2(self, height).await
+    async fn get_reward_merkle_tree_v2(
+        &self,
+        request: tonic::Request<serialization_api::v2::GetRewardMerkleTreeRequest>,
+    ) -> Result<tonic::Response<serialization_api::v2::RewardMerkleTreeV2Data>, tonic::Status> {
+        let request = request.into_inner();
+        tracing::info!("v2: get_reward_merkle_tree_v2(height={})", request.height);
+        Ok(tonic::Response::new(
+            serialization_api::v2::RewardMerkleTreeV2Data {
+                data: vec![0x01, 0x02, 0x03, 0x04],
+            },
+        ))
     }
 }
 
-// Implement v2::DataApi with test data
-#[async_trait]
-impl v2::DataApi for TestApi {
+#[tonic::async_trait]
+impl espresso_api::proto::data_service_server::DataService for TestApi {
     async fn get_namespace_proof(
         &self,
-        namespace_id: u64,
-        block_height: u64,
-    ) -> Result<Self::NamespaceProof> {
-        tracing::info!(
-            "v2: get_namespace_proof(namespace_id={}, block_height={})",
-            namespace_id,
-            block_height
-        );
-        // Return (transactions as Vec<Vec<u8>>, optional proof)
-        Ok((vec![vec![0xaa, 0xbb, 0xcc]], Some(vec![0x11, 0x22, 0x33])))
-    }
+        request: tonic::Request<serialization_api::v2::GetNamespaceProofRequest>,
+    ) -> Result<tonic::Response<serialization_api::v2::GetNamespaceProofResponse>, tonic::Status>
+    {
+        use serialization_api::v2::get_namespace_proof_response::Response;
 
-    async fn get_namespace_proof_range(
-        &self,
-        namespace_id: u64,
-        from: u64,
-        until: u64,
-    ) -> Result<Vec<Self::NamespaceProof>> {
+        let request = request.into_inner();
         tracing::info!(
-            "v2: get_namespace_proof_range(namespace_id={}, from={}, until={})",
-            namespace_id,
-            from,
-            until
+            "v2: get_namespace_proof(namespace_id={}, block={:?}, first={:?}, last={:?})",
+            request.namespace_id,
+            request.block,
+            request.first,
+            request.last
         );
-        Ok(vec![
-            (vec![vec![0xaa, 0xbb]], Some(vec![0x11, 0x22])),
-            (vec![vec![0xcc, 0xdd]], Some(vec![0x33, 0x44])),
-        ])
+        let single = serialization_api::v2::NamespaceProofResponse {
+            transactions: vec![serialization_api::v2::Transaction {
+                namespace: request.namespace_id,
+                payload: "dGVzdA==".to_string(),
+            }],
+            proof: None,
+        };
+        let response = match (request.block, request.first, request.last) {
+            (Some(_), None, None) => Response::Single(single),
+            (None, Some(first), Some(last)) => {
+                Response::Range(serialization_api::v2::NamespaceProofRangeResponse {
+                    proofs: (first..=last).map(|_| single.clone()).collect(),
+                })
+            },
+            _ => {
+                return Err(tonic::Status::invalid_argument(
+                    "specify either 'block' or both 'first' and 'last'",
+                ));
+            },
+        };
+        Ok(tonic::Response::new(
+            serialization_api::v2::GetNamespaceProofResponse {
+                response: Some(response),
+            },
+        ))
     }
 
     async fn get_incorrect_encoding_proof(
         &self,
-        namespace_id: u64,
-        block_height: u64,
-    ) -> Result<Self::IncorrectEncodingProof> {
+        request: tonic::Request<serialization_api::v2::GetIncorrectEncodingProofRequest>,
+    ) -> Result<tonic::Response<serialization_api::v2::IncorrectEncodingProofResponse>, tonic::Status>
+    {
+        let request = request.into_inner();
         tracing::info!(
             "v2: get_incorrect_encoding_proof(namespace_id={}, block_height={})",
-            namespace_id,
-            block_height
+            request.namespace_id,
+            request.block_height
         );
-        Ok(vec![0xde, 0xad, 0xbe, 0xef])
-    }
-}
-
-// Implement v2::ConsensusApi with test data
-#[async_trait]
-impl v2::ConsensusApi for TestApi {
-    async fn get_state_certificate(&self, epoch: u64) -> Result<Self::StateCertificate> {
-        tracing::info!("v2: get_state_certificate(epoch={})", epoch);
-        Ok(vec![0x01, 0x02, 0x03, 0x04])
-    }
-
-    async fn get_stake_table(&self, epoch: u64) -> Result<Self::StakeTable> {
-        tracing::info!("v2: get_stake_table(epoch={})", epoch);
-        // Return Vec<Vec<u8>> - each entry represents a peer
-        Ok(vec![
-            vec![0x05, 0x06, 0x07, 0x08],
-            vec![0x09, 0x0a, 0x0b, 0x0c],
-        ])
-    }
-}
-
-// Implement ApiSerializations for v2 proto type conversions
-impl ApiSerializations for TestApi {
-    type Address = String;
-    type RewardClaimInput = MockRewardClaimInput;
-    type RewardBalance = u128;
-    type RewardAccountQueryData = (u128, Vec<u8>);
-    type RewardBalances = (Vec<(u128, u128)>, u64);
-    type RewardMerkleTreeData = Vec<u8>;
-
-    // Data API types
-    type NamespaceProof = (Vec<Vec<u8>>, Option<Vec<u8>>); // (transactions, proof)
-    type IncorrectEncodingProof = Vec<u8>;
-
-    // Consensus API types
-    type StateCertificate = Vec<u8>;
-    type StakeTable = Vec<Vec<u8>>;
-
-    // Helper conversion types (dummy types for test)
-    type PeerConfig = Vec<u8>;
-    type LightClientCert = Vec<u8>;
-    type NsProof = Vec<u8>;
-
-    fn deserialize_address(&self, s: &str) -> Result<Self::Address> {
-        // Simple validation: must start with 0x and be hex
-        if s.starts_with("0x") && s.len() == 42 {
-            Ok(s.to_string())
-        } else {
-            Err(anyhow::anyhow!(
-                "Invalid address format: expected 0x followed by 40 hex characters"
-            ))
-        }
-    }
-
-    fn serialize_reward_claim_input(
-        &self,
-        address: &str,
-        value: &Self::RewardClaimInput,
-    ) -> Result<serialization_api::v2::RewardClaimInput> {
-        Ok(serialization_api::v2::RewardClaimInput {
-            address: address.to_string(),
-            lifetime_rewards: format!("{:#x}", value.lifetime_rewards),
-            auth_data: format!("0x{}", hex::encode(&value.auth_data)),
-        })
-    }
-
-    fn serialize_reward_balance(
-        &self,
-        value: &Self::RewardBalance,
-    ) -> Result<serialization_api::v2::RewardBalance> {
-        Ok(serialization_api::v2::RewardBalance {
-            amount: value.to_string(), // Decimal string
-        })
-    }
-
-    fn serialize_reward_account_query_data(
-        &self,
-        value: &Self::RewardAccountQueryData,
-    ) -> Result<serialization_api::v2::RewardAccountQueryDataV2> {
-        let (balance, _proof_data) = value;
-
-        // Create a minimal dummy proof
-        Ok(serialization_api::v2::RewardAccountQueryDataV2 {
-            balance: balance.to_string(),
-            proof: Some(serialization_api::v2::RewardAccountProofV2 {
-                account: "0x1234567890123456789012345678901234567890".to_string(),
-                proof: Some(serialization_api::v2::RewardMerkleProofV2 {
-                    proof_type: Some(
-                        serialization_api::v2::reward_merkle_proof_v2::ProofType::Presence(
-                            serialization_api::v2::MerkleProof {
-                                pos: "FIELD~dummy_pos".to_string(),
-                                proof: vec![],
-                            },
-                        ),
-                    ),
+        Ok(tonic::Response::new(
+            serialization_api::v2::IncorrectEncodingProofResponse {
+                proof: Some(serialization_api::v2::AvidMIncorrectEncodingNsProof {
+                    proof_data: "{}".to_string(),
                 }),
-            }),
-        })
+            },
+        ))
+    }
+}
+
+#[tonic::async_trait]
+impl espresso_api::proto::consensus_service_server::ConsensusService for TestApi {
+    async fn get_state_certificate(
+        &self,
+        request: tonic::Request<serialization_api::v2::GetStateCertificateRequest>,
+    ) -> Result<tonic::Response<serialization_api::v2::StateCertificateResponse>, tonic::Status>
+    {
+        let request = request.into_inner();
+        tracing::info!("v2: get_state_certificate(epoch={})", request.epoch);
+        Ok(tonic::Response::new(
+            serialization_api::v2::StateCertificateResponse {
+                certificate: Some(serialization_api::v2::LightClientStateUpdateCertificateV2 {
+                    epoch: request.epoch,
+                    light_client_state: String::new(),
+                    next_stake_table_state: String::new(),
+                    signatures: vec![],
+                    auth_root: String::new(),
+                }),
+            },
+        ))
     }
 
-    fn serialize_reward_balances(
+    async fn get_stake_table(
         &self,
-        value: &Self::RewardBalances,
-    ) -> Result<serialization_api::v2::RewardBalances> {
-        let (amounts_vec, total) = value;
+        request: tonic::Request<serialization_api::v2::GetStakeTableRequest>,
+    ) -> Result<tonic::Response<serialization_api::v2::StakeTableResponse>, tonic::Status> {
+        let request = request.into_inner();
+        tracing::info!("v2: get_stake_table(epoch={})", request.epoch);
+        Ok(tonic::Response::new(
+            serialization_api::v2::StakeTableResponse { peers: vec![] },
+        ))
+    }
+}
 
-        let amounts = amounts_vec
-            .iter()
-            .map(|(account, amount)| serialization_api::v2::RewardAmount {
-                address: format!("{:#x}", account),
-                amount: amount.to_string(),
-            })
-            .collect();
-
-        Ok(serialization_api::v2::RewardBalances {
-            amounts,
-            total: *total,
-        })
+// Implement the generated StatusService tonic trait with test data; the REST routes for
+// it are generated from the google.api.http annotations in status.proto.
+#[tonic::async_trait]
+impl espresso_api::proto::status_service_server::StatusService for TestApi {
+    async fn get_block_height(
+        &self,
+        _request: tonic::Request<serialization_api::v2::GetBlockHeightRequest>,
+    ) -> Result<tonic::Response<serialization_api::v2::BlockHeightResponse>, tonic::Status> {
+        tracing::info!("v2: get_block_height()");
+        Ok(tonic::Response::new(
+            serialization_api::v2::BlockHeightResponse { height: 0 },
+        ))
     }
 
-    fn serialize_reward_merkle_tree_data(
+    async fn get_success_rate(
         &self,
-        value: &Self::RewardMerkleTreeData,
-    ) -> Result<serialization_api::v2::RewardMerkleTreeV2Data> {
-        Ok(serialization_api::v2::RewardMerkleTreeV2Data {
-            data: value.clone(),
-        })
+        _request: tonic::Request<serialization_api::v2::GetSuccessRateRequest>,
+    ) -> Result<tonic::Response<serialization_api::v2::SuccessRateResponse>, tonic::Status> {
+        tracing::info!("v2: get_success_rate()");
+        Ok(tonic::Response::new(
+            serialization_api::v2::SuccessRateResponse { rate: 1.0 },
+        ))
     }
 
-    // Data API serialization methods
-
-    fn serialize_namespace_proof(
+    async fn get_time_since_last_decide(
         &self,
-        value: &Self::NamespaceProof,
-    ) -> Result<serialization_api::v2::NamespaceProofResponse> {
-        let (transactions, proof_bytes) = value;
-
-        // Convert transactions to Transaction messages
-        let txs = transactions
-            .iter()
-            .map(|tx| serialization_api::v2::Transaction {
-                namespace: 0,
-                payload: STANDARD.encode(tx),
-            })
-            .collect();
-
-        // Convert proof bytes to NsProof if present
-        let proof = proof_bytes.as_ref().map(|bytes| {
-            // Create a dummy NsProof for testing
-            serialization_api::v2::NsProof {
-                proof_version: Some(serialization_api::v2::ns_proof::ProofVersion::V0(
-                    serialization_api::v2::AdvzNsProof {
-                        namespace_id: 0,
-                        ns_payload: String::new(),
-                        ns_proof: Some(STANDARD.encode(bytes)),
-                    },
-                )),
-            }
-        });
-
-        Ok(serialization_api::v2::NamespaceProofResponse {
-            transactions: txs,
-            proof,
-        })
+        _request: tonic::Request<serialization_api::v2::GetTimeSinceLastDecideRequest>,
+    ) -> Result<tonic::Response<serialization_api::v2::TimeSinceLastDecideResponse>, tonic::Status>
+    {
+        tracing::info!("v2: get_time_since_last_decide()");
+        Ok(tonic::Response::new(
+            serialization_api::v2::TimeSinceLastDecideResponse { seconds: 0 },
+        ))
     }
 
-    fn serialize_incorrect_encoding_proof(
+    async fn get_node_keys(
         &self,
-        value: &Self::IncorrectEncodingProof,
-    ) -> Result<serialization_api::v2::IncorrectEncodingProofResponse> {
-        Ok(serialization_api::v2::IncorrectEncodingProofResponse {
-            proof: Some(serialization_api::v2::AvidMIncorrectEncodingNsProof {
-                proof_data: STANDARD.encode(value),
-            }),
-        })
-    }
-
-    // Consensus API serialization methods
-
-    fn serialize_state_certificate(
-        &self,
-        value: &Self::StateCertificate,
-    ) -> Result<serialization_api::v2::StateCertificateResponse> {
-        Ok(serialization_api::v2::StateCertificateResponse {
-            certificate: Some(serialization_api::v2::LightClientStateUpdateCertificateV2 {
-                epoch: 0,
-                light_client_state: String::new(),
-                next_stake_table_state: String::new(),
-                signatures: vec![],
-                auth_root: STANDARD.encode(value),
-            }),
-        })
-    }
-
-    fn serialize_stake_table(
-        &self,
-        value: &Self::StakeTable,
-    ) -> Result<serialization_api::v2::StakeTableResponse> {
-        // Convert each entry to a PeerConfig
-        let peers = value
-            .iter()
-            .map(|peer_bytes| serialization_api::v2::PeerConfig {
-                stake_table_entry: Some(serialization_api::v2::StakeTableEntry {
-                    stake_key: Some(serialization_api::v2::BlsPublicKey {
-                        key: STANDARD.encode(peer_bytes),
-                    }),
-                    stake_amount: "1000000".to_string(),
+        _request: tonic::Request<serialization_api::v2::GetNodeKeysRequest>,
+    ) -> Result<tonic::Response<serialization_api::v2::NodeKeysResponse>, tonic::Status> {
+        tracing::info!("v2: get_node_keys()");
+        Ok(tonic::Response::new(
+            serialization_api::v2::NodeKeysResponse {
+                eth_account: Some("0x0000000000000000000000000000000000000000".to_string()),
+                consensus_key: Some(serialization_api::v2::BlsPublicKey {
+                    key: "BLS_VER_KEY~test".to_string(),
                 }),
                 state_ver_key: Some(serialization_api::v2::SchnorrPublicKey {
-                    key: STANDARD.encode(peer_bytes),
+                    key: "SCHNORR_VER_KEY~test".to_string(),
                 }),
-                connect_info: None,
-            })
-            .collect();
-
-        Ok(serialization_api::v2::StakeTableResponse { peers })
-    }
-
-    fn serialize_peer_config(
-        &self,
-        _peer: &Self::PeerConfig,
-    ) -> Result<serialization_api::v2::PeerConfig> {
-        Ok(serialization_api::v2::PeerConfig {
-            stake_table_entry: None,
-            state_ver_key: None,
-            connect_info: None,
-        })
-    }
-
-    fn serialize_light_client_cert(
-        &self,
-        _cert: &Self::LightClientCert,
-    ) -> Result<serialization_api::v2::LightClientStateUpdateCertificateV2> {
-        Ok(serialization_api::v2::LightClientStateUpdateCertificateV2 {
-            epoch: 0,
-            light_client_state: String::new(),
-            next_stake_table_state: String::new(),
-            signatures: vec![],
-            auth_root: String::new(),
-        })
-    }
-
-    fn serialize_ns_proof(&self, _proof: &Self::NsProof) -> Result<serialization_api::v2::NsProof> {
-        Ok(serialization_api::v2::NsProof {
-            proof_version: None,
-        })
+                x25519_key: None,
+            },
+        ))
     }
 }
 

@@ -216,40 +216,12 @@ impl<D> NodeApiStateImpl<D> {
 }
 
 // ============================================================================
-// ApiSerializations implementation (conversion layer)
+// Proto conversions (internal domain types -> proto wire types), shared by the tonic
+// service impls below.
 // ============================================================================
 
-impl<D> serialization_api::ApiSerializations for NodeApiStateImpl<D>
-where
-    D: std::ops::Deref + Send + Sync + 'static,
-    D::Target: RewardMerkleTreeDataSource + Send + Sync,
-{
-    // Request types
-    type Address = alloy::primitives::Address;
-
-    // Response types (internal types)
-    type RewardClaimInput = InternalRewardClaimInput;
-    type RewardBalance = U256;
-    type RewardAccountQueryData = InternalRewardAccountQueryData;
-    type RewardBalances = (Vec<(RewardAccountV2, InternalRewardAmount)>, u64); // (amounts, total)
-    type RewardMerkleTreeData = InternalRewardTreeData;
-
-    // Data API types
-    type NamespaceProof = espresso_types::NamespaceProofQueryData;
-    type IncorrectEncodingProof = espresso_types::v0_3::AvidMIncorrectEncodingNsProof;
-
-    // Consensus API types
-    type StateCertificate = espresso_types::StateCertQueryDataV2<espresso_types::SeqTypes>;
-    type StakeTable = Vec<hotshot_types::PeerConfig<espresso_types::SeqTypes>>;
-
-    // Helper conversion types
-    type PeerConfig = hotshot_types::PeerConfig<espresso_types::SeqTypes>;
-    type LightClientCert = hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<
-        espresso_types::SeqTypes,
-    >;
-    type NsProof = espresso_types::NsProof;
-
-    fn deserialize_address(&self, s: &str) -> anyhow::Result<Self::Address> {
+impl<D> NodeApiStateImpl<D> {
+    fn deserialize_address(&self, s: &str) -> anyhow::Result<alloy::primitives::Address> {
         s.parse()
             .map_err(|_| anyhow::anyhow!("invalid ethereum address: {}", s))
     }
@@ -258,7 +230,7 @@ where
     fn serialize_reward_claim_input(
         &self,
         address: &str,
-        value: &Self::RewardClaimInput,
+        value: &InternalRewardClaimInput,
     ) -> anyhow::Result<RewardClaimInput> {
         // Serialize auth_data directly - it serializes to a hex string via serde
         let auth_data = serde_json::to_string(&value.auth_data)
@@ -274,10 +246,7 @@ where
         })
     }
 
-    fn serialize_reward_balance(
-        &self,
-        value: &Self::RewardBalance,
-    ) -> anyhow::Result<RewardBalance> {
+    fn serialize_reward_balance(&self, value: &U256) -> anyhow::Result<RewardBalance> {
         Ok(RewardBalance {
             amount: value.to_string(), // Decimal string
         })
@@ -285,7 +254,7 @@ where
 
     fn serialize_reward_account_query_data(
         &self,
-        value: &Self::RewardAccountQueryData,
+        value: &InternalRewardAccountQueryData,
     ) -> anyhow::Result<RewardAccountQueryDataV2> {
         // Convert balance to decimal string
         let balance = value.balance.to_string();
@@ -298,7 +267,7 @@ where
 
     fn serialize_reward_balances(
         &self,
-        value: &Self::RewardBalances,
+        value: &(Vec<(RewardAccountV2, InternalRewardAmount)>, u64),
     ) -> anyhow::Result<RewardBalances> {
         let (amounts_vec, total) = value;
 
@@ -319,7 +288,7 @@ where
 
     fn serialize_reward_merkle_tree_data(
         &self,
-        value: &Self::RewardMerkleTreeData,
+        value: &InternalRewardTreeData,
     ) -> anyhow::Result<RewardMerkleTreeV2Data> {
         let bytes = bincode::serialize(value)
             .map_err(|e| anyhow::anyhow!("failed to serialize RewardMerkleTreeV2Data: {}", e))?;
@@ -330,7 +299,7 @@ where
 
     fn serialize_namespace_proof(
         &self,
-        value: &Self::NamespaceProof,
+        value: &NamespaceProofQueryData,
     ) -> anyhow::Result<v2::NamespaceProofResponse> {
         // Serialize each transaction field explicitly using base64_bytes
         let transactions: Vec<v2::Transaction> = value
@@ -369,7 +338,7 @@ where
 
     fn serialize_incorrect_encoding_proof(
         &self,
-        value: &Self::IncorrectEncodingProof,
+        value: &espresso_types::v0_3::AvidMIncorrectEncodingNsProof,
     ) -> anyhow::Result<v2::IncorrectEncodingProofResponse> {
         // Serialize the VID proof to JSON string
         let proof_data = serde_json::to_string(&value.0)?;
@@ -382,7 +351,7 @@ where
 
     fn serialize_state_certificate(
         &self,
-        value: &Self::StateCertificate,
+        value: &espresso_types::StateCertQueryDataV2<espresso_types::SeqTypes>,
     ) -> anyhow::Result<v2::StateCertificateResponse> {
         let certificate = self.serialize_light_client_cert(&value.0)?;
 
@@ -393,7 +362,7 @@ where
 
     fn serialize_stake_table(
         &self,
-        value: &Self::StakeTable,
+        value: &Vec<hotshot_types::PeerConfig<espresso_types::SeqTypes>>,
     ) -> anyhow::Result<v2::StakeTableResponse> {
         let peers: Result<Vec<_>, _> = value
             .iter()
@@ -403,7 +372,10 @@ where
         Ok(serialization_api::v2::StakeTableResponse { peers: peers? })
     }
 
-    fn serialize_peer_config(&self, peer: &Self::PeerConfig) -> anyhow::Result<v2::PeerConfig> {
+    fn serialize_peer_config(
+        &self,
+        peer: &hotshot_types::PeerConfig<espresso_types::SeqTypes>,
+    ) -> anyhow::Result<v2::PeerConfig> {
         let stake_table_entry = v2::StakeTableEntry {
             stake_key: Some(v2::BlsPublicKey {
                 key: peer.stake_table_entry.stake_key.to_string(),
@@ -449,7 +421,9 @@ where
 
     fn serialize_light_client_cert(
         &self,
-        cert: &Self::LightClientCert,
+        cert: &hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<
+            espresso_types::SeqTypes,
+        >,
     ) -> anyhow::Result<v2::LightClientStateUpdateCertificateV2> {
         let signatures: Result<Vec<_>, anyhow::Error> = cert
             .signatures
@@ -476,7 +450,7 @@ where
         })
     }
 
-    fn serialize_ns_proof(&self, proof: &Self::NsProof) -> anyhow::Result<v2::NsProof> {
+    fn serialize_ns_proof(&self, proof: &NsProof) -> anyhow::Result<v2::NsProof> {
         let proof_version = match proof {
             NsProof::V0(advz_proof) => {
                 // Serialize the inner fields directly
@@ -538,19 +512,21 @@ where
 }
 
 // ============================================================================
-// RewardApiV2 implementation (business logic)
+// v2 RewardService: fetchers returning internal types, and the tonic service impl.
+// The REST routes are generated from the google.api.http annotations in rewards.proto.
 // ============================================================================
 
-#[async_trait]
-impl<D> espresso_api::v2::RewardApi for NodeApiStateImpl<D>
+// The data-source traits in the bounds are deliberately pub(crate).
+#[allow(private_bounds)]
+impl<D> NodeApiStateImpl<D>
 where
     D: std::ops::Deref + Clone + Send + Sync + 'static,
     D::Target: RewardMerkleTreeDataSource + Send + Sync,
 {
-    async fn get_reward_claim_input(
+    async fn fetch_reward_claim_input(
         &self,
-        address: Self::Address,
-    ) -> anyhow::Result<Self::RewardClaimInput> {
+        address: alloy::primitives::Address,
+    ) -> anyhow::Result<InternalRewardClaimInput> {
         // Load the latest reward account proof from the data source
         let proof = self
             .data_source
@@ -574,10 +550,10 @@ where
         })
     }
 
-    async fn get_reward_balance(
+    async fn fetch_reward_balance(
         &self,
-        address: Self::Address,
-    ) -> anyhow::Result<Self::RewardBalance> {
+        address: alloy::primitives::Address,
+    ) -> anyhow::Result<U256> {
         // Load the latest reward account proof from the data source
         let proof = self
             .data_source
@@ -594,10 +570,10 @@ where
         Ok(proof.balance)
     }
 
-    async fn get_reward_account_proof(
+    async fn fetch_reward_account_proof(
         &self,
-        address: Self::Address,
-    ) -> anyhow::Result<Self::RewardAccountQueryData> {
+        address: alloy::primitives::Address,
+    ) -> anyhow::Result<InternalRewardAccountQueryData> {
         // Load the latest reward account proof from the data source and return internal type
         self.data_source
             .load_latest_reward_account_proof_v2(address.into())
@@ -610,12 +586,12 @@ where
             })
     }
 
-    async fn get_reward_balances(
+    async fn fetch_reward_balances(
         &self,
         height: u64,
         offset: u64,
         limit: u64,
-    ) -> anyhow::Result<Self::RewardBalances> {
+    ) -> anyhow::Result<(Vec<(RewardAccountV2, InternalRewardAmount)>, u64)> {
         if limit > 10000 {
             return Err(bad_request(format!(
                 "limit {} exceeds maximum allowed value of 10000",
@@ -657,10 +633,10 @@ where
         Ok((reversed, total))
     }
 
-    async fn get_reward_merkle_tree_v2(
+    async fn fetch_reward_merkle_tree_v2(
         &self,
         height: u64,
-    ) -> anyhow::Result<Self::RewardMerkleTreeData> {
+    ) -> anyhow::Result<InternalRewardTreeData> {
         // Load the raw merkle tree bytes
         let tree_bytes = self.data_source.load_tree(height).await.map_err(|err| {
             not_found(format!(
@@ -676,6 +652,95 @@ where
                 height, err
             ))
         })
+    }
+}
+
+#[tonic::async_trait]
+impl<D> espresso_api::proto::reward_service_server::RewardService for NodeApiStateImpl<D>
+where
+    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D::Target: RewardMerkleTreeDataSource + Send + Sync,
+{
+    async fn get_reward_claim_input(
+        &self,
+        request: tonic::Request<v2::GetRewardClaimInputRequest>,
+    ) -> Result<tonic::Response<v2::RewardClaimInput>, tonic::Status> {
+        let request = request.into_inner();
+        let address = self
+            .deserialize_address(&request.address)
+            .map_err(invalid_argument)?;
+        let input = self
+            .fetch_reward_claim_input(address)
+            .await
+            .map_err(to_status)?;
+        let response = self
+            .serialize_reward_claim_input(&request.address, &input)
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(response))
+    }
+
+    async fn get_reward_balance(
+        &self,
+        request: tonic::Request<v2::GetRewardBalanceRequest>,
+    ) -> Result<tonic::Response<v2::RewardBalance>, tonic::Status> {
+        let request = request.into_inner();
+        let address = self
+            .deserialize_address(&request.address)
+            .map_err(invalid_argument)?;
+        let balance = self
+            .fetch_reward_balance(address)
+            .await
+            .map_err(to_status)?;
+        let response = self.serialize_reward_balance(&balance).map_err(to_status)?;
+        Ok(tonic::Response::new(response))
+    }
+
+    async fn get_reward_account_proof(
+        &self,
+        request: tonic::Request<v2::GetRewardAccountProofRequest>,
+    ) -> Result<tonic::Response<v2::RewardAccountQueryDataV2>, tonic::Status> {
+        let request = request.into_inner();
+        let address = self
+            .deserialize_address(&request.address)
+            .map_err(invalid_argument)?;
+        let proof = self
+            .fetch_reward_account_proof(address)
+            .await
+            .map_err(to_status)?;
+        let response = self
+            .serialize_reward_account_query_data(&proof)
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(response))
+    }
+
+    async fn get_reward_balances(
+        &self,
+        request: tonic::Request<v2::GetRewardBalancesRequest>,
+    ) -> Result<tonic::Response<v2::RewardBalances>, tonic::Status> {
+        let request = request.into_inner();
+        let balances = self
+            .fetch_reward_balances(request.height, request.offset, request.limit)
+            .await
+            .map_err(to_status)?;
+        let response = self
+            .serialize_reward_balances(&balances)
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(response))
+    }
+
+    async fn get_reward_merkle_tree_v2(
+        &self,
+        request: tonic::Request<v2::GetRewardMerkleTreeRequest>,
+    ) -> Result<tonic::Response<v2::RewardMerkleTreeV2Data>, tonic::Status> {
+        let request = request.into_inner();
+        let tree = self
+            .fetch_reward_merkle_tree_v2(request.height)
+            .await
+            .map_err(to_status)?;
+        let response = self
+            .serialize_reward_merkle_tree_data(&tree)
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(response))
     }
 }
 
@@ -1013,11 +1078,13 @@ where
 }
 
 // ============================================================================
-// v2::DataApi implementation
+// v2 DataService: fetchers returning internal types, and the tonic service impl.
+// The REST routes are generated from the google.api.http annotations in data.proto.
 // ============================================================================
 
-#[async_trait]
-impl<D> espresso_api::v2::DataApi for NodeApiStateImpl<D>
+// The data-source traits in the bounds are deliberately pub(crate).
+#[allow(private_bounds)]
+impl<D> NodeApiStateImpl<D>
 where
     D: std::ops::Deref + Clone + Send + Sync + 'static,
     D::Target: RewardMerkleTreeDataSource
@@ -1027,11 +1094,11 @@ where
         + Sync
         + Send,
 {
-    async fn get_namespace_proof(
+    async fn fetch_namespace_proof(
         &self,
         namespace_id: u64,
         block_height: u64,
-    ) -> anyhow::Result<Self::NamespaceProof> {
+    ) -> anyhow::Result<NamespaceProofQueryData> {
         let ns_id = NamespaceId(namespace_id);
         let block_id = HsBlockId::Number(block_height as usize);
 
@@ -1075,12 +1142,12 @@ where
         })
     }
 
-    async fn get_namespace_proof_range(
+    async fn fetch_namespace_proof_range(
         &self,
         namespace_id: u64,
         from: u64,
         until: u64,
-    ) -> anyhow::Result<Vec<Self::NamespaceProof>> {
+    ) -> anyhow::Result<Vec<NamespaceProofQueryData>> {
         let ns_id = NamespaceId(namespace_id);
 
         // Validate range
@@ -1158,11 +1225,11 @@ where
         Ok(proofs)
     }
 
-    async fn get_incorrect_encoding_proof(
+    async fn fetch_incorrect_encoding_proof(
         &self,
         namespace_id: u64,
         block_height: u64,
-    ) -> anyhow::Result<Self::IncorrectEncodingProof> {
+    ) -> anyhow::Result<espresso_types::v0_3::AvidMIncorrectEncodingNsProof> {
         let ns_id = NamespaceId(namespace_id);
         let block_id = HsBlockId::Number(block_height as usize);
 
@@ -1233,12 +1300,81 @@ where
     }
 }
 
+#[tonic::async_trait]
+impl<D> espresso_api::proto::data_service_server::DataService for NodeApiStateImpl<D>
+where
+    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D::Target: RewardMerkleTreeDataSource
+        + hotshot_query_service::availability::AvailabilityDataSource<espresso_types::SeqTypes>
+        + hotshot_query_service::node::NodeDataSource<espresso_types::SeqTypes>
+        + super::data_source::RequestResponseDataSource<espresso_types::SeqTypes>
+        + Sync
+        + Send,
+{
+    async fn get_namespace_proof(
+        &self,
+        request: tonic::Request<v2::GetNamespaceProofRequest>,
+    ) -> Result<tonic::Response<v2::GetNamespaceProofResponse>, tonic::Status> {
+        use v2::get_namespace_proof_response::Response;
+
+        let request = request.into_inner();
+        let response = match (request.block, request.first, request.last) {
+            (Some(block), None, None) => {
+                let proof = self
+                    .fetch_namespace_proof(request.namespace_id, block)
+                    .await
+                    .map_err(to_status)?;
+                Response::Single(self.serialize_namespace_proof(&proof).map_err(to_status)?)
+            },
+            (None, Some(first), Some(last)) => {
+                // The request range is inclusive on both ends; the fetcher takes an
+                // exclusive end.
+                let proofs = self
+                    .fetch_namespace_proof_range(request.namespace_id, first, last + 1)
+                    .await
+                    .map_err(to_status)?;
+                let proofs = proofs
+                    .iter()
+                    .map(|proof| self.serialize_namespace_proof(proof))
+                    .collect::<anyhow::Result<Vec<_>>>()
+                    .map_err(to_status)?;
+                Response::Range(v2::NamespaceProofRangeResponse { proofs })
+            },
+            _ => {
+                return Err(tonic::Status::invalid_argument(
+                    "specify either 'block' or both 'first' and 'last'",
+                ));
+            },
+        };
+        Ok(tonic::Response::new(v2::GetNamespaceProofResponse {
+            response: Some(response),
+        }))
+    }
+
+    async fn get_incorrect_encoding_proof(
+        &self,
+        request: tonic::Request<v2::GetIncorrectEncodingProofRequest>,
+    ) -> Result<tonic::Response<v2::IncorrectEncodingProofResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let proof = self
+            .fetch_incorrect_encoding_proof(request.namespace_id, request.block_height)
+            .await
+            .map_err(to_status)?;
+        let response = self
+            .serialize_incorrect_encoding_proof(&proof)
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(response))
+    }
+}
+
 // ============================================================================
-// v2::ConsensusApi implementation
+// v2 ConsensusService: fetchers returning internal types, and the tonic service impl.
+// The REST routes are generated from the google.api.http annotations in consensus.proto.
 // ============================================================================
 
-#[async_trait]
-impl<D> espresso_api::v2::ConsensusApi for NodeApiStateImpl<D>
+// The data-source traits in the bounds are deliberately pub(crate).
+#[allow(private_bounds)]
+impl<D> NodeApiStateImpl<D>
 where
     D: std::ops::Deref + Clone + Send + Sync + 'static,
     D::Target: RewardMerkleTreeDataSource
@@ -1248,7 +1384,10 @@ where
         + Send
         + Sync,
 {
-    async fn get_state_certificate(&self, epoch: u64) -> anyhow::Result<Self::StateCertificate> {
+    async fn fetch_state_certificate(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<espresso_types::StateCertQueryDataV2<espresso_types::SeqTypes>> {
         let ds = &*self.data_source;
 
         // Try to get from local storage first
@@ -1273,9 +1412,52 @@ where
         Ok(espresso_types::StateCertQueryDataV2(cert))
     }
 
-    async fn get_stake_table(&self, epoch: u64) -> anyhow::Result<Self::StakeTable> {
+    async fn fetch_stake_table(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<Vec<hotshot_types::PeerConfig<espresso_types::SeqTypes>>> {
         let ds = &*self.data_source;
         ds.get_stake_table(Some(EpochNumber::new(epoch))).await
+    }
+}
+
+#[tonic::async_trait]
+impl<D> espresso_api::proto::consensus_service_server::ConsensusService for NodeApiStateImpl<D>
+where
+    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D::Target: RewardMerkleTreeDataSource
+        + super::data_source::StateCertDataSource
+        + super::data_source::StateCertFetchingDataSource<espresso_types::SeqTypes>
+        + super::data_source::StakeTableDataSource<espresso_types::SeqTypes>
+        + Send
+        + Sync,
+{
+    async fn get_state_certificate(
+        &self,
+        request: tonic::Request<v2::GetStateCertificateRequest>,
+    ) -> Result<tonic::Response<v2::StateCertificateResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let cert = self
+            .fetch_state_certificate(request.epoch)
+            .await
+            .map_err(to_status)?;
+        let response = self.serialize_state_certificate(&cert).map_err(to_status)?;
+        Ok(tonic::Response::new(response))
+    }
+
+    async fn get_stake_table(
+        &self,
+        request: tonic::Request<v2::GetStakeTableRequest>,
+    ) -> Result<tonic::Response<v2::StakeTableResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let stake_table = self
+            .fetch_stake_table(request.epoch)
+            .await
+            .map_err(to_status)?;
+        let response = self
+            .serialize_stake_table(&stake_table)
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(response))
     }
 }
 
@@ -2337,6 +2519,81 @@ where
 
     async fn keys(&self) -> anyhow::Result<NodePublicKeys> {
         Ok(self.data_source.node_public_keys().await)
+    }
+}
+
+// ============================================================================
+// v2 StatusService implementation (generated tonic trait; REST comes from the
+// google.api.http annotations in status.proto)
+// ============================================================================
+
+/// Mirror of the v1 axum error classification: [`AvailabilityError`] variants carry
+/// semantic meaning; everything else is an internal error.
+fn to_status(err: anyhow::Error) -> tonic::Status {
+    match err.downcast_ref::<AvailabilityError>() {
+        Some(AvailabilityError::NotFound(_)) => tonic::Status::not_found(err.to_string()),
+        Some(_) => tonic::Status::invalid_argument(err.to_string()),
+        None => tonic::Status::internal(err.to_string()),
+    }
+}
+
+fn invalid_argument(err: anyhow::Error) -> tonic::Status {
+    tonic::Status::invalid_argument(err.to_string())
+}
+
+#[tonic::async_trait]
+impl<D> espresso_api::proto::status_service_server::StatusService for NodeApiStateImpl<D>
+where
+    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D::Target: hotshot_query_service::status::StatusDataSource + NodeKeysDataSource + Send + Sync,
+{
+    async fn get_block_height(
+        &self,
+        _request: tonic::Request<v2::GetBlockHeightRequest>,
+    ) -> Result<tonic::Response<v2::BlockHeightResponse>, tonic::Status> {
+        let height = <Self as espresso_api::v1::StatusApi>::block_height(self)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(v2::BlockHeightResponse { height }))
+    }
+
+    async fn get_success_rate(
+        &self,
+        _request: tonic::Request<v2::GetSuccessRateRequest>,
+    ) -> Result<tonic::Response<v2::SuccessRateResponse>, tonic::Status> {
+        let rate = <Self as espresso_api::v1::StatusApi>::success_rate(self)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(v2::SuccessRateResponse { rate }))
+    }
+
+    async fn get_time_since_last_decide(
+        &self,
+        _request: tonic::Request<v2::GetTimeSinceLastDecideRequest>,
+    ) -> Result<tonic::Response<v2::TimeSinceLastDecideResponse>, tonic::Status> {
+        let seconds = <Self as espresso_api::v1::StatusApi>::time_since_last_decide(self)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(v2::TimeSinceLastDecideResponse {
+            seconds,
+        }))
+    }
+
+    async fn get_node_keys(
+        &self,
+        _request: tonic::Request<v2::GetNodeKeysRequest>,
+    ) -> Result<tonic::Response<v2::NodeKeysResponse>, tonic::Status> {
+        let keys = self.data_source.node_public_keys().await;
+        Ok(tonic::Response::new(v2::NodeKeysResponse {
+            eth_account: keys.eth_account.map(|account| format!("{account:#x}")),
+            consensus_key: Some(v2::BlsPublicKey {
+                key: keys.consensus_key.to_string(),
+            }),
+            state_ver_key: Some(v2::SchnorrPublicKey {
+                key: keys.state_ver_key.to_string(),
+            }),
+            x25519_key: keys.x25519_key.as_ref().map(ToString::to_string),
+        }))
     }
 }
 

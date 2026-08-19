@@ -14,7 +14,6 @@ use aide::{
         SchemaObject,
     },
     operation::OperationOutput,
-    redoc::Redoc,
     scalar::Scalar,
 };
 use axum::{
@@ -26,22 +25,17 @@ use axum::{
     routing::get,
 };
 use http_wire::{
-    ContentType, DecodeFailure, WireFormat, body_limit_layer, cors_layer, drive_ws_stream,
-    healthcheck_response, module_healthcheck_response,
+    ContentType, DecodeFailure, WireFormat, drive_ws_stream, healthcheck_response,
+    module_healthcheck_response,
 };
 use schemars::transform::Transform;
 use serde::Serialize;
-use serialization_api::v2::{
-    GetIncorrectEncodingProofRequest, GetNamespaceProofRequest, GetRewardAccountProofRequest,
-    GetRewardBalanceRequest, GetRewardBalancesRequest, GetRewardClaimInputRequest,
-    GetRewardMerkleTreeRequest, GetStakeTableRequest, GetStateCertificateRequest,
-};
 use tokio::sync::Semaphore;
 use vbs::version::StaticVersion;
 
 use crate::{
     error::{ApiError, AvailabilityError},
-    handlers, v1, v2,
+    v1,
 };
 
 /// API error response — wire-compatible with the `Custom` variant of the per-module error enums
@@ -189,11 +183,6 @@ impl<T> OperationOutput for ApiJson<T> {
     }
 }
 
-/// Serve the OpenAPI spec (extracted from Extension)
-async fn serve_openapi_spec(Extension(api): Extension<OpenApi>) -> Json<OpenApi> {
-    Json(api)
-}
-
 /// In-flight request slots for `max_connections`.
 #[derive(Clone)]
 pub(crate) struct RequestLimit(pub(crate) Arc<Semaphore>);
@@ -272,75 +261,6 @@ pub(crate) fn rewrite_legacy_uri(mut req: Request) -> Request {
     }
 
     req
-}
-
-struct SendQuery<T>(T);
-
-impl<T, S> axum::extract::FromRequestParts<S> for SendQuery<T>
-where
-    T: serde::de::DeserializeOwned + Send,
-    S: Send + Sync,
-{
-    type Rejection = axum::extract::rejection::QueryRejection;
-
-    async fn from_request_parts(
-        parts: &mut axum::http::request::Parts,
-        state: &S,
-    ) -> Result<Self, Self::Rejection> {
-        axum::extract::Query::<T>::from_request_parts(parts, state)
-            .await
-            .map(|axum::extract::Query(inner)| SendQuery(inner))
-    }
-}
-
-impl<T: schemars::JsonSchema> aide::operation::OperationInput for SendQuery<T> {
-    fn operation_input(
-        ctx: &mut aide::generate::GenContext,
-        operation: &mut aide::openapi::Operation,
-    ) {
-        let schema = ctx.schema.subschema_for::<T>();
-        let params = aide::operation::parameters_from_schema(
-            ctx,
-            schema,
-            aide::operation::ParamLocation::Query,
-        );
-        aide::operation::add_parameters(ctx, operation, params);
-    }
-}
-
-/// Create a combined router serving both v1 and v2 APIs
-pub fn create_combined_router<S>(state: S) -> Router
-where
-    S: v1::RewardApi
-        + v1::AvailabilityApi
-        + v1::HotShotAvailabilityApi
-        + v1::BlockStateApi
-        + v1::FeeStateApi
-        + v1::StatusApi
-        + v1::ConfigApi
-        + v1::NodeApi
-        + v1::CatchupApi
-        + v1::SubmitApi
-        + v1::StateSignatureApi
-        + v1::HotShotEventsApi
-        + v1::LightClientApi
-        + v1::ExplorerApi
-        + v1::TokenApi
-        + v1::DatabaseApi
-        + v2::RewardApi
-        + v2::DataApi
-        + v2::ConsensusApi
-        + Clone
-        + Send
-        + Sync
-        + 'static,
-{
-    let router_v1 = create_router_v1(state.clone());
-    let router_v2 = create_router_v2(state);
-
-    with_top_level_routes(router_v2.merge(router_v1))
-        .layer(body_limit_layer())
-        .layer(cors_layer())
 }
 
 /// Add the routes that every mode serves regardless of which API modules are enabled:
@@ -3653,225 +3573,6 @@ fn declare_path_template_parameters(api: &mut OpenApi) {
     }
 }
 
-/// Create v2 router with OpenAPI documentation (proto types)
-pub fn create_router_v2<S>(state: S) -> Router
-where
-    S: v2::RewardApi + v2::DataApi + v2::ConsensusApi + Clone + Send + Sync + 'static,
-{
-    let mut api = OpenApi {
-        info: Info {
-            title: "Espresso Node API v2".to_string(),
-            description: None,
-            version: "1.0.0".to_string(),
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-
-    let get_reward_claim_input =
-        |State(state): State<S>, SendQuery(request): SendQuery<GetRewardClaimInputRequest>| async move {
-            handlers::get_reward_claim_input(&state, request)
-                .await
-                .map(Json)
-        };
-
-    let get_reward_balance =
-        |State(state): State<S>, SendQuery(request): SendQuery<GetRewardBalanceRequest>| async move {
-            handlers::get_reward_balance(&state, request)
-                .await
-                .map(Json)
-        };
-
-    let get_reward_account_proof =
-        |State(state): State<S>, SendQuery(request): SendQuery<GetRewardAccountProofRequest>| async move {
-            handlers::get_reward_account_proof(&state, request)
-                .await
-                .map(Json)
-        };
-
-    let get_reward_balances =
-        |State(state): State<S>, SendQuery(request): SendQuery<GetRewardBalancesRequest>| async move {
-            handlers::get_reward_balances(&state, request)
-                .await
-                .map(Json)
-        };
-
-    let get_reward_merkle_tree_v2 =
-        |State(state): State<S>, SendQuery(request): SendQuery<GetRewardMerkleTreeRequest>| async move {
-            handlers::get_reward_merkle_tree_v2(&state, request)
-                .await
-                .map(Json)
-        };
-
-    let get_state_certificate =
-        |State(state): State<S>, SendQuery(request): SendQuery<GetStateCertificateRequest>| async move {
-            handlers::get_state_certificate(&state, request)
-                .await
-                .map(Json)
-        };
-
-    let get_stake_table =
-        |State(state): State<S>, SendQuery(request): SendQuery<GetStakeTableRequest>| async move {
-            handlers::get_stake_table(&state, request).await.map(Json)
-        };
-
-    let get_namespace_proof =
-        |State(state): State<S>, SendQuery(query): SendQuery<GetNamespaceProofRequest>| async move {
-            handlers::get_namespace_proof(&state, query).await.map(Json)
-        };
-
-    let get_incorrect_encoding_proof = |State(state): State<S>,
-                                        SendQuery(query): SendQuery<
-        GetIncorrectEncodingProofRequest,
-    >| async move {
-        handlers::get_incorrect_encoding_proof(&state, query)
-            .await
-            .map(Json)
-    };
-
-    let router = ApiRouter::new()
-        .api_route(
-            routes::v2::REWARD_CLAIM_INPUT_ROUTE.http,
-            get_with(get_reward_claim_input, |op| {
-                op.description(routes::v2::REWARD_CLAIM_INPUT_ROUTE.description)
-                    .tag(routes::v2::REWARD_CLAIM_INPUT_ROUTE.tag)
-            }),
-        )
-        .api_route(
-            routes::v2::REWARD_BALANCE_ROUTE.http,
-            get_with(get_reward_balance, |op| {
-                op.description(routes::v2::REWARD_BALANCE_ROUTE.description)
-                    .tag(routes::v2::REWARD_BALANCE_ROUTE.tag)
-            }),
-        )
-        .api_route(
-            routes::v2::REWARD_ACCOUNT_PROOF_ROUTE.http,
-            get_with(get_reward_account_proof, |op| {
-                op.description(routes::v2::REWARD_ACCOUNT_PROOF_ROUTE.description)
-                    .tag(routes::v2::REWARD_ACCOUNT_PROOF_ROUTE.tag)
-            }),
-        )
-        .api_route(
-            routes::v2::REWARD_BALANCES_ROUTE.http,
-            get_with(get_reward_balances, |op| {
-                op.description(routes::v2::REWARD_BALANCES_ROUTE.description)
-                    .tag(routes::v2::REWARD_BALANCES_ROUTE.tag)
-            }),
-        )
-        .api_route(
-            routes::v2::REWARD_MERKLE_TREE_V2_ROUTE.http,
-            get_with(get_reward_merkle_tree_v2, |op| {
-                op.description(routes::v2::REWARD_MERKLE_TREE_V2_ROUTE.description)
-                    .tag(routes::v2::REWARD_MERKLE_TREE_V2_ROUTE.tag)
-            }),
-        )
-        .api_route(
-            routes::v2::NAMESPACE_PROOF_ROUTE.http,
-            get_with(get_namespace_proof, |op| {
-                op.description(routes::v2::NAMESPACE_PROOF_ROUTE.description)
-                    .tag(routes::v2::NAMESPACE_PROOF_ROUTE.tag)
-            }),
-        )
-        .api_route(
-            routes::v2::INCORRECT_ENCODING_PROOF_ROUTE.http,
-            get_with(get_incorrect_encoding_proof, |op| {
-                op.description(routes::v2::INCORRECT_ENCODING_PROOF_ROUTE.description)
-                    .tag(routes::v2::INCORRECT_ENCODING_PROOF_ROUTE.tag)
-            }),
-        )
-        .api_route(
-            routes::v2::STATE_CERTIFICATE_ROUTE.http,
-            get_with(get_state_certificate, |op| {
-                op.description(routes::v2::STATE_CERTIFICATE_ROUTE.description)
-                    .tag(routes::v2::STATE_CERTIFICATE_ROUTE.tag)
-            }),
-        )
-        .api_route(
-            routes::v2::STAKE_TABLE_ROUTE.http,
-            get_with(get_stake_table, |op| {
-                op.description(routes::v2::STAKE_TABLE_ROUTE.description)
-                    .tag(routes::v2::STAKE_TABLE_ROUTE.tag)
-            }),
-        )
-        .finish_api(&mut api);
-
-    // Transform examples (array) to example (singular) for OpenAPI 3.0/Swagger compatibility
-    if let Some(ref mut components) = api.components {
-        let mut transform = schemars::transform::SetSingleExample::default();
-        for schema in components.schemas.values_mut() {
-            transform.transform(&mut schema.json_schema);
-        }
-    }
-
-    // Also transform path parameter schemas
-    if let Some(ref mut paths) = api.paths {
-        let mut transform = schemars::transform::SetSingleExample::default();
-        for path_item_ref in paths.paths.values_mut() {
-            if let aide::openapi::ReferenceOr::Item(path_item) = path_item_ref {
-                for operation in [
-                    &mut path_item.get,
-                    &mut path_item.post,
-                    &mut path_item.put,
-                    &mut path_item.delete,
-                    &mut path_item.patch,
-                ]
-                .into_iter()
-                .flatten()
-                {
-                    for param in &mut operation.parameters {
-                        if let aide::openapi::ReferenceOr::Item(param_item) = param {
-                            let parameter_data = match param_item {
-                                aide::openapi::Parameter::Query { parameter_data, .. } => {
-                                    parameter_data
-                                },
-                                aide::openapi::Parameter::Header { parameter_data, .. } => {
-                                    parameter_data
-                                },
-                                aide::openapi::Parameter::Path { parameter_data, .. } => {
-                                    parameter_data
-                                },
-                                aide::openapi::Parameter::Cookie { parameter_data, .. } => {
-                                    parameter_data
-                                },
-                            };
-                            if let aide::openapi::ParameterSchemaOrContent::Schema(ref mut schema) =
-                                parameter_data.format
-                            {
-                                transform.transform(&mut schema.json_schema);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    router
-        .route(routes::v2::OPENAPI_SPEC_ROUTE, get(serve_openapi_spec))
-        .route(
-            routes::v2::SWAGGER_ROUTE,
-            get(|| async { swagger_html(routes::v2::OPENAPI_SPEC_ROUTE) }),
-        )
-        .route(
-            "/v2/",
-            get(|| async { swagger_html(routes::v2::OPENAPI_SPEC_ROUTE) }),
-        )
-        .route(
-            routes::v2::SCALAR_ROUTE,
-            get(Scalar::new(routes::v2::OPENAPI_SPEC_ROUTE)
-                .with_title("Espresso Node API v2")
-                .axum_handler()),
-        )
-        .route(
-            routes::v2::REDOC_ROUTE,
-            get(Redoc::new(routes::v2::OPENAPI_SPEC_ROUTE)
-                .with_title("Espresso Node API v2")
-                .axum_handler()),
-        )
-        .layer(Extension(api))
-        .with_state(state)
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -4708,7 +4409,7 @@ mod tests {
                     get(|| async { StatusCode::INTERNAL_SERVER_ERROR }),
                 ),
         )
-        .layer(cors_layer());
+        .layer(http_wire::cors_layer());
 
         let allow_origin = |resp: &Response, uri: &str| {
             resp.headers()

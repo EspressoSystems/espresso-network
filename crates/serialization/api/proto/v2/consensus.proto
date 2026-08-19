@@ -2,11 +2,8 @@ syntax = "proto3";
 
 package espresso.api.v2;
 
+import "google/api/annotations.proto";
 import "v2/common.proto";
-
-//=============================================================================
-// Light Client State Types
-//=============================================================================
 
 // Light client state
 message LightClientState {
@@ -39,10 +36,6 @@ message LightClientStateUpdateCertificateV2 {
   string auth_root = 5;  // TaggedBase64 or plain base64
 }
 
-//=============================================================================
-// State Certificate Queries
-//=============================================================================
-
 // Request to get state certificate for an epoch
 message GetStateCertificateRequest {
   // Epoch number
@@ -54,10 +47,6 @@ message StateCertificateResponse {
   // Structured light client state update certificate
   LightClientStateUpdateCertificateV2 certificate = 1;
 }
-
-//=============================================================================
-// Stake Table Queries
-//=============================================================================
 
 // Request to get stake table for an epoch
 message GetStakeTableRequest {
@@ -71,15 +60,15 @@ message StakeTableResponse {
   repeated PeerConfig peers = 1;
 }
 
-//=============================================================================
-// gRPC Service Definition
-//=============================================================================
-
 // gRPC service for consensus state queries
 service ConsensusService {
   // Get state certificate for an epoch
-  rpc GetStateCertificate(GetStateCertificateRequest) returns (StateCertificateResponse);
+  rpc GetStateCertificate(GetStateCertificateRequest) returns (StateCertificateResponse) {
+    option (google.api.http) = {get: "/v2/consensus/state-certificate"};
+  }
 
   // Get stake table for an epoch
-  rpc GetStakeTable(GetStakeTableRequest) returns (StakeTableResponse);
+  rpc GetStakeTable(GetStakeTableRequest) returns (StakeTableResponse) {
+    option (google.api.http) = {get: "/v2/consensus/stake-table"};
+  }
 }

@@ -8,13 +8,13 @@ edition.workspace = true
 generated = true
 
 [dependencies]
-anyhow = { workspace = true }
+axum = { workspace = true }
 prost = { workspace = true }
-schemars = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
+tonic = { workspace = true }
+tonic-prost = { workspace = true }
+tonic-rest = { workspace = true }
 
 [build-dependencies]
-prost-build = { workspace = true }
-serde = { workspace = true }
-toml = { workspace = true }
+tonic-prost-build = { workspace = true }
+tonic-rest-build = { workspace = true }

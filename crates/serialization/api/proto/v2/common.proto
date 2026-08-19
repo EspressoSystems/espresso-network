@@ -5,10 +5,6 @@ package espresso.api.v2;
 // Common types for Espresso API v2
 // This file is intentionally minimal - domain-specific types live in their own proto files
 
-//=============================================================================
-// Cryptographic Key Types
-//=============================================================================
-
 // BLS public key (typically 48 bytes)
 message BLSPublicKey {
   string key = 1;
@@ -18,10 +14,6 @@ message BLSPublicKey {
 message SchnorrPublicKey {
   string key = 1;
 }
-
-//=============================================================================
-// Network Address Types
-//=============================================================================
 
 // Network address - either IP or domain name with port
 message NetAddr {
@@ -46,10 +38,6 @@ message NameAddr {
   string name = 1;  // Domain name
   uint32 port = 2;
 }
-
-//=============================================================================
-// Peer Configuration Types
-//=============================================================================
 
 // Stake table entry for a validator
 message StakeTableEntry {

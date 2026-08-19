@@ -3,26 +3,18 @@
 // Module declarations
 mod axum;
 pub mod error;
-pub mod handlers;
-mod tonic;
 pub mod v1;
-pub mod v2;
 
+// The v2 API contract: proto types, tonic services, and generated REST routers all live
+// in `serialization-api`, generated from the proto files.
+pub use serialization_api::{rest, v2 as proto};
 use tower::Layer;
 
-// Generated gRPC service code - committed to git for visibility in code review
-pub mod proto {
-    include!("espresso.api.v2.rs");
-}
-
 // Re-exports
-pub use self::{
-    axum::{create_combined_router, create_router_v1, create_router_v2, routes},
-    tonic::create_reward_service,
-};
+pub use self::axum::{create_router_v1, routes};
 
 /// Build a full request URL from a server base URL and a path produced by one of the
-/// `routes::v1::*` (or `routes::v2::*`) builders.
+/// `routes::v1::*` builders.
 ///
 /// Use this from test/CLI sites that have a `url::Url` pointing at the API server and want
 /// the absolute URL for a single request. Internally this is just `base.join(path)`; the
@@ -63,9 +55,10 @@ where
         + v1::ExplorerApi
         + v1::TokenApi
         + v1::DatabaseApi
-        + v2::RewardApi
-        + v2::DataApi
-        + v2::ConsensusApi
+        + proto::reward_service_server::RewardService
+        + proto::data_service_server::DataService
+        + proto::consensus_service_server::ConsensusService
+        + proto::status_service_server::StatusService
         + Clone
         + Send
         + Sync
@@ -97,7 +90,12 @@ where
     if modules.hotshot_events {
         router = router.merge(axum::router_hotshot_events(state.clone()));
     }
-    let router = axum::finish_v1_docs(router).merge(axum::create_router_v2(state));
+    let state = std::sync::Arc::new(state);
+    let router = axum::finish_v1_docs(router)
+        .merge(rest::reward_service_rest_router(state.clone()))
+        .merge(rest::data_service_rest_router(state.clone()))
+        .merge(rest::consensus_service_rest_router(state.clone()))
+        .merge(rest::status_service_rest_router(state));
     serve_router(listener, "v1 and v2", router, max_connections).await
 }
 
@@ -313,25 +311,33 @@ fn apply_connection_limit(router: ::axum::Router, limit: usize) -> ::axum::Route
 /// Start Tonic gRPC server
 pub async fn serve_tonic<S>(port: u16, state: S) -> anyhow::Result<()>
 where
-    S: v2::RewardApi + Clone + Send + Sync + 'static,
+    S: proto::reward_service_server::RewardService
+        + proto::data_service_server::DataService
+        + proto::consensus_service_server::ConsensusService
+        + proto::status_service_server::StatusService
+        + Clone,
 {
     use ::tonic::transport::Server;
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
 
-    let reward_service = create_reward_service(state);
+    let reward_service = proto::reward_service_server::RewardServiceServer::new(state.clone());
+    let data_service = proto::data_service_server::DataServiceServer::new(state.clone());
+    let consensus_service =
+        proto::consensus_service_server::ConsensusServiceServer::new(state.clone());
+    let status_service = proto::status_service_server::StatusServiceServer::new(state);
 
     // Enable gRPC reflection for tools like grpcurl
     let reflection_service = tonic_reflection::server::Builder::configure()
-        .register_encoded_file_descriptor_set(include_bytes!(concat!(
-            env!("OUT_DIR"),
-            "/reflection_descriptor.bin"
-        )))
+        .register_encoded_file_descriptor_set(serialization_api::FILE_DESCRIPTOR_SET)
         .build_v1()?;
 
     tracing::info!("gRPC server listening on {}", addr);
     Server::builder()
         .add_service(reward_service)
+        .add_service(data_service)
+        .add_service(consensus_service)
+        .add_service(status_service)
         .add_service(reflection_service)
         .serve(addr)
         .await?;

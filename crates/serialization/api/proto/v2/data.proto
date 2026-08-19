@@ -2,9 +2,7 @@ syntax = "proto3";
 
 package espresso.api.v2;
 
-//=============================================================================
-// Namespace Proof Types
-//=============================================================================
+import "google/api/annotations.proto";
 
 // ADVZ (VID V0) namespace proof
 message ADVZNsProof {
@@ -41,10 +39,6 @@ message NsProof {
     AvidmGf2NsProof v2 = 4;
   }
 }
-
-//=============================================================================
-// Namespace Proof Queries
-//=============================================================================
 
 // Request to get namespace proof(s)
 // Either specify 'block' for a single block, or 'first' and 'last' for a range
@@ -91,10 +85,6 @@ message GetNamespaceProofResponse {
   }
 }
 
-//=============================================================================
-// Incorrect Encoding Proof
-//=============================================================================
-
 // Request to get incorrect encoding proof
 message GetIncorrectEncodingProofRequest {
   // Namespace ID
@@ -110,15 +100,15 @@ message IncorrectEncodingProofResponse {
   AvidMIncorrectEncodingNsProof proof = 1;
 }
 
-//=============================================================================
-// gRPC Service Definition
-//=============================================================================
-
 // gRPC service for data availability queries
 service DataService {
   // Get namespace proof(s) - handles both single block and range queries
-  rpc GetNamespaceProof(GetNamespaceProofRequest) returns (GetNamespaceProofResponse);
+  rpc GetNamespaceProof(GetNamespaceProofRequest) returns (GetNamespaceProofResponse) {
+    option (google.api.http) = {get: "/v2/data/finalized/namespace-proof"};
+  }
 
   // Get incorrect encoding proof for a block
-  rpc GetIncorrectEncodingProof(GetIncorrectEncodingProofRequest) returns (IncorrectEncodingProofResponse);
+  rpc GetIncorrectEncodingProof(GetIncorrectEncodingProofRequest) returns (IncorrectEncodingProofResponse) {
+    option (google.api.http) = {get: "/v2/data/finalized/incorrect-encoding-proof"};
+  }
 }
