@@ -18,11 +18,10 @@ Files in scope: `AGENTS.md`, `doc/agents/*.md`, and every doc referenced from th
 
 - Stale: every path, symbol, route, command, contract name, version claim still exists. Verify against the code,
   `justfile`, `data/genesis/*.toml`, `contracts/`.
-- Wrong: live claims match the network.
-  - `curl -s https://query.main.net.espresso.network/status/version`
-  - `curl -s https://query.decaf.testnet.espresso.network/status/version`
-  - `curl -s https://query.main.net.espresso.network/status/block-height`
-  - `curl -s https://query.main.net.espresso.network/availability/header/<height>`
+- Wrong: claims about the running network. The runner has network access; query the public query services
+  `https://query.main.net.espresso.network` and `https://query.decaf.testnet.espresso.network`. `/v1/status/metrics`
+  (Prometheus: build info, view, epoch, height) and `/v1/config/runtime` carry the most per request. Paths without the
+  `/v1` prefix redirect, so `curl -sL`.
 - Misplaced: content not needed by every session moves out of `AGENTS.md`, leaving a trigger line.
 - Duplicated: same fact in two files, keep one.
 - Missing: architectural changes since the docs in scope were last touched
