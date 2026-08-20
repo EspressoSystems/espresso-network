@@ -716,6 +716,24 @@ pub trait SequencerPersistence:
             next_epoch_high_qc = Some(extended_next_qc);
         }
 
+        if let Some(running_high_qc) = self
+            .load_high_qc2()
+            .await
+            .context("loading persisted high qc")?
+            && running_high_qc.view_number() > high_qc.view_number()
+        {
+            high_qc = running_high_qc;
+            next_epoch_high_qc = self
+                .load_next_epoch_quorum_certificate()
+                .await
+                .context("loading persisted next epoch qc")?
+                .filter(|neqc| {
+                    CertificatePair::new(high_qc.clone(), Some(neqc.clone()))
+                        .verify_next_epoch_qc(epoch_height)
+                        .is_ok()
+                });
+        }
+
         let validated_state = if leaf.block_header().height() == 0 {
             // If we are starting from genesis, we can provide the full state.
             genesis_validated_state
@@ -769,26 +787,20 @@ pub trait SequencerPersistence:
         );
 
         Ok((
-            HotShotInitializer {
-                instance_state: state,
+            HotShotInitializer::load(
+                state,
                 epoch_height,
                 epoch_start_block,
-                anchor_leaf: leaf,
-                anchor_state: Arc::new(validated_state),
-                anchor_state_delta: None,
-                start_view: restart_view,
-                start_epoch: epoch,
-                last_actioned_view: highest_voted_view,
-                saved_proposals,
-                high_qc,
-                next_epoch_high_qc,
-                decided_upgrade_certificate: upgrade_certificate,
-                undecided_leaves: Default::default(),
-                undecided_state: Default::default(),
-                saved_vid_shares: Default::default(), // TODO: implement saved_vid_shares
                 start_epoch_info,
+                (leaf, Some(Arc::new(validated_state)), None),
+                (restart_view, epoch),
+                (high_qc, next_epoch_high_qc),
+                highest_voted_view,
+                saved_proposals,
+                Default::default(), // TODO: implement saved_vid_shares
+                upgrade_certificate,
                 state_cert,
-            },
+            ),
             anchor_view,
         ))
     }
@@ -902,6 +914,20 @@ pub trait SequencerPersistence:
         Ok(None)
     }
 
+    /// Persist the new protocol's locked QC, written before each phase-2 vote.
+    ///
+    /// Implementations must apply this as an atomic monotonic compare-and-set: a
+    /// write whose view is not newer than the stored one is a no-op. This lets
+    /// concurrent, retried writes race without ever regressing the persisted lock.
+    async fn append_high_qc2(&self, _high_qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Load the persisted locked QC, if any.
+    async fn load_high_qc2(&self) -> anyhow::Result<Option<QuorumCertificate2<SeqTypes>>> {
+        Ok(None)
+    }
+
     /// Update the current eQC in storage.
     async fn store_eqc(
         &self,
@@ -951,14 +977,16 @@ pub trait SequencerPersistence:
         }
     }
 
-    async fn store_next_epoch_quorum_certificate(
-        &self,
-        high_qc: NextEpochQuorumCertificate2<SeqTypes>,
-    ) -> anyhow::Result<()>;
-
     async fn load_next_epoch_quorum_certificate(
         &self,
     ) -> anyhow::Result<Option<NextEpochQuorumCertificate2<SeqTypes>>>;
+
+    async fn append_next_epoch_high_qc2(
+        &self,
+        _next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
 
     async fn append_da2(
         &self,
@@ -1074,8 +1102,8 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
         (**self).append_quorum_proposal2(&proposal_qp_wrapper).await
     }
 
-    async fn update_high_qc2(&self, _high_qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
-        Ok(())
+    async fn update_high_qc2(&self, high_qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
+        (**self).append_high_qc2(high_qc).await
     }
 
     /// Update the current eQC in storage.
@@ -1095,9 +1123,11 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
 
     async fn update_next_epoch_high_qc2(
         &self,
-        _next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
+        next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
     ) -> anyhow::Result<()> {
-        Ok(())
+        (**self)
+            .append_next_epoch_high_qc2(next_epoch_high_qc)
+            .await
     }
 
     async fn update_decided_upgrade_certificate(

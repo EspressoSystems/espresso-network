@@ -186,7 +186,7 @@ where
                                             self.epoch_height,
                                             self.epoch_start_block,
                                             self.start_epoch_info.clone(),
-                                            self.last_decided_leaf.clone(),
+                                            (self.last_decided_leaf.clone(), None, None),
                                             (
                                                 ViewNumber::genesis(),
                                                 genesis_epoch_from_version(self.upgrade.base),
@@ -306,7 +306,7 @@ where
                                     self.epoch_height,
                                     self.epoch_start_block,
                                     self.start_epoch_info.clone(),
-                                    self.last_decided_leaf.clone(),
+                                    (self.last_decided_leaf.clone(), None, None),
                                     (start_view, start_epoch),
                                     (high_qc, next_epoch_high_qc),
                                     last_actioned_view,

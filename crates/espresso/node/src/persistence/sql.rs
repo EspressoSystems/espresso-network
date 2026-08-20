@@ -1849,6 +1849,50 @@ impl SequencerPersistence for Persistence {
         .transpose()
     }
 
+    async fn append_high_qc2(&self, high_qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
+        let view = high_qc.view_number();
+        let data = bincode::serialize(&high_qc).context("serializing high_qc2")?;
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            // Compare-and-set inside one write transaction so a stale
+            // concurrent write can never regress the stored view: under
+            // SERIALIZABLE a racing writer conflicts and retries; on SQLite
+            // writes are serialized.
+            let stored_view = query("SELECT data FROM high_qc2 WHERE id = true")
+                .fetch_optional(tx.as_mut())
+                .await?
+                .map(|row| {
+                    let bytes: Vec<u8> = row.get("data");
+                    bincode::deserialize::<QuorumCertificate2<SeqTypes>>(&bytes)
+                        .context("deserializing existing high_qc2")
+                        .map(|qc| qc.view_number())
+                })
+                .transpose()?;
+            if stored_view.is_some_and(|stored| stored >= view) {
+                return Ok(());
+            }
+            tx.upsert("high_qc2", ["id", "data"], ["id"], [(true, data.clone())])
+                .await?;
+            tx.commit().await
+        })
+        .await
+    }
+
+    async fn load_high_qc2(&self) -> anyhow::Result<Option<QuorumCertificate2<SeqTypes>>> {
+        let row = self
+            .db
+            .read()
+            .await?
+            .fetch_optional("SELECT data FROM high_qc2 WHERE id = true")
+            .await?;
+        row.map(|row| {
+            let bytes: Vec<u8> = row.get("data");
+            bincode::deserialize::<QuorumCertificate2<SeqTypes>>(&bytes)
+                .context("deserializing high_qc2")
+        })
+        .transpose()
+    }
+
     async fn load_upgrade_certificate(
         &self,
     ) -> anyhow::Result<Option<UpgradeCertificate<SeqTypes>>> {
@@ -2515,25 +2559,6 @@ impl SequencerPersistence for Persistence {
         Ok(())
     }
 
-    async fn store_next_epoch_quorum_certificate(
-        &self,
-        high_qc: NextEpochQuorumCertificate2<SeqTypes>,
-    ) -> anyhow::Result<()> {
-        let qc2_bytes = bincode::serialize(&high_qc).context("serializing next epoch qc")?;
-        serializable_retry!(self, || async {
-            let mut tx = self.db.write().await?;
-            tx.upsert(
-                "next_epoch_quorum_certificate",
-                ["id", "data"],
-                ["id"],
-                [(true, qc2_bytes.clone())],
-            )
-            .await?;
-            tx.commit().await
-        })
-        .await
-    }
-
     async fn load_next_epoch_quorum_certificate(
         &self,
     ) -> anyhow::Result<Option<NextEpochQuorumCertificate2<SeqTypes>>> {
@@ -2550,6 +2575,41 @@ impl SequencerPersistence for Persistence {
                 anyhow::Result::<_>::Ok(bincode::deserialize(&bytes)?)
             })
             .transpose()
+    }
+
+    async fn append_next_epoch_high_qc2(
+        &self,
+        next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        let view = next_epoch_high_qc.view_number();
+        let data =
+            bincode::serialize(&next_epoch_high_qc).context("serializing next epoch high_qc2")?;
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            let stored_view =
+                query("SELECT data FROM next_epoch_quorum_certificate WHERE id = true")
+                    .fetch_optional(tx.as_mut())
+                    .await?
+                    .map(|row| {
+                        let bytes: Vec<u8> = row.get("data");
+                        bincode::deserialize::<NextEpochQuorumCertificate2<SeqTypes>>(&bytes)
+                            .context("deserializing existing next epoch high_qc2")
+                            .map(|qc| qc.view_number())
+                    })
+                    .transpose()?;
+            if stored_view.is_some_and(|stored| stored >= view) {
+                return Ok(());
+            }
+            tx.upsert(
+                "next_epoch_quorum_certificate",
+                ["id", "data"],
+                ["id"],
+                [(true, data.clone())],
+            )
+            .await?;
+            tx.commit().await
+        })
+        .await
     }
 
     async fn store_eqc(

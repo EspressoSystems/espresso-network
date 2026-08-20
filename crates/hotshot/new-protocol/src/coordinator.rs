@@ -117,12 +117,12 @@ where
             state_private_key,
             stake_table_capacity,
             upgrade_lock.clone(),
-            initializer.anchor_leaf.clone(),
-            initializer.epoch_height,
+            initializer.anchor_leaf().clone(),
+            initializer.epoch_height(),
         );
 
         let state_manager = StateManager::new(
-            Arc::new(initializer.instance_state.clone()),
+            Arc::new(initializer.instance_state().clone()),
             upgrade_lock.clone(),
         );
 
@@ -158,18 +158,18 @@ where
                 lock,
             ))
             .epoch_manager(EpochManager::new(
-                initializer.epoch_height,
+                initializer.epoch_height(),
                 membership_coordinator.clone(),
             ))
             .block_builder(BlockBuilder::new(
-                Arc::new(initializer.instance_state.clone()),
+                Arc::new(initializer.instance_state().clone()),
                 membership_coordinator.clone(),
                 BlockBuilderConfig::default(),
                 upgrade_lock.clone(),
             ))
             .proposal_validator(ProposalValidator::new(
                 membership_coordinator.clone(),
-                initializer.epoch_height,
+                initializer.epoch_height(),
                 upgrade_lock,
             ))
             .storage(Storage::new(storage, private_key))
