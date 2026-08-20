@@ -1424,6 +1424,7 @@ impl<T: NodeType> Consensus<T> {
             // here. Keep it and ask for whatever is needed to act on it.
             if view > self.decide_floor() {
                 self.certs.entry(view).or_insert(cert1.into_cert());
+                self.adopt_certified_drb(view);
                 self.request_missing_certified_data(view, outbox);
             }
             return Protocol::Continue;

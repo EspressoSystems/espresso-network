@@ -424,12 +424,12 @@ pub enum MessageType<T: NodeType, S> {
     Consensus(ConsensusMessage<T, S>),
     Block(BlockMessage<T>),
     ProposalFetch(ProposalFetchMessage<T>),
+    External(#[serde(with = "serde_bytes")] Vec<u8>),
     PayloadFetch(PayloadFetchMessage<T>),
     /// Request for the receiver's own VID share of a certified view, used for
     /// payloads too large to fetch whole. There is no response variant: the
     /// receiver answers with its regular [`ConsensusMessage::VidShareBroadcast`].
     ShareFetch(FetchRequest<T>),
-    External(#[serde(with = "serde_bytes")] Vec<u8>),
 }
 
 impl<T: NodeType, S> MessageType<T, S> {

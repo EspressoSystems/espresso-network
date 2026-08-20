@@ -3,7 +3,7 @@ pub(crate) mod metrics;
 pub mod timer;
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -48,7 +48,7 @@ use crate::{
     },
     network::Cliquenet,
     outbox::Outbox,
-    payload_fetch::{PayloadFetcher, expected_vid_param},
+    payload_fetch::{PayloadFetcher, ProposalFetchKey, expected_vid_param},
     proposal::{ProposalValidator, VidShareValidator},
     state::{HeaderRequest, StateEntry, StateManager, StateManagerOutput},
     storage::{NewProtocolStorage, Storage},
@@ -119,8 +119,6 @@ pub struct Coordinator<T: NodeType, S> {
     timer: Timer,
     #[builder(skip)]
     pending_proposal_fetches: PendingProposalFetches<T>,
-    #[builder(skip)]
-    requested_missing_proposals: HashSet<ProposalFetchKey<T>>,
     payload_fetcher: PayloadFetcher<T>,
     #[builder(skip)]
     da_payloads: BTreeMap<(ViewNumber, VidCommitment2), PendingDa<T>>,
@@ -286,12 +284,7 @@ where
                 .map(|m| m.consensus.vid_disperse_duration.clone().into()),
         );
 
-        let whole_payload_threshold = network
-            .sender()
-            .max_message_size()
-            .get()
-            .saturating_sub(1024 * 1024)
-            .max(1024 * 1024);
+        let whole_payload_threshold = network.sender().max_message_size().get() / 2;
 
         let lock = upgrade_lock.clone();
         Self::builder()
@@ -683,7 +676,9 @@ where
     }
 
     pub fn apply_consensus(&mut self, input: ConsensusInput<T>) {
-        self.consensus.apply(input, &mut self.outbox)
+        self.consensus.apply(input, &mut self.outbox);
+        self.payload_fetcher
+            .note_locked(self.consensus.locked_view());
     }
 
     pub fn process_consensus_output(
@@ -762,7 +757,13 @@ where
             },
             ConsensusOutput::RequestMissingProposal { view, leaf_commit } => {
                 debug!(%node, %view, "request missing proposal");
-                if let Err(err) = self.request_missing_proposal(view, leaf_commit) {
+                if let Err(err) = self.payload_fetcher.request_missing_proposal(
+                    view,
+                    leaf_commit,
+                    self.timer.duration(),
+                    &self.consensus,
+                    self.network.sender(),
+                ) {
                     warn!(%node, %view, %err, "failed to request missing proposal");
                 }
             },
@@ -1280,8 +1281,10 @@ where
                     }) {
                         match e {
                             CatchupEvidence::Qc(qc) => {
-                                self.payload_fetcher
-                                    .note_advertiser(qc.view_number(), message.sender.clone());
+                                if !self.is_view_too_far_ahead(qc.view_number()) {
+                                    self.payload_fetcher
+                                        .note_advertiser(qc.view_number(), message.sender.clone());
+                                }
                                 if let Some(epoch) = self
                                     .cert_verifiers
                                     .advance
@@ -1348,8 +1351,10 @@ where
                         epoch = ?qc.epoch().map(|e| *e),
                         "recv high qc"
                     );
-                    self.payload_fetcher
-                        .note_advertiser(qc.view_number(), message.sender.clone());
+                    if !self.is_view_too_far_ahead(qc.view_number()) {
+                        self.payload_fetcher
+                            .note_advertiser(qc.view_number(), message.sender.clone());
+                    }
                     if let Some(epoch) = self
                         .cert_verifiers
                         .advance
@@ -1461,6 +1466,7 @@ where
                 self.payload_fetcher.serve_payload(
                     view,
                     &message.sender,
+                    self.timer.duration(),
                     &self.consensus,
                     self.network.sender(),
                 );
@@ -1478,9 +1484,10 @@ where
                     );
                     return None;
                 }
-                self.payload_fetcher.serve_share(
+                self.payload_fetcher.serve_share_request(
                     view,
                     &message.sender,
+                    self.timer.duration(),
                     &self.consensus,
                     self.network.sender(),
                 );
@@ -1645,7 +1652,11 @@ where
                     .pending_proposal_fetches
                     .contains_request(view, leaf_commitment)
                 {
-                    self.broadcast_proposal_fetch(view)?;
+                    self.payload_fetcher.broadcast_proposal_fetch(
+                        view,
+                        &self.consensus,
+                        self.network.sender(),
+                    )?;
                 }
                 self.pending_proposal_fetches
                     .push(view, leaf_commitment, respond);
@@ -1841,40 +1852,12 @@ where
         }
     }
 
-    /// Broadcast a signed proposal fetch request for `view` to all peers.
-    fn broadcast_proposal_fetch(&mut self, view: ViewNumber) -> Result<(), CoordinatorError> {
-        let request = self.consensus.signed_fetch_request(view).map_err(|err| {
-            let err = format!("failed to sign proposal request: {err}");
-            CoordinatorError::regular(err).context("sign proposal request")
-        })?;
-        let message = Message {
-            sender: self.public_key.clone(),
-            message_type: MessageType::ProposalFetch(ProposalFetchMessage::Request(request)),
-        };
-        self.network
-            .sender()
-            .broadcast(self.consensus.current_view(), &message)
-            .map_err(|err| CoordinatorError::from(err).context("broadcast proposal request"))
-    }
-
-    fn request_missing_proposal(
-        &mut self,
-        view: ViewNumber,
-        leaf_commit: Commitment<Leaf2<T>>,
-    ) -> Result<(), CoordinatorError> {
-        if !self
-            .requested_missing_proposals
-            .insert(ProposalFetchKey::new(view, leaf_commit))
-        {
-            return Ok(());
-        }
-        self.broadcast_proposal_fetch(view)
-    }
-
     fn maybe_validate_fetched_proposal(&mut self, proposal: SignedProposal<T, Proposal<T>>) {
         let view = proposal.data.view_number;
-        let key = ProposalFetchKey::new(view, proposal_commitment(&proposal.data));
-        if !self.requested_missing_proposals.remove(&key) {
+        if !self
+            .payload_fetcher
+            .take_requested_proposal(view, proposal_commitment(&proposal.data))
+        {
             return;
         }
         if self.consensus.proposal_at(view).is_some() {
@@ -1906,8 +1889,6 @@ where
                 self.epoch_root_collector.gc(view);
                 self.cert_verifiers.gc(decide_floor, epoch);
                 self.pending_proposal_fetches.gc(view);
-                self.requested_missing_proposals
-                    .retain(|key| key.view > view);
                 self.payload_fetcher.gc(view);
                 self.state_manager.gc(view);
                 self.storage
@@ -2071,21 +2052,6 @@ struct PendingDa<T: NodeType> {
 
 type ProposalFetchResponseSender<T> =
     oneshot::Sender<Result<SignedProposal<T, Proposal<T>>, QueryError>>;
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-struct ProposalFetchKey<T: NodeType> {
-    view: ViewNumber,
-    leaf_commitment: Commitment<Leaf2<T>>,
-}
-
-impl<T: NodeType> ProposalFetchKey<T> {
-    fn new(view: ViewNumber, leaf_commitment: Commitment<Leaf2<T>>) -> Self {
-        Self {
-            view,
-            leaf_commitment,
-        }
-    }
-}
 
 #[derive(Default)]
 struct PendingProposalFetches<T: NodeType> {
