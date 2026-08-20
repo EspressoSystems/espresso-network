@@ -1002,6 +1002,76 @@ impl espresso_api::proto::status_service_server::StatusService for TestApi {
     }
 }
 
+#[tonic::async_trait]
+impl espresso_api::proto::token_service_server::TokenService for TestApi {
+    async fn get_total_minted_supply(
+        &self,
+        _request: tonic::Request<espresso_api::proto::GetTotalMintedSupplyRequest>,
+    ) -> Result<tonic::Response<espresso_api::proto::TotalMintedSupplyResponse>, tonic::Status>
+    {
+        tracing::info!("v2: get_total_minted_supply()");
+        Ok(tonic::Response::new(
+            espresso_api::proto::TotalMintedSupplyResponse {
+                amount: "0".to_string(),
+            },
+        ))
+    }
+
+    async fn get_circulating_supply(
+        &self,
+        _request: tonic::Request<espresso_api::proto::GetCirculatingSupplyRequest>,
+    ) -> Result<tonic::Response<espresso_api::proto::CirculatingSupplyResponse>, tonic::Status>
+    {
+        tracing::info!("v2: get_circulating_supply()");
+        Ok(tonic::Response::new(
+            espresso_api::proto::CirculatingSupplyResponse {
+                amount: "0".to_string(),
+            },
+        ))
+    }
+
+    async fn get_circulating_supply_ethereum(
+        &self,
+        _request: tonic::Request<espresso_api::proto::GetCirculatingSupplyEthereumRequest>,
+    ) -> Result<
+        tonic::Response<espresso_api::proto::CirculatingSupplyEthereumResponse>,
+        tonic::Status,
+    > {
+        tracing::info!("v2: get_circulating_supply_ethereum()");
+        Ok(tonic::Response::new(
+            espresso_api::proto::CirculatingSupplyEthereumResponse {
+                amount: "0".to_string(),
+            },
+        ))
+    }
+
+    async fn get_total_issued_supply(
+        &self,
+        _request: tonic::Request<espresso_api::proto::GetTotalIssuedSupplyRequest>,
+    ) -> Result<tonic::Response<espresso_api::proto::TotalIssuedSupplyResponse>, tonic::Status>
+    {
+        tracing::info!("v2: get_total_issued_supply()");
+        Ok(tonic::Response::new(
+            espresso_api::proto::TotalIssuedSupplyResponse {
+                amount: "0".to_string(),
+            },
+        ))
+    }
+
+    async fn get_total_reward_distributed(
+        &self,
+        _request: tonic::Request<espresso_api::proto::GetTotalRewardDistributedRequest>,
+    ) -> Result<tonic::Response<espresso_api::proto::TotalRewardDistributedResponse>, tonic::Status>
+    {
+        tracing::info!("v2: get_total_reward_distributed()");
+        Ok(tonic::Response::new(
+            espresso_api::proto::TotalRewardDistributedResponse {
+                amount: "0".to_string(),
+            },
+        ))
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize tracing

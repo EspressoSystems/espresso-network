@@ -2596,3 +2596,731 @@ pub mod status_service_server {
         const NAME: &'static str = SERVICE_NAME;
     }
 }
+/// Request for the total minted supply (no parameters)
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetTotalMintedSupplyRequest {}
+/// Total minted supply response
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TotalMintedSupplyResponse {
+    /// Total supply of the ESP token minted on Ethereum, in ESP (decimal string);
+    /// excludes unclaimed rewards
+    #[prost(string, tag = "1")]
+    pub amount: ::prost::alloc::string::String,
+}
+/// Request for the circulating supply (no parameters)
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetCirculatingSupplyRequest {}
+/// Circulating supply response
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CirculatingSupplyResponse {
+    /// Circulating supply in ESP (decimal string): initial_supply + reward_distributed -
+    /// locked, following the mainnet unlock schedule
+    #[prost(string, tag = "1")]
+    pub amount: ::prost::alloc::string::String,
+}
+/// Request for the circulating supply on Ethereum L1 (no parameters)
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetCirculatingSupplyEthereumRequest {}
+/// Circulating supply on Ethereum L1 response
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CirculatingSupplyEthereumResponse {
+    /// Circulating supply of ESP tokens on Ethereum L1, in ESP (decimal string):
+    /// total_supply_l1 - locked
+    #[prost(string, tag = "1")]
+    pub amount: ::prost::alloc::string::String,
+}
+/// Request for the total issued supply (no parameters)
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetTotalIssuedSupplyRequest {}
+/// Total issued supply response
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TotalIssuedSupplyResponse {
+    /// Total issued supply in ESP (decimal string): initial_supply +
+    /// total_reward_distributed, including rewards not yet claimed on Ethereum
+    #[prost(string, tag = "1")]
+    pub amount: ::prost::alloc::string::String,
+}
+/// Request for the total reward distributed (no parameters)
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetTotalRewardDistributedRequest {}
+/// Total reward distributed response
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TotalRewardDistributedResponse {
+    /// Total rewards distributed by consensus, in ESP (decimal string), including rewards
+    /// not yet claimed on Ethereum
+    #[prost(string, tag = "1")]
+    pub amount: ::prost::alloc::string::String,
+}
+/// Generated client implementations.
+pub mod token_service_client {
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
+    use tonic::codegen::*;
+    use tonic::codegen::http::Uri;
+    /// gRPC service for ESP token supply queries
+    #[derive(Debug, Clone)]
+    pub struct TokenServiceClient<T> {
+        inner: tonic::client::Grpc<T>,
+    }
+    impl TokenServiceClient<tonic::transport::Channel> {
+        /// Attempt to create a new client by connecting to a given endpoint.
+        pub async fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
+        where
+            D: TryInto<tonic::transport::Endpoint>,
+            D::Error: Into<StdError>,
+        {
+            let conn = tonic::transport::Endpoint::new(dst)?.connect().await?;
+            Ok(Self::new(conn))
+        }
+    }
+    impl<T> TokenServiceClient<T>
+    where
+        T: tonic::client::GrpcService<tonic::body::Body>,
+        T::Error: Into<StdError>,
+        T::ResponseBody: Body<Data = Bytes> + std::marker::Send + 'static,
+        <T::ResponseBody as Body>::Error: Into<StdError> + std::marker::Send,
+    {
+        pub fn new(inner: T) -> Self {
+            let inner = tonic::client::Grpc::new(inner);
+            Self { inner }
+        }
+        pub fn with_origin(inner: T, origin: Uri) -> Self {
+            let inner = tonic::client::Grpc::with_origin(inner, origin);
+            Self { inner }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> TokenServiceClient<InterceptedService<T, F>>
+        where
+            F: tonic::service::Interceptor,
+            T::ResponseBody: Default,
+            T: tonic::codegen::Service<
+                http::Request<tonic::body::Body>,
+                Response = http::Response<
+                    <T as tonic::client::GrpcService<tonic::body::Body>>::ResponseBody,
+                >,
+            >,
+            <T as tonic::codegen::Service<
+                http::Request<tonic::body::Body>,
+            >>::Error: Into<StdError> + std::marker::Send + std::marker::Sync,
+        {
+            TokenServiceClient::new(InterceptedService::new(inner, interceptor))
+        }
+        /// Compress requests with the given encoding.
+        ///
+        /// This requires the server to support it otherwise it might respond with an
+        /// error.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.inner = self.inner.send_compressed(encoding);
+            self
+        }
+        /// Enable decompressing responses.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.inner = self.inner.accept_compressed(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.inner = self.inner.max_decoding_message_size(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.inner = self.inner.max_encoding_message_size(limit);
+            self
+        }
+        /// Get the total supply of the ESP token minted on Ethereum; excludes unclaimed rewards
+        pub async fn get_total_minted_supply(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetTotalMintedSupplyRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::TotalMintedSupplyResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/espresso.api.v2.TokenService/GetTotalMintedSupply",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "espresso.api.v2.TokenService",
+                        "GetTotalMintedSupply",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// Get the circulating supply, following the mainnet unlock schedule
+        pub async fn get_circulating_supply(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetCirculatingSupplyRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::CirculatingSupplyResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/espresso.api.v2.TokenService/GetCirculatingSupply",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "espresso.api.v2.TokenService",
+                        "GetCirculatingSupply",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// Get the circulating supply of ESP tokens on Ethereum L1
+        pub async fn get_circulating_supply_ethereum(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetCirculatingSupplyEthereumRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::CirculatingSupplyEthereumResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/espresso.api.v2.TokenService/GetCirculatingSupplyEthereum",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "espresso.api.v2.TokenService",
+                        "GetCirculatingSupplyEthereum",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// Get the total issued supply, including rewards not yet claimed on Ethereum
+        pub async fn get_total_issued_supply(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetTotalIssuedSupplyRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::TotalIssuedSupplyResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/espresso.api.v2.TokenService/GetTotalIssuedSupply",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "espresso.api.v2.TokenService",
+                        "GetTotalIssuedSupply",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// Get the total rewards distributed by consensus, including rewards not yet claimed on Ethereum
+        pub async fn get_total_reward_distributed(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetTotalRewardDistributedRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::TotalRewardDistributedResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/espresso.api.v2.TokenService/GetTotalRewardDistributed",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "espresso.api.v2.TokenService",
+                        "GetTotalRewardDistributed",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+    }
+}
+/// Generated server implementations.
+pub mod token_service_server {
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
+    use tonic::codegen::*;
+    /// Generated trait containing gRPC methods that should be implemented for use with TokenServiceServer.
+    #[async_trait]
+    pub trait TokenService: std::marker::Send + std::marker::Sync + 'static {
+        /// Get the total supply of the ESP token minted on Ethereum; excludes unclaimed rewards
+        async fn get_total_minted_supply(
+            &self,
+            request: tonic::Request<super::GetTotalMintedSupplyRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::TotalMintedSupplyResponse>,
+            tonic::Status,
+        >;
+        /// Get the circulating supply, following the mainnet unlock schedule
+        async fn get_circulating_supply(
+            &self,
+            request: tonic::Request<super::GetCirculatingSupplyRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::CirculatingSupplyResponse>,
+            tonic::Status,
+        >;
+        /// Get the circulating supply of ESP tokens on Ethereum L1
+        async fn get_circulating_supply_ethereum(
+            &self,
+            request: tonic::Request<super::GetCirculatingSupplyEthereumRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::CirculatingSupplyEthereumResponse>,
+            tonic::Status,
+        >;
+        /// Get the total issued supply, including rewards not yet claimed on Ethereum
+        async fn get_total_issued_supply(
+            &self,
+            request: tonic::Request<super::GetTotalIssuedSupplyRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::TotalIssuedSupplyResponse>,
+            tonic::Status,
+        >;
+        /// Get the total rewards distributed by consensus, including rewards not yet claimed on Ethereum
+        async fn get_total_reward_distributed(
+            &self,
+            request: tonic::Request<super::GetTotalRewardDistributedRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::TotalRewardDistributedResponse>,
+            tonic::Status,
+        >;
+    }
+    /// gRPC service for ESP token supply queries
+    #[derive(Debug)]
+    pub struct TokenServiceServer<T> {
+        inner: Arc<T>,
+        accept_compression_encodings: EnabledCompressionEncodings,
+        send_compression_encodings: EnabledCompressionEncodings,
+        max_decoding_message_size: Option<usize>,
+        max_encoding_message_size: Option<usize>,
+    }
+    impl<T> TokenServiceServer<T> {
+        pub fn new(inner: T) -> Self {
+            Self::from_arc(Arc::new(inner))
+        }
+        pub fn from_arc(inner: Arc<T>) -> Self {
+            Self {
+                inner,
+                accept_compression_encodings: Default::default(),
+                send_compression_encodings: Default::default(),
+                max_decoding_message_size: None,
+                max_encoding_message_size: None,
+            }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> InterceptedService<Self, F>
+        where
+            F: tonic::service::Interceptor,
+        {
+            InterceptedService::new(Self::new(inner), interceptor)
+        }
+        /// Enable decompressing requests with the given encoding.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.accept_compression_encodings.enable(encoding);
+            self
+        }
+        /// Compress responses with the given encoding, if the client supports it.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.send_compression_encodings.enable(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.max_decoding_message_size = Some(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.max_encoding_message_size = Some(limit);
+            self
+        }
+    }
+    impl<T, B> tonic::codegen::Service<http::Request<B>> for TokenServiceServer<T>
+    where
+        T: TokenService,
+        B: Body + std::marker::Send + 'static,
+        B::Error: Into<StdError> + std::marker::Send + 'static,
+    {
+        type Response = http::Response<tonic::body::Body>;
+        type Error = std::convert::Infallible;
+        type Future = BoxFuture<Self::Response, Self::Error>;
+        fn poll_ready(
+            &mut self,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::result::Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+        fn call(&mut self, req: http::Request<B>) -> Self::Future {
+            match req.uri().path() {
+                "/espresso.api.v2.TokenService/GetTotalMintedSupply" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetTotalMintedSupplySvc<T: TokenService>(pub Arc<T>);
+                    impl<
+                        T: TokenService,
+                    > tonic::server::UnaryService<super::GetTotalMintedSupplyRequest>
+                    for GetTotalMintedSupplySvc<T> {
+                        type Response = super::TotalMintedSupplyResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetTotalMintedSupplyRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TokenService>::get_total_minted_supply(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetTotalMintedSupplySvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.TokenService/GetCirculatingSupply" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetCirculatingSupplySvc<T: TokenService>(pub Arc<T>);
+                    impl<
+                        T: TokenService,
+                    > tonic::server::UnaryService<super::GetCirculatingSupplyRequest>
+                    for GetCirculatingSupplySvc<T> {
+                        type Response = super::CirculatingSupplyResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetCirculatingSupplyRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TokenService>::get_circulating_supply(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetCirculatingSupplySvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.TokenService/GetCirculatingSupplyEthereum" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetCirculatingSupplyEthereumSvc<T: TokenService>(pub Arc<T>);
+                    impl<
+                        T: TokenService,
+                    > tonic::server::UnaryService<
+                        super::GetCirculatingSupplyEthereumRequest,
+                    > for GetCirculatingSupplyEthereumSvc<T> {
+                        type Response = super::CirculatingSupplyEthereumResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::GetCirculatingSupplyEthereumRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TokenService>::get_circulating_supply_ethereum(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetCirculatingSupplyEthereumSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.TokenService/GetTotalIssuedSupply" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetTotalIssuedSupplySvc<T: TokenService>(pub Arc<T>);
+                    impl<
+                        T: TokenService,
+                    > tonic::server::UnaryService<super::GetTotalIssuedSupplyRequest>
+                    for GetTotalIssuedSupplySvc<T> {
+                        type Response = super::TotalIssuedSupplyResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetTotalIssuedSupplyRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TokenService>::get_total_issued_supply(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetTotalIssuedSupplySvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.TokenService/GetTotalRewardDistributed" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetTotalRewardDistributedSvc<T: TokenService>(pub Arc<T>);
+                    impl<
+                        T: TokenService,
+                    > tonic::server::UnaryService<
+                        super::GetTotalRewardDistributedRequest,
+                    > for GetTotalRewardDistributedSvc<T> {
+                        type Response = super::TotalRewardDistributedResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::GetTotalRewardDistributedRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TokenService>::get_total_reward_distributed(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetTotalRewardDistributedSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                _ => {
+                    Box::pin(async move {
+                        let mut response = http::Response::new(
+                            tonic::body::Body::default(),
+                        );
+                        let headers = response.headers_mut();
+                        headers
+                            .insert(
+                                tonic::Status::GRPC_STATUS,
+                                (tonic::Code::Unimplemented as i32).into(),
+                            );
+                        headers
+                            .insert(
+                                http::header::CONTENT_TYPE,
+                                tonic::metadata::GRPC_CONTENT_TYPE,
+                            );
+                        Ok(response)
+                    })
+                }
+            }
+        }
+    }
+    impl<T> Clone for TokenServiceServer<T> {
+        fn clone(&self) -> Self {
+            let inner = self.inner.clone();
+            Self {
+                inner,
+                accept_compression_encodings: self.accept_compression_encodings,
+                send_compression_encodings: self.send_compression_encodings,
+                max_decoding_message_size: self.max_decoding_message_size,
+                max_encoding_message_size: self.max_encoding_message_size,
+            }
+        }
+    }
+    /// Generated gRPC service name
+    pub const SERVICE_NAME: &str = "espresso.api.v2.TokenService";
+    impl<T> tonic::server::NamedService for TokenServiceServer<T> {
+        const NAME: &'static str = SERVICE_NAME;
+    }
+}

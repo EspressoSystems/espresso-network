@@ -305,6 +305,111 @@ where
     Ok(Json(response.into_inner()))
 }
 
+// =============================================================================
+// TokenService REST routes
+// =============================================================================
+
+/// Build Axum REST routes for `TokenService`.
+///
+/// Generated from `google.api.http` annotations in `proto.proto`.
+pub fn token_service_rest_router<S>(service: Arc<S>) -> Router
+where
+    S: crate::proto::token_service_server::TokenService + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/v2/token/total-minted-supply", axum::routing::get(rest_token_service_get_total_minted_supply::<S>))
+        .route("/v2/token/circulating-supply", axum::routing::get(rest_token_service_get_circulating_supply::<S>))
+        .route("/v2/token/circulating-supply-ethereum", axum::routing::get(rest_token_service_get_circulating_supply_ethereum::<S>))
+        .route("/v2/token/total-issued-supply", axum::routing::get(rest_token_service_get_total_issued_supply::<S>))
+        .route("/v2/token/total-reward-distributed", axum::routing::get(rest_token_service_get_total_reward_distributed::<S>))
+        .with_state(service)
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetTotalMintedSupply` - JSON endpoint.
+///
+/// `GET /v2/token/total-minted-supply`
+async fn rest_token_service_get_total_minted_supply<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetTotalMintedSupplyRequest>,
+) -> Result<Json<crate::proto::TotalMintedSupplyResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::token_service_server::TokenService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_total_minted_supply(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetCirculatingSupply` - JSON endpoint.
+///
+/// `GET /v2/token/circulating-supply`
+async fn rest_token_service_get_circulating_supply<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetCirculatingSupplyRequest>,
+) -> Result<Json<crate::proto::CirculatingSupplyResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::token_service_server::TokenService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_circulating_supply(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetCirculatingSupplyEthereum` - JSON endpoint.
+///
+/// `GET /v2/token/circulating-supply-ethereum`
+async fn rest_token_service_get_circulating_supply_ethereum<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetCirculatingSupplyEthereumRequest>,
+) -> Result<Json<crate::proto::CirculatingSupplyEthereumResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::token_service_server::TokenService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_circulating_supply_ethereum(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetTotalIssuedSupply` - JSON endpoint.
+///
+/// `GET /v2/token/total-issued-supply`
+async fn rest_token_service_get_total_issued_supply<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetTotalIssuedSupplyRequest>,
+) -> Result<Json<crate::proto::TotalIssuedSupplyResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::token_service_server::TokenService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_total_issued_supply(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// `GetTotalRewardDistributed` - JSON endpoint.
+///
+/// `GET /v2/token/total-reward-distributed`
+async fn rest_token_service_get_total_reward_distributed<S>(
+    State(service): State<Arc<S>>,
+    headers: HeaderMap,
+    Query(body): Query<crate::proto::GetTotalRewardDistributedRequest>,
+) -> Result<Json<crate::proto::TotalRewardDistributedResponse>, tonic_rest::RestError>
+where
+    S: crate::proto::token_service_server::TokenService + Send + Sync + 'static,
+{
+    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
+    let response = service.get_total_reward_distributed(req).await.map_err(tonic_rest::RestError::from)?;
+    Ok(Json(response.into_inner()))
+}
+
 
 // =============================================================================
 // Public REST paths (bypass auth middleware)
@@ -324,21 +429,24 @@ pub const PUBLIC_REST_PATHS: &[&str] = &[
 /// Build a combined Axum router with REST routes for all proto services.
 ///
 /// Each service is generic - pass your concrete implementations as `Arc<T>`.
-pub fn all_rest_routes<S0, S1, S2, S3>(
+pub fn all_rest_routes<S0, S1, S2, S3, S4>(
     consensus_service: Arc<S0>,
     data_service: Arc<S1>,
     reward_service: Arc<S2>,
     status_service: Arc<S3>,
+    token_service: Arc<S4>,
 ) -> Router
 where
     S0: crate::proto::consensus_service_server::ConsensusService + Send + Sync + 'static,
     S1: crate::proto::data_service_server::DataService + Send + Sync + 'static,
     S2: crate::proto::reward_service_server::RewardService + Send + Sync + 'static,
     S3: crate::proto::status_service_server::StatusService + Send + Sync + 'static,
+    S4: crate::proto::token_service_server::TokenService + Send + Sync + 'static,
 {
     Router::new()
         .merge(consensus_service_rest_router(consensus_service))
         .merge(data_service_rest_router(data_service))
         .merge(reward_service_rest_router(reward_service))
         .merge(status_service_rest_router(status_service))
+        .merge(token_service_rest_router(token_service))
 }

@@ -74,6 +74,7 @@ where
         + proto::data_service_server::DataService
         + proto::consensus_service_server::ConsensusService
         + proto::status_service_server::StatusService
+        + proto::token_service_server::TokenService
         + Clone
         + Send
         + Sync
@@ -110,7 +111,8 @@ where
         .merge(rest::reward_service_rest_router(state.clone()))
         .merge(rest::data_service_rest_router(state.clone()))
         .merge(rest::consensus_service_rest_router(state.clone()))
-        .merge(rest::status_service_rest_router(state));
+        .merge(rest::status_service_rest_router(state.clone()))
+        .merge(rest::token_service_rest_router(state));
     serve_router(listener, "v1 and v2", router, max_connections).await
 }
 
@@ -330,6 +332,7 @@ where
         + proto::data_service_server::DataService
         + proto::consensus_service_server::ConsensusService
         + proto::status_service_server::StatusService
+        + proto::token_service_server::TokenService
         + Clone,
 {
     use ::tonic::transport::Server;
@@ -340,7 +343,8 @@ where
     let data_service = proto::data_service_server::DataServiceServer::new(state.clone());
     let consensus_service =
         proto::consensus_service_server::ConsensusServiceServer::new(state.clone());
-    let status_service = proto::status_service_server::StatusServiceServer::new(state);
+    let status_service = proto::status_service_server::StatusServiceServer::new(state.clone());
+    let token_service = proto::token_service_server::TokenServiceServer::new(state);
 
     // Enable gRPC reflection for tools like grpcurl
     let reflection_service = tonic_reflection::server::Builder::configure()
@@ -353,6 +357,7 @@ where
         .add_service(data_service)
         .add_service(consensus_service)
         .add_service(status_service)
+        .add_service(token_service)
         .add_service(reflection_service)
         .serve(addr)
         .await?;
