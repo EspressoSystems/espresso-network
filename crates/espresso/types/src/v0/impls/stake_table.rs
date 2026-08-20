@@ -2,7 +2,7 @@ use std::{
     cmp::min,
     collections::{HashMap, HashSet},
     str::FromStr,
-    time::{Duration, Instant},
+    time::Duration,
 };
 #[cfg(feature = "node")]
 use std::{future::Future, sync::Arc};
@@ -59,7 +59,7 @@ use num_traits::{FromPrimitive, Zero};
 use thiserror::Error;
 #[cfg(feature = "node")]
 use tokio::spawn;
-use tokio::time::sleep;
+use tokio::time::{Instant, sleep, timeout};
 #[cfg(feature = "node")]
 use tracing::Instrument;
 use vbs::version::Version;
@@ -1403,29 +1403,28 @@ impl Fetcher {
         to_block: u64,
     ) -> Result<Vec<(EventKey, StakeTableEvent)>, StakeTableError> {
         let stake_table_contract = StakeTableV3::new(contract, l1_client.provider.clone());
-        let max_retry_duration = l1_client.options().l1_events_max_retry_duration;
         let retry_delay = l1_client.options().l1_retry_delay;
+        // One deadline for the whole logical fetch, shared by the `initializedAtBlock` lookup
+        // and every chunk below, so a fetch spanning N chunks can't take N times the budget.
+        let deadline = RetryDeadline::new(l1_client.options().l1_events_max_retry_duration);
         // get the block number when the contract was initialized
         // to avoid fetching events from block number 0
         let from_block = match from_block {
             Some(block) => block,
             None => {
-                let start = Instant::now();
-                loop {
-                    match stake_table_contract.initializedAtBlock().call().await {
-                        Ok(init_block) => break init_block.to::<u64>(),
-                        Err(err) => {
-                            if start.elapsed() >= max_retry_duration {
-                                panic!(
-                                    "Failed to retrieve initial block after `{}`: {err}",
-                                    format_duration(max_retry_duration)
-                                );
-                            }
-                            tracing::warn!(%err, "Failed to retrieve initial block, retrying...");
-                            sleep(retry_delay).await;
-                        },
-                    }
-                }
+                let init_block = retry(
+                    retry_delay,
+                    deadline,
+                    "stake table initializedAtBlock lookup",
+                    move || {
+                        let stake_table_contract = stake_table_contract.clone();
+                        Box::pin(
+                            async move { stake_table_contract.initializedAtBlock().call().await },
+                        )
+                    },
+                )
+                .await?;
+                init_block.to::<u64>()
             },
         };
 
@@ -1445,8 +1444,8 @@ impl Fetcher {
             // retry if the call to the provider to fetch the events fails
             let logs: Vec<Log> = retry(
                 retry_delay,
-                max_retry_duration,
-                "stake table events fetch",
+                deadline,
+                &format!("stake table events fetch to_block={to}"),
                 move || {
                     let provider = provider.clone();
 
@@ -1474,7 +1473,7 @@ impl Fetcher {
                     })
                 },
             )
-            .await;
+            .await?;
 
             let chunk_events = logs
                 .into_iter()
@@ -1805,47 +1804,107 @@ impl Fetcher {
     }
 }
 
+/// Absolute deadline shared by every retry within one logical L1 fetch.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RetryDeadline(Instant);
+
+impl RetryDeadline {
+    pub(crate) fn new(budget: Duration) -> Self {
+        Self(Instant::now() + budget)
+    }
+
+    /// Time left until the deadline, or `Duration::ZERO` if it has passed.
+    pub(crate) fn remaining(&self) -> Duration {
+        self.0.saturating_duration_since(Instant::now())
+    }
+
+    pub(crate) fn expired(&self) -> bool {
+        Instant::now() >= self.0
+    }
+}
+
+/// Longest any single attempt is allowed to hang before it is cancelled and retried.
+/// Independent of `BACKOFF_CAP`: this bounds one `operation()` call, not the delay between calls.
+const ATTEMPT_TIMEOUT_CAP: Duration = Duration::from_secs(60);
+const BACKOFF_CAP: Duration = Duration::from_secs(60);
+const WARN_AFTER: Duration = Duration::from_secs(60);
+const ERROR_AFTER: Duration = Duration::from_secs(5 * 60);
+const ERROR_INTERVAL: Duration = Duration::from_secs(30 * 60);
+
+/// Retries `operation` with capped exponential backoff until it succeeds or `deadline` passes.
+/// Every attempt is bounded by `tokio::time::timeout`, so a hung request can't stall past the
+/// deadline. Pass the same `deadline` to every `retry` call within one logical fetch (e.g. every
+/// chunk of a chunked range) so the budget is spent once for the whole fetch, not once per call.
 #[cfg_attr(not(feature = "node"), allow(dead_code))]
 async fn retry<F, T, E>(
     retry_delay: Duration,
-    max_duration: Duration,
+    deadline: RetryDeadline,
     operation_name: &str,
     mut operation: F,
-) -> T
+) -> Result<T, StakeTableError>
 where
     F: FnMut() -> BoxFuture<'static, Result<T, E>>,
     E: std::fmt::Display,
 {
-    let start = Instant::now();
+    let call_start = Instant::now();
+    let budget = deadline.remaining();
+    let mut delay = retry_delay;
+    let mut attempts: u32 = 0;
+    let mut warned = false;
+    let mut error_milestones = 0;
+
     loop {
-        match operation().await {
-            Ok(result) => return result,
-            Err(err) => {
-                if start.elapsed() >= max_duration {
-                    panic!(
-                        r#"
-                    Failed to complete operation `{operation_name}` after `{}`.
-                    error: {err}
+        attempts += 1;
+        let remaining = deadline.remaining();
+        let attempt_timeout = remaining.min(ATTEMPT_TIMEOUT_CAP);
+        let err = match timeout(attempt_timeout, operation()).await {
+            Ok(Ok(result)) => return Ok(result),
+            Ok(Err(err)) => err.to_string(),
+            Err(_) => format!(
+                "operation timed out after {}",
+                format_duration(attempt_timeout)
+            ),
+        };
+        let elapsed = call_start.elapsed();
 
-
-                    This might be caused by:
-                    - The current block range being too large for your RPC provider.
-                    - The event query returning more data than your RPC allows as
-                      some RPC providers limit the number of events returned.
-                    - RPC provider outage
-
-                    Suggested solution:
-                    - Reduce the value of the environment variable
-                      `ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE` to query smaller ranges.
-                    - Add multiple RPC providers
-                    - Use a different RPC provider with higher rate limits."#,
-                        format_duration(max_duration)
-                    );
-                }
-                tracing::warn!(%err, "Retrying `{operation_name}` after error");
-                sleep(retry_delay).await;
-            },
+        tracing::debug!(
+            ?elapsed, ?budget, attempts, operation = operation_name, %err,
+            "L1 fetch attempt failed"
+        );
+        if !warned && elapsed >= WARN_AFTER {
+            warned = true;
+            tracing::warn!(
+                ?elapsed, ?budget, attempts, operation = operation_name, %err,
+                "L1 fetch still retrying after 1 minute"
+            );
         }
+        let milestones = if elapsed >= ERROR_AFTER {
+            1 + (elapsed - ERROR_AFTER).as_secs() / ERROR_INTERVAL.as_secs()
+        } else {
+            0
+        };
+        if milestones > error_milestones {
+            error_milestones = milestones;
+            tracing::error!(
+                ?elapsed, ?budget, attempts, operation = operation_name, %err,
+                "L1 fetch still retrying after 5+ minutes"
+            );
+        }
+
+        if deadline.expired() {
+            tracing::error!(
+                ?elapsed, ?budget, attempts, operation = operation_name, %err,
+                "L1 FETCH RETRY BUDGET EXHAUSTED"
+            );
+            return Err(StakeTableError::L1Fetch {
+                operation: operation_name.to_string(),
+                budget: format_duration(budget).to_string(),
+                err,
+            });
+        }
+
+        sleep(delay.min(deadline.remaining())).await;
+        delay = (delay * 2).min(BACKOFF_CAP);
     }
 }
 
@@ -2166,6 +2225,8 @@ pub mod testing {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU32, Ordering};
+
     use alloy::{
         primitives::{Address, Bytes},
         rpc::types::Log,
@@ -3228,6 +3289,160 @@ mod tests {
         )
         .await
         .unwrap();
+    }
+
+    #[test_log::test(tokio::test(start_paused = true))]
+    async fn retry_returns_l1_fetch_error_when_deadline_expires() {
+        let deadline = RetryDeadline::new(Duration::from_millis(200));
+
+        let result: Result<(), StakeTableError> = retry(
+            Duration::from_millis(50),
+            deadline,
+            "always fails",
+            move || -> BoxFuture<'static, Result<(), &'static str>> {
+                Box::pin(async { Err("boom") })
+            },
+        )
+        .await;
+
+        let err = result.expect_err("budget should be exhausted");
+        assert!(matches!(err, StakeTableError::L1Fetch { .. }));
+        assert!(
+            err.to_string()
+                .contains("ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE")
+        );
+    }
+
+    /// Mirrors `fetch_events_from_contract`'s chunk loop: multiple `retry` calls share one
+    /// `RetryDeadline`. Each simulated chunk needs 5 attempts to succeed (1+2+4+8 = 15s of
+    /// backoff), but the shared 20s budget only has room for the first chunk.
+    #[test_log::test(tokio::test(start_paused = true))]
+    async fn retry_deadline_is_shared_across_chunks_not_per_chunk() {
+        let retry_delay = Duration::from_secs(1);
+        let deadline = RetryDeadline::new(Duration::from_secs(20));
+        let start = Instant::now();
+
+        let attempts_1 = Arc::new(AtomicU32::new(0));
+        let result_1: Result<(), StakeTableError> = retry(retry_delay, deadline, "chunk 1", {
+            let attempts_1 = attempts_1.clone();
+            move || -> BoxFuture<'static, Result<(), &'static str>> {
+                let attempts_1 = attempts_1.clone();
+                Box::pin(async move {
+                    if attempts_1.fetch_add(1, Ordering::SeqCst) < 4 {
+                        Err("not yet")
+                    } else {
+                        Ok(())
+                    }
+                })
+            }
+        })
+        .await;
+        assert!(result_1.is_ok());
+        assert_eq!(attempts_1.load(Ordering::SeqCst), 5);
+
+        // Only ~5s of the shared budget remains, not a fresh 20s, so the second chunk - which
+        // needs the same 15s to succeed - must fail instead of getting its own budget.
+        let attempts_2 = Arc::new(AtomicU32::new(0));
+        let result_2: Result<(), StakeTableError> = retry(retry_delay, deadline, "chunk 2", {
+            let attempts_2 = attempts_2.clone();
+            move || -> BoxFuture<'static, Result<(), &'static str>> {
+                let attempts_2 = attempts_2.clone();
+                Box::pin(async move {
+                    if attempts_2.fetch_add(1, Ordering::SeqCst) < 4 {
+                        Err("not yet")
+                    } else {
+                        Ok(())
+                    }
+                })
+            }
+        })
+        .await;
+
+        assert!(matches!(result_2, Err(StakeTableError::L1Fetch { .. })));
+        // ~1 budget total for both chunks combined, not 2.
+        assert!(start.elapsed() < Duration::from_secs(25));
+    }
+
+    #[test_log::test(tokio::test(start_paused = true))]
+    async fn retry_backoff_grows_and_caps_at_60_seconds() {
+        let deadline = RetryDeadline::new(Duration::from_secs(600));
+        let start = Instant::now();
+        let attempt_times: Arc<AsyncMutex<Vec<Duration>>> = Arc::new(AsyncMutex::new(Vec::new()));
+        let count = Arc::new(AtomicU32::new(0));
+        const SUCCEED_ON_ATTEMPT: u32 = 9;
+
+        let result: Result<(), StakeTableError> =
+            retry(Duration::from_secs(1), deadline, "flaky", {
+                let attempt_times = attempt_times.clone();
+                let count = count.clone();
+                move || -> BoxFuture<'static, Result<(), &'static str>> {
+                    let attempt_times = attempt_times.clone();
+                    let count = count.clone();
+                    Box::pin(async move {
+                        attempt_times.lock().await.push(start.elapsed());
+                        if count.fetch_add(1, Ordering::SeqCst) + 1 < SUCCEED_ON_ATTEMPT {
+                            Err("not yet")
+                        } else {
+                            Ok(())
+                        }
+                    })
+                }
+            })
+            .await;
+
+        assert!(result.is_ok());
+        let times = attempt_times.lock().await.clone();
+        let gaps: Vec<Duration> = times.windows(2).map(|w| w[1] - w[0]).collect();
+        let expected: Vec<Duration> = [1, 2, 4, 8, 16, 32, 60, 60]
+            .into_iter()
+            .map(Duration::from_secs)
+            .collect();
+        assert_eq!(gaps, expected);
+    }
+
+    /// 1s + 2s of backoff exhausts a 3.5s budget; without deadline-aware clamping the next
+    /// backoff step (4s) would sleep well past it.
+    #[test_log::test(tokio::test(start_paused = true))]
+    async fn retry_backoff_never_sleeps_past_deadline() {
+        let deadline = RetryDeadline::new(Duration::from_millis(3500));
+        let start = Instant::now();
+
+        let result: Result<(), StakeTableError> = retry(
+            Duration::from_secs(1),
+            deadline,
+            "always fails",
+            move || -> BoxFuture<'static, Result<(), &'static str>> {
+                Box::pin(async { Err("boom") })
+            },
+        )
+        .await;
+
+        assert!(matches!(result, Err(StakeTableError::L1Fetch { .. })));
+        assert!(start.elapsed() < Duration::from_secs(4));
+    }
+
+    /// The operation never resolves; only `tokio::time::timeout` can move the loop forward.
+    /// Multiple attempts occurring proves each one was cut off by the per-attempt timeout
+    /// instead of hanging until the deadline in a single call.
+    #[test_log::test(tokio::test(start_paused = true))]
+    async fn retry_cuts_off_hung_attempt_via_timeout() {
+        let deadline = RetryDeadline::new(Duration::from_secs(200));
+        let attempts = Arc::new(AtomicU32::new(0));
+        let start = Instant::now();
+
+        let result: Result<(), StakeTableError> =
+            retry(Duration::from_secs(1), deadline, "hangs", {
+                let attempts = attempts.clone();
+                move || -> BoxFuture<'static, Result<(), &'static str>> {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                    Box::pin(std::future::pending())
+                }
+            })
+            .await;
+
+        assert!(matches!(result, Err(StakeTableError::L1Fetch { .. })));
+        assert!(attempts.load(Ordering::SeqCst) > 1);
+        assert!(start.elapsed() <= Duration::from_secs(201));
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

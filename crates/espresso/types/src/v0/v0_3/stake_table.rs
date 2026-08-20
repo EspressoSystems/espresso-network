@@ -490,6 +490,20 @@ pub enum StakeTableError {
     StakeTableEventDecodeError(#[from] alloy::sol_types::Error),
     #[error("Stake table events sorting error: {0}")]
     EventSortingError(#[from] EventSortingError),
+    #[error(
+        "Failed to complete L1 operation `{operation}` after `{budget}`: {err}\n\nThis might be \
+         caused by:\n- The current block range being too large for your RPC provider.\n- The \
+         event query returning more data than your RPC allows as some RPC providers limit the \
+         number of events returned.\n- RPC provider outage\n\nSuggested solution:\n- Reduce the \
+         value of the environment variable `ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE` to query smaller \
+         ranges.\n- Add multiple RPC providers\n- Use a different RPC provider with higher rate \
+         limits."
+    )]
+    L1Fetch {
+        operation: String,
+        budget: String,
+        err: String,
+    },
 }
 
 #[derive(Debug, Error)]
