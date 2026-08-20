@@ -14,7 +14,6 @@ fn v2_proto_files(proto_root: &std::path::Path) -> std::io::Result<Vec<PathBuf>>
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proto_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("proto");
-    let vendor_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("vendor");
     let out_dir = PathBuf::from(std::env::var("OUT_DIR")?);
     let src_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/generated");
     std::fs::create_dir_all(&src_dir)?;
@@ -28,21 +27,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // tonic-rest-build; nothing references them at runtime, so skip generating them.
         .extern_path(".google.api", "::google_api_unused")
         .file_descriptor_set_path(out_dir.join("descriptor.bin"))
-        .compile_protos(&v2_proto_files(&proto_root)?, &[proto_root, vendor_root])?;
+        .compile_protos(&v2_proto_files(&proto_root)?, &[proto_root])?;
 
     // Generate Axum REST handlers for every service with google.api.http annotations.
     // The proto file is the single definition site: path and method come from the
     // annotation, request/response types from the rpc signature, and the handlers call
     // through the tonic service traits generated above.
     let descriptor_bytes = std::fs::read(out_dir.join("descriptor.bin"))?;
-    let rest_config = tonic_rest_build::RestCodegenConfig::new().package("espresso.api.v2", "v2");
+    let rest_config =
+        tonic_rest_build::RestCodegenConfig::new().package("espresso.api.v2", "proto");
     let rest_code = tonic_rest_build::generate(&descriptor_bytes, &rest_config)?;
     // Repo convention: no em dashes in committed text.
     let rest_code = rest_code.replace('\u{2014}', "-");
     std::fs::write(src_dir.join("espresso.api.v2.rest.rs"), rest_code)?;
 
     println!("cargo:rerun-if-changed=proto");
-    println!("cargo:rerun-if-changed=vendor");
 
     Ok(())
 }

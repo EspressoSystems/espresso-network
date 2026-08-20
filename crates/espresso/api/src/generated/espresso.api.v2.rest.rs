@@ -17,10 +17,10 @@ use axum::Router;
 
 /// Build Axum REST routes for `ConsensusService`.
 ///
-/// Generated from `google.api.http` annotations in `v2.proto`.
+/// Generated from `google.api.http` annotations in `proto.proto`.
 pub fn consensus_service_rest_router<S>(service: Arc<S>) -> Router
 where
-    S: crate::v2::consensus_service_server::ConsensusService + Send + Sync + 'static,
+    S: crate::proto::consensus_service_server::ConsensusService + Send + Sync + 'static,
 {
     Router::new()
         .route("/v2/consensus/state-certificate", axum::routing::get(rest_consensus_service_get_state_certificate::<S>))
@@ -35,10 +35,10 @@ where
 async fn rest_consensus_service_get_state_certificate<S>(
     State(service): State<Arc<S>>,
     headers: HeaderMap,
-    Query(body): Query<crate::v2::GetStateCertificateRequest>,
-) -> Result<Json<crate::v2::StateCertificateResponse>, tonic_rest::RestError>
+    Query(body): Query<crate::proto::GetStateCertificateRequest>,
+) -> Result<Json<crate::proto::StateCertificateResponse>, tonic_rest::RestError>
 where
-    S: crate::v2::consensus_service_server::ConsensusService + Send + Sync + 'static,
+    S: crate::proto::consensus_service_server::ConsensusService + Send + Sync + 'static,
 {
     let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
     let response = service.get_state_certificate(req).await.map_err(tonic_rest::RestError::from)?;
@@ -52,10 +52,10 @@ where
 async fn rest_consensus_service_get_stake_table<S>(
     State(service): State<Arc<S>>,
     headers: HeaderMap,
-    Query(body): Query<crate::v2::GetStakeTableRequest>,
-) -> Result<Json<crate::v2::StakeTableResponse>, tonic_rest::RestError>
+    Query(body): Query<crate::proto::GetStakeTableRequest>,
+) -> Result<Json<crate::proto::StakeTableResponse>, tonic_rest::RestError>
 where
-    S: crate::v2::consensus_service_server::ConsensusService + Send + Sync + 'static,
+    S: crate::proto::consensus_service_server::ConsensusService + Send + Sync + 'static,
 {
     let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
     let response = service.get_stake_table(req).await.map_err(tonic_rest::RestError::from)?;
@@ -68,10 +68,10 @@ where
 
 /// Build Axum REST routes for `DataService`.
 ///
-/// Generated from `google.api.http` annotations in `v2.proto`.
+/// Generated from `google.api.http` annotations in `proto.proto`.
 pub fn data_service_rest_router<S>(service: Arc<S>) -> Router
 where
-    S: crate::v2::data_service_server::DataService + Send + Sync + 'static,
+    S: crate::proto::data_service_server::DataService + Send + Sync + 'static,
 {
     Router::new()
         .route("/v2/data/finalized/namespace-proof", axum::routing::get(rest_data_service_get_namespace_proof::<S>))
@@ -86,10 +86,10 @@ where
 async fn rest_data_service_get_namespace_proof<S>(
     State(service): State<Arc<S>>,
     headers: HeaderMap,
-    Query(body): Query<crate::v2::GetNamespaceProofRequest>,
-) -> Result<Json<crate::v2::GetNamespaceProofResponse>, tonic_rest::RestError>
+    Query(body): Query<crate::proto::GetNamespaceProofRequest>,
+) -> Result<Json<crate::proto::GetNamespaceProofResponse>, tonic_rest::RestError>
 where
-    S: crate::v2::data_service_server::DataService + Send + Sync + 'static,
+    S: crate::proto::data_service_server::DataService + Send + Sync + 'static,
 {
     let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
     let response = service.get_namespace_proof(req).await.map_err(tonic_rest::RestError::from)?;
@@ -103,10 +103,10 @@ where
 async fn rest_data_service_get_incorrect_encoding_proof<S>(
     State(service): State<Arc<S>>,
     headers: HeaderMap,
-    Query(body): Query<crate::v2::GetIncorrectEncodingProofRequest>,
-) -> Result<Json<crate::v2::IncorrectEncodingProofResponse>, tonic_rest::RestError>
+    Query(body): Query<crate::proto::GetIncorrectEncodingProofRequest>,
+) -> Result<Json<crate::proto::IncorrectEncodingProofResponse>, tonic_rest::RestError>
 where
-    S: crate::v2::data_service_server::DataService + Send + Sync + 'static,
+    S: crate::proto::data_service_server::DataService + Send + Sync + 'static,
 {
     let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
     let response = service.get_incorrect_encoding_proof(req).await.map_err(tonic_rest::RestError::from)?;
@@ -119,10 +119,10 @@ where
 
 /// Build Axum REST routes for `RewardService`.
 ///
-/// Generated from `google.api.http` annotations in `v2.proto`.
+/// Generated from `google.api.http` annotations in `proto.proto`.
 pub fn reward_service_rest_router<S>(service: Arc<S>) -> Router
 where
-    S: crate::v2::reward_service_server::RewardService + Send + Sync + 'static,
+    S: crate::proto::reward_service_server::RewardService + Send + Sync + 'static,
 {
     Router::new()
         .route("/v2/rewards/claim-input", axum::routing::get(rest_reward_service_get_reward_claim_input::<S>))
@@ -140,10 +140,10 @@ where
 async fn rest_reward_service_get_reward_claim_input<S>(
     State(service): State<Arc<S>>,
     headers: HeaderMap,
-    Query(body): Query<crate::v2::GetRewardClaimInputRequest>,
-) -> Result<Json<crate::v2::RewardClaimInput>, tonic_rest::RestError>
+    Query(body): Query<crate::proto::GetRewardClaimInputRequest>,
+) -> Result<Json<crate::proto::RewardClaimInput>, tonic_rest::RestError>
 where
-    S: crate::v2::reward_service_server::RewardService + Send + Sync + 'static,
+    S: crate::proto::reward_service_server::RewardService + Send + Sync + 'static,
 {
     let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
     let response = service.get_reward_claim_input(req).await.map_err(tonic_rest::RestError::from)?;
@@ -157,10 +157,10 @@ where
 async fn rest_reward_service_get_reward_balance<S>(
     State(service): State<Arc<S>>,
     headers: HeaderMap,
-    Query(body): Query<crate::v2::GetRewardBalanceRequest>,
-) -> Result<Json<crate::v2::RewardBalance>, tonic_rest::RestError>
+    Query(body): Query<crate::proto::GetRewardBalanceRequest>,
+) -> Result<Json<crate::proto::RewardBalance>, tonic_rest::RestError>
 where
-    S: crate::v2::reward_service_server::RewardService + Send + Sync + 'static,
+    S: crate::proto::reward_service_server::RewardService + Send + Sync + 'static,
 {
     let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
     let response = service.get_reward_balance(req).await.map_err(tonic_rest::RestError::from)?;
@@ -174,10 +174,10 @@ where
 async fn rest_reward_service_get_reward_account_proof<S>(
     State(service): State<Arc<S>>,
     headers: HeaderMap,
-    Query(body): Query<crate::v2::GetRewardAccountProofRequest>,
-) -> Result<Json<crate::v2::RewardAccountQueryDataV2>, tonic_rest::RestError>
+    Query(body): Query<crate::proto::GetRewardAccountProofRequest>,
+) -> Result<Json<crate::proto::RewardAccountQueryDataV2>, tonic_rest::RestError>
 where
-    S: crate::v2::reward_service_server::RewardService + Send + Sync + 'static,
+    S: crate::proto::reward_service_server::RewardService + Send + Sync + 'static,
 {
     let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
     let response = service.get_reward_account_proof(req).await.map_err(tonic_rest::RestError::from)?;
@@ -191,10 +191,10 @@ where
 async fn rest_reward_service_get_reward_balances<S>(
     State(service): State<Arc<S>>,
     headers: HeaderMap,
-    Query(body): Query<crate::v2::GetRewardBalancesRequest>,
-) -> Result<Json<crate::v2::RewardBalances>, tonic_rest::RestError>
+    Query(body): Query<crate::proto::GetRewardBalancesRequest>,
+) -> Result<Json<crate::proto::RewardBalances>, tonic_rest::RestError>
 where
-    S: crate::v2::reward_service_server::RewardService + Send + Sync + 'static,
+    S: crate::proto::reward_service_server::RewardService + Send + Sync + 'static,
 {
     let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
     let response = service.get_reward_balances(req).await.map_err(tonic_rest::RestError::from)?;
@@ -208,10 +208,10 @@ where
 async fn rest_reward_service_get_reward_merkle_tree_v2<S>(
     State(service): State<Arc<S>>,
     headers: HeaderMap,
-    Query(body): Query<crate::v2::GetRewardMerkleTreeRequest>,
-) -> Result<Json<crate::v2::RewardMerkleTreeV2Data>, tonic_rest::RestError>
+    Query(body): Query<crate::proto::GetRewardMerkleTreeRequest>,
+) -> Result<Json<crate::proto::RewardMerkleTreeV2Data>, tonic_rest::RestError>
 where
-    S: crate::v2::reward_service_server::RewardService + Send + Sync + 'static,
+    S: crate::proto::reward_service_server::RewardService + Send + Sync + 'static,
 {
     let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
     let response = service.get_reward_merkle_tree_v2(req).await.map_err(tonic_rest::RestError::from)?;
@@ -224,10 +224,10 @@ where
 
 /// Build Axum REST routes for `StatusService`.
 ///
-/// Generated from `google.api.http` annotations in `v2.proto`.
+/// Generated from `google.api.http` annotations in `proto.proto`.
 pub fn status_service_rest_router<S>(service: Arc<S>) -> Router
 where
-    S: crate::v2::status_service_server::StatusService + Send + Sync + 'static,
+    S: crate::proto::status_service_server::StatusService + Send + Sync + 'static,
 {
     Router::new()
         .route("/v2/status/block-height", axum::routing::get(rest_status_service_get_block_height::<S>))
@@ -244,10 +244,10 @@ where
 async fn rest_status_service_get_block_height<S>(
     State(service): State<Arc<S>>,
     headers: HeaderMap,
-    Query(body): Query<crate::v2::GetBlockHeightRequest>,
-) -> Result<Json<crate::v2::BlockHeightResponse>, tonic_rest::RestError>
+    Query(body): Query<crate::proto::GetBlockHeightRequest>,
+) -> Result<Json<crate::proto::BlockHeightResponse>, tonic_rest::RestError>
 where
-    S: crate::v2::status_service_server::StatusService + Send + Sync + 'static,
+    S: crate::proto::status_service_server::StatusService + Send + Sync + 'static,
 {
     let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
     let response = service.get_block_height(req).await.map_err(tonic_rest::RestError::from)?;
@@ -261,10 +261,10 @@ where
 async fn rest_status_service_get_success_rate<S>(
     State(service): State<Arc<S>>,
     headers: HeaderMap,
-    Query(body): Query<crate::v2::GetSuccessRateRequest>,
-) -> Result<Json<crate::v2::SuccessRateResponse>, tonic_rest::RestError>
+    Query(body): Query<crate::proto::GetSuccessRateRequest>,
+) -> Result<Json<crate::proto::SuccessRateResponse>, tonic_rest::RestError>
 where
-    S: crate::v2::status_service_server::StatusService + Send + Sync + 'static,
+    S: crate::proto::status_service_server::StatusService + Send + Sync + 'static,
 {
     let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
     let response = service.get_success_rate(req).await.map_err(tonic_rest::RestError::from)?;
@@ -278,10 +278,10 @@ where
 async fn rest_status_service_get_time_since_last_decide<S>(
     State(service): State<Arc<S>>,
     headers: HeaderMap,
-    Query(body): Query<crate::v2::GetTimeSinceLastDecideRequest>,
-) -> Result<Json<crate::v2::TimeSinceLastDecideResponse>, tonic_rest::RestError>
+    Query(body): Query<crate::proto::GetTimeSinceLastDecideRequest>,
+) -> Result<Json<crate::proto::TimeSinceLastDecideResponse>, tonic_rest::RestError>
 where
-    S: crate::v2::status_service_server::StatusService + Send + Sync + 'static,
+    S: crate::proto::status_service_server::StatusService + Send + Sync + 'static,
 {
     let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
     let response = service.get_time_since_last_decide(req).await.map_err(tonic_rest::RestError::from)?;
@@ -295,10 +295,10 @@ where
 async fn rest_status_service_get_node_keys<S>(
     State(service): State<Arc<S>>,
     headers: HeaderMap,
-    Query(body): Query<crate::v2::GetNodeKeysRequest>,
-) -> Result<Json<crate::v2::NodeKeysResponse>, tonic_rest::RestError>
+    Query(body): Query<crate::proto::GetNodeKeysRequest>,
+) -> Result<Json<crate::proto::NodeKeysResponse>, tonic_rest::RestError>
 where
-    S: crate::v2::status_service_server::StatusService + Send + Sync + 'static,
+    S: crate::proto::status_service_server::StatusService + Send + Sync + 'static,
 {
     let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
     let response = service.get_node_keys(req).await.map_err(tonic_rest::RestError::from)?;
@@ -331,10 +331,10 @@ pub fn all_rest_routes<S0, S1, S2, S3>(
     status_service: Arc<S3>,
 ) -> Router
 where
-    S0: crate::v2::consensus_service_server::ConsensusService + Send + Sync + 'static,
-    S1: crate::v2::data_service_server::DataService + Send + Sync + 'static,
-    S2: crate::v2::reward_service_server::RewardService + Send + Sync + 'static,
-    S3: crate::v2::status_service_server::StatusService + Send + Sync + 'static,
+    S0: crate::proto::consensus_service_server::ConsensusService + Send + Sync + 'static,
+    S1: crate::proto::data_service_server::DataService + Send + Sync + 'static,
+    S2: crate::proto::reward_service_server::RewardService + Send + Sync + 'static,
+    S3: crate::proto::status_service_server::StatusService + Send + Sync + 'static,
 {
     Router::new()
         .merge(consensus_service_rest_router(consensus_service))

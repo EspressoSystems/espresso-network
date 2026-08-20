@@ -12,16 +12,22 @@ base64 = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
 http-wire = { workspace = true, features = ["server"] }
+prost = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-serialization-api = { path = "../../serialization/api" }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
+tonic-prost = { workspace = true }
 tonic-reflection = { workspace = true }
+tonic-rest = { workspace = true }
 tower = { workspace = true, features = ["limit", "load-shed", "util"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
 vbs = { workspace = true }
+
+[build-dependencies]
+tonic-prost-build = { workspace = true }
+tonic-rest-build = { workspace = true }

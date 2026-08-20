@@ -1,4 +1,4 @@
-// Copyright 2026 Google LLC
+// Copyright 2025 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,50 +14,21 @@
 //
 // Vendored from github.com/googleapis/googleapis, trimmed to the definitions
 // (upstream doc comments removed). Consumed at build time only, to compile the
-// google.api.http annotations in ../../proto/v2/*.proto.
+// google.api.http annotations in ../../v2/*.proto.
 
 syntax = "proto3";
 
 package google.api;
 
+import "google/api/http.proto";
+import "google/protobuf/descriptor.proto";
+
 option go_package = "google.golang.org/genproto/googleapis/api/annotations;annotations";
 option java_multiple_files = true;
-option java_outer_classname = "HttpProto";
+option java_outer_classname = "AnnotationsProto";
 option java_package = "com.google.api";
 option objc_class_prefix = "GAPI";
 
-message Http {
-  repeated HttpRule rules = 1;
-
-  bool fully_decode_reserved_expansion = 2;
-}
-
-message HttpRule {
-  string selector = 1;
-
-  oneof pattern {
-    string get = 2;
-
-    string put = 3;
-
-    string post = 4;
-
-    string delete = 5;
-
-    string patch = 6;
-
-    CustomHttpPattern custom = 8;
-  }
-
-  string body = 7;
-
-  string response_body = 12;
-
-  repeated HttpRule additional_bindings = 11;
-}
-
-message CustomHttpPattern {
-  string kind = 1;
-
-  string path = 2;
+extend google.protobuf.MethodOptions {
+  HttpRule http = 72295728;
 }

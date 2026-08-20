@@ -1,7 +1,7 @@
 //! RewardApi trait implementations for espresso-node
 //!
 //! This module provides implementations for both v1::RewardApi (internal types)
-//! and v2::RewardApi (proto types), backed by the same data source.
+//! and proto::RewardApi (proto types), backed by the same data source.
 
 use std::{ops::Bound, time::Duration};
 
@@ -9,7 +9,15 @@ use alloy::primitives::U256;
 use async_trait::async_trait;
 use committable::Committable as _;
 use disco_types::{error::Error as _, status::StatusCode};
-use espresso_api::{error::AvailabilityError, v1::HotShotAvailabilityApi};
+use espresso_api::{
+    error::AvailabilityError,
+    proto::{
+        self, RewardAccountProofV2, RewardAccountQueryDataV2, RewardBalance, RewardBalances,
+        RewardClaimInput, RewardMerkleProofV2, RewardMerkleTreeV2Data, merkle_node,
+        reward_merkle_proof_v2::ProofType,
+    },
+    v1::HotShotAvailabilityApi,
+};
 use espresso_types::{
     NamespaceId, NamespaceProofQueryData, NsProof, SeqTypes,
     v0::sparse_mt::KeccakNode,
@@ -56,11 +64,6 @@ use jf_merkle_tree_compat::prelude::{
 };
 use prometheus::Encoder as _;
 use serde_json;
-use serialization_api::v2::{
-    self, RewardAccountProofV2, RewardAccountQueryDataV2, RewardBalance, RewardBalances,
-    RewardClaimInput, RewardMerkleProofV2, RewardMerkleTreeV2Data, merkle_node,
-    reward_merkle_proof_v2::ProofType,
-};
 use tagged_base64::TaggedBase64;
 
 use super::{
@@ -84,7 +87,7 @@ const FETCH_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Node API state implementation
 ///
-/// This struct implements both v1::RewardApi (internal types) and v2::RewardApi (proto types).
+/// This struct implements both v1::RewardApi (internal types) and proto::RewardApi (proto types).
 #[derive(Clone)]
 pub struct NodeApiStateImpl<D> {
     data_source: D,
@@ -148,14 +151,14 @@ impl<D> NodeApiStateImpl<D> {
     fn convert_merkle_proof(
         &self,
         proof: &InternalMerkleProof<InternalRewardAmount, RewardAccountV2, KeccakNode, 2>,
-    ) -> anyhow::Result<v2::MerkleProof> {
-        let proof_nodes: Result<Vec<v2::MerkleNode>, _> = proof
+    ) -> anyhow::Result<proto::MerkleProof> {
+        let proof_nodes: Result<Vec<proto::MerkleNode>, _> = proof
             .proof
             .iter()
             .map(|node| self.convert_merkle_node(node))
             .collect();
 
-        Ok(v2::MerkleProof {
+        Ok(proto::MerkleProof {
             pos: TaggedBase64::new("FIELD", proof.pos.0.as_slice())
                 .map_err(|e| anyhow::anyhow!("failed to encode proof pos: {}", e))?
                 .to_string(),
@@ -167,13 +170,13 @@ impl<D> NodeApiStateImpl<D> {
     fn convert_merkle_node(
         &self,
         node: &InternalMerkleNode<InternalRewardAmount, RewardAccountV2, KeccakNode>,
-    ) -> anyhow::Result<v2::MerkleNode> {
+    ) -> anyhow::Result<proto::MerkleNode> {
         let node_type = match node {
-            InternalMerkleNode::Empty => merkle_node::NodeType::Empty(v2::Empty {
-                dummy: Some(v2::EmptyData {}),
+            InternalMerkleNode::Empty => merkle_node::NodeType::Empty(proto::Empty {
+                dummy: Some(proto::EmptyData {}),
             }),
             InternalMerkleNode::Leaf { pos, elem, value } => {
-                merkle_node::NodeType::Leaf(v2::Leaf {
+                merkle_node::NodeType::Leaf(proto::Leaf {
                     pos: TaggedBase64::new("FIELD", pos.0.as_slice())
                         .map_err(|e| anyhow::anyhow!("failed to encode leaf pos: {}", e))?
                         .to_string(),
@@ -186,12 +189,12 @@ impl<D> NodeApiStateImpl<D> {
                 })
             },
             InternalMerkleNode::Branch { value, children } => {
-                let proto_children: Result<Vec<v2::MerkleNode>, _> = children
+                let proto_children: Result<Vec<proto::MerkleNode>, _> = children
                     .iter()
                     .map(|child| self.convert_merkle_node(child))
                     .collect();
 
-                merkle_node::NodeType::Branch(v2::Branch {
+                merkle_node::NodeType::Branch(proto::Branch {
                     value: TaggedBase64::new("FIELD", &value.0)
                         .map_err(|e| anyhow::anyhow!("failed to encode branch value: {}", e))?
                         .to_string(),
@@ -199,7 +202,7 @@ impl<D> NodeApiStateImpl<D> {
                 })
             },
             InternalMerkleNode::ForgettenSubtree { value } => {
-                merkle_node::NodeType::ForgottenSubtree(v2::ForgottenSubtree {
+                merkle_node::NodeType::ForgottenSubtree(proto::ForgottenSubtree {
                     value: TaggedBase64::new("FIELD", &value.0)
                         .map_err(|e| {
                             anyhow::anyhow!("failed to encode forgotten subtree value: {}", e)
@@ -209,7 +212,7 @@ impl<D> NodeApiStateImpl<D> {
             },
         };
 
-        Ok(v2::MerkleNode {
+        Ok(proto::MerkleNode {
             node_type: Some(node_type),
         })
     }
@@ -274,7 +277,7 @@ impl<D> NodeApiStateImpl<D> {
         // Convert each account/amount pair to proto format
         let amounts = amounts_vec
             .iter()
-            .map(|(account, amount)| serialization_api::v2::RewardAmount {
+            .map(|(account, amount)| espresso_api::proto::RewardAmount {
                 address: format!("{:#x}", account.0),
                 amount: amount.0.to_string(), // Decimal string
             })
@@ -300,12 +303,12 @@ impl<D> NodeApiStateImpl<D> {
     fn serialize_namespace_proof(
         &self,
         value: &NamespaceProofQueryData,
-    ) -> anyhow::Result<v2::NamespaceProofResponse> {
+    ) -> anyhow::Result<proto::NamespaceProofResponse> {
         // Serialize each transaction field explicitly using base64_bytes
-        let transactions: Vec<v2::Transaction> = value
+        let transactions: Vec<proto::Transaction> = value
             .transactions
             .iter()
-            .map(|tx| -> anyhow::Result<v2::Transaction> {
+            .map(|tx| -> anyhow::Result<proto::Transaction> {
                 let mut payload_bytes = Vec::new();
                 base64_bytes::serialize(
                     &tx.payload,
@@ -317,7 +320,7 @@ impl<D> NodeApiStateImpl<D> {
                     .trim_matches('"')
                     .to_string();
 
-                Ok(v2::Transaction {
+                Ok(proto::Transaction {
                     namespace: tx.namespace.0,
                     payload: payload_str,
                 })
@@ -330,7 +333,7 @@ impl<D> NodeApiStateImpl<D> {
             .map(|p| self.serialize_ns_proof(p))
             .transpose()?;
 
-        Ok(serialization_api::v2::NamespaceProofResponse {
+        Ok(espresso_api::proto::NamespaceProofResponse {
             transactions,
             proof,
         })
@@ -339,11 +342,11 @@ impl<D> NodeApiStateImpl<D> {
     fn serialize_incorrect_encoding_proof(
         &self,
         value: &espresso_types::v0_3::AvidMIncorrectEncodingNsProof,
-    ) -> anyhow::Result<v2::IncorrectEncodingProofResponse> {
+    ) -> anyhow::Result<proto::IncorrectEncodingProofResponse> {
         // Serialize the VID proof to JSON string
         let proof_data = serde_json::to_string(&value.0)?;
-        Ok(serialization_api::v2::IncorrectEncodingProofResponse {
-            proof: Some(v2::AvidMIncorrectEncodingNsProof { proof_data }),
+        Ok(espresso_api::proto::IncorrectEncodingProofResponse {
+            proof: Some(proto::AvidMIncorrectEncodingNsProof { proof_data }),
         })
     }
 
@@ -352,10 +355,10 @@ impl<D> NodeApiStateImpl<D> {
     fn serialize_state_certificate(
         &self,
         value: &espresso_types::StateCertQueryDataV2<espresso_types::SeqTypes>,
-    ) -> anyhow::Result<v2::StateCertificateResponse> {
+    ) -> anyhow::Result<proto::StateCertificateResponse> {
         let certificate = self.serialize_light_client_cert(&value.0)?;
 
-        Ok(serialization_api::v2::StateCertificateResponse {
+        Ok(espresso_api::proto::StateCertificateResponse {
             certificate: Some(certificate),
         })
     }
@@ -363,34 +366,34 @@ impl<D> NodeApiStateImpl<D> {
     fn serialize_stake_table(
         &self,
         value: &Vec<hotshot_types::PeerConfig<espresso_types::SeqTypes>>,
-    ) -> anyhow::Result<v2::StakeTableResponse> {
+    ) -> anyhow::Result<proto::StakeTableResponse> {
         let peers: Result<Vec<_>, _> = value
             .iter()
             .map(|peer| self.serialize_peer_config(peer))
             .collect();
 
-        Ok(serialization_api::v2::StakeTableResponse { peers: peers? })
+        Ok(espresso_api::proto::StakeTableResponse { peers: peers? })
     }
 
     fn serialize_peer_config(
         &self,
         peer: &hotshot_types::PeerConfig<espresso_types::SeqTypes>,
-    ) -> anyhow::Result<v2::PeerConfig> {
-        let stake_table_entry = v2::StakeTableEntry {
-            stake_key: Some(v2::BlsPublicKey {
+    ) -> anyhow::Result<proto::PeerConfig> {
+        let stake_table_entry = proto::StakeTableEntry {
+            stake_key: Some(proto::BlsPublicKey {
                 key: peer.stake_table_entry.stake_key.to_string(),
             }),
             stake_amount: peer.stake_table_entry.stake_amount.to_string(),
         };
 
-        let state_ver_key = v2::SchnorrPublicKey {
+        let state_ver_key = proto::SchnorrPublicKey {
             key: peer.state_ver_key.to_string(),
         };
 
         let connect_info = peer.connect_info.as_ref().map(|info| {
             let p2p_addr = match &info.p2p_addr {
-                hotshot_types::addr::NetAddr::Inet(ip, port) => v2::NetAddr {
-                    addr_type: Some(v2::net_addr::AddrType::Inet(v2::InetAddr {
+                hotshot_types::addr::NetAddr::Inet(ip, port) => proto::NetAddr {
+                    addr_type: Some(proto::net_addr::AddrType::Inet(proto::InetAddr {
                         host: match ip {
                             std::net::IpAddr::V4(_) => ip.to_string(),
                             std::net::IpAddr::V6(_) => format!("[{ip}]"),
@@ -398,21 +401,21 @@ impl<D> NodeApiStateImpl<D> {
                         port: *port as u32,
                     })),
                 },
-                hotshot_types::addr::NetAddr::Name(name, port) => v2::NetAddr {
-                    addr_type: Some(v2::net_addr::AddrType::Name(v2::NameAddr {
+                hotshot_types::addr::NetAddr::Name(name, port) => proto::NetAddr {
+                    addr_type: Some(proto::net_addr::AddrType::Name(proto::NameAddr {
                         name: name.to_string(),
                         port: *port as u32,
                     })),
                 },
             };
 
-            v2::PeerConnectInfo {
+            proto::PeerConnectInfo {
                 x25519_key: info.x25519_key.to_string(),
                 p2p_addr: Some(p2p_addr),
             }
         });
 
-        Ok(v2::PeerConfig {
+        Ok(proto::PeerConfig {
             stake_table_entry: Some(stake_table_entry),
             state_ver_key: Some(state_ver_key),
             connect_info,
@@ -424,14 +427,14 @@ impl<D> NodeApiStateImpl<D> {
         cert: &hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<
             espresso_types::SeqTypes,
         >,
-    ) -> anyhow::Result<v2::LightClientStateUpdateCertificateV2> {
+    ) -> anyhow::Result<proto::LightClientStateUpdateCertificateV2> {
         let signatures: Result<Vec<_>, anyhow::Error> = cert
             .signatures
             .iter()
             .map(
-                |(key, lcv3_sig, lcv2_sig)| -> anyhow::Result<v2::StateSignatureTuple> {
-                    Ok(v2::StateSignatureTuple {
-                        state_signature_key: Some(v2::SchnorrPublicKey {
+                |(key, lcv3_sig, lcv2_sig)| -> anyhow::Result<proto::StateSignatureTuple> {
+                    Ok(proto::StateSignatureTuple {
+                        state_signature_key: Some(proto::SchnorrPublicKey {
                             key: key.to_string(),
                         }),
                         lcv3_signature: lcv3_sig.to_string(),
@@ -441,7 +444,7 @@ impl<D> NodeApiStateImpl<D> {
             )
             .collect();
 
-        Ok(v2::LightClientStateUpdateCertificateV2 {
+        Ok(proto::LightClientStateUpdateCertificateV2 {
             epoch: cert.epoch.u64(),
             light_client_state: cert.light_client_state.to_string(),
             next_stake_table_state: cert.next_stake_table_state.to_string(),
@@ -450,7 +453,7 @@ impl<D> NodeApiStateImpl<D> {
         })
     }
 
-    fn serialize_ns_proof(&self, proof: &NsProof) -> anyhow::Result<v2::NsProof> {
+    fn serialize_ns_proof(&self, proof: &NsProof) -> anyhow::Result<proto::NsProof> {
         let proof_version = match proof {
             NsProof::V0(advz_proof) => {
                 // Serialize the inner fields directly
@@ -459,7 +462,7 @@ impl<D> NodeApiStateImpl<D> {
                     "ns_payload": advz_proof.ns_payload,
                     "ns_proof": advz_proof.ns_proof,
                 });
-                v2::ns_proof::ProofVersion::V0(serde_json::from_value(json)?)
+                proto::ns_proof::ProofVersion::V0(serde_json::from_value(json)?)
             },
             NsProof::V1(avidm_proof) => {
                 // Serialize ns_payload using base64_bytes
@@ -473,7 +476,7 @@ impl<D> NodeApiStateImpl<D> {
                     .trim_matches('"')
                     .to_string();
 
-                v2::ns_proof::ProofVersion::V1(v2::AvidMNsProof {
+                proto::ns_proof::ProofVersion::V1(proto::AvidMNsProof {
                     ns_index: avidm_proof.0.ns_index as u64,
                     ns_payload: ns_payload_str,
                     ns_proof: avidm_proof.0.ns_proof.to_string(),
@@ -481,9 +484,11 @@ impl<D> NodeApiStateImpl<D> {
             },
             NsProof::V1IncorrectEncoding(incorrect_proof) => {
                 // Serialize the whole proof to JSON string
-                v2::ns_proof::ProofVersion::V1IncorrectEncoding(v2::AvidMIncorrectEncodingNsProof {
-                    proof_data: serde_json::to_string(&incorrect_proof.0)?,
-                })
+                proto::ns_proof::ProofVersion::V1IncorrectEncoding(
+                    proto::AvidMIncorrectEncodingNsProof {
+                        proof_data: serde_json::to_string(&incorrect_proof.0)?,
+                    },
+                )
             },
             NsProof::V2(gf2_proof) => {
                 // Serialize ns_payload using base64_bytes
@@ -497,7 +502,7 @@ impl<D> NodeApiStateImpl<D> {
                     .trim_matches('"')
                     .to_string();
 
-                v2::ns_proof::ProofVersion::V2(v2::AvidmGf2NsProof {
+                proto::ns_proof::ProofVersion::V2(proto::AvidmGf2NsProof {
                     ns_index: gf2_proof.0.ns_index as u64,
                     ns_payload: ns_payload_str,
                     ns_proof: gf2_proof.0.ns_proof.to_string(),
@@ -505,7 +510,7 @@ impl<D> NodeApiStateImpl<D> {
             },
         };
 
-        Ok(v2::NsProof {
+        Ok(proto::NsProof {
             proof_version: Some(proof_version),
         })
     }
@@ -663,8 +668,8 @@ where
 {
     async fn get_reward_claim_input(
         &self,
-        request: tonic::Request<v2::GetRewardClaimInputRequest>,
-    ) -> Result<tonic::Response<v2::RewardClaimInput>, tonic::Status> {
+        request: tonic::Request<proto::GetRewardClaimInputRequest>,
+    ) -> Result<tonic::Response<proto::RewardClaimInput>, tonic::Status> {
         let request = request.into_inner();
         let address = self
             .deserialize_address(&request.address)
@@ -681,8 +686,8 @@ where
 
     async fn get_reward_balance(
         &self,
-        request: tonic::Request<v2::GetRewardBalanceRequest>,
-    ) -> Result<tonic::Response<v2::RewardBalance>, tonic::Status> {
+        request: tonic::Request<proto::GetRewardBalanceRequest>,
+    ) -> Result<tonic::Response<proto::RewardBalance>, tonic::Status> {
         let request = request.into_inner();
         let address = self
             .deserialize_address(&request.address)
@@ -697,8 +702,8 @@ where
 
     async fn get_reward_account_proof(
         &self,
-        request: tonic::Request<v2::GetRewardAccountProofRequest>,
-    ) -> Result<tonic::Response<v2::RewardAccountQueryDataV2>, tonic::Status> {
+        request: tonic::Request<proto::GetRewardAccountProofRequest>,
+    ) -> Result<tonic::Response<proto::RewardAccountQueryDataV2>, tonic::Status> {
         let request = request.into_inner();
         let address = self
             .deserialize_address(&request.address)
@@ -715,8 +720,8 @@ where
 
     async fn get_reward_balances(
         &self,
-        request: tonic::Request<v2::GetRewardBalancesRequest>,
-    ) -> Result<tonic::Response<v2::RewardBalances>, tonic::Status> {
+        request: tonic::Request<proto::GetRewardBalancesRequest>,
+    ) -> Result<tonic::Response<proto::RewardBalances>, tonic::Status> {
         let request = request.into_inner();
         let balances = self
             .fetch_reward_balances(request.height, request.offset, request.limit)
@@ -730,8 +735,8 @@ where
 
     async fn get_reward_merkle_tree_v2(
         &self,
-        request: tonic::Request<v2::GetRewardMerkleTreeRequest>,
-    ) -> Result<tonic::Response<v2::RewardMerkleTreeV2Data>, tonic::Status> {
+        request: tonic::Request<proto::GetRewardMerkleTreeRequest>,
+    ) -> Result<tonic::Response<proto::RewardMerkleTreeV2Data>, tonic::Status> {
         let request = request.into_inner();
         let tree = self
             .fetch_reward_merkle_tree_v2(request.height)
@@ -1313,9 +1318,9 @@ where
 {
     async fn get_namespace_proof(
         &self,
-        request: tonic::Request<v2::GetNamespaceProofRequest>,
-    ) -> Result<tonic::Response<v2::GetNamespaceProofResponse>, tonic::Status> {
-        use v2::get_namespace_proof_response::Response;
+        request: tonic::Request<proto::GetNamespaceProofRequest>,
+    ) -> Result<tonic::Response<proto::GetNamespaceProofResponse>, tonic::Status> {
+        use proto::get_namespace_proof_response::Response;
 
         let request = request.into_inner();
         let response = match (request.block, request.first, request.last) {
@@ -1338,7 +1343,7 @@ where
                     .map(|proof| self.serialize_namespace_proof(proof))
                     .collect::<anyhow::Result<Vec<_>>>()
                     .map_err(to_status)?;
-                Response::Range(v2::NamespaceProofRangeResponse { proofs })
+                Response::Range(proto::NamespaceProofRangeResponse { proofs })
             },
             _ => {
                 return Err(tonic::Status::invalid_argument(
@@ -1346,15 +1351,15 @@ where
                 ));
             },
         };
-        Ok(tonic::Response::new(v2::GetNamespaceProofResponse {
+        Ok(tonic::Response::new(proto::GetNamespaceProofResponse {
             response: Some(response),
         }))
     }
 
     async fn get_incorrect_encoding_proof(
         &self,
-        request: tonic::Request<v2::GetIncorrectEncodingProofRequest>,
-    ) -> Result<tonic::Response<v2::IncorrectEncodingProofResponse>, tonic::Status> {
+        request: tonic::Request<proto::GetIncorrectEncodingProofRequest>,
+    ) -> Result<tonic::Response<proto::IncorrectEncodingProofResponse>, tonic::Status> {
         let request = request.into_inner();
         let proof = self
             .fetch_incorrect_encoding_proof(request.namespace_id, request.block_height)
@@ -1434,8 +1439,8 @@ where
 {
     async fn get_state_certificate(
         &self,
-        request: tonic::Request<v2::GetStateCertificateRequest>,
-    ) -> Result<tonic::Response<v2::StateCertificateResponse>, tonic::Status> {
+        request: tonic::Request<proto::GetStateCertificateRequest>,
+    ) -> Result<tonic::Response<proto::StateCertificateResponse>, tonic::Status> {
         let request = request.into_inner();
         let cert = self
             .fetch_state_certificate(request.epoch)
@@ -1447,8 +1452,8 @@ where
 
     async fn get_stake_table(
         &self,
-        request: tonic::Request<v2::GetStakeTableRequest>,
-    ) -> Result<tonic::Response<v2::StakeTableResponse>, tonic::Status> {
+        request: tonic::Request<proto::GetStakeTableRequest>,
+    ) -> Result<tonic::Response<proto::StakeTableResponse>, tonic::Status> {
         let request = request.into_inner();
         let stake_table = self
             .fetch_stake_table(request.epoch)
@@ -2549,47 +2554,47 @@ where
 {
     async fn get_block_height(
         &self,
-        _request: tonic::Request<v2::GetBlockHeightRequest>,
-    ) -> Result<tonic::Response<v2::BlockHeightResponse>, tonic::Status> {
+        _request: tonic::Request<proto::GetBlockHeightRequest>,
+    ) -> Result<tonic::Response<proto::BlockHeightResponse>, tonic::Status> {
         let height = <Self as espresso_api::v1::StatusApi>::block_height(self)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(v2::BlockHeightResponse { height }))
+        Ok(tonic::Response::new(proto::BlockHeightResponse { height }))
     }
 
     async fn get_success_rate(
         &self,
-        _request: tonic::Request<v2::GetSuccessRateRequest>,
-    ) -> Result<tonic::Response<v2::SuccessRateResponse>, tonic::Status> {
+        _request: tonic::Request<proto::GetSuccessRateRequest>,
+    ) -> Result<tonic::Response<proto::SuccessRateResponse>, tonic::Status> {
         let rate = <Self as espresso_api::v1::StatusApi>::success_rate(self)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(v2::SuccessRateResponse { rate }))
+        Ok(tonic::Response::new(proto::SuccessRateResponse { rate }))
     }
 
     async fn get_time_since_last_decide(
         &self,
-        _request: tonic::Request<v2::GetTimeSinceLastDecideRequest>,
-    ) -> Result<tonic::Response<v2::TimeSinceLastDecideResponse>, tonic::Status> {
+        _request: tonic::Request<proto::GetTimeSinceLastDecideRequest>,
+    ) -> Result<tonic::Response<proto::TimeSinceLastDecideResponse>, tonic::Status> {
         let seconds = <Self as espresso_api::v1::StatusApi>::time_since_last_decide(self)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(v2::TimeSinceLastDecideResponse {
+        Ok(tonic::Response::new(proto::TimeSinceLastDecideResponse {
             seconds,
         }))
     }
 
     async fn get_node_keys(
         &self,
-        _request: tonic::Request<v2::GetNodeKeysRequest>,
-    ) -> Result<tonic::Response<v2::NodeKeysResponse>, tonic::Status> {
+        _request: tonic::Request<proto::GetNodeKeysRequest>,
+    ) -> Result<tonic::Response<proto::NodeKeysResponse>, tonic::Status> {
         let keys = self.data_source.node_public_keys().await;
-        Ok(tonic::Response::new(v2::NodeKeysResponse {
+        Ok(tonic::Response::new(proto::NodeKeysResponse {
             eth_account: keys.eth_account.map(|account| format!("{account:#x}")),
-            consensus_key: Some(v2::BlsPublicKey {
+            consensus_key: Some(proto::BlsPublicKey {
                 key: keys.consensus_key.to_string(),
             }),
-            state_ver_key: Some(v2::SchnorrPublicKey {
+            state_ver_key: Some(proto::SchnorrPublicKey {
                 key: keys.state_ver_key.to_string(),
             }),
             x25519_key: keys.x25519_key.as_ref().map(ToString::to_string),

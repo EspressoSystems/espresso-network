@@ -4720,14 +4720,18 @@ dependencies = [
  "futures",
  "hex",
  "http-wire",
+ "prost 0.14.4",
  "schemars 0.9.0",
  "serde",
  "serde_json",
- "serialization-api",
  "thiserror 2.0.18",
  "tokio",
  "tonic 0.14.6",
+ "tonic-prost",
+ "tonic-prost-build",
  "tonic-reflection",
+ "tonic-rest",
+ "tonic-rest-build",
  "tower 0.4.13",
  "tracing",
  "tracing-subscriber 0.3.23",
@@ -4940,7 +4944,6 @@ dependencies = [
  "serde",
  "serde_bytes",
  "serde_json",
- "serialization-api",
  "sha2 0.10.9",
  "snafu 0.8.9",
  "sqlx",
@@ -12075,20 +12078,6 @@ checksum = "a84f14a19e9a014bb9f4512488d9829a68e04ecabffb0f9904cd1ace94598177"
 dependencies = [
  "base16ct",
  "serde",
-]
-
-[[package]]
-name = "serialization-api"
-version = "0.1.0"
-dependencies = [
- "axum 0.8.9",
- "prost 0.14.4",
- "serde",
- "tonic 0.14.6",
- "tonic-prost",
- "tonic-prost-build",
- "tonic-rest",
- "tonic-rest-build",
 ]
 
 [[package]]
