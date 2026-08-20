@@ -66,9 +66,10 @@ struct CustomError {
 }
 
 impl ErrorResponse {
-    /// Every node API error body is built here, so this is where credentials embedded in a provider
-    /// URL are removed. These bodies are served to unauthenticated callers and never pass the OTLP
-    /// exporter that scrubs the logging path.
+    /// Scrubs credentials out of the message. `ApiError`'s `Display` already does this for handler
+    /// errors, which the tonic adapter shares; this also covers messages that never went through
+    /// it, such as a serialization failure. Error bodies go to unauthenticated callers and never
+    /// pass the OTLP exporter.
     fn new(status: StatusCode, message: String) -> Self {
         Self {
             custom: CustomError {
