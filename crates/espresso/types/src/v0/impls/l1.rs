@@ -53,6 +53,7 @@ use super::{L1BlockInfo, v0_1::L1BlockInfoWithParent};
 #[cfg(feature = "node")]
 use super::{
     L1ClientMetrics, L1State, L1UpdateTask,
+    l1_error::{RpcErrorKind, classify},
     v0_1::{SingleTransport, SingleTransportStatus, SwitchingTransport},
 };
 use crate::L1ClientOptions;
@@ -173,6 +174,13 @@ impl L1ClientMetrics {
             failure_metrics.push(failures.create(vec![url_index.to_string()]));
         }
 
+        // No provider label here; a separate PR owns that dimension.
+        let error_family = metrics.counter_family("errors".into(), vec!["kind".into()]);
+        let errors = RpcErrorKind::ALL_LABELS
+            .into_iter()
+            .map(|label| (label, error_family.create(vec![label.to_string()])))
+            .collect();
+
         Self {
             head: metrics.create_gauge("head".into(), None).into(),
             finalized: metrics.create_gauge("finalized".into(), None).into(),
@@ -181,6 +189,7 @@ impl L1ClientMetrics {
                 .into(),
             failovers: metrics.create_counter("failovers".into(), None).into(),
             failures: Arc::new(failure_metrics),
+            errors: Arc::new(errors),
         }
     }
 }
@@ -376,16 +385,22 @@ impl Service<RequestPacket> for SwitchingTransport {
                         f.add(1);
                     }
 
+                    let kind = classify(&err);
+                    if let Some(counter) = self_clone.metrics.errors.get(kind.label()) {
+                        counter.add(1);
+                    }
+
                     // Treat rate limited errors specially; these should not cause failover, but instead
                     // should only cause us to temporarily back off on making requests to the RPC
-                    // server.
-                    if let RpcError::ErrorResp(e) = &err {
-                        // 429 == Too Many Requests
-                        if e.code == 429 {
-                            current_transport.status.write().rate_limited_until =
-                                Some(Instant::now() + self_clone.opt.rate_limit_delay());
-                            return Err(err);
-                        }
+                    // server. The JSON-RPC code for a rate limit varies by provider (infura
+                    // -32005, quicknode -32007, ...) and is never the HTTP 429 status, so
+                    // `classify` looks at the message rather than a single code.
+                    if let RpcErrorKind::RateLimited { retry_after } = kind {
+                        let delay =
+                            retry_after.unwrap_or_else(|| self_clone.opt.rate_limit_delay());
+                        current_transport.status.write().rate_limited_until =
+                            Some(Instant::now() + delay);
+                        return Err(err);
                     }
 
                     // Log the error and indicate a failure
@@ -1144,6 +1159,10 @@ mod test {
     };
     use espresso_contract_deployer::{Contracts, deploy_fee_contract_proxy};
     use time::OffsetDateTime;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
 
     use super::*;
 
@@ -1699,6 +1718,58 @@ mod test {
         // Eventually we revert back to the primary and requests fail again.
         sleep(Duration::from_millis(2100)).await;
         provider.get_block_number().await.unwrap_err();
+    }
+
+    /// Spawns a server that always returns HTTP 429 with the given JSON-RPC error body, just
+    /// enough to drive alloy's HTTP transport for one negative-path assertion.
+    async fn spawn_rate_limited_server(code: i64, message: &'static str) -> Url {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    return;
+                };
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 4096];
+                    let _ = socket.read(&mut buf).await;
+                    let body = format!(
+                        r#"{{"jsonrpc":"2.0","id":1,"error":{{"code":{code},"message":"{message}"}}}}"#
+                    );
+                    let response = format!(
+                        "HTTP/1.1 429 Too Many Requests\r\nContent-Type: \
+                         application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        format!("http://{addr}").parse().unwrap()
+    }
+
+    // Regression test for the bug fixed alongside `classify`: `e.code` is the JSON-RPC code, not
+    // the HTTP status, so infura's -32005 rate limit was never recognized by the old `e.code ==
+    // 429` check and caused a failover instead of a backoff.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_rate_limited_error_does_not_trigger_failover() {
+        let anvil = Anvil::new().block_time(1).spawn();
+        let rate_limited_url =
+            spawn_rate_limited_server(-32005, "daily request count exceeded, request rate limited")
+                .await;
+
+        let provider = L1ClientOptions {
+            l1_consecutive_failure_tolerance: 1,
+            ..Default::default()
+        }
+        .connect(vec![rate_limited_url, anvil.endpoint_url()])
+        .expect("Failed to create L1 client");
+
+        // A tolerance of 1 would fail over on any ordinary failure. The rate-limited error must
+        // instead be recognized and handled without switching providers.
+        provider.get_block_number().await.unwrap_err();
+        assert_eq!(get_failover_index(&provider), 0);
     }
 
     // Checks that the L1 client initialized the state on startup even

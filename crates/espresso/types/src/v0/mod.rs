@@ -176,6 +176,8 @@ pub type NetworkConfig = hotshot_types::network::NetworkConfig<SeqTypes>;
 pub use self::impls::{
     AuthenticatedValidatorMap, NodeState, RegisteredValidatorMap, UpgradeMap, ValidatedState,
 };
+#[cfg(feature = "node")]
+pub use self::impls::{RpcErrorKind, classify};
 pub use crate::{
     v0::impls::{
         StakeTableHash, StakeTableState, calculate_proportion_staked_and_reward_rate,

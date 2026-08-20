@@ -7,6 +7,8 @@ mod fee_info;
 mod header;
 mod instance_state;
 mod l1;
+#[cfg(feature = "node")]
+mod l1_error;
 pub mod reward;
 mod stake_table;
 mod state;
@@ -20,6 +22,8 @@ pub use fee_info::{FeeError, retain_accounts};
 #[cfg(any(test, feature = "testing"))]
 pub use instance_state::mock;
 pub use instance_state::{NodeState, UpgradeMap};
+#[cfg(feature = "node")]
+pub use l1_error::{RpcErrorKind, classify};
 pub use reward::*;
 pub use stake_table::*;
 pub use state::{

@@ -1,5 +1,5 @@
 #[cfg(feature = "node")]
-use std::time::Instant;
+use std::{collections::HashMap, time::Instant};
 use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 
 use alloy::primitives::{B256, U256};
@@ -279,6 +279,8 @@ pub(crate) struct L1ClientMetrics {
     pub(crate) reconnects: Arc<dyn Counter>,
     pub(crate) failovers: Arc<dyn Counter>,
     pub(crate) failures: Arc<Vec<Box<dyn Counter>>>,
+    /// Count of L1 errors by `RpcErrorKind::label()`, independent of provider.
+    pub(crate) errors: Arc<HashMap<&'static str, Box<dyn Counter>>>,
 }
 
 /// An RPC client with multiple remote (HTTP) providers.
