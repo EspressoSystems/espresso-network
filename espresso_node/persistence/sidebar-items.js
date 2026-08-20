@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["migrate_network_config"],"mod":["fs","migrations","no_storage","persistence_metrics","sql"],"struct":["RegisteredValidatorNoX25519","RegisteredValidatorPreOption","RegisteredValidatorPreSchnorrOption"],"trait":["ChainConfigPersistence"]};
+window.SIDEBAR_ITEMS = {"fn":["migrate_network_config"],"mod":["fs","no_storage","persistence_metrics","sql"],"struct":["RegisteredValidatorNoX25519","RegisteredValidatorPreOption","RegisteredValidatorPreSchnorrOption"],"trait":["ChainConfigPersistence"]};

@@ -21,14 +21,14 @@
 join later via <a href="struct.TestNetwork.html#method.start_deferred_node" title="method espresso_node::api::test_helpers::TestNetwork::start_deferred_node"><code>TestNetwork::start_deferred_node</code></a>.</p>
 </div></details><section id="method.network_config" class="method"><a class="src rightside" href="../../../src/espresso_node/api.rs.html#2101-2104">Source</a><h4 class="code-header">pub fn <a href="#method.network_config" class="fn">network_config</a>(self, network_config: <a class="struct" href="../../testing/struct.TestConfig.html" title="struct espresso_node::testing::TestConfig">TestConfig</a>&lt;NUM_NODES&gt;) -&gt; Self</h4></section><section id="method.contracts" class="method"><a class="src rightside" href="../../../src/espresso_node/api.rs.html#2106-2109">Source</a><h4 class="code-header">pub fn <a href="#method.contracts" class="fn">contracts</a>(self, contracts: <a class="struct" href="../../../espresso_contract_deployer/struct.Contracts.html" title="struct espresso_contract_deployer::Contracts">Contracts</a>) -&gt; Self</h4></section><details class="toggle method-toggle" open><summary><section id="method.pos_hook" class="method"><a class="src rightside" href="../../../src/espresso_node/api.rs.html#2113-2127">Source</a><h4 class="code-header">pub async fn <a href="#method.pos_hook" class="fn">pos_hook</a>(
     self,
-    delegation_config: <a class="enum" href="../../../staking_cli/demo/enum.DelegationConfig.html" title="enum staking_cli::demo::DelegationConfig">DelegationConfig</a>,
+    delegation_config: DelegationConfig,
     stake_table_version: <a class="enum" href="../../../hotshot_contract_adapter/stake_table/enum.StakeTableContractVersion.html" title="enum hotshot_contract_adapter::stake_table::StakeTableContractVersion">StakeTableContractVersion</a>,
     upgrade: Upgrade,
 ) -&gt; <a class="type" href="https://docs.rs/anyhow/1.0.102/anyhow/type.Result.html" title="type anyhow::Result">Result</a>&lt;Self&gt;</h4></section></summary><div class="docblock"><p>Setup for POS testing. Deploys contracts and adds the
 stake table address to state. Must be called before <code>build()</code>.</p>
 </div></details><details class="toggle method-toggle" open><summary><section id="method.pos_hook_with_registered" class="method"><a class="src rightside" href="../../../src/espresso_node/api.rs.html#2133-2249">Source</a><h4 class="code-header">pub async fn <a href="#method.pos_hook_with_registered" class="fn">pos_hook_with_registered</a>(
     self,
-    delegation_config: <a class="enum" href="../../../staking_cli/demo/enum.DelegationConfig.html" title="enum staking_cli::demo::DelegationConfig">DelegationConfig</a>,
+    delegation_config: DelegationConfig,
     stake_table_version: <a class="enum" href="../../../hotshot_contract_adapter/stake_table/enum.StakeTableContractVersion.html" title="enum hotshot_contract_adapter::stake_table::StakeTableContractVersion">StakeTableContractVersion</a>,
     upgrade: Upgrade,
     registered: &amp;[<a class="primitive" href="https://doc.rust-lang.org/1.97.1/std/primitive.usize.html">usize</a>],
