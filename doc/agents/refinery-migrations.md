@@ -1,10 +1,6 @@
 # Refinery Migrations and Deferred Backfills
 
-Guidance for AI coding agents (and humans) working on storage migrations in this repo.
-Not loaded into the default agent context — read this file when adding or modifying
-a storage migration.
-
-## ⚠️ Refinery Migrations Block Startup — Avoid Large Data Operations
+## Refinery migrations block startup
 
 Refinery migrations run synchronously at node startup, before the node joins consensus. Any migration
 that does significant data work (bulk inserts, table rewrites, large backfills) will delay or prevent
@@ -15,7 +11,7 @@ the node from participating in consensus, which is unacceptable in production.
 Unsafe: any DML that touches a number of rows proportional to database size (`UPDATE`, `INSERT ... SELECT`,
 `DELETE` across large tables).
 
-## Deferred Backfill Pattern for Large Data Migrations
+## Deferred backfill pattern for large data migrations
 
 When a migration requires transforming or copying a significant amount of existing data, use the
 `DataBackfill` trait (`hotshot-query-service/src/migration.rs`) instead of doing the work in Refinery.
@@ -41,7 +37,7 @@ existing database (e.g. copying rows to a new table, recomputing a column, refor
 6. **Drop the old table** in a future Refinery migration once the backfill is confirmed complete and
    the read fallback is no longer needed.
 
-**Progress is tracked** in the `deferred_migrations` table and exposed at `GET database/migration-status`.
+**Progress is tracked** in the `deferred_migrations` table and exposed at `GET /v1/database/migration-status`.
 
 **Storage caveat:** if the new table has FK constraints that require a lookup table to be fully populated
 before any rows can be inserted, that lookup table will be doubled in storage for the duration of the
