@@ -1,14 +1,10 @@
 # Refinery Migrations and Deferred Backfills
 
-Guidance for AI coding agents (and humans) working on storage migrations in this repo.
-Not loaded into the default agent context — read this file when adding or modifying
-a storage migration.
+## Refinery migrations block startup
 
-## ⚠️ Refinery Migrations Block Startup — Avoid Large Data Operations
-
-Refinery migrations run synchronously at node startup, before the node joins consensus. Any migration
-that does significant data work (bulk inserts, table rewrites, large backfills) will delay or prevent
-the node from participating in consensus, which is unacceptable in production.
+Refinery migrations run synchronously at node startup, before the node joins consensus. Any migration that does
+significant data work (bulk inserts, table rewrites, large backfills) delays or prevents the node from participating in
+consensus.
 
 **Rule: Refinery migrations must be fast and schema-only.** Safe operations: `CREATE TABLE`,
 `CREATE INDEX CONCURRENTLY`, `ALTER TABLE ... ADD COLUMN` with a nullable/defaulted column, `DROP TABLE`.
@@ -41,7 +37,8 @@ existing database (e.g. copying rows to a new table, recomputing a column, refor
 6. **Drop the old table** in a future Refinery migration once the backfill is confirmed complete and
    the read fallback is no longer needed.
 
-**Progress is tracked** in the `deferred_migrations` table and exposed at `GET database/migration-status`.
+**Progress is tracked** in the `deferred_migrations` table and exposed at `GET /v1/database/migration-status`
+(`crates/espresso/api/src/axum/routes.rs:325`).
 
 **Storage caveat:** if the new table has FK constraints that require a lookup table to be fully populated
 before any rows can be inserted, that lookup table will be doubled in storage for the duration of the

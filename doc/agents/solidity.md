@@ -26,7 +26,9 @@ just gen-bindings                     # regenerate Rust bindings after ABI chang
 
 ## Key contracts (`contracts/src/`)
 
-- `LightClient.sol`: verifies HotShot state proofs, stores block commitments, exposes `authRoot()`
+- `LightClient.sol` / `LightClientV2.sol` / `LightClientV3.sol`: verifies HotShot state proofs, stores block
+  commitments. `authRoot()` exists only on V3 (`contracts/src/LightClientV3.sol:16`); Arbitrum variants in
+  `LightClientArbitrum{,V2,V3}.sol`
 - `StakeTable.sol` / `StakeTableV2.sol` / `StakeTableV3.sol`: validator staking, delegations, withdrawals, x25519/p2p
   registration (V3, fast finality)
 - `FeeContract.sol`: builder fee deposits, read by Espresso node from finalized L1

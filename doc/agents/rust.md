@@ -56,8 +56,8 @@ just demo-native                      # local network via process-compose
   with `HotShotEvent` variants. `EpochMembershipCoordinator` manages per-epoch stake tables.
 - **L1Client** (`crates/espresso/types/src/v0/impls/l1.rs`): tracks `head` and `finalized`; reads use
   `BlockId::finalized()`.
-- **Stake table fetcher** (`crates/espresso/types/src/v0/impls/stake_table.rs`): polls finalized L1, builds
-  `ValidatorMap`; `select_active_validator_set()` picks top 100 by stake.
+- **Stake table fetcher** (`crates/espresso/types/src/v0/impls/stake_table.rs`): `select_active_validator_set()`,
+  `MAX_VALIDATORS` (`crates/espresso/types/src/v0/v0_3/mod.rs:27`).
 - **Catchup** (`crates/espresso/node/src/catchup.rs`): `SqlStateCatchup` (local DB), `StatePeers` (HTTP, reliability
   scored), `ParallelStateCatchup` (local first, peers fallback). Fetches fee/reward proofs, block frontier, chain
   config, leaf chain, and `LightClientStateUpdateCertificateV2` state certs per epoch.
@@ -113,10 +113,8 @@ Migrations (all three backends required when adding storage):
   read-time fallbacks (see `load_stake` and `legacy_anchor_leaf_path`), and keep writes atomic via `Inner::replace`.
 - Update `SequencerPersistence` for all backends; test with `cargo test -p espresso-node persistence`.
 
-Refinery migrations run synchronously at startup before the node joins consensus, so they must be fast and schema-only.
-Any migration whose work scales with database size must use the `DataBackfill` pattern (background task, runs after
-startup) instead. Before writing a migration that touches existing rows, read
-[`doc/agents/refinery-migrations.md`](refinery-migrations.md).
+Read [`doc/agents/refinery-migrations.md`](refinery-migrations.md) before adding or modifying a migration: Refinery runs
+at startup and must stay schema-only; data work that scales with database size goes in a `DataBackfill`.
 
 ## Adding an API endpoint
 

@@ -13,8 +13,8 @@ Espresso Network is a confirmation layer for Ethereum rollups, providing fast fi
 
 ## Where to look
 
-- `doc/agents/rust.md`
-- `doc/agents/solidity.md`
+- `doc/agents/rust.md` - before any Rust change: cargo/just commands, storage backends, adding an API endpoint
+- `doc/agents/solidity.md` - before any Solidity change: forge/just commands, contract map, upgrade constraints
 - `doc/cargo-features.md` - feature gates for zkVM builds and which functions panic without them
 
 ## Writing Reviewable Code
@@ -88,16 +88,17 @@ header as part of `auth_root`.
 
 ### Protocol versions
 
-Defined in `crates/espresso/types/src/v0/mod.rs`. `SequencerVersions<Base, Upgrade>` pairs versions for network
-operation. **Mainnet currently runs V0_4.**
+`Version` constants in `crates/versions/src/lib.rs`; `StaticVersion` aliases in `crates/espresso/types/src/v0/mod.rs`. A
+network's versions come from genesis TOML `base_version` / `upgrade_version` (`crates/espresso/node/src/genesis.rs:95`),
+parsed into `versions::Upgrade { base, target }`. **Mainnet runs V0_5, decaf runs V0_6.**
 
-- V0_1: base Header, ChainConfig, Transaction, ADVZ VID proofs (shipped)
-- V0_2, `FeeVersion`: fee support (shipped)
-- V0_3, `EpochVersion`: PoS, stake_table_contract, reward_merkle_tree, AvidM VID proofs (shipped)
-- V0_4, `DrbAndHeaderUpgradeVersion`: header adds timestamp_millis, total_reward_distributed, RewardMerkleTreeV2
-  (**mainnet**)
-- V0_5, `EpochRewardVersion`: per-epoch rewards (**next upgrade**)
-- V0_6, `NEW_PROTOCOL_VERSION`: DA upgrade + VID2 (AvidmGf2) proofs + cliquenet + new protocol (bundled at 0.6)
+- V0_1: base Header, ChainConfig, Transaction, ADVZ VID proofs
+- V0_2, `FeeVersion` / `FEE_VERSION`: fee support
+- V0_3, `EpochVersion` / `EPOCH_VERSION`: PoS, stake_table_contract, reward_merkle_tree, AvidM VID proofs
+- V0_4, `DrbAndHeaderUpgradeVersion` / `DRB_AND_HEADER_UPGRADE_VERSION`: header adds timestamp_millis,
+  total_reward_distributed, RewardMerkleTreeV2
+- V0_5, `EpochRewardVersion` / `EPOCH_REWARD_VERSION`: per-epoch rewards, header adds `leader_counts` (**mainnet**)
+- V0_6, `NEW_PROTOCOL_VERSION`: DA upgrade + VID2 (AvidmGf2) proofs + cliquenet + new protocol (**decaf**)
 
 **Fast finality** (V0_6, see `crates/hotshot/new-protocol/` and `doc/stake-table-fast-finality.md`): replaces CDN +
 libp2p networking with `crates/cliquenet/` (fully-connected mesh, x25519-encrypted). Validators register `x25519_key`
@@ -124,8 +125,8 @@ Public query-service base URLs:
 Useful paths (append to either base URL):
 
 - `/status/block-height` - current block height
-- `/status/version` - running protocol version
-- `/availability/header/{height}` - block header (check `version`, `l1_finalized`, `timestamp_millis`)
+- `/availability/header/{height}` - block header; `version` is the running protocol version (also check `l1_finalized`,
+  `timestamp_millis`)
 - `/availability/leaf/{height}` - leaf at height
 - `/node/transactions/count` - total tx count
 - `/v0/config/hotshot` - HotShot config including `libp2p_config.bootstrap_nodes`
