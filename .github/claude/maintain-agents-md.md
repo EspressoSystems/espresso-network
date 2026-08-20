@@ -19,6 +19,11 @@ Edit nothing else; anything outside `AGENTS.md` and `doc/` is dropped before the
 3. Facts only. No prose, no hedging, no marketing, no emoji, no summaries of what changed. Minimal markdown: headings,
    bullets, `path:line`, code spans.
 4. Reasoning, evidence and verification never appear in the md files. They go in the report (see below).
+5. Write the command or path that reveals a fact, not the fact. Hardcode a value only when nothing on the machine
+   produces it, and then date-stamp it. Version and deployment constants drift fastest and are followed literally.
+6. Cut what one grep answers: directory trees, file inventories, restated control flow.
+7. Naming a tool makes agents reach for it. Name only tools that should be used.
+8. No aspirational rules. Every instruction is read as mandatory work.
 
 ## Checks
 
@@ -31,6 +36,8 @@ Edit nothing else; anything outside `AGENTS.md` and `doc/` is dropped before the
   instructions.
 - Misplaced: content not needed by every session moves out of `AGENTS.md`, leaving a trigger line.
 - Duplicated: same fact in two files, keep one.
+- Unreferenced: every file under `doc/agents/` needs a trigger line in `AGENTS.md`. A doc nothing points at is read in
+  under 10% of sessions; one referenced with a trigger is read in over 90%.
 - Missing: architectural changes since the docs in scope were last touched
   (`git log --oneline -20 -- AGENTS.md doc/agents/`, then `git log --oneline --since` that date over `crates/`,
   `contracts/`) that every session needs.
