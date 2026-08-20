@@ -1157,7 +1157,7 @@ async fn fetch_finalized_block_from_rpc(
 
 #[cfg(test)]
 mod test {
-    use std::{collections::HashMap, ops::Add, sync::Mutex, time::Duration};
+    use std::{ops::Add, time::Duration};
 
     use alloy::{
         eips::BlockNumberOrTag,
@@ -1166,10 +1166,7 @@ mod test {
         providers::layers::AnvilProvider,
     };
     use espresso_contract_deployer::{Contracts, deploy_fee_contract_proxy};
-    use hotshot_types::traits::metrics::{
-        Counter, CounterFamily, Gauge, GaugeFamily, Histogram, HistogramFamily, NoMetrics,
-        TextFamily,
-    };
+    use hotshot_query_service::metrics::PrometheusMetrics;
     use time::OffsetDateTime;
 
     use super::*;
@@ -1743,91 +1740,28 @@ mod test {
         assert_eq!(next_generation(3, 7), Some(4));
     }
 
-    /// A [`Metrics`] that records counter values by name, so tests can assert on them.
-    #[derive(Clone, Debug, Default)]
-    struct CountingMetrics(Arc<Mutex<HashMap<String, usize>>>);
-
-    impl CountingMetrics {
-        fn count(&self, name: &str) -> usize {
-            *self.0.lock().unwrap().get(name).unwrap_or(&0)
-        }
-    }
-
-    impl Metrics for CountingMetrics {
-        fn create_counter(&self, name: String, _unit_label: Option<String>) -> Box<dyn Counter> {
-            Box::new(NamedCounter {
-                name,
-                counts: Arc::clone(&self.0),
-            })
-        }
-
-        fn create_gauge(&self, _name: String, _unit_label: Option<String>) -> Box<dyn Gauge> {
-            Box::new(NoMetrics)
-        }
-
-        fn create_histogram(
-            &self,
-            _name: String,
-            _unit_label: Option<String>,
-        ) -> Box<dyn Histogram> {
-            Box::new(NoMetrics)
-        }
-
-        fn create_text(&self, _name: String) {}
-
-        fn counter_family(&self, _name: String, _labels: Vec<String>) -> Box<dyn CounterFamily> {
-            Box::new(NoMetrics)
-        }
-
-        fn gauge_family(&self, _name: String, _labels: Vec<String>) -> Box<dyn GaugeFamily> {
-            Box::new(NoMetrics)
-        }
-
-        fn histogram_family(
-            &self,
-            _name: String,
-            _labels: Vec<String>,
-        ) -> Box<dyn HistogramFamily> {
-            Box::new(NoMetrics)
-        }
-
-        fn text_family(&self, _name: String, _labels: Vec<String>) -> Box<dyn TextFamily> {
-            Box::new(NoMetrics)
-        }
-
-        fn subgroup(&self, _subgroup_name: String) -> Box<dyn Metrics> {
-            Box::new(self.clone())
-        }
-    }
-
-    #[derive(Clone, Debug)]
-    struct NamedCounter {
-        name: String,
-        counts: Arc<Mutex<HashMap<String, usize>>>,
-    }
-
-    impl Counter for NamedCounter {
-        fn add(&self, amount: usize) {
-            *self
-                .counts
-                .lock()
-                .unwrap()
-                .entry(self.name.clone())
-                .or_default() += amount;
-        }
+    /// Reads the `failovers` counter registered by `L1ClientMetrics::new` (`:182`) under the
+    /// `l1` subgroup that `L1ClientOptions::with_metrics` creates.
+    fn failovers(metrics: &PrometheusMetrics) -> usize {
+        metrics
+            .get_subgroup(["l1"])
+            .unwrap()
+            .get_counter("failovers")
+            .unwrap()
+            .get()
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_failover_single_provider_no_switch() {
-        let metrics = CountingMetrics::default();
+        let metrics = PrometheusMetrics::default();
         let tolerance = 5;
 
         let provider = L1ClientOptions {
             l1_frequent_failure_tolerance: Duration::from_millis(0),
             l1_consecutive_failure_tolerance: tolerance,
-            metrics: Arc::new(Box::new(metrics.clone())),
             ..Default::default()
         }
+        .with_metrics(&metrics)
         .connect(vec!["http://notarealurl:1234".parse().unwrap()])
         .expect("Failed to create L1 client");
 
@@ -1835,7 +1769,7 @@ mod test {
             provider.get_block_number().await.unwrap_err();
         }
 
-        assert_eq!(metrics.count("failovers"), 0);
+        assert_eq!(failovers(&metrics), 0);
         assert_eq!(provider.transport.current_transport.read().generation, 0);
         assert_eq!(
             provider
@@ -1852,14 +1786,14 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_failover_two_providers_still_switches() {
         let anvil = Anvil::new().block_time(1).spawn();
-        let metrics = CountingMetrics::default();
+        let metrics = PrometheusMetrics::default();
 
         let provider = L1ClientOptions {
             l1_polling_interval: Duration::from_secs(1),
             l1_frequent_failure_tolerance: Duration::from_millis(100),
-            metrics: Arc::new(Box::new(metrics.clone())),
             ..Default::default()
         }
+        .with_metrics(&metrics)
         .connect(vec![
             "http://notarealurl:1234".parse().unwrap(),
             anvil.endpoint_url(),
@@ -1871,7 +1805,7 @@ mod test {
         provider.get_block_number().await.unwrap();
 
         assert_eq!(get_failover_index(&provider), 1);
-        assert_eq!(metrics.count("failovers"), 1);
+        assert_eq!(failovers(&metrics), 1);
     }
 
     // Checks that the L1 client initialized the state on startup even
