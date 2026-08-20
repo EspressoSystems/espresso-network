@@ -1,6 +1,7 @@
 use std::{
     cmp::min,
     collections::{HashMap, HashSet},
+    num::NonZeroU64,
     str::FromStr,
     time::{Duration, Instant},
 };
@@ -1379,18 +1380,18 @@ impl Fetcher {
     fn block_range_chunks(
         from_block: u64,
         to_block: u64,
-        chunk_size: u64,
+        chunk_size: NonZeroU64,
     ) -> impl Iterator<Item = (u64, u64)> {
-        let mut start = from_block;
-        let end = to_block;
+        // `start = None` marks exhaustion, distinct from a chunk ending at `u64::MAX`.
+        let mut start = Some(from_block);
         std::iter::from_fn(move || {
-            let chunk_end = min(start + chunk_size - 1, end);
-            if chunk_end < start {
+            let chunk_start = start?;
+            if chunk_start > to_block {
                 return None;
             }
-            let chunk = (start, chunk_end);
-            start = chunk_end + 1;
-            Some(chunk)
+            let chunk_end = min(chunk_start.saturating_add(chunk_size.get() - 1), to_block);
+            start = chunk_end.checked_add(1);
+            Some((chunk_start, chunk_end))
         })
     }
 
@@ -1678,7 +1679,7 @@ impl Fetcher {
         stake_table_init_block: u64,
         token: EspTokenInstance<L1Provider>,
     ) -> Result<Log, FetchRewardError> {
-        let max_events_range = self.l1_client.options().l1_events_max_block_range;
+        let max_events_range = self.l1_client.options().l1_events_max_block_range.get();
         const MAX_BLOCKS_SCANNED: u64 = 200_000;
         let mut total_scanned = 0;
 
@@ -3129,7 +3130,7 @@ mod tests {
     ) {
         let l1 = L1ClientOptions {
             l1_events_max_retry_duration: Duration::from_secs(120),
-            l1_events_max_block_range: 10_000,
+            l1_events_max_block_range: NonZeroU64::new(10_000).unwrap(),
             l1_retry_delay: Duration::from_secs(2),
             ..Default::default()
         }
@@ -3210,7 +3211,7 @@ mod tests {
         let l1 = L1ClientOptions {
             l1_events_max_retry_duration: Duration::from_secs(30),
             // max block range for public node rpc is 50000 so this should result in a panic
-            l1_events_max_block_range: 10_u64.pow(9),
+            l1_events_max_block_range: NonZeroU64::new(10_u64.pow(9)).unwrap(),
             l1_retry_delay: Duration::from_secs(1),
             ..Default::default()
         }
@@ -4805,6 +4806,24 @@ mod tests {
                 .unwrap()
                 .stake_table_key,
             prior_v2
+        );
+    }
+
+    #[test]
+    fn test_block_range_chunks_near_u64_max() {
+        let chunk_size = NonZeroU64::new(100).unwrap();
+        let from = u64::MAX - 250;
+        let to = u64::MAX;
+
+        let chunks: Vec<_> = Fetcher::block_range_chunks(from, to, chunk_size).collect();
+
+        assert_eq!(
+            chunks,
+            vec![
+                (u64::MAX - 250, u64::MAX - 151),
+                (u64::MAX - 150, u64::MAX - 51),
+                (u64::MAX - 50, u64::MAX),
+            ]
         );
     }
 }

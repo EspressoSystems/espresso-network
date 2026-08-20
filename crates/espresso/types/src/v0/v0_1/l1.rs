@@ -1,6 +1,10 @@
 #[cfg(feature = "node")]
 use std::time::Instant;
-use std::{num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{
+    num::{NonZeroU64, NonZeroUsize},
+    sync::Arc,
+    time::Duration,
+};
 
 use alloy::primitives::{B256, U256};
 #[cfg(feature = "node")]
@@ -111,7 +115,7 @@ pub struct L1ClientOptions {
         env = "ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE",
         default_value = "10000"
     )]
-    pub l1_events_max_block_range: u64,
+    pub l1_events_max_block_range: NonZeroU64,
 
     /// Maximum time to wait for new heads before considering a stream invalid and reconnecting.
     #[clap(

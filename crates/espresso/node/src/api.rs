@@ -3489,6 +3489,7 @@ mod api_tests {
 mod test {
     use std::{
         collections::{HashMap, HashSet},
+        num::NonZeroU64,
         time::{Duration, Instant},
     };
 
@@ -7697,7 +7698,7 @@ mod test {
         let l1_client = L1ClientOptions {
             stake_table_update_interval: Duration::from_secs(7),
             l1_retry_delay: Duration::from_millis(10),
-            l1_events_max_block_range: 10000,
+            l1_events_max_block_range: NonZeroU64::new(10000).unwrap(),
             ..Default::default()
         }
         .connect(vec![l1_url])

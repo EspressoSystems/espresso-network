@@ -977,7 +977,7 @@ impl From<&L1ClientOptions> for L1Tuning {
             polling_interval: o.l1_polling_interval,
             blocks_cache_size: o.l1_blocks_cache_size.get(),
             events_channel_capacity: o.l1_events_channel_capacity,
-            events_max_block_range: o.l1_events_max_block_range,
+            events_max_block_range: o.l1_events_max_block_range.get(),
             subscription_timeout: o.subscription_timeout,
             frequent_failure_tolerance: o.l1_frequent_failure_tolerance,
             consecutive_failure_tolerance: o.l1_consecutive_failure_tolerance,

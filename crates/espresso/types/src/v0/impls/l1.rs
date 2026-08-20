@@ -977,18 +977,21 @@ impl L1Client {
 
         // Divide the range `prev_finalized..=new_finalized` into chunks of size
         // `events_max_block_range`.
-        let mut start = prev;
-        let end = new_finalized;
         let chunk_size = opt.l1_events_max_block_range;
+        // `start = None` marks exhaustion, distinct from a chunk ending at `u64::MAX`.
+        let mut start = Some(prev);
         let chunks = std::iter::from_fn(move || {
-            let chunk_end = min(start + chunk_size - 1, end);
-            if chunk_end < start {
+            let chunk_start = start?;
+            if chunk_start > new_finalized {
                 return None;
             }
 
-            let chunk = (start, chunk_end);
-            start = chunk_end + 1;
-            Some(chunk)
+            let chunk_end = min(
+                chunk_start.saturating_add(chunk_size.get() - 1),
+                new_finalized,
+            );
+            start = chunk_end.checked_add(1);
+            Some((chunk_start, chunk_end))
         });
 
         // Fetch events for each chunk.
@@ -1134,7 +1137,7 @@ async fn fetch_finalized_block_from_rpc(
 
 #[cfg(test)]
 mod test {
-    use std::{ops::Add, time::Duration};
+    use std::{num::NonZeroU64, ops::Add, time::Duration};
 
     use alloy::{
         eips::BlockNumberOrTag,
@@ -1152,7 +1155,7 @@ mod test {
         f: impl FnOnce(&mut L1ClientOptions),
     ) -> L1Client {
         let mut opt = L1ClientOptions {
-            l1_events_max_block_range: 1,
+            l1_events_max_block_range: NonZeroU64::MIN,
             l1_polling_interval: Duration::from_secs(1),
             subscription_timeout: Duration::from_secs(5),
             ..Default::default()
@@ -1174,6 +1177,16 @@ mod test {
             }
         })
         .await
+    }
+
+    #[test]
+    fn test_l1_events_max_block_range_rejects_zero() {
+        let err = L1ClientOptions::try_parse_from(["test", "--l1-events-max-block-range", "0"])
+            .expect_err("a block range of 0 should be rejected");
+        assert!(
+            err.to_string().contains("l1-events-max-block-range"),
+            "error should reference the offending flag: {err}"
+        );
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
