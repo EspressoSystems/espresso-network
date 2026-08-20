@@ -72,55 +72,6 @@ where
 
         let nodes: Vec<Node> = rows.into_iter().map(|r| r.into()).collect();
 
-        // On postgres, the backfill moves Merkle rows from the legacy table into the `*_bigint`
-        // table by `created` (block height), low heights first. Mid-migration a single path's
-        // versions are split across both tables, so the latest version <= `created` for a path may
-        // live in either one. Query the legacy table for every path and keep, per path, the row
-        // with the greatest `created` across both tables. (Once the contract phase drops the legacy
-        // table and renames `*_bigint`, `state_type` no longer ends in `_bigint` and this is skipped.)
-        #[cfg(not(feature = "embedded-db"))]
-        let nodes = if let Some(legacy_table) = state_type.strip_suffix("_bigint") {
-            let mut query = QueryBuilder::default();
-            let paths_param = query.bind(traversal_path_values(&traversal_path, tree_height))?;
-            let created_param = query.bind(created)?;
-            let sql = format!(
-                "SELECT n.path, n.created, n.hash_id::BIGINT AS hash_id, n.children, \
-                 n.children_bitvec, n.idx, n.entry FROM unnest({paths_param}::jsonb[]) AS \
-                 p(path), LATERAL (SELECT * FROM {legacy_table} WHERE {legacy_table}.path = \
-                 p.path AND {legacy_table}.created <= {created_param} ORDER BY \
-                 {legacy_table}.path DESC, {legacy_table}.created DESC LIMIT 1) AS n"
-            );
-            let legacy_rows = query
-                .query(&sql)
-                .fetch_all(self.as_mut())
-                .await
-                .map_err(|e| QueryError::Error {
-                    message: format!("merkle path fallback lookup failed: {e}"),
-                })?;
-
-            let mut latest: HashMap<String, Node> = HashMap::new();
-            for node in nodes
-                .into_iter()
-                .chain(legacy_rows.into_iter().map(Node::from))
-            {
-                let key = node.path.to_string();
-                if latest
-                    .get(&key)
-                    .is_none_or(|cur| node.created > cur.created)
-                {
-                    latest.insert(key, node);
-                }
-            }
-            let mut nodes: Vec<Node> = latest.into_values().collect();
-            // Sort leaf-first (longer paths first) for proof reconstruction.
-            nodes.sort_by_key(|n| {
-                std::cmp::Reverse(n.path.as_array().map(|v| v.len()).unwrap_or(0))
-            });
-            nodes
-        } else {
-            nodes
-        };
-
         // insert all the hash ids to a hashset which is used to query later
         // HashSet is used to avoid duplicates
         let mut hash_ids = HashSet::new();
@@ -141,43 +92,20 @@ where
             #[cfg(not(feature = "embedded-db"))]
             {
                 let hash_ids_arr: Vec<i64> = hash_ids.iter().copied().collect();
-                let mut result: HashMap<i64, Vec<u8>> = sqlx::query_as(
-                    "SELECT id::BIGINT, value FROM hash_bigint WHERE id = ANY($1::BIGINT[])",
-                )
-                .bind(&hash_ids_arr)
-                .fetch_all(self.as_mut())
-                .await
-                .map_err(|e| QueryError::Error {
-                    message: format!("hash lookup failed: {e}"),
-                })?
-                .into_iter()
-                .collect();
-
-                let missing: Vec<i64> = hash_ids
-                    .iter()
-                    .filter(|id| !result.contains_key(id))
-                    .copied()
-                    .collect();
-
-                if !missing.is_empty() {
-                    let rows: Vec<(i64, Vec<u8>)> = sqlx::query_as(
-                        "SELECT id::BIGINT, value FROM hash WHERE id = ANY($1::BIGINT[])",
-                    )
-                    .bind(&missing)
+                sqlx::query_as("SELECT id, value FROM hash WHERE id = ANY($1::BIGINT[])")
+                    .bind(&hash_ids_arr)
                     .fetch_all(self.as_mut())
                     .await
                     .map_err(|e| QueryError::Error {
-                        message: format!("hash fallback lookup failed: {e}"),
-                    })?;
-                    result.extend(rows);
-                }
-                result
+                        message: format!("hash lookup failed: {e}"),
+                    })?
+                    .into_iter()
+                    .collect()
             }
 
             #[cfg(feature = "embedded-db")]
             {
-                let (query, sql) =
-                    build_where_in("SELECT id, value FROM hash_bigint", "id", hash_ids)?;
+                let (query, sql) = build_where_in("SELECT id, value FROM hash", "id", hash_ids)?;
                 query
                     .query_as(&sql)
                     .fetch(self.as_mut())
@@ -443,7 +371,7 @@ pub(crate) fn build_hash_batch_insert(
         .map(|hash| Ok(format!("({})", query.bind(hash)?)))
         .collect::<QueryResult<Vec<String>>>()?;
     let sql = format!(
-        "INSERT INTO hash_bigint(value) values {} ON CONFLICT (value) DO UPDATE SET value = \
+        "INSERT INTO hash(value) values {} ON CONFLICT (value) DO UPDATE SET value = \
          EXCLUDED.value returning value, id",
         params.join(",")
     );
@@ -462,9 +390,8 @@ pub(crate) async fn batch_insert_hashes(
     }
 
     // Use UNNEST-based batch insert (more efficient and avoids parameter limits).
-    // Cast id to BIGINT in RETURNING so the result maps directly to i64.
-    let sql = "INSERT INTO hash_bigint(value) SELECT * FROM UNNEST($1::bytea[]) ON CONFLICT \
-               (value) DO UPDATE SET value = EXCLUDED.value RETURNING value, id::BIGINT";
+    let sql = "INSERT INTO hash(value) SELECT * FROM UNNEST($1::bytea[]) ON CONFLICT (value) DO \
+               UPDATE SET value = EXCLUDED.value RETURNING value, id";
 
     let result: HashMap<Vec<u8>, i64> = sqlx::query_as(sql)
         .bind(&hashes)
