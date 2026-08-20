@@ -15,7 +15,7 @@ use alloy::transports::{HttpError, RpcError, TransportErrorKind};
 /// free-tier `eth_getLogs` cap) and [`Self::AuthFailed`] (alchemy's inactive-key rejection), so the
 /// message content, not the code alone, drives the decision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RpcErrorKind {
+pub(crate) enum RpcErrorKind {
     /// The requested block range exceeds a provider-side cap. `suggested` is the cap the
     /// provider's message names, when it names one.
     RangeTooLarge { suggested: Option<u64> },
@@ -35,7 +35,7 @@ pub enum RpcErrorKind {
 
 impl RpcErrorKind {
     /// Every label `label()` can return, for pre-registering one metric per kind.
-    pub const ALL_LABELS: [&'static str; 6] = [
+    pub(crate) const ALL_LABELS: [&'static str; 6] = [
         "range_too_large",
         "too_many_results",
         "rate_limited",
@@ -45,7 +45,7 @@ impl RpcErrorKind {
     ];
 
     /// Stable label used as the `kind` value of the `consensus_l1_errors` metric.
-    pub fn label(&self) -> &'static str {
+    pub(crate) fn label(&self) -> &'static str {
         match self {
             Self::RangeTooLarge { .. } => "range_too_large",
             Self::TooManyResults => "too_many_results",
@@ -59,7 +59,7 @@ impl RpcErrorKind {
 
 /// Classify an L1 RPC error. Pure: no network access, no allocation beyond the small string
 /// searches needed to inspect the provider's message.
-pub fn classify(err: &RpcError<TransportErrorKind>) -> RpcErrorKind {
+pub(crate) fn classify(err: &RpcError<TransportErrorKind>) -> RpcErrorKind {
     match err {
         RpcError::ErrorResp(e) => classify_json_rpc(e.code, &e.message),
         RpcError::Transport(kind) => classify_transport(kind),
