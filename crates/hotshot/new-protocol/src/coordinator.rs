@@ -122,7 +122,7 @@ where
         );
 
         let state_manager = StateManager::new(
-            Arc::new(initializer.instance_state.clone()),
+            Arc::new(initializer.instance_state().clone()),
             upgrade_lock.clone(),
         );
 
@@ -169,7 +169,7 @@ where
             ))
             .proposal_validator(ProposalValidator::new(
                 membership_coordinator.clone(),
-                initializer.epoch_height,
+                initializer.epoch_height(),
                 upgrade_lock,
             ))
             .storage(Storage::new(storage, private_key))
