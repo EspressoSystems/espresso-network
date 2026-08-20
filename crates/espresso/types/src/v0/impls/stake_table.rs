@@ -1404,9 +1404,10 @@ impl Fetcher {
     ) -> Result<Vec<(EventKey, StakeTableEvent)>, StakeTableError> {
         let stake_table_contract = StakeTableV3::new(contract, l1_client.provider.clone());
         let retry_delay = l1_client.options().l1_retry_delay;
-        // One deadline for the whole logical fetch, shared by the `initializedAtBlock` lookup
-        // and every chunk below, so a fetch spanning N chunks can't take N times the budget.
-        let deadline = RetryDeadline::new(l1_client.options().l1_events_max_retry_duration);
+        // One budget for the whole logical fetch, shared by the `initializedAtBlock` lookup and
+        // every chunk below. It resets on every success, so a fetch spanning many chunks isn't
+        // bounded by wall-clock total, only by how long any single chunk can stall.
+        let mut budget = RetryBudget::new(l1_client.options().l1_events_max_retry_duration);
         // get the block number when the contract was initialized
         // to avoid fetching events from block number 0
         let from_block = match from_block {
@@ -1414,7 +1415,8 @@ impl Fetcher {
             None => {
                 let init_block = retry(
                     retry_delay,
-                    deadline,
+                    ATTEMPT_TIMEOUT,
+                    &mut budget,
                     "stake table initializedAtBlock lookup",
                     move || {
                         let stake_table_contract = stake_table_contract.clone();
@@ -1444,8 +1446,9 @@ impl Fetcher {
             // retry if the call to the provider to fetch the events fails
             let logs: Vec<Log> = retry(
                 retry_delay,
-                deadline,
-                &format!("stake table events fetch to_block={to}"),
+                ATTEMPT_TIMEOUT,
+                &mut budget,
+                &format!("stake table events fetch from_block={from} to_block={to}"),
                 move || {
                     let provider = provider.clone();
 
@@ -1804,41 +1807,68 @@ impl Fetcher {
     }
 }
 
-/// Absolute deadline shared by every retry within one logical L1 fetch.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct RetryDeadline(Instant);
+/// Gives up when no attempt has succeeded for `budget`. The deadline is pushed forward on every
+/// success, so a slow-but-progressing fetch (e.g. many chunks of a large block range, each
+/// eventually succeeding) completes however long it takes in total, while a fetch stuck making
+/// no progress at all still dies within one budget.
+pub(crate) struct RetryBudget {
+    /// Configured value, reported in the operator-facing error and every log line.
+    budget: Duration,
+    /// Start of the whole logical fetch. Never reset: the log escalation ladder below keys off
+    /// this so it fires once per milestone for the fetch as a whole, not once per chunk.
+    fetch_start: Instant,
+    /// Reset to `now + budget` on every successful attempt.
+    deadline: Instant,
+    attempts: u32,
+    warned: bool,
+    error_milestones: u64,
+}
 
-impl RetryDeadline {
+impl RetryBudget {
     pub(crate) fn new(budget: Duration) -> Self {
-        Self(Instant::now() + budget)
+        let now = Instant::now();
+        Self {
+            budget,
+            fetch_start: now,
+            deadline: now + budget,
+            attempts: 0,
+            warned: false,
+            error_milestones: 0,
+        }
+    }
+
+    fn expired(&self) -> bool {
+        Instant::now() >= self.deadline
     }
 
     /// Time left until the deadline, or `Duration::ZERO` if it has passed.
-    pub(crate) fn remaining(&self) -> Duration {
-        self.0.saturating_duration_since(Instant::now())
+    fn remaining(&self) -> Duration {
+        self.deadline.saturating_duration_since(Instant::now())
     }
 
-    pub(crate) fn expired(&self) -> bool {
-        Instant::now() >= self.0
+    fn reset(&mut self) {
+        self.deadline = Instant::now() + self.budget;
     }
 }
 
-/// Longest any single attempt is allowed to hang before it is cancelled and retried.
-/// Independent of `BACKOFF_CAP`: this bounds one `operation()` call, not the delay between calls.
-const ATTEMPT_TIMEOUT_CAP: Duration = Duration::from_secs(60);
+// TODO(follow-up commit): make this configurable via `L1ClientOptions`.
+const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(60);
 const BACKOFF_CAP: Duration = Duration::from_secs(60);
 const WARN_AFTER: Duration = Duration::from_secs(60);
 const ERROR_AFTER: Duration = Duration::from_secs(5 * 60);
 const ERROR_INTERVAL: Duration = Duration::from_secs(30 * 60);
 
-/// Retries `operation` with capped exponential backoff until it succeeds or `deadline` passes.
-/// Every attempt is bounded by `tokio::time::timeout`, so a hung request can't stall past the
-/// deadline. Pass the same `deadline` to every `retry` call within one logical fetch (e.g. every
-/// chunk of a chunked range) so the budget is spent once for the whole fetch, not once per call.
+/// Retries `operation` until it succeeds or `budget` records no success for its whole duration.
+/// Every attempt is bounded by `attempt_timeout`; the delay between attempts backs off
+/// exponentially, doubling up to `BACKOFF_CAP` or `retry_delay` itself, whichever is larger. Pass
+/// one `&mut RetryBudget` through every `retry` call within one logical fetch (e.g. every chunk
+/// of a chunked range): it resets on every success, so it bounds how long any single chunk can
+/// stall, not the wall-clock time of the whole fetch.
 #[cfg_attr(not(feature = "node"), allow(dead_code))]
 async fn retry<F, T, E>(
     retry_delay: Duration,
-    deadline: RetryDeadline,
+    attempt_timeout: Duration,
+    budget: &mut RetryBudget,
     operation_name: &str,
     mut operation: F,
 ) -> Result<T, StakeTableError>
@@ -1846,35 +1876,47 @@ where
     F: FnMut() -> BoxFuture<'static, Result<T, E>>,
     E: std::fmt::Display,
 {
-    let call_start = Instant::now();
-    let budget = deadline.remaining();
+    let configured_budget = budget.budget;
     let mut delay = retry_delay;
-    let mut attempts: u32 = 0;
-    let mut warned = false;
-    let mut error_milestones = 0;
+    let mut last_err: Option<String> = None;
 
     loop {
-        attempts += 1;
-        let remaining = deadline.remaining();
-        let attempt_timeout = remaining.min(ATTEMPT_TIMEOUT_CAP);
+        if budget.expired() {
+            let elapsed = budget.fetch_start.elapsed();
+            let err = last_err.unwrap_or_else(|| "no successful L1 call within budget".to_string());
+            tracing::error!(
+                ?elapsed, ?configured_budget, attempts = budget.attempts, operation = operation_name, %err,
+                "L1 FETCH RETRY BUDGET EXHAUSTED"
+            );
+            return Err(StakeTableError::L1Fetch {
+                operation: operation_name.to_string(),
+                budget: format_duration(configured_budget).to_string(),
+                err,
+            });
+        }
+
+        budget.attempts += 1;
         let err = match timeout(attempt_timeout, operation()).await {
-            Ok(Ok(result)) => return Ok(result),
+            Ok(Ok(result)) => {
+                budget.reset();
+                return Ok(result);
+            },
             Ok(Err(err)) => err.to_string(),
             Err(_) => format!(
                 "operation timed out after {}",
                 format_duration(attempt_timeout)
             ),
         };
-        let elapsed = call_start.elapsed();
+        let elapsed = budget.fetch_start.elapsed();
 
         tracing::debug!(
-            ?elapsed, ?budget, attempts, operation = operation_name, %err,
+            ?elapsed, ?configured_budget, attempts = budget.attempts, operation = operation_name, %err,
             "L1 fetch attempt failed"
         );
-        if !warned && elapsed >= WARN_AFTER {
-            warned = true;
+        if !budget.warned && elapsed >= WARN_AFTER {
+            budget.warned = true;
             tracing::warn!(
-                ?elapsed, ?budget, attempts, operation = operation_name, %err,
+                ?elapsed, ?configured_budget, attempts = budget.attempts, operation = operation_name, %err,
                 "L1 fetch still retrying after 1 minute"
             );
         }
@@ -1883,28 +1925,17 @@ where
         } else {
             0
         };
-        if milestones > error_milestones {
-            error_milestones = milestones;
+        if milestones > budget.error_milestones {
+            budget.error_milestones = milestones;
             tracing::error!(
-                ?elapsed, ?budget, attempts, operation = operation_name, %err,
+                ?elapsed, ?configured_budget, attempts = budget.attempts, operation = operation_name, %err,
                 "L1 fetch still retrying after 5+ minutes"
             );
         }
 
-        if deadline.expired() {
-            tracing::error!(
-                ?elapsed, ?budget, attempts, operation = operation_name, %err,
-                "L1 FETCH RETRY BUDGET EXHAUSTED"
-            );
-            return Err(StakeTableError::L1Fetch {
-                operation: operation_name.to_string(),
-                budget: format_duration(budget).to_string(),
-                err,
-            });
-        }
-
-        sleep(delay.min(deadline.remaining())).await;
-        delay = (delay * 2).min(BACKOFF_CAP);
+        last_err = Some(err);
+        sleep(delay.min(budget.remaining())).await;
+        delay = (delay * 2).min(BACKOFF_CAP.max(retry_delay));
     }
 }
 
@@ -3262,13 +3293,31 @@ mod tests {
         .await;
     }
 
+    const TEST_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(60);
+
+    /// A closure usable as a `retry` operation that fails `fail_times` times, then succeeds.
+    fn flaky_op(fail_times: u32) -> impl FnMut() -> BoxFuture<'static, Result<(), &'static str>> {
+        let attempts = Arc::new(AtomicU32::new(0));
+        move || {
+            let attempts = attempts.clone();
+            Box::pin(async move {
+                if attempts.fetch_add(1, Ordering::SeqCst) < fail_times {
+                    Err("not yet")
+                } else {
+                    Ok(())
+                }
+            })
+        }
+    }
+
     #[test_log::test(tokio::test(start_paused = true))]
-    async fn retry_returns_l1_fetch_error_when_deadline_expires() {
-        let deadline = RetryDeadline::new(Duration::from_millis(200));
+    async fn retry_returns_l1_fetch_error_when_budget_expires() {
+        let mut budget = RetryBudget::new(Duration::from_millis(200));
 
         let result: Result<(), StakeTableError> = retry(
             Duration::from_millis(50),
-            deadline,
+            TEST_ATTEMPT_TIMEOUT,
+            &mut budget,
             "always fails",
             move || -> BoxFuture<'static, Result<(), &'static str>> {
                 Box::pin(async { Err("boom") })
@@ -3284,74 +3333,113 @@ mod tests {
         );
     }
 
-    /// Mirrors `fetch_events_from_contract`'s chunk loop: multiple `retry` calls share one
-    /// `RetryDeadline`. Each simulated chunk needs 5 attempts to succeed (1+2+4+8 = 15s of
-    /// backoff), but the shared 20s budget only has room for the first chunk.
+    /// The regression this PR fixes: a fetch chunked into many pieces, each of which is slow but
+    /// eventually succeeds, must complete however long that takes in total. A wall-clock deadline
+    /// shared across chunks (the previous, buggy design) would abort partway through even though
+    /// every chunk is making progress - this is what livelocked a cold-start mainnet sync.
     #[test_log::test(tokio::test(start_paused = true))]
-    async fn retry_deadline_is_shared_across_chunks_not_per_chunk() {
+    async fn retry_many_slow_but_successful_chunks_complete_past_one_budget() {
         let retry_delay = Duration::from_secs(1);
-        let deadline = RetryDeadline::new(Duration::from_secs(20));
+        let mut budget = RetryBudget::new(Duration::from_secs(20));
         let start = Instant::now();
 
-        let attempts_1 = Arc::new(AtomicU32::new(0));
-        let result_1: Result<(), StakeTableError> = retry(retry_delay, deadline, "chunk 1", {
-            let attempts_1 = attempts_1.clone();
-            move || -> BoxFuture<'static, Result<(), &'static str>> {
-                let attempts_1 = attempts_1.clone();
-                Box::pin(async move {
-                    if attempts_1.fetch_add(1, Ordering::SeqCst) < 4 {
-                        Err("not yet")
-                    } else {
-                        Ok(())
-                    }
-                })
-            }
-        })
-        .await;
-        assert!(result_1.is_ok());
-        assert_eq!(attempts_1.load(Ordering::SeqCst), 5);
+        // Each "chunk" needs 5 attempts to succeed (1+2+4+8 = 15s of backoff), just under the
+        // 20s budget. 10 such chunks take ~150s total, 7.5x the budget.
+        for chunk in 0..10 {
+            let result: Result<(), StakeTableError> = retry(
+                retry_delay,
+                TEST_ATTEMPT_TIMEOUT,
+                &mut budget,
+                &format!("chunk {chunk}"),
+                flaky_op(4),
+            )
+            .await;
+            assert!(result.is_ok(), "chunk {chunk} should have succeeded");
+        }
 
-        // Only ~5s of the shared budget remains, not a fresh 20s, so the second chunk - which
-        // needs the same 15s to succeed - must fail instead of getting its own budget.
-        let attempts_2 = Arc::new(AtomicU32::new(0));
-        let result_2: Result<(), StakeTableError> = retry(retry_delay, deadline, "chunk 2", {
-            let attempts_2 = attempts_2.clone();
+        assert!(start.elapsed() > Duration::from_secs(20));
+    }
+
+    /// A chunk that never succeeds dies within one budget; preceding successful chunks (which
+    /// would have exhausted a naive cumulative failure-time budget) don't shrink that budget.
+    #[test_log::test(tokio::test(start_paused = true))]
+    async fn retry_dies_within_one_budget_after_prior_successes() {
+        let retry_delay = Duration::from_secs(1);
+        let mut budget = RetryBudget::new(Duration::from_secs(20));
+
+        for chunk in 0..5 {
+            let result: Result<(), StakeTableError> = retry(
+                retry_delay,
+                TEST_ATTEMPT_TIMEOUT,
+                &mut budget,
+                &format!("chunk {chunk}"),
+                flaky_op(4),
+            )
+            .await;
+            assert!(result.is_ok());
+        }
+
+        let start = Instant::now();
+        let result: Result<(), StakeTableError> = retry(
+            retry_delay,
+            TEST_ATTEMPT_TIMEOUT,
+            &mut budget,
+            "always fails",
             move || -> BoxFuture<'static, Result<(), &'static str>> {
-                let attempts_2 = attempts_2.clone();
-                Box::pin(async move {
-                    if attempts_2.fetch_add(1, Ordering::SeqCst) < 4 {
-                        Err("not yet")
-                    } else {
-                        Ok(())
-                    }
-                })
-            }
-        })
+                Box::pin(async { Err("boom") })
+            },
+        )
         .await;
 
-        assert!(matches!(result_2, Err(StakeTableError::L1Fetch { .. })));
-        // ~1 budget total for both chunks combined, not 2.
+        assert!(matches!(result, Err(StakeTableError::L1Fetch { .. })));
         assert!(start.elapsed() < Duration::from_secs(25));
     }
 
+    /// The escalation ladder keys off the whole fetch's elapsed time, not any one chunk's, so a
+    /// fetch that is merely slow (never failing for more than a few minutes at a time) but stuck
+    /// that way across many chunks still gets an `error!`, instead of staying silent forever
+    /// because no single chunk crosses the threshold.
     #[test_log::test(tokio::test(start_paused = true))]
-    async fn retry_backoff_grows_and_caps_at_60_seconds() {
-        let deadline = RetryDeadline::new(Duration::from_secs(600));
-        let start = Instant::now();
-        let attempt_times: Arc<AsyncMutex<Vec<Duration>>> = Arc::new(AsyncMutex::new(Vec::new()));
-        let count = Arc::new(AtomicU32::new(0));
-        const SUCCEED_ON_ATTEMPT: u32 = 9;
+    async fn retry_ladder_escalates_across_many_chunks_not_per_chunk() {
+        let retry_delay = Duration::from_secs(4 * 60);
+        let mut budget = RetryBudget::new(Duration::from_secs(3600));
 
-        let result: Result<(), StakeTableError> =
-            retry(Duration::from_secs(1), deadline, "flaky", {
+        // 10 chunks, each failing once (well under WARN_AFTER/ERROR_AFTER on its own) then
+        // succeeding after one retry_delay. ~40 minutes of fetch-wide elapsed time in total.
+        for chunk in 0..10 {
+            let result: Result<(), StakeTableError> = retry(
+                retry_delay,
+                TEST_ATTEMPT_TIMEOUT,
+                &mut budget,
+                &format!("chunk {chunk}"),
+                flaky_op(1),
+            )
+            .await;
+            assert!(result.is_ok());
+        }
+
+        assert!(budget.warned);
+        assert!(budget.error_milestones >= 1);
+    }
+
+    /// With `ESPRESSO_L1_RETRY_DELAY` set above `BACKOFF_CAP`, delay must never shrink below the
+    /// configured value.
+    #[test_log::test(tokio::test(start_paused = true))]
+    async fn retry_backoff_honours_retry_delay_larger_than_cap() {
+        let retry_delay = Duration::from_secs(90);
+        assert!(retry_delay > BACKOFF_CAP);
+        let mut budget = RetryBudget::new(Duration::from_secs(600));
+        let start = Instant::now();
+        let attempt_times = Arc::new(AsyncMutex::new(Vec::new()));
+
+        let _: Result<(), StakeTableError> =
+            retry(retry_delay, TEST_ATTEMPT_TIMEOUT, &mut budget, "flaky", {
                 let attempt_times = attempt_times.clone();
-                let count = count.clone();
                 move || -> BoxFuture<'static, Result<(), &'static str>> {
                     let attempt_times = attempt_times.clone();
-                    let count = count.clone();
                     Box::pin(async move {
                         attempt_times.lock().await.push(start.elapsed());
-                        if count.fetch_add(1, Ordering::SeqCst) + 1 < SUCCEED_ON_ATTEMPT {
+                        if attempt_times.lock().await.len() < 3 {
                             Err("not yet")
                         } else {
                             Ok(())
@@ -3361,26 +3449,54 @@ mod tests {
             })
             .await;
 
-        assert!(result.is_ok());
         let times = attempt_times.lock().await.clone();
         let gaps: Vec<Duration> = times.windows(2).map(|w| w[1] - w[0]).collect();
-        let expected: Vec<Duration> = [1, 2, 4, 8, 16, 32, 60, 60]
-            .into_iter()
-            .map(Duration::from_secs)
-            .collect();
-        assert_eq!(gaps, expected);
+        assert_eq!(gaps, vec![retry_delay, retry_delay]);
     }
 
-    /// 1s + 2s of backoff exhausts a 3.5s budget; without deadline-aware clamping the next
-    /// backoff step (4s) would sleep well past it.
+    /// `retry` reports the configured budget in the exhaustion error, not whatever slice of it
+    /// happened to be left when this particular chunk started.
     #[test_log::test(tokio::test(start_paused = true))]
-    async fn retry_backoff_never_sleeps_past_deadline() {
-        let deadline = RetryDeadline::new(Duration::from_millis(3500));
+    async fn retry_exhaustion_error_names_configured_budget_not_remaining_slice() {
+        let mut budget = RetryBudget::new(Duration::from_secs(20));
+
+        // One immediate success resets the deadline; then unrelated time passes (as prior chunks
+        // would take), leaving only a slice of the 20s budget for the next, failing chunk.
+        let _: Result<(), StakeTableError> = retry(
+            Duration::from_secs(1),
+            TEST_ATTEMPT_TIMEOUT,
+            &mut budget,
+            "warm up",
+            move || -> BoxFuture<'static, Result<(), &'static str>> { Box::pin(async { Ok(()) }) },
+        )
+        .await;
+        tokio::time::advance(Duration::from_secs(15)).await;
+
+        let result: Result<(), StakeTableError> = retry(
+            Duration::from_secs(1),
+            TEST_ATTEMPT_TIMEOUT,
+            &mut budget,
+            "always fails",
+            move || -> BoxFuture<'static, Result<(), &'static str>> {
+                Box::pin(async { Err("boom") })
+            },
+        )
+        .await;
+
+        let message = result.expect_err("budget should be exhausted").to_string();
+        assert!(message.contains("20s"), "message was: {message}");
+    }
+
+    /// A chunk that never succeeds dies within one budget instead of running forever.
+    #[test_log::test(tokio::test(start_paused = true))]
+    async fn retry_never_succeeding_chunk_dies_within_one_budget() {
+        let mut budget = RetryBudget::new(Duration::from_millis(3500));
         let start = Instant::now();
 
         let result: Result<(), StakeTableError> = retry(
             Duration::from_secs(1),
-            deadline,
+            TEST_ATTEMPT_TIMEOUT,
+            &mut budget,
             "always fails",
             move || -> BoxFuture<'static, Result<(), &'static str>> {
                 Box::pin(async { Err("boom") })
@@ -3394,26 +3510,33 @@ mod tests {
 
     /// The operation never resolves; only `tokio::time::timeout` can move the loop forward.
     /// Multiple attempts occurring proves each one was cut off by the per-attempt timeout
-    /// instead of hanging until the deadline in a single call.
+    /// instead of hanging until the budget expires in a single call.
     #[test_log::test(tokio::test(start_paused = true))]
     async fn retry_cuts_off_hung_attempt_via_timeout() {
-        let deadline = RetryDeadline::new(Duration::from_secs(200));
+        let mut budget = RetryBudget::new(Duration::from_secs(200));
         let attempts = Arc::new(AtomicU32::new(0));
         let start = Instant::now();
 
-        let result: Result<(), StakeTableError> =
-            retry(Duration::from_secs(1), deadline, "hangs", {
+        let result: Result<(), StakeTableError> = retry(
+            Duration::from_secs(1),
+            TEST_ATTEMPT_TIMEOUT,
+            &mut budget,
+            "hangs",
+            {
                 let attempts = attempts.clone();
                 move || -> BoxFuture<'static, Result<(), &'static str>> {
                     attempts.fetch_add(1, Ordering::SeqCst);
                     Box::pin(std::future::pending())
                 }
-            })
-            .await;
+            },
+        )
+        .await;
 
         assert!(matches!(result, Err(StakeTableError::L1Fetch { .. })));
         assert!(attempts.load(Ordering::SeqCst) > 1);
-        assert!(start.elapsed() <= Duration::from_secs(201));
+        // Budget expiry is only checked between attempts, not by clamping the attempt timeout
+        // itself, so overshoot is bounded by one attempt timeout (60s here), not unbounded.
+        assert!(start.elapsed() <= Duration::from_secs(200) + TEST_ATTEMPT_TIMEOUT);
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
