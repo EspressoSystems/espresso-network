@@ -595,10 +595,15 @@ pub fn expected_vid_param<T: NodeType>(
 mod tests {
     use hotshot::types::BLSPubKey;
     use hotshot_example_types::{block_types::TestBlockPayload, node_types::TestTypes};
-    use hotshot_types::{data::ViewNumber, traits::signature_key::SignatureKey};
+    use hotshot_types::{
+        data::ViewNumber,
+        traits::{metrics::NoMetrics, signature_key::SignatureKey},
+    };
 
     use super::*;
     use crate::{
+        helpers::test_upgrade_lock,
+        network::Cliquenet,
         tests::common::utils::{ConsensusHarness, TestData, mock_membership},
         vid::VidReconstructErrorKind,
     };
@@ -609,6 +614,29 @@ mod tests {
 
     fn fetcher() -> Fetcher<TestTypes> {
         Fetcher::new(key(0), 5 * 1024 * 1024)
+    }
+
+    /// A peerless localhost network: sends to unknown targets are dropped by
+    /// the wrapper, so the tests observe the fetcher's decisions through its
+    /// own state rather than the wire.
+    async fn network() -> Cliquenet<TestTypes> {
+        let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
+        let keypair = hotshot_types::x25519::Keypair::derive_from::<BLSPubKey>(&private_key)
+            .expect("keypair derivation should succeed");
+        let port =
+            test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let addr = hotshot_types::addr::NetAddr::Inet(std::net::Ipv4Addr::LOCALHOST.into(), port);
+        Cliquenet::create(
+            "fetch-tests",
+            public_key,
+            keypair,
+            addr,
+            vec![],
+            test_upgrade_lock(),
+            Box::new(NoMetrics),
+        )
+        .await
+        .expect("cliquenet creation should succeed")
     }
 
     /// The retained payload tracks the lock, not reconstruction order.
@@ -754,5 +782,205 @@ mod tests {
 
         fetcher.gc(view + 1);
         assert!(fetcher.served.is_empty());
+    }
+
+    /// The request path picks whole-payload fetching when this node's own
+    /// share sizes the payload within the threshold, prefers an advertiser as
+    /// the target, and never targets itself.
+    #[tokio::test]
+    async fn request_fetches_small_payloads_whole_from_an_advertiser() {
+        let test_data = TestData::new(1).await;
+        let view = test_data.views[0].view_number;
+        let commitment = test_data.views[0].vid_commitment();
+
+        let mut harness = ConsensusHarness::new(0).await;
+        harness
+            .apply_pair(test_data.views[0].proposal_input_consensus(&key(0)))
+            .await;
+
+        let membership = mock_membership();
+        let network = network().await;
+        let timeout = Duration::from_secs(60);
+
+        // Both advertisers are known; this node itself must be skipped.
+        {
+            let mut fetcher = fetcher();
+            fetcher.note_advertiser(view, key(0));
+            fetcher.note_advertiser(view, key(3));
+            fetcher
+                .request(
+                    view,
+                    commitment,
+                    timeout,
+                    &harness.consensus,
+                    &membership,
+                    network.sender(),
+                )
+                .expect("request should succeed");
+            let target = match fetcher.requested.get(&(view, commitment)) {
+                Some((_, Some(target))) => *target,
+                other => panic!("expected a whole-payload attempt, got {other:?}"),
+            };
+            assert_eq!(target, key(3), "the advertiser is preferred, self skipped");
+        }
+
+        // Without advertisers the target is any committee member but self.
+        let mut fetcher = fetcher();
+        fetcher
+            .request(
+                view,
+                commitment,
+                timeout,
+                &harness.consensus,
+                &membership,
+                network.sender(),
+            )
+            .expect("request should succeed");
+        let target = match fetcher.requested.get(&(view, commitment)) {
+            Some((_, Some(target))) => *target,
+            other => panic!("expected a whole-payload attempt, got {other:?}"),
+        };
+        assert_ne!(target, key(0), "this node never fetches from itself");
+    }
+
+    /// The size threshold is inclusive, and a payload whose size is unknown
+    /// because this node holds no share of its own goes through the share
+    /// path. (The over-threshold direction of the comparison is not reachable
+    /// with this fixture: its blocks are empty, and a zero-size payload fits
+    /// every threshold.)
+    #[tokio::test]
+    async fn request_falls_back_to_shares() {
+        let test_data = TestData::new(1).await;
+        let view = test_data.views[0].view_number;
+        let commitment = test_data.views[0].vid_commitment();
+
+        let membership = mock_membership();
+        let network = network().await;
+        let timeout = Duration::from_secs(60);
+
+        // The boundary: the fixture's empty payload has size zero, which fits
+        // even a zero threshold, so the comparison being inclusive routes it
+        // whole.
+        {
+            let mut harness = ConsensusHarness::new(0).await;
+            harness
+                .apply_pair(test_data.views[0].proposal_input_consensus(&key(0)))
+                .await;
+            let size = harness
+                .consensus
+                .vid_share_at(view)
+                .expect("own share is held")
+                .common
+                .payload_byte_len();
+            assert_eq!(size, 0, "the fixture's blocks are empty");
+            let mut fetcher = Fetcher::<TestTypes>::new(key(0), 0);
+            fetcher
+                .request(
+                    view,
+                    commitment,
+                    timeout,
+                    &harness.consensus,
+                    &membership,
+                    network.sender(),
+                )
+                .expect("request should succeed");
+            assert!(
+                matches!(
+                    fetcher.requested.get(&(view, commitment)),
+                    Some((_, Some(_)))
+                ),
+                "a payload exactly at the threshold is fetched whole"
+            );
+        }
+
+        // Unknown size: the proposal was fetched, so this node has no share
+        // of its own to read the size from.
+        let mut harness = ConsensusHarness::new(0).await;
+        harness
+            .apply(crate::consensus::ConsensusInput::FetchedProposal(
+                test_data.views[0].proposal_message(),
+            ))
+            .await;
+        let mut fetcher = fetcher();
+        fetcher
+            .request(
+                view,
+                commitment,
+                timeout,
+                &harness.consensus,
+                &membership,
+                network.sender(),
+            )
+            .expect("request should succeed");
+        assert!(
+            matches!(fetcher.requested.get(&(view, commitment)), Some((_, None))),
+            "without a share of our own the size is unknown and shares work at any size"
+        );
+    }
+
+    /// A repeated request within the interval changes nothing; once the
+    /// interval has passed the attempt is repeated.
+    #[tokio::test]
+    async fn request_is_paced_per_interval() {
+        let test_data = TestData::new(1).await;
+        let view = test_data.views[0].view_number;
+        let commitment = test_data.views[0].vid_commitment();
+
+        let mut harness = ConsensusHarness::new(0).await;
+        harness
+            .apply_pair(test_data.views[0].proposal_input_consensus(&key(0)))
+            .await;
+
+        let membership = mock_membership();
+        let network = network().await;
+        let timeout = Duration::from_secs(60);
+
+        let mut fetcher = fetcher();
+        fetcher
+            .request(
+                view,
+                commitment,
+                timeout,
+                &harness.consensus,
+                &membership,
+                network.sender(),
+            )
+            .expect("request should succeed");
+        let first = fetcher.requested.get(&(view, commitment)).unwrap().0;
+
+        fetcher
+            .request(
+                view,
+                commitment,
+                timeout,
+                &harness.consensus,
+                &membership,
+                network.sender(),
+            )
+            .expect("request should succeed");
+        assert_eq!(
+            fetcher.requested.get(&(view, commitment)).unwrap().0,
+            first,
+            "a repeat within the interval does not fire"
+        );
+
+        // Rewind the recorded attempt past the interval; the next request
+        // fires again.
+        fetcher.requested.get_mut(&(view, commitment)).unwrap().0 =
+            first - Fetcher::<TestTypes>::retry_interval(timeout);
+        fetcher
+            .request(
+                view,
+                commitment,
+                timeout,
+                &harness.consensus,
+                &membership,
+                network.sender(),
+            )
+            .expect("request should succeed");
+        assert!(
+            fetcher.requested.get(&(view, commitment)).unwrap().0 > first,
+            "past the interval the attempt is repeated"
+        );
     }
 }
