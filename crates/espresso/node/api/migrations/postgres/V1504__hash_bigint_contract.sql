@@ -24,15 +24,3 @@ ALTER TABLE block_merkle_tree
     RENAME CONSTRAINT block_merkle_tree_bigint_pkey TO block_merkle_tree_pkey;
 ALTER TABLE block_merkle_tree
     RENAME CONSTRAINT block_merkle_tree_bigint_hash_id_fkey TO block_merkle_tree_hash_id_fkey;
-
--- Mark the backfills complete in `deferred_migrations`. A previous-release binary run against this
--- schema would otherwise retry them, and its cleanup step truncates `hash`, `fee_merkle_tree` and
--- `block_merkle_tree` -- which the renames above just turned into the live tables.
-UPDATE deferred_migrations
-SET completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP)
-WHERE name IN (
-    'hash_bigint_backfill_hash',
-    'hash_bigint_backfill_fee_merkle_tree',
-    'hash_bigint_backfill_block_merkle_tree',
-    'hash_bigint_cleanup_legacy_hash'
-);

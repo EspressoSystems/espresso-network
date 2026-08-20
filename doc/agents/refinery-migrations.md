@@ -41,7 +41,8 @@ database (e.g. copying rows to a new table, recomputing a column, reformatting d
    `<Options as PersistenceOptions>::create()` in `crates/espresso/node/src/persistence/sql.rs`. No registry is wired up
    there today; V1504 removed the last one.
 6. **Drop the old table** in a future Refinery migration once the backfill is confirmed complete on every deployment and
-   the read fallback is no longer needed.
+   the read fallback is no longer needed. Refinery aborts on applied-but-missing and divergent migration versions, so
+   reverting to an older binary cannot roll back a migration.
 
 The `DROP` discards whatever the backfill has not moved, so confirming completion on every deployment (via
 `GET database/migration-status`) is a hard precondition for shipping it, not a formality. A database that never ran the
