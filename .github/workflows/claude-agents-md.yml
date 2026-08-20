@@ -1,0 +1,88 @@
+name: Claude AGENTS.md
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 5 * * 0" # Sunday
+  pull_request:
+    paths:
+      - .github/workflows/claude-agents-md.yml
+      - .github/claude/maintain-agents-md.md
+
+concurrency:
+  # One run per base branch: runs share a bot branch and force-push it.
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  maintain:
+    # Fork PRs get no secrets and no push access.
+    if: |
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # A named branch, not the PR merge ref: create-pull-request bases the PR
+          # on the checked-out branch.
+          ref: ${{ github.head_ref || github.ref_name }}
+          fetch-depth: 0
+          # Keep push credentials out of the audit step; create-pull-request
+          # pushes with its own token.
+          persist-credentials: false
+
+      - name: Audit the agent docs
+        timeout-minutes: 30
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -euo pipefail
+          curl -fsSL https://claude.ai/install.sh | bash
+          export PATH="$HOME/.local/bin:$PATH"
+          mkdir -p ./tmp
+          # Committing, pushing and opening the PR are deterministic steps below.
+          claude -p "$(cat .github/claude/maintain-agents-md.md)" \
+            --model opus \
+            --dangerously-skip-permissions \
+            --disallowedTools "Bash(git commit:*),Bash(git push:*),Bash(git switch:*),Bash(git checkout:*),Bash(gh:*)"
+
+      - name: Build PR body
+        id: body
+        run: |
+          set -euo pipefail
+          if [ -s ./tmp/agents-md-report.md ]; then
+            cat ./tmp/agents-md-report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ ! -s ./tmp/agents-md-report.md ] || [ -z "$(git status --porcelain)" ]; then
+            echo "nothing to propose"
+            # git clean, not just checkout: Claude may have added untracked files.
+            git checkout -- . && git clean -fd
+            exit 0
+          fi
+          {
+            echo "Automated AGENTS.md maintenance. To trigger the CI, close and re-open the PR."
+            echo
+            cat ./tmp/agents-md-report.md
+          } > ./tmp/pr-body.md
+          echo "propose=true" >> "$GITHUB_OUTPUT"
+
+      - name: Create Pull Request
+        if: steps.body.outputs.propose == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # One branch per base, so a PR run does not clobber the scheduled PR.
+          # Re-running force-pushes and updates the open PR in place.
+          branch: bot/agents-md/${{ github.head_ref || github.ref_name }}
+          delete-branch: true
+          title: "[Bot] Update AGENTS.md"
+          commit-message: "docs(agents): update AGENTS.md and referenced docs"
+          body-path: ./tmp/pr-body.md
+          labels: |
+            agent-generated
+            documentation
