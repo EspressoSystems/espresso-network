@@ -1394,6 +1394,30 @@ impl Fetcher {
         })
     }
 
+    /// `eth_getLogs` filter matching every `StakeTable` event that affects consensus membership.
+    #[cfg(feature = "node")]
+    pub fn stake_table_event_filter(contract: Address, from: u64, to: u64) -> Filter {
+        Filter::new()
+            .events([
+                ValidatorRegistered::SIGNATURE,
+                ValidatorRegisteredV2::SIGNATURE,
+                ValidatorRegisteredV3::SIGNATURE,
+                ValidatorExit::SIGNATURE,
+                ValidatorExitV2::SIGNATURE,
+                Delegated::SIGNATURE,
+                Undelegated::SIGNATURE,
+                UndelegatedV2::SIGNATURE,
+                ConsensusKeysUpdated::SIGNATURE,
+                ConsensusKeysUpdatedV2::SIGNATURE,
+                CommissionUpdated::SIGNATURE,
+                X25519KeyUpdated::SIGNATURE,
+                P2pAddrUpdated::SIGNATURE,
+            ])
+            .address(contract)
+            .from_block(from)
+            .to_block(to)
+    }
+
     /// Fetch all stake table events from L1
     #[cfg(feature = "node")]
     pub async fn fetch_events_from_contract(
@@ -1451,25 +1475,7 @@ impl Fetcher {
                     let provider = provider.clone();
 
                     Box::pin(async move {
-                        let filter = Filter::new()
-                            .events([
-                                ValidatorRegistered::SIGNATURE,
-                                ValidatorRegisteredV2::SIGNATURE,
-                                ValidatorRegisteredV3::SIGNATURE,
-                                ValidatorExit::SIGNATURE,
-                                ValidatorExitV2::SIGNATURE,
-                                Delegated::SIGNATURE,
-                                Undelegated::SIGNATURE,
-                                UndelegatedV2::SIGNATURE,
-                                ConsensusKeysUpdated::SIGNATURE,
-                                ConsensusKeysUpdatedV2::SIGNATURE,
-                                CommissionUpdated::SIGNATURE,
-                                X25519KeyUpdated::SIGNATURE,
-                                P2pAddrUpdated::SIGNATURE,
-                            ])
-                            .address(contract)
-                            .from_block(from)
-                            .to_block(to);
+                        let filter = Self::stake_table_event_filter(contract, from, to);
                         provider.get_logs(&filter).await
                     })
                 },
@@ -2198,6 +2204,48 @@ mod tests {
             x: U256::ZERO,
             y: U256::ZERO,
         }
+    }
+
+    #[test]
+    fn test_stake_table_event_filter_topics() {
+        let contract = Address::random();
+        let from = 100;
+        let to = 200;
+
+        let filter = Fetcher::stake_table_event_filter(contract, from, to);
+
+        let signatures = [
+            ValidatorRegistered::SIGNATURE,
+            ValidatorRegisteredV2::SIGNATURE,
+            ValidatorRegisteredV3::SIGNATURE,
+            ValidatorExit::SIGNATURE,
+            ValidatorExitV2::SIGNATURE,
+            Delegated::SIGNATURE,
+            Undelegated::SIGNATURE,
+            UndelegatedV2::SIGNATURE,
+            ConsensusKeysUpdated::SIGNATURE,
+            ConsensusKeysUpdatedV2::SIGNATURE,
+            CommissionUpdated::SIGNATURE,
+            X25519KeyUpdated::SIGNATURE,
+            P2pAddrUpdated::SIGNATURE,
+        ];
+        assert_eq!(
+            signatures.len(),
+            13,
+            "the filter must cover exactly 13 events"
+        );
+
+        let expected_topics = signatures
+            .iter()
+            .map(|sig| alloy::primitives::keccak256(sig.as_bytes()))
+            .collect::<HashSet<_>>();
+        let actual_topics = filter.topics[0].iter().copied().collect::<HashSet<_>>();
+        assert_eq!(actual_topics, expected_topics);
+        assert_eq!(actual_topics.len(), 13);
+
+        assert_eq!(filter.address, contract.into());
+        assert_eq!(filter.get_from_block(), Some(from));
+        assert_eq!(filter.get_to_block(), Some(to));
     }
 
     #[test_log::test]
