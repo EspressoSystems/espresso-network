@@ -301,6 +301,7 @@ async fn build_cutover_coordinator(
     let share_validator =
         VidShareValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
 
+    let whole_payload_threshold = network.sender().max_message_size().get() / 2;
     let vid_disperser = VidDisperser::new(
         membership.clone(),
         network.sender().clone(),
@@ -333,7 +334,7 @@ async fn build_cutover_coordinator(
             ViewNumber::genesis(),
             hotshot_types::data::EpochNumber::genesis(),
         ))
-        .fetcher(Fetcher::new(public_key, 10 * 1024 * 1024))
+        .fetcher(Fetcher::new(public_key, whole_payload_threshold))
         .public_key(public_key)
         .build()
 }

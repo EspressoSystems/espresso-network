@@ -1,25 +1,18 @@
 //! Recovery of a certified view's proposal and payload.
 //!
 //! A `Cert1` proves a quorum held the view's proposal and enough VID shares
-//! to reconstruct its payload, but nothing retransmits the share broadcasts a
-//! node missed: proposals and shares are sent once, and the transport's
-//! retries are garbage-collected two views behind the frontier. A node that
-//! missed them while the network moved on can only pull — and must, because
-//! it cannot vote on any proposal extending the certified view without the
-//! payload, which stalls certification for good once the faulty nodes leave
-//! no vote to spare (`Consensus::request_missing_certified_data`).
-//!
-//! [`Fetcher`] is that pull. Payloads that fit a message are fetched
-//! whole from one randomly chosen peer; larger ones as VID share
-//! retransmissions from a random stake-weighted subset — never a broadcast,
-//! which would amplify a recovery into a flood. Consensus re-raises the
-//! request on every timeout round the payload stays missing, and each attempt
-//! after the retry interval picks fresh targets, so a silent or Byzantine
-//! target costs one round, not the recovery. Nothing served or received is
-//! taken on trust: whole payloads are verified by recomputing the VID
-//! commitment the requester's own validated proposal pins, refetched shares
-//! go through the ordinary share intake, and a whole-payload response counts
-//! only from the transport-authenticated peer it was requested from.
+//! to reconstruct its payload, but nothing retransmits what a node missed,
+//! and a node that cannot reconstruct the view its peers' locks are pinned
+//! at cannot vote on anything extending it
+//! (`Consensus::request_missing_certified_data`). [`Fetcher`] is the pull
+//! that closes the gap: proposals by broadcast, payloads that fit a message
+//! whole from one random peer, larger payloads as share retransmissions from
+//! a random stake-weighted subset. Never a broadcast of payload data, and
+//! attempts are paced to the view timeout with targets re-randomized (not
+//! excluded) each round. Nothing is taken on trust: whole payloads must
+//! re-commit to the requester's own proposal's commitment, refetched shares
+//! pass the ordinary share intake, and a whole-payload response counts only
+//! from the transport-authenticated peer it was requested from.
 
 use std::{
     cmp::max,
@@ -30,18 +23,15 @@ use std::{
 
 use alloy::primitives::U256;
 use committable::Commitment;
+use hotshot::traits::BlockPayload;
 use hotshot_types::{
-    data::{
-        EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewNumber,
-        vid_disperse::vid_total_weight,
-    },
+    data::{Leaf2, VidCommitment, VidCommitment2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     traits::{
         block_contents::{BlockHeader, EncodeBytes},
         node_implementation::NodeType,
         signature_key::{SignatureKey, StakeTableEntryType},
     },
-    vid::avidm_gf2::{AvidmGf2Param, init_avidm_gf2_param},
 };
 use tracing::warn;
 
@@ -53,7 +43,7 @@ use crate::{
         ProposalFetchMessage,
     },
     network::Sender,
-    vid::VidReconstructor,
+    vid::{VidReconstructor, expected_vid_param},
 };
 
 /// A proposal fetch is for one view's proposal with one specific leaf
@@ -75,6 +65,9 @@ impl<T: NodeType> ProposalFetchKey<T> {
 }
 
 type FetchRequests<K> = HashMap<(ViewNumber, VidCommitment2), (Instant, Option<K>)>;
+
+/// How many candidate payloads to keep around.
+const CANDIDATE_WINDOW: usize = 3;
 
 /// Requester- and server-side state of payload recovery.
 pub struct Fetcher<T: NodeType> {
@@ -112,8 +105,12 @@ pub struct Fetcher<T: NodeType> {
     /// blocks, which reconstruct but never certify, evict the pinned one.
     retained: Option<(ViewNumber, VidCommitment2, Arc<[u8]>)>,
 
-    /// The highest-view payload this node reconstructed, awaiting the lock.
-    candidate: Option<(ViewNumber, VidCommitment2, Arc<[u8]>)>,
+    /// The highest-view payloads this node reconstructed, awaiting the lock.
+    /// A small window rather than one slot: reconstruction order and lock
+    /// order need not agree — a later view can reconstruct before an earlier
+    /// view's certificate arrives — and a single latch would then miss the
+    /// promotion for good.
+    candidates: BTreeMap<ViewNumber, (VidCommitment2, Arc<[u8]>)>,
 
     /// When each requester was last served per view, so that serving follows
     /// the same cadence the requester is paced to: signatures prove who asks,
@@ -130,55 +127,54 @@ impl<T: NodeType> Fetcher<T> {
             requested_proposals: HashMap::new(),
             advertisers: BTreeMap::new(),
             retained: None,
-            candidate: None,
+            candidates: BTreeMap::new(),
             served: HashMap::new(),
         }
     }
 
     /// Remember that `peer` advertised the view's certificate.
-    pub fn note_advertiser(
-        &mut self,
-        view: ViewNumber,
-        peer: T::SignatureKey,
-        consensus: &Consensus<T>,
-    ) {
-        if consensus.cert1_at(view).is_none() {
-            return;
-        }
+    pub fn note_advertiser(&mut self, view: ViewNumber, peer: T::SignatureKey) {
         self.advertisers.entry(view).or_default().insert(peer);
     }
 
     /// Retain a servable copy of a reconstructed payload as a candidate for
     /// `Self::note_locked` to promote.
-    ///
-    /// Sized by the encoded bytes, which are what a response carries;
-    /// `txn_bytes` is the payload's own accounting and need not agree.
     pub fn retain_payload(
         &mut self,
         view: ViewNumber,
         payload_commitment: VidCommitment2,
         payload: &T::BlockPayload,
     ) {
-        let payload = payload.encode();
-        if payload.len() <= self.max_whole_payload_fetch
-            && self.candidate.as_ref().is_none_or(|(v, ..)| *v <= view)
+        if self.candidates.len() >= CANDIDATE_WINDOW
+            && self.candidates.keys().next().is_some_and(|v| view < *v)
+            || self.candidates.contains_key(&view)
+            || payload.txn_bytes() > self.max_whole_payload_fetch
         {
-            self.candidate = Some((view, payload_commitment, payload));
+            return;
+        }
+
+        let payload = payload.encode();
+
+        if payload.len() > self.max_whole_payload_fetch {
+            return;
+        }
+
+        self.candidates.insert(view, (payload_commitment, payload));
+
+        while self.candidates.len() > CANDIDATE_WINDOW {
+            self.candidates.pop_first();
         }
     }
 
-    /// Promote the candidate to the retained payload once the lock reaches
-    /// its view. Locking requires the reconstructed block, so on the lock
-    /// path the candidate is already in place when the lock moves.
+    /// Promote a candidate to the retained payload once the lock reaches its
+    /// view. Locking requires the reconstructed block, so on the lock path
+    /// the candidate is already in place when the lock moves.
     pub fn note_locked(&mut self, locked: Option<ViewNumber>) {
-        if let Some(candidate) = &self.candidate
-            && locked == Some(candidate.0)
-            && self
-                .retained
-                .as_ref()
-                .is_none_or(|(v, ..)| *v < candidate.0)
+        if let Some(view) = locked
+            && let Some((commitment, payload)) = self.candidates.get(&view)
+            && self.retained.as_ref().is_none_or(|(v, ..)| *v < view)
         {
-            self.retained = Some(candidate.clone());
+            self.retained = Some((view, *commitment, payload.clone()));
         }
     }
 
@@ -416,10 +412,10 @@ impl<T: NodeType> Fetcher<T> {
                 .filter(|(v, c, _)| *v == view && *c == commitment)
                 .map(|(.., payload)| payload.clone())
                 .or_else(|| {
-                    self.candidate
-                        .as_ref()
-                        .filter(|(v, c, _)| *v == view && *c == commitment)
-                        .map(|(.., payload)| payload.clone())
+                    self.candidates
+                        .get(&view)
+                        .filter(|(c, _)| *c == commitment)
+                        .map(|(_, payload)| payload.clone())
                 })
                 .or_else(|| {
                     consensus
@@ -476,11 +472,13 @@ impl<T: NodeType> Fetcher<T> {
         requester: &T::SignatureKey,
         view_timeout: Duration,
     ) -> bool {
+        // Slightly under the requester's interval: this side measures
+        // receipts while the requester paces sends, so an honest retry can
+        // arrive early by the difference in network latency.
+        let interval = Self::retry_interval(view_timeout) * 9 / 10;
         self.served
             .get(&(view, requester.clone()))
-            .is_none_or(|last| {
-                Instant::now().duration_since(*last) >= Self::retry_interval(view_timeout)
-            })
+            .is_none_or(|last| Instant::now().duration_since(*last) >= interval)
     }
 
     /// Record a send to `requester`, starting its pacing interval. Recorded
@@ -584,24 +582,8 @@ impl<T: NodeType> Fetcher<T> {
         if self.retained.as_ref().is_some_and(|(v, ..)| *v <= view) {
             self.retained = None;
         }
-        if self.candidate.as_ref().is_some_and(|(v, ..)| *v <= view) {
-            self.candidate = None;
-        }
+        self.candidates = self.candidates.split_off(&(view + 1));
     }
-}
-
-/// The VID erasure parameters the committee fixes for `target_epoch`,
-/// matching what an honest disperser derives. Used to reject shares whose
-/// `common.param` is forged (the commitment binds `ns_commits`, not `param`)
-/// and to verify payloads fetched whole. `None` if the committee cannot be
-/// resolved.
-pub fn expected_vid_param<T: NodeType>(
-    membership: &EpochMembershipCoordinator<T>,
-    target_epoch: Option<EpochNumber>,
-) -> Option<AvidmGf2Param> {
-    let membership = membership.stake_table_for_epoch(target_epoch).ok()?;
-    let total_weight = vid_total_weight::<T, _>(membership.stake_table(), target_epoch);
-    init_avidm_gf2_param(total_weight).ok()
 }
 
 #[cfg(test)]
@@ -688,9 +670,13 @@ mod tests {
             "stalled reconstructions must not evict the locked block"
         );
         assert_eq!(
-            fetcher.candidate.as_ref().map(|(v, ..)| *v),
+            fetcher.candidates.keys().max().copied(),
             Some(test_data.views[2].view_number)
         );
+
+        // The window keeps earlier candidates around, so a lock arriving
+        // after later reconstructions can still be promoted.
+        assert!(fetcher.candidates.contains_key(&view_1));
 
         // Once the lock catches up, so does the retained payload; a decide
         // clears both.
@@ -699,7 +685,7 @@ mod tests {
         assert_eq!(fetcher.retained.as_ref().map(|(v, ..)| *v), Some(view_3));
         fetcher.gc(view_3);
         assert!(fetcher.retained.is_none());
-        assert!(fetcher.candidate.is_none());
+        assert!(fetcher.candidates.is_empty());
     }
 
     /// Only the peer a request went to can consume it, and a provably bad
@@ -800,10 +786,6 @@ mod tests {
     /// The request path picks whole-payload fetching when this node's own
     /// share sizes the payload within the threshold, prefers an advertiser as
     /// the target, and never targets itself.
-    ///
-    /// Advertisers are only recorded for views this node holds a certificate
-    /// for: those are the only ones a fetch can target, so an advertisement
-    /// for any other view is refused rather than stored on a peer's say-so.
     #[tokio::test]
     async fn request_fetches_small_payloads_whole_from_an_advertiser() {
         let test_data = TestData::new(1).await;
@@ -814,7 +796,6 @@ mod tests {
         harness
             .apply_pair(test_data.views[0].proposal_input_consensus(&key(0)))
             .await;
-        harness.apply(test_data.views[0].cert1_input()).await;
 
         let membership = mock_membership();
         let network = network().await;
@@ -823,14 +804,8 @@ mod tests {
         // Both advertisers are known; this node itself must be skipped.
         {
             let mut fetcher = fetcher();
-            fetcher.note_advertiser(view, key(0), &harness.consensus);
-            fetcher.note_advertiser(view, key(3), &harness.consensus);
-            fetcher.note_advertiser(view + 1, key(4), &harness.consensus);
-            assert_eq!(
-                fetcher.advertisers.keys().copied().collect::<Vec<_>>(),
-                vec![view],
-                "no certificate for view + 1, so nothing is recorded for it"
-            );
+            fetcher.note_advertiser(view, key(0));
+            fetcher.note_advertiser(view, key(3));
             fetcher
                 .request(
                     view,

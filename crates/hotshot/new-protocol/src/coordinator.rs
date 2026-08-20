@@ -39,7 +39,7 @@ use crate::{
         timer::Timer,
     },
     epoch::{EpochManager, EpochRootResult},
-    fetch::{Fetcher, ProposalFetchKey, expected_vid_param},
+    fetch::{Fetcher, ProposalFetchKey},
     helpers::proposal_commitment,
     logging::KeyPrefix,
     message::{
@@ -52,7 +52,10 @@ use crate::{
     proposal::{ProposalValidator, VidShareValidator},
     state::{HeaderRequest, StateEntry, StateManager, StateManagerOutput},
     storage::{NewProtocolStorage, Storage},
-    vid::{VidDisperseRequest, VidDisperser, VidFragmentAccumulator, VidReconstructor},
+    vid::{
+        VidDisperseRequest, VidDisperser, VidFragmentAccumulator, VidReconstructor,
+        expected_vid_param,
+    },
     vote::{EpochRootTally, SimpleTally, VoteCollector},
 };
 
@@ -1277,11 +1280,10 @@ where
                     }) {
                         match e {
                             CatchupEvidence::Qc(qc) => {
-                                self.fetcher.note_advertiser(
-                                    qc.view_number(),
-                                    message.sender.clone(),
-                                    &self.consensus,
-                                );
+                                if !self.is_view_too_far_ahead(qc.view_number()) {
+                                    self.fetcher
+                                        .note_advertiser(qc.view_number(), message.sender.clone());
+                                }
                                 if let Some(epoch) = self
                                     .cert_verifiers
                                     .advance
@@ -1348,11 +1350,10 @@ where
                         epoch = ?qc.epoch().map(|e| *e),
                         "recv high qc"
                     );
-                    self.fetcher.note_advertiser(
-                        qc.view_number(),
-                        message.sender.clone(),
-                        &self.consensus,
-                    );
+                    if !self.is_view_too_far_ahead(qc.view_number()) {
+                        self.fetcher
+                            .note_advertiser(qc.view_number(), message.sender.clone());
+                    }
                     if let Some(epoch) = self
                         .cert_verifiers
                         .advance

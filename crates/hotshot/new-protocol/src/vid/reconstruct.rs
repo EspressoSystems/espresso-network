@@ -253,7 +253,10 @@ impl<T: NodeType> VidReconstructor<T> {
 
                     self.accumulators.remove(&out.view);
 
-                    // Nothing left to decode: stop the attempt that lost.
+                    // Nothing left to decode: try to stop the attempt that
+                    // lost. Best effort — aborting a blocking task that has
+                    // already started does nothing, and its result is dropped
+                    // by the `reconstructed` check above either way.
                     if let Some(loser) = self.calculations.remove(&out.view) {
                         loser.abort();
                     }

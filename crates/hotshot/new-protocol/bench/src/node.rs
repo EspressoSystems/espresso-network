@@ -194,6 +194,7 @@ async fn build_coordinator(
         EpochNumber::genesis(),
     );
 
+    let whole_payload_threshold = network.sender().max_message_size().get() / 2;
     let mut coordinator = Coordinator::builder()
         .consensus(consensus)
         .network(network)
@@ -218,7 +219,7 @@ async fn build_coordinator(
         .membership_coordinator(membership)
         .outbox(Outbox::new())
         .timer(timer)
-        .fetcher(Fetcher::new(public_key, 10 * 1024 * 1024))
+        .fetcher(Fetcher::new(public_key, whole_payload_threshold))
         .public_key(public_key)
         .build();
 

@@ -1240,18 +1240,27 @@ impl<T: NodeType> Consensus<T> {
         self.adopt_certified_drb(view);
     }
 
-    /// Ask peers for whatever keeps the certified `view` from being acted on.
+    /// Ask peers for the payload of the certified `view` when this node
+    /// cannot reconstruct it and the network has moved on.
     ///
-    /// A Cert1 proves a quorum held the view's proposal and enough shares to
-    /// reconstruct its payload, so whatever this node is missing, peers have.
-    /// Nothing pushes it again — proposals and share broadcasts are sent once
-    /// and the transport's retries are garbage-collected a few views behind
-    /// the frontier — so a node that missed them can only pull. Without the
-    /// pull a single such node can halt certification for good: it cannot vote
-    /// on any proposal extending `view` ([`Self::parent_reconstructed`]), every
-    /// certifiable proposal must extend `view` while the other nodes' locks
-    /// are pinned there, and once the faulty nodes leave no vote to spare its
-    /// vote is the one that cannot be missed.
+    /// A Cert1 proves a quorum held enough shares to reconstruct the payload,
+    /// so peers have it — but nothing pushes it again: share broadcasts are
+    /// sent once and the transport's retries are garbage-collected a few
+    /// views behind the frontier, so a node that missed them can only pull.
+    /// Without the pull a single such node can halt certification for good:
+    /// it cannot vote on any proposal extending `view`
+    /// ([`Self::parent_reconstructed`]), every certifiable proposal must
+    /// extend `view` while the other nodes' locks are pinned there, and once
+    /// the faulty nodes leave no vote to spare its vote is the one that
+    /// cannot be missed.
+    ///
+    /// Only the payload is requested here. A *missing proposal* already has
+    /// its own trigger — [`Self::request_parent_proposal_if_missing`], which
+    /// a stall re-fires every round, since every round's proposal names the
+    /// pinned view as its parent. And a held proposal that does not match
+    /// the certificate (an equivocating leader got the other copy certified)
+    /// is left alone: held state is never replaced, so the view is wedged
+    /// for this node and skipped over by the timeout path.
     ///
     /// Gated on the network having moved past the view: in healthy operation
     /// a certificate precedes this node's reconstruction by moments and
@@ -1271,30 +1280,22 @@ impl<T: NodeType> Consensus<T> {
         let Some(cert) = self.certs.get(&view) else {
             return;
         };
-        match self.proposals.get(&view) {
-            Some(proposal) if proposal_commitment(proposal) == cert.data.leaf_commit => {
-                if let VidCommitment::V2(payload_commitment) =
-                    proposal.block_header.payload_commitment()
-                    && !self
-                        .blocks_reconstructed
-                        .contains(&(view, payload_commitment))
-                {
-                    outbox.push_back(ConsensusOutput::RequestMissingPayload {
-                        view,
-                        payload_commitment,
-                    });
-                }
-            },
-            // Missing, or not the certified proposal (an equivocation kept
-            // the wrong one): fetch the one the certificate names.
-            _ => outbox.push_back(ConsensusOutput::RequestMissingProposal {
+        if let Some(proposal) = self.proposals.get(&view)
+            && proposal_commitment(proposal) == cert.data.leaf_commit
+            && let VidCommitment::V2(payload_commitment) =
+                proposal.block_header.payload_commitment()
+            && !self
+                .blocks_reconstructed
+                .contains(&(view, payload_commitment))
+        {
+            outbox.push_back(ConsensusOutput::RequestMissingPayload {
                 view,
-                leaf_commit: cert.data.leaf_commit,
-            }),
+                payload_commitment,
+            });
         }
     }
 
-    /// Re-check every certified view above the lock for missing data.
+    /// Re-check every certified view above the lock for a missing payload.
     ///
     /// Fired on the timeout path, where `Self::request_missing_certified_data`
     /// can newly apply to a certificate this node already holds: the
