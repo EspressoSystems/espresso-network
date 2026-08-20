@@ -9,7 +9,7 @@
 //! payload, which stalls certification for good once the faulty nodes leave
 //! no vote to spare (`Consensus::request_missing_certified_data`).
 //!
-//! [`PayloadFetcher`] is that pull. Payloads that fit a message are fetched
+//! [`Fetcher`] is that pull. Payloads that fit a message are fetched
 //! whole from one randomly chosen peer; larger ones as VID share
 //! retransmissions from a random stake-weighted subset — never a broadcast,
 //! which would amplify a recovery into a flood. Consensus re-raises the
@@ -78,7 +78,7 @@ impl<T: NodeType> ProposalFetchKey<T> {
 type FetchRequests<K> = HashMap<(ViewNumber, VidCommitment2), (Instant, Option<K>)>;
 
 /// Requester- and server-side state of payload recovery.
-pub struct PayloadFetcher<T: NodeType> {
+pub struct Fetcher<T: NodeType> {
     public_key: T::SignatureKey,
 
     /// Payloads at or below this size are fetched whole from one peer.
@@ -122,7 +122,7 @@ pub struct PayloadFetcher<T: NodeType> {
     served: HashMap<(ViewNumber, T::SignatureKey), Instant>,
 }
 
-impl<T: NodeType> PayloadFetcher<T> {
+impl<T: NodeType> Fetcher<T> {
     pub fn new(public_key: T::SignatureKey, max_whole_payload_fetch: usize) -> Self {
         Self {
             public_key,
@@ -422,6 +422,7 @@ impl<T: NodeType> PayloadFetcher<T> {
             return;
         };
 
+        self.note_served(view, requester);
         let response = Message {
             sender: self.public_key.clone(),
             message_type: MessageType::PayloadFetch(PayloadFetchMessage::Response(
@@ -457,30 +458,30 @@ impl<T: NodeType> PayloadFetcher<T> {
     /// so serving refuses anything faster: a signature proves who is asking,
     /// not how often, and a whole-payload response is worth megabytes.
     fn may_serve(
-        &mut self,
+        &self,
         view: ViewNumber,
         requester: &T::SignatureKey,
         view_timeout: Duration,
     ) -> bool {
-        let interval = Self::retry_interval(view_timeout);
-        let now = Instant::now();
-        match self.served.entry((view, requester.clone())) {
-            std::collections::hash_map::Entry::Occupied(mut served) => {
-                if now.duration_since(*served.get()) < interval {
-                    return false;
-                }
-                served.insert(now);
-            },
-            std::collections::hash_map::Entry::Vacant(slot) => {
-                slot.insert(now);
-            },
-        }
-        true
+        self.served
+            .get(&(view, requester.clone()))
+            .is_none_or(|last| {
+                Instant::now().duration_since(*last) >= Self::retry_interval(view_timeout)
+            })
+    }
+
+    /// Record a send to `requester`, starting its pacing interval. Recorded
+    /// only when something is actually sent: the view in a request is
+    /// attacker-chosen, and recording requests for views this node holds
+    /// nothing of would grow `served` without bound.
+    fn note_served(&mut self, view: ViewNumber, requester: &T::SignatureKey) {
+        self.served
+            .insert((view, requester.clone()), Instant::now());
     }
 
     /// Re-unicast our own `VidShareBroadcast` for `view`.
     fn serve_share(
-        &self,
+        &mut self,
         view: ViewNumber,
         requester: &T::SignatureKey,
         consensus: &Consensus<T>,
@@ -489,6 +490,7 @@ impl<T: NodeType> PayloadFetcher<T> {
         let Some(share) = consensus.vid_share_at(view) else {
             return;
         };
+        self.note_served(view, requester);
 
         let message = Message {
             sender: self.public_key.clone(),
@@ -605,8 +607,8 @@ mod tests {
         BLSPubKey::generated_from_seed_indexed([0u8; 32], index).0
     }
 
-    fn fetcher() -> PayloadFetcher<TestTypes> {
-        PayloadFetcher::new(key(0), 5 * 1024 * 1024)
+    fn fetcher() -> Fetcher<TestTypes> {
+        Fetcher::new(key(0), 5 * 1024 * 1024)
     }
 
     /// The retained payload tracks the lock, not reconstruction order.
@@ -678,7 +680,7 @@ mod tests {
         let mut fetcher = fetcher();
         fetcher
             .requested
-            .insert((view, commitment), (Instant::now(), Some(target.clone())));
+            .insert((view, commitment), (Instant::now(), Some(target)));
 
         // An unsolicited response, valid-looking or not, is ignored and the
         // pending entry survives.
@@ -721,7 +723,9 @@ mod tests {
         }
     }
 
-    /// Serving refuses repeats within the pacing interval, per requester.
+    /// Serving refuses repeats within the pacing interval, per requester,
+    /// and records nothing until something is actually sent — the view in a
+    /// request is attacker-chosen, and unserved views must leave no state.
     #[test]
     fn serving_is_paced_per_requester() {
         let mut fetcher = fetcher();
@@ -729,6 +733,12 @@ mod tests {
         let timeout = Duration::from_secs(60);
 
         assert!(fetcher.may_serve(view, &key(1), timeout));
+        assert!(
+            fetcher.served.is_empty(),
+            "a request that served nothing leaves no state"
+        );
+
+        fetcher.note_served(view, &key(1));
         assert!(
             !fetcher.may_serve(view, &key(1), timeout),
             "a repeat within the interval is refused"

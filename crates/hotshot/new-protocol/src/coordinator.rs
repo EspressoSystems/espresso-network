@@ -39,6 +39,7 @@ use crate::{
         timer::Timer,
     },
     epoch::{EpochManager, EpochRootResult},
+    fetch::{Fetcher, ProposalFetchKey, expected_vid_param},
     helpers::proposal_commitment,
     logging::KeyPrefix,
     message::{
@@ -48,7 +49,6 @@ use crate::{
     },
     network::Cliquenet,
     outbox::Outbox,
-    payload_fetch::{PayloadFetcher, ProposalFetchKey, expected_vid_param},
     proposal::{ProposalValidator, VidShareValidator},
     state::{HeaderRequest, StateEntry, StateManager, StateManagerOutput},
     storage::{NewProtocolStorage, Storage},
@@ -119,7 +119,7 @@ pub struct Coordinator<T: NodeType, S> {
     timer: Timer,
     #[builder(skip)]
     pending_proposal_fetches: PendingProposalFetches<T>,
-    payload_fetcher: PayloadFetcher<T>,
+    fetcher: Fetcher<T>,
     #[builder(skip)]
     da_payloads: BTreeMap<(ViewNumber, VidCommitment2), PendingDa<T>>,
     metrics: Option<metrics::Metrics>,
@@ -340,10 +340,7 @@ where
             .storage(Storage::new(storage, private_key).with_metrics(metrics))
             .membership_coordinator(membership_coordinator)
             .timer(Timer::new(timeout_duration, anchor_view, anchor_epoch))
-            .payload_fetcher(PayloadFetcher::new(
-                public_key.clone(),
-                whole_payload_threshold,
-            ))
+            .fetcher(Fetcher::new(public_key.clone(), whole_payload_threshold))
             .public_key(public_key)
             .maybe_metrics(coordinator_metrics)
             .participation(participation)
@@ -610,7 +607,7 @@ where
                 },
                 Some(item) = self.vid_reconstructor.next() => match item {
                     Ok(out) => {
-                        self.payload_fetcher
+                        self.fetcher
                             .retain_payload(out.view, out.payload_commitment, &out.payload);
                         self.payload_txn_bytes.insert(out.view, out.payload.txn_bytes());
                         self.block_builder.on_block_reconstructed(out.tx_commitments);
@@ -677,8 +674,7 @@ where
 
     pub fn apply_consensus(&mut self, input: ConsensusInput<T>) {
         self.consensus.apply(input, &mut self.outbox);
-        self.payload_fetcher
-            .note_locked(self.consensus.locked_view());
+        self.fetcher.note_locked(self.consensus.locked_view());
     }
 
     pub fn process_consensus_output(
@@ -757,7 +753,7 @@ where
             },
             ConsensusOutput::RequestMissingProposal { view, leaf_commit } => {
                 debug!(%node, %view, "request missing proposal");
-                if let Err(err) = self.payload_fetcher.request_missing_proposal(
+                if let Err(err) = self.fetcher.request_missing_proposal(
                     view,
                     leaf_commit,
                     self.timer.duration(),
@@ -772,7 +768,7 @@ where
                 payload_commitment,
             } => {
                 debug!(%node, %view, "request missing payload");
-                if let Err(err) = self.payload_fetcher.request(
+                if let Err(err) = self.fetcher.request(
                     view,
                     payload_commitment,
                     self.timer.duration(),
@@ -1282,7 +1278,7 @@ where
                         match e {
                             CatchupEvidence::Qc(qc) => {
                                 if !self.is_view_too_far_ahead(qc.view_number()) {
-                                    self.payload_fetcher
+                                    self.fetcher
                                         .note_advertiser(qc.view_number(), message.sender.clone());
                                 }
                                 if let Some(epoch) = self
@@ -1352,7 +1348,7 @@ where
                         "recv high qc"
                     );
                     if !self.is_view_too_far_ahead(qc.view_number()) {
-                        self.payload_fetcher
+                        self.fetcher
                             .note_advertiser(qc.view_number(), message.sender.clone());
                     }
                     if let Some(epoch) = self
@@ -1463,7 +1459,7 @@ where
                     );
                     return None;
                 }
-                self.payload_fetcher.serve_payload(
+                self.fetcher.serve_payload(
                     view,
                     &message.sender,
                     self.timer.duration(),
@@ -1484,7 +1480,7 @@ where
                     );
                     return None;
                 }
-                self.payload_fetcher.serve_share_request(
+                self.fetcher.serve_share_request(
                     view,
                     &message.sender,
                     self.timer.duration(),
@@ -1496,7 +1492,7 @@ where
             MessageType::PayloadFetch(PayloadFetchMessage::Response(response)) => {
                 let view = response.view;
                 debug!(%node, %sender, %view, "received payload fetch response");
-                self.payload_fetcher.handle_response(
+                self.fetcher.handle_response(
                     response,
                     &message.sender,
                     &self.consensus,
@@ -1652,7 +1648,7 @@ where
                     .pending_proposal_fetches
                     .contains_request(view, leaf_commitment)
                 {
-                    self.payload_fetcher.broadcast_proposal_fetch(
+                    self.fetcher.broadcast_proposal_fetch(
                         view,
                         &self.consensus,
                         self.network.sender(),
@@ -1855,7 +1851,7 @@ where
     fn maybe_validate_fetched_proposal(&mut self, proposal: SignedProposal<T, Proposal<T>>) {
         let view = proposal.data.view_number;
         if !self
-            .payload_fetcher
+            .fetcher
             .take_requested_proposal(view, proposal_commitment(&proposal.data))
         {
             return;
@@ -1889,7 +1885,7 @@ where
                 self.epoch_root_collector.gc(view);
                 self.cert_verifiers.gc(decide_floor, epoch);
                 self.pending_proposal_fetches.gc(view);
-                self.payload_fetcher.gc(view);
+                self.fetcher.gc(view);
                 self.state_manager.gc(view);
                 self.storage
                     .gc(view.saturating_sub(STORAGE_GC_MARGIN).into());

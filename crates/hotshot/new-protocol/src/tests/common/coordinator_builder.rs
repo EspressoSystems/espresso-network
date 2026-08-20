@@ -26,11 +26,11 @@ use crate::{
     consensus::{Consensus, PreCutoverSeed},
     coordinator::{Coordinator, timer::Timer},
     epoch::EpochManager,
+    fetch::Fetcher,
     helpers::test_upgrade_lock,
     message::{Certificate1, Proposal},
     network::Cliquenet,
     outbox::Outbox,
-    payload_fetch::PayloadFetcher,
     proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
     vid::{VidDisperser, VidReconstructor},
@@ -266,7 +266,7 @@ pub async fn build_test_coordinator(
             ViewNumber::genesis(),
             EpochNumber::genesis(),
         ))
-        .payload_fetcher(PayloadFetcher::new(public_key, 10 * 1024 * 1024))
+        .fetcher(Fetcher::new(public_key, 10 * 1024 * 1024))
         .public_key(public_key)
         .build();
 
