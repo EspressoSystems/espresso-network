@@ -1,6 +1,6 @@
 #[cfg(feature = "node")]
 use std::time::Instant;
-use std::{num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{fmt, num::NonZeroUsize, sync::Arc, time::Duration};
 
 use alloy::primitives::{B256, U256};
 #[cfg(feature = "node")]
@@ -209,6 +209,52 @@ pub struct L1ClientOptions {
 
     #[clap(skip = Arc::<Box<dyn Metrics>>::new(Box::new(NoMetrics)))]
     pub metrics: Arc<Box<dyn Metrics>>,
+}
+
+/// A suspicious aspect of the configured L1 provider URLs.
+///
+/// Detected by [`crate::v0::impls::l1::lint_provider_config`] and logged at startup; never
+/// treated as fatal.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProviderConfigWarning {
+    /// Only one provider is configured, so the node cannot fail over.
+    SingleProvider,
+    /// The same host appears more than once in one list, so a host outage takes out both entries.
+    DuplicateHost { host: String },
+    /// The WS list shares no host with the HTTP list, so the two disagree about the provider.
+    WsHostsDisjointFromHttp,
+    /// HTTP providers are configured but no WS provider is, so the node polls instead of subscribing.
+    WsProviderMissing,
+}
+
+impl fmt::Display for ProviderConfigWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SingleProvider => write!(
+                f,
+                "only one L1 provider is configured (ESPRESSO_L1_PROVIDER); the node cannot fail \
+                 over if it goes down. Configure more than one provider host."
+            ),
+            Self::DuplicateHost { host } => write!(
+                f,
+                "provider host `{host}` is configured more than once in one provider list; an \
+                 outage of that host takes out every entry pointing at it. Replace the duplicate \
+                 with a distinct host."
+            ),
+            Self::WsHostsDisjointFromHttp => write!(
+                f,
+                "ESPRESSO_L1_WS_PROVIDER shares no host with the HTTP provider list; the node's \
+                 subscription feed and its query provider disagree about which chain state is \
+                 current. Point ESPRESSO_L1_WS_PROVIDER at (also) one of the configured HTTP \
+                 hosts."
+            ),
+            Self::WsProviderMissing => write!(
+                f,
+                "HTTP L1 providers are configured but ESPRESSO_L1_WS_PROVIDER is not; the node \
+                 polls for new heads instead of subscribing. Configure ESPRESSO_L1_WS_PROVIDER."
+            ),
+        }
+    }
 }
 
 /// Type alias for alloy provider

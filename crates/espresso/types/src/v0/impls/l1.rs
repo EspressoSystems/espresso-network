@@ -1,6 +1,13 @@
 use std::{cmp::Ordering, sync::Arc};
 #[cfg(feature = "node")]
-use std::{cmp::min, num::NonZeroUsize, pin::Pin, result::Result as StdResult, time::Instant};
+use std::{
+    cmp::min,
+    collections::{HashMap, HashSet},
+    num::NonZeroUsize,
+    pin::Pin,
+    result::Result as StdResult,
+    time::Instant,
+};
 
 #[cfg(feature = "node")]
 use alloy::{
@@ -53,7 +60,7 @@ use super::{L1BlockInfo, v0_1::L1BlockInfoWithParent};
 #[cfg(feature = "node")]
 use super::{
     L1ClientMetrics, L1State, L1UpdateTask,
-    v0_1::{SingleTransport, SingleTransportStatus, SwitchingTransport},
+    v0_1::{ProviderConfigWarning, SingleTransport, SingleTransportStatus, SwitchingTransport},
 };
 use crate::L1ClientOptions;
 #[cfg(feature = "node")]
@@ -148,6 +155,10 @@ impl L1ClientOptions {
     /// Instantiate an `L1Client` for a given list of provider `Url`s.
     #[cfg(feature = "node")]
     pub fn connect(self, urls: Vec<Url>) -> anyhow::Result<L1Client> {
+        for warning in lint_provider_config(&urls, self.l1_ws_provider.as_deref()) {
+            tracing::warn!("suspicious L1 provider configuration: {warning}");
+        }
+
         // create custom transport
         let t = SwitchingTransport::new(self, urls)
             .with_context(|| "failed to create switching transport")?;
@@ -159,6 +170,67 @@ impl L1ClientOptions {
     fn rate_limit_delay(&self) -> Duration {
         self.l1_rate_limit_delay.unwrap_or(self.l1_retry_delay)
     }
+}
+
+/// Lint the configured provider URLs. Pure: no network, no logging.
+///
+/// Compares URLs on host only (case-insensitively): provider URLs carry API keys in the path and
+/// sometimes in userinfo, so a full-URL comparison or log line would leak them.
+#[cfg(feature = "node")]
+pub fn lint_provider_config(http: &[Url], ws: Option<&[Url]>) -> Vec<ProviderConfigWarning> {
+    let http_hosts = hosts_of(http);
+    let mut warnings: Vec<_> = duplicate_hosts(&http_hosts)
+        .map(|host| ProviderConfigWarning::DuplicateHost { host })
+        .collect();
+
+    match ws {
+        Some(ws) => {
+            let ws_hosts = hosts_of(ws);
+            warnings.extend(
+                duplicate_hosts(&ws_hosts)
+                    .map(|host| ProviderConfigWarning::DuplicateHost { host }),
+            );
+
+            if !http_hosts.is_empty()
+                && !ws_hosts.is_empty()
+                && !ws_hosts.iter().any(|host| http_hosts.contains(host))
+            {
+                warnings.push(ProviderConfigWarning::WsHostsDisjointFromHttp);
+            }
+        },
+        None if !http.is_empty() => warnings.push(ProviderConfigWarning::WsProviderMissing),
+        None => {},
+    }
+
+    if http.len() == 1 {
+        warnings.push(ProviderConfigWarning::SingleProvider);
+    }
+
+    warnings
+}
+
+/// Lowercased hosts of `urls`, dropping any URL without a host.
+#[cfg(feature = "node")]
+fn hosts_of(urls: &[Url]) -> Vec<String> {
+    urls.iter()
+        .filter_map(|url| url.host_str())
+        .map(str::to_ascii_lowercase)
+        .collect()
+}
+
+/// Hosts that appear more than once in `hosts`, each reported once in first-seen order.
+#[cfg(feature = "node")]
+fn duplicate_hosts(hosts: &[String]) -> impl Iterator<Item = String> + '_ {
+    let counts: HashMap<&str, usize> = hosts.iter().fold(HashMap::new(), |mut counts, host| {
+        *counts.entry(host.as_str()).or_default() += 1;
+        counts
+    });
+
+    let mut reported = HashSet::new();
+    hosts
+        .iter()
+        .filter(move |host| counts[host.as_str()] > 1 && reported.insert(host.as_str()))
+        .cloned()
 }
 
 #[cfg(feature = "node")]
@@ -1721,5 +1793,146 @@ mod test {
             sleep(Duration::from_millis(200)).await;
         }
         panic!("L1 state of L1Client not initialized");
+    }
+
+    fn urls(hosts: &[&str]) -> Vec<Url> {
+        hosts.iter().map(|s| Url::parse(s).unwrap()).collect()
+    }
+
+    // Verbatim observed fleet misconfigurations (mainnet, 2026-08).
+
+    #[test]
+    fn lint_provider_config_infura_http_drpc_ws_disagree() {
+        let http = urls(&["https://mainnet.infura.io/v3/redacted"]);
+        let ws = urls(&["wss://lb.drpc.live/ws/redacted"]);
+
+        let warnings = lint_provider_config(&http, Some(&ws));
+
+        assert_eq!(
+            warnings,
+            vec![
+                ProviderConfigWarning::WsHostsDisjointFromHttp,
+                ProviderConfigWarning::SingleProvider,
+            ]
+        );
+    }
+
+    #[test]
+    fn lint_provider_config_shared_infura_host_not_disjoint() {
+        let http = urls(&[
+            "https://rpc.ankr.com/eth",
+            "https://mainnet.infura.io/v3/redacted",
+            "http://65.108.72.227:8545",
+        ]);
+        let ws = urls(&[
+            "wss://eth-mainnet.g.alchemy.com/v2/redacted",
+            "wss://mainnet.infura.io/ws/v3/redacted",
+        ]);
+
+        let warnings = lint_provider_config(&http, Some(&ws));
+
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+    }
+
+    #[test]
+    fn lint_provider_config_shared_getblock_host_not_disjoint() {
+        let http = urls(&[
+            "https://shared.eu-central-1.getblock.io/redacted",
+            "http://65.108.72.227:8545",
+        ]);
+        let ws = urls(&[
+            "wss://shared.eu-central-1.getblock.io/redacted",
+            "wss://mainnet.infura.io/ws/v3/redacted",
+        ]);
+
+        let warnings = lint_provider_config(&http, Some(&ws));
+
+        assert!(
+            !warnings.contains(&ProviderConfigWarning::WsHostsDisjointFromHttp),
+            "unexpected warnings: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn lint_provider_config_no_ws_provider() {
+        let http = urls(&["https://mainnet.infura.io/v3/redacted"]);
+
+        let warnings = lint_provider_config(&http, None);
+
+        assert_eq!(
+            warnings,
+            vec![
+                ProviderConfigWarning::WsProviderMissing,
+                ProviderConfigWarning::SingleProvider,
+            ]
+        );
+    }
+
+    #[test]
+    fn lint_provider_config_empty_http_is_silent() {
+        assert!(lint_provider_config(&[], None).is_empty());
+    }
+
+    #[test]
+    fn lint_provider_config_single_provider_matching_ws_not_disjoint() {
+        let http = urls(&["https://mainnet.infura.io/v3/redacted"]);
+        let ws = urls(&["wss://mainnet.infura.io/ws/v3/redacted"]);
+
+        let warnings = lint_provider_config(&http, Some(&ws));
+
+        assert_eq!(warnings, vec![ProviderConfigWarning::SingleProvider]);
+    }
+
+    #[test]
+    fn lint_provider_config_duplicate_host_reported_once() {
+        let http = urls(&[
+            "https://mainnet.infura.io/v3/one",
+            "https://mainnet.infura.io:8545/v3/two",
+            "https://rpc.ankr.com/eth",
+        ]);
+
+        let warnings = lint_provider_config(&http, None);
+
+        assert_eq!(
+            warnings
+                .iter()
+                .filter(|w| matches!(
+                    w,
+                    ProviderConfigWarning::DuplicateHost { host } if host == "mainnet.infura.io"
+                ))
+                .count(),
+            1,
+            "expected exactly one DuplicateHost warning, got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn lint_provider_config_duplicate_host_case_insensitive() {
+        let http = urls(&[
+            "https://Mainnet.Infura.io/v3/one",
+            "https://mainnet.infura.io/v3/two",
+        ]);
+
+        let warnings = lint_provider_config(&http, None);
+
+        assert!(warnings.contains(&ProviderConfigWarning::DuplicateHost {
+            host: "mainnet.infura.io".to_string()
+        }));
+    }
+
+    #[test]
+    fn lint_provider_config_never_leaks_a_url() {
+        let http = urls(&[
+            "https://mainnet.infura.io/v3/super-secret-key",
+            "https://mainnet.infura.io:8545/v3/super-secret-key",
+        ]);
+        let ws = urls(&["wss://lb.drpc.live/ws/other-secret"]);
+
+        for warning in lint_provider_config(&http, Some(&ws)) {
+            let text = warning.to_string();
+            assert!(!text.contains('@'), "leaked userinfo: {text}");
+            assert!(!text.contains("/v3/"), "leaked path: {text}");
+            assert!(!text.contains("secret"), "leaked path: {text}");
+        }
     }
 }
