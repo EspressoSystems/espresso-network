@@ -1992,7 +1992,11 @@ impl<T: NodeType> Consensus<T> {
     /// vote1. Fired at proposal validation (common path) and re-fired in the
     /// vote1 path (restart fallback, since seeded proposals are not
     /// re-validated); the per-view guard keeps it to one broadcast per view.
-    fn broadcast_own_vid_share(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
+    fn broadcast_own_vid_share(
+        &mut self,
+        view: ViewNumber,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) {
         // Disjoint borrows: `vid_shares` (read) and `broadcast_vid_views`
         // (insert) are different fields. Insert is only reached once we have the
         // share, so a not-yet-received share doesn't consume the once-per-view

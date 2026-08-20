@@ -50,6 +50,16 @@ pub struct NodeConfig {
     /// /proc reads per second.
     #[arg(long, default_value_t = 50)]
     pub sampler_tick_ms: u64,
+
+    /// Hold VID reconstruction back while this node disperses a block it
+    /// built, so the encode and share fan-out get the rayon pool to
+    /// themselves and the committee receives the shares sooner.
+    ///
+    /// Trades this node's own decode latency for faster dispersal, so it only
+    /// pays off on committees large enough that one node's vote is never what
+    /// a certificate waits on. Leave off below ~20 nodes.
+    #[arg(long, default_value_t = false)]
+    pub defer_reconstruction: bool,
 }
 
 impl NodeConfig {

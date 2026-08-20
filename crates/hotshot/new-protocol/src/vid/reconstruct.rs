@@ -65,6 +65,13 @@ pub struct VidReconstructor<T: NodeType> {
     reconstructed: BTreeSet<ViewNumber>,
     tasks: JoinSet<ReconstructResult<T>>,
     calculations: BTreeMap<ViewNumber, AbortHandle>,
+    /// While set, reconstructions that become ready are recorded in
+    /// [`Self::deferred`] instead of started, so a block this node is
+    /// dispersing gets the rayon pool to itself (see [`crate::vid::gate`]).
+    build_active: bool,
+    /// Views ready to reconstruct, held back while `build_active`. Drained in
+    /// view order by [`Self::set_build_active`] once the dispersal finishes.
+    deferred: BTreeSet<ViewNumber>,
     /// Optional leader-event tracer (wired by the bench).  Production builds
     /// leave this `None`.
     tracer: Option<crate::leader_trace::LeaderTracerHandle>,
@@ -103,7 +110,39 @@ impl<T: NodeType> VidReconstructor<T> {
             reconstructed: BTreeSet::new(),
             tasks: JoinSet::new(),
             calculations: BTreeMap::new(),
+            build_active: false,
+            deferred: BTreeSet::new(),
             tracer: None,
+        }
+    }
+
+    /// Hold back (or release) reconstruction while this node disperses a block
+    /// it built. Releasing starts every view held back, oldest first — the
+    /// order they would have run in anyway.
+    ///
+    /// Deferral only postpones *starting* a reconstruction: an already-running
+    /// one is left alone (aborting would discard completed decode work), and a
+    /// dispersal never waits on a reconstruction, so the held-back views are
+    /// always released.
+    pub fn set_build_active(&mut self, active: bool) {
+        if self.build_active == active {
+            return;
+        }
+        self.build_active = active;
+        if active {
+            // Reconstructions already running are the ceiling on what deferral
+            // can protect this dispersal from.
+            for view in self.calculations.keys() {
+                crate::trace_leader_event!(
+                    self.tracer,
+                    *view,
+                    crate::leader_trace::LeaderEvent::RecoverAlreadyRunning
+                );
+            }
+            return;
+        }
+        for view in std::mem::take(&mut self.deferred) {
+            self.try_reconstruct(view);
         }
     }
 
@@ -235,6 +274,19 @@ impl<T: NodeType> VidReconstructor<T> {
         let Some(common) = accumulator.common.clone() else {
             return;
         };
+        // Ready, but this node is dispersing a block it built: hold the view
+        // back so the dispersal keeps the rayon pool. Nothing is discarded —
+        // the accumulator stays intact and `set_build_active(false)` starts it.
+        if self.build_active {
+            if self.deferred.insert(view) {
+                crate::trace_leader_event!(
+                    self.tracer,
+                    view,
+                    crate::leader_trace::LeaderEvent::RecoverDeferred
+                );
+            }
+            return;
+        }
         let payload_commitment = accumulator.payload_commitment;
         let metadata = accumulator.metadata.clone();
         let shares: Vec<(T::SignatureKey, AvidmGf2Share)> = accumulator
@@ -287,6 +339,7 @@ impl<T: NodeType> VidReconstructor<T> {
         self.pending = self.pending.split_off(&view_number);
         self.accumulators = self.accumulators.split_off(&view_number);
         self.reconstructed = self.reconstructed.split_off(&view_number);
+        self.deferred = self.deferred.split_off(&view_number);
     }
 
     /// Stop tracking `view`.
@@ -299,6 +352,7 @@ impl<T: NodeType> VidReconstructor<T> {
         self.reconstructed.insert(view);
         self.pending.remove(&view);
         self.accumulators.remove(&view);
+        self.deferred.remove(&view);
         if let Some(handle) = self.calculations.remove(&view) {
             handle.abort();
         }

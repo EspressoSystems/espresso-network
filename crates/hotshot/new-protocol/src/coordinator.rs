@@ -55,7 +55,7 @@ use crate::{
     proposal::{ProposalValidator, VidShareValidator},
     state::{HeaderRequest, StateEntry, StateManager, StateManagerOutput},
     storage::{NewProtocolStorage, Storage},
-    vid::{VidFragmentAccumulator, VidReconstructor},
+    vid::{DispersalGate, VidFragmentAccumulator, VidReconstructor},
     vote::{EpochRootTally, SimpleTally, VoteCollector},
 };
 
@@ -143,6 +143,16 @@ pub struct Coordinator<T: NodeType, S> {
     invalid_certs_at_decide: u64,
     #[builder(skip)]
     payload_txn_bytes: BTreeMap<ViewNumber, usize>,
+    /// Set while this node is dispersing a block it built (encode + fan-out).
+    #[builder(default)]
+    dispersal_gate: DispersalGate,
+    /// Hold VID reconstruction back while dispersing, so the leader's shares
+    /// reach the committee sooner. Off by default: it trades this node's own
+    /// decode latency for faster dispersal, which only pays off when the
+    /// committee is large enough that this node's vote is never the one a
+    /// certificate waits on.
+    #[builder(default)]
+    defer_reconstruction: bool,
 }
 
 #[bon]
@@ -279,7 +289,7 @@ where
         let participation = ParticipationTracker::new(&membership_coordinator, anchor_epoch);
 
         let lock = upgrade_lock.clone();
-        Self::builder()
+        let mut coordinator = Self::builder()
             .consensus(consensus)
             .network(network)
             .state_manager(state_manager)
@@ -337,7 +347,11 @@ where
             .public_key(public_key)
             .maybe_metrics(coordinator_metrics)
             .participation(participation)
-            .build()
+            .build();
+        // The builder is constructed before the coordinator owns the gate.
+        let gate = coordinator.dispersal_gate.clone();
+        coordinator.block_builder.set_dispersal_gate(gate);
+        coordinator
     }
 
     /// Emit `ViewChanged(current_view + 1)` and, if leader, a
@@ -415,6 +429,7 @@ where
 
     pub async fn next_consensus_input(&mut self) -> Result<ConsensusInput<T>, CoordinatorError> {
         loop {
+            self.sync_dispersal_gate();
             select! {
                 message = self.network.receive() => match message {
                     Ok(m) => {
@@ -652,7 +667,26 @@ where
     }
 
     pub fn apply_consensus(&mut self, input: ConsensusInput<T>) {
-        self.consensus.apply(input, &mut self.outbox)
+        self.consensus.apply(input, &mut self.outbox);
+        self.sync_dispersal_gate();
+    }
+
+    /// Match reconstruction's hold to whether a dispersal is in flight.
+    ///
+    /// Called wherever the loop can observe a change: after applying an input,
+    /// and each time round the select loop (which is also where a release
+    /// drains the held-back views, before the next await).
+    fn sync_dispersal_gate(&mut self) {
+        if self.defer_reconstruction {
+            self.vid_reconstructor
+                .set_build_active(self.dispersal_gate.active());
+        }
+    }
+
+    /// Share this node's dispersal gate — the bench builds and disperses its
+    /// own synthetic blocks, so it must mark those dispersals itself.
+    pub fn dispersal_gate(&self) -> DispersalGate {
+        self.dispersal_gate.clone()
     }
 
     pub fn retire_reconstruction(&mut self, view: ViewNumber) {

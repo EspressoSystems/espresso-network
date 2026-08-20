@@ -51,6 +51,12 @@ pub enum LeaderEvent {
     /// serial post-processing can be measured separately.
     RecoverVMinus1DecodeEnd,
     RecoverVMinus1End,
+    /// Reconstruction was ready to start but held back because this node is
+    /// dispersing a block it built; it starts when the dispersal finishes.
+    RecoverDeferred,
+    /// Reconstruction was already running when a dispersal began, so deferring
+    /// could not protect that dispersal. Measures the ceiling on the deferral.
+    RecoverAlreadyRunning,
 
     // Phase 6 - cert1[V-1] formation gates Phase 7.
     Cert1VMinus1InputDispatched,
@@ -99,6 +105,8 @@ impl LeaderEvent {
             RecoverVMinus1Start => "recover_v_minus_1_start",
             RecoverVMinus1DecodeEnd => "recover_v_minus_1_decode_end",
             RecoverVMinus1End => "recover_v_minus_1_end",
+            RecoverDeferred => "recover_deferred",
+            RecoverAlreadyRunning => "recover_already_running",
             Cert1VMinus1InputDispatched => "cert1_v_minus_1_input_dispatched",
             Vote2VMinus1Signed => "vote2_v_minus_1_signed",
             Vote2VMinus1Queued => "vote2_v_minus_1_queued",

@@ -35,7 +35,7 @@ use crate::{
     message::{DedupManifest, Proposal, TransactionMessage},
     network::Sender,
     state::HeaderRequest,
-    vid::fanout,
+    vid::{DispersalGate, fanout},
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -118,6 +118,9 @@ pub struct BlockBuilder<T: NodeType> {
     // `handle_timeout_certificate`) don't dedup against each other.
     calculations: BTreeMap<(ViewNumber, Commitment<Leaf2<T>>), AbortHandle>,
     tasks: JoinSet<Result<BlockBuilderOutput<T>, BlockError>>,
+    /// Marks dispersal in flight so the coordinator can hold reconstruction
+    /// back until the shares are out. Default gate = feature off.
+    dispersal_gate: DispersalGate,
 }
 
 impl<T: NodeType> BlockBuilder<T> {
@@ -147,6 +150,7 @@ impl<T: NodeType> BlockBuilder<T> {
             current_view: ViewNumber::genesis(),
             calculations: BTreeMap::new(),
             tasks: JoinSet::new(),
+            dispersal_gate: DispersalGate::default(),
             tracer: None,
         }
     }
@@ -154,6 +158,12 @@ impl<T: NodeType> BlockBuilder<T> {
     /// Register a leader-event tracer. Production builds leave this `None`.
     pub fn set_tracer(&mut self, tracer: Option<crate::leader_trace::LeaderTracerHandle>) {
         self.tracer = tracer;
+    }
+
+    /// Share the coordinator's dispersal gate so reconstruction can be held
+    /// back while this builder is dispersing.
+    pub fn set_dispersal_gate(&mut self, gate: DispersalGate) {
+        self.dispersal_gate = gate;
     }
 
     pub fn request_block(&mut self, request: BlockAndHeaderRequest<T>) {
@@ -175,6 +185,10 @@ impl<T: NodeType> BlockBuilder<T> {
         let public_key = self.public_key.clone();
         let private_key = self.private_key.clone();
         let tracer = self.tracer.clone();
+        // Entered inside the task, immediately before the erasure coding, so
+        // the empty-block throttle below and payload assembly don't hold
+        // reconstruction back — only the dispersal itself does.
+        let dispersal_gate = self.dispersal_gate.clone();
 
         let handle = self.tasks.spawn(async move {
             // Throttle empty block production: when no transactions are pending,
@@ -215,6 +229,10 @@ impl<T: NodeType> BlockBuilder<T> {
                     view,
                     crate::leader_trace::LeaderEvent::NsDisperseStart
                 );
+                // Held until the shares are fanned out, not merely encoded: the
+                // fan-out is the larger half of the dispersal and contends for
+                // the same rayon pool.
+                let dispersal = dispersal_gate.enter();
                 let (commitment, common, shares, recipients) =
                     spawn_blocking(move || -> Result<_, BlockError> {
                         let params = VidDisperse2::<T>::disperse_params(
@@ -262,6 +280,7 @@ impl<T: NodeType> BlockBuilder<T> {
                 // Surface fanout failures and panics; a detached blocking task
                 // would otherwise swallow them silently.
                 tokio::spawn(async move {
+                    let _dispersal = dispersal;
                     match fanout_handle.await {
                         Ok(Ok(())) => {},
                         Ok(Err(err)) => error!(%view, %err, "vid share fanout failed"),

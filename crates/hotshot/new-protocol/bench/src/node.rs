@@ -20,7 +20,7 @@ use hotshot_new_protocol::{
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
-    vid::{VidReconstructor, fanout},
+    vid::{DispersalGate, DispersalGuard, VidReconstructor, fanout},
     vote::VoteCollector,
 };
 use hotshot_types::{
@@ -58,6 +58,9 @@ struct BenchDisperser {
     membership: EpochMembershipCoordinator<TestTypes>,
     public_key: BLSPubKey,
     private_key: <BLSPubKey as SignatureKey>::PrivateKey,
+    /// Shared with the coordinator: marks the bench's own dispersals so
+    /// reconstruction can be held back while they run.
+    gate: DispersalGate,
 }
 
 /// Build and run a single benchmark node.
@@ -86,11 +89,12 @@ pub async fn run(cfg: NodeConfig) -> Result<()> {
         Duration::from_millis(cfg.sampler_tick_ms),
     );
 
-    let disperser = BenchDisperser {
+    let mut disperser = BenchDisperser {
         network: network.sender().clone(),
         membership: membership.clone(),
         public_key,
         private_key: private_key.clone(),
+        gate: DispersalGate::default(),
     };
 
     let coordinator = build_coordinator(
@@ -103,6 +107,9 @@ pub async fn run(cfg: NodeConfig) -> Result<()> {
         tracer.clone() as LeaderTracerHandle,
     )
     .await;
+    // The bench builds and disperses its own blocks, so it marks those
+    // dispersals on the coordinator's gate itself.
+    disperser.gate = coordinator.dispersal_gate();
 
     let result = run_instrumented(coordinator, &cfg, disperser, tracer.clone()).await;
     if let Err(err) = tracer.flush() {
@@ -281,6 +288,7 @@ async fn build_coordinator(
         .outbox(Outbox::new())
         .timer(timer)
         .public_key(public_key)
+        .defer_reconstruction(cfg.defer_reconstruction)
         .build();
 
     // Emit initial ViewChanged and (for the leader) RequestBlockAndHeader.
@@ -354,6 +362,9 @@ async fn run_instrumented(
                 let tracer = tracer.clone();
                 let (size, namespaces) = (cfg.block_size, cfg.namespaces);
                 let req = req.clone();
+                // Mark the dispersal in flight before the build task starts, so
+                // reconstruction is held back for the whole encode + fan-out.
+                let guard = disperser.gate.enter();
                 builds.spawn_blocking(move || {
                     let td = build_test_block(
                         size,
@@ -362,6 +373,7 @@ async fn run_instrumented(
                         req.view,
                         req.epoch,
                         Some(tracer),
+                        guard,
                     );
                     BuiltBlock { req, td }
                 });
@@ -466,6 +478,7 @@ fn build_test_block(
     view: ViewNumber,
     epoch: EpochNumber,
     tracer: Option<LeaderTracerHandle>,
+    dispersal: DispersalGuard,
 ) -> TestBlock {
     // Split the configured payload into many BENCH_TX_BYTES-byte transactions.
     // At least one tx so an empty `--block-size=0` config still produces a
@@ -542,6 +555,7 @@ fn build_test_block(
         )
     });
     tokio::spawn(async move {
+        let _dispersal = dispersal;
         match fanout_handle.await {
             Ok(Ok(())) => {},
             Ok(Err(err)) => error!(%view, %err, "bench vid fanout failed"),

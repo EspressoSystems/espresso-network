@@ -205,6 +205,70 @@ async fn test_no_duplicate_reconstruction_after_threshold() {
     .await;
 }
 
+/// While a dispersal is in flight, a view that reaches the threshold is held
+/// back rather than reconstructed, and runs as soon as the dispersal ends.
+#[tokio::test]
+async fn test_reconstruction_deferred_while_dispersing() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let mut reconstructor = VidReconstructor::<TestTypes>::new();
+
+    reconstructor.set_build_active(true);
+    handle_proposal(&mut reconstructor, view);
+    for i in 0..view.vid_shares.len() as u64 {
+        feed(&mut reconstructor, honest_share(view, i));
+    }
+    assert_no_reconstruction(&mut reconstructor, "a dispersal in flight").await;
+
+    // Releasing the gate must start the held-back reconstruction.
+    reconstructor.set_build_active(false);
+    expect_reconstruction(&mut reconstructor, view).await;
+}
+
+/// Releasing a gate that held nothing back must not reconstruct anything, and
+/// a view retired while deferred must stay retired once the gate releases.
+#[tokio::test]
+async fn test_deferred_view_retired_before_release() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let mut reconstructor = VidReconstructor::<TestTypes>::new();
+
+    reconstructor.set_build_active(true);
+    handle_proposal(&mut reconstructor, view);
+    for i in 0..view.vid_shares.len() as u64 {
+        feed(&mut reconstructor, honest_share(view, i));
+    }
+    // The view is decided (or timed out) while its reconstruction is held back.
+    reconstructor.retire_view(view.view_number);
+    reconstructor.set_build_active(false);
+
+    assert_no_reconstruction(
+        &mut reconstructor,
+        "a view retired while deferred should not reconstruct on release",
+    )
+    .await;
+}
+
+/// Deferral must not lose shares that arrive while the gate is held: a view
+/// that only reaches the threshold mid-dispersal still reconstructs on release.
+#[tokio::test]
+async fn test_shares_arriving_during_dispersal_are_kept() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let mut reconstructor = VidReconstructor::<TestTypes>::new();
+
+    handle_proposal(&mut reconstructor, view);
+    reconstructor.set_build_active(true);
+    // Every share arrives only after the gate is held.
+    for i in 0..view.vid_shares.len() as u64 {
+        feed(&mut reconstructor, honest_share(view, i));
+    }
+    assert_no_reconstruction(&mut reconstructor, "shares arriving during a dispersal").await;
+
+    reconstructor.set_build_active(false);
+    expect_reconstruction(&mut reconstructor, view).await;
+}
+
 /// `retire_view` should suppress reconstruction for the retired view
 /// even when the proposal and threshold-plus shares are fed in afterwards.
 #[tokio::test]

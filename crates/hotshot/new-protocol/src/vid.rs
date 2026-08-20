@@ -29,9 +29,11 @@
 
 pub mod fanout;
 mod fragments;
+mod gate;
 mod reconstruct;
 
 pub use fragments::{VidFragmentAccumulator, VidFragmentError};
+pub use gate::{DispersalGate, DispersalGuard};
 pub use reconstruct::{
     VidReconstructError, VidReconstructErrorKind, VidReconstructOutput, VidReconstructor,
 };
