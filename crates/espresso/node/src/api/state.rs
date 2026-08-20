@@ -3,9 +3,12 @@
 //! This module provides implementations for both v1::RewardApi (internal types)
 //! and proto::RewardApi (proto types), backed by the same data source.
 
-use std::{ops::Bound, time::Duration};
+use std::{
+    ops::{Bound, Deref},
+    time::Duration,
+};
 
-use alloy::primitives::U256;
+use alloy::primitives::{U256, utils::format_ether};
 use async_trait::async_trait;
 use committable::Committable as _;
 use disco_types::{error::Error as _, status::StatusCode};
@@ -16,7 +19,7 @@ use espresso_api::{
         RewardClaimInput, RewardMerkleProofV2, RewardMerkleTreeV2Data, merkle_node,
         reward_merkle_proof_v2::ProofType,
     },
-    v1::HotShotAvailabilityApi,
+    v1::{self, HotShotAvailabilityApi},
 };
 use espresso_types::{
     NamespaceId, NamespaceProofQueryData, NsProof, SeqTypes,
@@ -69,10 +72,11 @@ use tagged_base64::TaggedBase64;
 use super::{
     RewardMerkleTreeDataSource, RewardMerkleTreeV2Data as InternalRewardTreeData,
     data_source::{
-        CatchupDataSource as _, DatabaseMetadataSource as _, HotShotConfigDataSource as _,
-        NodeKeysDataSource, NodePublicKeys, NodeStateDataSource as _, PruningDataSource as _,
-        RequestResponseDataSource as _, StakeTableDataSource, StateCertDataSource,
-        StateCertFetchingDataSource, StateSignatureDataSource, TokenDataSource as _,
+        CatchupDataSource, DatabaseMetadataSource, HotShotConfigDataSource, MigrationStatus,
+        NodeKeysDataSource, NodePublicKeys, NodeStateDataSource, PruningDataSource,
+        RequestResponseDataSource, StakeTableDataSource, StakeTableWithEpochNumber,
+        StateCertDataSource, StateCertFetchingDataSource, StateSignatureDataSource,
+        SubmitDataSource, TableSize, TokenDataSource,
     },
 };
 
@@ -277,7 +281,7 @@ impl<D> NodeApiStateImpl<D> {
         // Convert each account/amount pair to proto format
         let amounts = amounts_vec
             .iter()
-            .map(|(account, amount)| espresso_api::proto::RewardAmount {
+            .map(|(account, amount)| proto::RewardAmount {
                 address: format!("{:#x}", account.0),
                 amount: amount.0.to_string(), // Decimal string
             })
@@ -333,7 +337,7 @@ impl<D> NodeApiStateImpl<D> {
             .map(|p| self.serialize_ns_proof(p))
             .transpose()?;
 
-        Ok(espresso_api::proto::NamespaceProofResponse {
+        Ok(proto::NamespaceProofResponse {
             transactions,
             proof,
         })
@@ -345,7 +349,7 @@ impl<D> NodeApiStateImpl<D> {
     ) -> anyhow::Result<proto::IncorrectEncodingProofResponse> {
         // Serialize the VID proof to JSON string
         let proof_data = serde_json::to_string(&value.0)?;
-        Ok(espresso_api::proto::IncorrectEncodingProofResponse {
+        Ok(proto::IncorrectEncodingProofResponse {
             proof: Some(proto::AvidMIncorrectEncodingNsProof { proof_data }),
         })
     }
@@ -354,30 +358,30 @@ impl<D> NodeApiStateImpl<D> {
 
     fn serialize_state_certificate(
         &self,
-        value: &espresso_types::StateCertQueryDataV2<espresso_types::SeqTypes>,
+        value: &espresso_types::StateCertQueryDataV2<SeqTypes>,
     ) -> anyhow::Result<proto::StateCertificateResponse> {
         let certificate = self.serialize_light_client_cert(&value.0)?;
 
-        Ok(espresso_api::proto::StateCertificateResponse {
+        Ok(proto::StateCertificateResponse {
             certificate: Some(certificate),
         })
     }
 
     fn serialize_stake_table(
         &self,
-        value: &Vec<hotshot_types::PeerConfig<espresso_types::SeqTypes>>,
+        value: &Vec<hotshot_types::PeerConfig<SeqTypes>>,
     ) -> anyhow::Result<proto::StakeTableResponse> {
         let peers: Result<Vec<_>, _> = value
             .iter()
             .map(|peer| self.serialize_peer_config(peer))
             .collect();
 
-        Ok(espresso_api::proto::StakeTableResponse { peers: peers? })
+        Ok(proto::StakeTableResponse { peers: peers? })
     }
 
     fn serialize_peer_config(
         &self,
-        peer: &hotshot_types::PeerConfig<espresso_types::SeqTypes>,
+        peer: &hotshot_types::PeerConfig<SeqTypes>,
     ) -> anyhow::Result<proto::PeerConfig> {
         let stake_table_entry = proto::StakeTableEntry {
             stake_key: Some(proto::BlsPublicKey {
@@ -424,9 +428,7 @@ impl<D> NodeApiStateImpl<D> {
 
     fn serialize_light_client_cert(
         &self,
-        cert: &hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<
-            espresso_types::SeqTypes,
-        >,
+        cert: &hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<SeqTypes>,
     ) -> anyhow::Result<proto::LightClientStateUpdateCertificateV2> {
         let signatures: Result<Vec<_>, anyhow::Error> = cert
             .signatures
@@ -525,7 +527,7 @@ impl<D> NodeApiStateImpl<D> {
 #[allow(private_bounds)]
 impl<D> NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D: Deref + Clone + Send + Sync + 'static,
     D::Target: RewardMerkleTreeDataSource + Send + Sync,
 {
     async fn fetch_reward_claim_input(
@@ -661,9 +663,9 @@ where
 }
 
 #[tonic::async_trait]
-impl<D> espresso_api::proto::reward_service_server::RewardService for NodeApiStateImpl<D>
+impl<D> proto::reward_service_server::RewardService for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D: Deref + Clone + Send + Sync + 'static,
     D::Target: RewardMerkleTreeDataSource + Send + Sync,
 {
     async fn get_reward_claim_input(
@@ -754,18 +756,18 @@ where
 // ============================================================================
 
 #[async_trait]
-impl<D> espresso_api::v1::RewardApi for NodeApiStateImpl<D>
+impl<D> v1::RewardApi for NodeApiStateImpl<D>
 where
-    D: RewardMerkleTreeDataSource + std::ops::Deref,
+    D: RewardMerkleTreeDataSource + Deref,
     D::Target: hotshot_query_service::merklized_state::MerklizedStateHeightPersistence
         + hotshot_query_service::merklized_state::MerklizedStateDataSource<
-            espresso_types::SeqTypes,
+            SeqTypes,
             espresso_types::v0_3::RewardMerkleTreeV1,
             {
                 <espresso_types::v0_3::RewardMerkleTreeV1 as jf_merkle_tree_compat::MerkleTreeScheme>::ARITY
             },
         > + hotshot_query_service::merklized_state::MerklizedStateDataSource<
-            espresso_types::SeqTypes,
+            SeqTypes,
             espresso_types::v0_4::RewardMerkleTreeV2,
             {
                 <espresso_types::v0_4::RewardMerkleTreeV2 as jf_merkle_tree_compat::MerkleTreeScheme>::ARITY
@@ -1031,12 +1033,12 @@ where
 
     async fn get_reward_state_path_v1(
         &self,
-        snapshot: espresso_api::v1::Snapshot,
+        snapshot: v1::Snapshot,
         key: String,
     ) -> anyhow::Result<Self::RewardStatePathV1> {
         let hs_snapshot = match snapshot {
-            espresso_api::v1::Snapshot::Height(h) => HsSnapshot::Index(h),
-            espresso_api::v1::Snapshot::Commit(c) => {
+            v1::Snapshot::Height(h) => HsSnapshot::Index(h),
+            v1::Snapshot::Commit(c) => {
                 let tb64: TaggedBase64 = c
                     .parse()
                     .map_err(|_| bad_request("failed to parse commit param"))?;
@@ -1057,12 +1059,12 @@ where
 
     async fn get_reward_state_path_v2(
         &self,
-        snapshot: espresso_api::v1::Snapshot,
+        snapshot: v1::Snapshot,
         key: String,
     ) -> anyhow::Result<Self::RewardStatePathV2> {
         let hs_snapshot = match snapshot {
-            espresso_api::v1::Snapshot::Height(h) => HsSnapshot::Index(h),
-            espresso_api::v1::Snapshot::Commit(c) => {
+            v1::Snapshot::Height(h) => HsSnapshot::Index(h),
+            v1::Snapshot::Commit(c) => {
                 let tb64: TaggedBase64 = c
                     .parse()
                     .map_err(|_| bad_request("failed to parse commit param"))?;
@@ -1091,11 +1093,11 @@ where
 #[allow(private_bounds)]
 impl<D> NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D: Deref + Clone + Send + Sync + 'static,
     D::Target: RewardMerkleTreeDataSource
-        + hotshot_query_service::availability::AvailabilityDataSource<espresso_types::SeqTypes>
-        + hotshot_query_service::node::NodeDataSource<espresso_types::SeqTypes>
-        + super::data_source::RequestResponseDataSource<espresso_types::SeqTypes>
+        + hotshot_query_service::availability::AvailabilityDataSource<SeqTypes>
+        + hotshot_query_service::node::NodeDataSource<SeqTypes>
+        + RequestResponseDataSource<SeqTypes>
         + Sync
         + Send,
 {
@@ -1306,13 +1308,13 @@ where
 }
 
 #[tonic::async_trait]
-impl<D> espresso_api::proto::data_service_server::DataService for NodeApiStateImpl<D>
+impl<D> proto::data_service_server::DataService for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D: Deref + Clone + Send + Sync + 'static,
     D::Target: RewardMerkleTreeDataSource
-        + hotshot_query_service::availability::AvailabilityDataSource<espresso_types::SeqTypes>
-        + hotshot_query_service::node::NodeDataSource<espresso_types::SeqTypes>
-        + super::data_source::RequestResponseDataSource<espresso_types::SeqTypes>
+        + hotshot_query_service::availability::AvailabilityDataSource<SeqTypes>
+        + hotshot_query_service::node::NodeDataSource<SeqTypes>
+        + RequestResponseDataSource<SeqTypes>
         + Sync
         + Send,
 {
@@ -1381,18 +1383,18 @@ where
 #[allow(private_bounds)]
 impl<D> NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D: Deref + Clone + Send + Sync + 'static,
     D::Target: RewardMerkleTreeDataSource
-        + super::data_source::StateCertDataSource
-        + super::data_source::StateCertFetchingDataSource<espresso_types::SeqTypes>
-        + super::data_source::StakeTableDataSource<espresso_types::SeqTypes>
+        + StateCertDataSource
+        + StateCertFetchingDataSource<SeqTypes>
+        + StakeTableDataSource<SeqTypes>
         + Send
         + Sync,
 {
     async fn fetch_state_certificate(
         &self,
         epoch: u64,
-    ) -> anyhow::Result<espresso_types::StateCertQueryDataV2<espresso_types::SeqTypes>> {
+    ) -> anyhow::Result<espresso_types::StateCertQueryDataV2<SeqTypes>> {
         let ds = &*self.data_source;
 
         // Try to get from local storage first
@@ -1420,20 +1422,20 @@ where
     async fn fetch_stake_table(
         &self,
         epoch: u64,
-    ) -> anyhow::Result<Vec<hotshot_types::PeerConfig<espresso_types::SeqTypes>>> {
+    ) -> anyhow::Result<Vec<hotshot_types::PeerConfig<SeqTypes>>> {
         let ds = &*self.data_source;
         ds.get_stake_table(Some(EpochNumber::new(epoch))).await
     }
 }
 
 #[tonic::async_trait]
-impl<D> espresso_api::proto::consensus_service_server::ConsensusService for NodeApiStateImpl<D>
+impl<D> proto::consensus_service_server::ConsensusService for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D: Deref + Clone + Send + Sync + 'static,
     D::Target: RewardMerkleTreeDataSource
-        + super::data_source::StateCertDataSource
-        + super::data_source::StateCertFetchingDataSource<espresso_types::SeqTypes>
-        + super::data_source::StakeTableDataSource<espresso_types::SeqTypes>
+        + StateCertDataSource
+        + StateCertFetchingDataSource<SeqTypes>
+        + StakeTableDataSource<SeqTypes>
         + Send
         + Sync,
 {
@@ -1471,42 +1473,42 @@ where
 // ============================================================================
 
 #[async_trait]
-impl<D> espresso_api::v1::AvailabilityApi for NodeApiStateImpl<D>
+impl<D> v1::AvailabilityApi for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D: Deref + Clone + Send + Sync + 'static,
     // No `RewardMerkleTreeDataSource` bound here: unlike `v1::RewardApi`, none of these methods
     // touch the reward merkle tree, so filesystem storage (which doesn't implement it) can serve
     // this module too.
-    D::Target: hotshot_query_service::availability::AvailabilityDataSource<espresso_types::SeqTypes>
-        + hotshot_query_service::node::NodeDataSource<espresso_types::SeqTypes>
-        + super::data_source::RequestResponseDataSource<espresso_types::SeqTypes>
-        + super::data_source::StateCertDataSource
-        + super::data_source::StateCertFetchingDataSource<espresso_types::SeqTypes>
+    D::Target: hotshot_query_service::availability::AvailabilityDataSource<SeqTypes>
+        + hotshot_query_service::node::NodeDataSource<SeqTypes>
+        + RequestResponseDataSource<SeqTypes>
+        + StateCertDataSource
+        + StateCertFetchingDataSource<SeqTypes>
         + Send
         + Sync,
 {
     type NamespaceProofQueryData = espresso_types::NamespaceProofQueryData;
     type IncorrectEncodingProof = espresso_types::v0_3::AvidMIncorrectEncodingNsProof;
-    type StateCertQueryDataV1 = espresso_types::StateCertQueryDataV1<espresso_types::SeqTypes>;
-    type StateCertQueryDataV2 = espresso_types::StateCertQueryDataV2<espresso_types::SeqTypes>;
+    type StateCertQueryDataV1 = espresso_types::StateCertQueryDataV1<SeqTypes>;
+    type StateCertQueryDataV2 = espresso_types::StateCertQueryDataV2<SeqTypes>;
 
     async fn get_namespace_proof(
         &self,
-        block_id: espresso_api::v1::availability::BlockId,
+        block_id: v1::availability::BlockId,
         namespace: u32,
     ) -> anyhow::Result<Self::NamespaceProofQueryData> {
         let ns_id = NamespaceId::from(namespace);
 
         // Convert v1 BlockId to hotshot BlockId
         let hs_block_id = match block_id {
-            espresso_api::v1::availability::BlockId::Height(h) => HsBlockId::Number(h as usize),
-            espresso_api::v1::availability::BlockId::Hash(h) => {
+            v1::availability::BlockId::Height(h) => HsBlockId::Number(h as usize),
+            v1::availability::BlockId::Hash(h) => {
                 let hash = h
                     .parse()
                     .map_err(|_| bad_request(format!("invalid block hash: {}", h)))?;
                 HsBlockId::Hash(hash)
             },
-            espresso_api::v1::availability::BlockId::PayloadHash(h) => {
+            v1::availability::BlockId::PayloadHash(h) => {
                 let payload_hash = h
                     .parse()
                     .map_err(|_| bad_request(format!("invalid payload hash: {}", h)))?;
@@ -1681,20 +1683,20 @@ where
 
     async fn get_incorrect_encoding_proof(
         &self,
-        block_id: espresso_api::v1::availability::BlockId,
+        block_id: v1::availability::BlockId,
         namespace: u32,
     ) -> anyhow::Result<Self::IncorrectEncodingProof> {
         let ns_id = NamespaceId::from(namespace);
 
         let hs_block_id = match block_id {
-            espresso_api::v1::availability::BlockId::Height(h) => HsBlockId::Number(h as usize),
-            espresso_api::v1::availability::BlockId::Hash(h) => {
+            v1::availability::BlockId::Height(h) => HsBlockId::Number(h as usize),
+            v1::availability::BlockId::Hash(h) => {
                 let hash = h
                     .parse()
                     .map_err(|_| anyhow::anyhow!("invalid block hash: {}", h))?;
                 HsBlockId::Hash(hash)
             },
-            espresso_api::v1::availability::BlockId::PayloadHash(h) => {
+            v1::availability::BlockId::PayloadHash(h) => {
                 let payload_hash = h
                     .parse()
                     .map_err(|_| anyhow::anyhow!("invalid payload hash: {}", h))?;
@@ -1859,27 +1861,24 @@ fn large_object_range_limit() -> usize {
 #[async_trait]
 impl<D> HotShotAvailabilityApi for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target: AvailabilityDataSource<espresso_types::SeqTypes> + Send + Sync,
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: AvailabilityDataSource<SeqTypes> + Send + Sync,
 {
-    type Leaf = LeafQueryData<espresso_types::SeqTypes>;
-    type Block = BlockQueryData<espresso_types::SeqTypes>;
-    type Header = HsHeader<espresso_types::SeqTypes>;
-    type Payload = PayloadQueryData<espresso_types::SeqTypes>;
-    type VidCommon = VidCommonQueryData<espresso_types::SeqTypes>;
-    type Transaction = TransactionQueryData<espresso_types::SeqTypes>;
-    type TransactionWithProof = TransactionWithProofQueryData<espresso_types::SeqTypes>;
-    type BlockSummary = BlockSummaryQueryData<espresso_types::SeqTypes>;
+    type Leaf = LeafQueryData<SeqTypes>;
+    type Block = BlockQueryData<SeqTypes>;
+    type Header = HsHeader<SeqTypes>;
+    type Payload = PayloadQueryData<SeqTypes>;
+    type VidCommon = VidCommonQueryData<SeqTypes>;
+    type Transaction = TransactionQueryData<SeqTypes>;
+    type TransactionWithProof = TransactionWithProofQueryData<SeqTypes>;
+    type BlockSummary = BlockSummaryQueryData<SeqTypes>;
     type Limits = HsLimits;
-    type Cert2 = Certificate2<espresso_types::SeqTypes>;
+    type Cert2 = Certificate2<SeqTypes>;
 
-    async fn get_leaf(
-        &self,
-        id: espresso_api::v1::availability::LeafId,
-    ) -> anyhow::Result<Self::Leaf> {
+    async fn get_leaf(&self, id: v1::availability::LeafId) -> anyhow::Result<Self::Leaf> {
         let hs_id = match id {
-            espresso_api::v1::availability::LeafId::Height(h) => HsLeafId::Number(h as usize),
-            espresso_api::v1::availability::LeafId::Hash(h) => {
+            v1::availability::LeafId::Height(h) => HsLeafId::Number(h as usize),
+            v1::availability::LeafId::Hash(h) => {
                 HsLeafId::Hash(h.parse().map_err(|_| bad_request("invalid leaf hash"))?)
             },
         };
@@ -1910,10 +1909,7 @@ where
         Ok(results)
     }
 
-    async fn get_header(
-        &self,
-        id: espresso_api::v1::availability::BlockId,
-    ) -> anyhow::Result<Self::Header> {
+    async fn get_header(&self, id: v1::availability::BlockId) -> anyhow::Result<Self::Header> {
         let hs_id = block_id_to_hs(id)?;
         let ds = &*self.data_source;
         ds.get_header(hs_id)
@@ -1946,10 +1942,7 @@ where
         Ok(results)
     }
 
-    async fn get_block(
-        &self,
-        id: espresso_api::v1::availability::BlockId,
-    ) -> anyhow::Result<Self::Block> {
+    async fn get_block(&self, id: v1::availability::BlockId) -> anyhow::Result<Self::Block> {
         let hs_id = block_id_to_hs(id)?;
         let ds = &*self.data_source;
         ds.get_block(hs_id)
@@ -1978,10 +1971,7 @@ where
         Ok(results)
     }
 
-    async fn get_payload(
-        &self,
-        id: espresso_api::v1::availability::PayloadId,
-    ) -> anyhow::Result<Self::Payload> {
+    async fn get_payload(&self, id: v1::availability::PayloadId) -> anyhow::Result<Self::Payload> {
         let hs_id = payload_id_to_hs(id)?;
         let ds = &*self.data_source;
         ds.get_payload(hs_id)
@@ -2016,7 +2006,7 @@ where
 
     async fn get_vid_common(
         &self,
-        id: espresso_api::v1::availability::BlockId,
+        id: v1::availability::BlockId,
     ) -> anyhow::Result<Self::VidCommon> {
         let hs_id = block_id_to_hs(id)?;
         let ds = &*self.data_source;
@@ -2081,9 +2071,7 @@ where
 
     async fn get_transaction_by_hash(&self, hash: String) -> anyhow::Result<Self::Transaction> {
         let ds = &*self.data_source;
-        let tx_hash: hotshot_query_service::availability::TransactionHash<
-            espresso_types::SeqTypes,
-        > = hash
+        let tx_hash: hotshot_query_service::availability::TransactionHash<SeqTypes> = hash
             .parse()
             .map_err(|_| bad_request(format!("invalid transaction hash: {}", hash)))?;
         let bwt = ds
@@ -2143,9 +2131,7 @@ where
         let ds = &*self.data_source;
         let timeout = FETCH_TIMEOUT;
 
-        let tx_hash: hotshot_query_service::availability::TransactionHash<
-            espresso_types::SeqTypes,
-        > = hash
+        let tx_hash: hotshot_query_service::availability::TransactionHash<SeqTypes> = hash
             .parse()
             .map_err(|_| bad_request(format!("invalid transaction hash: {}", hash)))?;
         let bwt = ds
@@ -2289,18 +2275,16 @@ where
     }
 }
 
-fn block_id_to_hs(
-    id: espresso_api::v1::availability::BlockId,
-) -> anyhow::Result<HsBlockId<SeqTypes>> {
+fn block_id_to_hs(id: v1::availability::BlockId) -> anyhow::Result<HsBlockId<SeqTypes>> {
     match id {
-        espresso_api::v1::availability::BlockId::Height(h) => Ok(HsBlockId::Number(h as usize)),
-        espresso_api::v1::availability::BlockId::Hash(h) => {
+        v1::availability::BlockId::Height(h) => Ok(HsBlockId::Number(h as usize)),
+        v1::availability::BlockId::Hash(h) => {
             let hash = h
                 .parse()
                 .map_err(|_| bad_request(format!("invalid block hash: {}", h)))?;
             Ok(HsBlockId::Hash(hash))
         },
-        espresso_api::v1::availability::BlockId::PayloadHash(h) => {
+        v1::availability::BlockId::PayloadHash(h) => {
             let payload_hash = h
                 .parse()
                 .map_err(|_| bad_request(format!("invalid payload hash: {}", h)))?;
@@ -2309,18 +2293,16 @@ fn block_id_to_hs(
     }
 }
 
-fn payload_id_to_hs(
-    id: espresso_api::v1::availability::PayloadId,
-) -> anyhow::Result<HsBlockId<SeqTypes>> {
+fn payload_id_to_hs(id: v1::availability::PayloadId) -> anyhow::Result<HsBlockId<SeqTypes>> {
     match id {
-        espresso_api::v1::availability::PayloadId::Height(h) => Ok(HsBlockId::Number(h as usize)),
-        espresso_api::v1::availability::PayloadId::Hash(h) => {
+        v1::availability::PayloadId::Height(h) => Ok(HsBlockId::Number(h as usize)),
+        v1::availability::PayloadId::Hash(h) => {
             let payload_hash = h
                 .parse()
                 .map_err(|_| bad_request(format!("invalid payload hash: {}", h)))?;
             Ok(HsBlockId::PayloadHash(payload_hash))
         },
-        espresso_api::v1::availability::PayloadId::BlockHash(h) => {
+        v1::availability::PayloadId::BlockHash(h) => {
             let hash = h
                 .parse()
                 .map_err(|_| bad_request(format!("invalid block hash: {}", h)))?;
@@ -2337,11 +2319,11 @@ fn classify_query_error(err: hotshot_query_service::QueryError) -> anyhow::Error
 }
 
 #[async_trait]
-impl<D> espresso_api::v1::BlockStateApi for NodeApiStateImpl<D>
+impl<D> v1::BlockStateApi for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D: Deref + Clone + Send + Sync + 'static,
     D::Target: hotshot_query_service::merklized_state::MerklizedStateDataSource<
-            espresso_types::SeqTypes,
+            SeqTypes,
             espresso_types::BlockMerkleTree,
             { <espresso_types::BlockMerkleTree as jf_merkle_tree_compat::MerkleTreeScheme>::ARITY },
         > + hotshot_query_service::merklized_state::MerklizedStateHeightPersistence
@@ -2357,12 +2339,12 @@ where
 
     async fn get_block_state_path(
         &self,
-        snapshot: espresso_api::v1::Snapshot,
+        snapshot: v1::Snapshot,
         key: String,
     ) -> anyhow::Result<Self::MerkleProof> {
         let hs_snapshot = match snapshot {
-            espresso_api::v1::Snapshot::Height(h) => HsSnapshot::Index(h),
-            espresso_api::v1::Snapshot::Commit(c) => {
+            v1::Snapshot::Height(h) => HsSnapshot::Index(h),
+            v1::Snapshot::Commit(c) => {
                 let tb64: TaggedBase64 = c
                     .parse()
                     .map_err(|_| bad_request("failed to parse commit param"))?;
@@ -2376,11 +2358,11 @@ where
             .parse()
             .map_err(|_| bad_request("failed to parse Key param"))?;
         let ds = &*self.data_source;
-        MerklizedStateDataSource::<
-            espresso_types::SeqTypes,
-            espresso_types::BlockMerkleTree,
-            _,
-        >::get_path(ds, hs_snapshot, key)
+        MerklizedStateDataSource::<SeqTypes, espresso_types::BlockMerkleTree, _>::get_path(
+            ds,
+            hs_snapshot,
+            key,
+        )
         .await
         .map_err(classify_query_error)
     }
@@ -2395,11 +2377,11 @@ where
 }
 
 #[async_trait]
-impl<D> espresso_api::v1::FeeStateApi for NodeApiStateImpl<D>
+impl<D> v1::FeeStateApi for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D: Deref + Clone + Send + Sync + 'static,
     D::Target: hotshot_query_service::merklized_state::MerklizedStateDataSource<
-            espresso_types::SeqTypes,
+            SeqTypes,
             espresso_types::FeeMerkleTree,
             { <espresso_types::FeeMerkleTree as jf_merkle_tree_compat::MerkleTreeScheme>::ARITY },
         > + hotshot_query_service::merklized_state::MerklizedStateHeightPersistence
@@ -2416,12 +2398,12 @@ where
 
     async fn get_fee_state_path(
         &self,
-        snapshot: espresso_api::v1::Snapshot,
+        snapshot: v1::Snapshot,
         key: String,
     ) -> anyhow::Result<Self::MerkleProof> {
         let hs_snapshot = match snapshot {
-            espresso_api::v1::Snapshot::Height(h) => HsSnapshot::Index(h),
-            espresso_api::v1::Snapshot::Commit(c) => {
+            v1::Snapshot::Height(h) => HsSnapshot::Index(h),
+            v1::Snapshot::Commit(c) => {
                 let tb64: TaggedBase64 = c
                     .parse()
                     .map_err(|_| bad_request("failed to parse commit param"))?;
@@ -2435,11 +2417,11 @@ where
             .parse()
             .map_err(|_| bad_request("failed to parse Key param"))?;
         let ds = &*self.data_source;
-        MerklizedStateDataSource::<
-            espresso_types::SeqTypes,
-            espresso_types::FeeMerkleTree,
-            _,
-        >::get_path(ds, hs_snapshot, key)
+        MerklizedStateDataSource::<SeqTypes, espresso_types::FeeMerkleTree, _>::get_path(
+            ds,
+            hs_snapshot,
+            key,
+        )
         .await
         .map_err(classify_query_error)
     }
@@ -2469,11 +2451,11 @@ where
             espresso_types::FeeAccount,
             jf_merkle_tree_compat::prelude::Sha3Node,
             256,
-        > = MerklizedStateDataSource::<
-            espresso_types::SeqTypes,
-            espresso_types::FeeMerkleTree,
-            _,
-        >::get_path(ds, HsSnapshot::Index(height as u64), key)
+        > = MerklizedStateDataSource::<SeqTypes, espresso_types::FeeMerkleTree, _>::get_path(
+            ds,
+            HsSnapshot::Index(height as u64),
+            key,
+        )
         .await
         .map_err(classify_query_error)?;
         Ok(path.elem().copied())
@@ -2485,9 +2467,9 @@ where
 // ============================================================================
 
 #[async_trait]
-impl<D> espresso_api::v1::StatusApi for NodeApiStateImpl<D>
+impl<D> v1::StatusApi for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D: Deref + Clone + Send + Sync + 'static,
     D::Target: hotshot_query_service::status::StatusDataSource + NodeKeysDataSource + Send + Sync,
 {
     type Keys = NodePublicKeys;
@@ -2547,16 +2529,16 @@ fn invalid_argument(err: anyhow::Error) -> tonic::Status {
 }
 
 #[tonic::async_trait]
-impl<D> espresso_api::proto::status_service_server::StatusService for NodeApiStateImpl<D>
+impl<D> proto::status_service_server::StatusService for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D: Deref + Clone + Send + Sync + 'static,
     D::Target: hotshot_query_service::status::StatusDataSource + NodeKeysDataSource + Send + Sync,
 {
     async fn get_block_height(
         &self,
         _request: tonic::Request<proto::GetBlockHeightRequest>,
     ) -> Result<tonic::Response<proto::BlockHeightResponse>, tonic::Status> {
-        let height = <Self as espresso_api::v1::StatusApi>::block_height(self)
+        let height = <Self as v1::StatusApi>::block_height(self)
             .await
             .map_err(to_status)?;
         Ok(tonic::Response::new(proto::BlockHeightResponse { height }))
@@ -2566,7 +2548,7 @@ where
         &self,
         _request: tonic::Request<proto::GetSuccessRateRequest>,
     ) -> Result<tonic::Response<proto::SuccessRateResponse>, tonic::Status> {
-        let rate = <Self as espresso_api::v1::StatusApi>::success_rate(self)
+        let rate = <Self as v1::StatusApi>::success_rate(self)
             .await
             .map_err(to_status)?;
         Ok(tonic::Response::new(proto::SuccessRateResponse { rate }))
@@ -2576,7 +2558,7 @@ where
         &self,
         _request: tonic::Request<proto::GetTimeSinceLastDecideRequest>,
     ) -> Result<tonic::Response<proto::TimeSinceLastDecideResponse>, tonic::Status> {
-        let seconds = <Self as espresso_api::v1::StatusApi>::time_since_last_decide(self)
+        let seconds = <Self as v1::StatusApi>::time_since_last_decide(self)
             .await
             .map_err(to_status)?;
         Ok(tonic::Response::new(proto::TimeSinceLastDecideResponse {
@@ -2607,10 +2589,10 @@ where
 // ============================================================================
 
 #[async_trait]
-impl<D> espresso_api::v1::ConfigApi for NodeApiStateImpl<D>
+impl<D> v1::ConfigApi for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target: super::data_source::HotShotConfigDataSource + Send + Sync,
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: HotShotConfigDataSource + Send + Sync,
 {
     type HotShotConfig = espresso_types::config::PublicNetworkConfig;
     type RuntimeConfig = crate::options::PublicNodeConfig;
@@ -2639,24 +2621,22 @@ where
 // ============================================================================
 
 #[async_trait]
-impl<D> espresso_api::v1::NodeApi for NodeApiStateImpl<D>
+impl<D> v1::NodeApi for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target: hotshot_query_service::node::NodeDataSource<espresso_types::SeqTypes>
-        + super::data_source::StakeTableDataSource<espresso_types::SeqTypes>
-        + super::data_source::PruningDataSource
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: hotshot_query_service::node::NodeDataSource<SeqTypes>
+        + StakeTableDataSource<SeqTypes>
+        + PruningDataSource
         + Send
         + Sync,
 {
     type VidShare = hotshot_types::data::VidShare;
     type SyncStatus = hotshot_query_service::node::SyncStatusQueryData;
-    type HeaderWindow = hotshot_query_service::node::TimeWindowQueryData<
-        hotshot_query_service::Header<espresso_types::SeqTypes>,
-    >;
+    type HeaderWindow =
+        hotshot_query_service::node::TimeWindowQueryData<hotshot_query_service::Header<SeqTypes>>;
     type Limits = hotshot_query_service::node::Limits;
-    type StakeTable = Vec<hotshot_types::PeerConfig<espresso_types::SeqTypes>>;
-    type StakeTableCurrent =
-        super::data_source::StakeTableWithEpochNumber<espresso_types::SeqTypes>;
+    type StakeTable = Vec<hotshot_types::PeerConfig<SeqTypes>>;
+    type StakeTableCurrent = StakeTableWithEpochNumber<SeqTypes>;
     type Validators = indexmap::IndexMap<
         alloy::primitives::Address,
         espresso_types::v0_3::AuthenticatedValidator<espresso_types::PubKey>,
@@ -2664,8 +2644,8 @@ where
     type AllValidators = Vec<espresso_types::v0_3::RegisteredValidator<espresso_types::PubKey>>;
     type Participation = std::collections::HashMap<espresso_types::PubKey, f64>;
     type BlockReward = Option<espresso_types::v0_3::RewardAmount>;
-    type Block = hotshot_query_service::availability::BlockQueryData<espresso_types::SeqTypes>;
-    type Leaf = hotshot_query_service::availability::LeafQueryData<espresso_types::SeqTypes>;
+    type Block = hotshot_query_service::availability::BlockQueryData<SeqTypes>;
+    type Leaf = hotshot_query_service::availability::LeafQueryData<SeqTypes>;
 
     async fn block_height(&self) -> anyhow::Result<u64> {
         let ds = &*self.data_source;
@@ -2721,18 +2701,15 @@ where
         Ok(size as u64)
     }
 
-    async fn get_vid_share(
-        &self,
-        id: espresso_api::v1::VidShareId,
-    ) -> anyhow::Result<Self::VidShare> {
+    async fn get_vid_share(&self, id: v1::VidShareId) -> anyhow::Result<Self::VidShare> {
         let ds = &*self.data_source;
-        let node_id: HsBlockId<espresso_types::SeqTypes> = match id {
-            espresso_api::v1::VidShareId::Height(h) => HsBlockId::Number(h as usize),
-            espresso_api::v1::VidShareId::Hash(h) => HsBlockId::Hash(
+        let node_id: HsBlockId<SeqTypes> = match id {
+            v1::VidShareId::Height(h) => HsBlockId::Number(h as usize),
+            v1::VidShareId::Hash(h) => HsBlockId::Hash(
                 h.parse()
                     .map_err(|_| bad_request(format!("invalid block hash: {h}")))?,
             ),
-            espresso_api::v1::VidShareId::PayloadHash(h) => HsBlockId::PayloadHash(
+            v1::VidShareId::PayloadHash(h) => HsBlockId::PayloadHash(
                 h.parse()
                     .map_err(|_| bad_request(format!("invalid payload hash: {h}")))?,
             ),
@@ -2751,14 +2728,14 @@ where
 
     async fn get_header_window(
         &self,
-        start: espresso_api::v1::HeaderWindowStart,
+        start: v1::HeaderWindowStart,
         end: u64,
     ) -> anyhow::Result<Self::HeaderWindow> {
         let ds = &*self.data_source;
-        let start: WindowStart<espresso_types::SeqTypes> = match start {
-            espresso_api::v1::HeaderWindowStart::Time(t) => WindowStart::Time(t),
-            espresso_api::v1::HeaderWindowStart::Height(h) => WindowStart::Height(h),
-            espresso_api::v1::HeaderWindowStart::Hash(h) => WindowStart::Hash(
+        let start: WindowStart<SeqTypes> = match start {
+            v1::HeaderWindowStart::Time(t) => WindowStart::Time(t),
+            v1::HeaderWindowStart::Height(h) => WindowStart::Height(h),
+            v1::HeaderWindowStart::Hash(h) => WindowStart::Hash(
                 h.parse()
                     .map_err(|err| bad_request(format!("invalid block hash {h}: {err}")))?,
             ),
@@ -2866,13 +2843,10 @@ fn node_window_limit() -> usize {
 // ============================================================================
 
 #[async_trait]
-impl<D> espresso_api::v1::CatchupApi for NodeApiStateImpl<D>
+impl<D> v1::CatchupApi for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target: super::data_source::CatchupDataSource
-        + super::data_source::NodeStateDataSource
-        + Send
-        + Sync,
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: CatchupDataSource + NodeStateDataSource + Send + Sync,
 {
     type FeeAccount = espresso_types::FeeAccount;
     type RewardAccountV1 = espresso_types::v0_3::RewardAccountV1;
@@ -2883,14 +2857,13 @@ where
     type BlocksFrontier = super::BlocksFrontier;
     type ChainConfig = espresso_types::v0_3::ChainConfig;
     type LeafChain = Vec<espresso_types::Leaf2>;
-    type Cert2 = espresso_types::Certificate2<espresso_types::SeqTypes>;
+    type Cert2 = espresso_types::Certificate2<SeqTypes>;
     type RewardAccountQueryDataV1 = espresso_types::v0_3::RewardAccountQueryDataV1;
     type RewardMerkleTreeV1 = espresso_types::v0_3::RewardMerkleTreeV1;
     type RewardAccountQueryDataV2 = espresso_types::v0_4::RewardAccountQueryDataV2;
     type RewardMerkleTreeV2Data = serde_json::Value;
-    type StateCert = hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<
-        espresso_types::SeqTypes,
-    >;
+    type StateCert =
+        hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<SeqTypes>;
 
     async fn get_account(
         &self,
@@ -3039,9 +3012,9 @@ where
 // ============================================================================
 
 #[async_trait]
-impl<D> espresso_api::v1::SubmitApi for NodeApiStateImpl<D>
+impl<D> v1::SubmitApi for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D: Deref + Clone + Send + Sync + 'static,
     D::Target: SubmitDataSourceErased + Send + Sync,
 {
     type Transaction = espresso_types::Transaction;
@@ -3074,7 +3047,7 @@ where
     D: Send + Sync,
 {
     async fn submit_erased(&self, tx: espresso_types::Transaction) -> anyhow::Result<()> {
-        <Self as super::data_source::SubmitDataSource<N, P>>::submit(self, tx).await
+        <Self as SubmitDataSource<N, P>>::submit(self, tx).await
     }
 }
 
@@ -3087,7 +3060,7 @@ where
     P: espresso_types::v0::traits::SequencerPersistence,
 {
     async fn submit_erased(&self, tx: espresso_types::Transaction) -> anyhow::Result<()> {
-        <Self as super::data_source::SubmitDataSource<N, P>>::submit(self, tx).await
+        <Self as SubmitDataSource<N, P>>::submit(self, tx).await
     }
 }
 
@@ -3096,9 +3069,9 @@ where
 // ============================================================================
 
 #[async_trait]
-impl<D> espresso_api::v1::StateSignatureApi for NodeApiStateImpl<D>
+impl<D> v1::StateSignatureApi for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D: Deref + Clone + Send + Sync + 'static,
     D::Target: StateSignatureDataSourceErased + Send + Sync,
 {
     type Signature = hotshot_types::light_client::LCV3StateSignatureRequestBody;
@@ -3156,37 +3129,28 @@ where
 // ============================================================================
 
 #[async_trait]
-impl<D> espresso_api::v1::ExplorerApi for NodeApiStateImpl<D>
+impl<D> v1::ExplorerApi for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target:
-        hotshot_query_service::explorer::ExplorerDataSource<espresso_types::SeqTypes> + Send + Sync,
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: hotshot_query_service::explorer::ExplorerDataSource<SeqTypes> + Send + Sync,
 {
-    type BlockDetail =
-        hotshot_query_service::explorer::BlockDetailResponse<espresso_types::SeqTypes>;
-    type BlockSummaries =
-        hotshot_query_service::explorer::BlockSummaryResponse<espresso_types::SeqTypes>;
-    type TransactionDetail =
-        hotshot_query_service::explorer::TransactionDetailResponse<espresso_types::SeqTypes>;
+    type BlockDetail = hotshot_query_service::explorer::BlockDetailResponse<SeqTypes>;
+    type BlockSummaries = hotshot_query_service::explorer::BlockSummaryResponse<SeqTypes>;
+    type TransactionDetail = hotshot_query_service::explorer::TransactionDetailResponse<SeqTypes>;
     type TransactionSummaries =
-        hotshot_query_service::explorer::TransactionSummariesResponse<espresso_types::SeqTypes>;
-    type ExplorerSummary =
-        hotshot_query_service::explorer::ExplorerSummaryResponse<espresso_types::SeqTypes>;
-    type SearchResult =
-        hotshot_query_service::explorer::SearchResultResponse<espresso_types::SeqTypes>;
+        hotshot_query_service::explorer::TransactionSummariesResponse<SeqTypes>;
+    type ExplorerSummary = hotshot_query_service::explorer::ExplorerSummaryResponse<SeqTypes>;
+    type SearchResult = hotshot_query_service::explorer::SearchResultResponse<SeqTypes>;
 
-    async fn get_block_detail(
-        &self,
-        ident: espresso_api::v1::BlockIdent,
-    ) -> anyhow::Result<Self::BlockDetail> {
+    async fn get_block_detail(&self, ident: v1::BlockIdent) -> anyhow::Result<Self::BlockDetail> {
         let ds = &*self.data_source;
         let target = match ident {
-            espresso_api::v1::BlockIdent::Height(h) => BlockIdentifier::Height(h as usize),
-            espresso_api::v1::BlockIdent::Hash(h) => BlockIdentifier::Hash(
+            v1::BlockIdent::Height(h) => BlockIdentifier::Height(h as usize),
+            v1::BlockIdent::Hash(h) => BlockIdentifier::Hash(
                 h.parse()
                     .map_err(|err| bad_request(format!("invalid block hash {h}: {err}")))?,
             ),
-            espresso_api::v1::BlockIdent::Latest => BlockIdentifier::Latest,
+            v1::BlockIdent::Latest => BlockIdentifier::Latest,
         };
         ds.get_block_detail(target)
             .await
@@ -3196,7 +3160,7 @@ where
 
     async fn get_block_summaries(
         &self,
-        target: espresso_api::v1::BlockIdent,
+        target: v1::BlockIdent,
         limit: u64,
     ) -> anyhow::Result<Self::BlockSummaries> {
         let ds = &*self.data_source;
@@ -3206,12 +3170,12 @@ where
             return Err(bad_request("limit must be <= 100"));
         }
         let target = match target {
-            espresso_api::v1::BlockIdent::Height(h) => BlockIdentifier::Height(h as usize),
-            espresso_api::v1::BlockIdent::Hash(h) => BlockIdentifier::Hash(
+            v1::BlockIdent::Height(h) => BlockIdentifier::Height(h as usize),
+            v1::BlockIdent::Hash(h) => BlockIdentifier::Hash(
                 h.parse()
                     .map_err(|err| bad_request(format!("invalid block hash {h}: {err}")))?,
             ),
-            espresso_api::v1::BlockIdent::Latest => BlockIdentifier::Latest,
+            v1::BlockIdent::Latest => BlockIdentifier::Latest,
         };
         ds.get_block_summaries(GetBlockSummariesRequest(BlockRange { target, num_blocks }))
             .await
@@ -3221,18 +3185,18 @@ where
 
     async fn get_transaction_detail(
         &self,
-        ident: espresso_api::v1::TxIdent,
+        ident: v1::TxIdent,
     ) -> anyhow::Result<Self::TransactionDetail> {
         let ds = &*self.data_source;
         let target = match ident {
-            espresso_api::v1::TxIdent::HeightAndOffset(h, o) => {
+            v1::TxIdent::HeightAndOffset(h, o) => {
                 TransactionIdentifier::HeightAndOffset(h as usize, o as usize)
             },
-            espresso_api::v1::TxIdent::Hash(h) => TransactionIdentifier::Hash(
+            v1::TxIdent::Hash(h) => TransactionIdentifier::Hash(
                 h.parse()
                     .map_err(|err| bad_request(format!("invalid tx hash {h}: {err}")))?,
             ),
-            espresso_api::v1::TxIdent::Latest => TransactionIdentifier::Latest,
+            v1::TxIdent::Latest => TransactionIdentifier::Latest,
         };
         ds.get_transaction_detail(target)
             .await
@@ -3242,9 +3206,9 @@ where
 
     async fn get_transaction_summaries(
         &self,
-        target: espresso_api::v1::TxIdent,
+        target: v1::TxIdent,
         limit: u64,
-        filter: espresso_api::v1::TxSummaryFilter,
+        filter: v1::TxSummaryFilter,
     ) -> anyhow::Result<Self::TransactionSummaries> {
         let ds = &*self.data_source;
         let num_transactions = std::num::NonZeroUsize::new(limit as usize)
@@ -3253,23 +3217,19 @@ where
             return Err(bad_request("limit must be <= 100"));
         }
         let target = match target {
-            espresso_api::v1::TxIdent::HeightAndOffset(h, o) => {
+            v1::TxIdent::HeightAndOffset(h, o) => {
                 TransactionIdentifier::HeightAndOffset(h as usize, o as usize)
             },
-            espresso_api::v1::TxIdent::Hash(h) => TransactionIdentifier::Hash(
+            v1::TxIdent::Hash(h) => TransactionIdentifier::Hash(
                 h.parse()
                     .map_err(|err| bad_request(format!("invalid tx hash {h}: {err}")))?,
             ),
-            espresso_api::v1::TxIdent::Latest => TransactionIdentifier::Latest,
+            v1::TxIdent::Latest => TransactionIdentifier::Latest,
         };
         let filter = match filter {
-            espresso_api::v1::TxSummaryFilter::None => TransactionSummaryFilter::None,
-            espresso_api::v1::TxSummaryFilter::Block(b) => {
-                TransactionSummaryFilter::Block(b as usize)
-            },
-            espresso_api::v1::TxSummaryFilter::Namespace(n) => {
-                TransactionSummaryFilter::RollUp(n.into())
-            },
+            v1::TxSummaryFilter::None => TransactionSummaryFilter::None,
+            v1::TxSummaryFilter::Block(b) => TransactionSummaryFilter::Block(b as usize),
+            v1::TxSummaryFilter::Namespace(n) => TransactionSummaryFilter::RollUp(n.into()),
         };
         ds.get_transaction_summaries(GetTransactionSummariesRequest {
             range: TransactionRange {
@@ -3308,22 +3268,22 @@ where
 // ============================================================================
 
 #[async_trait]
-impl<D> espresso_api::v1::LightClientApi for NodeApiStateImpl<D>
+impl<D> v1::LightClientApi for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target: AvailabilityDataSource<espresso_types::SeqTypes>
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: AvailabilityDataSource<SeqTypes>
         + hotshot_query_service::merklized_state::MerklizedStateDataSource<
-            espresso_types::SeqTypes,
+            SeqTypes,
             espresso_types::BlockMerkleTree,
             3,
-        > + super::data_source::NodeStateDataSource
-        + super::data_source::StakeTableDataSource<espresso_types::SeqTypes>
+        > + NodeStateDataSource
+        + StakeTableDataSource<SeqTypes>
         + hotshot_query_service::data_source::VersionedDataSource
         + Sized
         + Send
         + Sync,
     for<'a> <D::Target as hotshot_query_service::data_source::VersionedDataSource>::ReadOnly<'a>:
-        hotshot_query_service::data_source::storage::NodeStorage<espresso_types::SeqTypes>,
+        hotshot_query_service::data_source::storage::NodeStorage<SeqTypes>,
 {
     type LeafProof = light_client::consensus::leaf::LeafProof;
     type HeaderProof = light_client::consensus::header::HeaderProof;
@@ -3333,19 +3293,19 @@ where
 
     async fn get_leaf_proof(
         &self,
-        query: espresso_api::v1::LeafQuery,
+        query: v1::LeafQuery,
         finalized: Option<u64>,
     ) -> anyhow::Result<Self::LeafProof> {
         let ds = &*self.data_source;
         let fetch_timeout = FETCH_TIMEOUT;
 
         let requested = match query {
-            espresso_api::v1::LeafQuery::Height(h) => HsLeafId::Number(h as usize),
-            espresso_api::v1::LeafQuery::Hash(h) => HsLeafId::Hash(
+            v1::LeafQuery::Height(h) => HsLeafId::Number(h as usize),
+            v1::LeafQuery::Hash(h) => HsLeafId::Hash(
                 h.parse()
                     .map_err(|err| bad_request(format!("invalid leaf hash {h}: {err}")))?,
             ),
-            espresso_api::v1::LeafQuery::BlockHash(h) => {
+            v1::LeafQuery::BlockHash(h) => {
                 let parsed = h
                     .parse()
                     .map_err(|err| bad_request(format!("invalid block hash {h}: {err}")))?;
@@ -3356,7 +3316,7 @@ where
                     .ok_or_else(|| not_found(format!("unknown block hash {h}")))?;
                 HsLeafId::Number(header.height() as usize)
             },
-            espresso_api::v1::LeafQuery::PayloadHash(h) => {
+            v1::LeafQuery::PayloadHash(h) => {
                 let parsed = h
                     .parse()
                     .map_err(|err| bad_request(format!("invalid payload hash {h}: {err}")))?;
@@ -3389,17 +3349,17 @@ where
     async fn get_header_proof(
         &self,
         root: u64,
-        requested: espresso_api::v1::HeaderQuery,
+        requested: v1::HeaderQuery,
     ) -> anyhow::Result<Self::HeaderProof> {
         let ds = &*self.data_source;
         let fetch_timeout = FETCH_TIMEOUT;
         let requested = match requested {
-            espresso_api::v1::HeaderQuery::Height(h) => HsBlockId::Number(h as usize),
-            espresso_api::v1::HeaderQuery::Hash(h) => HsBlockId::Hash(
+            v1::HeaderQuery::Height(h) => HsBlockId::Number(h as usize),
+            v1::HeaderQuery::Hash(h) => HsBlockId::Hash(
                 h.parse()
                     .map_err(|err| bad_request(format!("invalid block hash {h}: {err}")))?,
             ),
-            espresso_api::v1::HeaderQuery::PayloadHash(h) => HsBlockId::PayloadHash(
+            v1::HeaderQuery::PayloadHash(h) => HsBlockId::PayloadHash(
                 h.parse()
                     .map_err(|err| bad_request(format!("invalid payload hash {h}: {err}")))?,
             ),
@@ -3416,7 +3376,7 @@ where
         let ds = &*self.data_source;
         let fetch_timeout = FETCH_TIMEOUT;
 
-        let node_state = super::data_source::NodeStateDataSource::node_state(ds).await;
+        let node_state = NodeStateDataSource::node_state(ds).await;
         let epoch_height = node_state
             .epoch_height
             .ok_or_else(|| anyhow::anyhow!("epoch state not set"))?;
@@ -3429,7 +3389,7 @@ where
         }
 
         let epoch_root_height = root_block_in_epoch(epoch - 2, epoch_height) as usize;
-        let epoch_root = AvailabilityDataSource::get_header::<HsBlockId<espresso_types::SeqTypes>>(
+        let epoch_root = AvailabilityDataSource::get_header::<HsBlockId<SeqTypes>>(
             ds,
             HsBlockId::Number(epoch_root_height),
         )
@@ -3444,9 +3404,10 @@ where
 
         let from_l1_block = if epoch >= first_epoch + 3 {
             let prev_epoch_root_height = root_block_in_epoch(epoch - 3, epoch_height) as usize;
-            let prev_epoch_root = AvailabilityDataSource::get_header::<
-                HsBlockId<espresso_types::SeqTypes>,
-            >(ds, HsBlockId::Number(prev_epoch_root_height))
+            let prev_epoch_root = AvailabilityDataSource::get_header::<HsBlockId<SeqTypes>>(
+                ds,
+                HsBlockId::Number(prev_epoch_root_height),
+            )
             .await
             .with_timeout(fetch_timeout)
             .await
@@ -3466,8 +3427,7 @@ where
             0
         };
 
-        super::data_source::StakeTableDataSource::stake_table_events(ds, from_l1_block, to_l1_block)
-            .await
+        StakeTableDataSource::stake_table_events(ds, from_l1_block, to_l1_block).await
     }
 
     async fn get_payload_proof(&self, height: u64) -> anyhow::Result<Self::PayloadProof> {
@@ -3620,14 +3580,13 @@ fn lc_leaf_proof_chain_limit() -> usize {
 // ============================================================================
 
 #[async_trait]
-impl<D> espresso_api::v1::HotShotEventsApi for NodeApiStateImpl<D>
+impl<D> v1::HotShotEventsApi for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target:
-        hotshot_events_service::events_source::EventsSource<espresso_types::SeqTypes> + Send + Sync,
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: hotshot_events_service::events_source::EventsSource<SeqTypes> + Send + Sync,
 {
-    type Event = std::sync::Arc<hotshot_types::event::Event<espresso_types::SeqTypes>>;
-    type StartupInfo = hotshot_events_service::events_source::StartupInfo<espresso_types::SeqTypes>;
+    type Event = std::sync::Arc<hotshot_types::event::Event<SeqTypes>>;
+    type StartupInfo = hotshot_events_service::events_source::StartupInfo<SeqTypes>;
 
     async fn startup_info(&self) -> anyhow::Result<Self::StartupInfo> {
         let ds = &*self.data_source;
@@ -3646,13 +3605,10 @@ where
 // ============================================================================
 
 #[async_trait]
-impl<D> espresso_api::v1::TokenApi for NodeApiStateImpl<D>
+impl<D> v1::TokenApi for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target: super::data_source::TokenDataSource<espresso_types::SeqTypes>
-        + super::data_source::NodeStateDataSource
-        + Send
-        + Sync,
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: TokenDataSource<SeqTypes> + NodeStateDataSource + Send + Sync,
 {
     async fn total_minted_supply(&self) -> anyhow::Result<String> {
         let ds = &*self.data_source;
@@ -3660,35 +3616,27 @@ where
             .get_total_supply_l1()
             .await
             .map_err(|err| not_found(format!("failed to get total supply. err={err:#}")))?;
-        Ok(alloy::primitives::utils::format_ether(value))
+        Ok(format_ether(value))
     }
 
     async fn circulating_supply(&self) -> anyhow::Result<String> {
         let calc = fetch_supply_inputs(&*self.data_source).await?;
-        Ok(alloy::primitives::utils::format_ether(
-            calc.circulating_supply(),
-        ))
+        Ok(format_ether(calc.circulating_supply()))
     }
 
     async fn circulating_supply_ethereum(&self) -> anyhow::Result<String> {
         let calc = fetch_supply_inputs(&*self.data_source).await?;
-        Ok(alloy::primitives::utils::format_ether(
-            calc.circulating_supply_ethereum(),
-        ))
+        Ok(format_ether(calc.circulating_supply_ethereum()))
     }
 
     async fn total_issued_supply(&self) -> anyhow::Result<String> {
         let calc = fetch_supply_inputs(&*self.data_source).await?;
-        Ok(alloy::primitives::utils::format_ether(
-            calc.total_issued_supply(),
-        ))
+        Ok(format_ether(calc.total_issued_supply()))
     }
 
     async fn total_reward_distributed(&self) -> anyhow::Result<String> {
         let calc = fetch_supply_inputs(&*self.data_source).await?;
-        Ok(alloy::primitives::utils::format_ether(
-            calc.total_reward_distributed(),
-        ))
+        Ok(format_ether(calc.total_reward_distributed()))
     }
 }
 
@@ -3696,10 +3644,7 @@ async fn fetch_supply_inputs<S>(
     ds: &S,
 ) -> anyhow::Result<crate::api::unlock_schedule::SupplyCalculator>
 where
-    S: super::data_source::TokenDataSource<espresso_types::SeqTypes>
-        + super::data_source::NodeStateDataSource
-        + Sync
-        + ?Sized,
+    S: TokenDataSource<SeqTypes> + NodeStateDataSource + Sync + ?Sized,
 {
     let node_state = ds.node_state().await;
     let chain_id = node_state.chain_config.chain_id;
@@ -3733,19 +3678,16 @@ where
 // ============================================================================
 
 #[tonic::async_trait]
-impl<D> espresso_api::proto::token_service_server::TokenService for NodeApiStateImpl<D>
+impl<D> proto::token_service_server::TokenService for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target: super::data_source::TokenDataSource<espresso_types::SeqTypes>
-        + super::data_source::NodeStateDataSource
-        + Send
-        + Sync,
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: TokenDataSource<SeqTypes> + NodeStateDataSource + Send + Sync,
 {
     async fn get_total_minted_supply(
         &self,
         _request: tonic::Request<proto::GetTotalMintedSupplyRequest>,
     ) -> Result<tonic::Response<proto::TotalMintedSupplyResponse>, tonic::Status> {
-        let amount = <Self as espresso_api::v1::TokenApi>::total_minted_supply(self)
+        let amount = <Self as v1::TokenApi>::total_minted_supply(self)
             .await
             .map_err(to_status)?;
         Ok(tonic::Response::new(proto::TotalMintedSupplyResponse {
@@ -3757,7 +3699,7 @@ where
         &self,
         _request: tonic::Request<proto::GetCirculatingSupplyRequest>,
     ) -> Result<tonic::Response<proto::CirculatingSupplyResponse>, tonic::Status> {
-        let amount = <Self as espresso_api::v1::TokenApi>::circulating_supply(self)
+        let amount = <Self as v1::TokenApi>::circulating_supply(self)
             .await
             .map_err(to_status)?;
         Ok(tonic::Response::new(proto::CirculatingSupplyResponse {
@@ -3769,7 +3711,7 @@ where
         &self,
         _request: tonic::Request<proto::GetCirculatingSupplyEthereumRequest>,
     ) -> Result<tonic::Response<proto::CirculatingSupplyEthereumResponse>, tonic::Status> {
-        let amount = <Self as espresso_api::v1::TokenApi>::circulating_supply_ethereum(self)
+        let amount = <Self as v1::TokenApi>::circulating_supply_ethereum(self)
             .await
             .map_err(to_status)?;
         Ok(tonic::Response::new(
@@ -3781,7 +3723,7 @@ where
         &self,
         _request: tonic::Request<proto::GetTotalIssuedSupplyRequest>,
     ) -> Result<tonic::Response<proto::TotalIssuedSupplyResponse>, tonic::Status> {
-        let amount = <Self as espresso_api::v1::TokenApi>::total_issued_supply(self)
+        let amount = <Self as v1::TokenApi>::total_issued_supply(self)
             .await
             .map_err(to_status)?;
         Ok(tonic::Response::new(proto::TotalIssuedSupplyResponse {
@@ -3793,7 +3735,7 @@ where
         &self,
         _request: tonic::Request<proto::GetTotalRewardDistributedRequest>,
     ) -> Result<tonic::Response<proto::TotalRewardDistributedResponse>, tonic::Status> {
-        let amount = <Self as espresso_api::v1::TokenApi>::total_reward_distributed(self)
+        let amount = <Self as v1::TokenApi>::total_reward_distributed(self)
             .await
             .map_err(to_status)?;
         Ok(tonic::Response::new(
@@ -3807,13 +3749,13 @@ where
 // ============================================================================
 
 #[async_trait]
-impl<D> espresso_api::v1::DatabaseApi for NodeApiStateImpl<D>
+impl<D> v1::DatabaseApi for NodeApiStateImpl<D>
 where
-    D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target: super::data_source::DatabaseMetadataSource + Send + Sync,
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: DatabaseMetadataSource + Send + Sync,
 {
-    type TableSizes = Vec<super::data_source::TableSize>;
-    type MigrationStatus = Vec<super::data_source::MigrationStatus>;
+    type TableSizes = Vec<TableSize>;
+    type MigrationStatus = Vec<MigrationStatus>;
 
     async fn get_table_sizes(&self) -> anyhow::Result<Self::TableSizes> {
         let ds = &*self.data_source;

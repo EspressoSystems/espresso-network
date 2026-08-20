@@ -27,6 +27,13 @@ use tower::Layer;
 
 // Re-exports
 pub use self::axum::{create_router_v1, routes};
+use self::proto::{
+    consensus_service_server::{ConsensusService, ConsensusServiceServer},
+    data_service_server::{DataService, DataServiceServer},
+    reward_service_server::{RewardService, RewardServiceServer},
+    status_service_server::{StatusService, StatusServiceServer},
+    token_service_server::{TokenService, TokenServiceServer},
+};
 
 /// Build a full request URL from a server base URL and a path produced by one of the
 /// `routes::v1::*` builders.
@@ -70,11 +77,11 @@ where
         + v1::ExplorerApi
         + v1::TokenApi
         + v1::DatabaseApi
-        + proto::reward_service_server::RewardService
-        + proto::data_service_server::DataService
-        + proto::consensus_service_server::ConsensusService
-        + proto::status_service_server::StatusService
-        + proto::token_service_server::TokenService
+        + RewardService
+        + DataService
+        + ConsensusService
+        + StatusService
+        + TokenService
         + Clone
         + Send
         + Sync
@@ -328,23 +335,17 @@ fn apply_connection_limit(router: ::axum::Router, limit: usize) -> ::axum::Route
 /// Start Tonic gRPC server
 pub async fn serve_tonic<S>(port: u16, state: S) -> anyhow::Result<()>
 where
-    S: proto::reward_service_server::RewardService
-        + proto::data_service_server::DataService
-        + proto::consensus_service_server::ConsensusService
-        + proto::status_service_server::StatusService
-        + proto::token_service_server::TokenService
-        + Clone,
+    S: RewardService + DataService + ConsensusService + StatusService + TokenService + Clone,
 {
     use ::tonic::transport::Server;
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
 
-    let reward_service = proto::reward_service_server::RewardServiceServer::new(state.clone());
-    let data_service = proto::data_service_server::DataServiceServer::new(state.clone());
-    let consensus_service =
-        proto::consensus_service_server::ConsensusServiceServer::new(state.clone());
-    let status_service = proto::status_service_server::StatusServiceServer::new(state.clone());
-    let token_service = proto::token_service_server::TokenServiceServer::new(state);
+    let reward_service = RewardServiceServer::new(state.clone());
+    let data_service = DataServiceServer::new(state.clone());
+    let consensus_service = ConsensusServiceServer::new(state.clone());
+    let status_service = StatusServiceServer::new(state.clone());
+    let token_service = TokenServiceServer::new(state);
 
     // Enable gRPC reflection for tools like grpcurl
     let reflection_service = tonic_reflection::server::Builder::configure()

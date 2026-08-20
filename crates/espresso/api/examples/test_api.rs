@@ -8,7 +8,7 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use espresso_api::v1;
+use espresso_api::{proto, v1};
 use serde::Serialize;
 
 /// Port for the test API server
@@ -774,51 +774,47 @@ impl v1::DatabaseApi for TestApi {
 // Implement the generated v2 tonic service traits with test data; the REST routes are
 // generated from the google.api.http annotations in the proto files.
 #[tonic::async_trait]
-impl espresso_api::proto::reward_service_server::RewardService for TestApi {
+impl proto::reward_service_server::RewardService for TestApi {
     async fn get_reward_claim_input(
         &self,
-        request: tonic::Request<espresso_api::proto::GetRewardClaimInputRequest>,
-    ) -> Result<tonic::Response<espresso_api::proto::RewardClaimInput>, tonic::Status> {
+        request: tonic::Request<proto::GetRewardClaimInputRequest>,
+    ) -> Result<tonic::Response<proto::RewardClaimInput>, tonic::Status> {
         let request = request.into_inner();
         tracing::info!("v2: get_reward_claim_input(address={})", request.address);
-        Ok(tonic::Response::new(
-            espresso_api::proto::RewardClaimInput {
-                address: request.address,
-                lifetime_rewards: "0x64".to_string(),
-                auth_data: format!("0x{}", hex::encode([0xab; 32])),
-            },
-        ))
+        Ok(tonic::Response::new(proto::RewardClaimInput {
+            address: request.address,
+            lifetime_rewards: "0x64".to_string(),
+            auth_data: format!("0x{}", hex::encode([0xab; 32])),
+        }))
     }
 
     async fn get_reward_balance(
         &self,
-        request: tonic::Request<espresso_api::proto::GetRewardBalanceRequest>,
-    ) -> Result<tonic::Response<espresso_api::proto::RewardBalance>, tonic::Status> {
+        request: tonic::Request<proto::GetRewardBalanceRequest>,
+    ) -> Result<tonic::Response<proto::RewardBalance>, tonic::Status> {
         let request = request.into_inner();
         tracing::info!("v2: get_reward_balance(address={})", request.address);
-        Ok(tonic::Response::new(espresso_api::proto::RewardBalance {
+        Ok(tonic::Response::new(proto::RewardBalance {
             amount: "1000000".to_string(),
         }))
     }
 
     async fn get_reward_account_proof(
         &self,
-        request: tonic::Request<espresso_api::proto::GetRewardAccountProofRequest>,
-    ) -> Result<tonic::Response<espresso_api::proto::RewardAccountQueryDataV2>, tonic::Status> {
+        request: tonic::Request<proto::GetRewardAccountProofRequest>,
+    ) -> Result<tonic::Response<proto::RewardAccountQueryDataV2>, tonic::Status> {
         let request = request.into_inner();
         tracing::info!("v2: get_reward_account_proof(address={})", request.address);
-        Ok(tonic::Response::new(
-            espresso_api::proto::RewardAccountQueryDataV2 {
-                balance: "1000000".to_string(),
-                proof: None,
-            },
-        ))
+        Ok(tonic::Response::new(proto::RewardAccountQueryDataV2 {
+            balance: "1000000".to_string(),
+            proof: None,
+        }))
     }
 
     async fn get_reward_balances(
         &self,
-        request: tonic::Request<espresso_api::proto::GetRewardBalancesRequest>,
-    ) -> Result<tonic::Response<espresso_api::proto::RewardBalances>, tonic::Status> {
+        request: tonic::Request<proto::GetRewardBalancesRequest>,
+    ) -> Result<tonic::Response<proto::RewardBalances>, tonic::Status> {
         let request = request.into_inner();
         tracing::info!(
             "v2: get_reward_balances(height={}, offset={}, limit={})",
@@ -826,8 +822,8 @@ impl espresso_api::proto::reward_service_server::RewardService for TestApi {
             request.offset,
             request.limit
         );
-        Ok(tonic::Response::new(espresso_api::proto::RewardBalances {
-            amounts: vec![espresso_api::proto::RewardAmount {
+        Ok(tonic::Response::new(proto::RewardBalances {
+            amounts: vec![proto::RewardAmount {
                 address: "0x0000000000000000000000000000000000000000".to_string(),
                 amount: "1000000".to_string(),
             }],
@@ -837,26 +833,23 @@ impl espresso_api::proto::reward_service_server::RewardService for TestApi {
 
     async fn get_reward_merkle_tree_v2(
         &self,
-        request: tonic::Request<espresso_api::proto::GetRewardMerkleTreeRequest>,
-    ) -> Result<tonic::Response<espresso_api::proto::RewardMerkleTreeV2Data>, tonic::Status> {
+        request: tonic::Request<proto::GetRewardMerkleTreeRequest>,
+    ) -> Result<tonic::Response<proto::RewardMerkleTreeV2Data>, tonic::Status> {
         let request = request.into_inner();
         tracing::info!("v2: get_reward_merkle_tree_v2(height={})", request.height);
-        Ok(tonic::Response::new(
-            espresso_api::proto::RewardMerkleTreeV2Data {
-                data: vec![0x01, 0x02, 0x03, 0x04],
-            },
-        ))
+        Ok(tonic::Response::new(proto::RewardMerkleTreeV2Data {
+            data: vec![0x01, 0x02, 0x03, 0x04],
+        }))
     }
 }
 
 #[tonic::async_trait]
-impl espresso_api::proto::data_service_server::DataService for TestApi {
+impl proto::data_service_server::DataService for TestApi {
     async fn get_namespace_proof(
         &self,
-        request: tonic::Request<espresso_api::proto::GetNamespaceProofRequest>,
-    ) -> Result<tonic::Response<espresso_api::proto::GetNamespaceProofResponse>, tonic::Status>
-    {
-        use espresso_api::proto::get_namespace_proof_response::Response;
+        request: tonic::Request<proto::GetNamespaceProofRequest>,
+    ) -> Result<tonic::Response<proto::GetNamespaceProofResponse>, tonic::Status> {
+        use proto::get_namespace_proof_response::Response;
 
         let request = request.into_inner();
         tracing::info!(
@@ -866,8 +859,8 @@ impl espresso_api::proto::data_service_server::DataService for TestApi {
             request.first,
             request.last
         );
-        let single = espresso_api::proto::NamespaceProofResponse {
-            transactions: vec![espresso_api::proto::Transaction {
+        let single = proto::NamespaceProofResponse {
+            transactions: vec![proto::Transaction {
                 namespace: request.namespace_id,
                 payload: "dGVzdA==".to_string(),
             }],
@@ -876,7 +869,7 @@ impl espresso_api::proto::data_service_server::DataService for TestApi {
         let response = match (request.block, request.first, request.last) {
             (Some(_), None, None) => Response::Single(single),
             (None, Some(first), Some(last)) => {
-                Response::Range(espresso_api::proto::NamespaceProofRangeResponse {
+                Response::Range(proto::NamespaceProofRangeResponse {
                     proofs: (first..=last).map(|_| single.clone()).collect(),
                 })
             },
@@ -886,18 +879,15 @@ impl espresso_api::proto::data_service_server::DataService for TestApi {
                 ));
             },
         };
-        Ok(tonic::Response::new(
-            espresso_api::proto::GetNamespaceProofResponse {
-                response: Some(response),
-            },
-        ))
+        Ok(tonic::Response::new(proto::GetNamespaceProofResponse {
+            response: Some(response),
+        }))
     }
 
     async fn get_incorrect_encoding_proof(
         &self,
-        request: tonic::Request<espresso_api::proto::GetIncorrectEncodingProofRequest>,
-    ) -> Result<tonic::Response<espresso_api::proto::IncorrectEncodingProofResponse>, tonic::Status>
-    {
+        request: tonic::Request<proto::GetIncorrectEncodingProofRequest>,
+    ) -> Result<tonic::Response<proto::IncorrectEncodingProofResponse>, tonic::Status> {
         let request = request.into_inner();
         tracing::info!(
             "v2: get_incorrect_encoding_proof(namespace_id={}, block_height={})",
@@ -905,8 +895,8 @@ impl espresso_api::proto::data_service_server::DataService for TestApi {
             request.block_height
         );
         Ok(tonic::Response::new(
-            espresso_api::proto::IncorrectEncodingProofResponse {
-                proof: Some(espresso_api::proto::AvidMIncorrectEncodingNsProof {
+            proto::IncorrectEncodingProofResponse {
+                proof: Some(proto::AvidMIncorrectEncodingNsProof {
                     proof_data: "{}".to_string(),
                 }),
             },
@@ -915,131 +905,117 @@ impl espresso_api::proto::data_service_server::DataService for TestApi {
 }
 
 #[tonic::async_trait]
-impl espresso_api::proto::consensus_service_server::ConsensusService for TestApi {
+impl proto::consensus_service_server::ConsensusService for TestApi {
     async fn get_state_certificate(
         &self,
-        request: tonic::Request<espresso_api::proto::GetStateCertificateRequest>,
-    ) -> Result<tonic::Response<espresso_api::proto::StateCertificateResponse>, tonic::Status> {
+        request: tonic::Request<proto::GetStateCertificateRequest>,
+    ) -> Result<tonic::Response<proto::StateCertificateResponse>, tonic::Status> {
         let request = request.into_inner();
         tracing::info!("v2: get_state_certificate(epoch={})", request.epoch);
-        Ok(tonic::Response::new(
-            espresso_api::proto::StateCertificateResponse {
-                certificate: Some(espresso_api::proto::LightClientStateUpdateCertificateV2 {
-                    epoch: request.epoch,
-                    light_client_state: String::new(),
-                    next_stake_table_state: String::new(),
-                    signatures: vec![],
-                    auth_root: String::new(),
-                }),
-            },
-        ))
+        Ok(tonic::Response::new(proto::StateCertificateResponse {
+            certificate: Some(proto::LightClientStateUpdateCertificateV2 {
+                epoch: request.epoch,
+                light_client_state: String::new(),
+                next_stake_table_state: String::new(),
+                signatures: vec![],
+                auth_root: String::new(),
+            }),
+        }))
     }
 
     async fn get_stake_table(
         &self,
-        request: tonic::Request<espresso_api::proto::GetStakeTableRequest>,
-    ) -> Result<tonic::Response<espresso_api::proto::StakeTableResponse>, tonic::Status> {
+        request: tonic::Request<proto::GetStakeTableRequest>,
+    ) -> Result<tonic::Response<proto::StakeTableResponse>, tonic::Status> {
         let request = request.into_inner();
         tracing::info!("v2: get_stake_table(epoch={})", request.epoch);
-        Ok(tonic::Response::new(
-            espresso_api::proto::StakeTableResponse { peers: vec![] },
-        ))
+        Ok(tonic::Response::new(proto::StakeTableResponse {
+            peers: vec![],
+        }))
     }
 }
 
 // Implement the generated StatusService tonic trait with test data; the REST routes for
 // it are generated from the google.api.http annotations in status.proto.
 #[tonic::async_trait]
-impl espresso_api::proto::status_service_server::StatusService for TestApi {
+impl proto::status_service_server::StatusService for TestApi {
     async fn get_block_height(
         &self,
-        _request: tonic::Request<espresso_api::proto::GetBlockHeightRequest>,
-    ) -> Result<tonic::Response<espresso_api::proto::BlockHeightResponse>, tonic::Status> {
+        _request: tonic::Request<proto::GetBlockHeightRequest>,
+    ) -> Result<tonic::Response<proto::BlockHeightResponse>, tonic::Status> {
         tracing::info!("v2: get_block_height()");
-        Ok(tonic::Response::new(
-            espresso_api::proto::BlockHeightResponse { height: 0 },
-        ))
+        Ok(tonic::Response::new(proto::BlockHeightResponse {
+            height: 0,
+        }))
     }
 
     async fn get_success_rate(
         &self,
-        _request: tonic::Request<espresso_api::proto::GetSuccessRateRequest>,
-    ) -> Result<tonic::Response<espresso_api::proto::SuccessRateResponse>, tonic::Status> {
+        _request: tonic::Request<proto::GetSuccessRateRequest>,
+    ) -> Result<tonic::Response<proto::SuccessRateResponse>, tonic::Status> {
         tracing::info!("v2: get_success_rate()");
-        Ok(tonic::Response::new(
-            espresso_api::proto::SuccessRateResponse { rate: 1.0 },
-        ))
+        Ok(tonic::Response::new(proto::SuccessRateResponse {
+            rate: 1.0,
+        }))
     }
 
     async fn get_time_since_last_decide(
         &self,
-        _request: tonic::Request<espresso_api::proto::GetTimeSinceLastDecideRequest>,
-    ) -> Result<tonic::Response<espresso_api::proto::TimeSinceLastDecideResponse>, tonic::Status>
-    {
+        _request: tonic::Request<proto::GetTimeSinceLastDecideRequest>,
+    ) -> Result<tonic::Response<proto::TimeSinceLastDecideResponse>, tonic::Status> {
         tracing::info!("v2: get_time_since_last_decide()");
-        Ok(tonic::Response::new(
-            espresso_api::proto::TimeSinceLastDecideResponse { seconds: 0 },
-        ))
+        Ok(tonic::Response::new(proto::TimeSinceLastDecideResponse {
+            seconds: 0,
+        }))
     }
 
     async fn get_node_keys(
         &self,
-        _request: tonic::Request<espresso_api::proto::GetNodeKeysRequest>,
-    ) -> Result<tonic::Response<espresso_api::proto::NodeKeysResponse>, tonic::Status> {
+        _request: tonic::Request<proto::GetNodeKeysRequest>,
+    ) -> Result<tonic::Response<proto::NodeKeysResponse>, tonic::Status> {
         tracing::info!("v2: get_node_keys()");
-        Ok(tonic::Response::new(
-            espresso_api::proto::NodeKeysResponse {
-                eth_account: Some("0x0000000000000000000000000000000000000000".to_string()),
-                consensus_key: Some(espresso_api::proto::BlsPublicKey {
-                    key: "BLS_VER_KEY~test".to_string(),
-                }),
-                state_ver_key: Some(espresso_api::proto::SchnorrPublicKey {
-                    key: "SCHNORR_VER_KEY~test".to_string(),
-                }),
-                x25519_key: None,
-            },
-        ))
+        Ok(tonic::Response::new(proto::NodeKeysResponse {
+            eth_account: Some("0x0000000000000000000000000000000000000000".to_string()),
+            consensus_key: Some(proto::BlsPublicKey {
+                key: "BLS_VER_KEY~test".to_string(),
+            }),
+            state_ver_key: Some(proto::SchnorrPublicKey {
+                key: "SCHNORR_VER_KEY~test".to_string(),
+            }),
+            x25519_key: None,
+        }))
     }
 }
 
 #[tonic::async_trait]
-impl espresso_api::proto::token_service_server::TokenService for TestApi {
+impl proto::token_service_server::TokenService for TestApi {
     async fn get_total_minted_supply(
         &self,
-        _request: tonic::Request<espresso_api::proto::GetTotalMintedSupplyRequest>,
-    ) -> Result<tonic::Response<espresso_api::proto::TotalMintedSupplyResponse>, tonic::Status>
-    {
+        _request: tonic::Request<proto::GetTotalMintedSupplyRequest>,
+    ) -> Result<tonic::Response<proto::TotalMintedSupplyResponse>, tonic::Status> {
         tracing::info!("v2: get_total_minted_supply()");
-        Ok(tonic::Response::new(
-            espresso_api::proto::TotalMintedSupplyResponse {
-                amount: "0".to_string(),
-            },
-        ))
+        Ok(tonic::Response::new(proto::TotalMintedSupplyResponse {
+            amount: "0".to_string(),
+        }))
     }
 
     async fn get_circulating_supply(
         &self,
-        _request: tonic::Request<espresso_api::proto::GetCirculatingSupplyRequest>,
-    ) -> Result<tonic::Response<espresso_api::proto::CirculatingSupplyResponse>, tonic::Status>
-    {
+        _request: tonic::Request<proto::GetCirculatingSupplyRequest>,
+    ) -> Result<tonic::Response<proto::CirculatingSupplyResponse>, tonic::Status> {
         tracing::info!("v2: get_circulating_supply()");
-        Ok(tonic::Response::new(
-            espresso_api::proto::CirculatingSupplyResponse {
-                amount: "0".to_string(),
-            },
-        ))
+        Ok(tonic::Response::new(proto::CirculatingSupplyResponse {
+            amount: "0".to_string(),
+        }))
     }
 
     async fn get_circulating_supply_ethereum(
         &self,
-        _request: tonic::Request<espresso_api::proto::GetCirculatingSupplyEthereumRequest>,
-    ) -> Result<
-        tonic::Response<espresso_api::proto::CirculatingSupplyEthereumResponse>,
-        tonic::Status,
-    > {
+        _request: tonic::Request<proto::GetCirculatingSupplyEthereumRequest>,
+    ) -> Result<tonic::Response<proto::CirculatingSupplyEthereumResponse>, tonic::Status> {
         tracing::info!("v2: get_circulating_supply_ethereum()");
         Ok(tonic::Response::new(
-            espresso_api::proto::CirculatingSupplyEthereumResponse {
+            proto::CirculatingSupplyEthereumResponse {
                 amount: "0".to_string(),
             },
         ))
@@ -1047,25 +1023,21 @@ impl espresso_api::proto::token_service_server::TokenService for TestApi {
 
     async fn get_total_issued_supply(
         &self,
-        _request: tonic::Request<espresso_api::proto::GetTotalIssuedSupplyRequest>,
-    ) -> Result<tonic::Response<espresso_api::proto::TotalIssuedSupplyResponse>, tonic::Status>
-    {
+        _request: tonic::Request<proto::GetTotalIssuedSupplyRequest>,
+    ) -> Result<tonic::Response<proto::TotalIssuedSupplyResponse>, tonic::Status> {
         tracing::info!("v2: get_total_issued_supply()");
-        Ok(tonic::Response::new(
-            espresso_api::proto::TotalIssuedSupplyResponse {
-                amount: "0".to_string(),
-            },
-        ))
+        Ok(tonic::Response::new(proto::TotalIssuedSupplyResponse {
+            amount: "0".to_string(),
+        }))
     }
 
     async fn get_total_reward_distributed(
         &self,
-        _request: tonic::Request<espresso_api::proto::GetTotalRewardDistributedRequest>,
-    ) -> Result<tonic::Response<espresso_api::proto::TotalRewardDistributedResponse>, tonic::Status>
-    {
+        _request: tonic::Request<proto::GetTotalRewardDistributedRequest>,
+    ) -> Result<tonic::Response<proto::TotalRewardDistributedResponse>, tonic::Status> {
         tracing::info!("v2: get_total_reward_distributed()");
         Ok(tonic::Response::new(
-            espresso_api::proto::TotalRewardDistributedResponse {
+            proto::TotalRewardDistributedResponse {
                 amount: "0".to_string(),
             },
         ))
