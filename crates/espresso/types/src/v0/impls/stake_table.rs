@@ -1404,6 +1404,7 @@ impl Fetcher {
     ) -> Result<Vec<(EventKey, StakeTableEvent)>, StakeTableError> {
         let stake_table_contract = StakeTableV3::new(contract, l1_client.provider.clone());
         let retry_delay = l1_client.options().l1_retry_delay;
+        let attempt_timeout = l1_client.options().l1_events_attempt_timeout;
         // One budget for the whole logical fetch, shared by the `initializedAtBlock` lookup and
         // every chunk below. It resets on every success, so a fetch spanning many chunks isn't
         // bounded by wall-clock total, only by how long any single chunk can stall.
@@ -1415,7 +1416,7 @@ impl Fetcher {
             None => {
                 let init_block = retry(
                     retry_delay,
-                    ATTEMPT_TIMEOUT,
+                    attempt_timeout,
                     &mut budget,
                     "stake table initializedAtBlock lookup",
                     move || {
@@ -1446,7 +1447,7 @@ impl Fetcher {
             // retry if the call to the provider to fetch the events fails
             let logs: Vec<Log> = retry(
                 retry_delay,
-                ATTEMPT_TIMEOUT,
+                attempt_timeout,
                 &mut budget,
                 &format!("stake table events fetch from_block={from} to_block={to}"),
                 move || {
@@ -1851,8 +1852,6 @@ impl RetryBudget {
     }
 }
 
-// TODO(follow-up commit): make this configurable via `L1ClientOptions`.
-const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(60);
 const BACKOFF_CAP: Duration = Duration::from_secs(60);
 const WARN_AFTER: Duration = Duration::from_secs(60);
 const ERROR_AFTER: Duration = Duration::from_secs(5 * 60);

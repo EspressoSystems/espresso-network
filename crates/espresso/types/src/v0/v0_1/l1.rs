@@ -176,13 +176,27 @@ pub struct L1ClientOptions {
     )]
     pub stake_table_update_interval: Duration,
 
-    /// Maximum duration to retry fetching L1 events before panicking.
+    /// Longest time to wait for a single L1 events call (e.g. `eth_getLogs` or a contract call)
+    /// before treating the attempt as failed and retrying.
+    #[clap(
+        long,
+        env = "ESPRESSO_L1_EVENTS_ATTEMPT_TIMEOUT",
+        default_value = "60s",
+        value_parser = parse_duration,
+    )]
+    pub l1_events_attempt_timeout: Duration,
+
+    /// Longest time without a *successful* L1 events call before giving up on the current
+    /// logical fetch.
     ///
-    /// This prevents infinite retries by panicking if the total number of retries exceed the maximum duration.
-    /// This is helpful in cases where the RPC block range limit or the event return limit is hit,
-    /// or if there is an outage. In such cases, panicking ensures that the node operator can take
-    /// action instead of the node getting stuck indefinitely. This is necessary because the stake table is constructed
-    /// from the fetched events, and is required for node to participate in consensus.
+    /// This is not a bound on the total time a fetch may take: every successful attempt (e.g.
+    /// one chunk of a chunked block range) resets the clock, so a fetch that is slow but making
+    /// progress can run indefinitely. Only a fetch that is stuck making no progress at all (e.g.
+    /// a misconfigured block range, or a dead provider) gives up, after this duration. This is
+    /// helpful in cases where the RPC block range limit or the event return limit is hit, or if
+    /// there is an outage, so the node operator can take action instead of the node getting
+    /// stuck indefinitely. This is necessary because the stake table is constructed from the
+    /// fetched events, and is required for the node to participate in consensus.
     #[clap(
         long,
         env = "ESPRESSO_L1_EVENTS_MAX_RETRY_DURATION",

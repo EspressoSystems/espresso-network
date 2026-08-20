@@ -938,6 +938,7 @@ pub struct L1Tuning {
     pub failover_revert: Duration,
     pub rate_limit_delay: Option<Duration>,
     pub stake_table_update_interval: Duration,
+    pub events_attempt_timeout: Duration,
     pub events_max_retry_duration: Duration,
     pub finalized_safety_margin: Option<u64>,
 }
@@ -984,6 +985,7 @@ impl From<&L1ClientOptions> for L1Tuning {
             failover_revert: o.l1_failover_revert,
             rate_limit_delay: o.l1_rate_limit_delay,
             stake_table_update_interval: o.stake_table_update_interval,
+            events_attempt_timeout: o.l1_events_attempt_timeout,
             events_max_retry_duration: o.l1_events_max_retry_duration,
             finalized_safety_margin: o.l1_finalized_safety_margin,
         }
