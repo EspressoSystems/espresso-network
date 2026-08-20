@@ -114,7 +114,10 @@ pub struct Fetcher<T: NodeType> {
 
     /// When each requester was last served per view, so that serving follows
     /// the same cadence the requester is paced to: signatures prove who asks,
-    /// not how often, and a whole-payload response is worth megabytes.
+    /// not how often, and a whole-payload response is worth megabytes. Both
+    /// request kinds share one budget per view; an honest node never sends
+    /// both for one view within an interval, since the path choice is a
+    /// deterministic function of the payload size.
     served: HashMap<(ViewNumber, T::SignatureKey), Instant>,
 }
 
@@ -235,6 +238,19 @@ impl<T: NodeType> Fetcher<T> {
         network
             .broadcast(consensus.current_view(), &message)
             .map_err(|err| CoordinatorError::from(err).context("broadcast proposal request"))
+    }
+
+    /// Whether a fetched proposal would answer one of this node's own
+    /// requests. Non-consuming: the request is only consumed once the
+    /// response validated ([`Self::take_requested_proposal`]), or a bad
+    /// response racing the honest ones would burn the round.
+    pub fn is_requested_proposal(
+        &self,
+        view: ViewNumber,
+        leaf_commitment: Commitment<Leaf2<T>>,
+    ) -> bool {
+        self.requested_proposals
+            .contains_key(&ProposalFetchKey::new(view, leaf_commitment))
     }
 
     /// Whether a fetched proposal answers one of this node's own requests,
@@ -420,6 +436,7 @@ impl<T: NodeType> Fetcher<T> {
                 .or_else(|| {
                     consensus
                         .built_payload_at(view, commitment)
+                        .filter(|payload| payload.txn_bytes() <= self.max_whole_payload_fetch)
                         .map(|payload| payload.encode())
                 })
                 .filter(|payload| payload.len() <= self.max_whole_payload_fetch)
@@ -589,7 +606,10 @@ impl<T: NodeType> Fetcher<T> {
 #[cfg(test)]
 mod tests {
     use hotshot::types::BLSPubKey;
-    use hotshot_example_types::{block_types::TestBlockPayload, node_types::TestTypes};
+    use hotshot_example_types::{
+        block_types::{TestBlockPayload, TestTransaction},
+        node_types::TestTypes,
+    };
     use hotshot_types::{
         data::ViewNumber,
         traits::{metrics::NoMetrics, signature_key::SignatureKey},
@@ -597,7 +617,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        helpers::test_upgrade_lock,
+        helpers::{proposal_commitment, test_upgrade_lock},
         network::Cliquenet,
         tests::common::utils::{ConsensusHarness, TestData, mock_membership},
         vid::VidReconstructErrorKind,
@@ -980,6 +1000,86 @@ mod tests {
         assert!(
             fetcher.requested.get(&(view, commitment)).unwrap().0 > first,
             "past the interval the attempt is repeated"
+        );
+    }
+    /// The size pre-filter keeps oversized payloads out of retention.
+    #[test]
+    fn oversized_payloads_are_not_retained() {
+        let mut fetcher = Fetcher::<TestTypes>::new(key(0), 8);
+        let oversized = TestBlockPayload {
+            transactions: vec![TestTransaction::new(vec![0; 16])],
+        };
+        fetcher.retain_payload(ViewNumber::new(1), VidCommitment2::default(), &oversized);
+        assert!(fetcher.candidates.is_empty());
+
+        let small = TestBlockPayload {
+            transactions: vec![TestTransaction::new(vec![0; 4])],
+        };
+        fetcher.retain_payload(ViewNumber::new(2), VidCommitment2::default(), &small);
+        assert!(fetcher.candidates.contains_key(&ViewNumber::new(2)));
+    }
+
+    /// A proposal request outlives responses that do not validate: receipt
+    /// only peeks, and the request is consumed once a response validated —
+    /// otherwise one bad response racing the broadcast would burn the round
+    /// for the honest copies behind it.
+    #[tokio::test]
+    async fn proposal_requests_survive_until_a_response_validates() {
+        let test_data = TestData::new(1).await;
+        let view = test_data.views[0].view_number;
+        let commit = proposal_commitment(&test_data.views[0].proposal.data);
+
+        let mut fetcher = fetcher();
+        fetcher
+            .requested_proposals
+            .insert(ProposalFetchKey::new(view, commit), Instant::now());
+
+        assert!(fetcher.is_requested_proposal(view, commit));
+        assert!(
+            fetcher.is_requested_proposal(view, commit),
+            "peeking consumes nothing"
+        );
+        assert!(fetcher.take_requested_proposal(view, commit));
+        assert!(!fetcher.is_requested_proposal(view, commit));
+        assert!(!fetcher.take_requested_proposal(view, commit));
+    }
+
+    /// The serve chain answers whole from the retained slot, and a request
+    /// for a view this node holds nothing of sends nothing and leaves no
+    /// state. The proposal here was fetched, so the node holds no share of
+    /// its own: a recorded send can only have been the whole-payload path.
+    #[tokio::test]
+    async fn serve_payload_answers_from_the_retained_slot() {
+        let test_data = TestData::new(1).await;
+        let view = test_data.views[0].view_number;
+        let commitment = test_data.views[0].vid_commitment();
+
+        let mut harness = ConsensusHarness::new(0).await;
+        harness
+            .apply(crate::consensus::ConsensusInput::FetchedProposal(
+                test_data.views[0].proposal_message(),
+            ))
+            .await;
+
+        let network = network().await;
+        let timeout = Duration::from_secs(60);
+
+        {
+            let mut fetcher = fetcher();
+            fetcher.retain_payload(view, commitment, &TestBlockPayload::genesis());
+            fetcher.note_locked(Some(view));
+            fetcher.serve_payload(view, &key(1), timeout, &harness.consensus, network.sender());
+            assert!(
+                fetcher.served.contains_key(&(view, key(1))),
+                "the retained payload was served whole"
+            );
+        }
+
+        let mut fetcher = fetcher();
+        fetcher.serve_payload(view, &key(1), timeout, &harness.consensus, network.sender());
+        assert!(
+            fetcher.served.is_empty(),
+            "with neither payload nor share held, nothing is sent and no state is kept"
         );
     }
 }

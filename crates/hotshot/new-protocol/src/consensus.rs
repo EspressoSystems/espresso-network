@@ -1254,13 +1254,6 @@ impl<T: NodeType> Consensus<T> {
     /// the faulty nodes leave no vote to spare its vote is the one that
     /// cannot be missed.
     ///
-    /// Only the payload is requested here. A *missing proposal* already has
-    /// its own trigger — [`Self::request_parent_proposal_if_missing`], which
-    /// a stall re-fires every round, since every round's proposal names the
-    /// pinned view as its parent. And a held proposal that does not match
-    /// the certificate (an equivocating leader got the other copy certified)
-    /// is left alone: held state is never replaced, so the view is wedged
-    /// for this node and skipped over by the timeout path.
     ///
     /// Gated on the network having moved past the view: in healthy operation
     /// a certificate precedes this node's reconstruction by moments and

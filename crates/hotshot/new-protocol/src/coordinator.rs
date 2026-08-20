@@ -539,11 +539,15 @@ where
                 },
                 Some(item) = self.proposal_validator.next() => match item {
                     Ok(validated) if validated.fetched => {
+                        let proposal = &validated.message.proposal.data;
+                        self.fetcher.take_requested_proposal(
+                            proposal.view_number,
+                            proposal_commitment(proposal),
+                        );
                         // Pin the reconstructor so shares for this view can
                         // accumulate. The normal pinning happens when a
                         // proposal is paired with our VID share, which a
                         // fetched proposal never is.
-                        let proposal = &validated.message.proposal.data;
                         if let VidCommitment::V2(pc) = proposal.block_header.payload_commitment() {
                             let expected_param =
                                 expected_vid_param(&self.membership_coordinator, Some(proposal.epoch));
@@ -1853,9 +1857,13 @@ where
 
     fn maybe_validate_fetched_proposal(&mut self, proposal: SignedProposal<T, Proposal<T>>) {
         let view = proposal.data.view_number;
+        // Peek only: consuming before validation would let one bad response
+        // (right content, garbage signature) burn the round for the honest
+        // copies arriving after it. The request is consumed once a response
+        // has validated, below in the `validated.fetched` arm.
         if !self
             .fetcher
-            .take_requested_proposal(view, proposal_commitment(&proposal.data))
+            .is_requested_proposal(view, proposal_commitment(&proposal.data))
         {
             return;
         }
