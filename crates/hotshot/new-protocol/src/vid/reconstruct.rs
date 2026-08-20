@@ -10,8 +10,8 @@ use hotshot_types::{
     traits::{block_contents::EncodeBytes, node_implementation::NodeType},
     vid::avidm_gf2::{AvidmGf2Common, AvidmGf2Param, AvidmGf2Scheme, AvidmGf2Share},
 };
-use tokio::task::{AbortHandle, JoinSet};
-use tracing::warn;
+use tokio::task::{AbortHandle, Id, JoinSet};
+use tracing::{error, warn};
 
 type Metadata<T> = <<T as NodeType>::BlockPayload as BlockPayload<T>>::Metadata;
 
@@ -242,25 +242,61 @@ impl<T: NodeType> VidReconstructor<T> {
 
     pub async fn next(&mut self) -> Option<ReconstructResult<T>> {
         loop {
-            match self.tasks.join_next().await {
-                Some(Ok(Ok(out))) => {
-                    self.calculations.remove(&out.view);
-                    self.accumulators.remove(&out.view);
+            match self.tasks.join_next_with_id().await? {
+                Ok((id, Ok(out))) => {
+                    self.forget_calculation(out.view, id);
                     // A share-based attempt and a fetched-payload verification
                     // may race; the first one out wins, the loser is dropped.
                     if !self.reconstructed.insert(out.view) {
                         continue;
                     }
+
+                    self.accumulators.remove(&out.view);
+
+                    // Nothing left to decode: stop the attempt that lost.
+                    if let Some(loser) = self.calculations.remove(&out.view) {
+                        loser.abort();
+                    }
+
                     return Some(Ok(out));
                 },
-                Some(Ok(Err(err))) => {
-                    self.calculations.remove(&err.view);
+                Ok((id, Err(err))) => {
+                    self.forget_calculation(err.view, id);
                     self.handle_failed_attempt(&err);
                     return Some(Err(err));
                 },
-                Some(Err(_)) => continue,
-                None => return None,
+                Err(err) => {
+                    if err.is_panic() {
+                        error!(%err, "VID reconstruction task panicked");
+                    }
+                    let view = self
+                        .calculations
+                        .iter()
+                        .find(|(_, task)| task.id() == err.id())
+                        .map(|(view, _)| *view);
+                    if let Some(view) = view {
+                        self.calculations.remove(&view);
+                    }
+                },
             }
+        }
+    }
+
+    /// Drop the view's calculation handle, but only if `id` is the calculation
+    /// it tracks.
+    ///
+    /// Fetched-payload verifications run in the same [`JoinSet`] and carry the
+    /// same view, so a finished task is not necessarily the tracked one.
+    /// Dropping the handle of a calculation that is still running would defeat
+    /// the [`Self::try_reconstruct`] guard against a second attempt for the
+    /// same view, and leave the first one unabortable.
+    fn forget_calculation(&mut self, view: ViewNumber, id: Id) {
+        if self
+            .calculations
+            .get(&view)
+            .is_some_and(|task| task.id() == id)
+        {
+            self.calculations.remove(&view);
         }
     }
 
@@ -600,4 +636,62 @@ fn share_verifies(common: &AvidmGf2Common, share: &AvidmGf2Share) -> bool {
         AvidmGf2Scheme::verify_share_with_verified_common(common, share),
         Ok(Ok(()))
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use hotshot_example_types::node_types::TestTypes;
+
+    use super::*;
+
+    /// A finished task clears only the calculation it *is*.
+    ///
+    /// Fetched-payload verifications share the [`JoinSet`] and carry the same
+    /// view as the share-based calculation they race, so clearing by view
+    /// alone would drop a running calculation's handle: the guard against a
+    /// second attempt for that view would stop holding, and the first one
+    /// could no longer be aborted.
+    #[tokio::test]
+    async fn a_finished_task_clears_only_its_own_calculation() {
+        let mut reconstructor = VidReconstructor::<TestTypes>::new();
+        let view = ViewNumber::new(1);
+
+        let calculation = reconstructor.tasks.spawn(std::future::pending());
+        let other = reconstructor.tasks.spawn(std::future::pending());
+        let calculation_id = calculation.id();
+        reconstructor.calculations.insert(view, calculation);
+
+        reconstructor.forget_calculation(view, other.id());
+        assert!(
+            reconstructor.calculations.contains_key(&view),
+            "another task finishing must leave the calculation in place"
+        );
+
+        reconstructor.forget_calculation(view, calculation_id);
+        assert!(!reconstructor.calculations.contains_key(&view));
+    }
+
+    /// A panicking calculation releases its view.
+    ///
+    /// A panic yields a [`JoinError`] carrying only the task id, so the view
+    /// has to be recovered from `calculations`. Leaving the handle behind
+    /// would make [`VidReconstructor::try_reconstruct`] refuse that view for
+    /// good, and the share path would never retry it.
+    #[tokio::test]
+    async fn a_panicking_calculation_releases_its_view() {
+        let mut reconstructor = VidReconstructor::<TestTypes>::new();
+        let view = ViewNumber::new(1);
+
+        let calculation = reconstructor
+            .tasks
+            .spawn(async { panic!("decode blew up") });
+        reconstructor.calculations.insert(view, calculation);
+
+        // The panic is swallowed; with no other task the stream then ends.
+        assert!(reconstructor.next().await.is_none());
+        assert!(
+            !reconstructor.calculations.contains_key(&view),
+            "a panicked calculation must not block its view forever"
+        );
+    }
 }

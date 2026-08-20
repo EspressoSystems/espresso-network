@@ -1277,10 +1277,11 @@ where
                     }) {
                         match e {
                             CatchupEvidence::Qc(qc) => {
-                                if !self.is_view_too_far_ahead(qc.view_number()) {
-                                    self.fetcher
-                                        .note_advertiser(qc.view_number(), message.sender.clone());
-                                }
+                                self.fetcher.note_advertiser(
+                                    qc.view_number(),
+                                    message.sender.clone(),
+                                    &self.consensus,
+                                );
                                 if let Some(epoch) = self
                                     .cert_verifiers
                                     .advance
@@ -1347,10 +1348,11 @@ where
                         epoch = ?qc.epoch().map(|e| *e),
                         "recv high qc"
                     );
-                    if !self.is_view_too_far_ahead(qc.view_number()) {
-                        self.fetcher
-                            .note_advertiser(qc.view_number(), message.sender.clone());
-                    }
+                    self.fetcher.note_advertiser(
+                        qc.view_number(),
+                        message.sender.clone(),
+                        &self.consensus,
+                    );
                     if let Some(epoch) = self
                         .cert_verifiers
                         .advance

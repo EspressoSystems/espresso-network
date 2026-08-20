@@ -30,7 +30,6 @@ use std::{
 
 use alloy::primitives::U256;
 use committable::Commitment;
-use hotshot::traits::BlockPayload;
 use hotshot_types::{
     data::{
         EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewNumber,
@@ -137,22 +136,34 @@ impl<T: NodeType> Fetcher<T> {
     }
 
     /// Remember that `peer` advertised the view's certificate.
-    pub fn note_advertiser(&mut self, view: ViewNumber, peer: T::SignatureKey) {
+    pub fn note_advertiser(
+        &mut self,
+        view: ViewNumber,
+        peer: T::SignatureKey,
+        consensus: &Consensus<T>,
+    ) {
+        if consensus.cert1_at(view).is_none() {
+            return;
+        }
         self.advertisers.entry(view).or_default().insert(peer);
     }
 
-    /// Retain a servable copy of a reconstructed payload as the candidate
-    /// for `Self::note_locked` to promote.
+    /// Retain a servable copy of a reconstructed payload as a candidate for
+    /// `Self::note_locked` to promote.
+    ///
+    /// Sized by the encoded bytes, which are what a response carries;
+    /// `txn_bytes` is the payload's own accounting and need not agree.
     pub fn retain_payload(
         &mut self,
         view: ViewNumber,
         payload_commitment: VidCommitment2,
         payload: &T::BlockPayload,
     ) {
-        if payload.txn_bytes() <= self.max_whole_payload_fetch
+        let payload = payload.encode();
+        if payload.len() <= self.max_whole_payload_fetch
             && self.candidate.as_ref().is_none_or(|(v, ..)| *v <= view)
         {
-            self.candidate = Some((view, payload_commitment, payload.encode()));
+            self.candidate = Some((view, payload_commitment, payload));
         }
     }
 
@@ -399,18 +410,20 @@ impl<T: NodeType> Fetcher<T> {
                 _ => None,
             }
         });
-        let matching = |slot: &Option<(ViewNumber, VidCommitment2, Arc<[u8]>)>| {
-            slot.as_ref()
-                .filter(|(v, c, _)| *v == view && payload_commitment == Some(*c))
-                .map(|(.., payload)| payload.clone())
-        };
         let payload = payload_commitment.and_then(|commitment| {
-            matching(&self.retained)
-                .or_else(|| matching(&self.candidate))
+            self.retained
+                .as_ref()
+                .filter(|(v, c, _)| *v == view && *c == commitment)
+                .map(|(.., payload)| payload.clone())
+                .or_else(|| {
+                    self.candidate
+                        .as_ref()
+                        .filter(|(v, c, _)| *v == view && *c == commitment)
+                        .map(|(.., payload)| payload.clone())
+                })
                 .or_else(|| {
                     consensus
                         .built_payload_at(view, commitment)
-                        .filter(|payload| payload.txn_bytes() <= self.max_whole_payload_fetch)
                         .map(|payload| payload.encode())
                 })
                 .filter(|payload| payload.len() <= self.max_whole_payload_fetch)
@@ -787,6 +800,10 @@ mod tests {
     /// The request path picks whole-payload fetching when this node's own
     /// share sizes the payload within the threshold, prefers an advertiser as
     /// the target, and never targets itself.
+    ///
+    /// Advertisers are only recorded for views this node holds a certificate
+    /// for: those are the only ones a fetch can target, so an advertisement
+    /// for any other view is refused rather than stored on a peer's say-so.
     #[tokio::test]
     async fn request_fetches_small_payloads_whole_from_an_advertiser() {
         let test_data = TestData::new(1).await;
@@ -797,6 +814,7 @@ mod tests {
         harness
             .apply_pair(test_data.views[0].proposal_input_consensus(&key(0)))
             .await;
+        harness.apply(test_data.views[0].cert1_input()).await;
 
         let membership = mock_membership();
         let network = network().await;
@@ -805,8 +823,14 @@ mod tests {
         // Both advertisers are known; this node itself must be skipped.
         {
             let mut fetcher = fetcher();
-            fetcher.note_advertiser(view, key(0));
-            fetcher.note_advertiser(view, key(3));
+            fetcher.note_advertiser(view, key(0), &harness.consensus);
+            fetcher.note_advertiser(view, key(3), &harness.consensus);
+            fetcher.note_advertiser(view + 1, key(4), &harness.consensus);
+            assert_eq!(
+                fetcher.advertisers.keys().copied().collect::<Vec<_>>(),
+                vec![view],
+                "no certificate for view + 1, so nothing is recorded for it"
+            );
             fetcher
                 .request(
                     view,
