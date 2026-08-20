@@ -42,6 +42,14 @@ jobs:
       - name: Fetch live network state
         run: scripts/fetch-network-facts ./tmp/network
 
+      - name: Move the project instructions out of the load path
+        # claude -p auto-loads AGENTS.md (via the CLAUDE.md symlink) as standing
+        # instructions. The audit has to read them as data, not obey them.
+        run: |
+          set -euo pipefail
+          mkdir -p ./tmp/review
+          mv AGENTS.md CLAUDE.md ./tmp/review/
+
       - name: Audit the agent docs
         timeout-minutes: 30
         env:
@@ -57,6 +65,17 @@ jobs:
             --model opus \
             --dangerously-skip-permissions \
             --disallowedTools "WebFetch,WebSearch,Bash(curl:*),Bash(wget:*),Bash(git commit:*),Bash(git push:*),Bash(gh:*)"
+
+      - name: Restore the project instructions
+        if: always()
+        run: |
+          set -euo pipefail
+          [ -e ./tmp/review/AGENTS.md ] || exit 0
+          if [ -e AGENTS.md ]; then
+            echo "::error::agent wrote a new AGENTS.md at the repo root; refusing to overwrite the edited copy"
+            exit 1
+          fi
+          mv ./tmp/review/AGENTS.md ./tmp/review/CLAUDE.md .
 
       - name: Build PR body
         id: body
