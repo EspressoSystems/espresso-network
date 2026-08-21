@@ -16,8 +16,7 @@ use anyhow::{Context, ensure};
 use async_trait::async_trait;
 use futures::{TryFutureExt, future::try_join_all};
 use hotshot_types::{data::VidCommon, traits::node_implementation::NodeType};
-use http_client::{Client, Url};
-use vbs::version::StaticVersion;
+use http_client::{Client, Url, WireVersion};
 
 use super::Provider;
 use crate::{
@@ -48,9 +47,8 @@ use crate::{
 /// protocol.
 #[derive(Clone, Debug)]
 pub struct TrustedQueryServiceProvider {
-    // All peers frame at http-wire's `WireVersion` (VBS 0.1); the API's own version lives in
-    // the URL.
-    client: Client<Error, StaticVersion<0, 1>>,
+    // All peers frame at `WireVersion` (VBS 0.1); the API's own version lives in the URL.
+    client: Client<Error, WireVersion>,
 }
 
 impl TrustedQueryServiceProvider {
