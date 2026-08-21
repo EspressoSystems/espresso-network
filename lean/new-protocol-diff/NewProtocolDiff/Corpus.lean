@@ -58,11 +58,26 @@ def unmodelledDropped (text : String) : Option String :=
         if kind.startsWith name then some s!"{feature} (dropped {name})" else none
     else none
 
-/-- Each view a trace delivers a proposal for, paired with its parent's view. -/
+/--
+Each view whose proposal the trace shows, paired with its parent's view.
+
+Delivered *or* emitted. A node's own proposal is built rather than delivered, so
+counting only arrivals leaves every self-led view looking like state the trace
+cannot account for — and the excuse below then waves through any divergence
+there, which was true of eight of the twenty-one traces that propose. The
+excuse's premise is that the trace does not show where the state came from, and
+for a view this node proposed in the trace shows exactly that, as an output.
+-/
 def proposalParents (events : List Event) : List (ViewNumber × ViewNumber) :=
-  events.filterMap fun
-    | .consensus (.proposal _ p _) _ => some (p.viewNumber, p.parentCert.view)
-    | _ => none
+  events.flatMap fun
+    | .consensus (.proposal _ p _) out =>
+      (p.viewNumber, p.parentCert.view) :: out.filterMap emitted
+    | .consensus _ out => out.filterMap emitted
+    | .collect => []
+  where
+    emitted : Output → Option (ViewNumber × ViewNumber)
+      | .send (.proposal p) => some (p.viewNumber, p.parentCert.view)
+      | _ => none
 
 /--
 The view an action at `view` needs and the trace does not deliver.

@@ -90,6 +90,35 @@ def readPreamble (text : String) : Except String Preamble := do
     fun e => s!"its `# trace` header's `decideBuffer`: {e}"
   pure ⟨← ident "node", ← ident "anchor", buffer⟩
 
+/--
+Who leads each view, as the recorder saw it.
+
+Read from the `# leader <view> <key>` lines. Every view has a leader and the model
+takes the schedule as a parameter, so a replay that cannot read it has to assume
+one; assuming this node leads everywhere is what made the leader clause of
+`ProposalJustification` unfalsifiable, and a proposal in a view this node does not
+lead replayed as agreement.
+
+A view with no line has no leader here, which is the strict reading: a step
+records the leader of its own view, so a proposal always has one, and anything
+proposing in a view the trace never mentions is acting on a schedule the trace
+does not show.
+-/
+def readLeaders (text : String) : Std.TreeMap ViewNumber PubKey :=
+  (text.splitOn "\n").foldl (init := {}) fun leaders line =>
+    let tag := "# leader "
+    if !line.startsWith tag then leaders
+    else
+      match (line.drop tag.length).toString.trimAscii.toString.splitOn " " with
+      | [v, key] =>
+        match v.toNat? with
+        | some v =>
+          match cryptoFromJson (Json.str (key.replace "\"" "")) with
+          | .ok k => leaders.insert ⟨v⟩ ⟨k⟩
+          | .error _ => leaders
+        | none => leaders
+      | _ => leaders
+
 /-- Replay one trace and say what came of it. -/
 def replayOne (path : System.FilePath) : IO (Verdict × String) := do
   let text ← IO.FS.readFile path
@@ -111,7 +140,8 @@ def replayOne (path : System.FilePath) : IO (Verdict × String) := do
     let cfg : Config :=
       ⟨anchor, ⟨⟨⟨said.anchor⟩⟩, ViewNumber.genesis⟩, said.decideBuffer⟩
     let me : PubKey := ⟨said.node⟩
-    return verdictOf text events (replay cfg (fun _ => some me) me events)
+    let leaders := readLeaders text
+    return verdictOf text events (replay cfg (leaders.get? ·) me events)
 
 public def main (args : List String) : IO UInt32 := do
   match parseOptions args with

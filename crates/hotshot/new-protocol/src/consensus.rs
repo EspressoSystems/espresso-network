@@ -996,6 +996,25 @@ impl<T: NodeType> Consensus<T> {
         }
     }
 
+    pub fn leader_of(&self, view: ViewNumber, epoch: EpochNumber) -> Option<T::SignatureKey> {
+        match self
+            .stake_table_coordinator
+            .membership_for_epoch(Some(epoch))
+        {
+            Ok(stake_table) => match stake_table.leader(view) {
+                Ok(leader) => Some(leader),
+                Err(err) => {
+                    warn!(%view, %epoch, %err, "failed to get leader from stake table");
+                    None
+                },
+            },
+            Err(err) => {
+                warn!(%view, %epoch, %err, "failed to get stake table");
+                None
+            },
+        }
+    }
+
     /// Test-only: forcibly replace the proposal stored at `view`.
     ///
     /// Used to simulate the scenario where `self.proposals[parent_view]`
@@ -2392,22 +2411,7 @@ impl<T: NodeType> Consensus<T> {
 
     #[instrument(level = "trace", skip_all)]
     fn is_leader(&self, view: ViewNumber, epoch: EpochNumber) -> bool {
-        match self
-            .stake_table_coordinator
-            .membership_for_epoch(Some(epoch))
-        {
-            Ok(stake_table) => match stake_table.leader(view) {
-                Ok(leader) => leader == self.public_key,
-                Err(err) => {
-                    warn!(%view, %epoch, %err, "failed to get leader from stake table");
-                    false
-                },
-            },
-            Err(err) => {
-                warn!(%view, %epoch, %err, "failed to get stake table");
-                false
-            },
-        }
+        self.leader_of(view, epoch).as_ref() == Some(&self.public_key)
     }
 
     fn staked_in_epoch(&self, epoch: EpochNumber) -> bool {
@@ -2548,7 +2552,7 @@ impl<T: NodeType> Consensus<T> {
 }
 
 impl<T: NodeType> ConsensusInput<T> {
-    fn view_number(&self) -> ViewNumber {
+    pub fn view_number(&self) -> ViewNumber {
         match self {
             ConsensusInput::BlockBuilt { view, .. } => *view,
             ConsensusInput::BlockReconstructed(view, _) => *view,

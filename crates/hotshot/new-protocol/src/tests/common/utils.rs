@@ -1002,6 +1002,7 @@ impl ConsensusHarness {
             self.consensus.public_key(),
             self.consensus.last_decided_leaf(),
         );
+        record_leader(&mut self.trace, &self.consensus, &input);
         let before = outbox.len();
         self.consensus.apply(input.clone(), outbox);
         self.trace.record(&input, outbox.iter().skip(before));
@@ -1458,4 +1459,24 @@ pub(crate) fn build_timeout_cert(
         private_key,
         &test_upgrade_lock::<TestTypes>(),
     )
+}
+
+/// Name the leader of the view a step is about, for the replay.
+///
+/// Every view has one, and the model takes the schedule as a parameter, so a
+/// trace that does not say who leads leaves a replay to assume — and the only
+/// safe-looking assumption, that this node leads everywhere, makes the leader
+/// clause of `ProposalJustification` unfalsifiable. Asked of the stake table
+/// here rather than taken from the propose path, so a propose path that forgets
+/// to check leadership is caught rather than confirmed.
+pub(crate) fn record_leader(
+    trace: &mut trace::Recorder,
+    consensus: &Consensus<TestTypes>,
+    input: &ConsensusInput<TestTypes>,
+) {
+    let view = input.view_number();
+    let epoch = consensus.current_epoch().unwrap_or(EpochNumber::genesis());
+    if let Some(leader) = consensus.leader_of(view, epoch) {
+        trace.leader::<TestTypes>(view, &leader);
+    }
 }

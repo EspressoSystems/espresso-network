@@ -27,7 +27,8 @@ const TRACE_RS: &str = include_str!("../trace.rs");
 
 /// The replay's list of excuses. A moved file breaks the build, which is the
 /// loudest failure available and better than a check that quietly stops looking.
-const CORPUS_LEAN: &str = include_str!("../../../../../lean/new-protocol-diff/NewProtocolDiff/Corpus.lean");
+const CORPUS_LEAN: &str =
+    include_str!("../../../../../lean/new-protocol-diff/NewProtocolDiff/Corpus.lean");
 
 /// Every `Dropped("…")` name the recorder can write.
 fn dropped_kinds() -> Vec<String> {
@@ -69,9 +70,9 @@ fn every_excused_input_is_one_the_recorder_drops() {
     for kind in &excused {
         assert!(
             dropped.iter().any(|d| d == kind || d.starts_with(kind)),
-            "`{kind}` is excused by the replay but never dropped by the recorder, \
-             so it excuses nothing: either drop it in trace.rs or remove the entry \
-             from unmodelledInputs. Dropped: {dropped:?}"
+            "`{kind}` is excused by the replay but never dropped by the recorder, so it excuses \
+             nothing: either drop it in trace.rs or remove the entry from unmodelledInputs. \
+             Dropped: {dropped:?}"
         );
     }
 }

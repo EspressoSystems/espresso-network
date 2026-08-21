@@ -10,7 +10,7 @@ use hotshot_types::{
     traits::{metrics::NoMetrics, signature_key::SignatureKey},
 };
 
-use super::utils::mock_membership_with_num_nodes;
+use super::utils::{mock_membership_with_num_nodes, record_leader};
 use crate::{
     block::{BlockBuilder, BlockBuilderConfig},
     cert_verifier::CertVerifiers,
@@ -178,6 +178,7 @@ impl TestHarness {
         let consensus = self.coordinator.consensus();
         self.trace
             .preamble(consensus.public_key(), consensus.last_decided_leaf());
+        record_leader(&mut self.trace, consensus, &input);
         self.coordinator.apply_consensus(input.clone());
         // The outbox was drained at the end of the previous call, so it now holds
         // exactly what this input drew — which is what a trace step is.

@@ -42,6 +42,7 @@
 //! that is asked is that distinct commitments give distinct text.
 
 use std::{
+    collections::BTreeSet,
     fs::create_dir_all,
     path::PathBuf,
     sync::atomic::{AtomicUsize, Ordering},
@@ -93,6 +94,8 @@ pub struct Recorder {
     ///
     /// See [`Recorder::record`] for why they wait rather than being dropped.
     pending: Vec<String>,
+    /// Views whose leader has been written; see [`Recorder::leader`].
+    led: BTreeSet<ViewNumber>,
 }
 
 impl Recorder {
@@ -103,6 +106,7 @@ impl Recorder {
             lines: Vec::new(),
             identified: true,
             pending: Vec::new(),
+            led: BTreeSet::new(),
         };
         let Ok(dir) = std::env::var(TRACE_DIR) else {
             return inert;
@@ -120,6 +124,7 @@ impl Recorder {
             lines: Vec::new(),
             identified: false,
             pending: Vec::new(),
+            led: BTreeSet::new(),
         }
     }
 
@@ -155,6 +160,24 @@ impl Recorder {
             ("decideBuffer", DECIDE_BUFFER.to_string()),
         ]);
         self.lines.push(format!("# trace {line}"));
+    }
+
+    /// Name the leader of `view`, once.
+    ///
+    /// Every view has a leader, and a trace that omits them leaves a replay with
+    /// no way to tell a proposal this node was entitled to make from one it was
+    /// not: the model takes the schedule as a parameter, so a replay that cannot
+    /// read it has to assume something, and assuming this node leads everywhere
+    /// makes the leader clause of `ProposalJustification` unfalsifiable.
+    ///
+    /// Written on the comment channel, like the identity line, so a reader that
+    /// only knows about steps skips it.
+    pub fn leader<T: NodeType>(&mut self, view: ViewNumber, leader: &T::SignatureKey) {
+        if self.path.is_none() || !self.led.insert(view) {
+            return;
+        }
+        self.lines
+            .push(format!("# leader {} {}", view, ident(leader)));
     }
 
     /// Record one step: the input taken, and what it drew.
