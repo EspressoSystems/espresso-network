@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/espresso/node/src/persistence/sql.rs`."><title>sql.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-17e0aaed.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="espresso_node" data-themes="" data-resource-suffix="" data-rustdoc-version="1.97.1 (8bab26f4f 2026-07-14)" data-channel="1.97.1" data-search-js="search-fd9372ac.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../static.files/storage-41dd4d93.js"></script><script defer src="../../../static.files/src-script-813739b1.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-fcd733ba.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">espresso_node/persistence/</div>sql.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="kw">use </span>std::{
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/espresso/node/src/persistence/sql.rs`."><title>sql.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-1ed95124.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="espresso_node" data-themes="" data-resource-suffix="" data-rustdoc-version="1.98.0 (88d9e12ae 2026-08-18)" data-channel="1.98.0" data-search-js="search-9944d736.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../static.files/storage-41dd4d93.js"></script><script defer src="../../../static.files/src-script-813739b1.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-417ebf0a.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">espresso_node/persistence/</div>sql.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="kw">use </span>std::{
 <a href=#2 id=2 data-nosnippet>2</a>    collections::BTreeMap,
 <a href=#3 id=3 data-nosnippet>3</a>    future::Future,
 <a href=#4 id=4 data-nosnippet>4</a>    path::PathBuf,
@@ -2202,361 +2202,361 @@
 <a href=#2202 id=2202 data-nosnippet>2202</a>        .<span class="kw">await
 <a href=#2203 id=2203 data-nosnippet>2203</a>    </span>}
 <a href=#2204 id=2204 data-nosnippet>2204</a>
-<a href=#2205 id=2205 data-nosnippet>2205</a>    <span class="kw">async fn </span>store_epoch_root(
-<a href=#2206 id=2206 data-nosnippet>2206</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#2207 id=2207 data-nosnippet>2207</a>        epoch: EpochNumber,
-<a href=#2208 id=2208 data-nosnippet>2208</a>        block_header: &lt;SeqTypes <span class="kw">as </span>NodeType&gt;::BlockHeader,
-<a href=#2209 id=2209 data-nosnippet>2209</a>    ) -&gt; anyhow::Result&lt;()&gt; {
-<a href=#2210 id=2210 data-nosnippet>2210</a>        <span class="kw">let </span>epoch_i64 = epoch.u64() <span class="kw">as </span>i64;
-<a href=#2211 id=2211 data-nosnippet>2211</a>        <span class="kw">let </span>block_header_bytes =
-<a href=#2212 id=2212 data-nosnippet>2212</a>            bincode::serialize(<span class="kw-2">&amp;</span>block_header).context(<span class="string">"serializing block header"</span>)<span class="question-mark">?</span>;
-<a href=#2213 id=2213 data-nosnippet>2213</a>
-<a href=#2214 id=2214 data-nosnippet>2214</a>        <span class="macro">serializable_retry!</span>(<span class="self">self</span>, || <span class="kw">async </span>{
-<a href=#2215 id=2215 data-nosnippet>2215</a>            <span class="kw">let </span><span class="kw-2">mut </span>tx = <span class="self">self</span>.db.write().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#2216 id=2216 data-nosnippet>2216</a>            tx.upsert(
-<a href=#2217 id=2217 data-nosnippet>2217</a>                <span class="string">"epoch_drb_and_root"</span>,
-<a href=#2218 id=2218 data-nosnippet>2218</a>                [<span class="string">"epoch"</span>, <span class="string">"block_header"</span>],
-<a href=#2219 id=2219 data-nosnippet>2219</a>                [<span class="string">"epoch"</span>],
-<a href=#2220 id=2220 data-nosnippet>2220</a>                [(epoch_i64, block_header_bytes.clone())],
-<a href=#2221 id=2221 data-nosnippet>2221</a>            )
-<a href=#2222 id=2222 data-nosnippet>2222</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#2223 id=2223 data-nosnippet>2223</a>            tx.commit().<span class="kw">await
-<a href=#2224 id=2224 data-nosnippet>2224</a>        </span>})
-<a href=#2225 id=2225 data-nosnippet>2225</a>        .<span class="kw">await
-<a href=#2226 id=2226 data-nosnippet>2226</a>    </span>}
-<a href=#2227 id=2227 data-nosnippet>2227</a>
-<a href=#2228 id=2228 data-nosnippet>2228</a>    <span class="kw">async fn </span>store_drb_input(<span class="kw-2">&amp;</span><span class="self">self</span>, drb_input: DrbInput) -&gt; anyhow::Result&lt;()&gt; {
-<a href=#2229 id=2229 data-nosnippet>2229</a>        <span class="kw">if let </span><span class="prelude-val">Ok</span>(loaded_drb_input) = <span class="self">self</span>.load_drb_input(drb_input.epoch).<span class="kw">await </span>{
-<a href=#2230 id=2230 data-nosnippet>2230</a>            <span class="kw">if </span>loaded_drb_input.difficulty_level != drb_input.difficulty_level {
-<a href=#2231 id=2231 data-nosnippet>2231</a>                <span class="macro">tracing::error!</span>(<span class="string">"Overwriting {loaded_drb_input:?} in storage with {drb_input:?}"</span>);
-<a href=#2232 id=2232 data-nosnippet>2232</a>            } <span class="kw">else if </span>loaded_drb_input.iteration &gt;= drb_input.iteration {
-<a href=#2233 id=2233 data-nosnippet>2233</a>                <span class="macro">anyhow::bail!</span>(
-<a href=#2234 id=2234 data-nosnippet>2234</a>                    <span class="string">"DrbInput in storage {:?} is more recent than {:?}, refusing to update"</span>,
-<a href=#2235 id=2235 data-nosnippet>2235</a>                    loaded_drb_input,
-<a href=#2236 id=2236 data-nosnippet>2236</a>                    drb_input
-<a href=#2237 id=2237 data-nosnippet>2237</a>                )
-<a href=#2238 id=2238 data-nosnippet>2238</a>            }
-<a href=#2239 id=2239 data-nosnippet>2239</a>        }
-<a href=#2240 id=2240 data-nosnippet>2240</a>
-<a href=#2241 id=2241 data-nosnippet>2241</a>        <span class="kw">let </span>drb_epoch_i64 = drb_input.epoch <span class="kw">as </span>i64;
-<a href=#2242 id=2242 data-nosnippet>2242</a>        <span class="kw">let </span>drb_input_bytes = bincode::serialize(<span class="kw-2">&amp;</span>drb_input)
-<a href=#2243 id=2243 data-nosnippet>2243</a>            .context(<span class="string">"Failed to serialize DrbInput. This is not fatal, but should never happen."</span>)<span class="question-mark">?</span>;
-<a href=#2244 id=2244 data-nosnippet>2244</a>
-<a href=#2245 id=2245 data-nosnippet>2245</a>        <span class="macro">serializable_retry!</span>(<span class="self">self</span>, || <span class="kw">async </span>{
-<a href=#2246 id=2246 data-nosnippet>2246</a>            <span class="kw">let </span><span class="kw-2">mut </span>tx = <span class="self">self</span>.db.write().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#2247 id=2247 data-nosnippet>2247</a>            tx.upsert(
-<a href=#2248 id=2248 data-nosnippet>2248</a>                <span class="string">"drb"</span>,
-<a href=#2249 id=2249 data-nosnippet>2249</a>                [<span class="string">"epoch"</span>, <span class="string">"drb_input"</span>],
-<a href=#2250 id=2250 data-nosnippet>2250</a>                [<span class="string">"epoch"</span>],
-<a href=#2251 id=2251 data-nosnippet>2251</a>                [(drb_epoch_i64, drb_input_bytes.clone())],
-<a href=#2252 id=2252 data-nosnippet>2252</a>            )
-<a href=#2253 id=2253 data-nosnippet>2253</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#2254 id=2254 data-nosnippet>2254</a>            tx.commit().<span class="kw">await
-<a href=#2255 id=2255 data-nosnippet>2255</a>        </span>})
-<a href=#2256 id=2256 data-nosnippet>2256</a>        .<span class="kw">await
-<a href=#2257 id=2257 data-nosnippet>2257</a>    </span>}
-<a href=#2258 id=2258 data-nosnippet>2258</a>
-<a href=#2259 id=2259 data-nosnippet>2259</a>    <span class="kw">async fn </span>load_drb_input(<span class="kw-2">&amp;</span><span class="self">self</span>, epoch: u64) -&gt; anyhow::Result&lt;DrbInput&gt; {
-<a href=#2260 id=2260 data-nosnippet>2260</a>        <span class="kw">let </span>row = <span class="self">self
-<a href=#2261 id=2261 data-nosnippet>2261</a>            </span>.db
-<a href=#2262 id=2262 data-nosnippet>2262</a>            .read()
-<a href=#2263 id=2263 data-nosnippet>2263</a>            .<span class="kw">await</span><span class="question-mark">?
-<a href=#2264 id=2264 data-nosnippet>2264</a>            </span>.fetch_optional(query(<span class="string">"SELECT drb_input FROM drb WHERE epoch = $1"</span>).bind(epoch <span class="kw">as </span>i64))
-<a href=#2265 id=2265 data-nosnippet>2265</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#2266 id=2266 data-nosnippet>2266</a>
-<a href=#2267 id=2267 data-nosnippet>2267</a>        <span class="kw">match </span>row {
-<a href=#2268 id=2268 data-nosnippet>2268</a>            <span class="prelude-val">None </span>=&gt; <span class="macro">anyhow::bail!</span>(<span class="string">"No DrbInput for epoch {} in storage"</span>, epoch),
-<a href=#2269 id=2269 data-nosnippet>2269</a>            <span class="prelude-val">Some</span>(row) =&gt; {
-<a href=#2270 id=2270 data-nosnippet>2270</a>                <span class="kw">let </span>drb_input_bytes: Vec&lt;u8&gt; = row.try_get(<span class="string">"drb_input"</span>)<span class="question-mark">?</span>;
-<a href=#2271 id=2271 data-nosnippet>2271</a>                <span class="kw">let </span>drb_input = bincode::deserialize(<span class="kw-2">&amp;</span>drb_input_bytes)
-<a href=#2272 id=2272 data-nosnippet>2272</a>                    .context(<span class="string">"Failed to deserialize drb_input from storage"</span>)<span class="question-mark">?</span>;
-<a href=#2273 id=2273 data-nosnippet>2273</a>
-<a href=#2274 id=2274 data-nosnippet>2274</a>                <span class="prelude-val">Ok</span>(drb_input)
-<a href=#2275 id=2275 data-nosnippet>2275</a>            },
-<a href=#2276 id=2276 data-nosnippet>2276</a>        }
-<a href=#2277 id=2277 data-nosnippet>2277</a>    }
-<a href=#2278 id=2278 data-nosnippet>2278</a>
-<a href=#2279 id=2279 data-nosnippet>2279</a>    <span class="kw">async fn </span>add_state_cert(
-<a href=#2280 id=2280 data-nosnippet>2280</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#2281 id=2281 data-nosnippet>2281</a>        state_cert: LightClientStateUpdateCertificateV2&lt;SeqTypes&gt;,
-<a href=#2282 id=2282 data-nosnippet>2282</a>    ) -&gt; anyhow::Result&lt;()&gt; {
-<a href=#2283 id=2283 data-nosnippet>2283</a>        <span class="kw">let </span>view_number = state_cert.light_client_state.view_number <span class="kw">as </span>i64;
-<a href=#2284 id=2284 data-nosnippet>2284</a>        <span class="kw">let </span>state_cert_bytes = bincode::serialize(<span class="kw-2">&amp;</span>state_cert)
-<a href=#2285 id=2285 data-nosnippet>2285</a>            .context(<span class="string">"serializing light client state update certificate"</span>)<span class="question-mark">?</span>;
-<a href=#2286 id=2286 data-nosnippet>2286</a>
-<a href=#2287 id=2287 data-nosnippet>2287</a>        <span class="macro">serializable_retry!</span>(<span class="self">self</span>, || <span class="kw">async </span>{
-<a href=#2288 id=2288 data-nosnippet>2288</a>            <span class="kw">let </span><span class="kw-2">mut </span>tx = <span class="self">self</span>.db.write().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#2289 id=2289 data-nosnippet>2289</a>            tx.upsert(
-<a href=#2290 id=2290 data-nosnippet>2290</a>                <span class="string">"state_cert"</span>,
-<a href=#2291 id=2291 data-nosnippet>2291</a>                [<span class="string">"view"</span>, <span class="string">"state_cert"</span>],
-<a href=#2292 id=2292 data-nosnippet>2292</a>                [<span class="string">"view"</span>],
-<a href=#2293 id=2293 data-nosnippet>2293</a>                [(view_number, state_cert_bytes.clone())],
-<a href=#2294 id=2294 data-nosnippet>2294</a>            )
-<a href=#2295 id=2295 data-nosnippet>2295</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#2296 id=2296 data-nosnippet>2296</a>            tx.commit().<span class="kw">await
-<a href=#2297 id=2297 data-nosnippet>2297</a>        </span>})
-<a href=#2298 id=2298 data-nosnippet>2298</a>        .<span class="kw">await
-<a href=#2299 id=2299 data-nosnippet>2299</a>    </span>}
-<a href=#2300 id=2300 data-nosnippet>2300</a>
-<a href=#2301 id=2301 data-nosnippet>2301</a>    <span class="kw">async fn </span>load_state_cert(
-<a href=#2302 id=2302 data-nosnippet>2302</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#2303 id=2303 data-nosnippet>2303</a>    ) -&gt; anyhow::Result&lt;<span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificateV2&lt;SeqTypes&gt;&gt;&gt; {
-<a href=#2304 id=2304 data-nosnippet>2304</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(row) = <span class="self">self
-<a href=#2305 id=2305 data-nosnippet>2305</a>            </span>.db
-<a href=#2306 id=2306 data-nosnippet>2306</a>            .read()
-<a href=#2307 id=2307 data-nosnippet>2307</a>            .<span class="kw">await</span><span class="question-mark">?
-<a href=#2308 id=2308 data-nosnippet>2308</a>            </span>.fetch_optional(
-<a href=#2309 id=2309 data-nosnippet>2309</a>                <span class="string">"SELECT state_cert FROM finalized_state_cert ORDER BY epoch DESC LIMIT 1"</span>,
-<a href=#2310 id=2310 data-nosnippet>2310</a>            )
-<a href=#2311 id=2311 data-nosnippet>2311</a>            .<span class="kw">await</span><span class="question-mark">?
-<a href=#2312 id=2312 data-nosnippet>2312</a>        </span><span class="kw">else </span>{
-<a href=#2313 id=2313 data-nosnippet>2313</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
-<a href=#2314 id=2314 data-nosnippet>2314</a>        };
-<a href=#2315 id=2315 data-nosnippet>2315</a>        <span class="kw">let </span>bytes: Vec&lt;u8&gt; = row.get(<span class="string">"state_cert"</span>);
-<a href=#2316 id=2316 data-nosnippet>2316</a>
-<a href=#2317 id=2317 data-nosnippet>2317</a>        <span class="kw">let </span>cert = <span class="kw">match </span>bincode::deserialize(<span class="kw-2">&amp;</span>bytes) {
-<a href=#2318 id=2318 data-nosnippet>2318</a>            <span class="prelude-val">Ok</span>(cert) =&gt; cert,
-<a href=#2319 id=2319 data-nosnippet>2319</a>            <span class="prelude-val">Err</span>(err) =&gt; {
-<a href=#2320 id=2320 data-nosnippet>2320</a>                <span class="macro">tracing::info!</span>(
-<a href=#2321 id=2321 data-nosnippet>2321</a>                    error = %err,
-<a href=#2322 id=2322 data-nosnippet>2322</a>                    <span class="string">"Failed to deserialize state certificate with v2. attempting with v1"
-<a href=#2323 id=2323 data-nosnippet>2323</a>                </span>);
-<a href=#2324 id=2324 data-nosnippet>2324</a>
-<a href=#2325 id=2325 data-nosnippet>2325</a>                <span class="kw">let </span>v1_cert =
-<a href=#2326 id=2326 data-nosnippet>2326</a>                    bincode::deserialize::&lt;LightClientStateUpdateCertificateV1&lt;SeqTypes&gt;&gt;(<span class="kw-2">&amp;</span>bytes)
-<a href=#2327 id=2327 data-nosnippet>2327</a>                        .with_context(|| {
-<a href=#2328 id=2328 data-nosnippet>2328</a>                        <span class="macro">format!</span>(<span class="string">"Failed to deserialize using both v1 and v2. error: {err}"</span>)
-<a href=#2329 id=2329 data-nosnippet>2329</a>                    })<span class="question-mark">?</span>;
-<a href=#2330 id=2330 data-nosnippet>2330</a>
-<a href=#2331 id=2331 data-nosnippet>2331</a>                v1_cert.into()
-<a href=#2332 id=2332 data-nosnippet>2332</a>            },
-<a href=#2333 id=2333 data-nosnippet>2333</a>        };
-<a href=#2334 id=2334 data-nosnippet>2334</a>
-<a href=#2335 id=2335 data-nosnippet>2335</a>        <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(cert))
-<a href=#2336 id=2336 data-nosnippet>2336</a>    }
-<a href=#2337 id=2337 data-nosnippet>2337</a>
-<a href=#2338 id=2338 data-nosnippet>2338</a>    <span class="kw">async fn </span>get_state_cert_by_epoch(
-<a href=#2339 id=2339 data-nosnippet>2339</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#2340 id=2340 data-nosnippet>2340</a>        epoch: u64,
-<a href=#2341 id=2341 data-nosnippet>2341</a>    ) -&gt; anyhow::Result&lt;<span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificateV2&lt;SeqTypes&gt;&gt;&gt; {
-<a href=#2342 id=2342 data-nosnippet>2342</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(row) = <span class="self">self
-<a href=#2343 id=2343 data-nosnippet>2343</a>            </span>.db
-<a href=#2344 id=2344 data-nosnippet>2344</a>            .read()
-<a href=#2345 id=2345 data-nosnippet>2345</a>            .<span class="kw">await</span><span class="question-mark">?
-<a href=#2346 id=2346 data-nosnippet>2346</a>            </span>.fetch_optional(
-<a href=#2347 id=2347 data-nosnippet>2347</a>                query(<span class="string">"SELECT state_cert FROM finalized_state_cert WHERE epoch = $1"</span>)
-<a href=#2348 id=2348 data-nosnippet>2348</a>                    .bind(epoch <span class="kw">as </span>i64),
-<a href=#2349 id=2349 data-nosnippet>2349</a>            )
-<a href=#2350 id=2350 data-nosnippet>2350</a>            .<span class="kw">await</span><span class="question-mark">?
-<a href=#2351 id=2351 data-nosnippet>2351</a>        </span><span class="kw">else </span>{
-<a href=#2352 id=2352 data-nosnippet>2352</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
-<a href=#2353 id=2353 data-nosnippet>2353</a>        };
-<a href=#2354 id=2354 data-nosnippet>2354</a>        <span class="kw">let </span>bytes: Vec&lt;u8&gt; = row.get(<span class="string">"state_cert"</span>);
-<a href=#2355 id=2355 data-nosnippet>2355</a>
-<a href=#2356 id=2356 data-nosnippet>2356</a>        <span class="kw">let </span>cert = <span class="kw">match </span>bincode::deserialize(<span class="kw-2">&amp;</span>bytes) {
-<a href=#2357 id=2357 data-nosnippet>2357</a>            <span class="prelude-val">Ok</span>(cert) =&gt; cert,
-<a href=#2358 id=2358 data-nosnippet>2358</a>            <span class="prelude-val">Err</span>(err) =&gt; {
-<a href=#2359 id=2359 data-nosnippet>2359</a>                <span class="macro">tracing::info!</span>(
-<a href=#2360 id=2360 data-nosnippet>2360</a>                    error = %err,
-<a href=#2361 id=2361 data-nosnippet>2361</a>                    <span class="string">"Failed to deserialize state certificate with v2. attempting with v1"
-<a href=#2362 id=2362 data-nosnippet>2362</a>                </span>);
-<a href=#2363 id=2363 data-nosnippet>2363</a>
-<a href=#2364 id=2364 data-nosnippet>2364</a>                <span class="kw">let </span>v1_cert =
-<a href=#2365 id=2365 data-nosnippet>2365</a>                    bincode::deserialize::&lt;LightClientStateUpdateCertificateV1&lt;SeqTypes&gt;&gt;(<span class="kw-2">&amp;</span>bytes)
-<a href=#2366 id=2366 data-nosnippet>2366</a>                        .with_context(|| {
-<a href=#2367 id=2367 data-nosnippet>2367</a>                        <span class="macro">format!</span>(<span class="string">"Failed to deserialize using both v1 and v2. error: {err}"</span>)
-<a href=#2368 id=2368 data-nosnippet>2368</a>                    })<span class="question-mark">?</span>;
-<a href=#2369 id=2369 data-nosnippet>2369</a>
-<a href=#2370 id=2370 data-nosnippet>2370</a>                v1_cert.into()
-<a href=#2371 id=2371 data-nosnippet>2371</a>            },
-<a href=#2372 id=2372 data-nosnippet>2372</a>        };
-<a href=#2373 id=2373 data-nosnippet>2373</a>
-<a href=#2374 id=2374 data-nosnippet>2374</a>        <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(cert))
-<a href=#2375 id=2375 data-nosnippet>2375</a>    }
+<a href=#2205 id=2205 data-nosnippet>2205</a>    <span class="kw">async fn </span>store_drb_input(<span class="kw-2">&amp;</span><span class="self">self</span>, drb_input: DrbInput) -&gt; anyhow::Result&lt;()&gt; {
+<a href=#2206 id=2206 data-nosnippet>2206</a>        <span class="kw">if let </span><span class="prelude-val">Ok</span>(loaded_drb_input) = <span class="self">self</span>.load_drb_input(drb_input.epoch).<span class="kw">await </span>{
+<a href=#2207 id=2207 data-nosnippet>2207</a>            <span class="kw">if </span>loaded_drb_input.difficulty_level != drb_input.difficulty_level {
+<a href=#2208 id=2208 data-nosnippet>2208</a>                <span class="macro">tracing::error!</span>(<span class="string">"Overwriting {loaded_drb_input:?} in storage with {drb_input:?}"</span>);
+<a href=#2209 id=2209 data-nosnippet>2209</a>            } <span class="kw">else if </span>loaded_drb_input.iteration &gt;= drb_input.iteration {
+<a href=#2210 id=2210 data-nosnippet>2210</a>                <span class="macro">anyhow::bail!</span>(
+<a href=#2211 id=2211 data-nosnippet>2211</a>                    <span class="string">"DrbInput in storage {:?} is more recent than {:?}, refusing to update"</span>,
+<a href=#2212 id=2212 data-nosnippet>2212</a>                    loaded_drb_input,
+<a href=#2213 id=2213 data-nosnippet>2213</a>                    drb_input
+<a href=#2214 id=2214 data-nosnippet>2214</a>                )
+<a href=#2215 id=2215 data-nosnippet>2215</a>            }
+<a href=#2216 id=2216 data-nosnippet>2216</a>        }
+<a href=#2217 id=2217 data-nosnippet>2217</a>
+<a href=#2218 id=2218 data-nosnippet>2218</a>        <span class="kw">let </span>drb_epoch_i64 = drb_input.epoch <span class="kw">as </span>i64;
+<a href=#2219 id=2219 data-nosnippet>2219</a>        <span class="kw">let </span>drb_input_bytes = bincode::serialize(<span class="kw-2">&amp;</span>drb_input)
+<a href=#2220 id=2220 data-nosnippet>2220</a>            .context(<span class="string">"Failed to serialize DrbInput. This is not fatal, but should never happen."</span>)<span class="question-mark">?</span>;
+<a href=#2221 id=2221 data-nosnippet>2221</a>
+<a href=#2222 id=2222 data-nosnippet>2222</a>        <span class="macro">serializable_retry!</span>(<span class="self">self</span>, || <span class="kw">async </span>{
+<a href=#2223 id=2223 data-nosnippet>2223</a>            <span class="kw">let </span><span class="kw-2">mut </span>tx = <span class="self">self</span>.db.write().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2224 id=2224 data-nosnippet>2224</a>            tx.upsert(
+<a href=#2225 id=2225 data-nosnippet>2225</a>                <span class="string">"drb"</span>,
+<a href=#2226 id=2226 data-nosnippet>2226</a>                [<span class="string">"epoch"</span>, <span class="string">"drb_input"</span>],
+<a href=#2227 id=2227 data-nosnippet>2227</a>                [<span class="string">"epoch"</span>],
+<a href=#2228 id=2228 data-nosnippet>2228</a>                [(drb_epoch_i64, drb_input_bytes.clone())],
+<a href=#2229 id=2229 data-nosnippet>2229</a>            )
+<a href=#2230 id=2230 data-nosnippet>2230</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2231 id=2231 data-nosnippet>2231</a>            tx.commit().<span class="kw">await
+<a href=#2232 id=2232 data-nosnippet>2232</a>        </span>})
+<a href=#2233 id=2233 data-nosnippet>2233</a>        .<span class="kw">await
+<a href=#2234 id=2234 data-nosnippet>2234</a>    </span>}
+<a href=#2235 id=2235 data-nosnippet>2235</a>
+<a href=#2236 id=2236 data-nosnippet>2236</a>    <span class="kw">async fn </span>load_drb_input(<span class="kw-2">&amp;</span><span class="self">self</span>, epoch: u64) -&gt; anyhow::Result&lt;DrbInput&gt; {
+<a href=#2237 id=2237 data-nosnippet>2237</a>        <span class="kw">let </span>row = <span class="self">self
+<a href=#2238 id=2238 data-nosnippet>2238</a>            </span>.db
+<a href=#2239 id=2239 data-nosnippet>2239</a>            .read()
+<a href=#2240 id=2240 data-nosnippet>2240</a>            .<span class="kw">await</span><span class="question-mark">?
+<a href=#2241 id=2241 data-nosnippet>2241</a>            </span>.fetch_optional(query(<span class="string">"SELECT drb_input FROM drb WHERE epoch = $1"</span>).bind(epoch <span class="kw">as </span>i64))
+<a href=#2242 id=2242 data-nosnippet>2242</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2243 id=2243 data-nosnippet>2243</a>
+<a href=#2244 id=2244 data-nosnippet>2244</a>        <span class="kw">match </span>row {
+<a href=#2245 id=2245 data-nosnippet>2245</a>            <span class="prelude-val">None </span>=&gt; <span class="macro">anyhow::bail!</span>(<span class="string">"No DrbInput for epoch {} in storage"</span>, epoch),
+<a href=#2246 id=2246 data-nosnippet>2246</a>            <span class="prelude-val">Some</span>(row) =&gt; {
+<a href=#2247 id=2247 data-nosnippet>2247</a>                <span class="kw">let </span>drb_input_bytes: Vec&lt;u8&gt; = row.try_get(<span class="string">"drb_input"</span>)<span class="question-mark">?</span>;
+<a href=#2248 id=2248 data-nosnippet>2248</a>                <span class="kw">let </span>drb_input = bincode::deserialize(<span class="kw-2">&amp;</span>drb_input_bytes)
+<a href=#2249 id=2249 data-nosnippet>2249</a>                    .context(<span class="string">"Failed to deserialize drb_input from storage"</span>)<span class="question-mark">?</span>;
+<a href=#2250 id=2250 data-nosnippet>2250</a>
+<a href=#2251 id=2251 data-nosnippet>2251</a>                <span class="prelude-val">Ok</span>(drb_input)
+<a href=#2252 id=2252 data-nosnippet>2252</a>            },
+<a href=#2253 id=2253 data-nosnippet>2253</a>        }
+<a href=#2254 id=2254 data-nosnippet>2254</a>    }
+<a href=#2255 id=2255 data-nosnippet>2255</a>
+<a href=#2256 id=2256 data-nosnippet>2256</a>    <span class="kw">async fn </span>add_state_cert(
+<a href=#2257 id=2257 data-nosnippet>2257</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#2258 id=2258 data-nosnippet>2258</a>        state_cert: LightClientStateUpdateCertificateV2&lt;SeqTypes&gt;,
+<a href=#2259 id=2259 data-nosnippet>2259</a>    ) -&gt; anyhow::Result&lt;()&gt; {
+<a href=#2260 id=2260 data-nosnippet>2260</a>        <span class="kw">let </span>view_number = state_cert.light_client_state.view_number <span class="kw">as </span>i64;
+<a href=#2261 id=2261 data-nosnippet>2261</a>        <span class="kw">let </span>state_cert_bytes = bincode::serialize(<span class="kw-2">&amp;</span>state_cert)
+<a href=#2262 id=2262 data-nosnippet>2262</a>            .context(<span class="string">"serializing light client state update certificate"</span>)<span class="question-mark">?</span>;
+<a href=#2263 id=2263 data-nosnippet>2263</a>
+<a href=#2264 id=2264 data-nosnippet>2264</a>        <span class="macro">serializable_retry!</span>(<span class="self">self</span>, || <span class="kw">async </span>{
+<a href=#2265 id=2265 data-nosnippet>2265</a>            <span class="kw">let </span><span class="kw-2">mut </span>tx = <span class="self">self</span>.db.write().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2266 id=2266 data-nosnippet>2266</a>            tx.upsert(
+<a href=#2267 id=2267 data-nosnippet>2267</a>                <span class="string">"state_cert"</span>,
+<a href=#2268 id=2268 data-nosnippet>2268</a>                [<span class="string">"view"</span>, <span class="string">"state_cert"</span>],
+<a href=#2269 id=2269 data-nosnippet>2269</a>                [<span class="string">"view"</span>],
+<a href=#2270 id=2270 data-nosnippet>2270</a>                [(view_number, state_cert_bytes.clone())],
+<a href=#2271 id=2271 data-nosnippet>2271</a>            )
+<a href=#2272 id=2272 data-nosnippet>2272</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2273 id=2273 data-nosnippet>2273</a>            tx.commit().<span class="kw">await
+<a href=#2274 id=2274 data-nosnippet>2274</a>        </span>})
+<a href=#2275 id=2275 data-nosnippet>2275</a>        .<span class="kw">await
+<a href=#2276 id=2276 data-nosnippet>2276</a>    </span>}
+<a href=#2277 id=2277 data-nosnippet>2277</a>
+<a href=#2278 id=2278 data-nosnippet>2278</a>    <span class="kw">async fn </span>load_state_cert(
+<a href=#2279 id=2279 data-nosnippet>2279</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#2280 id=2280 data-nosnippet>2280</a>    ) -&gt; anyhow::Result&lt;<span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificateV2&lt;SeqTypes&gt;&gt;&gt; {
+<a href=#2281 id=2281 data-nosnippet>2281</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(row) = <span class="self">self
+<a href=#2282 id=2282 data-nosnippet>2282</a>            </span>.db
+<a href=#2283 id=2283 data-nosnippet>2283</a>            .read()
+<a href=#2284 id=2284 data-nosnippet>2284</a>            .<span class="kw">await</span><span class="question-mark">?
+<a href=#2285 id=2285 data-nosnippet>2285</a>            </span>.fetch_optional(
+<a href=#2286 id=2286 data-nosnippet>2286</a>                <span class="string">"SELECT state_cert FROM finalized_state_cert ORDER BY epoch DESC LIMIT 1"</span>,
+<a href=#2287 id=2287 data-nosnippet>2287</a>            )
+<a href=#2288 id=2288 data-nosnippet>2288</a>            .<span class="kw">await</span><span class="question-mark">?
+<a href=#2289 id=2289 data-nosnippet>2289</a>        </span><span class="kw">else </span>{
+<a href=#2290 id=2290 data-nosnippet>2290</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
+<a href=#2291 id=2291 data-nosnippet>2291</a>        };
+<a href=#2292 id=2292 data-nosnippet>2292</a>        <span class="kw">let </span>bytes: Vec&lt;u8&gt; = row.get(<span class="string">"state_cert"</span>);
+<a href=#2293 id=2293 data-nosnippet>2293</a>
+<a href=#2294 id=2294 data-nosnippet>2294</a>        <span class="kw">let </span>cert = <span class="kw">match </span>bincode::deserialize(<span class="kw-2">&amp;</span>bytes) {
+<a href=#2295 id=2295 data-nosnippet>2295</a>            <span class="prelude-val">Ok</span>(cert) =&gt; cert,
+<a href=#2296 id=2296 data-nosnippet>2296</a>            <span class="prelude-val">Err</span>(err) =&gt; {
+<a href=#2297 id=2297 data-nosnippet>2297</a>                <span class="macro">tracing::info!</span>(
+<a href=#2298 id=2298 data-nosnippet>2298</a>                    error = %err,
+<a href=#2299 id=2299 data-nosnippet>2299</a>                    <span class="string">"Failed to deserialize state certificate with v2. attempting with v1"
+<a href=#2300 id=2300 data-nosnippet>2300</a>                </span>);
+<a href=#2301 id=2301 data-nosnippet>2301</a>
+<a href=#2302 id=2302 data-nosnippet>2302</a>                <span class="kw">let </span>v1_cert =
+<a href=#2303 id=2303 data-nosnippet>2303</a>                    bincode::deserialize::&lt;LightClientStateUpdateCertificateV1&lt;SeqTypes&gt;&gt;(<span class="kw-2">&amp;</span>bytes)
+<a href=#2304 id=2304 data-nosnippet>2304</a>                        .with_context(|| {
+<a href=#2305 id=2305 data-nosnippet>2305</a>                        <span class="macro">format!</span>(<span class="string">"Failed to deserialize using both v1 and v2. error: {err}"</span>)
+<a href=#2306 id=2306 data-nosnippet>2306</a>                    })<span class="question-mark">?</span>;
+<a href=#2307 id=2307 data-nosnippet>2307</a>
+<a href=#2308 id=2308 data-nosnippet>2308</a>                v1_cert.into()
+<a href=#2309 id=2309 data-nosnippet>2309</a>            },
+<a href=#2310 id=2310 data-nosnippet>2310</a>        };
+<a href=#2311 id=2311 data-nosnippet>2311</a>
+<a href=#2312 id=2312 data-nosnippet>2312</a>        <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(cert))
+<a href=#2313 id=2313 data-nosnippet>2313</a>    }
+<a href=#2314 id=2314 data-nosnippet>2314</a>
+<a href=#2315 id=2315 data-nosnippet>2315</a>    <span class="kw">async fn </span>get_state_cert_by_epoch(
+<a href=#2316 id=2316 data-nosnippet>2316</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#2317 id=2317 data-nosnippet>2317</a>        epoch: u64,
+<a href=#2318 id=2318 data-nosnippet>2318</a>    ) -&gt; anyhow::Result&lt;<span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificateV2&lt;SeqTypes&gt;&gt;&gt; {
+<a href=#2319 id=2319 data-nosnippet>2319</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(row) = <span class="self">self
+<a href=#2320 id=2320 data-nosnippet>2320</a>            </span>.db
+<a href=#2321 id=2321 data-nosnippet>2321</a>            .read()
+<a href=#2322 id=2322 data-nosnippet>2322</a>            .<span class="kw">await</span><span class="question-mark">?
+<a href=#2323 id=2323 data-nosnippet>2323</a>            </span>.fetch_optional(
+<a href=#2324 id=2324 data-nosnippet>2324</a>                query(<span class="string">"SELECT state_cert FROM finalized_state_cert WHERE epoch = $1"</span>)
+<a href=#2325 id=2325 data-nosnippet>2325</a>                    .bind(epoch <span class="kw">as </span>i64),
+<a href=#2326 id=2326 data-nosnippet>2326</a>            )
+<a href=#2327 id=2327 data-nosnippet>2327</a>            .<span class="kw">await</span><span class="question-mark">?
+<a href=#2328 id=2328 data-nosnippet>2328</a>        </span><span class="kw">else </span>{
+<a href=#2329 id=2329 data-nosnippet>2329</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
+<a href=#2330 id=2330 data-nosnippet>2330</a>        };
+<a href=#2331 id=2331 data-nosnippet>2331</a>        <span class="kw">let </span>bytes: Vec&lt;u8&gt; = row.get(<span class="string">"state_cert"</span>);
+<a href=#2332 id=2332 data-nosnippet>2332</a>
+<a href=#2333 id=2333 data-nosnippet>2333</a>        <span class="kw">let </span>cert = <span class="kw">match </span>bincode::deserialize(<span class="kw-2">&amp;</span>bytes) {
+<a href=#2334 id=2334 data-nosnippet>2334</a>            <span class="prelude-val">Ok</span>(cert) =&gt; cert,
+<a href=#2335 id=2335 data-nosnippet>2335</a>            <span class="prelude-val">Err</span>(err) =&gt; {
+<a href=#2336 id=2336 data-nosnippet>2336</a>                <span class="macro">tracing::info!</span>(
+<a href=#2337 id=2337 data-nosnippet>2337</a>                    error = %err,
+<a href=#2338 id=2338 data-nosnippet>2338</a>                    <span class="string">"Failed to deserialize state certificate with v2. attempting with v1"
+<a href=#2339 id=2339 data-nosnippet>2339</a>                </span>);
+<a href=#2340 id=2340 data-nosnippet>2340</a>
+<a href=#2341 id=2341 data-nosnippet>2341</a>                <span class="kw">let </span>v1_cert =
+<a href=#2342 id=2342 data-nosnippet>2342</a>                    bincode::deserialize::&lt;LightClientStateUpdateCertificateV1&lt;SeqTypes&gt;&gt;(<span class="kw-2">&amp;</span>bytes)
+<a href=#2343 id=2343 data-nosnippet>2343</a>                        .with_context(|| {
+<a href=#2344 id=2344 data-nosnippet>2344</a>                        <span class="macro">format!</span>(<span class="string">"Failed to deserialize using both v1 and v2. error: {err}"</span>)
+<a href=#2345 id=2345 data-nosnippet>2345</a>                    })<span class="question-mark">?</span>;
+<a href=#2346 id=2346 data-nosnippet>2346</a>
+<a href=#2347 id=2347 data-nosnippet>2347</a>                v1_cert.into()
+<a href=#2348 id=2348 data-nosnippet>2348</a>            },
+<a href=#2349 id=2349 data-nosnippet>2349</a>        };
+<a href=#2350 id=2350 data-nosnippet>2350</a>
+<a href=#2351 id=2351 data-nosnippet>2351</a>        <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(cert))
+<a href=#2352 id=2352 data-nosnippet>2352</a>    }
+<a href=#2353 id=2353 data-nosnippet>2353</a>
+<a href=#2354 id=2354 data-nosnippet>2354</a>    <span class="kw">async fn </span>insert_state_cert(
+<a href=#2355 id=2355 data-nosnippet>2355</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#2356 id=2356 data-nosnippet>2356</a>        epoch: u64,
+<a href=#2357 id=2357 data-nosnippet>2357</a>        cert: LightClientStateUpdateCertificateV2&lt;SeqTypes&gt;,
+<a href=#2358 id=2358 data-nosnippet>2358</a>    ) -&gt; anyhow::Result&lt;()&gt; {
+<a href=#2359 id=2359 data-nosnippet>2359</a>        <span class="kw">let </span>epoch_i64 = epoch <span class="kw">as </span>i64;
+<a href=#2360 id=2360 data-nosnippet>2360</a>        <span class="kw">let </span>bytes = bincode::serialize(<span class="kw-2">&amp;</span>cert)
+<a href=#2361 id=2361 data-nosnippet>2361</a>            .with_context(|| <span class="macro">format!</span>(<span class="string">"Failed to serialize state cert for epoch {epoch}"</span>))<span class="question-mark">?</span>;
+<a href=#2362 id=2362 data-nosnippet>2362</a>
+<a href=#2363 id=2363 data-nosnippet>2363</a>        <span class="macro">serializable_retry!</span>(<span class="self">self</span>, || <span class="kw">async </span>{
+<a href=#2364 id=2364 data-nosnippet>2364</a>            <span class="kw">let </span><span class="kw-2">mut </span>tx = <span class="self">self</span>.db.write().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2365 id=2365 data-nosnippet>2365</a>            tx.upsert(
+<a href=#2366 id=2366 data-nosnippet>2366</a>                <span class="string">"finalized_state_cert"</span>,
+<a href=#2367 id=2367 data-nosnippet>2367</a>                [<span class="string">"epoch"</span>, <span class="string">"state_cert"</span>],
+<a href=#2368 id=2368 data-nosnippet>2368</a>                [<span class="string">"epoch"</span>],
+<a href=#2369 id=2369 data-nosnippet>2369</a>                [(epoch_i64, bytes.clone())],
+<a href=#2370 id=2370 data-nosnippet>2370</a>            )
+<a href=#2371 id=2371 data-nosnippet>2371</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2372 id=2372 data-nosnippet>2372</a>            tx.commit().<span class="kw">await
+<a href=#2373 id=2373 data-nosnippet>2373</a>        </span>})
+<a href=#2374 id=2374 data-nosnippet>2374</a>        .<span class="kw">await
+<a href=#2375 id=2375 data-nosnippet>2375</a>    </span>}
 <a href=#2376 id=2376 data-nosnippet>2376</a>
-<a href=#2377 id=2377 data-nosnippet>2377</a>    <span class="kw">async fn </span>insert_state_cert(
-<a href=#2378 id=2378 data-nosnippet>2378</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#2379 id=2379 data-nosnippet>2379</a>        epoch: u64,
-<a href=#2380 id=2380 data-nosnippet>2380</a>        cert: LightClientStateUpdateCertificateV2&lt;SeqTypes&gt;,
-<a href=#2381 id=2381 data-nosnippet>2381</a>    ) -&gt; anyhow::Result&lt;()&gt; {
-<a href=#2382 id=2382 data-nosnippet>2382</a>        <span class="kw">let </span>epoch_i64 = epoch <span class="kw">as </span>i64;
-<a href=#2383 id=2383 data-nosnippet>2383</a>        <span class="kw">let </span>bytes = bincode::serialize(<span class="kw-2">&amp;</span>cert)
-<a href=#2384 id=2384 data-nosnippet>2384</a>            .with_context(|| <span class="macro">format!</span>(<span class="string">"Failed to serialize state cert for epoch {epoch}"</span>))<span class="question-mark">?</span>;
-<a href=#2385 id=2385 data-nosnippet>2385</a>
-<a href=#2386 id=2386 data-nosnippet>2386</a>        <span class="macro">serializable_retry!</span>(<span class="self">self</span>, || <span class="kw">async </span>{
-<a href=#2387 id=2387 data-nosnippet>2387</a>            <span class="kw">let </span><span class="kw-2">mut </span>tx = <span class="self">self</span>.db.write().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#2388 id=2388 data-nosnippet>2388</a>            tx.upsert(
-<a href=#2389 id=2389 data-nosnippet>2389</a>                <span class="string">"finalized_state_cert"</span>,
-<a href=#2390 id=2390 data-nosnippet>2390</a>                [<span class="string">"epoch"</span>, <span class="string">"state_cert"</span>],
-<a href=#2391 id=2391 data-nosnippet>2391</a>                [<span class="string">"epoch"</span>],
-<a href=#2392 id=2392 data-nosnippet>2392</a>                [(epoch_i64, bytes.clone())],
-<a href=#2393 id=2393 data-nosnippet>2393</a>            )
-<a href=#2394 id=2394 data-nosnippet>2394</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#2395 id=2395 data-nosnippet>2395</a>            tx.commit().<span class="kw">await
-<a href=#2396 id=2396 data-nosnippet>2396</a>        </span>})
-<a href=#2397 id=2397 data-nosnippet>2397</a>        .<span class="kw">await
-<a href=#2398 id=2398 data-nosnippet>2398</a>    </span>}
-<a href=#2399 id=2399 data-nosnippet>2399</a>
-<a href=#2400 id=2400 data-nosnippet>2400</a>    <span class="kw">async fn </span>load_start_epoch_info(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; anyhow::Result&lt;Vec&lt;InitializerEpochInfo&lt;SeqTypes&gt;&gt;&gt; {
-<a href=#2401 id=2401 data-nosnippet>2401</a>        <span class="kw">let </span>rows = <span class="self">self
-<a href=#2402 id=2402 data-nosnippet>2402</a>            </span>.db
-<a href=#2403 id=2403 data-nosnippet>2403</a>            .read()
-<a href=#2404 id=2404 data-nosnippet>2404</a>            .<span class="kw">await</span><span class="question-mark">?
-<a href=#2405 id=2405 data-nosnippet>2405</a>            </span>.fetch_all(
-<a href=#2406 id=2406 data-nosnippet>2406</a>                query(<span class="string">"SELECT * from epoch_drb_and_root ORDER BY epoch DESC LIMIT $1"</span>)
-<a href=#2407 id=2407 data-nosnippet>2407</a>                    .bind(RECENT_STAKE_TABLES_LIMIT <span class="kw">as </span>i64),
-<a href=#2408 id=2408 data-nosnippet>2408</a>            )
-<a href=#2409 id=2409 data-nosnippet>2409</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#2410 id=2410 data-nosnippet>2410</a>
-<a href=#2411 id=2411 data-nosnippet>2411</a>        <span class="comment">// reverse the rows vector to return the most recent epochs, but in ascending order
-<a href=#2412 id=2412 data-nosnippet>2412</a>        </span>rows.into_iter()
-<a href=#2413 id=2413 data-nosnippet>2413</a>            .rev()
-<a href=#2414 id=2414 data-nosnippet>2414</a>            .map(|row| {
-<a href=#2415 id=2415 data-nosnippet>2415</a>                <span class="kw">let </span>epoch: i64 = row.try_get(<span class="string">"epoch"</span>)<span class="question-mark">?</span>;
-<a href=#2416 id=2416 data-nosnippet>2416</a>                <span class="kw">let </span>drb_result: <span class="prelude-ty">Option</span>&lt;Vec&lt;u8&gt;&gt; = row.try_get(<span class="string">"drb_result"</span>)<span class="question-mark">?</span>;
-<a href=#2417 id=2417 data-nosnippet>2417</a>                <span class="kw">let </span>block_header: <span class="prelude-ty">Option</span>&lt;Vec&lt;u8&gt;&gt; = row.try_get(<span class="string">"block_header"</span>)<span class="question-mark">?</span>;
-<a href=#2418 id=2418 data-nosnippet>2418</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(drb_result) = drb_result {
-<a href=#2419 id=2419 data-nosnippet>2419</a>                    <span class="kw">let </span>drb_result_array = drb_result
-<a href=#2420 id=2420 data-nosnippet>2420</a>                        .try_into()
-<a href=#2421 id=2421 data-nosnippet>2421</a>                        .or_else(|<span class="kw">_</span>| <span class="macro">bail!</span>(<span class="string">"invalid drb result"</span>))<span class="question-mark">?</span>;
-<a href=#2422 id=2422 data-nosnippet>2422</a>                    <span class="kw">let </span>block_header: <span class="prelude-ty">Option</span>&lt;&lt;SeqTypes <span class="kw">as </span>NodeType&gt;::BlockHeader&gt; = block_header
-<a href=#2423 id=2423 data-nosnippet>2423</a>                        .map(|data| bincode::deserialize(<span class="kw-2">&amp;</span>data))
-<a href=#2424 id=2424 data-nosnippet>2424</a>                        .transpose()<span class="question-mark">?</span>;
-<a href=#2425 id=2425 data-nosnippet>2425</a>                    <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(InitializerEpochInfo::&lt;SeqTypes&gt; {
-<a href=#2426 id=2426 data-nosnippet>2426</a>                        epoch: EpochNumber::new(epoch <span class="kw">as </span>u64),
-<a href=#2427 id=2427 data-nosnippet>2427</a>                        drb_result: drb_result_array,
-<a href=#2428 id=2428 data-nosnippet>2428</a>                        block_header,
-<a href=#2429 id=2429 data-nosnippet>2429</a>                    }))
-<a href=#2430 id=2430 data-nosnippet>2430</a>                } <span class="kw">else </span>{
-<a href=#2431 id=2431 data-nosnippet>2431</a>                    <span class="comment">// Right now we skip the epoch_drb_and_root row if there is no drb result.
-<a href=#2432 id=2432 data-nosnippet>2432</a>                    // This seems reasonable based on the expected order of events, but please double check!
-<a href=#2433 id=2433 data-nosnippet>2433</a>                    </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>)
-<a href=#2434 id=2434 data-nosnippet>2434</a>                }
-<a href=#2435 id=2435 data-nosnippet>2435</a>            })
-<a href=#2436 id=2436 data-nosnippet>2436</a>            .filter_map(|e| <span class="kw">match </span>e {
-<a href=#2437 id=2437 data-nosnippet>2437</a>                <span class="prelude-val">Err</span>(v) =&gt; <span class="prelude-val">Some</span>(<span class="prelude-val">Err</span>(v)),
-<a href=#2438 id=2438 data-nosnippet>2438</a>                <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(v)) =&gt; <span class="prelude-val">Some</span>(<span class="prelude-val">Ok</span>(v)),
-<a href=#2439 id=2439 data-nosnippet>2439</a>                <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>) =&gt; <span class="prelude-val">None</span>,
-<a href=#2440 id=2440 data-nosnippet>2440</a>            })
-<a href=#2441 id=2441 data-nosnippet>2441</a>            .collect()
-<a href=#2442 id=2442 data-nosnippet>2442</a>    }
-<a href=#2443 id=2443 data-nosnippet>2443</a>
-<a href=#2444 id=2444 data-nosnippet>2444</a>    <span class="kw">fn </span>enable_metrics(<span class="kw-2">&amp;mut </span><span class="self">self</span>, metrics: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Metrics) {
-<a href=#2445 id=2445 data-nosnippet>2445</a>        <span class="self">self</span>.internal_metrics = PersistenceMetricsValue::new(metrics);
-<a href=#2446 id=2446 data-nosnippet>2446</a>    }
-<a href=#2447 id=2447 data-nosnippet>2447</a>}
-<a href=#2448 id=2448 data-nosnippet>2448</a>
-<a href=#2449 id=2449 data-nosnippet>2449</a><span class="kw">fn </span>deserialize_authenticated_validator_map(
-<a href=#2450 id=2450 data-nosnippet>2450</a>    bytes: <span class="kw-2">&amp;</span>[u8],
-<a href=#2451 id=2451 data-nosnippet>2451</a>) -&gt; anyhow::Result&lt;AuthenticatedValidatorMap&gt; {
-<a href=#2452 id=2452 data-nosnippet>2452</a>    <span class="kw">if let </span><span class="prelude-val">Ok</span>(map) = bincode::deserialize::&lt;AuthenticatedValidatorMap&gt;(bytes) {
-<a href=#2453 id=2453 data-nosnippet>2453</a>        <span class="kw">return </span><span class="prelude-val">Ok</span>(map);
-<a href=#2454 id=2454 data-nosnippet>2454</a>    }
-<a href=#2455 id=2455 data-nosnippet>2455</a>
-<a href=#2456 id=2456 data-nosnippet>2456</a>    <span class="comment">// Pre-Schnorr-Option: stake_table_key as Option&lt;KEY&gt;, state_ver_key as raw KEY.
-<a href=#2457 id=2457 data-nosnippet>2457</a>    </span><span class="kw">if let </span><span class="prelude-val">Ok</span>(pre_schnorr) =
-<a href=#2458 id=2458 data-nosnippet>2458</a>        bincode::deserialize::&lt;IndexMap&lt;Address, <span class="kw">super</span>::RegisteredValidatorPreSchnorrOption&gt;&gt;(bytes)
-<a href=#2459 id=2459 data-nosnippet>2459</a>    {
-<a href=#2460 id=2460 data-nosnippet>2460</a>        <span class="kw">return </span>pre_schnorr
-<a href=#2461 id=2461 data-nosnippet>2461</a>            .into_iter()
-<a href=#2462 id=2462 data-nosnippet>2462</a>            .map(|(addr, v)| {
-<a href=#2463 id=2463 data-nosnippet>2463</a>                <span class="kw">let </span>registered = v.migrate();
-<a href=#2464 id=2464 data-nosnippet>2464</a>                <span class="kw">let </span>authenticated = AuthenticatedValidator::try_from(registered)<span class="question-mark">?</span>;
-<a href=#2465 id=2465 data-nosnippet>2465</a>                <span class="prelude-val">Ok</span>((addr, authenticated))
-<a href=#2466 id=2466 data-nosnippet>2466</a>            })
-<a href=#2467 id=2467 data-nosnippet>2467</a>            .collect();
-<a href=#2468 id=2468 data-nosnippet>2468</a>    }
-<a href=#2469 id=2469 data-nosnippet>2469</a>
-<a href=#2470 id=2470 data-nosnippet>2470</a>    <span class="comment">// Pre-Option: both keys raw, with x25519/p2p fields.
-<a href=#2471 id=2471 data-nosnippet>2471</a>    </span><span class="kw">let </span>legacy: IndexMap&lt;Address, <span class="kw">super</span>::RegisteredValidatorPreOption&gt; =
-<a href=#2472 id=2472 data-nosnippet>2472</a>        bincode::deserialize(bytes).context(<span class="string">"deserializing stake table"</span>)<span class="question-mark">?</span>;
-<a href=#2473 id=2473 data-nosnippet>2473</a>    legacy
-<a href=#2474 id=2474 data-nosnippet>2474</a>        .into_iter()
-<a href=#2475 id=2475 data-nosnippet>2475</a>        .map(|(addr, v)| {
-<a href=#2476 id=2476 data-nosnippet>2476</a>            <span class="kw">let </span>registered = v.migrate();
-<a href=#2477 id=2477 data-nosnippet>2477</a>            <span class="kw">let </span>authenticated = AuthenticatedValidator::try_from(registered)<span class="question-mark">?</span>;
-<a href=#2478 id=2478 data-nosnippet>2478</a>            <span class="prelude-val">Ok</span>((addr, authenticated))
-<a href=#2479 id=2479 data-nosnippet>2479</a>        })
-<a href=#2480 id=2480 data-nosnippet>2480</a>        .collect()
-<a href=#2481 id=2481 data-nosnippet>2481</a>}
-<a href=#2482 id=2482 data-nosnippet>2482</a>
-<a href=#2483 id=2483 data-nosnippet>2483</a><span class="attr">#[async_trait]
-<a href=#2484 id=2484 data-nosnippet>2484</a></span><span class="kw">impl </span>MembershipPersistence <span class="kw">for </span>Persistence {
-<a href=#2485 id=2485 data-nosnippet>2485</a>    <span class="kw">async fn </span>load_stake(<span class="kw-2">&amp;</span><span class="self">self</span>, epoch: EpochNumber) -&gt; anyhow::Result&lt;<span class="prelude-ty">Option</span>&lt;StakeTuple&gt;&gt; {
-<a href=#2486 id=2486 data-nosnippet>2486</a>        <span class="kw">let </span>result = <span class="self">self
-<a href=#2487 id=2487 data-nosnippet>2487</a>            </span>.db
-<a href=#2488 id=2488 data-nosnippet>2488</a>            .read()
-<a href=#2489 id=2489 data-nosnippet>2489</a>            .<span class="kw">await</span><span class="question-mark">?
-<a href=#2490 id=2490 data-nosnippet>2490</a>            </span>.fetch_optional(
-<a href=#2491 id=2491 data-nosnippet>2491</a>                query(
-<a href=#2492 id=2492 data-nosnippet>2492</a>                    <span class="string">"SELECT stake, block_reward, stake_table_hash FROM epoch_drb_and_root WHERE \
-<a href=#2493 id=2493 data-nosnippet>2493</a>                     epoch = $1 AND stake IS NOT NULL"</span>,
-<a href=#2494 id=2494 data-nosnippet>2494</a>                )
-<a href=#2495 id=2495 data-nosnippet>2495</a>                .bind(epoch.u64() <span class="kw">as </span>i64),
-<a href=#2496 id=2496 data-nosnippet>2496</a>            )
-<a href=#2497 id=2497 data-nosnippet>2497</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#2498 id=2498 data-nosnippet>2498</a>
-<a href=#2499 id=2499 data-nosnippet>2499</a>        result
-<a href=#2500 id=2500 data-nosnippet>2500</a>            .map(|row| {
-<a href=#2501 id=2501 data-nosnippet>2501</a>                <span class="kw">let </span>stake_table_bytes: Vec&lt;u8&gt; = row.get(<span class="string">"stake"</span>);
-<a href=#2502 id=2502 data-nosnippet>2502</a>                <span class="kw">let </span>reward_bytes: <span class="prelude-ty">Option</span>&lt;Vec&lt;u8&gt;&gt; = row.get(<span class="string">"block_reward"</span>);
-<a href=#2503 id=2503 data-nosnippet>2503</a>                <span class="kw">let </span>stake_table_hash_bytes: <span class="prelude-ty">Option</span>&lt;Vec&lt;u8&gt;&gt; = row.get(<span class="string">"stake_table_hash"</span>);
-<a href=#2504 id=2504 data-nosnippet>2504</a>                <span class="kw">let </span>stake_table = deserialize_authenticated_validator_map(<span class="kw-2">&amp;</span>stake_table_bytes)<span class="question-mark">?</span>;
-<a href=#2505 id=2505 data-nosnippet>2505</a>                <span class="kw">let </span>reward: <span class="prelude-ty">Option</span>&lt;RewardAmount&gt; = reward_bytes
-<a href=#2506 id=2506 data-nosnippet>2506</a>                    .map(|b| bincode::deserialize(<span class="kw-2">&amp;</span>b).context(<span class="string">"deserializing block_reward"</span>))
-<a href=#2507 id=2507 data-nosnippet>2507</a>                    .transpose()<span class="question-mark">?</span>;
-<a href=#2508 id=2508 data-nosnippet>2508</a>                <span class="kw">let </span>stake_table_hash: <span class="prelude-ty">Option</span>&lt;StakeTableHash&gt; = stake_table_hash_bytes
-<a href=#2509 id=2509 data-nosnippet>2509</a>                    .map(|b| bincode::deserialize(<span class="kw-2">&amp;</span>b).context(<span class="string">"deserializing stake table hash"</span>))
-<a href=#2510 id=2510 data-nosnippet>2510</a>                    .transpose()<span class="question-mark">?</span>;
-<a href=#2511 id=2511 data-nosnippet>2511</a>
-<a href=#2512 id=2512 data-nosnippet>2512</a>                <span class="prelude-val">Ok</span>((stake_table, reward, stake_table_hash))
-<a href=#2513 id=2513 data-nosnippet>2513</a>            })
-<a href=#2514 id=2514 data-nosnippet>2514</a>            .transpose()
-<a href=#2515 id=2515 data-nosnippet>2515</a>    }
-<a href=#2516 id=2516 data-nosnippet>2516</a>
-<a href=#2517 id=2517 data-nosnippet>2517</a>    <span class="kw">async fn </span>load_drb_result(<span class="kw-2">&amp;</span><span class="self">self</span>, epoch: EpochNumber) -&gt; anyhow::Result&lt;<span class="prelude-ty">Option</span>&lt;DrbResult&gt;&gt; {
-<a href=#2518 id=2518 data-nosnippet>2518</a>        <span class="kw">let </span>result = <span class="self">self
-<a href=#2519 id=2519 data-nosnippet>2519</a>            </span>.db
-<a href=#2520 id=2520 data-nosnippet>2520</a>            .read()
-<a href=#2521 id=2521 data-nosnippet>2521</a>            .<span class="kw">await</span><span class="question-mark">?
-<a href=#2522 id=2522 data-nosnippet>2522</a>            </span>.fetch_optional(
-<a href=#2523 id=2523 data-nosnippet>2523</a>                query(
-<a href=#2524 id=2524 data-nosnippet>2524</a>                    <span class="string">"SELECT drb_result FROM epoch_drb_and_root WHERE epoch = $1 AND drb_result IS \
-<a href=#2525 id=2525 data-nosnippet>2525</a>                     NOT NULL"</span>,
-<a href=#2526 id=2526 data-nosnippet>2526</a>                )
-<a href=#2527 id=2527 data-nosnippet>2527</a>                .bind(epoch.u64() <span class="kw">as </span>i64),
-<a href=#2528 id=2528 data-nosnippet>2528</a>            )
-<a href=#2529 id=2529 data-nosnippet>2529</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#2530 id=2530 data-nosnippet>2530</a>
-<a href=#2531 id=2531 data-nosnippet>2531</a>        result
-<a href=#2532 id=2532 data-nosnippet>2532</a>            .map(|row| {
-<a href=#2533 id=2533 data-nosnippet>2533</a>                <span class="kw">let </span>bytes: Vec&lt;u8&gt; = row.get(<span class="string">"drb_result"</span>);
-<a href=#2534 id=2534 data-nosnippet>2534</a>                bytes.try_into().or_else(|<span class="kw">_</span>| <span class="macro">bail!</span>(<span class="string">"invalid drb result"</span>))
-<a href=#2535 id=2535 data-nosnippet>2535</a>            })
-<a href=#2536 id=2536 data-nosnippet>2536</a>            .transpose()
-<a href=#2537 id=2537 data-nosnippet>2537</a>    }
-<a href=#2538 id=2538 data-nosnippet>2538</a>
-<a href=#2539 id=2539 data-nosnippet>2539</a>    <span class="kw">async fn </span>load_epoch_root(<span class="kw-2">&amp;</span><span class="self">self</span>, epoch: EpochNumber) -&gt; anyhow::Result&lt;<span class="prelude-ty">Option</span>&lt;Header&gt;&gt; {
-<a href=#2540 id=2540 data-nosnippet>2540</a>        <span class="kw">let </span>result = <span class="self">self
-<a href=#2541 id=2541 data-nosnippet>2541</a>            </span>.db
-<a href=#2542 id=2542 data-nosnippet>2542</a>            .read()
-<a href=#2543 id=2543 data-nosnippet>2543</a>            .<span class="kw">await</span><span class="question-mark">?
-<a href=#2544 id=2544 data-nosnippet>2544</a>            </span>.fetch_optional(
-<a href=#2545 id=2545 data-nosnippet>2545</a>                query(
-<a href=#2546 id=2546 data-nosnippet>2546</a>                    <span class="string">"SELECT block_header FROM epoch_drb_and_root WHERE epoch = $1 AND \
-<a href=#2547 id=2547 data-nosnippet>2547</a>                     block_header IS NOT NULL"</span>,
-<a href=#2548 id=2548 data-nosnippet>2548</a>                )
-<a href=#2549 id=2549 data-nosnippet>2549</a>                .bind(epoch.u64() <span class="kw">as </span>i64),
-<a href=#2550 id=2550 data-nosnippet>2550</a>            )
-<a href=#2551 id=2551 data-nosnippet>2551</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#2552 id=2552 data-nosnippet>2552</a>
-<a href=#2553 id=2553 data-nosnippet>2553</a>        result
-<a href=#2554 id=2554 data-nosnippet>2554</a>            .map(|row| {
-<a href=#2555 id=2555 data-nosnippet>2555</a>                <span class="kw">let </span>bytes: Vec&lt;u8&gt; = row.get(<span class="string">"block_header"</span>);
-<a href=#2556 id=2556 data-nosnippet>2556</a>                bincode::deserialize(<span class="kw-2">&amp;</span>bytes).context(<span class="string">"deserializing block header"</span>)
-<a href=#2557 id=2557 data-nosnippet>2557</a>            })
-<a href=#2558 id=2558 data-nosnippet>2558</a>            .transpose()
-<a href=#2559 id=2559 data-nosnippet>2559</a>    }
+<a href=#2377 id=2377 data-nosnippet>2377</a>    <span class="kw">async fn </span>load_start_epoch_info(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; anyhow::Result&lt;Vec&lt;InitializerEpochInfo&lt;SeqTypes&gt;&gt;&gt; {
+<a href=#2378 id=2378 data-nosnippet>2378</a>        <span class="kw">let </span>rows = <span class="self">self
+<a href=#2379 id=2379 data-nosnippet>2379</a>            </span>.db
+<a href=#2380 id=2380 data-nosnippet>2380</a>            .read()
+<a href=#2381 id=2381 data-nosnippet>2381</a>            .<span class="kw">await</span><span class="question-mark">?
+<a href=#2382 id=2382 data-nosnippet>2382</a>            </span>.fetch_all(
+<a href=#2383 id=2383 data-nosnippet>2383</a>                query(<span class="string">"SELECT * from epoch_drb_and_root ORDER BY epoch DESC LIMIT $1"</span>)
+<a href=#2384 id=2384 data-nosnippet>2384</a>                    .bind(RECENT_STAKE_TABLES_LIMIT <span class="kw">as </span>i64),
+<a href=#2385 id=2385 data-nosnippet>2385</a>            )
+<a href=#2386 id=2386 data-nosnippet>2386</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2387 id=2387 data-nosnippet>2387</a>
+<a href=#2388 id=2388 data-nosnippet>2388</a>        <span class="comment">// reverse the rows vector to return the most recent epochs, but in ascending order
+<a href=#2389 id=2389 data-nosnippet>2389</a>        </span>rows.into_iter()
+<a href=#2390 id=2390 data-nosnippet>2390</a>            .rev()
+<a href=#2391 id=2391 data-nosnippet>2391</a>            .map(|row| {
+<a href=#2392 id=2392 data-nosnippet>2392</a>                <span class="kw">let </span>epoch: i64 = row.try_get(<span class="string">"epoch"</span>)<span class="question-mark">?</span>;
+<a href=#2393 id=2393 data-nosnippet>2393</a>                <span class="kw">let </span>drb_result: <span class="prelude-ty">Option</span>&lt;Vec&lt;u8&gt;&gt; = row.try_get(<span class="string">"drb_result"</span>)<span class="question-mark">?</span>;
+<a href=#2394 id=2394 data-nosnippet>2394</a>                <span class="kw">let </span>block_header: <span class="prelude-ty">Option</span>&lt;Vec&lt;u8&gt;&gt; = row.try_get(<span class="string">"block_header"</span>)<span class="question-mark">?</span>;
+<a href=#2395 id=2395 data-nosnippet>2395</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(drb_result) = drb_result {
+<a href=#2396 id=2396 data-nosnippet>2396</a>                    <span class="kw">let </span>drb_result_array = drb_result
+<a href=#2397 id=2397 data-nosnippet>2397</a>                        .try_into()
+<a href=#2398 id=2398 data-nosnippet>2398</a>                        .or_else(|<span class="kw">_</span>| <span class="macro">bail!</span>(<span class="string">"invalid drb result"</span>))<span class="question-mark">?</span>;
+<a href=#2399 id=2399 data-nosnippet>2399</a>                    <span class="kw">let </span>block_header: <span class="prelude-ty">Option</span>&lt;&lt;SeqTypes <span class="kw">as </span>NodeType&gt;::BlockHeader&gt; = block_header
+<a href=#2400 id=2400 data-nosnippet>2400</a>                        .map(|data| bincode::deserialize(<span class="kw-2">&amp;</span>data))
+<a href=#2401 id=2401 data-nosnippet>2401</a>                        .transpose()<span class="question-mark">?</span>;
+<a href=#2402 id=2402 data-nosnippet>2402</a>                    <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(InitializerEpochInfo::&lt;SeqTypes&gt; {
+<a href=#2403 id=2403 data-nosnippet>2403</a>                        epoch: EpochNumber::new(epoch <span class="kw">as </span>u64),
+<a href=#2404 id=2404 data-nosnippet>2404</a>                        drb_result: drb_result_array,
+<a href=#2405 id=2405 data-nosnippet>2405</a>                        block_header,
+<a href=#2406 id=2406 data-nosnippet>2406</a>                    }))
+<a href=#2407 id=2407 data-nosnippet>2407</a>                } <span class="kw">else </span>{
+<a href=#2408 id=2408 data-nosnippet>2408</a>                    <span class="comment">// Right now we skip the epoch_drb_and_root row if there is no drb result.
+<a href=#2409 id=2409 data-nosnippet>2409</a>                    // This seems reasonable based on the expected order of events, but please double check!
+<a href=#2410 id=2410 data-nosnippet>2410</a>                    </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>)
+<a href=#2411 id=2411 data-nosnippet>2411</a>                }
+<a href=#2412 id=2412 data-nosnippet>2412</a>            })
+<a href=#2413 id=2413 data-nosnippet>2413</a>            .filter_map(|e| <span class="kw">match </span>e {
+<a href=#2414 id=2414 data-nosnippet>2414</a>                <span class="prelude-val">Err</span>(v) =&gt; <span class="prelude-val">Some</span>(<span class="prelude-val">Err</span>(v)),
+<a href=#2415 id=2415 data-nosnippet>2415</a>                <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(v)) =&gt; <span class="prelude-val">Some</span>(<span class="prelude-val">Ok</span>(v)),
+<a href=#2416 id=2416 data-nosnippet>2416</a>                <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>) =&gt; <span class="prelude-val">None</span>,
+<a href=#2417 id=2417 data-nosnippet>2417</a>            })
+<a href=#2418 id=2418 data-nosnippet>2418</a>            .collect()
+<a href=#2419 id=2419 data-nosnippet>2419</a>    }
+<a href=#2420 id=2420 data-nosnippet>2420</a>
+<a href=#2421 id=2421 data-nosnippet>2421</a>    <span class="kw">fn </span>enable_metrics(<span class="kw-2">&amp;mut </span><span class="self">self</span>, metrics: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Metrics) {
+<a href=#2422 id=2422 data-nosnippet>2422</a>        <span class="self">self</span>.internal_metrics = PersistenceMetricsValue::new(metrics);
+<a href=#2423 id=2423 data-nosnippet>2423</a>    }
+<a href=#2424 id=2424 data-nosnippet>2424</a>}
+<a href=#2425 id=2425 data-nosnippet>2425</a>
+<a href=#2426 id=2426 data-nosnippet>2426</a><span class="kw">fn </span>deserialize_authenticated_validator_map(
+<a href=#2427 id=2427 data-nosnippet>2427</a>    bytes: <span class="kw-2">&amp;</span>[u8],
+<a href=#2428 id=2428 data-nosnippet>2428</a>) -&gt; anyhow::Result&lt;AuthenticatedValidatorMap&gt; {
+<a href=#2429 id=2429 data-nosnippet>2429</a>    <span class="kw">if let </span><span class="prelude-val">Ok</span>(map) = bincode::deserialize::&lt;AuthenticatedValidatorMap&gt;(bytes) {
+<a href=#2430 id=2430 data-nosnippet>2430</a>        <span class="kw">return </span><span class="prelude-val">Ok</span>(map);
+<a href=#2431 id=2431 data-nosnippet>2431</a>    }
+<a href=#2432 id=2432 data-nosnippet>2432</a>
+<a href=#2433 id=2433 data-nosnippet>2433</a>    <span class="comment">// Pre-Schnorr-Option: stake_table_key as Option&lt;KEY&gt;, state_ver_key as raw KEY.
+<a href=#2434 id=2434 data-nosnippet>2434</a>    </span><span class="kw">if let </span><span class="prelude-val">Ok</span>(pre_schnorr) =
+<a href=#2435 id=2435 data-nosnippet>2435</a>        bincode::deserialize::&lt;IndexMap&lt;Address, <span class="kw">super</span>::RegisteredValidatorPreSchnorrOption&gt;&gt;(bytes)
+<a href=#2436 id=2436 data-nosnippet>2436</a>    {
+<a href=#2437 id=2437 data-nosnippet>2437</a>        <span class="kw">return </span>pre_schnorr
+<a href=#2438 id=2438 data-nosnippet>2438</a>            .into_iter()
+<a href=#2439 id=2439 data-nosnippet>2439</a>            .map(|(addr, v)| {
+<a href=#2440 id=2440 data-nosnippet>2440</a>                <span class="kw">let </span>registered = v.migrate();
+<a href=#2441 id=2441 data-nosnippet>2441</a>                <span class="kw">let </span>authenticated = AuthenticatedValidator::try_from(registered)<span class="question-mark">?</span>;
+<a href=#2442 id=2442 data-nosnippet>2442</a>                <span class="prelude-val">Ok</span>((addr, authenticated))
+<a href=#2443 id=2443 data-nosnippet>2443</a>            })
+<a href=#2444 id=2444 data-nosnippet>2444</a>            .collect();
+<a href=#2445 id=2445 data-nosnippet>2445</a>    }
+<a href=#2446 id=2446 data-nosnippet>2446</a>
+<a href=#2447 id=2447 data-nosnippet>2447</a>    <span class="comment">// Pre-Option: both keys raw, with x25519/p2p fields.
+<a href=#2448 id=2448 data-nosnippet>2448</a>    </span><span class="kw">let </span>legacy: IndexMap&lt;Address, <span class="kw">super</span>::RegisteredValidatorPreOption&gt; =
+<a href=#2449 id=2449 data-nosnippet>2449</a>        bincode::deserialize(bytes).context(<span class="string">"deserializing stake table"</span>)<span class="question-mark">?</span>;
+<a href=#2450 id=2450 data-nosnippet>2450</a>    legacy
+<a href=#2451 id=2451 data-nosnippet>2451</a>        .into_iter()
+<a href=#2452 id=2452 data-nosnippet>2452</a>        .map(|(addr, v)| {
+<a href=#2453 id=2453 data-nosnippet>2453</a>            <span class="kw">let </span>registered = v.migrate();
+<a href=#2454 id=2454 data-nosnippet>2454</a>            <span class="kw">let </span>authenticated = AuthenticatedValidator::try_from(registered)<span class="question-mark">?</span>;
+<a href=#2455 id=2455 data-nosnippet>2455</a>            <span class="prelude-val">Ok</span>((addr, authenticated))
+<a href=#2456 id=2456 data-nosnippet>2456</a>        })
+<a href=#2457 id=2457 data-nosnippet>2457</a>        .collect()
+<a href=#2458 id=2458 data-nosnippet>2458</a>}
+<a href=#2459 id=2459 data-nosnippet>2459</a>
+<a href=#2460 id=2460 data-nosnippet>2460</a><span class="attr">#[async_trait]
+<a href=#2461 id=2461 data-nosnippet>2461</a></span><span class="kw">impl </span>MembershipPersistence <span class="kw">for </span>Persistence {
+<a href=#2462 id=2462 data-nosnippet>2462</a>    <span class="kw">async fn </span>load_stake(<span class="kw-2">&amp;</span><span class="self">self</span>, epoch: EpochNumber) -&gt; anyhow::Result&lt;<span class="prelude-ty">Option</span>&lt;StakeTuple&gt;&gt; {
+<a href=#2463 id=2463 data-nosnippet>2463</a>        <span class="kw">let </span>result = <span class="self">self
+<a href=#2464 id=2464 data-nosnippet>2464</a>            </span>.db
+<a href=#2465 id=2465 data-nosnippet>2465</a>            .read()
+<a href=#2466 id=2466 data-nosnippet>2466</a>            .<span class="kw">await</span><span class="question-mark">?
+<a href=#2467 id=2467 data-nosnippet>2467</a>            </span>.fetch_optional(
+<a href=#2468 id=2468 data-nosnippet>2468</a>                query(
+<a href=#2469 id=2469 data-nosnippet>2469</a>                    <span class="string">"SELECT stake, block_reward, stake_table_hash FROM epoch_drb_and_root WHERE \
+<a href=#2470 id=2470 data-nosnippet>2470</a>                     epoch = $1 AND stake IS NOT NULL"</span>,
+<a href=#2471 id=2471 data-nosnippet>2471</a>                )
+<a href=#2472 id=2472 data-nosnippet>2472</a>                .bind(epoch.u64() <span class="kw">as </span>i64),
+<a href=#2473 id=2473 data-nosnippet>2473</a>            )
+<a href=#2474 id=2474 data-nosnippet>2474</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2475 id=2475 data-nosnippet>2475</a>
+<a href=#2476 id=2476 data-nosnippet>2476</a>        result
+<a href=#2477 id=2477 data-nosnippet>2477</a>            .map(|row| {
+<a href=#2478 id=2478 data-nosnippet>2478</a>                <span class="kw">let </span>stake_table_bytes: Vec&lt;u8&gt; = row.get(<span class="string">"stake"</span>);
+<a href=#2479 id=2479 data-nosnippet>2479</a>                <span class="kw">let </span>reward_bytes: <span class="prelude-ty">Option</span>&lt;Vec&lt;u8&gt;&gt; = row.get(<span class="string">"block_reward"</span>);
+<a href=#2480 id=2480 data-nosnippet>2480</a>                <span class="kw">let </span>stake_table_hash_bytes: <span class="prelude-ty">Option</span>&lt;Vec&lt;u8&gt;&gt; = row.get(<span class="string">"stake_table_hash"</span>);
+<a href=#2481 id=2481 data-nosnippet>2481</a>                <span class="kw">let </span>stake_table = deserialize_authenticated_validator_map(<span class="kw-2">&amp;</span>stake_table_bytes)<span class="question-mark">?</span>;
+<a href=#2482 id=2482 data-nosnippet>2482</a>                <span class="kw">let </span>reward: <span class="prelude-ty">Option</span>&lt;RewardAmount&gt; = reward_bytes
+<a href=#2483 id=2483 data-nosnippet>2483</a>                    .map(|b| bincode::deserialize(<span class="kw-2">&amp;</span>b).context(<span class="string">"deserializing block_reward"</span>))
+<a href=#2484 id=2484 data-nosnippet>2484</a>                    .transpose()<span class="question-mark">?</span>;
+<a href=#2485 id=2485 data-nosnippet>2485</a>                <span class="kw">let </span>stake_table_hash: <span class="prelude-ty">Option</span>&lt;StakeTableHash&gt; = stake_table_hash_bytes
+<a href=#2486 id=2486 data-nosnippet>2486</a>                    .map(|b| bincode::deserialize(<span class="kw-2">&amp;</span>b).context(<span class="string">"deserializing stake table hash"</span>))
+<a href=#2487 id=2487 data-nosnippet>2487</a>                    .transpose()<span class="question-mark">?</span>;
+<a href=#2488 id=2488 data-nosnippet>2488</a>
+<a href=#2489 id=2489 data-nosnippet>2489</a>                <span class="prelude-val">Ok</span>((stake_table, reward, stake_table_hash))
+<a href=#2490 id=2490 data-nosnippet>2490</a>            })
+<a href=#2491 id=2491 data-nosnippet>2491</a>            .transpose()
+<a href=#2492 id=2492 data-nosnippet>2492</a>    }
+<a href=#2493 id=2493 data-nosnippet>2493</a>
+<a href=#2494 id=2494 data-nosnippet>2494</a>    <span class="kw">async fn </span>load_drb_result(<span class="kw-2">&amp;</span><span class="self">self</span>, epoch: EpochNumber) -&gt; anyhow::Result&lt;<span class="prelude-ty">Option</span>&lt;DrbResult&gt;&gt; {
+<a href=#2495 id=2495 data-nosnippet>2495</a>        <span class="kw">let </span>result = <span class="self">self
+<a href=#2496 id=2496 data-nosnippet>2496</a>            </span>.db
+<a href=#2497 id=2497 data-nosnippet>2497</a>            .read()
+<a href=#2498 id=2498 data-nosnippet>2498</a>            .<span class="kw">await</span><span class="question-mark">?
+<a href=#2499 id=2499 data-nosnippet>2499</a>            </span>.fetch_optional(
+<a href=#2500 id=2500 data-nosnippet>2500</a>                query(
+<a href=#2501 id=2501 data-nosnippet>2501</a>                    <span class="string">"SELECT drb_result FROM epoch_drb_and_root WHERE epoch = $1 AND drb_result IS \
+<a href=#2502 id=2502 data-nosnippet>2502</a>                     NOT NULL"</span>,
+<a href=#2503 id=2503 data-nosnippet>2503</a>                )
+<a href=#2504 id=2504 data-nosnippet>2504</a>                .bind(epoch.u64() <span class="kw">as </span>i64),
+<a href=#2505 id=2505 data-nosnippet>2505</a>            )
+<a href=#2506 id=2506 data-nosnippet>2506</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2507 id=2507 data-nosnippet>2507</a>
+<a href=#2508 id=2508 data-nosnippet>2508</a>        result
+<a href=#2509 id=2509 data-nosnippet>2509</a>            .map(|row| {
+<a href=#2510 id=2510 data-nosnippet>2510</a>                <span class="kw">let </span>bytes: Vec&lt;u8&gt; = row.get(<span class="string">"drb_result"</span>);
+<a href=#2511 id=2511 data-nosnippet>2511</a>                bytes.try_into().or_else(|<span class="kw">_</span>| <span class="macro">bail!</span>(<span class="string">"invalid drb result"</span>))
+<a href=#2512 id=2512 data-nosnippet>2512</a>            })
+<a href=#2513 id=2513 data-nosnippet>2513</a>            .transpose()
+<a href=#2514 id=2514 data-nosnippet>2514</a>    }
+<a href=#2515 id=2515 data-nosnippet>2515</a>
+<a href=#2516 id=2516 data-nosnippet>2516</a>    <span class="kw">async fn </span>load_epoch_root(<span class="kw-2">&amp;</span><span class="self">self</span>, epoch: EpochNumber) -&gt; anyhow::Result&lt;<span class="prelude-ty">Option</span>&lt;Header&gt;&gt; {
+<a href=#2517 id=2517 data-nosnippet>2517</a>        <span class="kw">let </span>result = <span class="self">self
+<a href=#2518 id=2518 data-nosnippet>2518</a>            </span>.db
+<a href=#2519 id=2519 data-nosnippet>2519</a>            .read()
+<a href=#2520 id=2520 data-nosnippet>2520</a>            .<span class="kw">await</span><span class="question-mark">?
+<a href=#2521 id=2521 data-nosnippet>2521</a>            </span>.fetch_optional(
+<a href=#2522 id=2522 data-nosnippet>2522</a>                query(
+<a href=#2523 id=2523 data-nosnippet>2523</a>                    <span class="string">"SELECT block_header FROM epoch_drb_and_root WHERE epoch = $1 AND \
+<a href=#2524 id=2524 data-nosnippet>2524</a>                     block_header IS NOT NULL"</span>,
+<a href=#2525 id=2525 data-nosnippet>2525</a>                )
+<a href=#2526 id=2526 data-nosnippet>2526</a>                .bind(epoch.u64() <span class="kw">as </span>i64),
+<a href=#2527 id=2527 data-nosnippet>2527</a>            )
+<a href=#2528 id=2528 data-nosnippet>2528</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2529 id=2529 data-nosnippet>2529</a>
+<a href=#2530 id=2530 data-nosnippet>2530</a>        result
+<a href=#2531 id=2531 data-nosnippet>2531</a>            .map(|row| {
+<a href=#2532 id=2532 data-nosnippet>2532</a>                <span class="kw">let </span>bytes: Vec&lt;u8&gt; = row.get(<span class="string">"block_header"</span>);
+<a href=#2533 id=2533 data-nosnippet>2533</a>                bincode::deserialize(<span class="kw-2">&amp;</span>bytes).context(<span class="string">"deserializing block header"</span>)
+<a href=#2534 id=2534 data-nosnippet>2534</a>            })
+<a href=#2535 id=2535 data-nosnippet>2535</a>            .transpose()
+<a href=#2536 id=2536 data-nosnippet>2536</a>    }
+<a href=#2537 id=2537 data-nosnippet>2537</a>
+<a href=#2538 id=2538 data-nosnippet>2538</a>    <span class="kw">async fn </span>store_epoch_root(
+<a href=#2539 id=2539 data-nosnippet>2539</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#2540 id=2540 data-nosnippet>2540</a>        epoch: EpochNumber,
+<a href=#2541 id=2541 data-nosnippet>2541</a>        block_header: Header,
+<a href=#2542 id=2542 data-nosnippet>2542</a>    ) -&gt; anyhow::Result&lt;()&gt; {
+<a href=#2543 id=2543 data-nosnippet>2543</a>        <span class="kw">let </span>epoch_i64 = epoch.u64() <span class="kw">as </span>i64;
+<a href=#2544 id=2544 data-nosnippet>2544</a>        <span class="kw">let </span>block_header_bytes =
+<a href=#2545 id=2545 data-nosnippet>2545</a>            bincode::serialize(<span class="kw-2">&amp;</span>block_header).context(<span class="string">"serializing block header"</span>)<span class="question-mark">?</span>;
+<a href=#2546 id=2546 data-nosnippet>2546</a>
+<a href=#2547 id=2547 data-nosnippet>2547</a>        <span class="macro">serializable_retry!</span>(<span class="self">self</span>, || <span class="kw">async </span>{
+<a href=#2548 id=2548 data-nosnippet>2548</a>            <span class="kw">let </span><span class="kw-2">mut </span>tx = <span class="self">self</span>.db.write().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2549 id=2549 data-nosnippet>2549</a>            tx.upsert(
+<a href=#2550 id=2550 data-nosnippet>2550</a>                <span class="string">"epoch_drb_and_root"</span>,
+<a href=#2551 id=2551 data-nosnippet>2551</a>                [<span class="string">"epoch"</span>, <span class="string">"block_header"</span>],
+<a href=#2552 id=2552 data-nosnippet>2552</a>                [<span class="string">"epoch"</span>],
+<a href=#2553 id=2553 data-nosnippet>2553</a>                [(epoch_i64, block_header_bytes.clone())],
+<a href=#2554 id=2554 data-nosnippet>2554</a>            )
+<a href=#2555 id=2555 data-nosnippet>2555</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#2556 id=2556 data-nosnippet>2556</a>            tx.commit().<span class="kw">await
+<a href=#2557 id=2557 data-nosnippet>2557</a>        </span>})
+<a href=#2558 id=2558 data-nosnippet>2558</a>        .<span class="kw">await
+<a href=#2559 id=2559 data-nosnippet>2559</a>    </span>}
 <a href=#2560 id=2560 data-nosnippet>2560</a>
 <a href=#2561 id=2561 data-nosnippet>2561</a>    <span class="kw">async fn </span>load_latest_stake(<span class="kw-2">&amp;</span><span class="self">self</span>, limit: u64) -&gt; anyhow::Result&lt;<span class="prelude-ty">Option</span>&lt;Vec&lt;IndexedStake&gt;&gt;&gt; {
 <a href=#2562 id=2562 data-nosnippet>2562</a>        <span class="kw">let </span><span class="kw-2">mut </span>tx = <span class="self">self</span>.db.read().<span class="kw">await</span><span class="question-mark">?</span>;
