@@ -2,42 +2,22 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use hotshot::traits::BlockPayload;
 use hotshot_types::{
-    data::{EpochNumber, VidCommitment, VidCommitment2, ViewNumber},
+    data::{VidCommitment, VidCommitment2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     traits::{
         block_contents::BlockHeader, node_implementation::NodeType, signature_key::SignatureKey,
     },
-    vid::avidm_gf2::AvidmGf2Param,
 };
-use tracing::warn;
+use tokio::task::JoinSet;
+use tracing::{error, warn};
 
 use crate::{
     consensus::Consensus,
     coordinator::error::CoordinatorError,
     message::{Message, MessageType, PayloadFetchMessage, PayloadFetchResponse},
     network::Sender,
-    vid::expected_vid_param,
+    vid::{VidReconstructOutput, expected_vid_param, matches_commitment},
 };
-
-type Metadata<T> = <<T as NodeType>::BlockPayload as BlockPayload<T>>::Metadata;
-
-/// A payload a peer sent us whole, on its way into
-/// [`VidReconstructor::handle_fetched_payload`].
-///
-/// Only `payload` comes from the peer. Commitment, metadata and epoch are
-/// taken from the requester's own validated proposal and `param` from the
-/// committee, so the response is checked against what we already believe.
-///
-/// [`VidReconstructor::handle_fetched_payload`]: crate::vid::VidReconstructor
-#[non_exhaustive]
-pub struct FetchedPayload<T: NodeType> {
-    pub view: ViewNumber,
-    pub epoch: EpochNumber,
-    pub payload_commitment: VidCommitment2,
-    pub metadata: Metadata<T>,
-    pub param: AvidmGf2Param,
-    pub payload: Vec<u8>,
-}
 
 /// Requester- and server-side state of payload recovery.
 pub struct Fetcher<T: NodeType> {
@@ -54,6 +34,9 @@ pub struct Fetcher<T: NodeType> {
     /// what they advertise, and locking requires the reconstructed payload,
     /// so they are the first choice when that payload must be fetched whole.
     advertisers: BTreeMap<ViewNumber, HashSet<T::SignatureKey>>,
+
+    /// Verifications of received payloads, surfaced by [`Fetcher::next`].
+    tasks: JoinSet<Option<VidReconstructOutput<T>>>,
 }
 
 impl<T: NodeType> Fetcher<T> {
@@ -62,6 +45,7 @@ impl<T: NodeType> Fetcher<T> {
             public_key,
             requested: HashMap::new(),
             advertisers: BTreeMap::new(),
+            tasks: JoinSet::new(),
         }
     }
 
@@ -126,48 +110,50 @@ impl<T: NodeType> Fetcher<T> {
             .map_err(|err| CoordinatorError::from(err).context("unicast payload request"))
     }
 
-    /// Take a peer's response to a request we made, with what
-    /// [`VidReconstructor::handle_fetched_payload`] needs to verify it.
+    /// Verify a peer's response to a request we made, and yield the payload
+    /// from [`Self::next`] once it checks out.
     ///
-    /// The commitment, metadata and epoch come from our own validated
-    /// proposal and the param from the committee, so nothing the peer sent
-    /// but the bytes themselves is carried through.
-    ///
-    /// [`VidReconstructor::handle_fetched_payload`]: crate::vid::VidReconstructor
+    /// Nothing the peer sent is trusted but the bytes, and those only if they
+    /// re-commit: the commitment, metadata and epoch come from our own
+    /// validated proposal and the erasure parameters from the committee. A
+    /// peer we asked can at worst make us verify once, since answering
+    /// consumes its slot in the request.
     pub fn accept_response(
         &mut self,
         response: PayloadFetchResponse,
         sender: &T::SignatureKey,
         consensus: &Consensus<T>,
         membership: &EpochMembershipCoordinator<T>,
-    ) -> Option<FetchedPayload<T>> {
+    ) {
         let view = response.view;
 
-        let proposal = consensus.proposal_at(view)?;
+        let Some(proposal) = consensus.proposal_at(view) else {
+            return;
+        };
 
         let VidCommitment::V2(payload_commitment) = proposal.block_header.payload_commitment()
         else {
-            return None;
+            return;
         };
 
         if payload_commitment != response.payload_commitment {
             warn!(%view, "payload response does not match the proposal's commitment");
-            return None;
+            return;
         }
 
         if !self
             .requested
             .get(&(view, payload_commitment))
-            .is_some_and(|nodes| nodes.contains(sender))
+            .is_some_and(|peers| peers.contains(sender))
         {
             warn!(%view, "payload response from a peer we did not ask");
-            return None;
+            return;
         }
 
-        let param = expected_vid_param(membership, Some(proposal.epoch)).or_else(|| {
+        let Some(param) = expected_vid_param(membership, Some(proposal.epoch)) else {
             warn!(%view, "no VID param for fetched payload; dropping");
-            None
-        })?;
+            return;
+        };
 
         if let Some(peers) = self.requested.get_mut(&(view, payload_commitment)) {
             peers.remove(sender);
@@ -176,14 +162,39 @@ impl<T: NodeType> Fetcher<T> {
             }
         }
 
-        Some(FetchedPayload {
-            view,
-            epoch: proposal.epoch,
-            payload_commitment,
-            metadata: proposal.block_header.metadata().clone(),
-            param,
-            payload: response.payload,
-        })
+        let epoch = proposal.epoch;
+        let metadata = proposal.block_header.metadata().clone();
+        let bytes = response.payload;
+
+        self.tasks.spawn_blocking(move || {
+            if !matches_commitment::<T>(view, &param, &metadata, &bytes, &payload_commitment) {
+                return None;
+            }
+            let payload = T::BlockPayload::from_bytes(&bytes, &metadata);
+            let tx_commitments = payload.transaction_commitments(&metadata);
+            Some(VidReconstructOutput {
+                view,
+                epoch,
+                payload_commitment,
+                payload,
+                metadata,
+                tx_commitments,
+            })
+        });
+    }
+
+    pub async fn next(&mut self) -> Option<VidReconstructOutput<T>> {
+        loop {
+            match self.tasks.join_next().await? {
+                Ok(Some(out)) => return Some(out),
+                Ok(None) => continue,
+                Err(err) => {
+                    if err.is_panic() {
+                        error!(%err, "fetched payload verification panicked");
+                    }
+                },
+            }
+        }
     }
 
     pub fn gc(&mut self, view: ViewNumber) {

@@ -629,6 +629,11 @@ impl<T: NodeType> Consensus<T> {
         self.timeout_certs.get(&view)
     }
 
+    pub fn is_reconstructed(&self, view: ViewNumber, payload_commitment: VidCommitment2) -> bool {
+        self.blocks_reconstructed
+            .contains(&(view, payload_commitment))
+    }
+
     /// Return the view of the locked certificate, if set.
     pub fn locked_view(&self) -> Option<ViewNumber> {
         self.locked_cert.as_ref().map(|c| c.view_number())
@@ -736,20 +741,28 @@ impl<T: NodeType> Consensus<T> {
             ConsensusInput::BlockReconstructed(view, vid_commitment) => {
                 debug!(%view, "apply: block reconstructed");
                 self.blocks_reconstructed.insert((view, vid_commitment));
-                // Retry every votable child whose vote1 is gated on this
+                // Retry the votable children whose vote1 is gated on this
                 // parent's reconstruction. More than `view + 1` can be
                 // waiting: while a view's payload was missing, every later
                 // proposal extends it — but of those, only the ones above the
                 // timeout bar can still be voted, so the views between the
                 // parent and the bar are skipped outright.
+                //
+                // Highest first, and stop at the one we vote for. Voting a
+                // lower child afterwards adds nothing and costs the vote2
+                // there: the higher vote1 skips it, which
+                // `voted_for_branch_excluding` refuses to follow.
                 let children: Vec<ViewNumber> = self
                     .proposals
                     .range(view.max(self.timeout_view) + 1..)
                     .filter(|(_, p)| p.justify_qc.view_number() == view)
                     .map(|(&child, _)| child)
                     .collect();
-                for child in children {
+                for child in children.into_iter().rev() {
                     self.maybe_vote_1(child, outbox);
+                    if self.voted_1_views.contains(&child) {
+                        break;
+                    }
                 }
                 Protocol::Continue
             },
