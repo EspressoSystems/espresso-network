@@ -43,7 +43,7 @@ use crate::{
     handlers, v1, v2,
 };
 
-/// API error response — wire-compatible with the `Custom` variant of the per-module error enums
+/// API error response, wire-compatible with the `Custom` variant of the per-module error enums
 /// (`node::Error::Custom`, `merklized_state::Error::Custom`, etc.) that all of tide-disco's
 /// `Error::catch_all` calls produce. Most of our migrated endpoints (catchup, submit,
 /// state-signature, light-client, node, status, config, token, database) take that path, so this
@@ -110,7 +110,7 @@ fn encode_response<T: Serialize>(headers: &HeaderMap, value: T) -> Response {
 
 /// Decode a request body based on its `Content-Type`, matched by media-type essence.
 ///
-/// - `application/octet-stream`: VBS (versioned binary) — what `Request::body_binary`
+/// - `application/octet-stream`: VBS (versioned binary), what `Request::body_binary`
 ///   sends, and what production peer-catchup / submit-transactions clients use.
 /// - `application/json`: serde_json.
 fn decode_body<T: serde::de::DeserializeOwned>(
@@ -153,7 +153,7 @@ impl OperationOutput for ApiError {
 }
 
 /// Successful JSON response for v1 handlers, most of which return domain types (from
-/// `espresso-types`, `hotshot-query-service`, etc.) that don't implement `schemars::JsonSchema` —
+/// `espresso-types`, `hotshot-query-service`, etc.) that don't implement `schemars::JsonSchema`;
 /// this crate doesn't add OpenAPI derives to domain types. Wire format is identical to
 /// `axum::Json<T>`; only the OpenAPI operation gets an untyped 200 response instead of a generated
 /// schema.
@@ -2515,14 +2515,14 @@ where
         .api_route(
             routes::v1::CATCHUP_REWARD_ACCOUNTS_V2_ROUTE,
             post_with(catchup_reward_accounts_v2, |op| {
-                op.summary("Catch up reward accounts (bulk, V2) — deprecated")
+                op.summary("Catch up reward accounts (bulk, V2) (deprecated)")
                     .description("Deprecated: this endpoint always returns 404 Not Found.")
             }),
         )
         .api_route(
             routes::v1::CATCHUP_REWARD_AMOUNTS_ROUTE,
             get_with(catchup_reward_amounts, |op| {
-                op.summary("List reward amounts — deprecated")
+                op.summary("List reward amounts (deprecated)")
                     .description("Deprecated: this endpoint always returns 404 Not Found.")
             }),
         )
@@ -2549,7 +2549,7 @@ pub(crate) fn router_submit<S>(state: S) -> ApiRouter
 where
     S: v1::SubmitApi + Clone + Send + Sync + 'static,
 {
-    // Submit handler — body is decoded as VBS (binary) or JSON based on Content-Type, matching
+    // Submit handler: body is decoded as VBS (binary) or JSON based on Content-Type, matching
     // tide-disco's `body_auto`.
     let submit_submit = |State(state): State<S>, headers: HeaderMap, body: Bytes| async move {
         let tx: <S as v1::SubmitApi>::Transaction = decode_body(&headers, &body)?;
@@ -3425,7 +3425,7 @@ where
 /// Create v1 router with OpenAPI documentation.
 ///
 /// Unlike v2 (which documents proto request/response types with real JSON schemas), most v1
-/// handlers return internal domain types that don't implement `schemars::JsonSchema` by design —
+/// handlers return internal domain types that don't implement `schemars::JsonSchema` by design;
 /// see [`ApiJson`]. The generated spec therefore documents routes, parameters, and summaries, but
 /// response bodies are mostly untyped.
 pub fn create_router_v1<S>(state: S) -> Router
