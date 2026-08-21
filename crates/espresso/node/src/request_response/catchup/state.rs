@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
     BackoffParams, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment, Leaf2,
-    NodeState, PubKey, SeqTypes,
+    NodeState, PubKey, SeqTypes, StakeTableHash, StakeTableState,
     traits::{SequencerPersistence, StateCatchup},
     v0_3::{ChainConfig, RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1},
     v0_4::{
@@ -16,8 +16,11 @@ use espresso_types::{
 use hotshot::traits::NodeImplementation;
 use hotshot_new_protocol::{storage::NewProtocolStorage, utils::verify_new_protocol_leaf_chain};
 use hotshot_types::{
-    data::ViewNumber, epoch_membership::EpochMembershipCoordinator, message::UpgradeLock,
-    simple_certificate::LightClientStateUpdateCertificateV2, traits::network::ConnectedNetwork,
+    data::{EpochNumber, ViewNumber},
+    epoch_membership::EpochMembershipCoordinator,
+    message::UpgradeLock,
+    simple_certificate::LightClientStateUpdateCertificateV2,
+    traits::network::ConnectedNetwork,
 };
 use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
 use request_response::RequestType;
@@ -172,6 +175,22 @@ where
         timeout(timeout_duration, self.fetch_state_cert(epoch))
             .await
             .with_context(|| "timed out while fetching state cert")?
+    }
+
+    async fn try_fetch_stake_table_state(
+        &self,
+        _retry: usize,
+        epoch: EpochNumber,
+        expected_stake_table_hash: StakeTableHash,
+    ) -> anyhow::Result<StakeTableState> {
+        let timeout_duration = self.config.request_batch_interval * 3;
+
+        timeout(
+            timeout_duration,
+            self.fetch_stake_table_state(epoch, expected_stake_table_hash),
+        )
+        .await
+        .with_context(|| "timed out while fetching stake table state")?
     }
 
     fn backoff(&self) -> &BackoffParams {
@@ -537,6 +556,43 @@ where
             .with_context(|| "failed to request state cert")?;
 
         tracing::info!("Fetched state cert for epoch: {epoch}");
+
+        Ok(response)
+    }
+
+    async fn fetch_stake_table_state(
+        &self,
+        epoch: EpochNumber,
+        expected_stake_table_hash: StakeTableHash,
+    ) -> anyhow::Result<StakeTableState> {
+        tracing::info!("Fetching stake table state for epoch: {epoch}");
+
+        // The peer sends the resulting state directly, so validation is a single commit()
+        // rather than replaying the whole event history.
+        let response_validation_fn = move |_request: &Request, response: Response| async move {
+            let Response::StakeTableState(state) = response else {
+                return Err(anyhow::anyhow!("expected stake table state response"));
+            };
+
+            if state.commit() != expected_stake_table_hash {
+                return Err(anyhow::anyhow!(
+                    "stake table state commitment mismatch for epoch {epoch}"
+                ));
+            }
+
+            Ok(state)
+        };
+
+        let response = self
+            .request_indefinitely(
+                Request::StakeTableState { epoch: *epoch },
+                RequestType::Batched,
+                response_validation_fn,
+            )
+            .await
+            .with_context(|| "failed to request stake table state")?;
+
+        tracing::info!("Fetched stake table state for epoch: {epoch}");
 
         Ok(response)
     }

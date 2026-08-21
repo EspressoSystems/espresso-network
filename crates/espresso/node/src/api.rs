@@ -3514,15 +3514,18 @@ mod test {
         upgrade_stake_table_v3,
     };
     use espresso_types::{
-        FeeAmount, Header, L1Client, L1ClientOptions, MOCK_SEQUENCER_VERSIONS, NamespaceId,
-        NamespaceProofQueryData, NsProof, RegisteredValidatorMap, RewardDistributor,
+        DECAF_CHAIN_ID, FeeAmount, Header, L1Client, L1ClientOptions, MOCK_SEQUENCER_VERSIONS,
+        NamespaceId, NamespaceProofQueryData, NsProof, RegisteredValidatorMap, RewardDistributor,
         StakeTableState, StateCertQueryDataV1, StateCertQueryDataV2, ValidatedState,
         ValidatorLeaderCounts,
         config::PublicHotShotConfig,
-        traits::{NullEventConsumer, PersistenceOptions},
-        v0_3::{COMMISSION_BASIS_POINTS, Fetcher, RewardAmount, RewardMerkleProofV1},
+        stake_table_anchor_root_height, stake_table_state_from_l1_events,
+        traits::{
+            EventsPersistenceRead, MembershipPersistence, NullEventConsumer, PersistenceOptions,
+        },
+        v0_1::DECAF_INITIAL_SUPPLY_WEI,
+        v0_3::{COMMISSION_BASIS_POINTS, ChainConfig, Fetcher, RewardAmount, RewardMerkleProofV1},
         v0_4::{RewardAccountV2, RewardMerkleProofV2},
-        validators_from_l1_events,
     };
     use futures::{
         future::{self, join_all, try_join_all},
@@ -5054,7 +5057,8 @@ mod test {
 
             // This also checks if there is a duplicate registration
             let stake_table =
-                validators_from_l1_events(sorted_events.into_iter().map(|(_, e)| e)).unwrap();
+                stake_table_state_from_l1_events(sorted_events.into_iter().map(|(_, e)| e))
+                    .unwrap();
             if let Some(prev_st) = prev_st {
                 assert_eq!(stake_table, prev_st);
             }
@@ -6851,6 +6855,205 @@ mod test {
                 "Stake table mismatch for epoch {epoch_num}",
             );
         }
+    }
+
+    /// Regression test: a node with a dead L1 from genesis still rejoins consensus, converges
+    /// its stake table for the target epoch from peers, and never persists that peer-supplied
+    /// state as if it had come from its own L1.
+    ///
+    /// One of six nodes (`DEAD_NODE`) is given an unroutable L1 URL from genesis. `ChainConfig`
+    /// is set to `DECAF_CHAIN_ID` and the ESP token is deployed with `DECAF_INITIAL_SUPPLY_WEI`
+    /// (in whole tokens, since the deployer converts via `parse_ether`), so
+    /// `known_initial_supply` (`crates/espresso/types/src/v0/impls/stake_table.rs`) genuinely
+    /// matches what is on the test chain. This is not a fudge: it makes the test network into a
+    /// chain the production code already special-cases correctly, rather than bypassing the
+    /// check. Without it, epoch 3 onward would need `Fetcher::initial_supply_or_fetch`, which
+    /// has no peer fallback and would fail outright against a dead L1
+    /// (`EpochCommittees::calculate_dynamic_block_reward`,
+    /// `crates/espresso/types/src/v0/impls/committee.rs`).
+    ///
+    /// This does not assert the dead node never misses a view: the anchor for epoch `e - 1` is
+    /// decided at the same height committee `e` first becomes required, so a node whose stake
+    /// table for `e` is briefly unavailable at that boundary is expected to miss the epoch-root
+    /// vote (and, via a separate HotShot gap on the legacy decide path, never persist that root
+    /// locally either; see `tmp/extended-qc-skips-epoch-roots.md`). What this test proves is
+    /// narrower: the node keeps making progress afterward, its stake table for the target epoch
+    /// converges with a healthy peer's, and that convergence did not happen by quietly
+    /// re-deriving from its own (dead) L1.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_stake_table_peer_catchup_dead_l1_rejoins() {
+        const EPOCH_HEIGHT: u64 = 10;
+        const NUM_NODES: usize = 6;
+        const DEAD_NODE: usize = NUM_NODES - 1;
+        const TARGET_EPOCH: u64 = 4;
+        const TARGET_HEIGHT: u64 = EPOCH_HEIGHT * (TARGET_EPOCH + 1);
+        // The deployer's `initial_token_supply` takes whole tokens and converts to wei via
+        // `parse_ether`, so divide out the 18 decimals to match `DECAF_INITIAL_SUPPLY_WEI`.
+        const DECAF_INITIAL_SUPPLY_TOKENS: u128 = DECAF_INITIAL_SUPPLY_WEI / 10u128.pow(18);
+
+        // `reserve_tcp_port` completes a TCP handshake and drops both ends, leaving the port in
+        // TIME_WAIT with nothing listening: connections to it are refused rather than hanging.
+        let dead_l1_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let dead_l1_url: Url = format!("http://localhost:{dead_l1_port}").parse().unwrap();
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .l1_url_override(DEAD_NODE, dead_l1_url)
+            .l1_opt(L1ClientOptions {
+                // Short so a dead-L1 background retry loop or an all-arms failure doesn't stall
+                // the test; the happy path doesn't wait on this since peers win the race.
+                l1_events_max_retry_duration: Duration::from_secs(10),
+                l1_retry_delay: Duration::from_millis(200),
+                stake_table_update_interval: Duration::from_secs(5),
+                l1_events_max_block_range: 1000,
+                l1_polling_interval: Duration::from_secs(1),
+                subscription_timeout: Duration::from_secs(5),
+                ..Default::default()
+            })
+            .build();
+
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence_options: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let catchup_peers = std::array::from_fn(|_| {
+            StatePeers::<StaticVersion<0, 1>>::from_urls(
+                vec![format!("http://localhost:{port}").parse().unwrap()],
+                Default::default(),
+                Duration::from_secs(2),
+                &NoMetrics,
+            )
+        });
+
+        let decaf_state = ValidatedState {
+            chain_config: ChainConfig {
+                chain_id: DECAF_CHAIN_ID,
+                ..Default::default()
+            }
+            .into(),
+            ..Default::default()
+        };
+
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence_options.clone())
+            .catchups(catchup_peers)
+            .states(std::array::from_fn(|_| decaf_state.clone()))
+            .initial_token_supply(U256::from(DECAF_INITIAL_SUPPLY_TOKENS))
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                Default::default(),
+                POS_V4,
+            )
+            .await
+            .unwrap()
+            .build();
+
+        let network = TestNetwork::new(config, POS_V4).await;
+        let dead_node = &network.peers[DEAD_NODE - 1];
+
+        let mut server_events = network.server.event_stream();
+        while let Some(event) = server_events.next().await {
+            if let CoordinatorEvent::LegacyEvent(Event {
+                event: EventType::Decide { leaf_chain, .. },
+                ..
+            }) = event
+            {
+                let height = leaf_chain[0].leaf.height();
+                tracing::info!("healthy node decided at height: {height}");
+                if height > EPOCH_HEIGHT * (TARGET_EPOCH + 2) {
+                    break;
+                }
+            }
+        }
+
+        let height_at_boundary = dead_node.decided_leaf().await.height();
+        let mut dead_events = dead_node.event_stream();
+        let mut height_after = height_at_boundary;
+        while let Some(event) = dead_events.next().await {
+            if let CoordinatorEvent::LegacyEvent(Event {
+                event: EventType::Decide { leaf_chain, .. },
+                ..
+            }) = event
+            {
+                height_after = leaf_chain[0].leaf.height();
+                tracing::info!("dead-L1 node decided at height: {height_after}");
+                if height_after > height_at_boundary + EPOCH_HEIGHT && height_after > TARGET_HEIGHT
+                {
+                    break;
+                }
+            }
+        }
+        assert!(
+            height_after > height_at_boundary,
+            "dead-L1 node made no progress past the epoch boundary"
+        );
+        assert!(
+            height_after > TARGET_HEIGHT,
+            "dead-L1 node never reached the target height"
+        );
+
+        let epoch = EpochNumber::new(TARGET_EPOCH);
+        let dead_coordinator = dead_node.node_state().coordinator;
+        let healthy_coordinator = network.server.node_state().coordinator;
+        let dead_em = match dead_coordinator.membership_for_epoch(Some(epoch)) {
+            Ok(em) => em,
+            Err(_) => dead_coordinator.wait_for_catchup(epoch).await.unwrap(),
+        };
+        let healthy_em = match healthy_coordinator.membership_for_epoch(Some(epoch)) {
+            Ok(em) => em,
+            Err(_) => healthy_coordinator.wait_for_catchup(epoch).await.unwrap(),
+        };
+        assert_eq!(
+            HSStakeTable::from_iter(dead_em.stake_table()),
+            HSStakeTable::from_iter(healthy_em.stake_table()),
+            "stake table mismatch for epoch {TARGET_EPOCH}; with a dead L1 the only source for \
+             the dead node's stake table is peers, so this is exactly the property the peer \
+             catchup fallback is responsible for",
+        );
+
+        // Read the anchor from the healthy node: the dead node's local storage never gets it,
+        // even though its in-memory committee/stake-table state is correct (see
+        // `tmp/extended-qc-skips-epoch-roots.md`).
+        let mut healthy_persistence_opts = persistence_options[0].clone();
+        let healthy_persistence = healthy_persistence_opts.create().await.unwrap();
+        // `store_epoch_root` files the header rooted at epoch `k` under key `k + 2`, so the
+        // anchor for `TARGET_EPOCH` (rooted at `TARGET_EPOCH - 1`) is filed under
+        // `TARGET_EPOCH + 1` (see `Fetcher::try_fetch_stake_table_anchor`).
+        let anchor = healthy_persistence
+            .load_epoch_root(EpochNumber::new(TARGET_EPOCH + 1))
+            .await
+            .unwrap()
+            .expect("healthy node should have the epoch root anchor");
+        let expected_anchor_height = stake_table_anchor_root_height(epoch, EPOCH_HEIGHT).unwrap();
+        assert_eq!(anchor.height(), expected_anchor_height);
+        let to_l1_block = anchor
+            .l1_finalized()
+            .expect("epoch root header must carry l1_finalized")
+            .number();
+
+        // `dead_node`'s L1 event store was never advanced to cover `TARGET_EPOCH`'s L1 range:
+        // the peer-supplied state was used to vote/build committees but never written back as
+        // if it were real L1 events.
+        let mut dead_persistence_opts = persistence_options[DEAD_NODE].clone();
+        let dead_persistence = dead_persistence_opts.create().await.unwrap();
+        let (read, _events) = dead_persistence.load_events(0, to_l1_block).await.unwrap();
+        assert_ne!(
+            read,
+            Some(EventsPersistenceRead::Complete),
+            "dead-L1 node's L1 event store must never be advanced by peer-supplied stake table \
+             state",
+        );
     }
 
     #[rstest]

@@ -28,7 +28,8 @@ pub use impls::testing;
 pub use impls::{
     BuilderValidationError, EpochCommittees, EpochCommitteesError, EpochSnapshot, FeeError,
     ProposalValidationError, RECENT_STAKE_TABLES_LIMIT, StateValidationError, ValidatorSet,
-    get_l1_deposits, retain_accounts, validators_from_l1_events,
+    get_l1_deposits, retain_accounts, stake_table_anchor_root_height,
+    stake_table_snapshot_root_height, stake_table_state_from_l1_events,
 };
 pub use nsproof::*;
 pub use txproof::*;

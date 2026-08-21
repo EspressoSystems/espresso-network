@@ -58,7 +58,7 @@ use super::{
 use crate::{
     AuthenticatedValidatorMap, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
     Header, Leaf2, PubKey, SeqTypes,
-    v0::impls::StakeTableHash,
+    v0::impls::{StakeTableHash, StakeTableState},
     v0_3::{
         ChainConfig, RegisteredValidator, RewardAccountProofV1, RewardAccountV1, RewardAmount,
         RewardMerkleCommitmentV1,
@@ -297,6 +297,48 @@ pub trait StateCatchup: Send + Sync {
             .await
     }
 
+    /// Fetch the full consensus stake table state for `epoch` from peers, without retrying on
+    /// transient errors.
+    ///
+    /// The response is only usable if `state.commit() == expected_stake_table_hash`. That hash
+    /// comes from `next_stake_table_hash()` of the QC-backed epoch root header at
+    /// `stake_table_anchor_root_height(epoch, epoch_height)`. Implementations SHOULD check it
+    /// inline so a bad peer is rejected and another is tried, but the caller re-checks and is
+    /// the authoritative gate.
+    ///
+    /// The default implementation returns an error; only providers that support stake table
+    /// state catchup override it.
+    async fn try_fetch_stake_table_state(
+        &self,
+        _retry: usize,
+        _epoch: EpochNumber,
+        _expected_stake_table_hash: StakeTableHash,
+    ) -> anyhow::Result<StakeTableState> {
+        Err(anyhow::anyhow!(
+            "stake table state catchup is not supported by provider {}",
+            self.name()
+        ))
+    }
+
+    /// Fetch the full consensus stake table state for `epoch` from peers, retrying on transient
+    /// errors.
+    async fn fetch_stake_table_state(
+        &self,
+        epoch: EpochNumber,
+        expected_stake_table_hash: StakeTableHash,
+    ) -> anyhow::Result<StakeTableState> {
+        self.backoff()
+            .retry(self, |provider, retry| {
+                provider
+                    .try_fetch_stake_table_state(retry, epoch, expected_stake_table_hash)
+                    .map_err(|err| {
+                        err.context(format!("fetching stake table state for epoch {epoch}"))
+                    })
+                    .boxed()
+            })
+            .await
+    }
+
     /// Returns true if the catchup provider is local (e.g. does not make calls to remote resources).
     fn is_local(&self) -> bool;
 
@@ -472,6 +514,27 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
         epoch: u64,
     ) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>> {
         (**self).fetch_state_cert(epoch).await
+    }
+
+    async fn try_fetch_stake_table_state(
+        &self,
+        retry: usize,
+        epoch: EpochNumber,
+        expected_stake_table_hash: StakeTableHash,
+    ) -> anyhow::Result<StakeTableState> {
+        (**self)
+            .try_fetch_stake_table_state(retry, epoch, expected_stake_table_hash)
+            .await
+    }
+
+    async fn fetch_stake_table_state(
+        &self,
+        epoch: EpochNumber,
+        expected_stake_table_hash: StakeTableHash,
+    ) -> anyhow::Result<StakeTableState> {
+        (**self)
+            .fetch_stake_table_state(epoch, expected_stake_table_hash)
+            .await
     }
 
     fn backoff(&self) -> &BackoffParams {

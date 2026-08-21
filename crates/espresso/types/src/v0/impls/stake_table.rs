@@ -33,6 +33,8 @@ use bigdecimal::BigDecimal;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use futures::future::BoxFuture;
 #[cfg(feature = "node")]
+use futures::future::Either;
+#[cfg(feature = "node")]
 use hotshot_contract_adapter::sol_types::{
     EspToken::{self, EspTokenInstance},
     StakeTableV3,
@@ -45,27 +47,36 @@ use hotshot_contract_adapter::{
     },
     stake_table::StakeTableSolError,
 };
+#[cfg(feature = "node")]
+use hotshot_types::epoch_membership::EpochMembershipCoordinator;
 use hotshot_types::{
     addr::NetAddr,
     data::{EpochNumber, vid_disperse::VID_TARGET_TOTAL_STAKE},
     signature_key::{BLSPubKey, SchnorrPubKey},
     traits::signature_key::SignatureKey as _,
+    utils::root_block_in_epoch,
     x25519,
 };
 use humantime::format_duration;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use num_traits::{FromPrimitive, Zero};
+use serde::{Deserialize, Serialize};
+#[cfg(feature = "node")]
 use thiserror::Error;
 #[cfg(feature = "node")]
 use tokio::spawn;
 use tokio::time::sleep;
+#[cfg(feature = "node")]
+use tokio::time::timeout;
 #[cfg(feature = "node")]
 use tracing::Instrument;
 use vbs::version::Version;
 
 #[cfg(feature = "node")]
 use super::L1Client;
+#[cfg(feature = "node")]
+use super::SeqTypes;
 #[cfg(any(test, feature = "testing"))]
 use super::v0_3::DAMembers;
 use super::{
@@ -81,7 +92,10 @@ use super::{traits::MembershipPersistence, v0_3::StakeTableUpdateTask};
 #[cfg(feature = "node")]
 use crate::traits::EventsPersistenceRead;
 #[cfg(feature = "node")]
-use crate::v0_1::L1Provider;
+use crate::v0_1::{
+    ChainId, DECAF_CHAIN_ID, DECAF_INITIAL_SUPPLY_WEI, L1Provider, MAINNET_CHAIN_ID,
+    MAINNET_INITIAL_SUPPLY_WEI,
+};
 #[cfg(feature = "node")]
 use crate::v0_3::{BLOCKS_PER_YEAR, INFLATION_RATE};
 use crate::v0_3::{
@@ -102,6 +116,38 @@ pub fn to_registered_validator_map(
 }
 
 pub type StakeTableHash = Commitment<StakeTableState>;
+
+/// Height of the epoch root whose `l1_finalized` bounds the L1 event range for `epoch`.
+///
+/// `add_epoch_root` builds the stake table for epoch `k + 2` from the epoch root at epoch `k`
+/// (`crates/espresso/types/src/v0/impls/committee.rs`), so the events that make up `epoch`'s
+/// stake table are bounded by the L1 block finalized at the root of epoch `epoch - 2`.
+pub fn stake_table_snapshot_root_height(
+    epoch: EpochNumber,
+    epoch_height: u64,
+) -> anyhow::Result<u64> {
+    let snapshot_epoch = epoch
+        .u64()
+        .checked_sub(2)
+        .with_context(|| format!("epoch {epoch} has no snapshot root (requires epoch >= 2)"))?;
+    Ok(root_block_in_epoch(snapshot_epoch, epoch_height))
+}
+
+/// Height of the epoch root whose `next_stake_table_hash` commits to `epoch`'s stake table.
+///
+/// `Header::new` sets `next_stake_table_hash` from `stake_table_for_epoch(epoch + 1)` when
+/// building the epoch root header for `epoch` (`crates/espresso/types/src/v0/impls/header.rs`),
+/// so the hash committing to `epoch`'s stake table is anchored at the root of epoch `epoch - 1`.
+pub fn stake_table_anchor_root_height(
+    epoch: EpochNumber,
+    epoch_height: u64,
+) -> anyhow::Result<u64> {
+    let anchor_epoch = epoch
+        .u64()
+        .checked_sub(1)
+        .with_context(|| format!("epoch {epoch} has no anchor root (requires epoch >= 1)"))?;
+    Ok(root_block_in_epoch(anchor_epoch, epoch_height))
+}
 
 /// The result of applying a stake table event:
 /// - `Ok(Ok(()))`: success
@@ -223,7 +269,7 @@ fn sort_stake_table_events(
     Ok(events)
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct StakeTableState {
     validators: RegisteredValidatorMap,
     validator_exits: HashSet<Address>,
@@ -947,9 +993,11 @@ fn parse_x25519_key(bytes: [u8; 32]) -> anyhow::Result<x25519::PublicKey> {
     Ok(x25519::PublicKey::try_from(bytes.as_slice())?)
 }
 
-pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
-    events: I,
-) -> Result<(RegisteredValidatorMap, StakeTableHash), StakeTableError> {
+/// Replay stake table events into a fresh [`StakeTableState`].
+pub fn stake_table_state_from_l1_events<I>(events: I) -> Result<StakeTableState, StakeTableError>
+where
+    I: IntoIterator<Item = StakeTableEvent>,
+{
     let mut state = StakeTableState::default();
     for event in events {
         match state.apply_event(event.clone()) {
@@ -966,8 +1014,7 @@ pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
             },
         }
     }
-    let commit = state.commit();
-    Ok((state.into_validators(), commit))
+    Ok(state)
 }
 
 /// Select active validators
@@ -1076,10 +1123,25 @@ pub struct ValidatorSet {
 
 impl ValidatorSet {
     /// Derive a validator set from a stake-table state at a given protocol version.
+    ///
+    /// `StakeTableState::commit()` does not cover the `validators` map keys, only the
+    /// `RegisteredValidator` values, so a peer-supplied state could move a validator under a
+    /// different address key without changing the commitment. This is the choke point where a
+    /// `StakeTableState` becomes a committee, so the `key == value.account` invariant is
+    /// re-checked here rather than trusted from the caller.
     pub fn from_state(
         state: &StakeTableState,
         protocol_version: Version,
     ) -> Result<Self, StakeTableError> {
+        for (key, validator) in state.validators() {
+            if *key != validator.account {
+                return Err(StakeTableError::ValidatorKeyMismatch {
+                    key: *key,
+                    account: validator.account,
+                });
+            }
+        }
+
         let active_validators = select_active_validator_set(state.validators(), protocol_version)?;
         Ok(Self {
             all_validators: state.validators().clone(),
@@ -1094,14 +1156,8 @@ impl ValidatorSet {
         events: I,
         protocol_version: Version,
     ) -> Result<Self, StakeTableError> {
-        let (all_validators, stake_table_hash) = validators_from_l1_events(events)?;
-        let active_validators = select_active_validator_set(&all_validators, protocol_version)?;
-        Ok(Self {
-            all_validators,
-            active_validators,
-            stake_table_hash: Some(stake_table_hash),
-            protocol_version,
-        })
+        let state = stake_table_state_from_l1_events(events)?;
+        Self::from_state(&state, protocol_version)
     }
 
     /// All registered validators known when this set was derived.
@@ -1154,6 +1210,60 @@ impl std::fmt::Debug for StakeTableEvent {
                 write!(f, "P2pAddrUpdate({:?})", event.validator)
             },
         }
+    }
+}
+
+/// How often [`Fetcher::fetch_stake_table_state_from_peers`] re-checks whether the epoch root
+/// anchor has been decided yet.
+///
+/// Anchor availability changes at epoch granularity (tens of minutes to hours), so a coarse
+/// interval loses no useful responsiveness while cutting wasted round trips to peers during the
+/// long stretch before the anchor can possibly exist.
+#[cfg(feature = "node")]
+const STAKE_TABLE_ANCHOR_POLL_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Why one attempt to resolve and fetch from the peer-catchup anchor produced nothing.
+#[cfg(feature = "node")]
+#[derive(Debug, Error)]
+enum PeerArmError {
+    /// The anchor exists but has no `next_stake_table_hash`: a legitimate `None` for
+    /// `epoch - 1 <= first_epoch` (see `crates/espresso/types/src/v0/impls/state.rs`,
+    /// `validate_next_stake_table_hash`), or, historically, a pre-V4 header.
+    /// Permanent for this epoch: there is nothing to verify a peer response against, ever, so
+    /// the caller stops polling instead of spinning to the deadline.
+    #[error(
+        "epoch root anchor at height {height} (version {version}) does not commit to a stake \
+         table hash"
+    )]
+    Unverifiable { height: u64, version: Version },
+    /// The anchor is not decided anywhere reachable yet. Retryable.
+    #[error("epoch root anchor for epoch {0} is not yet decided")]
+    AnchorUnavailable(EpochNumber),
+    /// The anchor is known, but no peer served a state matching it. Retryable.
+    #[error("{0}")]
+    NoPeerData(anyhow::Error),
+}
+
+/// Returns the ESP token's initial supply for chains where the value is already known.
+///
+/// The initial supply is fixed at token deployment: `fetch_and_update_initial_supply` locates
+/// the one-time `Initialized` event and the matching mint `Transfer` from `address(0)`, which
+/// can only occur once and can never change afterwards. Hardcoding it for known networks
+/// removes the last L1 dependency on the epoch-root reward-calculation path, so a node whose
+/// L1 connection is down can still compute block rewards.
+///
+/// A wrong constant here has no local symptom: the node keeps computing rewards, just the
+/// wrong ones, diverging from the rest of the network and losing consensus.
+/// `assert_known_initial_supply_matches_l1` (below, in tests) guards against this by fetching
+/// the value from L1 and comparing it to the constant.
+#[cfg(feature = "node")]
+fn known_initial_supply(chain_id: ChainId) -> Option<U256> {
+    if chain_id == MAINNET_CHAIN_ID {
+        Some(U256::from(MAINNET_INITIAL_SUPPLY_WEI))
+    } else if chain_id == DECAF_CHAIN_ID {
+        Some(U256::from(DECAF_INITIAL_SUPPLY_WEI))
+    } else {
+        None
     }
 }
 
@@ -1410,22 +1520,19 @@ impl Fetcher {
         let from_block = match from_block {
             Some(block) => block,
             None => {
-                let start = Instant::now();
-                loop {
-                    match stake_table_contract.initializedAtBlock().call().await {
-                        Ok(init_block) => break init_block.to::<u64>(),
-                        Err(err) => {
-                            if start.elapsed() >= max_retry_duration {
-                                panic!(
-                                    "Failed to retrieve initial block after `{}`: {err}",
-                                    format_duration(max_retry_duration)
-                                );
-                            }
-                            tracing::warn!(%err, "Failed to retrieve initial block, retrying...");
-                            sleep(retry_delay).await;
-                        },
-                    }
-                }
+                let init_block = retry(
+                    retry_delay,
+                    max_retry_duration,
+                    "stake table initial block fetch",
+                    move || {
+                        let stake_table_contract = stake_table_contract.clone();
+                        Box::pin(
+                            async move { stake_table_contract.initializedAtBlock().call().await },
+                        )
+                    },
+                )
+                .await?;
+                init_block.to::<u64>()
             },
         };
 
@@ -1474,7 +1581,7 @@ impl Fetcher {
                     })
                 },
             )
-            .await;
+            .await?;
 
             let chunk_events = logs
                 .into_iter()
@@ -1505,13 +1612,23 @@ impl Fetcher {
         let events = Self::fetch_events_from_contract(l1_client, contract, None, to_block).await?;
 
         // Process the sorted events and return the resulting stake table.
-        validators_from_l1_events(events.into_iter().map(|(_, e)| e))
-            .context("failed to construct validators set from l1 events")
+        let state = stake_table_state_from_l1_events(events.into_iter().map(|(_, e)| e))
+            .context("failed to construct validators set from l1 events")?;
+        let hash = state.commit();
+        Ok((state.into_validators(), hash))
     }
 
     /// Returns the initial token supply, fetching it from L1 if not yet known.
+    ///
+    /// Known chains resolve immediately via `known_initial_supply`, without touching the cache
+    /// or L1. Unknown chains fall back to the cache, then an L1 fetch.
     #[cfg(feature = "node")]
     pub async fn initial_supply_or_fetch(&self) -> Result<U256, FetchRewardError> {
+        let chain_id = self.chain_config.lock().await.chain_id;
+        if let Some(supply) = known_initial_supply(chain_id) {
+            return Ok(supply);
+        }
+
         // `fetch_and_update_initial_supply` needs a write lock, create temporary to drop lock
         let supply = *self.initial_supply.read().await;
         match supply {
@@ -1726,8 +1843,21 @@ impl Fetcher {
         Ok(())
     }
 
+    /// Fetch the stake table for `epoch`, which the caller is building at the snapshot root
+    /// `header`, racing the L1 against peer catchup.
+    ///
+    /// `header` is `H_{epoch-2}`: its `l1_finalized` bounds the L1 event range, and its
+    /// protocol version governs active-validator selection, evaluated under the rules in
+    /// effect when the events were read rather than each event's wall-clock version. `header`
+    /// is not the header that commits to `epoch`'s stake table hash; that is the anchor
+    /// `H_{epoch-1}`, resolved internally by the peer arm via `coordinator`.
     #[cfg(feature = "node")]
-    pub async fn fetch(&self, epoch: EpochNumber, header: &Header) -> anyhow::Result<ValidatorSet> {
+    pub async fn fetch(
+        &self,
+        epoch: EpochNumber,
+        header: &Header,
+        coordinator: &EpochMembershipCoordinator<SeqTypes>,
+    ) -> anyhow::Result<ValidatorSet> {
         let chain_config = *self.chain_config.lock().await;
         let Some(address) = chain_config.stake_table_contract else {
             bail!("No stake table contract address found in Chain config");
@@ -1740,27 +1870,253 @@ impl Fetcher {
             );
         };
 
-        let events = match self
-            .fetch_and_store_stake_table_events(address, l1_finalized_block_info.number())
-            .await
-            .map_err(GetStakeTablesError::L1ClientFetchError)
+        let to_l1_block = l1_finalized_block_info.number();
+        let state = self
+            .resolve_stake_table_state(
+                epoch,
+                address,
+                to_l1_block,
+                coordinator,
+                STAKE_TABLE_ANCHOR_POLL_INTERVAL,
+            )
+            .await?;
+
+        ValidatorSet::from_state(&state, header.version())
+            .with_context(|| format!("failed to construct stake table for epoch {epoch}"))
+    }
+
+    /// Resolve the stake table state committed to at `epoch`, racing the L1 against peer
+    /// catchup.
+    ///
+    /// A node whose local event store already covers `to_l1_block` never contacts a peer: both
+    /// racing arms only start after that check misses. `poll_interval` is threaded through to
+    /// the peer arm so tests can observe multiple poll iterations without waiting out
+    /// [`STAKE_TABLE_ANCHOR_POLL_INTERVAL`].
+    #[cfg(feature = "node")]
+    async fn resolve_stake_table_state(
+        &self,
+        epoch: EpochNumber,
+        contract: Address,
+        to_l1_block: u64,
+        coordinator: &EpochMembershipCoordinator<SeqTypes>,
+        poll_interval: Duration,
+    ) -> anyhow::Result<StakeTableState> {
         {
-            Ok(events) => events,
-            Err(e) => {
-                bail!("failed to fetch stake table events {e:?}");
-            },
+            let persistence_lock = self.persistence.lock().await;
+            let (read, events) = persistence_lock.load_events(0, to_l1_block).await?;
+            if let Some(EventsPersistenceRead::Complete) = read {
+                return stake_table_state_from_l1_events(events.into_iter().map(|(_, e)| e))
+                    .map_err(anyhow::Error::from);
+            }
+        }
+
+        // Both arms share one deadline: the L1 arm is wrapped in a `timeout` for the remaining
+        // budget below, and the peer arm takes `deadline` directly and stops polling once it
+        // passes. Without this, a double failure could leave this call pending forever,
+        // `add_epoch_root` never returning, and the `EpochMembershipCoordinator` catchup slot
+        // for `epoch` permanently occupied, so every later attempt would see "catchup already
+        // in progress" and the node would never recover.
+        let deadline = Instant::now() + self.l1_client.options().l1_events_max_retry_duration;
+        let l1_budget = deadline.saturating_duration_since(Instant::now());
+
+        let l1 = async {
+            timeout(
+                l1_budget,
+                self.fetch_stake_table_state_from_l1(contract, to_l1_block),
+            )
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "fetching stake table state from L1 exceeded the {l1_budget:?} shared catchup \
+                     deadline"
+                )
+            })
+            .and_then(std::convert::identity)
+            .inspect_err(|err| {
+                tracing::error!(
+                    %epoch,
+                    to_l1_block,
+                    "failed to fetch stake table state from L1: {err:#}"
+                );
+            })
+        };
+        let peers = async {
+            self.fetch_stake_table_state_from_peers(epoch, coordinator, deadline, poll_interval)
+                .await
+                .inspect_err(|err| {
+                    tracing::warn!(%epoch, "failed to fetch stake table state from peers: {err:#}");
+                })
         };
 
-        // Selection runs at the epoch root header's protocol version: that header's
-        // `next_stake_table_hash` was computed under the active-set rules in effect at the root,
-        // so events spanning an upgrade are intentionally evaluated under the root's rules rather
-        // than each event's wall-clock version.
-        match ValidatorSet::from_l1_events(events.into_iter().map(|(_, e)| e), header.version()) {
-            Ok(res) => Ok(res),
-            Err(e) => {
-                bail!("failed to construct stake table {e:?}");
+        // Race the two sources; if the first to finish failed, await the other.
+        let l1 = std::pin::pin!(l1);
+        let peers = std::pin::pin!(peers);
+        let combine = |l1_err, peer_err| {
+            anyhow::anyhow!(
+                "failed to fetch stake table state from L1 ({l1_err:#}) and from peers \
+                 ({peer_err:#})"
+            )
+        };
+        match futures::future::select(l1, peers).await {
+            Either::Left((Ok(state), _)) | Either::Right((Ok(state), _)) => Ok(state),
+            Either::Left((Err(l1_err), peers)) => {
+                peers.await.map_err(|peer_err| combine(l1_err, peer_err))
+            },
+            Either::Right((Err(peer_err), l1)) => {
+                l1.await.map_err(|l1_err| combine(l1_err, peer_err))
             },
         }
+    }
+
+    /// Fetch and replay the stake table events from `[contract init, to_l1_block]` on the L1.
+    #[cfg(feature = "node")]
+    async fn fetch_stake_table_state_from_l1(
+        &self,
+        contract: Address,
+        to_l1_block: u64,
+    ) -> anyhow::Result<StakeTableState> {
+        let events = self
+            .fetch_and_store_stake_table_events(contract, to_l1_block)
+            .await?;
+        Ok(stake_table_state_from_l1_events(
+            events.into_iter().map(|(_, e)| e),
+        )?)
+    }
+
+    /// Fallback for [`Self::fetch_stake_table_state_from_l1`] when the L1 is slow or down:
+    /// resolve the epoch root anchor and fetch the state it commits to from a peer, polling
+    /// every `poll_interval` until the anchor is decided or `deadline` passes.
+    ///
+    /// The anchor `H_{epoch-1}` is decided one full epoch after `add_epoch_root(H_{epoch-2})`
+    /// runs, i.e. typically long after this call starts. `EpochMembershipCoordinator::
+    /// stake_table_for_epoch` permits only one in-flight catchup per epoch, so an attempt that
+    /// checked the anchor once and gave up would hold that slot for the whole L1 retry budget
+    /// without noticing the anchor appearing partway through. Polling here is what lets a
+    /// single long-lived attempt pick it up the moment it exists.
+    ///
+    /// `poll_interval` is a parameter (rather than always `STAKE_TABLE_ANCHOR_POLL_INTERVAL`)
+    /// so tests can observe multiple poll iterations without waiting out the real interval.
+    #[cfg(feature = "node")]
+    async fn fetch_stake_table_state_from_peers(
+        &self,
+        epoch: EpochNumber,
+        coordinator: &EpochMembershipCoordinator<SeqTypes>,
+        deadline: Instant,
+        poll_interval: Duration,
+    ) -> anyhow::Result<StakeTableState> {
+        loop {
+            let outcome = match self.try_fetch_stake_table_anchor(epoch, coordinator).await {
+                Ok(Some(anchor)) => {
+                    self.fetch_stake_table_state_for_anchor(epoch, &anchor)
+                        .await
+                },
+                Ok(None) => Err(PeerArmError::AnchorUnavailable(epoch)),
+                Err(err) => Err(PeerArmError::NoPeerData(err)),
+            };
+
+            match outcome {
+                Ok(state) => return Ok(state),
+                // Permanent for this epoch: no amount of polling produces a hash to verify
+                // against, so stop immediately instead of spinning to the deadline.
+                Err(err @ PeerArmError::Unverifiable { .. }) => return Err(err.into()),
+                Err(err) if Instant::now() >= deadline => return Err(err.into()),
+                Err(_) => sleep(poll_interval).await,
+            }
+        }
+    }
+
+    /// The epoch root header whose `next_stake_table_hash` commits to the stake table for
+    /// `epoch`, i.e. the header at `stake_table_anchor_root_height(epoch, _)`. Returns
+    /// `Ok(None)` when it is not decided anywhere reachable yet; the caller polls.
+    #[cfg(feature = "node")]
+    async fn try_fetch_stake_table_anchor(
+        &self,
+        epoch: EpochNumber,
+        coordinator: &EpochMembershipCoordinator<SeqTypes>,
+    ) -> anyhow::Result<Option<Header>> {
+        let epoch_height = *coordinator.epoch_height();
+        let anchor_height = stake_table_anchor_root_height(epoch, epoch_height)?;
+
+        // `store_epoch_root` stores the header rooted at epoch `k` under key `k + 2`
+        // (`crates/hotshot/task-impls/src/helpers.rs`), so the anchor for `epoch` (rooted at
+        // epoch `epoch - 1`) is filed under `epoch + 1`. This looks like an off-by-one; it is
+        // not, it is `stake_table_anchor_root_height`'s own `epoch - 1` offset shifted by the
+        // `+ 2` `store_epoch_root` always adds.
+        {
+            let persistence_lock = self.persistence.lock().await;
+            if let Some(header) = persistence_lock
+                .load_epoch_root(EpochNumber::new(*epoch + 1))
+                .await?
+            {
+                if header.height() == anchor_height {
+                    return Ok(Some(header));
+                }
+                // e.g. a genesis header stored under epoch 1 regardless of its real height
+                // (`crates/espresso/node/src/persistence.rs`): not this epoch's anchor.
+                tracing::warn!(
+                    %epoch,
+                    expected_height = anchor_height,
+                    actual_height = header.height(),
+                    "stored epoch root does not match the expected anchor height; falling back \
+                     to peers"
+                );
+            }
+        }
+
+        // "Not decided yet" is the expected case while the anchor epoch is still in progress,
+        // so failures here are swallowed rather than propagated to the caller, which polls.
+        match self
+            .peers
+            .try_fetch_leaf(0, coordinator.clone(), anchor_height)
+            .await
+        {
+            Ok(leaf) => Ok(Some(leaf.block_header().clone())),
+            Err(err) => {
+                tracing::debug!(
+                    %epoch,
+                    anchor_height,
+                    "epoch root anchor not yet available from peers: {err:#}"
+                );
+                Ok(None)
+            },
+        }
+    }
+
+    /// Coordinator-free core of the peer arm, for a known anchor. Unit testable.
+    #[cfg(feature = "node")]
+    async fn fetch_stake_table_state_for_anchor(
+        &self,
+        epoch: EpochNumber,
+        anchor: &Header,
+    ) -> Result<StakeTableState, PeerArmError> {
+        let Some(expected_hash) = anchor.next_stake_table_hash() else {
+            return Err(PeerArmError::Unverifiable {
+                height: anchor.height(),
+                version: anchor.version(),
+            });
+        };
+
+        let state = self
+            .peers
+            .try_fetch_stake_table_state(0, epoch, expected_hash)
+            .await
+            .map_err(PeerArmError::NoPeerData)?;
+
+        // The provider's own hash check (see `StateCatchup::try_fetch_stake_table_state`) is a
+        // liveness optimisation that lets a bad peer be rejected and another tried; this
+        // re-check is the authoritative gate regardless of what the provider claims to verify.
+        if state.commit() != expected_hash {
+            return Err(PeerArmError::NoPeerData(anyhow::anyhow!(
+                "peer-provided stake table state for epoch {epoch} does not match the hash \
+                 committed to by the epoch root anchor ({expected_hash})"
+            )));
+        }
+
+        // Peer data is deliberately never written to the local L1 event store here: it is a
+        // state, not an event list, and writing it in place of real L1 events would corrupt
+        // the store for any future incremental L1 fetch. The L1 backfills the real events on
+        // its own schedule.
+        Ok(state)
     }
 
     /// Retrieve and verify `ChainConfig`
@@ -1805,13 +2161,17 @@ impl Fetcher {
     }
 }
 
+/// Retry `operation` every `retry_delay` until it succeeds or `max_duration` elapses.
+///
+/// Returns [`StakeTableError::L1Fetch`] on giving up, so callers can fall back to another
+/// source (e.g. peer catchup) instead of crashing the node.
 #[cfg_attr(not(feature = "node"), allow(dead_code))]
 async fn retry<F, T, E>(
     retry_delay: Duration,
     max_duration: Duration,
     operation_name: &str,
     mut operation: F,
-) -> T
+) -> Result<T, StakeTableError>
 where
     F: FnMut() -> BoxFuture<'static, Result<T, E>>,
     E: std::fmt::Display,
@@ -1819,14 +2179,12 @@ where
     let start = Instant::now();
     loop {
         match operation().await {
-            Ok(result) => return result,
+            Ok(result) => return Ok(result),
             Err(err) => {
                 if start.elapsed() >= max_duration {
-                    panic!(
-                        r#"
-                    Failed to complete operation `{operation_name}` after `{}`.
-                    error: {err}
-
+                    tracing::error!(
+                        %err,
+                        r#"Failed to complete operation `{operation_name}` after `{}`.
 
                     This might be caused by:
                     - The current block range being too large for your RPC provider.
@@ -1841,6 +2199,10 @@ where
                     - Use a different RPC provider with higher rate limits."#,
                         format_duration(max_duration)
                     );
+                    return Err(StakeTableError::L1Fetch(format!(
+                        "operation `{operation_name}` failed after {}: {err}",
+                        format_duration(max_duration)
+                    )));
                 }
                 tracing::warn!(%err, "Retrying `{operation_name}` after error");
                 sleep(retry_delay).await;
@@ -1918,14 +2280,6 @@ pub(crate) fn compute_block_reward(
     let block_reward_u256 = U256::from_str(&block_reward.round(0).to_string())?;
 
     Ok(block_reward_u256.into())
-}
-
-#[derive(Error, Debug)]
-/// Error representing fail cases for retrieving the stake table.
-#[cfg_attr(not(feature = "node"), allow(dead_code))]
-enum GetStakeTablesError {
-    #[error("Error fetching from L1: {0}")]
-    L1ClientFetchError(anyhow::Error),
 }
 
 #[cfg(any(test, feature = "testing"))]
@@ -2200,6 +2554,768 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_stake_table_anchor_root_height_matches_root_block_in_epoch() {
+        let epoch_height = 100;
+        for e in 1..10 {
+            let epoch = EpochNumber::new(e);
+            assert_eq!(
+                stake_table_anchor_root_height(epoch, epoch_height).unwrap(),
+                root_block_in_epoch(e - 1, epoch_height)
+            );
+        }
+    }
+
+    #[test]
+    fn test_stake_table_snapshot_root_height_matches_root_block_in_epoch() {
+        let epoch_height = 100;
+        for e in 2..10 {
+            let epoch = EpochNumber::new(e);
+            assert_eq!(
+                stake_table_snapshot_root_height(epoch, epoch_height).unwrap(),
+                root_block_in_epoch(e - 2, epoch_height)
+            );
+        }
+    }
+
+    #[test]
+    fn test_stake_table_anchor_root_height_underflow_errors() {
+        assert!(stake_table_anchor_root_height(EpochNumber::new(0), 100).is_err());
+    }
+
+    #[test]
+    fn test_stake_table_snapshot_root_height_underflow_errors() {
+        assert!(stake_table_snapshot_root_height(EpochNumber::new(0), 100).is_err());
+        assert!(stake_table_snapshot_root_height(EpochNumber::new(1), 100).is_err());
+    }
+
+    /// In-memory event store, mimicking the SQL store's offset semantics closely enough to
+    /// exercise `Fetcher::fetch`'s peer fallback.
+    #[derive(Debug, Clone, Default)]
+    struct MemEventsStorage {
+        #[allow(clippy::type_complexity)]
+        events: Arc<AsyncMutex<Option<(u64, Vec<(EventKey, StakeTableEvent)>)>>>,
+        /// Epoch roots keyed exactly as `MembershipPersistence::load_epoch_root` is called, so
+        /// tests can populate the wrong key to exercise the height assertion in
+        /// `Fetcher::try_fetch_stake_table_anchor`.
+        epoch_roots: Arc<AsyncMutex<HashMap<EpochNumber, Header>>>,
+        /// Number of times [`MembershipPersistence::store_events`] was called, so tests can
+        /// assert peer-fetched state is never written to the L1 event store.
+        store_events_calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl MemEventsStorage {
+        fn set_epoch_root(&self, epoch: EpochNumber, header: Header) {
+            self.epoch_roots.try_lock().unwrap().insert(epoch, header);
+        }
+
+        fn store_events_call_count(&self) -> usize {
+            self.store_events_calls
+                .load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MembershipPersistence for MemEventsStorage {
+        async fn load_stake(
+            &self,
+            _epoch: EpochNumber,
+        ) -> anyhow::Result<Option<crate::traits::StakeTuple>> {
+            Ok(None)
+        }
+
+        async fn load_latest_stake(
+            &self,
+            _limit: u64,
+        ) -> anyhow::Result<Option<Vec<crate::v0_3::IndexedStake>>> {
+            Ok(None)
+        }
+
+        async fn load_drb_result(
+            &self,
+            _epoch: EpochNumber,
+        ) -> anyhow::Result<Option<hotshot_types::drb::DrbResult>> {
+            Ok(None)
+        }
+
+        async fn load_epoch_root(&self, epoch: EpochNumber) -> anyhow::Result<Option<Header>> {
+            Ok(self.epoch_roots.lock().await.get(&epoch).cloned())
+        }
+
+        async fn store_stake(
+            &self,
+            _epoch: EpochNumber,
+            _stake: AuthenticatedValidatorMap,
+            _block_reward: Option<crate::v0_3::RewardAmount>,
+            _stake_table_hash: Option<StakeTableHash>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn store_events(
+            &self,
+            l1_finalized: u64,
+            events: Vec<(EventKey, StakeTableEvent)>,
+        ) -> anyhow::Result<()> {
+            self.store_events_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let mut guard = self.events.lock().await;
+            match &mut *guard {
+                Some((offset, stored)) => {
+                    if l1_finalized > *offset {
+                        stored.extend(events);
+                        *offset = l1_finalized;
+                    }
+                },
+                None => *guard = Some((l1_finalized, events)),
+            }
+            Ok(())
+        }
+
+        async fn load_events(
+            &self,
+            from_l1_block: u64,
+            to_l1_block: u64,
+        ) -> anyhow::Result<(
+            Option<EventsPersistenceRead>,
+            Vec<(EventKey, StakeTableEvent)>,
+        )> {
+            let guard = self.events.lock().await;
+            let Some((offset, stored)) = &*guard else {
+                return Ok((None, Vec::new()));
+            };
+            let query_block = std::cmp::min(*offset, to_l1_block);
+            let events = stored
+                .iter()
+                .filter(|((block, _), _)| (from_l1_block..=query_block).contains(block))
+                .cloned()
+                .collect();
+            let read = if query_block == to_l1_block {
+                EventsPersistenceRead::Complete
+            } else {
+                EventsPersistenceRead::UntilL1Block(query_block)
+            };
+            Ok((Some(read), events))
+        }
+
+        async fn delete_stake_tables(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn store_all_validators(
+            &self,
+            _epoch: EpochNumber,
+            _all_validators: RegisteredValidatorMap,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn load_all_validators(
+            &self,
+            _epoch: EpochNumber,
+            _offset: u64,
+            _limit: u64,
+        ) -> anyhow::Result<Vec<RegisteredValidator<crate::PubKey>>> {
+            Ok(Vec::new())
+        }
+    }
+
+    /// A catchup peer serving a canned epoch root anchor (as a leaf) and the stake table state
+    /// it commits to, recording how many times each was requested.
+    #[derive(Debug, Clone, Default)]
+    struct MockPeer {
+        anchor: Option<Header>,
+        state: Option<StakeTableState>,
+        leaf_fetches: Arc<std::sync::atomic::AtomicUsize>,
+        state_fetches: Arc<std::sync::atomic::AtomicUsize>,
+        /// Simulates a misbehaving or buggy peer that skips its own hash check, to exercise
+        /// `Fetcher::fetch_stake_table_state_for_anchor`'s authoritative re-check.
+        skip_hash_check: bool,
+    }
+
+    impl MockPeer {
+        fn leaf_fetch_count(&self) -> usize {
+            self.leaf_fetches.load(std::sync::atomic::Ordering::SeqCst)
+        }
+
+        fn state_fetch_count(&self) -> usize {
+            self.state_fetches.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl StateCatchup for MockPeer {
+        async fn try_fetch_leaf(
+            &self,
+            _retry: usize,
+            _coordinator: EpochMembershipCoordinator<SeqTypes>,
+            height: u64,
+        ) -> anyhow::Result<crate::Leaf2> {
+            self.leaf_fetches
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let anchor = self
+                .anchor
+                .clone()
+                .filter(|header| header.height() == height)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("no epoch root leaf available at height {height}")
+                })?;
+            Ok(leaf_with_header(anchor).await)
+        }
+
+        async fn try_fetch_accounts(
+            &self,
+            _retry: usize,
+            _instance: &crate::NodeState,
+            _height: u64,
+            _view: hotshot_types::data::ViewNumber,
+            _fee_merkle_tree_root: crate::FeeMerkleCommitment,
+            _accounts: &[crate::FeeAccount],
+        ) -> anyhow::Result<Vec<crate::FeeAccountProof>> {
+            unimplemented!()
+        }
+
+        async fn try_remember_blocks_merkle_tree(
+            &self,
+            _retry: usize,
+            _instance: &crate::NodeState,
+            _height: u64,
+            _view: hotshot_types::data::ViewNumber,
+            _mt: &mut crate::BlockMerkleTree,
+        ) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+
+        async fn try_fetch_chain_config(
+            &self,
+            _retry: usize,
+            _commitment: Commitment<ChainConfig>,
+        ) -> anyhow::Result<ChainConfig> {
+            unimplemented!()
+        }
+
+        async fn try_fetch_reward_merkle_tree_v2(
+            &self,
+            _retry: usize,
+            _height: u64,
+            _view: hotshot_types::data::ViewNumber,
+            _reward_merkle_tree_root: crate::v0_4::RewardMerkleCommitmentV2,
+            _accounts: Arc<Vec<crate::v0_4::RewardAccountV2>>,
+        ) -> anyhow::Result<crate::v0_4::PermittedRewardMerkleTreeV2> {
+            unimplemented!()
+        }
+
+        async fn try_fetch_reward_accounts_v1(
+            &self,
+            _retry: usize,
+            _instance: &crate::NodeState,
+            _height: u64,
+            _view: hotshot_types::data::ViewNumber,
+            _reward_merkle_tree_root: crate::v0_3::RewardMerkleCommitmentV1,
+            _accounts: &[crate::v0_3::RewardAccountV1],
+        ) -> anyhow::Result<Vec<crate::v0_3::RewardAccountProofV1>> {
+            unimplemented!()
+        }
+
+        async fn try_fetch_state_cert(
+            &self,
+            _retry: usize,
+            _epoch: u64,
+        ) -> anyhow::Result<
+            hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<crate::SeqTypes>,
+        > {
+            unimplemented!()
+        }
+
+        async fn try_fetch_stake_table_state(
+            &self,
+            _retry: usize,
+            _epoch: EpochNumber,
+            expected_stake_table_hash: StakeTableHash,
+        ) -> anyhow::Result<StakeTableState> {
+            self.state_fetches
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let state = self
+                .state
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("no stake table state available"))?;
+            if !self.skip_hash_check {
+                ensure!(
+                    state.commit() == expected_stake_table_hash,
+                    "stake table state commitment mismatch"
+                );
+            }
+            Ok(state)
+        }
+
+        fn backoff(&self) -> &crate::BackoffParams {
+            unimplemented!()
+        }
+
+        fn name(&self) -> String {
+            "MockPeer".to_string()
+        }
+
+        fn is_local(&self) -> bool {
+            false
+        }
+    }
+
+    /// Build a V5 header at `height` with the given finalized L1 block and (epoch-root) stake
+    /// table hash, the fields peer catchup relies on.
+    async fn mock_v5_header(
+        height: u64,
+        to_l1_block: u64,
+        next_stake_table_hash: Option<StakeTableHash>,
+    ) -> Header {
+        use hotshot_types::traits::{
+            BlockPayload, ValidatedState as _, block_contents::BlockHeader,
+        };
+        use jf_merkle_tree_compat::MerkleTreeScheme as _;
+
+        use crate::{
+            NodeState, Payload, Transaction, ValidatedState,
+            v0_1::L1BlockInfo,
+            v0_5::{self, MAX_VALIDATORS},
+        };
+
+        let instance = NodeState::mock_v2();
+        let tx = Transaction::of_size(10);
+        let (payload, metadata) =
+            Payload::from_transactions([tx], &instance.genesis_state, &instance)
+                .await
+                .expect("payload");
+        let genesis = Header::genesis(&instance, payload, &metadata, EPOCH_REWARD_VERSION);
+        let Header::V2(g) = genesis else {
+            panic!("expected V2 header from NodeState::mock_v2, got {genesis:?}");
+        };
+        let reward_merkle_tree_root = ValidatedState::genesis(&instance)
+            .0
+            .reward_merkle_tree_v2
+            .commitment();
+        Header::V5(v0_5::Header {
+            chain_config: instance.chain_config.into(),
+            height,
+            timestamp: g.timestamp,
+            timestamp_millis: crate::TimestampMillis::from_millis(g.timestamp * 1_000),
+            l1_head: g.l1_head,
+            l1_finalized: Some(L1BlockInfo {
+                number: to_l1_block,
+                ..Default::default()
+            }),
+            payload_commitment: g.payload_commitment,
+            builder_commitment: g.builder_commitment,
+            ns_table: g.ns_table,
+            block_merkle_tree_root: g.block_merkle_tree_root,
+            fee_merkle_tree_root: g.fee_merkle_tree_root,
+            fee_info: g.fee_info,
+            builder_signature: g.builder_signature,
+            reward_merkle_tree_root,
+            total_reward_distributed: Default::default(),
+            next_stake_table_hash,
+            leader_counts: [0; MAX_VALIDATORS],
+        })
+    }
+
+    /// Wrap `header` in a genesis-templated leaf, the way a real `try_fetch_leaf` response
+    /// carries an arbitrary header.
+    async fn leaf_with_header(header: Header) -> crate::Leaf2 {
+        use hotshot_types::traits::ValidatedState as _;
+
+        let instance = crate::NodeState::mock_v2();
+        let validated_state = crate::ValidatedState::genesis(&instance).0;
+        let mut leaf = crate::Leaf2::genesis(&validated_state, &instance, header.version()).await;
+        *leaf.block_header_mut() = header;
+        leaf
+    }
+
+    /// An L1 client pointing at an unreachable endpoint, with retry delay short enough to keep
+    /// tests fast.
+    fn unreachable_l1_client(max_retry_duration: Duration) -> L1Client {
+        L1ClientOptions {
+            l1_events_max_retry_duration: max_retry_duration,
+            l1_retry_delay: Duration::from_millis(10),
+            ..Default::default()
+        }
+        .connect(vec!["http://localhost:9".parse().unwrap()])
+        .expect("unable to construct l1 client")
+    }
+
+    /// `Fetcher::fetch` must verify (and, on peer fallback, source) the stake table for `epoch`
+    /// against the epoch root anchor `H_{epoch-1}`, not the snapshot header `H_{epoch-2}` it is
+    /// called with. Anchoring on the snapshot header, as a previous version of this code did,
+    /// is wrong because that header's `next_stake_table_hash` commits to `epoch - 1`'s table,
+    /// not `epoch`'s: if this regresses, the peer response is rejected and this test fails.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_fetch_verifies_against_epoch_root_anchor() -> anyhow::Result<()> {
+        let epoch = EpochNumber::new(5);
+        let instance = crate::NodeState::mock_v2();
+        let epoch_height = *instance.coordinator.epoch_height();
+        let snapshot_height = stake_table_snapshot_root_height(epoch, epoch_height)?;
+        let anchor_height = stake_table_anchor_root_height(epoch, epoch_height)?;
+
+        const B_SNAPSHOT: u64 = 100;
+        const B_ANCHOR: u64 = 200;
+
+        let val_1 = TestValidator::random();
+        let val_2 = TestValidator::random();
+        let events: Vec<(EventKey, StakeTableEvent)> = vec![
+            ((10, 0), ValidatorRegistered::from(&val_1).into()),
+            (
+                (B_SNAPSHOT, 0),
+                Delegated {
+                    delegator: Address::random(),
+                    validator: val_1.account,
+                    amount: U256::from(10),
+                }
+                .into(),
+            ),
+            // Strictly between the two bounds, so the state bounded at `B_SNAPSHOT` (epoch
+            // `epoch`'s table) and the state bounded at `B_ANCHOR` genuinely differ.
+            ((150, 0), ValidatorRegisteredV2::from(&val_2).into()),
+        ];
+        let state_at = |bound: u64| {
+            stake_table_state_from_l1_events(
+                events
+                    .iter()
+                    .filter(|((block, _), _)| *block <= bound)
+                    .map(|(_, e)| e.clone()),
+            )
+        };
+        let epoch_state = state_at(B_SNAPSHOT)?;
+        let epoch_hash = epoch_state.commit();
+        let wrong_hash = state_at(B_ANCHOR)?.commit();
+        assert_ne!(
+            epoch_hash, wrong_hash,
+            "test setup must give the two bounds distinguishable stake tables"
+        );
+
+        // The header handed to `fetch` carries a stake table hash for the *wrong* epoch, so a
+        // regression to anchoring on it is caught by the mismatch instead of silently passing.
+        let snapshot_header = mock_v5_header(snapshot_height, B_SNAPSHOT, Some(wrong_hash)).await;
+        let anchor_header = mock_v5_header(anchor_height, B_ANCHOR, Some(epoch_hash)).await;
+
+        let peer = MockPeer {
+            anchor: Some(anchor_header),
+            state: Some(epoch_state),
+            ..Default::default()
+        };
+        let storage = MemEventsStorage::default();
+        let l1 = unreachable_l1_client(Duration::from_millis(300));
+
+        let fetcher = Fetcher::new(
+            Arc::new(peer.clone()),
+            Arc::new(AsyncMutex::new(storage.clone())),
+            l1,
+            ChainConfig {
+                stake_table_contract: Some(Address::random()),
+                ..Default::default()
+            },
+        );
+
+        let validator_set = fetcher
+            .fetch(epoch, &snapshot_header, &instance.coordinator)
+            .await?;
+        assert_eq!(validator_set.stake_table_hash(), Some(epoch_hash));
+        assert!(
+            validator_set
+                .active_validators()
+                .contains_key(&val_1.account),
+            "delegated validator should be in the active set"
+        );
+        assert!(
+            peer.leaf_fetch_count() >= 1,
+            "peer should have served the epoch root anchor"
+        );
+        assert!(
+            peer.state_fetch_count() >= 1,
+            "peer should have served the stake table state"
+        );
+        assert_eq!(
+            storage.store_events_call_count(),
+            0,
+            "peer-fetched state must never be written to the L1 event store"
+        );
+
+        Ok(())
+    }
+
+    /// Once the local event store covers the requested range, neither racing arm contacts a
+    /// peer: the anchor is never even resolved.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_fetch_stake_table_state_local_hit_skips_peers() -> anyhow::Result<()> {
+        let val = TestValidator::random();
+        let events: Vec<(EventKey, StakeTableEvent)> =
+            vec![((10, 0), ValidatorRegistered::from(&val).into())];
+        let storage = MemEventsStorage::default();
+        storage.store_events(50, events.clone()).await?;
+
+        let peer = MockPeer::default();
+        let l1 = unreachable_l1_client(Duration::from_millis(200));
+        let fetcher = Fetcher::new(
+            Arc::new(peer.clone()),
+            Arc::new(AsyncMutex::new(storage)),
+            l1,
+            ChainConfig::default(),
+        );
+
+        let instance = crate::NodeState::mock_v2();
+        let state = fetcher
+            .resolve_stake_table_state(
+                EpochNumber::new(5),
+                Address::random(),
+                50,
+                &instance.coordinator,
+                Duration::from_millis(10),
+            )
+            .await?;
+        assert_eq!(
+            state,
+            stake_table_state_from_l1_events(events.into_iter().map(|(_, e)| e))?
+        );
+        assert_eq!(
+            peer.leaf_fetch_count(),
+            0,
+            "peer should never be contacted when persistence already covers the range"
+        );
+        assert_eq!(peer.state_fetch_count(), 0);
+
+        Ok(())
+    }
+
+    /// If the L1 is down and the epoch root anchor never appears, `resolve_stake_table_state`
+    /// must still return (not hang forever) once the shared deadline passes, and the error must
+    /// name both failed sources. The peer arm must poll for the anchor more than once rather
+    /// than giving up after a single check.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_fetch_stake_table_state_errors_when_anchor_never_resolves() -> anyhow::Result<()>
+    {
+        let peer = MockPeer::default();
+        let storage = MemEventsStorage::default();
+        let l1 = unreachable_l1_client(Duration::from_millis(300));
+        let fetcher = Fetcher::new(
+            Arc::new(peer.clone()),
+            Arc::new(AsyncMutex::new(storage)),
+            l1,
+            ChainConfig {
+                stake_table_contract: Some(Address::random()),
+                ..Default::default()
+            },
+        );
+
+        let instance = crate::NodeState::mock_v2();
+        let err = fetcher
+            .resolve_stake_table_state(
+                EpochNumber::new(5),
+                Address::random(),
+                100,
+                &instance.coordinator,
+                Duration::from_millis(10),
+            )
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("L1"), "error should name the L1 source: {msg}");
+        assert!(
+            msg.contains("peers"),
+            "error should name the peer source: {msg}"
+        );
+        assert!(
+            peer.leaf_fetch_count() > 1,
+            "peer arm should poll for the anchor more than once"
+        );
+
+        Ok(())
+    }
+
+    /// A header without `next_stake_table_hash` (pre-V4) can never be verified against, no
+    /// matter how long the peer arm polls, so it must give up immediately instead of spinning
+    /// to the deadline.
+    #[test_log::test(tokio::test)]
+    async fn test_fetch_stake_table_state_from_peers_stops_on_unverifiable_anchor()
+    -> anyhow::Result<()> {
+        let epoch = EpochNumber::new(5);
+        let instance = crate::NodeState::mock_v2();
+        let epoch_height = *instance.coordinator.epoch_height();
+        let anchor_height = stake_table_anchor_root_height(epoch, epoch_height)?;
+
+        let anchor_header = mock_v5_header(anchor_height, 200, None).await;
+        let peer = MockPeer {
+            anchor: Some(anchor_header),
+            ..Default::default()
+        };
+        let storage = MemEventsStorage::default();
+        let l1 = unreachable_l1_client(Duration::from_secs(30));
+        let fetcher = Fetcher::new(
+            Arc::new(peer.clone()),
+            Arc::new(AsyncMutex::new(storage)),
+            l1,
+            ChainConfig::default(),
+        );
+
+        // A deadline far beyond the poll interval: if the implementation kept polling instead
+        // of stopping immediately, this call would not return until the deadline.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let start = Instant::now();
+        let err = fetcher
+            .fetch_stake_table_state_from_peers(
+                epoch,
+                &instance.coordinator,
+                deadline,
+                STAKE_TABLE_ANCHOR_POLL_INTERVAL,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "should stop polling immediately on an unverifiable anchor"
+        );
+        assert!(
+            err.to_string()
+                .contains("does not commit to a stake table hash"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(
+            peer.leaf_fetch_count(),
+            1,
+            "should not keep polling once the anchor is known to be unverifiable"
+        );
+
+        Ok(())
+    }
+
+    /// `fetch_stake_table_state_for_anchor` must reject a peer response that does not commit to
+    /// the anchor's expected hash even when the peer itself fails to check it: the mocks
+    /// otherwise all perform this check inline, which would let a deleted re-check in the
+    /// fetcher go unnoticed.
+    #[test_log::test(tokio::test)]
+    async fn test_fetch_stake_table_state_for_anchor_rejects_uncommitted_peer_state()
+    -> anyhow::Result<()> {
+        let epoch = EpochNumber::new(5);
+        let val = TestValidator::random();
+        let honest_state =
+            stake_table_state_from_l1_events([ValidatorRegistered::from(&val).into()])?;
+        let expected_hash = honest_state.commit();
+
+        let wrong_val = TestValidator::random();
+        let wrong_state =
+            stake_table_state_from_l1_events([ValidatorRegistered::from(&wrong_val).into()])?;
+        assert_ne!(wrong_state.commit(), expected_hash);
+
+        let anchor_header = mock_v5_header(100, 200, Some(expected_hash)).await;
+        let peer = MockPeer {
+            state: Some(wrong_state),
+            skip_hash_check: true,
+            ..Default::default()
+        };
+        let storage = MemEventsStorage::default();
+        let l1 = unreachable_l1_client(Duration::from_millis(50));
+        let fetcher = Fetcher::new(
+            Arc::new(peer),
+            Arc::new(AsyncMutex::new(storage)),
+            l1,
+            ChainConfig::default(),
+        );
+
+        let err = fetcher
+            .fetch_stake_table_state_for_anchor(epoch, &anchor_header)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("does not match"),
+            "unexpected error: {err}"
+        );
+
+        Ok(())
+    }
+
+    /// A correct-height anchor stored under key `epoch + 1` (`store_epoch_root`'s own offset,
+    /// see `try_fetch_stake_table_anchor`'s doc comment) is resolved from persistence without
+    /// ever contacting a peer.
+    #[test_log::test(tokio::test)]
+    async fn test_try_fetch_stake_table_anchor_resolves_from_persistence() -> anyhow::Result<()> {
+        let epoch = EpochNumber::new(5);
+        let instance = crate::NodeState::mock_v2();
+        let epoch_height = *instance.coordinator.epoch_height();
+        let anchor_height = stake_table_anchor_root_height(epoch, epoch_height)?;
+
+        let anchor_header = mock_v5_header(
+            anchor_height,
+            200,
+            Some(StakeTableState::default().commit()),
+        )
+        .await;
+        let storage = MemEventsStorage::default();
+        storage.set_epoch_root(EpochNumber::new(*epoch + 1), anchor_header.clone());
+
+        let peer = MockPeer::default();
+        let l1 = unreachable_l1_client(Duration::from_millis(50));
+        let fetcher = Fetcher::new(
+            Arc::new(peer.clone()),
+            Arc::new(AsyncMutex::new(storage)),
+            l1,
+            ChainConfig::default(),
+        );
+
+        let resolved = fetcher
+            .try_fetch_stake_table_anchor(epoch, &instance.coordinator)
+            .await?;
+        assert_eq!(resolved, Some(anchor_header));
+        assert_eq!(
+            peer.leaf_fetch_count(),
+            0,
+            "a correct-height anchor in persistence must not trigger a peer leaf fetch"
+        );
+
+        Ok(())
+    }
+
+    /// An epoch root stored under the right persistence key but at the wrong height (e.g. the
+    /// genesis header persistence stores under epoch 1 regardless of its real height) is
+    /// rejected and falls through to fetching the anchor from peers.
+    #[test_log::test(tokio::test)]
+    async fn test_try_fetch_stake_table_anchor_falls_through_on_wrong_height() -> anyhow::Result<()>
+    {
+        let epoch = EpochNumber::new(5);
+        let instance = crate::NodeState::mock_v2();
+        let epoch_height = *instance.coordinator.epoch_height();
+        let anchor_height = stake_table_anchor_root_height(epoch, epoch_height)?;
+
+        let wrong_header = mock_v5_header(0, 1, None).await;
+        let storage = MemEventsStorage::default();
+        storage.set_epoch_root(EpochNumber::new(*epoch + 1), wrong_header);
+
+        let anchor_header = mock_v5_header(
+            anchor_height,
+            200,
+            Some(StakeTableState::default().commit()),
+        )
+        .await;
+        let peer = MockPeer {
+            anchor: Some(anchor_header.clone()),
+            ..Default::default()
+        };
+        let l1 = unreachable_l1_client(Duration::from_millis(50));
+        let fetcher = Fetcher::new(
+            Arc::new(peer.clone()),
+            Arc::new(AsyncMutex::new(storage)),
+            l1,
+            ChainConfig::default(),
+        );
+
+        let resolved = fetcher
+            .try_fetch_stake_table_anchor(epoch, &instance.coordinator)
+            .await?;
+        assert_eq!(resolved, Some(anchor_header));
+        assert_eq!(
+            peer.leaf_fetch_count(),
+            1,
+            "should fall through to peers when the stored header has the wrong height"
+        );
+
+        Ok(())
+    }
+
     #[test_log::test]
     fn test_from_l1_events() -> anyhow::Result<()> {
         // Build a stake table with one DA node and one consensus node.
@@ -2326,7 +3442,7 @@ mod tests {
             // NOTE: not selecting the active validator set because we care about wrong sequences of
             // events being detected. If we compute the active set we will also get an error if the
             // set is empty but that's not what we want to test here.
-            let res = validators_from_l1_events(events.iter().cloned());
+            let res = stake_table_state_from_l1_events(events.iter().cloned());
             assert!(
                 res.is_err(),
                 "events {res:?}, not a valid sequence of events"
@@ -2432,7 +3548,7 @@ mod tests {
         let deregister1 = ValidatorExit::from(&val1).into();
         let register2 = ValidatorRegisteredV2::from(&val2).into();
         let events = [register1, deregister1, register2];
-        let error = validators_from_l1_events(events.iter().cloned()).unwrap_err();
+        let error = stake_table_state_from_l1_events(events.iter().cloned()).unwrap_err();
         assert_matches!(error, StakeTableError::ValidatorAlreadyExited(addr) if addr == account);
     }
 
@@ -3093,7 +4209,7 @@ mod tests {
         events_file.write_all(json_events.as_bytes()).await?;
 
         // Process into stake table
-        let stake_table = validators_from_l1_events(sorted_events.into_iter().map(|(_, e)| e))?;
+        let stake_table = stake_table_state_from_l1_events(sorted_events.into_iter().map(|(_, e)| e))?;
 
         // Serialize and write stake table
         let json_stake_table = serde_json::to_string_pretty(&stake_table)?;
@@ -3201,15 +4317,91 @@ mod tests {
         .await;
     }
 
+    /// Fetches the initial supply from L1 for `chain_id` and asserts it matches the constant
+    /// hardcoded in `known_initial_supply`.
+    ///
+    /// Guards against a wrong hardcoded constant: since `known_initial_supply` is consulted
+    /// before any L1 call, a wrong value would make this node compute different block rewards
+    /// from the rest of the network, a consensus fault.
+    async fn assert_known_initial_supply_matches_l1(
+        rpc_url: &str,
+        stake_table_contract: &str,
+        chain_id: ChainId,
+    ) {
+        let expected =
+            known_initial_supply(chain_id).expect("chain id must have a hardcoded initial supply");
+
+        let l1 = L1ClientOptions {
+            l1_events_max_retry_duration: Duration::from_secs(120),
+            l1_events_max_block_range: 10_000,
+            l1_retry_delay: Duration::from_secs(2),
+            ..Default::default()
+        }
+        .connect(vec![rpc_url.parse().unwrap()])
+        .expect("unable to construct l1 client");
+
+        let fetcher = Fetcher::new(
+            Arc::new(crate::mock::MockStateCatchup::default()),
+            Arc::new(AsyncMutex::new(MemEventsStorage::default())),
+            l1,
+            ChainConfig {
+                chain_id,
+                stake_table_contract: Some(stake_table_contract.parse().unwrap()),
+                ..Default::default()
+            },
+        );
+
+        let fetched = fetcher
+            .fetch_and_update_initial_supply()
+            .await
+            .expect("failed to fetch initial supply from L1");
+
+        assert_eq!(
+            fetched, expected,
+            "hardcoded initial supply for chain id {chain_id} does not match L1"
+        );
+    }
+
+    /// publicnode's free-tier mainnet endpoint rejects full-range `eth_getLogs` with "Archive
+    /// requests require a personal token", so this can only be run against an archival RPC.
+    #[ignore = "talks to public Ethereum mainnet RPC; requires an archival endpoint"]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    #[should_panic]
-    async fn test_large_max_events_range_panic() {
+    async fn fetch_initial_supply_matches_mainnet_constant() {
+        assert_known_initial_supply_matches_l1(
+            "https://ethereum-rpc.publicnode.com",
+            "0xcef474d372b5b09defe2af187bf17338dc704451",
+            MAINNET_CHAIN_ID,
+        )
+        .await;
+    }
+
+    /// Confirmed by hand: `eth_getLogs` with a topic filter silently returns no results for this
+    /// block range on publicnode's free-tier Sepolia endpoint, even though an unfiltered query
+    /// over the same range and address returns the log (including the `Initialized` event). This
+    /// makes `EspToken::Initialized_filter` unusable here, so the scan fallback exhausts
+    /// `MAX_BLOCKS_SCANNED` without ever seeing the event. Needs an archival RPC with working
+    /// topic-indexed log queries.
+    #[ignore = "talks to public Sepolia RPC; topic-filtered eth_getLogs returns empty for this old \
+                block range on publicnode's free tier"]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn fetch_initial_supply_matches_decaf_constant() {
+        assert_known_initial_supply_matches_l1(
+            "https://ethereum-sepolia-rpc.publicnode.com",
+            "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037",
+            DECAF_CHAIN_ID,
+        )
+        .await;
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_large_max_events_range_error() {
         // decaf stake table contract address
         let contract_address = "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037";
 
         let l1 = L1ClientOptions {
             l1_events_max_retry_duration: Duration::from_secs(30),
-            // max block range for public node rpc is 50000 so this should result in a panic
+            // max block range for public node rpc is 50000 so this should result in an error
+            // once the retry duration is exhausted
             l1_events_max_block_range: 10_u64.pow(9),
             l1_retry_delay: Duration::from_secs(1),
             ..Default::default()
@@ -3220,14 +4412,15 @@ mod tests {
         .expect("unable to construct l1 client");
 
         let latest_block = l1.provider.get_block_number().await.unwrap();
-        let _events = Fetcher::fetch_events_from_contract(
+        let err = Fetcher::fetch_events_from_contract(
             l1,
             contract_address.parse().unwrap(),
             None,
             latest_block,
         )
         .await
-        .unwrap();
+        .expect_err("expected fetch to fail after exhausting retries");
+        assert_matches!(err, StakeTableError::L1Fetch(_));
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -3944,6 +5137,93 @@ mod tests {
         Ok(())
     }
 
+    /// `StakeTableState::commit()` does not cover the `validators` map keys, so a state where a
+    /// validator is stored under an address other than its own `account` commits identically to
+    /// the honest state. This is exactly why `ValidatorSet::from_state` must re-check the
+    /// invariant rather than rely on the commitment to catch it.
+    #[test]
+    fn test_from_state_rejects_mismatched_validator_key() {
+        let validator = RegisteredValidator::<BLSPubKey>::mock();
+        let honest_account = validator.account;
+
+        let mut honest_map = RegisteredValidatorMap::new();
+        honest_map.insert(honest_account, validator.clone());
+        let honest_state = StakeTableState::new(
+            honest_map,
+            HashSet::new(),
+            HashSet::new(),
+            HashSet::new(),
+            HashSet::new(),
+        );
+
+        let mut tampered_map = RegisteredValidatorMap::new();
+        let wrong_key = Address::random();
+        assert_ne!(wrong_key, honest_account);
+        tampered_map.insert(wrong_key, validator);
+        let tampered_state = StakeTableState::new(
+            tampered_map,
+            HashSet::new(),
+            HashSet::new(),
+            HashSet::new(),
+            HashSet::new(),
+        );
+
+        assert_eq!(
+            honest_state.commit(),
+            tampered_state.commit(),
+            "commit() must not cover the map key, otherwise the check in from_state is redundant"
+        );
+
+        assert!(matches!(
+            ValidatorSet::from_state(&tampered_state, EPOCH_VERSION),
+            Err(StakeTableError::ValidatorKeyMismatch { key, account })
+                if key == wrong_key && account == honest_account
+        ));
+        assert!(ValidatorSet::from_state(&honest_state, EPOCH_VERSION).is_ok());
+    }
+
+    #[test]
+    fn test_stake_table_state_from_l1_events_populates_all_fields() -> anyhow::Result<()> {
+        let registered = TestValidator::random();
+        let exited = TestValidator::random();
+
+        let events = [
+            StakeTableEvent::RegisterV3((&registered).into()),
+            StakeTableEvent::Register((&exited).into()),
+            StakeTableEvent::Deregister((&exited).into()),
+        ];
+
+        let state = stake_table_state_from_l1_events(events)?;
+
+        assert!(state.validators().contains_key(&registered.account));
+        assert!(!state.validators().contains_key(&exited.account));
+
+        assert_eq!(state.validator_exits(), &HashSet::from([exited.account]));
+
+        let registered_bls = BLSPubKey::try_from(registered.bls_vk).unwrap();
+        let exited_bls = BLSPubKey::try_from(exited.bls_vk).unwrap();
+        assert_eq!(
+            state.used_bls_keys(),
+            &HashSet::from([registered_bls, exited_bls])
+        );
+
+        let registered_schnorr = SchnorrPubKey::try_from(registered.schnorr_vk).unwrap();
+        let exited_schnorr = SchnorrPubKey::try_from(exited.schnorr_vk).unwrap();
+        assert_eq!(
+            state.used_schnorr_keys(),
+            &HashSet::from([registered_schnorr, exited_schnorr])
+        );
+
+        let registered_x25519 =
+            x25519::PublicKey::try_from(registered.x25519_key.as_slice()).unwrap();
+        assert_eq!(
+            state.used_x25519_keys(),
+            &HashSet::from([registered_x25519])
+        );
+
+        Ok(())
+    }
+
     // --- NEW_PROTOCOL_VERSION selection filter tests ---
 
     /// Construct a `RegisteredValidator` with both x25519_key and p2p_addr populated.
@@ -4535,7 +5815,9 @@ mod tests {
             }),
         ];
 
-        let (validators, _) = validators_from_l1_events(events.into_iter()).expect("must not fail");
+        let validators = stake_table_state_from_l1_events(events)
+            .expect("must not fail")
+            .into_validators();
         let valid = validators
             .get(&valid_val.account)
             .expect("valid validator present");
@@ -4566,7 +5848,9 @@ mod tests {
             }),
         ];
 
-        let (validators, _) = validators_from_l1_events(events.into_iter()).expect("must not fail");
+        let validators = stake_table_state_from_l1_events(events)
+            .expect("must not fail")
+            .into_validators();
         let valid = validators
             .get(&valid_val.account)
             .expect("valid validator present");

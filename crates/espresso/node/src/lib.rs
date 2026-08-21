@@ -1145,6 +1145,7 @@ pub mod testing {
         state_key_pairs: Vec<StateKeyPair>,
         master_map: Arc<MasterMap<PubKey>>,
         l1_url: Url,
+        l1_url_overrides: HashMap<usize, Url>,
         l1_opt: L1ClientOptions,
         anvil_provider: Option<AnvilFillProvider>,
         signer: LocalSigner<SigningKey>,
@@ -1244,6 +1245,13 @@ pub mod testing {
         pub fn l1_url(mut self, l1_url: Url) -> Self {
             self.anvil_provider = None;
             self.l1_url = l1_url;
+            self
+        }
+
+        /// Overrides the L1 URL used by the node at `node_index` only, leaving every other
+        /// node's L1 client pointed at the network-wide [`Self::l1_url`].
+        pub fn l1_url_override(mut self, node_index: usize, url: Url) -> Self {
+            self.l1_url_overrides.insert(node_index, url);
             self
         }
 
@@ -1413,6 +1421,7 @@ pub mod testing {
                 state_key_pairs: self.state_key_pairs,
                 master_map: self.master_map,
                 l1_url: self.l1_url,
+                l1_url_overrides: self.l1_url_overrides,
                 l1_opt: self.l1_opt,
                 signer: self.signer,
                 state_relay_url: self.state_relay_url,
@@ -1525,6 +1534,7 @@ pub mod testing {
                 state_key_pairs,
                 master_map,
                 l1_url: anvil_provider.anvil().endpoint().parse().unwrap(),
+                l1_url_overrides: HashMap::new(),
                 l1_opt: L1ClientOptions {
                     stake_table_update_interval: Duration::from_secs(5),
                     l1_events_max_block_range: 1000,
@@ -1550,6 +1560,7 @@ pub mod testing {
         state_key_pairs: Vec<StateKeyPair>,
         master_map: Arc<MasterMap<PubKey>>,
         l1_url: Url,
+        l1_url_overrides: HashMap<usize, Url>,
         l1_opt: L1ClientOptions,
         anvil_provider: Option<AnvilFillProvider>,
         signer: LocalSigner<SigningKey>,
@@ -1585,6 +1596,24 @@ pub mod testing {
 
         pub fn l1_url(&self) -> Url {
             self.l1_url.clone()
+        }
+
+        /// Overrides the L1 URL used by `node_index` on its next [`Self::init_node`] call.
+        ///
+        /// Unlike [`TestConfigBuilder::l1_url_override`], this applies to an already-built
+        /// config, so a node can be given a healthy L1 for its first life and a different one
+        /// (e.g. unroutable) after a restart.
+        pub fn set_l1_url_override(&mut self, node_index: usize, url: Url) {
+            self.l1_url_overrides.insert(node_index, url);
+        }
+
+        /// The L1 URL to use for `node_index`, honoring any
+        /// [`TestConfigBuilder::l1_url_override`] set for that node.
+        fn l1_url_for(&self, node_index: usize) -> Url {
+            self.l1_url_overrides
+                .get(&node_index)
+                .cloned()
+                .unwrap_or_else(|| self.l1_url.clone())
         }
 
         pub fn anvil(&self) -> Option<&AnvilFillProvider> {
@@ -1752,7 +1781,7 @@ pub mod testing {
             let l1_client = self
                 .l1_opt
                 .clone()
-                .connect(vec![self.l1_url.clone()])
+                .connect(vec![self.l1_url_for(i)])
                 .expect("failed to create L1 client");
             l1_client.spawn_tasks().await;
 

@@ -2,13 +2,15 @@
 //! to calculate/derive a response for a specific request. In the confirmation layer the implementer
 //! would be something like a [`FeeMerkleTree`] for fee catchup
 
-use std::{marker::PhantomData, sync::Arc};
+use std::{collections::BTreeMap, marker::PhantomData, sync::Arc};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use async_trait::async_trait;
+use committable::Committable as _;
 use espresso_types::{
-    NodeState, PubKey, SeqTypes, retain_accounts,
-    traits::SequencerPersistence,
+    Header, NodeState, PubKey, SeqTypes, StakeTableState, retain_accounts,
+    stake_table_snapshot_root_height, stake_table_state_from_l1_events,
+    traits::{EventsPersistenceRead, MembershipPersistence, SequencerPersistence},
     v0_3::{RewardAccountV1, RewardMerkleTreeV1},
     v0_4::{RewardAccountV2, RewardMerkleTreeV2},
 };
@@ -21,12 +23,18 @@ use hotshot_query_service::{
     },
     node::BlockId,
 };
-use hotshot_types::{data::ViewNumber, traits::network::ConnectedNetwork, vote::HasViewNumber};
+use hotshot_types::{
+    data::{EpochNumber, ViewNumber},
+    traits::network::ConnectedNetwork,
+    utils::epoch_from_block_number,
+    vote::HasViewNumber,
+};
 use itertools::Itertools;
 use jf_merkle_tree_compat::{
     ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
     MerkleTreeScheme, UniversalMerkleTreeScheme,
 };
+use parking_lot::Mutex;
 use request_response::data_source::DataSource as DataSourceTrait;
 
 use super::request::{Request, Response};
@@ -38,6 +46,14 @@ use crate::{
     },
     consensus_handle::ConsensusHandle,
 };
+
+/// Number of the most recent epochs whose replayed [`StakeTableState`] is kept in memory, so
+/// that repeated (sequential) requests for the same epoch don't each pay for a full event
+/// replay from SQL. The cache is populated only after a replay completes, so concurrent misses
+/// for the same epoch each replay in full; it only saves later, non-concurrent requests.
+const STAKE_TABLE_STATE_CACHE_EPOCHS: usize = 8;
+
+pub(crate) type StakeTableStateCache = Arc<Mutex<BTreeMap<u64, Arc<StakeTableState>>>>;
 
 /// Query Service Storage types that can be used for request-response data source
 #[derive(Clone)]
@@ -60,6 +76,8 @@ pub struct DataSource<
     pub storage: Option<Storage>,
     /// sequencer persistence
     pub persistence: Arc<P>,
+    /// Cache of replayed [`StakeTableState`]s, keyed by epoch
+    pub stake_table_state_cache: StakeTableStateCache,
     /// Phantom data
     pub phantom: PhantomData<N>,
 }
@@ -359,6 +377,16 @@ where
 
                 Ok(Response::RewardMerkleTreeV2(merkle_tree_bytes))
             },
+            Request::StakeTableState { epoch } => Ok(Response::StakeTableState(
+                stake_table_state_for_epoch(
+                    *epoch,
+                    &self.node_state,
+                    &*self.persistence,
+                    self.storage.as_ref(),
+                    &self.stake_table_state_cache,
+                )
+                .await?,
+            )),
         }
     }
 }
@@ -407,6 +435,119 @@ where
     }
 
     anyhow::bail!("incomplete leaf chain in memory for height {height}")
+}
+
+/// Replay the L1 stake table events committed to at `epoch` into a [`StakeTableState`],
+/// consulting `cache` first and populating it on success.
+///
+/// Does not require a [`ConsensusHandle`]: the epoch root header and event history are read
+/// entirely from `persistence` (falling back to `storage` for the epoch root), so this is
+/// callable directly from tests.
+pub(crate) async fn stake_table_state_for_epoch<P: SequencerPersistence>(
+    epoch: u64,
+    node_state: &NodeState,
+    persistence: &P,
+    storage: Option<&Storage>,
+    cache: &StakeTableStateCache,
+) -> Result<StakeTableState> {
+    if let Some(state) = cache.lock().get(&epoch) {
+        return Ok((**state).clone());
+    }
+
+    let epoch_height = node_state.epoch_height.context("epoch state not set")?;
+    let first_epoch = epoch_from_block_number(node_state.epoch_start_block, epoch_height);
+    ensure!(
+        epoch >= first_epoch + 2,
+        "stake table state requires epoch >= {}",
+        first_epoch + 2
+    );
+
+    let snapshot_height = stake_table_snapshot_root_height(EpochNumber::new(epoch), epoch_height)?;
+    let snapshot_root = load_epoch_root_header(
+        persistence,
+        storage,
+        EpochNumber::new(epoch),
+        snapshot_height,
+    )
+    .await?;
+    ensure!(
+        snapshot_root.height() == snapshot_height,
+        "epoch root for epoch {epoch} has height {}, expected snapshot root height \
+         {snapshot_height}",
+        snapshot_root.height()
+    );
+
+    let to_l1_block = snapshot_root
+        .l1_finalized()
+        .context("epoch root header is missing L1 finalized block")?
+        .number();
+
+    let (read, events) = persistence
+        .load_events(0, to_l1_block)
+        .await
+        .context("failed to load stake table events from persistence")?;
+    ensure!(
+        matches!(read, Some(EventsPersistenceRead::Complete)),
+        "stake table events not fully available up to L1 block {to_l1_block}; refusing to serve a \
+         partial replay"
+    );
+
+    let state = stake_table_state_from_l1_events(events.into_iter().map(|(_, event)| event))
+        .context("failed to replay stake table events")?;
+
+    // `load_epoch_root(epoch + 1)` returns the anchor root `H_{e-1}` whose
+    // `next_stake_table_hash` commits to this epoch's stake table (see the offset note on
+    // `load_epoch_root_header` below).
+    if let Some(anchor) = persistence
+        .load_epoch_root(EpochNumber::new(epoch + 1))
+        .await?
+        && let Some(expected) = anchor.next_stake_table_hash()
+        && expected != state.commit()
+    {
+        tracing::error!(
+            epoch,
+            "replayed stake table does not match anchor commitment; refusing to serve"
+        );
+        bail!("replayed stake table for epoch {epoch} does not match anchor commitment");
+    }
+
+    let state = Arc::new(state);
+    {
+        let mut cache = cache.lock();
+        cache.insert(epoch, state.clone());
+        while cache.len() > STAKE_TABLE_STATE_CACHE_EPOCHS {
+            let oldest = *cache.keys().next().expect("cache is non-empty");
+            cache.remove(&oldest);
+        }
+    }
+
+    Ok((*state).clone())
+}
+
+/// Load the epoch root header for `epoch`, falling back to SQL storage if persistence has not
+/// recorded it.
+///
+/// `store_epoch_root` is called with `epoch_from_block_number(decided_block_number) + 2`
+/// (`crates/hotshot/task-impls/src/helpers.rs`), so `load_epoch_root(epoch)` returns the header
+/// at `stake_table_snapshot_root_height(epoch, _)`, i.e. two epochs behind `epoch` itself.
+async fn load_epoch_root_header<P: MembershipPersistence>(
+    persistence: &P,
+    storage: Option<&Storage>,
+    epoch: EpochNumber,
+    snapshot_height: u64,
+) -> Result<Header> {
+    if let Some(header) = persistence.load_epoch_root(epoch).await? {
+        return Ok(header);
+    }
+
+    match storage {
+        Some(Storage::Sql(storage)) => Ok(storage
+            .get_leaf(snapshot_height)
+            .await?
+            .block_header()
+            .clone()),
+        _ => bail!("missing epoch root header at height {snapshot_height}"),
+    }
 }
 
 /// Get a partial snapshot of the given reward state, which contains only the specified accounts.

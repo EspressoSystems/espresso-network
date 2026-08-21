@@ -13,7 +13,7 @@ use committable::{Commitment, Committable};
 use espresso_api::routes::v1 as paths;
 use espresso_types::{
     BackoffParams, BlockMerkleTree, Certificate2, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
-    FeeMerkleTree, Leaf2, NodeState, SeqTypes, ValidatedState,
+    FeeMerkleTree, Leaf2, NodeState, SeqTypes, StakeTableHash, StakeTableState, ValidatedState,
     config::PublicNetworkConfig,
     v0::traits::StateCatchup,
     v0_3::{
@@ -33,7 +33,7 @@ use futures::{
 use hotshot_new_protocol::{storage::NewProtocolStorage, utils::verify_new_protocol_leaf_chain};
 use hotshot_types::{
     ValidatorConfig,
-    data::ViewNumber,
+    data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     network::NetworkConfig,
@@ -1453,6 +1453,22 @@ impl StateCatchup for ParallelStateCatchup {
         // If that fails, try the remote ones
         self.on_remote_providers(move |provider| async move {
             provider.try_fetch_state_cert(retry, epoch).await
+        })
+        .await
+    }
+
+    async fn try_fetch_stake_table_state(
+        &self,
+        retry: usize,
+        epoch: EpochNumber,
+        expected_stake_table_hash: StakeTableHash,
+    ) -> anyhow::Result<StakeTableState> {
+        // Local providers would replay the same local event store the caller has already
+        // exhausted, so they cannot help. Go straight to the remote ones.
+        self.on_remote_providers(move |provider| async move {
+            provider
+                .try_fetch_stake_table_state(retry, epoch, expected_stake_table_hash)
+                .await
         })
         .await
     }
