@@ -1261,10 +1261,20 @@ where
                     // highest certificate. Evidence takes precedence over
                     // the vote being too far ahead, and a valid certificate proves
                     // the network reached that view.
-                    if let Some(e) = timeout_msg
-                        .evidence
-                        .filter(|e| e.view_number() >= current_view)
-                    {
+                    //
+                    // A QC is measured against the lock. TCs carry the view forward
+                    // while the lock stays put, and a certified view above the lock
+                    // whose payload we never reconstructed is exactly what blocks us.
+                    // Such a QC is the last channel still naming that view once
+                    // the votes and the certificate broadcasts are gone, and
+                    // `handle_advance_view` records it whether or not it moves us.
+                    let locked_view = self.consensus.locked_view();
+                    if let Some(e) = timeout_msg.evidence.filter(|e| match e {
+                        CatchupEvidence::Qc(qc) => {
+                            locked_view.is_none_or(|locked| qc.view_number() > locked)
+                        },
+                        CatchupEvidence::Tc(tc) => tc.view_number() >= current_view,
+                    }) {
                         match e {
                             CatchupEvidence::Qc(qc) => {
                                 if let Some(epoch) = self
