@@ -18,6 +18,7 @@ use async_broadcast::{InactiveReceiver, Sender};
 use clap::Parser;
 #[cfg(feature = "node")]
 use derive_more::Deref;
+use espresso_utils::redact::redact_urls;
 #[cfg(feature = "node")]
 use hotshot_types::traits::metrics::{Counter, Gauge};
 use hotshot_types::traits::metrics::{Metrics, NoMetrics};
@@ -73,7 +74,7 @@ pub struct L1Snapshot {
 }
 
 /// Configuration for an L1 client.
-#[derive(Clone, Debug, Parser)]
+#[derive(Clone, derive_more::Debug, Parser)]
 pub struct L1ClientOptions {
     /// Delay when retrying failed L1 queries.
     #[clap(
@@ -163,6 +164,7 @@ pub struct L1ClientOptions {
     ///
     /// Typically this would be a WebSockets endpoint while the main provider uses HTTP.
     #[clap(long, env = "ESPRESSO_L1_WS_PROVIDER", value_delimiter = ',')]
+    #[debug("{:?}", l1_ws_provider.as_ref().map(redact_urls))]
     pub l1_ws_provider: Option<Vec<Url>>,
 
     /// Interval at which the background update loop polls the L1 stake table contract for new events
@@ -286,11 +288,12 @@ pub(crate) struct L1ClientMetrics {
 /// This client utilizes one RPC provider at a time, but if it detects that the provider is in a
 /// failing state, it will automatically switch to the next provider in its list.
 #[cfg(feature = "node")]
-#[derive(Clone, Debug)]
+#[derive(Clone, derive_more::Debug)]
 pub struct SwitchingTransport {
     /// The transport currently being used by the client
     pub(crate) current_transport: Arc<RwLock<SingleTransport>>,
     /// The list of configured HTTP URLs to use for RPC requests
+    #[debug("{:?}", redact_urls(urls.iter()))]
     pub(crate) urls: Arc<Vec<Url>>,
     pub(crate) opt: Arc<L1ClientOptions>,
     pub(crate) metrics: L1ClientMetrics,
@@ -300,9 +303,11 @@ pub struct SwitchingTransport {
 /// The state of the current provider being used by a [`SwitchingTransport`].
 /// This is cloneable and returns a reference to the same underlying data.
 #[cfg(feature = "node")]
-#[derive(Debug, Clone)]
+#[derive(derive_more::Debug, Clone)]
 pub(crate) struct SingleTransport {
     pub(crate) generation: usize,
+    pub(crate) redacted_url: String,
+    #[debug(skip)]
     pub(crate) client: Http<Client>,
     pub(crate) status: Arc<RwLock<SingleTransportStatus>>,
     /// Time at which to revert back to the primary provider after a failover.

@@ -25,6 +25,8 @@ use async_trait::async_trait;
 use clap::Parser;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 #[cfg(feature = "node")]
+use espresso_utils::redact::redact_url;
+#[cfg(feature = "node")]
 use futures::{
     future::{Future, TryFuture, TryFutureExt},
     stream::{self, StreamExt},
@@ -294,6 +296,7 @@ impl SingleTransport {
     fn new(url: &Url, generation: usize, revert_at: Option<Instant>) -> Self {
         Self {
             generation,
+            redacted_url: redact_url(url),
             client: Http::new(url.clone()),
             status: Default::default(),
             revert_at,
@@ -389,7 +392,11 @@ impl Service<RequestPacket> for SwitchingTransport {
                     }
 
                     // Log the error and indicate a failure
-                    tracing::warn!(?err, "L1 client error");
+                    tracing::warn!(
+                        url = %current_transport.redacted_url,
+                        ?err,
+                        "L1 client error"
+                    );
 
                     // If the transport should switch, do so. We don't need to worry about
                     // race conditions here, since it will only return true once.
@@ -415,7 +422,7 @@ impl SwitchingTransport {
     fn switch_to(&self, next_gen: usize, current_transport: SingleTransport) -> SingleTransport {
         let next_index = next_gen % self.urls.len();
         let url = self.urls[next_index].clone();
-        tracing::info!(%url, next_gen, "switch L1 transport");
+        tracing::info!(url = %redact_url(&url), next_gen, "switch L1 transport");
 
         let revert_at = if next_gen.is_multiple_of(self.urls.len()) {
             // If we are reverting to the primary transport, clear our scheduled revert time.
@@ -540,10 +547,16 @@ impl L1Client {
                             // problem with one of the hosts specifically.
                             let provider = i % urls.len();
                             let url = &urls[provider];
-                            ws = match ProviderBuilder::new().connect_ws(WsConnect::new(url.clone())).await {
+                            ws = match ProviderBuilder::new()
+                                .connect_ws(WsConnect::new(url.clone()))
+                                .await
+                            {
                                 Ok(ws) => ws,
                                 Err(err) => {
-                                    tracing::warn!(provider, "Failed to connect WebSockets provider: {err:#}");
+                                    tracing::warn!(
+                                        provider,
+                                        "Failed to connect WebSockets provider: {err:#}"
+                                    );
                                     sleep(retry_delay).await;
                                     continue;
                                 }
@@ -577,7 +590,10 @@ impl L1Client {
                                                     None
                                                 }
                                                 Err(err) => {
-                                                    tracing::warn!(%hash, "Error fetching block from HTTP stream: {err:#}");
+                                                    tracing::warn!(
+                                                        %hash,
+                                                        "Error fetching block from HTTP stream: {err:#}"
+                                                    );
                                                     None
                                                 }
                                             }
@@ -1146,6 +1162,38 @@ mod test {
     use time::OffsetDateTime;
 
     use super::*;
+
+    #[test]
+    fn test_switching_transport_debug_hides_credentials() {
+        let opt = L1ClientOptions {
+            l1_ws_provider: Some(vec!["wss://u:p@ws.invalid/v2/WS_SECRET".parse().unwrap()]),
+            ..Default::default()
+        };
+        let transport = SwitchingTransport::new(
+            opt,
+            vec!["https://u:p@rpc.invalid/v2/HTTP_SECRET".parse().unwrap()],
+        )
+        .expect("switching transport constructs");
+
+        let debug = format!("{transport:?}");
+        assert!(!debug.contains("WS_SECRET"), "{debug}");
+        assert!(!debug.contains("HTTP_SECRET"), "{debug}");
+        assert!(!debug.contains("u:p"), "{debug}");
+        assert!(debug.contains("rpc.invalid"), "{debug}");
+    }
+
+    #[test]
+    fn test_node_state_debug_hides_credentials() {
+        let l1 = L1Client::new(vec![
+            "https://u:p@rpc.invalid/v2/HTTP_SECRET".parse().unwrap(),
+        ])
+        .expect("L1 client constructs");
+        let node_state = crate::NodeState::mock().with_l1(l1);
+
+        let debug = format!("{node_state:?}");
+        assert!(!debug.contains("HTTP_SECRET"), "{debug}");
+        assert!(!debug.contains("u:p"), "{debug}");
+    }
 
     async fn new_l1_client_opt(
         anvil: &Arc<AnvilInstance>,
