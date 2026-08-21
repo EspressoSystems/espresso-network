@@ -120,19 +120,19 @@ def readLeaders (text : String) : Std.TreeMap ViewNumber PubKey :=
       | _ => leaders
 
 /-- Replay one trace and say what came of it. -/
-def replayOne (path : System.FilePath) : IO (Verdict × String) := do
+def replayOne (path : System.FilePath) : IO (Verdict × String × Nat × Nat) := do
   let text ← IO.FS.readFile path
   let steps := text.splitOn "\n" |>.filter fun l => !l.trimAscii.isEmpty && !l.startsWith "#"
   if steps.isEmpty then
-    return (.empty, "no step recorded")
+    return (.empty, "no step recorded", 0, 0)
   let .ok said := readPreamble text |
     let .error e := readPreamble text | unreachable!
-    return (.unreplayable, e)
+    return (.unreplayable, e, 0, steps.length)
   match parseTrace text with
   | .error e =>
     match parseOutOfScope e with
-    | some reason => return (.outOfScope reason, s!"cannot be read: {reason}")
-    | none => return (.malformed, Divergence.describe (.malformed e))
+    | some reason => return (.outOfScope reason, s!"cannot be read: {reason}", 0, steps.length)
+    | none => return (.malformed, Divergence.describe (.malformed e), 0, steps.length)
   | .ok events =>
     -- The anchor sits at genesis, where no rule reads its payload commitment.
     let anchor : Block := ⟨⟨⟨0⟩⟩, ViewNumber.genesis, ⟨⟨⟨said.anchor⟩⟩, ViewNumber.genesis⟩,
@@ -141,7 +141,9 @@ def replayOne (path : System.FilePath) : IO (Verdict × String) := do
       ⟨anchor, ⟨⟨⟨said.anchor⟩⟩, ViewNumber.genesis⟩, said.decideBuffer⟩
     let me : PubKey := ⟨said.node⟩
     let leaders := readLeaders text
-    return verdictOf text events (replay cfg (leaders.get? ·) me events)
+    let outcome := replay cfg (leaders.get? ·) me events
+    let (verdict, said) := verdictOf text events outcome
+    return (verdict, said, outcome.steps, events.length)
 
 public def main (args : List String) : IO UInt32 := do
   match parseOptions args with
@@ -162,11 +164,15 @@ public def main (args : List String) : IO UInt32 := do
 
     let mut tally : List (String × Nat) := []
     let mut failed := false
+    let mut stepsChecked := 0
+    let mut stepsTotal := 0
     for path in traces do
-      let (verdict, said) ← replayOne path
+      let (verdict, said, checked, total) ← replayOne path
       let label := verdict.label
       tally := (label, (tally.lookup label |>.getD 0) + 1) :: tally.filter (·.1 != label)
       if verdict.failed then failed := true
+      stepsChecked := stepsChecked + checked
+      stepsTotal := stepsTotal + total
       -- An exact agreement is one line and says nothing a tally cannot; an
       -- agreement with the machine still ahead is several, and says where.
       let terse := verdict == .empty || (verdict == .agree && (said.splitOn "\n").length == 1)
@@ -177,6 +183,7 @@ public def main (args : List String) : IO UInt32 := do
 
     IO.println ""
     IO.println s!"replayed {traces.size} traces"
+    IO.println s!"  steps checked: {stepsChecked} of {stepsTotal}"
     for label in ["agree", "out-of-scope", "diverge", "malformed", "unreplayable", "empty"] do
       if let some n := tally.lookup label then
         IO.println s!"  {label}: {n}"

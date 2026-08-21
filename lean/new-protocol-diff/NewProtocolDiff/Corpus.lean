@@ -48,15 +48,39 @@ def unmodelledInputs : List (String × String) :=
     ("FetchedProposal", "block fetching"),
     ("StateValidationFailed", "state validation") ]
 
-/-- The first unmodelled feature a trace's dropped inputs name, if any. -/
-def unmodelledDropped (text : String) : Option String :=
+/--
+An unmodelled feature a trace dropped an input for at or before `step`, if any.
+
+The step matters. A recording drops inputs all through a run, and one unmodelled
+drop used to excuse every divergence in the trace, however much later — a
+`StateValidationFailed` on step 3 of six hundred stood as the reason for anything
+that happened at step 580. The recorder writes the index it was at, so the excuse
+can be required to precede what it excuses.
+
+That is necessary and not sufficient. A drop at step 0 still excuses a divergence
+at step 47, which is most of the epoch suites, and no ordering rule can narrow
+that. What keeps it honest is the report: it says how many steps were checked
+before the excuse, so an excused trace cannot read as a checked one.
+-/
+def unmodelledDropped (text : String) (step : Nat) : Option String :=
   let tag := "# dropped input: "
   text.splitOn "\n" |>.findSome? fun line =>
     if line.startsWith tag then
-      let kind := (line.drop tag.length).toString
-      unmodelledInputs.findSome? fun (name, feature) =>
-        if kind.startsWith name then some s!"{feature} (dropped {name})" else none
+      let rest := (line.drop tag.length).toString
+      match droppedStep rest with
+      | some at' => if at' > step then none else named rest
+      | none => named rest
     else none
+  where
+    /-- The feature a dropped input's name belongs to. -/
+    named (rest : String) : Option String :=
+      unmodelledInputs.findSome? fun (name, feature) =>
+        if rest.startsWith name then some s!"{feature} (dropped {name})" else none
+    /-- The step index the recorder noted, from `… (at step N)`. -/
+    droppedStep (rest : String) : Option Nat :=
+      match (rest.splitOn "(at step ").getLast? with
+      | some tail => (tail.takeWhile Char.isDigit).toString.toNat?
+      | none => none
 
 /--
 Each view whose proposal the trace shows, paired with its parent's view.
@@ -139,9 +163,9 @@ def Verdict.failed : Verdict → Bool
 Why this divergence is a boundary of the specification rather than a
 disagreement, if it is one.
 -/
-def excuse (text : String) (events : List Event) : Divergence → Option String
+def excuse (text : String) (events : List Event) (step : Nat) : Divergence → Option String
   | .recordingAhead _ _ view =>
-    match unmodelledDropped text with
+    match unmodelledDropped text step with
     | some reason => some reason
     | none =>
       match missingAncestor (proposalParents events) view with
@@ -173,8 +197,10 @@ def verdictOf (text : String) (events : List Event) (o : Outcome) : Verdict × S
   match o.divergence with
   | none => (.agree, o.report)
   | some d =>
-    match excuse text events d with
-    | some reason => (.outOfScope reason, o.report ++ s!"\n  reason: {reason}")
+    match excuse text events o.steps d with
+    | some reason =>
+      (.outOfScope reason,
+        o.report ++ s!"\n  reason: {reason}\n  checked {o.steps} of {events.length} steps")
     | none => (.diverge, o.report)
 
 end NewProtocolDiff

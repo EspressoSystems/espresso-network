@@ -96,6 +96,12 @@ pub struct Recorder {
     pending: Vec<String>,
     /// Views whose leader has been written; see [`Recorder::leader`].
     led: BTreeSet<ViewNumber>,
+    /// Steps written so far, which is the index the next one will have.
+    ///
+    /// A dropped input is noted with this number, so a replay can tell whether
+    /// the drop came before the divergence it is being asked to excuse. Without
+    /// it, one unmodelled input anywhere excuses everything anywhere.
+    steps: usize,
 }
 
 impl Recorder {
@@ -107,6 +113,7 @@ impl Recorder {
             identified: true,
             pending: Vec::new(),
             led: BTreeSet::new(),
+            steps: 0,
         };
         let Ok(dir) = std::env::var(TRACE_DIR) else {
             return inert;
@@ -125,6 +132,7 @@ impl Recorder {
             identified: false,
             pending: Vec::new(),
             led: BTreeSet::new(),
+            steps: 0,
         }
     }
 
@@ -223,11 +231,12 @@ impl Recorder {
                 // that discarded them would show a node that never voted: the
                 // votes a real node parks until storage confirms them are
                 // released on exactly these steps.
-                lines.push(format!("# dropped input: {dropped}"));
+                lines.push(format!("# dropped input: {dropped} (at step {})", self.steps));
                 self.pending.extend(emitted);
             },
         }
 
+        self.steps += lines.iter().filter(|l| !l.starts_with('#')).count();
         self.lines.extend(lines);
     }
 }
