@@ -9,7 +9,7 @@ use hotshot_types::{
     },
 };
 use tokio::task::JoinSet;
-use tracing::{error, warn};
+use tracing::{debug, error, warn};
 
 use crate::{
     consensus::Consensus,
@@ -30,14 +30,27 @@ pub struct Fetcher<T: NodeType> {
     public_key: T::SignatureKey,
 
     /// Outstanding fetches.
-    ///
-    /// The peers the request went to. Only responses from these peers are
-    /// accepted, so an unsolicited garbage response cannot consume the
-    /// round a genuine answer is still in flight for.
-    requested: HashMap<(ViewNumber, VidCommitment2), HashSet<T::SignatureKey>>,
+    requested: HashMap<(ViewNumber, VidCommitment2), Fetch<T::SignatureKey>>,
 
     /// Verifications of received payloads, surfaced by [`Fetcher::next`].
     tasks: JoinSet<Option<ObtainedPayload<T>>>,
+}
+
+/// The peers one fetch has involved.
+///
+/// `asked` decides who not to draw again, `pending` who may still answer.
+struct Fetch<K> {
+    asked: HashSet<K>,
+    pending: HashSet<K>,
+}
+
+impl<K> Default for Fetch<K> {
+    fn default() -> Self {
+        Self {
+            asked: HashSet::new(),
+            pending: HashSet::new(),
+        }
+    }
 }
 
 impl<T: NodeType> Fetcher<T> {
@@ -68,17 +81,18 @@ impl<T: NodeType> Fetcher<T> {
 
         let mut rng = rand::thread_rng();
 
-        let mut asked = self.requested.get_mut(&(view, payload_commitment));
+        let mut fetch = self.requested.get_mut(&(view, payload_commitment));
 
         let target = (|| {
             let epoch = consensus.proposal_at(view)?.epoch;
             let membership = membership.stake_table_for_epoch(Some(epoch)).ok()?;
             let stake_table = membership.stake_table();
-            if let Some(asked) = &mut asked
+            if let Some(fetch) = &mut fetch
                 && retry == Retry::NewRound
-                && asked.len() + 1 == stake_table.len()
+                && fetch.asked.len() + 1 == stake_table.len()
             {
-                asked.clear()
+                fetch.asked.clear();
+                fetch.pending.clear();
             }
             stake_table
                 .map(|peer| T::SignatureKey::public_key(&peer.stake_table_entry))
@@ -86,8 +100,8 @@ impl<T: NodeType> Fetcher<T> {
                     if *peer == self.public_key {
                         return false;
                     }
-                    let Some(asked) = &asked else { return true };
-                    !asked.contains(peer)
+                    let Some(fetch) = &fetch else { return true };
+                    !fetch.asked.contains(peer)
                 })
                 .choose(&mut rng)
         })();
@@ -97,10 +111,12 @@ impl<T: NodeType> Fetcher<T> {
             return Ok(());
         };
 
-        self.requested
+        let fetch = self
+            .requested
             .entry((view, payload_commitment))
-            .or_default()
-            .insert(target.clone());
+            .or_default();
+        fetch.asked.insert(target.clone());
+        fetch.pending.insert(target.clone());
 
         let message = Message {
             sender: self.public_key.clone(),
@@ -146,9 +162,9 @@ impl<T: NodeType> Fetcher<T> {
         if !self
             .requested
             .get(&(view, payload_commitment))
-            .is_some_and(|peers| peers.contains(sender))
+            .is_some_and(|fetch| fetch.pending.contains(sender))
         {
-            warn!(%view, "payload response from a peer we did not ask");
+            warn!(%view, "payload response from unexpected peer");
             return;
         }
 
@@ -157,11 +173,8 @@ impl<T: NodeType> Fetcher<T> {
             return;
         };
 
-        if let Some(peers) = self.requested.get_mut(&(view, payload_commitment)) {
-            peers.remove(sender);
-            if peers.is_empty() {
-                self.requested.remove(&(view, payload_commitment));
-            }
+        if let Some(fetch) = self.requested.get_mut(&(view, payload_commitment)) {
+            fetch.pending.remove(sender);
         }
 
         let epoch = proposal.epoch;
@@ -199,24 +212,30 @@ impl<T: NodeType> Fetcher<T> {
         }
     }
 
+    /// Take a peer's refusal of a request we made, and say whether it is
+    /// worth drawing another peer for `view` right away.
     pub fn accept_refusal(
-        &self,
+        &mut self,
         view: ViewNumber,
         reason: Unavailable,
         sender: &T::SignatureKey,
     ) -> bool {
-        let asked = self
+        let spent = self
             .requested
-            .iter()
-            .any(|((asked_view, _), peers)| *asked_view == view && peers.contains(sender));
-        if !asked {
-            warn!(%view, %sender, "payload refusal from a peer we did not ask");
+            .iter_mut()
+            .filter(|((asked_view, _), _)| *asked_view == view)
+            .any(|(_, fetch)| fetch.pending.remove(sender));
+        if !spent {
+            warn!(%view, %sender, "payload refusal from unexpected peer");
             return false;
         }
         match reason {
-            Unavailable::NotHeld => true,
+            Unavailable::NotHeld => {
+                debug!(%view, %sender, "peer does not hold the payload");
+                true
+            },
             Unavailable::TooLarge => {
-                warn!(%view, "peer says the payload exceeds the message size limit");
+                warn!(%view, %sender, "peer says the payload exceeds the message size limit");
                 false
             },
         }
@@ -242,7 +261,7 @@ mod tests {
         vid::avidm_gf2::AvidmGf2Scheme,
     };
 
-    use super::{Fetcher, Unavailable};
+    use super::{Fetch, Fetcher, Unavailable};
     use crate::{
         consensus::Consensus,
         message::PayloadFetchResponse,
@@ -304,9 +323,13 @@ mod tests {
 
     fn fetcher_expecting(peer: BLSPubKey, commitment: VidCommitment2) -> Fetcher<TestTypes> {
         let mut fetcher = Fetcher::new(key(0));
-        fetcher
-            .requested
-            .insert((ViewNumber::new(1), commitment), HashSet::from([peer]));
+        fetcher.requested.insert(
+            (ViewNumber::new(1), commitment),
+            Fetch {
+                asked: HashSet::from([peer]),
+                pending: HashSet::from([peer]),
+            },
+        );
         fetcher
     }
 
@@ -375,8 +398,8 @@ mod tests {
             fetcher
                 .requested
                 .get(&(ViewNumber::new(1), commitment))
-                .is_some_and(|peers| peers.contains(&key(1))),
-            "the peer we asked keeps its slot"
+                .is_some_and(|fetch| fetch.pending.contains(&key(1))),
+            "the peer we asked still owes us an answer"
         );
     }
 
@@ -397,6 +420,43 @@ mod tests {
         .await;
 
         assert!(fetcher.next().await.is_none());
+    }
+
+    /// Only a peer that owes us an answer can drive the draw, only "not me"
+    /// is worth turning to another peer for, and refusing spends the slot, so
+    /// a peer cannot refuse twice to be asked for two more.
+    #[test]
+    fn a_refusal_redraws_once_and_only_from_a_peer_we_asked() {
+        let commitment = VidCommitment2::default();
+        let peer = key(1);
+        let view = ViewNumber::new(1);
+        let mut fetcher = fetcher_expecting(peer, commitment);
+
+        assert!(!fetcher.accept_refusal(view, Unavailable::NotHeld, &key(2)));
+        assert!(!fetcher.accept_refusal(ViewNumber::new(2), Unavailable::NotHeld, &peer));
+        assert!(fetcher.accept_refusal(view, Unavailable::NotHeld, &peer));
+        assert!(
+            !fetcher.accept_refusal(view, Unavailable::NotHeld, &peer),
+            "the slot was spent by the first refusal"
+        );
+        assert!(
+            fetcher
+                .requested
+                .get(&(view, commitment))
+                .is_some_and(|fetch| fetch.asked.contains(&peer)),
+            "a spent peer is still not drawn again"
+        );
+    }
+
+    /// A peer that cannot serve the block at all does not send us round the
+    /// committee: that claim is not the sender's to make.
+    #[test]
+    fn a_too_large_refusal_does_not_redraw() {
+        let commitment = VidCommitment2::default();
+        let peer = key(1);
+        let mut fetcher = fetcher_expecting(peer, commitment);
+
+        assert!(!fetcher.accept_refusal(ViewNumber::new(1), Unavailable::TooLarge, &peer));
     }
 
     /// Answering consumes the peer's slot, so one request buys one
@@ -421,21 +481,5 @@ mod tests {
             fetcher.next().await.is_none(),
             "the second response was not verified"
         );
-    }
-
-    /// A refusal is acted on only if we asked that peer, and only "not me"
-    /// is worth turning to another peer for. A claim about the block itself
-    /// is not the sender's to make.
-    #[test]
-    fn only_a_solicited_not_held_refusal_redraws() {
-        let commitment = VidCommitment2::default();
-        let peer = key(1);
-        let fetcher = fetcher_expecting(peer, commitment);
-        let view = ViewNumber::new(1);
-
-        assert!(fetcher.accept_refusal(view, Unavailable::NotHeld, &peer));
-        assert!(!fetcher.accept_refusal(view, Unavailable::TooLarge, &peer));
-        assert!(!fetcher.accept_refusal(view, Unavailable::NotHeld, &key(2)));
-        assert!(!fetcher.accept_refusal(ViewNumber::new(2), Unavailable::NotHeld, &peer));
     }
 }
