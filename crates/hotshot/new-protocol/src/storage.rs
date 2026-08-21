@@ -179,7 +179,7 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
         &mut self,
         view_number: ViewNumber,
         epoch: EpochNumber,
-        block_payload: T::BlockPayload,
+        block_payload: Arc<T::BlockPayload>,
         metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
         vid_commit: VidCommitment,
     ) {

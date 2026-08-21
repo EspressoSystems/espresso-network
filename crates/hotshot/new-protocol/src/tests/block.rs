@@ -1,15 +1,22 @@
-use std::sync::Arc;
+use std::{net::Ipv4Addr, sync::Arc};
 
 use committable::Committable;
+use hotshot::types::BLSPubKey;
 use hotshot_example_types::{
     block_types::TestTransaction, node_types::TestTypes, state_types::TestInstanceState,
 };
-use hotshot_types::data::{EpochNumber, ViewNumber};
+use hotshot_types::{
+    addr::NetAddr,
+    data::{EpochNumber, ViewNumber},
+    traits::{metrics::NoMetrics, signature_key::SignatureKey},
+    x25519::Keypair,
+};
 
 use crate::{
     block::{BlockBuilder, BlockBuilderConfig},
     helpers::test_upgrade_lock,
     message::{DedupManifest, TransactionMessage},
+    network::Cliquenet,
     tests::common::utils::mock_membership,
 };
 
@@ -41,18 +48,42 @@ fn small_config() -> BlockBuilderConfig {
     }
 }
 
-fn builder() -> BlockBuilder<TestTypes> {
+async fn builder_with_config(config: BlockBuilderConfig) -> BlockBuilder<TestTypes> {
+    let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);
+    let upgrade_lock = test_upgrade_lock();
+    let keypair =
+        Keypair::derive_from::<BLSPubKey>(&private_key).expect("keypair derivation should succeed");
+    let port = test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
+    let addr = NetAddr::Inet(Ipv4Addr::LOCALHOST.into(), port);
+    let network = Cliquenet::create(
+        "test-block-builder",
+        public_key,
+        keypair,
+        addr,
+        vec![],
+        upgrade_lock.clone(),
+        Box::new(NoMetrics),
+    )
+    .await
+    .expect("cliquenet creation should succeed");
     BlockBuilder::new(
         Arc::new(TestInstanceState::default()),
         mock_membership(),
-        small_config(),
-        test_upgrade_lock(),
+        network.sender().clone(),
+        public_key,
+        private_key,
+        config,
+        upgrade_lock,
     )
+}
+
+async fn builder() -> BlockBuilder<TestTypes> {
+    builder_with_config(small_config()).await
 }
 
 #[tokio::test]
 async fn test_retry_buffer() {
-    let mut b = builder();
+    let mut b = builder().await;
     let t1 = tx(1);
     let t2 = tx(2);
     b.on_submit_transaction(t1.clone());
@@ -75,7 +106,7 @@ async fn test_retry_buffer() {
 
 #[tokio::test]
 async fn test_leader_buffer_drain() {
-    let mut b = builder();
+    let mut b = builder().await;
     b.on_transactions(tx_msg(view(1), vec![tx(1), tx(2)]));
     let (mut txns, manifest) = b.drain(view(1), epoch());
     txns.sort_by_key(|t| t.bytes().clone());
@@ -112,7 +143,7 @@ async fn test_request_block_same_view_different_parent_both_produce_output() {
         block::BlockAndHeaderRequest, helpers::proposal_commitment, tests::common::utils::TestData,
     };
 
-    let mut b = builder();
+    let mut b = builder().await;
 
     let test_data = TestData::new(3).await;
     let parent_a = test_data.views[0].proposal.data.clone();
@@ -150,7 +181,7 @@ async fn test_request_block_same_view_different_parent_both_produce_output() {
 async fn test_request_block_dedups_same_view_same_parent() {
     use crate::{block::BlockAndHeaderRequest, tests::common::utils::TestData};
 
-    let mut b = builder();
+    let mut b = builder().await;
     let test_data = TestData::new(2).await;
     let parent = test_data.views[0].proposal.data.clone();
 
@@ -169,15 +200,11 @@ async fn test_request_block_dedups_same_view_same_parent() {
 
 #[tokio::test]
 async fn test_dedup_window() {
-    let mut b = BlockBuilder::new(
-        Arc::new(TestInstanceState::default()),
-        mock_membership(),
-        BlockBuilderConfig {
-            dedup_window_size: 2,
-            ..small_config()
-        },
-        test_upgrade_lock(),
-    );
+    let mut b = builder_with_config(BlockBuilderConfig {
+        dedup_window_size: 2,
+        ..small_config()
+    })
+    .await;
     let t = tx(1);
 
     b.on_dedup_manifest(DedupManifest {

@@ -7,9 +7,8 @@ use std::{
 use committable::{Commitment, Committable};
 use hotshot::traits::{BlockPayload, ValidatedState as _};
 use hotshot_types::{
-    consensus::PayloadWithMetadata,
     data::{
-        EpochNumber, Leaf2, VidCommitment, ViewNumber, vid_commitment,
+        EpochNumber, Leaf2, VidCommitment, VidDisperse2, ViewNumber, vid_commitment,
         vid_disperse::vid_total_weight,
     },
     epoch_membership::EpochMembershipCoordinator,
@@ -18,21 +17,25 @@ use hotshot_types::{
         EncodeBytes,
         block_contents::{BuilderFee, Transaction},
         node_implementation::NodeType,
-        signature_key::BuilderSignatureKey,
+        signature_key::{BuilderSignatureKey, SignatureKey},
     },
     utils::BuilderCommitment,
+    vid::avidm_gf2::AvidmGf2Scheme,
 };
 use tokio::{
-    task::{AbortHandle, JoinSet},
+    task::{AbortHandle, JoinSet, spawn_blocking},
     time::sleep,
 };
 use tracing::{error, warn};
+use versions::NEW_PROTOCOL_VERSION;
 
 use crate::{
     consensus::ConsensusInput,
     helpers::proposal_commitment,
     message::{DedupManifest, Proposal, TransactionMessage},
+    network::Sender,
     state::HeaderRequest,
+    vid::fanout,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -45,6 +48,8 @@ pub enum BlockError {
 
     #[error("builder signature failed")]
     BuilderSignature,
+    #[error("vid dispersal failed: {0}")]
+    VidDisperse(String),
 }
 
 #[derive(Clone, Eq, PartialEq, Debug)]
@@ -57,7 +62,8 @@ pub struct BlockAndHeaderRequest<T: NodeType> {
 pub struct BlockBuilderOutput<T: NodeType> {
     pub view: ViewNumber,
     pub epoch: EpochNumber,
-    pub payload: PayloadWithMetadata<T>,
+    pub payload: Arc<T::BlockPayload>,
+    pub metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
     pub parent_proposal: Proposal<T>,
     pub builder_commitment: BuilderCommitment,
     pub builder_fee: BuilderFee<T>,
@@ -92,6 +98,9 @@ struct RetryEntry<T: NodeType> {
 pub struct BlockBuilder<T: NodeType> {
     instance: Arc<T::InstanceState>,
     membership: EpochMembershipCoordinator<T>,
+    network: Sender<T>,
+    public_key: T::SignatureKey,
+    private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
     retry_pending: HashMap<Commitment<T::Transaction>, RetryEntry<T>>,
     retry_total_bytes: u64,
     leader_buffer: HashMap<Commitment<T::Transaction>, T::Transaction>,
@@ -109,15 +118,22 @@ pub struct BlockBuilder<T: NodeType> {
 }
 
 impl<T: NodeType> BlockBuilder<T> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         instance: Arc<T::InstanceState>,
         membership: EpochMembershipCoordinator<T>,
+        network: Sender<T>,
+        public_key: T::SignatureKey,
+        private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
         config: BlockBuilderConfig,
         upgrade_lock: UpgradeLock<T>,
     ) -> Self {
         Self {
             instance,
             membership,
+            network,
+            public_key,
+            private_key,
             config,
             upgrade_lock,
             retry_pending: HashMap::new(),
@@ -146,6 +162,9 @@ impl<T: NodeType> BlockBuilder<T> {
         self.leader_total_bytes = 0;
         let instance = self.instance.clone();
         let membership = self.membership.clone();
+        let network = self.network.clone();
+        let public_key = self.public_key.clone();
+        let private_key = self.private_key.clone();
 
         let handle = self.tasks.spawn(async move {
             // Throttle empty block production: when no transactions are pending,
@@ -167,18 +186,75 @@ impl<T: NodeType> BlockBuilder<T> {
                 T::BlockPayload::from_transactions(txs, &validated_state, &instance)
                     .await
                     .map_err(|e| BlockError::PayloadConstruction(e.to_string()))?;
-            let payload: PayloadWithMetadata<T> = PayloadWithMetadata { payload, metadata };
 
-            let payload_bytes = payload.payload.encode();
-            let metadata_bytes = payload.metadata.encode();
+            let payload_bytes = payload.encode();
+            let metadata_bytes = metadata.encode();
+            let block_size = payload_bytes.len() as u64;
 
-            let total_weight = {
-                let target_mem = membership
-                    .stake_table_for_epoch(Some(epoch))
-                    .map_err(|_| BlockError::StakeTableUnavailable)?;
-                vid_total_weight(target_mem.stake_table(), Some(epoch))
-            };
-            let payload_commitment = {
+            // Only the new protocol (>= V0_6) disperses V2/AvidmGf2 shares. During
+            // the cutover period this builder also produces pre-V0_6 blocks, which
+            // must carry a version-appropriate commitment so their headers match
+            // the legacy builder's; those are not dispersed here (the `BlockBuilt`
+            // handler ignores non-V2 commitments).
+            let payload_commitment = if version >= NEW_PROTOCOL_VERSION {
+                // Erasure-code every namespace exactly once and derive the payload
+                // commitment from that same computation. Runs on a blocking thread;
+                // the proposal is not gated on the fanout that follows.
+                let (commitment, common, shares, recipients) =
+                    spawn_blocking(move || -> Result<_, BlockError> {
+                        let params = VidDisperse2::<T>::disperse_params(
+                            payload_bytes,
+                            metadata_bytes.as_ref(),
+                            &membership,
+                            Some(epoch),
+                        )
+                        .map_err(|e| BlockError::VidDisperse(e.to_string()))?;
+                        let (commitment, common, shares) = AvidmGf2Scheme::ns_disperse(
+                            &params.param,
+                            &params.weights,
+                            &params.payload,
+                            params.ns_table.iter().cloned(),
+                        )
+                        .map_err(|e| BlockError::VidDisperse(e.to_string()))?;
+                        Ok((commitment, common, shares, params.recipients))
+                    })
+                    .await
+                    .map_err(|e| BlockError::VidDisperse(e.to_string()))??;
+
+                // Fan the shares out in the background, including the leader's own
+                // share (delivered via unicast loopback, which is how the leader
+                // obtains the share it votes with). A critical send failure is
+                // logged, not fatal.
+                let fanout_handle = spawn_blocking(move || {
+                    fanout::fan_out::<T>(
+                        shares,
+                        common,
+                        commitment,
+                        recipients,
+                        view,
+                        epoch,
+                        network,
+                        public_key,
+                        private_key,
+                    )
+                });
+                // Surface fanout failures and panics; a detached blocking task
+                // would otherwise swallow them silently.
+                tokio::spawn(async move {
+                    match fanout_handle.await {
+                        Ok(Ok(())) => {},
+                        Ok(Err(err)) => error!(%view, %err, "vid share fanout failed"),
+                        Err(err) => error!(%view, %err, "vid share fanout task panicked"),
+                    }
+                });
+                VidCommitment::V2(commitment)
+            } else {
+                let total_weight = {
+                    let target_mem = membership
+                        .stake_table_for_epoch(Some(epoch))
+                        .map_err(|_| BlockError::StakeTableUnavailable)?;
+                    vid_total_weight(target_mem.stake_table(), Some(epoch))
+                };
                 vid_commitment(
                     payload_bytes.as_ref(),
                     metadata_bytes.as_ref(),
@@ -187,10 +263,9 @@ impl<T: NodeType> BlockBuilder<T> {
                 )
             };
 
-            let builder_commitment = payload.payload.builder_commitment(&payload.metadata);
+            let builder_commitment = payload.builder_commitment(&metadata);
             let (builder_key, builder_private_key) =
                 T::BuilderSignatureKey::generated_from_seed_indexed([0u8; 32], 0);
-            let block_size = payload_bytes.len() as u64;
             let offered_fee = block_size;
             let builder_fee = BuilderFee {
                 fee_amount: offered_fee,
@@ -198,14 +273,15 @@ impl<T: NodeType> BlockBuilder<T> {
                 fee_signature: T::BuilderSignatureKey::sign_fee(
                     &builder_private_key,
                     offered_fee,
-                    &payload.metadata,
+                    &metadata,
                 )
                 .map_err(|_| BlockError::BuilderSignature)?,
             };
             Ok(BlockBuilderOutput {
                 view,
                 epoch,
-                payload,
+                payload: Arc::new(payload),
+                metadata,
                 parent_proposal: request.parent_proposal,
                 builder_commitment,
                 builder_fee,
@@ -369,7 +445,7 @@ impl<T: NodeType> From<&BlockBuilderOutput<T>> for HeaderRequest<T> {
             parent_proposal: output.parent_proposal.clone(),
             payload_commitment: output.payload_commitment,
             builder_commitment: output.builder_commitment.clone(),
-            metadata: output.payload.metadata.clone(),
+            metadata: output.metadata.clone(),
             builder_fee: output.builder_fee.clone(),
         }
     }
@@ -380,8 +456,7 @@ impl<T: NodeType> From<BlockBuilderOutput<T>> for ConsensusInput<T> {
         ConsensusInput::BlockBuilt {
             view: output.view,
             epoch: output.epoch,
-            payload: output.payload.payload,
-            metadata: output.payload.metadata,
+            payload: output.payload,
             payload_commitment: output.payload_commitment,
         }
     }

@@ -5,14 +5,15 @@
 //! whose shards cover the recovery threshold. This module owns the three stages
 //! of that lifecycle, one per submodule:
 //!
-//! - [`disperse`] -- the leader side. [`VidDisperser`] erasure-codes each
-//!   namespace, coalesces namespaces into size-balanced buckets, and unicasts
-//!   to every node a stream of [`AvidmGf2DisperseShareFragment`] messages
-//!   (one per bucket), each carrying that node's shares for the bucket's
-//!   namespaces.
+//! - [`fanout`] -- the leader side. The block builder erasure-codes the block
+//!   once (via `NsAvidmGf2Scheme::ns_disperse`, which yields the commitment) and
+//!   [`fan_out`] coalesces namespaces into size-balanced buckets and unicasts to
+//!   every node — including the leader itself, via loopback — a stream of
+//!   [`AvidmGf2DisperseShareFragment`] messages (one per bucket), each carrying
+//!   that node's shares for the bucket's namespaces.
 //!
 //! - [`fragments`] -- the receive side of dispersal, the mirror of
-//!   [`VidDisperser`]. [`VidFragmentAccumulator`] buffers the fragments a node
+//!   [`fanout`]. [`VidFragmentAccumulator`] buffers the fragments a node
 //!   receives for its *own* share and, once every namespace has arrived,
 //!   reassembles them into a complete [`VidDisperseShare2`]. That share is then
 //!   verified, attached to this node's vote, and fed to the reconstructor.
@@ -24,12 +25,12 @@
 //!
 //! [`AvidmGf2DisperseShareFragment`]: hotshot_types::data::vid_disperse::AvidmGf2DisperseShareFragment
 //! [`VidDisperseShare2`]: hotshot_types::data::VidDisperseShare2
+//! [`fan_out`]: fanout::fan_out
 
-mod disperse;
+pub mod fanout;
 mod fragments;
 mod reconstruct;
 
-pub use disperse::{VidDisperseError, VidDisperseOutput, VidDisperseRequest, VidDisperser};
 pub use fragments::{VidFragmentAccumulator, VidFragmentError};
 pub use reconstruct::{
     VidReconstructError, VidReconstructErrorKind, VidReconstructOutput, VidReconstructor,
