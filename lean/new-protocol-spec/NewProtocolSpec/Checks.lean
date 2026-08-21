@@ -23,6 +23,10 @@ These exist because that rot has happened here: two premises that became theorem
 and stayed listed as premises, and two clause counts that drifted after a clause
 was removed.
 
+What is checked here is the specification only. `new-protocol-impl` claims an
+axiom footprint of its own, for the conformance proof, and checks it in
+`NewProtocolImpl.Checks` — it has to, since this package cannot see that one.
+
 What is *not* checked here is that the declarations named in prose still exist.
 Two things cover that between them: `../Lint.lean` walks every docstring in the
 specification and fails on a backticked name that resolves to nothing, and

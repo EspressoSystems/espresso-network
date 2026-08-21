@@ -74,7 +74,7 @@ and Lean syntax, which is a command rather than a constant and so resolves to
 nothing however it is spelled. Anything else that fails to resolve is a stale name.
 -/
 def elsewhere : List String :=
-  ["NewProtocolImpl.Demo", "NewProtocolDiff.Corpus", "run_meta"]
+  ["NewProtocolImpl.Demo", "NewProtocolImpl.Checks", "NewProtocolDiff.Corpus", "run_meta"]
 
 /--
 Whether a name resolves to a declaration, a module, or something known to be elsewhere.

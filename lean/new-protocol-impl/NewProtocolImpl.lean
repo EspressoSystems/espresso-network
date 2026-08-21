@@ -32,6 +32,7 @@ public import NewProtocolImpl.Conformance.Step
 public import NewProtocolImpl.Conformance.Inputs
 public import NewProtocolImpl.Conformance.Marks
 public import NewProtocolImpl.Conformance.Lock
+public import NewProtocolImpl.Checks
 
 /-!
 # A reference implementation
@@ -123,11 +124,14 @@ theorem NewProtocol.Impl.conforms (cfg : Config) (leader : ViewNumber → Option
     (node : PubKey) : ProtocolConforms cfg leader node
 ```
 
-`#print axioms` on it reports only `propext`, `Classical.choice` and `Quot.sound`; there
-are no `sorry`s. `ProtocolConforms` is `Conforms` for every configuration whose anchor
-sits at genesis, every leader schedule and every node identity — so the machine is a
-witness that the specification is satisfiable, and that nothing in it is contradictory
-in combination with fairness.
+`#print axioms` on it reports only `propext`, `Classical.choice` and `Quot.sound`, and
+there are no `sorry`s. That is checked on every build by `NewProtocolImpl.Checks`
+rather than asserted here: the specification's own checks cannot see this package,
+since the dependency runs the other way, so until that file existed a `sorry`
+anywhere in the conformance argument built green. `ProtocolConforms` is `Conforms` for
+every configuration whose anchor sits at genesis, every leader schedule and every node
+identity — so the machine is a witness that the specification is satisfiable, and that
+nothing in it is contradictory in combination with fairness.
 
 It is relative to one assumption about the environment, and only one:
 `ValidityReported`, the machine's `Implements.envOk`. `Vote1Justification.blockValid`
