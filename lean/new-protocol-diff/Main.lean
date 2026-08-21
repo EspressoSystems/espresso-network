@@ -25,7 +25,10 @@ floor, which gates every decide and the retention of the vote2 marks
 
 The exit status is 1 if any trace diverged, could not be read, or could not be
 replayed. A trace that runs past what the specification covers is reported and
-counted, but does not fail the run; see `NewProtocolDiff.Corpus`.
+counted, but does not fail the run; see `NewProtocolDiff.Corpus`. That includes a
+trace the parser refuses for such a reason — a header from before a version
+boundary carries no payload commitment this protocol accepts, and being unable to
+read it is a boundary of the model rather than a broken recording.
 -/
 
 open Lean NewProtocol NewProtocolDiff
@@ -97,7 +100,10 @@ def replayOne (path : System.FilePath) : IO (Verdict × String) := do
     let .error e := readPreamble text | unreachable!
     return (.unreplayable, e)
   match parseTrace text with
-  | .error e => return (.malformed, Divergence.describe (.malformed e))
+  | .error e =>
+    match parseOutOfScope e with
+    | some reason => return (.outOfScope reason, s!"cannot be read: {reason}")
+    | none => return (.malformed, Divergence.describe (.malformed e))
   | .ok events =>
     -- The anchor sits at genesis, where no rule reads its payload commitment.
     let anchor : Block := ⟨⟨⟨0⟩⟩, ViewNumber.genesis, ⟨⟨⟨said.anchor⟩⟩, ViewNumber.genesis⟩,

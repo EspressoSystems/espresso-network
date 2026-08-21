@@ -117,19 +117,31 @@ instance : ToJson BlockHeader :=
   ⟨fun h => Json.mkObj [("payloadCommit", toJson h.payloadCommit)]⟩
 
 /--
-A header without a payload commitment is refused, with a reason.
+The mark a parse error carries when a trace is *outside* the specification rather
+than broken.
+
+`FromJson` fixes the error type to `String`, so the distinction has no type to
+travel in and has to travel in the message. `NewProtocolDiff.Corpus` reads it back
+out: a trace refused for a reason so marked is out of scope, which is what the
+reason already said in prose, and not a failure. Without the mark the two are
+indistinguishable to a caller, and a boundary of the model fails the run.
+-/
+def outOfScopeMark : String := "outside the model: "
+
+/--
+A header without a payload commitment is refused, and the refusal is marked.
 
 A recorder writes `null` there for a header carrying a commitment of a kind this
 protocol does not accept, which in a real run means a block inherited from an
 earlier protocol at a version boundary. That is outside what the specification
-covers, so such a trace is out of scope rather than a disagreement, and the
-message should say which.
+covers, so such a trace is out of scope rather than a disagreement, and
+`outOfScopeMark` is what carries that difference to whoever reads the error.
 -/
 instance : FromJson BlockHeader := ⟨fun j => do
   let pc ← j.getObjVal? "payloadCommit"
   match pc with
-  | .null => throw "header has no payload commitment: a block from before a \
-      version boundary, which this model does not cover"
+  | .null => throw (outOfScopeMark ++ "a header with no payload commitment is a \
+      block from before a version boundary, which this model does not cover")
   | _ => BlockHeader.mk <$> fromJson? pc⟩
 deriving instance ToJson, FromJson for Proposal, VidShare, Vote, CatchupEvidence
 deriving instance ToJson, FromJson for Message, Input, Output, Event

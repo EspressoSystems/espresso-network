@@ -132,6 +132,20 @@ def excuse (text : String) (events : List Event) : Divergence → Option String
             the trace never delivers"
   | _ => none
 
+/--
+Why a trace could not be parsed at all, when the reason is a boundary of the
+specification rather than a broken line.
+
+`NewProtocolDiff.outOfScopeMark` is how the parser says so. The mark is looked for anywhere
+in the message rather than at the front, because a `FromJson` error arrives
+wrapped in the field path that produced it.
+-/
+def parseOutOfScope (e : String) : Option String :=
+  if (e.splitOn NewProtocolDiff.outOfScopeMark).length > 1 then
+    some (e.splitOn NewProtocolDiff.outOfScopeMark |>.getLast!)
+  else
+    none
+
 /-- The verdict on one replayed trace, and what to print under it. -/
 def verdictOf (text : String) (events : List Event) (o : Outcome) : Verdict × String :=
   match o.divergence with

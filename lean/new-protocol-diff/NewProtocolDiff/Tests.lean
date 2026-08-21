@@ -2,11 +2,13 @@ module
 
 public import NewProtocolDiff.Trace
 public import NewProtocolDiff.Replay
+public import NewProtocolDiff.Corpus
 public meta import NewProtocolSpec.Interface
 public meta import NewProtocolImpl.Protocol
 public meta import NewProtocolDiff.Json
 public meta import NewProtocolDiff.Trace
 public meta import NewProtocolDiff.Replay
+public meta import NewProtocolDiff.Corpus
 
 /-!
 # Checks on the harness itself
@@ -187,6 +189,43 @@ private def voteStep (identity : BlockHash) : Event :=
 
 /-- info: "DIVERGED after 3 steps\n  step 3: the recording voted1 in view 1, the machine did not" -/
 #guard_msgs in #eval run (opening ++ [voteStep ⟨999⟩])
+
+/-! ## A boundary of the model is not a failure
+
+A header whose payload commitment is `null` is a block from before a version
+boundary. The parser refuses it, and the refusal has to read as out of scope
+rather than as a broken trace: it was the second for a while, which made every
+recorded cutover run a red build waiting to happen.
+
+The two lines below are written out rather than encoded from the types, because
+neither is a value the types admit — that is what makes them worth testing. Kept
+on one line each: `parseTrace` splits on newlines, so a step broken across two
+would be malformed for the wrong reason and the first test would pass without
+touching the case it names.
+-/
+
+/-- A step delivering a proposal whose header carries no payload commitment. -/
+private def preCutoverLine : String :=
+  r#"{"consensus":{"input":{"proposal":{"sender":1,"p":{"blockHeader":"# ++
+  r#"{"payloadCommit":null},"viewNumber":1,"parentCert":{"data":"# ++
+  r#"{"blockHash":7},"view":0},"timeoutEvidence":null,"identity":9},"# ++
+  r#""vid":{"view":1,"payloadCommit":3}}},"output":[]}}"#
+
+/-- A step that is simply incomplete. -/
+private def brokenLine : String :=
+  r#"{"consensus":{"input":{"proposal":{"sender":1}}}}"#
+
+/-- How a parse failure classifies: the boundary of the model, or a bad recording. -/
+private def classify (line : String) : String :=
+  match parseTrace line with
+  | .ok _ => "parsed, which it should not"
+  | .error e => if (parseOutOfScope e).isSome then "out of scope" else "malformed"
+
+/-- info: "out of scope" -/
+#guard_msgs in #eval classify preCutoverLine
+
+/-- info: "malformed" -/
+#guard_msgs in #eval classify brokenLine
 
 end Tests
 end NewProtocolDiff
