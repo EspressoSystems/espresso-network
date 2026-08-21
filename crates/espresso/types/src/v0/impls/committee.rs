@@ -810,6 +810,24 @@ impl Membership<SeqTypes> for EpochCommittees {
             return Err(Self::Error::NoRootBlock(block_number.into()));
         }
 
+        // Stored ahead of the early return below so a failed write is retried by the next
+        // `add_epoch_root` for this epoch. Downstream of `put_epoch_committee` the committee
+        // is complete, which both arms that early return and stops catchup from re-entering
+        // `fetch_stake_table`, so one dropped error would leave the header unpersisted.
+        //
+        // Keyed by `epoch`, unlike the previous-epoch stake table stored further down, and
+        // not gated behind the stake table consistency check, which doesn't apply here.
+        if let Err(e) = self
+            .fetcher
+            .persistence
+            .lock()
+            .await
+            .store_epoch_root(epoch, block_header.clone())
+            .await
+        {
+            error!(?e, ?epoch, "`add_epoch_root`, error storing epoch root");
+        }
+
         let version = block_header.version();
         // Update the chain config if the block header contains a newer one.
         self.fetcher
@@ -940,15 +958,6 @@ impl Membership<SeqTypes> for EpochCommittees {
         }
 
         let persistence_lock = self.fetcher.persistence.lock().await;
-
-        // Keyed by `epoch`, unlike the previous-epoch stake table stored below; not
-        // gated behind the stake table consistency check, which doesn't apply here.
-        if let Err(e) = persistence_lock
-            .store_epoch_root(epoch, block_header.clone())
-            .await
-        {
-            error!(?e, ?epoch, "`add_epoch_root`, error storing epoch root");
-        }
 
         let decided_hash = block_header.next_stake_table_hash();
 
@@ -1556,6 +1565,7 @@ mod tests {
         ValidatorConfig,
         traits::{BlockPayload, block_contents::BlockHeader},
     };
+    use rstest::rstest;
     use tokio::{task::JoinSet, time::Duration};
 
     use super::*;
@@ -2206,12 +2216,15 @@ mod tests {
     // `add_epoch_root` is the only path by which a V0_6-native node (which
     // never calls the legacy `decide_epoch_root`/`Storage::store_epoch_root`)
     // persists the epoch root header. Regression test for that header being
-    // silently dropped.
+    // silently dropped. The header version is irrelevant: the store happens
+    // before any version-dependent branch. A cached header makes the committee
+    // complete, which takes the early return; that path must persist too.
+    #[rstest]
+    #[case::incomplete_committee(false)]
+    #[case::complete_committee(true)]
     #[tokio::test]
-    async fn add_epoch_root_persists_epoch_root_header() {
+    async fn add_epoch_root_persists_epoch_root_header(#[case] cached_header: bool) {
         let header = build_epoch_root_header().await;
-        let epoch_height = 100u64;
-        let epoch = EpochNumber::new(epoch_from_block_number(header.height(), epoch_height) + 2);
 
         let store = MockStakeStore {
             header: header.clone(),
@@ -2225,6 +2238,8 @@ mod tests {
             crate::ChainConfig::default(),
         );
         let committees = build_committees_with_fetcher(4, fetcher);
+        let epoch_height = *committees.epoch_height();
+        let epoch = EpochNumber::new(epoch_from_block_number(header.height(), epoch_height) + 2);
 
         // Prefill so `add_epoch_root` reuses the cached validators and skips the L1 fetch.
         {
@@ -2235,7 +2250,7 @@ mod tests {
             let prefilled = EpochCommittee {
                 block_reward: Some(RewardAmount::default()),
                 stake_table_hash: Some(StakeTableState::default().commit()),
-                header: None,
+                header: cached_header.then(|| header.clone()),
                 eligible_leaders: template.eligible_leaders.clone(),
                 stake_table: template.stake_table.clone(),
                 validators: template.validators.clone(),
@@ -2246,7 +2261,7 @@ mod tests {
 
         let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(
             committees.clone(),
-            *committees.epoch_height(),
+            epoch_height,
             &hotshot_example_types::storage_types::TestStorage::default(),
         );
         coordinator
