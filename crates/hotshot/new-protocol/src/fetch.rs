@@ -72,41 +72,14 @@ impl<T: NodeType> Fetcher<T> {
         membership: &EpochMembershipCoordinator<T>,
         network: &Sender<T>,
     ) -> Result<(), CoordinatorError> {
-        use rand::seq::IteratorRandom;
-
         let request = consensus.signed_fetch_request(view).map_err(|err| {
             let err = format!("failed to sign payload request: {err}");
             CoordinatorError::regular(err).context("sign payload request")
         })?;
 
-        let mut rng = rand::thread_rng();
-
-        let mut fetch = self.requested.get_mut(&(view, payload_commitment));
-
-        let target = (|| {
-            let epoch = consensus.proposal_at(view)?.epoch;
-            let membership = membership.stake_table_for_epoch(Some(epoch)).ok()?;
-            let stake_table = membership.stake_table();
-            if let Some(fetch) = &mut fetch
-                && retry == Retry::NewRound
-                && fetch.asked.len() + 1 == stake_table.len()
-            {
-                fetch.asked.clear();
-                fetch.pending.clear();
-            }
-            stake_table
-                .map(|peer| T::SignatureKey::public_key(&peer.stake_table_entry))
-                .filter(|peer| {
-                    if *peer == self.public_key {
-                        return false;
-                    }
-                    let Some(fetch) = &fetch else { return true };
-                    !fetch.asked.contains(peer)
-                })
-                .choose(&mut rng)
-        })();
-
-        let Some(target) = target else {
+        let Some(target) =
+            self.choose_target(view, payload_commitment, retry, consensus, membership)
+        else {
             warn!(%view, "no peer to fetch the payload from");
             return Ok(());
         };
@@ -115,6 +88,7 @@ impl<T: NodeType> Fetcher<T> {
             .requested
             .entry((view, payload_commitment))
             .or_default();
+
         fetch.asked.insert(target.clone());
         fetch.pending.insert(target.clone());
 
@@ -126,6 +100,47 @@ impl<T: NodeType> Fetcher<T> {
         network
             .unicast(consensus.current_view(), &target, &message)
             .map_err(|err| CoordinatorError::from(err).context("unicast payload request"))
+    }
+
+    /// A member of the view's committee this fetch has not asked yet.
+    fn choose_target(
+        &mut self,
+        view: ViewNumber,
+        payload_commitment: VidCommitment2,
+        retry: Retry,
+        consensus: &Consensus<T>,
+        membership: &EpochMembershipCoordinator<T>,
+    ) -> Option<T::SignatureKey> {
+        use rand::seq::IteratorRandom;
+
+        let epoch = consensus.proposal_at(view)?.epoch;
+        let membership = membership.stake_table_for_epoch(Some(epoch)).ok()?;
+
+        let mut rng = rand::thread_rng();
+        let mut fetch = self.requested.get_mut(&(view, payload_commitment));
+        let me = &self.public_key;
+
+        let draw = |fetch: Option<&Fetch<T::SignatureKey>>, rng: &mut _| {
+            membership
+                .stake_table()
+                .map(|peer| T::SignatureKey::public_key(&peer.stake_table_entry))
+                .filter(|peer| peer != me && fetch.is_none_or(|fetch| !fetch.asked.contains(peer)))
+                .choose(rng)
+        };
+
+        if let Some(peer) = draw(fetch.as_deref(), &mut rng) {
+            return Some(peer);
+        }
+
+        if retry == Retry::SameRound {
+            return None;
+        }
+
+        let fetch = fetch.as_mut()?;
+        fetch.asked.clear();
+        fetch.pending.clear();
+
+        draw(None, &mut rng)
     }
 
     /// Verify a peer's response to a request we made, and yield the payload
