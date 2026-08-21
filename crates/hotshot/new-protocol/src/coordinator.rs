@@ -1256,13 +1256,6 @@ where
                     let current_view = self.consensus.current_view();
                     let has_evidence = timeout_msg.evidence.is_some();
 
-                    if let Some(CatchupEvidence::Qc(qc)) = &timeout_msg.evidence
-                        && !self.is_view_too_far_ahead(qc.view_number())
-                    {
-                        self.fetcher
-                            .note_advertiser(qc.view_number(), message.sender.clone());
-                    }
-
                     // If a peer times out in a view at or ahead of us we adopt its
                     // highest certificate. Evidence takes precedence over
                     // the vote being too far ahead, and a valid certificate proves
@@ -1339,10 +1332,6 @@ where
                         epoch = ?qc.epoch().map(|e| *e),
                         "recv high qc"
                     );
-                    if !self.is_view_too_far_ahead(qc.view_number()) {
-                        self.fetcher
-                            .note_advertiser(qc.view_number(), message.sender.clone());
-                    }
                     if let Some(epoch) = self
                         .cert_verifiers
                         .advance
