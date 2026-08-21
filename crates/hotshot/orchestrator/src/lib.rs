@@ -40,7 +40,7 @@ use hotshot_types::{
     },
 };
 use http_client::{Url, error::ClientErr};
-use http_wire::{self as wire, ServerError, cors_layer, healthcheck_response};
+use http_wire::{self as wire, ServerError, WireVersion, cors_layer, healthcheck_response};
 use libp2p_identity::{
     Keypair, PeerId,
     ed25519::{Keypair as EdKeypair, SecretKey},
@@ -48,18 +48,13 @@ use libp2p_identity::{
 use multiaddr::Multiaddr;
 use serde::de::DeserializeOwned;
 use tokio::net::TcpListener;
-use vbs::{BinarySerializer, Serializer, version::StaticVersion};
+use vbs::{BinarySerializer, Serializer};
 
-/// Orchestrator is not, strictly speaking, bound to the network; it can have its own versioning.
-/// Orchestrator Version (major)
-pub const ORCHESTRATOR_MAJOR_VERSION: u16 = 0;
-/// Orchestrator Version (minor)
-pub const ORCHESTRATOR_MINOR_VERSION: u16 = 1;
-/// Orchestrator Version as a type
-pub type OrchestratorVersion =
-    StaticVersion<ORCHESTRATOR_MAJOR_VERSION, ORCHESTRATOR_MINOR_VERSION>;
-/// Orchestrator Version as a type-binding instance
-pub const ORCHESTRATOR_VERSION: OrchestratorVersion = StaticVersion {};
+/// VBS framing version for orchestrator request bodies and the client in `client.rs`.
+///
+/// Responses go through [`wire::respond`], which always encodes at [`WireVersion`]; aliasing
+/// keeps request decoding and the client in lockstep with the responses.
+pub type OrchestratorVersion = WireVersion;
 
 /// Generate an keypair based on a `seed` and an `index`
 /// # Panics
