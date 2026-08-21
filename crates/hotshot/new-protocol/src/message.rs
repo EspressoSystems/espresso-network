@@ -3,7 +3,8 @@ use std::marker::PhantomData;
 use committable::{Commitment, Committable};
 use hotshot_types::{
     data::{
-        EpochNumber, VidDisperseShare2, ViewNumber, vid_disperse::AvidmGf2DisperseShareFragment,
+        EpochNumber, VidCommitment2, VidDisperseShare2, ViewNumber,
+        vid_disperse::AvidmGf2DisperseShareFragment,
     },
     message::Proposal as SignedProposal,
     request_response::ProposalRequestPayload,
@@ -242,12 +243,12 @@ impl<T: NodeType, S> HasEpoch for EpochChangeMessage<T, S> {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
-pub struct ProposalFetchRequest<T: NodeType> {
+pub struct FetchRequest<T: NodeType> {
     pub payload: ProposalRequestPayload<T>,
     pub signature: <T::SignatureKey as SignatureKey>::PureAssembledSignatureType,
 }
 
-impl<T: NodeType> ProposalFetchRequest<T> {
+impl<T: NodeType> FetchRequest<T> {
     pub fn new(
         view_number: ViewNumber,
         key: T::SignatureKey,
@@ -267,7 +268,7 @@ impl<T: NodeType> ProposalFetchRequest<T> {
     }
 }
 
-impl<T: NodeType> HasViewNumber for ProposalFetchRequest<T> {
+impl<T: NodeType> HasViewNumber for FetchRequest<T> {
     fn view_number(&self) -> ViewNumber {
         self.payload.view_number
     }
@@ -332,7 +333,7 @@ impl<T: NodeType, S> HasViewNumber for ConsensusMessage<T, S> {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
 pub enum ProposalFetchMessage<T: NodeType> {
-    Request(ProposalFetchRequest<T>),
+    Request(FetchRequest<T>),
     Response(Box<SignedProposal<T, Proposal<T>>>),
 }
 
@@ -343,6 +344,30 @@ impl<T: NodeType> HasViewNumber for ProposalFetchMessage<T> {
             Self::Response(proposal) => proposal.data.view_number(),
         }
     }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = ""))]
+pub enum PayloadFetchMessage<T: NodeType> {
+    Request(FetchRequest<T>),
+    Response(PayloadFetchResponse),
+}
+
+impl<T: NodeType> HasViewNumber for PayloadFetchMessage<T> {
+    fn view_number(&self) -> ViewNumber {
+        match self {
+            Self::Request(request) => request.view_number(),
+            Self::Response(response) => response.view,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+pub struct PayloadFetchResponse {
+    pub view: ViewNumber,
+    pub payload_commitment: VidCommitment2,
+    #[serde(with = "serde_bytes")]
+    pub payload: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
@@ -384,6 +409,7 @@ pub enum MessageType<T: NodeType, S> {
     Block(BlockMessage<T>),
     ProposalFetch(ProposalFetchMessage<T>),
     External(#[serde(with = "serde_bytes")] Vec<u8>),
+    PayloadFetch(PayloadFetchMessage<T>),
 }
 
 impl<T: NodeType, S> MessageType<T, S> {
@@ -394,6 +420,7 @@ impl<T: NodeType, S> MessageType<T, S> {
             Self::Block(b) => MessageType::Block(b),
             Self::ProposalFetch(r) => MessageType::ProposalFetch(r),
             Self::External(v) => MessageType::External(v),
+            Self::PayloadFetch(r) => MessageType::PayloadFetch(r),
         }
     }
 }
@@ -426,6 +453,7 @@ impl<T: NodeType, S> HasViewNumber for Message<T, S> {
             MessageType::Block(block_message) => block_message.view_number(),
             MessageType::ProposalFetch(message) => message.view_number(),
             MessageType::External(_) => ViewNumber::new(1), // TODO: This can become a problem
+            MessageType::PayloadFetch(message) => message.view_number(),
         }
     }
 }

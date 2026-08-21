@@ -8,6 +8,7 @@ mod epoch_change;
 mod failures;
 mod integration;
 mod legacy_cutover;
+mod liveness;
 mod restarts;
 mod safety;
 mod stake_table_changes;

@@ -31,6 +31,26 @@ mod reconstruct;
 
 pub use disperse::{VidDisperseError, VidDisperseOutput, VidDisperseRequest, VidDisperser};
 pub use fragments::{VidFragmentAccumulator, VidFragmentError};
+use hotshot_types::{
+    data::{EpochNumber, vid_disperse::vid_total_weight},
+    epoch_membership::EpochMembershipCoordinator,
+    traits::node_implementation::NodeType,
+    vid::avidm_gf2::{AvidmGf2Param, init_avidm_gf2_param},
+};
 pub use reconstruct::{
     VidReconstructError, VidReconstructErrorKind, VidReconstructOutput, VidReconstructor,
 };
+
+/// The VID erasure parameters the committee fixes for `target_epoch`,
+/// matching what an honest disperser derives. Used to reject shares whose
+/// `common.param` is forged (the commitment binds `ns_commits`, not `param`)
+/// and to verify payloads fetched whole. `None` if the committee cannot be
+/// resolved.
+pub fn expected_vid_param<T: NodeType>(
+    membership: &EpochMembershipCoordinator<T>,
+    target_epoch: Option<EpochNumber>,
+) -> Option<AvidmGf2Param> {
+    let membership = membership.stake_table_for_epoch(target_epoch).ok()?;
+    let total_weight = vid_total_weight::<T, _>(membership.stake_table(), target_epoch);
+    init_avidm_gf2_param(total_weight).ok()
+}
