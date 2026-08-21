@@ -33,10 +33,17 @@ namespace NewProtocolDiff
 
 open NewProtocol
 
-/-- Dropped inputs standing for something the specification does not cover. -/
+/--
+Dropped inputs standing for something the specification does not cover.
+
+Every name here must be one the recorder actually writes. The comparison is one-way.
+A recorder may drop inputs this list does not excuse: `Stored` and `BlockBuilt` are
+dropped and deliberately absent, since their outputs ride along on the next written
+step rather than being lost, and a trace that diverges around one of them is a
+disagreement to look at rather than a boundary to wave through.
+-/
 def unmodelledInputs : List (String × String) :=
   [ ("EpochChange", "epoch machinery"),
-    ("EpochRootCertificates", "epoch machinery"),
     ("DrbResult", "epoch machinery"),
     ("FetchedProposal", "block fetching"),
     ("StateValidationFailed", "state validation") ]

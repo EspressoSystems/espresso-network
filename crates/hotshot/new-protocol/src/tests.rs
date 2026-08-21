@@ -13,5 +13,6 @@ mod restarts;
 mod safety;
 mod stake_table_changes;
 mod state;
+mod trace_contract;
 mod storage;
 mod vid;
