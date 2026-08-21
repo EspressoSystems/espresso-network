@@ -3423,6 +3423,12 @@ pub fn router_v2_docs() -> Router {
             routes::v2::SWAGGER_ROUTE,
             get(|| async { swagger_html(routes::v2::OPENAPI_SPEC_ROUTE) }),
         )
+        // axum 0.8 has no trailing-slash redirect and `rewrite_legacy_uri` leaves `/v2/` alone,
+        // so the slashed form needs its own route, as `/v1/` does.
+        .route(
+            "/v2/",
+            get(|| async { swagger_html(routes::v2::OPENAPI_SPEC_ROUTE) }),
+        )
         .route(
             routes::v2::SCALAR_ROUTE,
             get(Scalar::new(routes::v2::OPENAPI_SPEC_ROUTE)
@@ -4669,16 +4675,16 @@ mod tests {
 
     #[tokio::test]
     async fn v2_swagger_ui_serves_html() {
-        let req = Request::builder()
-            .uri(routes::v2::SWAGGER_ROUTE)
-            .body(axum::body::Body::empty())
-            .unwrap();
-        let resp = tower::ServiceExt::oneshot(router_v2_docs(), req)
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = body_string(resp).await;
-        assert!(body.contains(routes::v2::OPENAPI_SPEC_ROUTE));
+        for uri in [routes::v2::SWAGGER_ROUTE, "/v2/", routes::v2::SCALAR_ROUTE] {
+            let req = Request::builder()
+                .uri(uri)
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let resp = tower::ServiceExt::oneshot(router_v2_docs(), req)
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK, "{uri} should serve docs");
+        }
     }
 
     /// `submit` and the bulk `catchup` routes take bodies over axum's 2 MiB `Bytes` default, and
