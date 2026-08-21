@@ -31,7 +31,9 @@ impl fmt::Display for ApiError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ApiError::BadRequest(err) | ApiError::NotFound(err) | ApiError::Internal(err) => {
-                write!(f, "{}", err)
+                // Both the axum and tonic adapters render an error into a response body through
+                // this impl, so a provider credential in the message is removed once, here.
+                f.write_str(&espresso_utils::redact::scrub(&err.to_string()))
             },
         }
     }

@@ -2409,6 +2409,62 @@ pub mod test_helpers {
             self.deferred.remove(0);
 
             let ctx = self
+                .init_and_start(i, state, persistence, catchup, upgrade)
+                .await;
+            self.peers.push(ctx);
+            self.peers.last().unwrap()
+        }
+
+        /// Shuts the node at index `i` down and reinitializes it from the
+        /// network's current configuration, picking up any rotated consensus
+        /// keys or coordinator address (see [`TestConfig::set_consensus_keys`]
+        /// and [`TestConfig::set_coordinator_addr`]). Node 0 hosts the query
+        /// API and cannot be restarted this way.
+        pub async fn restart_node<C: StateCatchup + 'static>(
+            &mut self,
+            i: usize,
+            state: ValidatedState,
+            persistence: P,
+            catchup: C,
+            upgrade: versions::Upgrade,
+        ) -> &SequencerContext<network::Memory, P::Persistence> {
+            assert_ne!(i, 0, "node 0 runs the API server and cannot be restarted");
+            assert!(
+                !self.deferred.contains(&i),
+                "node {i} was deferred and has not been started yet"
+            );
+            self.peers[i - 1].shut_down().await;
+            // The restarted node may rebind the very coordinator port it
+            // just released, but `shut_down` cannot await the listener drop:
+            // aborted tasks holding network senders keep it alive. Poll
+            // until the address is actually bindable again.
+            let addr = self.cfg.coordinator_addr(i).to_string();
+            timeout(Duration::from_secs(60), async {
+                while std::net::TcpListener::bind(&addr).is_err() {
+                    sleep(Duration::from_millis(100)).await;
+                }
+            })
+            .await
+            .expect("shut-down node did not release its coordinator port");
+
+            let ctx = self
+                .init_and_start(i, state, persistence, catchup, upgrade)
+                .await;
+            self.peers[i - 1] = ctx;
+            &self.peers[i - 1]
+        }
+
+        /// Initializes node `i` from the network's current configuration and
+        /// starts consensus on it, the same way construction does.
+        async fn init_and_start<C: StateCatchup + 'static>(
+            &self,
+            i: usize,
+            state: ValidatedState,
+            persistence: P,
+            catchup: C,
+            upgrade: versions::Upgrade,
+        ) -> SequencerContext<network::Memory, P::Persistence> {
+            let ctx = self
                 .cfg
                 .init_node(
                     i,
@@ -2424,8 +2480,7 @@ pub mod test_helpers {
                 )
                 .await;
             ctx.start_consensus().await;
-            self.peers.push(ctx);
-            self.peers.last().unwrap()
+            ctx
         }
 
         pub async fn stop_consensus(&mut self) {
