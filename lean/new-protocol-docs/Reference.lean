@@ -1,0 +1,1240 @@
+import Verso
+import VersoManual
+import NewProtocolSpec
+import Style
+
+open Verso.Genre Manual InlineLean
+open NewProtocol
+
+set_option verso.code.warnLineLength 90
+
+#doc (Manual) "New protocol: consensus specification" =>
+
+%%%
+tag := "top"
+%%%
+
+_What one consensus node must do, and the whole contract an implementation owes._
+
+Consensus runs in numbered views, each with a leader. The leader of a view
+proposes one block, extending a parent that it names by certificate. Every node
+then votes on that block twice, and each round completes when a quorum has voted.
+
+A vote1 says the block is a fit extension. The node casting it holds the (valid)
+block, holds its own share of the block's data, and has checked that the block does
+not conflict with its lock. A quorum of vote1s is a {name NewProtocol.Cert1}`Cert1`,
+which does three jobs:
+  * the next leader cites it to extend the chain,
+  * any node may move to the next view on it, and
+  * a node may lock on it.
+
+A vote2 says the block is there to stay. It requires a {name NewProtocol.Cert1}`Cert1`
+for the block and the block's payload reconstructed from enough shares — so the second
+round is where availability is established, not just agreement. A quorum of vote2s is a
+{name NewProtocol.Cert2}`Cert2`, and a {name NewProtocol.Cert2}`Cert2` decides the block:
+the node hands it to the application, along with any ancestors it holds and that it has
+not delivered before.
+
+A view that produces no {name NewProtocol.Cert1}`Cert1` is abandoned. The node's timer
+fires, it votes to give the view up, and a quorum of those votes is a
+{name NewProtocol.TimeoutCert}`TimeoutCert`, on which the next view can start without a
+{name NewProtocol.Cert1}`Cert1` for the one skipped.
+
+Forks are prevented by two things a node knows about its own past, not by any test
+on the branch it is asked to endorse. A node that has cast a vote2 in a view has
+its lock at that view or beyond, which stops it endorsing a later proposal reaching
+back past it. A node that has cast a vote1 remembers the branch it endorsed, which
+stops it casting a vote2 in a view that branch skips.
+{name NewProtocol.decideSafety}`decideSafety` is the proof that these two suffice.
+
+Everything is stated per node — one node's state, one node's step — until the
+network section, which is where a quorum's worth of nodes first appears, and which
+is all that {name NewProtocol.decideSafety}`decideSafety` needs.
+
+Every rule below is spliced from the declaration that states it. The prose here
+orders and groups them; it does not restate them, so it cannot drift from what is
+proved. Read top to bottom, nothing is used before it is defined.
+
+# What is not covered
+
+%%%
+tag := "not-covered"
+%%%
+
+This specification covers the core protocol: a single, static committee of which this
+node is a member, with the leader schedule left as a parameter, on crash-free nodes.
+What is left out falls into two groups, and the difference decides how much judgment
+each item deserves.
+
+*Absent, and nothing proved depends on it.* An implementation supplies these, and no
+rule here reads them, so how they work cannot affect the results.
+
+* *Light-client certification of the chain's state.* Consensus only carries such a
+  certificate for others to use; nothing in the protocol reads it.
+
+* *Message assembly.* A proposal and the recipient's VID share travel separately and
+  must be paired; {name NewProtocol.Input}`Input` delivers the pair already assembled.
+  That the pairing is honest is still required rather than assumed:
+  {name NewProtocol.StepSpec.vidShareProvenance}`StepSpec.vidShareProvenance` says a
+  held share arrived with the proposal it belongs to.
+
+* *Fetching blocks a node missed.* An implementation may ask peers for them. Here a
+  fetched block is an ordinary proposal arrival — held for ancestry when its admission
+  guards fail, never votable — and no obligation depends on fetching, since the decide
+  stream skips what is not in hand. Fetching is quality of service, not protocol.
+
+*Absent, and the results are narrower for it.* Each of these is something a real
+deployment does, and what is proved holds of the system with the piece removed. The
+distance between that system and a real one is where an audit should spend its doubt.
+
+* *Epochs and committee rotation.* Epoch numbers on messages, the arithmetic of epoch
+  boundaries, the randomness that seeds the next committee, the handover, and
+  stake-table membership. Only the leader schedule survives, as a parameter. Safety is
+  stated for one fixed committee, so nothing here speaks to a handover between two.
+
+* *Persistence and restart.* Parking a vote or a proposal until storage confirms it,
+  and resuming afterwards, exist to make voting promises survive a crash. Nodes are
+  assumed not to crash, so nothing is claimed of a node that does; what matters for
+  safety is kept as ordering obligations — the lock is settled before a vote2 is
+  released ({name NewProtocol.SafetySpec.vote2LockOrdered}`SafetySpec.vote2LockOrdered`),
+  and a view voted in is never voted in twice
+  ({name NewProtocol.SafetySpec.vote1Once}`SafetySpec.vote1Once`,
+  {name NewProtocol.SafetySpec.vote2Once}`SafetySpec.vote2Once`).
+
+* *Application-level block validity.* Consensus treats blocks as opaque, so
+  {name NewProtocol.BlockValid}`BlockValid` is uninterpreted and arrives as an input to
+  be believed. Every result is therefore conditional on
+  {name NewProtocol.ValidityReported}`ValidityReported` below: a node told that an
+  invalid block is valid will vote for it.
+
+* *The network.* Nothing says a message is ever delivered, not even eventually, and
+  with no notion of duration there is nothing for a synchrony assumption to be about.
+  {name NewProtocol.WeaklyFair}`WeaklyFair` is the per-node half of liveness: it
+  constrains how a node schedules its own actions and says nothing about its peers.
+  End-to-end progress needs the other half.
+
+* *The view timer.* A timeout input is the timer firing; nothing says when, because
+  nothing here has a notion of duration. {name NewProtocol.Network}`Network` orders
+  events causally, which is a different thing: it says one event precedes another, never
+  how long anything takes, and concurrent events stay incomparable. So resetting the
+  timer on entering a view has no counterpart here, and neither does the request that
+  would do it — see {name NewProtocol.Output}`Output`. What this costs is progress:
+  partial synchrony would need the duration that is absent.
+
+* *Agreement on what may be pruned.* {name NewProtocol.GcSpec}`GcSpec` lets each node
+  prune unilaterally, bounded by two watermarks, and proves that nothing it may still
+  owe is lost. Nothing coordinates the decision, which is sound only because nothing
+  here says what it means to serve a peer what one has kept; a specification that had
+  one would need the nodes to agree on the watermark before pruning past it.
+
+* *Message routing.* No message names a recipient, so nothing here says whether one is
+  broadcast or sent to a single peer, and for one message the choice is not free. Every
+  honest node must be able to assemble a timeout certificate itself, which means the
+  timeout votes must reach all of them: a node enters the next view only on a `Cert1`
+  for the previous one or a timeout certificate over it, and it cannot time out of a
+  view it never entered. Concentrate those votes on one node and that node can stop the
+  network for good. Vote1s and vote2s are not like this — withholding them stalls one
+  view, which the timeout path then carries. Neither fact is stated here, so end-to-end
+  progress needs both, alongside a delivery model.
+
+* *Migration from an earlier protocol.* Only what happens after such a boundary is
+  described, and only for a node that ran this protocol from the start:
+  {name NewProtocol.Config.anchorBlock}`Config.anchorBlock` anchors every run at
+  genesis. The earlier protocol is not described here, so nothing is claimed of it, of
+  the crossing, or of a node carrying state from before it.
+
+Whether each omission is safe is a judgment for the reader; the specification does not
+settle it. The second group is where that judgment is needed.
+
+# The data
+
+The objects the rules are about. Two reductions run through all of them.
+Cryptographic values — hashes, keys, commitments — are one-field wrappers, because
+the rules only ever compare and store them. And hashing is opaque: no rule can look
+inside a hash, so every rule relates hash images only. Signatures are not modelled
+either — where a message would carry one and a recipient would verify it, the
+conclusion is stated as a proposition, and {name NewProtocol.Network}`Network` is
+where those propositions are collected.
+
+{docstring NewProtocol.ViewNumber}
+
+{docstring NewProtocol.BlockHash}
+
+{docstring NewProtocol.PayloadCommit}
+
+{docstring NewProtocol.PubKey}
+
+{docstring NewProtocol.BlockHeader}
+
+{docstring NewProtocol.Proposal}
+
+{docstring NewProtocol.Block}
+
+{expansion NewProtocol.Block}
+
+{docstring NewProtocol.BlockTable}
+
+{expansion NewProtocol.BlockTable}
+
+{docstring NewProtocol.Vote1Data}
+
+{docstring NewProtocol.Vote2Data}
+
+Certificates share one shape, differing in what their votes signed.
+{name NewProtocol.Cert1}`Cert1` and {name NewProtocol.Cert2}`Cert2` are kept apart
+at the type level so that no rule can mistake a vote of one round for the other.
+
+{docstring NewProtocol.Certificate}
+
+{docstring NewProtocol.Cert1}
+
+{expansion NewProtocol.Cert1}
+
+{docstring NewProtocol.Cert2}
+
+{expansion NewProtocol.Cert2}
+
+{docstring NewProtocol.TimeoutCert}
+
+{expansion NewProtocol.TimeoutCert}
+
+{docstring NewProtocol.Vote}
+
+{docstring NewProtocol.Vote1}
+
+{expansion NewProtocol.Vote1}
+
+{docstring NewProtocol.Vote2}
+
+{expansion NewProtocol.Vote2}
+
+{docstring NewProtocol.TimeoutVote}
+
+{expansion NewProtocol.TimeoutVote}
+
+{docstring NewProtocol.CatchupEvidence}
+
+{docstring NewProtocol.VidShare}
+
+{docstring NewProtocol.Config}
+
+One function over that data is used throughout, and it is not a rule.
+
+{docstring NewProtocol.blockHash}
+
+# What a node is told, and what it says
+
+Nothing else crosses the boundary. In particular a node never asks for anything,
+so there are no request outputs: an implementation's own subsystems are its
+business, and the specification only names what arrives.
+
+Both are architecture-neutral *events*. An input is a moment at which the node
+comes to know something — a proposal arrived, a payload is in hand, a block was
+found valid, a timer fired — never a module answering a call, so every
+implementation has these moments however it is decomposed. Which of them a node
+*owes* is not settled here; that is what the obligations of
+{name NewProtocol.StepSpec}`StepSpec` name.
+
+{docstring NewProtocol.Input}
+
+{docstring NewProtocol.Output}
+
+{docstring NewProtocol.Message}
+
+# What a node remembers
+
+{docstring NewProtocol.NodeState}
+
+The other watermark is not a field. The bar is stored, because a node chooses when
+to move it; the decide floor is derived, because it follows the views the node has
+decided, and so moves on its own as the chain advances.
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.NodeState.aboveDecideFloor
+  ```lean
+  def NodeState.aboveDecideFloor (cfg : NewProtocol.Config) (s : NodeState)
+      (v : ViewNumber) : Prop :=
+    ∀ w, s.decidedViews w → w - cfg.decideBuffer < v
+  ```
+:::
+
+```lean -show
+example : @Spec.NodeState.aboveDecideFloor = @NewProtocol.NodeState.aboveDecideFloor := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.NodeState.aboveDecideFloor}
+
+What a step may not discard is split along the same seam. Each names one view's
+worth of state, and the two halves go stale at different times, which is what lets
+a collection drop one and keep the other.
+
+{docstring NewProtocol.RetainsDecide +hideFields}
+
+{docstring NewProtocol.RetainsVote +hideFields}
+
+{docstring NewProtocol.Retains +hideFields}
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.Writable
+  ```lean
+  def Writable {α : Type} (o : Option α) (x : α) : Prop :=
+    o = none ∨ o = some x
+  ```
+:::
+
+```lean -show
+example : @Spec.Writable = @NewProtocol.Writable := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.Writable}
+
+{docstring NewProtocol.Event}
+
+{docstring NewProtocol.StepRel}
+
+{expansion NewProtocol.StepRel}
+
+Collection is a step of the machine like any other: a `.consensus` event is
+justified by the step relation, a `.collect` event by
+{name NewProtocol.GcSpec}`GcSpec`. What a node prunes is therefore bound by a
+rule, rather than happening between steps where nothing constrains it.
+
+{docstring NewProtocol.Transition}
+
+{docstring NewProtocol.Reachable}
+
+{docstring NewProtocol.Run}
+
+Three readings of a run are used below, and nothing else looks inside one: what it
+emitted, what it consumed, and what holds from some point on.
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.Run.Emits
+  ```lean
+  def Run.Emits {cfg : NewProtocol.Config} {S : StepRel}
+      (r : Run cfg S) (P : NewProtocol.Output → Prop) : Prop :=
+    ∃ n o, o ∈ (Run.event r n).outputs ∧ P o
+  ```
+:::
+
+```lean -show
+example : @Spec.Run.Emits = @NewProtocol.Run.Emits := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.Run.Emits}
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.Run.Consumes
+  ```lean
+  def Run.Consumes {cfg : NewProtocol.Config} {S : StepRel}
+      (r : Run cfg S) (n : Nat) (i : Input) : Prop :=
+    ∃ out, Run.event r n = .consensus i out
+  ```
+:::
+
+```lean -show
+example : @Spec.Run.Consumes = @NewProtocol.Run.Consumes := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.Run.Consumes}
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.Run.EventuallyAlways
+  ```lean
+  def Run.EventuallyAlways {cfg : NewProtocol.Config} {S : StepRel}
+      (r : Run cfg S) (P : NodeState → Prop) : Prop :=
+    ∃ n, ∀ m, n ≤ m → P (Run.state r m)
+  ```
+:::
+
+```lean -show
+example : @Spec.Run.EventuallyAlways = @NewProtocol.Run.EventuallyAlways := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.Run.EventuallyAlways}
+
+None of this is a liveness notion. {ref "network"}[The network] and the no-fork
+result are built on runs too, and both read a node's history rather than its
+future; progress is stated separately, in {ref "when-owed"}[when an action is
+owed], so nothing here need be read as a promise that anything happens.
+
+# The rules the votes appeal to
+
+Both votes, and the rule for proposing, are stated in terms of these. Each reads
+only the proposal in front of the node and what the node already holds.
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.ProposalWellFormed
+  ```lean
+  def ProposalWellFormed (p : Proposal) : Prop :=
+    p.parentCert.view < p.viewNumber
+      ∧ (p.parentCert.view + 1 = p.viewNumber
+          ∨ ∃ tc, p.timeoutEvidence = some tc ∧ tc.view + 1 = p.viewNumber)
+  ```
+:::
+
+```lean -show
+example : @Spec.ProposalWellFormed = @NewProtocol.ProposalWellFormed := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.ProposalWellFormed}
+
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.SafeToExtend
+  ```lean
+  def SafeToExtend (locked : Option Cert1) (p : Proposal) : Prop :=
+    match locked with
+    | none      => True
+    | some lock =>
+      if lock.view = p.viewNumber then
+        lock.data.blockHash = blockHash p
+      else
+        p.parentCert.data = lock.data ∨ lock.view < p.parentCert.view
+  ```
+:::
+
+```lean -show
+example : @Spec.SafeToExtend = @NewProtocol.SafeToExtend := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.SafeToExtend}
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.ShareMatches
+  ```lean
+  def ShareMatches (p : Proposal) (vid : VidShare) : Prop :=
+    vid.view = p.viewNumber ∧ p.payloadCommit = vid.payloadCommit
+  ```
+:::
+
+```lean -show
+example : @Spec.ShareMatches = @NewProtocol.ShareMatches := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.ShareMatches}
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.ChainLinked
+  ```lean
+  def ChainLinked : List NewProtocol.Block → Prop
+    | []              => True
+    | [_]             => True
+    | b :: b' :: rest => b.parentCert.view = b'.viewNumber
+        ∧ b.parentCert.data.blockHash = blockHash b'
+        ∧ ChainLinked (b' :: rest)
+  ```
+:::
+
+```lean -show
+example : @Spec.ChainLinked = @NewProtocol.ChainLinked := by
+  funext l
+  induction l with
+  | nil => rfl
+  | cons b rest ih =>
+    cases rest with
+    | nil => rfl
+    | cons b' r => simp only [Spec.ChainLinked, NewProtocol.ChainLinked, ih]
+end Spec
+```
+
+{includeDocstring NewProtocol.ChainLinked}
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.Vote1SkippedView
+  ```lean
+  def Vote1SkippedView (s : NodeState) (v : ViewNumber) : Prop :=
+    ∃ w u, v < w ∧ s.vote1Branches w = some u ∧ u < v
+  ```
+:::
+
+```lean -show
+example : @Spec.Vote1SkippedView = @NewProtocol.Vote1SkippedView := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.Vote1SkippedView}
+
+Its three branches are what the safety argument turns on.
+
+{docstring NewProtocol.Vote1Justification}
+
+{docstring NewProtocol.Vote2Justification}
+
+{docstring NewProtocol.ProposalJustification}
+
+# The clauses safety rests on
+
+Twenty-one, collected in {name NewProtocol.SafetySpec}`SafetySpec`. No-fork rests on
+exactly these; `NewProtocolSpec.Checks` fails the build if that changes silently.
+
+They come in six groups, and the fields below are in that order.
+
+* *Where a node's state comes from.* Nothing enters a node's state except through
+  an input, so no rule can be satisfied by inventing the state that justifies it.
+* *Views left behind.* A node that has abandoned a view must not act in it, and
+  collection is the only thing that may move the bar.
+* *What a node may not forget.* Safety compares two actions of one node, so what it
+  did must still be known when the second action comes due.
+* *The first vote.* What a vote1 requires, and what it leaves on the record.
+* *The second vote.* A vote2 commits a view for good, so it is the more constrained
+  of the two.
+* *The lock, and timeouts.* The lock is a certificate the node holds and only ever
+  moves forward. Timing out endorses no branch, which is why it bars so little.
+
+{docstring NewProtocol.SafetySpec}
+
+Of those, {name NewProtocol.SafetySpec.vote2NotInSkippedView}`vote2NotInSkippedView`
+is the one whose absence is hardest to picture, so here is the run it forbids.
+
+:::scenario "the fork a withheld certificate would buy"
+
+Four nodes, so a quorum is three and one may be faulty. `D` is the faulty one.
+`A` and `B` are honest, and everything they do below passes every other rule.
+
+1. *View 10, led by `D`.* `D` proposes a block justified by the `Cert1` for view
+   9, and sends it to `A` and `B` only. Both vote1. `D` assembles the `Cert1`
+   for view 10 from their votes and its own, and keeps it. `A` and `B` now want
+   to vote2 and cannot: {name NewProtocol.Vote2Justification}`Vote2Justification`
+   needs that `Cert1`. Their locks are still at 9.
+
+2. *Views 10 and 11 time out.* A timeout certificate forms for each.
+
+3. *View 12, led by `C`.* `C` never saw view 10's block, so its lock is still at
+   9, and it proposes justified by the `Cert1` for view 9 plus the timeout
+   certificate — well-formed by
+   {name NewProtocol.ProposalWellFormed}`ProposalWellFormed`. `A` and `B` check
+   {name NewProtocol.SafeToExtend}`SafeToExtend`: the proposal's parent
+   certificate *is* their lock, so it passes. `A`, `B` and `C` vote1, then
+   vote2, and view 12 gets a `Cert2`. The chain runs 9 → 12, and view 10 is
+   skipped.
+
+4. *`D` releases the certificate it withheld.* Now `A` and `B` hold everything
+   view 10's vote2 asks for — the proposal, its payload, and a matching
+   `Cert1`. Nothing else stops them: their locks are at 12, which
+   {name NewProtocol.SafetySpec.vote2LockOrdered}`SafetySpec.vote2LockOrdered`
+   is content with, and
+   {name NewProtocol.Vote2Enabled}`Vote2Enabled` carries no timeout bar, so the
+   two expired views do not stop it either. Their two votes plus `D`'s make a
+   `Cert2` for view 10.
+
+Two blocks would then hold a `Cert2`, and neither is an ancestor of the other:
+view 12's block descends from view 9 without passing through view 10, and view
+10's block has no descendants at all. That is precisely what
+{name NewProtocol.DecideSafety}`DecideSafety` denies.
+
+The vote1 `A` and `B` cast in step 3 is what forbids their vote2 in step 4:
+it was justified at view 9, so it recorded view 10 as skipped, and
+{name NewProtocol.Vote1SkippedView}`Vote1SkippedView` holds there ever after.
+Note which votes it is stated about — the *earlier* pair of votes constrains the
+later one, in the opposite order to the one the run takes.
+
+A bar on the timeout view would stop this run too. Two arguments reach that
+conclusion, and they differ in what they need.
+
+The first goes through the quorum. The timeout certificate is a quorum of
+timeout votes for view 11, so
+{name NewProtocol.Committee.intersect}`Committee.intersect` puts an honest node
+in both that quorum and view 10's, and
+{name NewProtocol.SafetySpec.timeoutVoteSound}`SafetySpec.timeoutVoteSound` has
+already carried its bar past view 10.
+
+The second needs nothing of the kind, but does need a rule this specification
+does not have. Were the bar to rise on *holding* a valid timeout certificate,
+`A` and `B` would carry theirs to 11 the moment they admitted `C`'s proposal —
+which is where that certificate reaches them. View 10 is below it, so their
+vote2 is refused, and the whole argument is about one node's own state with no
+quorum in it. As things stand the bar rises only on
+a node's own timer or on enough timeout votes to prove that an honest node timed
+out ({name NewProtocol.StepSpec.timeoutViewJustified}`StepSpec.timeoutViewJustified`),
+and a certificate that arrives inside a proposal is never recorded
+({name NewProtocol.StepSpec.timeoutCertIngested}`StepSpec.timeoutCertIngested`).
+
+The bar is not the rule used because it is coarser than a record of what the
+node endorsed. A bar at 11 refuses a vote2 in *every* view at or below 11,
+including view 9 — the branch's own parent — where
+{name NewProtocol.Vote1SkippedView}`Vote1SkippedView` refuses only the views the
+branch skipped. What that costs is a vote rather than a block: a view the chain
+extends is still delivered as an ancestor once a descendant commits, which
+{name NewProtocol.Vote2Enabled}`Vote2Enabled` sets out.
+:::
+
+# When an action is owed
+
+%%%
+tag := "when-owed"
+%%%
+
+An action is owed when it is justified, still fresh, and not barred. These are
+the predicates {name NewProtocol.WeaklyFair}`WeaklyFair` quantifies over.
+
+Progress has to be stated over runs, because no step-local specification can
+force it: a node that receives everything and emits nothing violates none of the
+obligations of {name NewProtocol.StepSpec}`StepSpec`. What those obligations do
+forbid is silent retirement — consuming the mark that makes an action
+unrepeatable without emitting the action — so an action that becomes owed stays
+owed, and fairness turns "owed for ever" into "eventually taken".
+
+This is the per-node half only. End-to-end progress — after the network settles,
+a view with an honest leader decides — needs the delivery and synchrony
+assumptions listed under {ref "not-covered"}[what is not covered]; the predicates
+below are the hypotheses such a proof would consume.
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.Vote1Enabled
+  ```lean
+  def Vote1Enabled (s : NodeState) (p : Proposal) : Prop :=
+    Vote1Justification s p
+      ∧ s.validated p.viewNumber = some (blockHash p)
+      ∧ ¬ s.voted1Views p.viewNumber ∧ s.timeoutView < p.viewNumber
+      ∧ s.barredView < p.viewNumber
+      ∧ ∀ lock, s.lockedCert = some lock → lock.view < p.viewNumber
+  ```
+:::
+
+```lean -show
+example : @Spec.Vote1Enabled = @NewProtocol.Vote1Enabled := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.Vote1Enabled}
+
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.Vote2Enabled
+  ```lean
+  def Vote2Enabled (cfg : NewProtocol.Config) (s : NodeState) (p : Proposal) : Prop :=
+    Vote2Justification s p ∧ ¬ Vote1SkippedView s p.viewNumber
+      ∧ ¬ s.voted2Views p.viewNumber ∧ s.cert2s p.viewNumber = none
+      ∧ ¬ s.decidedViews p.viewNumber ∧ s.aboveDecideFloor cfg p.viewNumber
+      ∧ s.barredView < p.viewNumber
+  ```
+:::
+
+```lean -show
+example : @Spec.Vote2Enabled = @NewProtocol.Vote2Enabled := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.Vote2Enabled}
+
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.DecideEnabled
+  ```lean
+  def DecideEnabled (cfg : NewProtocol.Config) (s : NodeState) (v : ViewNumber) : Prop :=
+    ¬ s.decidedViews v ∧ s.aboveDecideFloor cfg v ∧ (s.cert1s v).isSome
+      ∧ ∃ c2 p, s.cert2s v = some c2 ∧ s.proposals v = some p
+          ∧ c2.data.blockHash = blockHash p
+  ```
+:::
+
+```lean -show
+example : @Spec.DecideEnabled = @NewProtocol.DecideEnabled := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.DecideEnabled}
+
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.ProposeEnabled
+  ```lean
+  def ProposeEnabled (leader : ViewNumber → Option PubKey) (node : PubKey)
+      (s : NodeState) (p : Proposal) : Prop :=
+    ProposalJustification leader node s p ∧ ¬ s.proposedViews p.viewNumber
+      ∧ s.timeoutView < p.viewNumber ∧ s.barredView < p.viewNumber
+  ```
+:::
+
+```lean -show
+example : @Spec.ProposeEnabled = @NewProtocol.ProposeEnabled := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.ProposeEnabled}
+
+
+Progress is not proved but owed: {name NewProtocol.Conforms}`Conforms` carries
+{name NewProtocol.WeaklyFair}`WeaklyFair` as a field, so an implementation must exhibit
+it. Both speak of a node's whole history rather than of one step.
+
+{docstring NewProtocol.WeaklyFair}
+
+# Everything else a node owes
+
+{name NewProtocol.StepSpec}`StepSpec` extends {name NewProtocol.SafetySpec}`SafetySpec`
+with thirty-seven further clauses. No safety result consumes them, which is not to say
+they are optional: they are what makes a node useful rather than merely harmless.
+
+{docstring NewProtocol.StepSpec}
+
+# Pruning
+
+Pruning is a transition of its own rather than something a step does on the side,
+for two reasons: it takes no input, so a node that receives nothing can still
+reclaim memory, and it is the only place the staleness watermarks apply, which is
+what lets a node forget a vote it can no longer repeat. A consensus step, by
+contrast, never prunes above the decide floor
+({name NewProtocol.StepSpec.contentRetained}`StepSpec.contentRetained`) and never
+moves the bar
+({name NewProtocol.SafetySpec.barredViewUnchanged}`SafetySpec.barredViewUnchanged`).
+
+Two watermarks decide what a collection may drop. The bar covers what only a vote1
+or a proposal would read, and once a view is at or below it none of that can be
+acted on again. The decide floor, lower, covers what a late `Cert2` could still
+need — the vote2 marks among it, because a view between the floor and the bar is
+one this node has given up proposing in and may still commit.
+
+{docstring NewProtocol.Shrinks +hideFields}
+
+{docstring NewProtocol.GcSpec}
+
+The floor is what makes those cuts safe, and it never descends. A collection may
+drop a decided view once the floor has passed it, which is why `floorStable` is
+assumed above; a consensus step keeps every decided view, so there the same fact
+is a theorem.
+
+{docstring NewProtocol.SafetySpec.floorMono}
+
+# The network, and what certificates guarantee
+
+%%%
+tag := "network"
+%%%
+
+A node's own rules say nothing about certificates, which are the act of many. The
+committee supplies the one thing the argument takes from stake, and the ordering
+supplies the one thing it takes from time.
+
+{docstring NewProtocol.Committee}
+
+A certificate is not a signature here. It is the votes behind it: to say a `Cert1`
+is backed is to say some quorum of honest nodes each emitted that very vote at some
+point in its own run. So the two predicates below are about runs, not about
+cryptography, and the verification layer's job is to make the certificates a node
+is handed match them.
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.CastVote1
+  ```lean
+  def CastVote1 {cfg : NewProtocol.Config} {node : PubKey}
+      (r : Run cfg (SafetySpec cfg node)) (v : Vote1) : Prop :=
+    Run.Emits r fun o => o = NewProtocol.Output.send (.vote1 v)
+  ```
+:::
+
+```lean -show
+example : @Spec.CastVote1 = @NewProtocol.CastVote1 := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.CastVote1}
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.CastTimeout
+  ```lean
+  def CastTimeout {cfg : NewProtocol.Config} {node : PubKey}
+      (r : Run cfg (SafetySpec cfg node)) (v : ViewNumber) : Prop :=
+    Run.Emits r fun o => ∃ e, o = NewProtocol.Output.send (.timeoutVote ⟨(), v, node⟩ e)
+  ```
+:::
+
+```lean -show
+example : @Spec.CastTimeout = @NewProtocol.CastTimeout := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.CastTimeout}
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.Cert1Backed
+  ```lean
+  def Cert1Backed {cfg : NewProtocol.Config} {C : Committee}
+      (run : ∀ k, C.honest k → NewProtocol.Run cfg (SafetySpec cfg k))
+      (c : Cert1) : Prop :=
+    ∃ q, C.Quorum q ∧ ∀ k, q k → ∀ h : C.honest k,
+      CastVote1 (run k h) ⟨c.data, c.view, k⟩
+  ```
+:::
+
+```lean -show
+example : @Spec.Cert1Backed = @NewProtocol.Cert1Backed := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.Cert1Backed}
+
+{docstring NewProtocol.NodeStep}
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.Cert1BackedBefore
+  ```lean
+  def Cert1BackedBefore {cfg : NewProtocol.Config} {C : Committee}
+      (run : ∀ k, C.honest k → NewProtocol.Run cfg (SafetySpec cfg k))
+      (Before : NodeStep C → NodeStep C → Prop) (c : Cert1) (s : NodeStep C) : Prop :=
+    ∃ q, C.Quorum q ∧ ∀ k, q k → ∀ h : C.honest k,
+      ∃ n, NewProtocol.Output.send (.vote1 ⟨c.data, c.view, k⟩)
+            ∈ (NewProtocol.Run.event (run k h) n).outputs
+        ∧ Before ⟨k, h, n⟩ s
+  ```
+:::
+
+```lean -show
+example : @Spec.Cert1BackedBefore = @NewProtocol.Cert1BackedBefore := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.Cert1BackedBefore}
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.TimeoutCertBacked
+  ```lean
+  def TimeoutCertBacked {cfg : NewProtocol.Config} {C : Committee}
+      (run : ∀ k, C.honest k → NewProtocol.Run cfg (SafetySpec cfg k))
+      (tc : TimeoutCert) : Prop :=
+    ∃ q, C.Quorum q ∧ ∀ k, q k → ∀ h : C.honest k,
+      CastTimeout (run k h) tc.view
+  ```
+:::
+
+```lean -show
+example : @Spec.TimeoutCertBacked = @NewProtocol.TimeoutCertBacked := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.TimeoutCertBacked}
+
+{docstring NewProtocol.Network}
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.Network.Cast1
+  ```lean
+  def Network.Cast1 (cfg : NewProtocol.Config) {C : Committee}
+      (N : NewProtocol.Network cfg C) (k : PubKey) (h : C.honest k) (v : Vote1) : Prop :=
+    Run.Emits (N.run k h) fun o => o = NewProtocol.Output.send (.vote1 v)
+  ```
+:::
+
+```lean -show
+example : @Spec.Network.Cast1 = @NewProtocol.Network.Cast1 := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.Network.Cast1}
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.Network.Cast2
+  ```lean
+  def Network.Cast2 (cfg : NewProtocol.Config) {C : Committee}
+      (N : NewProtocol.Network cfg C) (k : PubKey) (h : C.honest k) (v : Vote2) : Prop :=
+    Run.Emits (N.run k h) fun o => o = NewProtocol.Output.send (.vote2 v)
+  ```
+:::
+
+```lean -show
+example : @Spec.Network.Cast2 = @NewProtocol.Network.Cast2 := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.Network.Cast2}
+
+
+A certificate is valid when a quorum signed it, and only the quorum's honest
+members are held to having voted — which is the strength quorum intersection
+needs.
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.Network.ValidCert1
+  ```lean
+  def Network.ValidCert1 (cfg : NewProtocol.Config) {C : Committee}
+      (N : NewProtocol.Network cfg C) (c : Cert1) : Prop :=
+    ∃ q, C.Quorum q ∧ ∀ k, q k → ∀ h : C.honest k,
+      NewProtocol.Network.Cast1 cfg N k h ⟨c.data, c.view, k⟩
+  ```
+:::
+
+```lean -show
+example : @Spec.Network.ValidCert1 = @NewProtocol.Network.ValidCert1 := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.Network.ValidCert1}
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.Network.ValidCert2
+  ```lean
+  def Network.ValidCert2 (cfg : NewProtocol.Config) {C : Committee}
+      (N : NewProtocol.Network cfg C) (c : Cert2) : Prop :=
+    ∃ q, C.Quorum q ∧ ∀ k, q k → ∀ h : C.honest k,
+      NewProtocol.Network.Cast2 cfg N k h ⟨c.data, c.view, k⟩
+  ```
+:::
+
+```lean -show
+example : @Spec.Network.ValidCert2 = @NewProtocol.Network.ValidCert2 := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.Network.ValidCert2}
+
+
+All six results below were once premises. Four were discharged outright, and two
+more became theorems once the ordering arrived —
+{name NewProtocol.cert1_backed}`cert1_backed`, that a certificate an honest node
+holds is one a quorum really signed, and
+{name NewProtocol.oneHonest_reached}`oneHonest_reached`, that one-honest evidence
+follows a view an honest node was really in. What used to be trusted about
+certificates is now proved from the two premises above.
+
+{docstring NewProtocol.cert1_unique}
+
+{docstring NewProtocol.cert2_unique}
+
+{docstring NewProtocol.cert2_implies_cert1}
+
+{docstring NewProtocol.timeoutCert_reached}
+
+{docstring NewProtocol.cert1_backed}
+
+{docstring NewProtocol.oneHonest_reached}
+
+# What is assumed
+
+Besides the fields of {name NewProtocol.Committee}`Committee` and
+{name NewProtocol.Network}`Network` above, three premises are stated outright.
+
+Ancestry is followed through a block table, so the statement is worth nothing
+unless the table holds the blocks the network actually has.
+
+{docstring NewProtocol.Ancestor}
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.Resolves
+  ```lean
+  def Resolves (tree : NewProtocol.BlockTable)
+      {cfg : NewProtocol.Config} {C : Committee} (N : Network cfg C) : Prop :=
+    ∀ k (h : C.honest k) n v b,
+      (Run.state (N.run k h) n).proposals v = some b → tree (blockHash b) = some b
+  ```
+:::
+
+```lean -show
+example : @Spec.Resolves = @NewProtocol.Resolves := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.Resolves}
+
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.CollisionFree
+  ```lean
+  def CollisionFree : Prop :=
+    ∀ b b' : NewProtocol.Block, blockHash b = blockHash b' → b = b'
+  ```
+:::
+
+```lean -show
+example : @Spec.CollisionFree = @NewProtocol.CollisionFree := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.CollisionFree}
+
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.TreeCoherent
+  ```lean
+  def TreeCoherent (tree : NewProtocol.BlockTable) : Prop :=
+    ∀ (h : BlockHash) (b : NewProtocol.Block), tree h = some b → blockHash b = h
+  ```
+:::
+
+```lean -show
+example : @Spec.TreeCoherent = @NewProtocol.TreeCoherent := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.TreeCoherent}
+
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.ValidityReported
+  ```lean
+  def ValidityReported (i : Input) : Prop :=
+    ∀ v h, i = Input.blockValidated v h →
+      ∀ b : NewProtocol.Block, blockHash b = h → BlockValid b
+  ```
+:::
+
+```lean -show
+example : @Spec.ValidityReported = @NewProtocol.ValidityReported := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.ValidityReported}
+
+
+{docstring NewProtocol.BlockValid}
+
+One further premise is a hypothesis of {name NewProtocol.decideSafety}`decideSafety`
+itself and appears in its signature: the configured anchor must sit where the rules
+assume it does.
+
+{docstring NewProtocol.ConfigCoherent}
+
+# What is proved
+
+The point of everything above. It is stated here rather than at the front because
+it is phrased with all of it: a committee, nodes obeying the safety clauses, and
+the three conditions on the block table.
+
+Six results, and this is the first of them. The rest are stated where the
+definitions they speak about are introduced.
+
+:::table +header
+*
+  * Result
+  * What it says
+  * Stated in
+*
+  * {name NewProtocol.decideSafety}`decideSafety`
+  * no forks: the `Cert2`-certified blocks form one chain
+  * this section
+*
+  * {name NewProtocol.decideInv_reachable}`decideInv_reachable`
+  * a decide is never taken back
+  * {ref "decide-stream"}[What the application is promised]
+*
+  * {name NewProtocol.cert1_unique}`cert1_unique`
+  * at most one `Cert1` per view
+  * {ref "network"}[The network, and what certificates guarantee]
+*
+  * {name NewProtocol.cert2_unique}`cert2_unique`
+  * at most one `Cert2` per view
+  * {ref "network"}[The network, and what certificates guarantee]
+*
+  * {name NewProtocol.cert2_implies_cert1}`cert2_implies_cert1`
+  * a `Cert2` presupposes its `Cert1`
+  * {ref "network"}[The network, and what certificates guarantee]
+*
+  * {name NewProtocol.timeoutCert_reached}`timeoutCert_reached`
+  * a quorum timeout means an honest node was in that view
+  * {ref "network"}[The network, and what certificates guarantee]
+:::
+
+Progress is not among them. It is owed rather than proved; see
+{ref "when-owed"}[When an action is owed].
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.DecideSafety
+  ```lean
+  def DecideSafety (tree : NewProtocol.BlockTable)
+      {cfg : NewProtocol.Config} {C : Committee} (N : Network cfg C) : Prop :=
+    TreeCoherent tree → CollisionFree → Resolves tree N →
+      ∀ c c', Network.ValidCert2 cfg N c → Network.ValidCert2 cfg N c' →
+        c.view ≤ c'.view → Ancestor tree c.data.blockHash c'.data.blockHash
+  ```
+:::
+
+```lean -show
+example : @Spec.DecideSafety = @NewProtocol.DecideSafety := rfl
+end Spec
+```
+
+{includeDocstring NewProtocol.DecideSafety}
+
+
+{docstring NewProtocol.decideSafety}
+
+# What the application is promised
+
+%%%
+tag := "decide-stream"
+%%%
+
+A decide is never taken back. That is a property of one node's stream, not
+agreement between nodes, which is what the previous section settles.
+
+{docstring NewProtocol.DecideInv}
+
+{docstring NewProtocol.decideInv_reachable}
+
+# What conformance means
+
+{docstring NewProtocol.Implements}
+
+{docstring NewProtocol.Conforms}
+
+{docstring NewProtocol.Run.weaken}
+
+# How to audit this
+
+Everything hinges on the statements. The proofs are checked by the Lean kernel,
+but no machine checks that a statement says what was intended. So the definitions
+are to be read and judged, and the premises challenged.
+
+The source is arranged for that. `Network`, `Safety` and `DecideStream` come in
+three parts each: `X/Defs.lean` holds the definitions the statements are phrased
+with, `X/Lemmas.lean` the kernel-checked scaffolding, and `X.lean` the results. An
+audit reads the first and the third, and everything spliced into this document
+comes from those. Nothing in `Lemmas` needs reading to judge what is claimed.
+
+Nothing is assumed beyond what is collected above. There are no `axiom`s and no
+`sorry`s, so the axiom footprint of every theorem here is Lean's own — `propext`,
+`Classical.choice`, `Quot.sound` — and that is checked on every build rather than
+asserted, along with the clause lists and the premise lists themselves.
+
+*Definitions — read and judge.* In particular:
+
+* The types and the interface: do they faithfully represent the objects that really
+  travel, given the deliberate reductions — signatures become propositions, hashing is
+  opaque, cryptographic values are one-field wrappers?
+
+* The rules: are {name NewProtocol.ProposalWellFormed}`ProposalWellFormed` and
+  {name NewProtocol.SafeToExtend}`SafeToExtend` the right admission rules; are the
+  justification gates complete; do the mark obligations and the input-triggered ones
+  cover everything a node must not withhold; are the ingestion obligations and
+  {name NewProtocol.StepSpec.contentRetained}`StepSpec.contentRetained` enough that a
+  node cannot escape an obligation by never holding what triggers it; does each
+  obligation say what its docstring claims; and does every bar on an output have a
+  counterpart in the enabledness predicate that owes it? That last one is not
+  decoration: an action a node is forbidden to emit must also not be owed, or the two
+  obligations ask for opposite things and nothing can satisfy both
+  ({name NewProtocol.StepSpec.vote1Bar}`StepSpec.vote1Bar` against
+  {name NewProtocol.Vote1Enabled}`Vote1Enabled`,
+  {name NewProtocol.SafetySpec.vote2NotInSkippedView}`SafetySpec.vote2NotInSkippedView` against
+  {name NewProtocol.Vote2Enabled}`Vote2Enabled`).
+
+* Pruning: is {name NewProtocol.GcSpec}`GcSpec` weak enough for a real implementation
+  and strong enough that safety survives pruning? Note that what a node may discard is
+  set by {name NewProtocol.StepSpec.contentRetained}`StepSpec.contentRetained`, which
+  binds every step; {name NewProtocol.GcSpec}`GcSpec` governs only the spontaneous,
+  input-free case.
+
+* Progress: is {name NewProtocol.WeaklyFair}`WeaklyFair` the right progress assumption,
+  and are the enabledness predicates exactly the actions a node owes?
+
+* Conformance: is {name NewProtocol.Conforms}`Conforms` the whole of what an
+  implementation owes? Its abstraction argument is trusted glue supplied by the
+  implementation — a wrong abstraction makes conformance vacuous, so it is the first
+  thing to read in any conformance claim.
+
+* The omissions above: whether each is safe to omit is an audit judgment.
+
+*Premises — challenge.* They are the ones collected above:
+{name NewProtocol.TreeCoherent}`TreeCoherent` and
+{name NewProtocol.CollisionFree}`CollisionFree` stated outright, and the
+verification-layer fields of {name NewProtocol.Committee}`Committee` and
+{name NewProtocol.Network}`Network`. Certificate uniqueness and cert2-implies-cert1 are
+not among them: they are theorems.
+
+{name NewProtocol.Resolves}`Resolves` is worth challenging alongside them. It is a
+hypothesis of {name NewProtocol.DecideSafety}`DecideSafety` rather than a standing
+premise, but the statement says nothing without it — ancestry is followed through the
+block table, so an empty table would collapse it to equality of hashes.
+
+The node's seam with its environment is not a premise but an obligation: the
+provenance clauses say nothing enters a node's state except through an input, and
+the ingestion clauses say an input's content is taken.
+
+What no reading can check is the correspondence between this formalisation and the
+intended protocol. That gap is closed by the audit itself, and narrowed by
+replaying a real execution against a machine proved to satisfy these rules.
+
+Everything here is a proposition. That these obligations are jointly satisfiable is
+not something the specification can tell you — it is discharged by exhibiting a
+conforming implementation.

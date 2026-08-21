@@ -1,0 +1,28 @@
+default:
+    just --list
+
+# Build the specification and check its claims about itself.
+spec:
+    cd new-protocol-spec && lake build
+
+# Check that every name the specification's prose mentions still exists.
+lint:
+    cd new-protocol-spec && lake exe lint
+
+# Build the executable machine and its conformance proof.
+impl:
+    cd new-protocol-impl && lake build
+
+# Build the differential harness and the `replay` binary.
+diff:
+    cd new-protocol-diff && lake build
+
+# Build and render the reference document.
+docs:
+    cd new-protocol-docs && lake build && .lake/build/bin/reference --output _out
+
+serve-docs: docs
+    cd new-protocol-docs/_out/html-multi && python3 -m http.server --bind 127.0.0.1 8000
+
+all: spec lint impl diff docs
+
