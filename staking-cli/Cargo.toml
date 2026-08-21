@@ -52,6 +52,7 @@ warp = { workspace = true, optional = true }
 
 [dev-dependencies]
 assert_cmd = { workspace = true }
+proptest = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }
 staking-cli = { path = ".", features = ["testing"] }

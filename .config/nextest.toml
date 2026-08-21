@@ -80,6 +80,13 @@ filter = 'package(request-response)'
 threads-required = 'num-cpus'
 
 # HotShot integration tests
+# The differential fuzz replays whole validator lifecycles against anvil, so it is far slower
+# than a unit test. It defaults to a small case count; raise it locally with PROPTEST_CASES.
+[[profile.default.overrides]]
+filter = 'package(staking-cli) & test(stake_table_matches_contract_under_random_lifecycles)'
+slow-timeout = { period = "2m", terminate-after = 5 }
+retries = 0
+
 [profile.hotshot]
 retries = 0
 slow-timeout = { period = "2m", terminate-after = 2 }
