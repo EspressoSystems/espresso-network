@@ -17,6 +17,7 @@ use url::Url;
 pub mod build_info;
 pub mod env_compat;
 pub mod logging;
+pub mod redact;
 pub mod ser;
 pub mod test_utils;
 
