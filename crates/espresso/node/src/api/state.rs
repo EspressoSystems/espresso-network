@@ -370,7 +370,7 @@ impl<D> NodeApiStateImpl<D> {
 
     fn serialize_stake_table(
         &self,
-        value: &Vec<hotshot_types::PeerConfig<SeqTypes>>,
+        value: &[hotshot_types::PeerConfig<SeqTypes>],
     ) -> anyhow::Result<proto::StakeTableResponse> {
         let peers: Result<Vec<_>, _> = value
             .iter()
