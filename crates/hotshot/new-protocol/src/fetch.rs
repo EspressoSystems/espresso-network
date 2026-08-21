@@ -16,7 +16,7 @@ use crate::{
     coordinator::error::CoordinatorError,
     message::{Message, MessageType, PayloadFetchMessage, PayloadFetchResponse},
     network::Sender,
-    vid::{VidReconstructOutput, expected_vid_param, matches_commitment},
+    vid::{ObtainedPayload, expected_vid_param, matches_commitment},
 };
 
 /// Requester- and server-side state of payload recovery.
@@ -36,7 +36,7 @@ pub struct Fetcher<T: NodeType> {
     advertisers: BTreeMap<ViewNumber, HashSet<T::SignatureKey>>,
 
     /// Verifications of received payloads, surfaced by [`Fetcher::next`].
-    tasks: JoinSet<Option<VidReconstructOutput<T>>>,
+    tasks: JoinSet<Option<ObtainedPayload<T>>>,
 }
 
 impl<T: NodeType> Fetcher<T> {
@@ -172,7 +172,7 @@ impl<T: NodeType> Fetcher<T> {
             }
             let payload = T::BlockPayload::from_bytes(&bytes, &metadata);
             let tx_commitments = payload.transaction_commitments(&metadata);
-            Some(VidReconstructOutput {
+            Some(ObtainedPayload {
                 view,
                 epoch,
                 payload_commitment,
@@ -183,7 +183,7 @@ impl<T: NodeType> Fetcher<T> {
         });
     }
 
-    pub async fn next(&mut self) -> Option<VidReconstructOutput<T>> {
+    pub async fn next(&mut self) -> Option<ObtainedPayload<T>> {
         loop {
             match self.tasks.join_next().await? {
                 Ok(Some(out)) => return Some(out),
