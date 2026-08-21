@@ -812,7 +812,7 @@ impl Membership<SeqTypes> for EpochCommittees {
 
         // Stored ahead of the early return below so a failed write is retried by the next
         // `add_epoch_root` for this epoch. Downstream of `put_epoch_committee` the committee
-        // is complete, which both arms that early return and stops catchup from re-entering
+        // is complete, which arms that early return and also stops catchup from re-entering
         // `fetch_stake_table`, so one dropped error would leave the header unpersisted.
         //
         // Keyed by `epoch`, unlike the previous-epoch stake table stored further down, and
@@ -1598,11 +1598,13 @@ mod tests {
     /// Persistence stub holding stake tables for epochs 7 and 8, plus a DRB
     /// result and an epoch root header for epoch 7 only. `stored_headers`
     /// records headers written via `store_epoch_root`, independent of
-    /// `header`.
+    /// `header`. `fail_next_store` makes the next `store_epoch_root` fail
+    /// once, then clears itself.
     #[derive(Debug)]
     struct MockStakeStore {
         header: Header,
         stored_headers: std::sync::Mutex<HashMap<EpochNumber, Header>>,
+        fail_next_store: Arc<AtomicBool>,
     }
 
     #[async_trait::async_trait]
@@ -1637,6 +1639,9 @@ mod tests {
             epoch: EpochNumber,
             block_header: Header,
         ) -> anyhow::Result<()> {
+            if self.fail_next_store.swap(false, Ordering::SeqCst) {
+                anyhow::bail!("injected store_epoch_root failure");
+            }
             self.stored_headers
                 .lock()
                 .unwrap()
@@ -1704,6 +1709,7 @@ mod tests {
         let store = MockStakeStore {
             header: build_epoch_root_header().await,
             stored_headers: Default::default(),
+            fail_next_store: Default::default(),
         };
         let fetcher = Fetcher::new(
             Arc::new(crate::mock::MockStateCatchup::default()),
@@ -2213,22 +2219,24 @@ mod tests {
         assert!(round > 0, "test loop never executed a round");
     }
 
-    // `add_epoch_root` is the only path by which a V0_6-native node (which
-    // never calls the legacy `decide_epoch_root`/`Storage::store_epoch_root`)
-    // persists the epoch root header. Regression test for that header being
-    // silently dropped. The header version is irrelevant: the store happens
-    // before any version-dependent branch. A cached header makes the committee
-    // complete, which takes the early return; that path must persist too.
-    #[rstest]
-    #[case::incomplete_committee(false)]
-    #[case::complete_committee(true)]
-    #[tokio::test]
-    async fn add_epoch_root_persists_epoch_root_header(#[case] cached_header: bool) {
-        let header = build_epoch_root_header().await;
-
+    /// Build an `add_epoch_root` fixture for `header`'s target epoch. The
+    /// epoch committee is prefilled so the call reuses the cached validators
+    /// and skips the L1 fetch; `cached_header` decides whether that committee
+    /// is already complete, i.e. whether the call takes the early return.
+    fn epoch_root_fixture(
+        header: &Header,
+        cached_header: bool,
+    ) -> (
+        EpochCommittees,
+        EpochMembershipCoordinator<SeqTypes>,
+        EpochNumber,
+        Arc<AtomicBool>,
+    ) {
+        let fail_next_store = Arc::<AtomicBool>::default();
         let store = MockStakeStore {
             header: header.clone(),
             stored_headers: Default::default(),
+            fail_next_store: fail_next_store.clone(),
         };
         let fetcher = Fetcher::new(
             Arc::new(crate::mock::MockStateCatchup::default()),
@@ -2241,7 +2249,6 @@ mod tests {
         let epoch_height = *committees.epoch_height();
         let epoch = EpochNumber::new(epoch_from_block_number(header.height(), epoch_height) + 2);
 
-        // Prefill so `add_epoch_root` reuses the cached validators and skips the L1 fetch.
         {
             let mut inner = committees.inner.write();
             let template = inner
@@ -2264,6 +2271,23 @@ mod tests {
             epoch_height,
             &hotshot_example_types::storage_types::TestStorage::default(),
         );
+        (committees, coordinator, epoch, fail_next_store)
+    }
+
+    // `add_epoch_root` is the only path by which a V0_6-native node (which
+    // never calls the legacy `decide_epoch_root`/`Storage::store_epoch_root`)
+    // persists the epoch root header. Regression test for that header being
+    // silently dropped. The header version is irrelevant: the store happens
+    // before any version-dependent branch. A cached header makes the committee
+    // complete, which takes the early return; that path must persist too.
+    #[rstest]
+    #[case::incomplete_committee(false)]
+    #[case::complete_committee(true)]
+    #[tokio::test]
+    async fn add_epoch_root_persists_epoch_root_header(#[case] cached_header: bool) {
+        let header = build_epoch_root_header().await;
+        let (committees, coordinator, epoch, _) = epoch_root_fixture(&header, cached_header);
+
         coordinator
             .add_epoch_root(header.clone())
             .await
@@ -2272,6 +2296,51 @@ mod tests {
         let persistence = committees.fetcher.persistence.lock().await;
         assert_eq!(
             persistence.load_epoch_root(epoch).await.unwrap(),
+            Some(header)
+        );
+    }
+
+    // A failed `store_epoch_root` must be retried by the next `add_epoch_root`
+    // for the epoch. The first call leaves the in-memory committee complete, so
+    // the second takes the early return; a store placed after that return would
+    // leave the header unpersisted for good.
+    #[tokio::test]
+    async fn add_epoch_root_retries_a_failed_store() {
+        let header = build_epoch_root_header().await;
+        let (committees, coordinator, epoch, fail_next_store) = epoch_root_fixture(&header, false);
+
+        fail_next_store.store(true, Ordering::SeqCst);
+
+        coordinator
+            .add_epoch_root(header.clone())
+            .await
+            .expect("a dropped store must not fail `add_epoch_root`");
+        assert_eq!(
+            committees
+                .fetcher
+                .persistence
+                .lock()
+                .await
+                .load_epoch_root(epoch)
+                .await
+                .unwrap(),
+            None,
+            "the injected failure should have dropped the write"
+        );
+
+        coordinator
+            .add_epoch_root(header.clone())
+            .await
+            .expect("add_epoch_root should succeed for the complete committee");
+        assert_eq!(
+            committees
+                .fetcher
+                .persistence
+                .lock()
+                .await
+                .load_epoch_root(epoch)
+                .await
+                .unwrap(),
             Some(header)
         );
     }
