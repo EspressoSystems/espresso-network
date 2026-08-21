@@ -10,6 +10,7 @@ use std::{
 
 use alloy::primitives::{U256, utils::format_ether};
 use async_trait::async_trait;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use committable::Committable as _;
 use disco_types::{error::Error as _, status::StatusCode};
 use espresso_api::{
@@ -458,13 +459,18 @@ impl<D> NodeApiStateImpl<D> {
     fn serialize_ns_proof(&self, proof: &NsProof) -> anyhow::Result<proto::NsProof> {
         let proof_version = match proof {
             NsProof::V0(advz_proof) => {
-                // Serialize the inner fields directly
-                let json = serde_json::json!({
-                    "ns_index": advz_proof.ns_index,
-                    "ns_payload": advz_proof.ns_payload,
-                    "ns_proof": advz_proof.ns_proof,
-                });
-                proto::ns_proof::ProofVersion::V0(serde_json::from_value(json)?)
+                // `ns_proof` is `None` when the namespace payload is empty.
+                let ns_proof = advz_proof
+                    .ns_proof
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()?;
+
+                proto::ns_proof::ProofVersion::V0(proto::AdvzNsProof {
+                    namespace_id: i64::from(advz_proof.ns_index.clone()) as u64,
+                    ns_payload: BASE64.encode(advz_proof.ns_payload.as_bytes_slice()),
+                    ns_proof,
+                })
             },
             NsProof::V1(avidm_proof) => {
                 // Serialize ns_payload using base64_bytes
