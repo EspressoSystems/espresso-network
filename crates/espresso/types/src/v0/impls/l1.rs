@@ -514,7 +514,7 @@ impl L1Client {
 
         async move {
 
-            for i in 0.. {
+            for i in 0..usize::MAX {
                 let ws;
 
                 // Fetch current L1 head block for the first value of the stream to avoid having
