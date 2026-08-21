@@ -1448,6 +1448,7 @@ where
                     && let Some(proposal) = self.consensus.proposal_at(view)
                     && let VidCommitment::V2(payload_commitment) =
                         proposal.block_header.payload_commitment()
+                    && !self.consensus.is_reconstructed(view, payload_commitment)
                     && let Err(err) = self.fetcher.request(
                         view,
                         payload_commitment,
