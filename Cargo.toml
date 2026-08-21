@@ -127,7 +127,6 @@ aide = { version = "0.15.1", features = [
     "axum-ws",
     "scalar",
     "swagger",
-    "redoc",
 ] }
 alloy = { version = "2", features = [
     "eips",
@@ -429,7 +428,6 @@ tokio-tungstenite = "0.28"
 tokio-util = { version = "0.7", features = ["rt"] }
 toml = "0.8"
 tonic = { version = "0.14.5", features = ["transport"] }
-tonic-build = "0.14"
 tonic-prost = "0.14"
 tonic-prost-build = "0.14"
 tonic-reflection = "0.14"

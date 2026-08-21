@@ -4740,7 +4740,6 @@ dependencies = [
  "base64 0.22.1",
  "espresso-utils",
  "futures",
- "hex",
  "http-wire",
  "pbjson",
  "pbjson-build",
@@ -4760,7 +4759,6 @@ dependencies = [
  "tonic-rest-build",
  "tower 0.4.13",
  "tracing",
- "tracing-subscriber 0.3.23",
  "url",
  "vbs",
 ]

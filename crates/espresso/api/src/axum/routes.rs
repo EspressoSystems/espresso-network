@@ -23,18 +23,6 @@ macro_rules! path_fn {
     };
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Route {
-    /// HTTP path for Axum handler (e.g., "/v2/rewards/balance/{height}/{address}")
-    pub http: &'static str,
-    /// gRPC path for Tonic service (e.g., "/espresso.api.v2.RewardService/GetRewardBalance")
-    pub grpc: &'static str,
-    /// OpenAPI description for the endpoint
-    pub description: &'static str,
-    /// OpenAPI tag grouping for the endpoint
-    pub tag: &'static str,
-}
-
 pub mod v1 {
     pub const REWARD_CLAIM_INPUT_ROUTE: &str =
         "/v1/reward-state-v2/reward-claim-input/{height}/{address}";
@@ -1002,5 +990,8 @@ pub mod v1 {
 pub mod v2 {
     pub const OPENAPI_SPEC_ROUTE: &str = "/v2/docs/openapi.json";
     pub const SWAGGER_ROUTE: &str = "/v2";
+    /// axum 0.8 does not redirect trailing slashes and `rewrite_legacy_uri` leaves `/v2/` alone,
+    /// so the slashed form is its own route.
+    pub const SWAGGER_SLASH_ROUTE: &str = "/v2/";
     pub const SCALAR_ROUTE: &str = "/v2/scalar";
 }
