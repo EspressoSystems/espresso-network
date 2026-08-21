@@ -866,10 +866,10 @@ impl Header {
     ///   validation.
     ///
     /// If the previous epoch's result is missing at the boundary (e.g. after a
-    /// restart), the function spawns the calculation and awaits it before
-    /// applying. The background task fetches the epoch's leaf and recovers the
-    /// leader counts and stake table itself, returning zero rewards for epochs
-    /// whose header version is < V5
+    /// restart) or the background attempt failed, the function spawns a fresh
+    /// calculation and awaits it before applying. The background task fetches
+    /// the epoch's leaf and recovers the leader counts and stake table itself,
+    /// returning zero rewards for epochs whose header version is < V5
     ///
     /// # Returns
     /// `(total_rewards_applied, changed_accounts)` — the total reward amount
@@ -902,16 +902,28 @@ impl Header {
 
         // Eagerly start the previous epoch's reward calculation if it hasn't
         // been kicked off yet, so the result is ready by the epoch boundary.
-        if epoch > first_epoch + 2 && !reward_calculator.is_calculating(prev_epoch) {
-            tracing::info!(%epoch, %prev_epoch, "triggering catchup reward calculation");
-            reward_calculator.spawn_background_task(
-                prev_epoch,
-                epoch_height,
-                validated_state.reward_merkle_tree_v2.clone(),
-                instance_state.clone(),
-                coordinator.clone(),
-                None,
-            );
+        // A background attempt that already failed is cleared here so it is
+        // retried on the next block instead of staying latched until the
+        // boundary.
+        if epoch > first_epoch + 2 {
+            if let Some(err) = reward_calculator.reap_finished_task(prev_epoch).await {
+                tracing::warn!(
+                    %epoch,
+                    %prev_epoch,
+                    "background epoch rewards calculation failed, respawning: {err:#}"
+                );
+            }
+            if !reward_calculator.is_calculating(prev_epoch) {
+                tracing::info!(%epoch, %prev_epoch, "triggering catchup reward calculation");
+                reward_calculator.spawn_background_task(
+                    prev_epoch,
+                    epoch_height,
+                    validated_state.reward_merkle_tree_v2.clone(),
+                    instance_state.clone(),
+                    coordinator.clone(),
+                    None,
+                );
+            }
         }
 
         if !is_last_block(height, epoch_height) {
@@ -920,9 +932,21 @@ impl Header {
 
         tracing::info!(%height, %epoch, %prev_epoch, "epoch boundary: applying rewards");
 
-        // Take the result. A failed task propagates its
-        // error here rather than retrying
-        let result = reward_calculator.get_result(prev_epoch).await.transpose()?;
+        // Take the result. A background task that failed is treated as missing
+        // so the fallback below recalculates fresh, instead of failing
+        // validation on an error latched earlier in the epoch.
+        let result = match reward_calculator.get_result(prev_epoch).await {
+            Some(Ok(result)) => Some(result),
+            Some(Err(err)) => {
+                tracing::warn!(
+                    %epoch,
+                    %prev_epoch,
+                    "background epoch rewards calculation failed, recalculating: {err:#}"
+                );
+                None
+            },
+            None => None,
+        };
 
         let (epoch_rewards_applied, changed_accounts) = if let Some(result) = result {
             tracing::info!(
