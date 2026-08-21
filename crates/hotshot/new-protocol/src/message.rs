@@ -351,6 +351,23 @@ impl<T: NodeType> HasViewNumber for ProposalFetchMessage<T> {
 pub enum PayloadFetchMessage<T: NodeType> {
     Request(FetchRequest<T>),
     Response(PayloadFetchResponse),
+    Unavailable {
+        view: ViewNumber,
+        reason: Unavailable,
+    },
+}
+
+/// Why a peer will not send a payload it was asked for.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Hash, Eq)]
+pub enum Unavailable {
+    /// The payload is not among the blocks the peer retains.
+    ///
+    /// Another peer may well hold it.
+    NotHeld,
+    /// The payload does not fit a message.
+    ///
+    /// No peer can serve it whole, but a peer saying so is not proof of it.
+    TooLarge,
 }
 
 impl<T: NodeType> HasViewNumber for PayloadFetchMessage<T> {
@@ -358,6 +375,7 @@ impl<T: NodeType> HasViewNumber for PayloadFetchMessage<T> {
         match self {
             Self::Request(request) => request.view_number(),
             Self::Response(response) => response.view,
+            Self::Unavailable { view, .. } => *view,
         }
     }
 }
