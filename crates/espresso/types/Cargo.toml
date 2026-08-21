@@ -40,7 +40,7 @@ rlp = ["alloy-rlp"]
 [dependencies]
 # Direct declaration (not workspace) so SP1 zkVM builds can drop the default
 # reqwest/ws transports; the node feature restores the workspace feature set.
-alloy = { version = "1.0", default-features = false, features = [
+alloy = { version = "2", default-features = false, features = [
     "contract",
     "eips",
     "rpc-types",
