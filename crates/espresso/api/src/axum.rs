@@ -67,10 +67,14 @@ struct CustomError {
 }
 
 impl ErrorResponse {
+    /// Scrubs credentials out of the message. `ApiError`'s `Display` already does this for handler
+    /// errors, which the tonic adapter shares; this also covers messages that never went through
+    /// it, such as a serialization failure. Error bodies go to unauthenticated callers and never
+    /// pass the OTLP exporter.
     fn new(status: StatusCode, message: String) -> Self {
         Self {
             custom: CustomError {
-                message,
+                message: espresso_utils::redact::scrub(&message),
                 status: status.as_u16(),
             },
         }
@@ -3961,6 +3965,19 @@ mod tests {
             rewritten_uri("/availability/leaf/1?foo=bar"),
             "/v1/availability/leaf/1?foo=bar"
         );
+    }
+
+    /// Error bodies go to unauthenticated callers, so an L1 provider URL in the message must not
+    /// reach them.
+    #[test]
+    fn error_response_redacts_provider_credentials() {
+        let msg = r#"failed to get total supply. err=reqwest::Error { url: "https://u:p@rpc.invalid/v1/FAKEKEY" }"#;
+
+        let body = ErrorResponse::new(StatusCode::NOT_FOUND, msg.to_string());
+
+        assert!(!body.custom.message.contains("FAKEKEY"), "{body:?}");
+        assert!(!body.custom.message.contains("u:p"), "{body:?}");
+        assert!(body.custom.message.contains("rpc.invalid"), "{body:?}");
     }
 
     /// Implements every v1 API trait with `unimplemented!()` bodies, purely so `create_router_v1`

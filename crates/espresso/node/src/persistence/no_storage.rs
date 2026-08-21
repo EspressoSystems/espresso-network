@@ -31,7 +31,7 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 
-use crate::{NodeType, SeqTypes, ViewNumber};
+use crate::{SeqTypes, ViewNumber};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Options;
@@ -177,13 +177,6 @@ impl SequencerPersistence for NoStorage {
         Ok(())
     }
 
-    async fn store_next_epoch_quorum_certificate(
-        &self,
-        _high_qc: NextEpochQuorumCertificate2<SeqTypes>,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-
     async fn load_next_epoch_quorum_certificate(
         &self,
     ) -> anyhow::Result<Option<NextEpochQuorumCertificate2<SeqTypes>>> {
@@ -237,14 +230,6 @@ impl SequencerPersistence for NoStorage {
         bail!("Cannot load from NoStorage")
     }
 
-    async fn store_epoch_root(
-        &self,
-        _epoch: EpochNumber,
-        _block_header: <SeqTypes as NodeType>::BlockHeader,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-
     async fn load_start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>> {
         Ok(Vec::new())
     }
@@ -296,6 +281,14 @@ impl MembershipPersistence for NoStorage {
 
     async fn load_epoch_root(&self, _epoch: EpochNumber) -> anyhow::Result<Option<Header>> {
         Ok(None)
+    }
+
+    async fn store_epoch_root(
+        &self,
+        _epoch: EpochNumber,
+        _block_header: Header,
+    ) -> anyhow::Result<()> {
+        Ok(())
     }
 
     async fn store_stake(

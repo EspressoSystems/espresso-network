@@ -131,7 +131,7 @@ aide = { version = "0.15.1", features = [
     "swagger",
     "redoc",
 ] }
-alloy = { version = "1.0", features = [
+alloy = { version = "2", features = [
     "eips",
     "provider-ws",
     "json-rpc",
@@ -403,7 +403,7 @@ snafu = "0.8"
 snap = "1"
 snow = { version = "0.10.0", features = ["ring-accelerated"] }
 socket2 = "0.6.4"
-sqlx = { version = "0.8.6", features = [
+sqlx = { version = "=0.8.3", features = [
     "bit-vec",
     "chrono",
     "postgres",
