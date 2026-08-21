@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use futures::{TryFutureExt, future::try_join_all};
 use hotshot_types::{data::VidCommon, traits::node_implementation::NodeType};
 use http_client::{Client, Url};
-use vbs::version::StaticVersionType;
+use vbs::version::StaticVersion;
 
 use super::Provider;
 use crate::{
@@ -47,19 +47,21 @@ use crate::{
 /// implementation that verifies the data it receives, for example using a light client for the
 /// protocol.
 #[derive(Clone, Debug)]
-pub struct TrustedQueryServiceProvider<Ver: StaticVersionType> {
-    client: Client<Error, Ver>,
+pub struct TrustedQueryServiceProvider {
+    // All peers frame at http-wire's `WireVersion` (VBS 0.1); the API's own version lives in
+    // the URL.
+    client: Client<Error, StaticVersion<0, 1>>,
 }
 
-impl<Ver: StaticVersionType> TrustedQueryServiceProvider<Ver> {
-    pub fn new(url: Url, _: Ver) -> Self {
+impl TrustedQueryServiceProvider {
+    pub fn new(url: Url) -> Self {
         Self {
             client: Client::new(url),
         }
     }
 }
 
-impl<Ver: StaticVersionType> TrustedQueryServiceProvider<Ver> {
+impl TrustedQueryServiceProvider {
     pub async fn fetch_payload<Types: NodeType>(
         &self,
         req: PayloadRequest,
@@ -110,8 +112,7 @@ impl<Ver: StaticVersionType> TrustedQueryServiceProvider<Ver> {
 }
 
 #[async_trait]
-impl<Types, Ver: StaticVersionType> Provider<Types, PayloadRequest>
-    for TrustedQueryServiceProvider<Ver>
+impl<Types> Provider<Types, PayloadRequest> for TrustedQueryServiceProvider
 where
     Types: NodeType,
 {
@@ -121,8 +122,7 @@ where
 }
 
 #[async_trait]
-impl<Types, Ver: StaticVersionType> Provider<Types, BlockRangeRequest>
-    for TrustedQueryServiceProvider<Ver>
+impl<Types> Provider<Types, BlockRangeRequest> for TrustedQueryServiceProvider
 where
     Types: NodeType,
 {
@@ -131,7 +131,7 @@ where
     }
 }
 
-impl<Ver: StaticVersionType> TrustedQueryServiceProvider<Ver> {
+impl TrustedQueryServiceProvider {
     pub async fn fetch_leaf<Types: NodeType>(
         &self,
         req: LeafRequest,
@@ -178,8 +178,7 @@ impl<Ver: StaticVersionType> TrustedQueryServiceProvider<Ver> {
 }
 
 #[async_trait]
-impl<Types, Ver: StaticVersionType> Provider<Types, LeafRequest>
-    for TrustedQueryServiceProvider<Ver>
+impl<Types> Provider<Types, LeafRequest> for TrustedQueryServiceProvider
 where
     Types: NodeType,
 {
@@ -189,8 +188,7 @@ where
 }
 
 #[async_trait]
-impl<Types, Ver: StaticVersionType> Provider<Types, LeafRangeRequest>
-    for TrustedQueryServiceProvider<Ver>
+impl<Types> Provider<Types, LeafRangeRequest> for TrustedQueryServiceProvider
 where
     Types: NodeType,
 {
@@ -199,7 +197,7 @@ where
     }
 }
 
-impl<Ver: StaticVersionType> TrustedQueryServiceProvider<Ver> {
+impl TrustedQueryServiceProvider {
     /// Fetch a cert2 from a peer at the given height.
     pub async fn fetch_cert2<Types: NodeType>(
         &self,
@@ -223,8 +221,7 @@ impl<Ver: StaticVersionType> TrustedQueryServiceProvider<Ver> {
 }
 
 #[async_trait]
-impl<Types, Ver: StaticVersionType> Provider<Types, Certificate2Request>
-    for TrustedQueryServiceProvider<Ver>
+impl<Types> Provider<Types, Certificate2Request> for TrustedQueryServiceProvider
 where
     Types: NodeType,
 {
@@ -235,7 +232,7 @@ where
     }
 }
 
-impl<Ver: StaticVersionType> TrustedQueryServiceProvider<Ver> {
+impl TrustedQueryServiceProvider {
     pub async fn fetch_vid_common<Types: NodeType>(
         &self,
         req: VidCommonRequest,
@@ -312,8 +309,7 @@ impl<Ver: StaticVersionType> TrustedQueryServiceProvider<Ver> {
 }
 
 #[async_trait]
-impl<Types, Ver: StaticVersionType> Provider<Types, VidCommonRequest>
-    for TrustedQueryServiceProvider<Ver>
+impl<Types> Provider<Types, VidCommonRequest> for TrustedQueryServiceProvider
 where
     Types: NodeType,
 {
@@ -323,8 +319,7 @@ where
 }
 
 #[async_trait]
-impl<Types, Ver: StaticVersionType> Provider<Types, VidCommonRangeRequest>
-    for TrustedQueryServiceProvider<Ver>
+impl<Types> Provider<Types, VidCommonRangeRequest> for TrustedQueryServiceProvider
 where
     Types: NodeType,
 {
@@ -370,13 +365,13 @@ mod test {
         node::data_source::NodeDataSource,
         testing::{
             consensus::{MockDataSource, MockNetwork},
-            mocks::{MockBase, MockPayload, MockTypes, mock_transaction},
+            mocks::{MockPayload, MockTypes, mock_transaction},
             sleep,
         },
         types::HeightIndexed,
     };
 
-    type Provider = TestProvider<TrustedQueryServiceProvider<MockBase>>;
+    type Provider = TestProvider<TrustedQueryServiceProvider>;
 
     fn ignore<T>(_: T) {}
 
@@ -430,11 +425,8 @@ mod test {
         test_fixtures::serve_availability(data_source).await
     }
 
-    fn trusted_provider(port: u16) -> TrustedQueryServiceProvider<MockBase> {
-        TrustedQueryServiceProvider::new(
-            format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
-        )
+    fn trusted_provider(port: u16) -> TrustedQueryServiceProvider {
+        TrustedQueryServiceProvider::new(format!("http://localhost:{port}").parse().unwrap())
     }
 
     /// Build a data source suitable for this suite of tests.
@@ -471,7 +463,6 @@ mod test {
         let db = TmpDb::init().await;
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
         ));
         let data_source = data_source(&db, &provider).await;
 
@@ -687,7 +678,6 @@ mod test {
         let db = TmpDb::init().await;
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
         ));
         let data_source = data_source(&db, &provider).await;
 
@@ -897,7 +887,6 @@ mod test {
         let db = TmpDb::init().await;
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
         ));
         let data_source = data_source(&db, &provider).await;
 
@@ -943,7 +932,6 @@ mod test {
         let db = TmpDb::init().await;
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
         ));
         let data_source = data_source(&db, &provider).await;
 
@@ -993,7 +981,6 @@ mod test {
         let db = TmpDb::init().await;
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
         ));
         let data_source = data_source(&db, &provider).await;
 
@@ -1040,7 +1027,6 @@ mod test {
         let db = TmpDb::init().await;
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
         ));
         let data_source = data_source(&db, &provider).await;
 
@@ -1150,7 +1136,6 @@ mod test {
         let db = TmpDb::init().await;
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
         ));
         let data_source = builder(&db, &provider)
             .await
@@ -1210,7 +1195,6 @@ mod test {
         let db = TmpDb::init().await;
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
         ));
         let mut data_source = db
             .config()
@@ -1348,7 +1332,6 @@ mod test {
         // Start a data source which is not receiving events from consensus, only from a peer.
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
         ));
         let db = TmpDb::init().await;
         let storage = FailStorage::from(
@@ -1439,7 +1422,6 @@ mod test {
         // Start a data source which is not receiving events from consensus, only from a peer.
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
         ));
         let db = TmpDb::init().await;
         let storage = FailStorage::from(
@@ -1524,7 +1506,6 @@ mod test {
         let db = TmpDb::init().await;
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
         ));
         let data_source = builder(&db, &provider)
             .await
@@ -1882,7 +1863,6 @@ mod test {
         // Start a data source which is not receiving events from consensus, only from a peer.
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
         ));
         let db = TmpDb::init().await;
         let storage = FailStorage::from(
@@ -1932,7 +1912,6 @@ mod test {
         // Start a data source which is not receiving events from consensus, only from a peer.
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
         ));
         let db = TmpDb::init().await;
         let storage = FailStorage::from(
@@ -2000,7 +1979,6 @@ mod test {
         // Start a data source which is not receiving events from consensus, only from a peer.
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
         ));
         let db = TmpDb::init().await;
         let storage = FailStorage::from(
@@ -2090,7 +2068,6 @@ mod test {
         // Start a data source which is not receiving events from consensus, only from a peer.
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
         ));
         let db = TmpDb::init().await;
         let storage = FailStorage::from(
@@ -2149,7 +2126,6 @@ mod test {
         // Start a data source which is not receiving events from consensus, only from a peer.
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
         ));
         let db = TmpDb::init().await;
         let storage = FailStorage::from(
@@ -2213,7 +2189,6 @@ mod test {
         // Start a data source which is not receiving events from consensus, only from a peer.
         let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
         ));
         let db = TmpDb::init().await;
         let storage = FailStorage::from(
@@ -2337,10 +2312,8 @@ mod test {
             .await;
 
         // Connect a fetching provider.
-        let provider = TrustedQueryServiceProvider::new(
-            format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
-        );
+        let provider =
+            TrustedQueryServiceProvider::new(format!("http://localhost:{port}").parse().unwrap());
 
         // Make ranged requests.
         tracing::info!("fetch leaf range");
@@ -2391,10 +2364,8 @@ mod test {
     #[test_log::test]
     async fn test_vid_common_fallback() {
         let (port, _server) = old_server().await;
-        let provider = TrustedQueryServiceProvider::new(
-            format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
-        );
+        let provider =
+            TrustedQueryServiceProvider::new(format!("http://localhost:{port}").parse().unwrap());
 
         // First fetch a range of VID common one by one, to get a ground truth.
         let common = try_join_all((0..5).map(|i| {

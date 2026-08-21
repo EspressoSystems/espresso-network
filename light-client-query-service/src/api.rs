@@ -60,7 +60,7 @@ fn encode_ok<T: Serialize>(headers: &HeaderMap, value: T) -> Response {
 }
 
 fn respond<T: Serialize>(headers: &HeaderMap, result: Result<T, ApiError>) -> Response {
-    wire::respond::<ApiError, _>(headers, result)
+    wire::respond(headers, result)
 }
 
 /// Parses a path parameter the way tide-disco's `TaggedBase64`/`Integer` param types did,

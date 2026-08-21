@@ -50,7 +50,7 @@ use crate::{
 /// The fixture serves the crate-level [`Error`] envelope, the same envelope the old tide app
 /// served and the provider's client decodes.
 pub(crate) fn respond<T: Serialize>(headers: &HeaderMap, result: Result<T, Error>) -> Response {
-    wire::respond::<Error, _>(headers, result)
+    wire::respond(headers, result)
 }
 
 fn fetch_timeout() -> Duration {

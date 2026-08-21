@@ -18,21 +18,14 @@ use axum::{
 use futures::{StreamExt, stream::BoxStream};
 use serde::{Serialize, de::DeserializeOwned};
 use tower_http::cors::{Any, CorsLayer};
-use vbs::version::StaticVersion;
 
 use crate::{
-    body::{DecodeFailure, encode_body},
+    body::{DecodeFailure, WireVersion, encode_body},
     content_type::ContentType,
     error::WireError,
     health::{AppHealth, HealthStatus},
     ws::{encode_binary_frame, encode_text_frame},
 };
-
-/// The VBS framing version every encode and decode helper here speaks.
-///
-/// The API's own versioning lives in the URL (`/v1`, `/v2`); the framing version has always
-/// been 0.1 and is shared rather than re-declared per service.
-pub type WireVersion = StaticVersion<0, 1>;
 
 /// Encode a successful response body, negotiating VBS binary vs JSON from the `Accept` header.
 pub fn encode_ok<E: WireError, T: Serialize>(headers: &HeaderMap, value: T) -> Response {
@@ -41,7 +34,10 @@ pub fn encode_ok<E: WireError, T: Serialize>(headers: &HeaderMap, value: T) -> R
         Ok(bytes) => ([(header::CONTENT_TYPE, format.mime())], bytes).into_response(),
         Err(err) => encode_err::<E>(
             headers,
-            E::catch_all(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
+            E::catch_all(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to serialize response: {err}"),
+            ),
         ),
     }
 }
@@ -191,7 +187,7 @@ fn encode_health<T: Serialize>(headers: &HeaderMap, value: &T) -> Response {
 mod tests {
     use axum::http::HeaderValue;
     use serde::Deserialize;
-    use vbs::{BinarySerializer, Serializer};
+    use vbs::{BinarySerializer, Serializer, version::StaticVersion};
 
     use super::*;
 

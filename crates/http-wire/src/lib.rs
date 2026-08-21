@@ -32,14 +32,13 @@ mod health;
 mod server;
 mod ws;
 
-pub use body::{DecodeFailure, EncodeFailure, decode_response, encode_body};
+pub use body::{DecodeFailure, EncodeFailure, WireVersion, decode_response, encode_body};
 pub use content_type::{ContentType, wants_binary};
 pub use error::{ServerError, WireError};
 pub use health::{AppHealth, HealthCheck, HealthStatus};
 #[cfg(feature = "server")]
 pub use server::{
-    MAX_REQUEST_BODY_BYTES, WireVersion, body_limit_layer, cors_layer, decode_body,
-    drive_ws_stream, encode_err, encode_ok, healthcheck_response, module_healthcheck_response,
-    respond, spawn_serve,
+    MAX_REQUEST_BODY_BYTES, body_limit_layer, cors_layer, decode_body, drive_ws_stream, encode_err,
+    encode_ok, healthcheck_response, module_healthcheck_response, respond, spawn_serve,
 };
 pub use ws::{decode_binary_frame, decode_text_frame, encode_binary_frame, encode_text_frame};

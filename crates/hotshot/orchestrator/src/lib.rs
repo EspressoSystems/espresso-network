@@ -719,7 +719,7 @@ async fn post_identity<TYPES: NodeType>(
             .post_identity(libp2p_address, libp2p_public_key),
         Err(err) => Err(err),
     };
-    wire::respond::<ServerError, _>(&headers, result)
+    wire::respond(&headers, result)
 }
 
 async fn post_getconfig<TYPES: NodeType>(
@@ -728,7 +728,7 @@ async fn post_getconfig<TYPES: NodeType>(
     headers: HeaderMap,
 ) -> Response {
     let result = state.write().await.post_getconfig(node_index);
-    wire::respond::<ServerError, _>(&headers, result)
+    wire::respond(&headers, result)
 }
 
 async fn get_tmp_node_index<TYPES: NodeType>(
@@ -736,7 +736,7 @@ async fn get_tmp_node_index<TYPES: NodeType>(
     headers: HeaderMap,
 ) -> Response {
     let result = state.write().await.get_tmp_node_index();
-    wire::respond::<ServerError, _>(&headers, result)
+    wire::respond(&headers, result)
 }
 
 async fn post_pubkey<TYPES: NodeType>(
@@ -752,7 +752,7 @@ async fn post_pubkey<TYPES: NodeType>(
             .register_public_key(&mut pubkey, is_da, libp2p_address, libp2p_public_key),
         Err(err) => Err(err),
     };
-    wire::respond::<ServerError, _>(&headers, result)
+    wire::respond(&headers, result)
 }
 
 async fn peer_pubconfig_ready<TYPES: NodeType>(
@@ -760,7 +760,7 @@ async fn peer_pubconfig_ready<TYPES: NodeType>(
     headers: HeaderMap,
 ) -> Response {
     let result = state.read().await.peer_pub_ready();
-    wire::respond::<ServerError, _>(&headers, result)
+    wire::respond(&headers, result)
 }
 
 async fn post_config_after_peer_collected<TYPES: NodeType>(
@@ -768,7 +768,7 @@ async fn post_config_after_peer_collected<TYPES: NodeType>(
     headers: HeaderMap,
 ) -> Response {
     let result = state.write().await.post_config_after_peer_collected();
-    wire::respond::<ServerError, _>(&headers, result)
+    wire::respond(&headers, result)
 }
 
 async fn post_ready<TYPES: NodeType>(
@@ -780,7 +780,7 @@ async fn post_ready<TYPES: NodeType>(
         Ok(peer_config) => state.write().await.post_ready(&peer_config),
         Err(err) => Err(err),
     };
-    wire::respond::<ServerError, _>(&headers, result)
+    wire::respond(&headers, result)
 }
 
 async fn post_manual_start<TYPES: NodeType>(
@@ -790,7 +790,7 @@ async fn post_manual_start<TYPES: NodeType>(
 ) -> Response {
     // The raw body is used as-is, with no framing.
     let result = state.write().await.post_manual_start(body.to_vec());
-    wire::respond::<ServerError, _>(&headers, result)
+    wire::respond(&headers, result)
 }
 
 async fn get_start<TYPES: NodeType>(
@@ -798,7 +798,7 @@ async fn get_start<TYPES: NodeType>(
     headers: HeaderMap,
 ) -> Response {
     let result = state.read().await.get_start();
-    wire::respond::<ServerError, _>(&headers, result)
+    wire::respond(&headers, result)
 }
 
 async fn post_results<TYPES: NodeType>(
@@ -810,7 +810,7 @@ async fn post_results<TYPES: NodeType>(
     // caller (`client.rs`'s `post_bench_results`) always sends well-formed JSON.
     let metrics: BenchResults = serde_json::from_slice(&body).unwrap();
     let result = state.write().await.post_run_results(metrics);
-    wire::respond::<ServerError, _>(&headers, result)
+    wire::respond(&headers, result)
 }
 
 async fn post_builder<TYPES: NodeType>(
@@ -842,7 +842,7 @@ async fn post_builder<TYPES: NodeType>(
         },
         Err(err) => Err(err),
     };
-    wire::respond::<ServerError, _>(&headers, result)
+    wire::respond(&headers, result)
 }
 
 async fn get_builders<TYPES: NodeType>(
@@ -850,7 +850,7 @@ async fn get_builders<TYPES: NodeType>(
     headers: HeaderMap,
 ) -> Response {
     let result = state.read().await.get_builders();
-    wire::respond::<ServerError, _>(&headers, result)
+    wire::respond(&headers, result)
 }
 
 /// Builds the `api` module's routes. Existing clients call these both directly (e.g.
