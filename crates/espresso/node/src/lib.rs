@@ -1616,6 +1616,38 @@ pub mod testing {
             select_staking_key_sets(self.staking_priv_keys(), indices)
         }
 
+        /// The cliquenet coordinator address assigned to node `i`.
+        pub fn coordinator_addr(&self, i: usize) -> NetAddr {
+            self.coordinator_addrs[i].clone()
+        }
+
+        /// Rebinds node `i`'s cliquenet coordinator to `addr`, taking effect
+        /// the next time the node is initialized. Peers learn the address
+        /// from the stake table contract, so the caller must also publish it
+        /// there (`updateP2pAddr` or `updateNetworkConfig`).
+        pub fn set_coordinator_addr(&mut self, i: usize, addr: NetAddr) {
+            self.coordinator_addrs[i] = addr;
+        }
+
+        /// Replaces node `i`'s consensus keys, taking effect the next time
+        /// the node is initialized: it then signs with the new keys and
+        /// derives its cliquenet x25519 identity from the new BLS key (see
+        /// [`Self::init_node`]). The genesis stake table intentionally keeps
+        /// the old keys — it must stay identical across nodes — so the new
+        /// keys only become effective once the caller publishes the same
+        /// rotation on-chain (`updateConsensusKeysV2`, plus
+        /// `updateNetworkConfig` with the newly derived x25519 key) and the
+        /// change reaches an epoch's stake table snapshot.
+        ///
+        /// Caveat: the light-client state signer checks membership against
+        /// the genesis stake table, so a rotated node stops contributing
+        /// state-relay signatures. No test combines rotation with a state
+        /// relay yet.
+        pub fn set_consensus_keys(&mut self, i: usize, bls: BLSPrivKey, state: StateKeyPair) {
+            self.priv_keys[i] = bls;
+            self.state_key_pairs[i] = state;
+        }
+
         /// Contracts deployed by [`TestConfigBuilder::set_upgrades_with`], if
         /// that was used to set up this config.
         pub fn contracts(&self) -> Option<Contracts> {
@@ -1691,9 +1723,10 @@ pub mod testing {
                 .expect("x25519 keypair derivation should succeed");
             let coordinator_addr = self.coordinator_addrs[i].clone();
 
-            // Create our own (private, local) validator config
+            let pub_key = PubKey::from_private(&self.priv_keys[i]);
+
             let validator_config = ValidatorConfig {
-                public_key: my_peer_config.stake_table_entry.stake_key,
+                public_key: pub_key,
                 private_key: self.priv_keys[i].clone(),
                 stake_value: my_peer_config.stake_table_entry.stake_amount,
                 state_public_key: self.state_key_pairs[i].ver_key(),
@@ -1710,7 +1743,7 @@ pub mod testing {
             };
 
             let network = Arc::new(MemoryNetwork::new(
-                &my_peer_config.stake_table_entry.stake_key,
+                &pub_key,
                 &self.master_map,
                 &topics,
                 None,
@@ -1800,24 +1833,21 @@ pub mod testing {
 
             tracing::info!(
                 i,
-                key = %my_peer_config.stake_table_entry.stake_key,
-                state_key = %my_peer_config.state_ver_key,
+                key = %pub_key,
+                state_key = %self.state_key_pairs[i].ver_key(),
                 "starting node",
             );
 
-            let coordinator_network = {
-                let pub_key = my_peer_config.stake_table_entry.stake_key;
-                move |upgrade| {
-                    Cliquenet::create(
-                        "test-coordinator",
-                        pub_key,
-                        x25519_keypair,
-                        coordinator_addr,
-                        [],
-                        upgrade,
-                        Box::new(NoMetrics),
-                    )
-                }
+            let coordinator_network = move |upgrade| {
+                Cliquenet::create(
+                    "test-coordinator",
+                    pub_key,
+                    x25519_keypair,
+                    coordinator_addr,
+                    [],
+                    upgrade,
+                    Box::new(NoMetrics),
+                )
             };
 
             SequencerContext::init(
