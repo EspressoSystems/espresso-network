@@ -8,7 +8,7 @@ edition = { workspace = true }
 [dependencies]
 # Direct declaration (not workspace) so SP1 zkVM builds can drop the default
 # reqwest/ws transports; node builds restore them via feature unification.
-alloy = { version = "1.0", default-features = false, features = [
+alloy = { version = "2", default-features = false, features = [
     "serde",
     "signers",
 ] }

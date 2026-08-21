@@ -1394,37 +1394,6 @@ impl SequencerPersistence for Persistence {
         )
     }
 
-    async fn store_epoch_root(
-        &self,
-        epoch: EpochNumber,
-        block_header: <SeqTypes as NodeType>::BlockHeader,
-    ) -> anyhow::Result<()> {
-        let mut inner = self.inner.write().await;
-        let dir_path = inner.epoch_root_block_header_dir_path();
-
-        fs::create_dir_all(dir_path.clone())
-            .context("failed to create epoch root block header dir")?;
-
-        let block_header_bytes =
-            bincode::serialize(&block_header).context("serialize block header")?;
-
-        let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
-        inner
-            .replace(
-                &file_path,
-                |_| Ok(true),
-                |mut file| {
-                    file.write_all(&block_header_bytes)?;
-                    Ok(())
-                },
-            )
-            .context(format!(
-                "writing epoch root block header file for epoch {epoch:?}"
-            ))?;
-
-        Ok(())
-    }
-
     async fn add_state_cert(
         &self,
         state_cert: LightClientStateUpdateCertificateV2<SeqTypes>,
@@ -1687,6 +1656,37 @@ impl MembershipPersistence for Persistence {
             file_path.display()
         ))?;
         Ok(Some(header))
+    }
+
+    async fn store_epoch_root(
+        &self,
+        epoch: EpochNumber,
+        block_header: Header,
+    ) -> anyhow::Result<()> {
+        let mut inner = self.inner.write().await;
+        let dir_path = inner.epoch_root_block_header_dir_path();
+
+        fs::create_dir_all(dir_path.clone())
+            .context("failed to create epoch root block header dir")?;
+
+        let block_header_bytes =
+            bincode::serialize(&block_header).context("serialize block header")?;
+
+        let file_path = dir_path.join(epoch.to_string()).with_extension("txt");
+        inner
+            .replace(
+                &file_path,
+                |_| Ok(true),
+                |mut file| {
+                    file.write_all(&block_header_bytes)?;
+                    Ok(())
+                },
+            )
+            .context(format!(
+                "writing epoch root block header file for epoch {epoch:?}"
+            ))?;
+
+        Ok(())
     }
 
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {

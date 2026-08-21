@@ -422,7 +422,7 @@ where
         };
 
         let future = async move {
-            for i in 1.. {
+            for i in 1..u64::MAX {
                 // Delay before we start the pruner run to avoid a useless and expensive prune
                 // immediately on startup.
                 sleep(cfg.interval()).await;
@@ -1550,7 +1550,7 @@ where
         chunk_size: usize,
         metrics: ScannerMetrics,
     ) {
-        for i in 0.. {
+        for i in 0..usize::MAX {
             let span = tracing::warn_span!("proactive scan", i);
             metrics.running.set(1);
             metrics.current_scan.set(i);

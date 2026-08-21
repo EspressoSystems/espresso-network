@@ -274,8 +274,10 @@ check-features-ci *args:
 check-sp1-target:
     # getrandom 0.3/0.4 have no zkVM backend; opt out explicitly (0.2 is
     # handled by the `custom` feature in sp1/target-check)
+    # --ignore-rust-version: the succinct toolchain reports rustc 1.94.0-dev,
+    # one patch below alloy's declared 1.94.1 MSRV
     CARGO_TARGET_RISCV64IM_SUCCINCT_ZKVM_ELF_RUSTFLAGS='--cfg getrandom_backend="unsupported"' \
-        cargo +succinct check --target riscv64im-succinct-zkvm-elf -p sp1-target-check
+        cargo +succinct check --ignore-rust-version --target riscv64im-succinct-zkvm-elf -p sp1-target-check
 
 # Helpful shortcuts for local development
 dev-orchestrator:
