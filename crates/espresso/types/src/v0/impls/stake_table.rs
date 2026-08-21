@@ -197,6 +197,50 @@ impl TryFrom<StakeTableV3Events> for StakeTableEvent {
     }
 }
 
+/// The stake table event signatures the node subscribes to on L1.
+///
+/// Shared between the `eth_getLogs` filter and [`events_from_logs`] so the two can never disagree
+/// about which events matter. `stake_table_event_signatures_cover_all_variants` pins this list
+/// against the [`StakeTableEvent`] variants.
+pub const STAKE_TABLE_EVENT_SIGNATURES: [&str; 13] = [
+    ValidatorRegistered::SIGNATURE,
+    ValidatorRegisteredV2::SIGNATURE,
+    ValidatorRegisteredV3::SIGNATURE,
+    ValidatorExit::SIGNATURE,
+    ValidatorExitV2::SIGNATURE,
+    Delegated::SIGNATURE,
+    Undelegated::SIGNATURE,
+    UndelegatedV2::SIGNATURE,
+    ConsensusKeysUpdated::SIGNATURE,
+    ConsensusKeysUpdatedV2::SIGNATURE,
+    CommissionUpdated::SIGNATURE,
+    X25519KeyUpdated::SIGNATURE,
+    P2pAddrUpdated::SIGNATURE,
+];
+
+/// Decode, validate, and sort raw L1 logs into the ordered stake table event stream.
+///
+/// Split out of [`Fetcher::fetch_events_from_contract`] so tests can drive the whole decode path
+/// from checked-in logs instead of an RPC. Logs that do not decode to a known stake table event are
+/// skipped, as are events [`Fetcher::validate_event`] rejects non-fatally.
+pub fn events_from_logs(
+    logs: Vec<Log>,
+) -> Result<Vec<(EventKey, StakeTableEvent)>, StakeTableError> {
+    let decoded = logs
+        .into_iter()
+        .filter_map(|log| {
+            let event = StakeTableV3Events::decode_raw_log(log.topics(), &log.data().data).ok()?;
+            match Fetcher::validate_event(&event, &log) {
+                Ok(true) => Some(Ok((event, log))),
+                Ok(false) => None,
+                Err(e) => Some(Err(e)),
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    sort_stake_table_events(decoded).map_err(Into::into)
+}
+
 #[cfg_attr(not(feature = "node"), allow(dead_code))]
 fn sort_stake_table_events(
     event_logs: Vec<(StakeTableV3Events, Log)>,
@@ -1435,7 +1479,7 @@ impl Fetcher {
         let chunk_size = l1_client.options().l1_events_max_block_range;
         let chunks = Self::block_range_chunks(from_block, to_block, chunk_size);
 
-        let mut events = vec![];
+        let mut logs = vec![];
 
         for (from, to) in chunks {
             let provider = l1_client.provider.clone();
@@ -1443,7 +1487,7 @@ impl Fetcher {
             tracing::debug!(from, to, "fetch all stake table events in range");
             // fetch events
             // retry if the call to the provider to fetch the events fails
-            let logs: Vec<Log> = retry(
+            let chunk_logs: Vec<Log> = retry(
                 retry_delay,
                 max_retry_duration,
                 "stake table events fetch",
@@ -1452,21 +1496,7 @@ impl Fetcher {
 
                     Box::pin(async move {
                         let filter = Filter::new()
-                            .events([
-                                ValidatorRegistered::SIGNATURE,
-                                ValidatorRegisteredV2::SIGNATURE,
-                                ValidatorRegisteredV3::SIGNATURE,
-                                ValidatorExit::SIGNATURE,
-                                ValidatorExitV2::SIGNATURE,
-                                Delegated::SIGNATURE,
-                                Undelegated::SIGNATURE,
-                                UndelegatedV2::SIGNATURE,
-                                ConsensusKeysUpdated::SIGNATURE,
-                                ConsensusKeysUpdatedV2::SIGNATURE,
-                                CommissionUpdated::SIGNATURE,
-                                X25519KeyUpdated::SIGNATURE,
-                                P2pAddrUpdated::SIGNATURE,
-                            ])
+                            .events(STAKE_TABLE_EVENT_SIGNATURES)
                             .address(contract)
                             .from_block(from)
                             .to_block(to);
@@ -1476,23 +1506,12 @@ impl Fetcher {
             )
             .await;
 
-            let chunk_events = logs
-                .into_iter()
-                .filter_map(|log| {
-                    let event =
-                        StakeTableV3Events::decode_raw_log(log.topics(), &log.data().data).ok()?;
-                    match Self::validate_event(&event, &log) {
-                        Ok(true) => Some(Ok((event, log))),
-                        Ok(false) => None,
-                        Err(e) => Some(Err(e)),
-                    }
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-
-            events.extend(chunk_events);
+            logs.extend(chunk_logs);
         }
 
-        sort_stake_table_events(events).map_err(Into::into)
+        // Decoding after every chunk has been fetched, rather than per chunk, only moves *when* a
+        // fatal decode error surfaces; the checks themselves are per-log and order-independent.
+        events_from_logs(logs)
     }
 
     // Only used by staking CLI which doesn't have persistence
