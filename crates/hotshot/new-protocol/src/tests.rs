@@ -3,6 +3,7 @@ pub(crate) mod common;
 mod block;
 mod cliquenet;
 mod consensus;
+mod coordinator;
 mod cutover;
 mod epoch_change;
 mod failures;
