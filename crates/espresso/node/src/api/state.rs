@@ -1499,10 +1499,14 @@ where
 /// Mirror of the v1 axum error classification: [`AvailabilityError`] variants carry
 /// semantic meaning; everything else is an internal error.
 fn to_status(err: anyhow::Error) -> tonic::Status {
+    // The v2 adapters take `anyhow::Error` straight from the fetchers rather than rendering
+    // through `ApiError`, which is where the v1 path scrubs. `grpc-message` and the REST error
+    // body both reach unauthenticated callers, so provider credentials are removed here.
+    let message = espresso_utils::redact::scrub(&err.to_string());
     match err.downcast_ref::<AvailabilityError>() {
-        Some(AvailabilityError::NotFound(_)) => tonic::Status::not_found(err.to_string()),
-        Some(_) => tonic::Status::invalid_argument(err.to_string()),
-        None => tonic::Status::internal(err.to_string()),
+        Some(AvailabilityError::NotFound(_)) => tonic::Status::not_found(message),
+        Some(_) => tonic::Status::invalid_argument(message),
+        None => tonic::Status::internal(message),
     }
 }
 

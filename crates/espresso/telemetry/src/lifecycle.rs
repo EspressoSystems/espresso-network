@@ -32,7 +32,9 @@ use tracing::Subscriber;
 use tracing_subscriber::{EnvFilter, Layer, registry::LookupSpan};
 use url::Url;
 
-use crate::{UnauthenticatedToken, push_task, remote_write::Label};
+use crate::{
+    UnauthenticatedToken, push_task, redact_exporter::RedactingLogExporter, remote_write::Label,
+};
 
 const SERVICE_NAME: &str = "espresso-node";
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -446,7 +448,7 @@ fn build_logger_provider(
 
     Ok(SdkLoggerProvider::builder()
         .with_resource(resource.build())
-        .with_batch_exporter(exporter)
+        .with_batch_exporter(RedactingLogExporter::new(exporter))
         .build())
 }
 

@@ -1461,7 +1461,7 @@ impl MerklizedState<SeqTypes, { Self::ARITY }> for BlockMerkleTree {
     type Digest = Sha3Digest;
 
     fn state_type() -> &'static str {
-        "block_merkle_tree_bigint"
+        "block_merkle_tree"
     }
 
     fn header_state_commitment_field() -> &'static str {
@@ -1493,7 +1493,7 @@ impl MerklizedState<SeqTypes, { Self::ARITY }> for FeeMerkleTree {
     type Digest = Sha3Digest;
 
     fn state_type() -> &'static str {
-        "fee_merkle_tree_bigint"
+        "fee_merkle_tree"
     }
 
     fn header_state_commitment_field() -> &'static str {

@@ -31,7 +31,10 @@ impl fmt::Display for ApiError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ApiError::BadRequest(err) | ApiError::NotFound(err) | ApiError::Internal(err) => {
-                write!(f, "{}", err)
+                // The v1 axum handlers render an error into a response body through this impl, so
+                // a provider credential in the message is removed once, here. The v2 adapters do
+                // not go through `ApiError`; they scrub in `to_status`.
+                f.write_str(&espresso_utils::redact::scrub(&err.to_string()))
             },
         }
     }

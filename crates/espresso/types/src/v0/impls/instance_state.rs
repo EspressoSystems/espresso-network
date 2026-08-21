@@ -186,6 +186,14 @@ impl MembershipPersistence for NoStorage {
         Ok(None)
     }
 
+    async fn store_epoch_root(
+        &self,
+        _epoch: EpochNumber,
+        _block_header: Header,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     async fn store_stake(
         &self,
         _epoch: EpochNumber,

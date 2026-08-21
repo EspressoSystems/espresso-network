@@ -10,7 +10,12 @@
 //! scenarios would need a per-epoch-aware `TestData` (cert signers, VID
 //! recipients, leader keys) and are not covered here.
 
+#[cfg(target_os = "linux")]
+use std::net::Ipv4Addr;
 use std::{collections::BTreeMap, time::Duration};
+
+#[cfg(target_os = "linux")]
+use hotshot_types::addr::NetAddr;
 
 use crate::tests::common::{
     runner::{NodeAction, NodeChange, TestRunner},
@@ -35,6 +40,7 @@ async fn validator_joins_at_epoch_boundary() {
         .stake_table_schedule(StakeTableSchedule {
             initial: vec![0, 1, 2, 3, 4],
             changes: vec![(3, vec![0, 1, 2, 3, 4, 5])],
+            ..Default::default()
         })
         .node_changes(vec![(
             17,
@@ -75,6 +81,7 @@ async fn validator_set_replaced_at_epoch_boundary() {
         .stake_table_schedule(StakeTableSchedule {
             initial: (0..10).collect(),
             changes: vec![(3, vec![0, 1, 2, 3, 4]), (4, vec![5, 6, 7, 8, 9])],
+            ..Default::default()
         })
         .build()
         .run()
@@ -98,6 +105,7 @@ async fn incoming_validator_restarts_before_replacement_boundary() {
         .stake_table_schedule(StakeTableSchedule {
             initial: (0..10).collect(),
             changes: vec![(3, vec![0, 1, 2, 3, 4]), (4, vec![5, 6, 7, 8, 9])],
+            ..Default::default()
         })
         .node_changes(vec![(
             35,
@@ -106,6 +114,69 @@ async fn incoming_validator_restarts_before_replacement_boundary() {
                 action: NodeAction::Restart,
             }],
         )])
+        .build()
+        .run()
+        .await
+        .unwrap();
+}
+
+/// 6 nodes, epoch_height=12; node 5 is a member of every epoch, but the
+/// epoch-3 stake table (blocks 25-36) registers a new p2p address for it.
+///
+/// Node 5 lives on its own loopback IPs — 127.0.0.2 initially, rotating to
+/// 127.0.0.3 — while its peers stay on 127.0.0.1 (hence Linux-only: macOS
+/// does not alias 127.0.0.0/8). Cliquenet validates inbound connections by
+/// source IP, and loopback dials always originate from 127.0.0.1, so node
+/// 5's own dials are rejected by its peers and it is reachable only when
+/// peers dial the address registered for it. If the rotated address did
+/// not propagate, node 5 would stay partitioned after its restart and the
+/// test fails.
+///
+/// Peers adopt the new address when they enter epoch 2: `apply_epoch`
+/// eagerly merges the next epoch's connect info, so crossing into epoch 2
+/// at block 13 re-points node 5's peers at the epoch-3 address. Node 5
+/// restarts bound to the new address when view 11 decides (during view
+/// ~12), i.e. it is already listening there when its peers re-point.
+///
+/// The epoch boundary must not be a view node 5 leads: peers re-point the
+/// moment they validate the first epoch-2 proposal, and node 5 has not
+/// rebound yet if it is that proposal's leader (its restart is gated on
+/// the boundary view deciding). Cutting off the active leader mid-view
+/// splits its certificates across the committee and, with the zero-slack
+/// 5-of-6 quorum, can wedge the network for good. With epoch_height 12
+/// the boundary view 13 is led by node 1 while node 5 (views 5, 11, 17,
+/// ...) is idle through the handoff.
+///
+/// Node 5 leads views 17, 23, 29 and 35 after the rotation, every view is
+/// required to decide, and its post-restart decisions (target 20) must
+/// match the other nodes' chain. The 10s view timeout keeps a loaded CI
+/// runner from timing out a view (5-of-6 leaves no vote slack, so a
+/// single slow node fails the view).
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn validator_rotates_address_at_epoch_boundary() {
+    let port = test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
+    let new_addr = NetAddr::Inet(Ipv4Addr::new(127, 0, 0, 3).into(), port);
+    TestRunner::builder()
+        .num_nodes(6)
+        .target_decisions(35)
+        .max_runtime(Duration::from_secs(500))
+        .epoch_height(12)
+        .view_timeout(Duration::from_secs(10))
+        .node_ips(BTreeMap::from([(5, Ipv4Addr::new(127, 0, 0, 2).into())]))
+        .stake_table_schedule(StakeTableSchedule {
+            initial: vec![0, 1, 2, 3, 4, 5],
+            changes: vec![(3, vec![0, 1, 2, 3, 4, 5])],
+            addr_overrides: vec![(3, 5, new_addr.clone())],
+        })
+        .node_changes(vec![(
+            11,
+            vec![NodeChange {
+                idx: 5,
+                action: NodeAction::RestartAt(new_addr),
+            }],
+        )])
+        .node_decision_targets(BTreeMap::from([(5, 20)]))
         .build()
         .run()
         .await
@@ -132,6 +203,7 @@ async fn validator_leaves_at_epoch_boundary() {
         .stake_table_schedule(StakeTableSchedule {
             initial: vec![0, 1, 2, 3, 4, 5],
             changes: vec![(3, vec![0, 1, 2, 3, 4])],
+            ..Default::default()
         })
         .node_decision_targets(BTreeMap::from([(5, 12)]))
         .build();

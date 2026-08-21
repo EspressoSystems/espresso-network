@@ -129,7 +129,7 @@ aide = { version = "0.15.1", features = [
     "swagger",
     "redoc",
 ] }
-alloy = { version = "1.0", features = [
+alloy = { version = "2", features = [
     "eips",
     "provider-ws",
     "json-rpc",
