@@ -231,7 +231,10 @@ impl Recorder {
                 // that discarded them would show a node that never voted: the
                 // votes a real node parks until storage confirms them are
                 // released on exactly these steps.
-                lines.push(format!("# dropped input: {dropped} (at step {})", self.steps));
+                lines.push(format!(
+                    "# dropped input: {dropped} (at step {})",
+                    self.steps
+                ));
                 self.pending.extend(emitted);
             },
         }
