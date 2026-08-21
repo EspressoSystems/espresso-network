@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use hotshot::traits::BlockPayload;
 use hotshot_types::{
@@ -30,11 +30,6 @@ pub struct Fetcher<T: NodeType> {
     /// round a genuine answer is still in flight for.
     requested: HashMap<(ViewNumber, VidCommitment2), HashSet<T::SignatureKey>>,
 
-    /// Peers that advertised a `Qc` for a view as catchup evidence: they lock
-    /// what they advertise, and locking requires the reconstructed payload,
-    /// so they are the first choice when that payload must be fetched whole.
-    advertisers: BTreeMap<ViewNumber, HashSet<T::SignatureKey>>,
-
     /// Verifications of received payloads, surfaced by [`Fetcher::next`].
     tasks: JoinSet<Option<ObtainedPayload<T>>>,
 }
@@ -44,14 +39,8 @@ impl<T: NodeType> Fetcher<T> {
         Self {
             public_key,
             requested: HashMap::new(),
-            advertisers: BTreeMap::new(),
             tasks: JoinSet::new(),
         }
-    }
-
-    /// Remember that `peer` advertised the view's certificate.
-    pub fn note_advertiser(&mut self, view: ViewNumber, peer: T::SignatureKey) {
-        self.advertisers.entry(view).or_default().insert(peer);
     }
 
     /// Ask peers for the certified `view`'s payload.
@@ -72,23 +61,28 @@ impl<T: NodeType> Fetcher<T> {
 
         let mut rng = rand::thread_rng();
 
-        let advertiser = self.advertisers.get(&view).and_then(|advertisers| {
-            advertisers
-                .iter()
-                .filter(|peer| **peer != self.public_key)
-                .choose(&mut rng)
-                .cloned()
-        });
+        let mut asked = self.requested.get_mut(&(view, payload_commitment));
 
-        let target = advertiser.or_else(|| {
+        let target = (|| {
             let epoch = consensus.proposal_at(view)?.epoch;
             let membership = membership.stake_table_for_epoch(Some(epoch)).ok()?;
-            membership
-                .stake_table()
+            let stake_table = membership.stake_table();
+            if let Some(asked) = &mut asked
+                && asked.len() + 1 == stake_table.len()
+            {
+                asked.clear()
+            }
+            stake_table
                 .map(|peer| T::SignatureKey::public_key(&peer.stake_table_entry))
-                .filter(|peer| *peer != self.public_key)
+                .filter(|peer| {
+                    if *peer == self.public_key {
+                        return false;
+                    }
+                    let Some(asked) = &asked else { return true };
+                    !asked.contains(peer)
+                })
                 .choose(&mut rng)
-        });
+        })();
 
         let Some(target) = target else {
             warn!(%view, "no peer to fetch the payload from");
@@ -199,6 +193,5 @@ impl<T: NodeType> Fetcher<T> {
 
     pub fn gc(&mut self, view: ViewNumber) {
         self.requested.retain(|(v, _), _| *v > view);
-        self.advertisers = self.advertisers.split_off(&(view + 1));
     }
 }
