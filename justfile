@@ -181,6 +181,22 @@ test-all:
     just nextest --features embedded-db --profile all
     just nextest --profile all
 
+# Regenerate the checked-in stake table history fixtures from L1.
+#
+# Needs *archive* RPCs: pruning endpoints answer eth_getLogs for old ranges with an empty result
+# instead of an error, which would silently commit truncated history. The generator asserts the
+# first known event is present, so a pruning endpoint fails loudly.
+regen-stake-table-fixtures:
+    @echo 'Requires ESPRESSO_L1_ARCHIVE_RPC_MAINNET and ESPRESSO_L1_ARCHIVE_RPC_SEPOLIA'
+    cargo test -p espresso-types --lib regenerate_history_fixtures -- --ignored --nocapture
+    cargo test -p espresso-types --lib regenerate_synthetic_corpus -- --ignored --nocapture
+    @echo 'Now review the fixture diff, then update the pins:'
+    @echo '  INSTA_FORCE_UPDATE=1 cargo test -p espresso-types --lib stake_table_history_pin'
+
+# Check the checked-in stake table history fixtures still match the live chains.
+check-stake-table-history:
+    cargo test -p espresso-types --lib stake_table_history_is_current -- --ignored --nocapture
+
 test-integration: (build "test")
 	INTEGRATION_TEST_NODE_VERSION=2 cargo nextest run -p tests --nocapture --profile integration test_native_demo_basic
 
