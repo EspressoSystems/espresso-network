@@ -21,7 +21,6 @@ full = [
     "dep:surf",
     "dep:tokio",
     "dep:tracing-subscriber",
-    "dep:url",
     "tokio/signal",
 ]
 testing = []
@@ -40,7 +39,7 @@ surf = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, optional = true }
-url = { workspace = true, optional = true }
+url = { workspace = true }
 
 [build-dependencies]
 anyhow = { workspace = true }

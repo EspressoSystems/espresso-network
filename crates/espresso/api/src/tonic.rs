@@ -26,10 +26,12 @@ use crate::{
 
 /// Convert ApiError to tonic::Status with proper status code mapping
 fn map_error(err: ApiError) -> Status {
+    // Render through `ApiError`'s `Display`, not the inner error's, so the message is scrubbed.
+    let message = err.to_string();
     match err {
-        ApiError::BadRequest(e) => Status::invalid_argument(e.to_string()),
-        ApiError::NotFound(e) => Status::not_found(e.to_string()),
-        ApiError::Internal(e) => Status::internal(e.to_string()),
+        ApiError::BadRequest(_) => Status::invalid_argument(message),
+        ApiError::NotFound(_) => Status::not_found(message),
+        ApiError::Internal(_) => Status::internal(message),
     }
 }
 
@@ -200,4 +202,33 @@ where
     S: v2::ConsensusApi + Send + Sync + Clone + 'static,
 {
     ConsensusServiceServer::new(ConsensusServiceImpl::new(state))
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    /// The gRPC adapter serves the same handlers as axum, and `grpc-message` reaches unauthenticated
+    /// callers just like an HTTP body.
+    #[test]
+    fn map_error_redacts_provider_credentials() {
+        let err = ApiError::Internal(anyhow::anyhow!(
+            r#"failed to get total supply. err=reqwest::Error {{ url: "https://u:p@rpc.invalid/v1/FAKEKEY" }}"#
+        ));
+
+        let status = map_error(err);
+
+        assert_eq!(status.code(), tonic::Code::Internal);
+        assert!(
+            !status.message().contains("FAKEKEY"),
+            "{}",
+            status.message()
+        );
+        assert!(!status.message().contains("u:p"), "{}", status.message());
+        assert!(
+            status.message().contains("rpc.invalid"),
+            "{}",
+            status.message()
+        );
+    }
 }

@@ -9,6 +9,7 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
 base64 = { workspace = true }
+espresso-utils = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
 prost = { workspace = true }

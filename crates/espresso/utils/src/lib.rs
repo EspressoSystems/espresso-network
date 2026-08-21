@@ -23,6 +23,7 @@ pub mod build_info;
 pub mod env_compat;
 #[cfg(feature = "full")]
 pub mod logging;
+pub mod redact;
 pub mod ser;
 #[cfg(feature = "full")]
 pub mod shutdown;
