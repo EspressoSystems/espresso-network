@@ -16,9 +16,14 @@ use tracing::{error, warn};
 pub(crate) type Metadata<T> = <<T as NodeType>::BlockPayload as BlockPayload<T>>::Metadata;
 
 type ReconstructResult<T> =
-    Result<VidReconstructOutput<T>, VidReconstructError<<T as NodeType>::SignatureKey>>;
+    Result<ObtainedPayload<T>, VidReconstructError<<T as NodeType>::SignatureKey>>;
 
-pub struct VidReconstructOutput<T: NodeType> {
+/// A block's payload in hand, with what the node needs to file it.
+///
+/// Produced by decoding a view's shares and, on the recovery path, by a
+/// payload a peer sent whole. Either way the bytes are bound to
+/// `payload_commitment` before this is built.
+pub struct ObtainedPayload<T: NodeType> {
     pub view: ViewNumber,
     pub epoch: EpochNumber,
     pub payload_commitment: VidCommitment2,
@@ -440,7 +445,7 @@ fn reconstruct<T: NodeType>(
     {
         let payload = T::BlockPayload::from_bytes(&bytes, &metadata);
         let tx_commitments = payload.transaction_commitments(&metadata);
-        let output = VidReconstructOutput {
+        let output = ObtainedPayload {
             view,
             epoch,
             payload_commitment,

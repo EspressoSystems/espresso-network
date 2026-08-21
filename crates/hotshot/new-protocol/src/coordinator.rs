@@ -54,7 +54,7 @@ use crate::{
     state::{HeaderRequest, StateEntry, StateManager, StateManagerOutput},
     storage::{NewProtocolStorage, Storage},
     vid::{
-        VidDisperseRequest, VidDisperser, VidFragmentAccumulator, VidReconstructOutput,
+        ObtainedPayload, VidDisperseRequest, VidDisperser, VidFragmentAccumulator,
         VidReconstructor, expected_vid_param,
     },
     vote::{EpochRootTally, SimpleTally, VoteCollector},
@@ -639,7 +639,7 @@ where
         }
     }
 
-    fn on_payload_obtained(&mut self, out: VidReconstructOutput<T>) -> ConsensusInput<T> {
+    fn on_payload_obtained(&mut self, out: ObtainedPayload<T>) -> ConsensusInput<T> {
         self.server
             .retain(out.view, out.payload_commitment, &out.payload);
         self.payload_txn_bytes
