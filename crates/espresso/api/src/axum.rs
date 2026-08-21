@@ -3357,10 +3357,10 @@ where
 
 /// Create v1 router with OpenAPI documentation.
 ///
-/// Unlike v2 (which documents proto request/response types with real JSON schemas), most v1
-/// handlers return internal domain types that don't implement `schemars::JsonSchema` by design —
-/// see [`ApiJson`]. The generated spec therefore documents routes, parameters, and summaries, but
-/// response bodies are mostly untyped.
+/// Unlike v2 (whose spec comes from the protos, with real schemas for every request and response;
+/// see [`router_v2_docs`]), most v1 handlers return internal domain types that don't implement
+/// `schemars::JsonSchema` by design - see [`ApiJson`]. The generated spec therefore documents
+/// routes, parameters, and summaries, but response bodies are mostly untyped.
 pub fn create_router_v1<S>(state: S) -> Router
 where
     S: v1::RewardApi
@@ -3405,6 +3405,32 @@ where
     finish_v1_docs(router)
 }
 
+/// Serve the v2 API documentation: the OpenAPI document generated from the protos at build time,
+/// plus the two UIs that render it.
+///
+/// The document is generated rather than derived from the router (`finish_v1_docs`'s approach),
+/// because the protos, not the handlers, are the definition site: they carry the request and
+/// response schemas and the doc comments.
+pub fn router_v2_docs() -> Router {
+    const SPEC: &str = include_str!("generated/espresso.api.v2.openapi.json");
+
+    Router::new()
+        .route(
+            routes::v2::OPENAPI_SPEC_ROUTE,
+            get(|| async { ([(header::CONTENT_TYPE, "application/json")], SPEC) }),
+        )
+        .route(
+            routes::v2::SWAGGER_ROUTE,
+            get(|| async { swagger_html(routes::v2::OPENAPI_SPEC_ROUTE) }),
+        )
+        .route(
+            routes::v2::SCALAR_ROUTE,
+            get(Scalar::new(routes::v2::OPENAPI_SPEC_ROUTE)
+                .with_title("Espresso Node API v2")
+                .axum_handler()),
+        )
+}
+
 /// Build the OpenAPI spec for the mounted routes and attach the docs routes; every serve mode
 /// must route through this.
 pub fn finish_v1_docs(router: ApiRouter) -> Router {
@@ -3423,8 +3449,8 @@ pub fn finish_v1_docs(router: ApiRouter) -> Router {
     declare_path_template_parameters(&mut api);
     tag_operations_by_module(&mut api);
 
-    // Transform examples (array) to example (singular) for OpenAPI 3.0/Swagger compatibility,
-    // matching create_router_v2 (a no-op unless a future v1 route adds a JsonSchema body/query).
+    // Transform examples (array) to example (singular) for OpenAPI 3.0/Swagger compatibility
+    // (a no-op unless a future v1 route adds a JsonSchema body/query).
     if let Some(ref mut components) = api.components {
         let mut transform = schemars::transform::SetSingleExample::default();
         for schema in components.schemas.values_mut() {
@@ -4618,6 +4644,41 @@ mod tests {
             routes::v1::STATUS_BLOCK_HEIGHT_ROUTE,
             body
         );
+    }
+
+    #[tokio::test]
+    async fn v2_openapi_spec_documents_the_proto_routes() {
+        let req = Request::builder()
+            .uri(routes::v2::OPENAPI_SPEC_ROUTE)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router_v2_docs(), req)
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_string(resp).await;
+        let spec: serde_json::Value = serde_json::from_str(&body).expect("valid JSON");
+        assert!(
+            spec["paths"]
+                .as_object()
+                .expect("spec has paths")
+                .contains_key("/v2/status/block-height"),
+            "expected /v2/status/block-height in spec paths: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn v2_swagger_ui_serves_html() {
+        let req = Request::builder()
+            .uri(routes::v2::SWAGGER_ROUTE)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router_v2_docs(), req)
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_string(resp).await;
+        assert!(body.contains(routes::v2::OPENAPI_SPEC_ROUTE));
     }
 
     /// `submit` and the bulk `catchup` routes take bodies over axum's 2 MiB `Bytes` default, and

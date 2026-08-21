@@ -995,3 +995,12 @@ pub mod v1 {
     path_fn!(database_table_sizes, DATABASE_TABLE_SIZES_ROUTE);
     path_fn!(database_migration_status, DATABASE_MIGRATION_STATUS_ROUTE);
 }
+
+/// The v2 endpoint routes are defined by the `google.api.http` annotations in `proto/v2/` and
+/// registered by the generated `rest::*_rest_router` functions, so only the hand-written docs
+/// routes appear here.
+pub mod v2 {
+    pub const OPENAPI_SPEC_ROUTE: &str = "/v2/docs/openapi.json";
+    pub const SWAGGER_ROUTE: &str = "/v2";
+    pub const SCALAR_ROUTE: &str = "/v2/scalar";
+}

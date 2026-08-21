@@ -1,0 +1,1712 @@
+{
+  "components": {
+    "schemas": {
+      "ADVZNsProof": {
+        "description": "ADVZ (VID V0) namespace proof",
+        "properties": {
+          "namespaceId": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "nsPayload": {
+            "type": "string"
+          },
+          "nsProof": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "AvidMIncorrectEncodingNsProof": {
+        "description": "AvidM incorrect encoding proof",
+        "properties": {
+          "proofData": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "AvidMNsProof": {
+        "description": "AvidM (VID V1) namespace proof",
+        "properties": {
+          "nsIndex": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "nsPayload": {
+            "type": "string"
+          },
+          "nsProof": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "AvidmGf2NsProof": {
+        "description": "AvidmGf2 (VID V2) namespace proof",
+        "properties": {
+          "nsIndex": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "nsPayload": {
+            "type": "string"
+          },
+          "nsProof": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "BLSPublicKey": {
+        "description": "BLS public key (typically 48 bytes)",
+        "properties": {
+          "key": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "BlockHeightResponse": {
+        "description": "Latest block height response",
+        "properties": {
+          "height": {
+            "description": "Height of the latest decided block",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Branch": {
+        "description": "Branch node with hash and children",
+        "properties": {
+          "children": {
+            "description": "Child nodes (up to 2 for binary tree)",
+            "items": {
+              "$ref": "#/components/schemas/MerkleNode"
+            },
+            "type": "array"
+          },
+          "value": {
+            "description": "Hash value, TaggedBase64 format",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "CirculatingSupplyEthereumResponse": {
+        "description": "Circulating supply on Ethereum L1 response",
+        "properties": {
+          "amount": {
+            "description": "Circulating supply of ESP tokens on Ethereum L1, in ESP (decimal string):\ntotal_supply_l1 - locked",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "CirculatingSupplyResponse": {
+        "description": "Circulating supply response",
+        "properties": {
+          "amount": {
+            "description": "Circulating supply in ESP (decimal string): initial_supply + reward_distributed -\nlocked, following the mainnet unlock schedule",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Empty": {
+        "description": "Empty node variant (no data)",
+        "properties": {
+          "dummy": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/EmptyData"
+              }
+            ],
+            "description": "Dummy field for serde flatten compatibility (must be a message type)"
+          }
+        },
+        "type": "object"
+      },
+      "EmptyData": {
+        "description": "Dummy message for flattening Empty",
+        "properties": {},
+        "type": "object"
+      },
+      "Error": {
+        "description": "Error response following the Google API error model",
+        "properties": {
+          "error": {
+            "properties": {
+              "code": {
+                "description": "HTTP status code",
+                "type": "integer"
+              },
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "description": "gRPC status name, e.g. NOT_FOUND",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "ForgottenSubtree": {
+        "description": "Forgotten subtree node with hash only",
+        "properties": {
+          "value": {
+            "description": "Hash value, TaggedBase64 format",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "GetBlockHeightRequest": {
+        "description": "Request for the latest block height (no parameters)",
+        "properties": {},
+        "type": "object"
+      },
+      "GetCirculatingSupplyEthereumRequest": {
+        "description": "Request for the circulating supply on Ethereum L1 (no parameters)",
+        "properties": {},
+        "type": "object"
+      },
+      "GetCirculatingSupplyRequest": {
+        "description": "Request for the circulating supply (no parameters)",
+        "properties": {},
+        "type": "object"
+      },
+      "GetIncorrectEncodingProofRequest": {
+        "description": "Request to get incorrect encoding proof",
+        "properties": {
+          "blockHeight": {
+            "description": "Block height",
+            "format": "uint64",
+            "type": "string"
+          },
+          "namespaceId": {
+            "description": "Namespace ID",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "GetNamespaceProofRequest": {
+        "description": "Request to get namespace proof(s)\nEither specify 'block' for a single block, or 'first' and 'last' for a range",
+        "properties": {
+          "block": {
+            "description": "Single block query",
+            "format": "uint64",
+            "type": "string"
+          },
+          "first": {
+            "description": "Range query - first block (inclusive)",
+            "format": "uint64",
+            "type": "string"
+          },
+          "last": {
+            "description": "Range query - last block (inclusive)",
+            "format": "uint64",
+            "type": "string"
+          },
+          "namespaceId": {
+            "description": "Namespace ID",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "GetNamespaceProofResponse": {
+        "description": "Unified response for namespace proof queries",
+        "properties": {
+          "range": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NamespaceProofRangeResponse"
+              }
+            ],
+            "description": "Member of oneof `response`."
+          },
+          "single": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NamespaceProofResponse"
+              }
+            ],
+            "description": "Member of oneof `response`."
+          }
+        },
+        "type": "object"
+      },
+      "GetNodeKeysRequest": {
+        "description": "Request for the node's public keys (no parameters)",
+        "properties": {},
+        "type": "object"
+      },
+      "GetRewardAccountProofRequest": {
+        "description": "Request to get reward account proof (at latest finalized height)",
+        "properties": {
+          "address": {
+            "description": "Ethereum address to query",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "GetRewardBalanceRequest": {
+        "description": "Request to get reward balance (at latest finalized height)",
+        "properties": {
+          "address": {
+            "description": "Ethereum address to query",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "GetRewardBalancesRequest": {
+        "description": "Request to get paginated reward balances",
+        "properties": {
+          "height": {
+            "description": "Block height to query",
+            "format": "uint64",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Maximum number of results (limit ≤ 10000)",
+            "format": "uint64",
+            "type": "string"
+          },
+          "offset": {
+            "description": "Starting offset for pagination",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "GetRewardClaimInputRequest": {
+        "description": "Request to get reward claim input (at latest finalized height)",
+        "properties": {
+          "address": {
+            "description": "Ethereum address to query rewards for (hex format, e.g. \"0x1234...\")",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "GetRewardMerkleTreeRequest": {
+        "description": "Request to get reward merkle tree snapshot",
+        "properties": {
+          "height": {
+            "description": "Block height to query",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "GetStakeTableRequest": {
+        "description": "Request to get stake table for an epoch",
+        "properties": {
+          "epoch": {
+            "description": "Epoch number",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "GetStateCertificateRequest": {
+        "description": "Request to get state certificate for an epoch",
+        "properties": {
+          "epoch": {
+            "description": "Epoch number",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "GetSuccessRateRequest": {
+        "description": "Request for the view success rate (no parameters)",
+        "properties": {},
+        "type": "object"
+      },
+      "GetTimeSinceLastDecideRequest": {
+        "description": "Request for the time since the last decide (no parameters)",
+        "properties": {},
+        "type": "object"
+      },
+      "GetTotalIssuedSupplyRequest": {
+        "description": "Request for the total issued supply (no parameters)",
+        "properties": {},
+        "type": "object"
+      },
+      "GetTotalMintedSupplyRequest": {
+        "description": "Request for the total minted supply (no parameters)",
+        "properties": {},
+        "type": "object"
+      },
+      "GetTotalRewardDistributedRequest": {
+        "description": "Request for the total reward distributed (no parameters)",
+        "properties": {},
+        "type": "object"
+      },
+      "IncorrectEncodingProofResponse": {
+        "description": "Incorrect encoding proof response",
+        "properties": {
+          "proof": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AvidMIncorrectEncodingNsProof"
+              }
+            ],
+            "description": "Incorrect encoding proof (AvidM V1.1 proof)"
+          }
+        },
+        "type": "object"
+      },
+      "InetAddr": {
+        "description": "IP address (v4 or v6) with port\n`host` is a socket-address-ready host string: plain dotted-decimal for IPv4\n(e.g. \"192.0.2.1\") and bracket-enclosed for IPv6 (e.g. \"[::1]\"), so that\nconsumers can form a valid address with a simple \"{host}:{port}\" without\ninspecting the IP version.",
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "format": "uint32",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "Leaf": {
+        "description": "Leaf node containing account and reward amount",
+        "properties": {
+          "elem": {
+            "description": "Reward amount (U256), TaggedBase64 format",
+            "type": "string"
+          },
+          "pos": {
+            "description": "Leaf position (account address), TaggedBase64 format",
+            "type": "string"
+          },
+          "value": {
+            "description": "Node hash value, TaggedBase64 format",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "LightClientState": {
+        "description": "Light client state",
+        "properties": {
+          "blockCommRoot": {
+            "type": "string"
+          },
+          "blockHeight": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "viewNumber": {
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "LightClientStateUpdateCertificateV2": {
+        "description": "Light client state update certificate V2",
+        "properties": {
+          "authRoot": {
+            "type": "string"
+          },
+          "epoch": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "lightClientState": {
+            "type": "string"
+          },
+          "nextStakeTableState": {
+            "type": "string"
+          },
+          "signatures": {
+            "items": {
+              "$ref": "#/components/schemas/StateSignatureTuple"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "MerkleNode": {
+        "description": "Merkle tree node (one of four variants)",
+        "properties": {
+          "branch": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Branch"
+              }
+            ],
+            "description": "Member of oneof `node_type`."
+          },
+          "empty": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Empty"
+              }
+            ],
+            "description": "Member of oneof `node_type`."
+          },
+          "forgottenSubtree": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ForgottenSubtree"
+              }
+            ],
+            "description": "Member of oneof `node_type`."
+          },
+          "leaf": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Leaf"
+              }
+            ],
+            "description": "Member of oneof `node_type`."
+          }
+        },
+        "type": "object"
+      },
+      "MerkleProof": {
+        "description": "Merkle proof containing leaf position and path to root",
+        "properties": {
+          "pos": {
+            "description": "Leaf position (account address), TaggedBase64 format",
+            "type": "string"
+          },
+          "proof": {
+            "description": "Merkle path from leaf to root (160 levels for binary tree)",
+            "items": {
+              "$ref": "#/components/schemas/MerkleNode"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "NameAddr": {
+        "description": "Domain name with port",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "port": {
+            "format": "uint32",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "NamespaceProofRangeResponse": {
+        "description": "Response for range queries - array of namespace proofs",
+        "properties": {
+          "proofs": {
+            "description": "Proofs for each block in the range",
+            "items": {
+              "$ref": "#/components/schemas/NamespaceProofResponse"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "NamespaceProofResponse": {
+        "description": "Single block namespace proof response",
+        "properties": {
+          "proof": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NsProof"
+              }
+            ],
+            "description": "Namespace proof (optional - may be None if namespace not present)"
+          },
+          "transactions": {
+            "description": "Transactions for this namespace",
+            "items": {
+              "$ref": "#/components/schemas/Transaction"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "NetAddr": {
+        "description": "Network address - either IP or domain name with port",
+        "properties": {
+          "inet": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/InetAddr"
+              }
+            ],
+            "description": "Member of oneof `addr_type`."
+          },
+          "name": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NameAddr"
+              }
+            ],
+            "description": "Member of oneof `addr_type`."
+          }
+        },
+        "type": "object"
+      },
+      "NodeKeysResponse": {
+        "description": "Node public keys response",
+        "properties": {
+          "consensusKey": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BLSPublicKey"
+              }
+            ],
+            "description": "BLS consensus key"
+          },
+          "ethAccount": {
+            "description": "Ethereum account associated with this node, 0x-prefixed hex",
+            "type": "string"
+          },
+          "stateVerKey": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SchnorrPublicKey"
+              }
+            ],
+            "description": "Schnorr state verification key"
+          },
+          "x25519Key": {
+            "description": "X25519 public key for cliquenet, TaggedBase64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "NsProof": {
+        "description": "Namespace proof - supports multiple VID versions",
+        "properties": {
+          "v0": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ADVZNsProof"
+              }
+            ],
+            "description": "Member of oneof `proof_version`."
+          },
+          "v1": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AvidMNsProof"
+              }
+            ],
+            "description": "Member of oneof `proof_version`."
+          },
+          "v1IncorrectEncoding": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AvidMIncorrectEncodingNsProof"
+              }
+            ],
+            "description": "Member of oneof `proof_version`."
+          },
+          "v2": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AvidmGf2NsProof"
+              }
+            ],
+            "description": "Member of oneof `proof_version`."
+          }
+        },
+        "type": "object"
+      },
+      "PeerConfig": {
+        "description": "Complete peer configuration",
+        "properties": {
+          "connectInfo": {
+            "$ref": "#/components/schemas/PeerConnectInfo"
+          },
+          "stakeTableEntry": {
+            "$ref": "#/components/schemas/StakeTableEntry"
+          },
+          "stateVerKey": {
+            "$ref": "#/components/schemas/SchnorrPublicKey"
+          }
+        },
+        "type": "object"
+      },
+      "PeerConnectInfo": {
+        "description": "Peer connection information",
+        "properties": {
+          "p2pAddr": {
+            "$ref": "#/components/schemas/NetAddr"
+          },
+          "x25519Key": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RewardAccountProofV2": {
+        "description": "Reward account proof containing account address and merkle path",
+        "properties": {
+          "account": {
+            "description": "Ethereum address of the account",
+            "type": "string"
+          },
+          "proof": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RewardMerkleProofV2"
+              }
+            ],
+            "description": "Merkle proof (Presence or Absence)"
+          }
+        },
+        "type": "object"
+      },
+      "RewardAccountQueryDataV2": {
+        "description": "Complete reward account query data with balance and merkle proof",
+        "properties": {
+          "balance": {
+            "description": "Current balance for this account (decimal string)",
+            "type": "string"
+          },
+          "proof": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RewardAccountProofV2"
+              }
+            ],
+            "description": "Merkle proof for this account"
+          }
+        },
+        "type": "object"
+      },
+      "RewardAmount": {
+        "description": "Single reward amount entry",
+        "properties": {
+          "address": {
+            "description": "Ethereum address",
+            "type": "string"
+          },
+          "amount": {
+            "description": "Reward amount in wei (decimal string)",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RewardBalance": {
+        "description": "Reward balance for an address",
+        "properties": {
+          "amount": {
+            "description": "Balance amount in wei (decimal string)",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RewardBalances": {
+        "description": "Paginated list of reward balances",
+        "properties": {
+          "amounts": {
+            "description": "List of reward amounts in this page",
+            "items": {
+              "$ref": "#/components/schemas/RewardAmount"
+            },
+            "type": "array"
+          },
+          "total": {
+            "description": "Total number of accounts with rewards at this height",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RewardClaimInput": {
+        "description": "Reward claim input for contract submission\nContains all data needed to call the claimRewards function on the L1 contract",
+        "properties": {
+          "address": {
+            "description": "Ethereum address of the reward recipient",
+            "type": "string"
+          },
+          "authData": {
+            "description": "Auth data containing the Merkle proof and auth root inputs (hex-encoded with \"0x\" prefix)\nThis is the encoded RewardAuthData from the contract adapter",
+            "type": "string"
+          },
+          "lifetimeRewards": {
+            "description": "Total lifetime rewards for this address (hex-encoded with \"0x\" prefix for contract)",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RewardMerkleProofV2": {
+        "description": "Merkle proof variant (Presence for existing accounts, Absence for non-existing)",
+        "properties": {
+          "absence": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerkleProof"
+              }
+            ],
+            "description": "Member of oneof `proof_type`."
+          },
+          "presence": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MerkleProof"
+              }
+            ],
+            "description": "Member of oneof `proof_type`."
+          }
+        },
+        "type": "object"
+      },
+      "RewardMerkleTreeV2Data": {
+        "description": "Raw RewardMerkleTreeV2 snapshot data",
+        "properties": {
+          "data": {
+            "description": "Serialized merkle tree data",
+            "format": "byte",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SchnorrPublicKey": {
+        "description": "Schnorr public key (typically 32 bytes)",
+        "properties": {
+          "key": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "StakeTableEntry": {
+        "description": "Stake table entry for a validator",
+        "properties": {
+          "stakeAmount": {
+            "type": "string"
+          },
+          "stakeKey": {
+            "$ref": "#/components/schemas/BLSPublicKey"
+          }
+        },
+        "type": "object"
+      },
+      "StakeTableResponse": {
+        "description": "Stake table response",
+        "properties": {
+          "peers": {
+            "description": "List of peer configurations",
+            "items": {
+              "$ref": "#/components/schemas/PeerConfig"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "StakeTableState": {
+        "description": "Stake table state commitments",
+        "properties": {
+          "amountComm": {
+            "type": "string"
+          },
+          "blsKeyComm": {
+            "type": "string"
+          },
+          "schnorrKeyComm": {
+            "type": "string"
+          },
+          "threshold": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "StateCertificateResponse": {
+        "description": "State certificate response",
+        "properties": {
+          "certificate": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LightClientStateUpdateCertificateV2"
+              }
+            ],
+            "description": "Structured light client state update certificate"
+          }
+        },
+        "type": "object"
+      },
+      "StateSignatureTuple": {
+        "description": "State signature tuple (key + two signatures)",
+        "properties": {
+          "lcv2Signature": {
+            "type": "string"
+          },
+          "lcv3Signature": {
+            "type": "string"
+          },
+          "stateSignatureKey": {
+            "$ref": "#/components/schemas/SchnorrPublicKey"
+          }
+        },
+        "type": "object"
+      },
+      "SuccessRateResponse": {
+        "description": "View success rate response",
+        "properties": {
+          "rate": {
+            "description": "Fraction of views in which this node decided a block",
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "TimeSinceLastDecideResponse": {
+        "description": "Time since last decide response",
+        "properties": {
+          "seconds": {
+            "description": "Seconds elapsed since this node last decided a block",
+            "format": "uint64",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "TotalIssuedSupplyResponse": {
+        "description": "Total issued supply response",
+        "properties": {
+          "amount": {
+            "description": "Total issued supply in ESP (decimal string): initial_supply +\ntotal_reward_distributed, including rewards not yet claimed on Ethereum",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "TotalMintedSupplyResponse": {
+        "description": "Total minted supply response",
+        "properties": {
+          "amount": {
+            "description": "Total supply of the ESP token minted on Ethereum, in ESP (decimal string);\nexcludes unclaimed rewards",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "TotalRewardDistributedResponse": {
+        "description": "Total reward distributed response",
+        "properties": {
+          "amount": {
+            "description": "Total rewards distributed by consensus, in ESP (decimal string), including rewards\nnot yet claimed on Ethereum",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Transaction": {
+        "description": "Transaction",
+        "properties": {
+          "namespace": {
+            "format": "uint64",
+            "type": "string"
+          },
+          "payload": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "U256": {
+        "description": "U256 value encoded as hex string",
+        "properties": {
+          "value": {
+            "description": "Hex-encoded value with \"0x\" prefix (e.g., \"0x32fe2fedb43f62b4ee2\")",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "Generated from the proto definitions in crates/espresso/api/proto/v2. JSON follows canonical protoJSON: camelCase field names, 64-bit integers as decimal strings, bytes as base64, oneofs flattened, defaults omitted. Query parameters accept both the proto field name and its camelCase form.",
+    "title": "Espresso Node API v2",
+    "version": "0.1.0"
+  },
+  "openapi": "3.0.3",
+  "paths": {
+    "/v2/consensus/stake-table": {
+      "get": {
+        "description": "Get stake table for an epoch",
+        "operationId": "GetStakeTable",
+        "parameters": [
+          {
+            "description": "Epoch number",
+            "in": "query",
+            "name": "epoch",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StakeTableResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get stake table for an epoch",
+        "tags": [
+          "Consensus"
+        ]
+      }
+    },
+    "/v2/consensus/state-certificate": {
+      "get": {
+        "description": "Get state certificate for an epoch",
+        "operationId": "GetStateCertificate",
+        "parameters": [
+          {
+            "description": "Epoch number",
+            "in": "query",
+            "name": "epoch",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StateCertificateResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get state certificate for an epoch",
+        "tags": [
+          "Consensus"
+        ]
+      }
+    },
+    "/v2/data/finalized/incorrect-encoding-proof": {
+      "get": {
+        "description": "Get incorrect encoding proof for a block",
+        "operationId": "GetIncorrectEncodingProof",
+        "parameters": [
+          {
+            "description": "Namespace ID",
+            "in": "query",
+            "name": "namespace_id",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Block height",
+            "in": "query",
+            "name": "block_height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IncorrectEncodingProofResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get incorrect encoding proof for a block",
+        "tags": [
+          "Data"
+        ]
+      }
+    },
+    "/v2/data/finalized/namespace-proof": {
+      "get": {
+        "description": "Get namespace proof(s) - handles both single block and range queries",
+        "operationId": "GetNamespaceProof",
+        "parameters": [
+          {
+            "description": "Namespace ID",
+            "in": "query",
+            "name": "namespace_id",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Single block query",
+            "in": "query",
+            "name": "block",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Range query - first block (inclusive)",
+            "in": "query",
+            "name": "first",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Range query - last block (inclusive)",
+            "in": "query",
+            "name": "last",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetNamespaceProofResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get namespace proof(s) - handles both single block and range queries",
+        "tags": [
+          "Data"
+        ]
+      }
+    },
+    "/v2/rewards/balance": {
+      "get": {
+        "description": "Get reward balance (at latest finalized height)",
+        "operationId": "GetRewardBalance",
+        "parameters": [
+          {
+            "description": "Ethereum address to query",
+            "in": "query",
+            "name": "address",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardBalance"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get reward balance (at latest finalized height)",
+        "tags": [
+          "Reward"
+        ]
+      }
+    },
+    "/v2/rewards/balances": {
+      "get": {
+        "description": "Get paginated list of reward balances at a specific height",
+        "operationId": "GetRewardBalances",
+        "parameters": [
+          {
+            "description": "Block height to query",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Starting offset for pagination",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Maximum number of results (limit ≤ 10000)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardBalances"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get paginated list of reward balances at a specific height",
+        "tags": [
+          "Reward"
+        ]
+      }
+    },
+    "/v2/rewards/claim-input": {
+      "get": {
+        "description": "Get reward claim input for L1 contract submission (at latest finalized height)",
+        "operationId": "GetRewardClaimInput",
+        "parameters": [
+          {
+            "description": "Ethereum address to query rewards for (hex format, e.g. \"0x1234...\")",
+            "in": "query",
+            "name": "address",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardClaimInput"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get reward claim input for L1 contract submission (at latest finalized height)",
+        "tags": [
+          "Reward"
+        ]
+      }
+    },
+    "/v2/rewards/proof": {
+      "get": {
+        "description": "Get Merkle proof for reward account (at latest finalized height)",
+        "operationId": "GetRewardAccountProof",
+        "parameters": [
+          {
+            "description": "Ethereum address to query",
+            "in": "query",
+            "name": "address",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardAccountQueryDataV2"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get Merkle proof for reward account (at latest finalized height)",
+        "tags": [
+          "Reward"
+        ]
+      }
+    },
+    "/v2/rewards/tree": {
+      "get": {
+        "description": "Get raw RewardMerkleTreeV2 snapshot at a specific height",
+        "operationId": "GetRewardMerkleTreeV2",
+        "parameters": [
+          {
+            "description": "Block height to query",
+            "in": "query",
+            "name": "height",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardMerkleTreeV2Data"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get raw RewardMerkleTreeV2 snapshot at a specific height",
+        "tags": [
+          "Reward"
+        ]
+      }
+    },
+    "/v2/status/block-height": {
+      "get": {
+        "description": "Get the height of the latest decided block",
+        "operationId": "GetBlockHeight",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockHeightResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the height of the latest decided block",
+        "tags": [
+          "Status"
+        ]
+      }
+    },
+    "/v2/status/keys": {
+      "get": {
+        "description": "Get the node's public keys",
+        "operationId": "GetNodeKeys",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeKeysResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the node's public keys",
+        "tags": [
+          "Status"
+        ]
+      }
+    },
+    "/v2/status/success-rate": {
+      "get": {
+        "description": "Get the fraction of views in which this node decided a block",
+        "operationId": "GetSuccessRate",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessRateResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the fraction of views in which this node decided a block",
+        "tags": [
+          "Status"
+        ]
+      }
+    },
+    "/v2/status/time-since-last-decide": {
+      "get": {
+        "description": "Get the seconds elapsed since this node last decided a block",
+        "operationId": "GetTimeSinceLastDecide",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimeSinceLastDecideResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the seconds elapsed since this node last decided a block",
+        "tags": [
+          "Status"
+        ]
+      }
+    },
+    "/v2/token/circulating-supply": {
+      "get": {
+        "description": "Get the circulating supply, following the mainnet unlock schedule",
+        "operationId": "GetCirculatingSupply",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CirculatingSupplyResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the circulating supply, following the mainnet unlock schedule",
+        "tags": [
+          "Token"
+        ]
+      }
+    },
+    "/v2/token/circulating-supply-ethereum": {
+      "get": {
+        "description": "Get the circulating supply of ESP tokens on Ethereum L1",
+        "operationId": "GetCirculatingSupplyEthereum",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CirculatingSupplyEthereumResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the circulating supply of ESP tokens on Ethereum L1",
+        "tags": [
+          "Token"
+        ]
+      }
+    },
+    "/v2/token/total-issued-supply": {
+      "get": {
+        "description": "Get the total issued supply, including rewards not yet claimed on Ethereum",
+        "operationId": "GetTotalIssuedSupply",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TotalIssuedSupplyResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the total issued supply, including rewards not yet claimed on Ethereum",
+        "tags": [
+          "Token"
+        ]
+      }
+    },
+    "/v2/token/total-minted-supply": {
+      "get": {
+        "description": "Get the total supply of the ESP token minted on Ethereum; excludes unclaimed rewards",
+        "operationId": "GetTotalMintedSupply",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TotalMintedSupplyResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the total supply of the ESP token minted on Ethereum; excludes unclaimed rewards",
+        "tags": [
+          "Token"
+        ]
+      }
+    },
+    "/v2/token/total-reward-distributed": {
+      "get": {
+        "description": "Get the total rewards distributed by consensus, including rewards not yet claimed on Ethereum",
+        "operationId": "GetTotalRewardDistributed",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TotalRewardDistributedResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error, following the Google API error model"
+          }
+        },
+        "summary": "Get the total rewards distributed by consensus, including rewards not yet claimed on Ethereum",
+        "tags": [
+          "Token"
+        ]
+      }
+    }
+  }
+}
