@@ -57,6 +57,10 @@ pub enum LeaderEvent {
     /// Reconstruction was already running when a dispersal began, so deferring
     /// could not protect that dispersal. Measures the ceiling on the deferral.
     RecoverAlreadyRunning,
+    /// Erasure decoding was skipped for this view (`--skip-reconstruction`):
+    /// the view was reported reconstructed without decoding. Counting these
+    /// is how a run is confirmed to have engaged the flag.
+    RecoverSkipped,
 
     // Phase 6 - cert1[V-1] formation gates Phase 7.
     Cert1VMinus1InputDispatched,
@@ -107,6 +111,7 @@ impl LeaderEvent {
             RecoverVMinus1End => "recover_v_minus_1_end",
             RecoverDeferred => "recover_deferred",
             RecoverAlreadyRunning => "recover_already_running",
+            RecoverSkipped => "recover_skipped",
             Cert1VMinus1InputDispatched => "cert1_v_minus_1_input_dispatched",
             Vote2VMinus1Signed => "vote2_v_minus_1_signed",
             Vote2VMinus1Queued => "vote2_v_minus_1_queued",

@@ -41,6 +41,8 @@ fn node_config(
         block_size,
         namespaces: 1,
         sampler_tick_ms: 50,
+        defer_reconstruction: false,
+        skip_reconstruction: false,
     }
 }
 

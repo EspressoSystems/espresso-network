@@ -2,7 +2,7 @@ use hotshot::types::BLSPubKey;
 use hotshot_example_types::node_types::TestTypes;
 use hotshot_types::{
     data::{VidCommitment2, VidDisperseShare2},
-    traits::signature_key::SignatureKey,
+    traits::{block_contents::EncodeBytes, signature_key::SignatureKey},
     vid::avidm_gf2::AvidmGf2Scheme,
 };
 
@@ -832,4 +832,86 @@ async fn fragment_accumulator_rejects_intra_fragment_duplicate() {
         accumulator.accept(fragment),
         Err(VidFragmentError::DuplicateIndex(0))
     ));
+}
+
+/// With `set_skip`, a view that reaches the threshold is still reported
+/// reconstructed, carrying the commitment the proposal pinned — that is what
+/// consensus consumes — but with no payload decoded.
+#[tokio::test]
+async fn test_skip_reconstruction_reports_pinned_commitment() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let mut reconstructor = VidReconstructor::<TestTypes>::new();
+    reconstructor.set_skip(true);
+
+    handle_proposal(&mut reconstructor, view);
+    for i in 0..view.vid_shares.len() as u64 {
+        feed(&mut reconstructor, honest_share(view, i));
+    }
+
+    let out = tokio::time::timeout(std::time::Duration::from_secs(5), reconstructor.next())
+        .await
+        .expect("skipped reconstruction should complete in time")
+        .expect("should produce a result")
+        .expect("skipped reconstruction should succeed");
+    assert_eq!(out.view, view.view_number);
+    assert_eq!(
+        out.payload_commitment,
+        view.vid_shares[0].payload_commitment
+    );
+    assert!(out.payload.encode().is_empty(), "payload was decoded");
+    assert!(out.tx_commitments.is_empty(), "transactions were committed");
+
+    // Still exactly one result per view.
+    assert_no_duplicate_success(&mut reconstructor, "skipping must not spawn extra tasks").await;
+}
+
+/// Proof that skipping decodes nothing: a non-codeword dispersal, which the
+/// decoding path proves unrecoverable, succeeds under `set_skip`.
+#[tokio::test]
+async fn test_skip_reconstruction_does_not_decode() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let recovery_threshold = recovery_threshold(view);
+    let (payload_commitment, shares) = non_codeword_shares(view);
+
+    let feed_threshold = |reconstructor: &mut VidReconstructor<TestTypes>| {
+        reconstructor.handle_proposal(
+            view.view_number,
+            payload_commitment,
+            view.proposal.data.block_header.metadata,
+            view.proposal.data.epoch,
+            Some(shares[0].common.param.clone()),
+        );
+        let mut coverage = 0u64;
+        for share in &shares {
+            if coverage >= recovery_threshold {
+                break;
+            }
+            coverage += share.share.weight() as u64;
+            feed(reconstructor, share.clone());
+        }
+    };
+
+    let mut skipping = VidReconstructor::<TestTypes>::new();
+    skipping.set_skip(true);
+    feed_threshold(&mut skipping);
+    let out = tokio::time::timeout(std::time::Duration::from_secs(5), skipping.next())
+        .await
+        .expect("skipped reconstruction should complete in time")
+        .expect("should produce a result")
+        .expect("skipping must not decode, so the poisoned payload is not detected");
+    assert_eq!(out.payload_commitment, payload_commitment);
+
+    // The same input on the normal path still decodes and reports the fault.
+    let mut decoding = VidReconstructor::<TestTypes>::new();
+    feed_threshold(&mut decoding);
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), decoding.next())
+        .await
+        .expect("attempt should complete in time")
+        .expect("should produce a result");
+    match result {
+        Err(err) => assert_eq!(err.kind, VidReconstructErrorKind::Unrecoverable),
+        Ok(_) => panic!("BUG: the non-codeword payload must fail to decode"),
+    }
 }

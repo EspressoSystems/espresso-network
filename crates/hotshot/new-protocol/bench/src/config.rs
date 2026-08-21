@@ -60,6 +60,15 @@ pub struct NodeConfig {
     /// a certificate waits on. Leave off below ~20 nodes.
     #[arg(long, default_value_t = false)]
     pub defer_reconstruction: bool,
+
+    /// Report every view as reconstructed without erasure-decoding it, to
+    /// measure the ceiling if decode were free.
+    ///
+    /// Share fan-out, receipt, verification and accumulation are unchanged, so
+    /// network and crypto-verify load match a normal run and decode CPU is the
+    /// only variable. Benchmark-only: the payload bytes are never recovered.
+    #[arg(long, default_value_t = false)]
+    pub skip_reconstruction: bool,
 }
 
 impl NodeConfig {

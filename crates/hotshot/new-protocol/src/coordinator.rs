@@ -153,6 +153,12 @@ pub struct Coordinator<T: NodeType, S> {
     /// certificate waits on.
     #[builder(default)]
     defer_reconstruction: bool,
+    /// Report views as reconstructed without erasure-decoding them. Bench-only
+    /// A/B knob: everything else (share fan-out, verification, accumulation,
+    /// this node's own share and vote) is unchanged, so decode CPU is the only
+    /// variable. Never enable in production — the payload bytes are lost.
+    #[builder(default)]
+    skip_reconstruction: bool,
 }
 
 #[bon]
@@ -363,6 +369,10 @@ where
     /// that view instead of proposing; a bridged high QC or a timeout
     /// advances it.
     pub fn start(&mut self, seed: Option<PreCutoverSeed<T>>) {
+        // The reconstructor is built outside the builder (the bench wires its
+        // tracer), so push the flag here, before any share is handled.
+        self.vid_reconstructor.set_skip(self.skip_reconstruction);
+
         if let Some(seed) = seed
             && !self.apply_cutover_seed(seed)
         {

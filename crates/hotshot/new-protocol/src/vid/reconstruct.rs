@@ -75,6 +75,11 @@ pub struct VidReconstructor<T: NodeType> {
     /// Optional leader-event tracer (wired by the bench).  Production builds
     /// leave this `None`.
     tracer: Option<crate::leader_trace::LeaderTracerHandle>,
+    /// Bench-only A/B knob: report every ready view as reconstructed without
+    /// decoding anything, to measure the ceiling if erasure decode were free.
+    /// Share intake, verification and accumulation are untouched, so only
+    /// decode CPU differs from a normal run.
+    skip: bool,
 }
 
 pub(crate) struct VidShareAccumulator<T: NodeType> {
@@ -113,6 +118,7 @@ impl<T: NodeType> VidReconstructor<T> {
             build_active: false,
             deferred: BTreeSet::new(),
             tracer: None,
+            skip: false,
         }
     }
 
@@ -149,6 +155,11 @@ impl<T: NodeType> VidReconstructor<T> {
     /// Register a leader-event tracer.  Production builds leave this `None`.
     pub fn set_tracer(&mut self, tracer: Option<crate::leader_trace::LeaderTracerHandle>) {
         self.tracer = tracer;
+    }
+
+    /// Skip erasure decoding (see [`Self::skip`]).
+    pub fn set_skip(&mut self, skip: bool) {
+        self.skip = skip;
     }
 
     /// Pin `view` to its validated proposal's payload commitment and
@@ -289,17 +300,24 @@ impl<T: NodeType> VidReconstructor<T> {
         }
         let payload_commitment = accumulator.payload_commitment;
         let metadata = accumulator.metadata.clone();
-        let shares: Vec<(T::SignatureKey, AvidmGf2Share)> = accumulator
-            .shares
-            .iter()
-            .map(|(key, share)| (key.clone(), share.clone()))
-            .collect();
         let epoch = accumulator.epoch;
         crate::trace_leader_event!(
             self.tracer,
             view,
             crate::leader_trace::LeaderEvent::ThresholdShareReachedVMinus1
         );
+        if self.skip {
+            let task = self.spawn_skipped(view, epoch, payload_commitment, metadata);
+            self.calculations.insert(view, task);
+            return;
+        }
+        // Deep-copies tens of MB per view, so it happens only on the decoding
+        // path.
+        let shares: Vec<(T::SignatureKey, AvidmGf2Share)> = accumulator
+            .shares
+            .iter()
+            .map(|(key, share)| (key.clone(), share.clone()))
+            .collect();
         // Bracket the whole `reconstruct` call with start/end so the bench can
         // measure end-to-end recover wall time.  `RecoverVMinus1DecodeEnd`
         // fires from inside `reconstruct()` between the parallel AvidM decode
@@ -328,6 +346,49 @@ impl<T: NodeType> VidReconstructor<T> {
             result
         });
         self.calculations.insert(view, task);
+    }
+
+    /// Report `view` as reconstructed without decoding: the output carries the
+    /// commitment the accumulator pinned, which is all consensus consumes
+    /// (`BlockReconstructed` gates voting and lock/decide), plus an empty
+    /// payload standing in for the bytes nothing will read.
+    fn spawn_skipped(
+        &mut self,
+        view: ViewNumber,
+        epoch: EpochNumber,
+        payload_commitment: VidCommitment2,
+        metadata: Metadata<T>,
+    ) -> AbortHandle {
+        let tracer = self.tracer.clone();
+        self.tasks.spawn_blocking(move || {
+            crate::trace_leader_event!(
+                tracer,
+                view,
+                crate::leader_trace::LeaderEvent::RecoverSkipped
+            );
+            // Keep the recover span even though it brackets no work: the
+            // analysis scripts pair start/end to measure recover time, and a
+            // ~0 ms span is exactly the picture a free decode should paint.
+            crate::trace_leader_event!(
+                tracer,
+                view,
+                crate::leader_trace::LeaderEvent::RecoverVMinus1Start
+            );
+            let payload = T::BlockPayload::from_bytes(&[], &metadata);
+            crate::trace_leader_event!(
+                tracer,
+                view,
+                crate::leader_trace::LeaderEvent::RecoverVMinus1End
+            );
+            Ok(VidReconstructOutput {
+                view,
+                epoch,
+                payload_commitment,
+                payload,
+                metadata,
+                tx_commitments: Vec::new(),
+            })
+        })
     }
 
     pub fn gc(&mut self, view_number: ViewNumber) {

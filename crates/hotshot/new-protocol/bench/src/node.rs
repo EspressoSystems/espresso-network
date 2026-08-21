@@ -289,6 +289,7 @@ async fn build_coordinator(
         .timer(timer)
         .public_key(public_key)
         .defer_reconstruction(cfg.defer_reconstruction)
+        .skip_reconstruction(cfg.skip_reconstruction)
         .build();
 
     // Emit initial ViewChanged and (for the leader) RequestBlockAndHeader.
