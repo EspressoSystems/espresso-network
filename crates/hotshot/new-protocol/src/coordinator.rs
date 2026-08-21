@@ -39,7 +39,7 @@ use crate::{
         timer::Timer,
     },
     epoch::{EpochManager, EpochRootResult},
-    fetch::Fetcher,
+    fetch::{Fetcher, Retry},
     helpers::proposal_commitment,
     logging::KeyPrefix,
     message::{
@@ -764,6 +764,7 @@ where
                 if let Err(err) = self.fetcher.request(
                     view,
                     payload_commitment,
+                    Retry::NewRound,
                     &self.consensus,
                     &self.membership_coordinator,
                     self.network.sender(),
@@ -1438,6 +1439,25 @@ where
                     self.network.sender(),
                 ) {
                     warn!(%node, %sender, %view, %err, "failed to send payload response");
+                }
+                None
+            },
+            MessageType::PayloadFetch(PayloadFetchMessage::Unavailable { view, reason }) => {
+                debug!(%node, %sender, %view, ?reason, "recv payload unavailable");
+                if self.fetcher.accept_refusal(view, reason, &message.sender)
+                    && let Some(proposal) = self.consensus.proposal_at(view)
+                    && let VidCommitment::V2(payload_commitment) =
+                        proposal.block_header.payload_commitment()
+                    && let Err(err) = self.fetcher.request(
+                        view,
+                        payload_commitment,
+                        Retry::SameRound,
+                        &self.consensus,
+                        &self.membership_coordinator,
+                        self.network.sender(),
+                    )
+                {
+                    warn!(%node, %view, %err, "failed to ask another peer for the payload");
                 }
                 None
             },

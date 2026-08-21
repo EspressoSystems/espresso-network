@@ -9,8 +9,10 @@ use tracing::{debug, warn};
 
 use crate::{
     coordinator::error::CoordinatorError,
-    message::{FetchRequest, Message, MessageType, PayloadFetchMessage, PayloadFetchResponse},
-    network::Sender,
+    message::{
+        FetchRequest, Message, MessageType, PayloadFetchMessage, PayloadFetchResponse, Unavailable,
+    },
+    network::{NetworkError, Sender},
 };
 
 /// The block this node hands to a peer whose payload fetch names it.
@@ -99,8 +101,19 @@ impl<T: NodeType> Server<T> {
             .find(|block| block.view == view)
         else {
             debug!(%view, %sender, "payload request for a block we do not retain");
-            return Ok(());
+            return self.refuse(view, Unavailable::NotHeld, sender, slot, network);
         };
+
+        if block.payload.len() >= network.max_message_size().get() {
+            warn!(
+                %view,
+                %sender,
+                bytes = %block.payload.len(),
+                limit = %network.max_message_size(),
+                "retained payload does not fit a message"
+            );
+            return self.refuse(view, Unavailable::TooLarge, sender, slot, network);
+        }
 
         let message = Message {
             sender: self.public_key.clone(),
@@ -113,8 +126,33 @@ impl<T: NodeType> Server<T> {
             )),
         };
 
+        match network.unicast(slot, sender, &message) {
+            Ok(()) => Ok(()),
+            Err(NetworkError::Cliquenet(cliquenet::NetworkError::MessageTooLarge)) => {
+                warn!(%view, %sender, "payload response rejected as too large");
+                self.refuse(view, Unavailable::TooLarge, sender, slot, network)
+            },
+            Err(err) => Err(CoordinatorError::from(err).context("unicast payload response")),
+        }
+    }
+
+    fn refuse(
+        &self,
+        view: ViewNumber,
+        reason: Unavailable,
+        sender: &T::SignatureKey,
+        slot: ViewNumber,
+        network: &Sender<T>,
+    ) -> Result<(), CoordinatorError> {
+        let message = Message {
+            sender: self.public_key.clone(),
+            message_type: MessageType::PayloadFetch(PayloadFetchMessage::Unavailable {
+                view,
+                reason,
+            }),
+        };
         network
             .unicast(slot, sender, &message)
-            .map_err(|err| CoordinatorError::from(err).context("unicast payload response"))
+            .map_err(|err| CoordinatorError::from(err).context("unicast payload refusal"))
     }
 }

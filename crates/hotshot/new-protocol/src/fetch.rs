@@ -14,12 +14,18 @@ use tracing::{error, warn};
 use crate::{
     consensus::Consensus,
     coordinator::error::CoordinatorError,
-    message::{Message, MessageType, PayloadFetchMessage, PayloadFetchResponse},
+    message::{Message, MessageType, PayloadFetchMessage, PayloadFetchResponse, Unavailable},
     network::Sender,
     vid::{ObtainedPayload, expected_vid_param, matches_commitment},
 };
 
-/// Requester- and server-side state of payload recovery.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Retry {
+    NewRound,
+    SameRound,
+}
+
+/// The requesting half of payload recovery.
 pub struct Fetcher<T: NodeType> {
     public_key: T::SignatureKey,
 
@@ -48,6 +54,7 @@ impl<T: NodeType> Fetcher<T> {
         &mut self,
         view: ViewNumber,
         payload_commitment: VidCommitment2,
+        retry: Retry,
         consensus: &Consensus<T>,
         membership: &EpochMembershipCoordinator<T>,
         network: &Sender<T>,
@@ -68,6 +75,7 @@ impl<T: NodeType> Fetcher<T> {
             let membership = membership.stake_table_for_epoch(Some(epoch)).ok()?;
             let stake_table = membership.stake_table();
             if let Some(asked) = &mut asked
+                && retry == Retry::NewRound
                 && asked.len() + 1 == stake_table.len()
             {
                 asked.clear()
@@ -188,6 +196,29 @@ impl<T: NodeType> Fetcher<T> {
                     }
                 },
             }
+        }
+    }
+
+    pub fn accept_refusal(
+        &self,
+        view: ViewNumber,
+        reason: Unavailable,
+        sender: &T::SignatureKey,
+    ) -> bool {
+        let asked = self
+            .requested
+            .iter()
+            .any(|((asked_view, _), peers)| *asked_view == view && peers.contains(sender));
+        if !asked {
+            warn!(%view, %sender, "payload refusal from a peer we did not ask");
+            return false;
+        }
+        match reason {
+            Unavailable::NotHeld => true,
+            Unavailable::TooLarge => {
+                warn!(%view, "peer says the payload exceeds the message size limit");
+                false
+            },
         }
     }
 
