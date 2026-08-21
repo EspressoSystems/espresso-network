@@ -537,6 +537,12 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     /// `EpochMembershipCoordinator` by removing the failed epochs from the
     /// `catchup_map` and broadcasting the error to any tasks that are waiting for the
     /// catchup to complete.
+    ///
+    /// It also sweeps any entry whose channel is closed. A closed channel
+    /// means every sender is gone, i.e. the task that claimed the entry died
+    /// without cleaning up (e.g. it was aborted by the `spawn_catchup`
+    /// watchdog while holding entries for intermediate epochs), so nothing
+    /// else can ever complete or remove it.
     fn catchup_cleanup(
         &self,
         req_epoch: EpochNumber,
@@ -558,6 +564,13 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                 // Remove the failed epochs from the catchup map
                 map_lock.remove(epoch);
             }
+            map_lock.retain(|epoch, rx| {
+                if rx.is_closed() {
+                    tracing::error!("evicting orphaned catchup_map entry for epoch {epoch}");
+                    return false;
+                }
+                true
+            });
         }
 
         for (cancel_epoch, tx) in cancel_epochs {
@@ -750,13 +763,50 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     }
 }
 
+/// Upper bound on a single catchup attempt. Past this the attempt is abandoned
+/// and its `catchup_map` entry evicted so a later request can retry.
+const CATCHUP_ATTEMPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+
 fn spawn_catchup<T: NodeType>(
     coordinator: EpochMembershipCoordinator<T>,
     epoch: EpochNumber,
     epoch_tx: Sender<Result<EpochMembership<T>>>,
 ) {
     tokio::spawn(async move {
-        coordinator.clone().catchup(epoch, epoch_tx).await;
+        let mut inner = tokio::spawn({
+            let coordinator = coordinator.clone();
+            let epoch_tx = epoch_tx.clone();
+            async move { coordinator.catchup(epoch, epoch_tx).await }
+        });
+        let outcome = match tokio::time::timeout(CATCHUP_ATTEMPT_TIMEOUT, &mut inner).await {
+            // `catchup` ran to completion; it removed its own map entries.
+            Ok(Ok(())) => return,
+            Ok(Err(join_err)) => format!("catchup task died: {join_err}"),
+            Err(_) => {
+                // Cancel the stuck attempt so it stops holding whatever it is
+                // blocked on (e.g. the membership's storage lock), then wait
+                // for it to actually terminate: dropping its future drops the
+                // senders of any intermediate epochs it claimed, which is how
+                // `catchup_cleanup` below recognizes those entries as orphaned.
+                inner.abort();
+                let _ = tokio::time::timeout(CATCHUP_ATTEMPT_TIMEOUT, &mut inner).await;
+                "catchup timed out".to_string()
+            },
+        };
+        // The attempt neither succeeded nor reported failure, so nothing has
+        // evicted its `catchup_map` entries — the requested epoch's and any
+        // intermediate epochs' the discovery loop claimed. Clean up here,
+        // otherwise every later `stake_table_for_epoch` for those epochs is
+        // answered "Catchup already in progress" for the lifetime of the
+        // process. The intermediate entries are recognized by their closed
+        // channels (the aborted attempt's senders are gone) and swept inside
+        // `catchup_cleanup`.
+        coordinator.catchup_cleanup(
+            epoch,
+            epoch_tx,
+            vec![],
+            anytrace::error!("catchup for epoch {epoch} abandoned: {outcome}"),
+        );
     });
 }
 

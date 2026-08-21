@@ -23,11 +23,12 @@
 //! process: no timeout, no eviction, no retry. Every view in which such a node
 //! is elected leader then times out.
 //!
-//! Both tests below drive `EpochMembershipCoordinator` directly with a
+//! The tests below drive `EpochMembershipCoordinator` directly with a
 //! membership whose stake-table load never completes (or whose catchup task
 //! dies), and assert that the coordinator eventually gives up on the stuck
-//! attempt and tries again. On unfixed code they fail: exactly one attempt is
-//! ever made.
+//! attempt and tries again — including for the intermediate epochs the stuck
+//! attempt had claimed on its way to the requested one. On unfixed code they
+//! fail: exactly one attempt is ever made.
 
 use std::{
     sync::{
@@ -92,6 +93,12 @@ enum LoadBehavior {
     /// Panics on the first call, killing the spawned catchup task before it can
     /// run `catchup_cleanup`. Models any way the task can die (panic, cancel).
     PanicOnce,
+    /// The load itself returns quickly (with "not found"), letting the
+    /// epoch-discovery loop claim `catchup_map` entries for the intermediate
+    /// epochs, but the epoch-root fetch then never returns. Parks the task
+    /// one step later than [`Hang`](Self::Hang): after it has claimed entries
+    /// it will never release on its own.
+    HangEpochRoot,
 }
 
 /// A `Membership` that delegates everything to `StrictMembership` except the
@@ -104,11 +111,18 @@ struct WedgeMembership {
     /// Number of times `load_stake_table` has been entered. One per catchup
     /// attempt that reached the epoch-discovery loop.
     load_calls: Arc<AtomicUsize>,
+    /// Number of times `get_epoch_root` has been entered. One per catchup
+    /// attempt that got past the epoch-discovery loop.
+    root_calls: Arc<AtomicUsize>,
 }
 
 impl WedgeMembership {
     fn attempts(&self) -> usize {
         self.load_calls.load(Ordering::SeqCst)
+    }
+
+    fn root_fetches(&self) -> usize {
+        self.root_calls.load(Ordering::SeqCst)
     }
 }
 
@@ -132,9 +146,14 @@ impl Membership<WedgeTypes> for WedgeMembership {
 
     async fn get_epoch_root(
         &self,
-        _e: EpochNumber,
+        epoch: EpochNumber,
         _coordinator: &EpochMembershipCoordinator<WedgeTypes>,
     ) -> Result<Leaf2<WedgeTypes>, Self::Error> {
+        let calls = self.root_calls.fetch_add(1, Ordering::SeqCst) + 1;
+        tracing::info!(%epoch, calls, "get_epoch_root entered");
+        if matches!(self.behavior, LoadBehavior::HangEpochRoot) {
+            std::future::pending::<()>().await;
+        }
         Err(anyhow!("epoch root unavailable").into())
     }
 
@@ -166,7 +185,7 @@ impl Membership<WedgeTypes> for WedgeMembership {
             LoadBehavior::PanicOnce if calls == 1 => {
                 panic!("simulated catchup task death while loading epoch {epoch}")
             },
-            LoadBehavior::PanicOnce => false,
+            LoadBehavior::PanicOnce | LoadBehavior::HangEpochRoot => false,
         }
     }
 
@@ -226,6 +245,7 @@ fn setup(behavior: LoadBehavior) -> (WedgeMembership, EpochMembershipCoordinator
         inner: Arc::new(inner),
         behavior,
         load_calls: Arc::default(),
+        root_calls: Arc::default(),
     };
     // Registers stake tables for FIRST_EPOCH and FIRST_EPOCH + 1.
     membership.set_first_epoch(EpochNumber::new(FIRST_EPOCH), INITIAL_DRB_RESULT);
@@ -332,5 +352,58 @@ async fn catchup_retries_after_catchup_task_dies() {
         "catchup for {target} was never retried in {RECOVERY_BUDGET:?}: the catchup task died \
          without running catchup_cleanup, leaking its catchup_map entry (attempts = {})",
         membership.attempts()
+    );
+}
+
+/// The wedge one level deeper: on its way to the requested epoch, the
+/// discovery loop claims `catchup_map` entries for the intermediate epochs it
+/// plans to fetch. If the attempt is then abandoned, evicting only the
+/// requested epoch's entry leaves the intermediate ones orphaned, and every
+/// `stake_table_for_epoch` for those epochs is answered "Catchup already in
+/// progress" for the lifetime of the process.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn intermediate_epochs_recover_after_catchup_abandoned() {
+    let (membership, coordinator) = setup(LoadBehavior::HangEpochRoot);
+    let target = EpochNumber::new(TARGET_EPOCH);
+    // Claimed by the discovery loop on the way to `target`, then orphaned
+    // when the parked attempt is abandoned.
+    let intermediate = EpochNumber::new(TARGET_EPOCH - 1);
+
+    assert!(
+        coordinator.stake_table_for_epoch(Some(target)).is_err(),
+        "epoch {target} is not locally known, so this must not succeed"
+    );
+
+    // Wait until the attempt has claimed the intermediate epochs and parked
+    // itself in the epoch-root fetch.
+    assert!(
+        wait_until(RECOVERY_BUDGET, || membership.root_fetches() >= 1).await,
+        "catchup task never reached get_epoch_root"
+    );
+
+    // While the attempt is parked it owns the intermediate epoch's entry, so
+    // callers are told a catchup is in flight. That much is fine.
+    let Err(err) = coordinator.stake_table_for_epoch(Some(intermediate)) else {
+        panic!("epoch {intermediate} must still be unavailable")
+    };
+    assert!(
+        format!("{err:?}").contains("Catchup already in progress"),
+        "expected an in-progress error, got: {err:?}"
+    );
+
+    // Once the attempt is abandoned, its intermediate entry must be evicted
+    // too, so a fresh catchup can be started for that epoch.
+    let recovered = wait_until(RECOVERY_BUDGET, || {
+        matches!(
+            coordinator.stake_table_for_epoch(Some(intermediate)),
+            Err(e) if format!("{e:?}").contains("Starting catchup")
+        )
+    })
+    .await;
+
+    assert!(
+        recovered,
+        "the abandoned catchup's entry for intermediate epoch {intermediate} was never evicted: \
+         stake_table_for_epoch answers \"Catchup already in progress\" forever"
     );
 }
