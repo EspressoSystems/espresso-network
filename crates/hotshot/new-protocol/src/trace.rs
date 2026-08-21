@@ -261,8 +261,15 @@ impl Drop for Recorder {
         }
         let held = self.pending.len();
         if held > 0 {
-            self.lines
-                .push(format!("# {held} outputs had no later step to ride on"));
+            // Named, not just counted. A held output is the usual reason a replay
+            // reports the machine ahead of the recording at the end of a trace,
+            // and the question it raises — did the node fail to act, or did the
+            // recorder fail to place what it did? — is answerable only if the
+            // note says which action it was.
+            self.lines.push(format!(
+                "# {held} outputs had no later step to ride on: {}",
+                self.pending.join(", ")
+            ));
         }
         let mut text = self.lines.join("\n");
         text.push('\n');
