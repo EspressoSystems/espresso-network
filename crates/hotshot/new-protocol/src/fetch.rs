@@ -183,6 +183,15 @@ impl<T: NodeType> Fetcher<T> {
             return;
         }
 
+        // The share decode may have won the race while this was in flight.
+        if consensus.is_reconstructed(view, payload_commitment) {
+            debug!(%view, "payload already obtained; dropping the response");
+            if let Some(fetch) = self.requested.get_mut(&(view, payload_commitment)) {
+                fetch.pending.remove(sender);
+            }
+            return;
+        }
+
         let Some(param) = expected_vid_param(membership, Some(proposal.epoch)) else {
             warn!(%view, "no VID param for fetched payload; dropping");
             return;
