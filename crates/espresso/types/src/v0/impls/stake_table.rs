@@ -1985,7 +1985,7 @@ pub mod testing {
         stake_table::{StateSignatureSol, sign_address_bls, sign_address_schnorr},
     };
     use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
-    use rand::{Rng as _, RngCore as _};
+    use rand::{CryptoRng, Rng as _, RngCore};
 
     use super::*;
 
@@ -2014,11 +2014,31 @@ pub mod testing {
             Self::random_update_keys(self.account, self.commission)
         }
 
+        /// Seeded counterpart of [`TestValidator::randomize_keys`].
+        pub fn randomize_keys_with<R: RngCore + CryptoRng>(&self, rng: &mut R) -> Self {
+            Self::random_update_keys_with(rng, self.account, self.commission)
+        }
+
+        /// Seeded counterpart of [`TestValidator::random`], for fixtures that must be
+        /// byte-reproducible across runs and machines.
+        pub fn random_with<R: RngCore + CryptoRng>(rng: &mut R) -> Self {
+            let account = Address::from(rng.r#gen::<[u8; 20]>());
+            let commission = rng.gen_range(0..10000);
+            Self::random_update_keys_with(rng, account, commission)
+        }
+
         pub fn random_update_keys(account: Address, commission: u16) -> Self {
-            let mut rng = &mut rand::thread_rng();
+            Self::random_update_keys_with(&mut rand::thread_rng(), account, commission)
+        }
+
+        pub fn random_update_keys_with<R: RngCore + CryptoRng>(
+            rng: &mut R,
+            account: Address,
+            commission: u16,
+        ) -> Self {
             let mut seed = [0u8; 32];
             rng.fill_bytes(&mut seed);
-            let bls_key_pair = BLSKeyPair::generate(&mut rng);
+            let bls_key_pair = BLSKeyPair::generate(&mut *rng);
             let bls_sig = sign_address_bls(&bls_key_pair, account);
             let schnorr_key_pair = StateKeyPair::generate_from_seed_indexed(seed, 0);
             let schnorr_sig = sign_address_schnorr(&schnorr_key_pair, account);
@@ -2180,6 +2200,14 @@ pub mod testing {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "stake_table_history_tests.rs"]
+mod history_tests;
+
+#[cfg(test)]
+#[path = "stake_table_proptests.rs"]
+mod state_machine_proptests;
 
 #[cfg(test)]
 mod tests {

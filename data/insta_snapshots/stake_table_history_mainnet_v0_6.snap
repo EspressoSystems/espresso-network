@@ -1,0 +1,69 @@
+---
+source: crates/espresso/types/src/v0/impls/stake_table_history_tests.rs
+expression: summary
+---
+corpus: mainnet
+protocol_version: 0.6
+logs: 2737
+decoded_events: 2737
+stake_table_hash: STAKE_TABLE~BfffcamiX5aiODiUCHNTnh9ZHCHL8otb0R-x0G2pEHzt
+active_validator_selection_error: No validators met the minimum criteria (non-zero stake and at least one delegator)
+
+event_variants:
+    101  RegisterV2
+      4  DeregisterV2
+   2011  Delegate
+    596  UndelegateV2
+      1  KeyUpdateV2
+     24  CommissionUpdate
+
+hash_ladder:
+(every 58 event(s), and always the last)
+   57  block  24433860  log  717  RegisterV2        STAKE_TABLE~OHVGrVFMouuhMM9p1EQI_SSfeGZkgmeGjwiCUl43-qgj
+  115  block  24440857  log  441  Delegate          STAKE_TABLE~fdmB3dKszs6WBtfkqNayUMCD74ZomEpnHevJXioGR4Ff
+  173  block  24440974  log  401  Delegate          STAKE_TABLE~NgGtg7L_us9NciopFln24-G9VrDpKLXRFaa5zYUADbD7
+  231  block  24441067  log  589  Delegate          STAKE_TABLE~Jq03iyQtoyTj1lamP_JfsI5-cWVimxEHIIDiHp9kjtJF
+  289  block  24441162  log  190  Delegate          STAKE_TABLE~ncjNrFEjz8kNssE6yxvmuuaZd1ek68J9z2lDv4kKABUF
+  347  block  24441285  log  533  Delegate          STAKE_TABLE~zEWHQv94zZbkfCtbqKuxKFKW5wvvBIZ-L50jbg3KmtJI
+  405  block  24441456  log  460  Delegate          STAKE_TABLE~Wnz5n0YGgf-u-f52GEpJHg3QBCukSRWxhbRCk_nZjI0A
+  463  block  24441655  log  412  UndelegateV2      STAKE_TABLE~fUv9ZR9nfEgsYSZstEFBJP5tpXIp1_TSeWp4lM7YGmPm
+  521  block  24441932  log  344  UndelegateV2      STAKE_TABLE~QD02oCmX6zy7av_eXIx6NpauG1hPnrKiPbgpT0mlIyZe
+  579  block  24442126  log  256  Delegate          STAKE_TABLE~2bYi05DIIjFrAOP5eq2N3N1TwkX8AyiC10o6GA7TSiye
+  637  block  24442566  log  360  UndelegateV2      STAKE_TABLE~_LwT3wgOweEOFzCYqNpc1Qr7dLANN2QdNyLr84CjoYRK
+  695  block  24443104  log  235  Delegate          STAKE_TABLE~zdpyTw9AId1JsA74X0kUpgZ_2r35Iws9XslmtTuoyBcp
+  753  block  24443314  log  205  Delegate          STAKE_TABLE~Hr0--mEbOO78b8n6I4Rw5XAIcqE-LNvKa_TzCcu3kgJc
+  811  block  24443912  log   83  Delegate          STAKE_TABLE~GkoRXNxH-UHApVTcowTYeXg0sSlyRMExnD8TX83AEoYP
+  869  block  24444829  log  610  Delegate          STAKE_TABLE~uxkiSX1lE1s75GlWi77wk39AjgQYXgN0I3gwUGVeJuDp
+  927  block  24445798  log 1234  Delegate          STAKE_TABLE~HeyiNAH3MuBWbzbWfR-83hHYlV5ZMp4xbq-oIIbRzKwR
+  985  block  24446461  log  332  Delegate          STAKE_TABLE~cAUjGkfbvAigLMz8Og8a4dP5l9vPtFytkOgzYu13GtLu
+ 1043  block  24447251  log  234  Delegate          STAKE_TABLE~T93URWXbAIdXequ8cuE7ZX8YrxmS63NI4E4MBcPYfp9T
+ 1101  block  24447974  log  556  Delegate          STAKE_TABLE~B5pBkOLUySjjrCamhy6cbEzrs5SrqR3JYzFtZXaMJ_vY
+ 1159  block  24449862  log 1113  Delegate          STAKE_TABLE~CRwUofQ7OZtMDpSj30mZkMWw-lEX35lKrgx0mrIs1nfa
+ 1217  block  24453096  log  253  Delegate          STAKE_TABLE~aP3x37jxiIZeiMsak0m8HWWkPmCsq93Hh0HQ4Xz9_1vH
+ 1275  block  24456087  log  658  Delegate          STAKE_TABLE~YmEfcF-1F5N41AchICAQBEi24nxHgqM8D7z2hMch97Wv
+ 1333  block  24459837  log   16  Delegate          STAKE_TABLE~q_EPtar-52saVL8smvv5JN_S3cuCAkoLMkMk9KezkH92
+ 1391  block  24464907  log  880  Delegate          STAKE_TABLE~0jXTN1J7Zx8Af76PbbjLP1cmhB0bq4oJU-LaVV4wj16A
+ 1449  block  24468891  log 1063  Delegate          STAKE_TABLE~q-pJmR__eYOqE25u9xols31v535RVvMBpc7RejavK1IM
+ 1507  block  24476354  log   66  Delegate          STAKE_TABLE~nyfWxAetLkiqPpekPUy0psx7FLRxruErX1MuMPGgosu8
+ 1565  block  24481825  log  339  Delegate          STAKE_TABLE~IUK08MmvZCOIfsEZVh334_x_2yDBuOUEG_5BuVySoHta
+ 1623  block  24488786  log  302  UndelegateV2      STAKE_TABLE~zJbVGeQ4mFR13mc_GAtRAu4Yub6PL5Ypyfuk3QkuOAcz
+ 1681  block  24503857  log   81  Delegate          STAKE_TABLE~QbivapIMCJVTGLuyKBUZGX0ogTyWEsE1nAJuWaHIuTsd
+ 1739  block  24514458  log 3241  Delegate          STAKE_TABLE~Kmn2mba4pdG67okl47V5LceqeKQRAZRLsPNde_4gdosc
+ 1797  block  24521915  log  103  UndelegateV2      STAKE_TABLE~iznMhXofotrwW3EmLC_O2WTdT2Oh-LG5R3sDagByWJf2
+ 1855  block  24525391  log  279  Delegate          STAKE_TABLE~N_3xdRcpyspFnPnuM5ssrbX7DyEq0TtNyQKyWMVXlwR7
+ 1913  block  24526252  log  491  UndelegateV2      STAKE_TABLE~-_jCVirIXB2Qw4anRWvTdOqNRuBKlLQ7GGuZarWxVMoB
+ 1971  block  24531725  log  337  UndelegateV2      STAKE_TABLE~2DNDm484nmtmw3XfrtImPUD6HqJjDIVm54RhRK02bSBI
+ 2029  block  24539187  log  609  UndelegateV2      STAKE_TABLE~tduENKjBOxq9jAhQqZLBomOgQcmKHnAGx4BdiaQl4Grb
+ 2087  block  24547088  log  687  Delegate          STAKE_TABLE~NPOuzsjPlzYMPv4d_jp1v6PbScRhS9dlzDtgZ0KzmiEA
+ 2145  block  24547644  log  828  Delegate          STAKE_TABLE~pb-JkIcBur8vNSIAAUzeN7Oa_cRl8VdML3iKfIJWTp1e
+ 2203  block  24557012  log  778  Delegate          STAKE_TABLE~17t8RBc-jCtG9S5AC7_ypgkrM4vfudWwWMkiBzaVCqv7
+ 2261  block  24575192  log  167  Delegate          STAKE_TABLE~qfSybXSUPBYqX67BjMP1uCg7dqdrbztZSaKYoJusRer-
+ 2319  block  24593447  log  512  Delegate          STAKE_TABLE~6eHZBY07kbgF2gmBJKDo-YPv7fl6eWxQ5nPswS-XJIsZ
+ 2377  block  24639984  log  166  UndelegateV2      STAKE_TABLE~xCfR2my28VDk3DNaCDahXareUfGmC2H_Q9d19JaWe0cm
+ 2435  block  24717489  log  338  UndelegateV2      STAKE_TABLE~kFfS6KCzRJwjc1cHRq3nTJx44Br2FhlKtb0Q7Kq31QYS
+ 2493  block  24838799  log  190  Delegate          STAKE_TABLE~RLyfKbzkXZz2FcXIvHsaevr6ylBPTG_Xuy3pXLTQjLrL
+ 2551  block  24971630  log  421  Delegate          STAKE_TABLE~wnw4G1t_DFTyDTozRecMav8_6FZ6Faahu1Zyk9G6BCsd
+ 2609  block  25053357  log  232  UndelegateV2      STAKE_TABLE~mGPRiz2XpcwktYTV2w21rZAZGtvQQ1VWY8DjBwhk2360
+ 2667  block  25102413  log  240  Delegate          STAKE_TABLE~ikLY7S8p566ybplVJJINRqNv0fdsKCQLj4Pdd0M9YUlq
+ 2725  block  25169376  log  566  RegisterV2        STAKE_TABLE~JS34cPQr6D9OWcKngc1bwLxgnhD5Q9SLbWKzBMb1Mqfe
+ 2736  block  25182395  log  655  UndelegateV2      STAKE_TABLE~BfffcamiX5aiODiUCHNTnh9ZHCHL8otb0R-x0G2pEHzt

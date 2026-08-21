@@ -1,0 +1,54 @@
+---
+source: crates/espresso/types/src/v0/impls/stake_table_history_tests.rs
+expression: summary
+---
+corpus: synthetic
+protocol_version: 0.3
+logs: 24
+decoded_events: 24
+stake_table_hash: STAKE_TABLE~ojO8an8IOS-s5Zq6UKs5U0rrsZp51wWo4OoaMUzZVT-P
+active_validators_commit: STAKE_TABLE~b8U3WR2TiRooCqagYe7cp3gpm_9oYE3qB2qTtnnBdBuI
+all_validators: 4
+active_validators: 2
+
+event_variants:
+      4  Register
+      2  RegisterV2
+      1  RegisterV3
+      1  Deregister
+      1  DeregisterV2
+      6  Delegate
+      1  Undelegate
+      1  UndelegateV2
+      1  KeyUpdate
+      1  KeyUpdateV2
+      1  CommissionUpdate
+      2  X25519KeyUpdate
+      2  P2pAddrUpdate
+
+hash_ladder:
+(every 1 event(s), and always the last)
+    0  block      1000  log    0  Register          STAKE_TABLE~R1Ni56qcsUv73Z8ISG5zvGl29ymja6lPEEBriPh1SZ6c
+    1  block      1001  log    1  Delegate          STAKE_TABLE~qTB0OAVEjyDdYvLI7uzpVpefVW7fC9rjApay41B3k0I2
+    2  block      1002  log    2  KeyUpdate         STAKE_TABLE~Cgmvy6POoACM0wQvLIq0HFBe8GUVOgJ73E9eeZW34c0y
+    3  block      1003  log    3  Register          STAKE_TABLE~7CUXQH46RAHgTA7-IO3vYw4Mh_XP0vJGjb9lrsM-4VXr
+    4  block      1004  log    4  Delegate          STAKE_TABLE~HvA7SU6wX3mUUxkGREq-6K44z3DP8WzF4zjy7xFR8TEe
+    5  block      1005  log    5  Undelegate        STAKE_TABLE~bAY2Xq3_W0SoMTiAHH7C1d7fTx-sN6hBI9r4OeW3Qzdw
+    6  block      1006  log    6  RegisterV2        STAKE_TABLE~xJ_3yCoda8CKiX76U6xHANbYu_zgMozU7nZa3GqeKkZQ
+    7  block      1007  log    7  Delegate          STAKE_TABLE~WiZxyROAmvbThZ9fDhMwbr_r-8b7yjEWrm5WlIN_r_8K
+    8  block      1008  log    8  KeyUpdateV2       STAKE_TABLE~93L3iHRt8d5LNc-uh9IU8BN8N_6MHT7VDaoX4-gVYxd5
+    9  block      1009  log    9  CommissionUpdate  STAKE_TABLE~gLml6T4Sjidagh2KPgVJknSvZJRWknRpNQ2wOPmi1Fbl
+   10  block      1010  log   10  UndelegateV2      STAKE_TABLE~dBWC-x29irtqX1DV47DPdXcqQ1pyyutoZpSQ9psxAXgR
+   11  block      1011  log   11  RegisterV3        STAKE_TABLE~5DuqzywMuplGg82JeTraZMYoxcNI7idffccT98XbnZ2A
+   12  block      1012  log   12  Delegate          STAKE_TABLE~zYENhm2vhUBbr15qX0LFq_ESlNVPErNG3Gw9ohoJsqCK
+   13  block      1013  log   13  X25519KeyUpdate   STAKE_TABLE~BLV7pQMtRp42OHpfskgLDpgnVlE1t_BmnEI27c7JcbuA
+   14  block      1014  log   14  P2pAddrUpdate     STAKE_TABLE~WwNmRAeuTkY7fFOjTDN-gYyATWS0AWBrF0K6emvDCLFE
+   15  block      1015  log   15  X25519KeyUpdate   STAKE_TABLE~WwNmRAeuTkY7fFOjTDN-gYyATWS0AWBrF0K6emvDCLFE
+   16  block      1016  log   16  P2pAddrUpdate     STAKE_TABLE~-kUQ59AsmNi_NRhS1nv28R8a-Rl7q6n6-rFP6xwgNq9a
+   17  block      1017  log   17  Register          STAKE_TABLE~We5uaWYIrHOwuCJ3KChMYV4ZkrYskTHezA26rDELnAAC
+   18  block      1018  log   18  Delegate          STAKE_TABLE~QHaReIyaDnGHWn5JswwYPEjkeeqYa7gdGx3W5BJOvlRP
+   19  block      1019  log   19  RegisterV2        STAKE_TABLE~GKTkVhEEl5s7ChAnRJupfgV-y8USMVWmpu9wlAFe_4HR
+   20  block      1020  log   20  Delegate          STAKE_TABLE~bkHyemmnHf7_zqOWTtr8W-U2Eq2S4SddSFHbXPZgg2B-
+   21  block      1021  log   21  Register          STAKE_TABLE~bkHyemmnHf7_zqOWTtr8W-U2Eq2S4SddSFHbXPZgg2B-
+   22  block      1022  log   22  Deregister        STAKE_TABLE~NLuwIlLXHXSSVHK1kaheNsw3vvb5l4bLB6-hy6B-8AEI
+   23  block      1023  log   23  DeregisterV2      STAKE_TABLE~ojO8an8IOS-s5Zq6UKs5U0rrsZp51wWo4OoaMUzZVT-P
