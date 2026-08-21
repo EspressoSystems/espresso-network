@@ -13,10 +13,7 @@ use committable::Commitment;
 use hotshot::{HotShotInitializer, traits::BlockPayload, types::SignatureKey};
 use hotshot_types::{
     consensus::{ConsensusMetricsValue, ParticipationTracker},
-    data::{
-        EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewNumber,
-        vid_disperse::vid_total_weight,
-    },
+    data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::{Proposal as SignedProposal, UpgradeLock},
     simple_certificate::{QuorumCertificate2, TimeoutCertificate2},
@@ -26,7 +23,6 @@ use hotshot_types::{
         signature_key::StateSignatureKey,
     },
     utils::{epoch_from_block_number, is_epoch_root},
-    vid::avidm_gf2::{AvidmGf2Param, init_avidm_gf2_param},
     vote::{HasViewNumber, Vote},
 };
 use time::OffsetDateTime;
@@ -43,19 +39,24 @@ use crate::{
         timer::Timer,
     },
     epoch::{EpochManager, EpochRootResult},
+    fetch::Fetcher,
     helpers::proposal_commitment,
     logging::KeyPrefix,
     message::{
         self, BlockMessage, CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, Message,
-        MessageType, OpaqueMessage, Proposal, ProposalFetchMessage, ProposalMessage,
-        TimeoutOneHonest, TransactionMessage, Unchecked, Validated, Vote2,
+        MessageType, OpaqueMessage, PayloadFetchMessage, Proposal, ProposalFetchMessage,
+        ProposalMessage, TimeoutOneHonest, TransactionMessage, Unchecked, Validated, Vote2,
     },
     network::Cliquenet,
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
+    serve::Server,
     state::{HeaderRequest, StateEntry, StateManager, StateManagerOutput},
     storage::{NewProtocolStorage, Storage},
-    vid::{VidDisperseRequest, VidDisperser, VidFragmentAccumulator, VidReconstructor},
+    vid::{
+        VidDisperseRequest, VidDisperser, VidFragmentAccumulator, VidReconstructor,
+        expected_vid_param,
+    },
     vote::{EpochRootTally, SimpleTally, VoteCollector},
 };
 
@@ -124,6 +125,10 @@ pub struct Coordinator<T: NodeType, S> {
     pending_proposal_fetches: PendingProposalFetches<T>,
     #[builder(skip)]
     requested_missing_proposals: HashSet<ProposalFetchKey<T>>,
+    #[builder(default = Fetcher::new(public_key.clone()))]
+    fetcher: Fetcher<T>,
+    #[builder(default = Server::new(public_key.clone()))]
+    server: Server<T>,
     #[builder(skip)]
     da_payloads: BTreeMap<(ViewNumber, VidCommitment2), PendingDa<T>>,
     metrics: Option<metrics::Metrics>,
@@ -592,6 +597,7 @@ where
                 },
                 Some(item) = self.vid_reconstructor.next() => match item {
                     Ok(out) => {
+                        self.server.retain(out.view, out.payload_commitment, &out.payload);
                         self.payload_txn_bytes.insert(out.view, out.payload.txn_bytes());
                         self.block_builder.on_block_reconstructed(out.tx_commitments);
                         self.storage.append_da(
@@ -725,18 +731,29 @@ where
                     self.epoch_manager.handle_leaf_decided(leaf);
                 }
             },
-            ConsensusOutput::LockUpdated(cert) => {
-                debug!(
-                    %node,
-                    view = %cert.view_number(),
-                    epoch = ?cert.epoch().map(|e| *e),
-                    "lock updated"
-                );
+            ConsensusOutput::LockUpdated(view) => {
+                debug!(%node, %view, "lock updated");
+                self.server.lock_moved(view);
             },
             ConsensusOutput::RequestMissingProposal { view, leaf_commit } => {
                 debug!(%node, %view, "request missing proposal");
                 if let Err(err) = self.request_missing_proposal(view, leaf_commit) {
                     warn!(%node, %view, %err, "failed to request missing proposal");
+                }
+            },
+            ConsensusOutput::RequestMissingPayload {
+                view,
+                payload_commitment,
+            } => {
+                debug!(%node, %view, "request missing payload");
+                if let Err(err) = self.fetcher.request(
+                    view,
+                    payload_commitment,
+                    &self.consensus,
+                    &self.membership_coordinator,
+                    self.network.sender(),
+                ) {
+                    warn!(%node, %view, %err, "failed to request missing payload");
                 }
             },
             ConsensusOutput::RequestBlockAndHeader(request) => {
@@ -792,7 +809,8 @@ where
                         state_cert.clone(),
                     );
                 }
-                let expected_param = self.expected_vid_param(vid_share.target_epoch);
+                let expected_param =
+                    expected_vid_param(&self.membership_coordinator, vid_share.target_epoch);
                 self.vid_reconstructor.handle_proposal(
                     view,
                     vid_share.payload_commitment,
@@ -1223,6 +1241,13 @@ where
                     let current_view = self.consensus.current_view();
                     let has_evidence = timeout_msg.evidence.is_some();
 
+                    if let Some(CatchupEvidence::Qc(qc)) = &timeout_msg.evidence
+                        && !self.is_view_too_far_ahead(qc.view_number())
+                    {
+                        self.fetcher
+                            .note_advertiser(qc.view_number(), message.sender.clone());
+                    }
+
                     // If a peer times out in a view at or ahead of us we adopt its
                     // highest certificate. Evidence takes precedence over
                     // the vote being too far ahead, and a valid certificate proves
@@ -1299,6 +1324,10 @@ where
                         epoch = ?qc.epoch().map(|e| *e),
                         "recv high qc"
                     );
+                    if !self.is_view_too_far_ahead(qc.view_number()) {
+                        self.fetcher
+                            .note_advertiser(qc.view_number(), message.sender.clone());
+                    }
                     if let Some(epoch) = self
                         .cert_verifiers
                         .advance
@@ -1395,6 +1424,32 @@ where
                 self.maybe_validate_fetched_proposal(*proposal);
                 None
             },
+            MessageType::PayloadFetch(PayloadFetchMessage::Request(request)) => {
+                let view = request.view_number();
+                debug!(%node, %sender, %view, "recv payload fetch request");
+                if let Err(err) = self.server.handle_request(
+                    &request,
+                    &message.sender,
+                    self.consensus.current_view(),
+                    self.network.sender(),
+                ) {
+                    warn!(%node, %sender, %view, %err, "failed to send payload response");
+                }
+                None
+            },
+            MessageType::PayloadFetch(PayloadFetchMessage::Response(response)) => {
+                let view = response.view;
+                debug!(%node, %sender, %view, "received payload fetch response");
+                if let Some(fetched) = self.fetcher.accept_response(
+                    response,
+                    &message.sender,
+                    &self.consensus,
+                    &self.membership_coordinator,
+                ) {
+                    self.vid_reconstructor.handle_fetched_payload(fetched);
+                }
+                None
+            },
             MessageType::External(data) => {
                 debug!(%node, %sender, bytes = data.len(), "recv external message");
                 self.coordinator_outbox.push_back(OpaqueMessage {
@@ -1435,19 +1490,6 @@ where
                 None
             },
         }
-    }
-
-    /// The VID erasure parameters the committee fixes for `target_epoch`,
-    /// matching what an honest disperser derives. Used to reject shares whose
-    /// `common.param` is forged (the commitment binds `ns_commits`, not
-    /// `param`). `None` if the committee cannot be resolved.
-    fn expected_vid_param(&self, target_epoch: Option<EpochNumber>) -> Option<AvidmGf2Param> {
-        let membership = self
-            .membership_coordinator
-            .stake_table_for_epoch(target_epoch)
-            .ok()?;
-        let total_weight = vid_total_weight::<T, _>(membership.stake_table(), target_epoch);
-        init_avidm_gf2_param(total_weight).ok()
     }
 
     fn broadcast(
@@ -1753,13 +1795,10 @@ where
 
     /// Broadcast a signed proposal fetch request for `view` to all peers.
     fn broadcast_proposal_fetch(&mut self, view: ViewNumber) -> Result<(), CoordinatorError> {
-        let request = self
-            .consensus
-            .signed_proposal_fetch_request(view)
-            .map_err(|err| {
-                let err = format!("failed to sign proposal request: {err}");
-                CoordinatorError::regular(err).context("sign proposal request")
-            })?;
+        let request = self.consensus.signed_fetch_request(view).map_err(|err| {
+            let err = format!("failed to sign proposal request: {err}");
+            CoordinatorError::regular(err).context("sign proposal request")
+        })?;
         let message = Message {
             sender: self.public_key.clone(),
             message_type: MessageType::ProposalFetch(ProposalFetchMessage::Request(request)),
@@ -1821,6 +1860,7 @@ where
                 self.pending_proposal_fetches.gc(view);
                 self.requested_missing_proposals
                     .retain(|key| key.view > view);
+                self.fetcher.gc(view);
                 self.state_manager.gc(view);
                 self.storage
                     .gc(view.saturating_sub(STORAGE_GC_MARGIN).into());

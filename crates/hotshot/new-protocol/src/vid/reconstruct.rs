@@ -10,8 +10,10 @@ use hotshot_types::{
     traits::{block_contents::EncodeBytes, node_implementation::NodeType},
     vid::avidm_gf2::{AvidmGf2Common, AvidmGf2Param, AvidmGf2Scheme, AvidmGf2Share},
 };
-use tokio::task::{AbortHandle, JoinSet};
-use tracing::warn;
+use tokio::task::{AbortHandle, Id, JoinSet};
+use tracing::{error, warn};
+
+use crate::fetch::FetchedPayload;
 
 type Metadata<T> = <<T as NodeType>::BlockPayload as BlockPayload<T>>::Metadata;
 
@@ -38,6 +40,9 @@ pub enum VidReconstructErrorKind {
     /// disperser committed to a non-codeword, so no subset can ever recover it.
     #[error("unrecoverable: verified shares cannot decode to a payload matching the commitment")]
     Unrecoverable,
+    /// A payload obtained from a peer does not re-commit.
+    #[error("fetched payload does not match the commitment")]
+    FetchedPayloadMismatch,
 }
 
 /// A failed reconstruction attempt for one view and claimed commitment.
@@ -169,23 +174,133 @@ impl<T: NodeType> VidReconstructor<T> {
         self.try_reconstruct(view);
     }
 
+    /// Verify a payload obtained whole from a peer instead of decoded from
+    /// shares, and surface it through [`Self::next`] like any reconstruction.
+    ///
+    /// Nothing in the response is trusted: the bytes count only if they
+    /// re-commit to `payload_commitment` under the committee's `param` — the
+    /// same binding [`decode_and_recommit`] enforces for shares. The caller
+    /// pins commitment and metadata from its own validated proposal, so a
+    /// peer can at worst waste the verification.
+    ///
+    /// Runs outside `calculations` on purpose: a share-based attempt may be
+    /// in flight for the same view, and neither should wait for the other.
+    /// [`Self::next`] keeps the first success and drops the loser.
+    pub(crate) fn handle_fetched_payload(&mut self, fetched: FetchedPayload<T>) {
+        let FetchedPayload {
+            view,
+            epoch,
+            payload_commitment,
+            metadata,
+            param,
+            payload,
+        } = fetched;
+
+        if self.reconstructed.contains(&view) {
+            return;
+        }
+        self.tasks.spawn_blocking(move || {
+            let ns_table = parse_ns_table(payload.len(), &metadata.encode());
+            match AvidmGf2Scheme::commit(&param, &payload, ns_table) {
+                Ok((recomputed, _)) if recomputed == payload_commitment => {
+                    let payload = T::BlockPayload::from_bytes(&payload, &metadata);
+                    let tx_commitments = payload.transaction_commitments(&metadata);
+                    Ok(VidReconstructOutput {
+                        view,
+                        epoch,
+                        payload_commitment,
+                        payload,
+                        metadata,
+                        tx_commitments,
+                    })
+                },
+                Ok((recomputed, _)) => {
+                    warn!(
+                        %view,
+                        expected = %payload_commitment,
+                        %recomputed,
+                        "fetched payload does not match the payload commitment"
+                    );
+                    Err(VidReconstructError {
+                        view,
+                        payload_commitment,
+                        kind: VidReconstructErrorKind::FetchedPayloadMismatch,
+                        bad_share_keys: Vec::new(),
+                    })
+                },
+                Err(err) => {
+                    warn!(%view, %err, "failed to commit fetched payload");
+                    Err(VidReconstructError {
+                        view,
+                        payload_commitment,
+                        kind: VidReconstructErrorKind::FetchedPayloadMismatch,
+                        bad_share_keys: Vec::new(),
+                    })
+                },
+            }
+        });
+    }
+
     pub async fn next(&mut self) -> Option<ReconstructResult<T>> {
         loop {
-            match self.tasks.join_next().await {
-                Some(Ok(Ok(out))) => {
-                    self.calculations.remove(&out.view);
+            match self.tasks.join_next_with_id().await? {
+                Ok((id, Ok(out))) => {
+                    self.forget_calculation(out.view, id);
+                    // A share-based attempt and a fetched-payload verification
+                    // may race; the first one out wins, the loser is dropped.
+                    if !self.reconstructed.insert(out.view) {
+                        continue;
+                    }
+
                     self.accumulators.remove(&out.view);
-                    self.reconstructed.insert(out.view);
+
+                    // Nothing left to decode: try to stop the attempt that
+                    // lost. Best effort — aborting a blocking task that has
+                    // already started does nothing, and its result is dropped
+                    // by the `reconstructed` check above either way.
+                    if let Some(loser) = self.calculations.remove(&out.view) {
+                        loser.abort();
+                    }
+
                     return Some(Ok(out));
                 },
-                Some(Ok(Err(err))) => {
-                    self.calculations.remove(&err.view);
+                Ok((id, Err(err))) => {
+                    self.forget_calculation(err.view, id);
                     self.handle_failed_attempt(&err);
                     return Some(Err(err));
                 },
-                Some(Err(_)) => continue,
-                None => return None,
+                Err(err) => {
+                    if err.is_panic() {
+                        error!(%err, "VID reconstruction task panicked");
+                    }
+                    let view = self
+                        .calculations
+                        .iter()
+                        .find(|(_, task)| task.id() == err.id())
+                        .map(|(view, _)| *view);
+                    if let Some(view) = view {
+                        self.calculations.remove(&view);
+                    }
+                },
             }
+        }
+    }
+
+    /// Drop the view's calculation handle, but only if `id` is the calculation
+    /// it tracks.
+    ///
+    /// Fetched-payload verifications run in the same [`JoinSet`] and carry the
+    /// same view, so a finished task is not necessarily the tracked one.
+    /// Dropping the handle of a calculation that is still running would defeat
+    /// the [`Self::try_reconstruct`] guard against a second attempt for the
+    /// same view, and leave the first one unabortable.
+    fn forget_calculation(&mut self, view: ViewNumber, id: Id) {
+        if self
+            .calculations
+            .get(&view)
+            .is_some_and(|task| task.id() == id)
+        {
+            self.calculations.remove(&view);
         }
     }
 
@@ -209,6 +324,7 @@ impl<T: NodeType> VidReconstructor<T> {
         match err.kind {
             VidReconstructErrorKind::Unrecoverable => accumulator.exhausted = true,
             VidReconstructErrorKind::AwaitingShares => self.try_reconstruct(err.view),
+            VidReconstructErrorKind::FetchedPayloadMismatch => {},
         }
     }
 

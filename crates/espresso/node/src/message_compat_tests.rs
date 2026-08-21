@@ -33,8 +33,8 @@ use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_example_types::{node_types::TEST_VERSIONS, storage_types::TestStorage};
 use hotshot_new_protocol::message::{
     BlockMessage, CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, DedupManifest,
-    EpochChangeMessage, Message as NewProtocolMessage, MessageType, ProposalFetchMessage,
-    ProposalFetchRequest, ProposalMessage, TimeoutVoteMessage, TransactionMessage, Unchecked,
+    EpochChangeMessage, FetchRequest, Message as NewProtocolMessage, MessageType,
+    ProposalFetchMessage, ProposalMessage, TimeoutVoteMessage, TransactionMessage, Unchecked,
     Validated, Vote1,
 };
 use hotshot_types::{
@@ -677,7 +677,7 @@ async fn reference_new_protocol_messages() -> Vec<NewProtocolMessage<SeqTypes, V
                 hashes: vec![transaction.commit()],
             })),
             MessageType::ProposalFetch(ProposalFetchMessage::Request(
-                ProposalFetchRequest::new(view, sender, &priv_key).unwrap(),
+                FetchRequest::new(view, sender, &priv_key).unwrap(),
             )),
             MessageType::ProposalFetch(ProposalFetchMessage::Response(Box::new(signed_proposal))),
             // External payloads bypass this envelope on the wire, so this entry pins only the
