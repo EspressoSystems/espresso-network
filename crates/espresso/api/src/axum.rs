@@ -34,7 +34,7 @@ use tokio::sync::Semaphore;
 use vbs::version::StaticVersion;
 
 use crate::{
-    error::{ApiError, AvailabilityError},
+    error::{ApiError, ErrorKind},
     v1,
 };
 
@@ -146,16 +146,13 @@ fn decode_body<T: serde::de::DeserializeOwned>(
 }
 
 /// Classify an `anyhow::Error` from an availability handler into the appropriate `ApiError`
-/// variant. Errors produced via [`AvailabilityError`] in the state implementation carry semantic
-/// meaning; everything else falls back to a 500 Internal Server Error.
+/// variant, sharing [`crate::error::classify`] with the v2 adapter so the two transports agree on
+/// which failures are 404s.
 pub(crate) fn classify_availability_error(err: anyhow::Error) -> ApiError {
-    let is_not_found = err
-        .downcast_ref::<AvailabilityError>()
-        .map(|e| matches!(e, AvailabilityError::NotFound(_)));
-    match is_not_found {
-        Some(true) => ApiError::NotFound(err),
-        Some(false) => ApiError::BadRequest(err),
-        None => ApiError::Internal(err),
+    match crate::error::classify(&err) {
+        ErrorKind::NotFound => ApiError::NotFound(err),
+        ErrorKind::BadRequest => ApiError::BadRequest(err),
+        ErrorKind::Internal => ApiError::Internal(err),
     }
 }
 
@@ -205,9 +202,9 @@ pub(crate) async fn limit_requests(
     }
 }
 
-/// The v2 router's `Extension<OpenApi>` layer only covers routes registered on the v2
-/// `ApiRouter`; this newtype lets v1 layer its own `OpenApi` extension without the two `Extension`
-/// lookups being ambiguous if the routers are ever merged and inspected by type.
+/// Wrapper so the v1 spec is looked up by a distinct type. v2 serves a build-time document
+/// rather than an `Extension<OpenApi>`, so nothing collides today, but the newtype keeps an
+/// `Extension<OpenApi>` added later from silently resolving to v1's.
 #[derive(Clone)]
 struct OpenApiV1(OpenApi);
 
@@ -3409,6 +3406,42 @@ where
     finish_v1_docs(router)
 }
 
+/// Give framework-level rejections on the v2 routes the same error envelope as handler errors.
+///
+/// The generated handlers extract with `Query<T>`, and axum answers a rejected query string
+/// itself, with a `text/plain` body that never reaches `tonic_rest::RestError`. protoJSON
+/// decoding rejects unknown fields, so that is the most likely client mistake on these routes,
+/// and `doc/api-v2.md` promises one error shape for all of them. Rebuilding the rejection as a
+/// [`tonic::Status`] reuses tonic-rest's envelope instead of hand-rolling a second copy.
+pub(crate) async fn v2_error_envelope(req: Request, next: axum::middleware::Next) -> Response {
+    /// Rejection bodies are single-line messages; this only needs to be larger than one.
+    const MAX_REJECTION_BODY: usize = 8 * 1024;
+
+    let response = next.run(req).await;
+
+    // Only the statuses whose gRPC code maps back to the same HTTP status, so the rewrite cannot
+    // change what the client sees beyond the body shape.
+    let code = match response.status() {
+        StatusCode::BAD_REQUEST => tonic::Code::InvalidArgument,
+        StatusCode::NOT_FOUND => tonic::Code::NotFound,
+        _ => return response,
+    };
+    let already_enveloped = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .is_some_and(|value| value.as_bytes().starts_with(b"application/json"));
+    if already_enveloped {
+        return response;
+    }
+
+    let (parts, body) = response.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, MAX_REJECTION_BODY).await else {
+        return parts.status.into_response();
+    };
+    let message = String::from_utf8_lossy(&bytes);
+    tonic_rest::RestError::from(tonic::Status::new(code, message)).into_response()
+}
+
 /// Serve the v2 API documentation: the OpenAPI document generated from the protos at build time,
 /// plus the two UIs that render it.
 ///
@@ -3427,10 +3460,8 @@ pub fn router_v2_docs() -> Router {
             routes::v2::SWAGGER_ROUTE,
             get(|| async { swagger_html(routes::v2::OPENAPI_SPEC_ROUTE) }),
         )
-        // axum 0.8 has no trailing-slash redirect and `rewrite_legacy_uri` leaves `/v2/` alone,
-        // so the slashed form needs its own route, as `/v1/` does.
         .route(
-            "/v2/",
+            routes::v2::SWAGGER_SLASH_ROUTE,
             get(|| async { swagger_html(routes::v2::OPENAPI_SPEC_ROUTE) }),
         )
         .route(
@@ -4681,18 +4712,57 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let body = body_string(resp).await;
         let spec: serde_json::Value = serde_json::from_str(&body).expect("valid JSON");
-        assert!(
-            spec["paths"]
-                .as_object()
-                .expect("spec has paths")
-                .contains_key("/v2/status/block-height"),
-            "expected /v2/status/block-height in spec paths: {body}"
-        );
+        let documented: std::collections::BTreeSet<&str> = spec["paths"]
+            .as_object()
+            .expect("spec has paths")
+            .keys()
+            .map(String::as_str)
+            .collect();
+
+        // The document covers exactly the mounted routes plus the reward routes that
+        // `rewards.proto` defines without an implementation. Wiring rewards up, or adding an
+        // endpoint, has to update this list, which is the point: the published document and the
+        // served surface are supposed to diverge only where we say they do.
+        let mounted = [
+            "/v2/status/block-height",
+            "/v2/status/success-rate",
+            "/v2/status/time-since-last-decide",
+            "/v2/status/keys",
+            "/v2/token/total-minted-supply",
+            "/v2/token/circulating-supply",
+            "/v2/token/circulating-supply-ethereum",
+            "/v2/token/total-issued-supply",
+            "/v2/token/total-reward-distributed",
+        ];
+        let unimplemented = [
+            "/v2/rewards/claim-input",
+            "/v2/rewards/balance",
+            "/v2/rewards/proof",
+            "/v2/rewards/balances",
+            "/v2/rewards/tree",
+        ];
+        let expected: std::collections::BTreeSet<&str> =
+            mounted.into_iter().chain(unimplemented).collect();
+        assert_eq!(documented, expected);
+
+        // Every unimplemented operation says so, so a generated client cannot silently ship a
+        // method that always 404s.
+        for path in unimplemented {
+            assert_eq!(
+                spec["paths"][path]["get"]["deprecated"],
+                serde_json::json!(true),
+                "{path} should be marked deprecated"
+            );
+        }
     }
 
     #[tokio::test]
-    async fn v2_swagger_ui_serves_html() {
-        for uri in [routes::v2::SWAGGER_ROUTE, "/v2/", routes::v2::SCALAR_ROUTE] {
+    async fn v2_docs_uis_serve_html() {
+        for uri in [
+            routes::v2::SWAGGER_ROUTE,
+            routes::v2::SWAGGER_SLASH_ROUTE,
+            routes::v2::SCALAR_ROUTE,
+        ] {
             let req = Request::builder()
                 .uri(uri)
                 .body(axum::body::Body::empty())
@@ -4701,6 +4771,18 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(resp.status(), StatusCode::OK, "{uri} should serve docs");
+            let content_type = resp
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_string();
+            assert!(content_type.contains("text/html"), "{uri}: {content_type}");
+            assert!(
+                body_string(resp)
+                    .await
+                    .contains(routes::v2::OPENAPI_SPEC_ROUTE)
+            );
         }
     }
 

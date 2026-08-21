@@ -4,12 +4,6 @@ package espresso.api.v2;
 
 import "google/api/annotations.proto";
 
-// U256 value encoded as hex string
-message U256 {
-  // Hex-encoded value with "0x" prefix (e.g., "0x32fe2fedb43f62b4ee2")
-  string value = 1;
-}
-
 // Reward claim input for contract submission
 // Contains all data needed to call the claimRewards function on the L1 contract
 message RewardClaimInput {
@@ -87,14 +81,8 @@ message MerkleNode {
   }
 }
 
-// Dummy message for flattening Empty
-message EmptyData {
-}
-
 // Empty node variant (no data)
 message Empty {
-  // Dummy field for serde flatten compatibility (must be a message type)
-  EmptyData dummy = 1;
 }
 
 // Leaf node containing account and reward amount
@@ -156,7 +144,7 @@ message GetRewardBalancesRequest {
   // Starting offset for pagination
   uint64 offset = 2;
 
-  // Maximum number of results (limit ≤ 10000)
+  // Maximum number of results (limit <= 10000)
   uint64 limit = 3;
 }
 

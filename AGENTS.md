@@ -142,4 +142,5 @@ To investigate logs and metrics of Espresso's own infrastructure, use the `pup` 
 - `data/genesis/*.toml` - genesis configurations
 - `data/v1/`, `data/v2/`, etc. - reference serialization test vectors
 - `doc/upgrades.md` - upgrade mechanism
-- `crates/espresso/api/src/v1/`, `crates/espresso/api/src/v2/` - API trait and route definitions
+- `crates/espresso/api/src/v1/` - v1 API trait and route definitions
+- `crates/espresso/api/proto/v2/` - v2 API definitions (see `doc/api-v2.md`)

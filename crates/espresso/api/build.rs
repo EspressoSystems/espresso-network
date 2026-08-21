@@ -1,4 +1,7 @@
-use std::path::PathBuf;
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+};
 
 /// Generates the OpenAPI document from the compiled descriptor set. Lives under
 /// `src/generated/` next to its output, but it is this build script's module, not a
@@ -6,9 +9,12 @@ use std::path::PathBuf;
 #[path = "src/generated/openapi.rs"]
 mod openapi;
 
+/// Proto package the v2 API is defined in, shared with [`openapi`].
+pub const PACKAGE: &str = "espresso.api.v2";
+
 /// All .proto files under `<proto_root>/v2`, sorted for deterministic codegen.
-fn v2_proto_files(proto_root: &std::path::Path) -> std::io::Result<Vec<PathBuf>> {
-    let mut files: Vec<_> = std::fs::read_dir(proto_root.join("v2"))?
+fn v2_proto_files(proto_root: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let mut files: Vec<_> = fs::read_dir(proto_root.join("v2"))?
         .filter_map(|entry| {
             let path = entry.ok()?.path();
             (path.extension()? == "proto").then_some(path)
@@ -18,23 +24,38 @@ fn v2_proto_files(proto_root: &std::path::Path) -> std::io::Result<Vec<PathBuf>>
     Ok(files)
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let proto_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("proto");
-    let out_dir = PathBuf::from(std::env::var("OUT_DIR")?);
-    let src_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/generated");
-    std::fs::create_dir_all(&src_dir)?;
+/// Writes only when the content changes, so a rerun does not bump mtimes on artifacts that are
+/// `include!`d and force a rebuild of the whole crate.
+fn write_if_changed(path: PathBuf, content: &str) -> std::io::Result<()> {
+    if fs::read_to_string(&path).is_ok_and(|existing| existing == content) {
+        return Ok(());
+    }
+    fs::write(path, content)
+}
 
-    // Generate message types plus tonic client and server stubs in one pass. The types get
-    // no serde derives: JSON is canonical protoJSON, implemented by the pbjson pass below.
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
+    let proto_root = manifest_dir.join("proto");
+    let out_dir = PathBuf::from(env::var("OUT_DIR")?);
+    let src_dir = manifest_dir.join("src/generated");
+    fs::create_dir_all(&src_dir)?;
+
+    // Generate message types plus the tonic server traits in one pass. The types get no serde
+    // derives: JSON is canonical protoJSON, implemented by the pbjson pass below. Clients are
+    // skipped because nothing in the workspace consumes this API over gRPC; the REST handlers and
+    // the node's service impls only need the server side.
     tonic_prost_build::configure()
         .out_dir(&src_dir)
-        // google.api types back the HTTP annotations consumed at build time by
-        // tonic-rest-build; nothing references them at runtime, so skip generating them.
+        .build_client(false)
+        // google.api types back the HTTP annotations consumed at build time by tonic-rest-build.
+        // Nothing references them at runtime, so point them at a crate that does not exist: if a
+        // future proto ever puts one in a message field, the result is an unresolved-crate error
+        // naming `google_api_unused` rather than silently generating the types.
         .extern_path(".google.api", "::google_api_unused")
         .file_descriptor_set_path(out_dir.join("descriptor.bin"))
         .compile_protos(&v2_proto_files(&proto_root)?, &[proto_root])?;
 
-    let descriptor_bytes = std::fs::read(out_dir.join("descriptor.bin"))?;
+    let descriptor_bytes = fs::read(out_dir.join("descriptor.bin"))?;
 
     // Generate canonical protoJSON Serialize/Deserialize impls for the message types:
     // lowerCamelCase names, 64-bit integers as decimal strings, bytes as base64, oneofs
@@ -43,24 +64,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     pbjson_build::Builder::new()
         .register_descriptors(&descriptor_bytes)?
         .out_dir(&src_dir)
-        .build(&[".espresso.api.v2"])?;
+        .build(&[&format!(".{PACKAGE}")])?;
 
     // Generate Axum REST handlers for every service with google.api.http annotations.
     // The proto file is the single definition site: path and method come from the
     // annotation, request/response types from the rpc signature, and the handlers call
     // through the tonic service traits generated above.
-    let rest_config =
-        tonic_rest_build::RestCodegenConfig::new().package("espresso.api.v2", "proto");
+    let rest_config = tonic_rest_build::RestCodegenConfig::new().package(PACKAGE, "proto");
     let rest_code = tonic_rest_build::generate(&descriptor_bytes, &rest_config)?;
     // Repo convention: no em dashes in committed text.
     let rest_code = rest_code.replace('\u{2014}', "-");
-    std::fs::write(src_dir.join("espresso.api.v2.rest.rs"), rest_code)?;
+    write_if_changed(src_dir.join("espresso.api.v2.rest.rs"), &rest_code)?;
 
     // Document the same routes for HTTP clients, from the same descriptor set.
     let spec = openapi::generate(&descriptor_bytes)?;
-    std::fs::write(
+    write_if_changed(
         src_dir.join("espresso.api.v2.openapi.json"),
-        serde_json::to_string_pretty(&spec)?,
+        &serde_json::to_string_pretty(&spec)?,
     )?;
 
     println!("cargo:rerun-if-changed=proto");

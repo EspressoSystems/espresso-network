@@ -35,14 +35,9 @@ fn bytes_serialize_as_base64() {
 #[test]
 fn oneof_flattens_into_parent_object() {
     let node = proto::MerkleNode {
-        node_type: Some(proto::merkle_node::NodeType::Empty(proto::Empty {
-            dummy: Some(proto::EmptyData {}),
-        })),
+        node_type: Some(proto::merkle_node::NodeType::Empty(proto::Empty {})),
     };
-    assert_eq!(
-        serde_json::to_value(node).unwrap(),
-        json!({"empty": {"dummy": {}}})
-    );
+    assert_eq!(serde_json::to_value(node).unwrap(), json!({"empty": {}}));
 }
 
 #[test]

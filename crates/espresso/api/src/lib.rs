@@ -113,9 +113,11 @@ where
         router = router.merge(axum::router_hotshot_events(state.clone()));
     }
     let state = std::sync::Arc::new(state);
-    let router = axum::finish_v1_docs(router)
-        .merge(rest::status_service_rest_router(state.clone()))
+    let v2 = rest::status_service_rest_router(state.clone())
         .merge(rest::token_service_rest_router(state))
+        .layer(::axum::middleware::from_fn(axum::v2_error_envelope));
+    let router = axum::finish_v1_docs(router)
+        .merge(v2)
         .merge(axum::router_v2_docs());
     serve_router(listener, "v1 and v2", router, max_connections).await
 }

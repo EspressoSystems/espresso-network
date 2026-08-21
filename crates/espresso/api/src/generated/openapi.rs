@@ -8,7 +8,7 @@
 //! flattened into the parent object, defaults omitted. Routes and HTTP methods come
 //! from the `google.api.http` annotations; descriptions come from proto comments.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use prost::Message as _;
 use prost_types::{
@@ -17,7 +17,16 @@ use prost_types::{
 };
 use serde_json::{Value, json};
 
-const PACKAGE: &str = "espresso.api.v2";
+use crate::PACKAGE;
+
+/// Messages of this package by fully-qualified name, with their file's comments and their index in
+/// that file (which is how source-code-info keys their field comments).
+type Messages<'a> = BTreeMap<String, (&'a DescriptorProto, Comments, usize)>;
+
+/// Services with no implementation mounted by `serve_axum`. Their routes are still documented,
+/// because the protos are the published definition, but a client generator would otherwise emit
+/// methods that always 404 with nothing in the document saying so.
+const UNIMPLEMENTED_SERVICES: &[&str] = &["RewardService"];
 
 pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Error>> {
     let fdset = FileDescriptorSet::decode(descriptor_bytes)?;
@@ -37,32 +46,56 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
     for file in &package_files {
         let comments = Comments::new(file);
         for (i, message) in file.message_type.iter().enumerate() {
+            if !message.nested_type.is_empty() {
+                // A nested type is never registered as a schema, so a field referencing one would
+                // emit a `$ref` to a schema that does not exist. Neither this generator nor the
+                // REST transcoder handles them, so refuse rather than publish a broken document.
+                return Err(format!(
+                    "{}: nested messages are not supported in the v2 API",
+                    message.name()
+                )
+                .into());
+            }
             let name = message.name().to_string();
             schemas.insert(name.clone(), message_schema(message, &comments, i));
-            messages.insert(format!(".{PACKAGE}.{name}"), (message, comments.clone()));
+            messages.insert(format!(".{PACKAGE}.{name}"), (message, comments.clone(), i));
         }
     }
     schemas.insert("Error".to_string(), error_schema());
 
-    let mut paths = BTreeMap::new();
+    let mut paths: BTreeMap<String, BTreeMap<String, Value>> = BTreeMap::new();
+    let mut operation_ids = BTreeSet::new();
     for file in &package_files {
         let comments = Comments::new(file);
         for (si, service) in file.service.iter().enumerate() {
             for (mi, method) in service.method.iter().enumerate() {
                 let key = (service.name().to_string(), method.name().to_string());
+                // An rpc with no google.api.http annotation is gRPC-only and has no REST route
+                // to document.
                 let Some((verb, path)) = routes.get(&key) else {
                     continue;
                 };
+                if !operation_ids.insert(method.name().to_string()) {
+                    return Err(format!(
+                        "duplicate operationId `{}`: rpc names must be unique across services",
+                        method.name()
+                    )
+                    .into());
+                }
                 let operation = operation(
                     service.name(),
                     method,
                     &comments.get(&[6, si as i32, 2, mi as i32]),
                     &messages,
-                );
-                paths
+                )?;
+                if paths
                     .entry(path.clone())
-                    .or_insert_with(BTreeMap::new)
-                    .insert(verb.clone(), operation);
+                    .or_default()
+                    .insert(verb.clone(), operation)
+                    .is_some()
+                {
+                    return Err(format!("duplicate route: {verb} {path}").into());
+                }
             }
         }
     }
@@ -76,7 +109,7 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
                             integers as decimal strings, bytes as base64, oneofs flattened, \
                             defaults omitted. Query parameters accept both the proto field name \
                             and its camelCase form.",
-            "version": env!("CARGO_PKG_VERSION"),
+            "version": "2",
         },
         "paths": paths,
         "components": { "schemas": schemas },
@@ -112,12 +145,12 @@ fn operation(
     service: &str,
     method: &prost_types::MethodDescriptorProto,
     comment: &Option<String>,
-    messages: &BTreeMap<String, (&DescriptorProto, Comments)>,
-) -> Value {
+    messages: &Messages,
+) -> Result<Value, Box<dyn std::error::Error>> {
     let mut op = json!({
-        "tags": [service.trim_end_matches("Service")],
+        "tags": [service.strip_suffix("Service").unwrap_or(service)],
         "operationId": method.name(),
-        "parameters": request_parameters(method.input_type(), messages),
+        "parameters": request_parameters(method.input_type(), messages)?,
         "responses": {
             "200": {
                 "description": "OK",
@@ -132,22 +165,35 @@ fn operation(
         },
     });
     if let Some(comment) = comment {
-        op["summary"] = json!(comment.lines().next().unwrap_or_default());
-        op["description"] = json!(comment);
+        let summary = comment.lines().next().unwrap_or_default();
+        op["summary"] = json!(summary);
+        // Only when it says more than the summary, so UIs do not render the same line twice.
+        if comment.trim() != summary {
+            op["description"] = json!(comment);
+        }
     }
-    op
+    if UNIMPLEMENTED_SERVICES.contains(&service) {
+        op["deprecated"] = json!(true);
+        op["summary"] = json!(format!(
+            "{} (not implemented: returns 404)",
+            op["summary"].as_str().unwrap_or_default()
+        ));
+    }
+    Ok(op)
 }
 
 /// Request message fields become query parameters, named after the proto field
 /// (the deserializer also accepts the camelCase form).
 fn request_parameters(
     input_type: &str,
-    messages: &BTreeMap<String, (&DescriptorProto, Comments)>,
-) -> Value {
-    let Some((message, comments)) = messages.get(input_type) else {
-        return json!([]);
+    messages: &Messages,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    // Only messages of this package are registered, so a miss means the rpc takes something this
+    // generator cannot describe (an imported or well-known type). Emitting an empty parameter list
+    // would silently drop every parameter from the docs.
+    let Some((message, comments, index)) = messages.get(input_type) else {
+        return Err(format!("request type {input_type} is not a message of {PACKAGE}").into());
     };
-    let message_index = message_index(messages, input_type);
     let params: Vec<Value> = message
         .field
         .iter()
@@ -156,23 +202,19 @@ fn request_parameters(
             let mut param = json!({
                 "name": field.name(),
                 "in": "query",
+                // Proto3 has no required fields: an absent parameter decodes to its default, so
+                // the server accepts every subset. Whether a default is *meaningful* is the rpc's
+                // business, not the schema's.
                 "required": false,
                 "schema": query_schema(field),
             });
-            if let Some(comment) = comments.get(&[4, message_index, 2, j as i32]) {
+            if let Some(comment) = comments.get(&[4, *index as i32, 2, j as i32]) {
                 param["description"] = json!(comment);
             }
             param
         })
         .collect();
-    json!(params)
-}
-
-fn message_index(messages: &BTreeMap<String, (&DescriptorProto, Comments)>, fqn: &str) -> i32 {
-    messages
-        .get(fqn)
-        .map(|(m, c)| c.message_index(m.name()))
-        .unwrap_or(0)
+    Ok(json!(params))
 }
 
 fn message_schema(message: &DescriptorProto, comments: &Comments, index: usize) -> Value {
@@ -281,7 +323,6 @@ fn error_schema() -> Value {
 #[derive(Clone)]
 struct Comments {
     by_path: BTreeMap<Vec<i32>, String>,
-    message_names: Vec<String>,
 }
 
 impl Comments {
@@ -303,25 +344,10 @@ impl Comments {
                 }
             }
         }
-        let message_names = file
-            .message_type
-            .iter()
-            .map(|m| m.name().to_string())
-            .collect();
-        Self {
-            by_path,
-            message_names,
-        }
+        Self { by_path }
     }
 
     fn get(&self, path: &[i32]) -> Option<String> {
         self.by_path.get(path).cloned()
-    }
-
-    fn message_index(&self, name: &str) -> i32 {
-        self.message_names
-            .iter()
-            .position(|n| n == name)
-            .unwrap_or(0) as i32
     }
 }

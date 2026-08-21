@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use committable::Committable as _;
 use disco_types::{error::Error as _, status::StatusCode};
 use espresso_api::{
-    error::AvailabilityError,
+    error::{AvailabilityError, to_status},
     proto,
     v1::{self, HotShotAvailabilityApi},
 };
@@ -1496,20 +1496,6 @@ where
 // google.api.http annotations in status.proto)
 // ============================================================================
 
-/// Mirror of the v1 axum error classification: [`AvailabilityError`] variants carry
-/// semantic meaning; everything else is an internal error.
-fn to_status(err: anyhow::Error) -> tonic::Status {
-    // The v2 adapters take `anyhow::Error` straight from the fetchers rather than rendering
-    // through `ApiError`, which is where the v1 path scrubs. `grpc-message` and the REST error
-    // body both reach unauthenticated callers, so provider credentials are removed here.
-    let message = espresso_utils::redact::scrub(&err.to_string());
-    match err.downcast_ref::<AvailabilityError>() {
-        Some(AvailabilityError::NotFound(_)) => tonic::Status::not_found(message),
-        Some(_) => tonic::Status::invalid_argument(message),
-        None => tonic::Status::internal(message),
-    }
-}
-
 #[tonic::async_trait]
 impl<D> proto::status_service_server::StatusService for NodeApiStateImpl<D>
 where
@@ -1533,6 +1519,10 @@ where
         let rate = <Self as v1::StatusApi>::success_rate(self)
             .await
             .map_err(to_status)?;
+        // The rate is decided-blocks over views, so a node that has not seen a view yet computes
+        // 0/0. protoJSON has no encoding for a non-finite double, `serde_json` would write it as
+        // `null`, and the generated deserializer rejects that, so report no views as no successes.
+        let rate = if rate.is_finite() { rate } else { 0. };
         Ok(tonic::Response::new(proto::SuccessRateResponse { rate }))
     }
 
