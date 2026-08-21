@@ -12,108 +12,6 @@ use axum::http::HeaderMap;
 use axum::Router;
 
 // =============================================================================
-// ConsensusService REST routes
-// =============================================================================
-
-/// Build Axum REST routes for `ConsensusService`.
-///
-/// Generated from `google.api.http` annotations in `proto.proto`.
-pub fn consensus_service_rest_router<S>(service: Arc<S>) -> Router
-where
-    S: crate::proto::consensus_service_server::ConsensusService + Send + Sync + 'static,
-{
-    Router::new()
-        .route("/v2/consensus/state-certificate", axum::routing::get(rest_consensus_service_get_state_certificate::<S>))
-        .route("/v2/consensus/stake-table", axum::routing::get(rest_consensus_service_get_stake_table::<S>))
-        .with_state(service)
-}
-
-#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
-/// `GetStateCertificate` - JSON endpoint.
-///
-/// `GET /v2/consensus/state-certificate`
-async fn rest_consensus_service_get_state_certificate<S>(
-    State(service): State<Arc<S>>,
-    headers: HeaderMap,
-    Query(body): Query<crate::proto::GetStateCertificateRequest>,
-) -> Result<Json<crate::proto::StateCertificateResponse>, tonic_rest::RestError>
-where
-    S: crate::proto::consensus_service_server::ConsensusService + Send + Sync + 'static,
-{
-    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
-    let response = service.get_state_certificate(req).await.map_err(tonic_rest::RestError::from)?;
-    Ok(Json(response.into_inner()))
-}
-
-#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
-/// `GetStakeTable` - JSON endpoint.
-///
-/// `GET /v2/consensus/stake-table`
-async fn rest_consensus_service_get_stake_table<S>(
-    State(service): State<Arc<S>>,
-    headers: HeaderMap,
-    Query(body): Query<crate::proto::GetStakeTableRequest>,
-) -> Result<Json<crate::proto::StakeTableResponse>, tonic_rest::RestError>
-where
-    S: crate::proto::consensus_service_server::ConsensusService + Send + Sync + 'static,
-{
-    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
-    let response = service.get_stake_table(req).await.map_err(tonic_rest::RestError::from)?;
-    Ok(Json(response.into_inner()))
-}
-
-// =============================================================================
-// DataService REST routes
-// =============================================================================
-
-/// Build Axum REST routes for `DataService`.
-///
-/// Generated from `google.api.http` annotations in `proto.proto`.
-pub fn data_service_rest_router<S>(service: Arc<S>) -> Router
-where
-    S: crate::proto::data_service_server::DataService + Send + Sync + 'static,
-{
-    Router::new()
-        .route("/v2/data/finalized/namespace-proof", axum::routing::get(rest_data_service_get_namespace_proof::<S>))
-        .route("/v2/data/finalized/incorrect-encoding-proof", axum::routing::get(rest_data_service_get_incorrect_encoding_proof::<S>))
-        .with_state(service)
-}
-
-#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
-/// `GetNamespaceProof` - JSON endpoint.
-///
-/// `GET /v2/data/finalized/namespace-proof`
-async fn rest_data_service_get_namespace_proof<S>(
-    State(service): State<Arc<S>>,
-    headers: HeaderMap,
-    Query(body): Query<crate::proto::GetNamespaceProofRequest>,
-) -> Result<Json<crate::proto::GetNamespaceProofResponse>, tonic_rest::RestError>
-where
-    S: crate::proto::data_service_server::DataService + Send + Sync + 'static,
-{
-    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
-    let response = service.get_namespace_proof(req).await.map_err(tonic_rest::RestError::from)?;
-    Ok(Json(response.into_inner()))
-}
-
-#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
-/// `GetIncorrectEncodingProof` - JSON endpoint.
-///
-/// `GET /v2/data/finalized/incorrect-encoding-proof`
-async fn rest_data_service_get_incorrect_encoding_proof<S>(
-    State(service): State<Arc<S>>,
-    headers: HeaderMap,
-    Query(body): Query<crate::proto::GetIncorrectEncodingProofRequest>,
-) -> Result<Json<crate::proto::IncorrectEncodingProofResponse>, tonic_rest::RestError>
-where
-    S: crate::proto::data_service_server::DataService + Send + Sync + 'static,
-{
-    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
-    let response = service.get_incorrect_encoding_proof(req).await.map_err(tonic_rest::RestError::from)?;
-    Ok(Json(response.into_inner()))
-}
-
-// =============================================================================
 // RewardService REST routes
 // =============================================================================
 
@@ -429,23 +327,17 @@ pub const PUBLIC_REST_PATHS: &[&str] = &[
 /// Build a combined Axum router with REST routes for all proto services.
 ///
 /// Each service is generic - pass your concrete implementations as `Arc<T>`.
-pub fn all_rest_routes<S0, S1, S2, S3, S4>(
-    consensus_service: Arc<S0>,
-    data_service: Arc<S1>,
-    reward_service: Arc<S2>,
-    status_service: Arc<S3>,
-    token_service: Arc<S4>,
+pub fn all_rest_routes<S0, S1, S2>(
+    reward_service: Arc<S0>,
+    status_service: Arc<S1>,
+    token_service: Arc<S2>,
 ) -> Router
 where
-    S0: crate::proto::consensus_service_server::ConsensusService + Send + Sync + 'static,
-    S1: crate::proto::data_service_server::DataService + Send + Sync + 'static,
-    S2: crate::proto::reward_service_server::RewardService + Send + Sync + 'static,
-    S3: crate::proto::status_service_server::StatusService + Send + Sync + 'static,
-    S4: crate::proto::token_service_server::TokenService + Send + Sync + 'static,
+    S0: crate::proto::reward_service_server::RewardService + Send + Sync + 'static,
+    S1: crate::proto::status_service_server::StatusService + Send + Sync + 'static,
+    S2: crate::proto::token_service_server::TokenService + Send + Sync + 'static,
 {
     Router::new()
-        .merge(consensus_service_rest_router(consensus_service))
-        .merge(data_service_rest_router(data_service))
         .merge(reward_service_rest_router(reward_service))
         .merge(status_service_rest_router(status_service))
         .merge(token_service_rest_router(token_service))

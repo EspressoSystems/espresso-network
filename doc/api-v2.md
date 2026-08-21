@@ -18,6 +18,16 @@ One implementation of a tonic service trait therefore serves both transports: `s
 `*_rest_router` functions under `/v2/...`, and `serve_tonic` registers the tonic servers plus gRPC reflection (the
 descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
 
+## What is served today
+
+Only `StatusService` and `TokenService` are implemented and mounted, so v2 serves nine endpoints under `/v2/status/...`
+and `/v2/token/...`. Everything else those clients need is still on v1.
+
+`rewards.proto` is deliberately kept but not wired up: no `RewardService` implementation exists, and `serve_axum` does
+not merge its router. Because the build globs the proto directory, its messages and service stubs are still generated
+and its five endpoints still appear in the OpenAPI document, where they will 404 until someone implements the trait and
+merges `rest::reward_service_rest_router`. Treat those paths as a published intent, not a contract.
+
 ## Adding an endpoint to an existing service
 
 1. Define the rpc in the service's proto file, for example `crates/espresso/api/proto/v2/status.proto`:
@@ -53,29 +63,26 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
 
    Commit the changes to `src/generated/` together with the proto change.
 
-3. Implement the new trait method. The build now fails everywhere the trait is implemented, which is the complete to-do
-   list:
-   - `crates/espresso/node/src/api/state.rs`: the real implementation. Follow the local pattern: a `fetch_*` method
-     returning internal types (`anyhow::Result`), a `serialize_*` conversion to the proto type, and a thin tonic method
-     composing them. Map errors with `to_status` so `AvailabilityError::NotFound` becomes gRPC `not_found` / HTTP 404.
-   - `crates/espresso/api/examples/test_api.rs`: a mock returning fixed data.
+3. Implement the new trait method in `crates/espresso/node/src/api/state.rs`. The build fails there until you do, which
+   is the complete to-do list. Follow the local pattern: a `fetch_*` method returning internal types (`anyhow::Result`),
+   a `serialize_*` conversion to the proto type, and a thin tonic method composing them. Map errors with `to_status` so
+   `AvailabilityError::NotFound` becomes gRPC `not_found` / HTTP 404.
 
 4. Verify:
 
    ```sh
    nix develop --command cargo test -p espresso-api
-   nix develop --command cargo run -p espresso-api --example test_api
-   curl http://localhost:5001/v2/status/uptime
    ```
 
-   gRPC can be exercised with `grpcurl` against the tonic port; reflection is enabled.
+   For a request against a running node, start one with SQL storage (v2 is only mounted by `serve_axum`) and curl the
+   route. gRPC can be exercised with `grpcurl` against the tonic port; reflection is enabled.
 
 ## Adding a new service
 
 1. Create `crates/espresso/api/proto/v2/<name>.proto` (the build globs the directory, so no build script change) with
    the service, its rpcs, and their `google.api.http` options.
 2. Regenerate as above.
-3. Implement the generated `<name>_service_server::<Name>Service` trait on `NodeApiStateImpl` and `TestApi`.
+3. Implement the generated `<name>_service_server::<Name>Service` trait on `NodeApiStateImpl`.
 4. Wire the transports in `crates/espresso/api/src/lib.rs`: add the trait bound to `serve_axum` and `serve_tonic`, merge
    `rest::<name>_service_rest_router(...)` in `serve_axum`, and `add_service` the tonic server in `serve_tonic`.
 
@@ -86,18 +93,19 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
 - Never edit `src/generated/` by hand; change the protos and rebuild.
 - Only GET bindings are used so far. The generator (`tonic-rest-build`) supports other methods, but decide the
   request-body mapping deliberately before introducing the first one.
-- v2 addresses resources with flat query parameters, not v1-style path parameters. Reward balance is
-  `/v2/rewards/balance?address=0x...` where v1 had `/v1/reward-state-v2/reward-balance/{height}/{address}`: one static
-  route per rpc, with every field of the request message as a query parameter. This is deliberate. The route lives in
-  the proto annotation and stays a constant, so adding a parameter is an additive proto change rather than a new URL
-  shape, and a single binding serves both gRPC and REST.
+- v2 addresses resources with flat query parameters, not v1-style path parameters: one static route per rpc, with every
+  field of the request message as a query parameter. Reward balance is spelled `/v2/rewards/balance?address=0x...` in
+  `rewards.proto` where v1 had `/v1/reward-state-v2/reward-balance/{height}/{address}`. This is deliberate. The route
+  lives in the proto annotation and stays a constant, so adding a parameter is an additive proto change rather than a
+  new URL shape, and a single binding serves both gRPC and REST. Every endpoint served today is parameterless, so this
+  rule currently binds future endpoints rather than existing ones.
 - Consequently request messages must stay flat: scalars and `optional` scalars only. The generated handlers extract with
   `axum::extract::Query`, and `serde_urlencoded` cannot decode repeated or nested message fields, so the first request
   message with a `repeated` or message-typed field silently fails to deserialize. Structured input needs the POST body
   mapping decided above, not a nested request message on a GET.
-- Unknown fields are rejected rather than ignored, in both JSON bodies and query strings: `?blck=5` is a 400 instead of
-  a defaulted `block`. This is pbjson's default and is worth keeping, since a typo'd parameter would otherwise return a
-  confidently wrong response.
+- Unknown fields are rejected rather than ignored, in both JSON bodies and query strings: any query parameter on a
+  parameterless endpoint is a 400. This is pbjson's default and is worth keeping, since a typo'd parameter would
+  otherwise return a confidently wrong response.
 - JSON is canonical protoJSON (generated by pbjson): lowerCamelCase field names, 64-bit integers as decimal strings,
   bytes as base64, oneofs flattened into the parent object, defaults omitted. Standard protobuf tooling can generate
   compatible clients. Deserialization accepts both camelCase and the original proto field names, so query parameters

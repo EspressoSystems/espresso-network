@@ -33,9 +33,6 @@ use tower::Layer;
 // Re-exports
 pub use self::axum::{create_router_v1, routes};
 use self::proto::{
-    consensus_service_server::{ConsensusService, ConsensusServiceServer},
-    data_service_server::{DataService, DataServiceServer},
-    reward_service_server::{RewardService, RewardServiceServer},
     status_service_server::{StatusService, StatusServiceServer},
     token_service_server::{TokenService, TokenServiceServer},
 };
@@ -82,9 +79,6 @@ where
         + v1::ExplorerApi
         + v1::TokenApi
         + v1::DatabaseApi
-        + RewardService
-        + DataService
-        + ConsensusService
         + StatusService
         + TokenService
         + Clone
@@ -120,9 +114,6 @@ where
     }
     let state = std::sync::Arc::new(state);
     let router = axum::finish_v1_docs(router)
-        .merge(rest::reward_service_rest_router(state.clone()))
-        .merge(rest::data_service_rest_router(state.clone()))
-        .merge(rest::consensus_service_rest_router(state.clone()))
         .merge(rest::status_service_rest_router(state.clone()))
         .merge(rest::token_service_rest_router(state))
         .merge(axum::router_v2_docs());
@@ -341,15 +332,12 @@ fn apply_connection_limit(router: ::axum::Router, limit: usize) -> ::axum::Route
 /// Start Tonic gRPC server
 pub async fn serve_tonic<S>(port: u16, state: S) -> anyhow::Result<()>
 where
-    S: RewardService + DataService + ConsensusService + StatusService + TokenService + Clone,
+    S: StatusService + TokenService + Clone,
 {
     use ::tonic::transport::Server;
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
 
-    let reward_service = RewardServiceServer::new(state.clone());
-    let data_service = DataServiceServer::new(state.clone());
-    let consensus_service = ConsensusServiceServer::new(state.clone());
     let status_service = StatusServiceServer::new(state.clone());
     let token_service = TokenServiceServer::new(state);
 
@@ -360,9 +348,6 @@ where
 
     tracing::info!("gRPC server listening on {}", addr);
     Server::builder()
-        .add_service(reward_service)
-        .add_service(data_service)
-        .add_service(consensus_service)
         .add_service(status_service)
         .add_service(token_service)
         .add_service(reflection_service)
