@@ -37,6 +37,7 @@ use hotshot_types::{
     traits::node_implementation::NodeType,
     vid::avidm_gf2::{AvidmGf2Param, init_avidm_gf2_param},
 };
+pub(crate) use reconstruct::matches_commitment;
 pub use reconstruct::{
     VidReconstructError, VidReconstructErrorKind, VidReconstructOutput, VidReconstructor,
 };

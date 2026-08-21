@@ -54,8 +54,8 @@ use crate::{
     state::{HeaderRequest, StateEntry, StateManager, StateManagerOutput},
     storage::{NewProtocolStorage, Storage},
     vid::{
-        VidDisperseRequest, VidDisperser, VidFragmentAccumulator, VidReconstructor,
-        expected_vid_param,
+        VidDisperseRequest, VidDisperser, VidFragmentAccumulator, VidReconstructOutput,
+        VidReconstructor, expected_vid_param,
     },
     vote::{EpochRootTally, SimpleTally, VoteCollector},
 };
@@ -597,40 +597,18 @@ where
                 },
                 Some(item) = self.vid_reconstructor.next() => match item {
                     Ok(out) => {
-                        self.server.retain(out.view, out.payload_commitment, &out.payload);
-                        self.payload_txn_bytes.insert(out.view, out.payload.txn_bytes());
-                        self.block_builder.on_block_reconstructed(out.tx_commitments);
-                        self.storage.append_da(
-                            out.view,
-                            out.epoch,
-                            out.payload.clone(),
-                            out.metadata.clone(),
-                            VidCommitment::V2(out.payload_commitment),
-                        );
-                        if let Some(proposal) = self.consensus.proposal_at(out.view) {
-                            // Only pair the payload with the header if the proposal commits to it
-                            if proposal.block_header.payload_commitment()
-                                == VidCommitment::V2(out.payload_commitment)
-                            {
-                                self.outbox.push_back(ConsensusOutput::BlockPayloadReconstructed {
-                                    view: out.view,
-                                    header: proposal.block_header.clone(),
-                                    payload: out.payload,
-                                });
-                            } else {
-                                warn!(
-                                    view = %out.view,
-                                    header = %proposal.block_header.payload_commitment(),
-                                    reconstructed = %out.payload_commitment,
-                                    "reconstructed payload commitment does not match proposal header"
-                                );
-                            }
-                        }
-                        return Ok(ConsensusInput::BlockReconstructed(out.view, out.payload_commitment))
+                        return Ok(self.on_payload_obtained(out))
                     }
                     Err(err) => {
                         return Err(CoordinatorError::regular(err).context("vid reconstruction"))
                     }
+                },
+                Some(out) = self.fetcher.next() => {
+                    if self.consensus.is_reconstructed(out.view, out.payload_commitment) {
+                        continue
+                    }
+                    self.vid_reconstructor.retire_view(out.view);
+                    return Ok(self.on_payload_obtained(out))
                 },
                 Some(stored) = self.storage.next() => {
                     return Ok(ConsensusInput::Stored(stored))
@@ -659,6 +637,43 @@ where
                 }
             }
         }
+    }
+
+    fn on_payload_obtained(&mut self, out: VidReconstructOutput<T>) -> ConsensusInput<T> {
+        self.server
+            .retain(out.view, out.payload_commitment, &out.payload);
+        self.payload_txn_bytes
+            .insert(out.view, out.payload.txn_bytes());
+        self.block_builder
+            .on_block_reconstructed(out.tx_commitments);
+        self.storage.append_da(
+            out.view,
+            out.epoch,
+            out.payload.clone(),
+            out.metadata.clone(),
+            VidCommitment::V2(out.payload_commitment),
+        );
+        if let Some(proposal) = self.consensus.proposal_at(out.view) {
+            // Only pair the payload with the header if the proposal commits to it
+            if proposal.block_header.payload_commitment()
+                == VidCommitment::V2(out.payload_commitment)
+            {
+                self.outbox
+                    .push_back(ConsensusOutput::BlockPayloadReconstructed {
+                        view: out.view,
+                        header: proposal.block_header.clone(),
+                        payload: out.payload,
+                    });
+            } else {
+                warn!(
+                    view = %out.view,
+                    header = %proposal.block_header.payload_commitment(),
+                    obtained = %out.payload_commitment,
+                    "payload commitment does not match proposal header"
+                );
+            }
+        }
+        ConsensusInput::BlockReconstructed(out.view, out.payload_commitment)
     }
 
     pub fn apply_consensus(&mut self, input: ConsensusInput<T>) {
@@ -1440,14 +1455,12 @@ where
             MessageType::PayloadFetch(PayloadFetchMessage::Response(response)) => {
                 let view = response.view;
                 debug!(%node, %sender, %view, "received payload fetch response");
-                if let Some(fetched) = self.fetcher.accept_response(
+                self.fetcher.accept_response(
                     response,
                     &message.sender,
                     &self.consensus,
                     &self.membership_coordinator,
-                ) {
-                    self.vid_reconstructor.handle_fetched_payload(fetched);
-                }
+                );
                 None
             },
             MessageType::External(data) => {
@@ -1871,6 +1884,14 @@ where
                 self.payload_txn_bytes = self.payload_txn_bytes.split_off(&(decide_floor + 1));
             },
             GcScope::Timeout(view) => {
+                // A view holding a certificate is likely to decide soon, so
+                // keep its payload and the shares that would rebuild it. The
+                // same guard keeps `Consensus::gc` from dropping its half.
+                if self.consensus.cert1_at(view).is_some()
+                    || self.consensus.cert2_at(view).is_some()
+                {
+                    return Ok(());
+                }
                 self.vid_reconstructor.retire_view(view);
                 let vc = VidCommitment2::default();
                 self.da_payloads
