@@ -185,10 +185,18 @@ structure Outcome where
 /--
 Feed a trace to the machine, checking containment after every step.
 
-A `collect` step in the trace prunes the machine too, which is the only way the
-`GcSpec` side of the specification gets exercised: pruning is where the machine
-could lose something it still owes, and the comparison would then show it
-falling behind a recording that kept going.
+A `collect` step prunes the machine, and is the only route to the machine's own
+`gc`. Nothing produces one from a real run: the implementation prunes inside a
+consensus step, and `NewProtocolDiff.Trace` gives the reason a bare collection is
+left out — a trace carries inputs and outputs but never state, so a `.collect`
+could not be checked against `GcSpec` in any case, and omitting it keeps the
+machine holding every mark, which is the stricter comparison.
+
+So this arm is for hand-written traces, and for a recorder that one day says
+where its pruning happened. `GcSpec` itself is not left unverified by that: it is
+part of what `Impl.conforms` proves about the machine. What the replay does not
+do is check the *implementation's* pruning, and that is a limit of the trace
+rather than of this function.
 -/
 def replay (cfg : Config) (leader : ViewNumber → Option PubKey) (node : PubKey)
     (trace : List Event) : Outcome :=

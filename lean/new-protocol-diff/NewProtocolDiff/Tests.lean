@@ -190,6 +190,17 @@ private def voteStep (identity : BlockHash) : Event :=
 /-- info: "DIVERGED after 3 steps\n  step 3: the recording voted1 in view 1, the machine did not" -/
 #guard_msgs in #eval run (opening ++ [voteStep ⟨999⟩])
 
+/-! ### Collecting
+
+A collection prunes the machine and must leave what the run still owes. Nothing
+records one — see `NewProtocolDiff.Trace` — so without a trace written here the
+`collect` arm of `replay` would be reached by nothing at all, and could rot
+unnoticed.
+-/
+
+/-- info: "OK: 5 steps, marks agree exactly" -/
+#guard_msgs in #eval run (opening ++ [.collect, voteStep ⟨3⟩])
+
 /-! ## A boundary of the model is not a failure
 
 A header whose payload commitment is `null` is a block from before a version

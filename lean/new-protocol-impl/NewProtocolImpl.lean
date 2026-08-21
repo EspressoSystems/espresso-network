@@ -110,7 +110,7 @@ obligations rather than chosen, and they are the ones to read first:
   so where the lock ends up has to be settled before either round tests it.
 * **Each round scans its own table, once.** A vote is owed only where a proposal
   was admitted, a decide only where a `Cert2` landed, a proposal only where a
-  header was headers. Scanning those keys is a complete search, and one pass over
+  header was built. Scanning those keys is a complete search, and one pass over
   them suffices, since an attempt can only retire opportunities and never create
   one. That is what makes the eagerness argument for progress available: nothing
   is left owed at a step boundary.
