@@ -25,12 +25,13 @@
 //!
 //! The payload fetch is the exit. Once the network has moved past a certified
 //! view this node cannot act on, consensus asks for what is missing, and the
-//! coordinator turns the request into a fetch — the whole payload from one
-//! randomly chosen peer when it fits a message, VID share retransmissions
-//! from a random stake-weighted subset when it does not; never a broadcast —
-//! and the verified data comes back as an ordinary `BlockReconstructed`. The
-//! first test walks the stall up to the emitted request; the second walks
-//! through the exit.
+//! coordinator turns the request into a fetch: the whole payload, unicast by
+//! one peer drawn from the view's committee, never a broadcast. A peer that
+//! does not hold it, or whose payload does not fit a message, says so and the
+//! next round draws someone else. The bytes are believed only if they
+//! re-commit to what our own proposal names, and then come back as an
+//! ordinary `BlockReconstructed`. The first test walks the stall up to the
+//! emitted request; the second walks through the exit.
 
 use hotshot::types::BLSPubKey;
 use hotshot_example_types::{block_types::TestBlockHeader, node_types::TEST_VERSIONS};
@@ -375,8 +376,7 @@ async fn one_missed_payload_stalls_certification() {
 /// reconstruct. The network times out view 2 and the node joins — the moment
 /// the network has provably moved past a certified view it cannot act on,
 /// and the moment consensus emits the `RequestMissingPayload` the coordinator
-/// turns into a fetch — whole from one peer or share by share, sized by this
-/// node's own share's dispersal data; either way it ends in the
+/// turns into a fetch of the whole payload from one peer, which ends in the
 /// `BlockReconstructed` input this test injects. View 3's proposal — parented
 /// at view 1 on the timeout certificate, the shape every view of the stall
 /// takes — arrives and is refused like before.
