@@ -78,6 +78,17 @@ impl<T: NodeType> Server<T> {
         }
     }
 
+    /// The block we can serve for `view`, if we hold it.
+    ///
+    /// `latest` is not what the lock rule promises to keep, but while it is
+    /// still held it answers just as well.
+    fn retained(&self, view: ViewNumber) -> Option<&RetainedBlock> {
+        [self.locked.as_ref(), self.latest.as_ref()]
+            .into_iter()
+            .flatten()
+            .find(|block| block.view == view)
+    }
+
     /// Unicast the retained block to `sender` if that is what `request` asks for.
     pub fn handle_request(
         &self,
@@ -93,13 +104,7 @@ impl<T: NodeType> Server<T> {
             return Ok(());
         }
 
-        // `latest` is not what the lock rule promises to keep, but while it is
-        // still held it answers just as well.
-        let Some(block) = [self.locked.as_ref(), self.latest.as_ref()]
-            .into_iter()
-            .flatten()
-            .find(|block| block.view == view)
-        else {
+        let Some(block) = self.retained(view) else {
             debug!(%view, %sender, "payload request for a block we do not retain");
             return self.refuse(view, Unavailable::NotHeld, sender, slot, network);
         };
@@ -154,5 +159,87 @@ impl<T: NodeType> Server<T> {
         network
             .unicast(slot, sender, &message)
             .map_err(|err| CoordinatorError::from(err).context("unicast payload refusal"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use hotshot::types::BLSPubKey;
+    use hotshot_example_types::{
+        block_types::{TestBlockPayload, TestTransaction},
+        node_types::TestTypes,
+    };
+    use hotshot_types::{
+        data::{VidCommitment2, ViewNumber},
+        traits::signature_key::SignatureKey,
+    };
+
+    use super::Server;
+
+    fn server() -> Server<TestTypes> {
+        Server::new(BLSPubKey::generated_from_seed_indexed([0; 32], 0).0)
+    }
+
+    fn payload() -> TestBlockPayload {
+        TestBlockPayload {
+            transactions: vec![TestTransaction::new(vec![1, 2, 3])],
+        }
+    }
+
+    fn view(n: u64) -> ViewNumber {
+        ViewNumber::new(n)
+    }
+
+    /// A freshly obtained block is not what we serve yet: the lock has not
+    /// reached it, and a peer asking is asking for the view we are locked at.
+    #[test]
+    fn retaining_a_block_does_not_make_it_the_locked_one() {
+        let mut server = server();
+        server.retain(view(1), VidCommitment2::default(), &payload());
+
+        assert!(server.locked.is_none());
+        assert_eq!(server.latest.as_ref().map(|b| b.view), Some(view(1)));
+    }
+
+    /// Locking the view a candidate belongs to is what promotes it.
+    #[test]
+    fn locking_the_candidates_view_promotes_it() {
+        let mut server = server();
+        server.retain(view(1), VidCommitment2::default(), &payload());
+        server.lock_moved(view(1));
+
+        assert_eq!(server.locked.as_ref().map(|b| b.view), Some(view(1)));
+        assert!(server.latest.is_none());
+    }
+
+    /// Both slots answer while both are held: the block we are locked at, and
+    /// the one waiting for its lock.
+    #[test]
+    fn either_slot_serves_its_view() {
+        let mut server = server();
+        server.retain(view(1), VidCommitment2::default(), &payload());
+        server.lock_moved(view(1));
+        server.retain(view(2), VidCommitment2::default(), &payload());
+
+        assert_eq!(server.retained(view(1)).map(|b| b.view), Some(view(1)));
+        assert_eq!(server.retained(view(2)).map(|b| b.view), Some(view(2)));
+        assert!(server.retained(view(3)).is_none());
+    }
+
+    /// The documented gap: two reconstructions before the certificate for the
+    /// first one arrives leave nothing to promote, so the lock moves on while
+    /// the served block stays where it was.
+    #[test]
+    fn a_lock_that_skips_a_candidate_promotes_nothing() {
+        let mut server = server();
+        server.retain(view(1), VidCommitment2::default(), &payload());
+        server.lock_moved(view(1));
+        server.retain(view(2), VidCommitment2::default(), &payload());
+        server.retain(view(3), VidCommitment2::default(), &payload());
+        server.lock_moved(view(2));
+
+        assert_eq!(server.locked.as_ref().map(|b| b.view), Some(view(1)));
+        assert_eq!(server.latest.as_ref().map(|b| b.view), Some(view(3)));
+        assert!(server.retained(view(2)).is_none());
     }
 }

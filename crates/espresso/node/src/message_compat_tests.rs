@@ -34,8 +34,8 @@ use hotshot_example_types::{node_types::TEST_VERSIONS, storage_types::TestStorag
 use hotshot_new_protocol::message::{
     BlockMessage, CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, DedupManifest,
     EpochChangeMessage, FetchRequest, Message as NewProtocolMessage, MessageType,
-    ProposalFetchMessage, ProposalMessage, TimeoutVoteMessage, TransactionMessage, Unchecked,
-    Validated, Vote1,
+    PayloadFetchMessage, PayloadFetchResponse, ProposalFetchMessage, ProposalMessage,
+    TimeoutVoteMessage, TransactionMessage, Unavailable, Unchecked, Validated, Vote1,
 };
 use hotshot_types::{
     PeerConfig,
@@ -602,6 +602,7 @@ async fn reference_new_protocol_messages() -> Vec<NewProtocolMessage<SeqTypes, V
         0,
     )
     .unwrap();
+    let payload_commitment = vid_share.payload_commitment;
     let vid_fragment = AvidmGf2DisperseShareFragment::<SeqTypes> {
         view_number: view,
         epoch: Some(epoch),
@@ -680,6 +681,22 @@ async fn reference_new_protocol_messages() -> Vec<NewProtocolMessage<SeqTypes, V
                 FetchRequest::new(view, sender, &priv_key).unwrap(),
             )),
             MessageType::ProposalFetch(ProposalFetchMessage::Response(Box::new(signed_proposal))),
+            MessageType::PayloadFetch(PayloadFetchMessage::Request(
+                FetchRequest::new(view, sender, &priv_key).unwrap(),
+            )),
+            MessageType::PayloadFetch(PayloadFetchMessage::Response(PayloadFetchResponse {
+                view,
+                payload_commitment,
+                payload: vec![1, 2, 3],
+            })),
+            MessageType::PayloadFetch(PayloadFetchMessage::Unavailable {
+                view,
+                reason: Unavailable::NotHeld,
+            }),
+            MessageType::PayloadFetch(PayloadFetchMessage::Unavailable {
+                view,
+                reason: Unavailable::TooLarge,
+            }),
             // External payloads bypass this envelope on the wire, so this entry pins only the
             // encoding of the variant itself.
             MessageType::External(vec![1, 2, 3]),
