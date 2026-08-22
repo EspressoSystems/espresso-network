@@ -454,6 +454,15 @@ async fn fetched_payload_restores_certification() {
     harness
         .apply(ConsensusInput::TimeoutOneHonest(ViewNumber::new(2), epoch))
         .await;
+    // The certificate carries the node into view 3, which is what puts view 1
+    // two views behind the frontier: up to that point a missed share broadcast
+    // could still arrive from a peer's queue, and the fetch holds off.
+    harness
+        .apply(ConsensusInput::TimeoutCertificate(ValidCert::new(
+            timeout_cert_2.clone(),
+            epoch,
+        )))
+        .await;
     harness
         .apply(ConsensusInput::Proposal(
             test_data.views[2].leader_public_key,

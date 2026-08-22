@@ -43,7 +43,13 @@ pub struct Server<T: NodeType> {
     /// The most recently reconstructed payload, promoted by
     /// [`Self::lock_moved`] once we lock the view it belongs to.
     latest: Option<RetainedBlock>,
+    /// The last view the network timed out on, which is what makes us willing
+    /// to serve at all.
+    timed_out: Option<ViewNumber>,
 }
+
+/// How long after a timeout this node keeps answering requests.
+const SERVE_AFTER_TIMEOUT: u64 = 3;
 
 impl<T: NodeType> Server<T> {
     pub fn new(public_key: T::SignatureKey) -> Self {
@@ -51,6 +57,7 @@ impl<T: NodeType> Server<T> {
             public_key,
             locked: None,
             latest: None,
+            timed_out: None,
         }
     }
 
@@ -81,6 +88,11 @@ impl<T: NodeType> Server<T> {
         }
     }
 
+    /// Note that the network timed out on `view`.
+    pub fn view_timed_out(&mut self, view: ViewNumber) {
+        self.timed_out = self.timed_out.max(Some(view));
+    }
+
     /// The block we can serve for `view`, if we hold it.
     ///
     /// `latest` is not what the lock rule promises to keep, but while it is
@@ -101,6 +113,14 @@ impl<T: NodeType> Server<T> {
         network: &Sender<T>,
     ) -> Result<(), CoordinatorError> {
         let view = request.view_number();
+
+        // Silence rather than a refusal: a refusal sends the requester to
+        // another peer at once, which is the last thing to do when the reason
+        // we will not answer has nothing to do with which peer was asked.
+        if !self.serving(slot) {
+            debug!(%view, %sender, "payload request outside a timeout window");
+            return Ok(());
+        }
 
         let Some(block) = self.retained(view) else {
             debug!(%view, %sender, "payload request for a block we do not retain");
@@ -164,6 +184,12 @@ impl<T: NodeType> Server<T> {
         network
             .unicast(slot, sender, &message)
             .map_err(|err| CoordinatorError::from(err).context("payload response"))
+    }
+
+    /// Whether a payload fetch is plausible right now.
+    fn serving(&self, current_view: ViewNumber) -> bool {
+        self.timed_out
+            .is_some_and(|view| current_view <= view + SERVE_AFTER_TIMEOUT)
     }
 }
 

@@ -1022,6 +1022,7 @@ where
             },
             ConsensusOutput::ViewTimedOut(view) => {
                 debug!(%node, %view, "view timed out");
+                self.server.view_timed_out(view);
                 let epoch = self
                     .consensus
                     .current_epoch()

@@ -202,6 +202,13 @@ type UnpairedVidShares<T> = BTreeMap<(ViewNumber, VidCommitment2), VidDisperseSh
 /// decided view, letting a late-broadcast Cert2 decide an older gap view.
 pub(crate) const DECIDE_BUFFER: u64 = 20;
 
+/// Views behind the frontier a payload must be before it is worth fetching.
+///
+/// Entering a view garbage collects the transport's queue two views back
+/// (`GcScope::Local`), so this is the point at which a peer can no longer
+/// retransmit the share broadcasts we missed.
+const GC_MARGIN_VIEWS: u64 = 2;
+
 // The decide buffer retains the proposals the VID reconstructor reads.
 const _: () = assert!(DECIDE_BUFFER >= VID_RECONSTRUCT_GC_MARGIN);
 
@@ -1250,18 +1257,30 @@ impl<T: NodeType> Consensus<T> {
     /// Every proposal we could vote for is parented at the quorum's lock, so
     /// reconstructing that one view unblocks us and lets the lock skip the
     /// views below it, which is also why peers keep no older payload.
-    fn request_missing_payloads(
-        &self,
-        timeout: ViewNumber,
-        outbox: &mut Outbox<ConsensusOutput<T>>,
-    ) {
+    /// Ask for the payload of the highest certified view we are stuck behind.
+    ///
+    /// Views at or below the lock cannot be what blocks us: safety pins the
+    /// justify_qc of any proposal we may still vote for at or above the lock.
+    ///
+    /// The upper bound is what the transport can no longer deliver. Peers keep
+    /// un-ACKed sends until they enter the view after next, so up to
+    /// `current_view - 2` a missing share broadcast may still arrive on its
+    /// own, and fetching would race it for a whole payload. Past that line
+    /// only a fetch can produce the block.
+    ///
+    /// Within the range only the highest missing payload is worth asking for.
+    /// Every proposal we could vote for is parented at the quorum's lock, so
+    /// reconstructing that one view unblocks us and lets the lock skip the
+    /// views below it, which is also why peers keep no older payload.
+    fn request_missing_payloads(&self, outbox: &mut Outbox<ConsensusOutput<T>>) {
         let start = self.locked_view().unwrap_or_else(ViewNumber::genesis) + 1;
+        let end = ViewNumber::from(self.current_view.saturating_sub(GC_MARGIN_VIEWS));
 
-        if start > timeout {
+        if start > end {
             return;
         }
 
-        for (&view, cert) in self.certs.range(start..=timeout).rev() {
+        for (&view, cert) in self.certs.range(start..=end).rev() {
             // Take the commitment from the proposal the certificate certifies,
             // never from an equivocating sibling at the same view.
             let Some(proposal) = self.proposals.get(&view) else {
@@ -1501,7 +1520,7 @@ impl<T: NodeType> Consensus<T> {
             }
         }
         self.timeout_view = max(self.timeout_view, view);
-        self.request_missing_payloads(view, outbox);
+        self.request_missing_payloads(outbox);
         let data = TimeoutData2 {
             view,
             epoch: Some(epoch),
@@ -1546,9 +1565,9 @@ impl<T: NodeType> Consensus<T> {
         }
         let epoch = certificate.epoch();
         self.timeout_certs.insert(view, certificate.cert().clone());
-        self.request_missing_payloads(certificate.view_number(), outbox);
         self.current_view = self.current_view.max(view);
         self.current_epoch = Some(epoch);
+        self.request_missing_payloads(outbox);
         outbox.push_back(ConsensusOutput::ViewChanged(view, epoch));
         outbox.push_back(ConsensusOutput::ViewTimedOut(certificate.view_number()));
         outbox.push_back(ConsensusOutput::SendTimeoutCertificate(
