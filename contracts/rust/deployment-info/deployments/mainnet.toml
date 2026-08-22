@@ -1,4 +1,4 @@
-# fetched at block 24940938 (2026-04-23T06:46:11Z)
+# fetched at block 25808803 (2026-08-22T06:10:47Z)
 network = "mainnet"
 
 [multisigs.espresso_labs]
@@ -9,7 +9,7 @@ owners = [
     "0x1584f9d22ba5c56ac0bb6496c447a95a721eb709",
     "0x3f3662e0b1d652cb6ddcd2dc31dfe5d762bbd3f2",
     "0xf4b7676d9ec86d2011ab87855424219a97deb40c",
-    "0x811caa1c5c96bfe0ab12b2eeb542994b0c368627",
+    "0x5e768dd03bd821703ef825e057434de85913eeac",
 ]
 threshold = 3
 
@@ -126,6 +126,6 @@ status = "deployed"
 address = "0xcef474d372b5b09defe2af187bf17338dc704451"
 default_admin_address = "0x67861f1ef4db9bcaddd8c5e86db92386dd4ec700"
 default_admin_name = "ops_timelock"
-version = "2.0.0"
+version = "3.0.0"
 pauser_address = "0x5e37b8038615ef3d75cf28b5982c4cbf065401fb"
 pauser_name = "serviceco"
