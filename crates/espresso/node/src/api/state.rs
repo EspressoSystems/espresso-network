@@ -115,10 +115,6 @@ impl<D> NodeApiStateImpl<D> {
     }
 }
 
-// ============================================================================
-// RewardApiV1 implementation (internal types, no proto conversion)
-// ============================================================================
-
 #[async_trait]
 impl<D> v1::RewardApi for NodeApiStateImpl<D>
 where
@@ -443,10 +439,6 @@ where
             .map_err(classify_query_error)
     }
 }
-
-// ============================================================================
-// v1::AvailabilityApi implementation
-// ============================================================================
 
 #[async_trait]
 impl<D> v1::AvailabilityApi for NodeApiStateImpl<D>
@@ -798,10 +790,6 @@ where
         Ok(espresso_types::StateCertQueryDataV2(cert))
     }
 }
-
-// ============================================================================
-// v1::HotShotAvailabilityApi implementation
-// ============================================================================
 
 fn not_found(msg: impl Into<String>) -> anyhow::Error {
     AvailabilityError::NotFound(msg.into()).into()
@@ -1438,10 +1426,6 @@ where
     }
 }
 
-// ============================================================================
-// v1::StatusApi implementation
-// ============================================================================
-
 #[async_trait]
 impl<D> v1::StatusApi for NodeApiStateImpl<D>
 where
@@ -1484,10 +1468,6 @@ where
         Ok(self.data_source.node_public_keys().await)
     }
 }
-
-// ============================================================================
-// v2 StatusService implementation
-// ============================================================================
 
 #[tonic::async_trait]
 impl<D> proto::status_service_server::StatusService for NodeApiStateImpl<D>
@@ -1548,10 +1528,6 @@ where
     }
 }
 
-// ============================================================================
-// v1::ConfigApi implementation
-// ============================================================================
-
 #[async_trait]
 impl<D> v1::ConfigApi for NodeApiStateImpl<D>
 where
@@ -1579,10 +1555,6 @@ where
         })
     }
 }
-
-// ============================================================================
-// v1::NodeApi implementation
-// ============================================================================
 
 #[async_trait]
 impl<D> v1::NodeApi for NodeApiStateImpl<D>
@@ -1802,10 +1774,6 @@ fn node_window_limit() -> usize {
     hotshot_query_service::node::Options::default().window_limit
 }
 
-// ============================================================================
-// v1::CatchupApi implementation
-// ============================================================================
-
 #[async_trait]
 impl<D> v1::CatchupApi for NodeApiStateImpl<D>
 where
@@ -1971,10 +1939,6 @@ where
     }
 }
 
-// ============================================================================
-// v1::SubmitApi implementation
-// ============================================================================
-
 #[async_trait]
 impl<D> v1::SubmitApi for NodeApiStateImpl<D>
 where
@@ -2027,10 +1991,6 @@ where
         <Self as SubmitDataSource<N, P>>::submit(self, tx).await
     }
 }
-
-// ============================================================================
-// v1::StateSignatureApi implementation
-// ============================================================================
 
 #[async_trait]
 impl<D> v1::StateSignatureApi for NodeApiStateImpl<D>
@@ -2087,10 +2047,6 @@ where
         <Self as StateSignatureDataSource<N>>::get_state_signature(self, height).await
     }
 }
-
-// ============================================================================
-// v1::ExplorerApi implementation
-// ============================================================================
 
 #[async_trait]
 impl<D> v1::ExplorerApi for NodeApiStateImpl<D>
@@ -2226,10 +2182,6 @@ where
             .map_err(|err| anyhow::anyhow!("{err}"))
     }
 }
-
-// ============================================================================
-// v1::LightClientApi implementation
-// ============================================================================
 
 #[async_trait]
 impl<D> v1::LightClientApi for NodeApiStateImpl<D>
@@ -2539,10 +2491,6 @@ fn lc_leaf_proof_chain_limit() -> usize {
     hotshot_query_service::availability::Options::default().small_object_range_limit
 }
 
-// ============================================================================
-// v1::HotShotEventsApi implementation
-// ============================================================================
-
 #[async_trait]
 impl<D> v1::HotShotEventsApi for NodeApiStateImpl<D>
 where
@@ -2563,10 +2511,6 @@ where
         Ok(Box::pin(stream))
     }
 }
-
-// ============================================================================
-// v1::TokenApi implementation
-// ============================================================================
 
 #[async_trait]
 impl<D> v1::TokenApi for NodeApiStateImpl<D>
@@ -2636,10 +2580,6 @@ where
     ))
 }
 
-// ============================================================================
-// v2 TokenService implementation
-// ============================================================================
-
 #[tonic::async_trait]
 impl<D> proto::token_service_server::TokenService for NodeApiStateImpl<D>
 where
@@ -2706,10 +2646,6 @@ where
         ))
     }
 }
-
-// ============================================================================
-// v1::DatabaseApi implementation
-// ============================================================================
 
 #[async_trait]
 impl<D> v1::DatabaseApi for NodeApiStateImpl<D>

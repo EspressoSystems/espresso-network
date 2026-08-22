@@ -317,15 +317,6 @@ pub mod v1 {
     pub const SWAGGER_ROUTE: &str = "/v1";
     pub const SCALAR_ROUTE: &str = "/v1/scalar";
 
-    // ---------------------------------------------------------------------
-    // Path builders
-    //
-    // For each constant above, generate a function that returns the path
-    // with `{placeholder}` segments substituted. Use these instead of
-    // hand-formatted URL strings so that the route definition and the
-    // request site stay in sync.
-    // ---------------------------------------------------------------------
-
     // Reward state v2
     path_fn!(
         reward_claim_input,
