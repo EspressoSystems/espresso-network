@@ -57,26 +57,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let descriptor_bytes = fs::read(out_dir.join("descriptor.bin"))?;
 
-    // Generate canonical protoJSON Serialize/Deserialize impls for the message types:
-    // lowerCamelCase names, 64-bit integers as decimal strings, bytes as base64, oneofs
-    // flattened, defaults omitted. Unknown fields are rejected, so a misspelled query
-    // parameter is a 400 rather than a silently wrong response.
+    // Unknown fields are rejected, so a misspelled query parameter is a 400 rather than a
+    // silently wrong response. `tests/proto_json.rs` pins the encoding itself.
     pbjson_build::Builder::new()
         .register_descriptors(&descriptor_bytes)?
         .out_dir(&src_dir)
         .build(&[&format!(".{PACKAGE}")])?;
 
-    // Generate Axum REST handlers for every service with google.api.http annotations.
-    // The proto file is the single definition site: path and method come from the
-    // annotation, request/response types from the rpc signature, and the handlers call
-    // through the tonic service traits generated above.
+    // Routes come from the `google.api.http` annotations, so an endpoint's URL is only ever
+    // edited in the proto.
     let rest_config = tonic_rest_build::RestCodegenConfig::new().package(PACKAGE, "proto");
     let rest_code = tonic_rest_build::generate(&descriptor_bytes, &rest_config)?;
     // Repo convention: no em dashes in committed text.
     let rest_code = rest_code.replace('\u{2014}', "-");
     write_if_changed(src_dir.join("espresso.api.v2.rest.rs"), &rest_code)?;
 
-    // Document the same routes for HTTP clients, from the same descriptor set.
     let spec = openapi::generate(&descriptor_bytes)?;
     write_if_changed(
         src_dir.join("espresso.api.v2.openapi.json"),

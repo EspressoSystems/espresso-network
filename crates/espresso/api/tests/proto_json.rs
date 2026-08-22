@@ -65,7 +65,6 @@ fn deserialize_accepts_both_field_name_forms_and_quoted_numbers() {
     assert_eq!(snake, camel);
     assert_eq!(snake.eth_account.as_deref(), Some("0xabc"));
 
-    // 64-bit integers are accepted both as JSON numbers and as decimal strings.
     let quoted: proto::BlockHeightResponse =
         serde_json::from_value(json!({"height": "7"})).unwrap();
     let bare: proto::BlockHeightResponse = serde_json::from_value(json!({"height": 7})).unwrap();
@@ -84,6 +83,5 @@ fn empty_query_string_decodes_parameterless_requests() {
 
 #[test]
 fn unknown_query_parameters_are_rejected() {
-    // A misspelled or stale parameter is an error rather than a silently wrong response.
     serde_urlencoded::from_str::<proto::GetBlockHeightRequest>("height=5").unwrap_err();
 }

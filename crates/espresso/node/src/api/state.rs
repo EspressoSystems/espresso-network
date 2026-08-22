@@ -1,7 +1,5 @@
-//! API trait implementations for espresso-node
-//!
-//! This module provides implementations for the v1 API traits (internal types) and the v2
-//! tonic service traits (proto types), backed by the same data source.
+//! Implementations of the v1 API traits and the v2 tonic service traits, both reading the one
+//! data source this type wraps.
 
 use std::{
     ops::{Bound, Deref},
@@ -320,7 +318,6 @@ where
             .parse()
             .map_err(|_| bad_request(format!("invalid ethereum address: {}", address)))?;
 
-        // Load and return the latest reward account proof directly (internal type)
         let proof = self
             .data_source
             .load_latest_reward_account_proof_v2(addr.into())
@@ -348,7 +345,6 @@ where
             )));
         }
 
-        // Load the merkle tree at the given height
         let tree_bytes = self.data_source.load_tree(height).await.map_err(|err| {
             not_found(format!(
                 "failed to load reward tree at height {}: {}",
@@ -356,7 +352,6 @@ where
             ))
         })?;
 
-        // Deserialize the tree into internal format
         let tree_data: InternalRewardTreeData =
             bincode::deserialize(&tree_bytes).map_err(|err| {
                 not_found(format!(
@@ -368,7 +363,6 @@ where
         let offset_usize = offset as usize;
         let limit_usize = limit as usize;
 
-        // Validate offset is within bounds
         if offset_usize > tree_data.balances.len() {
             return Err(not_found(format!("offset {} out of bounds", offset)));
         }
@@ -1492,8 +1486,7 @@ where
 }
 
 // ============================================================================
-// v2 StatusService implementation (generated tonic trait; REST comes from the
-// google.api.http annotations in status.proto)
+// v2 StatusService implementation
 // ============================================================================
 
 #[tonic::async_trait]
@@ -2645,8 +2638,7 @@ where
 }
 
 // ============================================================================
-// v2 TokenService implementation (generated tonic trait; REST comes from the
-// generated router). Delegates to the v1::TokenApi implementation above.
+// v2 TokenService implementation
 // ============================================================================
 
 #[tonic::async_trait]

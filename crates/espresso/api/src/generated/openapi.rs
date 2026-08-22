@@ -3,10 +3,8 @@
 //! Unlike its neighbors, this file is a hand-written `build.rs` module (the generator,
 //! not an output); it produces `espresso.api.v2.openapi.json` alongside it.
 //!
-//! The document mirrors the protoJSON encoding produced by pbjson: lowerCamelCase
-//! property names, 64-bit integers as decimal strings, bytes as base64, oneofs
-//! flattened into the parent object, defaults omitted. Routes and HTTP methods come
-//! from the `google.api.http` annotations; descriptions come from proto comments.
+//! Schemas have to mirror what the pbjson impls actually produce, which is why the field
+//! encodings here are spelled out rather than derived from the proto types.
 
 use std::collections::{BTreeMap, BTreeSet};
 

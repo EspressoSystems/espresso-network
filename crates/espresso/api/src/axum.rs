@@ -146,8 +146,7 @@ fn decode_body<T: serde::de::DeserializeOwned>(
 }
 
 /// Classify an `anyhow::Error` from an availability handler into the appropriate `ApiError`
-/// variant, sharing [`crate::error::classify`] with the v2 adapter so the two transports agree on
-/// which failures are 404s.
+/// variant.
 pub(crate) fn classify_availability_error(err: anyhow::Error) -> ApiError {
     match crate::error::classify(&err) {
         ErrorKind::NotFound => ApiError::NotFound(err),
@@ -3442,12 +3441,9 @@ pub(crate) async fn v2_error_envelope(req: Request, next: axum::middleware::Next
     tonic_rest::RestError::from(tonic::Status::new(code, message)).into_response()
 }
 
-/// Serve the v2 API documentation: the OpenAPI document generated from the protos at build time,
-/// plus the two UIs that render it.
-///
-/// The document is generated rather than derived from the router (`finish_v1_docs`'s approach),
-/// because the protos, not the handlers, are the definition site: they carry the request and
-/// response schemas and the doc comments.
+/// Serve the v2 API documentation: the build-time OpenAPI document and the two UIs that render
+/// it. Unlike [`finish_v1_docs`], nothing here inspects the router, so a route that is generated
+/// but never mounted still appears in the document.
 pub fn router_v2_docs() -> Router {
     const SPEC: &str = include_str!("generated/espresso.api.v2.openapi.json");
 
@@ -4745,8 +4741,6 @@ mod tests {
             mounted.into_iter().chain(unimplemented).collect();
         assert_eq!(documented, expected);
 
-        // Every unimplemented operation says so, so a generated client cannot silently ship a
-        // method that always 404s.
         for path in unimplemented {
             assert_eq!(
                 spec["paths"][path]["get"]["deprecated"],
