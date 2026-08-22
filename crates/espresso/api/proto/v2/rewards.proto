@@ -2,19 +2,7 @@ syntax = "proto3";
 
 package espresso.api.v2;
 
-//=============================================================================
-// Common Types
-//=============================================================================
-
-// U256 value encoded as hex string
-message U256 {
-  // Hex-encoded value with "0x" prefix (e.g., "0x32fe2fedb43f62b4ee2")
-  string value = 1;
-}
-
-//=============================================================================
-// Reward Claim Input (for L1 contract interaction)
-//=============================================================================
+import "google/api/annotations.proto";
 
 // Reward claim input for contract submission
 // Contains all data needed to call the claimRewards function on the L1 contract
@@ -36,10 +24,6 @@ message GetRewardClaimInputRequest {
   string address = 1;
 }
 
-//=============================================================================
-// Reward Balance Queries
-//=============================================================================
-
 // Reward balance for an address
 message RewardBalance {
   // Balance amount in wei (decimal string)
@@ -51,10 +35,6 @@ message GetRewardBalanceRequest {
   // Ethereum address to query
   string address = 1;
 }
-
-//=============================================================================
-// Reward Account Proofs
-//=============================================================================
 
 // Complete reward account query data with balance and merkle proof
 message RewardAccountQueryDataV2 {
@@ -101,14 +81,8 @@ message MerkleNode {
   }
 }
 
-// Dummy message for flattening Empty
-message EmptyData {
-}
-
 // Empty node variant (no data)
 message Empty {
-  // Dummy field for serde flatten compatibility (must be a message type)
-  EmptyData dummy = 1;
 }
 
 // Leaf node containing account and reward amount
@@ -138,16 +112,11 @@ message ForgottenSubtree {
   string value = 1;
 }
 
-
 // Request to get reward account proof (at latest finalized height)
 message GetRewardAccountProofRequest {
   // Ethereum address to query
   string address = 1;
 }
-
-//=============================================================================
-// Bulk Reward Queries
-//=============================================================================
 
 // Single reward amount entry
 message RewardAmount {
@@ -175,13 +144,9 @@ message GetRewardBalancesRequest {
   // Starting offset for pagination
   uint64 offset = 2;
 
-  // Maximum number of results (limit ≤ 10000)
+  // Maximum number of results (limit <= 10000)
   uint64 limit = 3;
 }
-
-//=============================================================================
-// Merkle Tree Snapshots
-//=============================================================================
 
 // Raw RewardMerkleTreeV2 snapshot data
 message RewardMerkleTreeV2Data {
@@ -195,24 +160,30 @@ message GetRewardMerkleTreeRequest {
   uint64 height = 1;
 }
 
-//=============================================================================
-// gRPC Service Definition
-//=============================================================================
-
 // gRPC service for reward state queries
 service RewardService {
   // Get reward claim input for L1 contract submission (at latest finalized height)
-  rpc GetRewardClaimInput(GetRewardClaimInputRequest) returns (RewardClaimInput);
+  rpc GetRewardClaimInput(GetRewardClaimInputRequest) returns (RewardClaimInput) {
+    option (google.api.http) = {get: "/v2/rewards/claim-input"};
+  }
 
   // Get reward balance (at latest finalized height)
-  rpc GetRewardBalance(GetRewardBalanceRequest) returns (RewardBalance);
+  rpc GetRewardBalance(GetRewardBalanceRequest) returns (RewardBalance) {
+    option (google.api.http) = {get: "/v2/rewards/balance"};
+  }
 
   // Get Merkle proof for reward account (at latest finalized height)
-  rpc GetRewardAccountProof(GetRewardAccountProofRequest) returns (RewardAccountQueryDataV2);
+  rpc GetRewardAccountProof(GetRewardAccountProofRequest) returns (RewardAccountQueryDataV2) {
+    option (google.api.http) = {get: "/v2/rewards/proof"};
+  }
 
   // Get paginated list of reward balances at a specific height
-  rpc GetRewardBalances(GetRewardBalancesRequest) returns (RewardBalances);
+  rpc GetRewardBalances(GetRewardBalancesRequest) returns (RewardBalances) {
+    option (google.api.http) = {get: "/v2/rewards/balances"};
+  }
 
   // Get raw RewardMerkleTreeV2 snapshot at a specific height
-  rpc GetRewardMerkleTreeV2(GetRewardMerkleTreeRequest) returns (RewardMerkleTreeV2Data);
+  rpc GetRewardMerkleTreeV2(GetRewardMerkleTreeRequest) returns (RewardMerkleTreeV2Data) {
+    option (google.api.http) = {get: "/v2/rewards/tree"};
+  }
 }
