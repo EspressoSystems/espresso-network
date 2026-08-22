@@ -3,8 +3,8 @@
 //! Unlike its neighbors, this file is a hand-written `build.rs` module (the generator,
 //! not an output); it produces `espresso.api.v2.openapi.json` alongside it.
 //!
-//! Schemas have to mirror what the pbjson impls actually produce, which is why the field
-//! encodings here are spelled out rather than derived from the proto types.
+//! The schemas must track what the pbjson impls emit, which is not a proto type's natural JSON:
+//! a `uint64` is a decimal string in a body but plain digits in a query parameter.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -59,10 +59,10 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
             messages.insert(format!(".{PACKAGE}.{name}"), (message, comments.clone(), i));
         }
     }
-    schemas.insert("Error".to_string(), error_schema());
 
     let mut paths: BTreeMap<String, BTreeMap<String, Value>> = BTreeMap::new();
     let mut operation_ids = BTreeSet::new();
+    let mut referenced = BTreeSet::new();
     for file in &package_files {
         let comments = Comments::new(file);
         for (si, service) in file.service.iter().enumerate() {
@@ -94,9 +94,15 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
                 {
                     return Err(format!("duplicate route: {verb} {path}").into());
                 }
+                reachable_schemas(method.output_type(), &messages, &mut referenced);
             }
         }
     }
+
+    // Request messages are query parameters, not bodies, so nothing can `$ref` them. Publishing
+    // them anyway leaves a client generator with a type per endpoint that it never uses.
+    schemas.retain(|name, _| referenced.contains(name));
+    schemas.insert("Error".to_string(), error_schema());
 
     Ok(json!({
         "openapi": "3.0.3",
@@ -112,6 +118,23 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
         "paths": paths,
         "components": { "schemas": schemas },
     }))
+}
+
+/// Records `type_name` and every message reachable from its fields, which is the set a client
+/// needs to deserialize a response.
+fn reachable_schemas(type_name: &str, messages: &Messages, out: &mut BTreeSet<String>) {
+    let short = short_name(type_name);
+    if !out.insert(short.to_string()) {
+        return;
+    }
+    let Some((message, ..)) = messages.get(type_name) else {
+        return;
+    };
+    for field in &message.field {
+        if field.r#type() == Type::Message {
+            reachable_schemas(field.type_name(), messages, out);
+        }
+    }
 }
 
 /// `(service, method)` -> `(http verb, route)` from the `google.api.http` annotations.
@@ -180,8 +203,7 @@ fn operation(
     Ok(op)
 }
 
-/// Request message fields become query parameters, named after the proto field
-/// (the deserializer also accepts the camelCase form).
+/// Request message fields become query parameters, named after the proto field.
 fn request_parameters(
     input_type: &str,
     messages: &Messages,
@@ -250,7 +272,7 @@ fn message_schema(message: &DescriptorProto, comments: &Comments, index: usize) 
     schema
 }
 
-/// protoJSON encoding of a message field, as produced by the pbjson impls.
+/// The encoding pbjson emits for this field in a response body.
 fn field_schema(field: &FieldDescriptorProto) -> Value {
     let inner = match field.r#type() {
         Type::Message => schema_ref(field.type_name()),
@@ -293,8 +315,11 @@ fn scalar_schema(ty: Type) -> Value {
 }
 
 fn schema_ref(type_name: &str) -> Value {
-    let short = type_name.rsplit('.').next().unwrap_or(type_name);
-    json!({ "$ref": format!("#/components/schemas/{short}") })
+    json!({ "$ref": format!("#/components/schemas/{}", short_name(type_name)) })
+}
+
+fn short_name(type_name: &str) -> &str {
+    type_name.rsplit('.').next().unwrap_or(type_name)
 }
 
 /// The Google API error model emitted by `tonic_rest::RestError`.

@@ -2,15 +2,15 @@ syntax = "proto3";
 
 package espresso.api.v2;
 
-// Common types for Espresso API v2
-// This file is intentionally minimal - domain-specific types live in their own proto files
+// Types shared by more than one v2 service. Kept minimal on purpose: domain types live in the
+// proto of the service that owns them.
 
-// BLS public key (typically 48 bytes)
 message BLSPublicKey {
+  // TaggedBase64, e.g. "BLS_VER_KEY~AAA..."
   string key = 1;
 }
 
-// Schnorr public key (typically 32 bytes)
 message SchnorrPublicKey {
+  // TaggedBase64, e.g. "SCHNORR_VER_KEY~AAA..."
   string key = 1;
 }

@@ -1512,9 +1512,8 @@ where
         let rate = <Self as v1::StatusApi>::success_rate(self)
             .await
             .map_err(to_status)?;
-        // The rate is decided-blocks over views, so a node that has not seen a view yet computes
-        // 0/0. protoJSON has no encoding for a non-finite double, `serde_json` would write it as
-        // `null`, and the generated deserializer rejects that, so report no views as no successes.
+        // A node that has not seen a view computes 0/0. protoJSON cannot encode a non-finite
+        // double, `serde_json` would write `null`, and the generated deserializer rejects that.
         let rate = if rate.is_finite() { rate } else { 0. };
         Ok(tonic::Response::new(proto::SuccessRateResponse { rate }))
     }

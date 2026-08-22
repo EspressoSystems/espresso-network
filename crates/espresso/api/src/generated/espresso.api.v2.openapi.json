@@ -2,16 +2,15 @@
   "components": {
     "schemas": {
       "BLSPublicKey": {
-        "description": "BLS public key (typically 48 bytes)",
         "properties": {
           "key": {
+            "description": "TaggedBase64, e.g. \"BLS_VER_KEY~AAA...\"",
             "type": "string"
           }
         },
         "type": "object"
       },
       "BlockHeightResponse": {
-        "description": "Latest block height response",
         "properties": {
           "height": {
             "description": "Height of the latest decided block",
@@ -39,7 +38,6 @@
         "type": "object"
       },
       "CirculatingSupplyEthereumResponse": {
-        "description": "Circulating supply on Ethereum L1 response",
         "properties": {
           "amount": {
             "description": "Circulating supply of ESP tokens on Ethereum L1, in ESP (decimal string):\ntotal_supply_l1 - locked",
@@ -49,7 +47,6 @@
         "type": "object"
       },
       "CirculatingSupplyResponse": {
-        "description": "Circulating supply response",
         "properties": {
           "amount": {
             "description": "Circulating supply in ESP (decimal string): initial_supply + reward_distributed -\nlocked, following the mainnet unlock schedule",
@@ -93,113 +90,6 @@
             "type": "string"
           }
         },
-        "type": "object"
-      },
-      "GetBlockHeightRequest": {
-        "description": "Request for the latest block height (no parameters)",
-        "properties": {},
-        "type": "object"
-      },
-      "GetCirculatingSupplyEthereumRequest": {
-        "description": "Request for the circulating supply on Ethereum L1 (no parameters)",
-        "properties": {},
-        "type": "object"
-      },
-      "GetCirculatingSupplyRequest": {
-        "description": "Request for the circulating supply (no parameters)",
-        "properties": {},
-        "type": "object"
-      },
-      "GetNodeKeysRequest": {
-        "description": "Request for the node's public keys (no parameters)",
-        "properties": {},
-        "type": "object"
-      },
-      "GetRewardAccountProofRequest": {
-        "description": "Request to get reward account proof (at latest finalized height)",
-        "properties": {
-          "address": {
-            "description": "Ethereum address to query",
-            "type": "string"
-          }
-        },
-        "type": "object"
-      },
-      "GetRewardBalanceRequest": {
-        "description": "Request to get reward balance (at latest finalized height)",
-        "properties": {
-          "address": {
-            "description": "Ethereum address to query",
-            "type": "string"
-          }
-        },
-        "type": "object"
-      },
-      "GetRewardBalancesRequest": {
-        "description": "Request to get paginated reward balances",
-        "properties": {
-          "height": {
-            "description": "Block height to query",
-            "format": "uint64",
-            "type": "string"
-          },
-          "limit": {
-            "description": "Maximum number of results (limit <= 10000)",
-            "format": "uint64",
-            "type": "string"
-          },
-          "offset": {
-            "description": "Starting offset for pagination",
-            "format": "uint64",
-            "type": "string"
-          }
-        },
-        "type": "object"
-      },
-      "GetRewardClaimInputRequest": {
-        "description": "Request to get reward claim input (at latest finalized height)",
-        "properties": {
-          "address": {
-            "description": "Ethereum address to query rewards for (hex format, e.g. \"0x1234...\")",
-            "type": "string"
-          }
-        },
-        "type": "object"
-      },
-      "GetRewardMerkleTreeRequest": {
-        "description": "Request to get reward merkle tree snapshot",
-        "properties": {
-          "height": {
-            "description": "Block height to query",
-            "format": "uint64",
-            "type": "string"
-          }
-        },
-        "type": "object"
-      },
-      "GetSuccessRateRequest": {
-        "description": "Request for the view success rate (no parameters)",
-        "properties": {},
-        "type": "object"
-      },
-      "GetTimeSinceLastDecideRequest": {
-        "description": "Request for the time since the last decide (no parameters)",
-        "properties": {},
-        "type": "object"
-      },
-      "GetTotalIssuedSupplyRequest": {
-        "description": "Request for the total issued supply (no parameters)",
-        "properties": {},
-        "type": "object"
-      },
-      "GetTotalMintedSupplyRequest": {
-        "description": "Request for the total minted supply (no parameters)",
-        "properties": {},
-        "type": "object"
-      },
-      "GetTotalRewardDistributedRequest": {
-        "description": "Request for the total reward distributed (no parameters)",
-        "properties": {},
         "type": "object"
       },
       "Leaf": {
@@ -276,27 +166,16 @@
         "type": "object"
       },
       "NodeKeysResponse": {
-        "description": "Node public keys response",
         "properties": {
           "consensusKey": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/BLSPublicKey"
-              }
-            ],
-            "description": "BLS consensus key"
+            "$ref": "#/components/schemas/BLSPublicKey"
           },
           "ethAccount": {
             "description": "Ethereum account associated with this node, 0x-prefixed hex",
             "type": "string"
           },
           "stateVerKey": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/SchnorrPublicKey"
-              }
-            ],
-            "description": "Schnorr state verification key"
+            "$ref": "#/components/schemas/SchnorrPublicKey"
           },
           "x25519Key": {
             "description": "X25519 public key for cliquenet, TaggedBase64",
@@ -435,26 +314,24 @@
         "type": "object"
       },
       "SchnorrPublicKey": {
-        "description": "Schnorr public key (typically 32 bytes)",
         "properties": {
           "key": {
+            "description": "TaggedBase64, e.g. \"SCHNORR_VER_KEY~AAA...\"",
             "type": "string"
           }
         },
         "type": "object"
       },
       "SuccessRateResponse": {
-        "description": "View success rate response",
         "properties": {
           "rate": {
-            "description": "Fraction of views in which this node decided a block",
+            "description": "Fraction of views in which this node decided a block. Node-local, not a network measure.\nZero before the node has seen any view, so a fresh node reports zero rather than an\nundefined ratio.",
             "type": "number"
           }
         },
         "type": "object"
       },
       "TimeSinceLastDecideResponse": {
-        "description": "Time since last decide response",
         "properties": {
           "seconds": {
             "description": "Seconds elapsed since this node last decided a block",
@@ -465,7 +342,6 @@
         "type": "object"
       },
       "TotalIssuedSupplyResponse": {
-        "description": "Total issued supply response",
         "properties": {
           "amount": {
             "description": "Total issued supply in ESP (decimal string): initial_supply +\ntotal_reward_distributed, including rewards not yet claimed on Ethereum",
@@ -475,7 +351,6 @@
         "type": "object"
       },
       "TotalMintedSupplyResponse": {
-        "description": "Total minted supply response",
         "properties": {
           "amount": {
             "description": "Total supply of the ESP token minted on Ethereum, in ESP (decimal string);\nexcludes unclaimed rewards",
@@ -485,7 +360,6 @@
         "type": "object"
       },
       "TotalRewardDistributedResponse": {
-        "description": "Total reward distributed response",
         "properties": {
           "amount": {
             "description": "Total rewards distributed by consensus, in ESP (decimal string), including rewards\nnot yet claimed on Ethereum",

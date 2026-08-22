@@ -5,52 +5,43 @@ package espresso.api.v2;
 import "google/api/annotations.proto";
 import "v2/common.proto";
 
-// Request for the latest block height (no parameters)
 message GetBlockHeightRequest {}
 
-// Latest block height response
 message BlockHeightResponse {
   // Height of the latest decided block
   uint64 height = 1;
 }
 
-// Request for the view success rate (no parameters)
 message GetSuccessRateRequest {}
 
-// View success rate response
 message SuccessRateResponse {
-  // Fraction of views in which this node decided a block
+  // Fraction of views in which this node decided a block. Node-local, not a network measure.
+  // Zero before the node has seen any view, so a fresh node reports zero rather than an
+  // undefined ratio.
   double rate = 1;
 }
 
-// Request for the time since the last decide (no parameters)
 message GetTimeSinceLastDecideRequest {}
 
-// Time since last decide response
 message TimeSinceLastDecideResponse {
   // Seconds elapsed since this node last decided a block
   uint64 seconds = 1;
 }
 
-// Request for the node's public keys (no parameters)
 message GetNodeKeysRequest {}
 
-// Node public keys response
 message NodeKeysResponse {
   // Ethereum account associated with this node, 0x-prefixed hex
   optional string eth_account = 1;
 
-  // BLS consensus key
   BLSPublicKey consensus_key = 2;
 
-  // Schnorr state verification key
   SchnorrPublicKey state_ver_key = 3;
 
   // X25519 public key for cliquenet, TaggedBase64
   optional string x25519_key = 4;
 }
 
-// gRPC service for node status queries
 service StatusService {
   // Get the height of the latest decided block
   rpc GetBlockHeight(GetBlockHeightRequest) returns (BlockHeightResponse) {

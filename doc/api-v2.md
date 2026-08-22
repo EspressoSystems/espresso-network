@@ -54,8 +54,13 @@ operations are marked `deprecated` with a summary saying they are not implemente
    }
    ```
 
-   Request message fields become HTTP query parameters. Give every message and rpc a comment; they flow into the
-   generated docs.
+   Request message fields become HTTP query parameters.
+
+   Proto comments are published API surface: an rpc comment becomes the operation summary, and a field comment becomes
+   the parameter or property description. So comment an rpc, and comment a field whose units, encoding, or zero value a
+   caller cannot guess (`in ESP (decimal string)`, `TaggedBase64`, `zero before the node has seen a view`). Do not
+   comment a message to restate its own name: `// Latest block height response` above `message BlockHeightResponse` only
+   adds a line to keep in sync.
 
 2. Regenerate:
 
