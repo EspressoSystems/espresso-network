@@ -44,8 +44,9 @@ use crate::{
     logging::KeyPrefix,
     message::{
         self, BlockMessage, CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, Message,
-        MessageType, OpaqueMessage, PayloadFetchMessage, Proposal, ProposalFetchMessage,
-        ProposalMessage, TimeoutOneHonest, TransactionMessage, Unchecked, Validated, Vote2,
+        MessageType, OpaqueMessage, Proposal, ProposalFetchMessage, ProposalMessage,
+        TimeoutOneHonest, TransactionMessage, Unchecked, Validated, Vote2,
+        payload::PayloadFetchMessage,
     },
     network::Cliquenet,
     outbox::Outbox,
@@ -761,15 +762,17 @@ where
                 payload_commitment,
             } => {
                 debug!(%node, %view, "request missing payload");
-                if let Err(err) = self.fetcher.request(
+                if let Some((peer, message)) = self.fetcher.request(
                     view,
                     payload_commitment,
                     Retry::NewRound,
                     &self.consensus,
                     &self.membership_coordinator,
-                    self.network.sender(),
                 ) {
-                    warn!(%node, %view, %err, "failed to request missing payload");
+                    self.network
+                        .sender()
+                        .unicast(self.consensus.current_view(), &peer, &message)
+                        .map_err(|e| CoordinatorError::from(e).context("payload request"))?;
                 }
             },
             ConsensusOutput::RequestBlockAndHeader(request) => {
@@ -1439,9 +1442,9 @@ where
                 self.maybe_validate_fetched_proposal(*proposal);
                 None
             },
-            MessageType::PayloadFetch(PayloadFetchMessage::Request(request)) => {
+            MessageType::PayloadFetch(PayloadFetchMessage::Req(request)) => {
                 let view = request.view_number();
-                debug!(%node, %sender, %view, "recv payload fetch request");
+                debug!(%node, %sender, %view, "received payload fetch request");
                 if let Err(err) = self.server.handle_request(
                     &request,
                     &message.sender,
@@ -1452,35 +1455,34 @@ where
                 }
                 None
             },
-            MessageType::PayloadFetch(PayloadFetchMessage::Unavailable { view, reason }) => {
-                debug!(%node, %sender, %view, ?reason, "recv payload unavailable");
-                if self.fetcher.accept_refusal(view, reason, &message.sender)
-                    && let Some(proposal) = self.consensus.proposal_at(view)
-                    && let VidCommitment::V2(payload_commitment) =
-                        proposal.block_header.payload_commitment()
-                    && !self.consensus.is_reconstructed(view, payload_commitment)
-                    && let Err(err) = self.fetcher.request(
-                        view,
-                        payload_commitment,
-                        Retry::SameRound,
-                        &self.consensus,
-                        &self.membership_coordinator,
-                        self.network.sender(),
-                    )
-                {
-                    warn!(%node, %view, %err, "failed to ask another peer for the payload");
-                }
-                None
-            },
-            MessageType::PayloadFetch(PayloadFetchMessage::Response(response)) => {
-                let view = response.view;
+            MessageType::PayloadFetch(PayloadFetchMessage::Res(response)) => {
+                let view = response.view_number();
                 debug!(%node, %sender, %view, "received payload fetch response");
-                self.fetcher.accept_response(
+                let retry = self.fetcher.response(
                     response,
                     &message.sender,
                     &self.consensus,
                     &self.membership_coordinator,
                 );
+                if retry
+                    && let Some(proposal) = self.consensus.proposal_at(view)
+                    && let VidCommitment::V2(commit) = proposal.block_header.payload_commitment()
+                    && !self.consensus.is_reconstructed(view, commit)
+                    && let Some((peer, message)) = self.fetcher.request(
+                        view,
+                        commit,
+                        Retry::SameRound,
+                        &self.consensus,
+                        &self.membership_coordinator,
+                    )
+                    && let Err(err) = self.network.sender().unicast(
+                        self.consensus.current_view(),
+                        &peer,
+                        &message,
+                    )
+                {
+                    warn!(%node, %sender, %view, %err, "failed to send payload request");
+                }
                 None
             },
             MessageType::External(data) => {
@@ -1828,10 +1830,13 @@ where
 
     /// Broadcast a signed proposal fetch request for `view` to all peers.
     fn broadcast_proposal_fetch(&mut self, view: ViewNumber) -> Result<(), CoordinatorError> {
-        let request = self.consensus.signed_fetch_request(view).map_err(|err| {
-            let err = format!("failed to sign proposal request: {err}");
-            CoordinatorError::regular(err).context("sign proposal request")
-        })?;
+        let request = self
+            .consensus
+            .signed_proposal_fetch_request(view)
+            .map_err(|err| {
+                let err = format!("failed to sign proposal request: {err}");
+                CoordinatorError::regular(err).context("sign proposal request")
+            })?;
         let message = Message {
             sender: self.public_key.clone(),
             message_type: MessageType::ProposalFetch(ProposalFetchMessage::Request(request)),

@@ -45,8 +45,8 @@ use crate::{
     helpers::proposal_commitment,
     logging::KeyPrefix,
     message::{
-        CatchupEvidence, Certificate1, Certificate2, EpochChangeMessage, FetchRequest, Proposal,
-        ProposalMessage, Validated, Vote1, Vote2,
+        CatchupEvidence, Certificate1, Certificate2, EpochChangeMessage, Proposal,
+        ProposalFetchRequest, ProposalMessage, Validated, Vote1, Vote2,
     },
     outbox::Outbox,
     state::{StateRequest, StateResponse},
@@ -610,11 +610,11 @@ impl<T: NodeType> Consensus<T> {
             .to_proposal(&self.private_key)
     }
 
-    pub fn signed_fetch_request(
+    pub fn signed_proposal_fetch_request(
         &self,
         view: ViewNumber,
-    ) -> Result<FetchRequest<T>, <T::SignatureKey as SignatureKey>::SignError> {
-        FetchRequest::new(view, self.public_key.clone(), &self.private_key)
+    ) -> Result<ProposalFetchRequest<T>, <T::SignatureKey as SignatureKey>::SignError> {
+        ProposalFetchRequest::new(view, self.public_key.clone(), &self.private_key)
     }
 
     /// Return the Certificate2 stored at the given view, if any.

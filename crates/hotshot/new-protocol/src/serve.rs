@@ -10,7 +10,10 @@ use tracing::{debug, warn};
 use crate::{
     coordinator::error::CoordinatorError,
     message::{
-        FetchRequest, Message, MessageType, PayloadFetchMessage, PayloadFetchResponse, Unavailable,
+        Message, MessageType,
+        payload::{
+            PayloadFetchMessage, PayloadFetchRequest, PayloadFetchResponse, PayloadResponseBody,
+        },
     },
     network::{NetworkError, Sender},
 };
@@ -92,21 +95,22 @@ impl<T: NodeType> Server<T> {
     /// Unicast the retained block to `sender` if that is what `request` asks for.
     pub fn handle_request(
         &self,
-        request: &FetchRequest<T>,
+        request: &PayloadFetchRequest,
         sender: &T::SignatureKey,
         slot: ViewNumber,
         network: &Sender<T>,
     ) -> Result<(), CoordinatorError> {
         let view = request.view_number();
 
-        if !request.validate_sender(sender) {
-            warn!(%view, %sender, "ignoring payload request with an invalid signature");
-            return Ok(());
-        }
-
         let Some(block) = self.retained(view) else {
             debug!(%view, %sender, "payload request for a block we do not retain");
-            return self.refuse(view, Unavailable::NotHeld, sender, slot, network);
+            return self.respond(
+                view,
+                PayloadResponseBody::NotAvailable,
+                sender,
+                slot,
+                network,
+            );
         };
 
         if block.payload.len() >= network.max_message_size().get() {
@@ -117,48 +121,49 @@ impl<T: NodeType> Server<T> {
                 limit = %network.max_message_size(),
                 "retained payload does not fit a message"
             );
-            return self.refuse(view, Unavailable::TooLarge, sender, slot, network);
+            return self.respond(view, PayloadResponseBody::TooLarge, sender, slot, network);
         }
 
         let message = Message {
             sender: self.public_key.clone(),
-            message_type: MessageType::PayloadFetch(PayloadFetchMessage::Response(
-                PayloadFetchResponse {
-                    view,
-                    payload_commitment: block.payload_commitment,
-                    payload: block.payload.to_vec(),
-                },
-            )),
+            message_type: {
+                let body = PayloadResponseBody::Payload {
+                    commitment: block.payload_commitment,
+                    data: block.payload.to_vec(),
+                };
+                let res = PayloadFetchResponse::new(view, body);
+                MessageType::PayloadFetch(PayloadFetchMessage::Res(res))
+            },
         };
 
         match network.unicast(slot, sender, &message) {
             Ok(()) => Ok(()),
             Err(NetworkError::Cliquenet(cliquenet::NetworkError::MessageTooLarge)) => {
                 warn!(%view, %sender, "payload response rejected as too large");
-                self.refuse(view, Unavailable::TooLarge, sender, slot, network)
+                self.respond(view, PayloadResponseBody::TooLarge, sender, slot, network)
             },
-            Err(err) => Err(CoordinatorError::from(err).context("unicast payload response")),
+            Err(err) => Err(CoordinatorError::from(err).context("payload response")),
         }
     }
 
-    fn refuse(
+    fn respond(
         &self,
         view: ViewNumber,
-        reason: Unavailable,
+        body: PayloadResponseBody,
         sender: &T::SignatureKey,
         slot: ViewNumber,
         network: &Sender<T>,
     ) -> Result<(), CoordinatorError> {
         let message = Message {
             sender: self.public_key.clone(),
-            message_type: MessageType::PayloadFetch(PayloadFetchMessage::Unavailable {
-                view,
-                reason,
-            }),
+            message_type: {
+                let res = PayloadFetchResponse::new(view, body);
+                MessageType::PayloadFetch(PayloadFetchMessage::Res(res))
+            },
         };
         network
             .unicast(slot, sender, &message)
-            .map_err(|err| CoordinatorError::from(err).context("unicast payload refusal"))
+            .map_err(|err| CoordinatorError::from(err).context("payload response"))
     }
 }
 

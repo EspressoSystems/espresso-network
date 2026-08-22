@@ -1,10 +1,12 @@
+pub mod fetch;
+pub mod payload;
+
 use std::marker::PhantomData;
 
 use committable::{Commitment, Committable};
 use hotshot_types::{
     data::{
-        EpochNumber, VidCommitment2, VidDisperseShare2, ViewNumber,
-        vid_disperse::AvidmGf2DisperseShareFragment,
+        EpochNumber, VidDisperseShare2, ViewNumber, vid_disperse::AvidmGf2DisperseShareFragment,
     },
     message::Proposal as SignedProposal,
     request_response::ProposalRequestPayload,
@@ -25,7 +27,7 @@ pub use hotshot_types::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::helpers::proposal_commitment;
+use crate::{helpers::proposal_commitment, message::payload::PayloadFetchMessage};
 
 pub type Vote2<T> = SimpleVote<T, Vote2Data<T>>;
 pub type TimeoutCertificate<T> = SimpleCertificate<T, TimeoutData2, SuccessThreshold>;
@@ -243,12 +245,12 @@ impl<T: NodeType, S> HasEpoch for EpochChangeMessage<T, S> {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
-pub struct FetchRequest<T: NodeType> {
+pub struct ProposalFetchRequest<T: NodeType> {
     pub payload: ProposalRequestPayload<T>,
     pub signature: <T::SignatureKey as SignatureKey>::PureAssembledSignatureType,
 }
 
-impl<T: NodeType> FetchRequest<T> {
+impl<T: NodeType> ProposalFetchRequest<T> {
     pub fn new(
         view_number: ViewNumber,
         key: T::SignatureKey,
@@ -268,7 +270,7 @@ impl<T: NodeType> FetchRequest<T> {
     }
 }
 
-impl<T: NodeType> HasViewNumber for FetchRequest<T> {
+impl<T: NodeType> HasViewNumber for ProposalFetchRequest<T> {
     fn view_number(&self) -> ViewNumber {
         self.payload.view_number
     }
@@ -333,7 +335,7 @@ impl<T: NodeType, S> HasViewNumber for ConsensusMessage<T, S> {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
 pub enum ProposalFetchMessage<T: NodeType> {
-    Request(FetchRequest<T>),
+    Request(ProposalFetchRequest<T>),
     Response(Box<SignedProposal<T, Proposal<T>>>),
 }
 
@@ -344,48 +346,6 @@ impl<T: NodeType> HasViewNumber for ProposalFetchMessage<T> {
             Self::Response(proposal) => proposal.data.view_number(),
         }
     }
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
-#[serde(bound(deserialize = ""))]
-pub enum PayloadFetchMessage<T: NodeType> {
-    Request(FetchRequest<T>),
-    Response(PayloadFetchResponse),
-    Unavailable {
-        view: ViewNumber,
-        reason: Unavailable,
-    },
-}
-
-/// Why a peer will not send a payload it was asked for.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Hash, Eq)]
-pub enum Unavailable {
-    /// The payload is not among the blocks the peer retains.
-    ///
-    /// Another peer may well hold it.
-    NotHeld,
-    /// The payload does not fit a message.
-    ///
-    /// No peer can serve it whole, but a peer saying so is not proof of it.
-    TooLarge,
-}
-
-impl<T: NodeType> HasViewNumber for PayloadFetchMessage<T> {
-    fn view_number(&self) -> ViewNumber {
-        match self {
-            Self::Request(request) => request.view_number(),
-            Self::Response(response) => response.view,
-            Self::Unavailable { view, .. } => *view,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
-pub struct PayloadFetchResponse {
-    pub view: ViewNumber,
-    pub payload_commitment: VidCommitment2,
-    #[serde(with = "serde_bytes")]
-    pub payload: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
@@ -427,7 +387,7 @@ pub enum MessageType<T: NodeType, S> {
     Block(BlockMessage<T>),
     ProposalFetch(ProposalFetchMessage<T>),
     External(#[serde(with = "serde_bytes")] Vec<u8>),
-    PayloadFetch(PayloadFetchMessage<T>),
+    PayloadFetch(PayloadFetchMessage),
 }
 
 impl<T: NodeType, S> MessageType<T, S> {
