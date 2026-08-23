@@ -1,11 +1,8 @@
 use std::fmt;
 
 use crate::{
-    block::BlockError,
-    epoch::EpochManagerError,
-    network::NetworkError,
-    proposal::ValidationError,
-    vid::{VidDisperseError, VidReconstructError},
+    block::BlockError, epoch::EpochManagerError, network::NetworkError, proposal::ValidationError,
+    vid::VidReconstructError,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -93,23 +90,10 @@ pub enum ErrorSource {
 
     #[error("vid reconstruction error: {0}")]
     VidReconstruct(String),
-
-    #[error("vid disperse error: {0}")]
-    VidDisperse(#[from] VidDisperseError),
 }
 
 impl From<NetworkError> for CoordinatorError {
     fn from(e: NetworkError) -> Self {
-        if e.is_critical() {
-            Self::critical(e)
-        } else {
-            Self::regular(e)
-        }
-    }
-}
-
-impl From<VidDisperseError> for CoordinatorError {
-    fn from(e: VidDisperseError) -> Self {
         if e.is_critical() {
             Self::critical(e)
         } else {

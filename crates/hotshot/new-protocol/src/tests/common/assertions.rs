@@ -55,10 +55,6 @@ pub(crate) fn is_persist_proposal(output: &ConsensusOutput<TestTypes>) -> bool {
     matches!(output, ConsensusOutput::PersistProposal(_))
 }
 
-pub(crate) fn is_request_vid_disperse(output: &ConsensusOutput<TestTypes>) -> bool {
-    matches!(output, ConsensusOutput::RequestVidDisperse { .. })
-}
-
 pub(crate) fn is_view_changed(output: &ConsensusOutput<TestTypes>) -> bool {
     matches!(output, ConsensusOutput::ViewChanged(..))
 }
@@ -92,10 +88,6 @@ pub(crate) fn is_cert1(input: &ConsensusInput<TestTypes>) -> bool {
 
 pub(crate) fn is_cert2(input: &ConsensusInput<TestTypes>) -> bool {
     matches!(input, ConsensusInput::Certificate2(_))
-}
-
-pub(crate) fn is_vid_disperse(input: &ConsensusInput<TestTypes>) -> bool {
-    matches!(input, ConsensusInput::VidDisperseCreated(..))
 }
 
 pub(crate) fn is_block_reconstructed(input: &ConsensusInput<TestTypes>) -> bool {
