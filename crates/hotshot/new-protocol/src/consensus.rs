@@ -1407,15 +1407,15 @@ impl<T: NodeType> Consensus<T> {
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> Protocol {
         let view = cert1.view_number();
-        let epoch = cert1.epoch();
-
-        // Keep the certificate even when it does not move us.
-        // A stale QC still names a certified view whose payload we may be missing.
-        self.handle_certificate1(cert1);
 
         if view < self.current_view {
             return Protocol::Continue;
         }
+
+        let epoch = cert1.epoch();
+
+        self.certs.entry(view).or_insert(cert1.into_cert());
+        self.adopt_certified_drb(view);
 
         // Ensure we submit a vote2 if we can:
         self.maybe_vote_2_and_update_lock(view, outbox);

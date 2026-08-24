@@ -1265,24 +1265,10 @@ where
                     // highest certificate. Evidence takes precedence over
                     // the vote being too far ahead, and a valid certificate proves
                     // the network reached that view.
-                    //
-                    // A QC is measured against the lock, not the current view.
-                    // Timeout certificates carry the view forward while the lock
-                    // stays put, and a certified view later than the lock whose
-                    // payload we never reconstructed is what blocks us, so the
-                    // current view is the wrong yardstick for a QC.
-                    //
-                    // This only reaches a node that has not yet timed out itself:
-                    // `catchup_evidence` prefers the timeout certificate as soon
-                    // as one exists, so a peer advertises its lock only in the
-                    // first round of a stall.
-                    let locked_view = self.consensus.locked_view();
-                    if let Some(e) = timeout_msg.evidence.filter(|e| match e {
-                        CatchupEvidence::Qc(qc) => {
-                            locked_view.is_none_or(|locked| qc.view_number() > locked)
-                        },
-                        CatchupEvidence::Tc(tc) => tc.view_number() >= current_view,
-                    }) {
+                    if let Some(e) = timeout_msg
+                        .evidence
+                        .filter(|e| e.view_number() >= current_view)
+                    {
                         match e {
                             CatchupEvidence::Qc(qc) => {
                                 if let Some(epoch) = self
