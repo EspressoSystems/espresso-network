@@ -3410,7 +3410,7 @@ where
 /// The generated handlers extract with `Query<T>`, and axum answers a rejected query string
 /// itself, with a `text/plain` body that never reaches `tonic_rest::RestError`. protoJSON
 /// decoding rejects unknown fields, so that is the most likely client mistake on these routes,
-/// and `doc/api-v2.md` promises one error shape for all of them. Rebuilding the rejection as a
+/// and `API.md` promises one error shape for all of them. Rebuilding the rejection as a
 /// [`tonic::Status`] reuses tonic-rest's envelope instead of hand-rolling a second copy.
 pub(crate) async fn v2_error_envelope(req: Request, next: axum::middleware::Next) -> Response {
     /// Rejection bodies are single-line messages; this only needs to be larger than one.
