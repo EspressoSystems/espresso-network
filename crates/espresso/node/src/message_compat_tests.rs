@@ -33,9 +33,11 @@ use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_example_types::{node_types::TEST_VERSIONS, storage_types::TestStorage};
 use hotshot_new_protocol::message::{
     BlockMessage, CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, DedupManifest,
-    EpochChangeMessage, FetchRequest, Message as NewProtocolMessage, MessageType,
-    PayloadFetchMessage, PayloadFetchResponse, ProposalFetchMessage, ProposalMessage,
-    TimeoutVoteMessage, TransactionMessage, Unavailable, Unchecked, Validated, Vote1,
+    EpochChangeMessage, Message as NewProtocolMessage, MessageType, ProposalFetchMessage,
+    ProposalFetchRequest, ProposalMessage, TimeoutVoteMessage, TransactionMessage, Unchecked,
+    Validated, Vote1,
+    fetch::{Request, Response},
+    payload::{PayloadFetchMessage, PayloadRequestBody, PayloadResponseBody},
 };
 use hotshot_types::{
     PeerConfig,
@@ -678,25 +680,28 @@ async fn reference_new_protocol_messages() -> Vec<NewProtocolMessage<SeqTypes, V
                 hashes: vec![transaction.commit()],
             })),
             MessageType::ProposalFetch(ProposalFetchMessage::Request(
-                FetchRequest::new(view, sender, &priv_key).unwrap(),
+                ProposalFetchRequest::new(view, sender, &priv_key).unwrap(),
             )),
             MessageType::ProposalFetch(ProposalFetchMessage::Response(Box::new(signed_proposal))),
-            MessageType::PayloadFetch(PayloadFetchMessage::Request(
-                FetchRequest::new(view, sender, &priv_key).unwrap(),
-            )),
-            MessageType::PayloadFetch(PayloadFetchMessage::Response(PayloadFetchResponse {
+            MessageType::PayloadFetch(PayloadFetchMessage::Req(Request::new(
                 view,
-                payload_commitment,
-                payload: vec![1, 2, 3],
-            })),
-            MessageType::PayloadFetch(PayloadFetchMessage::Unavailable {
+                PayloadRequestBody,
+            ))),
+            MessageType::PayloadFetch(PayloadFetchMessage::Res(Response::new(
                 view,
-                reason: Unavailable::NotHeld,
-            }),
-            MessageType::PayloadFetch(PayloadFetchMessage::Unavailable {
+                PayloadResponseBody::Payload {
+                    commitment: payload_commitment,
+                    data: vec![1, 2, 3],
+                },
+            ))),
+            MessageType::PayloadFetch(PayloadFetchMessage::Res(Response::new(
                 view,
-                reason: Unavailable::TooLarge,
-            }),
+                PayloadResponseBody::NotAvailable,
+            ))),
+            MessageType::PayloadFetch(PayloadFetchMessage::Res(Response::new(
+                view,
+                PayloadResponseBody::TooLarge,
+            ))),
             // External payloads bypass this envelope on the wire, so this entry pins only the
             // encoding of the variant itself.
             MessageType::External(vec![1, 2, 3]),
