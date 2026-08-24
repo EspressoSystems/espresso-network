@@ -27,8 +27,8 @@
 //! view this node cannot act on, consensus asks for what is missing, and the
 //! coordinator turns the request into a fetch: the whole payload, unicast by
 //! one peer drawn from the view's committee, never a broadcast. A peer that
-//! does not hold it, or whose payload does not fit a message, says so and the
-//! next round draws someone else. The bytes are believed only if they
+//! does not hold it, or whose payload does not fit a message, says so, and
+//! another peer is drawn at once. The bytes are believed only if they
 //! re-commit to what our own proposal names, and then come back as an
 //! ordinary `BlockReconstructed`. The first test walks the stall up to the
 //! emitted request; the second walks through the exit.

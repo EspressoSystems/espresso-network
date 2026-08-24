@@ -68,6 +68,9 @@ impl<T: NodeType> Server<T> {
         payload_commitment: VidCommitment2,
         payload: &T::BlockPayload,
     ) {
+        if self.latest.as_ref().is_some_and(|block| block.view >= view) {
+            return;
+        }
         self.latest = Some(RetainedBlock {
             view,
             payload_commitment,
@@ -255,6 +258,20 @@ mod tests {
         assert_eq!(server.retained(view(1)).map(|b| b.view), Some(view(1)));
         assert_eq!(server.retained(view(2)).map(|b| b.view), Some(view(2)));
         assert!(server.retained(view(3)).is_none());
+    }
+
+    /// A block obtained out of order does not displace a later one. Payloads
+    /// arrive unordered, and the candidate an earlier view would replace is
+    /// the one the lock is about to reach.
+    #[test]
+    fn an_earlier_block_does_not_replace_the_candidate() {
+        let mut server = server();
+        server.retain(view(2), VidCommitment2::default(), &payload());
+        server.retain(view(1), VidCommitment2::default(), &payload());
+
+        assert_eq!(server.latest.as_ref().map(|b| b.view), Some(view(2)));
+        server.lock_moved(view(2));
+        assert_eq!(server.locked.as_ref().map(|b| b.view), Some(view(2)));
     }
 
     /// The documented gap: two reconstructions before the certificate for the

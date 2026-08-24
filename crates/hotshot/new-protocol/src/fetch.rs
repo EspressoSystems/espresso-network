@@ -163,14 +163,14 @@ impl<T: NodeType> Fetcher<T> {
                     return false;
                 }
 
+                if let Some(fetch) = self.requested.get_mut(&(view, payload_commitment)) {
+                    fetch.pending.remove(sender);
+                }
+
                 let Some(param) = expected_vid_param(membership, Some(proposal.epoch)) else {
                     warn!(%view, "no VID param for fetched payload; dropping");
                     return false;
                 };
-
-                if let Some(fetch) = self.requested.get_mut(&(view, payload_commitment)) {
-                    fetch.pending.remove(sender);
-                }
 
                 let epoch = proposal.epoch;
                 let metadata = proposal.block_header.metadata().clone();
@@ -236,7 +236,6 @@ impl<T: NodeType> Fetcher<T> {
 
         let fetch = fetch.as_mut()?;
         fetch.asked.clear();
-        fetch.pending.clear();
 
         draw(None, &mut rng)
     }
