@@ -3,7 +3,7 @@ pub(crate) mod metrics;
 pub mod timer;
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -78,6 +78,13 @@ pub(crate) const VID_RECONSTRUCT_GC_MARGIN: u64 = 5;
 /// storage writes for recent views aren't aborted before they persist.
 const STORAGE_GC_MARGIN: u64 = 5;
 
+/// Views to wait before re-broadcasting a fetch request for a proposal that
+/// is still missing. The network GCs un-ACKed sends once the sender advances
+/// two views past the slot they were stamped with, so a request (or its
+/// responses) can be silently lost; conversely, within that margin the
+/// previous round may still answer, so re-requesting sooner is wasted.
+pub(crate) const PROPOSAL_FETCH_RETRY_VIEWS: u64 = 2;
+
 /// Epoch changes claiming an epoch further ahead than this are dropped at
 /// intake. We could not verify them anyway: an epoch's stake table only
 /// materializes by walking the DRB chain, so parking such a message and
@@ -123,7 +130,7 @@ pub struct Coordinator<T: NodeType, S> {
     #[builder(skip)]
     pending_proposal_fetches: PendingProposalFetches<T>,
     #[builder(skip)]
-    requested_missing_proposals: HashSet<ProposalFetchKey<T>>,
+    requested_missing_proposals: MissingProposalRequests<T>,
     #[builder(skip)]
     da_payloads: BTreeMap<(ViewNumber, VidCommitment2), PendingDa<T>>,
     metrics: Option<metrics::Metrics>,
@@ -1770,14 +1777,22 @@ where
             .map_err(|err| CoordinatorError::from(err).context("broadcast proposal request"))
     }
 
+    /// Broadcast a fetch request for a proposal consensus reported missing.
+    ///
+    /// Deduplicates requests for the same proposal, but re-broadcasts every
+    /// [`PROPOSAL_FETCH_RETRY_VIEWS`] views while it stays missing: the
+    /// network silently drops un-ACKed messages once its GC lower bound
+    /// passes the slot they were sent with, so a single broadcast (or all
+    /// of its responses) can be lost without a trace.
     fn request_missing_proposal(
         &mut self,
         view: ViewNumber,
         leaf_commit: Commitment<Leaf2<T>>,
     ) -> Result<(), CoordinatorError> {
+        let current_view = self.consensus.current_view();
         if !self
             .requested_missing_proposals
-            .insert(ProposalFetchKey::new(view, leaf_commit))
+            .try_begin(view, leaf_commit, current_view)
         {
             return Ok(());
         }
@@ -1786,8 +1801,10 @@ where
 
     fn maybe_validate_fetched_proposal(&mut self, proposal: SignedProposal<T, Proposal<T>>) {
         let view = proposal.data.view_number;
-        let key = ProposalFetchKey::new(view, proposal_commitment(&proposal.data));
-        if !self.requested_missing_proposals.remove(&key) {
+        if !self
+            .requested_missing_proposals
+            .resolve(view, proposal_commitment(&proposal.data))
+        {
             return;
         }
         if self.consensus.proposal_at(view).is_some() {
@@ -1819,8 +1836,7 @@ where
                 self.epoch_root_collector.gc(view);
                 self.cert_verifiers.gc(decide_floor, epoch);
                 self.pending_proposal_fetches.gc(view);
-                self.requested_missing_proposals
-                    .retain(|key| key.view > view);
+                self.requested_missing_proposals.gc(view);
                 self.state_manager.gc(view);
                 self.storage
                     .gc(view.saturating_sub(STORAGE_GC_MARGIN).into());
@@ -2052,5 +2068,52 @@ impl<T: NodeType> PendingProposalFetches<T> {
                 let _ = respond.send(Ok(proposal.clone()));
             }
         }
+    }
+}
+
+/// Fetch requests broadcast for proposals consensus reported missing, keyed
+/// by proposal and recording the view of the last broadcast so a request
+/// whose responses were lost is retried instead of blocked forever.
+#[derive(Default)]
+pub(crate) struct MissingProposalRequests<T: NodeType> {
+    requested: HashMap<ProposalFetchKey<T>, ViewNumber>,
+}
+
+impl<T: NodeType> MissingProposalRequests<T> {
+    /// Record a request attempt for the proposal at `current_view` and
+    /// return whether the caller should broadcast it: `false` while a
+    /// request broadcast fewer than [`PROPOSAL_FETCH_RETRY_VIEWS`] views
+    /// ago is still outstanding.
+    pub(crate) fn try_begin(
+        &mut self,
+        view: ViewNumber,
+        leaf_commitment: Commitment<Leaf2<T>>,
+        current_view: ViewNumber,
+    ) -> bool {
+        let key = ProposalFetchKey::new(view, leaf_commitment);
+        if let Some(requested_at) = self.requested.get(&key)
+            && *current_view < requested_at.saturating_add(PROPOSAL_FETCH_RETRY_VIEWS)
+        {
+            return false;
+        }
+        self.requested.insert(key, current_view);
+        true
+    }
+
+    /// Forget the request for the proposal, returning whether one was
+    /// outstanding.
+    pub(crate) fn resolve(
+        &mut self,
+        view: ViewNumber,
+        leaf_commitment: Commitment<Leaf2<T>>,
+    ) -> bool {
+        self.requested
+            .remove(&ProposalFetchKey::new(view, leaf_commitment))
+            .is_some()
+    }
+
+    /// Drop requests for views at or below the decided `view`.
+    pub(crate) fn gc(&mut self, view: ViewNumber) {
+        self.requested.retain(|key, _| key.view > view);
     }
 }
