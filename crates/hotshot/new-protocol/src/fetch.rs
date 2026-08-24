@@ -43,7 +43,8 @@ pub enum Retry {
 
 /// The peers one fetch has involved.
 ///
-/// `asked` decides who not to draw again, `pending` who may still answer.
+/// `asked` decides who not to draw again, and a new round forgets it.
+/// `pending` is who still owes us an answer, and outlives the round.
 struct Fetch<K> {
     asked: HashSet<K>,
     pending: HashSet<K>,
