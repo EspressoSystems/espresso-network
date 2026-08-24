@@ -12,111 +12,6 @@ use axum::http::HeaderMap;
 use axum::Router;
 
 // =============================================================================
-// RewardService REST routes
-// =============================================================================
-
-/// Build Axum REST routes for `RewardService`.
-///
-/// Generated from `google.api.http` annotations in `proto.proto`.
-pub fn reward_service_rest_router<S>(service: Arc<S>) -> Router
-where
-    S: crate::proto::reward_service_server::RewardService + Send + Sync + 'static,
-{
-    Router::new()
-        .route("/v2/rewards/claim-input", axum::routing::get(rest_reward_service_get_reward_claim_input::<S>))
-        .route("/v2/rewards/balance", axum::routing::get(rest_reward_service_get_reward_balance::<S>))
-        .route("/v2/rewards/proof", axum::routing::get(rest_reward_service_get_reward_account_proof::<S>))
-        .route("/v2/rewards/balances", axum::routing::get(rest_reward_service_get_reward_balances::<S>))
-        .route("/v2/rewards/tree", axum::routing::get(rest_reward_service_get_reward_merkle_tree_v2::<S>))
-        .with_state(service)
-}
-
-#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
-/// `GetRewardClaimInput` - JSON endpoint.
-///
-/// `GET /v2/rewards/claim-input`
-async fn rest_reward_service_get_reward_claim_input<S>(
-    State(service): State<Arc<S>>,
-    headers: HeaderMap,
-    Query(body): Query<crate::proto::GetRewardClaimInputRequest>,
-) -> Result<Json<crate::proto::RewardClaimInput>, tonic_rest::RestError>
-where
-    S: crate::proto::reward_service_server::RewardService + Send + Sync + 'static,
-{
-    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
-    let response = service.get_reward_claim_input(req).await.map_err(tonic_rest::RestError::from)?;
-    Ok(Json(response.into_inner()))
-}
-
-#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
-/// `GetRewardBalance` - JSON endpoint.
-///
-/// `GET /v2/rewards/balance`
-async fn rest_reward_service_get_reward_balance<S>(
-    State(service): State<Arc<S>>,
-    headers: HeaderMap,
-    Query(body): Query<crate::proto::GetRewardBalanceRequest>,
-) -> Result<Json<crate::proto::RewardBalance>, tonic_rest::RestError>
-where
-    S: crate::proto::reward_service_server::RewardService + Send + Sync + 'static,
-{
-    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
-    let response = service.get_reward_balance(req).await.map_err(tonic_rest::RestError::from)?;
-    Ok(Json(response.into_inner()))
-}
-
-#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
-/// `GetRewardAccountProof` - JSON endpoint.
-///
-/// `GET /v2/rewards/proof`
-async fn rest_reward_service_get_reward_account_proof<S>(
-    State(service): State<Arc<S>>,
-    headers: HeaderMap,
-    Query(body): Query<crate::proto::GetRewardAccountProofRequest>,
-) -> Result<Json<crate::proto::RewardAccountQueryDataV2>, tonic_rest::RestError>
-where
-    S: crate::proto::reward_service_server::RewardService + Send + Sync + 'static,
-{
-    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
-    let response = service.get_reward_account_proof(req).await.map_err(tonic_rest::RestError::from)?;
-    Ok(Json(response.into_inner()))
-}
-
-#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
-/// `GetRewardBalances` - JSON endpoint.
-///
-/// `GET /v2/rewards/balances`
-async fn rest_reward_service_get_reward_balances<S>(
-    State(service): State<Arc<S>>,
-    headers: HeaderMap,
-    Query(body): Query<crate::proto::GetRewardBalancesRequest>,
-) -> Result<Json<crate::proto::RewardBalances>, tonic_rest::RestError>
-where
-    S: crate::proto::reward_service_server::RewardService + Send + Sync + 'static,
-{
-    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
-    let response = service.get_reward_balances(req).await.map_err(tonic_rest::RestError::from)?;
-    Ok(Json(response.into_inner()))
-}
-
-#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
-/// `GetRewardMerkleTreeV2` - JSON endpoint.
-///
-/// `GET /v2/rewards/tree`
-async fn rest_reward_service_get_reward_merkle_tree_v2<S>(
-    State(service): State<Arc<S>>,
-    headers: HeaderMap,
-    Query(body): Query<crate::proto::GetRewardMerkleTreeRequest>,
-) -> Result<Json<crate::proto::RewardMerkleTreeV2Data>, tonic_rest::RestError>
-where
-    S: crate::proto::reward_service_server::RewardService + Send + Sync + 'static,
-{
-    let req = tonic_rest::build_tonic_request::<_, ()>(body, &headers, None);
-    let response = service.get_reward_merkle_tree_v2(req).await.map_err(tonic_rest::RestError::from)?;
-    Ok(Json(response.into_inner()))
-}
-
-// =============================================================================
 // StatusService REST routes
 // =============================================================================
 
@@ -327,18 +222,15 @@ pub const PUBLIC_REST_PATHS: &[&str] = &[
 /// Build a combined Axum router with REST routes for all proto services.
 ///
 /// Each service is generic - pass your concrete implementations as `Arc<T>`.
-pub fn all_rest_routes<S0, S1, S2>(
-    reward_service: Arc<S0>,
-    status_service: Arc<S1>,
-    token_service: Arc<S2>,
+pub fn all_rest_routes<S0, S1>(
+    status_service: Arc<S0>,
+    token_service: Arc<S1>,
 ) -> Router
 where
-    S0: crate::proto::reward_service_server::RewardService + Send + Sync + 'static,
-    S1: crate::proto::status_service_server::StatusService + Send + Sync + 'static,
-    S2: crate::proto::token_service_server::TokenService + Send + Sync + 'static,
+    S0: crate::proto::status_service_server::StatusService + Send + Sync + 'static,
+    S1: crate::proto::token_service_server::TokenService + Send + Sync + 'static,
 {
     Router::new()
-        .merge(reward_service_rest_router(reward_service))
         .merge(status_service_rest_router(status_service))
         .merge(token_service_rest_router(token_service))
 }

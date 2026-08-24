@@ -15,7 +15,7 @@ Espresso Network is a confirmation layer for Ethereum rollups, providing fast fi
 
 - `doc/agents/rust.md`
 - `doc/agents/solidity.md`
-- `doc/api-v2.md` - the proto-defined v2 API and how to add endpoints
+- `API.md` - the v1 and v2 APIs, and how to add a v2 endpoint
 - `doc/cargo-features.md` - feature gates for zkVM builds and which functions panic without them
 
 ## Writing Reviewable Code
@@ -143,4 +143,4 @@ To investigate logs and metrics of Espresso's own infrastructure, use the `pup` 
 - `data/v1/`, `data/v2/`, etc. - reference serialization test vectors
 - `doc/upgrades.md` - upgrade mechanism
 - `crates/espresso/api/src/v1/` - v1 API trait and route definitions
-- `crates/espresso/api/proto/v2/` - v2 API definitions (see `doc/api-v2.md`)
+- `crates/espresso/api/proto/v2/` - v2 API definitions (see `API.md`)

@@ -21,11 +21,6 @@ use crate::PACKAGE;
 /// that file (which is how source-code-info keys their field comments).
 type Messages<'a> = BTreeMap<String, (&'a DescriptorProto, Comments, usize)>;
 
-/// Services with no implementation mounted by `serve_axum`. Their routes are still documented,
-/// because the protos are the published definition, but a client generator would otherwise emit
-/// methods that always 404 with nothing in the document saying so.
-const UNIMPLEMENTED_SERVICES: &[&str] = &["RewardService"];
-
 pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Error>> {
     let fdset = FileDescriptorSet::decode(descriptor_bytes)?;
     // The slim descriptor types from tonic-rest-core carry the google.api.http
@@ -199,13 +194,6 @@ fn operation(
         if comment.trim() != summary {
             op["description"] = json!(comment);
         }
-    }
-    if UNIMPLEMENTED_SERVICES.contains(&service) {
-        op["deprecated"] = json!(true);
-        op["summary"] = json!(format!(
-            "{} (not implemented: returns 404)",
-            op["summary"].as_str().unwrap_or_default()
-        ));
     }
     Ok(op)
 }

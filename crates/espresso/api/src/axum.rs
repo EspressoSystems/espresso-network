@@ -3714,8 +3714,8 @@ mod tests {
     #[test]
     fn rewrite_legacy_uri_leaves_v2_unchanged() {
         assert_eq!(
-            rewritten_uri("/v2/rewards/balance/0xabc"),
-            "/v2/rewards/balance/0xabc"
+            rewritten_uri("/v2/status/block-height"),
+            "/v2/status/block-height"
         );
     }
 
@@ -4719,11 +4719,9 @@ mod tests {
             .map(String::as_str)
             .collect();
 
-        // The document covers exactly the mounted routes plus the reward routes that
-        // `rewards.proto` defines without an implementation. Wiring rewards up, or adding an
-        // endpoint, has to update this list, which is the point: the published document and the
-        // served surface are supposed to diverge only where we say they do.
-        let mounted = [
+        // Every documented route is one `serve_axum` mounts, so a generated client cannot ship a
+        // method that always 404s. Adding an endpoint has to update this list.
+        let expected: std::collections::BTreeSet<&str> = [
             "/v2/status/block-height",
             "/v2/status/success-rate",
             "/v2/status/time-since-last-decide",
@@ -4733,25 +4731,10 @@ mod tests {
             "/v2/token/circulating-supply-ethereum",
             "/v2/token/total-issued-supply",
             "/v2/token/total-reward-distributed",
-        ];
-        let unimplemented = [
-            "/v2/rewards/claim-input",
-            "/v2/rewards/balance",
-            "/v2/rewards/proof",
-            "/v2/rewards/balances",
-            "/v2/rewards/tree",
-        ];
-        let expected: std::collections::BTreeSet<&str> =
-            mounted.into_iter().chain(unimplemented).collect();
+        ]
+        .into_iter()
+        .collect();
         assert_eq!(documented, expected);
-
-        for path in unimplemented {
-            assert_eq!(
-                spec["paths"][path]["get"]["deprecated"],
-                serde_json::json!(true),
-                "{path} should be marked deprecated"
-            );
-        }
     }
 
     #[tokio::test]
