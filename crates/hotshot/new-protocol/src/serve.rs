@@ -241,7 +241,7 @@ mod tests {
         server.retain(view(1), VidCommitment2::default(), &payload());
 
         assert!(server.locked.is_none());
-        assert!(server.blocks.get(&view(1)).is_some());
+        assert!(server.blocks.contains_key(&view(1)));
     }
 
     /// Locking a view we hold the block for makes it the one we keep.
@@ -252,7 +252,7 @@ mod tests {
         server.lock_moved(view(1));
 
         assert_eq!(server.locked, Some(view(1)));
-        assert!(server.blocks.get(&view(1)).is_some());
+        assert!(server.blocks.contains_key(&view(1)));
     }
 
     /// Every retained block answers for its own view, whether or not the lock
@@ -264,9 +264,9 @@ mod tests {
         server.lock_moved(view(1));
         server.retain(view(2), VidCommitment2::default(), &payload());
 
-        assert!(server.blocks.get(&view(1)).is_some());
-        assert!(server.blocks.get(&view(2)).is_some());
-        assert!(server.blocks.get(&view(3)).is_none());
+        assert!(server.blocks.contains_key(&view(1)));
+        assert!(server.blocks.contains_key(&view(2)));
+        assert!(!server.blocks.contains_key(&view(3)));
     }
 
     /// A certificate arriving after later views were reconstructed still
@@ -280,7 +280,7 @@ mod tests {
         server.lock_moved(view(1));
 
         assert_eq!(server.locked, Some(view(1)));
-        assert!(server.blocks.get(&view(1)).is_some());
+        assert!(server.blocks.contains_key(&view(1)));
     }
 
     /// Blocks obtained out of order each take their own place.
@@ -290,8 +290,8 @@ mod tests {
         server.retain(view(2), VidCommitment2::default(), &payload());
         server.retain(view(1), VidCommitment2::default(), &payload());
 
-        assert!(server.blocks.get(&view(1)).is_some());
-        assert!(server.blocks.get(&view(2)).is_some());
+        assert!(server.blocks.contains_key(&view(1)));
+        assert!(server.blocks.contains_key(&view(2)));
     }
 
     /// Eviction takes the earliest block, and never the locked one.
@@ -306,11 +306,11 @@ mod tests {
 
         assert_eq!(server.blocks.len(), RETAINED_BLOCKS);
         assert!(
-            server.blocks.get(&view(1)).is_some(),
+            server.blocks.contains_key(&view(1)),
             "the locked block is never evicted"
         );
         assert!(
-            server.blocks.get(&view(2)).is_none(),
+            !server.blocks.contains_key(&view(2)),
             "the earliest unlocked block goes first"
         );
     }
