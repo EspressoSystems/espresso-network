@@ -33,7 +33,7 @@ use crate::{
     block::{BlockAndHeaderRequest, BlockBuilder, BlockBuilderConfig},
     cert_verifier::CertVerifiers,
     client::{ClientApi, ClientRequest, CoordinatorClient, QueryError},
-    consensus::{Consensus, ConsensusInput, ConsensusOutput, PreCutoverSeed},
+    consensus::{Consensus, ConsensusInput, ConsensusOutput, GC_MARGIN_VIEWS, PreCutoverSeed},
     coordinator::{
         error::{CoordinatorError, ErrorSource, Severity},
         timer::Timer,
@@ -1884,7 +1884,7 @@ where
                 self.vid_fragment_accumulator.gc(view);
                 // When we enter a new view, we do not want to GC certain data
                 // for the previous view yet:
-                let view = view.saturating_sub(1).into();
+                let view = view.saturating_sub(GC_MARGIN_VIEWS.get() - 1).into();
                 self.network.gc(view)?;
                 self.timeout_collector.gc(view);
                 self.timeout_one_honest_collector.gc(view);

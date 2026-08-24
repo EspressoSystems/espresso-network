@@ -2,6 +2,7 @@ use std::{
     cmp::max,
     collections::{BTreeMap, BTreeSet},
     marker::PhantomData,
+    num::NonZeroU64,
     sync::Arc,
 };
 
@@ -171,8 +172,6 @@ pub enum ConsensusOutput<T: NodeType> {
         view: ViewNumber,
         leaf_commit: Commitment<Leaf2<T>>,
     },
-    /// The view is certified and its proposal held, but its payload never
-    /// reconstructed while the network moved on -- recover it from peers.
     RequestMissingPayload {
         view: ViewNumber,
         payload_commitment: VidCommitment2,
@@ -202,12 +201,8 @@ type UnpairedVidShares<T> = BTreeMap<(ViewNumber, VidCommitment2), VidDisperseSh
 /// decided view, letting a late-broadcast Cert2 decide an older gap view.
 pub(crate) const DECIDE_BUFFER: u64 = 20;
 
-/// Views behind the frontier a payload must be before it is worth fetching.
-///
-/// Entering a view garbage collects the transport's queue two views back
-/// (`GcScope::Local`), so this is the point at which a peer can no longer
-/// retransmit the share broadcasts we missed.
-const GC_MARGIN_VIEWS: u64 = 2;
+/// Views behind the frontier at which the transport stops retransmitting.
+pub(crate) const GC_MARGIN_VIEWS: NonZeroU64 = NonZeroU64::new(2).expect("2 > 0");
 
 // The decide buffer retains the proposals the VID reconstructor reads.
 const _: () = assert!(DECIDE_BUFFER >= VID_RECONSTRUCT_GC_MARGIN);
@@ -753,12 +748,8 @@ impl<T: NodeType> Consensus<T> {
                 // waiting: while a view's payload was missing, every later
                 // proposal extends it — but of those, only the ones above the
                 // timeout bar can still be voted, so the views between the
-                // parent and the bar are skipped outright.
-                //
-                // Highest first, and stop at the one we vote for. Voting a
-                // lower child afterwards adds nothing and costs the vote2
-                // there: the higher vote1 skips it, which
-                // `voted_for_branch_excluding` refuses to follow.
+                // parent and the bar are skipped outright. Highest first, and
+                // stop at the one we vote for.
                 let children: Vec<ViewNumber> = self
                     .proposals
                     .range(view.max(self.timeout_view) + 1..)
@@ -1249,32 +1240,14 @@ impl<T: NodeType> Consensus<T> {
     /// Ask for the payload of the highest certified view that `timeout` proves
     /// we are stuck behind.
     ///
-    /// Views at or below the lock cannot be what blocks us: safety pins the
-    /// justify_qc of any proposal we may still vote for at or above the lock.
-    /// Views above the one that timed out are not late, only in flight.
-    ///
     /// Within that range only the highest missing payload is worth asking for.
     /// Every proposal we could vote for is parented at the quorum's lock, so
     /// reconstructing that one view unblocks us and lets the lock skip the
     /// views below it, which is also why peers keep no older payload.
     /// Ask for the payload of the highest certified view we are stuck behind.
-    ///
-    /// Views at or below the lock cannot be what blocks us: safety pins the
-    /// justify_qc of any proposal we may still vote for at or above the lock.
-    ///
-    /// The upper bound is what the transport can no longer deliver. Peers keep
-    /// un-ACKed sends until they enter the view after next, so up to
-    /// `current_view - 2` a missing share broadcast may still arrive on its
-    /// own, and fetching would race it for a whole payload. Past that line
-    /// only a fetch can produce the block.
-    ///
-    /// Within the range only the highest missing payload is worth asking for.
-    /// Every proposal we could vote for is parented at the quorum's lock, so
-    /// reconstructing that one view unblocks us and lets the lock skip the
-    /// views below it, which is also why peers keep no older payload.
     fn request_missing_payloads(&self, outbox: &mut Outbox<ConsensusOutput<T>>) {
         let start = self.locked_view().unwrap_or_else(ViewNumber::genesis) + 1;
-        let end = ViewNumber::from(self.current_view.saturating_sub(GC_MARGIN_VIEWS));
+        let end = ViewNumber::from(self.current_view.saturating_sub(GC_MARGIN_VIEWS.get()));
 
         if start > end {
             return;
@@ -1426,8 +1399,8 @@ impl<T: NodeType> Consensus<T> {
         let view = cert1.view_number();
         let epoch = cert1.epoch();
 
-        // Keep the certificate even when it does not move us. A stale QC still
-        // names a certified view whose payload we may be missing.
+        // Keep the certificate even when it does not move us.
+        // A stale QC still names a certified view whose payload we may be missing.
         self.handle_certificate1(cert1);
 
         if view < self.current_view {
