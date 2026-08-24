@@ -201,7 +201,9 @@ type UnpairedVidShares<T> = BTreeMap<(ViewNumber, VidCommitment2), VidDisperseSh
 /// decided view, letting a late-broadcast Cert2 decide an older gap view.
 pub(crate) const DECIDE_BUFFER: u64 = 20;
 
-/// Views behind the frontier at which the transport stops retransmitting.
+/// Views earlier than the current view at which the transport stops
+/// retransmitting: the bound the coordinator gives the network's collection,
+/// and so the earliest a missing payload is worth fetching.
 pub(crate) const GC_MARGIN_VIEWS: NonZeroU64 = NonZeroU64::new(2).expect("2 > 0");
 
 // The decide buffer retains the proposals the VID reconstructor reads.
@@ -746,10 +748,10 @@ impl<T: NodeType> Consensus<T> {
                 // Retry the votable children whose vote1 is gated on this
                 // parent's reconstruction. More than `view + 1` can be
                 // waiting: while a view's payload was missing, every later
-                // proposal extends it — but of those, only the ones above the
-                // timeout bar can still be voted, so the views between the
-                // parent and the bar are skipped outright. Highest first, and
-                // stop at the one we vote for.
+                // proposal extends it, and of those only the ones later than
+                // the timeout bar can still be voted. Latest first, stopping
+                // at the one we vote for: a vote at an earlier child adds
+                // nothing and costs its vote2, which the later vote1 skips.
                 let children: Vec<ViewNumber> = self
                     .proposals
                     .range(view.max(self.timeout_view) + 1..)

@@ -91,8 +91,11 @@ const THRESHOLD: usize = 7;
 /// continues from here.
 ///
 /// The catchup evidence attached to the current nodes' timeout votes names
-/// view 1's certificate — the pointer to the cure travels every timeout
-/// round, and the payload fetch is what finally acts on it.
+/// view 1's certificate, but only in this first round: `catchup_evidence`
+/// prefers the timeout certificate once one exists, and in a stall those keep
+/// forming while the lock stays put. So the evidence is not what carries a
+/// node to the cure, and the request is emitted from what the node already
+/// holds.
 #[tokio::test]
 async fn one_missed_payload_stalls_certification() {
     let test_data = TestData::new(3).await;
@@ -455,7 +458,7 @@ async fn fetched_payload_restores_certification() {
         .apply(ConsensusInput::TimeoutOneHonest(ViewNumber::new(2), epoch))
         .await;
     // The certificate carries the node into view 3, which is what puts view 1
-    // two views behind the frontier: up to that point a missed share broadcast
+    // two views earlier than the current view: up to that point a missed share
     // could still arrive from a peer's queue, and the fetch holds off.
     harness
         .apply(ConsensusInput::TimeoutCertificate(ValidCert::new(
