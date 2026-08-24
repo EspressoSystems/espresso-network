@@ -3434,10 +3434,14 @@ pub(crate) async fn v2_error_envelope(req: Request, next: axum::middleware::Next
     }
 
     let (parts, body) = response.into_parts();
-    let Ok(bytes) = axum::body::to_bytes(body, MAX_REJECTION_BODY).await else {
-        return parts.status.into_response();
+    let message = match axum::body::to_bytes(body, MAX_REJECTION_BODY).await {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        Err(_) => parts
+            .status
+            .canonical_reason()
+            .unwrap_or("request rejected")
+            .to_string(),
     };
-    let message = String::from_utf8_lossy(&bytes);
     tonic_rest::RestError::from(tonic::Status::new(code, message)).into_response()
 }
 

@@ -83,3 +83,42 @@ pub fn to_status(err: anyhow::Error) -> tonic::Status {
         ErrorKind::Internal => tonic::Status::internal(message),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Ported from the deleted `api/src/tonic.rs` when the v2 adapter stopped rendering through
+    /// [`ApiError`]. The token endpoints inline the L1 provider's error, URL and API key included,
+    /// and both the `grpc-message` trailer and the REST body reach unauthenticated callers.
+    #[test]
+    fn to_status_scrubs_provider_credentials() {
+        let err = anyhow::anyhow!(
+            r#"failed to get total supply. err=reqwest::Error {{ url: "https://u:p@rpc.invalid/v1/FAKEKEY" }}"#
+        );
+
+        let status = to_status(err);
+
+        assert_eq!(status.code(), tonic::Code::Internal);
+        assert!(
+            !status.message().contains("FAKEKEY"),
+            "{}",
+            status.message()
+        );
+        assert!(!status.message().contains("u:p"), "{}", status.message());
+        assert!(
+            status.message().contains("rpc.invalid"),
+            "{}",
+            status.message()
+        );
+    }
+
+    /// A 404 has to stay a 404 through the classifier, since the scrub sits on the same path.
+    #[test]
+    fn availability_not_found_maps_to_not_found() {
+        let status = to_status(anyhow::Error::new(AvailabilityError::NotFound(
+            "leaf 7".to_string(),
+        )));
+        assert_eq!(status.code(), tonic::Code::NotFound);
+    }
+}

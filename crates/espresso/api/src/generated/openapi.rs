@@ -55,7 +55,14 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
                 .into());
             }
             let name = message.name().to_string();
-            schemas.insert(name.clone(), message_schema(message, &comments, i));
+            // Schemas and the reachability walk both key on the short name, so a collision would
+            // silently drop one message's schema and prune the other's.
+            if schemas
+                .insert(name.clone(), message_schema(message, &comments, i))
+                .is_some()
+            {
+                return Err(format!("duplicate message name `{name}` in {PACKAGE}").into());
+            }
             messages.insert(format!(".{PACKAGE}.{name}"), (message, comments.clone(), i));
         }
     }

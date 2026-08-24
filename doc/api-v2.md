@@ -7,7 +7,7 @@ HTTP route, and the comments become the generated documentation.
 From those files, `crates/espresso/api/build.rs` generates everything else into `crates/espresso/api/src/generated/`
 (committed to git for review visibility, never edited by hand):
 
-- `espresso.api.v2.rs`: message types, tonic clients, and tonic servers
+- `espresso.api.v2.rs`: message types and the tonic server traits (clients are not generated)
 - `espresso.api.v2.serde.rs`: canonical protoJSON Serialize/Deserialize impls for the message types (pbjson)
 - `espresso.api.v2.rest.rs`: Axum handlers that transcode HTTP/JSON onto the tonic service traits
 - `espresso.api.v2.openapi.json`: OpenAPI 3.0 document for the REST routes, served at `/v2/docs/openapi.json` with
@@ -35,12 +35,10 @@ operations are marked `deprecated` with a summary saying they are not implemente
 1. Define the rpc in the service's proto file, for example `crates/espresso/api/proto/v2/status.proto`:
 
    ```proto
-   // Request for the node's uptime (no parameters)
    message GetUptimeRequest {}
 
-   // Node uptime response
    message UptimeResponse {
-     // Seconds since the node started
+     // Seconds since the process started, not since it last decided a block
      uint64 seconds = 1;
    }
 
@@ -114,7 +112,9 @@ operations are marked `deprecated` with a summary saying they are not implemente
   parameterless endpoint is a 400. This is pbjson's default and is worth keeping, since a typo'd parameter would
   otherwise return a confidently wrong response. Those rejections come from `axum::extract::Query`, not from the
   handler, so they arrive as plain text; `axum::v2_error_envelope` rewrites them into the envelope below, which is why
-  the v2 routers are layered with it in `serve_axum`.
+  the v2 routers are layered with it in `serve_axum`. The layer covers the mounted routes only: a request to an unknown
+  path under `/v2/`, or a known path with the wrong method, is answered by the router before the layer runs and keeps
+  axum's plain-text body.
 - Regenerate inside the nix shell. `prost-build` shells out to `protoc`, so a different local version can produce a
   different descriptor and leave `src/generated/` dirty after a plain `cargo build`. CI enforces the committed artifacts
   match the protos (`Check generated API code is up to date` in `lint.yml`).
