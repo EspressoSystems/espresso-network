@@ -69,9 +69,9 @@ needs is still on v1. Every route in the OpenAPI document is a route `serve_axum
    Commit the changes to `src/generated/` together with the proto change.
 
 3. Implement the new trait method in `crates/espresso/node/src/api/state.rs`. The build fails there until you do, which
-   is the complete to-do list. Follow the local pattern: a `fetch_*` method returning internal types (`anyhow::Result`),
-   a `serialize_*` conversion to the proto type, and a thin tonic method composing them. Map errors with `to_status` so
-   `AvailabilityError::NotFound` becomes gRPC `not_found` / HTTP 404.
+   is the complete to-do list. Follow the local pattern: a thin tonic method that delegates to the v1 trait method where
+   one exists (otherwise fetches from the data source), converts to the proto type inline, and maps errors with
+   `to_status` so `AvailabilityError::NotFound` becomes gRPC `not_found` / HTTP 404.
 
 4. Verify:
 
