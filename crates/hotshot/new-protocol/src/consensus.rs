@@ -1269,6 +1269,14 @@ impl<T: NodeType> Consensus<T> {
             return;
         }
 
+        // A view decided as an ancestor of a later one needs no vote from us,
+        // so its payload no longer blocks anything. Its proposal outlives the
+        // decide by the decide buffer, which would otherwise keep it a
+        // candidate for as long as the lock stays put.
+        if self.decided_views.contains(&view) {
+            return;
+        }
+
         let Some(proposal) = self.proposals.get(&view) else {
             return;
         };

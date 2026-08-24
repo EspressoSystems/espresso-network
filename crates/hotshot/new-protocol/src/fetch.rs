@@ -256,7 +256,7 @@ mod tests {
         vid::avidm_gf2::AvidmGf2Scheme,
     };
 
-    use super::{Fetch, Fetcher};
+    use super::{Fetch, Fetcher, Retry};
     use crate::{
         message::{
             fetch::Response,
@@ -455,6 +455,83 @@ mod tests {
         assert!(
             fetcher.next().await.is_none(),
             "the second response was not verified"
+        );
+    }
+
+    /// The draw excludes this node and everyone this fetch already asked, so
+    /// a peer that stays silent is not drawn again while the round lasts.
+    #[tokio::test]
+    async fn the_draw_excludes_this_node_and_the_peers_already_asked() {
+        let (_, commitment, harness) = payload_and_consensus().await;
+        let mut fetcher = Fetcher::new(key(0));
+        let mut drawn = HashSet::new();
+
+        // Ten committee members, one of them us.
+        for _ in 0..9 {
+            let peer = fetcher
+                .select_peer(
+                    view(),
+                    commitment,
+                    Retry::SameRound,
+                    &harness.consensus,
+                    &harness.membership_coordinator,
+                )
+                .expect("a peer this round has not asked");
+            assert!(peer != key(0), "never ourselves");
+            assert!(drawn.insert(peer), "never the same peer twice");
+            fetcher
+                .requested
+                .entry((view(), commitment))
+                .or_default()
+                .asked
+                .insert(peer);
+        }
+        assert_eq!(drawn.len(), 9);
+    }
+
+    /// Once every peer has been asked the round is over, and only the
+    /// periodic retry may start another one. A refusal must not, or peers
+    /// refusing at message speed would keep the draw going round the
+    /// committee.
+    #[tokio::test]
+    async fn only_a_new_round_starts_the_draw_over() {
+        let (_, commitment, harness) = payload_and_consensus().await;
+        let mut fetcher = Fetcher::new(key(0));
+        let everyone: HashSet<BLSPubKey> = (1..10).map(key).collect();
+        fetcher.requested.insert(
+            (view(), commitment),
+            Fetch {
+                asked: everyone.clone(),
+                pending: HashSet::new(),
+            },
+        );
+
+        assert!(
+            fetcher
+                .select_peer(
+                    view(),
+                    commitment,
+                    Retry::SameRound,
+                    &harness.consensus,
+                    &harness.membership_coordinator,
+                )
+                .is_none(),
+            "the round is exhausted"
+        );
+
+        let peer = fetcher
+            .select_peer(
+                view(),
+                commitment,
+                Retry::NewRound,
+                &harness.consensus,
+                &harness.membership_coordinator,
+            )
+            .expect("a new round draws again");
+        assert!(everyone.contains(&peer));
+        assert!(
+            fetcher.requested[&(view(), commitment)].asked.is_empty(),
+            "the new round forgot who was asked"
         );
     }
 
