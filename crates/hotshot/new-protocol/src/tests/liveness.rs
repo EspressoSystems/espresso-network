@@ -513,3 +513,79 @@ async fn fetched_payload_restores_certification() {
          missing block — so the pinned view can commit directly, not just as an ancestor"
     );
 }
+
+/// The fetch also fires for a node that never learned the view was certified.
+///
+/// Same deficit as [`fetched_payload_restores_certification`], one thing
+/// less: this node missed view 1's votes and the certificate broadcast that
+/// followed them, so it holds no `cert1` for the view whose payload it
+/// lacks. What it does hold is the proposals built on that view, each
+/// carrying a certificate for it as `justify_qc` — which is what the scan
+/// reads when it has no certificate of its own. Without that, a node in this
+/// state asks for nothing and stays blocked for good.
+#[tokio::test]
+async fn missing_certificate_still_requests_the_payload() {
+    let test_data = TestData::new(3).await;
+    let epoch = EpochNumber::genesis();
+
+    let leaders: Vec<u64> = test_data
+        .views
+        .iter()
+        .map(|v| {
+            (0..10u64)
+                .find(|i| {
+                    BLSPubKey::generated_from_seed_indexed([0; 32], *i).0 == v.leader_public_key
+                })
+                .expect("every leader is a committee member")
+        })
+        .collect();
+    let behind: u64 = (0..10)
+        .find(|i| !leaders.contains(i))
+        .expect("ten nodes, at most three lead views 1-3");
+    let honest: Vec<u64> = (0..10)
+        .filter(|i| leaders.contains(i) || *i == behind)
+        .chain((0..10).filter(|i| !leaders.contains(i) && *i != behind))
+        .take(THRESHOLD)
+        .collect();
+
+    let timeout_cert_2 = {
+        let membership = mock_membership();
+        let epoch_membership = membership
+            .membership_for_epoch(Some(epoch))
+            .expect("genesis membership");
+        build_timeout_cert_signed_by(ViewNumber::new(2), epoch, &epoch_membership, &honest)
+    };
+
+    let key = BLSPubKey::generated_from_seed_indexed([0; 32], behind).0;
+    let mut harness = ConsensusHarness::new(behind).await;
+
+    // View 1 without its share broadcasts and without its certificate: the
+    // node takes part, cannot reconstruct, and never learns that a quorum
+    // certified the view.
+    harness
+        .apply_pair(test_data.views[0].proposal_input_consensus(&key))
+        .await;
+    // View 2's proposal is justified at view 1, so it carries the certificate
+    // the node never received.
+    harness
+        .apply_pair(test_data.views[1].proposal_input_consensus(&key))
+        .await;
+    harness
+        .apply(ConsensusInput::TimeoutOneHonest(ViewNumber::new(2), epoch))
+        .await;
+    harness
+        .apply(ConsensusInput::TimeoutCertificate(ValidCert::new(
+            timeout_cert_2,
+            epoch,
+        )))
+        .await;
+
+    assert_eq!(harness.consensus.cert1_at(ViewNumber::new(1)), None);
+    assert!(
+        harness.outputs().iter().any(|o| {
+            matches!(o, ConsensusOutput::RequestMissingPayload { view, .. }
+                if *view == ViewNumber::new(1))
+        }),
+        "the payload of view 1 was requested from the child proposal's justify_qc"
+    );
+}

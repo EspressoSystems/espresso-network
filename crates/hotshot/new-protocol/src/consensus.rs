@@ -1280,13 +1280,28 @@ impl<T: NodeType> Consensus<T> {
             return;
         }
 
-        for (&view, cert) in self.certs.range(start..=end).rev() {
-            // Take the commitment from the proposal the certificate certifies,
-            // never from an equivocating sibling at the same view.
-            let Some(proposal) = self.proposals.get(&view) else {
+        // The leaf a quorum certified at a view, if we know of one. A
+        // certificate we hold is the first source, but a node that missed a
+        // view's votes and the certificate broadcast that followed them has
+        // none, while still holding proposals built on that view — and a
+        // proposal's `justify_qc` is a certificate for its parent, verified
+        // before the proposal was admitted.
+        let certified_leaf = |view| -> Option<Commitment<Leaf2<T>>> {
+            if let Some(cert) = self.certs.get(&view) {
+                return Some(cert.data.leaf_commit);
+            }
+            self.proposals
+                .range(view + 1..)
+                .map(|(_, proposal)| &proposal.justify_qc)
+                .find(|qc| qc.view_number() == view)
+                .map(|qc| qc.data.leaf_commit)
+        };
+
+        for (&view, proposal) in self.proposals.range(start..=end).rev() {
+            let Some(leaf_commit) = certified_leaf(view) else {
                 continue;
             };
-            if proposal_commitment(proposal) != cert.data.leaf_commit {
+            if proposal_commitment(proposal) != leaf_commit {
                 continue;
             }
             let VidCommitment::V2(payload_commitment) = proposal.block_header.payload_commitment()
