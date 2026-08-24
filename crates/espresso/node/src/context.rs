@@ -110,7 +110,7 @@ where
     N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
 {
-    #[tracing::instrument(skip_all, fields(node_id = initializer.instance_state.node_id))]
+    #[tracing::instrument(skip_all, fields(node_id = initializer.instance_state().node_id))]
     #[allow(clippy::too_many_arguments)]
     pub async fn init<F>(
         network_config: NetworkConfig<SeqTypes>,
@@ -138,7 +138,7 @@ where
         let pub_key = validator_config.public_key;
         tracing::info!(%pub_key, "initializing consensus");
 
-        let instance_state = initializer.instance_state.clone();
+        let instance_state = initializer.instance_state().clone();
 
         // Stick our node ID in `metrics` so it is easily accessible via the status API.
         metrics

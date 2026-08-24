@@ -1347,6 +1347,11 @@ impl<TYPES: NodeType> HotShotInitializer<TYPES> {
         &self.saved_proposals
     }
 
+    /// The upgrade certificate consensus has decided, if there is one.
+    pub fn decided_upgrade_certificate(&self) -> Option<&UpgradeCertificate<TYPES>> {
+        self.decided_upgrade_certificate.as_ref()
+    }
+
     /// The last formed light client state update certificate, if there is any.
     pub fn state_cert(&self) -> Option<&LightClientStateUpdateCertificateV2<TYPES>> {
         self.state_cert.as_ref()
