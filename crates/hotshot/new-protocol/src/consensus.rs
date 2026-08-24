@@ -1237,62 +1237,62 @@ impl<T: NodeType> Consensus<T> {
         self.adopt_certified_drb(view);
     }
 
-    /// Ask for the payload of the highest certified view that `timeout` proves
-    /// we are stuck behind.
+    /// Ask for the payload of the view every proposal we could vote for is
+    /// parented at.
     ///
-    /// Within that range only the highest missing payload is worth asking for.
-    /// Every proposal we could vote for is parented at the quorum's lock, so
-    /// reconstructing that one view unblocks us and lets the lock skip the
-    /// views below it, which is also why peers keep no older payload.
-    /// Ask for the payload of the highest certified view we are stuck behind.
+    /// Leaders build on their lock, so the parent of the latest proposal we
+    /// hold is that view, and it is the one view peers still retain: a node
+    /// holding the payload of a certified later view would have locked there
+    /// itself, so no peer keeps one. Its certificate is the proposal's
+    /// `justify_qc`, which is also the only record of it for a node that
+    /// missed the view's votes and the certificate broadcast that followed
+    /// them. The QC is read, not stored, so `certs` keeps meaning
+    /// certificates that arrived as certificates.
+    ///
+    /// Views at or earlier than the lock cannot be what blocks us: safety
+    /// pins the justify_qc of any proposal we may still vote for at or later
+    /// than the lock, and a parent equal to the lock counts as reconstructed.
+    /// Later than `current_view - GC_MARGIN_VIEWS` a missing share broadcast
+    /// may still arrive on its own, and fetching would race it for a whole
+    /// payload.
     fn request_missing_payloads(&self, outbox: &mut Outbox<ConsensusOutput<T>>) {
-        let start = self.locked_view().unwrap_or_else(ViewNumber::genesis) + 1;
-        let end = ViewNumber::from(self.current_view.saturating_sub(GC_MARGIN_VIEWS.get()));
+        let earliest = self.locked_view().unwrap_or_else(ViewNumber::genesis) + 1;
+        let latest = ViewNumber::from(self.current_view.saturating_sub(GC_MARGIN_VIEWS.get()));
 
-        if start > end {
+        let Some((_, child)) = self.proposals.last_key_value() else {
+            return;
+        };
+
+        let view = child.justify_qc.view_number();
+
+        if view < earliest || view > latest {
             return;
         }
 
-        // The leaf a quorum certified at a view, if we know of one. A
-        // certificate we hold is the first source, but a node that missed a
-        // view's votes and the certificate broadcast that followed them has
-        // none, while still holding proposals built on that view — and a
-        // proposal's `justify_qc` is a certificate for its parent, verified
-        // before the proposal was admitted.
-        let certified_leaf = |view| -> Option<Commitment<Leaf2<T>>> {
-            if let Some(cert) = self.certs.get(&view) {
-                return Some(cert.data.leaf_commit);
-            }
-            self.proposals
-                .range(view + 1..)
-                .map(|(_, proposal)| &proposal.justify_qc)
-                .find(|qc| qc.view_number() == view)
-                .map(|qc| qc.data.leaf_commit)
+        let Some(proposal) = self.proposals.get(&view) else {
+            return;
         };
 
-        for (&view, proposal) in self.proposals.range(start..=end).rev() {
-            let Some(leaf_commit) = certified_leaf(view) else {
-                continue;
-            };
-            if proposal_commitment(proposal) != leaf_commit {
-                continue;
-            }
-            let VidCommitment::V2(payload_commitment) = proposal.block_header.payload_commitment()
-            else {
-                continue;
-            };
-            if self
-                .blocks_reconstructed
-                .contains(&(view, payload_commitment))
-            {
-                continue;
-            }
-            outbox.push_back(ConsensusOutput::RequestMissingPayload {
-                view,
-                payload_commitment,
-            });
-            break;
+        if proposal_commitment(proposal) != child.justify_qc.data.leaf_commit {
+            return;
         }
+
+        let VidCommitment::V2(payload_commitment) = proposal.block_header.payload_commitment()
+        else {
+            return;
+        };
+
+        if self
+            .blocks_reconstructed
+            .contains(&(view, payload_commitment))
+        {
+            return;
+        }
+
+        outbox.push_back(ConsensusOutput::RequestMissingPayload {
+            view,
+            payload_commitment,
+        });
     }
 
     fn request_parent_proposal_if_missing(
