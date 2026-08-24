@@ -971,14 +971,14 @@ async fn check_cliquenet_info_registered(
 /// it: a decided upgrade certificate to the new protocol is stored and the
 /// view we restart from is past the cutover view.
 fn new_protocol_cutover_complete(initializer: &HotShotInitializer<SeqTypes>) -> bool {
-    let Some(cert) = &initializer.decided_upgrade_certificate else {
+    let Some(cert) = initializer.decided_upgrade_certificate() else {
         return false;
     };
     let complete = cert.data.new_version >= versions::NEW_PROTOCOL_VERSION
-        && initializer.start_view >= cert.data.new_version_first_view;
+        && initializer.start_view() >= cert.data.new_version_first_view;
     if complete {
         tracing::info!(
-            start_view = %initializer.start_view,
+            start_view = %initializer.start_view(),
             cutover_view = %cert.data.new_version_first_view,
             "network already upgraded to the new protocol, not waiting for the legacy network"
         );
