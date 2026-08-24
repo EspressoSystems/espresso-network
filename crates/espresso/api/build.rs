@@ -3,10 +3,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// Generates the OpenAPI document from the compiled descriptor set. Lives under
-/// `src/generated/` next to its output, but it is this build script's module, not a
-/// generated file.
-#[path = "src/generated/openapi.rs"]
+/// Generates the OpenAPI document from the compiled descriptor set into `src/generated/`.
+#[path = "build/openapi.rs"]
 mod openapi;
 
 /// Proto package the v2 API is defined in, shared with [`openapi`].
@@ -79,7 +77,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     println!("cargo:rerun-if-changed=proto");
-    println!("cargo:rerun-if-changed=src/generated/openapi.rs");
+    println!("cargo:rerun-if-changed=build/openapi.rs");
 
     Ok(())
 }

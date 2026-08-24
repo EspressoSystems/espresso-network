@@ -17,8 +17,8 @@ From those files, `crates/espresso/api/build.rs` generates everything else into 
 - `espresso.api.v2.serde.rs`: canonical protoJSON Serialize/Deserialize impls for the message types (pbjson)
 - `espresso.api.v2.rest.rs`: Axum handlers that transcode HTTP/JSON onto the tonic service traits
 - `espresso.api.v2.openapi.json`: OpenAPI 3.0 document for the REST routes, served at `/v2/docs/openapi.json` with
-  Swagger UI at `/v2` and Scalar at `/v2/scalar` (`generated/openapi.rs` is the hand-written build-script module that
-  produces it)
+  Swagger UI at `/v2` and Scalar at `/v2/scalar` (produced by the hand-written build-script module
+  `crates/espresso/api/build/openapi.rs`)
 
 One implementation of a tonic service trait therefore serves both transports: `serve_axum` mounts the generated
 `*_rest_router` functions under `/v2/...`, and `serve_tonic` registers the tonic servers plus gRPC reflection (the

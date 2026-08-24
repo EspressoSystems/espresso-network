@@ -1,7 +1,5 @@
-//! OpenAPI 3.0 generation from the compiled proto descriptor set.
-//!
-//! Unlike its neighbors, this file is a hand-written `build.rs` module (the generator,
-//! not an output); it produces `espresso.api.v2.openapi.json` alongside it.
+//! OpenAPI 3.0 generation from the compiled proto descriptor set, producing
+//! `src/generated/espresso.api.v2.openapi.json`.
 //!
 //! The schemas must track what the pbjson impls emit, which is not a proto type's natural JSON:
 //! a `uint64` is a decimal string in a body but plain digits in a query parameter.
