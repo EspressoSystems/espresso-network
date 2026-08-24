@@ -1,9 +1,6 @@
 # Refinery Migrations and Deferred Backfills
 
-Guidance for AI coding agents (and humans) working on storage migrations in this repo. Not loaded into the default agent
-context — read this file when adding or modifying a storage migration.
-
-## ⚠️ Refinery Migrations Block Startup — Avoid Large Data Operations
+## Refinery migrations block startup
 
 Refinery migrations run synchronously at node startup, before the node joins consensus. Any migration that does
 significant data work (bulk inserts, table rewrites, large backfills) will delay or prevent the node from participating
@@ -14,7 +11,7 @@ in consensus, which is unacceptable in production.
 DML that touches a number of rows proportional to database size (`UPDATE`, `INSERT ... SELECT`, `DELETE` across large
 tables).
 
-## Deferred Backfill Pattern for Large Data Migrations
+## Deferred backfill pattern for large data migrations
 
 When a migration requires transforming or copying a significant amount of existing data, use the `DataBackfill` trait
 (`hotshot-query-service/src/migration.rs`) instead of doing the work in Refinery. This runs the data work in a
@@ -45,11 +42,11 @@ database (e.g. copying rows to a new table, recomputing a column, reformatting d
    reverting to an older binary cannot roll back a migration.
 
 The `DROP` discards whatever the backfill has not moved, so confirming completion on every deployment (via
-`GET database/migration-status`) is a hard precondition for shipping it, not a formality. A database that never ran the
-backfill to completion (upgrading across releases, or restored from an old backup) loses the old table's rows and has to
-resync. `V1504__hash_bigint_contract.sql` is the worked example.
+`GET /v1/database/migration-status`) is a hard precondition for shipping it, not a formality. A database that never ran
+the backfill to completion (upgrading across releases, or restored from an old backup) loses the old table's rows and
+has to resync. `V1504__hash_bigint_contract.sql` is the worked example.
 
-**Progress is tracked** in the `deferred_migrations` table and exposed at `GET database/migration-status`.
+**Progress is tracked** in the `deferred_migrations` table and exposed at `GET /v1/database/migration-status`.
 
 **Storage caveat:** if the new table has FK constraints that require a lookup table to be fully populated before any
 rows can be inserted, that lookup table will be doubled in storage for the duration of the migration. This is
