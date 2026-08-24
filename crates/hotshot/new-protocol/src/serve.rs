@@ -116,14 +116,6 @@ impl<T: NodeType> Server<T> {
         self.timed_out = self.timed_out.max(Some(view));
     }
 
-    /// The block we can serve for `view`, if we hold it.
-    ///
-    /// A candidate the lock has not reached is not what the lock rule promises
-    /// to keep, but while it is still held it answers just as well.
-    fn retained(&self, view: ViewNumber) -> Option<&RetainedBlock> {
-        self.blocks.get(&view)
-    }
-
     /// Unicast the retained block to `sender` if that is what `request` asks for.
     pub fn handle_request(
         &self,
@@ -142,7 +134,7 @@ impl<T: NodeType> Server<T> {
             return Ok(());
         }
 
-        let Some(block) = self.retained(view) else {
+        let Some(block) = self.blocks.get(&view) else {
             debug!(%view, %sender, "payload request for a block we do not retain");
             return self.respond(
                 view,
@@ -249,7 +241,7 @@ mod tests {
         server.retain(view(1), VidCommitment2::default(), &payload());
 
         assert!(server.locked.is_none());
-        assert!(server.retained(view(1)).is_some());
+        assert!(server.blocks.get(&view(1)).is_some());
     }
 
     /// Locking a view we hold the block for makes it the one we keep.
@@ -260,7 +252,7 @@ mod tests {
         server.lock_moved(view(1));
 
         assert_eq!(server.locked, Some(view(1)));
-        assert!(server.retained(view(1)).is_some());
+        assert!(server.blocks.get(&view(1)).is_some());
     }
 
     /// Every retained block answers for its own view, whether or not the lock
@@ -272,9 +264,9 @@ mod tests {
         server.lock_moved(view(1));
         server.retain(view(2), VidCommitment2::default(), &payload());
 
-        assert!(server.retained(view(1)).is_some());
-        assert!(server.retained(view(2)).is_some());
-        assert!(server.retained(view(3)).is_none());
+        assert!(server.blocks.get(&view(1)).is_some());
+        assert!(server.blocks.get(&view(2)).is_some());
+        assert!(server.blocks.get(&view(3)).is_none());
     }
 
     /// A certificate arriving after later views were reconstructed still
@@ -288,7 +280,7 @@ mod tests {
         server.lock_moved(view(1));
 
         assert_eq!(server.locked, Some(view(1)));
-        assert!(server.retained(view(1)).is_some());
+        assert!(server.blocks.get(&view(1)).is_some());
     }
 
     /// Blocks obtained out of order each take their own place.
@@ -298,8 +290,8 @@ mod tests {
         server.retain(view(2), VidCommitment2::default(), &payload());
         server.retain(view(1), VidCommitment2::default(), &payload());
 
-        assert!(server.retained(view(1)).is_some());
-        assert!(server.retained(view(2)).is_some());
+        assert!(server.blocks.get(&view(1)).is_some());
+        assert!(server.blocks.get(&view(2)).is_some());
     }
 
     /// Eviction takes the earliest block, and never the locked one.
@@ -314,11 +306,11 @@ mod tests {
 
         assert_eq!(server.blocks.len(), RETAINED_BLOCKS);
         assert!(
-            server.retained(view(1)).is_some(),
+            server.blocks.get(&view(1)).is_some(),
             "the locked block is never evicted"
         );
         assert!(
-            server.retained(view(2)).is_none(),
+            server.blocks.get(&view(2)).is_none(),
             "the earliest unlocked block goes first"
         );
     }
