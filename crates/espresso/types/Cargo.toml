@@ -118,6 +118,7 @@ espresso-contract-deployer = { workspace = true }
 fluent-asserter = { workspace = true }
 hotshot-example-types = { workspace = true }
 hotshot-query-service = { workspace = true, features = ["testing"] }
+http = { workspace = true }
 insta = { workspace = true }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
@@ -125,8 +126,8 @@ rand_chacha = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = { workspace = true }
 test-log = { workspace = true }
+test-server = { workspace = true }
 test-utils = { workspace = true }
-tokio = { workspace = true, features = ["net", "io-util"] }
 
 [[bench]]
 name = "reward_mt"

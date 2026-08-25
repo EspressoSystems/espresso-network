@@ -1216,6 +1216,7 @@ mod test {
         providers::layers::AnvilProvider,
     };
     use espresso_contract_deployer::{Contracts, deploy_fee_contract_proxy};
+    use http::StatusCode;
     use time::OffsetDateTime;
 
     use super::*;
@@ -1796,48 +1797,16 @@ mod test {
         provider.transport.current_transport.read().generation % transport.urls.len()
     }
 
-    /// Spawns a TCP server that answers every connection with a fixed HTTP response, regardless
-    /// of what was sent. Used to stand in for a dead provider that speaks valid HTTP/JSON-RPC.
-    async fn spawn_fixed_response_server(status: u16, body: &'static str) -> Url {
-        use tokio::{
-            io::{AsyncReadExt, AsyncWriteExt},
-            net::TcpListener,
-        };
-
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind fake provider socket");
-        let port = listener.local_addr().unwrap().port();
-
-        spawn(async move {
-            loop {
-                let Ok((mut stream, _)) = listener.accept().await else {
-                    return;
-                };
-                spawn(async move {
-                    let mut buf = [0u8; 4096];
-                    // The request is tiny (a single JSON-RPC call); we don't need to parse it,
-                    // just drain it so the client isn't left waiting on us.
-                    let _ = stream.read(&mut buf).await;
-                    let response = format!(
-                        "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: \
-                         {}\r\nConnection: close\r\n\r\n{body}",
-                        body.len()
-                    );
-                    let _ = stream.write_all(response.as_bytes()).await;
-                    let _ = stream.shutdown().await;
-                });
-            }
-        });
-
-        format!("http://127.0.0.1:{port}").parse().unwrap()
-    }
-
     /// A provider that always answers with a parseable JSON-RPC error must be scored unhealthy
     /// and trigger failover, not be treated as healthy (see [`ResponseOutcome`]).
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_failover_on_dead_provider_with_json_rpc_error_body() {
-        let dead_provider = spawn_fixed_response_server(403, fixtures::ALCHEMY_APP_INACTIVE).await;
+        let dead_provider = test_server::serve_fixed(
+            StatusCode::FORBIDDEN,
+            "application/json",
+            fixtures::ALCHEMY_APP_INACTIVE,
+        )
+        .await;
         let anvil = Anvil::new().block_time(1).spawn();
 
         let provider = L1ClientOptions {

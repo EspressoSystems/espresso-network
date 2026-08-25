@@ -41,6 +41,7 @@ members = [
     "crates/http-wire",
     "crates/process-metrics",
     "crates/serialization/api",
+    "crates/test-server",
     "crates/versions",
     "hotshot-events-service",
     "hotshot-query-service",
@@ -101,6 +102,7 @@ default-members = [
     "request-response",
     "sdks/crypto-helper",
     "crates/serialization/api",
+    "crates/test-server",
     "crates/espresso/api",
     "crates/espresso/keyset",
     "crates/espresso/node",
@@ -418,6 +420,7 @@ sysinfo = "0.33.1"
 tagged-base64 = "0.4.1"
 tempfile = "3.10"
 test-log = { version = "0.2", features = ["color", "trace"] }
+test-server = { path = "crates/test-server" }
 test-utils = { path = "test-utils" }
 thiserror = "2"
 tide-disco = "0.9"
