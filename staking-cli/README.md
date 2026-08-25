@@ -96,6 +96,7 @@ Commands:
   init                    Initialize the config file with deployment and wallet info
   purge                   Remove the config file
   stake-table             Show the stake table in the Espresso stake table contract
+  stake-table-entry       Show everything the stake table contract knows about one address
   account                 Print the signer account address
   register-validator      Register to become a validator
   update-consensus-keys   Update a validators Espresso consensus signing keys
@@ -115,51 +116,70 @@ Commands:
   token-balance           Check ESP token balance
   token-allowance         Check ESP token allowance of stake table contract
   transfer                Transfer ESP tokens
+  demo                    Demo commands for testing and development
   export-node-signatures  Export validator node signatures for address validation
   preview-metadata        Preview metadata from a URL without registering
-  demo                    Demo commands for testing (stake, delegate, undelegate, churn)
   help                    Print this message or the help of the given subcommand(s)
 
 Options:
   -c, --config <CONFIG_PATH>
           Config file
 
+      --no-config
+          Skip loading the config file (takes precedence over -c)
+
       --rpc-url <RPC_URL>
           L1 Ethereum RPC
 
           [env: L1_PROVIDER=]
+
+      --token-address [<TOKEN_ADDRESS>]
+          [DEPRECATED] Deployed ESP token contract address.
+
+          [DEPRECATED] This is fetched from the stake table contract now.
+
+          [env: ESP_TOKEN_CONTRACT_ADDRESS=]
 
       --stake-table-address <STAKE_TABLE_ADDRESS>
           Deployed stake table contract address
 
           [env: STAKE_TABLE_ADDRESS=]
 
+      --network <NETWORK>
+          Use the built-in configuration for a network, without needing a config file.
+
+          The config file, other flags, and environment variables all take precedence, so an RPC that is down can still be replaced with `--rpc-url`. The stake table address is not overridable, since a different address is a different network.
+
+          [env: ESPRESSO_NETWORK=]
+          [possible values: mainnet, decaf, local]
+
       --espresso-url [<ESPRESSO_URL>]
           Espresso sequencer API URL for reward claims
 
           [env: ESPRESSO_URL=]
 
-      --mnemonic <MNEMONIC>
+      --mnemonic [<MNEMONIC>]
           The mnemonic to use when deriving the key
 
           [env: MNEMONIC=]
 
-      --private-key <PRIVATE_KEY>
+      --private-key [<PRIVATE_KEY>]
           Raw private key (hex-encoded with or without 0x prefix)
 
           [env: PRIVATE_KEY=]
 
-      --account-index <ACCOUNT_INDEX>
+      --account-index [<ACCOUNT_INDEX>]
           The mnemonic account index to use when deriving the key
 
           [env: ACCOUNT_INDEX=]
 
-      --ledger
+      --ledger <LEDGER>
           Use a ledger device to sign transactions.
 
           NOTE: ledger must be unlocked, Ethereum app open and blind signing must be enabled in the Ethereum app settings.
 
           [env: USE_LEDGER=]
+          [possible values: true, false]
 
       --export-calldata
           Export calldata for multisig wallets instead of sending transaction
@@ -184,8 +204,15 @@ Options:
 
           [possible values: safe, json, toml]
 
+      --backtrace-mode <BACKTRACE_MODE>
+          [env: RUST_LOG_FORMAT=]
+          [possible values: full, compact, json]
+
   -h, --help
           Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
 ```
 
 or by passing `--help` to a command, for example `delegate`:
@@ -320,7 +347,11 @@ override both. That means an RPC that is down can be replaced without giving up 
 staking-cli --network mainnet --rpc-url https://your-own-rpc.example stake-table
 ```
 
-`--network` conflicts with `--stake-table-address`, because a different stake table is a different network.
+`--network` conflicts with `--stake-table-address`, because a different stake table is a different network. The conflict
+also applies when the address comes from `STAKE_TABLE_ADDRESS`, so that variable has to be unset.
+
+The environment variable for this flag is `ESPRESSO_NETWORK`. Note that `init --network` reads a different one,
+`NETWORK`, since it selects a template to write rather than configuration to use.
 
 ### Inspect the configuration
 
@@ -359,6 +390,12 @@ By default the delegator and delegation lists are reduced to their totals, since
 ```bash
 staking-cli stake-table-entry --address 0x... --delegations --format json
 ```
+
+Pass `--l1-block-number` to query a past block instead of the latest one.
+
+The amounts are derived from the contract's event log. Withdrawals claimed before the stake table was upgraded to V2
+named only the delegator, not the validator they were claimed from, so they cannot be attributed and may leave the
+amounts overstated. When any are found the command says so, and the JSON output sets `approximate` to `true`.
 
 ## Calldata Export (for Multisig Wallets)
 
