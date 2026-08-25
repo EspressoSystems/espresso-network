@@ -382,6 +382,10 @@ impl<T: NodeType> Consensus<T> {
         }
     }
 
+    pub fn public_key(&self) -> &T::SignatureKey {
+        &self.public_key
+    }
+
     /// Seed a parent certificate and proposal so the leader of the *next* view
     /// can propose without any external bootstrap injection.
     /// Sets the locked certificate and current epoch. After calling this, a
@@ -972,6 +976,7 @@ impl<T: NodeType> Consensus<T> {
             GcScope::Local(view) => {
                 let c = Commitment::default_commitment_no_preimage();
                 let vc = VidCommitment2::default();
+                let floor = self.decide_floor();
                 self.headers = self.headers.split_off(&(view, c));
                 self.unpaired_proposals = self.unpaired_proposals.split_off(&(view, vc));
                 self.unpaired_vid_shares = self.unpaired_vid_shares.split_off(&(view, vc));
@@ -979,7 +984,7 @@ impl<T: NodeType> Consensus<T> {
                 self.states_verified = self.states_verified.split_off(&view);
                 self.timeout_certs = self.timeout_certs.split_off(&view);
                 self.voted_1_views = self.voted_1_views.split_off(&view);
-                self.voted_2_views = self.voted_2_views.split_off(&view);
+                self.voted_2_views = self.voted_2_views.split_off(&floor);
             },
             GcScope::Decided(view) => {
                 let vc = VidCommitment2::default();
@@ -1019,6 +1024,25 @@ impl<T: NodeType> Consensus<T> {
                 self.blocks
                     .extract_if((view, vc)..(view + 1, vc), |_, _| true)
                     .for_each(drop);
+            },
+        }
+    }
+
+    pub fn leader_of(&self, view: ViewNumber, epoch: EpochNumber) -> Option<T::SignatureKey> {
+        match self
+            .stake_table_coordinator
+            .membership_for_epoch(Some(epoch))
+        {
+            Ok(stake_table) => match stake_table.leader(view) {
+                Ok(leader) => Some(leader),
+                Err(err) => {
+                    warn!(%view, %epoch, %err, "failed to get leader from stake table");
+                    None
+                },
+            },
+            Err(err) => {
+                warn!(%view, %epoch, %err, "failed to get stake table");
+                None
             },
         }
     }
@@ -2488,22 +2512,7 @@ impl<T: NodeType> Consensus<T> {
 
     #[instrument(level = "trace", skip_all)]
     fn is_leader(&self, view: ViewNumber, epoch: EpochNumber) -> bool {
-        match self
-            .stake_table_coordinator
-            .membership_for_epoch(Some(epoch))
-        {
-            Ok(stake_table) => match stake_table.leader(view) {
-                Ok(leader) => leader == self.public_key,
-                Err(err) => {
-                    warn!(%view, %epoch, %err, "failed to get leader from stake table");
-                    false
-                },
-            },
-            Err(err) => {
-                warn!(%view, %epoch, %err, "failed to get stake table");
-                false
-            },
-        }
+        self.leader_of(view, epoch).as_ref() == Some(&self.public_key)
     }
 
     fn staked_in_epoch(&self, epoch: EpochNumber) -> bool {
@@ -2644,7 +2653,32 @@ impl<T: NodeType> Consensus<T> {
 }
 
 impl<T: NodeType> ConsensusInput<T> {
-    fn view_number(&self) -> ViewNumber {
+    /// The epoch this input carries, where it carries one.
+    pub fn epoch(&self) -> Option<EpochNumber> {
+        match self {
+            ConsensusInput::BlockBuilt { epoch, .. } => Some(*epoch),
+            ConsensusInput::Certificate1(cert) => Some(cert.epoch()),
+            ConsensusInput::Certificate2(cert) => Some(cert.epoch()),
+            ConsensusInput::AdvanceView(cert) => Some(cert.epoch()),
+            ConsensusInput::EpochRootCertificates { cert1, .. } => Some(cert1.epoch()),
+            ConsensusInput::TimeoutCertificate(cert) => Some(cert.epoch()),
+            ConsensusInput::Proposal(_, proposal) => Some(proposal.proposal.data.epoch),
+            ConsensusInput::FetchedProposal(proposal) => Some(proposal.proposal.data.epoch),
+            ConsensusInput::Timeout(_, epoch) => Some(*epoch),
+            ConsensusInput::TimeoutOneHonest(_, epoch) => Some(*epoch),
+            ConsensusInput::DrbResult(epoch, _) => Some(*epoch),
+            ConsensusInput::EpochChange(message) => message.cert1.epoch(),
+            ConsensusInput::BlockReconstructed(..)
+            | ConsensusInput::HeaderCreated(..)
+            | ConsensusInput::VidShare(..)
+            | ConsensusInput::StateValidated(..)
+            | ConsensusInput::StateValidationFailed(..)
+            | ConsensusInput::Stored(..)
+            | ConsensusInput::VidDisperseCreated(..) => None,
+        }
+    }
+
+    pub fn view_number(&self) -> ViewNumber {
         match self {
             ConsensusInput::BlockBuilt { view, .. } => *view,
             ConsensusInput::BlockReconstructed(view, _) => *view,

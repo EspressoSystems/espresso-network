@@ -1066,6 +1066,11 @@ where
         self.client.handle()
     }
 
+    #[cfg(test)]
+    pub(crate) fn consensus(&self) -> &Consensus<T> {
+        &self.consensus
+    }
+
     /// Refresh the network's peer window for `epoch`.
     ///
     /// The coordinator does this itself whenever a proposal validates, but
