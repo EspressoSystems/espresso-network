@@ -42,7 +42,9 @@ impl<Types: NodeType, ApiVer: StaticVersionType + 'static> EventServiceStream<Ty
         let mut last_err = None;
         let health = timeout(Self::CONNECTION_TIMEOUT, async {
             loop {
-                match client.healthcheck::<HealthStatus>().await {
+                // Absolute path: the base URL may include a version prefix (e.g. `/v1`), which
+                // serves the event stream but has no healthcheck route of its own.
+                match client.get::<HealthStatus>("/healthcheck").send().await {
                     Ok(_) => break,
                     Err(err) => {
                         tracing::debug!(%err, "Healthcheck failed, retrying");
