@@ -347,6 +347,10 @@ staking-cli --network mainnet --rpc-url https://your-own-rpc.example stake-table
 `--network` conflicts with `--stake-table-address`, because a different stake table is a different network. The conflict
 also applies when the address comes from `STAKE_TABLE_ADDRESS`, so that variable has to be unset.
 
+The two commands that read event logs, `stake-table` and `stake-table-entry`, fetch the whole range in one request and
+split it into smaller ranges only if the provider refuses. If your provider caps the range, set
+`ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE` to its limit to skip the request that would only be rejected.
+
 ### Inspect the configuration
 
 You can inspect the merged configuration by running:
