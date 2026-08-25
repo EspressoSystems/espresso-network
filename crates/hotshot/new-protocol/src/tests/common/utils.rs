@@ -1488,19 +1488,34 @@ pub(crate) fn build_timeout_cert(
 /// Name the leader of the view a step is about, for the replay.
 ///
 /// Every view has one, and the model takes the schedule as a parameter, so a
-/// trace that does not say who leads leaves a replay to assume — and the only
-/// safe-looking assumption, that this node leads everywhere, makes the leader
-/// clause of `ProposalJustification` unfalsifiable. Asked of the stake table
+/// trace that does not say who leads leaves the replay unable to tell a proposal
+/// this node was entitled to make from one it was not. Asked of the stake table
 /// here rather than taken from the propose path, so a propose path that forgets
 /// to check leadership is caught rather than confirmed.
+///
+/// The epoch comes from the input, not from `current_epoch`. `apply` checks
+/// leadership against the epoch of the input in hand, so this has to read it from
+/// the same place: across a boundary the two differ, and a leader from the wrong
+/// membership is a wrong answer that looks like a right one.
+///
+/// A stake table that cannot answer is recorded as `unknown` rather than skipped:
+/// silence would not say whether a view's leader was unknown or merely unrecorded,
+/// and the two mean different things to a reader. It is not a failure — an epoch
+/// the membership does not have leaves consensus unable to claim leadership
+/// either, so a replay that refuses to propose there agrees with it. Only reached
+/// while recording, so an ordinary test run is unaffected.
 pub(crate) fn record_leader(
     trace: &mut trace::Recorder,
     consensus: &Consensus<TestTypes>,
     input: &ConsensusInput<TestTypes>,
 ) {
-    let view = input.view_number();
-    let epoch = consensus.current_epoch().unwrap_or(EpochNumber::genesis());
-    if let Some(leader) = consensus.leader_of(view, epoch) {
-        trace.leader::<TestTypes>(view, &leader);
+    if !trace.recording() {
+        return;
     }
+    let view = input.view_number();
+    let epoch = input
+        .epoch()
+        .or_else(|| consensus.current_epoch())
+        .unwrap_or_else(EpochNumber::genesis);
+    trace.leader::<TestTypes>(view, consensus.leader_of(view, epoch).as_ref());
 }

@@ -170,22 +170,40 @@ impl Recorder {
         self.lines.push(format!("# trace {line}"));
     }
 
-    /// Name the leader of `view`, once.
+    /// Whether anything is being recorded.
     ///
-    /// Every view has a leader, and a trace that omits them leaves a replay with
-    /// no way to tell a proposal this node was entitled to make from one it was
-    /// not: the model takes the schedule as a parameter, so a replay that cannot
-    /// read it has to assume something, and assuming this node leads everywhere
-    /// makes the leader clause of `ProposalJustification` unfalsifiable.
+    /// Lets a caller skip work that only a trace needs — and, for the leader of a
+    /// view, skip a lookup whose failure should stop a recorded run but has no
+    /// business stopping an ordinary one.
+    pub fn recording(&self) -> bool {
+        self.path.is_some()
+    }
+
+    /// Name the leader of `view`, once, or say that it cannot be named.
+    ///
+    /// Every view has a leader, and the model takes the schedule as a parameter,
+    /// so a trace that does not say who leads leaves a replay with no way to tell
+    /// a proposal this node was entitled to make from one it was not: assuming
+    /// this node leads everywhere makes the leader clause of
+    /// `ProposalJustification` unfalsifiable.
+    ///
+    /// `None` is written as `unknown` rather than left out. A stake table that
+    /// cannot answer for an epoch it does not have leaves consensus unable to
+    /// claim leadership either, so a replay that refuses to propose there reaches
+    /// the same conclusion by the same ignorance — but silence would not say
+    /// whether the leader was unknown or merely unrecorded.
     ///
     /// Written on the comment channel, like the identity line, so a reader that
     /// only knows about steps skips it.
-    pub fn leader<T: NodeType>(&mut self, view: ViewNumber, leader: &T::SignatureKey) {
+    pub fn leader<T: NodeType>(&mut self, view: ViewNumber, leader: Option<&T::SignatureKey>) {
         if self.path.is_none() || !self.led.insert(view) {
             return;
         }
-        self.lines
-            .push(format!("# leader {} {}", view, ident(leader)));
+        let named = match leader {
+            Some(key) => ident(key),
+            None => "unknown".to_string(),
+        };
+        self.lines.push(format!("# leader {view} {named}"));
     }
 
     /// Record one step: the input taken, and what it drew.

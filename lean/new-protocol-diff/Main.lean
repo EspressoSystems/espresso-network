@@ -102,7 +102,9 @@ lead replayed as agreement.
 A view with no line has no leader here, which is the strict reading: a step
 records the leader of its own view, so a proposal always has one, and anything
 proposing in a view the trace never mentions is acting on a schedule the trace
-does not show.
+does not show. A line reading `unknown` is the same answer said out loud: the
+recorder's stake table could not name the leader, which leaves the recording
+unable to claim leadership there either.
 -/
 def readLeaders (text : String) : Std.TreeMap ViewNumber PubKey :=
   (text.splitOn "\n").foldl (init := {}) fun leaders line =>
@@ -113,9 +115,11 @@ def readLeaders (text : String) : Std.TreeMap ViewNumber PubKey :=
       | [v, key] =>
         match v.toNat? with
         | some v =>
-          match cryptoFromJson (Json.str (key.replace "\"" "")) with
-          | .ok k => leaders.insert ⟨v⟩ ⟨k⟩
-          | .error _ => leaders
+          if key == "unknown" then leaders
+          else
+            match cryptoFromJson (Json.str (key.replace "\"" "")) with
+            | .ok k => leaders.insert ⟨v⟩ ⟨k⟩
+            | .error _ => leaders
         | none => leaders
       | _ => leaders
 

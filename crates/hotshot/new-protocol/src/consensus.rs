@@ -2552,6 +2552,31 @@ impl<T: NodeType> Consensus<T> {
 }
 
 impl<T: NodeType> ConsensusInput<T> {
+    /// The epoch this input carries, where it carries one.
+    pub fn epoch(&self) -> Option<EpochNumber> {
+        match self {
+            ConsensusInput::BlockBuilt { epoch, .. } => Some(*epoch),
+            ConsensusInput::Certificate1(cert) => Some(cert.epoch()),
+            ConsensusInput::Certificate2(cert) => Some(cert.epoch()),
+            ConsensusInput::AdvanceView(cert) => Some(cert.epoch()),
+            ConsensusInput::EpochRootCertificates { cert1, .. } => Some(cert1.epoch()),
+            ConsensusInput::TimeoutCertificate(cert) => Some(cert.epoch()),
+            ConsensusInput::Proposal(_, proposal) => Some(proposal.proposal.data.epoch),
+            ConsensusInput::FetchedProposal(proposal) => Some(proposal.proposal.data.epoch),
+            ConsensusInput::Timeout(_, epoch) => Some(*epoch),
+            ConsensusInput::TimeoutOneHonest(_, epoch) => Some(*epoch),
+            ConsensusInput::DrbResult(epoch, _) => Some(*epoch),
+            ConsensusInput::EpochChange(message) => message.cert1.epoch(),
+            ConsensusInput::BlockReconstructed(..)
+            | ConsensusInput::HeaderCreated(..)
+            | ConsensusInput::VidShare(..)
+            | ConsensusInput::StateValidated(..)
+            | ConsensusInput::StateValidationFailed(..)
+            | ConsensusInput::Stored(..)
+            | ConsensusInput::VidDisperseCreated(..) => None,
+        }
+    }
+
     pub fn view_number(&self) -> ViewNumber {
         match self {
             ConsensusInput::BlockBuilt { view, .. } => *view,
