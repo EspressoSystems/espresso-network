@@ -21,10 +21,7 @@
 
 use hotshot::types::BLSPubKey;
 use hotshot_example_types::node_types::TestTypes;
-use hotshot_types::{
-    data::{EpochNumber, ViewNumber},
-    traits::signature_key::SignatureKey,
-};
+use hotshot_types::{data::EpochNumber, traits::signature_key::SignatureKey};
 use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
 
 use crate::{
@@ -61,29 +58,18 @@ struct Reached {
 }
 
 impl Reached {
-    fn tally(outputs: impl Iterator<Item = &'static str>) -> Self {
+    fn tally<'a>(outputs: impl Iterator<Item = &'a ConsensusOutput<TestTypes>>) -> Self {
         let mut r = Self::default();
-        for kind in outputs {
-            match kind {
-                "vote1" => r.vote1 += 1,
-                "vote2" => r.vote2 += 1,
-                "proposal" => r.proposal += 1,
-                "decided" => r.decided += 1,
+        for o in outputs {
+            match o {
+                ConsensusOutput::SendVote1(_) => r.vote1 += 1,
+                ConsensusOutput::SendVote2(_) => r.vote2 += 1,
+                ConsensusOutput::SendProposal(_) => r.proposal += 1,
+                ConsensusOutput::LeafDecided { .. } => r.decided += 1,
                 _ => {},
             }
         }
         r
-    }
-}
-
-/// The kind of action an output is, for counting; `None` for the rest.
-fn action_of(output: &ConsensusOutput<TestTypes>) -> Option<&'static str> {
-    match output {
-        ConsensusOutput::SendVote1(_) => Some("vote1"),
-        ConsensusOutput::SendVote2(_) => Some("vote2"),
-        ConsensusOutput::SendProposal(_) => Some("proposal"),
-        ConsensusOutput::LeafDecided { .. } => Some("decided"),
-        _ => None,
     }
 }
 
@@ -105,15 +91,13 @@ async fn run_seed(seed: u64) -> Reached {
     let data = TestData::new_with_epoch_height(VIEWS, EPOCH_HEIGHT).await;
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
-    // Every view's arrivals, but only some views' timers. A timeout for view `v`
-    // bars vote1 in every view up to `v`, so a bag holding all eight leaves
-    // almost nothing votable — a run where every view times out is a degenerate
-    // one, and it was costing this test most of its votes.
     let mut bag: Vec<(usize, u8)> = (0..VIEWS)
         .flat_map(|v| (0..5u8).map(move |k| (v, k)))
         .chain((0..VIEWS).filter(|_| rng.gen_bool(0.25)).map(|v| (v, 5u8)))
         .collect();
+
     bag.shuffle(&mut rng);
+
     let mut repeats = bag.clone();
     repeats.shuffle(&mut rng);
     bag.extend(repeats.into_iter().take(bag.len() / REPEAT_FRACTION));
@@ -133,7 +117,7 @@ async fn run_seed(seed: u64) -> Reached {
             _ => {
                 harness
                     .apply(ConsensusInput::Timeout(
-                        ViewNumber::new(view as u64),
+                        v.view_number,
                         EpochNumber::genesis(),
                     ))
                     .await
@@ -141,7 +125,7 @@ async fn run_seed(seed: u64) -> Reached {
         }
     }
 
-    Reached::tally(harness.outputs().iter().filter_map(action_of))
+    Reached::tally(harness.outputs().iter())
 }
 
 #[tokio::test]
@@ -165,6 +149,13 @@ async fn random_schedules_conform() {
     // nothing.
     assert!(total.vote1 >= 5, "too few vote1s to be evidence: {total:?}");
     assert!(total.vote2 >= 3, "too few vote2s to be evidence: {total:?}");
+    // Proposing needs this node to lead one of the hundred views and to hold a
+    // header for it, so it is the scarcest of the four and the first to vanish if
+    // the schedule stops assembling views. It reached ten when this was written.
+    assert!(
+        total.proposal >= 3,
+        "too few proposals to be evidence: {total:?}"
+    );
     assert!(
         total.decided >= 10,
         "too few decides to be evidence: {total:?}"
