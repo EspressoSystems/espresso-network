@@ -55,6 +55,7 @@ pub enum Error {
         source: EventError,
         resource: String,
     },
+    #[snafu(display("{status}: {message}"))]
     Custom {
         message: String,
         status: StatusCode,
