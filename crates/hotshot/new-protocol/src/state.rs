@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, HashMap},
     sync::Arc,
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 
 use committable::{Commitment, Committable};
@@ -17,7 +17,10 @@ use hotshot_types::{
     utils::BuilderCommitment,
     vote::HasViewNumber,
 };
-use tokio::task::{AbortHandle, JoinSet};
+use tokio::{
+    task::{AbortHandle, JoinSet},
+    time::sleep,
+};
 use tracing::{error, warn};
 
 use crate::{
@@ -25,6 +28,9 @@ use crate::{
     helpers::proposal_commitment,
     message::Proposal,
 };
+
+/// Default for [`StateManager::with_parent_deadline`].
+const DEFAULT_PARENT_DEADLINE: Duration = Duration::from_secs(5);
 
 pub struct UpdateLeaf<T: NodeType> {
     pub view: ViewNumber,
@@ -104,13 +110,27 @@ pub struct StateManager<T: NodeType> {
     tasks: JoinSet<Completed<T>>,
     validate_duration_metric: Option<Arc<dyn Histogram>>,
     update_leaf_duration_metric: Option<Arc<dyn Histogram>>,
+    /// See [`Self::with_parent_deadline`].
+    parent_deadline: Duration,
 }
 
-/// The proposal lets `gc` seed a stub for a validation it aborts.
+/// A state validation in progress. The proposal lets `gc` seed a stub for a
+/// validation it aborts.
 struct InFlight<T: NodeType> {
-    handle: AbortHandle,
+    validation: AbortHandle,
+    deadline: AbortHandle,
     view: ViewNumber,
     proposal: Proposal<T>,
+    /// Set once the validation outlives the parent deadline; requests on this
+    /// leaf then proceed against its `from_header` stub instead of waiting.
+    overdue: bool,
+}
+
+impl<T: NodeType> InFlight<T> {
+    fn abort(&self) {
+        self.validation.abort();
+        self.deadline.abort();
+    }
 }
 
 enum Pending<T: NodeType> {
@@ -137,6 +157,8 @@ enum Completed<T: NodeType> {
         response: HeaderResponse<T>,
         header: Option<T::BlockHeader>,
     },
+    /// The parent deadline elapsed for the validation of this proposal.
+    Deadline(Proposal<T>),
 }
 
 impl<T: NodeType> StateManager<T> {
@@ -151,7 +173,20 @@ impl<T: NodeType> StateManager<T> {
             tasks: JoinSet::new(),
             validate_duration_metric: None,
             update_leaf_duration_metric: None,
+            parent_deadline: DEFAULT_PARENT_DEADLINE,
         }
+    }
+
+    /// How long a request waits for its parent's in-flight validation before
+    /// proceeding against a `from_header` stub of the parent instead.
+    ///
+    /// Validation is fast on a dense state; one that takes this long is bound
+    /// by catchup, and queueing more catchups behind it costs more than running
+    /// them in parallel. The real state still replaces the stub when the
+    /// validation finishes.
+    pub fn with_parent_deadline(mut self, deadline: Duration) -> Self {
+        self.parent_deadline = deadline;
+        self
     }
 
     pub fn with_metrics(
@@ -203,7 +238,7 @@ impl<T: NodeType> StateManager<T> {
             return;
         }
 
-        if self.state_requests.contains_key(&request.parent_commitment) {
+        if self.parent_in_flight(&request.parent_commitment) {
             self.pending_requests
                 .entry(request.parent_commitment)
                 .or_default()
@@ -252,7 +287,7 @@ impl<T: NodeType> StateManager<T> {
         };
 
         let duration_metric = self.validate_duration_metric.clone();
-        let handle = self.tasks.spawn(async move {
+        let validation = self.tasks.spawn(async move {
             let measurement = duration_metric.map(Measurement::start);
             let result = parent_entry
                 .state
@@ -297,15 +332,31 @@ impl<T: NodeType> StateManager<T> {
                 },
             }
         });
+        let parent_deadline = self.parent_deadline;
+        let deadline_proposal = proposal.clone();
+        let deadline = self.tasks.spawn(async move {
+            sleep(parent_deadline).await;
+            Completed::Deadline(deadline_proposal)
+        });
 
         self.state_requests.insert(
             commitment,
             InFlight {
-                handle,
+                validation,
+                deadline,
                 view,
                 proposal,
+                overdue: false,
             },
         );
+    }
+
+    /// Whether requests on `commitment` should wait: its validation is running
+    /// and has not outlived the parent deadline.
+    fn parent_in_flight(&self, commitment: &Commitment<Leaf2<T>>) -> bool {
+        self.state_requests
+            .get(commitment)
+            .is_some_and(|in_flight| !in_flight.overdue)
     }
 
     pub fn request_header(&mut self, request: HeaderRequest<T>) {
@@ -317,7 +368,7 @@ impl<T: NodeType> StateManager<T> {
             return;
         }
 
-        if self.state_requests.contains_key(&parent_commitment) {
+        if self.parent_in_flight(&parent_commitment) {
             self.pending_requests
                 .entry(parent_commitment)
                 .or_default()
@@ -397,7 +448,7 @@ impl<T: NodeType> StateManager<T> {
         let commitment = leaf.commit();
         self.insert_state(view, state, delta, leaf);
         if let Some(in_flight) = self.state_requests.remove(&commitment) {
-            in_flight.handle.abort();
+            in_flight.abort();
         }
         self.start_pending(commitment);
     }
@@ -412,9 +463,11 @@ impl<T: NodeType> StateManager<T> {
                         leaf,
                         validated,
                     } => {
-                        if self.state_requests.remove(&response.commitment).is_none() {
+                        let Some(in_flight) = self.state_requests.remove(&response.commitment)
+                        else {
                             continue;
-                        }
+                        };
+                        in_flight.deadline.abort();
                         // A failed validation leaves a `from_header` stub
                         // (never displacing a real state) so the requests
                         // queued on this leaf proceed via catchup instead of
@@ -448,6 +501,20 @@ impl<T: NodeType> StateManager<T> {
                             continue;
                         }
                         return Some(StateManagerOutput::Header { response, header });
+                    },
+                    Completed::Deadline(proposal) => {
+                        let commitment = proposal_commitment(&proposal);
+                        let Some(in_flight) = self.state_requests.get_mut(&commitment) else {
+                            continue;
+                        };
+                        in_flight.overdue = true;
+                        warn!(
+                            view = %proposal.view_number(),
+                            deadline = ?self.parent_deadline,
+                            "state validation still running past the parent deadline; \
+                             descendants proceed against a from_header stub"
+                        );
+                        self.seed_from_header(proposal);
                     },
                 },
                 Some(Err(err)) => {
@@ -485,7 +552,7 @@ impl<T: NodeType> StateManager<T> {
             .extract_if(|_, in_flight| in_flight.view < view_number)
             .collect();
         for (commitment, in_flight) in stale {
-            in_flight.handle.abort();
+            in_flight.abort();
             if self.pending_requests.contains_key(&commitment) {
                 self.seed_from_header(in_flight.proposal);
             }

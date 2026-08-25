@@ -1,10 +1,14 @@
-use std::{sync::Arc, time::SystemTime};
+use std::{
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 
 use hotshot::traits::BlockPayload;
 use hotshot_example_types::{
     block_types::{TestBlockPayload, TestMetadata},
     node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
+    testable_delay::{DelayConfig, DelayOptions, DelaySettings, SupportedTraitTypesForAsyncDelay},
 };
 use hotshot_types::{
     data::{Leaf2, ViewNumber, vid_commitment},
@@ -236,6 +240,86 @@ async fn test_failed_validation_seeds_stub_for_children() {
             } if response.view == ViewNumber::new(2)
         ),
         "view 2 must validate against the stub"
+    );
+}
+
+/// A child waits for its parent's in-flight validation only up to the parent
+/// deadline. Past it the parent is stubbed and the child validates against the
+/// stub, in parallel with the parent; the real parent state still lands.
+#[tokio::test(start_paused = true)]
+async fn test_child_proceeds_on_stub_after_parent_deadline() {
+    let test_data = TestData::new(3).await;
+    let validation_delay = Duration::from_millis(500);
+    let mut delay_config = DelayConfig::default();
+    delay_config.add_setting(
+        SupportedTraitTypesForAsyncDelay::ValidatedState,
+        &DelaySettings {
+            delay_option: DelayOptions::Fixed,
+            fixed_time_in_milliseconds: validation_delay.as_millis() as u64,
+            ..Default::default()
+        },
+    );
+    let mut manager = new_manager_with_instance(TestInstanceState::new(delay_config))
+        .await
+        .with_parent_deadline(Duration::from_millis(50));
+
+    let started = tokio::time::Instant::now();
+    manager.request_state(make_state_request(&test_data.views[0]));
+    manager.request_state(make_state_request(&test_data.views[1]));
+
+    let mut validated = Vec::new();
+    for _ in 0..2 {
+        match manager.next().await.expect("both views complete") {
+            StateManagerOutput::State {
+                response,
+                validated: true,
+            } => validated.push(response.view),
+            other => panic!("unexpected output: {other:?}"),
+        }
+    }
+    assert_eq!(
+        validated,
+        vec![ViewNumber::new(1), ViewNumber::new(2)],
+        "both views validate, the parent first"
+    );
+    assert!(
+        started.elapsed() < validation_delay * 2,
+        "view 2 must not wait for view 1's full validation"
+    );
+    assert!(
+        manager
+            .get_state(ViewNumber::new(1))
+            .is_some_and(|entry| entry.delta.is_some()),
+        "the real parent state replaces the stub"
+    );
+}
+
+/// Without the deadline elapsing, a child still waits for its parent.
+#[tokio::test(start_paused = true)]
+async fn test_child_waits_for_parent_within_deadline() {
+    let test_data = TestData::new(3).await;
+    let validation_delay = Duration::from_millis(500);
+    let mut delay_config = DelayConfig::default();
+    delay_config.add_setting(
+        SupportedTraitTypesForAsyncDelay::ValidatedState,
+        &DelaySettings {
+            delay_option: DelayOptions::Fixed,
+            fixed_time_in_milliseconds: validation_delay.as_millis() as u64,
+            ..Default::default()
+        },
+    );
+    let mut manager = new_manager_with_instance(TestInstanceState::new(delay_config))
+        .await
+        .with_parent_deadline(Duration::from_secs(5));
+
+    let started = tokio::time::Instant::now();
+    manager.request_state(make_state_request(&test_data.views[0]));
+    manager.request_state(make_state_request(&test_data.views[1]));
+    manager.next().await.expect("view 1 completes");
+    manager.next().await.expect("view 2 completes");
+    assert!(
+        started.elapsed() >= validation_delay * 2,
+        "view 2 must validate against the real parent state, after it"
     );
 }
 

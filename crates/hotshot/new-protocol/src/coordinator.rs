@@ -229,7 +229,8 @@ where
             coordinator_metrics
                 .as_ref()
                 .map(|m| m.consensus.update_leaf_duration.clone().into()),
-        );
+        )
+        .with_parent_deadline(timeout_duration / 2);
         // Seed `from_header` stubs for restored undecided proposals so a child
         // proposal can be validated; anchor seeded last so its state wins.
         for p in initializer.saved_proposals().values() {
