@@ -150,7 +150,6 @@ Options:
 
           The config file, other flags, and environment variables all take precedence, so an RPC that is down can still be replaced with `--rpc-url`. The stake table address is not overridable, since a different address is a different network.
 
-          [env: ESPRESSO_NETWORK=]
           [possible values: mainnet, decaf, local]
 
       --espresso-url [<ESPRESSO_URL>]
@@ -308,8 +307,6 @@ This creates a TOML config file with the appropriate contract addresses and RPC 
 don't need to provide the configuration values every time you run the CLI. If no config file exists, all values must be
 provided via command-line arguments or environment variables.
 
-You can also set the network via environment variable: `NETWORK=mainnet staking-cli init --mnemonic MNEMONIC`
-
 NOTE: For this `init` command, wallet flags are specified _after_ the command. The `-c` flag (config path) goes before.
 
 ### Managing multiple network configurations
@@ -349,9 +346,6 @@ staking-cli --network mainnet --rpc-url https://your-own-rpc.example stake-table
 
 `--network` conflicts with `--stake-table-address`, because a different stake table is a different network. The conflict
 also applies when the address comes from `STAKE_TABLE_ADDRESS`, so that variable has to be unset.
-
-The environment variable for this flag is `ESPRESSO_NETWORK`. Note that `init --network` reads a different one,
-`NETWORK`, since it selects a template to write rather than configuration to use.
 
 ### Inspect the configuration
 

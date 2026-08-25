@@ -121,13 +121,7 @@ pub(crate) struct Config {
     /// The config file, other flags, and environment variables all take precedence, so an RPC
     /// that is down can still be replaced with `--rpc-url`. The stake table address is not
     /// overridable, since a different address is a different network.
-    #[clap(
-        long,
-        value_enum,
-        num_args = 1,
-        env = "ESPRESSO_NETWORK",
-        conflicts_with = "stake_table_address"
-    )]
+    #[clap(long, value_enum, num_args = 1, conflicts_with = "stake_table_address")]
     #[serde(skip)]
     pub network: Option<Network>,
 
@@ -356,7 +350,7 @@ pub(crate) enum Commands {
         ledger: bool,
 
         /// Network to configure (mainnet, decaf, or local).
-        #[clap(long, value_enum, env = "NETWORK")]
+        #[clap(long, value_enum)]
         network: Network,
     },
     /// Remove the config file.

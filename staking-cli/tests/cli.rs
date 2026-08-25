@@ -2705,31 +2705,6 @@ fn test_cli_init_network_local() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[test_log::test]
-fn test_cli_init_network_env_var() -> anyhow::Result<()> {
-    let tmpdir = tempfile::tempdir()?;
-    let config_path = tmpdir.path().join("config.toml");
-    let mnemonic = random_mnemonic();
-
-    base_cmd()
-        .env("NETWORK", "mainnet")
-        .arg("-c")
-        .arg(&config_path)
-        .arg("init")
-        .args(["--mnemonic", &mnemonic])
-        .assert()
-        .success();
-
-    let config: TestConfig = toml::from_str(&std::fs::read_to_string(&config_path)?)?;
-    assert_eq!(
-        config.stake_table_address.to_string().to_lowercase(),
-        "0xcef474d372b5b09defe2af187bf17338dc704451"
-    );
-    assert_eq!(config.signer.mnemonic.as_deref(), Some(mnemonic.as_str()));
-
-    Ok(())
-}
-
 #[test_log::test(rstest::rstest)]
 #[case::json(MetadataFormat::Json)]
 #[case::openmetrics(MetadataFormat::OpenMetrics)]
