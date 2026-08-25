@@ -32,13 +32,18 @@ use crate::{
 #[derive(Clone, Debug, Default)]
 pub struct TestInstanceState {
     pub delay_config: DelayConfig,
+    /// Block number whose header fails validation, to exercise failure paths.
+    pub failing_block: Option<u64>,
 }
 
 impl InstanceState for TestInstanceState {}
 
 impl TestInstanceState {
     pub fn new(delay_config: DelayConfig) -> Self {
-        TestInstanceState { delay_config }
+        TestInstanceState {
+            delay_config,
+            failing_block: None,
+        }
     }
 }
 
@@ -101,12 +106,17 @@ impl<TYPES: NodeType> ValidatedState<TYPES> for TestValidatedState {
         &self,
         instance: &Self::Instance,
         _parent_leaf: &Leaf2<TYPES>,
-        _proposed_header: &TYPES::BlockHeader,
+        proposed_header: &TYPES::BlockHeader,
         _payload_byte_len: u32,
         _version: Version,
         _view_number: u64,
     ) -> Result<(Self, Self::Delta), Self::Error> {
         Self::run_delay_settings_from_config(&instance.delay_config).await;
+        if instance.failing_block == Some(proposed_header.block_number()) {
+            return Err(BlockError::InvalidBlockHeader(
+                "configured to fail validation".into(),
+            ));
+        }
         Ok((
             TestValidatedState {
                 block_height: self.block_height + 1,

@@ -127,7 +127,8 @@ impl<T: NodeType> Pending<T> {
 enum Completed<T: NodeType> {
     State {
         response: StateResponse<T>,
-        leaf: Option<Leaf2<T>>,
+        leaf: Leaf2<T>,
+        validated: bool,
     },
     Header {
         response: HeaderResponse<T>,
@@ -261,6 +262,7 @@ impl<T: NodeType> StateManager<T> {
                     *view,
                 )
                 .await;
+            let leaf = request.proposal.into();
             match result {
                 Ok((state, delta)) => {
                     finish_measurement(measurement);
@@ -271,7 +273,8 @@ impl<T: NodeType> StateManager<T> {
                             state: Arc::new(state),
                             delta: Some(Arc::new(delta)),
                         },
-                        leaf: Some(request.proposal.into()),
+                        leaf,
+                        validated: true,
                     }
                 },
                 Err(err) => {
@@ -284,7 +287,8 @@ impl<T: NodeType> StateManager<T> {
                             state: Arc::new(T::ValidatedState::from_header(&header)),
                             delta: None,
                         },
-                        leaf: None,
+                        leaf,
+                        validated: false,
                     }
                 },
             }
@@ -401,35 +405,35 @@ impl<T: NodeType> StateManager<T> {
                 Some(Ok(result)) => match result {
                     Completed::State {
                         response,
-                        leaf: leaf2,
+                        leaf,
+                        validated,
                     } => {
                         if self.state_requests.remove(&response.commitment).is_none() {
                             continue;
                         }
-                        if let Some(leaf) = leaf2 {
-                            let measurement = self
-                                .update_leaf_duration_metric
+                        // A failed validation leaves a `from_header` stub
+                        // (never displacing a real state) so the requests
+                        // queued on this leaf proceed via catchup instead of
+                        // being dropped.
+                        let measurement = if validated {
+                            self.update_leaf_duration_metric
                                 .clone()
-                                .map(Measurement::start);
-                            self.insert_state(
-                                response.view,
-                                response.state.clone(),
-                                response.delta.clone(),
-                                leaf,
-                            );
-                            finish_measurement(measurement);
-                            self.start_pending(response.commitment);
-                            return Some(StateManagerOutput::State {
-                                response,
-                                validated: true,
-                            });
+                                .map(Measurement::start)
                         } else {
-                            self.pending_requests.remove(&response.commitment);
-                            return Some(StateManagerOutput::State {
-                                response,
-                                validated: false,
-                            });
-                        }
+                            None
+                        };
+                        self.insert_state(
+                            response.view,
+                            response.state.clone(),
+                            response.delta.clone(),
+                            leaf,
+                        );
+                        finish_measurement(measurement);
+                        self.start_pending(response.commitment);
+                        return Some(StateManagerOutput::State {
+                            response,
+                            validated,
+                        });
                     },
                     Completed::Header { response, header } => {
                         let key = (

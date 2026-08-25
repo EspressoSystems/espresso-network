@@ -79,19 +79,18 @@ fn make_header_request(
 }
 
 async fn new_manager() -> StateManager<TestTypes> {
-    let mut manager =
-        StateManager::new(Arc::new(TestInstanceState::default()), test_upgrade_lock());
+    new_manager_with_instance(TestInstanceState::default()).await
+}
+
+async fn new_manager_with_instance(instance: TestInstanceState) -> StateManager<TestTypes> {
+    let mut manager = StateManager::new(Arc::new(instance.clone()), test_upgrade_lock());
     let genesis_state = TestValidatedState::default();
     // Must match the version used by `TestViewGenerator` (which produces the
     // proposals fed to the manager), otherwise the genesis leaf commitment
     // won't match the `parent_commitment` carried by the first proposal's
     // justify_qc.
-    let genesis_leaf = Leaf2::<TestTypes>::genesis(
-        &genesis_state,
-        &TestInstanceState::default(),
-        TEST_VERSIONS.vid2.base,
-    )
-    .await;
+    let genesis_leaf =
+        Leaf2::<TestTypes>::genesis(&genesis_state, &instance, TEST_VERSIONS.vid2.base).await;
     manager.seed_state(ViewNumber::genesis(), Arc::new(genesis_state), genesis_leaf);
     manager
 }
@@ -190,6 +189,52 @@ async fn test_state_request_missing_parent_retried_after_seed() {
             }
         ),
         "View 2 should validate against the seeded parent state"
+    );
+}
+
+/// A failed validation seeds a `from_header` stub for the leaf, so a child
+/// queued behind it is validated (via catchup) instead of being dropped.
+#[tokio::test]
+async fn test_failed_validation_seeds_stub_for_children() {
+    let test_data = TestData::new(3).await;
+    let failing_block =
+        BlockHeader::<TestTypes>::block_number(&test_data.views[0].proposal.data.block_header);
+    let mut manager = new_manager_with_instance(TestInstanceState {
+        failing_block: Some(failing_block),
+        ..Default::default()
+    })
+    .await;
+
+    manager.request_state(make_state_request(&test_data.views[0]));
+    // View 2 queues behind its in-flight parent.
+    manager.request_state(make_state_request(&test_data.views[1]));
+
+    let first = manager.next().await.expect("view 1 should complete");
+    assert!(
+        matches!(
+            &first,
+            StateManagerOutput::State {
+                response,
+                validated: false,
+            } if response.view == ViewNumber::new(1)
+        ),
+        "view 1 must fail validation"
+    );
+    assert!(
+        manager.validated_contains_view(ViewNumber::new(1)),
+        "a from_header stub must be seeded for the failed leaf"
+    );
+
+    let second = manager.next().await.expect("view 2 should complete");
+    assert!(
+        matches!(
+            &second,
+            StateManagerOutput::State {
+                response,
+                validated: true,
+            } if response.view == ViewNumber::new(2)
+        ),
+        "view 2 must validate against the stub"
     );
 }
 

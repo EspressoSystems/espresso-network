@@ -483,35 +483,27 @@ async fn test_no_duplicate_vote2() {
     );
 }
 
-/// StateValidationFailed with matching commitment removes proposal and vid_share.
+/// A proposal whose state validation failed is kept: votes are gated on
+/// `states_verified`, and the state manager seeds a stub for the leaf, so its
+/// child can still be validated and voted on.
 #[tokio::test]
-async fn test_state_validation_failed_removes_proposal() {
+async fn test_child_of_failed_validation_can_vote() {
     let mut harness = ConsensusHarness::new(0).await;
     let test_data = TestData::new(3).await;
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
+    // Hold view 1's validation result and inject a failure instead.
+    harness.defer_state(ViewNumber::new(1));
     harness
         .apply_pair(test_data.views[0].proposal_input_consensus(&node_key))
         .await;
     harness
         .apply(test_data.views[0].block_reconstructed_input())
         .await;
-
-    // Send proposal for view 2 — but bypass the harness auto-response
-    // by directly applying the proposal input, then manually sending
-    // StateValidationFailed instead of letting the harness auto-respond.
-    // We need to call consensus.apply directly to avoid auto StateVerified.
-    let (proposal_input, vid_share_input) = test_data.views[1].proposal_input_consensus(&node_key);
-    let mut outbox = Outbox::new();
-    harness.consensus.apply(proposal_input, &mut outbox);
-    harness.consensus.apply(vid_share_input, &mut outbox);
-    harness.collected.extend(outbox.take());
-
-    // Send StateVerificationFailed — removes proposal
-    let proposal: Proposal<TestTypes> = test_data.views[1].proposal.data.clone();
+    let proposal: Proposal<TestTypes> = test_data.views[0].proposal.data.clone();
     harness
         .apply(ConsensusInput::StateValidationFailed(StateResponse {
-            view: test_data.views[1].view_number,
+            view: test_data.views[0].view_number,
             commitment: proposal_commitment(&proposal),
             state: Arc::new(
                 <TestValidatedState as ValidatedState<TestTypes>>::from_header(
@@ -521,16 +513,17 @@ async fn test_state_validation_failed_removes_proposal() {
             delta: None,
         }))
         .await;
-
-    // Now send cert1 + block_reconstructed — vote2 should NOT fire
-    harness
-        .apply(test_data.views[1].block_reconstructed_input())
-        .await;
-    harness.apply(test_data.views[1].cert1_input()).await;
-
     assert!(
-        !any(harness.outputs(), is_vote2),
-        "Vote2 should not fire after proposal removed by StateVerificationFailed"
+        !any(harness.outputs(), is_vote1),
+        "no vote1 for a view whose validation failed"
+    );
+
+    harness
+        .apply_pair(test_data.views[1].proposal_input_consensus(&node_key))
+        .await;
+    assert!(
+        any(harness.outputs(), is_vote1),
+        "the child of a failed view must still be votable"
     );
 }
 

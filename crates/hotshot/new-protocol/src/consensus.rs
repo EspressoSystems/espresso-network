@@ -787,28 +787,25 @@ impl<T: NodeType> Consensus<T> {
                 Protocol::Continue
             },
             ConsensusInput::StateValidationFailed(state_response) => {
+                // The proposal is kept, like a fetched or epoch-change
+                // proposal without a state: votes are gated on
+                // `states_verified`, and the state manager seeded a
+                // `from_header` stub for the leaf so its descendants can still
+                // be validated via catchup.
                 let view = state_response.view;
-                let stored_proposal = self.proposals.get(&view);
-                if let Some(proposal) = stored_proposal {
-                    let matches = proposal_commitment(proposal) == state_response.commitment;
-                    warn!(
+                match self.proposals.get(&view) {
+                    Some(proposal) => warn!(
                         %view,
                         block = %proposal.block_header.block_number(),
                         epoch = %proposal.epoch,
                         qc_view = %proposal.justify_qc.view_number(),
                         qc_epoch = ?proposal.justify_qc.epoch(),
-                        commitment_matches = matches,
+                        commitment_matches =
+                            proposal_commitment(proposal) == state_response.commitment,
                         "apply: state validation failed"
-                    );
-                    if !matches {
-                        return;
-                    }
-                } else {
-                    warn!(%view, "apply: state validation failed (no stored proposal)");
+                    ),
+                    None => warn!(%view, "apply: state validation failed (no stored proposal)"),
                 }
-                self.proposals.remove(&view);
-                self.leaves.remove(&view);
-                self.vid_shares.remove(&view);
                 return;
             },
             ConsensusInput::Timeout(view, epoch) => {
