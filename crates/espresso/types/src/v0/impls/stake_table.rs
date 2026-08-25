@@ -1451,48 +1451,78 @@ impl Fetcher {
                     let provider = provider.clone();
 
                     Box::pin(async move {
-                        let filter = Filter::new()
-                            .events([
-                                ValidatorRegistered::SIGNATURE,
-                                ValidatorRegisteredV2::SIGNATURE,
-                                ValidatorRegisteredV3::SIGNATURE,
-                                ValidatorExit::SIGNATURE,
-                                ValidatorExitV2::SIGNATURE,
-                                Delegated::SIGNATURE,
-                                Undelegated::SIGNATURE,
-                                UndelegatedV2::SIGNATURE,
-                                ConsensusKeysUpdated::SIGNATURE,
-                                ConsensusKeysUpdatedV2::SIGNATURE,
-                                CommissionUpdated::SIGNATURE,
-                                X25519KeyUpdated::SIGNATURE,
-                                P2pAddrUpdated::SIGNATURE,
-                            ])
-                            .address(contract)
-                            .from_block(from)
-                            .to_block(to);
-                        provider.get_logs(&filter).await
+                        provider
+                            .get_logs(&Self::events_filter(contract, from, to))
+                            .await
                     })
                 },
             )
             .await;
 
-            let chunk_events = logs
-                .into_iter()
-                .filter_map(|log| {
-                    let event =
-                        StakeTableV3Events::decode_raw_log(log.topics(), &log.data().data).ok()?;
-                    match Self::validate_event(&event, &log) {
-                        Ok(true) => Some(Ok((event, log))),
-                        Ok(false) => None,
-                        Err(e) => Some(Err(e)),
-                    }
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-
-            events.extend(chunk_events);
+            events.extend(Self::decode_events(logs)?);
         }
 
         sort_stake_table_events(events).map_err(Into::into)
+    }
+
+    /// The filter matching every stake table event the fetcher understands.
+    #[cfg(feature = "node")]
+    fn events_filter(contract: Address, from_block: u64, to_block: u64) -> Filter {
+        Filter::new()
+            .events([
+                ValidatorRegistered::SIGNATURE,
+                ValidatorRegisteredV2::SIGNATURE,
+                ValidatorRegisteredV3::SIGNATURE,
+                ValidatorExit::SIGNATURE,
+                ValidatorExitV2::SIGNATURE,
+                Delegated::SIGNATURE,
+                Undelegated::SIGNATURE,
+                UndelegatedV2::SIGNATURE,
+                ConsensusKeysUpdated::SIGNATURE,
+                ConsensusKeysUpdatedV2::SIGNATURE,
+                CommissionUpdated::SIGNATURE,
+                X25519KeyUpdated::SIGNATURE,
+                P2pAddrUpdated::SIGNATURE,
+            ])
+            .address(contract)
+            .from_block(from_block)
+            .to_block(to_block)
+    }
+
+    /// Decode logs, dropping the ones that fail authentication.
+    #[cfg(feature = "node")]
+    fn decode_events(logs: Vec<Log>) -> Result<Vec<(StakeTableV3Events, Log)>, StakeTableError> {
+        logs.into_iter()
+            .filter_map(|log| {
+                let event =
+                    StakeTableV3Events::decode_raw_log(log.topics(), &log.data().data).ok()?;
+                match Self::validate_event(&event, &log) {
+                    Ok(true) => Some(Ok((event, log))),
+                    Ok(false) => None,
+                    Err(e) => Some(Err(e)),
+                }
+            })
+            .collect()
+    }
+
+    /// Fetch all stake table events in a single request.
+    ///
+    /// Unlike [`Self::fetch_events_from_contract`] this neither splits the range into chunks nor
+    /// retries, so a provider that caps the block range or the result size fails immediately
+    /// instead of after the retry budget expires. Callers that can fall back to the chunked
+    /// fetcher use this to avoid paying for chunks against a provider that does not need them.
+    #[cfg(feature = "node")]
+    pub async fn try_fetch_events_from_contract(
+        l1_client: L1Client,
+        contract: Address,
+        from_block: u64,
+        to_block: u64,
+    ) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
+        let logs = l1_client
+            .provider
+            .get_logs(&Self::events_filter(contract, from_block, to_block))
+            .await?;
+        Ok(sort_stake_table_events(Self::decode_events(logs)?)?)
     }
 
     // Only used by staking CLI which doesn't have persistence

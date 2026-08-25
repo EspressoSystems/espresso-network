@@ -3581,3 +3581,56 @@ async fn test_cli_stake_table_entry_all_versions(
 
     Ok(())
 }
+
+/// Pinning the block range splits the event queries, and must produce the same result as fetching
+/// the whole range at once.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_stake_table_entry_split_block_range() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+    system.register_validator().await?;
+    system.delegate(parse_ether("2")?).await?;
+    system.undelegate(parse_ether("1")?).await?;
+
+    let entry = |range: Option<&str>| -> Result<serde_json::Value> {
+        let mut cmd = system
+            .cmd(Signer::Mnemonic)
+            .args(["stake-table-entry", "--delegations", "--format", "json"])
+            .arg("--address")
+            .arg(system.deployer_address.to_string());
+        if let Some(range) = range {
+            cmd = cmd.env("ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE", range);
+        }
+        Ok(serde_json::from_slice(&cmd.output()?.stdout)?)
+    };
+
+    // One block per request forces a separate request for every event.
+    assert_eq!(entry(Some("1"))?, entry(None)?);
+    // A range the provider would accept anyway takes the single request path.
+    assert_eq!(entry(Some("100000"))?, entry(None)?);
+    // A malformed value is ignored rather than failing the command.
+    assert_eq!(entry(Some("not-a-number"))?, entry(None)?);
+
+    Ok(())
+}
+
+/// `stake-table` splits its range the same way.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_stake_table_split_block_range() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+    system.register_validator().await?;
+    system.delegate(parse_ether("1.5")?).await?;
+
+    let table = |range: Option<&str>| -> Result<serde_json::Value> {
+        let mut cmd = system
+            .cmd(Signer::Mnemonic)
+            .args(["stake-table", "--format", "json"]);
+        if let Some(range) = range {
+            cmd = cmd.env("ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE", range);
+        }
+        Ok(serde_json::from_slice(&cmd.output()?.stdout)?)
+    };
+
+    assert_eq!(table(Some("1"))?, table(None)?);
+
+    Ok(())
+}

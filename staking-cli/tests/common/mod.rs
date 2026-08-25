@@ -76,6 +76,15 @@ impl<'a> TestCommand<'a> {
         self
     }
 
+    pub fn env(
+        mut self,
+        key: impl AsRef<std::ffi::OsStr>,
+        value: impl AsRef<std::ffi::OsStr>,
+    ) -> Self {
+        self.cmd.env(key, value);
+        self
+    }
+
     pub fn timeout(mut self, timeout: std::time::Duration) -> Self {
         self.cmd.timeout(timeout);
         self

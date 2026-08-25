@@ -225,12 +225,7 @@ pub async fn fetch_stake_table_entry(
         if let Some(topic) = topic2 {
             filter = filter.topic2(topic);
         }
-        async move {
-            provider
-                .get_logs(&filter)
-                .await
-                .context("failed to fetch stake table events")
-        }
+        async move { get_logs_adaptively(provider, filter, from_block, l1_block_number).await }
     };
 
     let word = address.into_word();
@@ -292,6 +287,85 @@ pub async fn fetch_stake_table_entry(
         validator,
         delegations,
         approximate,
+    })
+}
+
+/// Blocks per request when the range has to be split. Matches the default of the environment
+/// variable that overrides it, which is the range capped providers usually allow.
+const DEFAULT_BLOCK_RANGE: u64 = 10_000;
+
+/// The block range the user pinned for their provider, if any.
+///
+/// Set means "my provider caps the range at this", so the single request is skipped rather than
+/// spent on a rejection.
+pub(crate) fn configured_block_range() -> Option<u64> {
+    let value = std::env::var_os(BLOCK_RANGE_VAR)?;
+    match value.to_str().and_then(|value| value.parse().ok()) {
+        Some(range) if range > 0 => Some(range),
+        _ => {
+            tracing::warn!("ignoring {BLOCK_RANGE_VAR}: expected a positive integer");
+            None
+        },
+    }
+}
+
+pub(crate) const BLOCK_RANGE_VAR: &str = "ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE";
+
+/// Fetch a filter's logs in one request, splitting the range only if that is refused.
+///
+/// Providers pull in opposite directions: the gateways this CLI defaults to serve the whole range
+/// at once but rate limit the hundreds of requests splitting needs, while others cap the range and
+/// only work split. Neither attempt retries, so a provider that refuses the single request costs
+/// one extra round trip rather than a retry loop.
+async fn get_logs_adaptively(
+    provider: &impl Provider,
+    filter: Filter,
+    from_block: u64,
+    to_block: u64,
+) -> Result<Vec<Log>> {
+    let range = match configured_block_range() {
+        Some(range) => range,
+        None => match provider.get_logs(&filter).await {
+            Ok(logs) => return Ok(logs),
+            Err(err) => {
+                tracing::info!(
+                    %err,
+                    "could not fetch events in one request, retrying in {DEFAULT_BLOCK_RANGE} \
+                     block ranges"
+                );
+                DEFAULT_BLOCK_RANGE
+            },
+        },
+    };
+
+    let mut logs = vec![];
+    for (from, to) in block_ranges(from_block, to_block, range) {
+        logs.extend(
+            provider
+                .get_logs(&filter.clone().from_block(from).to_block(to))
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to fetch stake table events for blocks {from} to {to}; set \
+                         {BLOCK_RANGE_VAR} lower if the provider caps the range"
+                    )
+                })?,
+        );
+    }
+    Ok(logs)
+}
+
+/// Split an inclusive block range into consecutive chunks of at most `size` blocks.
+///
+/// `next` is an `Option` so that a chunk ending at `u64::MAX` terminates the iterator instead of
+/// saturating back onto itself.
+fn block_ranges(from: u64, to: u64, size: u64) -> impl Iterator<Item = (u64, u64)> {
+    let mut next = Some(from);
+    std::iter::from_fn(move || {
+        let start = next.filter(|&start| start <= to)?;
+        let end = start.saturating_add(size - 1).min(to);
+        next = end.checked_add(1);
+        Some((start, end))
     })
 }
 
@@ -755,7 +829,8 @@ mod test {
         CommissionUpdated, ConsensusKeysUpdated, Delegated, Delegator, FoldedPosition,
         PendingWithdrawal, Registration, StakeTableV3Events, Summary, UndelegatedV2,
         VALIDATOR_TOPIC, ValidatorExitClaimed, ValidatorExitV2, WithdrawalClaimed,
-        apply_registration_event, fold_positions, fold_registration, parse_x25519_key, timestamp,
+        apply_registration_event, block_ranges, fold_positions, fold_registration,
+        parse_x25519_key, timestamp,
     };
 
     const VALIDATOR: Address = address!("0x1111111111111111111111111111111111111111");
@@ -997,6 +1072,23 @@ mod test {
         assert_eq!(summary.pending_withdrawal_count, 1);
         assert_eq!(summary.total_pending_withdrawal.0, parse_ether("3")?);
         Ok(())
+    }
+
+    #[test]
+    fn test_block_ranges_cover_the_whole_span_without_gaps() {
+        assert_eq!(block_ranges(0, 9, 10).collect::<Vec<_>>(), vec![(0, 9)]);
+        assert_eq!(block_ranges(5, 5, 10).collect::<Vec<_>>(), vec![(5, 5)]);
+        assert_eq!(
+            block_ranges(0, 10, 4).collect::<Vec<_>>(),
+            vec![(0, 3), (4, 7), (8, 10)]
+        );
+        assert_eq!(
+            block_ranges(7, 9, 1).collect::<Vec<_>>(),
+            vec![(7, 7), (8, 8), (9, 9)]
+        );
+        // An exhausted range yields nothing rather than looping.
+        assert_eq!(block_ranges(10, 9, 10).count(), 0);
+        assert_eq!(block_ranges(u64::MAX - 1, u64::MAX, 10).count(), 1);
     }
 
     #[test]
