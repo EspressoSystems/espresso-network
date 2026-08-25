@@ -1,0 +1,111 @@
+---
+source: crates/espresso/types/src/v0/impls/stake_table_history_tests.rs
+expression: summary
+---
+corpus: decaf
+protocol_version: "0.6"
+logs: 574
+decoded_events: 574
+stake_table_hash: STAKE_TABLE~6wSXC2JhPp1TfGUpMULIV-VR1cvRVJCrWV593lA-KO59
+selection_error: No validators met the minimum criteria (non-zero stake and at least one delegator)
+event_variants:
+  CommissionUpdate: 3
+  Delegate: 265
+  Deregister: 1
+  DeregisterV2: 2
+  Register: 140
+  RegisterV2: 12
+  Undelegate: 50
+  UndelegateV2: 101
+ladder_stride: 32
+hash_ladder:
+  - event: 31
+    block: 8087559
+    log_index: 80
+    variant: Register
+    commit: STAKE_TABLE~KPAdZo9ctFkbcRhAtNdGRpQa9HiiGKUoiV6KVl2IO6tV
+  - event: 63
+    block: 8091447
+    log_index: 226
+    variant: Register
+    commit: STAKE_TABLE~bEoc8Rn7vXUFI3Vq2n0oVosIUgob7LAWrJ7g2bc16fiw
+  - event: 95
+    block: 8094287
+    log_index: 151
+    variant: Register
+    commit: STAKE_TABLE~VqGucaA2AA7mFyz-RvJ6vIzz_DBgMpHz4SSRudFU7PSE
+  - event: 127
+    block: 8099623
+    log_index: 80
+    variant: Delegate
+    commit: STAKE_TABLE~HJmyuyNr7g05peVV3CcsIAGea04jO_5r5FzUZhFLQRxN
+  - event: 159
+    block: 8099707
+    log_index: 113
+    variant: Delegate
+    commit: STAKE_TABLE~sAmlrCCXDLCw93cLJBvlIU23Ilv1m9to15L6fN4BQPRy
+  - event: 191
+    block: 8099754
+    log_index: 41
+    variant: Delegate
+    commit: STAKE_TABLE~n8ihSDX4KG-UhApvKPI6aocc8GU8HcRO-CXOkUDrpdoy
+  - event: 223
+    block: 9241376
+    log_index: 216
+    variant: Register
+    commit: STAKE_TABLE~hbPbqO7fmMmVPvAZ6M0awxfsBsxoweZP8hjfpgPStxqn
+  - event: 255
+    block: 9363754
+    log_index: 133
+    variant: Delegate
+    commit: STAKE_TABLE~cIPM9bZc4Ol3_VWjcAdZBgYpSMbaHyd7uzOUlz95eCbm
+  - event: 287
+    block: 9452344
+    log_index: 112
+    variant: Undelegate
+    commit: STAKE_TABLE~xzWCJaNHVAb00W44SwCDaKkS4I0cJrmWrNRPPkR-b_B3
+  - event: 319
+    block: 9600542
+    log_index: 204
+    variant: Delegate
+    commit: STAKE_TABLE~DgbftErogeO11f3HI75bv92l_anC85Qz9Dy5RdLL_vFZ
+  - event: 351
+    block: 9676791
+    log_index: 160
+    variant: Delegate
+    commit: STAKE_TABLE~_XcCDGL6lwzIISCcwE0Bykpl9Rx2teSBXa1H7moN7JHk
+  - event: 383
+    block: 10192206
+    log_index: 72
+    variant: Delegate
+    commit: STAKE_TABLE~216lQROg1EzUramLG3hqIw5pMqNPHozfeLsq63uDquZX
+  - event: 415
+    block: 10204578
+    log_index: 31
+    variant: UndelegateV2
+    commit: STAKE_TABLE~UsasaNxisGKnRGnNa13_573HfpRuS3uQQRvPmlBRqfAz
+  - event: 447
+    block: 10239543
+    log_index: 114
+    variant: UndelegateV2
+    commit: STAKE_TABLE~ockV7fTqSVUpTs-HNCUtKdXy07X9gmLzuF62JdtDq-g_
+  - event: 479
+    block: 10253687
+    log_index: 95
+    variant: UndelegateV2
+    commit: STAKE_TABLE~X1tjcA57dSEtn2mzSMAyDvRqEgAuorbHs95Y4v2wjRww
+  - event: 511
+    block: 10253826
+    log_index: 129
+    variant: UndelegateV2
+    commit: STAKE_TABLE~cFaTQGN0OxVJ83F3iW3Uh3911pCXr8J2XTk0dnZv-V-i
+  - event: 543
+    block: 10519417
+    log_index: 843
+    variant: UndelegateV2
+    commit: STAKE_TABLE~x4qjFj4BSdFm7vH_kr4YKaY76Yf1_CHOAr9xkf4Z-xSW
+  - event: 573
+    block: 10873245
+    log_index: 931
+    variant: Delegate
+    commit: STAKE_TABLE~6wSXC2JhPp1TfGUpMULIV-VR1cvRVJCrWV593lA-KO59

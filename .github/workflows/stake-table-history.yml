@@ -1,0 +1,93 @@
+name: Stake Table History
+
+# The stake table event fixtures under `data/stake_table_history/` pin a consensus-validated
+# header field, so they have to keep describing the real chains. This extends them to the current
+# finalized block once a week and opens a PR.
+#
+# The PR is meant to be checked, not waved through. `regenerate_history_fixtures` aborts unless
+# the existing fixture is still a prefix of what the chain returns, and the hash ladder uses a
+# fixed stride, so an honest update touches only:
+#
+#   - the log and event counts, the final hashes, the variant histogram
+#   - the single trailing `hash_ladder` entry, replaced by the new last event
+#   - new `hash_ladder` entries appended
+#
+# Any other changed hash means history itself moved. The per-PR `stake_table_history_pin` job is
+# what catches code changes; this job never touches code, so a hash change here is not one.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_LOG: info
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  extend-fixtures:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - uses: rui314/setup-mold@v1
+
+      - name: Enable Rust Caching
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: stake-table-history
+
+      # Needs an endpoint that still serves eth_getLogs back to the fixture's first block
+      # (sepolia 8077886, mainnet 24375467). No historical state is read. Most public endpoints
+      # gate log queries that old, so this defaults to Tenderly's keyless gateway, which does not.
+      # Set ESPRESSO_L1_ARCHIVE_RPC_{MAINNET,SEPOLIA} to use your own.
+      - name: Extend fixtures to the finalized block
+        run: |
+          cargo test -p espresso-types --lib regenerate_history_fixtures \
+            -- --ignored --nocapture 2>&1 | tee /tmp/regen.txt
+
+      - name: Update the pins
+        run: INSTA_FORCE_UPDATE=1 cargo test -p espresso-types --lib stake_table_history_pin
+
+      - name: Describe the change
+        run: |
+          {
+            echo 'Weekly extension of the stake table history fixtures to the current finalized block.'
+            echo
+            echo '```'
+            grep -E '^(decaf|mainnet):' /tmp/regen.txt || true
+            echo '```'
+            echo
+            echo '### What to check'
+            echo
+            echo 'Every `hash_ladder` entry except the last must be **unchanged**. The generator'
+            echo 'aborts unless the old fixture is still a prefix of the chain, and the ladder'
+            echo 'stride is fixed, so an append-only update changes only the counts, the final'
+            echo 'hashes, the histogram, and the trailing ladder entry. A modified historical'
+            echo 'hash means something is wrong; do not merge it.'
+          } > /tmp/pr-body.txt
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          author: "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"
+          committer: "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"
+          branch: auto/stake-table-history
+          base: main
+          delete-branch: true
+          labels: automated
+          title: "test(stake-table): extend history fixtures to the finalized block"
+          commit-message: "test(stake-table): extend history fixtures to the finalized block"
+          body-path: /tmp/pr-body.txt

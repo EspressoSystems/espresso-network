@@ -1,0 +1,451 @@
+---
+source: crates/espresso/types/src/v0/impls/stake_table_history_tests.rs
+expression: summary
+---
+corpus: mainnet
+protocol_version: "0.5"
+logs: 2737
+decoded_events: 2737
+stake_table_hash: STAKE_TABLE~BfffcamiX5aiODiUCHNTnh9ZHCHL8otb0R-x0G2pEHzt
+active_validators_commit: STAKE_TABLE~DLaGgL64ctrqjN5g1y_mvE54IghMBl_KYJfYyMInooKP
+all_validators: 97
+active_validators: 76
+event_variants:
+  CommissionUpdate: 24
+  Delegate: 2011
+  DeregisterV2: 4
+  KeyUpdateV2: 1
+  RegisterV2: 101
+  UndelegateV2: 596
+ladder_stride: 32
+hash_ladder:
+  - event: 31
+    block: 24427771
+    log_index: 489
+    variant: Delegate
+    commit: STAKE_TABLE~ME8lvrxf2DsN7zkz3pn-2xdEsO3DeVu0_bUh8437IQ4D
+  - event: 63
+    block: 24440585
+    log_index: 529
+    variant: Delegate
+    commit: STAKE_TABLE~tX2v0EIxHww5RWDzw4yiKu_I2EkLjjhXefK78S5AEbvX
+  - event: 95
+    block: 24440787
+    log_index: 439
+    variant: Delegate
+    commit: STAKE_TABLE~kjVwwQ_ud6VbI07CPG1kTDOZMNLxiD51sOz0pBcExJDP
+  - event: 127
+    block: 24440884
+    log_index: 357
+    variant: Delegate
+    commit: STAKE_TABLE~70NgkQ12SScpVT533bSNpYG9vvi-hYfDXyfeZtC8TsMh
+  - event: 159
+    block: 24440957
+    log_index: 168
+    variant: Delegate
+    commit: STAKE_TABLE~F_KtyLcMk1t-8uYV4nmWllipv_VAcQg5Wg-M82bNeCOr
+  - event: 191
+    block: 24441002
+    log_index: 599
+    variant: Delegate
+    commit: STAKE_TABLE~E8mbIh3n3SAnyhCKN6rfhqGcQ8I0GirS-fMLBa7uaMVP
+  - event: 223
+    block: 24441057
+    log_index: 343
+    variant: Delegate
+    commit: STAKE_TABLE~o_Itbnc6VGSx-yxaI9A4SbVK5xF6Td3ln2GkaQilY9wF
+  - event: 255
+    block: 24441117
+    log_index: 542
+    variant: Delegate
+    commit: STAKE_TABLE~Vp72LEpjvkLgDe25V309MCeCR8XeYm0gYE99YZ7_9RG0
+  - event: 287
+    block: 24441161
+    log_index: 604
+    variant: Delegate
+    commit: STAKE_TABLE~d5kGQ-QhL3WjAQxlBpa2611LnFOc5h14P8WshJ5iHnfv
+  - event: 319
+    block: 24441238
+    log_index: 390
+    variant: Delegate
+    commit: STAKE_TABLE~HEkmxLpcyMV2j7qpK2atlOMI15bFPZDrkDvPa3oruuo0
+  - event: 351
+    block: 24441292
+    log_index: 583
+    variant: Delegate
+    commit: STAKE_TABLE~PtcFdaRs99ZItv_NvSPxoe-353uZI93tal_wUJXwG1k1
+  - event: 383
+    block: 24441393
+    log_index: 229
+    variant: Delegate
+    commit: STAKE_TABLE~ElyFBPXXUN1G0Ob5RZK2CF0hcg8_hSNsi_Wffb9tKA9V
+  - event: 415
+    block: 24441480
+    log_index: 1212
+    variant: Delegate
+    commit: STAKE_TABLE~zgfhPu25YTeQG4cgxVZPBRJ58pYUpWTeODwkNVkLADSl
+  - event: 447
+    block: 24441596
+    log_index: 133
+    variant: Delegate
+    commit: STAKE_TABLE~fPYQIySYQrN7juHLagJJTAz-hDRb7iVy-ia2rn0ARtze
+  - event: 479
+    block: 24441719
+    log_index: 536
+    variant: Delegate
+    commit: STAKE_TABLE~RshCgIbTZTpC2VdD_rFmhcAp88RsOM9Qb2t--GhBaEke
+  - event: 511
+    block: 24441899
+    log_index: 840
+    variant: Delegate
+    commit: STAKE_TABLE~NZZvi0CDhewhFKnQSztHfeVt5_hhkd45JT_2a3lJSomt
+  - event: 543
+    block: 24442002
+    log_index: 12
+    variant: Delegate
+    commit: STAKE_TABLE~JmiS3kUZKKp0K9L8As4NsWo7EbStomsNZtiLpkc3aGk-
+  - event: 575
+    block: 24442108
+    log_index: 119
+    variant: Delegate
+    commit: STAKE_TABLE~332f-k21_L8znZ-41d5Xb-g5WqnVr2HFYX3vDeR3tohW
+  - event: 607
+    block: 24442314
+    log_index: 683
+    variant: Delegate
+    commit: STAKE_TABLE~cMVEMxa9SWf-B7-wVkCwZrkdQEnyRMOT5OXTvcW3uURb
+  - event: 639
+    block: 24442585
+    log_index: 1440
+    variant: Delegate
+    commit: STAKE_TABLE~HUKnh3v3QnFruKedF6jEJmA-p-fUI85w-4j1WMw9rDs4
+  - event: 671
+    block: 24443006
+    log_index: 445
+    variant: Delegate
+    commit: STAKE_TABLE~WYBXd_YggZFQT7YYHya-IrKTlizHPJgxoNClZVuQ575N
+  - event: 703
+    block: 24443169
+    log_index: 285
+    variant: Delegate
+    commit: STAKE_TABLE~5Zid3cFvXMnqS8CM2XCPeGorDTszjbcI-G3ThrdeIYMU
+  - event: 735
+    block: 24443245
+    log_index: 700
+    variant: Delegate
+    commit: STAKE_TABLE~zbxgLMk-aLuIkMsmnOyHPpx4EGbfaGEVpHShV2kv-qoD
+  - event: 767
+    block: 24443389
+    log_index: 249
+    variant: Delegate
+    commit: STAKE_TABLE~i5NFtuc8gCgYGJVslFqllqi9IuOWhQFf8faKkiO9BQyc
+  - event: 799
+    block: 24443781
+    log_index: 773
+    variant: Delegate
+    commit: STAKE_TABLE~m-pJo-16QK6EBQexqgkDSIUikfsAbXypUr5s_4tBSXae
+  - event: 831
+    block: 24444310
+    log_index: 474
+    variant: Delegate
+    commit: STAKE_TABLE~B4QqRCrHKTE9MFPiuXchFbBCb9mLP7YvAisowwxysHTa
+  - event: 863
+    block: 24444743
+    log_index: 308
+    variant: Delegate
+    commit: STAKE_TABLE~JKA-mACIK0hc7x6RfBpeGnkuo0HPqPi_VlJGRE5-vVlp
+  - event: 895
+    block: 24445176
+    log_index: 331
+    variant: Delegate
+    commit: STAKE_TABLE~XjM9SgIkqH4bTqniY-YGJ2LnDIp6MsZFROrDUjf6EDdc
+  - event: 927
+    block: 24445798
+    log_index: 1234
+    variant: Delegate
+    commit: STAKE_TABLE~HeyiNAH3MuBWbzbWfR-83hHYlV5ZMp4xbq-oIIbRzKwR
+  - event: 959
+    block: 24446185
+    log_index: 346
+    variant: Delegate
+    commit: STAKE_TABLE~TIieALJFE3hnChP5HkUq8gDe0W3PUdBQ65dnKu5Lntt4
+  - event: 991
+    block: 24446602
+    log_index: 218
+    variant: Delegate
+    commit: STAKE_TABLE~v8sJvtn00xVz4jiCtI3sLWG5ArZxK7XOJaBbAJpWCvHr
+  - event: 1023
+    block: 24447071
+    log_index: 997
+    variant: Delegate
+    commit: STAKE_TABLE~jNPpe3TJAkuHteeQZmTSlELdQJyS64oW-R2B86TrY8tA
+  - event: 1055
+    block: 24447354
+    log_index: 184
+    variant: Delegate
+    commit: STAKE_TABLE~nX4NJYNVNEY9xA1BXcPWujyWJRvgtnbAHIS_j_Kf9gWI
+  - event: 1087
+    block: 24447873
+    log_index: 1
+    variant: Delegate
+    commit: STAKE_TABLE~X-7FLxxgLMLryRZWCJfA0Ta1ARpBaULKDSgu6LIZueYG
+  - event: 1119
+    block: 24448228
+    log_index: 392
+    variant: Delegate
+    commit: STAKE_TABLE~Rm-uBV16IEZgY_23ylhR_skX26YBXM3ECaQNCbgSQSJ_
+  - event: 1151
+    block: 24449384
+    log_index: 483
+    variant: Delegate
+    commit: STAKE_TABLE~HoD-VRcpdBoYuia4PihZH-MDSOdfkTYyLGfszxR7WOL-
+  - event: 1183
+    block: 24450616
+    log_index: 189
+    variant: Delegate
+    commit: STAKE_TABLE~lXho8ZpzOdqYw_VAVGB7fStOlGyGggCx12T4BAMi8W4z
+  - event: 1215
+    block: 24452917
+    log_index: 1399
+    variant: Delegate
+    commit: STAKE_TABLE~pKiJCP1QCmUaBY39Rx8rn9jRtjirf9qax8d_SvLpDwKC
+  - event: 1247
+    block: 24454577
+    log_index: 112
+    variant: Delegate
+    commit: STAKE_TABLE~MhY6TCDm83AT_Vz-ZMuNbNFPo4tdDKZS9BVY9AEZPZAg
+  - event: 1279
+    block: 24456120
+    log_index: 924
+    variant: Delegate
+    commit: STAKE_TABLE~PLT6zjWNww0OR2mQGycBHDulxONhmY5-cJN7cqbN7Jqs
+  - event: 1311
+    block: 24459325
+    log_index: 314
+    variant: Delegate
+    commit: STAKE_TABLE~Bvz8gSiPujxNJMS0kMxHzhl_UjNY7VIwePgAVBC4g_1j
+  - event: 1343
+    block: 24461103
+    log_index: 340
+    variant: Delegate
+    commit: STAKE_TABLE~PKrwgrqf6klZT0b7pKraGaXpYCHzXA6ZGHfo00Ngo60P
+  - event: 1375
+    block: 24463839
+    log_index: 608
+    variant: Delegate
+    commit: STAKE_TABLE~OWL6OOezuBxDnuDpoPJae0I00CS5Ii3jy5OzB-_zXMpu
+  - event: 1407
+    block: 24465899
+    log_index: 38
+    variant: Delegate
+    commit: STAKE_TABLE~zx-dSiwuibtnFjoLsmC4xybban4ofqCvvA9QosjIuyRC
+  - event: 1439
+    block: 24468058
+    log_index: 572
+    variant: Delegate
+    commit: STAKE_TABLE~ZW3I5dRxEbzmuYle8CA3Nd7SWEXitJYykaBH1_4S1q1D
+  - event: 1471
+    block: 24471065
+    log_index: 393
+    variant: Delegate
+    commit: STAKE_TABLE~04U1i1FmqOOBL5O0RzZivSg2x_XZZZFhKKGqzAJS7jNL
+  - event: 1503
+    block: 24476020
+    log_index: 29
+    variant: UndelegateV2
+    commit: STAKE_TABLE~qkbDlackpjawRJROfRyooVN8SzHPfCrH226ZJQ2lInzd
+  - event: 1535
+    block: 24479435
+    log_index: 677
+    variant: Delegate
+    commit: STAKE_TABLE~n0ao7qniim6lfksXvw7QozL8dH7slr_c04IZ1xD7feY2
+  - event: 1567
+    block: 24481826
+    log_index: 95
+    variant: Delegate
+    commit: STAKE_TABLE~6vaWZPQCR_I6a3aMT9VOE8JSq_w1RC6_G__7eTO_vQ15
+  - event: 1599
+    block: 24484723
+    log_index: 188
+    variant: Delegate
+    commit: STAKE_TABLE~_wFxFcTLKna8EkSDQ36dJAPvwZgRC-4WEogIjZcN2quC
+  - event: 1631
+    block: 24489610
+    log_index: 1
+    variant: Delegate
+    commit: STAKE_TABLE~L8uo7Veu6ogER2rlSys3WO6e8vXTooomVWdMYDvOt-da
+  - event: 1663
+    block: 24496917
+    log_index: 201
+    variant: Delegate
+    commit: STAKE_TABLE~icYufcRvaiHe6QuT7bC0oZxzN9Kz4Y6RRyzHrTEppcH8
+  - event: 1695
+    block: 24504476
+    log_index: 550
+    variant: Delegate
+    commit: STAKE_TABLE~Sn78yuZ89M-EzIC-UXwgsnsiQS-JwIYtY-PC86_6iHkw
+  - event: 1727
+    block: 24510321
+    log_index: 144
+    variant: UndelegateV2
+    commit: STAKE_TABLE~ecQbBxeVvRrRyZt6iot0D5gn9FJMM0L-5bzeJUEC6ZEw
+  - event: 1759
+    block: 24517674
+    log_index: 483
+    variant: UndelegateV2
+    commit: STAKE_TABLE~4mcavYYP0Rfmbh28eum2qRTT_sd8tIueKlXAeHACNm_4
+  - event: 1791
+    block: 24521182
+    log_index: 311
+    variant: Delegate
+    commit: STAKE_TABLE~71kt_X4T3ySHu-LGxkYc8x1CvCsyfeLeJONXVCi2Xw3L
+  - event: 1823
+    block: 24524518
+    log_index: 231
+    variant: Delegate
+    commit: STAKE_TABLE~q1bmuWRVmIhSaPArvM4vmYOYpKuK2gB0w4af4pPLRBDq
+  - event: 1855
+    block: 24525391
+    log_index: 279
+    variant: Delegate
+    commit: STAKE_TABLE~N_3xdRcpyspFnPnuM5ssrbX7DyEq0TtNyQKyWMVXlwR7
+  - event: 1887
+    block: 24525736
+    log_index: 142
+    variant: Delegate
+    commit: STAKE_TABLE~DO4Kl_aJYsXnan6tMUV1zyI6E4Qsiua0SDwoz-U2gZ_o
+  - event: 1919
+    block: 24526425
+    log_index: 452
+    variant: UndelegateV2
+    commit: STAKE_TABLE~-FkElQiU0vK3j-AcjoCg3u0lRwPbQJD6s82WOsa-inNu
+  - event: 1951
+    block: 24527522
+    log_index: 1136
+    variant: UndelegateV2
+    commit: STAKE_TABLE~d7daakufrN1MlQneSbSeC9GlTkP3N8XxaxLGAVPcaIPg
+  - event: 1983
+    block: 24532488
+    log_index: 95
+    variant: Delegate
+    commit: STAKE_TABLE~M0iiu0p2qswxJCiyNHBh-yjSQlqHH_yCUS6GV6R1VKzV
+  - event: 2015
+    block: 24536564
+    log_index: 260
+    variant: Delegate
+    commit: STAKE_TABLE~58Y-qdfBHtAK8NVoyc502lCaB0aUJ95ydq_y8SlBHvsB
+  - event: 2047
+    block: 24540146
+    log_index: 943
+    variant: Delegate
+    commit: STAKE_TABLE~xOPFIm3jMLON1uVnFNkws-oNGptw3TatQ6ap4XBz-9r-
+  - event: 2079
+    block: 24545983
+    log_index: 438
+    variant: UndelegateV2
+    commit: STAKE_TABLE~BXFx7nrIKCkLNEz_fkUHtWhMjPN7Y52FDhLkT6gyWe-k
+  - event: 2111
+    block: 24547294
+    log_index: 538
+    variant: Delegate
+    commit: STAKE_TABLE~qWIyet5F4Z5FAaKbMQofdnWvXxqBkRL4B1stB18HAYbr
+  - event: 2143
+    block: 24547617
+    log_index: 196
+    variant: UndelegateV2
+    commit: STAKE_TABLE~CbcxipehjXkhljYJfcgb3LZltZpBbA7lspMV6JlZCgWI
+  - event: 2175
+    block: 24553826
+    log_index: 201
+    variant: UndelegateV2
+    commit: STAKE_TABLE~mrF5Y69IZeRPLkUmqPMDoMrrP84JqcHV3Tll-hHvrRoT
+  - event: 2207
+    block: 24557040
+    log_index: 477
+    variant: Delegate
+    commit: STAKE_TABLE~GSbgjjIha3Cag1aERgFmlydesG3rNioqjD0yIHnV3aah
+  - event: 2239
+    block: 24563686
+    log_index: 72
+    variant: UndelegateV2
+    commit: STAKE_TABLE~XQePKQ8q4-X6KNM9iPTLanQPdNcb03Pe0LVgTMRk_A77
+  - event: 2271
+    block: 24576089
+    log_index: 791
+    variant: Delegate
+    commit: STAKE_TABLE~1KegOHl_QUVi8gOC64cCJmiRY4wtNk0Mq88jiGhQIJyZ
+  - event: 2303
+    block: 24584635
+    log_index: 874
+    variant: UndelegateV2
+    commit: STAKE_TABLE~TLu6HCSWGXegYRLzPOK6o3VOHDHfIoylO1bQX6fH-COk
+  - event: 2335
+    block: 24601753
+    log_index: 267
+    variant: UndelegateV2
+    commit: STAKE_TABLE~KZBjcaUNuJU5bxZNXhIH0uxR6IrR7uLlFqUCZKA91Tok
+  - event: 2367
+    block: 24629139
+    log_index: 810
+    variant: UndelegateV2
+    commit: STAKE_TABLE~h-2tzP4YsqhJbXzJwzhtwMHDIaYDAd7UJ6dGKbox9IUl
+  - event: 2399
+    block: 24677459
+    log_index: 426
+    variant: UndelegateV2
+    commit: STAKE_TABLE~5yX4RrkbZnFP8I9u02v3jrjxVryFQGt1JfFpg4qx89B_
+  - event: 2431
+    block: 24711644
+    log_index: 49
+    variant: UndelegateV2
+    commit: STAKE_TABLE~W3RGsr_p1UtqUaysWYI-yi9b5dhG0ySpFQhIGEU9R4uH
+  - event: 2463
+    block: 24770095
+    log_index: 959
+    variant: Delegate
+    commit: STAKE_TABLE~9mje9I9wt2l-WPjBkfkYD985CiaRwACTw8z-yKTzs9Ge
+  - event: 2495
+    block: 24843946
+    log_index: 247
+    variant: CommissionUpdate
+    commit: STAKE_TABLE~edRGV7Gh8andHHwFaDFlKCAkzTFoQfeUWCsjfAOubxAR
+  - event: 2527
+    block: 24918935
+    log_index: 512
+    variant: Delegate
+    commit: STAKE_TABLE~tk58i4_ulOpBUxV2OS65hvaLIbsiOJMT8ABz5dv8gvTU
+  - event: 2559
+    block: 24991347
+    log_index: 861
+    variant: RegisterV2
+    commit: STAKE_TABLE~RtbCyDbZ-86Hn6Jd6_e-au6SyAljsf4LKg36JXD7Ohb8
+  - event: 2591
+    block: 25020784
+    log_index: 438
+    variant: RegisterV2
+    commit: STAKE_TABLE~SnCedSolFxSSw9TwBGu1UaROwiz2-GfkFDW39TC5n9P8
+  - event: 2623
+    block: 25088712
+    log_index: 630
+    variant: Delegate
+    commit: STAKE_TABLE~YHnr33kzoVy-dh1Ns7c9nWwcoUFv4xrHJhuHTThpvMO7
+  - event: 2655
+    block: 25102413
+    log_index: 216
+    variant: Delegate
+    commit: STAKE_TABLE~c_HCe5ruReyovq_FBOLa4WDC2m846OCE7FUX0dG0-8AS
+  - event: 2687
+    block: 25114017
+    log_index: 1403
+    variant: Delegate
+    commit: STAKE_TABLE~qAkxAR9ZBtZAiKqcdTqh7Ndufs4r2fRC4eOalS0241eZ
+  - event: 2719
+    block: 25162964
+    log_index: 632
+    variant: RegisterV2
+    commit: STAKE_TABLE~9im324_eMjYdmqJp4kEfYFqq0ylFzK_7mBybB0TFVSG5
+  - event: 2736
+    block: 25182395
+    log_index: 655
+    variant: UndelegateV2
+    commit: STAKE_TABLE~BfffcamiX5aiODiUCHNTnh9ZHCHL8otb0R-x0G2pEHzt

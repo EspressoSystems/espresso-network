@@ -1975,7 +1975,7 @@ pub mod testing {
         stake_table::{StateSignatureSol, sign_address_bls, sign_address_schnorr},
     };
     use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
-    use rand::{Rng as _, RngCore as _};
+    use rand::{CryptoRng, Rng as _, RngCore};
 
     use super::*;
 
@@ -2004,11 +2004,31 @@ pub mod testing {
             Self::random_update_keys(self.account, self.commission)
         }
 
+        /// Seeded counterpart of [`TestValidator::randomize_keys`].
+        pub fn randomize_keys_with<R: RngCore + CryptoRng>(&self, rng: &mut R) -> Self {
+            Self::random_update_keys_with(rng, self.account, self.commission)
+        }
+
+        /// Seeded counterpart of [`TestValidator::random`], for fixtures that must be
+        /// byte-reproducible across runs and machines.
+        pub fn random_with<R: RngCore + CryptoRng>(rng: &mut R) -> Self {
+            let account = Address::from(rng.r#gen::<[u8; 20]>());
+            let commission = rng.gen_range(0..10000);
+            Self::random_update_keys_with(rng, account, commission)
+        }
+
         pub fn random_update_keys(account: Address, commission: u16) -> Self {
-            let mut rng = &mut rand::thread_rng();
+            Self::random_update_keys_with(&mut rand::thread_rng(), account, commission)
+        }
+
+        pub fn random_update_keys_with<R: RngCore + CryptoRng>(
+            rng: &mut R,
+            account: Address,
+            commission: u16,
+        ) -> Self {
             let mut seed = [0u8; 32];
             rng.fill_bytes(&mut seed);
-            let bls_key_pair = BLSKeyPair::generate(&mut rng);
+            let bls_key_pair = BLSKeyPair::generate(&mut *rng);
             let bls_sig = sign_address_bls(&bls_key_pair, account);
             let schnorr_key_pair = StateKeyPair::generate_from_seed_indexed(seed, 0);
             let schnorr_sig = sign_address_schnorr(&schnorr_key_pair, account);
@@ -2170,6 +2190,14 @@ pub mod testing {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "stake_table_history_tests.rs"]
+mod history_tests;
+
+#[cfg(test)]
+#[path = "stake_table_proptests.rs"]
+mod state_machine_proptests;
 
 #[cfg(test)]
 mod tests {
@@ -3126,86 +3154,6 @@ mod tests {
             reconstructed_stake_table, expected,
             "Stake table reconstructed from events does not match the expected stake table "
         );
-    }
-
-    async fn snapshot_stake_table_commit(
-        network: &str,
-        rpc_url: &str,
-        contract: &str,
-        to_block: u64,
-    ) {
-        let l1 = L1ClientOptions {
-            l1_events_max_retry_duration: Duration::from_secs(120),
-            l1_events_max_block_range: 10_000,
-            l1_retry_delay: Duration::from_secs(2),
-            ..Default::default()
-        }
-        .connect(vec![rpc_url.parse().unwrap()])
-        .expect("unable to construct l1 client");
-
-        let events =
-            Fetcher::fetch_events_from_contract(l1, contract.parse().unwrap(), None, to_block)
-                .await
-                .unwrap();
-
-        let validator_set =
-            ValidatorSet::from_l1_events(events.into_iter().map(|(_, e)| e), EPOCH_VERSION)
-                .expect("failed to build validator set");
-
-        let active_as_registered = to_registered_validator_map(validator_set.active_validators());
-        let active_state = StakeTableState::new(
-            active_as_registered,
-            Default::default(),
-            Default::default(),
-            Default::default(),
-            Default::default(),
-        );
-        let active_commit = active_state.commit();
-
-        let summary = format!(
-            "network: {network}\nto_block: {to_block}\nstake_table_contract: \
-             {contract}\nstake_table_hash: {}\nactive_validators_commit: {}\nall_validators: \
-             {}\nactive_validators: {}\n",
-            validator_set
-                .stake_table_hash()
-                .expect("stake_table_hash should be set"),
-            active_commit,
-            validator_set.all_validators().len(),
-            validator_set.active_validators().len(),
-        );
-
-        let mut settings = insta::Settings::clone_current();
-        let data_dir = std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
-            .join("../../../data/insta_snapshots");
-        settings.set_snapshot_path(data_dir);
-        settings.set_prepend_module_to_snapshot(false);
-        settings.bind(|| {
-            insta::assert_snapshot!(format!("{network}_stake_table_snapshot"), summary);
-        });
-    }
-
-    #[ignore = "talks to public Sepolia RPC"]
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn snapshot_decaf_stake_table_commit() {
-        snapshot_stake_table_commit(
-            "decaf",
-            "https://ethereum-sepolia.publicnode.com",
-            "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037",
-            10_935_000,
-        )
-        .await;
-    }
-
-    #[ignore = "talks to public Ethereum mainnet RPC"]
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn snapshot_mainnet_stake_table_commit() {
-        snapshot_stake_table_commit(
-            "mainnet",
-            "https://ethereum-rpc.publicnode.com",
-            "0xcef474d372b5b09defe2af187bf17338dc704451",
-            25_188_000,
-        )
-        .await;
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
