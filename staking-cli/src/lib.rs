@@ -17,6 +17,7 @@ pub(crate) use hotshot_types::{
 };
 pub(crate) use jf_signature::bls_over_bn254::KeyPair as BLSKeyPair;
 use metadata::MetadataUriArgs;
+use output::OutputFormat;
 use serde::{Deserialize, Serialize};
 use signature::OutputArgs;
 use thiserror::Error;
@@ -28,6 +29,7 @@ pub(crate) mod concurrent;
 pub(crate) mod delegation;
 /// Used by sequencer, espresso-dev-node, staking-ui-service tests.
 pub mod demo;
+pub(crate) mod entry;
 pub(crate) mod info;
 pub(crate) mod l1;
 pub(crate) mod metadata;
@@ -264,6 +266,7 @@ impl Default for Commands {
         Commands::StakeTable {
             l1_block_number: None,
             compact: false,
+            format: OutputFormat::Text,
         }
     }
 }
@@ -340,8 +343,37 @@ pub(crate) enum Commands {
         l1_block_number: Option<BlockId>,
 
         /// Abbreviate the very long BLS public keys.
+        ///
+        /// Ignored when `--format json` is used.
         #[clap(long)]
         compact: bool,
+
+        /// Output format.
+        #[clap(long, value_enum, default_value_t)]
+        format: OutputFormat,
+    },
+    /// Show everything the stake table contract knows about one address.
+    ///
+    /// Covers both sides: the address' own validator registration, and the stake it has
+    /// delegated to other validators.
+    StakeTableEntry {
+        /// The address to look up. Defaults to the signer address.
+        #[clap(long)]
+        address: Option<Address>,
+
+        /// The block number to query.
+        ///
+        /// Defaults to the latest block for convenience.
+        #[clap(long)]
+        l1_block_number: Option<BlockId>,
+
+        /// List every delegator and delegation instead of only their totals.
+        #[clap(long)]
+        delegations: bool,
+
+        /// Output format.
+        #[clap(long, value_enum, default_value_t)]
+        format: OutputFormat,
     },
     /// Print the signer account address.
     Account,

@@ -33,13 +33,15 @@ use crate::{
         ChurnParams, DemoCommands, churn_for_demo, delegate_for_demo, stake_for_demo,
         undelegate_for_demo,
     },
+    entry::{display_stake_table_entry, fetch_stake_table_entry},
     info::{
         StakeTableContractVersion, display_stake_table, fetch_stake_table_version,
         fetch_token_address, stake_table_info,
     },
     metadata::{MetadataUri, fetch_metadata, validate_metadata_uri},
     output::{
-        CalldataInfo, format_esp, output_calldata, output_error, output_success, output_warn,
+        CalldataInfo, OutputFormat, format_esp, output_calldata, output_error, output_success,
+        output_warn,
     },
     signature::{NodeSignatureDestination, NodeSignatureInput, NodeSignatures},
     transaction::Transaction,
@@ -102,6 +104,16 @@ impl AddressExt for Option<Address> {
     fn or_from_wallet(self, wallet: Option<&EthereumWallet>) -> Option<Address> {
         self.or_else(|| wallet.map(NetworkWallet::<Ethereum>::default_signer_address))
     }
+}
+
+/// Resolve a block identifier to a concrete block number, defaulting to the latest block.
+async fn resolve_block_number(provider: &impl Provider, block: Option<BlockId>) -> Result<u64> {
+    let query_block = block.unwrap_or(BlockId::latest());
+    let l1_block = provider
+        .get_block(query_block)
+        .await?
+        .unwrap_or_else(|| exit_err(format!("Failed to get block {query_block:?}"), "not found"));
+    Ok(l1_block.header.number)
 }
 
 fn exit_err(msg: impl AsRef<str>, err: impl core::fmt::Display) -> ! {
@@ -379,14 +391,11 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
     if let Commands::StakeTable {
         l1_block_number,
         compact,
+        format,
     } = config.commands
     {
         let provider = ProviderBuilder::new().connect_http(config.rpc_url.clone());
-        let query_block = l1_block_number.unwrap_or(BlockId::latest());
-        let l1_block = provider.get_block(query_block).await?.unwrap_or_else(|| {
-            exit_err("Failed to get block {query_block}", "Block not found");
-        });
-        let l1_block_resolved = l1_block.header.number;
+        let l1_block_resolved = resolve_block_number(&provider, l1_block_number).await?;
         tracing::info!("Getting stake table info at block {l1_block_resolved}");
         let stake_table = stake_table_info(
             config.rpc_url.clone(),
@@ -394,7 +403,10 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
             l1_block_resolved,
         )
         .await?;
-        display_stake_table(stake_table, compact)?;
+        match format {
+            OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&stake_table)?),
+            OutputFormat::Text => display_stake_table(stake_table, compact)?,
+        }
         return Ok(());
     }
 
@@ -461,6 +473,34 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
             wallet.as_ref().ok_or_else(&require_wallet)?,
         );
         println!("{account}");
+        return Ok(());
+    }
+
+    if let Commands::StakeTableEntry {
+        address,
+        l1_block_number,
+        delegations,
+        format,
+    } = config.commands
+    {
+        let address = address
+            .or_from_wallet(wallet.as_ref())
+            .context("Address required - provide --address or configure a signer")?;
+        let l1_block_resolved = resolve_block_number(&readonly_provider, l1_block_number).await?;
+        let mut entry = fetch_stake_table_entry(
+            &readonly_provider,
+            stake_table_addr,
+            address,
+            l1_block_resolved,
+        )
+        .await?;
+        if !delegations {
+            entry.summarize();
+        }
+        match format {
+            OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&entry)?),
+            OutputFormat::Text => display_stake_table_entry(&entry),
+        }
         return Ok(());
     }
 
@@ -860,6 +900,7 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
         | Commands::Init { .. }
         | Commands::Purge { .. }
         | Commands::StakeTable { .. }
+        | Commands::StakeTableEntry { .. }
         | Commands::Account
         | Commands::UnclaimedRewards { .. }
         | Commands::TokenBalance { .. }

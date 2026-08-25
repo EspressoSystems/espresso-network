@@ -27,6 +27,7 @@ Contracts:
     - [Managing multiple network configurations](#managing-multiple-network-configurations)
     - [Inspect the configuration](#inspect-the-configuration)
     - [View the stake table](#view-the-stake-table)
+    - [Look up one address](#look-up-one-address)
   - [Calldata Export (for Multisig Wallets)](#calldata-export-for-multisig-wallets)
     - [Calldata Simulation](#calldata-simulation)
   - [Delegators (or stakers)](#delegators-or-stakers)
@@ -316,6 +317,28 @@ You can use the following command to display the current L1 stake table:
 
 ```bash
 staking-cli stake-table
+```
+
+Add `--compact` to abbreviate the long public keys, or `--format json` for machine readable output.
+
+### Look up one address
+
+`stake-table-entry` reports everything the stake table contract knows about a single address, on both sides: its own
+validator registration, and the stake it has delegated to other validators.
+
+```bash
+# The signer's own entry
+staking-cli stake-table-entry
+
+# Any address
+staking-cli stake-table-entry --address 0x...
+```
+
+By default the delegator and delegation lists are reduced to their totals, since a busy address can have hundreds. Pass
+`--delegations` to list them, and `--format json` for machine readable output:
+
+```bash
+staking-cli stake-table-entry --address 0x... --delegations --format json
 ```
 
 ## Calldata Export (for Multisig Wallets)
