@@ -12,12 +12,13 @@ pub const PACKAGE: &str = "espresso.api.v2";
 
 /// All .proto files under `<proto_root>/v2`, sorted for deterministic codegen.
 fn v2_proto_files(proto_root: &Path) -> std::io::Result<Vec<PathBuf>> {
-    let mut files: Vec<_> = fs::read_dir(proto_root.join("v2"))?
-        .filter_map(|entry| {
-            let path = entry.ok()?.path();
-            (path.extension()? == "proto").then_some(path)
-        })
-        .collect();
+    let mut files = Vec::new();
+    for entry in fs::read_dir(proto_root.join("v2"))? {
+        let path = entry?.path();
+        if path.extension().is_some_and(|ext| ext == "proto") {
+            files.push(path);
+        }
+    }
     files.sort();
     Ok(files)
 }

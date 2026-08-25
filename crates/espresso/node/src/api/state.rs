@@ -1492,8 +1492,9 @@ where
         let rate = <Self as v1::StatusApi>::success_rate(self)
             .await
             .map_err(to_status)?;
-        // A node that has not seen a view computes 0/0. protoJSON cannot encode a non-finite
-        // double, `serde_json` would write `null`, and the generated deserializer rejects that.
+        // A fresh node computes 0/0 and a restarted one height/0 until its first view tick
+        // (the view gauge is in-memory, the height persisted). protoJSON cannot encode a
+        // non-finite double and the generated deserializer rejects `null`, so clamp to zero.
         let rate = if rate.is_finite() { rate } else { 0. };
         Ok(tonic::Response::new(proto::SuccessRateResponse { rate }))
     }
@@ -1514,7 +1515,9 @@ where
         &self,
         _request: tonic::Request<proto::GetNodeKeysRequest>,
     ) -> Result<tonic::Response<proto::NodeKeysResponse>, tonic::Status> {
-        let keys = self.data_source.node_public_keys().await;
+        let keys = <Self as v1::StatusApi>::keys(self)
+            .await
+            .map_err(to_status)?;
         Ok(tonic::Response::new(proto::NodeKeysResponse {
             eth_account: keys.eth_account.map(|account| format!("{account:#x}")),
             consensus_key: Some(proto::BlsPublicKey {
@@ -2523,7 +2526,7 @@ where
         let value = ds
             .get_total_supply_l1()
             .await
-            .map_err(|err| not_found(format!("failed to get total supply. err={err:#}")))?;
+            .map_err(|err| anyhow::anyhow!("failed to get total supply: {err:#}"))?;
         Ok(format_ether(value))
     }
 

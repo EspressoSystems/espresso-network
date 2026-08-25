@@ -34,7 +34,7 @@ use tokio::sync::Semaphore;
 use vbs::version::StaticVersion;
 
 use crate::{
-    error::{ApiError, ErrorKind},
+    error::{ApiError, classify as classify_availability_error},
     v1,
 };
 
@@ -143,16 +143,6 @@ fn decode_body<T: serde::de::DeserializeOwned>(
             },
         })
     })
-}
-
-/// Classify an `anyhow::Error` from an availability handler into the appropriate `ApiError`
-/// variant.
-pub(crate) fn classify_availability_error(err: anyhow::Error) -> ApiError {
-    match crate::error::classify(&err) {
-        ErrorKind::NotFound => ApiError::NotFound(err),
-        ErrorKind::BadRequest => ApiError::BadRequest(err),
-        ErrorKind::Internal => ApiError::Internal(err),
-    }
 }
 
 impl OperationOutput for ApiError {
@@ -3447,7 +3437,8 @@ pub(crate) async fn v2_error_envelope(req: Request, next: axum::middleware::Next
 
 /// Serve the v2 API documentation: the build-time OpenAPI document and the two UIs that render
 /// it. Unlike [`finish_v1_docs`], nothing here inspects the router, so a route that is generated
-/// but never mounted still appears in the document.
+/// but never mounted would still appear in the document; `v2_documented_routes_are_mounted`
+/// asserts that never ships.
 pub fn router_v2_docs() -> Router {
     const SPEC: &str = include_str!("generated/espresso.api.v2.openapi.json");
 
@@ -3747,9 +3738,9 @@ mod tests {
     /// reach them.
     #[test]
     fn error_response_redacts_provider_credentials() {
-        let msg = r#"failed to get total supply. err=reqwest::Error { url: "https://u:p@rpc.invalid/v1/FAKEKEY" }"#;
+        let msg = r#"failed to get total supply: reqwest::Error { url: "https://u:p@rpc.invalid/v1/FAKEKEY" }"#;
 
-        let body = ErrorResponse::new(StatusCode::NOT_FOUND, msg.to_string());
+        let body = ErrorResponse::new(StatusCode::INTERNAL_SERVER_ERROR, msg.to_string());
 
         assert!(!body.custom.message.contains("FAKEKEY"), "{body:?}");
         assert!(!body.custom.message.contains("u:p"), "{body:?}");
@@ -4735,6 +4726,111 @@ mod tests {
         .into_iter()
         .collect();
         assert_eq!(documented, expected);
+    }
+
+    /// Implements the v2 tonic service traits with `Err(Status::internal)` bodies rather than
+    /// `unimplemented!()`: the mounted-routes test below invokes the handlers, and any response
+    /// at all proves the route is mounted, while a panic would abort the test.
+    #[derive(Clone)]
+    struct MockV2State;
+
+    #[tonic::async_trait]
+    impl crate::proto::status_service_server::StatusService for MockV2State {
+        async fn get_block_height(
+            &self,
+            _request: tonic::Request<crate::proto::GetBlockHeightRequest>,
+        ) -> Result<tonic::Response<crate::proto::BlockHeightResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_success_rate(
+            &self,
+            _request: tonic::Request<crate::proto::GetSuccessRateRequest>,
+        ) -> Result<tonic::Response<crate::proto::SuccessRateResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_time_since_last_decide(
+            &self,
+            _request: tonic::Request<crate::proto::GetTimeSinceLastDecideRequest>,
+        ) -> Result<tonic::Response<crate::proto::TimeSinceLastDecideResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_node_keys(
+            &self,
+            _request: tonic::Request<crate::proto::GetNodeKeysRequest>,
+        ) -> Result<tonic::Response<crate::proto::NodeKeysResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl crate::proto::token_service_server::TokenService for MockV2State {
+        async fn get_total_minted_supply(
+            &self,
+            _request: tonic::Request<crate::proto::GetTotalMintedSupplyRequest>,
+        ) -> Result<tonic::Response<crate::proto::TotalMintedSupplyResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_circulating_supply(
+            &self,
+            _request: tonic::Request<crate::proto::GetCirculatingSupplyRequest>,
+        ) -> Result<tonic::Response<crate::proto::CirculatingSupplyResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_circulating_supply_ethereum(
+            &self,
+            _request: tonic::Request<crate::proto::GetCirculatingSupplyEthereumRequest>,
+        ) -> Result<tonic::Response<crate::proto::CirculatingSupplyEthereumResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_total_issued_supply(
+            &self,
+            _request: tonic::Request<crate::proto::GetTotalIssuedSupplyRequest>,
+        ) -> Result<tonic::Response<crate::proto::TotalIssuedSupplyResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_total_reward_distributed(
+            &self,
+            _request: tonic::Request<crate::proto::GetTotalRewardDistributedRequest>,
+        ) -> Result<tonic::Response<crate::proto::TotalRewardDistributedResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
+    /// Every path in the OpenAPI document must be a route [`crate::router_v2`] mounts, so a
+    /// generated client cannot ship a method that always 404s.
+    #[tokio::test]
+    async fn v2_documented_routes_are_mounted() {
+        let spec: serde_json::Value =
+            serde_json::from_str(include_str!("generated/espresso.api.v2.openapi.json"))
+                .expect("valid JSON");
+        let router = crate::router_v2(Arc::new(MockV2State));
+        for path in spec["paths"].as_object().expect("spec has paths").keys() {
+            let req = Request::builder()
+                .uri(path)
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let resp = tower::ServiceExt::oneshot(router.clone(), req)
+                .await
+                .unwrap();
+            assert_ne!(
+                resp.status(),
+                StatusCode::NOT_FOUND,
+                "{path} is documented but not mounted"
+            );
+        }
     }
 
     #[tokio::test]

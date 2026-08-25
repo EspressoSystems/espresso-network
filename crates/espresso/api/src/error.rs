@@ -31,9 +31,9 @@ impl fmt::Display for ApiError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ApiError::BadRequest(err) | ApiError::NotFound(err) | ApiError::Internal(err) => {
-                // The v1 axum handlers render an error into a response body through this impl, so
-                // a provider credential in the message is removed once, here. The v2 adapters do
-                // not go through `ApiError`; they scrub in `to_status`.
+                // Both transports render handler errors through this impl (v1 via the axum
+                // handlers, v2 via `to_status`), so a provider credential in the message is
+                // removed once, here.
                 f.write_str(&espresso_utils::redact::scrub(&err.to_string()))
             },
         }
@@ -50,37 +50,27 @@ impl std::error::Error for ApiError {
     }
 }
 
-/// What a handler error means, independent of transport. v1 maps this onto [`ApiError`] and an
-/// HTTP status; v2 maps it onto a gRPC code in [`to_status`]. Both go through [`classify`] so the
-/// two transports cannot drift on what counts as a 404.
-pub enum ErrorKind {
-    NotFound,
-    BadRequest,
-    Internal,
-}
-
 /// Errors raised as [`AvailabilityError`] by a state implementation carry semantic meaning;
-/// anything else is a failure the client cannot act on.
-pub fn classify(err: &anyhow::Error) -> ErrorKind {
+/// anything else is a failure the client cannot act on. Both transports classify through here,
+/// so v1 and v2 cannot drift on what counts as a 404.
+pub fn classify(err: anyhow::Error) -> ApiError {
     match err.downcast_ref::<AvailabilityError>() {
-        Some(AvailabilityError::NotFound(_)) => ErrorKind::NotFound,
-        Some(_) => ErrorKind::BadRequest,
-        None => ErrorKind::Internal,
+        Some(AvailabilityError::NotFound(_)) => ApiError::NotFound(err),
+        Some(_) => ApiError::BadRequest(err),
+        None => ApiError::Internal(err),
     }
 }
 
 /// Render a handler error for the v2 transports: the gRPC `grpc-message` trailer and, via
-/// `tonic_rest::RestError`, the REST error body.
-///
-/// Both reach unauthenticated callers, and the v2 services hand up `anyhow::Error` directly
-/// rather than through [`ApiError`], so the credential scrub that `ApiError`'s `Display` applies
-/// to the v1 path has to happen here instead.
+/// `tonic_rest::RestError`, the REST error body. Classification and the credential scrub happen
+/// in [`classify`] and [`ApiError`]'s `Display`, shared with the v1 path.
 pub fn to_status(err: anyhow::Error) -> tonic::Status {
-    let message = espresso_utils::redact::scrub(&err.to_string());
-    match classify(&err) {
-        ErrorKind::NotFound => tonic::Status::not_found(message),
-        ErrorKind::BadRequest => tonic::Status::invalid_argument(message),
-        ErrorKind::Internal => tonic::Status::internal(message),
+    let err = classify(err);
+    let message = err.to_string();
+    match err {
+        ApiError::NotFound(_) => tonic::Status::not_found(message),
+        ApiError::BadRequest(_) => tonic::Status::invalid_argument(message),
+        ApiError::Internal(_) => tonic::Status::internal(message),
     }
 }
 
@@ -94,7 +84,7 @@ mod tests {
     #[test]
     fn to_status_scrubs_provider_credentials() {
         let err = anyhow::anyhow!(
-            r#"failed to get total supply. err=reqwest::Error {{ url: "https://u:p@rpc.invalid/v1/FAKEKEY" }}"#
+            r#"failed to get total supply: reqwest::Error {{ url: "https://u:p@rpc.invalid/v1/FAKEKEY" }}"#
         );
 
         let status = to_status(err);

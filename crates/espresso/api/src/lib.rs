@@ -112,14 +112,21 @@ where
     if modules.hotshot_events {
         router = router.merge(axum::router_hotshot_events(state.clone()));
     }
-    let state = std::sync::Arc::new(state);
-    let v2 = rest::status_service_rest_router(state.clone())
-        .merge(rest::token_service_rest_router(state))
-        .layer(::axum::middleware::from_fn(axum::v2_error_envelope));
     let router = axum::finish_v1_docs(router)
-        .merge(v2)
+        .merge(router_v2(std::sync::Arc::new(state)))
         .merge(axum::router_v2_docs());
     serve_router(listener, "v1 and v2", router, max_connections).await
+}
+
+/// The v2 REST routes exactly as [`serve_axum`] mounts them. Extracted so the test asserting
+/// every documented route is mounted exercises the same construction; don't inline it back.
+pub(crate) fn router_v2<S>(state: std::sync::Arc<S>) -> ::axum::Router
+where
+    S: StatusService + TokenService + Send + Sync + 'static,
+{
+    rest::status_service_rest_router(state.clone())
+        .merge(rest::token_service_rest_router(state))
+        .layer(::axum::middleware::from_fn(axum::v2_error_envelope))
 }
 
 /// Which of the optional API modules to serve, for modes that make them conditional

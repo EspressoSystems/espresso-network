@@ -27,8 +27,9 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
 ### What is served today
 
 `StatusService` and `TokenService`, nine endpoints under `/v2/status/...` and `/v2/token/...`. Everything else a client
-needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts; the two are asserted equal in
-`crates/espresso/api/src/axum.rs`.
+needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the tests in
+`crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented path against
+the mounted v2 router.
 
 ### Adding an endpoint to an existing service
 
