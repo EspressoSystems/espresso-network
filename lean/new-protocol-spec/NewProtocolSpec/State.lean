@@ -68,7 +68,7 @@ structure NodeState where
   /--
   Block content available to propose, by view and parent block hash.
 
-  We may only propose a header headers for exactly this view and parent
+  We may only propose a header built for exactly this view and parent
   (`ProposalJustification.headerBuilt`), and we can only be *owed* a proposal
   once one exists (`ProposeEnabled`) — a node cannot be obliged to propose a
   block that does not exist yet, which is why what is available to propose is

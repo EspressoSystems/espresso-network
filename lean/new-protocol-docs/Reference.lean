@@ -17,23 +17,29 @@ tag := "top"
 _What one consensus node must do, and the whole contract an implementation owes._
 
 Consensus runs in numbered views, each with a leader. The leader of a view
-proposes one block, extending a parent that it names by certificate. Every node
-then votes on that block twice, and each round completes when a quorum has voted.
+proposes one block, extending a parent that it names by certificate. What travels
+is a proposal: the block's header, the view it is made in, and the certificate
+for the parent. The transactions are erasure-coded into shares and dispersed, the
+header commits to them. Every node then votes on that proposal twice, and each
+round completes when a quorum has voted.
 
-A vote1 says the block is a fit extension. The node casting it holds the (valid)
-block, holds its own share of the block's data, and has checked that the block does
-not conflict with its lock. A quorum of vote1s is a {name NewProtocol.Cert1}`Cert1`,
-which does three jobs:
+A vote1 says the proposal is a fit extension. The node casting it holds the
+proposal, has been told the block it proposes is valid, holds its own share of the
+payload and has checked that the proposal does not conflict with its lock. Unless
+the parent is genesis, it also holds the parent proposal, with the parent's payload
+reconstructed. A quorum of vote1s is a {name NewProtocol.Cert1}`Cert1`, which does
+three jobs:
   * the next leader cites it to extend the chain,
   * any node may move to the next view on it, and
   * a node may lock on it.
 
 A vote2 says the block is there to stay. It requires a {name NewProtocol.Cert1}`Cert1`
-for the block and the block's payload reconstructed from enough shares — so the second
-round is where availability is established, not just agreement. A quorum of vote2s is a
-{name NewProtocol.Cert2}`Cert2`, and a {name NewProtocol.Cert2}`Cert2` decides the block:
-the node hands it to the application, along with any ancestors it holds and that it has
-not delivered before.
+for the proposal and the payload reconstructed from enough shares — so the second
+round is where availability is established, not just agreement, and where a proposal
+becomes a block the node has in full. A quorum of vote2s is a
+{name NewProtocol.Cert2}`Cert2`, and a {name NewProtocol.Cert2}`Cert2` decides the
+block: the node hands it to the application, along with any ancestors it holds and
+that it has not delivered before.
 
 A view that produces no {name NewProtocol.Cert1}`Cert1` is abandoned. The node's timer
 fires, it votes to give the view up, and a quorum of those votes is a
@@ -78,10 +84,11 @@ rule here reads them, so how they work cannot affect the results.
   {name NewProtocol.StepSpec.vidShareProvenance}`StepSpec.vidShareProvenance` says a
   held share arrived with the proposal it belongs to.
 
-* *Fetching blocks a node missed.* An implementation may ask peers for them. Here a
-  fetched block is an ordinary proposal arrival — held for ancestry when its admission
-  guards fail, never votable — and no obligation depends on fetching, since the decide
-  stream skips what is not in hand. Fetching is quality of service, not protocol.
+* *Fetching what a node missed.* An implementation may ask peers for proposals and
+  payloads it does not have. Here a fetched proposal arrives as any other does — held
+  for ancestry when its admission guards fail, never votable — and no obligation
+  depends on fetching, since the decide stream skips what is not in hand. Fetching is
+  quality of service, not protocol.
 
 *Absent, and the results are narrower for it.* Each of these is something a real
 deployment does, and what is proved holds of the system with the piece removed. The
@@ -101,7 +108,7 @@ distance between that system and a real one is where an audit should spend its d
   ({name NewProtocol.SafetySpec.vote1Once}`SafetySpec.vote1Once`,
   {name NewProtocol.SafetySpec.vote2Once}`SafetySpec.vote2Once`).
 
-* *Application-level block validity.* Consensus treats blocks as opaque, so
+* *Application-level block validity.* Consensus never sees a block's transactions, so
   {name NewProtocol.BlockValid}`BlockValid` is uninterpreted and arrives as an input to
   be believed. Every result is therefore conditional on
   {name NewProtocol.ValidityReported}`ValidityReported` below: a node told that an
@@ -148,10 +155,15 @@ settle it. The second group is where that judgment is needed.
 
 # The data
 
-The objects the rules are about. Two reductions run through all of them.
+The objects the rules are about. Three reductions run through all of them.
 Cryptographic values — hashes, keys, commitments — are one-field wrappers, because
-the rules only ever compare and store them. And hashing is opaque: no rule can look
-inside a hash, so every rule relates hash images only. Signatures are not modelled
+the rules only ever compare and store them. Hashing is opaque: no rule can look
+inside a hash, so every rule relates hash images only. And a block is reduced to the
+proposal that carries it: {name NewProtocol.Block}`Block` is an alias for
+{name NewProtocol.Proposal}`Proposal`, so what the rules call a block is its header,
+view and parent link, never its transactions. Those sit behind
+{name NewProtocol.PayloadCommit}`PayloadCommit`, and whether a node has them is
+tracked apart from the proposal, as availability. Signatures are not modelled
 either — where a message would carry one and a recipient would verify it, the
 conclusion is stated as a proposition, and {name NewProtocol.Network}`Network` is
 where those propositions are collected.
@@ -531,7 +543,7 @@ Four nodes, so a quorum is three and one may be faulty. `D` is the faulty one.
 `A` and `B` are honest, and everything they do below passes every other rule.
 
 1. *View 10, led by `D`.* `D` proposes a block justified by the `Cert1` for view
-   9, and sends it to `A` and `B` only. Both vote1. `D` assembles the `Cert1`
+   9, and sends the proposal to `A` and `B` only. Both vote1. `D` assembles the `Cert1`
    for view 10 from their votes and its own, and keeps it. `A` and `B` now want
    to vote2 and cannot: {name NewProtocol.Vote2Justification}`Vote2Justification`
    needs that `Cert1`. Their locks are still at 9.

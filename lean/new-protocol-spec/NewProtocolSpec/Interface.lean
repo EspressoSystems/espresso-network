@@ -21,7 +21,7 @@ structure Config where
 
   Genesis on a fresh network. It is *held* but never *admitted*: nothing
   votes on it, and it exists so that the first real proposal has a parent to
-  name and a header key to be headers under. Its hash need not match
+  name and a header key to be built under. Its hash need not match
   `Config.anchorCert` — the genesis exemptions in the proposing and
   parent-linking rules are exactly this.
 

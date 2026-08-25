@@ -676,7 +676,7 @@ proposals come last, over the settled lock.
 
 Each round ranges over the views its own table has entries at, which is every
 view the action could be owed in: a vote needs an admitted proposal, a decide
-a `Cert2`, a proposal a headers header. Scanning those keys is a complete
+a `Cert2`, a proposal a built header. Scanning those keys is a complete
 search, and one pass over them suffices: no attempt can make a view that an
 earlier attempt passed over become owed, since deciding only raises the floor
 and only marks views decided, and both of those retire opportunities rather

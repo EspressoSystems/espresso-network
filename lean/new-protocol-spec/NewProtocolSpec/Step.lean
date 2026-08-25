@@ -175,7 +175,7 @@ structure ProposalJustification (s : NodeState) (p : Proposal) : Prop where
         ∧ p.parentCert.view + 1 = p.viewNumber
 
   /--
-  We hold the parent block, and the header we propose is the one headers for
+  We hold the parent block, and the header we propose is the one built for
   exactly this view and parent.
 
   Genesis is exempt from the hash match: the stored genesis proposal is a
@@ -560,7 +560,7 @@ structure StepSpec (s : NodeState) (input : Input) (output : List Output) (s' : 
   reconstructedProvenance : ∀ v pc, s'.blocksReconstructed v pc →
     s.blocksReconstructed v pc ∨ input = Input.blockReconstructed v pc
 
-  /-- A headers header was handed to us for that view and parent. -/
+  /-- A built header was handed to us for that view and parent. -/
   headerProvenance : ∀ v h hd, s'.headers v h = some hd →
     s.headers v h = some hd ∨ input = Input.headerBuilt v h hd
 
@@ -631,7 +631,7 @@ structure StepSpec (s : NodeState) (input : Input) (output : List Output) (s' : 
   reconstructedIngested : ∀ v pc, input = Input.blockReconstructed v pc →
     s'.blocksReconstructed v pc
 
-  /-- A headers header is kept. -/
+  /-- A built header is kept. -/
   headerIngested : ∀ v parent h, input = Input.headerBuilt v parent h →
     Writable (s.headers v parent) h → s'.headers v parent = some h
 

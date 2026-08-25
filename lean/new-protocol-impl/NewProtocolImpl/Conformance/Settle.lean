@@ -129,7 +129,7 @@ theorem gc_settles (cfg : Config) (leader : ViewNumber → Option PubKey) (node 
 /-! ## What a fresh node owes
 
 Nothing, and for a blunter reason than above: a fresh node has admitted nothing,
-holds no `Cert2` and has no headers header, so three of the four
+holds no `Cert2` and has no built header, so three of the four
 justifications fail outright and the fourth has no block to propose.
 -/
 
