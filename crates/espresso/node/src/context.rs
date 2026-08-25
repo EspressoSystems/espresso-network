@@ -17,7 +17,7 @@ use futures::{
     future::join_all,
     stream::{BoxStream, Stream, StreamExt},
 };
-use hotshot::SystemContext;
+use hotshot::{HotShotInitializer, SystemContext};
 use hotshot_events_service::events_source::{EventConsumer, EventsStreamer};
 use hotshot_new_protocol::{
     coordinator::Coordinator,
@@ -110,14 +110,15 @@ where
     N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
 {
-    #[tracing::instrument(skip_all, fields(node_id = instance_state.node_id))]
+    #[tracing::instrument(skip_all, fields(node_id = initializer.instance_state().node_id))]
     #[allow(clippy::too_many_arguments)]
     pub async fn init<F>(
         network_config: NetworkConfig<SeqTypes>,
         upgrade: versions::Upgrade,
         validator_config: ValidatorConfig<SeqTypes>,
         membership_coordinator: EpochMembershipCoordinator<SeqTypes>,
-        instance_state: NodeState,
+        initializer: HotShotInitializer<SeqTypes>,
+        anchor_view: Option<ViewNumber>,
         storage: Option<RequestResponseStorage>,
         state_catchup: ParallelStateCatchup,
         persistence: Arc<P>,
@@ -137,6 +138,8 @@ where
         let pub_key = validator_config.public_key;
         tracing::info!(%pub_key, "initializing consensus");
 
+        let instance_state = initializer.instance_state().clone();
+
         // Stick our node ID in `metrics` so it is easily accessible via the status API.
         metrics
             .create_gauge("node_index".into(), None)
@@ -144,11 +147,6 @@ where
 
         // Start L1 client if it isn't already.
         instance_state.l1_client.spawn_tasks().await;
-
-        // Load saved consensus state from storage.
-        let (initializer, anchor_view) = persistence
-            .load_consensus_state(instance_state.clone(), upgrade)
-            .await?;
 
         info!(target: "announce", ?initializer, "starting up sequencer context with initializer");
 
