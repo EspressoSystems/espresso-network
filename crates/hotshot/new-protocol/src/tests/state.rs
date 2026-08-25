@@ -96,7 +96,7 @@ async fn new_manager_with_instance(instance: TestInstanceState) -> StateManager<
     // justify_qc.
     let genesis_leaf =
         Leaf2::<TestTypes>::genesis(&genesis_state, &instance, TEST_VERSIONS.vid2.base).await;
-    manager.seed_state(ViewNumber::genesis(), Arc::new(genesis_state), genesis_leaf);
+    manager.seed_state(Arc::new(genesis_state), genesis_leaf);
     manager
 }
 

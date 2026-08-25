@@ -236,11 +236,7 @@ where
         for p in initializer.saved_proposals().values() {
             state_manager.seed_from_header(message::Proposal::from(p.data.clone()));
         }
-        state_manager.seed_state(
-            anchor_view,
-            initializer.anchor_state().clone(),
-            anchor_leaf.clone(),
-        );
+        state_manager.seed_state(initializer.anchor_state().clone(), anchor_leaf.clone());
         // The anchor leaf and persisted proposals are blocks this node had
         // reconstructed before it went down, so treat them as reconstructed on
         // restart
@@ -1957,12 +1953,12 @@ where
         let anchor_view = seed.decided_anchor.view_number();
         if let Some(state) = seed.validated_states.get(&anchor_view).cloned() {
             self.state_manager
-                .seed_state(anchor_view, state, seed.decided_anchor.clone());
+                .seed_state(state, seed.decided_anchor.clone());
         }
         for leaf in &seed.undecided {
             let view = leaf.view_number();
             if let Some(state) = seed.validated_states.get(&view).cloned() {
-                self.state_manager.seed_state(view, state, leaf.clone());
+                self.state_manager.seed_state(state, leaf.clone());
             }
         }
 

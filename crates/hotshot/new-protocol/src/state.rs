@@ -207,8 +207,12 @@ impl<T: NodeType> StateManager<T> {
             .map(|(_, entry)| entry.leaf.clone())
     }
 
-    pub fn seed_state(&mut self, view: ViewNumber, state: Arc<T::ValidatedState>, leaf: Leaf2<T>) {
-        self.insert_state(view, state, None, leaf);
+    pub fn seed_state(&mut self, state: Arc<T::ValidatedState>, leaf: Leaf2<T>) {
+        self.insert_state(StateEntry {
+            state,
+            delta: None,
+            leaf,
+        });
     }
 
     /// Seed a commitment-only (`from_header`) state so a child proposal can be
@@ -430,13 +434,10 @@ impl<T: NodeType> StateManager<T> {
     /// Provide an externally-obtained validated state.
     pub fn update_state(&mut self, update: UpdateLeaf<T>) {
         let UpdateLeaf {
-            view,
-            leaf,
-            state,
-            delta,
+            leaf, state, delta, ..
         } = update;
         let commitment = leaf.commit();
-        self.insert_state(view, state, delta, leaf);
+        self.insert_state(StateEntry { state, delta, leaf });
         if let Some(in_flight) = self.state_requests.remove(&commitment) {
             in_flight.abort();
         }
@@ -467,12 +468,11 @@ impl<T: NodeType> StateManager<T> {
                         } else {
                             None
                         };
-                        self.insert_state(
-                            response.view,
-                            response.state.clone(),
-                            response.delta.clone(),
+                        self.insert_state(StateEntry {
+                            state: response.state.clone(),
+                            delta: response.delta.clone(),
                             leaf,
-                        );
+                        });
                         finish_measurement(measurement);
                         self.start_pending(response.commitment);
                         return Some(StateManagerOutput::State {
@@ -565,35 +565,28 @@ impl<T: NodeType> StateManager<T> {
     /// have no delta. States produced by `validate_and_apply_header` carry a delta representing
     /// the state transition. This method prevents a `from_header` state from overwriting a
     /// fully validated state that already has a delta.
-    fn insert_state(
-        &mut self,
-        view: ViewNumber,
-        state: Arc<T::ValidatedState>,
-        delta: Option<Delta<T>>,
-        leaf: Leaf2<T>,
-    ) {
-        if let Some(existing) = self.validated_states.get(&leaf.commit())
+    fn insert_state(&mut self, entry: StateEntry<T>) {
+        let commitment = entry.leaf.commit();
+        if let Some(existing) = self.validated_states.get(&commitment)
             && existing.delta.is_some()
-            && delta.is_none()
+            && entry.delta.is_none()
         {
             warn!(
-                ?view,
+                view = ?entry.leaf.view_number(),
                 "Skipping state update to not override a state with a delta"
             );
             return;
         }
-        self.validated_states
-            .insert(leaf.commit(), StateEntry { state, delta, leaf });
+        self.validated_states.insert(commitment, entry);
     }
 
     fn insert_empty_state(&mut self, proposal: Proposal<T>) {
         let state = T::ValidatedState::from_header(&proposal.block_header);
-        self.insert_state(
-            proposal.view_number(),
-            Arc::new(state),
-            None,
-            proposal.into(),
-        );
+        self.insert_state(StateEntry {
+            state: Arc::new(state),
+            delta: None,
+            leaf: proposal.into(),
+        });
     }
 
     #[cfg(test)]
