@@ -321,7 +321,12 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     // level, instead of putting this attribute on the expression, see
     // https://github.com/rust-lang/rust-clippy/issues/9047.
     #[allow(clippy::await_holding_lock)]
-    async fn catchup(self, epoch: EpochNumber, epoch_tx: Sender<Result<EpochMembership<TYPES>>>) {
+    async fn catchup(
+        self,
+        epoch: EpochNumber,
+        epoch_tx: Sender<Result<EpochMembership<TYPES>>>,
+        progress: CatchupProgress,
+    ) {
         // We need to fetch the requested epoch, that's for sure
         let mut fetch_epochs = vec![];
 
@@ -337,6 +342,9 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
 
         // First figure out which epochs we need to fetch
         loop {
+            progress.checkpoint(format_args!(
+                "loading stake table for epoch {try_epoch} from storage"
+            ));
             let has_stake_table = self.membership.snapshot(try_epoch).is_some()
                 || self.membership.load_stake_table(try_epoch).await;
             if has_stake_table {
@@ -365,6 +373,9 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                         // Somebody else is already fetching this epoch, drop
                         // the lock and wait for them to finish
                         drop(map_lock);
+                        progress.checkpoint(format_args!(
+                            "waiting for another task's catchup of epoch {try_epoch}"
+                        ));
                         if let Ok(Ok(_)) = rx.recv_direct().await {
                             break;
                         };
@@ -389,7 +400,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
 
         // Iterate through the epochs we need to fetch in reverse, i.e. from the oldest to the newest
         while let Some((current_fetch_epoch, tx)) = fetch_epochs.pop() {
-            match self.fetch_stake_table(current_fetch_epoch).await {
+            match self.fetch_stake_table(current_fetch_epoch, &progress).await {
                 Ok(_) => {},
                 Err(err) => {
                     fetch_epochs.push((current_fetch_epoch, tx));
@@ -429,7 +440,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             self.catchup_map.lock().remove(&current_fetch_epoch);
         }
 
-        let root_leaf = match self.fetch_stake_table(epoch).await {
+        let root_leaf = match self.fetch_stake_table(epoch, &progress).await {
             Ok(root_leaf) => root_leaf,
             Err(err) => {
                 tracing::error!("Failed to fetch stake table for epoch {epoch:?}: {err:?}");
@@ -438,6 +449,9 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             },
         };
 
+        progress.checkpoint(format_args!(
+            "fetching drb result for epoch {epoch} from peers"
+        ));
         match self.get_epoch_drb(epoch).await {
             Ok(drb_result) => {
                 tracing::warn!(
@@ -453,6 +467,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                     err
                 );
 
+                progress.checkpoint(format_args!("computing drb result for epoch {epoch}"));
                 let result = self.compute_drb_result(epoch, root_leaf).await;
 
                 log!(result);
@@ -600,7 +615,11 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     /// * `Ok(Leaf2<TYPES>)` containing the epoch root leaf if successful.
     /// * `Err(Error)` if the root membership or root leaf cannot be found, or if
     ///   updating the membership fails.
-    async fn fetch_stake_table(&self, epoch: EpochNumber) -> Result<Leaf2<TYPES>> {
+    async fn fetch_stake_table(
+        &self,
+        epoch: EpochNumber,
+        progress: &CatchupProgress,
+    ) -> Result<Leaf2<TYPES>> {
         let root_epoch = EpochNumber::new(epoch.saturating_sub(2));
         let Ok(root_membership) = self.stake_table_for_epoch(Some(root_epoch)) else {
             return Err(anytrace::error!(
@@ -611,12 +630,18 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
 
         // Get the epoch root headers and update our membership with them, finally sync them
         // Verification of the root is handled in get_epoch_root_and_drb
+        progress.checkpoint(format_args!(
+            "fetching epoch root of epoch {epoch} (in root epoch {root_epoch})"
+        ));
         let Ok(root_leaf) = root_membership.get_epoch_root().await else {
             return Err(anytrace::error!(
                 "get epoch root leaf failed for epoch {root_epoch:?}"
             ));
         };
 
+        progress.checkpoint(format_args!(
+            "adding epoch root of epoch {epoch} to membership"
+        ));
         self.add_epoch_root(root_leaf.block_header().clone())
             .await
             .map_err(|e| {
@@ -767,16 +792,47 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
 /// and its `catchup_map` entry evicted so a later request can retry.
 const CATCHUP_ATTEMPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
+/// Records the last checkpoint a catchup attempt passed. The attempt updates
+/// it right before every await, so when the watchdog in `spawn_catchup`
+/// abandons a stuck or dead attempt it can report exactly which step the
+/// attempt never came back from.
+#[derive(Clone)]
+struct CatchupProgress {
+    epoch: EpochNumber,
+    last: Arc<Mutex<String>>,
+}
+
+impl CatchupProgress {
+    fn new(epoch: EpochNumber) -> Self {
+        Self {
+            epoch,
+            last: Arc::new(Mutex::new("spawned".to_string())),
+        }
+    }
+
+    /// Record (and debug-log) the step the attempt is about to block on.
+    fn checkpoint(&self, at: impl std::fmt::Display) {
+        tracing::debug!("catchup for epoch {}: {at}", self.epoch);
+        *self.last.lock() = at.to_string();
+    }
+
+    fn last(&self) -> String {
+        self.last.lock().clone()
+    }
+}
+
 fn spawn_catchup<T: NodeType>(
     coordinator: EpochMembershipCoordinator<T>,
     epoch: EpochNumber,
     epoch_tx: Sender<Result<EpochMembership<T>>>,
 ) {
     tokio::spawn(async move {
+        let progress = CatchupProgress::new(epoch);
         let mut inner = tokio::spawn({
             let coordinator = coordinator.clone();
             let epoch_tx = epoch_tx.clone();
-            async move { coordinator.catchup(epoch, epoch_tx).await }
+            let progress = progress.clone();
+            async move { coordinator.catchup(epoch, epoch_tx, progress).await }
         });
         let outcome = match tokio::time::timeout(CATCHUP_ATTEMPT_TIMEOUT, &mut inner).await {
             // `catchup` ran to completion; it removed its own map entries.
@@ -801,11 +857,14 @@ fn spawn_catchup<T: NodeType>(
         // process. The intermediate entries are recognized by their closed
         // channels (the aborted attempt's senders are gone) and swept inside
         // `catchup_cleanup`.
+        let stuck_at = progress.last();
         coordinator.catchup_cleanup(
             epoch,
             epoch_tx,
             vec![],
-            anytrace::error!("catchup for epoch {epoch} abandoned: {outcome}"),
+            anytrace::error!(
+                "catchup for epoch {epoch} abandoned: {outcome}; last checkpoint: {stuck_at}"
+            ),
         );
     });
 }
