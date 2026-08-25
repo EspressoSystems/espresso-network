@@ -32,7 +32,109 @@ open Verso.ArgParse
 open Lean
 
 
-block_extension SpecBox (mirrors : Name) where
+/-!
+# House rules for print
+
+The LaTeX counterpart of the stylesheet in `Main.lean`, for a default that
+`Config` cannot reach: `TeXConfig` carries no preamble, and the only preamble
+Verso assembles is the one its extensions contribute. `houseStyle` adds the
+rules to every box defined below, so they outlive any one of those boxes.
+
+Inline code cannot break. Verso computes break opportunities for the names in a
+signature, a hyphen at each camel-case seam and a bare break after each dot, but
+a name written as `{name X}` or as plain code reaches LaTeX without them, and a
+long one then runs past the margin. `breakbefore` and `breakafter` ask fancyvrb
+for the same two policies, and for a break after `_`, everywhere a name is set
+inline.
+
+A few lines still have no break in reach, a name being one long word in a narrow
+column. `emergencystretch` gives TeX a last pass in which it may loosen the
+spaces on such a line instead of letting it run into the margin, which is the
+lesser of the two.
+-/
+
+/-!
+## The fonts in print
+
+Verso chooses three: Source Serif Pro for the body, Source Sans Pro for headings
+and the table of contents, DejaVu Sans Mono for code. Each of the three settings
+below replaces one of them, and `none` keeps Verso's.
+
+A name is one fontspec resolves, so the font has to be installed, and a font for
+code has to carry the symbols Lean is written in, `∀` and `→` and `⟨⟩` among
+them, along with the `↪` fvextra marks a wrapped line of code with. Neither
+failure stops the build: an unresolvable name falls back to the default font and
+a missing symbol leaves a gap on the page, both reported in `main.log` and
+nowhere else. Grep it for `Missing character` after changing any of these.
+
+Headings and code carry their name into the HTML nowhere. There Verso leaves both
+fonts to the reader's browser, through `--verso-code-font-family` and its
+siblings.
+-/
+
+/-- The body font, or `none` for Verso's Source Serif Pro. -/
+def bodyFont : Option String := none -- some "NewCM10-Regular"
+
+/-- The font for headings and the table of contents, or `none` for Verso's Source Sans Pro. -/
+def headingFont : Option String := none -- some "NewCMSans10-Regular"
+
+/-- The font for code, or `none` for Verso's DejaVu Sans Mono. -/
+def codeFont : Option String := none -- some "Gizmo"
+
+private def fontRules : String :=
+  choose "setmainfont" bodyFont ++ choose "setsansfont" headingFont ++ choose "setmonofont" codeFont
+where
+  choose (command : String) (font : Option String) : String :=
+    font.map (fun name => "\\" ++ command ++ "{" ++ name ++ "}\n") |>.getD ""
+
+private def houseTeXPreamble : String :=
+  fontRules ++
+  r#"
+\RecustomVerbatimCommand{\LeanVerb}{Verb}{commandchars=\\\{\},fontsize=\small,breaklines=true,breakafter={._},breakbefore={ABCDEFGHIJKLMNOPQRSTUVWXYZ},breakbeforesymbolpre={-},breakaftersymbolpre={}}
+
+\emergencystretch=1em
+"#
+
+/-- Adds the rules above to a box, whichever box it is. -/
+private def houseStyle (d : BlockDescr) : BlockDescr :=
+  { d with preamble := houseTeXPreamble :: d.preamble }
+
+/-!
+# The same distinctions in print
+
+`manualMain` renders the document twice, so an extension that draws a box in HTML
+has to say what that box is in LaTeX as well. A `toTeX` that only passes its
+content through loses whatever the box was there for: a reproduction stops
+looking like an object, a printed value comes out in the body font, and a
+scenario runs into the prose around it with nothing to say where it starts or
+ends.
+
+What each box needs in the LaTeX preamble goes in `preamble`, which Verso
+collects from the extensions a document uses, as it does `extraCss`. Verso's own
+preamble loads `tcolorbox` and uses it for the frame around a docstring, so the
+frames below are the same kind of object as those, and a reproduced definition
+does not read as subordinate to a docstring discussing it.
+
+The frame for a reproduction is shared with the one for a value, so it is defined
+once here rather than in both extensions. Verso collects preamble items into a
+set: two copies of this text are one item, but two that differ by a character
+would both survive, and the second `\newtcolorbox` would be an error.
+-/
+
+private def specBoxTeX : String :=
+  r#"
+\definecolor{specFrame}{HTML}{C8C8C8}
+\newtcolorbox{specBox}{
+colback=white,
+colframe=specFrame,
+boxrule=0.4pt,
+breakable,
+enhanced,
+left=2mm,right=2mm,top=1mm,bottom=1mm}
+"#
+
+
+block_extension SpecBox (mirrors : Name) via houseStyle where
   data := ToJson.toJson mirrors.toString
   traverse := fun id data _ => do
     let .ok (name : String) := FromJson.fromJson? data
@@ -54,10 +156,11 @@ block_extension SpecBox (mirrors : Name) where
 }
 "#
   ]
+  preamble := [specBoxTeX]
   toTeX :=
     some <| fun _ go _ _ content => do
-      pure <| .seq <| ← content.mapM fun b => do
-        pure <| .seq #[← go b, .raw "\n"]
+      let content ← content.mapM fun b => do pure <| .seq #[← go b, .raw "\n"]
+      pure <| .environment "specBox" #[] #[] content
   toHtml :=
     open Verso.Doc.Html HtmlT in
     some <| fun _ go id _ content => do
@@ -129,7 +232,7 @@ outside this document — `Option`, `Unit` — simply stays text.
 /-- A run of the printed value: the text to show, and the constant it names. -/
 private abbrev ValueToken := String × Option String
 
-block_extension ExpansionBox (tokens : Array ValueToken) where
+block_extension ExpansionBox (tokens : Array ValueToken) via houseStyle where
   data := ToJson.toJson tokens
   traverse := fun _ _ _ => pure none
   extraCss := [
@@ -144,11 +247,15 @@ pre.spec-value {
 }
 "#
   ]
+  preamble := [specBoxTeX]
   toTeX :=
     some <| fun _ _ _ data _ => do
       let .ok (tokens : Array ValueToken) := FromJson.fromJson? data
         | do reportError "`{expansion}` lost its value"; pure .empty
-      pure <| .raw <| String.join (tokens.map (·.1)).toList
+      let text := String.join (tokens.map (·.1)).toList
+      let code := Verso.Doc.TeX.escapeForVerbatim text
+      pure <| .environment "specBox" #[] #[]
+        #[.environment "LeanVerbatim" #[] #[] #[.raw code]]
   toHtml :=
     open Verso.Doc.Html HtmlT in
     some <| fun _ _ _ data _ => do
@@ -235,7 +342,7 @@ The markup and the `Example: ` prefix follow Lean's own reference manual, so a
 reader who has met one there recognises it here.
 -/
 
-block_extension ExampleBox (description : String) where
+block_extension ExampleBox (description : String) via houseStyle where
   data := ToJson.toJson description
   traverse := fun _ _ _ => pure none
   extraCss := [
@@ -267,10 +374,29 @@ details.example > .example-content > :first-child { margin-top: 0; }
 details.example > .example-content > p:last-child { margin-bottom: 0; }
 "#
   ]
+  preamble := [
+    r#"
+\definecolor{exampleFrame}{HTML}{98B2C0}
+\definecolor{exampleTitle}{HTML}{555555}
+\newtcolorbox{exampleBox}[1]{
+colback=white,
+colframe=exampleFrame,
+colbacktitle=white,
+coltitle=exampleTitle,
+boxrule=0.4pt,
+breakable,
+enhanced,
+attach boxed title to top left={xshift=2mm,yshift=-2mm},
+boxed title style={top=-0.3mm,bottom=-0.3mm,left=-0.3mm,right=-0.3mm,boxrule=0.4pt},
+fonttitle=\sffamily\itshape\small,
+title={Example: #1}}
+"#
+  ]
   toTeX :=
-    some <| fun _ go _ _ content => do
-      pure <| .seq <| ← content.mapM fun b => do
-        pure <| .seq #[← go b, .raw "\n"]
+    some <| fun _ go _ data content => do
+      let description := (FromJson.fromJson? (α := String) data).toOption.getD "Example"
+      let content ← content.mapM fun b => do pure <| .seq #[← go b, .raw "\n"]
+      pure <| .environment "exampleBox" #[] #[.text description] content
   toHtml :=
     open Verso.Output.Html in
     some <| fun _ go _ data content => do
@@ -303,3 +429,126 @@ meta def scenario : DirectiveExpanderOf ScenarioConfig
   | cfg, stxs => do
     let args ← stxs.mapM elabBlock
     ``(Block.other (ExampleBox $(quote cfg.description)) #[ $[ $args ],* ])
+
+
+/-!
+# A table that fits the page
+
+Verso renders a table to `tabular` with one `l` column per column. An `l` column
+is as wide as its widest cell and cannot wrap, so a cell holding a sentence is
+set on one line and the table runs past the margin, by two inches in the case of
+the one in this reference.
+
+`:::rows` takes the markup of `:::table`, an outer list of rows and an inner list
+of cells in each, and renders it to `tblr`, whose columns divide the text width
+between them and wrap inside a cell. The HTML is Verso's, `table.tabular`, so the
+rules `Main.lean` adds for a table apply to this one as well, and the two agree
+on the header: bold, with a rule under it. The cell rules come along too, since
+Verso's table is no longer used in this document and its stylesheet is emitted
+only for the extensions that are.
+
+Verso's own table is left alone rather than adjusted. The alternative was to
+redefine `tabular` in the preamble, which reaches every table LaTeX sets,
+including the one memoir builds the title page from.
+-/
+
+/-- Whether a `:::rows` table's first row names its columns. -/
+structure RowsConfig where
+  header : Bool
+
+section
+variable [Monad m] [MonadError m] [MonadLiftT CoreM m]
+
+meta def RowsConfig.parse : ArgParse m RowsConfig :=
+  RowsConfig.mk <$> .flag `header false
+
+meta instance : FromArgs RowsConfig m := ⟨RowsConfig.parse⟩
+end
+
+/-- The cells of a table, in reading order, cut into rows of `columns`. -/
+private def toRows {α : Type} (columns : Nat) (cells : Array α) : Array (Array α) :=
+  if columns = 0 then #[]
+  else
+    let rowCount := (cells.size + columns - 1) / columns
+    (Array.range rowCount).map fun i => cells.extract (i * columns) ((i + 1) * columns)
+
+block_extension RowsBox (columns : Nat) (header : Bool) via houseStyle where
+  data := ToJson.toJson (columns, header)
+  traverse := fun _ _ _ => pure none
+  extraCss := [
+    r#"
+table.tabular td, table.tabular th { text-align: left; vertical-align: top; }
+table.tabular td > p:first-child, table.tabular th > p:first-child { margin-top: 0; }
+table.tabular td > p:last-child, table.tabular th > p:last-child { margin-bottom: 0; }
+"#
+  ]
+  usePackages := ["\\usepackage{tabularray}"]
+  preamble := [
+    r#"
+\definecolor{rowsRule}{HTML}{98B2C0}
+"#
+  ]
+  toTeX :=
+    some <| fun _ go _ data blocks => do
+      let .ok ((columns, header) : Nat × Bool) := FromJson.fromJson? data
+        | do reportError "`:::rows` lost its shape"; pure .empty
+      let #[.ul cells] := blocks
+        | do reportError "`:::rows` lost its cells"; pure .empty
+      let rows ← (toRows columns cells).mapM fun row => do
+        let rendered ← row.mapM fun cell => do
+          pure <| Verso.Output.TeX.seq (← cell.contents.mapM go)
+        pure <| Verso.Output.TeX.seq (rendered.toList.intersperse (.raw " & ") |>.toArray)
+      let spec :=
+        "width=\\linewidth,colspec={" ++ String.join (List.replicate columns "X[l]") ++ "}" ++
+        ",hlines={0.4pt,rowsRule},rowsep=3pt" ++
+        (if header then ",row{1}={font=\\bfseries}" else "")
+      -- A `tblr` is an inline box, like the `tabular` it replaces, so without
+      -- this it joins the paragraph before it and the rules meet the prose.
+      pure <| .seq #[
+        .raw "\\par\\medskip\\noindent\n",
+        .environment "tblr" #[] #[.raw spec]
+          (rows.toList.intersperse (.raw " \\\\\n") |>.toArray),
+        .raw "\\par\\medskip\n"]
+  toHtml :=
+    open Verso.Output.Html in
+    some <| fun _ go _ data blocks => do
+      let .ok ((columns, header) : Nat × Bool) := FromJson.fromJson? data
+        | do reportError "`:::rows` lost its shape"; pure .empty
+      let #[.ul cells] := blocks
+        | do reportError "`:::rows` lost its cells"; pure .empty
+      let rows ← (toRows columns cells).mapIdxM fun i row => do
+        let rendered ← row.mapM fun cell => do
+          let content : Verso.Output.Html ← cell.contents.mapM go
+          pure <| if header && i == 0 then {{<th>{{content}}</th>}} else {{<td>{{content}}</td>}}
+        let row : Verso.Output.Html := .seq rendered
+        pure <| if header && i == 0 then {{<thead><tr>{{row}}</tr></thead>}} else {{<tr>{{row}}</tr>}}
+      pure {{<table class="tabular">{{Verso.Output.Html.seq rows}}</table>}}
+
+open Lean.Doc.Syntax in
+/--
+A table whose cells may hold prose.
+-/
+@[directive]
+meta def rows : DirectiveExpanderOf RowsConfig
+  | cfg, stxs => do
+    let #[list] := stxs
+      | throwError "Expected a single list, whose items are the rows"
+    let `(block|ul{$rowItems*}) := list
+      | throwErrorAt list "Expected a single list, whose items are the rows"
+    let rows ← rowItems.mapM fun rowItem => do
+      let #[row] := (← listItem rowItem).filter (·.raw.isOfKind ``ul)
+        | throwErrorAt rowItem "Expected one list of cells in this row"
+      let `(block|ul{$cellItems*}) := row
+        | throwErrorAt row "Expected one list of cells in this row"
+      cellItems.mapM listItem
+    let some columns := rows[0]?.map (·.size)
+      | throwErrorAt list "Expected at least one row"
+    if let some bad := rows.find? (·.size != columns) then
+      throwErrorAt list s!"Expected {columns} cells in every row, got a row of {bad.size}"
+    let cells ← rows.flatten.mapM (·.mapM elabBlock)
+    ``(Block.other (RowsBox $(quote columns) $(quote cfg.header))
+        #[Block.ul #[ $[Verso.Doc.ListItem.mk #[ $cells,* ]],* ]])
+where
+  listItem : Syntax → DocElabM (TSyntaxArray `block)
+    | `(list_item| * $content*) => pure content
+    | other => throwErrorAt other "Expected a list item"

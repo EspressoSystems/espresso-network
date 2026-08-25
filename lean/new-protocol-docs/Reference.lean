@@ -1082,7 +1082,7 @@ the three conditions on the block table.
 Six results, and this is the first of them. The rest are stated where the
 definitions they speak about are introduced.
 
-:::table +header
+:::rows +header
 *
   * Result
   * What it says
