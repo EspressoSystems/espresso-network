@@ -15,7 +15,7 @@ use hotshot_types::{
 
 use super::common::utils::{TestData, TestView};
 use crate::{
-    consensus::{ConsensusInput, ConsensusOutput, MAX_STATE_VALIDATION_FAILURES},
+    consensus::{ConsensusInput, ConsensusOutput},
     coordinator::GcScope,
     helpers::proposal_commitment,
     message::Proposal,
@@ -483,27 +483,9 @@ async fn test_no_duplicate_vote2() {
     );
 }
 
-fn state_validation_failed_input(view: &TestView) -> ConsensusInput<TestTypes> {
-    let proposal: Proposal<TestTypes> = view.proposal.data.clone();
-    ConsensusInput::StateValidationFailed(StateResponse {
-        view: view.view_number,
-        commitment: proposal_commitment(&proposal),
-        state: Arc::new(
-            <TestValidatedState as ValidatedState<TestTypes>>::from_header(&proposal.block_header),
-        ),
-        delta: None,
-    })
-}
-
-fn requests_state_for(output: &ConsensusOutput<TestTypes>, view: u64) -> bool {
-    matches!(output, ConsensusOutput::RequestState(r) if *r.view == view)
-}
-
-/// A failed state validation is retried: catchup timing out fails validation
-/// too, and dropping the proposal would leave every descendant validating
-/// against a `from_header` stub. Once the retry succeeds the node votes.
+/// StateValidationFailed with matching commitment removes proposal and vid_share.
 #[tokio::test]
-async fn test_state_validation_failed_retries() {
+async fn test_state_validation_failed_removes_proposal() {
     let mut harness = ConsensusHarness::new(0).await;
     let test_data = TestData::new(3).await;
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
@@ -514,80 +496,41 @@ async fn test_state_validation_failed_retries() {
     harness
         .apply(test_data.views[0].block_reconstructed_input())
         .await;
-    let votes_before = count_matching(harness.outputs(), is_vote1);
 
-    // Hold view 2's validation result so a failure can be injected instead.
-    harness.defer_state(ViewNumber::new(2));
+    // Send proposal for view 2 — but bypass the harness auto-response
+    // by directly applying the proposal input, then manually sending
+    // StateValidationFailed instead of letting the harness auto-respond.
+    // We need to call consensus.apply directly to avoid auto StateVerified.
+    let (proposal_input, vid_share_input) = test_data.views[1].proposal_input_consensus(&node_key);
+    let mut outbox = Outbox::new();
+    harness.consensus.apply(proposal_input, &mut outbox);
+    harness.consensus.apply(vid_share_input, &mut outbox);
+    harness.collected.extend(outbox.take());
+
+    // Send StateVerificationFailed — removes proposal
+    let proposal: Proposal<TestTypes> = test_data.views[1].proposal.data.clone();
     harness
-        .apply_pair(test_data.views[1].proposal_input_consensus(&node_key))
+        .apply(ConsensusInput::StateValidationFailed(StateResponse {
+            view: test_data.views[1].view_number,
+            commitment: proposal_commitment(&proposal),
+            state: Arc::new(
+                <TestValidatedState as ValidatedState<TestTypes>>::from_header(
+                    &proposal.block_header,
+                ),
+            ),
+            delta: None,
+        }))
         .await;
-    assert_eq!(
-        count_matching(harness.outputs(), |o| requests_state_for(o, 2)),
-        1
-    );
 
-    harness
-        .apply(state_validation_failed_input(&test_data.views[1]))
-        .await;
-    assert_eq!(
-        count_matching(harness.outputs(), |o| requests_state_for(o, 2)),
-        2,
-        "a failed validation must be re-requested"
-    );
-
-    // The retry succeeds: the proposal was kept, so the node can vote on it.
-    harness.release_state(ViewNumber::new(2)).await;
-    assert_eq!(
-        count_matching(harness.outputs(), is_vote1),
-        votes_before + 1,
-        "vote1 must follow the retried validation"
-    );
-}
-
-/// After the last permitted failure the proposal is dropped, as before
-/// retries existed: even a late success must not make the node vote on it.
-#[tokio::test]
-async fn test_state_validation_failed_repeatedly_drops_proposal() {
-    let mut harness = ConsensusHarness::new(0).await;
-    let test_data = TestData::new(3).await;
-    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
-
-    harness
-        .apply_pair(test_data.views[0].proposal_input_consensus(&node_key))
-        .await;
-    harness
-        .apply(test_data.views[0].block_reconstructed_input())
-        .await;
-    let votes_before = count_matching(harness.outputs(), is_vote1);
-
-    harness.defer_state(ViewNumber::new(2));
-    harness
-        .apply_pair(test_data.views[1].proposal_input_consensus(&node_key))
-        .await;
-    for _ in 0..MAX_STATE_VALIDATION_FAILURES {
-        harness
-            .apply(state_validation_failed_input(&test_data.views[1]))
-            .await;
-    }
-    assert_eq!(
-        count_matching(harness.outputs(), |o| requests_state_for(o, 2)),
-        MAX_STATE_VALIDATION_FAILURES as usize,
-        "no retry after the last permitted failure"
-    );
-
-    harness.release_state(ViewNumber::new(2)).await;
+    // Now send cert1 + block_reconstructed — vote2 should NOT fire
     harness
         .apply(test_data.views[1].block_reconstructed_input())
         .await;
     harness.apply(test_data.views[1].cert1_input()).await;
-    assert_eq!(
-        count_matching(harness.outputs(), is_vote1),
-        votes_before,
-        "no vote1 for a dropped proposal"
-    );
+
     assert!(
         !any(harness.outputs(), is_vote2),
-        "no vote2 for a dropped proposal"
+        "Vote2 should not fire after proposal removed by StateVerificationFailed"
     );
 }
 

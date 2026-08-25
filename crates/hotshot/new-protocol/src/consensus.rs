@@ -209,10 +209,6 @@ pub(crate) const GC_MARGIN_VIEWS: NonZeroU64 = NonZeroU64::new(2).expect("2 > 0"
 // The decide buffer retains the proposals the VID reconstructor reads.
 const _: () = assert!(DECIDE_BUFFER >= VID_RECONSTRUCT_GC_MARGIN);
 
-/// Failed state validations of one proposal before it is dropped, see
-/// [`Consensus::handle_state_validation_failed`].
-pub(crate) const MAX_STATE_VALIDATION_FAILURES: u32 = 3;
-
 pub struct Consensus<T: NodeType> {
     proposals: BTreeMap<ViewNumber, Proposal<T>>,
     signed_proposals: BTreeMap<ViewNumber, SignedProposal<T, Proposal<T>>>,
@@ -221,8 +217,6 @@ pub struct Consensus<T: NodeType> {
     unpaired_proposals: UnpairedProposals<T>,
     unpaired_vid_shares: UnpairedVidShares<T>,
     states_verified: BTreeMap<ViewNumber, Commitment<Leaf2<T>>>,
-    /// Failed state validations per view, bounding the retries.
-    state_validation_failures: BTreeMap<ViewNumber, u32>,
     blocks_reconstructed: BTreeSet<(ViewNumber, VidCommitment2)>,
     blocks: BTreeMap<(ViewNumber, VidCommitment2), T::BlockPayload>,
     certs: BTreeMap<ViewNumber, Certificate1<T>>,
@@ -345,7 +339,6 @@ impl<T: NodeType> Consensus<T> {
             proposed_views: BTreeSet::new(),
             blocks: BTreeMap::new(),
             states_verified: BTreeMap::new(),
-            state_validation_failures: BTreeMap::new(),
             blocks_reconstructed: BTreeSet::new(),
             certs: BTreeMap::new(),
             certs2: BTreeMap::new(),
@@ -794,7 +787,28 @@ impl<T: NodeType> Consensus<T> {
                 Protocol::Continue
             },
             ConsensusInput::StateValidationFailed(state_response) => {
-                self.handle_state_validation_failed(state_response, outbox);
+                let view = state_response.view;
+                let stored_proposal = self.proposals.get(&view);
+                if let Some(proposal) = stored_proposal {
+                    let matches = proposal_commitment(proposal) == state_response.commitment;
+                    warn!(
+                        %view,
+                        block = %proposal.block_header.block_number(),
+                        epoch = %proposal.epoch,
+                        qc_view = %proposal.justify_qc.view_number(),
+                        qc_epoch = ?proposal.justify_qc.epoch(),
+                        commitment_matches = matches,
+                        "apply: state validation failed"
+                    );
+                    if !matches {
+                        return;
+                    }
+                } else {
+                    warn!(%view, "apply: state validation failed (no stored proposal)");
+                }
+                self.proposals.remove(&view);
+                self.leaves.remove(&view);
+                self.vid_shares.remove(&view);
                 return;
             },
             ConsensusInput::Timeout(view, epoch) => {
@@ -981,8 +995,6 @@ impl<T: NodeType> Consensus<T> {
                 self.certs2 = self.certs2.split_off(&keep_from);
                 self.decided_views = self.decided_views.split_off(&keep_from);
                 self.proposals = self.proposals.split_off(&keep_from);
-                self.state_validation_failures =
-                    self.state_validation_failures.split_off(&keep_from);
                 self.vote1_parent = self.vote1_parent.split_off(&keep_from);
                 self.leaves = self.leaves.split_off(&view);
                 self.signed_proposals = self.signed_proposals.split_off(&view);
@@ -2043,48 +2055,6 @@ impl<T: NodeType> Consensus<T> {
             auth_root,
             signed_state_digest,
         })
-    }
-
-    /// A failed validation does not mean the proposal is invalid: state
-    /// catchup timing out fails it too. Dropping the proposal would then make
-    /// every descendant validate against a `from_header` stub and, once a
-    /// child's QC names it, fetch it right back. Retry a bounded number of
-    /// times before dropping it.
-    fn handle_state_validation_failed(
-        &mut self,
-        response: StateResponse<T>,
-        outbox: &mut Outbox<ConsensusOutput<T>>,
-    ) {
-        let view = response.view;
-        let Some(proposal) = self.proposals.get(&view) else {
-            warn!(%view, "apply: state validation failed (no stored proposal)");
-            return;
-        };
-        let block = proposal.block_header.block_number();
-        let epoch = proposal.epoch;
-        if proposal_commitment(proposal) != response.commitment {
-            warn!(
-                %view, %block, %epoch,
-                "apply: state validation failed for a superseded proposal"
-            );
-            return;
-        }
-        let failures = self.state_validation_failures.entry(view).or_default();
-        *failures += 1;
-        let failures = *failures;
-        if failures < MAX_STATE_VALIDATION_FAILURES {
-            warn!(%view, %block, %epoch, failures, "apply: state validation failed; retrying");
-            let payload_size = self.payload_size_for(proposal);
-            self.request_state(proposal, payload_size, outbox);
-            return;
-        }
-        warn!(
-            %view, %block, %epoch, failures,
-            "apply: state validation failed repeatedly; dropping proposal"
-        );
-        self.proposals.remove(&view);
-        self.leaves.remove(&view);
-        self.vid_shares.remove(&view);
     }
 
     fn handle_stored(&mut self, stored: StorageOutput<T>, outbox: &mut Outbox<ConsensusOutput<T>>) {
