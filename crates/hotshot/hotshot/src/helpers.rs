@@ -34,13 +34,11 @@ fn stderr_layer() -> ErasedFmtLayer {
     if json_mode {
         tracing_subscriber::fmt::layer()
             .json()
-            .with_writer(std::io::stderr)
             .with_span_events(span_event_filter)
             .with_filter(EnvFilter::from_default_env())
             .boxed()
     } else {
         tracing_subscriber::fmt::layer()
-            .with_writer(std::io::stderr)
             .with_span_events(span_event_filter)
             .with_filter(EnvFilter::from_default_env())
             .boxed()
