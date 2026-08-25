@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["NetAddr","NetworkError","Role"],"struct":["Cliquenet","CliquenetConfig","CliquenetMetrics","Counters","Gauges","Sender","Shared"]};
+window.SIDEBAR_ITEMS = {"enum":["NetAddr","NetworkError","Role"],"struct":["Cliquenet","CliquenetConfig","CliquenetMetrics","Counters","Gauges","Sender","Shared"],"type":["InboundFilter"]};

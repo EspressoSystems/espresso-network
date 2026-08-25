@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["PayloadFetchMessage","PayloadResponseBody"],"struct":["PayloadRequestBody"],"type":["PayloadFetchRequest","PayloadFetchResponse"]};

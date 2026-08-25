@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["VidReconstructErrorKind"],"fn":["decode_and_recommit","reconstruct","share_verifies"],"struct":["VidReconstructError","VidReconstructOutput","VidReconstructor","VidShareAccumulator"],"type":["Metadata","ReconstructResult"]};
+window.SIDEBAR_ITEMS = {"enum":["VidReconstructErrorKind"],"fn":["decode_and_recommit","matches_commitment","reconstruct","share_verifies"],"struct":["ObtainedPayload","VidReconstructError","VidReconstructor","VidShareAccumulator"],"type":["Metadata","ReconstructResult"]};

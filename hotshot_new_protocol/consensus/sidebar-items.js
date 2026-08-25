@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["DECIDE_BUFFER"],"enum":["ConsensusInput","ConsensusOutput","Protocol","SafetyError"],"struct":["Consensus","PreCutoverSeed"],"type":["UnpairedProposals","UnpairedVidShares"]};
+window.SIDEBAR_ITEMS = {"constant":["DECIDE_BUFFER","GC_MARGIN_VIEWS"],"enum":["ConsensusInput","ConsensusOutput","Protocol","SafetyError"],"struct":["Consensus","PreCutoverSeed"],"type":["UnpairedProposals","UnpairedVidShares"]};

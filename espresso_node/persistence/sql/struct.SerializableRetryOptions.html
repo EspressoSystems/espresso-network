@@ -3,7 +3,7 @@
     backoff_base: <a class="struct" href="https://doc.rust-lang.org/1.97.1/core/time/struct.Duration.html" title="struct core::time::Duration">Duration</a>,
     backoff_max: <a class="struct" href="https://doc.rust-lang.org/1.97.1/core/time/struct.Duration.html" title="struct core::time::Duration">Duration</a>,
     backoff_factor: <a class="primitive" href="https://doc.rust-lang.org/1.97.1/std/primitive.u32.html">u32</a>,
-    backoff_jitter: <a class="struct" href="../../../espresso_types/v0/utils/struct.Ratio.html" title="struct espresso_types::v0::utils::Ratio">Ratio</a>,
+    backoff_jitter: Ratio,
     pg_stat_diag: <a class="primitive" href="https://doc.rust-lang.org/1.97.1/std/primitive.bool.html">bool</a>,
 }</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Configuration for retrying transactions aborted by PostgreSQL serialization conflicts (error
 40001).  Under SERIALIZABLE isolation these aborts are expected and safe to retry from scratch.</p>
@@ -11,7 +11,7 @@
 </div><span id="structfield.backoff_base" class="structfield section-header"><a href="#structfield.backoff_base" class="anchor field">§</a><code>backoff_base: <a class="struct" href="https://doc.rust-lang.org/1.97.1/core/time/struct.Duration.html" title="struct core::time::Duration">Duration</a></code></span><div class="docblock"><p>Initial delay before retrying after a PostgreSQL serialization conflict.</p>
 </div><span id="structfield.backoff_max" class="structfield section-header"><a href="#structfield.backoff_max" class="anchor field">§</a><code>backoff_max: <a class="struct" href="https://doc.rust-lang.org/1.97.1/core/time/struct.Duration.html" title="struct core::time::Duration">Duration</a></code></span><div class="docblock"><p>Maximum delay between retries after a PostgreSQL serialization conflict.</p>
 </div><span id="structfield.backoff_factor" class="structfield section-header"><a href="#structfield.backoff_factor" class="anchor field">§</a><code>backoff_factor: <a class="primitive" href="https://doc.rust-lang.org/1.97.1/std/primitive.u32.html">u32</a></code></span><div class="docblock"><p>Multiplier applied to the backoff delay between successive retries.</p>
-</div><span id="structfield.backoff_jitter" class="structfield section-header"><a href="#structfield.backoff_jitter" class="anchor field">§</a><code>backoff_jitter: <a class="struct" href="../../../espresso_types/v0/utils/struct.Ratio.html" title="struct espresso_types::v0::utils::Ratio">Ratio</a></code></span><div class="docblock"><p>Backoff jitter as a ratio of the backoff delay, numerator:denominator.</p>
+</div><span id="structfield.backoff_jitter" class="structfield section-header"><a href="#structfield.backoff_jitter" class="anchor field">§</a><code>backoff_jitter: Ratio</code></span><div class="docblock"><p>Backoff jitter as a ratio of the backoff delay, numerator:denominator.</p>
 </div><span id="structfield.pg_stat_diag" class="structfield section-header"><a href="#structfield.pg_stat_diag" class="anchor field">§</a><code>pg_stat_diag: <a class="primitive" href="https://doc.rust-lang.org/1.97.1/std/primitive.bool.html">bool</a></code></span><div class="docblock"><p>When set, enable verbose diagnostic logging on PostgreSQL serialization conflicts.  Each
 retried conflict spawns a background query against <code>pg_stat_activity</code> and <code>pg_locks</code> to
 log concurrent sessions and predicate locks. Off by default.</p>
