@@ -1,10 +1,12 @@
+use std::time::Duration;
+
 use alloy::{
     primitives::{Address, utils::format_ether},
     providers::{Provider, ProviderBuilder},
 };
 use anyhow::{Context as _, Result};
 use espresso_types::{
-    L1Client,
+    L1ClientOptions,
     v0_3::{Fetcher, RegisteredValidator},
 };
 use hotshot_contract_adapter::sol_types::StakeTableV3;
@@ -14,12 +16,27 @@ use url::Url;
 
 use crate::{output::output_success, parse::Commission};
 
+/// The stake table event set is small enough for one query, provided the RPC serves a large block
+/// range. The default RPCs do, and chunking against them trips their request rate limit instead.
+const EVENTS_MAX_BLOCK_RANGE: u64 = 10_u64.pow(9);
+
+/// Providers that cap the block range reject every chunk, and the fetcher panics only once the
+/// retry budget runs out. Keep that short so the panic's `ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE`
+/// hint arrives in seconds rather than after the 20 minute default.
+const EVENTS_MAX_RETRY_DURATION: Duration = Duration::from_secs(30);
+
 pub async fn stake_table_info(
     l1_url: Url,
     stake_table_address: Address,
     l1_block_number: u64,
 ) -> Result<Vec<RegisteredValidator<BLSPubKey>>> {
-    let l1 = L1Client::new(vec![l1_url])?;
+    let mut options = L1ClientOptions::default();
+    // `default()` parses the environment, so only widen the range the user did not choose.
+    if std::env::var_os("ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE").is_none() {
+        options.l1_events_max_block_range = EVENTS_MAX_BLOCK_RANGE;
+        options.l1_events_max_retry_duration = EVENTS_MAX_RETRY_DURATION;
+    }
+    let l1 = options.connect(vec![l1_url])?;
     let (validators, _) =
         Fetcher::fetch_all_validators_from_contract(l1, stake_table_address, l1_block_number)
             .await?;
