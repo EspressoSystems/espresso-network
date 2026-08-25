@@ -424,7 +424,9 @@ impl<T: NodeType> StateManager<T> {
                                 validated: true,
                             });
                         } else {
-                            self.pending_requests.remove(&response.commitment);
+                            // Requests queued on this leaf stay queued:
+                            // consensus may retry the validation, and a
+                            // success then releases them. `gc` bounds them.
                             return Some(StateManagerOutput::State {
                                 response,
                                 validated: false,
