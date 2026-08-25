@@ -59,6 +59,10 @@ mod common;
 #[tokio::test(flavor = "multi_thread")]
 async fn stake_table_versions(#[case] _version: StakeTableContractVersion) {}
 
+/// Logs go to stdout, so a test that parses stdout as JSON has to pin the level rather than
+/// inherit `RUST_LOG` from the environment. CI and the dev shell both set it to `info`.
+const QUIET_LOG: &str = "error";
+
 const TEST_PRIVATE_KEY: &str = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
 
 #[test_log::test]
@@ -3219,6 +3223,7 @@ async fn test_cli_stake_table_entry_json() -> Result<()> {
             .cmd(Signer::Mnemonic)
             .args(["stake-table-entry", "--format", "json", "--address"])
             .arg(system.deployer_address.to_string())
+            .env("RUST_LOG", QUIET_LOG)
             .output()?
             .stdout,
     )?;
@@ -3262,6 +3267,7 @@ async fn test_cli_stake_table_entry_json() -> Result<()> {
                 "--address",
             ])
             .arg(system.deployer_address.to_string())
+            .env("RUST_LOG", QUIET_LOG)
             .output()?
             .stdout,
     )?;
@@ -3295,6 +3301,7 @@ async fn test_cli_stake_table_json(#[case] version: StakeTableContractVersion) -
         &system
             .cmd(Signer::Mnemonic)
             .args(["stake-table", "--format", "json"])
+            .env("RUST_LOG", QUIET_LOG)
             .output()?
             .stdout,
     )?;
@@ -3596,7 +3603,8 @@ async fn test_cli_stake_table_entry_split_block_range() -> Result<()> {
             .cmd(Signer::Mnemonic)
             .args(["stake-table-entry", "--delegations", "--format", "json"])
             .arg("--address")
-            .arg(system.deployer_address.to_string());
+            .arg(system.deployer_address.to_string())
+            .env("RUST_LOG", QUIET_LOG);
         if let Some(range) = range {
             cmd = cmd.env("ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE", range);
         }
@@ -3623,7 +3631,8 @@ async fn test_cli_stake_table_split_block_range() -> Result<()> {
     let table = |range: Option<&str>| -> Result<serde_json::Value> {
         let mut cmd = system
             .cmd(Signer::Mnemonic)
-            .args(["stake-table", "--format", "json"]);
+            .args(["stake-table", "--format", "json"])
+            .env("RUST_LOG", QUIET_LOG);
         if let Some(range) = range {
             cmd = cmd.env("ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE", range);
         }
