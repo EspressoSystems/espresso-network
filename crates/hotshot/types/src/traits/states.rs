@@ -10,7 +10,7 @@
 //! compatibilities over the current network state, which is modified by the transactions contained
 //! within blocks.
 
-use std::{error::Error, fmt::Debug, future::Future};
+use std::{error::Error, fmt::Debug, future::Future, time::SystemTime};
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use vbs::version::Version;
@@ -56,10 +56,15 @@ pub trait ValidatedState<TYPES: NodeType>:
     ///
     /// # Arguments
     /// * `instance` - Immutable instance-level state.
+    /// * `received_at` - When this node obtained the proposal. Validation can
+    ///   run well after that (queued behind the parent's validation, or for a
+    ///   fetched proposal), so checks against the local clock must use this
+    ///   rather than the time validation runs.
     ///
     /// # Errors
     ///
     /// If the block header is invalid or appending it would lead to an invalid state.
+    #[allow(clippy::too_many_arguments)]
     fn validate_and_apply_header(
         &self,
         instance: &Self::Instance,
@@ -68,6 +73,7 @@ pub trait ValidatedState<TYPES: NodeType>:
         payload_byte_len: u32,
         version: Version,
         view_number: u64,
+        received_at: SystemTime,
     ) -> impl Future<Output = Result<(Self, Self::Delta), Self::Error>> + Send;
 
     /// Construct the state with the given block header.

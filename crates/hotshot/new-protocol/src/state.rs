@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, HashMap},
     sync::Arc,
+    time::SystemTime,
 };
 
 use committable::{Commitment, Committable};
@@ -41,6 +42,8 @@ pub struct StateRequest<T: NodeType> {
     pub proposal: Proposal<T>,
     pub parent_commitment: Commitment<Leaf2<T>>,
     pub payload_size: u32,
+    /// When this node obtained the proposal; validation may start much later.
+    pub received_at: SystemTime,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -260,6 +263,7 @@ impl<T: NodeType> StateManager<T> {
                     payload_size,
                     upgrade_lock,
                     *view,
+                    request.received_at,
                 )
                 .await;
             let leaf = request.proposal.into();

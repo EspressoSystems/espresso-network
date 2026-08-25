@@ -4,6 +4,7 @@ use std::{
     marker::PhantomData,
     num::NonZeroU64,
     sync::Arc,
+    time::SystemTime,
 };
 
 use committable::{Commitment, CommitmentBoundsArkless, Committable};
@@ -1256,6 +1257,7 @@ impl<T: NodeType> Consensus<T> {
             proposal: proposal.clone(),
             parent_commitment: proposal.justify_qc.data().leaf_commit,
             payload_size,
+            received_at: SystemTime::now(),
         }));
     }
 

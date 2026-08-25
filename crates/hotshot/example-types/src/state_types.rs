@@ -5,7 +5,7 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 //! Implementations for examples and tests only
-use std::fmt::Debug;
+use std::{fmt::Debug, time::SystemTime};
 
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
@@ -110,6 +110,7 @@ impl<TYPES: NodeType> ValidatedState<TYPES> for TestValidatedState {
         _payload_byte_len: u32,
         _version: Version,
         _view_number: u64,
+        _received_at: SystemTime,
     ) -> Result<(Self, Self::Delta), Self::Error> {
         Self::run_delay_settings_from_config(&instance.delay_config).await;
         if instance.failing_block == Some(proposed_header.block_number()) {

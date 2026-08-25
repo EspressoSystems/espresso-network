@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::SystemTime};
 
 use hotshot::traits::BlockPayload;
 use hotshot_example_types::{
@@ -34,6 +34,7 @@ fn make_state_request(view: &TestView) -> StateRequest<TestTypes> {
         proposal: proposal.clone(),
         parent_commitment: proposal.justify_qc.data().leaf_commit,
         payload_size: 0,
+        received_at: SystemTime::now(),
     }
 }
 
