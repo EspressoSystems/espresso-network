@@ -2,6 +2,7 @@ use std::{
     cmp::max,
     collections::{BTreeMap, BTreeSet},
     marker::PhantomData,
+    num::NonZeroU64,
     sync::Arc,
 };
 
@@ -154,7 +155,7 @@ pub enum ConsensusOutput<T: NodeType> {
         cert2: Option<Certificate2<T>>,
         vid_shares: Vec<Option<SignedProposal<T, VidDisperseShare2<T>>>>,
     },
-    LockUpdated(Certificate2<T>),
+    LockUpdated(ViewNumber),
     ViewChanged(ViewNumber, EpochNumber),
     /// A view timed out with a timeout certificate.
     ViewTimedOut(ViewNumber),
@@ -170,6 +171,10 @@ pub enum ConsensusOutput<T: NodeType> {
     RequestMissingProposal {
         view: ViewNumber,
         leaf_commit: Commitment<Leaf2<T>>,
+    },
+    RequestMissingPayload {
+        view: ViewNumber,
+        payload_commitment: VidCommitment2,
     },
     /// Emitted when a node has reconstructed a block payload from VID shares.
     /// Notifies downstream consumers (e.g. the query service) so they can store
@@ -195,6 +200,11 @@ type UnpairedVidShares<T> = BTreeMap<(ViewNumber, VidCommitment2), VidDisperseSh
 /// Views to retain decide inputs (`proposals`, `certs`, `certs2`) behind the
 /// decided view, letting a late-broadcast Cert2 decide an older gap view.
 pub(crate) const DECIDE_BUFFER: u64 = 20;
+
+/// Views earlier than the current view at which the transport stops
+/// retransmitting: the bound the coordinator gives the network's collection,
+/// and so the earliest a missing payload is worth fetching.
+pub(crate) const GC_MARGIN_VIEWS: NonZeroU64 = NonZeroU64::new(2).expect("2 > 0");
 
 // The decide buffer retains the proposals the VID reconstructor reads.
 const _: () = assert!(DECIDE_BUFFER >= VID_RECONSTRUCT_GC_MARGIN);
@@ -627,6 +637,11 @@ impl<T: NodeType> Consensus<T> {
         self.timeout_certs.get(&view)
     }
 
+    pub fn is_reconstructed(&self, view: ViewNumber, payload_commitment: VidCommitment2) -> bool {
+        self.blocks_reconstructed
+            .contains(&(view, payload_commitment))
+    }
+
     /// Return the view of the locked certificate, if set.
     pub fn locked_view(&self) -> Option<ViewNumber> {
         self.locked_cert.as_ref().map(|c| c.view_number())
@@ -734,8 +749,25 @@ impl<T: NodeType> Consensus<T> {
             ConsensusInput::BlockReconstructed(view, vid_commitment) => {
                 debug!(%view, "apply: block reconstructed");
                 self.blocks_reconstructed.insert((view, vid_commitment));
-                // Retry the child whose vote1 is gated on this parent reconstruction.
-                self.maybe_vote_1(view + 1, outbox);
+                // Retry the votable children whose vote1 is gated on this
+                // parent's reconstruction. More than `view + 1` can be
+                // waiting: while a view's payload was missing, every later
+                // proposal extends it, and of those only the ones later than
+                // the timeout bar can still be voted. Latest first, stopping
+                // at the one we vote for: a vote at an earlier child adds
+                // nothing and costs its vote2, which the later vote1 skips.
+                let children: Vec<ViewNumber> = self
+                    .proposals
+                    .range(view.max(self.timeout_view) + 1..)
+                    .filter(|(_, p)| p.justify_qc.view_number() == view)
+                    .map(|(&child, _)| child)
+                    .collect();
+                for child in children.into_iter().rev() {
+                    self.maybe_vote_1(child, outbox);
+                    if self.voted_1_views.contains(&child) {
+                        break;
+                    }
+                }
                 Protocol::Continue
             },
             ConsensusInput::StateValidated(state_response) => {
@@ -1231,6 +1263,72 @@ impl<T: NodeType> Consensus<T> {
         self.adopt_certified_drb(view);
     }
 
+    /// Ask for the payload of the view every proposal we could vote for is
+    /// parented at.
+    ///
+    /// Leaders build on their lock, so the parent of the latest proposal we
+    /// hold is that view, and it is the one view peers still retain: a node
+    /// holding the payload of a certified later view would have locked there
+    /// itself, so no peer keeps one. Its certificate is the proposal's
+    /// `justify_qc`, which is also the only record of it for a node that
+    /// missed the view's votes and the certificate broadcast that followed
+    /// them. The QC is read, not stored, so `certs` keeps meaning
+    /// certificates that arrived as certificates.
+    ///
+    /// Views at or earlier than the lock cannot be what blocks us: safety
+    /// pins the justify_qc of any proposal we may still vote for at or later
+    /// than the lock, and a parent equal to the lock counts as reconstructed.
+    /// Later than `current_view - GC_MARGIN_VIEWS` a missing share broadcast
+    /// may still arrive on its own, and fetching would race it for a whole
+    /// payload.
+    fn request_missing_payloads(&self, outbox: &mut Outbox<ConsensusOutput<T>>) {
+        let earliest = self.locked_view().unwrap_or_else(ViewNumber::genesis) + 1;
+        let latest = ViewNumber::from(self.current_view.saturating_sub(GC_MARGIN_VIEWS.get()));
+
+        let Some((_, child)) = self.proposals.last_key_value() else {
+            return;
+        };
+
+        let view = child.justify_qc.view_number();
+
+        if view < earliest || view > latest {
+            return;
+        }
+
+        // A view decided as an ancestor of a later one needs no vote from us,
+        // so its payload no longer blocks anything. Its proposal outlives the
+        // decide by the decide buffer, which would otherwise keep it a
+        // candidate for as long as the lock stays put.
+        if self.decided_views.contains(&view) {
+            return;
+        }
+
+        let Some(proposal) = self.proposals.get(&view) else {
+            return;
+        };
+
+        if proposal_commitment(proposal) != child.justify_qc.data.leaf_commit {
+            return;
+        }
+
+        let VidCommitment::V2(payload_commitment) = proposal.block_header.payload_commitment()
+        else {
+            return;
+        };
+
+        if self
+            .blocks_reconstructed
+            .contains(&(view, payload_commitment))
+        {
+            return;
+        }
+
+        outbox.push_back(ConsensusOutput::RequestMissingPayload {
+            view,
+            payload_commitment,
+        });
+    }
+
     fn request_parent_proposal_if_missing(
         &self,
         proposal: &Proposal<T>,
@@ -1444,6 +1542,7 @@ impl<T: NodeType> Consensus<T> {
             }
         }
         self.timeout_view = max(self.timeout_view, view);
+        self.request_missing_payloads(outbox);
         let data = TimeoutData2 {
             view,
             epoch: Some(epoch),
@@ -1490,6 +1589,7 @@ impl<T: NodeType> Consensus<T> {
         self.timeout_certs.insert(view, certificate.cert().clone());
         self.current_view = self.current_view.max(view);
         self.current_epoch = Some(epoch);
+        self.request_missing_payloads(outbox);
         outbox.push_back(ConsensusOutput::ViewChanged(view, epoch));
         outbox.push_back(ConsensusOutput::ViewTimedOut(certificate.view_number()));
         outbox.push_back(ConsensusOutput::SendTimeoutCertificate(
@@ -2297,6 +2397,7 @@ impl<T: NodeType> Consensus<T> {
             self.locked_cert = Some(cert1.clone());
             self.current_view = self.current_view.max(view + 1);
             self.current_epoch = Some(proposal_epoch);
+            outbox.push_back(ConsensusOutput::LockUpdated(cert1.view_number()));
             outbox.push_back(ConsensusOutput::ViewChanged(view + 1, proposal_epoch));
             outbox.push_back(ConsensusOutput::SendCertificate1(cert1.clone()));
             // Persist the new lock; `release_vote2` gates the phase-2 vote on it.
