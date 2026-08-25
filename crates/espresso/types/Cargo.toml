@@ -126,6 +126,7 @@ rstest = { workspace = true }
 rstest_reuse = { workspace = true }
 test-log = { workspace = true }
 test-utils = { workspace = true }
+tokio = { workspace = true, features = ["net", "io-util"] }
 
 [[bench]]
 name = "reward_mt"

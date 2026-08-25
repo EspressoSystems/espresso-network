@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, sync::Arc};
 #[cfg(feature = "node")]
-use std::{cmp::min, num::NonZeroUsize, pin::Pin, result::Result as StdResult, time::Instant};
+use std::{cmp::min, fmt, num::NonZeroUsize, pin::Pin, result::Result as StdResult, time::Instant};
 
 #[cfg(feature = "node")]
 use alloy::{
@@ -304,6 +304,68 @@ impl SingleTransport {
     }
 }
 
+/// alloy returns a non-2xx response with a parseable JSON-RPC body as `Ok`, so the payload, not
+/// the `Result` arm, decides whether a provider is healthy.
+#[cfg(feature = "node")]
+pub(crate) enum ResponseOutcome {
+    Healthy,
+    /// Provider is rate limiting. Back off without counting towards failover.
+    RateLimited {
+        retry_after: Option<Duration>,
+    },
+    Failed,
+}
+
+/// HTTP status for "Too Many Requests". Also matched as a JSON-RPC code, since a proxy may echo
+/// the status into the error payload.
+#[cfg(feature = "node")]
+const TOO_MANY_REQUESTS: i64 = 429;
+
+#[cfg(feature = "node")]
+impl From<&StdResult<ResponsePacket, RpcError<TransportErrorKind>>> for ResponseOutcome {
+    fn from(result: &StdResult<ResponsePacket, RpcError<TransportErrorKind>>) -> Self {
+        match result {
+            Ok(res) => match res.first_error_code() {
+                None => Self::Healthy,
+                Some(code) if code == TOO_MANY_REQUESTS => Self::RateLimited { retry_after: None },
+                Some(_) => Self::Failed,
+            },
+            Err(RpcError::ErrorResp(e)) if e.code == TOO_MANY_REQUESTS => {
+                Self::RateLimited { retry_after: None }
+            },
+            Err(RpcError::Transport(TransportErrorKind::HttpError(http_err)))
+                if http_err.is_rate_limit_err() =>
+            {
+                Self::RateLimited { retry_after: None }
+            },
+            Err(RpcError::Transport(TransportErrorKind::HttpErrorWithRetryAfter {
+                error,
+                retry_after,
+            })) if error.is_rate_limit_err() => Self::RateLimited {
+                retry_after: Some(*retry_after),
+            },
+            Err(_) => Self::Failed,
+        }
+    }
+}
+
+#[cfg(feature = "node")]
+struct FailedResponse<'a>(&'a StdResult<ResponsePacket, RpcError<TransportErrorKind>>);
+
+#[cfg(feature = "node")]
+impl fmt::Display for FailedResponse<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            Ok(res) => match (res.first_error_code(), res.first_error_message()) {
+                (Some(code), Some(message)) => write!(f, "{code}: {message}"),
+                (Some(code), None) => write!(f, "{code}"),
+                (None, _) => write!(f, "ok response with no error payload"),
+            },
+            Err(err) => write!(f, "{err}"),
+        }
+    }
+}
+
 /// `SwitchingTransport` is an alternative [`Client`](https://docs.rs/alloy/0.12.5/alloy/transports/http/struct.Client.html)
 /// which by implementing `tower_service::Service`, traits like [`Transport`](https://docs.rs/alloy/0.12.5/alloy/transports/trait.Transport.html)
 /// are auto-derived, thus can be used as an alt [`RpcClient`](https://docs.rs/alloy/0.12.5/alloy/rpc/client/struct.RpcClient.html#method.new)
@@ -362,57 +424,52 @@ impl Service<RequestPacket> for SwitchingTransport {
                 }
             }
 
-            // Call the inner client, match on the result
-            match current_transport.client.call(req).await {
-                Ok(res) => {
-                    // If it's okay, log the success to the status
-                    current_transport.status.write().log_success();
-                    Ok(res)
-                },
-                Err(err) => {
-                    // Increment the failure metric
-                    if let Some(f) = self_clone
-                        .metrics
-                        .failures
-                        .get(current_transport.generation % self_clone.urls.len())
-                    {
-                        f.add(1);
-                    }
+            let result = current_transport.client.call(req).await;
+            let outcome = ResponseOutcome::from(&result);
 
-                    // Treat rate limited errors specially; these should not cause failover, but instead
-                    // should only cause us to temporarily back off on making requests to the RPC
-                    // server.
-                    if let RpcError::ErrorResp(e) = &err {
-                        // 429 == Too Many Requests
-                        if e.code == 429 {
-                            current_transport.status.write().rate_limited_until =
-                                Some(Instant::now() + self_clone.opt.rate_limit_delay());
-                            return Err(err);
-                        }
-                    }
-
-                    // Log the error and indicate a failure
-                    tracing::warn!(
-                        url = %current_transport.redacted_url,
-                        ?err,
-                        "L1 client error"
-                    );
-
-                    // If the transport should switch, do so. We don't need to worry about
-                    // race conditions here, since it will only return true once.
-                    if current_transport
-                        .status
-                        .write()
-                        .log_failure(&self_clone.opt)
-                    {
-                        // Increment the failovers metric
-                        self_clone.metrics.failovers.add(1);
-                        self_clone.switch_to(current_transport.generation + 1, current_transport);
-                    }
-
-                    Err(err)
-                },
+            if matches!(outcome, ResponseOutcome::Healthy) {
+                current_transport.status.write().log_success();
+                return result;
             }
+
+            // Increment the failure metric
+            if let Some(f) = self_clone
+                .metrics
+                .failures
+                .get(current_transport.generation % self_clone.urls.len())
+            {
+                f.add(1);
+            }
+
+            if let ResponseOutcome::RateLimited { retry_after } = outcome {
+                // Rate limits should not cause failover, but instead should only cause us to
+                // temporarily back off on making requests to the RPC server.
+                current_transport.status.write().rate_limited_until = Some(
+                    Instant::now()
+                        + retry_after.unwrap_or_else(|| self_clone.opt.rate_limit_delay()),
+                );
+                return result;
+            }
+
+            tracing::warn!(
+                url = %current_transport.redacted_url,
+                err = %FailedResponse(&result),
+                "L1 client error"
+            );
+
+            // If the transport should switch, do so. We don't need to worry about
+            // race conditions here, since it will only return true once.
+            if current_transport
+                .status
+                .write()
+                .log_failure(&self_clone.opt)
+            {
+                // Increment the failovers metric
+                self_clone.metrics.failovers.add(1);
+                self_clone.switch_to(current_transport.generation + 1, current_transport);
+            }
+
+            result
         })
     }
 }
@@ -1163,6 +1220,144 @@ mod test {
 
     use super::*;
 
+    /// Byte-exact JSON-RPC bodies recovered from production log dumps. The alchemy bodies are raw
+    /// captures (including the `***` redaction applied by the telemetry pipeline); the infura
+    /// envelopes are reconstructed around the exact code/message/data captured.
+    mod fixtures {
+        pub const ALCHEMY_APP_INACTIVE: &str = r#"{"jsonrpc":"2.0","id":399193,"error":{"code":-32600,"message":"App is inactive. Please create a new app or contact support at https://dashboard.alchemy.com/***"}}"#;
+        pub const ALCHEMY_10_BLOCK_RANGE: &str = r#"{"jsonrpc":"2.0","id":1005,"error":{"code":-32600,"message":"Under the Free tier plan, you can make eth_getLogs requests with up to a 10 block range. Based on your parameters, this block range should work: [0x1735fc9, 0x1735fd2]. Upgrade to PAYG for expanded block range."}}"#;
+        pub const BLOCK_RANGE_TOO_LARGE: &str = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32062,"message":"Block range is too large"}}"#;
+        pub const INFURA_RATE_LIMIT: &str = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32005,"message":"Too Many Requests","data":{"see":"https://infura.io/dashboard"}}}"#;
+        pub const INFURA_UNAVAILABLE: &str = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"service temporarily unavailable"}}"#;
+        pub const SUCCESS: &str = r#"{"jsonrpc":"2.0","id":1,"result":"0x1"}"#;
+    }
+
+    fn ok_packet(body: &str) -> StdResult<ResponsePacket, RpcError<TransportErrorKind>> {
+        Ok(serde_json::from_str(body).expect("valid JSON-RPC response fixture"))
+    }
+
+    #[test]
+    fn test_response_outcome_healthy_on_success() {
+        assert!(matches!(
+            ResponseOutcome::from(&ok_packet(fixtures::SUCCESS)),
+            ResponseOutcome::Healthy
+        ));
+    }
+
+    #[test]
+    fn test_response_outcome_alchemy_app_inactive_is_failed() {
+        assert!(matches!(
+            ResponseOutcome::from(&ok_packet(fixtures::ALCHEMY_APP_INACTIVE)),
+            ResponseOutcome::Failed
+        ));
+    }
+
+    #[test]
+    fn test_response_outcome_alchemy_10_block_range_is_failed() {
+        assert!(matches!(
+            ResponseOutcome::from(&ok_packet(fixtures::ALCHEMY_10_BLOCK_RANGE)),
+            ResponseOutcome::Failed
+        ));
+    }
+
+    #[test]
+    fn test_response_outcome_block_range_too_large_is_failed() {
+        assert!(matches!(
+            ResponseOutcome::from(&ok_packet(fixtures::BLOCK_RANGE_TOO_LARGE)),
+            ResponseOutcome::Failed
+        ));
+    }
+
+    // infura reuses -32005 for both rate limiting and too-many-results; this narrow classifier
+    // does not disambiguate, so the body is scored `Failed` rather than `RateLimited`.
+    #[test]
+    fn test_response_outcome_infura_rate_limit_body_is_failed() {
+        assert!(matches!(
+            ResponseOutcome::from(&ok_packet(fixtures::INFURA_RATE_LIMIT)),
+            ResponseOutcome::Failed
+        ));
+    }
+
+    #[test]
+    fn test_response_outcome_infura_unavailable_is_failed() {
+        assert!(matches!(
+            ResponseOutcome::from(&ok_packet(fixtures::INFURA_UNAVAILABLE)),
+            ResponseOutcome::Failed
+        ));
+    }
+
+    // Synthetic body: no captured provider response carries JSON-RPC code 429 (alchemy sends
+    // -32600, infura sends -32005), but the classifier still matches it if one ever does.
+    #[test]
+    fn test_response_outcome_ok_wrapped_429_is_rate_limited() {
+        let body = r#"{"jsonrpc":"2.0","id":1,"error":{"code":429,"message":"Too Many Requests"}}"#;
+        assert!(matches!(
+            ResponseOutcome::from(&ok_packet(body)),
+            ResponseOutcome::RateLimited { retry_after: None }
+        ));
+    }
+
+    #[test]
+    fn test_response_outcome_error_resp_429_is_rate_limited() {
+        let result: StdResult<ResponsePacket, RpcError<TransportErrorKind>> =
+            Err(RpcError::ErrorResp(alloy::rpc::json_rpc::ErrorPayload {
+                code: 429,
+                message: "Too Many Requests".into(),
+                data: None,
+            }));
+        assert!(matches!(
+            ResponseOutcome::from(&result),
+            ResponseOutcome::RateLimited { retry_after: None }
+        ));
+    }
+
+    #[test]
+    fn test_response_outcome_http_error_429_is_rate_limited() {
+        let result: StdResult<ResponsePacket, RpcError<TransportErrorKind>> =
+            Err(RpcError::Transport(TransportErrorKind::HttpError(
+                alloy::transports::HttpError {
+                    status: 429,
+                    body: String::new(),
+                },
+            )));
+        assert!(matches!(
+            ResponseOutcome::from(&result),
+            ResponseOutcome::RateLimited { retry_after: None }
+        ));
+    }
+
+    #[test]
+    fn test_response_outcome_http_error_with_retry_after_is_rate_limited() {
+        let result: StdResult<ResponsePacket, RpcError<TransportErrorKind>> = Err(
+            RpcError::Transport(TransportErrorKind::HttpErrorWithRetryAfter {
+                error: alloy::transports::HttpError {
+                    status: 429,
+                    body: String::new(),
+                },
+                retry_after: Duration::from_secs(52),
+            }),
+        );
+        assert!(matches!(
+            ResponseOutcome::from(&result),
+            ResponseOutcome::RateLimited { retry_after: Some(d) } if d == Duration::from_secs(52)
+        ));
+    }
+
+    #[test]
+    fn test_response_outcome_http_error_403_is_failed() {
+        let result: StdResult<ResponsePacket, RpcError<TransportErrorKind>> =
+            Err(RpcError::Transport(TransportErrorKind::HttpError(
+                alloy::transports::HttpError {
+                    status: 403,
+                    body: String::new(),
+                },
+            )));
+        assert!(matches!(
+            ResponseOutcome::from(&result),
+            ResponseOutcome::Failed
+        ));
+    }
+
     #[test]
     fn test_switching_transport_debug_hides_credentials() {
         let opt = L1ClientOptions {
@@ -1599,6 +1794,73 @@ mod test {
     fn get_failover_index(provider: &L1Client) -> usize {
         let transport = &provider.transport;
         provider.transport.current_transport.read().generation % transport.urls.len()
+    }
+
+    /// Spawns a TCP server that answers every connection with a fixed HTTP response, regardless
+    /// of what was sent. Used to stand in for a dead provider that speaks valid HTTP/JSON-RPC.
+    async fn spawn_fixed_response_server(status: u16, body: &'static str) -> Url {
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fake provider socket");
+        let port = listener.local_addr().unwrap().port();
+
+        spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
+                spawn(async move {
+                    let mut buf = [0u8; 4096];
+                    // The request is tiny (a single JSON-RPC call); we don't need to parse it,
+                    // just drain it so the client isn't left waiting on us.
+                    let _ = stream.read(&mut buf).await;
+                    let response = format!(
+                        "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: \
+                         {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                    let _ = stream.shutdown().await;
+                });
+            }
+        });
+
+        format!("http://127.0.0.1:{port}").parse().unwrap()
+    }
+
+    /// A provider that always answers with a parseable JSON-RPC error must be scored unhealthy
+    /// and trigger failover, not be treated as healthy (see [`ResponseOutcome`]).
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_failover_on_dead_provider_with_json_rpc_error_body() {
+        let dead_provider = spawn_fixed_response_server(403, fixtures::ALCHEMY_APP_INACTIVE).await;
+        let anvil = Anvil::new().block_time(1).spawn();
+
+        let provider = L1ClientOptions {
+            l1_frequent_failure_tolerance: Duration::from_millis(0),
+            l1_consecutive_failure_tolerance: 3,
+            ..Default::default()
+        }
+        .connect(vec![dead_provider, anvil.endpoint_url()])
+        .expect("Failed to create L1 client");
+
+        for _ in 0..3 {
+            let _ = provider.get_block_number().await;
+        }
+
+        assert_eq!(
+            get_failover_index(&provider),
+            1,
+            "client should have failed over from the dead provider"
+        );
+        provider
+            .get_block_number()
+            .await
+            .expect("requests succeed from the healthy provider");
     }
 
     async fn test_failover_update_task_helper(ws: bool) {
