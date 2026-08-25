@@ -719,6 +719,52 @@ async fn test_leader_sends_proposal() {
     );
 }
 
+/// A fetched proposal gets its state validated like a gossiped one.
+#[tokio::test]
+async fn test_fetched_proposal_requests_state() {
+    let test_data = TestData::new(2).await;
+    let mut harness = ConsensusHarness::new(0).await;
+
+    harness
+        .apply(ConsensusInput::FetchedProposal(
+            test_data.views[0].proposal_message(),
+        ))
+        .await;
+
+    assert!(
+        any(harness.outputs(), |o| matches!(
+            o,
+            ConsensusOutput::RequestState(r) if r.view == ViewNumber::new(1)
+        )),
+        "state validation must be requested for a fetched proposal"
+    );
+}
+
+/// Regression: a leader whose parent arrived via fetch could not propose.
+#[tokio::test]
+async fn test_leader_proposes_off_fetched_parent() {
+    let test_data = TestData::new(3).await;
+    let leader_for_view_2 = test_data.views[1].leader_public_key;
+    let leader_index = node_index_for_key(&leader_for_view_2);
+    let mut harness = ConsensusHarness::new(leader_index).await;
+
+    harness
+        .apply(ConsensusInput::FetchedProposal(
+            test_data.views[0].proposal_message(),
+        ))
+        .await;
+    harness.apply(test_data.views[0].cert1_input()).await;
+
+    assert!(
+        any(harness.outputs(), is_request_block_and_header),
+        "leader must request block and header off a fetched parent"
+    );
+    assert!(
+        any(harness.outputs(), |o| is_proposal_for_view(o, 2)),
+        "leader must propose once the fetched parent's cert1 forms"
+    );
+}
+
 /// Regression: `maybe_propose` must refuse to propose when
 /// `self.proposals[parent_view]` has drifted from
 /// `parent_cert.data.leaf_commit`.
@@ -859,13 +905,14 @@ async fn test_timeout_proposal_chains_from_lock_not_timed_out_cert1() {
         .await;
     harness.apply(test_data.views[0].cert1_input()).await;
 
-    // View 2 arrives via fetch (no optimistic header request); its cert1
-    // forms but the block is never reconstructed, so the lock stays at 1.
-    harness
-        .apply(ConsensusInput::FetchedProposal(
-            test_data.views[1].proposal_message(),
-        ))
-        .await;
+    // View 2 arrives via fetch and its block is never reconstructed, so the
+    // lock stays at 1. Bypass the harness so the header request off view 2
+    // stays unanswered and the leader cannot propose view 3 from cert1(2).
+    let mut fetched = Outbox::new();
+    harness.consensus.apply(
+        ConsensusInput::FetchedProposal(test_data.views[1].proposal_message()),
+        &mut fetched,
+    );
     harness.apply(test_data.views[1].cert1_input()).await;
     assert!(
         harness
@@ -917,15 +964,15 @@ async fn test_bridged_legacy_qc_adopts_lock_and_reproposes() {
         .apply(test_data.views[0].block_reconstructed_input())
         .await;
     harness.apply(test_data.views[0].cert1_input()).await;
-    harness
-        .apply(ConsensusInput::FetchedProposal(
-            test_data.views[1].proposal_message(),
-        ))
-        .await;
 
-    // Manual outbox from here: the TC's header request stays unfulfilled, so
+    // Manual outbox from here so both header requests stay unfulfilled and
     // the leader has not proposed view 3 when the legacy QC arrives.
     let mut outbox = Outbox::new();
+    harness.consensus.apply(
+        ConsensusInput::FetchedProposal(test_data.views[1].proposal_message()),
+        &mut outbox,
+    );
+    outbox.clear();
     harness
         .consensus
         .apply(test_data.views[1].timeout_cert_input(), &mut outbox);
