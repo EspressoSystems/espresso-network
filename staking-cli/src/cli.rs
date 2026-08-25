@@ -273,7 +273,13 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
     let mut cli = Args::parse();
 
     // initialize the logging ASAP so we don't accidentally hide any messages.
-    cli.config.logging.clone().unwrap_or_default().init();
+    //
+    // On stderr: stdout carries command output, including the JSON `--format json` produces.
+    cli.config
+        .logging
+        .clone()
+        .unwrap_or_default()
+        .init_on_stderr();
     espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
 
     let config_path = cli.config_path();
