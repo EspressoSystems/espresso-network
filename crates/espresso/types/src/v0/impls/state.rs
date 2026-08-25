@@ -2507,4 +2507,71 @@ mod test {
             .await
             .unwrap();
     }
+
+    /// A `from_header` state is what the state manager seeds for a leaf whose
+    /// real state never arrived (parent missed, proposal fetched later).
+    /// Validating a child against it succeeds, but every account and frontier
+    /// the header touches has to be fetched from peers first; against the real
+    /// parent state nothing is fetched. This is the cost that makes a single
+    /// missed proposal fan out into a catchup storm.
+    #[tokio::test]
+    async fn test_from_header_parent_validates_only_via_catchup() {
+        let mut instance = NodeState::mock_v2();
+        let mut genesis_state = instance.genesis_state.clone();
+        genesis_state
+            .fee_merkle_tree
+            .update(FeeAccount::default(), FeeAmount::from(1u64))
+            .unwrap();
+        instance.genesis_state = genesis_state.clone();
+
+        let genesis = Leaf::genesis(&genesis_state, &instance, MOCK_UPGRADE.base).await;
+        let parent_leaf: Leaf2 = genesis.into();
+        let parent_header = parent_leaf.block_header().clone();
+
+        let mut expected_block_tree = genesis_state.block_merkle_tree.clone();
+        expected_block_tree.push(parent_header.commit()).unwrap();
+        let proposed_header = match parent_header.clone() {
+            Header::V2(header) => Header::V2(v0_2::Header {
+                height: header.height + 1,
+                timestamp: OffsetDateTime::now_utc().unix_timestamp() as u64,
+                block_merkle_tree_root: expected_block_tree.commitment(),
+                chain_config: header.chain_config.commit().into(),
+                ..header
+            }),
+            _ => panic!("Expected V2 header"),
+        };
+
+        let catchup =
+            MockStateCatchup::from_iter([(ViewNumber::new(0), Arc::new(genesis_state.clone()))]);
+        instance.state_catchup = Arc::new(catchup.clone());
+
+        genesis_state
+            .validate_and_apply_header(
+                &instance,
+                &parent_leaf,
+                &proposed_header,
+                0, /* payload_byte_len */
+                FEE_VERSION,
+                0, /* view_number */
+            )
+            .await
+            .unwrap();
+        assert_eq!(catchup.fetches(), 0, "a full parent state needs no catchup");
+
+        let stub = ValidatedState::from_header(&parent_header);
+        stub.validate_and_apply_header(
+            &instance,
+            &parent_leaf,
+            &proposed_header,
+            0, /* payload_byte_len */
+            FEE_VERSION,
+            0, /* view_number */
+        )
+        .await
+        .unwrap();
+        assert!(
+            catchup.fetches() > 0,
+            "a from_header parent can only be extended by fetching from peers"
+        );
+    }
 }

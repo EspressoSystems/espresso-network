@@ -516,7 +516,10 @@ impl Upgrade {
 
 #[cfg(any(test, feature = "testing"))]
 pub mod mock {
-    use std::collections::HashMap;
+    use std::{
+        collections::HashMap,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
 
     use anyhow::Context;
     use async_trait::async_trait;
@@ -539,6 +542,8 @@ pub mod mock {
         backoff: BackoffParams,
         state: HashMap<ViewNumber, Arc<ValidatedState>>,
         delay: std::time::Duration,
+        /// Number of fetches served, shared with clones handed to a `NodeState`.
+        fetches: Arc<AtomicUsize>,
     }
 
     impl Default for MockStateCatchup {
@@ -547,6 +552,7 @@ pub mod mock {
                 backoff: Default::default(),
                 state: Default::default(),
                 delay: std::time::Duration::ZERO,
+                fetches: Default::default(),
             }
         }
     }
@@ -554,9 +560,8 @@ pub mod mock {
     impl FromIterator<(ViewNumber, Arc<ValidatedState>)> for MockStateCatchup {
         fn from_iter<I: IntoIterator<Item = (ViewNumber, Arc<ValidatedState>)>>(iter: I) -> Self {
             Self {
-                backoff: Default::default(),
                 state: iter.into_iter().collect(),
-                delay: std::time::Duration::ZERO,
+                ..Default::default()
             }
         }
     }
@@ -565,6 +570,15 @@ pub mod mock {
         pub fn with_delay(mut self, delay: std::time::Duration) -> Self {
             self.delay = delay;
             self
+        }
+
+        /// Number of fetches served so far, across all clones.
+        pub fn fetches(&self) -> usize {
+            self.fetches.load(Ordering::SeqCst)
+        }
+
+        fn record_fetch(&self) {
+            self.fetches.fetch_add(1, Ordering::SeqCst);
         }
     }
 
@@ -588,6 +602,7 @@ pub mod mock {
             fee_merkle_tree_root: FeeMerkleCommitment,
             accounts: &[FeeAccount],
         ) -> anyhow::Result<Vec<FeeAccountProof>> {
+            self.record_fetch();
             tokio::time::sleep(self.delay).await;
 
             let src = &self.state[&view].fee_merkle_tree;
@@ -619,6 +634,7 @@ pub mod mock {
             view: ViewNumber,
             mt: &mut BlockMerkleTree,
         ) -> anyhow::Result<()> {
+            self.record_fetch();
             tokio::time::sleep(self.delay).await;
 
             tracing::info!("catchup: fetching frontier for view {view}");
@@ -643,6 +659,7 @@ pub mod mock {
             _retry: usize,
             _commitment: Commitment<ChainConfig>,
         ) -> anyhow::Result<ChainConfig> {
+            self.record_fetch();
             tokio::time::sleep(self.delay).await;
 
             Ok(ChainConfig::default())
