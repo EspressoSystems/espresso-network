@@ -3345,6 +3345,134 @@ async fn test_cli_stake_table_json(#[case] version: StakeTableContractVersion) -
     Ok(())
 }
 
+/// `--network` supplies the built-in defaults without a config file.
+#[rstest::rstest]
+#[case::mainnet(
+    "mainnet",
+    "https://gateway.tenderly.co/public/mainnet",
+    "0xcef474d372b5b09defe2af187bf17338dc704451"
+)]
+#[case::decaf(
+    "decaf",
+    "https://gateway.tenderly.co/public/sepolia",
+    "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037"
+)]
+#[test_log::test]
+fn test_cli_network_defaults(
+    #[case] network: &str,
+    #[case] rpc_url: &str,
+    #[case] stake_table_address: &str,
+) -> Result<()> {
+    let config: TestConfig = parse_config(&["--no-config", "--network", network])?;
+
+    assert_eq!(config.rpc_url.as_str(), rpc_url);
+    assert_eq!(
+        config.stake_table_address,
+        stake_table_address.parse::<Address>()?
+    );
+    assert!(config.espresso_url.is_some());
+
+    Ok(())
+}
+
+/// Without `--network` the defaults stay local and the stake table address unset.
+#[test_log::test]
+fn test_cli_no_network_keeps_defaults() -> Result<()> {
+    let config: TestConfig = parse_config(&["--no-config"])?;
+
+    assert_eq!(config.rpc_url.as_str(), "http://localhost:8545/");
+    assert_eq!(config.stake_table_address, Address::ZERO);
+
+    Ok(())
+}
+
+/// A flag beats the config file, which beats the `--network` defaults. The network still supplies
+/// what neither of the other layers set.
+#[test_log::test]
+fn test_cli_network_precedence() -> Result<()> {
+    let tmpdir = tempfile::tempdir()?;
+    let config_path = tmpdir.path().join("config.toml");
+    std::fs::write(
+        &config_path,
+        "rpc_url = \"http://config-file:8545\"\nespresso_url = \"http://config-file:24000\"\n",
+    )?;
+    let path = config_path.display().to_string();
+
+    let from_file: TestConfig = parse_config(&["-c", &path, "--network", "decaf"])?;
+    assert_eq!(from_file.rpc_url.as_str(), "http://config-file:8545/");
+    assert_eq!(
+        from_file.espresso_url.map(|url| url.to_string()),
+        Some("http://config-file:24000/".to_string())
+    );
+    // Not set by the config file, so it falls through to the network defaults.
+    assert_eq!(
+        from_file.stake_table_address,
+        "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037".parse::<Address>()?
+    );
+
+    let from_flag: TestConfig = parse_config(&[
+        "-c",
+        &path,
+        "--network",
+        "decaf",
+        "--rpc-url",
+        "http://flag:1",
+    ])?;
+    assert_eq!(from_flag.rpc_url.as_str(), "http://flag:1/");
+    assert_eq!(
+        from_flag.espresso_url.map(|url| url.to_string()),
+        Some("http://config-file:24000/".to_string())
+    );
+
+    Ok(())
+}
+
+/// Overriding the stake table address would mean a different network, so the two conflict.
+#[test_log::test]
+fn test_cli_network_conflicts_with_stake_table_address() {
+    base_cmd()
+        .args([
+            "--no-config",
+            "--network",
+            "decaf",
+            "--stake-table-address",
+            "0x1111111111111111111111111111111111111111",
+            "config",
+        ])
+        .assert()
+        .failure()
+        .stderr(str::contains("cannot be used with"));
+}
+
+/// `--network` requires a value rather than silently applying no defaults.
+#[test_log::test]
+fn test_cli_network_requires_a_value() {
+    base_cmd()
+        .args(["--no-config", "--network", "config"])
+        .assert()
+        .failure()
+        .stderr(str::contains("possible values: mainnet, decaf, local"));
+}
+
+/// Run `config` with the given global arguments and parse the merged configuration it prints.
+fn parse_config(args: &[&str]) -> Result<TestConfig> {
+    let stdout = base_cmd()
+        .args(args)
+        .arg("config")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8(stdout)?;
+    // The merged config is preceded by a line naming the config file.
+    let toml = text
+        .split_once("\n\n")
+        .map(|(_, config)| config)
+        .unwrap_or(&text);
+    Ok(toml::from_str(toml)?)
+}
+
 /// A config file that names a mnemonic without an account index must still be rejected rather
 /// than silently signing with index 0.
 #[test_log::test]

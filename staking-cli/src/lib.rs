@@ -63,11 +63,27 @@ pub use transaction::Transaction;
 // Used by staking-cli integration tests.
 pub use tx_log::TxLog;
 
-#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub(crate) enum Network {
     Mainnet,
     Decaf,
     Local,
+}
+
+impl Network {
+    /// The network's default configuration, compiled into the binary.
+    pub(crate) fn config_template(&self) -> &'static str {
+        match self {
+            Network::Mainnet => include_str!("../config.mainnet.toml"),
+            Network::Decaf => include_str!("../config.decaf.toml"),
+            Network::Local => include_str!("../config.demo-native.toml"),
+        }
+    }
+
+    /// The network's defaults, as the lowest precedence configuration layer.
+    pub(crate) fn config(&self) -> Result<Config> {
+        Ok(toml::from_str(self.config_template())?)
+    }
 }
 
 /// Used by staking-ui-service, sequencer tests, staking-cli integration tests.
@@ -99,6 +115,21 @@ pub(crate) struct Config {
     /// Deployed stake table contract address.
     #[clap(long, env = "STAKE_TABLE_ADDRESS")]
     pub stake_table_address: Address,
+
+    /// Use the built-in configuration for a network, without needing a config file.
+    ///
+    /// The config file, other flags, and environment variables all take precedence, so an RPC
+    /// that is down can still be replaced with `--rpc-url`. The stake table address is not
+    /// overridable, since a different address is a different network.
+    #[clap(
+        long,
+        value_enum,
+        num_args = 1,
+        env = "ESPRESSO_NETWORK",
+        conflicts_with = "stake_table_address"
+    )]
+    #[serde(skip)]
+    pub network: Option<Network>,
 
     /// Espresso sequencer API URL for reward claims.
     #[clap(long, env = "ESPRESSO_URL")]

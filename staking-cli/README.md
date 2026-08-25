@@ -25,6 +25,7 @@ Contracts:
     - [Choose your type of wallet (mnemonic, private key, or Ledger)](#choose-your-type-of-wallet-mnemonic-private-key-or-ledger)
     - [Initialize the configuration file (optional)](#initialize-the-configuration-file-optional)
     - [Managing multiple network configurations](#managing-multiple-network-configurations)
+    - [Using a network without a config file](#using-a-network-without-a-config-file)
     - [Inspect the configuration](#inspect-the-configuration)
     - [View the stake table](#view-the-stake-table)
     - [Look up one address](#look-up-one-address)
@@ -303,9 +304,27 @@ staking-cli -c decaf.toml delegate --validator-address 0x... --amount 100
 When no `-c` flag is provided, the CLI uses a platform-specific default path (e.g.,
 `~/.config/espresso/espresso-staking-cli/config.toml` on Linux).
 
+### Using a network without a config file
+
+`--network mainnet|decaf|local` applies that network's built-in defaults, so read-only commands work with no setup:
+
+```bash
+staking-cli --network mainnet stake-table
+staking-cli --network decaf stake-table-entry --address 0x...
+```
+
+The defaults are the lowest precedence layer: the config file overrides them, and flags and environment variables
+override both. That means an RPC that is down can be replaced without giving up the rest of the defaults:
+
+```bash
+staking-cli --network mainnet --rpc-url https://your-own-rpc.example stake-table
+```
+
+`--network` conflicts with `--stake-table-address`, because a different stake table is a different network.
+
 ### Inspect the configuration
 
-You can inspect the configuration file by running:
+You can inspect the merged configuration by running:
 
 ```bash
 staking-cli config

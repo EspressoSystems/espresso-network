@@ -23,11 +23,13 @@ use hotshot_types::{
     light_client::{StateKeyPair, StateVerKey},
     signature_key::BLSPubKey,
 };
+use serde::Deserialize as _;
+use toml::Table;
 
 #[cfg(feature = "testing")]
 use crate::deploy::deploy_contracts_for_testing;
 use crate::{
-    Commands, Config, SignerConfigError, ValidSignerConfig,
+    Commands, Config, Network, SignerConfigError, ValidSignerConfig,
     claim::fetch_claim_rewards_inputs,
     demo::{
         ChurnParams, DemoCommands, churn_for_demo, delegate_for_demo, stake_for_demo,
@@ -104,6 +106,28 @@ impl AddressExt for Option<Address> {
     fn or_from_wallet(self, wallet: Option<&EthereumWallet>) -> Option<Address> {
         self.or_else(|| wallet.map(NetworkWallet::<Ethereum>::default_signer_address))
     }
+}
+
+/// Build the configuration from its layers, lowest precedence first.
+///
+/// The network defaults and the config file are merged as TOML tables, so a config file may set
+/// only the keys it overrides. Flags and environment variables are then merged on top.
+fn layered_config(
+    network: Option<Network>,
+    file: Option<&str>,
+    args: &mut <Config as ClapSerde>::Opt,
+) -> Result<Config> {
+    let mut table = match network {
+        Some(network) => toml::from_str::<Table>(network.config_template())?,
+        None => Table::new(),
+    };
+    if let Some(file) = file {
+        table.extend(toml::from_str::<Table>(file)?);
+    }
+    if table.is_empty() {
+        return Ok(Config::from(args));
+    }
+    Ok(Config::deserialize(table)?.merge(args))
 }
 
 /// Resolve a block identifier to a concrete block number, defaulting to the latest block.
@@ -253,26 +277,21 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
     espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
 
     let config_path = cli.config_path();
-    // Get config file
-    let config = if cli.no_config {
-        Config::from(&mut cli.config)
-    } else if let Ok(f) = std::fs::read_to_string(&config_path) {
-        // parse toml
-        match toml::from_str::<Config>(&f) {
-            Ok(config) => config.merge(&mut cli.config),
-            Err(err) => {
-                // This is a user error print the hopefully helpful error
-                // message without backtrace and exit.
-                exit_err(
-                    format!("Error in configuration file at {}", config_path.display()),
-                    err,
-                );
-            },
-        }
+    // Lowest to highest precedence: `--network` defaults, config file, then flags and env vars.
+    let network = cli.config.network.flatten();
+    let file = if cli.no_config {
+        None
     } else {
-        // If there is no config file return only config parsed from clap
-        Config::from(&mut cli.config)
+        std::fs::read_to_string(&config_path).ok()
     };
+    let config = layered_config(network, file.as_deref(), &mut cli.config).unwrap_or_else(|err| {
+        // This is a user error print the hopefully helpful error
+        // message without backtrace and exit.
+        exit_err(
+            format!("Error in configuration file at {}", config_path.display()),
+            err,
+        )
+    });
 
     if config.token_address.is_some() {
         tracing::warn!("The `--token_address` argument is no longer necessary , and ignored");
@@ -288,12 +307,7 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
             ledger,
             network,
         } => {
-            let config_template = match network {
-                crate::Network::Mainnet => include_str!("../config.mainnet.toml"),
-                crate::Network::Decaf => include_str!("../config.decaf.toml"),
-                crate::Network::Local => include_str!("../config.demo-native.toml"),
-            };
-            let mut config = toml::from_str::<Config>(config_template)?;
+            let mut config = network.config()?;
             config.signer.mnemonic = mnemonic;
             config.signer.private_key = private_key;
             config.signer.account_index = Some(account_index);
@@ -339,12 +353,15 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
             return Ok(());
         },
         Commands::Config => {
-            if !config_path.exists() {
-                println!("No config file found at {}", config_path.display());
-                println!("Run `staking-cli init --network <network>` to create one.");
-                return Ok(());
+            if config_path.exists() {
+                println!("Config file at {}\n", config_path.display());
+            } else {
+                println!("No config file at {}.", config_path.display());
+                println!(
+                    "Run `staking-cli init --network <network>` to create one, or pass `--network \
+                     <network>` per invocation.\n"
+                );
             }
-            println!("Config file at {}\n", config_path.display());
             let mut config = config;
             config.signer.mnemonic = config.signer.mnemonic.map(|_| "***".to_string());
             config.signer.private_key = config.signer.private_key.map(|_| "***".to_string());
