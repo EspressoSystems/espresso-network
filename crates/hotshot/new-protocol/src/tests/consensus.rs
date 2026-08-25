@@ -483,16 +483,13 @@ async fn test_no_duplicate_vote2() {
     );
 }
 
-/// A proposal whose state validation failed is kept: votes are gated on
-/// `states_verified`, and the state manager seeds a stub for the leaf, so its
-/// child can still be validated and voted on.
+/// A proposal whose validation failed is kept, so its child can still be voted on.
 #[tokio::test]
 async fn test_child_of_failed_validation_can_vote() {
     let mut harness = ConsensusHarness::new(0).await;
     let test_data = TestData::new(3).await;
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
-    // Hold view 1's validation result and inject a failure instead.
     harness.defer_state(ViewNumber::new(1));
     harness
         .apply_pair(test_data.views[0].proposal_input_consensus(&node_key))

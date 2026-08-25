@@ -197,8 +197,7 @@ async fn test_state_request_missing_parent_retried_after_seed() {
     );
 }
 
-/// A failed validation seeds a `from_header` stub for the leaf, so a child
-/// queued behind it is validated (via catchup) instead of being dropped.
+/// A failed validation seeds a stub, so a queued child is validated instead of dropped.
 #[tokio::test]
 async fn test_failed_validation_seeds_stub_for_children() {
     let test_data = TestData::new(3).await;
@@ -211,7 +210,6 @@ async fn test_failed_validation_seeds_stub_for_children() {
     .await;
 
     manager.request_state(make_state_request(&test_data.views[0]));
-    // View 2 queues behind its in-flight parent.
     manager.request_state(make_state_request(&test_data.views[1]));
 
     let first = manager.next().await.expect("view 1 should complete");
@@ -243,9 +241,8 @@ async fn test_failed_validation_seeds_stub_for_children() {
     );
 }
 
-/// A child waits for its parent's in-flight validation only up to the parent
-/// deadline. Past it the parent is stubbed and the child validates against the
-/// stub, in parallel with the parent; the real parent state still lands.
+/// Past the parent deadline a queued child validates against the parent's stub,
+/// in parallel with it; the real parent state still lands.
 #[tokio::test(start_paused = true)]
 async fn test_child_proceeds_on_stub_after_parent_deadline() {
     let test_data = TestData::new(3).await;

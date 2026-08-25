@@ -56,10 +56,8 @@ pub trait ValidatedState<TYPES: NodeType>:
     ///
     /// # Arguments
     /// * `instance` - Immutable instance-level state.
-    /// * `received_at` - When this node obtained the proposal. Validation can
-    ///   run well after that (queued behind the parent's validation, or for a
-    ///   fetched proposal), so checks against the local clock must use this
-    ///   rather than the time validation runs.
+    /// * `received_at` - When this node obtained the proposal. Validation may
+    ///   run much later, so checks against the local clock must use this.
     ///
     /// # Errors
     ///

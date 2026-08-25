@@ -29,7 +29,6 @@ use crate::{
     message::Proposal,
 };
 
-/// Default for [`StateManager::with_parent_deadline`].
 const DEFAULT_PARENT_DEADLINE: Duration = Duration::from_secs(5);
 
 pub struct UpdateLeaf<T: NodeType> {
@@ -48,7 +47,6 @@ pub struct StateRequest<T: NodeType> {
     pub proposal: Proposal<T>,
     pub parent_commitment: Commitment<Leaf2<T>>,
     pub payload_size: u32,
-    /// When this node obtained the proposal; validation may start much later.
     pub received_at: SystemTime,
 }
 
@@ -110,7 +108,6 @@ pub struct StateManager<T: NodeType> {
     tasks: JoinSet<Completed<T>>,
     validate_duration_metric: Option<Arc<dyn Histogram>>,
     update_leaf_duration_metric: Option<Arc<dyn Histogram>>,
-    /// See [`Self::with_parent_deadline`].
     parent_deadline: Duration,
 }
 
@@ -121,8 +118,7 @@ struct InFlight<T: NodeType> {
     deadline: AbortHandle,
     view: ViewNumber,
     proposal: Proposal<T>,
-    /// Set once the validation outlives the parent deadline; requests on this
-    /// leaf then proceed against its `from_header` stub instead of waiting.
+    /// Outlived the parent deadline; requests no longer wait for it.
     overdue: bool,
 }
 
@@ -157,7 +153,6 @@ enum Completed<T: NodeType> {
         response: HeaderResponse<T>,
         header: Option<T::BlockHeader>,
     },
-    /// The parent deadline elapsed for the validation of this proposal.
     Deadline(Proposal<T>),
 }
 
@@ -177,13 +172,10 @@ impl<T: NodeType> StateManager<T> {
         }
     }
 
-    /// How long a request waits for its parent's in-flight validation before
-    /// proceeding against a `from_header` stub of the parent instead.
-    ///
-    /// Validation is fast on a dense state; one that takes this long is bound
-    /// by catchup, and queueing more catchups behind it costs more than running
-    /// them in parallel. The real state still replaces the stub when the
-    /// validation finishes.
+    /// How long requests wait for a parent's in-flight validation before
+    /// proceeding against its `from_header` stub. A validation this slow is
+    /// catchup-bound, and queueing more catchups behind it costs more than
+    /// running them in parallel.
     pub fn with_parent_deadline(mut self, deadline: Duration) -> Self {
         self.parent_deadline = deadline;
         self
@@ -351,8 +343,6 @@ impl<T: NodeType> StateManager<T> {
         );
     }
 
-    /// Whether requests on `commitment` should wait: its validation is running
-    /// and has not outlived the parent deadline.
     fn parent_in_flight(&self, commitment: &Commitment<Leaf2<T>>) -> bool {
         self.state_requests
             .get(commitment)
@@ -468,10 +458,8 @@ impl<T: NodeType> StateManager<T> {
                             continue;
                         };
                         in_flight.deadline.abort();
-                        // A failed validation leaves a `from_header` stub
-                        // (never displacing a real state) so the requests
-                        // queued on this leaf proceed via catchup instead of
-                        // being dropped.
+                        // A failed validation still leaves a stub so queued
+                        // requests proceed via catchup.
                         let measurement = if validated {
                             self.update_leaf_duration_metric
                                 .clone()

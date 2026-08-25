@@ -542,7 +542,6 @@ pub mod mock {
         backoff: BackoffParams,
         state: HashMap<ViewNumber, Arc<ValidatedState>>,
         delay: std::time::Duration,
-        /// Number of fetches served, shared with clones handed to a `NodeState`.
         fetches: Arc<AtomicUsize>,
     }
 
@@ -572,7 +571,7 @@ pub mod mock {
             self
         }
 
-        /// Number of fetches served so far, across all clones.
+        /// Fetches served so far, across clones.
         pub fn fetches(&self) -> usize {
             self.fetches.load(Ordering::SeqCst)
         }

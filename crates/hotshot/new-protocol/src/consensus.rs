@@ -788,11 +788,8 @@ impl<T: NodeType> Consensus<T> {
                 Protocol::Continue
             },
             ConsensusInput::StateValidationFailed(state_response) => {
-                // The proposal is kept, like a fetched or epoch-change
-                // proposal without a state: votes are gated on
-                // `states_verified`, and the state manager seeded a
-                // `from_header` stub for the leaf so its descendants can still
-                // be validated via catchup.
+                // Kept like any stateless proposal: votes are gated on
+                // `states_verified`, and the state manager stubbed the leaf.
                 let view = state_response.view;
                 match self.proposals.get(&view) {
                     Some(proposal) => warn!(

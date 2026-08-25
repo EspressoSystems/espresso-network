@@ -560,7 +560,7 @@ pub(crate) struct ValidatedTransition<'a> {
     proposal: Proposal<'a>,
     total_rewards_distributed: Option<RewardAmount>,
     version: Version,
-    /// When the proposal was received; the anchor for timestamp drift.
+    /// Anchor for the timestamp drift check.
     received_at: OffsetDateTime,
     epoch_height: Option<u64>,
     leader_index: Option<usize>,
@@ -1326,10 +1326,6 @@ impl HotShotState<SeqTypes> for ValidatedState {
         }
         #[cfg(feature = "node")]
         {
-            // Timestamp drift is measured from when this node received the proposal, not from
-            // when validation runs: validation can start long after receipt (catchup, or queued
-            // behind the parent's validation), and that delay says nothing about the leader's
-            // clock.
             let received_at = OffsetDateTime::from(received_at);
 
             let (validated_state, delta, total_rewards_distributed) = self
@@ -2512,12 +2508,8 @@ mod test {
             .unwrap();
     }
 
-    /// A `from_header` state is what the state manager seeds for a leaf whose
-    /// real state never arrived (parent missed, proposal fetched later).
-    /// Validating a child against it succeeds, but every account and frontier
-    /// the header touches has to be fetched from peers first; against the real
-    /// parent state nothing is fetched. This is the cost that makes a single
-    /// missed proposal fan out into a catchup storm.
+    /// Validating against a `from_header` parent fetches every touched account
+    /// from peers; against the real parent it fetches nothing.
     #[tokio::test]
     async fn test_from_header_parent_validates_only_via_catchup() {
         let mut instance = NodeState::mock_v2();
@@ -2581,9 +2573,8 @@ mod test {
         );
     }
 
-    /// Timestamp drift is measured from when the proposal was received, so a
-    /// validation that starts late (queued behind a slow parent, or a fetched
-    /// proposal) is not failed for the delay.
+    /// Drift is measured from receipt, so a validation that starts late is not
+    /// failed for the delay.
     #[tokio::test]
     async fn test_timestamp_drift_anchored_at_receipt() {
         let instance = NodeState::mock_v2();
@@ -2595,7 +2586,6 @@ mod test {
         let mut expected_block_tree = genesis_state.block_merkle_tree.clone();
         expected_block_tree.push(parent_header.commit()).unwrap();
 
-        // Received 20 s ago with a timestamp from then, validated only now.
         let received_at = SystemTime::now() - Duration::from_secs(20);
         let proposed_header = match parent_header {
             Header::V2(header) => Header::V2(v0_2::Header {
@@ -2621,7 +2611,6 @@ mod test {
             .await
             .expect("late validation of a timely proposal succeeds");
 
-        // The same header received just now really is drifted.
         let err = genesis_state
             .validate_and_apply_header(
                 &instance,

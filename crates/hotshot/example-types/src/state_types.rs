@@ -32,7 +32,7 @@ use crate::{
 #[derive(Clone, Debug, Default)]
 pub struct TestInstanceState {
     pub delay_config: DelayConfig,
-    /// Block number whose header fails validation, to exercise failure paths.
+    /// Block number whose header fails validation.
     pub failing_block: Option<u64>,
 }
 
