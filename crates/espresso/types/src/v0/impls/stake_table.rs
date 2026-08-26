@@ -2008,14 +2008,6 @@ pub(crate) fn compute_block_reward(
     Ok(block_reward_u256.into())
 }
 
-#[derive(Error, Debug)]
-/// Error representing fail cases for retrieving the stake table.
-#[cfg_attr(not(feature = "node"), allow(dead_code))]
-enum GetStakeTablesError {
-    #[error("Error fetching from L1: {0}")]
-    L1ClientFetchError(anyhow::Error),
-}
-
 #[cfg(any(test, feature = "testing"))]
 impl super::v0_3::StakeTable {
     /// Generate a `StakeTable` with `n` members.
