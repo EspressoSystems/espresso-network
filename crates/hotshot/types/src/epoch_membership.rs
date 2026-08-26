@@ -1,6 +1,10 @@
 use std::{
     collections::{HashMap, HashSet, hash_map::Entry},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
 };
 
 use alloy_primitives::U256;
@@ -55,6 +59,7 @@ pub struct EpochMembershipCoordinator<TYPES: NodeType> {
     drb_calculation_map: Arc<Mutex<DrbMap>>,
     drb_cancel_map: Arc<Mutex<DrbCancelMap>>,
     epoch_height: BlockNumber,
+    catchup_timeout: Duration,
     store_drb_progress_fn: StoreDrbProgressFn,
     load_drb_progress_fn: LoadDrbProgressFn,
     store_drb_result_fn: StoreDrbResultFn,
@@ -69,6 +74,7 @@ impl<TYPES: NodeType> Clone for EpochMembershipCoordinator<TYPES> {
             drb_calculation_map: Arc::clone(&self.drb_calculation_map),
             drb_cancel_map: Arc::clone(&self.drb_cancel_map),
             epoch_height: self.epoch_height,
+            catchup_timeout: self.catchup_timeout,
             store_drb_progress_fn: Arc::clone(&self.store_drb_progress_fn),
             load_drb_progress_fn: Arc::clone(&self.load_drb_progress_fn),
             store_drb_result_fn: self.store_drb_result_fn.clone(),
@@ -90,6 +96,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             drb_calculation_map: Arc::default(),
             drb_cancel_map: Arc::default(),
             epoch_height: epoch_height.into(),
+            catchup_timeout: DEFAULT_CATCHUP_TIMEOUT,
             store_drb_progress_fn: store_drb_progress_fn(storage.clone()),
             load_drb_progress_fn: load_drb_progress_fn(storage.clone()),
             store_drb_result_fn: store_drb_result_fn(storage.clone()),
@@ -99,6 +106,13 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
 
     pub fn epoch_height(&self) -> BlockNumber {
         self.epoch_height
+    }
+
+    /// Override the watchdog budget for a single catchup attempt. Mostly for
+    /// tests, which need abandonment to happen within a test-sized budget.
+    pub fn with_catchup_timeout(mut self, timeout: Duration) -> Self {
+        self.catchup_timeout = timeout;
+        self
     }
 
     /// Get a reference to the membership
@@ -325,7 +339,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         self,
         epoch: EpochNumber,
         epoch_tx: Sender<Result<EpochMembership<TYPES>>>,
-        progress: CatchupProgress,
+        progress: CatchupProgress<TYPES>,
     ) {
         // We need to fetch the requested epoch, that's for sure
         let mut fetch_epochs = vec![];
@@ -342,6 +356,10 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
 
         // First figure out which epochs we need to fetch
         loop {
+            if progress.is_abandoned() {
+                tracing::warn!("catchup for epoch {epoch} was abandoned; stopping");
+                return;
+            }
             progress.checkpoint(format_args!(
                 "loading stake table for epoch {try_epoch} from storage"
             ));
@@ -387,6 +405,9 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                         let (mut tx, rx) = broadcast(1);
                         tx.set_overflow(true);
                         map_lock.insert(try_epoch, rx.deactivate());
+                        // Recorded under the map lock so the watchdog can
+                        // never observe the entry without the claim.
+                        progress.claim(try_epoch, tx.clone());
                         drop(map_lock);
                         fetch_epochs.push((try_epoch, tx));
                         try_epoch = EpochNumber::new(try_epoch.saturating_sub(1));
@@ -400,6 +421,10 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
 
         // Iterate through the epochs we need to fetch in reverse, i.e. from the oldest to the newest
         while let Some((current_fetch_epoch, tx)) = fetch_epochs.pop() {
+            if progress.is_abandoned() {
+                tracing::warn!("catchup for epoch {epoch} was abandoned; stopping");
+                return;
+            }
             match self.fetch_stake_table(current_fetch_epoch, &progress).await {
                 Ok(_) => {},
                 Err(err) => {
@@ -428,6 +453,14 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                     snapshot,
                 },
             };
+            // The watchdog may have abandoned this attempt while it fetched.
+            // The map entry for this epoch is then no longer ours — a retry
+            // may already have claimed it — so stop instead of touching it.
+            // The fetched stake table stays in the membership for the retry.
+            if progress.is_abandoned() {
+                tracing::warn!("catchup for epoch {epoch} was abandoned; stopping");
+                return;
+            }
             if let Ok(Some(res)) = tx.try_broadcast(Ok(mem)) {
                 tracing::warn!(
                     "The catchup channel for epoch {} was overflown, dropped message {:?}",
@@ -438,6 +471,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
 
             // Remove the epoch from the catchup map to indicate that the catchup is complete
             self.catchup_map.lock().remove(&current_fetch_epoch);
+            progress.unclaim(current_fetch_epoch);
         }
 
         let root_leaf = match self.fetch_stake_table(epoch, &progress).await {
@@ -478,6 +512,14 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                 }
             },
         };
+
+        // As above: if the watchdog abandoned this attempt, the requested
+        // epoch's map entry is no longer ours. Leave the completed work in
+        // the membership for the retry and stop.
+        if progress.is_abandoned() {
+            tracing::warn!("catchup for epoch {epoch} was abandoned; stopping");
+            return;
+        }
 
         // Signal the other tasks about the success. As above, the snapshot
         // must be present at this point — if not, treat as a catchup failure.
@@ -555,9 +597,8 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     ///
     /// It also sweeps any entry whose channel is closed. A closed channel
     /// means every sender is gone, i.e. the task that claimed the entry died
-    /// without cleaning up (e.g. it was aborted by the `spawn_catchup`
-    /// watchdog while holding entries for intermediate epochs), so nothing
-    /// else can ever complete or remove it.
+    /// without cleaning up (e.g. it panicked while holding entries for
+    /// intermediate epochs), so nothing else can ever complete or remove it.
     fn catchup_cleanup(
         &self,
         req_epoch: EpochNumber,
@@ -567,9 +608,14 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     ) {
         // Cleanup in case of error
         cancel_epochs.push((req_epoch, epoch_tx));
+        self.cancel_catchups(cancel_epochs, err);
+    }
 
+    /// Evict `cancel_epochs` from the `catchup_map`, sweep any entry whose
+    /// channel is closed, and broadcast the error to waiting tasks.
+    fn cancel_catchups(&self, cancel_epochs: Vec<EpochSender<TYPES>>, err: Error) {
         tracing::error!(
-            "catchup for epoch {req_epoch:?} failed: {err:?}. Canceling catchup for epochs: {:?}",
+            "canceling catchup for epochs {:?}: {err:?}",
             cancel_epochs.iter().map(|(e, _)| e).collect::<Vec<_>>()
         );
 
@@ -618,7 +664,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     async fn fetch_stake_table(
         &self,
         epoch: EpochNumber,
-        progress: &CatchupProgress,
+        progress: &CatchupProgress<TYPES>,
     ) -> Result<Leaf2<TYPES>> {
         let root_epoch = EpochNumber::new(epoch.saturating_sub(2));
         let Ok(root_membership) = self.stake_table_for_epoch(Some(root_epoch)) else {
@@ -788,25 +834,46 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     }
 }
 
-/// Upper bound on a single catchup attempt. Past this the attempt is abandoned
-/// and its `catchup_map` entry evicted so a later request can retry.
-const CATCHUP_ATTEMPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+/// Default upper bound on a single catchup attempt. Past this the attempt is
+/// abandoned — flagged to stop at its next checkpoint, never aborted — and its
+/// `catchup_map` entries are evicted so a later request can retry. Generous,
+/// because a legitimate attempt may walk many epochs and compute a DRB, and a
+/// premature abandonment costs duplicate work.
+const DEFAULT_CATCHUP_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// Records the last checkpoint a catchup attempt passed. The attempt updates
-/// it right before every await, so when the watchdog in `spawn_catchup`
-/// abandons a stuck or dead attempt it can report exactly which step the
-/// attempt never came back from.
-#[derive(Clone)]
-struct CatchupProgress {
+/// State shared between a catchup attempt and its watchdog in `spawn_catchup`.
+struct CatchupProgress<TYPES: NodeType> {
     epoch: EpochNumber,
+    /// The step the attempt is about to block on, updated right before every
+    /// await, so when the attempt is abandoned the watchdog can report
+    /// exactly which step it never came back from.
     last: Arc<Mutex<String>>,
+    /// The `catchup_map` entries the attempt claimed in its discovery loop,
+    /// so the watchdog can evict them and fail their waiters on abandonment.
+    claimed: Arc<Mutex<Vec<EpochSender<TYPES>>>>,
+    /// Set by the watchdog. The attempt checks it at its loop boundaries and
+    /// stops instead of racing the retry it was abandoned in favor of.
+    abandoned: Arc<AtomicBool>,
 }
 
-impl CatchupProgress {
+impl<TYPES: NodeType> Clone for CatchupProgress<TYPES> {
+    fn clone(&self) -> Self {
+        Self {
+            epoch: self.epoch,
+            last: Arc::clone(&self.last),
+            claimed: Arc::clone(&self.claimed),
+            abandoned: Arc::clone(&self.abandoned),
+        }
+    }
+}
+
+impl<TYPES: NodeType> CatchupProgress<TYPES> {
     fn new(epoch: EpochNumber) -> Self {
         Self {
             epoch,
             last: Arc::new(Mutex::new("spawned".to_string())),
+            claimed: Arc::default(),
+            abandoned: Arc::default(),
         }
     }
 
@@ -818,6 +885,31 @@ impl CatchupProgress {
 
     fn last(&self) -> String {
         self.last.lock().clone()
+    }
+
+    /// Record a `catchup_map` entry the attempt claimed. Call while holding
+    /// the map lock that inserted the entry, so the watchdog can never
+    /// observe the entry without the claim.
+    fn claim(&self, epoch: EpochNumber, tx: Sender<Result<EpochMembership<TYPES>>>) {
+        self.claimed.lock().push((epoch, tx));
+    }
+
+    /// Forget a claim after the attempt completed the epoch and removed its
+    /// map entry itself.
+    fn unclaim(&self, epoch: EpochNumber) {
+        self.claimed.lock().retain(|(e, _)| *e != epoch);
+    }
+
+    fn take_claimed(&self) -> Vec<EpochSender<TYPES>> {
+        std::mem::take(&mut *self.claimed.lock())
+    }
+
+    fn abandon(&self) {
+        self.abandoned.store(true, Ordering::Release);
+    }
+
+    fn is_abandoned(&self) -> bool {
+        self.abandoned.load(Ordering::Acquire)
     }
 }
 
@@ -834,38 +926,56 @@ fn spawn_catchup<T: NodeType>(
             let progress = progress.clone();
             async move { coordinator.catchup(epoch, epoch_tx, progress).await }
         });
-        let outcome = match tokio::time::timeout(CATCHUP_ATTEMPT_TIMEOUT, &mut inner).await {
-            // `catchup` ran to completion; it removed its own map entries.
-            Ok(Ok(())) => return,
-            Ok(Err(join_err)) => format!("catchup task died: {join_err}"),
-            Err(_) => {
-                // Cancel the stuck attempt so it stops holding whatever it is
-                // blocked on (e.g. the membership's storage lock), then wait
-                // for it to actually terminate: dropping its future drops the
-                // senders of any intermediate epochs it claimed, which is how
-                // `catchup_cleanup` below recognizes those entries as orphaned.
-                inner.abort();
-                let _ = tokio::time::timeout(CATCHUP_ATTEMPT_TIMEOUT, &mut inner).await;
-                "catchup timed out".to_string()
-            },
-        };
-        // The attempt neither succeeded nor reported failure, so nothing has
-        // evicted its `catchup_map` entries — the requested epoch's and any
-        // intermediate epochs' the discovery loop claimed. Clean up here,
-        // otherwise every later `stake_table_for_epoch` for those epochs is
-        // answered "Catchup already in progress" for the lifetime of the
-        // process. The intermediate entries are recognized by their closed
-        // channels (the aborted attempt's senders are gone) and swept inside
-        // `catchup_cleanup`.
+        let (outcome, still_running) =
+            match tokio::time::timeout(coordinator.catchup_timeout, &mut inner).await {
+                // `catchup` ran to completion; it removed its own map entries.
+                Ok(Ok(())) => return,
+                Ok(Err(join_err)) => (format!("catchup task died: {join_err}"), false),
+                Err(_) => ("catchup timed out".to_string(), true),
+            };
+        // Abandon the attempt WITHOUT aborting it: cancellation could land in
+        // the middle of a multi-step update (a torn membership write, a
+        // leaked `drb_calculation_map` guard) or not land at all (abort
+        // cannot interrupt a synchronously blocked task). Instead flag the
+        // attempt to stop at its next checkpoint, then evict every
+        // `catchup_map` entry it claimed — the requested epoch's and the
+        // intermediate epochs' — and fail their waiters, so later requests
+        // retry instead of being answered "Catchup already in progress" for
+        // the lifetime of the process.
+        progress.abandon();
         let stuck_at = progress.last();
         coordinator.catchup_cleanup(
             epoch,
             epoch_tx,
-            vec![],
+            progress.take_claimed(),
             anytrace::error!(
                 "catchup for epoch {epoch} abandoned: {outcome}; last checkpoint: {stuck_at}"
             ),
         );
+        if !still_running {
+            return;
+        }
+        // The abandoned attempt is still parked on whatever stalled. Wait for
+        // it so its fate shows up in the logs, then evict anything it claimed
+        // between the cleanup above and its termination.
+        match (&mut inner).await {
+            Ok(()) => tracing::warn!(
+                "abandoned catchup for epoch {epoch} eventually stopped; last checkpoint: {}",
+                progress.last()
+            ),
+            Err(join_err) => tracing::error!(
+                "abandoned catchup for epoch {epoch} eventually died: {join_err}; last \
+                 checkpoint: {}",
+                progress.last()
+            ),
+        }
+        let leftovers = progress.take_claimed();
+        if !leftovers.is_empty() {
+            coordinator.cancel_catchups(
+                leftovers,
+                anytrace::error!("catchup for epoch {epoch} was abandoned"),
+            );
+        }
     });
 }
 

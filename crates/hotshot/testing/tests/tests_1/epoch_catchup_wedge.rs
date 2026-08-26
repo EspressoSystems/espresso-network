@@ -91,7 +91,7 @@ enum LoadBehavior {
     /// lock, which is what parked the mainnet nodes inside the discovery loop.
     Hang,
     /// Panics on the first call, killing the spawned catchup task before it can
-    /// run `catchup_cleanup`. Models any way the task can die (panic, cancel).
+    /// run `catchup_cleanup`. Models any way the task can die unexpectedly.
     PanicOnce,
     /// The load itself returns quickly (with "not found"), letting the
     /// epoch-discovery loop claim `catchup_map` entries for the intermediate
@@ -254,7 +254,8 @@ fn setup(behavior: LoadBehavior) -> (WedgeMembership, EpochMembershipCoordinator
         membership.clone(),
         EPOCH_HEIGHT,
         &TestStorage::<WedgeTypes>::default(),
-    );
+    )
+    .with_catchup_timeout(Duration::from_millis(500));
     (membership, coordinator)
 }
 
