@@ -323,6 +323,27 @@ enum ResponseOutcome {
     Failed,
 }
 
+/// Upper bound on a backoff requested by the server via `Retry-After`.
+///
+/// alloy parses the header verbatim with no cap. A provider out of daily quota asks for hours,
+/// and honoring that freezes the L1 snapshot for its whole duration: proposals still go out
+/// against stale L1 references, but `wait_for_l1` never returns, so the node stops voting, and the
+/// stake table fetcher makes no progress across an epoch boundary.
+#[cfg(feature = "node")]
+const MAX_RATE_LIMIT_BACKOFF: Duration = Duration::from_secs(300);
+
+/// How long to back off after a rate limit.
+///
+/// A server-provided delay is capped at [`MAX_RATE_LIMIT_BACKOFF`]. The configured delay is
+/// operator-set and used as-is.
+#[cfg(feature = "node")]
+fn rate_limit_backoff(retry_after: Option<Duration>, configured: Duration) -> Duration {
+    match retry_after {
+        Some(retry_after) => retry_after.min(MAX_RATE_LIMIT_BACKOFF),
+        None => configured,
+    }
+}
+
 /// Score a transport response for provider health.
 ///
 /// A batch is `Failed` if any sub-request errored; no batch callers exist today.
@@ -451,7 +472,7 @@ impl Service<RequestPacket> for SwitchingTransport {
                 // temporarily back off on making requests to the RPC server.
                 current_transport.status.write().rate_limited_until = Some(
                     Instant::now()
-                        + retry_after.unwrap_or_else(|| self_clone.opt.rate_limit_delay()),
+                        + rate_limit_backoff(retry_after, self_clone.opt.rate_limit_delay()),
                 );
                 return result;
             }
@@ -1334,6 +1355,29 @@ mod test {
             classify(&result),
             ResponseOutcome::RateLimited { retry_after: Some(d) } if d == Duration::from_secs(52)
         ));
+    }
+
+    #[test]
+    fn test_rate_limit_backoff_honors_server_value_under_cap() {
+        assert_eq!(
+            rate_limit_backoff(Some(Duration::from_secs(52)), Duration::from_secs(1)),
+            Duration::from_secs(52)
+        );
+    }
+
+    #[test]
+    fn test_rate_limit_backoff_clamps_server_value_over_cap() {
+        assert_eq!(
+            rate_limit_backoff(Some(Duration::from_secs(86400)), Duration::from_secs(1)),
+            MAX_RATE_LIMIT_BACKOFF
+        );
+    }
+
+    /// The configured delay is operator-set, so it is used as-is even beyond the cap.
+    #[test]
+    fn test_rate_limit_backoff_without_server_value_uses_configured_delay() {
+        let configured = MAX_RATE_LIMIT_BACKOFF + Duration::from_secs(1);
+        assert_eq!(rate_limit_backoff(None, configured), configured);
     }
 
     #[test]
