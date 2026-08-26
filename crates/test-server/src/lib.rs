@@ -2,7 +2,8 @@
 
 use tokio::net::TcpListener;
 use url::Url;
-use warp::{Filter, http::StatusCode};
+use warp::Filter;
+pub use warp::http::StatusCode;
 
 /// Serve `filter` on an ephemeral port, returning its base URL (`http://127.0.0.1:<port>/`). The
 /// server runs until the process exits.
@@ -18,9 +19,6 @@ pub async fn serve_on_random_port(
 }
 
 /// Serve every request with the same status, content type, and body.
-///
-/// `content_type` and `body` are `&'static str` because they are captured by the `'static`
-/// filter closure passed to [`serve_on_random_port`].
 pub async fn serve_fixed(
     status: StatusCode,
     content_type: &'static str,

@@ -5091,7 +5091,6 @@ dependencies = [
  "hotshot-query-service",
  "hotshot-query-service-types",
  "hotshot-types",
- "http 1.4.2",
  "humantime",
  "indexmap 2.14.0",
  "insta",

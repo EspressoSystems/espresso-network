@@ -306,8 +306,15 @@ impl SingleTransport {
 
 /// alloy returns a non-2xx response with a parseable JSON-RPC body as `Ok`, so the payload, not
 /// the `Result` arm, decides whether a provider is healthy.
+///
+/// Everything that is not a rate limit is `Failed`, including request-driven rejections a healthy
+/// provider is entitled to return. `Fetcher::fetch_and_update_initial_supply` issues a
+/// full-range `eth_getLogs` that Infura rejects with a 200-wrapped `-32005` before falling back to
+/// chunked scanning; that expected rejection scores a strike against the provider, and the backup
+/// would reject the same query. Distinguishing provider faults from request faults needs an error
+/// taxonomy, which this does not attempt.
 #[cfg(feature = "node")]
-pub(crate) enum ResponseOutcome {
+enum ResponseOutcome {
     Healthy,
     /// Provider is rate limiting. Back off without counting towards failover.
     RateLimited {
@@ -316,25 +323,27 @@ pub(crate) enum ResponseOutcome {
     Failed,
 }
 
+/// Score a transport response for provider health.
+///
+/// A batch is `Failed` if any sub-request errored; no batch callers exist today.
 #[cfg(feature = "node")]
-impl From<&StdResult<ResponsePacket, RpcError<TransportErrorKind>>> for ResponseOutcome {
-    fn from(result: &StdResult<ResponsePacket, RpcError<TransportErrorKind>>) -> Self {
-        match result {
-            Ok(res) if res.is_error() => Self::Failed,
-            Ok(_) => Self::Healthy,
-            Err(RpcError::Transport(TransportErrorKind::HttpError(http_err)))
-                if http_err.is_rate_limit_err() =>
-            {
-                Self::RateLimited { retry_after: None }
-            },
-            Err(RpcError::Transport(TransportErrorKind::HttpErrorWithRetryAfter {
-                error,
-                retry_after,
-            })) if error.is_rate_limit_err() => Self::RateLimited {
-                retry_after: Some(*retry_after),
-            },
-            Err(_) => Self::Failed,
-        }
+fn classify(result: &StdResult<ResponsePacket, RpcError<TransportErrorKind>>) -> ResponseOutcome {
+    use ResponseOutcome::*;
+    match result {
+        Ok(res) if res.is_error() => Failed,
+        Ok(_) => Healthy,
+        Err(RpcError::Transport(TransportErrorKind::HttpError(http_err)))
+            if http_err.is_rate_limit_err() =>
+        {
+            RateLimited { retry_after: None }
+        },
+        Err(RpcError::Transport(TransportErrorKind::HttpErrorWithRetryAfter {
+            error,
+            retry_after,
+        })) if error.is_rate_limit_err() => RateLimited {
+            retry_after: Some(*retry_after),
+        },
+        Err(_) => Failed,
     }
 }
 
@@ -344,14 +353,21 @@ struct FailedResponse<'a>(&'a StdResult<ResponsePacket, RpcError<TransportErrorK
 #[cfg(feature = "node")]
 impl fmt::Display for FailedResponse<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.0 {
-            Ok(res) => match (res.first_error_code(), res.first_error_message()) {
-                (Some(code), Some(message)) => write!(f, "{code}: {message}"),
-                (Some(code), None) => write!(f, "{code}"),
-                (None, _) => write!(f, "ok response with no error payload"),
-            },
-            Err(err) => write!(f, "{err}"),
+        let res = match self.0 {
+            Ok(res) => res,
+            Err(err) => return write!(f, "{err}"),
+        };
+        write!(f, "JSON-RPC error")?;
+        if let Some(code) = res.first_error_code() {
+            write!(f, " {code}")?;
         }
+        if let Some(message) = res.first_error_message() {
+            write!(f, ": {message}")?;
+        }
+        if let Some(data) = res.first_error_data() {
+            write!(f, " (data: {data})")?;
+        }
+        Ok(())
     }
 }
 
@@ -414,7 +430,7 @@ impl Service<RequestPacket> for SwitchingTransport {
             }
 
             let result = current_transport.client.call(req).await;
-            let outcome = ResponseOutcome::from(&result);
+            let outcome = classify(&result);
 
             if matches!(outcome, ResponseOutcome::Healthy) {
                 current_transport.status.write().log_success();
@@ -1205,7 +1221,6 @@ mod test {
         providers::layers::AnvilProvider,
     };
     use espresso_contract_deployer::{Contracts, deploy_fee_contract_proxy};
-    use http::StatusCode;
     use time::OffsetDateTime;
 
     use super::*;
@@ -1229,7 +1244,7 @@ mod test {
     #[test]
     fn test_response_outcome_healthy_on_success() {
         assert!(matches!(
-            ResponseOutcome::from(&ok_packet(fixtures::SUCCESS)),
+            classify(&ok_packet(fixtures::SUCCESS)),
             ResponseOutcome::Healthy
         ));
     }
@@ -1237,7 +1252,7 @@ mod test {
     #[test]
     fn test_response_outcome_alchemy_app_inactive_is_failed() {
         assert!(matches!(
-            ResponseOutcome::from(&ok_packet(fixtures::ALCHEMY_APP_INACTIVE)),
+            classify(&ok_packet(fixtures::ALCHEMY_APP_INACTIVE)),
             ResponseOutcome::Failed
         ));
     }
@@ -1245,7 +1260,7 @@ mod test {
     #[test]
     fn test_response_outcome_alchemy_10_block_range_is_failed() {
         assert!(matches!(
-            ResponseOutcome::from(&ok_packet(fixtures::ALCHEMY_10_BLOCK_RANGE)),
+            classify(&ok_packet(fixtures::ALCHEMY_10_BLOCK_RANGE)),
             ResponseOutcome::Failed
         ));
     }
@@ -1253,7 +1268,7 @@ mod test {
     #[test]
     fn test_response_outcome_block_range_too_large_is_failed() {
         assert!(matches!(
-            ResponseOutcome::from(&ok_packet(fixtures::BLOCK_RANGE_TOO_LARGE)),
+            classify(&ok_packet(fixtures::BLOCK_RANGE_TOO_LARGE)),
             ResponseOutcome::Failed
         ));
     }
@@ -1263,7 +1278,7 @@ mod test {
     #[test]
     fn test_response_outcome_infura_rate_limit_body_is_failed() {
         assert!(matches!(
-            ResponseOutcome::from(&ok_packet(fixtures::INFURA_RATE_LIMIT)),
+            classify(&ok_packet(fixtures::INFURA_RATE_LIMIT)),
             ResponseOutcome::Failed
         ));
     }
@@ -1271,7 +1286,7 @@ mod test {
     #[test]
     fn test_response_outcome_infura_unavailable_is_failed() {
         assert!(matches!(
-            ResponseOutcome::from(&ok_packet(fixtures::INFURA_UNAVAILABLE)),
+            classify(&ok_packet(fixtures::INFURA_UNAVAILABLE)),
             ResponseOutcome::Failed
         ));
     }
@@ -1286,10 +1301,7 @@ mod test {
                 message: "Too Many Requests".into(),
                 data: None,
             }));
-        assert!(matches!(
-            ResponseOutcome::from(&result),
-            ResponseOutcome::Failed
-        ));
+        assert!(matches!(classify(&result), ResponseOutcome::Failed));
     }
 
     #[test]
@@ -1302,7 +1314,7 @@ mod test {
                 },
             )));
         assert!(matches!(
-            ResponseOutcome::from(&result),
+            classify(&result),
             ResponseOutcome::RateLimited { retry_after: None }
         ));
     }
@@ -1319,7 +1331,7 @@ mod test {
             }),
         );
         assert!(matches!(
-            ResponseOutcome::from(&result),
+            classify(&result),
             ResponseOutcome::RateLimited { retry_after: Some(d) } if d == Duration::from_secs(52)
         ));
     }
@@ -1333,10 +1345,7 @@ mod test {
                     body: String::new(),
                 },
             )));
-        assert!(matches!(
-            ResponseOutcome::from(&result),
-            ResponseOutcome::Failed
-        ));
+        assert!(matches!(classify(&result), ResponseOutcome::Failed));
     }
 
     #[test]
@@ -1782,7 +1791,7 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_failover_on_dead_provider_with_json_rpc_error_body() {
         let dead_provider = test_server::serve_fixed(
-            StatusCode::FORBIDDEN,
+            test_server::StatusCode::FORBIDDEN,
             "application/json",
             fixtures::ALCHEMY_APP_INACTIVE,
         )
@@ -1797,10 +1806,12 @@ mod test {
         .connect(vec![dead_provider, anvil.endpoint_url()])
         .expect("Failed to create L1 client");
 
-        for _ in 0..3 {
-            let _ = provider.get_block_number().await;
+        for _ in 0..2 {
+            provider.get_block_number().await.unwrap_err();
+            assert_eq!(get_failover_index(&provider), 0);
         }
 
+        provider.get_block_number().await.unwrap_err();
         assert_eq!(
             get_failover_index(&provider),
             1,
