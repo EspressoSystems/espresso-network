@@ -316,23 +316,12 @@ pub(crate) enum ResponseOutcome {
     Failed,
 }
 
-/// HTTP status for "Too Many Requests". Also matched as a JSON-RPC code, since a proxy may echo
-/// the status into the error payload.
-#[cfg(feature = "node")]
-const TOO_MANY_REQUESTS: i64 = 429;
-
 #[cfg(feature = "node")]
 impl From<&StdResult<ResponsePacket, RpcError<TransportErrorKind>>> for ResponseOutcome {
     fn from(result: &StdResult<ResponsePacket, RpcError<TransportErrorKind>>) -> Self {
         match result {
-            Ok(res) => match res.first_error_code() {
-                None => Self::Healthy,
-                Some(code) if code == TOO_MANY_REQUESTS => Self::RateLimited { retry_after: None },
-                Some(_) => Self::Failed,
-            },
-            Err(RpcError::ErrorResp(e)) if e.code == TOO_MANY_REQUESTS => {
-                Self::RateLimited { retry_after: None }
-            },
+            Ok(res) if res.is_error() => Self::Failed,
+            Ok(_) => Self::Healthy,
             Err(RpcError::Transport(TransportErrorKind::HttpError(http_err)))
                 if http_err.is_rate_limit_err() =>
             {
@@ -1287,19 +1276,10 @@ mod test {
         ));
     }
 
-    // Synthetic body: no captured provider response carries JSON-RPC code 429 (alchemy sends
-    // -32600, infura sends -32005), but the classifier still matches it if one ever does.
+    // No captured provider response has ever carried JSON-RPC code 429 (alchemy sends -32600,
+    // infura sends -32005); `ErrorResp` is not rate-limit signal here regardless of code.
     #[test]
-    fn test_response_outcome_ok_wrapped_429_is_rate_limited() {
-        let body = r#"{"jsonrpc":"2.0","id":1,"error":{"code":429,"message":"Too Many Requests"}}"#;
-        assert!(matches!(
-            ResponseOutcome::from(&ok_packet(body)),
-            ResponseOutcome::RateLimited { retry_after: None }
-        ));
-    }
-
-    #[test]
-    fn test_response_outcome_error_resp_429_is_rate_limited() {
+    fn test_response_outcome_error_resp_is_failed() {
         let result: StdResult<ResponsePacket, RpcError<TransportErrorKind>> =
             Err(RpcError::ErrorResp(alloy::rpc::json_rpc::ErrorPayload {
                 code: 429,
@@ -1308,7 +1288,7 @@ mod test {
             }));
         assert!(matches!(
             ResponseOutcome::from(&result),
-            ResponseOutcome::RateLimited { retry_after: None }
+            ResponseOutcome::Failed
         ));
     }
 
