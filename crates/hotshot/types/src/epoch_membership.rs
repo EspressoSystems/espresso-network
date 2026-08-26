@@ -955,20 +955,31 @@ fn spawn_catchup<T: NodeType>(
         if !still_running {
             return;
         }
-        // The abandoned attempt is still parked on whatever stalled. Wait for
-        // it so its fate shows up in the logs, then evict anything it claimed
-        // between the cleanup above and its termination.
-        match (&mut inner).await {
-            Ok(()) => tracing::warn!(
+        // The abandoned attempt is still parked on whatever stalled. Watch it
+        // for one more timeout so its fate shows up in the logs; past that,
+        // give up watching so the watchdog does not park alongside it forever.
+        match tokio::time::timeout(coordinator.catchup_timeout, &mut inner).await {
+            Ok(Ok(())) => tracing::warn!(
                 "abandoned catchup for epoch {epoch} eventually stopped; last checkpoint: {}",
                 progress.last()
             ),
-            Err(join_err) => tracing::error!(
+            Ok(Err(join_err)) => tracing::error!(
                 "abandoned catchup for epoch {epoch} eventually died: {join_err}; last \
                  checkpoint: {}",
                 progress.last()
             ),
+            Err(_) => tracing::error!(
+                "abandoned catchup for epoch {epoch} is still parked; giving up watching it; last \
+                 checkpoint: {}",
+                progress.last()
+            ),
         }
+        // Evict anything the attempt claimed between the cleanup above and
+        // now. A still-parked attempt cannot have claimed anything — there is
+        // no await between a claim and the next abandoned-check — and if it
+        // wakes and claims after we stop watching, its return drops the
+        // senders, so the closed-channel sweep at the next cleanup frees the
+        // entry.
         let leftovers = progress.take_claimed();
         if !leftovers.is_empty() {
             coordinator.cancel_catchups(
