@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, sync::Arc};
 #[cfg(feature = "node")]
-use std::{cmp::min, fmt, num::NonZeroUsize, pin::Pin, result::Result as StdResult, time::Instant};
+use std::{cmp::min, num::NonZeroUsize, pin::Pin, result::Result as StdResult, time::Instant};
 
 #[cfg(feature = "node")]
 use alloy::{
@@ -12,7 +12,7 @@ use alloy::{
         client::RpcClient,
         json_rpc::{RequestPacket, ResponsePacket},
     },
-    transports::{RpcError, TransportErrorKind, http::Http},
+    transports::{HttpError, RpcError, TransportErrorKind, http::Http},
 };
 use alloy::{
     primitives::{B256, U256},
@@ -307,12 +307,8 @@ impl SingleTransport {
 /// alloy returns a non-2xx response with a parseable JSON-RPC body as `Ok`, so the payload, not
 /// the `Result` arm, decides whether a provider is healthy.
 ///
-/// Everything that is not a rate limit is `Failed`, including request-driven rejections a healthy
-/// provider is entitled to return. `Fetcher::fetch_and_update_initial_supply` issues a
-/// full-range `eth_getLogs` that Infura rejects with a 200-wrapped `-32005` before falling back to
-/// chunked scanning; that expected rejection scores a strike against the provider, and the backup
-/// would reject the same query. Distinguishing provider faults from request faults needs an error
-/// taxonomy, which this does not attempt.
+/// TODO: request-driven rejections the backup would reject the same way are also `Failed`.
+/// Separating provider faults from request faults needs an error taxonomy.
 #[cfg(feature = "node")]
 enum ResponseOutcome {
     Healthy,
@@ -323,19 +319,13 @@ enum ResponseOutcome {
     Failed,
 }
 
-/// Upper bound on a backoff requested by the server via `Retry-After`.
-///
-/// alloy parses the header verbatim with no cap. A provider out of daily quota asks for hours,
-/// and honoring that freezes the L1 snapshot for its whole duration: proposals still go out
-/// against stale L1 references, but `wait_for_l1` never returns, so the node stops voting, and the
-/// stake table fetcher makes no progress across an epoch boundary.
+/// Cap on a server-requested `Retry-After`, which alloy parses verbatim. Honoring a
+/// daily-quota delay of hours would stall `wait_for_l1` for its whole duration. Matches alloy's
+/// own `MAX_BACKOFF_HINT`.
 #[cfg(feature = "node")]
 const MAX_RATE_LIMIT_BACKOFF: Duration = Duration::from_secs(300);
 
-/// How long to back off after a rate limit.
-///
-/// A server-provided delay is capped at [`MAX_RATE_LIMIT_BACKOFF`]. The configured delay is
-/// operator-set and used as-is.
+/// The configured delay is operator-set and used as-is; a server-provided one is capped.
 #[cfg(feature = "node")]
 fn rate_limit_backoff(retry_after: Option<Duration>, configured: Duration) -> Duration {
     match retry_after {
@@ -344,51 +334,24 @@ fn rate_limit_backoff(retry_after: Option<Duration>, configured: Duration) -> Du
     }
 }
 
-/// Score a transport response for provider health.
-///
-/// A batch is `Failed` if any sub-request errored; no batch callers exist today.
+/// Score a transport response for provider health. A batch is `Failed` if any sub-request
+/// errored; no batch callers exist today.
 #[cfg(feature = "node")]
 fn classify(result: &StdResult<ResponsePacket, RpcError<TransportErrorKind>>) -> ResponseOutcome {
     use ResponseOutcome::*;
     match result {
         Ok(res) if res.is_error() => Failed,
         Ok(_) => Healthy,
-        Err(RpcError::Transport(TransportErrorKind::HttpError(http_err)))
-            if http_err.is_rate_limit_err() =>
+        Err(RpcError::Transport(kind))
+            if kind
+                .as_http_error()
+                .is_some_and(HttpError::is_rate_limit_err) =>
         {
-            RateLimited { retry_after: None }
-        },
-        Err(RpcError::Transport(TransportErrorKind::HttpErrorWithRetryAfter {
-            error,
-            retry_after,
-        })) if error.is_rate_limit_err() => RateLimited {
-            retry_after: Some(*retry_after),
+            RateLimited {
+                retry_after: kind.retry_after(),
+            }
         },
         Err(_) => Failed,
-    }
-}
-
-#[cfg(feature = "node")]
-struct FailedResponse<'a>(&'a StdResult<ResponsePacket, RpcError<TransportErrorKind>>);
-
-#[cfg(feature = "node")]
-impl fmt::Display for FailedResponse<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let res = match self.0 {
-            Ok(res) => res,
-            Err(err) => return write!(f, "{err}"),
-        };
-        write!(f, "JSON-RPC error")?;
-        if let Some(code) = res.first_error_code() {
-            write!(f, " {code}")?;
-        }
-        if let Some(message) = res.first_error_message() {
-            write!(f, ": {message}")?;
-        }
-        if let Some(data) = res.first_error_data() {
-            write!(f, " (data: {data})")?;
-        }
-        Ok(())
     }
 }
 
@@ -479,7 +442,7 @@ impl Service<RequestPacket> for SwitchingTransport {
 
             tracing::warn!(
                 url = %current_transport.redacted_url,
-                err = %FailedResponse(&result),
+                err = ?result,
                 "L1 client error"
             );
 
