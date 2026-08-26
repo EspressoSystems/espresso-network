@@ -1149,36 +1149,14 @@ impl<T: NodeType> Consensus<T> {
             }
         }
 
-        outbox.push_back(ConsensusOutput::RequestState(StateRequest {
-            view: proposal.view_number(),
-            parent_view: proposal.justify_qc.view_number(),
-            epoch,
-            block: proposal.block_header.block_number().into(),
-            proposal: proposal.clone(),
-            parent_commitment: proposal.justify_qc.data().leaf_commit,
-            payload_size,
-        }));
-
-        let epoch = if is_last_block(block_number, *self.epoch_height) {
-            epoch + 1
-        } else {
-            epoch
-        };
+        self.request_state(&proposal, payload_size, outbox);
 
         outbox.push_back(ConsensusOutput::ProposalValidated {
             proposal: signed_proposal,
             sender,
         });
 
-        if self.is_leader(view + 1, epoch) {
-            outbox.push_back(ConsensusOutput::RequestBlockAndHeader(
-                BlockAndHeaderRequest {
-                    view: view + 1,
-                    epoch,
-                    parent_proposal: proposal,
-                },
-            ));
-        }
+        self.request_block_and_header_if_next_leader(&proposal, outbox);
 
         Protocol::Continue
     }
@@ -1203,8 +1181,66 @@ impl<T: NodeType> Consensus<T> {
         self.leaves.insert(view, proposal.clone().into());
         self.signed_proposals.insert(view, signed_proposal);
         self.request_parent_proposal_if_missing(&proposal, outbox);
-        self.proposals.insert(view, proposal);
+        self.proposals.insert(view, proposal.clone());
         self.adopt_certified_drb(view);
+
+        let payload_size = self.payload_size_for(&proposal);
+        self.request_state(&proposal, payload_size, outbox);
+        self.request_block_and_header_if_next_leader(&proposal, outbox);
+    }
+
+    fn request_state(
+        &self,
+        proposal: &Proposal<T>,
+        payload_size: u32,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) {
+        outbox.push_back(ConsensusOutput::RequestState(StateRequest {
+            view: proposal.view_number(),
+            parent_view: proposal.justify_qc.view_number(),
+            epoch: proposal.epoch,
+            block: proposal.block_header.block_number().into(),
+            proposal: proposal.clone(),
+            parent_commitment: proposal.justify_qc.data().leaf_commit,
+            payload_size,
+        }));
+    }
+
+    /// A fetched proposal may have no share. A quorum already certified it,
+    /// size checks included, so zero only skips this node's block-size checks.
+    fn payload_size_for(&self, proposal: &Proposal<T>) -> u32 {
+        let view = proposal.view_number();
+        if let Some(share) = self.vid_shares.get(&view) {
+            return share.payload_byte_len();
+        }
+        let VidCommitment::V2(commitment) = proposal.block_header.payload_commitment() else {
+            return 0;
+        };
+        self.unpaired_vid_shares
+            .get(&(view, commitment))
+            .map_or(0, |share| share.payload_byte_len())
+    }
+
+    fn request_block_and_header_if_next_leader(
+        &self,
+        proposal: &Proposal<T>,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) {
+        let view = proposal.view_number();
+        let epoch = if is_last_block(proposal.block_header.block_number(), *self.epoch_height) {
+            proposal.epoch + 1
+        } else {
+            proposal.epoch
+        };
+        if self.is_leader(view + 1, epoch) {
+            outbox.push_back(ConsensusOutput::RequestBlockAndHeader(
+                BlockAndHeaderRequest {
+                    view: view + 1,
+                    epoch,
+                    parent_proposal: proposal.clone(),
+                },
+            ));
+        }
     }
 
     fn request_parent_proposal_if_missing(
