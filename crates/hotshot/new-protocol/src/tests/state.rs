@@ -426,3 +426,56 @@ async fn test_interleaved_state_and_header_requests() {
         "Header request should complete"
     );
 }
+
+/// A decide that garbage-collects a still-running validation must not orphan
+/// the requests queued behind it: view 2's own validation queued on view 1,
+/// and the header for view 3 (led by this node) queued on view 2.
+#[tokio::test]
+async fn test_gc_releases_requests_queued_on_aborted_validation() {
+    let mut manager = new_manager().await;
+    let test_data = TestData::new(4).await;
+
+    // Spawned but not yet polled, so view 1 is still in flight at the gc.
+    manager.request_state(make_state_request(&test_data.views[0]));
+    manager.request_state(make_state_request(&test_data.views[1]));
+    manager.request_header(make_header_request(
+        &test_data.views[1],
+        test_data.views[2].view_number,
+    ));
+
+    manager.gc(test_data.views[1].view_number);
+
+    let mut outputs = Vec::new();
+    while let Some(output) = manager.next().await {
+        outputs.push(output);
+    }
+    assert_eq!(
+        count_state_verified(&outputs),
+        1,
+        "view 2 should validate against a stub of the aborted view 1"
+    );
+    assert_eq!(
+        count_header_created(&outputs),
+        1,
+        "the header for view 3 should be built once view 2's state lands"
+    );
+}
+
+/// No stub is seeded for an aborted validation nothing is queued on.
+#[tokio::test]
+async fn test_gc_aborts_stale_validation_without_dependents() {
+    let mut manager = new_manager().await;
+    let test_data = TestData::new(3).await;
+
+    manager.request_state(make_state_request(&test_data.views[0]));
+    manager.gc(test_data.views[1].view_number);
+
+    assert!(
+        manager.next().await.is_none(),
+        "the aborted validation should produce no output"
+    );
+    assert!(
+        !manager.validated_contains_view(test_data.views[0].view_number),
+        "no stub should be seeded for a view nothing is queued on"
+    );
+}
