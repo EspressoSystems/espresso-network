@@ -335,11 +335,16 @@ where
 }
 
 /// Add the routes that every mode serves regardless of which API modules are enabled:
-/// `/`, `/healthcheck`, `/v1/{module}/healthcheck`, and `/version`. Callers apply CORS.
+/// `/`, `/healthcheck`, `/v1/healthcheck`, `/v2/healthcheck`, `/v1/{module}/healthcheck`, and
+/// `/version`. Callers apply CORS.
 pub(crate) fn with_top_level_routes(router: Router) -> Router {
     router
         .route("/", get(redirect_to_docs))
         .route("/healthcheck", get(healthcheck))
+        // Clients configured with a versioned base URL resolve `healthcheck` against it, so each
+        // version prefix answers with the same app health as the unversioned route.
+        .route("/v1/healthcheck", get(healthcheck))
+        .route("/v2/healthcheck", get(healthcheck))
         .route("/v1/{module}/healthcheck", get(module_healthcheck))
         .route("/version", get(version))
 }
@@ -3960,6 +3965,13 @@ mod tests {
     }
 
     #[test]
+    fn rewrite_legacy_uri_maps_versioned_healthchecks() {
+        assert_eq!(rewritten_uri("/v1/healthcheck"), "/v1/healthcheck");
+        assert_eq!(rewritten_uri("/v2/healthcheck"), "/v2/healthcheck");
+        assert_eq!(rewritten_uri("/v0/healthcheck"), "/v1/healthcheck");
+    }
+
+    #[test]
     fn rewrite_legacy_uri_preserves_query_string() {
         assert_eq!(
             rewritten_uri("/availability/leaf/1?foo=bar"),
@@ -4851,6 +4863,13 @@ mod tests {
             get(&router, "/v1/status/healthcheck", "application/json").await,
             br#""available""#
         );
+        for uri in ["/v1/healthcheck", "/v2/healthcheck"] {
+            assert_eq!(
+                get(&router, uri, "application/json").await,
+                br#"{"status":"available","modules":{}}"#,
+                "{uri} should serve the app health, not the module shape"
+            );
+        }
 
         // vbs field order (status ordinal, then modules map) must not change either: surf-disco
         // clients default to `Accept: application/octet-stream`.
@@ -4878,6 +4897,24 @@ mod tests {
                 status: TideHealthStatus::Available,
                 modules: BTreeMap::new(),
             }
+        );
+    }
+
+    /// Adding `/v1/healthcheck` on top of the real v1 route table would panic if it collided with
+    /// a declared route, so this also guards against a future single-segment `/v1/{param}`.
+    #[tokio::test]
+    async fn versioned_healthcheck_coexists_with_v1_routes() {
+        let router = with_top_level_routes(create_router_v1(MockState));
+        let req = Request::builder()
+            .uri("/v1/healthcheck")
+            .header(header::ACCEPT, "application/json")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router, req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            body_string(resp).await,
+            r#"{"status":"available","modules":{}}"#
         );
     }
 

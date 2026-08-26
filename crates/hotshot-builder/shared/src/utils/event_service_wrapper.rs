@@ -39,21 +39,32 @@ impl<Types: NodeType, ApiVer: StaticVersionType + 'static> EventServiceStream<Ty
     > {
         let client = Client::<hotshot_events_service::events::Error, ApiVer>::new(url.clone());
 
-        timeout(Self::CONNECTION_TIMEOUT, async {
+        let mut last_err = None;
+        let health = timeout(Self::CONNECTION_TIMEOUT, async {
             loop {
-                match client.healthcheck::<HealthStatus>().await {
+                // Absolute path: the base URL may include a version prefix (e.g. `/v1`), which
+                // serves the event stream but has no healthcheck route of its own.
+                match client.get::<HealthStatus>("/healthcheck").send().await {
                     Ok(_) => break,
                     Err(err) => {
-                        tracing::debug!(?err, "Healthcheck failed, retrying");
+                        tracing::debug!(%err, "Healthcheck failed, retrying");
+                        last_err = Some(err);
                     },
                 }
                 sleep(Self::RETRY_PERIOD).await;
             }
         })
-        .await
-        .context("Couldn't connect to hotshot events API")?;
+        .await;
+        health.with_context(|| {
+            format!(
+                "Couldn't connect to hotshot events API at {url}: no successful healthcheck \
+                 within {:?}: {}",
+                Self::CONNECTION_TIMEOUT,
+                last_err.map_or_else(|| "no response".to_string(), |err| err.to_string()),
+            )
+        })?;
 
-        tracing::info!("Builder client connected to the hotshot events API");
+        tracing::info!(%url, "Builder events API healthcheck passed");
 
         // Create a new [`WebSocketConfig`]. We trust the events service on our nodes to not
         // send us malicious messages.
@@ -61,10 +72,14 @@ impl<Types: NodeType, ApiVer: StaticVersionType + 'static> EventServiceStream<Ty
             .max_message_size(None)
             .max_frame_size(None);
 
-        Ok(client
+        let connection = client
             .socket_with_config("hotshot-events/events", websocket_config)
             .subscribe::<Event<Types>>()
-            .await?)
+            .await
+            .with_context(|| format!("failed to subscribe to hotshot events stream at {url}"))?;
+
+        tracing::info!(%url, "Builder client connected to the hotshot events API");
+        Ok(connection)
     }
 
     /// Establish initial connection to the events service at `api_url`
@@ -85,7 +100,7 @@ impl<Types: NodeType, ApiVer: StaticVersionType + 'static> EventServiceStream<Ty
                                 return Some((event, this));
                             },
                             Ok(Some(Err(err))) => {
-                                warn!(?err, "Error in event stream");
+                                warn!(%err, "Error in event stream");
                                 let fut = Self::connect_inner(this.api_url.clone());
                                 let _ =
                                     std::mem::replace(&mut this.connection, Right(Box::pin(fut)));
@@ -114,7 +129,7 @@ impl<Types: NodeType, ApiVer: StaticVersionType + 'static> EventServiceStream<Ty
                             continue;
                         },
                         Err(err) => {
-                            error!(?err, "Error while reconnecting, will retry in a while");
+                            error!(err = %format!("{err:#}"), "Error while reconnecting, will retry in a while");
                             sleep(Self::RETRY_PERIOD).await;
                             let fut = Self::connect_inner(this.api_url.clone());
                             let _ = std::mem::replace(&mut this.connection, Right(Box::pin(fut)));

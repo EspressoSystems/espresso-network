@@ -36,6 +36,8 @@ use hotshot_new_protocol::message::{
     EpochChangeMessage, Message as NewProtocolMessage, MessageType, ProposalFetchMessage,
     ProposalFetchRequest, ProposalMessage, TimeoutVoteMessage, TransactionMessage, Unchecked,
     Validated, Vote1,
+    fetch::{Request, Response},
+    payload::{PayloadFetchMessage, PayloadRequestBody, PayloadResponseBody},
 };
 use hotshot_types::{
     PeerConfig,
@@ -602,6 +604,7 @@ async fn reference_new_protocol_messages() -> Vec<NewProtocolMessage<SeqTypes, V
         0,
     )
     .unwrap();
+    let payload_commitment = vid_share.payload_commitment;
     let vid_fragment = AvidmGf2DisperseShareFragment::<SeqTypes> {
         view_number: view,
         epoch: Some(epoch),
@@ -680,6 +683,25 @@ async fn reference_new_protocol_messages() -> Vec<NewProtocolMessage<SeqTypes, V
                 ProposalFetchRequest::new(view, sender, &priv_key).unwrap(),
             )),
             MessageType::ProposalFetch(ProposalFetchMessage::Response(Box::new(signed_proposal))),
+            MessageType::PayloadFetch(PayloadFetchMessage::Req(Request::new(
+                view,
+                PayloadRequestBody,
+            ))),
+            MessageType::PayloadFetch(PayloadFetchMessage::Res(Response::new(
+                view,
+                PayloadResponseBody::Payload {
+                    commitment: payload_commitment,
+                    data: vec![1, 2, 3],
+                },
+            ))),
+            MessageType::PayloadFetch(PayloadFetchMessage::Res(Response::new(
+                view,
+                PayloadResponseBody::NotAvailable,
+            ))),
+            MessageType::PayloadFetch(PayloadFetchMessage::Res(Response::new(
+                view,
+                PayloadResponseBody::TooLarge,
+            ))),
             // External payloads bypass this envelope on the wire, so this entry pins only the
             // encoding of the variant itself.
             MessageType::External(vec![1, 2, 3]),

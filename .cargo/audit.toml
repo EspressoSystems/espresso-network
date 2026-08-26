@@ -24,4 +24,8 @@ ignore = [
     # rkyv OOB read, only fixed in 0.8 while Push-CDN pins 0.7. Needs unsized `Rc`/`Arc` pointees,
     # which the CDN archived types don't have.
     "RUSTSEC-2026-0235",
+    # h2 queues unbounded empty DATA frames (low severity DoS), fixed only in 0.4.16, which the
+    # hyper 1.x stack here already uses. The vulnerable 0.3 copy comes via Push-CDN -> warp ->
+    # hyper 0.14 and serves only the CDN metrics endpoint; no patched 0.3.x release exists.
+    "RUSTSEC-2026-0258",
 ]

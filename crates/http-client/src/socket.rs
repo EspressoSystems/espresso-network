@@ -108,10 +108,18 @@ impl<E: ClientError, VER: StaticVersionType> SocketRequest<E, VER> {
                 self.url.set_path(location);
                 continue;
             }
-            return Err(E::catch_all(
-                reqwest::StatusCode::BAD_REQUEST,
-                err.to_string(),
-            ));
+            return Err(match err {
+                WsError::Http(res) => {
+                    let status = reqwest::StatusCode::from_u16(res.status().as_u16())
+                        .unwrap_or(reqwest::StatusCode::BAD_REQUEST);
+                    let reason = match res.body().as_deref().filter(|body| !body.is_empty()) {
+                        Some(body) => String::from_utf8_lossy(body).into_owned(),
+                        None => status.to_string(),
+                    };
+                    E::catch_all(status, format!("WS handshake rejected: {reason}"))
+                },
+                err => E::catch_all(reqwest::StatusCode::BAD_REQUEST, err.to_string()),
+            });
         }
         Err(E::catch_all(
             reqwest::StatusCode::BAD_REQUEST,
