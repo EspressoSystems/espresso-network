@@ -1,4 +1,4 @@
-#[cfg(any(feature = "node", test))]
+#[cfg(feature = "node")]
 use std::time::Duration;
 use std::{
     cmp::{max, min},
@@ -1492,10 +1492,11 @@ impl Fetcher {
                         Ok(init_block) => break init_block.to::<u64>(),
                         Err(err) => {
                             if start.elapsed() >= max_retry_duration {
-                                return Err(StakeTableError::L1RetryBudgetExhausted(format!(
-                                    "Failed to retrieve initial block after `{}`: {err}",
-                                    format_duration(max_retry_duration)
-                                )));
+                                return Err(StakeTableError::L1RetryBudgetExhausted {
+                                    operation: "initializedAtBlock".to_string(),
+                                    budget: format_duration(max_retry_duration).to_string(),
+                                    cause: err.to_string(),
+                                });
                             }
                             tracing::warn!(%err, "Failed to retrieve initial block, retrying...");
                             sleep(retry_delay).await;
@@ -1832,11 +1833,10 @@ impl Fetcher {
         let events = match self
             .fetch_and_store_stake_table_events(address, l1_finalized_block_info.number())
             .await
-            .map_err(GetStakeTablesError::L1ClientFetchError)
         {
             Ok(events) => events,
             Err(e) => {
-                bail!("failed to fetch stake table events {e:?}");
+                return Err(e.context("failed to fetch stake table events"));
             },
         };
 
@@ -1911,25 +1911,11 @@ where
             Ok(result) => return Ok(result),
             Err(err) => {
                 if start.elapsed() >= max_duration {
-                    return Err(StakeTableError::L1RetryBudgetExhausted(format!(
-                        r#"
-                    Failed to complete operation `{operation_name}` after `{}`.
-                    error: {err}
-
-
-                    This might be caused by:
-                    - The current block range being too large for your RPC provider.
-                    - The event query returning more data than your RPC allows as
-                      some RPC providers limit the number of events returned.
-                    - RPC provider outage
-
-                    Suggested solution:
-                    - Reduce the value of the environment variable
-                      `ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE` to query smaller ranges.
-                    - Add multiple RPC providers
-                    - Use a different RPC provider with higher rate limits."#,
-                        format_duration(max_duration)
-                    )));
+                    return Err(StakeTableError::L1RetryBudgetExhausted {
+                        operation: operation_name.to_string(),
+                        budget: format_duration(max_duration).to_string(),
+                        cause: err.to_string(),
+                    });
                 }
                 tracing::warn!(%err, "Retrying `{operation_name}` after error");
                 sleep(retry_delay).await;
@@ -1946,7 +1932,7 @@ fn is_l1_retry_budget_exhausted(err: &anyhow::Error) -> bool {
     err.chain().any(|cause| {
         matches!(
             cause.downcast_ref::<StakeTableError>(),
-            Some(StakeTableError::L1RetryBudgetExhausted(_))
+            Some(StakeTableError::L1RetryBudgetExhausted { .. })
         )
     })
 }
@@ -2275,9 +2261,9 @@ mod tests {
         stake_table::{StakeTableContractVersion, sign_address_bls},
     };
     use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
-    use http::StatusCode;
     use pretty_assertions::assert_matches;
     use rstest::rstest;
+    use test_server::StatusCode;
     use versions::{
         DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION,
     };
@@ -3424,36 +3410,6 @@ mod tests {
         .await;
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_large_max_events_range_exhausts_budget() {
-        // decaf stake table contract address
-        let contract_address = "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037";
-
-        let l1 = L1ClientOptions {
-            l1_events_max_retry_duration: Duration::from_secs(30),
-            // max block range for public node rpc is 50000, so every chunk is rejected
-            l1_events_max_block_range: 10_u64.pow(9),
-            l1_retry_delay: Duration::from_secs(1),
-            ..Default::default()
-        }
-        .connect(vec![
-            "https://ethereum-sepolia.publicnode.com".parse().unwrap(),
-        ])
-        .expect("unable to construct l1 client");
-
-        let latest_block = l1.provider.get_block_number().await.unwrap();
-        let err = Fetcher::fetch_events_from_contract(
-            l1,
-            contract_address.parse().unwrap(),
-            None,
-            latest_block,
-        )
-        .await
-        .expect_err("the configured block range exceeds the provider limit");
-
-        assert_matches!(err, StakeTableError::L1RetryBudgetExhausted(_));
-    }
-
     /// A JSON-RPC error body that every request receives, simulating a provider that never
     /// recovers.
     const DEAD_PROVIDER_BODY: &str =
@@ -3482,13 +3438,40 @@ mod tests {
             .await
             .expect_err("provider never recovers");
 
-        assert_matches!(err, StakeTableError::L1RetryBudgetExhausted(_));
+        assert_matches!(err, StakeTableError::L1RetryBudgetExhausted { .. });
         let message = err.to_string();
         assert!(message.contains("boom"), "{message}");
         assert!(
             message.contains("ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE"),
             "{message}"
         );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_retry_exhausts_budget_after_retrying() {
+        let dead_provider = test_server::serve_fixed(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "application/json",
+            DEAD_PROVIDER_BODY,
+        )
+        .await;
+
+        let l1 = L1ClientOptions {
+            l1_events_max_retry_duration: Duration::from_millis(50),
+            l1_retry_delay: Duration::from_millis(5),
+            ..Default::default()
+        }
+        .connect(vec![dead_provider])
+        .expect("unable to construct l1 client");
+
+        // `from_block` is provided so the contract's `initializedAtBlock` call is skipped and
+        // the error comes from `retry`'s `eth_getLogs` loop, which must run for at least one
+        // `l1_retry_delay` before the nonzero budget elapses.
+        let err = Fetcher::fetch_events_from_contract(l1, Address::ZERO, Some(0), 1)
+            .await
+            .expect_err("provider never recovers");
+
+        assert_matches!(err, StakeTableError::L1RetryBudgetExhausted { .. });
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -3512,13 +3495,17 @@ mod tests {
             .await
             .expect_err("provider never recovers");
 
-        assert_matches!(err, StakeTableError::L1RetryBudgetExhausted(_));
+        assert_matches!(err, StakeTableError::L1RetryBudgetExhausted { .. });
     }
 
     #[test]
     fn test_is_l1_retry_budget_exhausted() {
-        let bare: anyhow::Error =
-            StakeTableError::L1RetryBudgetExhausted("budget gone".to_string()).into();
+        let bare: anyhow::Error = StakeTableError::L1RetryBudgetExhausted {
+            operation: "test operation".to_string(),
+            budget: "1s".to_string(),
+            cause: "budget gone".to_string(),
+        }
+        .into();
         assert!(is_l1_retry_budget_exhausted(&bare));
 
         let wrapped = bare.context("while fetching stake table events");

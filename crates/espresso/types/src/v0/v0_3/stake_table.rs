@@ -492,8 +492,16 @@ pub enum StakeTableError {
     EventSortingError(#[from] EventSortingError),
     /// An L1 operation kept failing until its retry budget ran out. Terminal: the caller has
     /// already retried for `ESPRESSO_L1_EVENTS_MAX_RETRY_DURATION` and must not retry in place.
-    #[error("{0}")]
-    L1RetryBudgetExhausted(String),
+    #[error(
+        "L1 operation `{operation}` kept failing for {budget}: {cause}. Check that \
+         ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE is within the provider's `eth_getLogs` limit, and \
+         configure more than one L1 provider"
+    )]
+    L1RetryBudgetExhausted {
+        operation: String,
+        budget: String,
+        cause: String,
+    },
 }
 
 #[derive(Debug, Error)]

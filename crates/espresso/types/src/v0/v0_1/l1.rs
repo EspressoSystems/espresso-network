@@ -186,6 +186,17 @@ pub struct L1ClientOptions {
     /// cases, the error ensures that the node operator can take action instead of the node getting
     /// stuck indefinitely. This is necessary because the stake table is constructed from the
     /// fetched events, and is required for node to participate in consensus.
+    ///
+    /// A budget exhaustion is usually caused by one of:
+    /// - The current block range being too large for the RPC provider.
+    /// - The event query returning more data than the RPC allows, since some providers limit the
+    ///   number of events returned.
+    /// - An RPC provider outage.
+    ///
+    /// To recover:
+    /// - Reduce `ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE` to query smaller ranges.
+    /// - Add multiple RPC providers.
+    /// - Switch to a provider with higher rate limits.
     #[clap(
         long,
         env = "ESPRESSO_L1_EVENTS_MAX_RETRY_DURATION",
