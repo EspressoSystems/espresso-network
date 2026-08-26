@@ -3425,14 +3425,13 @@ mod tests {
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    #[should_panic]
-    async fn test_large_max_events_range_panic() {
+    async fn test_large_max_events_range_exhausts_budget() {
         // decaf stake table contract address
         let contract_address = "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037";
 
         let l1 = L1ClientOptions {
             l1_events_max_retry_duration: Duration::from_secs(30),
-            // max block range for public node rpc is 50000 so this should result in a panic
+            // max block range for public node rpc is 50000, so every chunk is rejected
             l1_events_max_block_range: 10_u64.pow(9),
             l1_retry_delay: Duration::from_secs(1),
             ..Default::default()
@@ -3443,14 +3442,16 @@ mod tests {
         .expect("unable to construct l1 client");
 
         let latest_block = l1.provider.get_block_number().await.unwrap();
-        let _events = Fetcher::fetch_events_from_contract(
+        let err = Fetcher::fetch_events_from_contract(
             l1,
             contract_address.parse().unwrap(),
             None,
             latest_block,
         )
         .await
-        .unwrap();
+        .expect_err("the configured block range exceeds the provider limit");
+
+        assert_matches!(err, StakeTableError::L1RetryBudgetExhausted(_));
     }
 
     /// A JSON-RPC error body that every request receives, simulating a provider that never
