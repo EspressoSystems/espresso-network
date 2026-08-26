@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeMap, HashMap},
     ops::Bound,
     sync::Arc,
+    time::Duration,
 };
 
 use alloy::primitives::{Address, U256};
@@ -53,6 +54,14 @@ use crate::{
 /// catchup.
 pub const RECENT_STAKE_TABLES_LIMIT: u64 = 20;
 
+/// Default for how long `load_stake_table` may spend loading one epoch from
+/// storage — including waiting on `load_from_storage_lock` and the
+/// persistence lock — before reporting the epoch as not persisted, letting
+/// the caller fall back to peer catchup. Bounds the damage of a stalled
+/// persistence query, which would otherwise pin both process-wide locks and
+/// block every epoch's catchup (observed on mainnet 2026-08-14).
+const DEFAULT_STORAGE_READ_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Type to describe DA and Stake memberships.
 #[derive(Clone, Debug)]
 pub struct EpochCommittees {
@@ -61,6 +70,7 @@ pub struct EpochCommittees {
     #[cfg_attr(not(feature = "node"), allow(dead_code))]
     update_fixed_block_reward_lock: Arc<AsyncMutex<()>>,
     load_from_storage_lock: Arc<AsyncMutex<()>>,
+    storage_read_timeout: Duration,
     epoch_height: BlockNumber,
 }
 
@@ -516,8 +526,17 @@ impl EpochCommittees {
             fetcher: Arc::new(fetcher),
             update_fixed_block_reward_lock: Arc::new(AsyncMutex::new(())),
             load_from_storage_lock: Arc::new(AsyncMutex::new(())),
+            storage_read_timeout: DEFAULT_STORAGE_READ_TIMEOUT,
             epoch_height: epoch_height.into(),
         }
+    }
+
+    /// Override how long `load_stake_table` may spend reading one epoch from
+    /// storage before treating it as not persisted. Mostly for tests, which
+    /// need a simulated stalled query to resolve within a test-sized budget.
+    pub fn with_storage_read_timeout(mut self, timeout: Duration) -> Self {
+        self.storage_read_timeout = timeout;
+        self
     }
 
     #[cfg(feature = "node")]
@@ -709,37 +728,68 @@ impl Membership<SeqTypes> for EpochCommittees {
         if self.inner.read().snapshots.contains_key(&epoch) {
             return true;
         }
-        // Ensure there is only one `load_stake_table` at a time:
-        let _guard = self.load_from_storage_lock.lock().await;
-        // Check if someone else won the race:
-        if self.inner.read().snapshots.contains_key(&epoch) {
-            return true;
+        // One short-lived local value; the size skew between variants is fine.
+        #[allow(clippy::large_enum_variant)]
+        enum Read {
+            /// Another task loaded the epoch while we waited for the lock.
+            AlreadyLoaded,
+            /// The epoch is not in storage (or a read failed).
+            NotFound,
+            Loaded(crate::traits::StakeTuple, Option<DrbResult>, Option<Header>),
         }
-        let persistence = self.fetcher.persistence.lock().await;
-        let stake_table = persistence.load_stake(epoch).await;
-        let (validators, block_reward, stake_table_hash) = match stake_table {
-            Ok(Some(stake)) => stake,
-            Ok(None) => return false,
-            Err(err) => {
-                warn!(%err, "failed to load stake table for epoch {epoch} from persistence");
+        // The whole read phase — lock waits included — is bounded: a stalled
+        // persistence query must not pin `load_from_storage_lock` and the
+        // persistence lock indefinitely, or every epoch's catchup blocks
+        // process-wide. Dropping the in-flight reads on timeout is safe;
+        // they are pure point reads.
+        let read = tokio::time::timeout(self.storage_read_timeout, async {
+            // Ensure there is only one `load_stake_table` at a time:
+            let _guard = self.load_from_storage_lock.lock().await;
+            // Check if someone else won the race:
+            if self.inner.read().snapshots.contains_key(&epoch) {
+                return Read::AlreadyLoaded;
+            }
+            let persistence = self.fetcher.persistence.lock().await;
+            let stake = match persistence.load_stake(epoch).await {
+                Ok(Some(stake)) => stake,
+                Ok(None) => return Read::NotFound,
+                Err(err) => {
+                    warn!(%err, "failed to load stake table for epoch {epoch} from persistence");
+                    return Read::NotFound;
+                },
+            };
+            let drb = match persistence.load_drb_result(epoch).await {
+                Ok(drb) => drb,
+                Err(err) => {
+                    warn!(%err, "failed to load drb result for epoch {epoch} from persistence");
+                    None
+                },
+            };
+            let header = match persistence.load_epoch_root(epoch).await {
+                Ok(header) => header,
+                Err(err) => {
+                    warn!(%err, "failed to load epoch root for epoch {epoch} from persistence");
+                    None
+                },
+            };
+            Read::Loaded(stake, drb, header)
+        })
+        .await;
+        let (validators, block_reward, stake_table_hash, drb, header) = match read {
+            Ok(Read::AlreadyLoaded) => return true,
+            Ok(Read::NotFound) => return false,
+            Ok(Read::Loaded((validators, block_reward, stake_table_hash), drb, header)) => {
+                (validators, block_reward, stake_table_hash, drb, header)
+            },
+            Err(_) => {
+                warn!(
+                    %epoch,
+                    timeout = ?self.storage_read_timeout,
+                    "timed out loading stake table from storage; treating it as not persisted"
+                );
                 return false;
             },
         };
-        let drb = match persistence.load_drb_result(epoch).await {
-            Ok(drb) => drb,
-            Err(err) => {
-                warn!(%err, "failed to load drb result for epoch {epoch} from persistence");
-                None
-            },
-        };
-        let header = match persistence.load_epoch_root(epoch).await {
-            Ok(header) => header,
-            Err(err) => {
-                warn!(%err, "failed to load epoch root for epoch {epoch} from persistence");
-                None
-            },
-        };
-        drop(persistence);
         info!(
             %epoch,
             has_drb = drb.is_some(),

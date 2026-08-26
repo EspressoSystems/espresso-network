@@ -91,6 +91,17 @@ impl StalledStakeStore {
     fn epochs_seen(&self) -> HashSet<u64> {
         self.load_stake_epochs.lock().iter().copied().collect()
     }
+
+    /// How many times `load_stake` was entered for `epoch`. A single catchup
+    /// attempt loads each epoch at most once, so a second load of the same
+    /// epoch proves a fresh attempt ran.
+    fn loads_of(&self, epoch: u64) -> usize {
+        self.load_stake_epochs
+            .lock()
+            .iter()
+            .filter(|e| **e == epoch)
+            .count()
+    }
 }
 
 #[async_trait]
@@ -187,7 +198,10 @@ fn setup() -> (Arc<StalledStakeStore>, EpochMembershipCoordinator<SeqTypes>) {
             .public_config()
         })
         .collect();
-    let committees = EpochCommittees::new_stake(peers.clone(), peers, None, fetcher, EPOCH_HEIGHT);
+    let committees = EpochCommittees::new_stake(peers.clone(), peers, None, fetcher, EPOCH_HEIGHT)
+        // Production-sized timeouts would dominate the test budget; the
+        // stalled query still stalls far longer than a real read takes.
+        .with_storage_read_timeout(Duration::from_millis(300));
     // Seeds snapshots for FIRST_EPOCH and FIRST_EPOCH + 1.
     committees.set_first_epoch(EpochNumber::new(FIRST_EPOCH), [0u8; 32]);
 
@@ -309,12 +323,15 @@ async fn catchup_retries_after_persistence_query_stalls() {
         "expected an in-progress error, got: {err:?}"
     );
 
-    // The stalled query will not come back. The coordinator must give up on
-    // that attempt so a fresh one can run; otherwise the node is wedged until
-    // it is restarted and every view it leads times out.
+    // The stalled query will not come back. The attempt must not park on it
+    // forever; it has to give up so a fresh attempt can run — a fresh attempt
+    // is proven by a *second* load of the same epoch, since one attempt loads
+    // each epoch at most once. Otherwise the node is wedged until it is
+    // restarted and every view it leads times out.
+    let stalled_epoch = TARGET_EPOCH - 1;
     let retried = wait_until(RECOVERY_BUDGET, || {
         let _ = coordinator.stake_table_for_epoch(Some(target));
-        store.calls() >= 2
+        store.loads_of(stalled_epoch) >= 2
     })
     .await;
 
@@ -322,8 +339,8 @@ async fn catchup_retries_after_persistence_query_stalls() {
         retried,
         "catchup for {target} was never retried in {RECOVERY_BUDGET:?}: the catchup_map entry is \
          never evicted when load_stake_table parks, so stake_table_for_epoch answers \"Catchup \
-         already in progress\" forever (load_stake calls = {})",
-        store.calls()
+         already in progress\" forever (loads of epoch {stalled_epoch} = {})",
+        store.loads_of(stalled_epoch)
     );
 }
 
@@ -349,11 +366,13 @@ async fn unrelated_epoch_still_reaches_storage_while_one_query_stalls() {
     );
 
     // A different epoch, whose catchup shares nothing with the first except the
-    // storage lock.
+    // storage lock. Its discovery loop starts at OTHER_EPOCH - 1, so a load of
+    // that epoch proves the unrelated catchup got through the locks to storage.
     assert!(coordinator.stake_table_for_epoch(Some(other)).is_err());
+    let other_walk_epoch = OTHER_EPOCH - 1;
     let progressed = wait_until(RECOVERY_BUDGET, || {
         let _ = coordinator.stake_table_for_epoch(Some(other));
-        store.epochs_seen().len() >= 2
+        store.epochs_seen().contains(&other_walk_epoch)
     })
     .await;
 
