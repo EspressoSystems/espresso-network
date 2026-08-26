@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["ApiError","AvailabilityError"]};
+window.SIDEBAR_ITEMS = {"enum":["ApiError","AvailabilityError"],"fn":["classify","to_status"]};

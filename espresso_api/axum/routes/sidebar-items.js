@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"macro":[["path_fn",1]],"mod":["v1","v2"],"struct":["Route"]};
+window.SIDEBAR_ITEMS = {"macro":[["path_fn",1]],"mod":["v1","v2"]};

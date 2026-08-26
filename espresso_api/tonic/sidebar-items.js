@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["create_consensus_service","create_data_service","create_reward_service","map_error"],"struct":["ConsensusServiceImpl","DataServiceImpl","RewardServiceImpl"]};
