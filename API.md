@@ -94,7 +94,7 @@ the mounted v2 router.
 
 ### Rules and caveats
 
-- Field and rpc numbers are frozen once merged. Only make additive changes: new fields, new rpcs, new messages. Never
+- Field and rpc numbers are frozen once released. Only make additive changes: new fields, new rpcs, new messages. Never
   renumber, reuse, or change the type of an existing field.
 - Never edit `src/generated/` by hand; change the protos and rebuild.
 - Only GET bindings are used so far. The generator (`tonic-rest-build`) supports other methods, but decide the
