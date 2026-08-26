@@ -1,6 +1,6 @@
 //! V1 hotshot-events API.
 //!
-//! Mirrors the endpoints defined in `hotshot-events-service/api/hotshot_events.toml`.
+//! Mirrors the endpoints defined in `crates/hotshot-events-service/api/hotshot_events.toml`.
 
 use async_trait::async_trait;
 use futures::stream::BoxStream;
