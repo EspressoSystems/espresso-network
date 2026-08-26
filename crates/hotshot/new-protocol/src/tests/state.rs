@@ -1,10 +1,14 @@
-use std::sync::Arc;
+use std::{
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 
 use hotshot::traits::BlockPayload;
 use hotshot_example_types::{
     block_types::{TestBlockPayload, TestMetadata},
     node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
+    testable_delay::{DelayConfig, DelayOptions, DelaySettings, SupportedTraitTypesForAsyncDelay},
 };
 use hotshot_types::{
     data::{Leaf2, ViewNumber, vid_commitment},
@@ -34,6 +38,7 @@ fn make_state_request(view: &TestView) -> StateRequest<TestTypes> {
         proposal: proposal.clone(),
         parent_commitment: proposal.justify_qc.data().leaf_commit,
         payload_size: 0,
+        received_at: SystemTime::now(),
     }
 }
 
@@ -79,20 +84,19 @@ fn make_header_request(
 }
 
 async fn new_manager() -> StateManager<TestTypes> {
-    let mut manager =
-        StateManager::new(Arc::new(TestInstanceState::default()), test_upgrade_lock());
+    new_manager_with_instance(TestInstanceState::default()).await
+}
+
+async fn new_manager_with_instance(instance: TestInstanceState) -> StateManager<TestTypes> {
+    let mut manager = StateManager::new(Arc::new(instance.clone()), test_upgrade_lock());
     let genesis_state = TestValidatedState::default();
     // Must match the version used by `TestViewGenerator` (which produces the
     // proposals fed to the manager), otherwise the genesis leaf commitment
     // won't match the `parent_commitment` carried by the first proposal's
     // justify_qc.
-    let genesis_leaf = Leaf2::<TestTypes>::genesis(
-        &genesis_state,
-        &TestInstanceState::default(),
-        TEST_VERSIONS.vid2.base,
-    )
-    .await;
-    manager.seed_state(ViewNumber::genesis(), Arc::new(genesis_state), genesis_leaf);
+    let genesis_leaf =
+        Leaf2::<TestTypes>::genesis(&genesis_state, &instance, TEST_VERSIONS.vid2.base).await;
+    manager.seed_state(Arc::new(genesis_state), genesis_leaf);
     manager
 }
 
@@ -191,6 +195,216 @@ async fn test_state_request_missing_parent_retried_after_seed() {
         ),
         "View 2 should validate against the seeded parent state"
     );
+}
+
+/// A failed validation seeds a stub, so a queued child is validated instead of dropped.
+#[tokio::test]
+async fn test_failed_validation_seeds_stub_for_children() {
+    let test_data = TestData::new(3).await;
+    let failing_block =
+        BlockHeader::<TestTypes>::block_number(&test_data.views[0].proposal.data.block_header);
+    let mut manager = new_manager_with_instance(TestInstanceState {
+        failing_block: Some(failing_block),
+        ..Default::default()
+    })
+    .await;
+
+    manager.request_state(make_state_request(&test_data.views[0]));
+    manager.request_state(make_state_request(&test_data.views[1]));
+
+    let first = manager.next().await.expect("view 1 should complete");
+    assert!(
+        matches!(
+            &first,
+            StateManagerOutput::State {
+                response,
+                validated: false,
+            } if response.view == ViewNumber::new(1)
+        ),
+        "view 1 must fail validation"
+    );
+    assert!(
+        manager.validated_contains_view(ViewNumber::new(1)),
+        "a from_header stub must be seeded for the failed leaf"
+    );
+
+    let second = manager.next().await.expect("view 2 should complete");
+    assert!(
+        matches!(
+            &second,
+            StateManagerOutput::State {
+                response,
+                validated: true,
+            } if response.view == ViewNumber::new(2)
+        ),
+        "view 2 must validate against the stub"
+    );
+}
+
+/// Past the parent deadline a queued child validates against the parent's stub,
+/// in parallel with it; the real parent state still lands.
+#[tokio::test(start_paused = true)]
+async fn test_child_proceeds_on_stub_after_parent_deadline() {
+    let test_data = TestData::new(3).await;
+    let validation_delay = Duration::from_millis(500);
+    let mut manager = new_manager_with_instance(slow_validation(validation_delay))
+        .await
+        .with_parent_deadline(Duration::from_millis(50));
+
+    let started = tokio::time::Instant::now();
+    manager.request_state(make_state_request(&test_data.views[0]));
+    manager.request_state(make_state_request(&test_data.views[1]));
+
+    let mut validated = Vec::new();
+    for _ in 0..2 {
+        match manager.next().await.expect("both views complete") {
+            StateManagerOutput::State {
+                response,
+                validated: true,
+            } => validated.push(response.view),
+            other => panic!("unexpected output: {other:?}"),
+        }
+    }
+    assert_eq!(
+        validated,
+        vec![ViewNumber::new(1), ViewNumber::new(2)],
+        "both views validate, the parent first"
+    );
+    assert!(
+        started.elapsed() < validation_delay * 2,
+        "view 2 must not wait for view 1's full validation"
+    );
+    assert!(
+        manager
+            .get_state(ViewNumber::new(1))
+            .is_some_and(|entry| entry.delta.is_some()),
+        "the real parent state replaces the stub"
+    );
+}
+
+/// Without the deadline elapsing, a child still waits for its parent.
+#[tokio::test(start_paused = true)]
+async fn test_child_waits_for_parent_within_deadline() {
+    let test_data = TestData::new(3).await;
+    let validation_delay = Duration::from_millis(500);
+    let mut manager = new_manager_with_instance(slow_validation(validation_delay))
+        .await
+        .with_parent_deadline(Duration::from_secs(5));
+
+    let started = tokio::time::Instant::now();
+    manager.request_state(make_state_request(&test_data.views[0]));
+    manager.request_state(make_state_request(&test_data.views[1]));
+    manager.next().await.expect("view 1 completes");
+    manager.next().await.expect("view 2 completes");
+    assert!(
+        started.elapsed() >= validation_delay * 2,
+        "view 2 must validate against the real parent state, after it"
+    );
+}
+
+fn slow_validation(delay: Duration) -> TestInstanceState {
+    let mut delay_config = DelayConfig::default();
+    delay_config.add_setting(
+        SupportedTraitTypesForAsyncDelay::ValidatedState,
+        &DelaySettings {
+            delay_option: DelayOptions::Fixed,
+            fixed_time_in_milliseconds: delay.as_millis() as u64,
+            ..Default::default()
+        },
+    );
+    TestInstanceState::new(delay_config)
+}
+
+/// A validation against a stub parent is catchup-bound, so its descendants
+/// are released up front: the next leader's header and a child proposal
+/// proceed against this proposal's stub at once, not after the deadline.
+#[tokio::test(start_paused = true)]
+async fn test_descendants_of_catchup_bound_validation_released_at_once() {
+    let test_data = TestData::new(4).await;
+    let validation_delay = Duration::from_millis(500);
+    let mut manager = new_manager_with_instance(slow_validation(validation_delay))
+        .await
+        .with_parent_deadline(Duration::from_secs(5));
+
+    // View 1 is known by its header only, as after a restart or a failed validation.
+    manager.seed_from_header(test_data.views[0].proposal.data.clone());
+
+    let started = tokio::time::Instant::now();
+    manager.request_state(make_state_request(&test_data.views[1]));
+    manager.request_header(make_header_request(
+        &test_data.views[1],
+        test_data.views[2].view_number,
+    ));
+    manager.request_state(make_state_request(&test_data.views[2]));
+
+    let view_2_commit = proposal_commitment(&test_data.views[1].proposal.data);
+    assert!(
+        !manager.pending_contains_commitment(&view_2_commit),
+        "nothing waits on view 2's catchup-bound validation"
+    );
+
+    let header = manager.next().await.expect("header completes");
+    assert!(
+        matches!(
+            header,
+            StateManagerOutput::Header {
+                header: Some(_),
+                ..
+            }
+        ),
+        "the header is created before any validation finishes"
+    );
+    assert!(started.elapsed() < validation_delay);
+
+    let mut validated = Vec::new();
+    for _ in 0..2 {
+        match manager.next().await.expect("both views complete") {
+            StateManagerOutput::State {
+                response,
+                validated: true,
+            } => validated.push(response.view),
+            other => panic!("unexpected output: {other:?}"),
+        }
+    }
+    validated.sort();
+    assert_eq!(validated, vec![ViewNumber::new(2), ViewNumber::new(3)]);
+    assert!(
+        started.elapsed() < validation_delay * 2,
+        "view 3 must validate in parallel with view 2"
+    );
+    assert!(
+        manager
+            .get_state(ViewNumber::new(2))
+            .is_some_and(|entry| entry.delta.is_some()),
+        "the real state for view 2 replaces its stub"
+    );
+}
+
+/// The state a catchup-bound validation yields is not itself a stub, so its
+/// children wait for their parent as usual.
+#[tokio::test(start_paused = true)]
+async fn test_child_of_state_validated_against_stub_waits() {
+    let test_data = TestData::new(4).await;
+    let validation_delay = Duration::from_millis(500);
+    let mut manager = new_manager_with_instance(slow_validation(validation_delay))
+        .await
+        .with_parent_deadline(Duration::from_secs(5));
+
+    manager.seed_from_header(test_data.views[0].proposal.data.clone());
+    manager.request_state(make_state_request(&test_data.views[1]));
+    manager.next().await.expect("view 2 completes");
+
+    let started = tokio::time::Instant::now();
+    manager.request_state(make_state_request(&test_data.views[2]));
+    manager.request_state(make_state_request(&test_data.views[3]));
+    let view_3_commit = proposal_commitment(&test_data.views[2].proposal.data);
+    assert!(
+        manager.pending_contains_commitment(&view_3_commit),
+        "view 4 waits on view 3, whose parent state is real"
+    );
+    manager.next().await.expect("view 3 completes");
+    manager.next().await.expect("view 4 completes");
+    assert!(started.elapsed() >= validation_delay * 2);
 }
 
 /// State request with seeded genesis parent spawns validation and produces output.

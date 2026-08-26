@@ -48,6 +48,8 @@ versions = { workspace = true }
 [dev-dependencies]
 bitvec = { workspace = true }
 quickcheck = { workspace = true }
+# Paused time in state-manager tests.
+tokio = { workspace = true, features = ["test-util"] }
 vbs = { workspace = true }
 # Enables `vid/testing` for tests only: constructs non-codeword dispersals to
 # exercise the unrecoverable VID reconstruction path.

@@ -4,7 +4,10 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{sync::Arc, time::Instant};
+use std::{
+    sync::Arc,
+    time::{Instant, SystemTime},
+};
 
 use async_broadcast::{InactiveReceiver, Sender};
 use chrono::Utc;
@@ -362,6 +365,7 @@ pub(crate) async fn update_shared_state<TYPES: NodeType>(
             vid_share.data.payload_byte_len(),
             version,
             *view_number,
+            SystemTime::now(),
         )
         .await
         .wrap()

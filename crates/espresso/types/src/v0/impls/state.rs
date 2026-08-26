@@ -1,4 +1,4 @@
-use std::ops::Add;
+use std::{ops::Add, time::SystemTime};
 
 use alloy::primitives::{Address, U256};
 use anyhow::{Context, bail};
@@ -560,7 +560,8 @@ pub(crate) struct ValidatedTransition<'a> {
     proposal: Proposal<'a>,
     total_rewards_distributed: Option<RewardAmount>,
     version: Version,
-    validation_start_time: OffsetDateTime,
+    /// Anchor for the timestamp drift check.
+    received_at: OffsetDateTime,
     epoch_height: Option<u64>,
     leader_index: Option<usize>,
 }
@@ -574,7 +575,7 @@ impl<'a> ValidatedTransition<'a> {
         proposal: Proposal<'a>,
         total_rewards_distributed: Option<RewardAmount>,
         version: Version,
-        validation_start_time: OffsetDateTime,
+        received_at: OffsetDateTime,
         epoch_height: Option<u64>,
         leader_index: Option<usize>,
     ) -> Self {
@@ -589,7 +590,7 @@ impl<'a> ValidatedTransition<'a> {
             proposal,
             total_rewards_distributed,
             version,
-            validation_start_time,
+            received_at,
             epoch_height,
             leader_index,
         }
@@ -760,8 +761,7 @@ impl<'a> ValidatedTransition<'a> {
         self.proposal
             .validate_timestamp_non_dec(self.parent.timestamp())?;
 
-        self.proposal
-            .validate_timestamp_drift(self.validation_start_time)?;
+        self.proposal.validate_timestamp_drift(self.received_at)?;
 
         Ok(())
     }
@@ -1317,6 +1317,7 @@ impl HotShotState<SeqTypes> for ValidatedState {
         payload_byte_len: u32,
         version: Version,
         view_number: u64,
+        received_at: SystemTime,
     ) -> Result<(Self, Self::Delta), Self::Error> {
         // The L1 deposit fetch and the wait for the proposal's L1 blocks require an L1 client.
         #[cfg(not(feature = "node"))]
@@ -1325,11 +1326,7 @@ impl HotShotState<SeqTypes> for ValidatedState {
         }
         #[cfg(feature = "node")]
         {
-            // Preferably we would do all validation that does not require catchup first, but this
-            // would require some refactoring of the header validation code that is out of scope for
-            // now. Record the time when validation started to later use it to validate the
-            // timestamp drift.
-            let validation_start_time = OffsetDateTime::now_utc();
+            let received_at = OffsetDateTime::from(received_at);
 
             let (validated_state, delta, total_rewards_distributed) = self
                 // TODO We can add this logic to `ValidatedTransition` or do something similar to that here.
@@ -1361,7 +1358,7 @@ impl HotShotState<SeqTypes> for ValidatedState {
                 Proposal::new(proposed_header, payload_byte_len),
                 total_rewards_distributed,
                 version,
-                validation_start_time,
+                received_at,
                 instance.epoch_height,
                 leader_index,
             )
@@ -1583,7 +1580,10 @@ impl MerklizedState<SeqTypes, { Self::ARITY }> for RewardMerkleTreeV1 {
 
 #[cfg(test)]
 mod test {
-    use std::{sync::Arc, time::Duration};
+    use std::{
+        sync::Arc,
+        time::{Duration, SystemTime},
+    };
 
     use espresso_utils::ser::FromStringOrInteger;
     use hotshot::traits::BlockPayload;
@@ -1744,7 +1744,6 @@ mod test {
     impl<'a> ValidatedTransition<'a> {
         fn mock(instance: NodeState, parent: &'a Header, proposal: Proposal<'a>) -> Self {
             let expected_chain_config = instance.chain_config;
-            let validation_start_time = OffsetDateTime::now_utc();
 
             Self {
                 state: instance.genesis_state,
@@ -1754,7 +1753,7 @@ mod test {
                 total_rewards_distributed: None,
                 epoch_height: instance.epoch_height,
                 version: version(0, 1),
-                validation_start_time,
+                received_at: OffsetDateTime::now_utc(),
                 leader_index: None,
             }
         }
@@ -2503,8 +2502,130 @@ mod test {
                 0, /* payload_byte_len */
                 FEE_VERSION,
                 0, /* view_number */
+                SystemTime::now(),
             )
             .await
             .unwrap();
+    }
+
+    /// Validating against a `from_header` parent fetches every touched account
+    /// from peers; against the real parent it fetches nothing.
+    #[tokio::test]
+    async fn test_from_header_parent_validates_only_via_catchup() {
+        let mut instance = NodeState::mock_v2();
+        let mut genesis_state = instance.genesis_state.clone();
+        genesis_state
+            .fee_merkle_tree
+            .update(FeeAccount::default(), FeeAmount::from(1u64))
+            .unwrap();
+        instance.genesis_state = genesis_state.clone();
+
+        let genesis = Leaf::genesis(&genesis_state, &instance, MOCK_UPGRADE.base).await;
+        let parent_leaf: Leaf2 = genesis.into();
+        let parent_header = parent_leaf.block_header().clone();
+
+        let mut expected_block_tree = genesis_state.block_merkle_tree.clone();
+        expected_block_tree.push(parent_header.commit()).unwrap();
+        let proposed_header = match parent_header.clone() {
+            Header::V2(header) => Header::V2(v0_2::Header {
+                height: header.height + 1,
+                timestamp: OffsetDateTime::now_utc().unix_timestamp() as u64,
+                block_merkle_tree_root: expected_block_tree.commitment(),
+                chain_config: header.chain_config.commit().into(),
+                ..header
+            }),
+            _ => panic!("Expected V2 header"),
+        };
+
+        let catchup =
+            MockStateCatchup::from_iter([(ViewNumber::new(0), Arc::new(genesis_state.clone()))]);
+        instance.state_catchup = Arc::new(catchup.clone());
+
+        genesis_state
+            .validate_and_apply_header(
+                &instance,
+                &parent_leaf,
+                &proposed_header,
+                0, /* payload_byte_len */
+                FEE_VERSION,
+                0, /* view_number */
+                SystemTime::now(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(catchup.fetches(), 0, "a full parent state needs no catchup");
+
+        let stub = ValidatedState::from_header(&parent_header);
+        stub.validate_and_apply_header(
+            &instance,
+            &parent_leaf,
+            &proposed_header,
+            0, /* payload_byte_len */
+            FEE_VERSION,
+            0, /* view_number */
+            SystemTime::now(),
+        )
+        .await
+        .unwrap();
+        assert!(
+            catchup.fetches() > 0,
+            "a from_header parent can only be extended by fetching from peers"
+        );
+    }
+
+    /// Drift is measured from receipt, so a validation that starts late is not
+    /// failed for the delay.
+    #[tokio::test]
+    async fn test_timestamp_drift_anchored_at_receipt() {
+        let instance = NodeState::mock_v2();
+        let genesis_state = instance.genesis_state.clone();
+        let genesis = Leaf::genesis(&genesis_state, &instance, MOCK_UPGRADE.base).await;
+        let parent_leaf: Leaf2 = genesis.into();
+        let parent_header = parent_leaf.block_header().clone();
+
+        let mut expected_block_tree = genesis_state.block_merkle_tree.clone();
+        expected_block_tree.push(parent_header.commit()).unwrap();
+
+        let received_at = SystemTime::now() - Duration::from_secs(20);
+        let proposed_header = match parent_header {
+            Header::V2(header) => Header::V2(v0_2::Header {
+                height: header.height + 1,
+                timestamp: OffsetDateTime::from(received_at).unix_timestamp() as u64,
+                block_merkle_tree_root: expected_block_tree.commitment(),
+                chain_config: header.chain_config.commit().into(),
+                ..header
+            }),
+            _ => panic!("Expected V2 header"),
+        };
+
+        genesis_state
+            .validate_and_apply_header(
+                &instance,
+                &parent_leaf,
+                &proposed_header,
+                0, /* payload_byte_len */
+                FEE_VERSION,
+                0, /* view_number */
+                received_at,
+            )
+            .await
+            .expect("late validation of a timely proposal succeeds");
+
+        let err = genesis_state
+            .validate_and_apply_header(
+                &instance,
+                &parent_leaf,
+                &proposed_header,
+                0, /* payload_byte_len */
+                FEE_VERSION,
+                0, /* view_number */
+                SystemTime::now(),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("Timestamp drift too high"),
+            "unexpected error: {err}"
+        );
     }
 }

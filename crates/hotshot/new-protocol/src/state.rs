@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, HashMap},
     sync::Arc,
+    time::{Duration, SystemTime},
 };
 
 use committable::{Commitment, Committable};
@@ -16,7 +17,10 @@ use hotshot_types::{
     utils::BuilderCommitment,
     vote::HasViewNumber,
 };
-use tokio::task::{AbortHandle, JoinSet};
+use tokio::{
+    task::{AbortHandle, JoinSet},
+    time::sleep,
+};
 use tracing::{error, warn};
 
 use crate::{
@@ -24,6 +28,8 @@ use crate::{
     helpers::proposal_commitment,
     message::Proposal,
 };
+
+const DEFAULT_PARENT_DEADLINE: Duration = Duration::from_secs(5);
 
 pub struct UpdateLeaf<T: NodeType> {
     pub view: ViewNumber,
@@ -41,6 +47,7 @@ pub struct StateRequest<T: NodeType> {
     pub proposal: Proposal<T>,
     pub parent_commitment: Commitment<Leaf2<T>>,
     pub payload_size: u32,
+    pub received_at: SystemTime,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -89,6 +96,8 @@ pub struct StateEntry<T: NodeType> {
     pub state: Arc<T::ValidatedState>,
     pub delta: Option<Delta<T>>,
     pub leaf: Leaf2<T>,
+    /// Built by `from_header`: extending it means catchup.
+    pub stub: bool,
 }
 
 pub struct StateManager<T: NodeType> {
@@ -101,13 +110,29 @@ pub struct StateManager<T: NodeType> {
     tasks: JoinSet<Completed<T>>,
     validate_duration_metric: Option<Arc<dyn Histogram>>,
     update_leaf_duration_metric: Option<Arc<dyn Histogram>>,
+    parent_deadline: Duration,
 }
 
-/// The proposal lets `gc` seed a stub for a validation it aborts.
+/// A state validation in progress. The proposal lets `gc` seed a stub for a
+/// validation it aborts.
 struct InFlight<T: NodeType> {
-    handle: AbortHandle,
+    validation: AbortHandle,
+    /// Releases the descendants if the validation outlives the parent
+    /// deadline. `None` if they were released up front.
+    deadline: Option<AbortHandle>,
     view: ViewNumber,
     proposal: Proposal<T>,
+    /// Descendants wait for this validation before starting.
+    gates_descendants: bool,
+}
+
+impl<T: NodeType> InFlight<T> {
+    fn abort(&self) {
+        self.validation.abort();
+        if let Some(deadline) = &self.deadline {
+            deadline.abort();
+        }
+    }
 }
 
 enum Pending<T: NodeType> {
@@ -127,12 +152,14 @@ impl<T: NodeType> Pending<T> {
 enum Completed<T: NodeType> {
     State {
         response: StateResponse<T>,
-        leaf: Option<Leaf2<T>>,
+        leaf: Leaf2<T>,
+        validated: bool,
     },
     Header {
         response: HeaderResponse<T>,
         header: Option<T::BlockHeader>,
     },
+    Deadline(Proposal<T>),
 }
 
 impl<T: NodeType> StateManager<T> {
@@ -147,7 +174,18 @@ impl<T: NodeType> StateManager<T> {
             tasks: JoinSet::new(),
             validate_duration_metric: None,
             update_leaf_duration_metric: None,
+            parent_deadline: DEFAULT_PARENT_DEADLINE,
         }
+    }
+
+    /// How long descendants wait for a parent's in-flight validation before
+    /// proceeding against its `from_header` stub. A validation this slow is
+    /// catchup-bound, and queueing more catchups behind it costs more than
+    /// running them in parallel. A validation known to be catchup-bound when
+    /// it starts (its own parent is a stub) is not waited for at all.
+    pub fn with_parent_deadline(mut self, deadline: Duration) -> Self {
+        self.parent_deadline = deadline;
+        self
     }
 
     pub fn with_metrics(
@@ -176,8 +214,13 @@ impl<T: NodeType> StateManager<T> {
             .map(|(_, entry)| entry.leaf.clone())
     }
 
-    pub fn seed_state(&mut self, view: ViewNumber, state: Arc<T::ValidatedState>, leaf: Leaf2<T>) {
-        self.insert_state(view, state, None, leaf);
+    pub fn seed_state(&mut self, state: Arc<T::ValidatedState>, leaf: Leaf2<T>) {
+        self.insert_state(StateEntry {
+            state,
+            delta: None,
+            leaf,
+            stub: false,
+        });
     }
 
     /// Seed a commitment-only (`from_header`) state so a child proposal can be
@@ -199,7 +242,7 @@ impl<T: NodeType> StateManager<T> {
             return;
         }
 
-        if self.state_requests.contains_key(&request.parent_commitment) {
+        if self.parent_gates(&request.parent_commitment) {
             self.pending_requests
                 .entry(request.parent_commitment)
                 .or_default()
@@ -247,8 +290,11 @@ impl<T: NodeType> StateManager<T> {
             return;
         };
 
+        // Extending a stub means catchup, and so does extending whatever that
+        // yields; descendants gain nothing by waiting for it.
+        let catchup_bound = parent_entry.stub;
         let duration_metric = self.validate_duration_metric.clone();
-        let handle = self.tasks.spawn(async move {
+        let validation = self.tasks.spawn(async move {
             let measurement = duration_metric.map(Measurement::start);
             let result = parent_entry
                 .state
@@ -259,8 +305,10 @@ impl<T: NodeType> StateManager<T> {
                     payload_size,
                     upgrade_lock,
                     *view,
+                    request.received_at,
                 )
                 .await;
+            let leaf = request.proposal.into();
             match result {
                 Ok((state, delta)) => {
                     finish_measurement(measurement);
@@ -271,7 +319,8 @@ impl<T: NodeType> StateManager<T> {
                             state: Arc::new(state),
                             delta: Some(Arc::new(delta)),
                         },
-                        leaf: Some(request.proposal.into()),
+                        leaf,
+                        validated: true,
                     }
                 },
                 Err(err) => {
@@ -284,20 +333,40 @@ impl<T: NodeType> StateManager<T> {
                             state: Arc::new(T::ValidatedState::from_header(&header)),
                             delta: None,
                         },
-                        leaf: None,
+                        leaf,
+                        validated: false,
                     }
                 },
             }
         });
-
+        let deadline = (!catchup_bound).then(|| self.spawn_deadline(proposal.clone()));
         self.state_requests.insert(
             commitment,
             InFlight {
-                handle,
+                validation,
+                deadline,
                 view,
-                proposal,
+                proposal: proposal.clone(),
+                gates_descendants: !catchup_bound,
             },
         );
+        if catchup_bound {
+            self.seed_from_header(proposal);
+        }
+    }
+
+    fn spawn_deadline(&mut self, proposal: Proposal<T>) -> AbortHandle {
+        let parent_deadline = self.parent_deadline;
+        self.tasks.spawn(async move {
+            sleep(parent_deadline).await;
+            Completed::Deadline(proposal)
+        })
+    }
+
+    fn parent_gates(&self, commitment: &Commitment<Leaf2<T>>) -> bool {
+        self.state_requests
+            .get(commitment)
+            .is_some_and(|in_flight| in_flight.gates_descendants)
     }
 
     pub fn request_header(&mut self, request: HeaderRequest<T>) {
@@ -309,7 +378,7 @@ impl<T: NodeType> StateManager<T> {
             return;
         }
 
-        if self.state_requests.contains_key(&parent_commitment) {
+        if self.parent_gates(&parent_commitment) {
             self.pending_requests
                 .entry(parent_commitment)
                 .or_default()
@@ -381,15 +450,17 @@ impl<T: NodeType> StateManager<T> {
     /// Provide an externally-obtained validated state.
     pub fn update_state(&mut self, update: UpdateLeaf<T>) {
         let UpdateLeaf {
-            view,
-            leaf,
-            state,
-            delta,
+            leaf, state, delta, ..
         } = update;
         let commitment = leaf.commit();
-        self.insert_state(view, state, delta, leaf);
+        self.insert_state(StateEntry {
+            state,
+            delta,
+            leaf,
+            stub: false,
+        });
         if let Some(in_flight) = self.state_requests.remove(&commitment) {
-            in_flight.handle.abort();
+            in_flight.abort();
         }
         self.start_pending(commitment);
     }
@@ -401,35 +472,37 @@ impl<T: NodeType> StateManager<T> {
                 Some(Ok(result)) => match result {
                     Completed::State {
                         response,
-                        leaf: leaf2,
+                        leaf,
+                        validated,
                     } => {
-                        if self.state_requests.remove(&response.commitment).is_none() {
+                        let Some(in_flight) = self.state_requests.remove(&response.commitment)
+                        else {
                             continue;
+                        };
+                        if let Some(deadline) = in_flight.deadline {
+                            deadline.abort();
                         }
-                        if let Some(leaf) = leaf2 {
-                            let measurement = self
-                                .update_leaf_duration_metric
+                        // A failed validation still leaves a stub so queued
+                        // requests proceed via catchup.
+                        let measurement = if validated {
+                            self.update_leaf_duration_metric
                                 .clone()
-                                .map(Measurement::start);
-                            self.insert_state(
-                                response.view,
-                                response.state.clone(),
-                                response.delta.clone(),
-                                leaf,
-                            );
-                            finish_measurement(measurement);
-                            self.start_pending(response.commitment);
-                            return Some(StateManagerOutput::State {
-                                response,
-                                validated: true,
-                            });
+                                .map(Measurement::start)
                         } else {
-                            self.pending_requests.remove(&response.commitment);
-                            return Some(StateManagerOutput::State {
-                                response,
-                                validated: false,
-                            });
-                        }
+                            None
+                        };
+                        self.insert_state(StateEntry {
+                            state: response.state.clone(),
+                            delta: response.delta.clone(),
+                            leaf,
+                            stub: !validated,
+                        });
+                        finish_measurement(measurement);
+                        self.start_pending(response.commitment);
+                        return Some(StateManagerOutput::State {
+                            response,
+                            validated,
+                        });
                     },
                     Completed::Header { response, header } => {
                         let key = (
@@ -440,6 +513,20 @@ impl<T: NodeType> StateManager<T> {
                             continue;
                         }
                         return Some(StateManagerOutput::Header { response, header });
+                    },
+                    Completed::Deadline(proposal) => {
+                        let commitment = proposal_commitment(&proposal);
+                        let Some(in_flight) = self.state_requests.get_mut(&commitment) else {
+                            continue;
+                        };
+                        in_flight.gates_descendants = false;
+                        warn!(
+                            view = %proposal.view_number(),
+                            deadline = ?self.parent_deadline,
+                            "state validation still running past the parent deadline; \
+                             descendants proceed against a from_header stub"
+                        );
+                        self.seed_from_header(proposal);
                     },
                 },
                 Some(Err(err)) => {
@@ -477,7 +564,7 @@ impl<T: NodeType> StateManager<T> {
             .extract_if(|_, in_flight| in_flight.view < view_number)
             .collect();
         for (commitment, in_flight) in stale {
-            in_flight.handle.abort();
+            in_flight.abort();
             if self.pending_requests.contains_key(&commitment) {
                 self.seed_from_header(in_flight.proposal);
             }
@@ -502,35 +589,29 @@ impl<T: NodeType> StateManager<T> {
     /// have no delta. States produced by `validate_and_apply_header` carry a delta representing
     /// the state transition. This method prevents a `from_header` state from overwriting a
     /// fully validated state that already has a delta.
-    fn insert_state(
-        &mut self,
-        view: ViewNumber,
-        state: Arc<T::ValidatedState>,
-        delta: Option<Delta<T>>,
-        leaf: Leaf2<T>,
-    ) {
-        if let Some(existing) = self.validated_states.get(&leaf.commit())
+    fn insert_state(&mut self, entry: StateEntry<T>) {
+        let commitment = entry.leaf.commit();
+        if let Some(existing) = self.validated_states.get(&commitment)
             && existing.delta.is_some()
-            && delta.is_none()
+            && entry.delta.is_none()
         {
             warn!(
-                ?view,
+                view = ?entry.leaf.view_number(),
                 "Skipping state update to not override a state with a delta"
             );
             return;
         }
-        self.validated_states
-            .insert(leaf.commit(), StateEntry { state, delta, leaf });
+        self.validated_states.insert(commitment, entry);
     }
 
     fn insert_empty_state(&mut self, proposal: Proposal<T>) {
         let state = T::ValidatedState::from_header(&proposal.block_header);
-        self.insert_state(
-            proposal.view_number(),
-            Arc::new(state),
-            None,
-            proposal.into(),
-        );
+        self.insert_state(StateEntry {
+            state: Arc::new(state),
+            delta: None,
+            leaf: proposal.into(),
+            stub: true,
+        });
     }
 
     #[cfg(test)]

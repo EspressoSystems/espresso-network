@@ -274,18 +274,14 @@ async fn build_cutover_coordinator(
     let genesis_cert1 = build_genesis_cert1(&genesis_leaf);
     let genesis_proposal = build_genesis_proposal(&genesis_leaf, &genesis_cert1);
     let genesis_state = Arc::new(genesis_state);
-    state_manager.seed_state(ViewNumber::genesis(), genesis_state.clone(), genesis_leaf);
+    state_manager.seed_state(genesis_state.clone(), genesis_leaf);
     // The synthetic genesis proposal carries the genesis cert1 as its
     // justify_qc, so the leaf derived from it has a different commitment than
     // the natural `Leaf2::genesis`. `request_header` for view 1 looks up the
     // parent state by the proposal's leaf commitment, so seed under that
     // commitment too — otherwise the view-1 leader's header request never
     // completes and the new protocol cannot make progress before cutover.
-    state_manager.seed_state(
-        ViewNumber::genesis(),
-        genesis_state,
-        Leaf2::from(genesis_proposal.clone()),
-    );
+    state_manager.seed_state(genesis_state, Leaf2::from(genesis_proposal.clone()));
     consensus.seed_parent(genesis_cert1, genesis_proposal, std::iter::empty());
 
     let block_builder = BlockBuilder::new(

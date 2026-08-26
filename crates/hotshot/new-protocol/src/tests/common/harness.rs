@@ -102,7 +102,7 @@ impl TestHarness {
         );
 
         let mut state_manager = StateManager::new(instance.clone(), upgrade_lock.clone());
-        state_manager.seed_state(ViewNumber::genesis(), Arc::new(genesis_state), genesis_leaf);
+        state_manager.seed_state(Arc::new(genesis_state), genesis_leaf);
 
         let proposal_validator =
             ProposalValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
