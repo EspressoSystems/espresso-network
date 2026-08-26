@@ -115,6 +115,7 @@ default-members = [
     "sp1/target-check",
     "tests",
 ]
+exclude = ["crates/espresso/node-sqlite"]
 # Note: workspace members/default-members reference directory paths, not crate names.
 
 [workspace.package]
