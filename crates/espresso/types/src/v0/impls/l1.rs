@@ -334,12 +334,25 @@ fn rate_limit_backoff(retry_after: Option<Duration>, configured: Duration) -> Du
     }
 }
 
+/// alloy returns an HTTP 429 whose body parses as `Ok`, dropping the status and `Retry-After`,
+/// so the payload is the only signal left.
+///
+/// TODO: matched on the message because infura reuses `-32005` for result-count rejections.
+/// [`alloy::rpc::json_rpc::ErrorPayload::is_retry_err`] covers more providers but treats every
+/// `-32005` as a rate limit; adopting it needs the error taxonomy.
+#[cfg(feature = "node")]
+fn is_rate_limit_body(res: &ResponsePacket) -> bool {
+    res.as_error()
+        .is_some_and(|e| e.code == 429 || e.message == "Too Many Requests")
+}
+
 /// Score a transport response for provider health. A batch is `Failed` if any sub-request
 /// errored; no batch callers exist today.
 #[cfg(feature = "node")]
 fn classify(result: &StdResult<ResponsePacket, RpcError<TransportErrorKind>>) -> ResponseOutcome {
     use ResponseOutcome::*;
     match result {
+        Ok(res) if is_rate_limit_body(res) => RateLimited { retry_after: None },
         Ok(res) if res.is_error() => Failed,
         Ok(_) => Healthy,
         Err(RpcError::Transport(kind))
@@ -1217,6 +1230,7 @@ mod test {
         pub const ALCHEMY_10_BLOCK_RANGE: &str = r#"{"jsonrpc":"2.0","id":1005,"error":{"code":-32600,"message":"Under the Free tier plan, you can make eth_getLogs requests with up to a 10 block range. Based on your parameters, this block range should work: [0x1735fc9, 0x1735fd2]. Upgrade to PAYG for expanded block range."}}"#;
         pub const BLOCK_RANGE_TOO_LARGE: &str = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32062,"message":"Block range is too large"}}"#;
         pub const INFURA_RATE_LIMIT: &str = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32005,"message":"Too Many Requests","data":{"see":"https://infura.io/dashboard"}}}"#;
+        pub const INFURA_TOO_MANY_RESULTS: &str = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32005,"message":"query returned more than 10000 results"}}"#;
         pub const INFURA_UNAVAILABLE: &str = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"service temporarily unavailable"}}"#;
         pub const SUCCESS: &str = r#"{"jsonrpc":"2.0","id":1,"result":"0x1"}"#;
     }
@@ -1257,12 +1271,19 @@ mod test {
         ));
     }
 
-    // infura reuses -32005 for both rate limiting and too-many-results; this narrow classifier
-    // does not disambiguate, so the body is scored `Failed` rather than `RateLimited`.
     #[test]
-    fn test_response_outcome_infura_rate_limit_body_is_failed() {
+    fn test_response_outcome_infura_rate_limit_body_is_rate_limited() {
         assert!(matches!(
             classify(&ok_packet(fixtures::INFURA_RATE_LIMIT)),
+            ResponseOutcome::RateLimited { retry_after: None }
+        ));
+    }
+
+    // Same -32005, different message: a result-count rejection is not a rate limit.
+    #[test]
+    fn test_response_outcome_infura_too_many_results_is_failed() {
+        assert!(matches!(
+            classify(&ok_packet(fixtures::INFURA_TOO_MANY_RESULTS)),
             ResponseOutcome::Failed
         ));
     }
@@ -1828,6 +1849,31 @@ mod test {
             .get_block_number()
             .await
             .expect("requests succeed from the healthy provider");
+    }
+
+    /// A rate limit must back off on the current provider, not fail over.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_no_failover_on_rate_limit_json_rpc_error_body() {
+        let rate_limited = test_server::serve_fixed(
+            test_server::StatusCode::TOO_MANY_REQUESTS,
+            "application/json",
+            fixtures::INFURA_RATE_LIMIT,
+        )
+        .await;
+        let anvil = Anvil::new().block_time(1).spawn();
+
+        let provider = L1ClientOptions {
+            l1_frequent_failure_tolerance: Duration::from_millis(0),
+            l1_consecutive_failure_tolerance: 1,
+            ..Default::default()
+        }
+        .connect(vec![rate_limited, anvil.endpoint_url()])
+        .expect("Failed to create L1 client");
+
+        for _ in 0..3 {
+            provider.get_block_number().await.unwrap_err();
+            assert_eq!(get_failover_index(&provider), 0);
+        }
     }
 
     async fn test_failover_update_task_helper(ws: bool) {
