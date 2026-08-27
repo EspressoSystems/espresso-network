@@ -56,6 +56,9 @@ pub trait ValidatedState<TYPES: NodeType>:
     ///
     /// # Arguments
     /// * `instance` - Immutable instance-level state.
+    /// * `payload_byte_len` - Size of the block payload, from the VID share. `None` when the
+    ///   proposal was fetched from a peer without one; checks that need the size are skipped,
+    ///   a quorum having already run them when it certified the proposal.
     ///
     /// # Errors
     ///
@@ -65,7 +68,7 @@ pub trait ValidatedState<TYPES: NodeType>:
         instance: &Self::Instance,
         parent_leaf: &Leaf2<TYPES>,
         proposed_header: &TYPES::BlockHeader,
-        payload_byte_len: u32,
+        payload_byte_len: Option<u32>,
         version: Version,
         view_number: u64,
     ) -> impl Future<Output = Result<(Self, Self::Delta), Self::Error>> + Send;

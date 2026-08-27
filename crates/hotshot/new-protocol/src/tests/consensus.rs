@@ -719,7 +719,9 @@ async fn test_leader_sends_proposal() {
     );
 }
 
-/// A fetched proposal gets its state validated like a gossiped one.
+/// A fetched proposal gets its state validated like a gossiped one. With no
+/// share for the view the request carries no payload size, rather than a
+/// fake one the validator would reject.
 #[tokio::test]
 async fn test_fetched_proposal_requests_state() {
     let test_data = TestData::new(2).await;
@@ -734,9 +736,36 @@ async fn test_fetched_proposal_requests_state() {
     assert!(
         any(harness.outputs(), |o| matches!(
             o,
-            ConsensusOutput::RequestState(r) if r.view == ViewNumber::new(1)
+            ConsensusOutput::RequestState(r)
+                if r.view == ViewNumber::new(1) && r.payload_size.is_none()
         )),
-        "state validation must be requested for a fetched proposal"
+        "state validation must be requested for a fetched proposal, without a payload size"
+    );
+}
+
+/// A share parked for the view supplies a fetched proposal's payload size.
+#[tokio::test]
+async fn test_fetched_proposal_takes_size_from_parked_share() {
+    let test_data = TestData::new(2).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let mut harness = ConsensusHarness::new(0).await;
+
+    let share = test_data.views[0].vid_share_for(&node_key);
+    let payload_size = share.payload_byte_len();
+    harness.apply(ConsensusInput::VidShare(share)).await;
+    harness
+        .apply(ConsensusInput::FetchedProposal(
+            test_data.views[0].proposal_message(),
+        ))
+        .await;
+
+    assert!(
+        any(harness.outputs(), |o| matches!(
+            o,
+            ConsensusOutput::RequestState(r)
+                if r.view == ViewNumber::new(1) && r.payload_size == Some(payload_size)
+        )),
+        "the parked share's payload size must reach the state request"
     );
 }
 

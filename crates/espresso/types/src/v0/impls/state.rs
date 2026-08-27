@@ -450,12 +450,15 @@ impl ValidatedState {
 #[derive(Debug)]
 pub(crate) struct Proposal<'a> {
     header: &'a Header,
-    block_size: u32,
+    /// Payload byte length from the VID share. `None` for a proposal fetched
+    /// from a peer without one; the checks that need it are skipped, a quorum
+    /// having already run them when it certified the proposal.
+    block_size: Option<u32>,
 }
 
 #[cfg_attr(not(feature = "node"), allow(dead_code))]
 impl<'a> Proposal<'a> {
-    pub(crate) fn new(header: &'a Header, block_size: u32) -> Self {
+    pub(crate) fn new(header: &'a Header, block_size: Option<u32>) -> Self {
         Self { header, block_size }
     }
     /// The L1 head block number in the proposal must be non-decreasing relative
@@ -712,7 +715,10 @@ impl<'a> ValidatedTransition<'a> {
     /// Validate that proposal block size does not exceed configured
     /// `ChainConfig.max_block_size`.
     fn validate_block_size(&self) -> Result<(), ProposalValidationError> {
-        let block_size = self.proposal.block_size as u64;
+        let Some(block_size) = self.proposal.block_size else {
+            return Ok(());
+        };
+        let block_size = block_size as u64;
         if block_size > *self.expected_chain_config.max_block_size {
             return Err(ProposalValidationError::MaxBlockSizeExceeded {
                 max_block_size: self.expected_chain_config.max_block_size,
@@ -729,8 +735,11 @@ impl<'a> ValidatedTransition<'a> {
         let Some(amount) = self.proposal.header.fee_info().amount() else {
             return Err(ProposalValidationError::SomeFeeAmountOutOfRange);
         };
+        let Some(block_size) = self.proposal.block_size else {
+            return Ok(());
+        };
 
-        if amount < self.expected_chain_config.base_fee * U256::from(self.proposal.block_size) {
+        if amount < self.expected_chain_config.base_fee * U256::from(block_size) {
             return Err(ProposalValidationError::InsufficientFee {
                 max_block_size: self.expected_chain_config.max_block_size,
                 base_fee: self.expected_chain_config.base_fee,
@@ -815,14 +824,16 @@ impl<'a> ValidatedTransition<'a> {
 
         Ok(())
     }
-    /// Proxy to [`super::NsTable::validate()`].
+    /// Proxy to [`super::NsTable::validate()`]. Without a payload size only
+    /// the size-independent invariants can be checked.
     fn validate_namespace_table(&self) -> Result<(), ProposalValidationError> {
-        self.proposal
-            .header
-            .ns_table()
+        let ns_table = self.proposal.header.ns_table();
+        match self.proposal.block_size {
             // Should be safe since `u32` will always fit in a `usize`.
-            .validate(&PayloadByteLen(self.proposal.block_size as usize))
-            .map_err(ProposalValidationError::from)
+            Some(block_size) => ns_table.validate(&PayloadByteLen(block_size as usize)),
+            None => ns_table.validate_deserialization_invariants(),
+        }
+        .map_err(ProposalValidationError::from)
     }
 
     /// Validate that the total rewards distributed in the proposed header matches the actual distributed amount.
@@ -1314,7 +1325,7 @@ impl HotShotState<SeqTypes> for ValidatedState {
         instance: &Self::Instance,
         parent_leaf: &Leaf2,
         proposed_header: &Header,
-        payload_byte_len: u32,
+        payload_byte_len: Option<u32>,
         version: Version,
         view_number: u64,
     ) -> Result<(Self, Self::Delta), Self::Error> {
@@ -1803,7 +1814,7 @@ mod test {
         let (header, block_size) = tx.into_mock_header().await;
 
         // Success Case
-        let proposal = Proposal::new(&header, block_size);
+        let proposal = Proposal::new(&header, Some(block_size));
         // Note we are using the same header for parent and proposal,
         // this may be OK depending on what we are testing.
         ValidatedTransition::mock(NodeState::mock_v2(), &header, proposal)
@@ -1811,7 +1822,7 @@ mod test {
             .unwrap();
 
         // Error Case
-        let proposal = Proposal::new(&header, block_size);
+        let proposal = Proposal::new(&header, Some(block_size));
         let err = proposal.validate_l1_head(u64::MAX).unwrap_err();
         assert_eq!(ProposalValidationError::DecrementingL1Head, err);
     }
@@ -1824,14 +1835,14 @@ mod test {
         let (header, block_size) = tx.into_mock_header().await;
 
         // Success Case
-        let proposal = Proposal::new(&header, block_size);
+        let proposal = Proposal::new(&header, Some(block_size));
         ValidatedTransition::mock(instance.clone(), &header, proposal)
             .validate_builder_fee()
             .unwrap();
 
         // Error Case
         let header = header.invalid_builder_signature();
-        let proposal = Proposal::new(&header, block_size);
+        let proposal = Proposal::new(&header, Some(block_size));
         let err = ValidatedTransition::mock(instance, &header, proposal)
             .validate_builder_fee()
             .unwrap_err();
@@ -1853,13 +1864,13 @@ mod test {
         let (header, block_size) = tx.into_mock_header().await;
 
         // Success Case
-        let proposal = Proposal::new(&header, block_size);
+        let proposal = Proposal::new(&header, Some(block_size));
         ValidatedTransition::mock(instance.clone(), &header, proposal)
             .validate_chain_config()
             .unwrap();
 
         // Error Case
-        let proposal = Proposal::new(&header, block_size);
+        let proposal = Proposal::new(&header, Some(block_size));
         let expected_chain_config = ChainConfig {
             max_block_size: BlockSize(3333),
             ..instance.chain_config
@@ -1894,7 +1905,7 @@ mod test {
         let (header, block_size) = tx.into_mock_header().await;
 
         // Error Case
-        let proposal = Proposal::new(&header, block_size);
+        let proposal = Proposal::new(&header, Some(block_size));
         let err = ValidatedTransition::mock(instance.clone(), &header, proposal)
             .validate_block_size()
             .unwrap_err();
@@ -1909,7 +1920,7 @@ mod test {
         );
 
         // Success Case
-        let proposal = Proposal::new(&header, 1);
+        let proposal = Proposal::new(&header, Some(1));
         ValidatedTransition::mock(instance, &header, proposal)
             .validate_block_size()
             .unwrap()
@@ -1926,7 +1937,7 @@ mod test {
             ..state.chain_config.resolve().unwrap()
         });
 
-        let proposal = Proposal::new(&header, block_size);
+        let proposal = Proposal::new(&header, Some(block_size));
         let err = ValidatedTransition::mock(instance.clone(), &header, proposal)
             .validate_fee()
             .unwrap_err();
@@ -1950,7 +1961,7 @@ mod test {
         let tx = Transaction::of_size(10);
         let (parent, block_size) = tx.into_mock_header().await;
 
-        let proposal = Proposal::new(&parent, block_size);
+        let proposal = Proposal::new(&parent, Some(block_size));
         let err = ValidatedTransition::mock(instance.clone(), &parent, proposal)
             .validate_height()
             .unwrap_err();
@@ -1968,7 +1979,7 @@ mod test {
         // Success case. Increment height on proposal.
         let mut header = parent.clone();
         *header.height_mut() += 1;
-        let proposal = Proposal::new(&header, block_size);
+        let proposal = Proposal::new(&header, Some(block_size));
 
         ValidatedTransition::mock(instance, &parent, proposal)
             .validate_height()
@@ -1981,7 +1992,7 @@ mod test {
         let (parent, block_size) = tx.into_mock_header().await;
 
         // Error case
-        let proposal = Proposal::new(&parent, block_size);
+        let proposal = Proposal::new(&parent, Some(block_size));
         let proposal_timestamp = proposal.header.timestamp();
         let err = proposal.validate_timestamp_non_dec(u64::MAX).unwrap_err();
 
@@ -1996,7 +2007,7 @@ mod test {
         );
 
         // Success case (genesis timestamp is `0`).
-        let proposal = Proposal::new(&parent, block_size);
+        let proposal = Proposal::new(&parent, Some(block_size));
         proposal.validate_timestamp_non_dec(0).unwrap();
     }
 
@@ -2008,7 +2019,7 @@ mod test {
 
         let header = parent.clone();
         // Error case.
-        let proposal = Proposal::new(&header, block_size);
+        let proposal = Proposal::new(&header, Some(block_size));
         let proposal_timestamp = header.timestamp();
 
         let mock_time = OffsetDateTime::now_utc().unix_timestamp() as u64;
@@ -2033,7 +2044,7 @@ mod test {
 
         let mut header = parent.clone();
         header.set_timestamp(timestamp - 13, timestamp_millis - 13_000);
-        let proposal = Proposal::new(&header, block_size);
+        let proposal = Proposal::new(&header, Some(block_size));
 
         let err = proposal.validate_timestamp_drift(time).unwrap_err();
         tracing::info!(%err, "task failed successfully");
@@ -2049,15 +2060,15 @@ mod test {
         // Success cases.
         let mut header = parent.clone();
         header.set_timestamp(timestamp, timestamp_millis);
-        let proposal = Proposal::new(&header, block_size);
+        let proposal = Proposal::new(&header, Some(block_size));
         proposal.validate_timestamp_drift(time).unwrap();
 
         header.set_timestamp(timestamp - 11, timestamp_millis - 11_000);
-        let proposal = Proposal::new(&header, block_size);
+        let proposal = Proposal::new(&header, Some(block_size));
         proposal.validate_timestamp_drift(time).unwrap();
 
         header.set_timestamp(timestamp - 12, timestamp_millis - 12_000);
-        let proposal = Proposal::new(&header, block_size);
+        let proposal = Proposal::new(&header, Some(block_size));
         proposal.validate_timestamp_drift(time).unwrap();
     }
 
@@ -2068,13 +2079,13 @@ mod test {
         let (header, block_size) = Transaction::of_size(10).into_mock_header().await;
 
         // Success case.
-        let proposal = Proposal::new(&header, block_size);
+        let proposal = Proposal::new(&header, Some(block_size));
         ValidatedTransition::mock(instance.clone(), &header, proposal)
             .validate_fee_merkle_tree()
             .unwrap();
 
         // Error case.
-        let proposal = Proposal::new(&header, block_size);
+        let proposal = Proposal::new(&header, Some(block_size));
 
         let mut fee_merkle_tree = instance.genesis_state.fee_merkle_tree;
         fee_merkle_tree
@@ -2102,13 +2113,13 @@ mod test {
         let (header, block_size) = Transaction::of_size(10).into_mock_header().await;
 
         // Success case.
-        let proposal = Proposal::new(&header, block_size);
+        let proposal = Proposal::new(&header, Some(block_size));
         ValidatedTransition::mock(instance.clone(), &header, proposal)
             .validate_block_merkle_tree()
             .unwrap();
 
         // Error case.
-        let proposal = Proposal::new(&header, block_size);
+        let proposal = Proposal::new(&header, Some(block_size));
         let mut block_merkle_tree = instance.genesis_state.block_merkle_tree;
         block_merkle_tree.push(header.commitment()).unwrap();
         block_merkle_tree
@@ -2137,13 +2148,13 @@ mod test {
         let (header, block_size) = tx.into_mock_header().await;
 
         // Success case.
-        let proposal = Proposal::new(&header, block_size);
+        let proposal = Proposal::new(&header, Some(block_size));
         ValidatedTransition::mock(NodeState::mock_v2(), &header, proposal)
             .validate_namespace_table()
             .unwrap();
 
         // Error case
-        let proposal = Proposal::new(&header, 40);
+        let proposal = Proposal::new(&header, Some(40));
         let err = ValidatedTransition::mock(NodeState::mock_v2(), &header, proposal)
             .validate_namespace_table()
             .unwrap_err();
@@ -2154,6 +2165,20 @@ mod test {
             ProposalValidationError::InvalidNsTable(InvalidFinalOffset),
             err
         );
+    }
+
+    /// A proposal fetched without a VID share has no payload size. The checks
+    /// that need one are skipped instead of run against a made-up length.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_validation_without_block_size() {
+        let tx = Transaction::of_size(10);
+        let (header, _block_size) = tx.into_mock_header().await;
+
+        let proposal = Proposal::new(&header, None);
+        let transition = ValidatedTransition::mock(NodeState::mock_v2(), &header, proposal);
+        transition.validate_namespace_table().unwrap();
+        transition.validate_block_size().unwrap();
+        transition.validate_fee().unwrap();
     }
 
     #[test_log::test]
@@ -2365,7 +2390,7 @@ mod test {
         let validated_transition = ValidatedTransition::new(
             validated_state.clone(),
             &header,
-            Proposal::new(&proposed_header, block_size),
+            Proposal::new(&proposed_header, Some(block_size)),
             Some(actual_total),
             version(0, 4),
             validation_start_time,
@@ -2389,7 +2414,7 @@ mod test {
         ValidatedTransition::new(
             validated_state.clone(),
             &header,
-            Proposal::new(&proposed_header, block_size),
+            Proposal::new(&proposed_header, Some(block_size)),
             Some(actual_total),
             version(0, 4),
             validation_start_time,
@@ -2415,7 +2440,7 @@ mod test {
         std::thread::sleep(Duration::from_secs(13));
 
         // Validation fails if we pass the current timestamp (emulates issue before fix)
-        let proposal_without_fix = Proposal::new(&header, block_size);
+        let proposal_without_fix = Proposal::new(&header, Some(block_size));
         let err = ValidatedTransition::new(
             instance.genesis_state.clone(),
             &parent,
@@ -2435,7 +2460,7 @@ mod test {
         ));
 
         // Validation succeeds if we pass a validation start timestamp
-        let proposal = Proposal::new(&header, block_size);
+        let proposal = Proposal::new(&header, Some(block_size));
         ValidatedTransition::new(
             instance.genesis_state.clone(),
             &parent,
@@ -2500,7 +2525,7 @@ mod test {
                 &instance,
                 &parent_leaf,
                 &proposed_header,
-                0, /* payload_byte_len */
+                Some(0), /* payload_byte_len */
                 FEE_VERSION,
                 0, /* view_number */
             )

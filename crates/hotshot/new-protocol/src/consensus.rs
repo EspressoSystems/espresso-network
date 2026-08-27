@@ -1205,7 +1205,7 @@ impl<T: NodeType> Consensus<T> {
             }
         }
 
-        self.request_state(&proposal, payload_size, outbox);
+        self.request_state(&proposal, Some(payload_size), outbox);
 
         outbox.push_back(ConsensusOutput::ProposalValidated {
             proposal: signed_proposal,
@@ -1248,7 +1248,7 @@ impl<T: NodeType> Consensus<T> {
     fn request_state(
         &self,
         proposal: &Proposal<T>,
-        payload_size: u32,
+        payload_size: Option<u32>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) {
         outbox.push_back(ConsensusOutput::RequestState(StateRequest {
@@ -1262,19 +1262,20 @@ impl<T: NodeType> Consensus<T> {
         }));
     }
 
-    /// A fetched proposal may have no share. A quorum already certified it,
-    /// size checks included, so zero only skips this node's block-size checks.
-    fn payload_size_for(&self, proposal: &Proposal<T>) -> u32 {
+    /// A fetched proposal arrives without this node's share; one parked for
+    /// the view still supplies the payload size. Without either the size is
+    /// unknown, and the state manager validates without the size checks.
+    fn payload_size_for(&self, proposal: &Proposal<T>) -> Option<u32> {
         let view = proposal.view_number();
         if let Some(share) = self.vid_shares.get(&view) {
-            return share.payload_byte_len();
+            return Some(share.payload_byte_len());
         }
         let VidCommitment::V2(commitment) = proposal.block_header.payload_commitment() else {
-            return 0;
+            return None;
         };
         self.unpaired_vid_shares
             .get(&(view, commitment))
-            .map_or(0, |share| share.payload_byte_len())
+            .map(|share| share.payload_byte_len())
     }
 
     fn request_block_and_header_if_next_leader(

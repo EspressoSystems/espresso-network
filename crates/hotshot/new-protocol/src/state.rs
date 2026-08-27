@@ -40,7 +40,9 @@ pub struct StateRequest<T: NodeType> {
     pub block: BlockNumber,
     pub proposal: Proposal<T>,
     pub parent_commitment: Commitment<Leaf2<T>>,
-    pub payload_size: u32,
+    /// Payload byte length from a VID share. `None` for a proposal fetched
+    /// without one; the validator skips the checks that need it.
+    pub payload_size: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

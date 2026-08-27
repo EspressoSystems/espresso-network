@@ -183,7 +183,7 @@ impl NsTable {
     ///
     /// Checks conditions 1-3 of [`NsTable::validate`]. Those conditions can be
     /// checked by looking only at the contents of the [`NsTable`].
-    fn validate_deserialization_invariants(&self) -> Result<(), NsTableValidationError> {
+    pub(crate) fn validate_deserialization_invariants(&self) -> Result<(), NsTableValidationError> {
         use NsTableValidationError::*;
 
         // Byte length for a table with `x` entries must be exactly `x *
