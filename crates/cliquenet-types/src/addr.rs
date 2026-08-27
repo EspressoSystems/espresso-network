@@ -87,13 +87,12 @@ impl NetAddr {
     /// Checks that this address is well-formed.
     ///
     /// A hostname is dot-separated labels, each 1 to 63 characters of ASCII letters,
-    /// digits, `-` and `_`, not beginning or ending with `-`, at most 253 characters in
-    /// all, and not digits and dots alone. RFC 952 and RFC 1123 do not allow `_`, but
-    /// names using it are in use. An IP address must be the address it prints as, so an
-    /// IPv4 address in IPv6 form is not well-formed; [`IpAddr::to_canonical`] converts
-    /// it.
+    /// digits, `-` and `_`, not beginning or ending with `-`, and not digits and dots
+    /// alone. RFC 952 and RFC 1123 do not allow `_`, but names using it are in use. An
+    /// IP address must be the address it prints as, so an IPv4 address in IPv6 form is
+    /// not well-formed; [`IpAddr::to_canonical`] converts it.
     ///
-    /// The port is not checked.
+    /// Neither the port nor the length of the whole name is checked.
     pub fn validate(&self) -> Result<(), InvalidNetAddr> {
         match self {
             Self::Inet(ip, _) => {
@@ -103,14 +102,10 @@ impl NetAddr {
                 Ok(())
             },
             Self::Name(host, _) => {
-                const MAX_NAME_LEN: usize = 253;
                 const MAX_LABEL_LEN: usize = 63;
 
                 if host.is_empty() {
                     return Err(InvalidNetAddr("empty hostname"));
-                }
-                if host.len() > MAX_NAME_LEN {
-                    return Err(InvalidNetAddr("hostname is longer than 253 characters"));
                 }
                 if host.bytes().all(|b| b.is_ascii_digit() || b == b'.') {
                     return Err(InvalidNetAddr("host is not an IP address nor a hostname"));
