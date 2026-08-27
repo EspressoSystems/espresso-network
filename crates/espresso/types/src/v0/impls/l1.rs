@@ -366,19 +366,6 @@ fn rate_limit_backoff(retry_after: Option<Duration>, configured: Duration) -> Du
     }
 }
 
-/// alloy returns an HTTP 429 whose body parses as `Ok`, dropping the status and `Retry-After`,
-/// so the payload is the only signal left.
-///
-/// Matched on the message rather than the code because infura reuses `-32005` for result-count
-/// rejections. [`alloy::rpc::json_rpc::ErrorPayload::is_retry_err`] would treat those as rate
-/// limits; [`is_request_rejection`] separates them here instead.
-#[cfg(feature = "node")]
-fn is_rate_limit_body(res: &ResponsePacket) -> bool {
-    res.as_error().is_some_and(|e| {
-        e.code == 429 || e.message.to_ascii_lowercase().contains("too many requests")
-    })
-}
-
 /// Whether the response rejects the request itself: the block range or result set is too large.
 ///
 /// These recur against a perfectly healthy provider. `l1_events_max_block_range` defaults to
@@ -388,7 +375,9 @@ fn is_rate_limit_body(res: &ResponsePacket) -> bool {
 ///
 /// Matched on the message because the code does not separate these: alchemy sends `-32600` for
 /// both a block-range rejection and a dead API key, and infura reuses `-32005` for both a
-/// result-count rejection and a rate limit.
+/// result-count rejection and a rate limit. Claiming them before
+/// [`ErrorPayload::is_retry_err`], which calls every `-32005` a rate limit, is what makes
+/// deferring to alloy's matcher safe here.
 #[cfg(feature = "node")]
 fn is_request_rejection(res: &ResponsePacket) -> bool {
     res.as_error().is_some_and(|e| {
@@ -415,8 +404,14 @@ impl ResponseOutcome {
     fn classify(result: &StdResult<ResponsePacket, RpcError<TransportErrorKind>>) -> Self {
         use ResponseOutcome::*;
         match result {
-            Ok(res) if is_rate_limit_body(res) => RateLimited { retry_after: None },
+            // Ordered before the rate-limit check: alloy treats every `-32005` as a rate limit,
+            // and infura reuses that code for result-count rejections.
             Ok(res) if is_request_rejection(res) => RequestRejected,
+            // alloy returns an HTTP 429 whose body parses as `Ok`, dropping the status and
+            // `Retry-After`, so the payload is the only signal left.
+            Ok(res) if res.as_error().is_some_and(ErrorPayload::is_retry_err) => {
+                RateLimited { retry_after: None }
+            },
             Ok(res) if res.is_error() => Failed,
             Ok(_) => Healthy,
             Err(RpcError::Transport(kind))
@@ -1323,6 +1318,14 @@ mod test {
         /// Infura's 429 body is a bare error object, not a JSON-RPC response, so alloy fails to
         /// parse it and it arrives as `Err(HttpError)`.
         pub const INFURA_RATE_LIMIT: &str = r#"{"code":-32005,"message":"Too Many Requests","data":{"see":"https://infura.io/dashboard"}}"#;
+        /// Infura's per-second rate limit, as a well-formed JSON-RPC response, so alloy parses it
+        /// and it arrives as `Ok`. Not a production capture: body from
+        /// <https://github.com/INFURA/infura/issues/201>.
+        pub const INFURA_RATE_EXCEEDED: &str = r#"{"jsonrpc":"2.0","id":3419,"error":{"code":-32005,"message":"project ID request rate exceeded","data":{"rate":{"allowed_rps":50,"backoff_seconds":0,"current_rps":52.3},"see":"https://infura.io/docs/ethereum/json-rpc/ratelimits"}}}"#;
+        /// What infura returns for the rest of the UTC day once the credit quota is spent. Not a
+        /// production capture: the message is the one alloy's `is_retry_err` special-cases as
+        /// "thrown by infura if out of budget for the day and ratelimited".
+        pub const INFURA_DAILY_QUOTA: &str = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32005,"message":"daily request count exceeded, request rate limited","data":{"see":"https://infura.io/dashboard"}}}"#;
         pub const INFURA_TOO_MANY_RESULTS: &str = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32005,"message":"query returned more than 10000 results. Try with this block range [0x1500000, 0x15000FA].","data":{"from":"0x1500000","limit":10000,"to":"0x15000FA"}}}"#;
         pub const INFURA_UNAVAILABLE: &str = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"service temporarily unavailable"}}"#;
         pub const SUCCESS: &str = r#"{"jsonrpc":"2.0","id":1,"result":"0x1"}"#;
@@ -1368,6 +1371,27 @@ mod test {
     fn test_response_outcome_alchemy_rate_limit_body_is_rate_limited() {
         assert!(matches!(
             ResponseOutcome::classify(&ok_packet(fixtures::ALCHEMY_RATE_LIMIT)),
+            ResponseOutcome::RateLimited { retry_after: None }
+        ));
+    }
+
+    /// The shape a node hits when its infura credits run out: 429 for the rest of the UTC day.
+    /// `RateLimited` rather than `Failed` keeps the backoff, and `MAX_CONSECUTIVE_RATE_LIMITS`
+    /// still gets the node onto a working provider.
+    #[test]
+    fn test_response_outcome_infura_daily_quota_is_rate_limited() {
+        assert!(matches!(
+            ResponseOutcome::classify(&ok_packet(fixtures::INFURA_DAILY_QUOTA)),
+            ResponseOutcome::RateLimited { retry_after: None }
+        ));
+    }
+
+    // Same -32005 as the result-count rejection, and it parses, so only the message separates
+    // this from a request the backup would reject too.
+    #[test]
+    fn test_response_outcome_infura_rate_exceeded_is_rate_limited() {
+        assert!(matches!(
+            ResponseOutcome::classify(&ok_packet(fixtures::INFURA_RATE_EXCEEDED)),
             ResponseOutcome::RateLimited { retry_after: None }
         ));
     }
