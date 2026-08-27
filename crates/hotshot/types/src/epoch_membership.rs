@@ -402,11 +402,20 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                     _ => {
                         // Nobody else is fetching this epoch. We need to do it.
                         // Put it in the map and move on to the next epoch
+                        //
+                        // Abandonment is checked under the map lock, and the
+                        // watchdog abandons and drains the claims under the
+                        // same lock: either this insert+claim happens first
+                        // and the drain evicts it, or the flag is already set
+                        // and the entry is never inserted.
+                        if progress.is_abandoned() {
+                            drop(map_lock);
+                            tracing::warn!("catchup for epoch {epoch} was abandoned; stopping");
+                            return;
+                        }
                         let (mut tx, rx) = broadcast(1);
                         tx.set_overflow(true);
                         map_lock.insert(try_epoch, rx.deactivate());
-                        // Recorded under the map lock so the watchdog can
-                        // never observe the entry without the claim.
                         progress.claim(try_epoch, tx.clone());
                         drop(map_lock);
                         fetch_epochs.push((try_epoch, tx));
@@ -453,11 +462,15 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                     snapshot,
                 },
             };
-            // The watchdog may have abandoned this attempt while it fetched.
-            // The map entry for this epoch is then no longer ours — a retry
-            // may already have claimed it — so stop instead of touching it.
-            // The fetched stake table stays in the membership for the retry.
+            // The watchdog may have abandoned this attempt while it fetched;
+            // checked under the map lock so the broadcast+remove+unclaim
+            // cannot race the watchdog's eviction. If abandoned, the map
+            // entry for this epoch is no longer ours — a retry may already
+            // have claimed it — so stop instead of touching it. The fetched
+            // stake table stays in the membership for the retry.
+            let mut map_lock = self.catchup_map.lock();
             if progress.is_abandoned() {
+                drop(map_lock);
                 tracing::warn!("catchup for epoch {epoch} was abandoned; stopping");
                 return;
             }
@@ -468,10 +481,10 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                     res.map(|em| em.epoch())
                 );
             }
-
             // Remove the epoch from the catchup map to indicate that the catchup is complete
-            self.catchup_map.lock().remove(&current_fetch_epoch);
+            map_lock.remove(&current_fetch_epoch);
             progress.unclaim(current_fetch_epoch);
+            drop(map_lock);
         }
 
         let root_leaf = match self.fetch_stake_table(epoch, &progress).await {
@@ -515,14 +528,6 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             },
         };
 
-        // As above: if the watchdog abandoned this attempt, the requested
-        // epoch's map entry is no longer ours. Leave the completed work in
-        // the membership for the retry and stop.
-        if progress.is_abandoned() {
-            tracing::warn!("catchup for epoch {epoch} was abandoned; stopping");
-            return;
-        }
-
         // Signal the other tasks about the success. As above, the snapshot
         // must be present at this point — if not, treat as a catchup failure.
         let Some(snapshot) = self.membership.snapshot(epoch) else {
@@ -536,6 +541,15 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             coordinator: self.clone(),
             snapshot: EpochMembershipSnapshot::Epoch { epoch, snapshot },
         };
+        // As above: checked under the map lock. If the watchdog abandoned
+        // this attempt, the requested epoch's entry is no longer ours —
+        // leave the completed work in the membership for the retry and stop.
+        let mut map_lock = self.catchup_map.lock();
+        if progress.is_abandoned() {
+            drop(map_lock);
+            tracing::warn!("catchup for epoch {epoch} was abandoned; stopping");
+            return;
+        }
         if let Ok(Some(res)) = epoch_tx.try_broadcast(Ok(mem)) {
             tracing::warn!(
                 "The catchup channel for epoch {} was overflown, dropped message {:?}",
@@ -543,9 +557,8 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                 res.map(|em| em.epoch())
             );
         }
-
         // Remove the epoch from the catchup map to indicate that the catchup is complete
-        self.catchup_map.lock().remove(&epoch);
+        map_lock.remove(&epoch);
     }
 
     /// Get the stake table for `epoch`, blocking on catchup if necessary.
@@ -871,8 +884,10 @@ struct CatchupProgress<TYPES: NodeType> {
     /// The `catchup_map` entries the attempt claimed in its discovery loop,
     /// so the watchdog can evict them and fail their waiters on abandonment.
     claimed: Arc<Mutex<Vec<EpochSender<TYPES>>>>,
-    /// Set by the watchdog. The attempt checks it at its loop boundaries and
-    /// stops instead of racing the retry it was abandoned in favor of.
+    /// Set by the watchdog, under the `catchup_map` lock. The attempt checks
+    /// it under the same lock before touching the map (and unlocked at its
+    /// loop boundaries, as a fast path) and stops instead of racing the retry
+    /// it was abandoned in favor of.
     abandoned: Arc<AtomicBool>,
     /// Raised by `compute_drb_result` while its hash chain is running, which
     /// legitimately outlasts the watchdog budget; the watchdog keeps waiting
@@ -926,10 +941,14 @@ impl<TYPES: NodeType> CatchupProgress<TYPES> {
         self.claimed.lock().retain(|(e, _)| *e != epoch);
     }
 
+    /// Drain the claims. Call under the `catchup_map` lock, after `abandon`,
+    /// so no claim can slip in after the drain.
     fn take_claimed(&self) -> Vec<EpochSender<TYPES>> {
         std::mem::take(&mut *self.claimed.lock())
     }
 
+    /// Flag the attempt as abandoned. Call under the `catchup_map` lock (see
+    /// `abandoned`).
     fn abandon(&self) {
         self.abandoned.store(true, Ordering::Release);
     }
@@ -982,12 +1001,21 @@ fn spawn_catchup<T: NodeType>(
         // intermediate epochs' — and fail their waiters, so later requests
         // retry instead of being answered "Catchup already in progress" for
         // the lifetime of the process.
-        progress.abandon();
+        //
+        // Flagging and draining under the map lock makes abandonment atomic
+        // with the attempt's claims: every insert+claim runs under this lock
+        // behind an abandonment check, so each entry is either drained here
+        // (and evicted below) or never inserted at all.
+        let claimed = {
+            let _map_lock = coordinator.catchup_map.lock();
+            progress.abandon();
+            progress.take_claimed()
+        };
         let stuck_at = progress.last();
         coordinator.catchup_cleanup(
             epoch,
             epoch_tx,
-            progress.take_claimed(),
+            claimed,
             anytrace::error!(
                 "catchup for epoch {epoch} abandoned: {outcome}; last checkpoint: {stuck_at}"
             ),
@@ -1013,19 +1041,6 @@ fn spawn_catchup<T: NodeType>(
                  checkpoint: {}",
                 progress.last()
             ),
-        }
-        // Evict anything the attempt claimed between the cleanup above and
-        // now. A still-parked attempt cannot have claimed anything — there is
-        // no await between a claim and the next abandoned-check — and if it
-        // wakes and claims after we stop watching, its return drops the
-        // senders, so the closed-channel sweep at the next cleanup frees the
-        // entry.
-        let leftovers = progress.take_claimed();
-        if !leftovers.is_empty() {
-            coordinator.cancel_catchups(
-                leftovers,
-                anytrace::error!("catchup for epoch {epoch} was abandoned"),
-            );
         }
     });
 }

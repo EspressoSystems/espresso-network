@@ -85,6 +85,12 @@ const TARGET_EPOCH: u64 = 5;
 /// catchup in a unit test.
 const RECOVERY_BUDGET: Duration = Duration::from_secs(3);
 
+/// How long [`HangOncePastWatch`](LoadBehavior::HangOncePastWatch) stalls the
+/// first load: past the watchdog budget (500 ms in `setup`) plus its
+/// post-abandonment watch (another 500 ms), with margin for slow CI, so the
+/// attempt resumes only once nothing is watching it any more.
+const LATE_LOAD_STALL: Duration = Duration::from_secs(2);
+
 type InnerMembership = StrictMembership<WedgeTypes, StaticStakeTable<BLSPubKey, SchnorrPubKey>>;
 
 /// How the stake-table load misbehaves.
@@ -108,6 +114,12 @@ enum LoadBehavior {
     /// computation. A healthy-but-slow attempt like this must not be
     /// abandoned.
     SlowDrb,
+    /// The first load stalls long enough to outlive both the watchdog budget
+    /// and its post-abandonment watch, then reports "not found" — modelling a
+    /// stalled query that resolves only after the attempt was abandoned. The
+    /// resumed attempt then reaches the discovery loop's vacant branch while
+    /// abandoned, where it must not insert a fresh `catchup_map` entry.
+    HangOncePastWatch,
 }
 
 /// A `Membership` that delegates everything to `StrictMembership` except the
@@ -183,7 +195,7 @@ impl Membership<WedgeTypes> for WedgeMembership {
                 leaf.block_header_mut().block_number = root_block_in_epoch(*epoch, EPOCH_HEIGHT);
                 Ok(leaf)
             },
-            LoadBehavior::Hang | LoadBehavior::PanicOnce => {
+            LoadBehavior::Hang | LoadBehavior::PanicOnce | LoadBehavior::HangOncePastWatch => {
                 Err(anyhow!("epoch root unavailable").into())
             },
         }
@@ -217,7 +229,14 @@ impl Membership<WedgeTypes> for WedgeMembership {
             LoadBehavior::PanicOnce if calls == 1 => {
                 panic!("simulated catchup task death while loading epoch {epoch}")
             },
-            LoadBehavior::PanicOnce | LoadBehavior::HangEpochRoot | LoadBehavior::SlowDrb => false,
+            LoadBehavior::HangOncePastWatch if calls == 1 => {
+                tokio::time::sleep(LATE_LOAD_STALL).await;
+                false
+            },
+            LoadBehavior::PanicOnce
+            | LoadBehavior::HangEpochRoot
+            | LoadBehavior::SlowDrb
+            | LoadBehavior::HangOncePastWatch => false,
         }
     }
 
@@ -439,6 +458,45 @@ async fn intermediate_epochs_recover_after_catchup_abandoned() {
         recovered,
         "the abandoned catchup's entry for intermediate epoch {intermediate} was never evicted: \
          stake_table_for_epoch answers \"Catchup already in progress\" forever"
+    );
+}
+
+/// An abandoned attempt that later resumes must not claim new epochs. Here
+/// the first load stalls past the watchdog's post-abandonment watch, then
+/// returns "not found"; the resumed attempt reaches the vacant branch of the
+/// discovery loop while abandoned. On unfixed code it inserts a `catchup_map`
+/// entry for the intermediate epoch there and — with the watchdog gone — the
+/// orphaned entry answers "Catchup already in progress" until some unrelated
+/// cleanup happens to sweep it.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn abandoned_attempt_claims_no_new_epochs() {
+    let (membership, coordinator) = setup(LoadBehavior::HangOncePastWatch);
+    let target = EpochNumber::new(TARGET_EPOCH);
+    let intermediate = EpochNumber::new(TARGET_EPOCH - 1);
+
+    assert!(
+        coordinator.stake_table_for_epoch(Some(target)).is_err(),
+        "epoch {target} is not locally known, so this must not succeed"
+    );
+    assert!(
+        wait_until(RECOVERY_BUDGET, || membership.attempts() >= 1).await,
+        "catchup task never reached load_stake_table"
+    );
+
+    // Sleep past the stalled load's return, deliberately NOT requesting
+    // `intermediate` in the meantime: a request would claim the epoch
+    // legitimately and mask the bug.
+    tokio::time::sleep(LATE_LOAD_STALL + Duration::from_millis(400)).await;
+
+    // The resumed-but-abandoned attempt must have left no entry behind, so a
+    // fresh catchup for the intermediate epoch must start immediately.
+    let Err(err) = coordinator.stake_table_for_epoch(Some(intermediate)) else {
+        panic!("epoch {intermediate} has no stake table, so this must not succeed")
+    };
+    assert!(
+        format!("{err:?}").contains("Starting catchup"),
+        "the abandoned attempt left an orphaned catchup_map entry for epoch {intermediate}: \
+         {err:?}"
     );
 }
 
