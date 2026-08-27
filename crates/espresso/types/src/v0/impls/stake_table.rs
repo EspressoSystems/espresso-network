@@ -3402,17 +3402,60 @@ mod tests {
         .unwrap();
     }
 
+    /// Pins the block reward each hardcoded initial supply produces.
+    ///
+    /// `known_initial_supply` has no local symptom when wrong: the node keeps computing
+    /// rewards, just different ones from the rest of the network. The live-chain tests above
+    /// need an archival RPC and do not run in CI, so this is the only guard that a digit slip
+    /// in either constant trips.
+    #[test]
+    fn block_reward_for_known_initial_supplies() {
+        let reward = |supply: U256| {
+            ((supply * U256::from(INFLATION_RATE)) / U256::from(BLOCKS_PER_YEAR))
+                .checked_div(U256::from(COMMISSION_BASIS_POINTS))
+                .unwrap()
+        };
+
+        assert_eq!(
+            reward(U256::from(MAINNET_INITIAL_SUPPLY_WEI)),
+            U256::from(6_830_289_193_302_891_933u128)
+        );
+        assert_eq!(
+            reward(U256::from(DECAF_INITIAL_SUPPLY_WEI)),
+            U256::from(19_025_875_190_258_751_902u128)
+        );
+    }
+
+    /// Pins the constants themselves, so a digit slip fails here as well as in the reward test.
+    #[test]
+    fn known_initial_supply_values() {
+        assert_eq!(
+            known_initial_supply(MAINNET_CHAIN_ID),
+            Some(U256::from_str("3590000000000000000000000000").unwrap())
+        );
+        assert_eq!(
+            known_initial_supply(DECAF_CHAIN_ID),
+            Some(U256::from_str("10000000000000000000000000000").unwrap())
+        );
+        assert_eq!(known_initial_supply(ChainId(U256::from(999))), None);
+    }
+
+    /// `initial_supply_or_fetch` short-circuits on a known chain id without touching the L1.
+    /// `Fetcher::mock` points at an unroutable L1, so reaching the fetch path would hang.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn sanity_check_block_reward_v3() {
-        // 10b tokens
-        let initial_supply = U256::from_str("10000000000000000000000000000").unwrap();
+    async fn initial_supply_or_fetch_skips_l1_for_known_chains() {
+        for (chain_id, expected) in [
+            (MAINNET_CHAIN_ID, MAINNET_INITIAL_SUPPLY_WEI),
+            (DECAF_CHAIN_ID, DECAF_INITIAL_SUPPLY_WEI),
+        ] {
+            let fetcher = Fetcher::mock();
+            fetcher.chain_config.lock().await.chain_id = chain_id;
 
-        let reward = ((initial_supply * U256::from(INFLATION_RATE)) / U256::from(BLOCKS_PER_YEAR))
-            .checked_div(U256::from(COMMISSION_BASIS_POINTS))
-            .unwrap();
-
-        println!("Calculated reward: {reward}");
-        assert!(reward > U256::ZERO);
+            assert_eq!(
+                fetcher.initial_supply_or_fetch().await.unwrap(),
+                U256::from(expected)
+            );
+        }
     }
 
     #[test]
