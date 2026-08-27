@@ -102,7 +102,7 @@ impl<TYPES: NodeType> ValidatedState<TYPES> for TestValidatedState {
         instance: &Self::Instance,
         _parent_leaf: &Leaf2<TYPES>,
         _proposed_header: &TYPES::BlockHeader,
-        _payload_byte_len: u32,
+        _payload_byte_len: Option<u32>,
         _version: Version,
         _view_number: u64,
     ) -> Result<(Self, Self::Delta), Self::Error> {
