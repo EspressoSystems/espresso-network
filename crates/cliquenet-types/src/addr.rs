@@ -83,11 +83,76 @@ impl NetAddr {
             Self::Name(host, _) => !host.eq_ignore_ascii_case("localhost"),
         }
     }
+
+    /// Checks that this address is well-formed.
+    ///
+    /// A hostname is dot-separated labels, each 1 to 63 characters of ASCII letters,
+    /// digits, `-` and `_`, not beginning or ending with `-`, at most 253 characters in
+    /// all, and not digits and dots alone. RFC 952 and RFC 1123 do not allow `_`, but
+    /// names using it are in use. An IP address must be the address it prints as, so an
+    /// IPv4 address in IPv6 form is not well-formed; [`IpAddr::to_canonical`] converts
+    /// it.
+    ///
+    /// The port is not checked.
+    pub fn validate(&self) -> Result<(), InvalidNetAddr> {
+        match self {
+            Self::Inet(ip, _) => {
+                if ip.to_canonical() != *ip {
+                    return Err(InvalidNetAddr("IPv4 address in IPv6 form"));
+                }
+                Ok(())
+            },
+            Self::Name(host, _) => {
+                const MAX_NAME_LEN: usize = 253;
+                const MAX_LABEL_LEN: usize = 63;
+
+                if host.is_empty() {
+                    return Err(InvalidNetAddr("empty hostname"));
+                }
+                if host.len() > MAX_NAME_LEN {
+                    return Err(InvalidNetAddr("hostname is longer than 253 characters"));
+                }
+                if host.bytes().all(|b| b.is_ascii_digit() || b == b'.') {
+                    return Err(InvalidNetAddr("host is not an IP address nor a hostname"));
+                }
+                for label in host.split('.') {
+                    if label.is_empty() {
+                        return Err(InvalidNetAddr("hostname contains invalid dots"));
+                    }
+                    if label.len() > MAX_LABEL_LEN {
+                        return Err(InvalidNetAddr("hostname part is longer than 63 chars"));
+                    }
+                    if label.starts_with('-') || label.ends_with('-') {
+                        return Err(InvalidNetAddr("hostname part starts or ends with `-`"));
+                    }
+                    if !label
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+                    {
+                        return Err(InvalidNetAddr("hostname contains invalid characters"));
+                    }
+                }
+                Ok(())
+            },
+        }
+    }
+
+    /// The address without brackets around an IPv6 literal.
+    ///
+    /// This is how [`fmt::Display`] printed every address before IPv6 literals were
+    /// bracketed. The format is retained here for backwards compatibility.
+    pub fn unbracketed_string(&self) -> String {
+        match self {
+            Self::Inet(a, p) => format!("{a}:{p}"),
+            Self::Name(h, p) => format!("{h}:{p}"),
+        }
+    }
 }
 
 impl fmt::Display for NetAddr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Inet(a @ IpAddr::V6(_), p) => write!(f, "[{a}]:{p}"),
             Self::Inet(a, p) => write!(f, "{a}:{p}"),
             Self::Name(h, p) => write!(f, "{h}:{p}"),
         }
@@ -130,17 +195,35 @@ impl From<SocketAddr> for NetAddr {
     }
 }
 
+/// Grammar:
+///
+/// addr = host               -- port is 0
+///      | host ":" port
+///      | "[" host "]"       -- port is 0
+///      | "[" host "]:" port
+///
+/// host = IP | name
+/// IP   = <std::net::IpAddr>
+/// name = <any sequence of characters, possibly empty>
+/// port = <u16>
+///
+/// - Input starting with "[" has the port after the last "]:". With no "]:" anywhere there
+/// is no port, so "[a:80" is the name "[a:80" on port 0.
+/// - Input not starting with "[" has the port after the last ":" or defaults to 0 if there
+/// is no ":".
+/// - `host` is an IP if `IpAddr` parses it, a name otherwise.
+/// - Parsing the port permits a leading "+" and leading zeros.
 impl std::str::FromStr for NetAddr {
     type Err = InvalidNetAddr;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.is_empty() {
-            return Err(InvalidNetAddr(()));
+            return Err(InvalidNetAddr("the address is empty"));
         }
 
         let parse = |a: &str, p: Option<&str>| {
             let p: u16 = if let Some(p) = p {
-                p.parse().map_err(|_| InvalidNetAddr(()))?
+                p.parse().map_err(|_| InvalidNetAddr("invalid port"))?
             } else {
                 0
             };
@@ -179,15 +262,15 @@ impl TryFrom<&str> for NetAddr {
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
-#[error("invalid network address")]
-pub struct InvalidNetAddr(());
+#[error("invalid network address: {0}")]
+pub struct InvalidNetAddr(&'static str);
 
 // TODO: distinguish human-readable:
 
 #[cfg(feature = "serde")]
 impl Serialize for NetAddr {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        self.to_string().serialize(s)
+        self.unbracketed_string().serialize(s)
     }
 }
 
@@ -202,7 +285,10 @@ impl<'de> Deserialize<'de> for NetAddr {
 
 #[cfg(test)]
 mod tests {
-    use std::{iter::repeat_with, net::IpAddr};
+    use std::{
+        iter::repeat_with,
+        net::{IpAddr, SocketAddr},
+    };
 
     use quickcheck::{Arbitrary, Gen, quickcheck};
 
@@ -237,6 +323,86 @@ mod tests {
     }
 
     #[test]
+    fn validate_accepts() {
+        let cases: &[&str] = &[
+            // an IP address, however it was written
+            "1.2.3.4:8080",
+            "1.2.3.4:0",
+            "1.2.3.4:65535",
+            "[::1]:9977",
+            "::1:9977",
+            "[2001:db8::1]:9000",
+            "2001:db8::1:9000",
+            "[::]:80",
+            ":::80",
+            "[::ffff:0:102:304]:80",
+            "[1.2.3.4]:80",
+            // hostnames, in any case, and with or without a port
+            "localhost:1234",
+            "example.com",
+            "a-b.c:80",
+            "a_b.example.com:80",
+            "_svc.example.com:80",
+            "Node.Example.COM:8080",
+            "[node.example.com]:8080",
+            "crpk232f2b1uqepj3qmg.bdnodes.net:9977",
+        ];
+        for s in cases {
+            let a: NetAddr = s.parse().unwrap_or_else(|_| panic!("parse {s}"));
+            assert_eq!(a.validate().map_err(|e| e.to_string()), Ok(()), "for {s}");
+        }
+    }
+
+    #[test]
+    fn validate_rejects() {
+        let cases: &[&str] = &[
+            // an IPv6 address without a port is a hostname with an empty part
+            "2001:db8::1",
+            "::1",
+            "[foo:bar]:80",
+            "[::1]:80]:90",
+            "[]:7",
+            // digits and dots that are not an IP address
+            "01.2.3.4:80",
+            "1.2.3.4.5:80",
+            "127.1:1",
+            "12345:80",
+            // hostname parts
+            "example.com.:80",
+            ".example.com:80",
+            "a..b:80",
+            "-a.b:80",
+            "a-.b:80",
+            "a b:80",
+            "ä:80",
+            "%:1",
+            "a/b:80",
+        ];
+        for s in cases {
+            let a: NetAddr = s.parse().unwrap_or_else(|_| panic!("parse {s}"));
+            assert!(a.validate().is_err(), "should be rejected: {s:?}");
+        }
+
+        // An IPv4 address in IPv6 form is one address written two ways.
+        let mapped: NetAddr = "[::ffff:1.2.3.4]:80".parse().expect("parse");
+        assert!(mapped.validate().is_err());
+        assert!(
+            mapped
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("IPv4 address in IPv6 form")
+        );
+        let NetAddr::Inet(ip, port) = mapped else {
+            panic!("an IP address")
+        };
+        assert_eq!(
+            NetAddr::Inet(ip.to_canonical(), port),
+            "1.2.3.4:80".parse().expect("parse")
+        );
+    }
+
+    #[test]
     fn test_is_probably_global() {
         let cases: &[(&str, bool)] = &[
             ("127.0.0.1:1234", false),
@@ -262,5 +428,13 @@ mod tests {
             let a: NetAddr = s.parse().unwrap_or_else(|_| panic!("parse {s}"));
             assert_eq!(a.is_probably_global(), *expected, "for input {s}");
         }
+    }
+
+    #[test]
+    fn ipv6_prints_as_a_socket_addr() {
+        let a: NetAddr = "::1:9977".parse().expect("parse");
+        assert_eq!(a.to_string(), "[::1]:9977");
+        assert!(a.to_string().parse::<SocketAddr>().is_ok());
+        assert!("::1:9977".parse::<SocketAddr>().is_err());
     }
 }

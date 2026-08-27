@@ -365,7 +365,7 @@ impl<KEY: SignatureKey> Committable for RegisteredValidator<KEY> {
             builder = builder.var_size_field("x25519_key", key.as_slice());
         }
         if let Some(addr) = &self.p2p_addr {
-            builder = builder.var_size_field("p2p_addr", addr.to_string().as_bytes());
+            builder = builder.var_size_field("p2p_addr", addr.unbracketed_string().as_bytes());
         }
 
         builder = builder.constant_str("delegators");
@@ -586,6 +586,28 @@ mod tests {
         assert_ne!(commit_base, commit_x25519);
         assert_ne!(commit_base, commit_p2p);
         assert_ne!(commit_x25519, commit_p2p);
+    }
+
+    #[test]
+    fn test_commitment_of_ipv6_addr_is_frozen() {
+        let p2p_addr: NetAddr = "[2001:db8::1]:9977".parse().unwrap();
+        assert_eq!(p2p_addr.unbracketed_string(), "2001:db8::1:9977");
+
+        let validator = RegisteredValidator::<BLSPubKey> {
+            account: Address::repeat_byte(7),
+            stake_table_key: Some(BLSPubKey::generated_from_seed_indexed([1u8; 32], 0).0),
+            state_ver_key: Some(StateVerKey::default()),
+            stake: U256::from(1000),
+            commission: 500,
+            delegators: HashMap::new(),
+            authenticated: true,
+            x25519_key: None,
+            p2p_addr: Some(p2p_addr),
+        };
+        assert_eq!(
+            validator.commit().to_string(),
+            "VALIDATOR~7K4UdfSAqHRUGHW6HvabPzbi7dnJxEbHfO66O3eO3Sbw"
+        );
     }
 
     /// Unauthenticated validators must produce a different commitment than authenticated ones.
