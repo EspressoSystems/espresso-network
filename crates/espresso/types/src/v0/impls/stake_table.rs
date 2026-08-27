@@ -81,7 +81,10 @@ use super::{traits::MembershipPersistence, v0_3::StakeTableUpdateTask};
 #[cfg(feature = "node")]
 use crate::traits::EventsPersistenceRead;
 #[cfg(feature = "node")]
-use crate::v0_1::L1Provider;
+use crate::v0_1::{
+    ChainId, DECAF_CHAIN_ID, DECAF_INITIAL_SUPPLY_WEI, L1Provider, MAINNET_CHAIN_ID,
+    MAINNET_INITIAL_SUPPLY_WEI,
+};
 #[cfg(feature = "node")]
 use crate::v0_3::{BLOCKS_PER_YEAR, INFLATION_RATE};
 use crate::v0_3::{
@@ -1157,6 +1160,29 @@ impl std::fmt::Debug for StakeTableEvent {
     }
 }
 
+/// Returns the ESP token's initial supply for chains where the value is already known.
+///
+/// The initial supply is fixed at token deployment: `fetch_and_update_initial_supply` locates
+/// the one-time `Initialized` event and the matching mint `Transfer` from `address(0)`, which
+/// can only occur once and can never change afterwards. Hardcoding it for known networks
+/// removes the last L1 dependency on the epoch-root reward-calculation path, so a node whose
+/// L1 connection is down can still compute block rewards.
+///
+/// A wrong constant here has no local symptom: the node keeps computing rewards, just the
+/// wrong ones, diverging from the rest of the network and losing consensus.
+/// `assert_known_initial_supply_matches_l1` (below, in tests) guards against this by fetching
+/// the value from L1 and comparing it to the constant.
+#[cfg(feature = "node")]
+fn known_initial_supply(chain_id: ChainId) -> Option<U256> {
+    if chain_id == MAINNET_CHAIN_ID {
+        Some(U256::from(MAINNET_INITIAL_SUPPLY_WEI))
+    } else if chain_id == DECAF_CHAIN_ID {
+        Some(U256::from(DECAF_INITIAL_SUPPLY_WEI))
+    } else {
+        None
+    }
+}
+
 impl Fetcher {
     #[cfg(feature = "node")]
     pub fn new(
@@ -1535,8 +1561,16 @@ impl Fetcher {
     }
 
     /// Returns the initial token supply, fetching it from L1 if not yet known.
+    ///
+    /// Known chains resolve immediately via `known_initial_supply`, without touching the cache
+    /// or L1. Unknown chains fall back to the cache, then an L1 fetch.
     #[cfg(feature = "node")]
     pub async fn initial_supply_or_fetch(&self) -> Result<U256, FetchRewardError> {
+        let chain_id = self.chain_config.lock().await.chain_id;
+        if let Some(supply) = known_initial_supply(chain_id) {
+            return Ok(supply);
+        }
+
         // `fetch_and_update_initial_supply` needs a write lock, create temporary to drop lock
         let supply = *self.initial_supply.read().await;
         match supply {
@@ -3259,6 +3293,82 @@ mod tests {
             "https://ethereum-rpc.publicnode.com",
             "0xcef474d372b5b09defe2af187bf17338dc704451",
             25_188_000,
+        )
+        .await;
+    }
+
+    /// Fetches the initial supply from L1 for `chain_id` and asserts it matches the constant
+    /// hardcoded in `known_initial_supply`.
+    ///
+    /// Guards against a wrong hardcoded constant: since `known_initial_supply` is consulted
+    /// before any L1 call, a wrong value would make this node compute different block rewards
+    /// from the rest of the network, a consensus fault.
+    async fn assert_known_initial_supply_matches_l1(
+        rpc_url: &str,
+        stake_table_contract: &str,
+        chain_id: ChainId,
+    ) {
+        let expected =
+            known_initial_supply(chain_id).expect("chain id must have a hardcoded initial supply");
+
+        let l1 = L1ClientOptions {
+            l1_events_max_retry_duration: Duration::from_secs(120),
+            l1_events_max_block_range: 10_000,
+            l1_retry_delay: Duration::from_secs(2),
+            ..Default::default()
+        }
+        .connect(vec![rpc_url.parse().unwrap()])
+        .expect("unable to construct l1 client");
+
+        let fetcher = Fetcher::new(
+            Arc::new(crate::mock::MockStateCatchup::default()),
+            Arc::new(AsyncMutex::new(crate::v0_1::NoStorage)),
+            l1,
+            ChainConfig {
+                chain_id,
+                stake_table_contract: Some(stake_table_contract.parse().unwrap()),
+                ..Default::default()
+            },
+        );
+
+        let fetched = fetcher
+            .fetch_and_update_initial_supply()
+            .await
+            .expect("failed to fetch initial supply from L1");
+
+        assert_eq!(
+            fetched, expected,
+            "hardcoded initial supply for chain id {chain_id} does not match L1"
+        );
+    }
+
+    /// publicnode's free-tier mainnet endpoint rejects full-range `eth_getLogs` with "Archive
+    /// requests require a personal token", so this can only be run against an archival RPC.
+    #[ignore = "talks to public Ethereum mainnet RPC; requires an archival endpoint"]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn fetch_initial_supply_matches_mainnet_constant() {
+        assert_known_initial_supply_matches_l1(
+            "https://ethereum-rpc.publicnode.com",
+            "0xcef474d372b5b09defe2af187bf17338dc704451",
+            MAINNET_CHAIN_ID,
+        )
+        .await;
+    }
+
+    /// Confirmed by hand: `eth_getLogs` with a topic filter silently returns no results for this
+    /// block range on publicnode's free-tier Sepolia endpoint, even though an unfiltered query
+    /// over the same range and address returns the log (including the `Initialized` event). This
+    /// makes `EspToken::Initialized_filter` unusable here, so the scan fallback exhausts
+    /// `MAX_BLOCKS_SCANNED` without ever seeing the event. Needs an archival RPC with working
+    /// topic-indexed log queries.
+    #[ignore = "talks to public Sepolia RPC; topic-filtered eth_getLogs returns empty for this old \
+                block range on publicnode's free tier"]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn fetch_initial_supply_matches_decaf_constant() {
+        assert_known_initial_supply_matches_l1(
+            "https://ethereum-sepolia-rpc.publicnode.com",
+            "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037",
+            DECAF_CHAIN_ID,
         )
         .await;
     }
