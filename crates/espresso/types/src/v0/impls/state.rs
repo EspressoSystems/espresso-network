@@ -1623,7 +1623,9 @@ mod test {
     use super::*;
     use crate::{
         BlockSize, FeeAccountProof, FeeMerkleProof, Leaf, Payload, TimestampMillis, Transaction,
-        eth_signature_key::EthKeyPair, mock::MockStateCatchup, v0_1, v0_2, v0_3, v0_4, v0_5, v0_6,
+        eth_signature_key::{BuilderSignature, EthKeyPair},
+        mock::MockStateCatchup,
+        v0_1, v0_2, v0_3, v0_4, v0_5, v0_6,
     };
 
     impl Transaction {
@@ -1734,34 +1736,38 @@ mod test {
                 self.metadata(),
             )
             .unwrap();
+            self.with_fee(fee_info, Some(sig))
+        }
 
+        /// Replaces the fee info and builder signature.
+        fn with_fee(&self, fee_info: FeeInfo, builder_signature: Option<BuilderSignature>) -> Self {
             match self {
-                Header::V1(_) => panic!(
-                    "You called `Header.invalid_builder_signature()` on unimplemented version (v1)"
-                ),
+                Header::V1(_) => {
+                    panic!("You called `Header.with_fee()` on unimplemented version (v1)")
+                },
                 Header::V2(parent) => Header::V2(v0_2::Header {
                     fee_info,
-                    builder_signature: Some(sig),
+                    builder_signature,
                     ..parent.clone()
                 }),
                 Header::V3(parent) => Header::V3(v0_3::Header {
                     fee_info,
-                    builder_signature: Some(sig),
+                    builder_signature,
                     ..parent.clone()
                 }),
                 Header::V4(parent) => Header::V4(v0_4::Header {
                     fee_info,
-                    builder_signature: Some(sig),
+                    builder_signature,
                     ..parent.clone()
                 }),
                 Header::V5(parent) => Header::V5(v0_5::Header {
                     fee_info,
-                    builder_signature: Some(sig),
+                    builder_signature,
                     ..parent.clone()
                 }),
                 Header::V6(parent) => Header::V6(v0_6::Header {
                     fee_info,
-                    builder_signature: Some(sig),
+                    builder_signature,
                     ..parent.clone()
                 }),
             }
@@ -2185,19 +2191,53 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_validation_without_payload_size_skips_size_checks() {
-        // A proposal adopted without its VID share carries no payload size;
-        // the size-dependent checks must not fail against a made-up size.
-        let tx = Transaction::of_size(10);
-        let (header, _block_size) = tx.into_mock_header().await;
+        use NsTableValidationError::InvalidFinalOffset;
+        // A proposal adopted without its VID share carries no payload size. Under
+        // this chain config every size-dependent check rejects the block once a
+        // size is supplied.
+        let tx = Transaction::of_size(20);
+        let (header, block_size) = tx.into_mock_header().await;
+        let instance = NodeState::mock_v2().with_chain_config(ChainConfig {
+            max_block_size: BlockSize::from_integer(10).unwrap(),
+            base_fee: 1000.into(),
+            ..ValidatedState::default().chain_config.resolve().unwrap()
+        });
 
-        let transition = ValidatedTransition::mock(
-            NodeState::mock_v2(),
+        let sized = ValidatedTransition::mock(
+            instance.clone(),
             &header,
-            Proposal::without_size(&header),
+            Proposal::new(&header, block_size),
         );
-        transition.validate_namespace_table().unwrap();
-        transition.validate_block_size().unwrap();
-        transition.validate_fee().unwrap();
+        assert!(matches!(
+            sized.validate_block_size(),
+            Err(ProposalValidationError::MaxBlockSizeExceeded { .. })
+        ));
+        assert!(matches!(
+            sized.validate_fee(),
+            Err(ProposalValidationError::InsufficientFee { .. })
+        ));
+        // Standing in a size of zero, as the fetch path once did, rejects every
+        // non-empty block.
+        let zero_sized =
+            ValidatedTransition::mock(instance.clone(), &header, Proposal::new(&header, 0));
+        assert_eq!(
+            ProposalValidationError::InvalidNsTable(InvalidFinalOffset),
+            zero_sized.validate_namespace_table().unwrap_err()
+        );
+
+        let sizeless =
+            ValidatedTransition::mock(instance.clone(), &header, Proposal::without_size(&header));
+        sizeless.validate_block_size().unwrap();
+        sizeless.validate_fee().unwrap();
+        sizeless.validate_namespace_table().unwrap();
+
+        // Fee presence does not depend on the size and is still checked.
+        let fee_account = EthKeyPair::random().fee_account();
+        let header = header.with_fee(FeeInfo::new(fee_account, FeeAmount(U256::MAX)), None);
+        let err = ValidatedTransition::mock(instance, &header, Proposal::without_size(&header))
+            .validate_fee()
+            .unwrap_err();
+        assert_eq!(ProposalValidationError::SomeFeeAmountOutOfRange, err);
     }
 
     #[test_log::test]
