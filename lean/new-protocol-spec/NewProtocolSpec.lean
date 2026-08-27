@@ -12,6 +12,8 @@ public import NewProtocolSpec.DecideStream
 public import NewProtocolSpec.Assumptions
 public import NewProtocolSpec.Network
 public import NewProtocolSpec.Safety
+public import NewProtocolSpec.Progress
+public import NewProtocolSpec.Deadlock
 public import NewProtocolSpec.Implements
 public import NewProtocolSpec.Checks
 
@@ -41,10 +43,14 @@ for the result they are built for, and `Conforms` for what an implementation owe
 * `Network` — the committee, certificates as the votes behind them, and what
   those certificates guarantee
 * `Safety` — the no-fork property
+* `Progress` — what an owed action is worth: fairness turned into an output, and a
+  quorum's worth of owed votes turned into a certificate
+* `Deadlock` — that an action can always be made owed, by inputs the specification
+  itself admits
 * `Checks` — the claims this specification makes about itself, checked at build
   time
 
-`Network`, `Safety` and `DecideStream` come in three parts each: `X/Defs.lean`
+`Network`, `Safety`, `DecideStream` and `Progress` come in three parts each: `X/Defs.lean`
 holds the definitions the statements are phrased with, `X/Lemmas.lean` the
 kernel-checked scaffolding, and `X.lean` the results. An audit reads the first
 and the third.
@@ -53,4 +59,11 @@ Everything from `Network` upwards talks about nodes that obey `SafetySpec` and
 nothing else. So a safety proof cannot reach for another clause: there is none in
 scope to reach for. `Run.weaken` says a node obeying all of `StepSpec` is one
 of these, so the results apply to it too.
+
+`Progress` and `Deadlock` are the other direction, and are the only places the
+obligations to act are used. Both are conditional throughout: a node acts if the
+environment delivers and nothing overtakes the view, and neither of those is
+something the specification models. What they establish is that the rules
+themselves leave no way to stall — which no reading of a clause list can settle,
+since it is a property of the conjunction.
 -/

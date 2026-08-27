@@ -11,6 +11,14 @@ The premises the safety argument takes rather than proves — the part that has 
 be believed, so it is kept short and alone. The free-standing ones are here; the
 rest are fields of `Committee` and `Network`, which is where a premise about an
 object has to live (`NewProtocolSpec.Network.Defs`).
+
+The progress results add none. `LiveNetwork` holds a `Network` and its premises
+unchanged, and asks two things more of it — that its nodes obey all of `StepSpec`
+rather than `SafetySpec` alone, and `WeaklyFair` — both of which `Conforms`
+obliges an implementation to exhibit. Everything else the results of
+`NewProtocolSpec.Progress` and `NewProtocolSpec.Deadlock` need is a hypothesis of
+the statement rather than a standing premise: that the environment delivers, and
+that nothing overtakes the view while the node has yet to act.
 -/
 
 @[expose] public section

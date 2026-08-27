@@ -806,18 +806,6 @@ structure StepSpec (s : NodeState) (input : Input) (output : List Output) (s' : 
   completeness (see `DecideInv`). Nothing else may cut the
   chain short: a held ancestor may not be withheld, or a node could strand
   blocks it holds behind a delivery it is never obliged to repeat.
-
-  **The stop condition is judged after the step, freshness before it**, and
-  the asymmetry is forced. Freshness is what stops a node re-deciding, so it
-  must hold of the state the step *began* in. The stop condition cannot: the
-  floor is derived from the decided views, so a step's own decides move it,
-  and the holdings the walk runs on include what this very step ingested.
-  `DecideEnabled` is a predicate of one state and reads it as it stands
-  there, so judging the stop at `s` would leave a decide forbidden during
-  the step that makes it owed and owed once that step is over — a bar no
-  input-driven implementation can live with, since a schedule need never
-  deliver another input, and `WeaklyFair` forces every implementation to
-  leave nothing enabled when a step ends.
   -/
   decideJustified : ∀ blocks c1 c2, Output.decided blocks c1 c2 ∈ output →
     (∃ head rest, blocks = head :: rest

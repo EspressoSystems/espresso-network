@@ -2,6 +2,7 @@ module
 
 import NewProtocolSpec.Safety
 import NewProtocolSpec.DecideStream
+import NewProtocolSpec.Deadlock
 import NewProtocolSpec.Implements
 meta import Lean.Elab.Command
 
@@ -17,7 +18,11 @@ either, so what can be checked is checked here at build time:
   clause added to it is a deliberate widening of what safety rests on rather
   than something that happens while a proof is being repaired;
 * the premises are exactly the fields of `Committee` and `Network`, so a premise
-  cannot be added without the trust surface being restated.
+  cannot be added without the trust surface being restated;
+* the windows of `NewProtocolSpec.Progress` have exactly the fields they claim.
+  Those are hypotheses rather than premises, so a field added there does not widen
+  what is believed — it weakens what is concluded, silently, which is the same rot
+  wearing the other hat.
 
 These exist because that rot has happened here: two premises that became theorems
 and stayed listed as premises, and two clause counts that drifted after a clause
@@ -54,12 +59,33 @@ appear here if any proof were incomplete.
 /-- info: 'NewProtocol.decideInv_reachable' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms decideInv_reachable
 
+/-- info: 'NewProtocol.cert1_forms' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms cert1_forms
+
+/-- info: 'NewProtocol.cert2_forms' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms cert2_forms
+
+/-- info: 'NewProtocol.quorum_on_chain' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms quorum_on_chain
+
+/-- info: 'NewProtocol.vote1_forced' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms vote1_forced
+
+/-- info: 'NewProtocol.vote2_forced' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms vote2_forced
+
+/-- info: 'NewProtocol.decide_forced' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms decide_forced
+
+/-- info: 'NewProtocol.propose_forced' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms propose_forced
+
 /-! ## What is stated where
 
-The three lists below are the specification's own claims about its shape: which
-clauses safety rests on, and which premises there are. Each is compared with the
-declaration it describes, and a mismatch fails the build with the name of what
-changed and where else it is written down.
+The lists below are the specification's own claims about its shape: which clauses
+safety rests on, which premises there are, and what a progress result may assume.
+Each is compared with the declaration it describes, and a mismatch fails the build
+with the name of what changed and where else it is written down.
 -/
 
 /-- Fail with an actionable message when a structure's fields are not what is expected. -/
@@ -109,6 +135,46 @@ run_meta (checkFields `NewProtocol.StepSpec
    `decideJustified, `decidedMarked, `cert2RelayOwed,
    `advanceOwed, `timeoutCertSound, `timeoutCertAdvanceOwed, `timeoutVoteOwed]
   "the clause count in `new-protocol-docs`")
+
+/-!
+## What a node owes over a whole run
+
+Four actions, and no more: a field added here is a new obligation on every
+implementation, and one removed is an action a node may sit on for ever.
+-/
+run_meta (checkFields `NewProtocol.WeaklyFair
+  [`vote1, `vote2, `decide, `propose]
+  "`NewProtocolSpec.Liveness`, and the results of `NewProtocolSpec.Progress` that consume it")
+
+/-!
+## What progress is conditional on
+
+A window is a hypothesis, and a hypothesis grows by being weakened. These lists
+are what each progress result may assume of a node beyond the action being owed.
+-/
+run_meta (checkFields `NewProtocol.Vote1Window
+  [`bar, `timedOut, `lock, `floor, `parentFloor]
+  "the field list in `NewProtocolSpec.Progress.Defs`")
+
+run_meta (checkFields `NewProtocol.Vote2Window
+  [`bar, `floor, `noSkip, `noCert2, `notDecided]
+  "the field list in `NewProtocolSpec.Progress.Defs`")
+
+run_meta (checkFields `NewProtocol.DecideWindow
+  [`floor]
+  "the field list in `NewProtocolSpec.Progress.Defs`")
+
+run_meta (checkFields `NewProtocol.ProposeWindow
+  [`bar, `timedOut, `floor, `parentFloor, `lock]
+  "the field list in `NewProtocolSpec.Progress.Defs`")
+
+/-!
+And that a `LiveNetwork` is a `Network` with fairness, rather than a second set of
+premises alongside it.
+-/
+run_meta (checkFields `NewProtocol.LiveNetwork
+  [`run, `fair, `net, `netRun]
+  "`NewProtocolSpec.Progress.Defs`, and the premise list in `NewProtocolSpec.Assumptions`")
 
 /-! What the argument takes from stake, and nothing more. -/
 run_meta (checkFields `NewProtocol.Committee
