@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+package espresso.api.v2;
+
+import "google/api/annotations.proto";
+import "v2/common.proto";
+
+message GetBlockHeightRequest {}
+
+message BlockHeightResponse {
+  // Height of the latest decided block
+  uint64 height = 1;
+}
+
+message GetSuccessRateRequest {}
+
+message SuccessRateResponse {
+  // Fraction of views in which this node decided a block. Node-local, not a network measure.
+  // Zero before the node has seen any view, so a fresh node reports zero rather than an
+  // undefined ratio.
+  double rate = 1;
+}
+
+message GetTimeSinceLastDecideRequest {}
+
+message TimeSinceLastDecideResponse {
+  // Seconds elapsed since this node last decided a block
+  uint64 seconds = 1;
+}
+
+message GetNodeKeysRequest {}
+
+message NodeKeysResponse {
+  // Ethereum account associated with this node, 0x-prefixed hex
+  optional string eth_account = 1;
+
+  BLSPublicKey consensus_key = 2;
+
+  SchnorrPublicKey state_ver_key = 3;
+
+  // X25519 public key for cliquenet, TaggedBase64
+  optional string x25519_key = 4;
+}
+
+service StatusService {
+  // Get the height of the latest decided block
+  rpc GetBlockHeight(GetBlockHeightRequest) returns (BlockHeightResponse) {
+    option (google.api.http) = {get: "/v2/status/block-height"};
+  }
+
+  // Get the fraction of views in which this node decided a block
+  rpc GetSuccessRate(GetSuccessRateRequest) returns (SuccessRateResponse) {
+    option (google.api.http) = {get: "/v2/status/success-rate"};
+  }
+
+  // Get the seconds elapsed since this node last decided a block
+  rpc GetTimeSinceLastDecide(GetTimeSinceLastDecideRequest) returns (TimeSinceLastDecideResponse) {
+    option (google.api.http) = {get: "/v2/status/time-since-last-decide"};
+  }
+
+  // Get the node's public keys
+  rpc GetNodeKeys(GetNodeKeysRequest) returns (NodeKeysResponse) {
+    option (google.api.http) = {get: "/v2/status/keys"};
+  }
+}
