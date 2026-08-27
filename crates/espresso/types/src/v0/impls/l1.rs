@@ -1229,7 +1229,11 @@ mod test {
         pub const ALCHEMY_APP_INACTIVE: &str = r#"{"jsonrpc":"2.0","id":399193,"error":{"code":-32600,"message":"App is inactive. Please create a new app or contact support at https://dashboard.alchemy.com/***"}}"#;
         pub const ALCHEMY_10_BLOCK_RANGE: &str = r#"{"jsonrpc":"2.0","id":1005,"error":{"code":-32600,"message":"Under the Free tier plan, you can make eth_getLogs requests with up to a 10 block range. Based on your parameters, this block range should work: [0x1735fc9, 0x1735fd2]. Upgrade to PAYG for expanded block range."}}"#;
         pub const BLOCK_RANGE_TOO_LARGE: &str = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32062,"message":"Block range is too large"}}"#;
-        pub const INFURA_RATE_LIMIT: &str = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32005,"message":"Too Many Requests","data":{"see":"https://infura.io/dashboard"}}}"#;
+        /// A 429 body alloy parses, so it arrives as `Ok`.
+        pub const ALCHEMY_RATE_LIMIT: &str = r#"{"jsonrpc":"2.0","id":1,"error":{"code":429,"message":"Your app has exceeded its concurrent requests capacity. If you have retries enabled, you can safely ignore this message. If not, check out https://docs.alchemy.com/reference/throughput. Reach out to us if you'd like to increase your limits: https://dashboard.alchemy.com/support"}}"#;
+        /// Infura's 429 body is a bare error object, not a JSON-RPC response, so alloy fails to
+        /// parse it and it arrives as `Err(HttpError)`.
+        pub const INFURA_RATE_LIMIT: &str = r#"{"code":-32005,"message":"Too Many Requests","data":{"see":"https://infura.io/dashboard"}}"#;
         pub const INFURA_TOO_MANY_RESULTS: &str = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32005,"message":"query returned more than 10000 results. Try with this block range [0x1500000, 0x15000FA].","data":{"from":"0x1500000","limit":10000,"to":"0x15000FA"}}}"#;
         pub const INFURA_UNAVAILABLE: &str = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"service temporarily unavailable"}}"#;
         pub const SUCCESS: &str = r#"{"jsonrpc":"2.0","id":1,"result":"0x1"}"#;
@@ -1272,11 +1276,16 @@ mod test {
     }
 
     #[test]
-    fn test_response_outcome_infura_rate_limit_body_is_rate_limited() {
+    fn test_response_outcome_alchemy_rate_limit_body_is_rate_limited() {
         assert!(matches!(
-            classify(&ok_packet(fixtures::INFURA_RATE_LIMIT)),
+            classify(&ok_packet(fixtures::ALCHEMY_RATE_LIMIT)),
             ResponseOutcome::RateLimited { retry_after: None }
         ));
+    }
+
+    #[test]
+    fn test_infura_rate_limit_body_is_not_a_json_rpc_response() {
+        serde_json::from_str::<ResponsePacket>(fixtures::INFURA_RATE_LIMIT).unwrap_err();
     }
 
     // Same -32005, different message: a result-count rejection is not a rate limit.
@@ -1857,7 +1866,7 @@ mod test {
         let rate_limited = test_server::serve_fixed(
             test_server::StatusCode::TOO_MANY_REQUESTS,
             "application/json",
-            fixtures::INFURA_RATE_LIMIT,
+            fixtures::ALCHEMY_RATE_LIMIT,
         )
         .await;
         let anvil = Anvil::new().block_time(1).spawn();
