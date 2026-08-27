@@ -16,7 +16,7 @@ use alloy::{
     sol_types::{SolEvent, SolEventInterface},
 };
 use alloy::{
-    primitives::{Address, U256},
+    primitives::{Address, U256, address},
     rpc::types::Log,
 };
 #[cfg(feature = "node")]
@@ -81,10 +81,7 @@ use super::{traits::MembershipPersistence, v0_3::StakeTableUpdateTask};
 #[cfg(feature = "node")]
 use crate::traits::EventsPersistenceRead;
 #[cfg(feature = "node")]
-use crate::v0_1::{
-    ChainId, DECAF_CHAIN_ID, DECAF_INITIAL_SUPPLY_WEI, L1Provider, MAINNET_CHAIN_ID,
-    MAINNET_INITIAL_SUPPLY_WEI,
-};
+use crate::v0_1::L1Provider;
 #[cfg(feature = "node")]
 use crate::v0_3::{BLOCKS_PER_YEAR, INFLATION_RATE};
 use crate::v0_3::{
@@ -1160,23 +1157,34 @@ impl std::fmt::Debug for StakeTableEvent {
     }
 }
 
-/// Returns the ESP token's initial supply for chains where the value is already known.
+/// ESP token initial supply on Espresso mainnet, in wei (18 decimals).
+const MAINNET_INITIAL_SUPPLY_WEI: u128 = 3_590_000_000_000_000_000_000_000_000;
+/// ESP token initial supply on the Decaf testnet, in wei (18 decimals).
+const DECAF_INITIAL_SUPPLY_WEI: u128 = 10_000_000_000_000_000_000_000_000_000;
+
+const MAINNET_STAKE_TABLE_CONTRACT: Address =
+    address!("0xcef474d372b5b09defe2af187bf17338dc704451");
+const DECAF_STAKE_TABLE_CONTRACT: Address = address!("0x40304fbe94d5e7d1492dd90c53a2d63e8506a037");
+
+/// Returns the ESP token's initial supply for the stake table contracts where it is already known.
 ///
 /// The initial supply is fixed at token deployment: `fetch_and_update_initial_supply` locates
 /// the one-time `Initialized` event and the matching mint `Transfer` from `address(0)`, which
-/// can only occur once and can never change afterwards. Hardcoding it for known networks
+/// can only occur once and can never change afterwards. Hardcoding it for known deployments
 /// removes the last L1 dependency on the epoch-root reward-calculation path, so a node whose
 /// L1 connection is down can still compute block rewards.
+///
+/// Keyed on the stake table contract rather than the chain id so that a redeploy invalidates
+/// the entry: the lookup misses and the node falls back to fetching from L1.
 ///
 /// A wrong constant here has no local symptom: the node keeps computing rewards, just the
 /// wrong ones, diverging from the rest of the network and losing consensus.
 /// `assert_known_initial_supply_matches_l1` (below, in tests) guards against this by fetching
 /// the value from L1 and comparing it to the constant.
-#[cfg(feature = "node")]
-fn known_initial_supply(chain_id: ChainId) -> Option<U256> {
-    if chain_id == MAINNET_CHAIN_ID {
+fn known_initial_supply(stake_table_contract: Address) -> Option<U256> {
+    if stake_table_contract == MAINNET_STAKE_TABLE_CONTRACT {
         Some(U256::from(MAINNET_INITIAL_SUPPLY_WEI))
-    } else if chain_id == DECAF_CHAIN_ID {
+    } else if stake_table_contract == DECAF_STAKE_TABLE_CONTRACT {
         Some(U256::from(DECAF_INITIAL_SUPPLY_WEI))
     } else {
         None
@@ -1562,12 +1570,11 @@ impl Fetcher {
 
     /// Returns the initial token supply, fetching it from L1 if not yet known.
     ///
-    /// Known chains resolve immediately via `known_initial_supply`, without touching the cache
-    /// or L1. Unknown chains fall back to the cache, then an L1 fetch.
+    /// Known deployments resolve immediately via `known_initial_supply`, without touching the
+    /// cache or L1. Unknown ones fall back to the cache, then an L1 fetch.
     #[cfg(feature = "node")]
     pub async fn initial_supply_or_fetch(&self) -> Result<U256, FetchRewardError> {
-        let chain_id = self.chain_config.lock().await.chain_id;
-        if let Some(supply) = known_initial_supply(chain_id) {
+        if let Some(supply) = self.known_initial_supply().await {
             return Ok(supply);
         }
 
@@ -1579,10 +1586,23 @@ impl Fetcher {
         }
     }
 
-    /// Returns the initial token supply, fetching it from L1 if not yet known.
+    /// Returns the initial token supply, from the hardcoded table or the pre-populated cache.
     #[cfg(not(feature = "node"))]
     pub async fn initial_supply_or_fetch(&self) -> Result<U256, FetchRewardError> {
+        if let Some(supply) = self.known_initial_supply().await {
+            return Ok(supply);
+        }
+
         Ok((*self.initial_supply.read().await).expect("initial supply pre-populated"))
+    }
+
+    /// Returns the hardcoded initial supply for the configured stake table contract, if known.
+    async fn known_initial_supply(&self) -> Option<U256> {
+        self.chain_config
+            .lock()
+            .await
+            .stake_table_contract
+            .and_then(known_initial_supply)
     }
 
     /// Calculates the fixed block reward based on the token's initial supply,
@@ -3297,19 +3317,15 @@ mod tests {
         .await;
     }
 
-    /// Fetches the initial supply from L1 for `chain_id` and asserts it matches the constant
-    /// hardcoded in `known_initial_supply`.
+    /// Fetches the initial supply from L1 for `stake_table_contract` and asserts it matches the
+    /// constant hardcoded in `known_initial_supply`.
     ///
     /// Guards against a wrong hardcoded constant: since `known_initial_supply` is consulted
     /// before any L1 call, a wrong value would make this node compute different block rewards
     /// from the rest of the network, a consensus fault.
-    async fn assert_known_initial_supply_matches_l1(
-        rpc_url: &str,
-        stake_table_contract: &str,
-        chain_id: ChainId,
-    ) {
-        let expected =
-            known_initial_supply(chain_id).expect("chain id must have a hardcoded initial supply");
+    async fn assert_known_initial_supply_matches_l1(rpc_url: &str, stake_table_contract: Address) {
+        let expected = known_initial_supply(stake_table_contract)
+            .expect("stake table contract must have a hardcoded initial supply");
 
         let l1 = L1ClientOptions {
             l1_events_max_retry_duration: Duration::from_secs(120),
@@ -3325,8 +3341,7 @@ mod tests {
             Arc::new(AsyncMutex::new(crate::v0_1::NoStorage)),
             l1,
             ChainConfig {
-                chain_id,
-                stake_table_contract: Some(stake_table_contract.parse().unwrap()),
+                stake_table_contract: Some(stake_table_contract),
                 ..Default::default()
             },
         );
@@ -3338,7 +3353,7 @@ mod tests {
 
         assert_eq!(
             fetched, expected,
-            "hardcoded initial supply for chain id {chain_id} does not match L1"
+            "hardcoded initial supply for {stake_table_contract} does not match L1"
         );
     }
 
@@ -3352,8 +3367,7 @@ mod tests {
     async fn fetch_initial_supply_matches_mainnet_constant() {
         assert_known_initial_supply_matches_l1(
             "https://mainnet.gateway.tenderly.co",
-            "0xcef474d372b5b09defe2af187bf17338dc704451",
-            MAINNET_CHAIN_ID,
+            MAINNET_STAKE_TABLE_CONTRACT,
         )
         .await;
     }
@@ -3369,8 +3383,7 @@ mod tests {
     async fn fetch_initial_supply_matches_decaf_constant() {
         assert_known_initial_supply_matches_l1(
             "https://sepolia.gateway.tenderly.co",
-            "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037",
-            DECAF_CHAIN_ID,
+            DECAF_STAKE_TABLE_CONTRACT,
         )
         .await;
     }
@@ -3408,8 +3421,7 @@ mod tests {
     ///
     /// `known_initial_supply` has no local symptom when wrong: the node keeps computing
     /// rewards, just different ones from the rest of the network. The live-chain tests above
-    /// need an archival RPC and do not run in CI, so this is the only guard that a digit slip
-    /// in either constant trips.
+    /// need an archival RPC and do not run in CI, so a digit slip has to fail here.
     #[test]
     fn block_reward_for_known_initial_supplies() {
         let reward = |supply: U256| {
@@ -3432,31 +3444,57 @@ mod tests {
     #[test]
     fn known_initial_supply_values() {
         assert_eq!(
-            known_initial_supply(MAINNET_CHAIN_ID),
+            known_initial_supply(MAINNET_STAKE_TABLE_CONTRACT),
             Some(U256::from_str("3590000000000000000000000000").unwrap())
         );
         assert_eq!(
-            known_initial_supply(DECAF_CHAIN_ID),
+            known_initial_supply(DECAF_STAKE_TABLE_CONTRACT),
             Some(U256::from_str("10000000000000000000000000000").unwrap())
         );
-        assert_eq!(known_initial_supply(ChainId(U256::from(999))), None);
+        assert_eq!(known_initial_supply(Address::repeat_byte(9)), None);
     }
 
-    /// `initial_supply_or_fetch` short-circuits on a known chain id without touching the L1.
-    /// `Fetcher::mock` points at an unroutable L1, so reaching the fetch path would hang.
+    /// The hardcoded addresses are the ones the networks actually run, per their genesis files.
+    #[test]
+    fn known_stake_table_contracts_match_genesis() {
+        let genesis = |network: &str| {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../data/genesis")
+                .join(format!("{network}.toml"));
+            let genesis: toml::Value =
+                toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+            genesis["chain_config"]["stake_table_contract"]
+                .as_str()
+                .unwrap()
+                .parse::<Address>()
+                .unwrap()
+        };
+
+        assert_eq!(genesis("mainnet"), MAINNET_STAKE_TABLE_CONTRACT);
+        assert_eq!(genesis("decaf"), DECAF_STAKE_TABLE_CONTRACT);
+    }
+
+    /// `initial_supply_or_fetch` short-circuits on a known stake table contract without touching
+    /// the L1. `Fetcher::mock` points at an unroutable L1, so the fetch path would hang; the
+    /// timeout turns that regression into a named failure instead of a CI job timeout.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn initial_supply_or_fetch_skips_l1_for_known_chains() {
-        for (chain_id, expected) in [
-            (MAINNET_CHAIN_ID, MAINNET_INITIAL_SUPPLY_WEI),
-            (DECAF_CHAIN_ID, DECAF_INITIAL_SUPPLY_WEI),
+    async fn initial_supply_or_fetch_skips_l1_for_known_contracts() {
+        for (contract, expected) in [
+            (MAINNET_STAKE_TABLE_CONTRACT, MAINNET_INITIAL_SUPPLY_WEI),
+            (DECAF_STAKE_TABLE_CONTRACT, DECAF_INITIAL_SUPPLY_WEI),
         ] {
             let fetcher = Fetcher::mock();
-            fetcher.chain_config.lock().await.chain_id = chain_id;
+            fetcher.chain_config.lock().await.stake_table_contract = Some(contract);
 
-            assert_eq!(
-                fetcher.initial_supply_or_fetch().await.unwrap(),
-                U256::from(expected)
-            );
+            let supply =
+                tokio::time::timeout(Duration::from_secs(5), fetcher.initial_supply_or_fetch())
+                    .await
+                    .expect(
+                        "initial_supply_or_fetch reached the L1 fetch path for a known contract",
+                    )
+                    .unwrap();
+
+            assert_eq!(supply, U256::from(expected));
         }
     }
 

@@ -18,21 +18,6 @@ pub struct ChainId(pub U256);
 /// Chain id of the Decaf testnet. Used to gate Decaf-specific light-client behavior.
 pub const DECAF_CHAIN_ID: ChainId = ChainId(U256::from_limbs([0xdecaf, 0, 0, 0]));
 
-/// Chain id of Espresso mainnet.
-pub const MAINNET_CHAIN_ID: ChainId = ChainId(U256::from_limbs([1, 0, 0, 0]));
-
-/// ESP token initial supply on the Decaf testnet, in wei (18 decimals).
-///
-/// Set once at token deployment; see `known_initial_supply` in
-/// `crates/espresso/types/src/v0/impls/stake_table.rs` for why this is hardcoded.
-pub const DECAF_INITIAL_SUPPLY_WEI: u128 = 10_000_000_000_000_000_000_000_000_000;
-
-/// ESP token initial supply on Espresso mainnet, in wei (18 decimals).
-///
-/// Set once at token deployment; see `known_initial_supply` in
-/// `crates/espresso/types/src/v0/impls/stake_table.rs` for why this is hardcoded.
-pub const MAINNET_INITIAL_SUPPLY_WEI: u128 = 3_590_000_000_000_000_000_000_000_000;
-
 #[derive(Hash, Copy, Clone, Debug, Default, Display, PartialEq, Eq, From, Into, Deref)]
 #[display("{_0}")]
 pub struct BlockSize(pub(crate) u64);
