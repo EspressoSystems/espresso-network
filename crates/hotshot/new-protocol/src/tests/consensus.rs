@@ -819,6 +819,55 @@ async fn test_live_proposal_adopts_unpaired_parent() {
     );
 }
 
+/// A Cert2 for the tip of a run of parked proposals adopts the whole run,
+/// oldest first, and fetches only the parent nothing parked can supply.
+#[tokio::test]
+async fn test_cert2_adopts_chain_of_parked_proposals() {
+    let test_data = TestData::new(4).await;
+    let mut harness = ConsensusHarness::new(0).await;
+    // Views 2, 3 and 4 arrive without shares; view 1 never arrives.
+    for tv in &test_data.views[1..] {
+        harness
+            .apply(ConsensusInput::Proposal(
+                tv.leader_public_key,
+                tv.proposal_message(),
+            ))
+            .await;
+    }
+    harness.apply(test_data.views[3].cert2_input()).await;
+
+    let requested: Vec<u64> = harness
+        .outputs()
+        .iter()
+        .filter_map(|o| match o {
+            ConsensusOutput::RequestState(r) if r.payload_size.is_none() => Some(*r.view),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        requested,
+        vec![2, 3, 4],
+        "the parked run must be adopted oldest first, each without a payload size"
+    );
+    let root_parent = proposal_commitment(&test_data.views[0].proposal.data);
+    assert_eq!(
+        count_matching(harness.outputs(), |o| matches!(
+            o,
+            ConsensusOutput::RequestMissingProposal { .. }
+        )),
+        1,
+        "only the missing root parent is fetched"
+    );
+    assert!(
+        any(harness.outputs(), |o| matches!(
+            o,
+            ConsensusOutput::RequestMissingProposal { view, leaf_commit }
+                if *view == ViewNumber::new(1) && *leaf_commit == root_parent
+        )),
+        "the fetch is for the root's parent"
+    );
+}
+
 /// A parked proposal is adopted only when it is the leaf the certificate
 /// names; a Cert2 for another leaf at that view must still fetch.
 #[tokio::test]
