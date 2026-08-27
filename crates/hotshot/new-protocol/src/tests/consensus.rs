@@ -15,6 +15,7 @@ use hotshot_types::{
 
 use super::common::utils::{TestData, TestView};
 use crate::{
+    cert_verifier::ValidCert,
     consensus::{ConsensusInput, ConsensusOutput},
     coordinator::GcScope,
     helpers::proposal_commitment,
@@ -734,9 +735,128 @@ async fn test_fetched_proposal_requests_state() {
     assert!(
         any(harness.outputs(), |o| matches!(
             o,
+            ConsensusOutput::RequestState(r)
+                if r.view == ViewNumber::new(1) && r.payload_size.is_none()
+        )),
+        "state validation must be requested for a fetched proposal, with the payload size unknown"
+    );
+}
+
+/// Regression: a Cert2 for a view whose proposal arrived live but whose VID
+/// share did not must adopt the parked proposal instead of refetching it.
+#[tokio::test]
+async fn test_cert2_adopts_unpaired_live_proposal() {
+    let test_data = TestData::new(2).await;
+    let mut harness = ConsensusHarness::new(0).await;
+    let tv = &test_data.views[0];
+
+    harness
+        .apply(ConsensusInput::Proposal(
+            tv.leader_public_key,
+            tv.proposal_message(),
+        ))
+        .await;
+    // Cert1 moves the node on, and the coordinator GCs on that view change,
+    // before the cert2 forms.
+    harness.apply(tv.cert1_input()).await;
+    harness.consensus.gc(GcScope::Local(ViewNumber::new(2)));
+    harness.apply(tv.cert2_input()).await;
+
+    assert!(
+        !any(harness.outputs(), |o| matches!(
+            o,
+            ConsensusOutput::RequestMissingProposal { view, .. } if *view == ViewNumber::new(1)
+        )),
+        "a parked live proposal must not be refetched"
+    );
+    assert!(
+        any(harness.outputs(), |o| matches!(
+            o,
+            ConsensusOutput::RequestState(r)
+                if r.view == ViewNumber::new(1) && r.payload_size.is_none()
+        )),
+        "the parked proposal must be state-validated without a payload size"
+    );
+}
+
+/// Regression: a live proposal whose parent arrived live without its VID
+/// share must adopt the parked parent instead of refetching it.
+#[tokio::test]
+async fn test_live_proposal_adopts_unpaired_parent() {
+    let test_data = TestData::new(2).await;
+    let mut harness = ConsensusHarness::new(0).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let parent = &test_data.views[0];
+
+    harness
+        .apply(ConsensusInput::Proposal(
+            parent.leader_public_key,
+            parent.proposal_message(),
+        ))
+        .await;
+    // The node has advanced, and the coordinator GC'd, by the time the child
+    // arrives.
+    harness.apply(parent.cert1_input()).await;
+    harness.consensus.gc(GcScope::Local(ViewNumber::new(2)));
+    harness
+        .apply_pair(test_data.views[1].proposal_input_consensus(&node_key))
+        .await;
+
+    assert!(
+        !any(harness.outputs(), |o| matches!(
+            o,
+            ConsensusOutput::RequestMissingProposal { view, .. } if *view == ViewNumber::new(1)
+        )),
+        "a parked live parent must not be refetched"
+    );
+    assert!(
+        any(harness.outputs(), |o| matches!(
+            o,
+            ConsensusOutput::RequestState(r)
+                if r.view == ViewNumber::new(1) && r.payload_size.is_none()
+        )),
+        "the parked parent must be state-validated without a payload size"
+    );
+}
+
+/// A parked proposal is adopted only when it is the leaf the certificate
+/// names; a Cert2 for another leaf at that view must still fetch.
+#[tokio::test]
+async fn test_cert2_for_other_leaf_does_not_adopt_parked_proposal() {
+    let test_data = TestData::new(2).await;
+    let mut harness = ConsensusHarness::new(0).await;
+    let tv = &test_data.views[0];
+    let other_leaf = proposal_commitment(&test_data.views[1].proposal.data);
+
+    harness
+        .apply(ConsensusInput::Proposal(
+            tv.leader_public_key,
+            tv.proposal_message(),
+        ))
+        .await;
+    let mut cert2 = tv.cert2.clone();
+    cert2.data.leaf_commit = other_leaf;
+    harness
+        .apply(ConsensusInput::Certificate2(ValidCert::new(
+            cert2,
+            tv.epoch_number,
+        )))
+        .await;
+
+    assert!(
+        any(harness.outputs(), |o| matches!(
+            o,
+            ConsensusOutput::RequestMissingProposal { view, leaf_commit }
+                if *view == ViewNumber::new(1) && *leaf_commit == other_leaf
+        )),
+        "the certified leaf must be fetched"
+    );
+    assert!(
+        !any(harness.outputs(), |o| matches!(
+            o,
             ConsensusOutput::RequestState(r) if r.view == ViewNumber::new(1)
         )),
-        "state validation must be requested for a fetched proposal"
+        "the uncertified parked proposal must not be adopted"
     );
 }
 

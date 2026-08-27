@@ -33,7 +33,7 @@ fn make_state_request(view: &TestView) -> StateRequest<TestTypes> {
         block: BlockHeader::<TestTypes>::block_number(&proposal.block_header).into(),
         proposal: proposal.clone(),
         parent_commitment: proposal.justify_qc.data().leaf_commit,
-        payload_size: 0,
+        payload_size: None,
     }
 }
 
