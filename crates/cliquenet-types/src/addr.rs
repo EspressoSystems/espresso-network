@@ -192,6 +192,7 @@ impl From<SocketAddr> for NetAddr {
 
 /// Grammar:
 ///
+/// ```text
 /// addr = host               -- port is 0
 ///      | host ":" port
 ///      | "[" host "]"       -- port is 0
@@ -201,13 +202,14 @@ impl From<SocketAddr> for NetAddr {
 /// IP   = <std::net::IpAddr>
 /// name = <any sequence of characters, possibly empty>
 /// port = <u16>
+/// ```
 ///
-/// - Input starting with "[" has the port after the last "]:". With no "]:" anywhere there
-/// is no port, so "[a:80" is the name "[a:80" on port 0.
-/// - Input not starting with "[" has the port after the last ":" or defaults to 0 if there
-/// is no ":".
+/// - Input starting with `[` has the port after the last `]:`. With no `]:` anywhere there
+///   is no port, so `[a:80` is the name `[a:80` on port 0.
+/// - Input not starting with `[` has the port after the last `:` or defaults to 0 if there
+///   is no `:`.
 /// - `host` is an IP if `IpAddr` parses it, a name otherwise.
-/// - Parsing the port permits a leading "+" and leading zeros.
+/// - Parsing the port permits a leading `+` and leading zeros.
 impl std::str::FromStr for NetAddr {
     type Err = InvalidNetAddr;
 
