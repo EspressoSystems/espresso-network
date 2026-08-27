@@ -233,14 +233,26 @@ impl SingleTransportStatus {
         self.consecutive_rate_limits = 0;
     }
 
-    /// Log a rate limit from the inner transport. Returns whether or not the transport should be
-    /// switched to the next URL.
+    /// Log a rate limit from the inner transport, backing off until `until`. Returns whether or
+    /// not the transport should be switched to the next URL.
     ///
     /// One rate limit is not a provider fault: the caller backs off and retries. One that
-    /// survives its own backoff is, because every request in the backoff window short-circuits
+    /// outlives a backoff is, because every request inside the backoff window short-circuits
     /// without reaching the provider, and nothing else in `call` moves off it: `should_revert`
     /// only reverts *towards* the primary.
-    fn log_rate_limit(&mut self) -> bool {
+    ///
+    /// Only a rate limit arriving outside a backoff window counts. Requests already in flight
+    /// when the window opened tell us nothing new, and would otherwise reach
+    /// [`MAX_CONSECUTIVE_RATE_LIMITS`] in a single burst with no backoff having elapsed at all.
+    fn log_rate_limit(&mut self, until: Instant) -> bool {
+        let outlived_backoff = self
+            .rate_limited_until
+            .is_none_or(|prev| Instant::now() >= prev);
+        self.rate_limited_until = Some(until);
+        if !outlived_backoff {
+            return false;
+        }
+
         self.consecutive_rate_limits += 1;
         if self.shutting_down || self.consecutive_rate_limits < MAX_CONSECUTIVE_RATE_LIMITS {
             return false;
@@ -339,12 +351,13 @@ enum ResponseOutcome {
     Failed,
 }
 
-/// How many consecutive rate limits before a provider is treated as failed.
+/// How many rate limits, each outliving the backoff the previous one imposed, before a provider
+/// is treated as failed.
 ///
-/// The second one has already outlived a backoff, so the provider is not merely busy. Counting
-/// it bounds how long the client stays pinned to a provider whose quota is exhausted for the
-/// day; without it, `rate_limited_until` short-circuits every request forever and the healthy
-/// backup is never reached.
+/// A provider still rate limiting after a backoff of its own is not merely busy. Counting it
+/// bounds how long the client stays pinned to a provider whose quota is exhausted for the day;
+/// without it, `rate_limited_until` short-circuits every request forever and the healthy backup
+/// is never reached.
 #[cfg(feature = "node")]
 const MAX_CONSECUTIVE_RATE_LIMITS: usize = 2;
 
@@ -366,24 +379,26 @@ fn rate_limit_backoff(retry_after: Option<Duration>, configured: Duration) -> Du
     }
 }
 
-/// Whether the response rejects the request itself: the block range or result set is too large.
+/// Whether the response rejects the request itself: the result set it asks for is over the
+/// provider's cap.
 ///
-/// These recur against a perfectly healthy provider. `l1_events_max_block_range` defaults to
+/// This recurs against a perfectly healthy provider. `l1_events_max_block_range` defaults to
 /// 10000, exactly infura's result cap, and `get_finalized_deposits` retries a rejected chunk in
-/// a loop at `l1_retry_delay`, so scoring them would burn a generation every couple of seconds
-/// and cycle the whole provider list against a request every one of them rejects.
+/// a loop at `l1_retry_delay`, so scoring it would burn a generation every couple of seconds and
+/// cycle the whole provider list against a request every one of them rejects.
 ///
-/// Matched on the message because the code does not separate these: alchemy sends `-32600` for
-/// both a block-range rejection and a dead API key, and infura reuses `-32005` for both a
-/// result-count rejection and a rate limit. Claiming them before
-/// [`ErrorPayload::is_retry_err`], which calls every `-32005` a rate limit, is what makes
-/// deferring to alloy's matcher safe here.
+/// Only result-count rejections qualify. A block-range cap reads the same way but is a plan or
+/// node-config limit, not a property of the request: alchemy caps `eth_getLogs` at 10 blocks on
+/// the free tier and not at all on paid ones, so a backup may well serve the identical request
+/// and failing over is the right move.
+///
+/// Matched on the message because infura reuses `-32005` for both a result-count rejection and a
+/// rate limit. Claiming it before [`ErrorPayload::is_retry_err`], which calls every `-32005` a
+/// rate limit, is what makes deferring to alloy's matcher safe here.
 #[cfg(feature = "node")]
 fn is_request_rejection(res: &ResponsePacket) -> bool {
-    res.as_error().is_some_and(|e| {
-        let message = e.message.to_ascii_lowercase();
-        message.contains("block range") || message.contains("query returned more than")
-    })
+    res.as_error()
+        .is_some_and(|e| e.message.contains("query returned more than"))
 }
 
 /// The JSON-RPC error a response carries, if any.
@@ -399,8 +414,8 @@ fn error_payload(
 
 #[cfg(feature = "node")]
 impl ResponseOutcome {
-    /// Score a transport response for provider health. A batch is scored by its first
-    /// sub-request; no batch callers exist today.
+    /// Score a transport response for provider health. A batch is scored by the first error in
+    /// it; no batch callers exist today.
     fn classify(result: &StdResult<ResponsePacket, RpcError<TransportErrorKind>>) -> Self {
         use ResponseOutcome::*;
         match result {
@@ -495,9 +510,11 @@ impl Service<RequestPacket> for SwitchingTransport {
             }
 
             // Leaves the failure counters untouched, in both directions: the request would be
-            // rejected by every other provider too, so it is evidence about neither.
+            // rejected by every other provider too, so it is evidence about neither. Warned
+            // rather than counted, because the caller has to shrink the request to make progress
+            // and the failover metrics would say nothing about that.
             if matches!(outcome, ResponseOutcome::RequestRejected) {
-                tracing::debug!(
+                tracing::warn!(
                     url = %current_transport.redacted_url,
                     error = ?error_payload(&result),
                     "L1 rejected the request"
@@ -519,18 +536,25 @@ impl Service<RequestPacket> for SwitchingTransport {
             let should_switch = if let ResponseOutcome::RateLimited { retry_after } = outcome {
                 // Back off on this provider rather than failing over, until it has kept rate
                 // limiting through a backoff of its own.
+                let until = Instant::now()
+                    + rate_limit_backoff(retry_after, self_clone.opt.rate_limit_delay());
                 let mut status = current_transport.status.write();
-                status.rate_limited_until = Some(
-                    Instant::now()
-                        + rate_limit_backoff(retry_after, self_clone.opt.rate_limit_delay()),
-                );
-                let should_switch = status.log_rate_limit();
-                tracing::debug!(
-                    url = %current_transport.redacted_url,
-                    consecutive = status.consecutive_rate_limits,
-                    should_switch,
-                    "L1 rate limited"
-                );
+                let should_switch = status.log_rate_limit(until);
+                // Warned only when it ends in a failover, which is otherwise unexplainable from
+                // production logs: a routine backoff is too frequent to warn about.
+                if should_switch {
+                    tracing::warn!(
+                        url = %current_transport.redacted_url,
+                        consecutive = status.consecutive_rate_limits,
+                        "L1 still rate limiting after its own backoff, failing over"
+                    );
+                } else {
+                    tracing::debug!(
+                        url = %current_transport.redacted_url,
+                        consecutive = status.consecutive_rate_limits,
+                        "L1 rate limited"
+                    );
+                }
                 should_switch
             } else {
                 tracing::warn!(
@@ -1326,6 +1350,11 @@ mod test {
         /// production capture: the message is the one alloy's `is_retry_err` special-cases as
         /// "thrown by infura if out of budget for the day and ratelimited".
         pub const INFURA_DAILY_QUOTA: &str = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32005,"message":"daily request count exceeded, request rate limited","data":{"see":"https://infura.io/dashboard"}}}"#;
+        /// Infura load-balancer artifact: the node that served the request had not yet seen the
+        /// head block. Not a production capture: the message is the one alloy's `is_retry_err`
+        /// special-cases as "a load balancer issue".
+        pub const INFURA_HEADER_NOT_FOUND: &str =
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"header not found"}}"#;
         pub const INFURA_TOO_MANY_RESULTS: &str = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32005,"message":"query returned more than 10000 results. Try with this block range [0x1500000, 0x15000FA].","data":{"from":"0x1500000","limit":10000,"to":"0x15000FA"}}}"#;
         pub const INFURA_UNAVAILABLE: &str = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"service temporarily unavailable"}}"#;
         pub const SUCCESS: &str = r#"{"jsonrpc":"2.0","id":1,"result":"0x1"}"#;
@@ -1351,19 +1380,21 @@ mod test {
         ));
     }
 
+    /// A block-range cap is a plan limit, not a request property: a paid backup serves the
+    /// identical request, so this must stay scored and fail over.
     #[test]
-    fn test_response_outcome_alchemy_10_block_range_is_request_rejected() {
+    fn test_response_outcome_alchemy_10_block_range_is_failed() {
         assert!(matches!(
             ResponseOutcome::classify(&ok_packet(fixtures::ALCHEMY_10_BLOCK_RANGE)),
-            ResponseOutcome::RequestRejected
+            ResponseOutcome::Failed
         ));
     }
 
     #[test]
-    fn test_response_outcome_block_range_too_large_is_request_rejected() {
+    fn test_response_outcome_block_range_too_large_is_failed() {
         assert!(matches!(
             ResponseOutcome::classify(&ok_packet(fixtures::BLOCK_RANGE_TOO_LARGE)),
-            ResponseOutcome::RequestRejected
+            ResponseOutcome::Failed
         ));
     }
 
@@ -1382,6 +1413,17 @@ mod test {
     fn test_response_outcome_infura_daily_quota_is_rate_limited() {
         assert!(matches!(
             ResponseOutcome::classify(&ok_packet(fixtures::INFURA_DAILY_QUOTA)),
+            ResponseOutcome::RateLimited { retry_after: None }
+        ));
+    }
+
+    /// Deferring to alloy's matcher pulls this in, and `RateLimited` is the handling it wants:
+    /// the node that answered is behind the head, so back off instead of hammering it, and fail
+    /// over if it stays behind past the backoff.
+    #[test]
+    fn test_response_outcome_infura_header_not_found_is_rate_limited() {
+        assert!(matches!(
+            ResponseOutcome::classify(&ok_packet(fixtures::INFURA_HEADER_NOT_FOUND)),
             ResponseOutcome::RateLimited { retry_after: None }
         ));
     }
@@ -1938,6 +1980,44 @@ mod test {
     // }
 
     /// A helper function to get the index of the current provider in the failover list.
+    /// Requests already in flight when the backoff window opened are not new evidence about the
+    /// provider: without this, two concurrent callers fail over on a single burst.
+    #[test]
+    fn test_rate_limits_inside_the_backoff_window_count_once() {
+        let mut status = SingleTransportStatus::default();
+        let until = Instant::now() + Duration::from_secs(3600);
+
+        assert!(!status.log_rate_limit(until));
+        for _ in 0..MAX_CONSECUTIVE_RATE_LIMITS + 1 {
+            assert!(!status.log_rate_limit(until), "still inside the window");
+        }
+        assert_eq!(status.consecutive_rate_limits, 1);
+    }
+
+    /// The window elapsing between them is what makes rate limits count towards a failover.
+    #[test]
+    fn test_rate_limits_outliving_their_backoff_switch() {
+        let mut status = SingleTransportStatus::default();
+
+        for _ in 0..MAX_CONSECUTIVE_RATE_LIMITS - 1 {
+            assert!(!status.log_rate_limit(Instant::now()));
+        }
+        assert!(status.log_rate_limit(Instant::now()));
+    }
+
+    /// A success in between clears the count, so rate limits a provider recovers from never
+    /// accumulate into a failover.
+    #[test]
+    fn test_success_resets_the_rate_limit_count() {
+        let mut status = SingleTransportStatus::default();
+
+        for _ in 0..MAX_CONSECUTIVE_RATE_LIMITS * 2 {
+            assert!(!status.log_rate_limit(Instant::now()));
+            status.log_success();
+        }
+        assert_eq!(status.consecutive_rate_limits, 0);
+    }
+
     fn get_failover_index(provider: &L1Client) -> usize {
         let transport = &provider.transport;
         provider.transport.current_transport.read().generation % transport.urls.len()
