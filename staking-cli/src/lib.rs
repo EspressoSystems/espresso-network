@@ -36,6 +36,7 @@ pub(crate) mod metadata_types;
 // TODO: Replace with imports from staking-ui-service once version compatibility is resolved
 pub(crate) mod openmetrics;
 pub(crate) mod output;
+pub(crate) mod p2p_addr;
 pub(crate) mod parse;
 pub(crate) mod receipt;
 pub(crate) mod registration;
@@ -362,7 +363,7 @@ pub(crate) enum Commands {
         x25519_key: Option<x25519::PublicKey>,
 
         /// p2p address in host:port format. Required for V3 stake tables.
-        #[clap(long, value_parser = parse::parse_net_addr, env = "P2P_ADDR")]
+        #[clap(long, value_parser = p2p_addr::parse_p2p_addr, env = "P2P_ADDR")]
         p2p_addr: Option<NetAddr>,
     },
     /// Update a validators Espresso consensus signing keys.
@@ -399,7 +400,7 @@ pub(crate) enum Commands {
         x25519_key: x25519::PublicKey,
 
         /// The p2p address in host:port format
-        #[clap(long, value_parser = parse::parse_net_addr, env = "P2P_ADDR")]
+        #[clap(long, value_parser = p2p_addr::parse_p2p_addr, env = "P2P_ADDR")]
         p2p_addr: NetAddr,
     },
     /// Set x25519 encryption key for a validator.
@@ -411,7 +412,7 @@ pub(crate) enum Commands {
     /// Update p2p address for a validator.
     UpdateP2pAddr {
         /// The p2p address in host:port format
-        #[clap(long, value_parser = parse::parse_net_addr, env = "P2P_ADDR")]
+        #[clap(long, value_parser = p2p_addr::parse_p2p_addr, env = "P2P_ADDR")]
         p2p_addr: NetAddr,
     },
     /// Approve stake table contract to move tokens

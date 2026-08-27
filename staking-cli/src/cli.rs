@@ -41,6 +41,7 @@ use crate::{
     output::{
         CalldataInfo, format_esp, output_calldata, output_error, output_success, output_warn,
     },
+    p2p_addr::warn_if_unreachable,
     signature::{NodeSignatureDestination, NodeSignatureInput, NodeSignatures},
     transaction::Transaction,
 };
@@ -698,6 +699,10 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
                     .context("use --skip-metadata-validation to skip")?;
             }
 
+            if let Some(addr) = p2p_addr {
+                warn_if_unreachable(addr).await;
+            }
+
             Transaction::RegisterValidator {
                 stake_table: stake_table_addr,
                 commission: *commission,
@@ -773,6 +778,8 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
             if !config.export_calldata {
                 wallet.as_ref().ok_or_else(&require_wallet)?;
             }
+            warn_if_unreachable(p2p_addr).await;
+
             Transaction::UpdateNetworkConfig {
                 stake_table: stake_table_addr,
                 x25519_key: *x25519_key,
@@ -792,6 +799,8 @@ pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
             if !config.export_calldata {
                 wallet.as_ref().ok_or_else(&require_wallet)?;
             }
+            warn_if_unreachable(p2p_addr).await;
+
             Transaction::UpdateP2pAddr {
                 stake_table: stake_table_addr,
                 p2p_addr: p2p_addr.clone(),
