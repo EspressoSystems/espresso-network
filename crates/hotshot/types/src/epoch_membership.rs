@@ -8,7 +8,7 @@ use std::{
 };
 
 use alloy_primitives::U256;
-use async_broadcast::{InactiveReceiver, Sender, broadcast};
+use async_broadcast::{InactiveReceiver, RecvError, Sender, broadcast};
 use committable::Commitment;
 use either::Either;
 use hotshot_utils::{anytrace::*, *};
@@ -394,10 +394,32 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                         progress.checkpoint(format_args!(
                             "waiting for another task's catchup of epoch {try_epoch}"
                         ));
-                        if let Ok(Ok(_)) = rx.recv_direct().await {
-                            break;
-                        };
-                        // If we didn't receive the epoch then we need to try again
+                        match rx.recv_direct().await {
+                            Ok(Ok(_)) => break,
+                            // The owner reported failure, or we lagged behind
+                            // the channel; try again from the top.
+                            Ok(Err(_)) | Err(RecvError::Overflowed(_)) => {},
+                            Err(RecvError::Closed) => {
+                                // Every sender is gone: the owning attempt
+                                // terminated without evicting its entry, so
+                                // nothing will ever complete it. Evict it —
+                                // re-checking under the lock that the mapped
+                                // entry is still a closed one — so the next
+                                // iteration can claim the epoch itself
+                                // instead of spinning on this dead channel
+                                // until an unrelated cleanup sweeps it.
+                                let mut map_lock = self.catchup_map.lock();
+                                if map_lock
+                                    .get(&try_epoch)
+                                    .is_some_and(InactiveReceiver::is_closed)
+                                {
+                                    tracing::error!(
+                                        "evicting orphaned catchup_map entry for epoch {try_epoch}"
+                                    );
+                                    map_lock.remove(&try_epoch);
+                                }
+                            },
+                        }
                     },
                     _ => {
                         // Nobody else is fetching this epoch. We need to do it.
