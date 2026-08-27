@@ -5119,6 +5119,7 @@ dependencies = [
  "static_assertions",
  "tagged-base64",
  "test-log",
+ "test-server",
  "test-utils",
  "thiserror 2.0.18",
  "time 0.3.51",
@@ -12800,6 +12801,7 @@ dependencies = [
  "tagged-base64",
  "tempfile",
  "test-log",
+ "test-server",
  "test-utils",
  "thiserror 2.0.18",
  "tokio",
@@ -13194,6 +13196,15 @@ checksum = "944ad38adcbb71eaa682c56bceeb079e4ca82b4b3edc2a0fde5cb297b77dac8d"
 dependencies = [
  "syn 2.0.118",
  "test-log-core",
+]
+
+[[package]]
+name = "test-server"
+version = "0.1.0"
+dependencies = [
+ "tokio",
+ "url",
+ "warp 0.4.3",
 ]
 
 [[package]]
