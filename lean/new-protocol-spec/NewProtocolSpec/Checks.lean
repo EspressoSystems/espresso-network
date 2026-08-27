@@ -4,6 +4,7 @@ import NewProtocolSpec.Safety
 import NewProtocolSpec.DecideStream
 import NewProtocolSpec.Deadlock
 import NewProtocolSpec.Implements
+import NewProtocolSpec.Checks.Examples
 meta import Lean.Elab.Command
 
 /-!
@@ -22,7 +23,14 @@ either, so what can be checked is checked here at build time:
 * the windows of `NewProtocolSpec.Progress` have exactly the fields they claim.
   Those are hypotheses rather than premises, so a field added there does not widen
   what is believed — it weakens what is concluded, silently, which is the same rot
-  wearing the other hat.
+  wearing the other hat;
+* the obligations can be owed at all, which is `NewProtocolSpec.Checks.Examples`:
+  a guard no state satisfies would leave every result about it vacuous, and prose
+  cannot tell you which.
+
+That the obligations can be owed at all is checked too, in
+`NewProtocolSpec.Checks.Examples`: a guard no state satisfies would leave every result
+about it vacuous, and prose cannot tell you which.
 
 These exist because that rot has happened here: two premises that became theorems
 and stayed listed as premises, and two clause counts that drifted after a clause
@@ -50,7 +58,9 @@ namespace Checks
 /-! ## Axioms
 
 `propext`, `Classical.choice` and `Quot.sound` are Lean's own. `sorryAx` would
-appear here if any proof were incomplete.
+appear here if any proof were incomplete. Two of the results below use fewer:
+turning a quorum's votes into a certificate is bookkeeping, and reaches for no
+classical principle.
 -/
 
 /-- info: 'NewProtocol.decideSafety' depends on axioms: [propext, Classical.choice, Quot.sound] -/
@@ -59,14 +69,35 @@ appear here if any proof were incomplete.
 /-- info: 'NewProtocol.decideInv_reachable' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms decideInv_reachable
 
-/-- info: 'NewProtocol.cert1_forms' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+/-- info: 'NewProtocol.cert1_forms_of_owed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms cert1_forms_of_owed
+
+/-- info: 'NewProtocol.cert2_forms_of_owed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms cert2_forms_of_owed
+
+/-- info: 'NewProtocol.admitted_held' depends on axioms: [propext] -/
+#guard_msgs in #print axioms admitted_held
+
+/-- info: 'NewProtocol.cert1_forms' depends on axioms: [propext] -/
 #guard_msgs in #print axioms cert1_forms
 
-/-- info: 'NewProtocol.cert2_forms' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+/-- info: 'NewProtocol.cert2_forms' depends on axioms: [propext] -/
 #guard_msgs in #print axioms cert2_forms
 
 /-- info: 'NewProtocol.quorum_on_chain' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms quorum_on_chain
+
+/-- info: 'NewProtocol.vote1_owed_of_validated' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms vote1_owed_of_validated
+
+/-- info: 'NewProtocol.vote2_owed_of_reconstructed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms vote2_owed_of_reconstructed
+
+/-- info: 'NewProtocol.vote1_unstalled' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms vote1_unstalled
+
+/-- info: 'NewProtocol.vote2_unstalled' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms vote2_unstalled
 
 /-- info: 'NewProtocol.vote1_forced' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms vote1_forced
@@ -79,6 +110,7 @@ appear here if any proof were incomplete.
 
 /-- info: 'NewProtocol.propose_forced' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms propose_forced
+
 
 /-! ## What is stated where
 
@@ -152,6 +184,14 @@ run_meta (checkFields `NewProtocol.WeaklyFair
 A window is a hypothesis, and a hypothesis grows by being weakened. These lists
 are what each progress result may assume of a node beyond the action being owed.
 -/
+run_meta (checkFields `NewProtocol.LockAllows
+  [`safe, `below]
+  "the field list in `NewProtocolSpec.Progress.Defs`")
+
+run_meta (checkFields `NewProtocol.AnchorKept
+  [`proposal, `cert]
+  "the field list in `NewProtocolSpec.Progress.Defs`")
+
 run_meta (checkFields `NewProtocol.Vote1Window
   [`bar, `timedOut, `lock, `floor, `parentFloor]
   "the field list in `NewProtocolSpec.Progress.Defs`")
@@ -165,7 +205,7 @@ run_meta (checkFields `NewProtocol.DecideWindow
   "the field list in `NewProtocolSpec.Progress.Defs`")
 
 run_meta (checkFields `NewProtocol.ProposeWindow
-  [`bar, `timedOut, `floor, `parentFloor, `lock]
+  [`bar, `timedOut, `floor, `parentFloor, `anchorKept, `lock]
   "the field list in `NewProtocolSpec.Progress.Defs`")
 
 /-!
@@ -175,19 +215,23 @@ as the windows: a field added here weakens the theorem that takes the bundle.
 -/
 run_meta (checkFields `NewProtocol.ProposalAdmissible
   [`bar, `admitted, `proposals, `vidShares, `safe, `wellFormed, `share]
-  "the field list in `NewProtocolSpec.Deadlock`")
+  "the field list in `NewProtocolSpec.Deadlock.Defs`")
 
 run_meta (checkFields `NewProtocol.Vote1Room
-  [`timedOut, `lock, `floor, `parentFloor]
-  "the field list in `NewProtocolSpec.Deadlock`")
+  [`bar, `timedOut, `lock, `floor, `parentFloor]
+  "the field list in `NewProtocolSpec.Deadlock.Defs`")
 
 run_meta (checkFields `NewProtocol.Vote2Room
   [`bar, `floor, `noSkip, `noCert2, `notDecided]
-  "the field list in `NewProtocolSpec.Deadlock`")
+  "the field list in `NewProtocolSpec.Deadlock.Defs`")
+
+run_meta (checkFields `NewProtocol.ProposeRoom
+  [`bar, `timedOut, `floor, `parentFloor, `lock]
+  "the field list in `NewProtocolSpec.Deadlock.Defs`")
 
 run_meta (checkFields `NewProtocol.ProposeReady
   [`leads, `wellFormed, `justified, `parentHeld]
-  "the field list in `NewProtocolSpec.Deadlock`")
+  "the field list in `NewProtocolSpec.Deadlock.Defs`")
 
 /-!
 And that a `LiveNetwork` is a `Network` with fairness, rather than a second set of

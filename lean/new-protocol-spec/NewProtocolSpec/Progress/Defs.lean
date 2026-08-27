@@ -94,23 +94,33 @@ def ProposePending {cfg : Config} {leader : ViewNumber → Option PubKey} {node 
   ∀ i, n ≤ i → i < m → ∀ q : Proposal,
     Output.send (.proposal q) ∈ (Run.event r i).outputs → q.viewNumber ≠ p.viewNumber
 
-/-! Nothing has gone out yet at the step the window opens: the range is empty. -/
+/-! Nothing has gone out yet at the step a window opens: the range is empty. -/
 
-theorem Vote1Pending.refl {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
-    (r : Run cfg (StepSpec cfg leader node)) (p : Proposal) (n : Nat) : Vote1Pending r p n n :=
+theorem ProposePending.refl {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
+    (r : Run cfg (StepSpec cfg leader node)) (p : Proposal) (n : Nat) : ProposePending r p n n :=
   fun i hi him => absurd (Nat.lt_of_lt_of_le him hi) (Nat.lt_irrefl i)
 
 theorem Vote2Pending.refl {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
     (r : Run cfg (StepSpec cfg leader node)) (p : Proposal) (n : Nat) : Vote2Pending r p n n :=
   fun i hi him => absurd (Nat.lt_of_lt_of_le him hi) (Nat.lt_irrefl i)
 
-theorem DecidePending.refl {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
-    (r : Run cfg (StepSpec cfg leader node)) (v : ViewNumber) (n : Nat) : DecidePending r v n n :=
-  fun i hi him => absurd (Nat.lt_of_lt_of_le him hi) (Nat.lt_irrefl i)
+/--
+The anchor a proposal extends is still there.
 
-theorem ProposePending.refl {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
-    (r : Run cfg (StepSpec cfg leader node)) (p : Proposal) (n : Nat) : ProposePending r p n n :=
-  fun i hi him => absurd (Nat.lt_of_lt_of_le him hi) (Nat.lt_irrefl i)
+`Config.anchorBlock` and `Config.anchorCert` sit at `ViewNumber.genesis`, which
+is below both watermarks for ever, so no retention clause reaches them: nothing
+obliges a node to keep the anchor, and a node that dropped it can never propose
+the chain's first view. That is a hypothesis of the propose results rather than
+an obligation, and one any node that has not pruned the anchor discharges.
+-/
+structure AnchorKept (s s' : NodeState) : Prop where
+  /-- The block the chain starts from is still held. -/
+  proposal : ∀ b, s.proposals ViewNumber.genesis = some b →
+    s'.proposals ViewNumber.genesis = some b
+
+  /-- And the certificate over it. -/
+  cert : ∀ c, s.cert1s ViewNumber.genesis = some c →
+    s'.cert1s ViewNumber.genesis = some c
 
 /-!
 ## Windows
@@ -135,7 +145,7 @@ last one they look at.
 The window in which a vote1 for `p` stays owed.
 
 `parentFloor` is conditional exactly as `Vote1Justification.parentLinked` is:
-below genesis there is no parent to keep.
+at genesis there is no parent to keep.
 -/
 structure Vote1Window {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
     (r : Run cfg (StepSpec cfg leader node)) (p : Proposal) (n : Nat) : Prop where
@@ -201,7 +211,7 @@ structure DecideWindow {cfg : Config} {leader : ViewNumber → Option PubKey} {n
 The window in which a proposal `p` stays owed.
 
 `lock` is conditional on the proposal carrying timeout evidence, because that is
-the only branch of `ProposalJustification.justified` that reads the lock. A
+the only branch of `ParentCertJustified` that reads the lock. A
 proposal extending the immediately preceding view rests on a certificate
 instead, which retention keeps.
 -/
@@ -217,9 +227,21 @@ structure ProposeWindow {cfg : Config} {leader : ViewNumber → Option PubKey} {
   floor : ∀ m, n ≤ m → ProposePending r p n m →
     (Run.state r m).aboveDecideFloor cfg p.viewNumber
 
-  /-- And below the parent's view, so the parent block and its certificate stay held. -/
-  parentFloor : ∀ m, n ≤ m → ProposePending r p n m →
-    (Run.state r m).aboveDecideFloor cfg p.parentCert.view
+  /--
+  And below the parent's view, so the parent block and its certificate stay held.
+
+  Conditional, as `Vote1Window.parentFloor` is, and for a sharper reason: genesis
+  is below the floor in every state, so retention could not reach the anchor
+  however the window was written. `anchorKept` is what covers that case.
+  -/
+  parentFloor : p.parentCert.view ≠ ViewNumber.genesis →
+    ∀ m, n ≤ m → ProposePending r p n m →
+      (Run.state r m).aboveDecideFloor cfg p.parentCert.view
+
+  /-- A proposal extending the anchor needs the anchor to still be there. -/
+  anchorKept : p.parentCert.view = ViewNumber.genesis →
+    ∀ m, n ≤ m → ProposePending r p n m →
+      AnchorKept (Run.state r m) (Run.state r (m + 1))
 
   /-- After a timeout, the lock stays on the certificate the proposal extends. -/
   lock : p.timeoutEvidence.isSome →

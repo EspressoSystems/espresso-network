@@ -327,8 +327,8 @@ rule, rather than happening between steps where nothing constrains it.
 {docstring NewProtocol.Run}
 
 Four readings of a run are used below, and nothing else looks inside one: what it
-emitted, what it emitted from a point on, what it consumed, and what holds from a
-point on.
+emitted, what it emitted from a step on, what it consumed, and what holds from a
+step on.
 
 ```lean -show
 namespace Spec
@@ -399,23 +399,12 @@ namespace Spec
   ```
 :::
 
-:::spec NewProtocol.Run.EventuallyAlways
-  ```lean
-  def Run.EventuallyAlways {cfg : NewProtocol.Config} {S : StepRel}
-      (r : Run cfg S) (P : NodeState → Prop) : Prop :=
-    ∃ n, Run.AlwaysFrom r n P
-  ```
-:::
-
 ```lean -show
 example : @Spec.Run.AlwaysFrom = @NewProtocol.Run.AlwaysFrom := rfl
-example : @Spec.Run.EventuallyAlways = @NewProtocol.Run.EventuallyAlways := rfl
 end Spec
 ```
 
 {includeDocstring NewProtocol.Run.AlwaysFrom}
-
-{includeDocstring NewProtocol.Run.EventuallyAlways}
 
 None of this is a liveness notion. {ref "network"}[The network] and the no-fork
 result are built on runs too, and both read a node's history rather than its
@@ -1260,25 +1249,25 @@ arrive.
   * an owed proposal is sent, in the view it was owed for
 *
   * {name NewProtocol.cert1_forms}`cert1_forms`
-  * a quorum that owes a vote1 forms the `Cert1`
+  * a quorum's vote1s are the `Cert1`
 *
   * {name NewProtocol.cert2_forms}`cert2_forms`
-  * a quorum that owes a vote2 forms the `Cert2`
+  * a quorum's vote2s are the `Cert2`
 *
   * {name NewProtocol.quorum_on_chain}`quorum_on_chain`
   * and what it commits lies on the one chain
 *
   * {name NewProtocol.vote1_unstalled}`vote1_unstalled`
-  * deliver the proposal and its validity, and a vote1 is owed
+  * deliver the proposal and its validity, and a vote1 is owed or already cast
 *
   * {name NewProtocol.vote2_unstalled}`vote2_unstalled`
-  * deliver the `Cert1` and the payload, and a vote2 is owed
+  * deliver the `Cert1` and the payload, and a vote2 is owed or already cast
 *
   * {name NewProtocol.decide_unstalled}`decide_unstalled`
-  * deliver the `Cert2`, and the decide is owed
+  * deliver the `Cert2`, and the decide is owed or already delivered
 *
   * {name NewProtocol.propose_unstalled}`propose_unstalled`
-  * deliver the block to propose, and the proposal is owed
+  * deliver the block to propose, and the proposal is owed or already sent
 *
   * {name NewProtocol.vote1_forced}`vote1_forced`
   * the two halves, composed: deliver, and the vote1 is cast
@@ -1295,6 +1284,66 @@ arrive.
 
 ## The window
 
+A window's fields are guarded by the action still being outstanding, which is
+read off the run's own history rather than the freshness mark: a collection may
+drop the mark once the view is abandoned, and nothing can undo an emission.
+
+```lean -show
+namespace Spec
+```
+
+:::spec NewProtocol.Vote1Pending
+  ```lean
+  def Vote1Pending {cfg : NewProtocol.Config} {leader : ViewNumber → Option PubKey}
+      {node : PubKey} (r : Run cfg (StepSpec cfg leader node)) (p : Proposal)
+      (n m : Nat) : Prop :=
+    ∀ i, n ≤ i → i < m → ∀ vote : Vote1,
+      NewProtocol.Output.send (.vote1 vote) ∈ (Run.event r i).outputs
+        → vote.view ≠ p.viewNumber
+  ```
+:::
+
+:::spec NewProtocol.Vote2Pending
+  ```lean
+  def Vote2Pending {cfg : NewProtocol.Config} {leader : ViewNumber → Option PubKey}
+      {node : PubKey} (r : Run cfg (StepSpec cfg leader node)) (p : Proposal)
+      (n m : Nat) : Prop :=
+    ∀ i, n ≤ i → i < m → ∀ vote : Vote2,
+      NewProtocol.Output.send (.vote2 vote) ∈ (Run.event r i).outputs
+        → vote.view ≠ p.viewNumber
+  ```
+:::
+
+:::spec NewProtocol.DecidePending
+  ```lean
+  def DecidePending {cfg : NewProtocol.Config} {leader : ViewNumber → Option PubKey}
+      {node : PubKey} (r : Run cfg (StepSpec cfg leader node)) (v : ViewNumber)
+      (n m : Nat) : Prop :=
+    ∀ i, n ≤ i → i < m → ∀ blocks c1 c2,
+      NewProtocol.Output.decided blocks c1 c2 ∈ (Run.event r i).outputs
+        → ∀ b ∈ blocks, b.viewNumber ≠ v
+  ```
+:::
+
+:::spec NewProtocol.ProposePending
+  ```lean
+  def ProposePending {cfg : NewProtocol.Config} {leader : ViewNumber → Option PubKey}
+      {node : PubKey} (r : Run cfg (StepSpec cfg leader node)) (p : Proposal)
+      (n m : Nat) : Prop :=
+    ∀ i, n ≤ i → i < m → ∀ q : Proposal,
+      NewProtocol.Output.send (.proposal q) ∈ (Run.event r i).outputs
+        → q.viewNumber ≠ p.viewNumber
+  ```
+:::
+
+```lean -show
+example : @Spec.Vote1Pending = @NewProtocol.Vote1Pending := rfl
+example : @Spec.Vote2Pending = @NewProtocol.Vote2Pending := rfl
+example : @Spec.DecidePending = @NewProtocol.DecidePending := rfl
+example : @Spec.ProposePending = @NewProtocol.ProposePending := rfl
+end Spec
+```
+
 {docstring NewProtocol.LockAllows}
 
 {docstring NewProtocol.Vote1Window}
@@ -1304,6 +1353,8 @@ arrive.
 {docstring NewProtocol.DecideWindow}
 
 {docstring NewProtocol.ProposeWindow}
+
+{docstring NewProtocol.AnchorKept}
 
 Each action being owed is its window together with the action being enabled at the
 step the window opens. These four are the hypothesis every result below takes.
@@ -1388,6 +1439,8 @@ have done to itself in the meantime.
 
 {docstring NewProtocol.Vote2Room}
 
+{docstring NewProtocol.ProposeRoom}
+
 {docstring NewProtocol.ProposeReady}
 
 ```lean -show
@@ -1410,6 +1463,10 @@ end Spec
 ```
 
 {includeDocstring NewProtocol.ParentHeld}
+
+{docstring NewProtocol.vote1_owed_of_validated}
+
+{docstring NewProtocol.vote2_owed_of_reconstructed}
 
 {docstring NewProtocol.vote1_unstalled}
 
@@ -1458,7 +1515,10 @@ comes from those. Nothing in `Lemmas` needs reading to judge what is claimed.
 Nothing is assumed beyond what is collected above. There are no `axiom`s and no
 `sorry`s, so the axiom footprint of every theorem here is Lean's own — `propext`,
 `Classical.choice`, `Quot.sound` — and that is checked on every build rather than
-asserted, along with the clause lists and the premise lists themselves.
+asserted, along with the clause lists and the premise lists. Alongside them
+`NewProtocolSpec.Checks.Examples` exhibits six states that owe an action, including on
+the branches a first-view proposal would leave exempt — so the claim
+{ref "progress"}[what progress is worth] rests on is checked rather than argued.
 
 *Definitions — read and judge.* In particular:
 

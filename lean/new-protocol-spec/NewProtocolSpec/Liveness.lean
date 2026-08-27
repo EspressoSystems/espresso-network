@@ -27,17 +27,22 @@ some point on forever is eventually taken.
 
 Each field pairs an enabledness predicate from `NewProtocolSpec.Step` with
 the output it owes, and both halves are anchored at the same step `n`: what is
-owed from `n` on is taken *at or after* `n` (`Run.EmitsFrom`). Anything weaker
-would let a node discharge an obligation with an action it took before the
-obligation arose.
+owed from `n` on is taken *at or after* `n` (`Run.EmitsFrom`).
 
-Every pairing is exact — taking the action clears its mark and so disables it,
-meaning the antecedent really does say "the node sat on this forever". So each
-field is in force precisely as a prohibition on indefinite deferral: a node that
-holds what justifies an action, and that nothing else overtakes, may not put it
-off for ever. What it does *not* say is that the action is ever justified, nor
-that anything arrives to justify it; `NewProtocolSpec.Progress` is how far these
-reach, and what they need beside them.
+Read what that amounts to. Taking an action sets its mark, which is one of the
+things its enabledness denies, so the antecedent and the conclusion cannot both
+hold: each field says that no
+action stays enabled for ever, and nothing more. The bound on the conclusion adds
+no strength for the same reason — an action taken before `n` would have left a
+mark the node may drop only where the action is barred anyway — and is there so
+that a consumer need not re-derive that. So each field is in force precisely as a
+prohibition on indefinite deferral: a node that holds what justifies an action,
+and that nothing else overtakes, may not put it off for ever. The four results of
+`NewProtocolSpec.Progress` consume it in that form, by contradiction.
+
+What it does *not* say is that the action is ever justified, nor that anything
+arrives to justify it; `NewProtocolSpec.Progress` is how far these reach, and
+what they need beside them.
 
 Every obligation is discharged by a `Message` or a decide, since those are
 the only outputs there are: each enabledness predicate reads only what the

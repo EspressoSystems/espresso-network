@@ -457,7 +457,8 @@ theorem next_conforms (cfg : Config) (leader : ViewNumber → Option PubKey) (no
     obtain ⟨parent, hpar, hmatch, hhd⟩ := hheaders
     refine { leader := hlead, wellFormed := hwfp, justified := ?_,
              headerBuilt := ⟨parent, ?_, hmatch, ?_⟩ }
-    · cases hte : p.timeoutEvidence with
+    · unfold ParentCertJustified
+      cases hte : p.timeoutEvidence with
       | some tc =>
         rw [hte] at hjust
         exact ⟨by rw [hfr.timeoutCerts]; exact hjust.1, hjust.2⟩

@@ -44,16 +44,18 @@ for the result they are built for, and `Conforms` for what an implementation owe
   those certificates guarantee
 * `Safety` — the no-fork property
 * `Progress` — what an owed action is worth: fairness turned into an output, and a
-  quorum's worth of owed votes turned into a certificate
+  quorum's worth of votes turned into a certificate
 * `Deadlock` — that an action can always be made owed, by inputs the specification
-  itself admits
+  itself admits, and that delivering them makes the node act
 * `Checks` — the claims this specification makes about itself, checked at build
-  time
+  time, with `Checks/Examples.lean` exhibiting states that owe an action so that
+  no obligation's guards are checked only in prose
 
 `Network`, `Safety`, `DecideStream` and `Progress` come in three parts each: `X/Defs.lean`
 holds the definitions the statements are phrased with, `X/Lemmas.lean` the
 kernel-checked scaffolding, and `X.lean` the results. An audit reads the first
-and the third.
+and the third. `Deadlock` has two parts and no scaffolding: its definitions are
+in `Deadlock/Defs.lean` and its results, proved in place, in `Deadlock.lean`.
 
 Everything from `Network` upwards talks about nodes that obey `SafetySpec` and
 nothing else. So a safety proof cannot reach for another clause: there is none in

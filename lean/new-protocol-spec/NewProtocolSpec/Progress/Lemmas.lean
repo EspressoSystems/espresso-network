@@ -5,18 +5,26 @@ public import NewProtocolSpec.Progress.Defs
 /-!
 # Working lemmas for the progress results
 
-Kernel-checked scaffolding for `NewProtocolSpec.Progress`; nothing here is part
-of the contract, and an audit can skip the file. It does four things:
+Kernel-checked scaffolding for `NewProtocolSpec.Progress` and
+`NewProtocolSpec.Deadlock`; nothing here is part of the contract, and an audit can
+skip the file. It does six things:
 
 * turns `StepSpec.contentRetained` and the two `GcSpec` retention clauses into
-  one statement per transition, whichever kind it was;
+  one statement per transition, whichever kind it was, and chains those along a
+  run so that a delivery arriving in parts is carried between them;
 * carries each freshness mark forward across a step that does not take the
   action, from the mark obligations alone;
 * propagates each enabledness predicate along a run inside its window, up to a
   bound, which is where the retention clauses are consumed;
+* moves a window's anchor forward, which is what lets a window cover the steps
+  that deliver and the results consume it after them;
 * finds the *first* step an action was taken at, which is the only one whose
   window is still open and so the only one the block a vote signed can be read
-  off.
+  off;
+* reads a vote of a `LiveNetwork` as one the `Network` underneath it records.
+
+`admitted_held` sits here too, and is the one statement in the file worth
+reading on its own: what a node has admitted above the decide floor, it holds.
 -/
 
 @[expose] public section
@@ -71,6 +79,86 @@ theorem cast2_of_emit {cfg : Config} {leader : ViewNumber → Option PubKey} {C 
   refine ⟨j, Output.send (.vote2 vote), ?_, rfl⟩
   rw [N.netRun k h, safeRun_event]
   exact hmem
+
+/-! ## Moving a window's anchor
+
+A window opened at `n` is one opened at any later `n'`, provided the action did
+not go out in between. Callers want the earlier anchor: a window has to cover the
+steps that deliver the inputs, or the run in which the node acts *during* the
+delivery satisfies the guard for ever and so satisfies no window at all.
+-/
+
+theorem Vote1Pending.trans {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
+    {r : Run cfg (StepSpec cfg leader node)} {p : Proposal} {n n' m : Nat}
+    (h : Vote1Pending r p n n') (h' : Vote1Pending r p n' m) : Vote1Pending r p n m := by
+  intro i hi him
+  by_cases hlt : i < n'
+  · exact h i hi hlt
+  · exact h' i (Nat.le_of_not_lt hlt) him
+
+theorem Vote2Pending.trans {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
+    {r : Run cfg (StepSpec cfg leader node)} {p : Proposal} {n n' m : Nat}
+    (h : Vote2Pending r p n n') (h' : Vote2Pending r p n' m) : Vote2Pending r p n m := by
+  intro i hi him
+  by_cases hlt : i < n'
+  · exact h i hi hlt
+  · exact h' i (Nat.le_of_not_lt hlt) him
+
+theorem DecidePending.trans {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
+    {r : Run cfg (StepSpec cfg leader node)} {v : ViewNumber} {n n' m : Nat}
+    (h : DecidePending r v n n') (h' : DecidePending r v n' m) : DecidePending r v n m := by
+  intro i hi him
+  by_cases hlt : i < n'
+  · exact h i hi hlt
+  · exact h' i (Nat.le_of_not_lt hlt) him
+
+theorem ProposePending.trans {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
+    {r : Run cfg (StepSpec cfg leader node)} {p : Proposal} {n n' m : Nat}
+    (h : ProposePending r p n n') (h' : ProposePending r p n' m) : ProposePending r p n m := by
+  intro i hi him
+  by_cases hlt : i < n'
+  · exact h i hi hlt
+  · exact h' i (Nat.le_of_not_lt hlt) him
+
+theorem Vote1Window.shift {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
+    {r : Run cfg (StepSpec cfg leader node)} {p : Proposal} {n n' : Nat}
+    (hw : Vote1Window r p n) (hle : n ≤ n') (hgap : Vote1Pending r p n n') :
+    Vote1Window r p n' :=
+  { bar := fun m hm hpend => hw.bar m (Nat.le_trans hle hm) (hgap.trans hpend)
+  , timedOut := fun m hm hpend => hw.timedOut m (Nat.le_trans hle hm) (hgap.trans hpend)
+  , lock := fun m hm hpend => hw.lock m (Nat.le_trans hle hm) (hgap.trans hpend)
+  , floor := fun m hm hpend => hw.floor m (Nat.le_trans hle hm) (hgap.trans hpend)
+  , parentFloor := fun hne m hm hpend =>
+      hw.parentFloor hne m (Nat.le_trans hle hm) (hgap.trans hpend) }
+
+theorem Vote2Window.shift {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
+    {r : Run cfg (StepSpec cfg leader node)} {p : Proposal} {n n' : Nat}
+    (hw : Vote2Window r p n) (hle : n ≤ n') (hgap : Vote2Pending r p n n') :
+    Vote2Window r p n' :=
+  { bar := fun m hm hpend => hw.bar m (Nat.le_trans hle hm) (hgap.trans hpend)
+  , floor := fun m hm hpend => hw.floor m (Nat.le_trans hle hm) (hgap.trans hpend)
+  , noSkip := fun m hm hpend => hw.noSkip m (Nat.le_trans hle hm) (hgap.trans hpend)
+  , noCert2 := fun m hm hpend => hw.noCert2 m (Nat.le_trans hle hm) (hgap.trans hpend)
+  , notDecided := fun m hm hpend => hw.notDecided m (Nat.le_trans hle hm) (hgap.trans hpend) }
+
+theorem DecideWindow.shift {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
+    {r : Run cfg (StepSpec cfg leader node)} {v : ViewNumber} {n n' : Nat}
+    (hw : DecideWindow r v n) (hle : n ≤ n') (hgap : DecidePending r v n n') :
+    DecideWindow r v n' :=
+  { floor := fun m hm hpend => hw.floor m (Nat.le_trans hle hm) (hgap.trans hpend) }
+
+theorem ProposeWindow.shift {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
+    {r : Run cfg (StepSpec cfg leader node)} {p : Proposal} {n n' : Nat}
+    (hw : ProposeWindow r p n) (hle : n ≤ n') (hgap : ProposePending r p n n') :
+    ProposeWindow r p n' :=
+  { bar := fun m hm hpend => hw.bar m (Nat.le_trans hle hm) (hgap.trans hpend)
+  , timedOut := fun m hm hpend => hw.timedOut m (Nat.le_trans hle hm) (hgap.trans hpend)
+  , floor := fun m hm hpend => hw.floor m (Nat.le_trans hle hm) (hgap.trans hpend)
+  , parentFloor := fun hne m hm hpend =>
+      hw.parentFloor hne m (Nat.le_trans hle hm) (hgap.trans hpend)
+  , anchorKept := fun hgen m hm hpend =>
+      hw.anchorKept hgen m (Nat.le_trans hle hm) (hgap.trans hpend)
+  , lock := fun hte m hm hpend => hw.lock hte m (Nat.le_trans hle hm) (hgap.trans hpend) }
 
 /-! ## The first time something happens
 
@@ -140,6 +228,125 @@ theorem retainsDecide_of_step {cfg : Config} {node : PubKey}
     (hfloor : s.aboveDecideFloor cfg v) : RetainsDecide s s' v :=
   (StepSpec.contentRetained hs v hfloor).decide
 
+/--
+What a node has admitted above the decide floor, it holds.
+
+`Vote2Justification` reads `NodeState.admitted`, while casting the vote2 it
+justifies moves the lock, and `SafetySpec.lockJustified` reads
+`NodeState.proposals`. Nothing in either says the two agree, so it is proved
+here: admission writes the proposal into both (`SafetySpec.admissionJustified`),
+and above the floor neither kind of step may drop it
+(`StepSpec.contentRetained`, `GcSpec.keepsDecideAboveFloor`). Below the floor the
+two may part, and nothing needs them not to.
+
+Stated over `StepSpec` rather than `SafetySpec`: retention is not a safety
+clause, and a node held to the safety clauses alone may drop what it admitted.
+-/
+theorem admitted_held {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
+    {s : NodeState}
+    (hr : Reachable cfg (StepSpec cfg leader node) (NodeState.initial cfg) s) :
+    ∀ v p, s.admitted v = some p → s.aboveDecideFloor cfg v → s.proposals v = some p := by
+  induction hr with
+  | refl => intro v p hp; simp [NodeState.initial] at hp
+  | step _ ht ih =>
+    intro v p hp hfl
+    cases ht with
+    | step hs =>
+      rcases SafetySpec.admissionJustified hs.toSafetySpec v p hp with
+        hold | ⟨-, -, -, -, -, -, -, -, -, hheld⟩
+      · have hfl' := SafetySpec.floorMono hs.toSafetySpec hfl
+        exact ((StepSpec.contentRetained hs v hfl').decide).proposals p (ih v p hold hfl')
+      · exact hheld
+    | collect hg =>
+      have hold := (GcSpec.shrinks hg).admitted v p hp
+      have hfl' := GcSpec.floorStable hg v hfl
+      exact (GcSpec.keepsDecideAboveFloor hg v hfl').proposals p (ih v p hold hfl')
+
+/-! ## Holdings carried along a run
+
+`retainsVote_of_transition` is one step; a delivery whose parts arrive at
+different times needs the stretch between them. Both are chained by the window,
+which supplies the floor at every state and the bar at every successor for as
+long as the action is outstanding.
+-/
+
+theorem RetainsVote.refl (s : NodeState) (v : ViewNumber) : RetainsVote s s v :=
+  { admitted := fun _ h => h, vidShares := fun _ h => h, validated := fun _ h => h
+  , headers := fun _ _ h => h, timeoutCerts := fun _ h => h }
+
+theorem RetainsVote.trans {s s' s'' : NodeState} {v : ViewNumber}
+    (h : RetainsVote s s' v) (h' : RetainsVote s' s'' v) : RetainsVote s s'' v :=
+  { admitted := fun p hp => h'.admitted p (h.admitted p hp)
+  , vidShares := fun sh hsh => h'.vidShares sh (h.vidShares sh hsh)
+  , validated := fun hb hhb => h'.validated hb (h.validated hb hhb)
+  , headers := fun hb hd hhd => h'.headers hb hd (h.headers hb hd hhd)
+  , timeoutCerts := fun tc htc => h'.timeoutCerts tc (h.timeoutCerts tc htc) }
+
+theorem RetainsDecide.refl (s : NodeState) (v : ViewNumber) : RetainsDecide s s v :=
+  { proposals := fun _ h => h, blocksReconstructed := fun _ h => h
+  , cert1s := fun _ h => h, cert2s := fun _ h => h }
+
+theorem RetainsDecide.trans {s s' s'' : NodeState} {v : ViewNumber}
+    (h : RetainsDecide s s' v) (h' : RetainsDecide s' s'' v) : RetainsDecide s s'' v :=
+  { proposals := fun p hp => h'.proposals p (h.proposals p hp)
+  , blocksReconstructed := fun pc hpc => h'.blocksReconstructed pc (h.blocksReconstructed pc hpc)
+  , cert1s := fun c hc => h'.cert1s c (h.cert1s c hc)
+  , cert2s := fun c hc => h'.cert2s c (h.cert2s c hc) }
+
+/-- A window carries the vote path from any state of it to any later one. -/
+theorem vote1Window_retainsVote {cfg : Config} {leader : ViewNumber → Option PubKey}
+    {node : PubKey} {r : Run cfg (StepSpec cfg leader node)} {p : Proposal} {n m₁ m₂ : Nat}
+    (hw : Vote1Window r p n) (hn : n ≤ m₁) (hle : m₁ ≤ m₂) (hpend : Vote1Pending r p n m₂) :
+    RetainsVote (Run.state r m₁) (Run.state r m₂) p.viewNumber := by
+  induction hle with
+  | refl => exact RetainsVote.refl _ _
+  | @step m hm ih =>
+    refine (ih (fun i hi him => hpend i hi (Nat.lt_succ_of_lt him))).trans ?_
+    have hnm : n ≤ m := Nat.le_trans hn hm
+    exact retainsVote_of_transition (Run.transition r m)
+      (hw.floor m hnm fun i hi him => hpend i hi (Nat.lt_succ_of_lt him))
+      (hw.bar (m + 1) (Nat.le_succ_of_le hnm) hpend)
+
+/-- And the decide path at the parent's view, where the parent's floor reaches. -/
+theorem vote1Window_retainsParent {cfg : Config} {leader : ViewNumber → Option PubKey}
+    {node : PubKey} {r : Run cfg (StepSpec cfg leader node)} {p : Proposal} {n m₁ m₂ : Nat}
+    (hw : Vote1Window r p n) (hne : p.parentCert.view ≠ ViewNumber.genesis)
+    (hn : n ≤ m₁) (hle : m₁ ≤ m₂) (hpend : Vote1Pending r p n m₂) :
+    RetainsDecide (Run.state r m₁) (Run.state r m₂) p.parentCert.view := by
+  induction hle with
+  | refl => exact RetainsDecide.refl _ _
+  | @step m hm ih =>
+    refine (ih (fun i hi him => hpend i hi (Nat.lt_succ_of_lt him))).trans ?_
+    exact retainsDecide_of_transition (Run.transition r m)
+      (hw.parentFloor hne m (Nat.le_trans hn hm)
+        fun i hi him => hpend i hi (Nat.lt_succ_of_lt him))
+
+/-- As `vote1Window_retainsVote`, for a vote2's window. -/
+theorem vote2Window_retainsVote {cfg : Config} {leader : ViewNumber → Option PubKey}
+    {node : PubKey} {r : Run cfg (StepSpec cfg leader node)} {p : Proposal} {n m₁ m₂ : Nat}
+    (hw : Vote2Window r p n) (hn : n ≤ m₁) (hle : m₁ ≤ m₂) (hpend : Vote2Pending r p n m₂) :
+    RetainsVote (Run.state r m₁) (Run.state r m₂) p.viewNumber := by
+  induction hle with
+  | refl => exact RetainsVote.refl _ _
+  | @step m hm ih =>
+    refine (ih (fun i hi him => hpend i hi (Nat.lt_succ_of_lt him))).trans ?_
+    have hnm : n ≤ m := Nat.le_trans hn hm
+    exact retainsVote_of_transition (Run.transition r m)
+      (hw.floor m hnm fun i hi him => hpend i hi (Nat.lt_succ_of_lt him))
+      (hw.bar (m + 1) (Nat.le_succ_of_le hnm) hpend)
+
+/-- And the decide path at the vote's own view, which a vote2 reads. -/
+theorem vote2Window_retainsDecide {cfg : Config} {leader : ViewNumber → Option PubKey}
+    {node : PubKey} {r : Run cfg (StepSpec cfg leader node)} {p : Proposal} {n m₁ m₂ : Nat}
+    (hw : Vote2Window r p n) (hn : n ≤ m₁) (hle : m₁ ≤ m₂) (hpend : Vote2Pending r p n m₂) :
+    RetainsDecide (Run.state r m₁) (Run.state r m₂) p.viewNumber := by
+  induction hle with
+  | refl => exact RetainsDecide.refl _ _
+  | @step m hm ih =>
+    refine (ih (fun i hi him => hpend i hi (Nat.lt_succ_of_lt him))).trans ?_
+    exact retainsDecide_of_transition (Run.transition r m)
+      (hw.floor m (Nat.le_trans hn hm) fun i hi him => hpend i hi (Nat.lt_succ_of_lt him))
+
 /-! ## The marks a step does not set
 
 One lemma per action, each the mark obligation in the direction progress needs:
@@ -196,6 +403,32 @@ theorem notProposed_step {cfg : Config} {leader : ViewNumber → Option PubKey} 
     obtain ⟨q, hmem, hview⟩ := StepSpec.proposedMarked hs v h hmark
     exact hno q hmem hview
   | collect hg => exact h (GcSpec.proposedSound hg v hmark)
+
+/-- The freshness mark survives a stretch in which the action does not go out. -/
+theorem notVoted1_upTo {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
+    {r : Run cfg (StepSpec cfg leader node)} {p : Proposal} {n m₁ m₂ : Nat}
+    (hle : m₁ ≤ m₂) (hpend : Vote1Pending r p n m₂) (hn : n ≤ m₁)
+    (h : ¬ (Run.state r m₁).voted1Views p.viewNumber) :
+    ¬ (Run.state r m₂).voted1Views p.viewNumber := by
+  induction hle with
+  | refl => exact h
+  | @step m hm ih =>
+    exact notVoted1_step (Run.transition r m)
+      (hpend m (Nat.le_trans hn hm) (Nat.lt_succ_self m))
+      (ih (fun i hi him => hpend i hi (Nat.lt_succ_of_lt him)))
+
+/-- As `notVoted1_upTo`, for a vote2. -/
+theorem notVoted2_upTo {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
+    {r : Run cfg (StepSpec cfg leader node)} {p : Proposal} {n m₁ m₂ : Nat}
+    (hle : m₁ ≤ m₂) (hpend : Vote2Pending r p n m₂) (hn : n ≤ m₁)
+    (h : ¬ (Run.state r m₁).voted2Views p.viewNumber) :
+    ¬ (Run.state r m₂).voted2Views p.viewNumber := by
+  induction hle with
+  | refl => exact h
+  | @step m hm ih =>
+    exact notVoted2_step (Run.transition r m)
+      (hpend m (Nat.le_trans hn hm) (Nat.lt_succ_self m))
+      (ih (fun i hi him => hpend i hi (Nat.lt_succ_of_lt him)))
 
 /-! ## A vote1 stays owed
 
@@ -263,7 +496,8 @@ theorem vote1Enabled_upTo {cfg : Config} {leader : ViewNumber → Option PubKey}
     have hprev := ih (Nat.le_of_lt hmb)
     have hsucc : n ≤ m + 1 := Nat.le_succ_of_le hnm
     have hpend : Vote1Pending r p n m := fun i hi him => hno i hi (Nat.lt_trans him hmb)
-    have hpend' : Vote1Pending r p n (m + 1) := fun i hi him => hno i hi (Nat.lt_of_lt_of_le him hle)
+    have hpend' : Vote1Pending r p n (m + 1) :=
+      fun i hi him => hno i hi (Nat.lt_of_lt_of_le him hle)
     have hfresh' : ¬ (Run.state r (m + 1)).voted1Views p.viewNumber :=
       notVoted1_step (Run.transition r m) (hno m hnm hmb) hprev.2.2.1
     exact vote1Enabled_step (Run.transition r m) (hw.floor m hnm hpend)
@@ -313,7 +547,8 @@ theorem vote2Enabled_upTo {cfg : Config} {leader : ViewNumber → Option PubKey}
     have hprev := ih (Nat.le_of_lt hmb)
     have hsucc : n ≤ m + 1 := Nat.le_succ_of_le hnm
     have hpend : Vote2Pending r p n m := fun i hi him => hno i hi (Nat.lt_trans him hmb)
-    have hpend' : Vote2Pending r p n (m + 1) := fun i hi him => hno i hi (Nat.lt_of_lt_of_le him hle)
+    have hpend' : Vote2Pending r p n (m + 1) :=
+      fun i hi him => hno i hi (Nat.lt_of_lt_of_le him hle)
     have hfresh' : ¬ (Run.state r (m + 1)).voted2Views p.viewNumber :=
       notVoted2_step (Run.transition r m) (hno m hnm hmb) hprev.2.2.1
     exact vote2Enabled_step (Run.transition r m) (hw.floor m hnm hpend)
@@ -358,7 +593,8 @@ theorem decideEnabled_upTo {cfg : Config} {leader : ViewNumber → Option PubKey
     have hprev := ih (Nat.le_of_lt hmb)
     have hsucc : n ≤ m + 1 := Nat.le_succ_of_le hnm
     have hpend : DecidePending r v n m := fun i hi him => hno i hi (Nat.lt_trans him hmb)
-    have hpend' : DecidePending r v n (m + 1) := fun i hi him => hno i hi (Nat.lt_of_lt_of_le him hle)
+    have hpend' : DecidePending r v n (m + 1) :=
+      fun i hi him => hno i hi (Nat.lt_of_lt_of_le him hle)
     have hfresh' : ¬ (Run.state r (m + 1)).decidedViews v :=
       notDecided_step (Run.transition r m) (hno m hnm hmb) hprev.1
     exact decideEnabled_step (Run.transition r m) (hw.floor m hnm hpend)
@@ -378,14 +614,27 @@ theorem justPropose_step {cfg : Config} {leader : ViewNumber → Option PubKey} 
     {s s' : NodeState} {e : Event} {p : Proposal}
     (ht : Transition cfg (StepSpec cfg leader node) s e s')
     (hfloor : s.aboveDecideFloor cfg p.viewNumber)
-    (hparent : s.aboveDecideFloor cfg p.parentCert.view)
+    (hparent : p.parentCert.view ≠ ViewNumber.genesis →
+      s.aboveDecideFloor cfg p.parentCert.view)
+    (hanchor : p.parentCert.view = ViewNumber.genesis → AnchorKept s s')
     (hbar : s'.barredView < p.viewNumber)
     (hlock : p.timeoutEvidence.isSome → s'.lockedCert = some p.parentCert)
     (h : ProposalJustification leader node s p) : ProposalJustification leader node s' p := by
   have hv := retainsVote_of_transition ht hfloor hbar
-  have hd := retainsDecide_of_transition ht hparent
+  -- The parent's view is kept either by the floor or, at genesis, by hypothesis.
+  have hprop : ∀ b, s.proposals p.parentCert.view = some b →
+      s'.proposals p.parentCert.view = some b := by
+    by_cases hgen : p.parentCert.view = ViewNumber.genesis
+    · rw [hgen]; exact (hanchor hgen).proposal
+    · exact (retainsDecide_of_transition ht (hparent hgen)).proposals
+  have hcert : ∀ c, s.cert1s p.parentCert.view = some c →
+      s'.cert1s p.parentCert.view = some c := by
+    by_cases hgen : p.parentCert.view = ViewNumber.genesis
+    · rw [hgen]; exact (hanchor hgen).cert
+    · exact (retainsDecide_of_transition ht (hparent hgen)).cert1s
   refine { leader := h.leader, wellFormed := h.wellFormed, justified := ?_, headerBuilt := ?_ }
   · have hj := h.justified
+    unfold ParentCertJustified at hj ⊢
     cases hte : p.timeoutEvidence with
     | some tc =>
       rw [hte] at hj
@@ -394,21 +643,23 @@ theorem justPropose_step {cfg : Config} {leader : ViewNumber → Option PubKey} 
       rw [hte] at hj
       refine ⟨?_, hj.2⟩
       rw [parent_view_of_linked hj.2] at hj ⊢
-      exact hd.cert1s _ hj.1
+      exact hcert _ hj.1
   · obtain ⟨parent, hpar, hhash, hhdr⟩ := h.headerBuilt
-    exact ⟨parent, hd.proposals parent hpar, hhash, hv.headers _ _ hhdr⟩
+    exact ⟨parent, hprop parent hpar, hhash, hv.headers _ _ hhdr⟩
 
 /-- A proposal stays owed across a step that does not send it. -/
 theorem proposeEnabled_step {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
     {s s' : NodeState} {e : Event} {p : Proposal}
     (ht : Transition cfg (StepSpec cfg leader node) s e s')
     (hfloor : s.aboveDecideFloor cfg p.viewNumber)
-    (hparent : s.aboveDecideFloor cfg p.parentCert.view)
+    (hparent : p.parentCert.view ≠ ViewNumber.genesis →
+      s.aboveDecideFloor cfg p.parentCert.view)
+    (hanchor : p.parentCert.view = ViewNumber.genesis → AnchorKept s s')
     (hbar : s'.barredView < p.viewNumber) (htv : s'.timeoutView < p.viewNumber)
     (hlock : p.timeoutEvidence.isSome → s'.lockedCert = some p.parentCert)
     (hfresh : ¬ s'.proposedViews p.viewNumber)
     (h : ProposeEnabled leader node s p) : ProposeEnabled leader node s' p :=
-  ⟨justPropose_step ht hfloor hparent hbar hlock h.1, hfresh, htv, hbar⟩
+  ⟨justPropose_step ht hfloor hparent hanchor hbar hlock h.1, hfresh, htv, hbar⟩
 
 /-- A proposal owed when its window opens is owed up to `bound`, as long as it is not sent. -/
 theorem proposeEnabled_upTo {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
@@ -427,11 +678,13 @@ theorem proposeEnabled_upTo {cfg : Config} {leader : ViewNumber → Option PubKe
     have hprev := ih (Nat.le_of_lt hmb)
     have hsucc : n ≤ m + 1 := Nat.le_succ_of_le hnm
     have hpend : ProposePending r p n m := fun i hi him => hno i hi (Nat.lt_trans him hmb)
-    have hpend' : ProposePending r p n (m + 1) := fun i hi him => hno i hi (Nat.lt_of_lt_of_le him hle)
+    have hpend' : ProposePending r p n (m + 1) :=
+      fun i hi him => hno i hi (Nat.lt_of_lt_of_le him hle)
     have hfresh' : ¬ (Run.state r (m + 1)).proposedViews p.viewNumber :=
       notProposed_step (Run.transition r m) (hno m hnm hmb) hprev.2.1
     exact proposeEnabled_step (Run.transition r m) (hw.floor m hnm hpend)
-      (hw.parentFloor m hnm hpend) (hw.bar (m + 1) hsucc hpend')
+      (fun hne => hw.parentFloor hne m hnm hpend) (fun hgen => hw.anchorKept hgen m hnm hpend)
+      (hw.bar (m + 1) hsucc hpend')
       (hw.timedOut (m + 1) hsucc hpend')
       (fun hte => hw.lock hte (m + 1) hsucc hpend') hfresh' hprev
 

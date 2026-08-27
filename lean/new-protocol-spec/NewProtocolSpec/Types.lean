@@ -100,7 +100,14 @@ abbrev Cert1 := Certificate Vote1Data
 `Cert2`; a block with a `Cert2` is decided.-/
 abbrev Cert2 := Certificate Vote2Data
 
-/-- Certificate that a view timed out. -/
+/--
+Certificate that a view timed out.
+
+`view` is the view that timed out; the certificate is stored under the view it
+advances *into*, i.e. `view + 1`. Several rules read it that way
+(`StepSpec.timeoutCertProvenance`, `StepSpec.timeoutCertIngested`,
+`ParentCertJustified`).
+-/
 abbrev TimeoutCert := Certificate Unit
 
 /--
