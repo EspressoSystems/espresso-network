@@ -3342,31 +3342,33 @@ mod tests {
         );
     }
 
-    /// publicnode's free-tier mainnet endpoint rejects full-range `eth_getLogs` with "Archive
-    /// requests require a personal token", so this can only be run against an archival RPC.
-    #[ignore = "talks to public Ethereum mainnet RPC; requires an archival endpoint"]
+    /// Needs an archival RPC: publicnode's free tier rejects the full-range `eth_getLogs` with
+    /// "Archive requests require a personal token". Tenderly's public gateway serves it.
+    ///
+    /// Tenderly rejects `finalized` as a `toBlock`, so the full-range query fails there and
+    /// `scan_token_contract_initialized_event_log` finds the event instead, in one chunk.
+    #[ignore = "talks to public Ethereum mainnet RPC"]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn fetch_initial_supply_matches_mainnet_constant() {
         assert_known_initial_supply_matches_l1(
-            "https://ethereum-rpc.publicnode.com",
+            "https://mainnet.gateway.tenderly.co",
             "0xcef474d372b5b09defe2af187bf17338dc704451",
             MAINNET_CHAIN_ID,
         )
         .await;
     }
 
-    /// Confirmed by hand: `eth_getLogs` with a topic filter silently returns no results for this
-    /// block range on publicnode's free-tier Sepolia endpoint, even though an unfiltered query
-    /// over the same range and address returns the log (including the `Initialized` event). This
-    /// makes `EspToken::Initialized_filter` unusable here, so the scan fallback exhausts
-    /// `MAX_BLOCKS_SCANNED` without ever seeing the event. Needs an archival RPC with working
-    /// topic-indexed log queries.
-    #[ignore = "talks to public Sepolia RPC; topic-filtered eth_getLogs returns empty for this old \
-                block range on publicnode's free tier"]
+    /// Needs an archival RPC with working topic-indexed log queries. Confirmed by hand that
+    /// publicnode's free-tier Sepolia endpoint is not one: a topic-filtered `eth_getLogs`
+    /// silently returns no results for this block range, even though an unfiltered query over
+    /// the same range and address returns the `Initialized` log. That makes
+    /// `EspToken::Initialized_filter` unusable there, and the scan fallback exhausts
+    /// `MAX_BLOCKS_SCANNED` without ever seeing the event.
+    #[ignore = "talks to public Sepolia RPC"]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn fetch_initial_supply_matches_decaf_constant() {
         assert_known_initial_supply_matches_l1(
-            "https://ethereum-sepolia-rpc.publicnode.com",
+            "https://sepolia.gateway.tenderly.co",
             "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037",
             DECAF_CHAIN_ID,
         )
