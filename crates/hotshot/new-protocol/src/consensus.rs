@@ -670,23 +670,7 @@ impl<T: NodeType> Consensus<T> {
                     view = %message.proposal.data.view_number,
                     "apply: fetched proposal"
                 );
-                self.handle_fetched_proposal(message, outbox);
-                // The fetched proposal itself may now be decidable (e.g. cert2
-                // arrived first and triggered the fetch).
-                self.maybe_decide(view, outbox);
-                // Views extending the fetched one may be blocked on it
-                let views_extending_fetched: Vec<ViewNumber> = self
-                    .proposals
-                    .range(view + 1..)
-                    .filter(|(_, proposal)| proposal.justify_qc.view_number() == view)
-                    .map(|(extending_view, _)| *extending_view)
-                    .collect();
-                for extending_view in views_extending_fetched {
-                    self.maybe_vote_1(extending_view, outbox);
-                    self.maybe_vote_2_and_update_lock(extending_view, outbox);
-                    self.maybe_decide(extending_view, outbox);
-                }
-                self.maybe_propose(view + 1, outbox);
+                self.adopt_certified_proposal(message, outbox);
                 return;
             },
             ConsensusInput::Certificate1(certificate) => {
@@ -1049,16 +1033,19 @@ impl<T: NodeType> Consensus<T> {
         vid_share: VidDisperseShare2<T>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> Protocol {
-        // Parked halves for this and older views can no longer pair.
         let view = proposal.view_number();
-        let vc = VidCommitment2::default();
-        self.unpaired_proposals = self.unpaired_proposals.split_off(&(view + 1, vc));
-        self.unpaired_vid_shares = self.unpaired_vid_shares.split_off(&(view + 1, vc));
         outbox.push_back(ConsensusOutput::ProposalPaired {
             proposal: proposal.proposal.clone(),
             vid_share: vid_share.clone(),
         });
-        self.handle_proposal_with_vid_share(sender, proposal, vid_share, outbox)
+        // Handle first: a parked older proposal may be this one's parent, which
+        // `request_parent_proposal_if_missing` adopts rather than fetches.
+        let result = self.handle_proposal_with_vid_share(sender, proposal, vid_share, outbox);
+        // Parked halves for this and older views can no longer pair.
+        let vc = VidCommitment2::default();
+        self.unpaired_proposals = self.unpaired_proposals.split_off(&(view + 1, vc));
+        self.unpaired_vid_shares = self.unpaired_vid_shares.split_off(&(view + 1, vc));
+        result
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -1103,7 +1090,7 @@ impl<T: NodeType> Consensus<T> {
             return Protocol::Abort;
         }
 
-        let payload_size = vid_share.payload_byte_len();
+        let payload_size = Some(vid_share.payload_byte_len());
 
         // Store the proposal before the DRB check so it is not lost when
         // the DRB is not yet available (e.g. a node catching up after a
@@ -1161,8 +1148,36 @@ impl<T: NodeType> Consensus<T> {
         Protocol::Continue
     }
 
+    /// Take in a proposal this node did not receive live together with its
+    /// VID share: one fetched from a peer, or one parked in
+    /// `unpaired_proposals` that a certificate has since vouched for.
     #[instrument(level = "debug", skip_all)]
-    fn handle_fetched_proposal(
+    fn adopt_certified_proposal(
+        &mut self,
+        message: ProposalMessage<T, Validated>,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) {
+        let view = message.proposal.data.view_number;
+        self.store_certified_proposal(message, outbox);
+        // The proposal itself may now be decidable (e.g. cert2 arrived first
+        // and triggered the fetch).
+        self.maybe_decide(view, outbox);
+        // Views extending it may be blocked on it.
+        let extending_views: Vec<ViewNumber> = self
+            .proposals
+            .range(view + 1..)
+            .filter(|(_, proposal)| proposal.justify_qc.view_number() == view)
+            .map(|(extending_view, _)| *extending_view)
+            .collect();
+        for extending_view in extending_views {
+            self.maybe_vote_1(extending_view, outbox);
+            self.maybe_vote_2_and_update_lock(extending_view, outbox);
+            self.maybe_decide(extending_view, outbox);
+        }
+        self.maybe_propose(view + 1, outbox);
+    }
+
+    fn store_certified_proposal(
         &mut self,
         message: ProposalMessage<T, Validated>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
@@ -1189,10 +1204,33 @@ impl<T: NodeType> Consensus<T> {
         self.request_block_and_header_if_next_leader(&proposal, outbox);
     }
 
+    /// Adopt the live proposal parked for `view` awaiting this node's VID
+    /// share, if it is the leaf `leaf_commit` names. Returns whether one was adopted.
+    fn adopt_unpaired_proposal(
+        &mut self,
+        view: ViewNumber,
+        leaf_commit: Commitment<Leaf2<T>>,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) -> bool {
+        let range = (view, VidCommitment2::default())..(view + 1, VidCommitment2::default());
+        let Some(message) = self
+            .unpaired_proposals
+            .range(range)
+            .map(|(_, (_, message))| message)
+            .find(|message| proposal_commitment(&message.proposal.data) == leaf_commit)
+            .cloned()
+        else {
+            return false;
+        };
+        debug!(%view, "adopting live proposal parked without a vid share");
+        self.adopt_certified_proposal(message, outbox);
+        true
+    }
+
     fn request_state(
         &self,
         proposal: &Proposal<T>,
-        payload_size: u32,
+        payload_size: Option<u32>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) {
         outbox.push_back(ConsensusOutput::RequestState(StateRequest {
@@ -1206,19 +1244,20 @@ impl<T: NodeType> Consensus<T> {
         }));
     }
 
-    /// A fetched proposal may have no share. A quorum already certified it,
-    /// size checks included, so zero only skips this node's block-size checks.
-    fn payload_size_for(&self, proposal: &Proposal<T>) -> u32 {
+    /// The payload size of an adopted proposal, if a share for it has arrived.
+    /// `None` makes state validation skip the checks that need the size; a
+    /// quorum already certified the proposal, so they have been run elsewhere.
+    fn payload_size_for(&self, proposal: &Proposal<T>) -> Option<u32> {
         let view = proposal.view_number();
         if let Some(share) = self.vid_shares.get(&view) {
-            return share.payload_byte_len();
+            return Some(share.payload_byte_len());
         }
         let VidCommitment::V2(commitment) = proposal.block_header.payload_commitment() else {
-            return 0;
+            return None;
         };
         self.unpaired_vid_shares
             .get(&(view, commitment))
-            .map_or(0, |share| share.payload_byte_len())
+            .map(|share| share.payload_byte_len())
     }
 
     fn request_block_and_header_if_next_leader(
@@ -1244,12 +1283,16 @@ impl<T: NodeType> Consensus<T> {
     }
 
     fn request_parent_proposal_if_missing(
-        &self,
+        &mut self,
         proposal: &Proposal<T>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) {
         let parent_view = proposal.justify_qc.view_number();
-        if parent_view > self.last_decided_view && !self.proposals.contains_key(&parent_view) {
+        let leaf_commit = proposal.justify_qc.data().leaf_commit;
+        if parent_view > self.last_decided_view
+            && !self.proposals.contains_key(&parent_view)
+            && !self.adopt_unpaired_proposal(parent_view, leaf_commit, outbox)
+        {
             warn!(
                 view = %proposal.view_number,
                 %parent_view,
@@ -1257,7 +1300,7 @@ impl<T: NodeType> Consensus<T> {
             );
             outbox.push_back(ConsensusOutput::RequestMissingProposal {
                 view: parent_view,
-                leaf_commit: proposal.justify_qc.data().leaf_commit,
+                leaf_commit,
             });
         }
     }
@@ -1294,14 +1337,15 @@ impl<T: NodeType> Consensus<T> {
                 certificate.cert().clone(),
             ));
         }
-        if view > self.last_decided_view && !self.proposals.contains_key(&view) {
-            warn!(%view, "have certificate2 but no proposal; requesting fetch");
-            outbox.push_back(ConsensusOutput::RequestMissingProposal {
-                view,
-                leaf_commit: certificate.data.leaf_commit,
-            });
-        }
+        let leaf_commit = certificate.data.leaf_commit;
         self.certs2.insert(view, certificate.into_cert());
+        if view > self.last_decided_view
+            && !self.proposals.contains_key(&view)
+            && !self.adopt_unpaired_proposal(view, leaf_commit, outbox)
+        {
+            warn!(%view, "have certificate2 but no proposal; requesting fetch");
+            outbox.push_back(ConsensusOutput::RequestMissingProposal { view, leaf_commit });
+        }
         Protocol::Continue
     }
 

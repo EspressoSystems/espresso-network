@@ -450,13 +450,28 @@ impl ValidatedState {
 #[derive(Debug)]
 pub(crate) struct Proposal<'a> {
     header: &'a Header,
-    block_size: u32,
+    /// `None` when this node does not hold the payload; see [`Self::without_size`].
+    block_size: Option<u32>,
 }
 
 #[cfg_attr(not(feature = "node"), allow(dead_code))]
 impl<'a> Proposal<'a> {
     pub(crate) fn new(header: &'a Header, block_size: u32) -> Self {
-        Self { header, block_size }
+        Self {
+            header,
+            block_size: Some(block_size),
+        }
+    }
+
+    /// A proposal whose payload size this node does not know, e.g. one fetched
+    /// from a peer without a VID share. Only valid for a proposal a quorum has
+    /// already certified, which vouches for the checks this skips: block size,
+    /// fee and namespace table.
+    pub(crate) fn without_size(header: &'a Header) -> Self {
+        Self {
+            header,
+            block_size: None,
+        }
     }
     /// The L1 head block number in the proposal must be non-decreasing relative
     /// to the parent.
@@ -712,7 +727,10 @@ impl<'a> ValidatedTransition<'a> {
     /// Validate that proposal block size does not exceed configured
     /// `ChainConfig.max_block_size`.
     fn validate_block_size(&self) -> Result<(), ProposalValidationError> {
-        let block_size = self.proposal.block_size as u64;
+        let Some(block_size) = self.proposal.block_size else {
+            return Ok(());
+        };
+        let block_size = block_size as u64;
         if block_size > *self.expected_chain_config.max_block_size {
             return Err(ProposalValidationError::MaxBlockSizeExceeded {
                 max_block_size: self.expected_chain_config.max_block_size,
@@ -729,8 +747,11 @@ impl<'a> ValidatedTransition<'a> {
         let Some(amount) = self.proposal.header.fee_info().amount() else {
             return Err(ProposalValidationError::SomeFeeAmountOutOfRange);
         };
+        let Some(block_size) = self.proposal.block_size else {
+            return Ok(());
+        };
 
-        if amount < self.expected_chain_config.base_fee * U256::from(self.proposal.block_size) {
+        if amount < self.expected_chain_config.base_fee * U256::from(block_size) {
             return Err(ProposalValidationError::InsufficientFee {
                 max_block_size: self.expected_chain_config.max_block_size,
                 base_fee: self.expected_chain_config.base_fee,
@@ -817,11 +838,14 @@ impl<'a> ValidatedTransition<'a> {
     }
     /// Proxy to [`super::NsTable::validate()`].
     fn validate_namespace_table(&self) -> Result<(), ProposalValidationError> {
+        let Some(block_size) = self.proposal.block_size else {
+            return Ok(());
+        };
         self.proposal
             .header
             .ns_table()
             // Should be safe since `u32` will always fit in a `usize`.
-            .validate(&PayloadByteLen(self.proposal.block_size as usize))
+            .validate(&PayloadByteLen(block_size as usize))
             .map_err(ProposalValidationError::from)
     }
 
@@ -1314,7 +1338,7 @@ impl HotShotState<SeqTypes> for ValidatedState {
         instance: &Self::Instance,
         parent_leaf: &Leaf2,
         proposed_header: &Header,
-        payload_byte_len: u32,
+        payload_byte_len: Option<u32>,
         version: Version,
         view_number: u64,
     ) -> Result<(Self, Self::Delta), Self::Error> {
@@ -1358,7 +1382,10 @@ impl HotShotState<SeqTypes> for ValidatedState {
             let validated_state = ValidatedTransition::new(
                 validated_state,
                 parent_leaf.block_header(),
-                Proposal::new(proposed_header, payload_byte_len),
+                match payload_byte_len {
+                    Some(len) => Proposal::new(proposed_header, len),
+                    None => Proposal::without_size(proposed_header),
+                },
                 total_rewards_distributed,
                 version,
                 validation_start_time,
@@ -2156,6 +2183,23 @@ mod test {
         );
     }
 
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_validation_without_payload_size_skips_size_checks() {
+        // A proposal adopted without its VID share carries no payload size;
+        // the size-dependent checks must not fail against a made-up size.
+        let tx = Transaction::of_size(10);
+        let (header, _block_size) = tx.into_mock_header().await;
+
+        let transition = ValidatedTransition::mock(
+            NodeState::mock_v2(),
+            &header,
+            Proposal::without_size(&header),
+        );
+        transition.validate_namespace_table().unwrap();
+        transition.validate_block_size().unwrap();
+        transition.validate_fee().unwrap();
+    }
+
     #[test_log::test]
     fn test_charge_fee() {
         let src = FeeAccount::generated_from_seed_indexed([0; 32], 0).0;
@@ -2500,7 +2544,7 @@ mod test {
                 &instance,
                 &parent_leaf,
                 &proposed_header,
-                0, /* payload_byte_len */
+                Some(0), /* payload_byte_len */
                 FEE_VERSION,
                 0, /* view_number */
             )
