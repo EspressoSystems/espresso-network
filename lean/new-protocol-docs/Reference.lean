@@ -1225,9 +1225,11 @@ Two directions, and they meet in the middle.
 *From owed to done.* An action owed, and not overtaken, is taken. The hypothesis
 is a *window*: the action is owed at some step, and until the node acts nothing
 raises the bar past the view, times it out, moves the lock past it or prunes it.
-Windows are guarded by the action's own freshness mark, because a node that acts
-*does* abandon the view afterwards — an unconditional window would be one no
-progressing node is ever in.
+Every field of a window is guarded by the action not having gone out yet, because
+a node that acts *does* abandon the view afterwards: an unconditional window
+would be one no progressing node is ever in. The guard reads the run's own
+history rather than the freshness mark, which a collection may drop once the view
+is abandoned.
 
 *From delivered to owed.* Inputs the specification itself admits make the action
 owed. This is the direction that cannot be read off the clause list: every

@@ -57,25 +57,78 @@ structure LockAllows (s : NodeState) (p : Proposal) : Prop where
   below : ∀ lock, s.lockedCert = some lock → lock.view < p.viewNumber
 
 /-!
+## While the action is outstanding
+
+An obligation lapses when the action is taken, and a window has to stop
+constraining the node there. What marks the action as taken cannot be the
+freshness mark itself: a collection may drop the mark once the view is
+abandoned (`GcSpec.voted1Retained`), so `¬ NodeState.voted1Views` comes back
+after a node has voted and pruned, and a window guarded on it would be false in
+exactly the runs that vote and then prune.
+
+So the guard is the run's own history: nothing of that kind has gone out since
+the window opened. Nothing can undo it, pruning included.
+-/
+
+/-- No vote1 for `p`'s view has gone out at a step in `[n, m)`. -/
+def Vote1Pending {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
+    (r : Run cfg (StepSpec cfg leader node)) (p : Proposal) (n m : Nat) : Prop :=
+  ∀ i, n ≤ i → i < m → ∀ vote : Vote1,
+    Output.send (.vote1 vote) ∈ (Run.event r i).outputs → vote.view ≠ p.viewNumber
+
+/-- No vote2 for `p`'s view has gone out at a step in `[n, m)`. -/
+def Vote2Pending {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
+    (r : Run cfg (StepSpec cfg leader node)) (p : Proposal) (n m : Nat) : Prop :=
+  ∀ i, n ≤ i → i < m → ∀ vote : Vote2,
+    Output.send (.vote2 vote) ∈ (Run.event r i).outputs → vote.view ≠ p.viewNumber
+
+/-- No decide naming view `v` has gone out at a step in `[n, m)`. -/
+def DecidePending {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
+    (r : Run cfg (StepSpec cfg leader node)) (v : ViewNumber) (n m : Nat) : Prop :=
+  ∀ i, n ≤ i → i < m → ∀ blocks c1 c2,
+    Output.decided blocks c1 c2 ∈ (Run.event r i).outputs → ∀ b ∈ blocks, b.viewNumber ≠ v
+
+/-- No proposal for `p`'s view has gone out at a step in `[n, m)`. -/
+def ProposePending {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
+    (r : Run cfg (StepSpec cfg leader node)) (p : Proposal) (n m : Nat) : Prop :=
+  ∀ i, n ≤ i → i < m → ∀ q : Proposal,
+    Output.send (.proposal q) ∈ (Run.event r i).outputs → q.viewNumber ≠ p.viewNumber
+
+/-! Nothing has gone out yet at the step the window opens: the range is empty. -/
+
+theorem Vote1Pending.refl {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
+    (r : Run cfg (StepSpec cfg leader node)) (p : Proposal) (n : Nat) : Vote1Pending r p n n :=
+  fun i hi him => absurd (Nat.lt_of_lt_of_le him hi) (Nat.lt_irrefl i)
+
+theorem Vote2Pending.refl {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
+    (r : Run cfg (StepSpec cfg leader node)) (p : Proposal) (n : Nat) : Vote2Pending r p n n :=
+  fun i hi him => absurd (Nat.lt_of_lt_of_le him hi) (Nat.lt_irrefl i)
+
+theorem DecidePending.refl {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
+    (r : Run cfg (StepSpec cfg leader node)) (v : ViewNumber) (n : Nat) : DecidePending r v n n :=
+  fun i hi him => absurd (Nat.lt_of_lt_of_le him hi) (Nat.lt_irrefl i)
+
+theorem ProposePending.refl {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
+    (r : Run cfg (StepSpec cfg leader node)) (p : Proposal) (n : Nat) : ProposePending r p n n :=
+  fun i hi him => absurd (Nat.lt_of_lt_of_le him hi) (Nat.lt_irrefl i)
+
+/-!
 ## Windows
 
-One per action, each a conjunction of "nothing overtakes this view while the
-action is outstanding". Every field names state a node cannot be obliged to
+One per action, each a conjunction of "nothing overtook this view while the
+action was outstanding". Every field names state a node cannot be obliged to
 preserve: a bar it may raise on a timeout, a floor it may raise by deciding, a
 lock it may move by committing.
 
-Every field is guarded by the action's own freshness mark being unset, and the
-guard is what makes a window something a run can satisfy rather than a promise
-that the node stops. A node that acts *does* abandon the view afterwards — the
-bar rises, the floor rises, the lock moves past it — so a window demanded
-unconditionally from some point on would be one no progressing node is in. What
-is wanted is that nothing overtakes the view *before* the node acts, and the mark
-is exactly the record of having acted (`StepSpec.vote1Marked` and its three
-companions), so it is what the guard reads.
+Every field is guarded by the action still being outstanding, and the guard is
+what makes a window something a run can satisfy rather than a promise that the
+node stops. A node that acts *does* abandon the view afterwards — the bar rises,
+the floor rises, the lock moves past it — so a window demanded unconditionally
+from some point on would be one no progressing node is in.
 
 Read together with `NewProtocolSpec.Progress`: the results consume a window only
-at states where the action has not yet been taken, and the step that takes it is
-the last one they look at.
+at states the action has yet to be taken at, and the step that takes it is the
+last one they look at.
 -/
 
 /--
@@ -87,24 +140,21 @@ below genesis there is no parent to keep.
 structure Vote1Window {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
     (r : Run cfg (StepSpec cfg leader node)) (p : Proposal) (n : Nat) : Prop where
   /-- The view is not abandoned while the vote is outstanding. -/
-  bar : ∀ m, n ≤ m → ¬ (Run.state r m).voted1Views p.viewNumber →
-    (Run.state r m).barredView < p.viewNumber
+  bar : ∀ m, n ≤ m → Vote1Pending r p n m → (Run.state r m).barredView < p.viewNumber
 
   /-- Nor does it time out. -/
-  timedOut : ∀ m, n ≤ m → ¬ (Run.state r m).voted1Views p.viewNumber →
-    (Run.state r m).timeoutView < p.viewNumber
+  timedOut : ∀ m, n ≤ m → Vote1Pending r p n m → (Run.state r m).timeoutView < p.viewNumber
 
   /-- The lock keeps leaving room for it. -/
-  lock : ∀ m, n ≤ m → ¬ (Run.state r m).voted1Views p.viewNumber →
-    LockAllows (Run.state r m) p
+  lock : ∀ m, n ≤ m → Vote1Pending r p n m → LockAllows (Run.state r m) p
 
   /-- The decide floor stays below it, so what the vote reads stays held. -/
-  floor : ∀ m, n ≤ m → ¬ (Run.state r m).voted1Views p.viewNumber →
+  floor : ∀ m, n ≤ m → Vote1Pending r p n m →
     (Run.state r m).aboveDecideFloor cfg p.viewNumber
 
   /-- And below the parent's view, so the ancestry stays held. -/
   parentFloor : p.parentCert.view ≠ ViewNumber.genesis →
-    ∀ m, n ≤ m → ¬ (Run.state r m).voted1Views p.viewNumber →
+    ∀ m, n ≤ m → Vote1Pending r p n m →
       (Run.state r m).aboveDecideFloor cfg p.parentCert.view
 
 /--
@@ -119,23 +169,21 @@ anything having stalled, and `noSkip` is the one that is a genuine choice — se
 structure Vote2Window {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
     (r : Run cfg (StepSpec cfg leader node)) (p : Proposal) (n : Nat) : Prop where
   /-- The view is not abandoned while the vote is outstanding. -/
-  bar : ∀ m, n ≤ m → ¬ (Run.state r m).voted2Views p.viewNumber →
-    (Run.state r m).barredView < p.viewNumber
+  bar : ∀ m, n ≤ m → Vote2Pending r p n m → (Run.state r m).barredView < p.viewNumber
 
   /-- The decide floor stays below it. -/
-  floor : ∀ m, n ≤ m → ¬ (Run.state r m).voted2Views p.viewNumber →
+  floor : ∀ m, n ≤ m → Vote2Pending r p n m →
     (Run.state r m).aboveDecideFloor cfg p.viewNumber
 
   /-- No later vote1 of this node's endorses a branch skipping the view. -/
-  noSkip : ∀ m, n ≤ m → ¬ (Run.state r m).voted2Views p.viewNumber →
+  noSkip : ∀ m, n ≤ m → Vote2Pending r p n m →
     ¬ Vote1SkippedView (Run.state r m) p.viewNumber
 
   /-- The certificate does not arrive ready-made. -/
-  noCert2 : ∀ m, n ≤ m → ¬ (Run.state r m).voted2Views p.viewNumber →
-    (Run.state r m).cert2s p.viewNumber = none
+  noCert2 : ∀ m, n ≤ m → Vote2Pending r p n m → (Run.state r m).cert2s p.viewNumber = none
 
   /-- And the view is not decided as some later block's ancestor. -/
-  notDecided : ∀ m, n ≤ m → ¬ (Run.state r m).voted2Views p.viewNumber →
+  notDecided : ∀ m, n ≤ m → Vote2Pending r p n m →
     ¬ (Run.state r m).decidedViews p.viewNumber
 
 /--
@@ -147,8 +195,7 @@ path only, and `StepSpec.contentRetained` keeps all of it above the floor.
 structure DecideWindow {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
     (r : Run cfg (StepSpec cfg leader node)) (v : ViewNumber) (n : Nat) : Prop where
   /-- The decide floor stays below the view while the decide is outstanding. -/
-  floor : ∀ m, n ≤ m → ¬ (Run.state r m).decidedViews v →
-    (Run.state r m).aboveDecideFloor cfg v
+  floor : ∀ m, n ≤ m → DecidePending r v n m → (Run.state r m).aboveDecideFloor cfg v
 
 /--
 The window in which a proposal `p` stays owed.
@@ -161,24 +208,22 @@ instead, which retention keeps.
 structure ProposeWindow {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
     (r : Run cfg (StepSpec cfg leader node)) (p : Proposal) (n : Nat) : Prop where
   /-- The view is not abandoned while the proposal is outstanding. -/
-  bar : ∀ m, n ≤ m → ¬ (Run.state r m).proposedViews p.viewNumber →
-    (Run.state r m).barredView < p.viewNumber
+  bar : ∀ m, n ≤ m → ProposePending r p n m → (Run.state r m).barredView < p.viewNumber
 
   /-- Nor does it time out. -/
-  timedOut : ∀ m, n ≤ m → ¬ (Run.state r m).proposedViews p.viewNumber →
-    (Run.state r m).timeoutView < p.viewNumber
+  timedOut : ∀ m, n ≤ m → ProposePending r p n m → (Run.state r m).timeoutView < p.viewNumber
 
   /-- The decide floor stays below the view, so the built header stays held. -/
-  floor : ∀ m, n ≤ m → ¬ (Run.state r m).proposedViews p.viewNumber →
+  floor : ∀ m, n ≤ m → ProposePending r p n m →
     (Run.state r m).aboveDecideFloor cfg p.viewNumber
 
   /-- And below the parent's view, so the parent block and its certificate stay held. -/
-  parentFloor : ∀ m, n ≤ m → ¬ (Run.state r m).proposedViews p.viewNumber →
+  parentFloor : ∀ m, n ≤ m → ProposePending r p n m →
     (Run.state r m).aboveDecideFloor cfg p.parentCert.view
 
   /-- After a timeout, the lock stays on the certificate the proposal extends. -/
   lock : p.timeoutEvidence.isSome →
-    ∀ m, n ≤ m → ¬ (Run.state r m).proposedViews p.viewNumber →
+    ∀ m, n ≤ m → ProposePending r p n m →
       (Run.state r m).lockedCert = some p.parentCert
 
 /-!

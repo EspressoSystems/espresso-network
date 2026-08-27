@@ -397,6 +397,10 @@ inputs, the window is open, and the action is taken. `stepSpec_of_consumes` is
 what joins them — a step of a run that consumed a named input is a transition the
 step-local results apply to.
 
+None of the four takes a `Vote1Room` or its analogue. A window instantiated at the
+step it opens gives exactly that, the action not having been taken there yet, so
+asking for both would make a caller prove the same thing twice.
+
 The action may be taken during the delivery itself rather than after it, and the
 conclusions do not distinguish the two: what is claimed is that it happens, not
 when. Nothing here says the inputs arrive, and the windows are still hypotheses;
@@ -412,7 +416,6 @@ theorem vote1_forced {cfg : Config} {leader : ViewNumber → Option PubKey} {nod
     (hin₁ : Run.Consumes r n (Input.proposal sender p vid))
     (hin₂ : Run.Consumes r (n + 1) (Input.blockValidated p.viewNumber (blockHash p)))
     (hadmissible : ProposalAdmissible (Run.state r n) p vid)
-    (hroom : Vote1Room cfg (Run.state r (n + 1 + 1)) p)
     (hparent : ParentHeld (Run.state r n) p) (hvalid : BlockValid p)
     (hwritable : Writable ((Run.state r (n + 1)).validated p.viewNumber) (blockHash p))
     (hfresh : ¬ (Run.state r n).voted1Views p.viewNumber)
@@ -422,6 +425,12 @@ theorem vote1_forced {cfg : Config} {leader : ViewNumber → Option PubKey} {nod
       ∧ vote.signer = node := by
   obtain ⟨o₁, hs₁, hout₁⟩ := stepSpec_of_consumes hin₁
   obtain ⟨o₂, hs₂, hout₂⟩ := stepSpec_of_consumes hin₂
+  have hpend := Vote1Pending.refl r p (n + 1 + 1)
+  have hroom : Vote1Room cfg (Run.state r (n + 1 + 1)) p :=
+    { timedOut := hwindow.timedOut _ (Nat.le_refl _) hpend
+    , lock := hwindow.lock _ (Nat.le_refl _) hpend
+    , floor := hwindow.floor _ (Nat.le_refl _) hpend
+    , parentFloor := fun hne => hwindow.parentFloor hne _ (Nat.le_refl _) hpend }
   rcases vote1_unstalled hs₁ hs₂ hadmissible hroom hparent hvalid hwritable hfresh with
     hen | ⟨vote, hmem, hview, hdata, hsigner⟩
   · exact vote1_cast hfair ⟨n + 1 + 1, hen, hwindow⟩
@@ -435,7 +444,6 @@ theorem vote2_forced {cfg : Config} {leader : ViewNumber → Option PubKey} {nod
     (hfair : WeaklyFair r)
     (hin₁ : Run.Consumes r n (Input.certificate1 c))
     (hin₂ : Run.Consumes r (n + 1) (Input.blockReconstructed p.viewNumber p.payloadCommit))
-    (hroom : Vote2Room cfg (Run.state r (n + 1 + 1)) p)
     (hadmitted : (Run.state r n).admitted p.viewNumber = some p)
     (hview : c.view = p.viewNumber) (hhash : c.data.blockHash = blockHash p)
     (hwritable : Writable ((Run.state r n).cert1s c.view) c)
@@ -446,6 +454,13 @@ theorem vote2_forced {cfg : Config} {leader : ViewNumber → Option PubKey} {nod
       ∧ vote.signer = node := by
   obtain ⟨o₁, hs₁, hout₁⟩ := stepSpec_of_consumes hin₁
   obtain ⟨o₂, hs₂, hout₂⟩ := stepSpec_of_consumes hin₂
+  have hpend := Vote2Pending.refl r p (n + 1 + 1)
+  have hroom : Vote2Room cfg (Run.state r (n + 1 + 1)) p :=
+    { bar := hwindow.bar _ (Nat.le_refl _) hpend
+    , floor := hwindow.floor _ (Nat.le_refl _) hpend
+    , noSkip := hwindow.noSkip _ (Nat.le_refl _) hpend
+    , noCert2 := hwindow.noCert2 _ (Nat.le_refl _) hpend
+    , notDecided := hwindow.notDecided _ (Nat.le_refl _) hpend }
   rcases vote2_unstalled hs₁ hs₂ hroom hadmitted hview hhash hwritable hfresh with
     hen | ⟨vote, hmem, hviewv, hdata, hsigner⟩
   · exact vote2_cast hfair ⟨n + 1 + 1, hen, hwindow⟩
@@ -459,7 +474,7 @@ theorem decide_forced {cfg : Config} {leader : ViewNumber → Option PubKey} {no
     {c : Cert2}
     (hfair : WeaklyFair r)
     (hin : Run.Consumes r n (Input.certificate2 c))
-    (hfloor : (Run.state r (n + 1)).aboveDecideFloor cfg v) (hview : c.view = v)
+    (hview : c.view = v)
     (hcert1 : ((Run.state r n).cert1s v).isSome)
     (hheld : (Run.state r n).proposals v = some p)
     (hhash : c.data.blockHash = blockHash p)
@@ -469,6 +484,7 @@ theorem decide_forced {cfg : Config} {leader : ViewNumber → Option PubKey} {no
     ∃ j blocks c1 c2 b, Output.decided blocks c1 c2 ∈ (Run.event r j).outputs
       ∧ b ∈ blocks ∧ b.viewNumber = v := by
   obtain ⟨o, hs, hout⟩ := stepSpec_of_consumes hin
+  have hfloor := hwindow.floor _ (Nat.le_refl _) (DecidePending.refl r v (n + 1))
   rcases decide_unstalled hs hfloor hview hcert1 hheld hhash hwritable hfresh with
     hen | ⟨blocks, c1, c2, b, hmem, hb, hbv⟩
   · exact decide_delivered hfair ⟨n + 1, hen, hwindow⟩
@@ -483,18 +499,16 @@ theorem propose_forced {cfg : Config} {leader : ViewNumber → Option PubKey} {n
     (hready : ProposeReady leader node (Run.state r n) p parent)
     (hwritable : Writable ((Run.state r n).headers p.viewNumber (blockHash parent))
       p.blockHeader)
-    (hfloor : (Run.state r (n + 1)).aboveDecideFloor cfg p.viewNumber)
-    (hparentFloor : (Run.state r (n + 1)).aboveDecideFloor cfg p.parentCert.view)
-    (hbar : (Run.state r (n + 1)).barredView < p.viewNumber)
-    (htimedOut : (Run.state r (n + 1)).timeoutView < p.viewNumber)
-    (hlock : p.timeoutEvidence.isSome →
-      (Run.state r (n + 1)).lockedCert = some p.parentCert)
     (hfresh : ¬ (Run.state r n).proposedViews p.viewNumber)
     (hwindow : ProposeWindow r p (n + 1)) :
     ∃ j, ∃ q : Proposal, Output.send (.proposal q) ∈ (Run.event r j).outputs
       ∧ q.viewNumber = p.viewNumber := by
   obtain ⟨o, hs, hout⟩ := stepSpec_of_consumes hin
-  rcases propose_unstalled hs hready hwritable hfloor hparentFloor hbar htimedOut hlock hfresh with
+  have hpend := ProposePending.refl r p (n + 1)
+  rcases propose_unstalled hs hready hwritable (hwindow.floor _ (Nat.le_refl _) hpend)
+    (hwindow.parentFloor _ (Nat.le_refl _) hpend) (hwindow.bar _ (Nat.le_refl _) hpend)
+    (hwindow.timedOut _ (Nat.le_refl _) hpend)
+    (fun hte => hwindow.lock hte _ (Nat.le_refl _) hpend) hfresh with
     hen | ⟨q, hmem, hview⟩
   · exact propose_sent hfair ⟨n + 1, hen, hwindow⟩
   · exact ⟨n, q, by rw [hout]; exact hmem, hview⟩

@@ -74,14 +74,14 @@ theorem vote1_cast {cfg : Config} {leader : ViewNumber → Option PubKey} {node 
     exists_least (P := fun j => n ≤ j ∧ ∃ vote : Vote1,
       Output.send (.vote1 vote) ∈ (Run.event r j).outputs ∧ vote.view = p.viewNumber)
       j₀ j₀ (Nat.le_refl j₀) hj₀
+  have hpend : Vote1Pending r p n j :=
+    fun i hi hij vote hmemi hviewi => hmin i hij ⟨hi, vote, hmemi, hviewi⟩
   have henj : Vote1Enabled (Run.state r j) p :=
-    vote1Enabled_upTo hw
-      (fun i hi hij vote hmemi hviewi => hmin i hij ⟨hi, vote, hmemi, hviewi⟩)
-      hen j hj (Nat.le_refl j)
+    vote1Enabled_upTo hw hpend hen j hj (Nat.le_refl j)
   obtain ⟨input, output, -, hs, hin⟩ := emit_step r hmem
   obtain ⟨q, hjq, hviewq, hsigner, hdata⟩ := SafetySpec.vote1Justified hs.toSafetySpec vote hin
   have hadm : (Run.state r (j + 1)).admitted p.viewNumber = some p :=
-    (retainsVote_of_step hs (hw.floor j hj henj.2.2.1)).admitted p henj.1.proposalAdmitted
+    (retainsVote_of_step hs (hw.floor j hj hpend)).admitted p henj.1.proposalAdmitted
   have hqp : q = p := by
     have h1 := hjq.proposalAdmitted
     rw [← hviewq, hview] at h1
@@ -117,14 +117,14 @@ theorem vote2_cast {cfg : Config} {leader : ViewNumber → Option PubKey} {node 
     exists_least (P := fun j => n ≤ j ∧ ∃ vote : Vote2,
       Output.send (.vote2 vote) ∈ (Run.event r j).outputs ∧ vote.view = p.viewNumber)
       j₀ j₀ (Nat.le_refl j₀) hj₀
+  have hpend : Vote2Pending r p n j :=
+    fun i hi hij vote hmemi hviewi => hmin i hij ⟨hi, vote, hmemi, hviewi⟩
   have henj : Vote2Enabled cfg (Run.state r j) p :=
-    vote2Enabled_upTo hw
-      (fun i hi hij vote hmemi hviewi => hmin i hij ⟨hi, vote, hmemi, hviewi⟩)
-      hen j hj (Nat.le_refl j)
+    vote2Enabled_upTo hw hpend hen j hj (Nat.le_refl j)
   obtain ⟨input, output, -, hs, hin⟩ := emit_step r hmem
   obtain ⟨q, hjq, hviewq, hsigner, hdata⟩ := SafetySpec.vote2Justified hs.toSafetySpec vote hin
   have hadm : (Run.state r (j + 1)).admitted p.viewNumber = some p :=
-    (retainsVote_of_step hs (hw.floor j hj henj.2.2.1)).admitted p henj.1.proposalAdmitted
+    (retainsVote_of_step hs (hw.floor j hj hpend)).admitted p henj.1.proposalAdmitted
   have hqp : q = p := by
     have h1 := hjq.proposalAdmitted
     rw [← hviewq, hview] at h1

@@ -201,8 +201,7 @@ Nothing here obliges a node to ask: an input that never arrives leaves the actio
 it would have justified unenabled, and an unenabled action is owed nothing. So a
 node that starves its own subsystems satisfies fairness vacuously rather than
 failing it. That a node asks for what it needs is a property of an implementation
-and not of this specification, and it is one of the stated omissions, alongside
-delivery.
+and not of this specification.
 -/
 inductive Output where
   /-- Send a protocol message to peers. -/

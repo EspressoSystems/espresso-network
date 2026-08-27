@@ -169,6 +169,27 @@ run_meta (checkFields `NewProtocol.ProposeWindow
   "the field list in `NewProtocolSpec.Progress.Defs`")
 
 /-!
+And what `NewProtocolSpec.Deadlock` may assume of the state an input arrives at,
+and of the room the node has left itself. Mutation-sensitive for the same reason
+as the windows: a field added here weakens the theorem that takes the bundle.
+-/
+run_meta (checkFields `NewProtocol.ProposalAdmissible
+  [`bar, `admitted, `proposals, `vidShares, `safe, `wellFormed, `share]
+  "the field list in `NewProtocolSpec.Deadlock`")
+
+run_meta (checkFields `NewProtocol.Vote1Room
+  [`timedOut, `lock, `floor, `parentFloor]
+  "the field list in `NewProtocolSpec.Deadlock`")
+
+run_meta (checkFields `NewProtocol.Vote2Room
+  [`bar, `floor, `noSkip, `noCert2, `notDecided]
+  "the field list in `NewProtocolSpec.Deadlock`")
+
+run_meta (checkFields `NewProtocol.ProposeReady
+  [`leads, `wellFormed, `justified, `parentHeld]
+  "the field list in `NewProtocolSpec.Deadlock`")
+
+/-!
 And that a `LiveNetwork` is a `Network` with fairness, rather than a second set of
 premises alongside it.
 -/

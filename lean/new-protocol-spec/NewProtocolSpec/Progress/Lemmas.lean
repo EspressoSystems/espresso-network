@@ -262,11 +262,13 @@ theorem vote1Enabled_upTo {cfg : Config} {leader : ViewNumber → Option PubKey}
     have hmb : m < bound := Nat.lt_of_lt_of_le (Nat.lt_succ_self m) hle
     have hprev := ih (Nat.le_of_lt hmb)
     have hsucc : n ≤ m + 1 := Nat.le_succ_of_le hnm
+    have hpend : Vote1Pending r p n m := fun i hi him => hno i hi (Nat.lt_trans him hmb)
+    have hpend' : Vote1Pending r p n (m + 1) := fun i hi him => hno i hi (Nat.lt_of_lt_of_le him hle)
     have hfresh' : ¬ (Run.state r (m + 1)).voted1Views p.viewNumber :=
       notVoted1_step (Run.transition r m) (hno m hnm hmb) hprev.2.2.1
-    exact vote1Enabled_step (Run.transition r m) (hw.floor m hnm hprev.2.2.1)
-      (fun hne => hw.parentFloor hne m hnm hprev.2.2.1) (hw.bar (m + 1) hsucc hfresh')
-      (hw.timedOut (m + 1) hsucc hfresh') (hw.lock (m + 1) hsucc hfresh') hfresh' hprev
+    exact vote1Enabled_step (Run.transition r m) (hw.floor m hnm hpend)
+      (fun hne => hw.parentFloor hne m hnm hpend) (hw.bar (m + 1) hsucc hpend')
+      (hw.timedOut (m + 1) hsucc hpend') (hw.lock (m + 1) hsucc hpend') hfresh' hprev
 
 /-! ## A vote2 stays owed -/
 
@@ -310,12 +312,14 @@ theorem vote2Enabled_upTo {cfg : Config} {leader : ViewNumber → Option PubKey}
     have hmb : m < bound := Nat.lt_of_lt_of_le (Nat.lt_succ_self m) hle
     have hprev := ih (Nat.le_of_lt hmb)
     have hsucc : n ≤ m + 1 := Nat.le_succ_of_le hnm
+    have hpend : Vote2Pending r p n m := fun i hi him => hno i hi (Nat.lt_trans him hmb)
+    have hpend' : Vote2Pending r p n (m + 1) := fun i hi him => hno i hi (Nat.lt_of_lt_of_le him hle)
     have hfresh' : ¬ (Run.state r (m + 1)).voted2Views p.viewNumber :=
       notVoted2_step (Run.transition r m) (hno m hnm hmb) hprev.2.2.1
-    exact vote2Enabled_step (Run.transition r m) (hw.floor m hnm hprev.2.2.1)
-      (hw.bar (m + 1) hsucc hfresh') (hw.floor (m + 1) hsucc hfresh')
-      (hw.noSkip (m + 1) hsucc hfresh') (hw.noCert2 (m + 1) hsucc hfresh')
-      (hw.notDecided (m + 1) hsucc hfresh') hfresh' hprev
+    exact vote2Enabled_step (Run.transition r m) (hw.floor m hnm hpend)
+      (hw.bar (m + 1) hsucc hpend') (hw.floor (m + 1) hsucc hpend')
+      (hw.noSkip (m + 1) hsucc hpend') (hw.noCert2 (m + 1) hsucc hpend')
+      (hw.notDecided (m + 1) hsucc hpend') hfresh' hprev
 
 /-! ## A decide stays owed
 
@@ -353,10 +357,12 @@ theorem decideEnabled_upTo {cfg : Config} {leader : ViewNumber → Option PubKey
     have hmb : m < bound := Nat.lt_of_lt_of_le (Nat.lt_succ_self m) hle
     have hprev := ih (Nat.le_of_lt hmb)
     have hsucc : n ≤ m + 1 := Nat.le_succ_of_le hnm
+    have hpend : DecidePending r v n m := fun i hi him => hno i hi (Nat.lt_trans him hmb)
+    have hpend' : DecidePending r v n (m + 1) := fun i hi him => hno i hi (Nat.lt_of_lt_of_le him hle)
     have hfresh' : ¬ (Run.state r (m + 1)).decidedViews v :=
       notDecided_step (Run.transition r m) (hno m hnm hmb) hprev.1
-    exact decideEnabled_step (Run.transition r m) (hw.floor m hnm hprev.1)
-      (hw.floor (m + 1) hsucc hfresh') hfresh' hprev
+    exact decideEnabled_step (Run.transition r m) (hw.floor m hnm hpend)
+      (hw.floor (m + 1) hsucc hpend') hfresh' hprev
 
 /-! ## A proposal stays owed -/
 
@@ -420,11 +426,13 @@ theorem proposeEnabled_upTo {cfg : Config} {leader : ViewNumber → Option PubKe
     have hmb : m < bound := Nat.lt_of_lt_of_le (Nat.lt_succ_self m) hle
     have hprev := ih (Nat.le_of_lt hmb)
     have hsucc : n ≤ m + 1 := Nat.le_succ_of_le hnm
+    have hpend : ProposePending r p n m := fun i hi him => hno i hi (Nat.lt_trans him hmb)
+    have hpend' : ProposePending r p n (m + 1) := fun i hi him => hno i hi (Nat.lt_of_lt_of_le him hle)
     have hfresh' : ¬ (Run.state r (m + 1)).proposedViews p.viewNumber :=
       notProposed_step (Run.transition r m) (hno m hnm hmb) hprev.2.1
-    exact proposeEnabled_step (Run.transition r m) (hw.floor m hnm hprev.2.1)
-      (hw.parentFloor m hnm hprev.2.1) (hw.bar (m + 1) hsucc hfresh')
-      (hw.timedOut (m + 1) hsucc hfresh')
-      (fun hte => hw.lock hte (m + 1) hsucc hfresh') hfresh' hprev
+    exact proposeEnabled_step (Run.transition r m) (hw.floor m hnm hpend)
+      (hw.parentFloor m hnm hpend) (hw.bar (m + 1) hsucc hpend')
+      (hw.timedOut (m + 1) hsucc hpend')
+      (fun hte => hw.lock hte (m + 1) hsucc hpend') hfresh' hprev
 
 end NewProtocol
