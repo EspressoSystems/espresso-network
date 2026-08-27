@@ -30,6 +30,7 @@ async fn test_compute_drb_result() {
         drb_input,
         null_store_drb_progress_fn(),
         null_load_drb_progress_fn(),
+        None,
         CancellationToken::new(),
     )
     .await
@@ -62,6 +63,7 @@ async fn test_compute_drb_result_2() {
         drb_input,
         null_store_drb_progress_fn(),
         null_load_drb_progress_fn(),
+        None,
         CancellationToken::new(),
     )
     .await

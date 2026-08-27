@@ -4,7 +4,14 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{collections::BTreeMap, sync::Arc, time::Instant};
+use std::{
+    collections::BTreeMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Instant,
+};
 
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
@@ -117,6 +124,26 @@ fn hash_batches(mut hash: [u8; 32], count: u64, cancel: CancellationToken) -> Op
     Some(hash)
 }
 
+/// Raises a flag for as long as it is alive.
+struct HashingGuard(Option<Arc<AtomicBool>>);
+
+impl HashingGuard {
+    fn new(flag: Option<Arc<AtomicBool>>) -> Self {
+        if let Some(flag) = &flag {
+            flag.store(true, Ordering::Release);
+        }
+        Self(flag)
+    }
+}
+
+impl Drop for HashingGuard {
+    fn drop(&mut self) {
+        if let Some(flag) = &self.0 {
+            flag.store(false, Ordering::Release);
+        }
+    }
+}
+
 /// Compute the DRB result for the leader rotation.
 ///
 /// This is to be started two epochs in advance and spawned in a non-blocking thread.
@@ -124,12 +151,17 @@ fn hash_batches(mut hash: [u8; 32], count: u64, cancel: CancellationToken) -> Op
 ///
 /// # Arguments
 /// * `drb_seed_input` - Serialized QC signature.
+/// * `hashing` - Raised while the hash chain itself is running — after the
+///   initial progress load, until return — so callers (e.g. the catchup
+///   watchdog) can tell the purposefully long CPU phase apart from the
+///   storage awaits around it.
 /// * `cancel` - Token that stops the hash loop when fired.
 #[must_use]
 pub async fn compute_drb_result(
     drb_input: DrbInput,
     store_drb_progress: StoreDrbProgressFn,
     load_drb_progress: LoadDrbProgressFn,
+    hashing: Option<Arc<AtomicBool>>,
     cancel: CancellationToken,
 ) -> Option<DrbResult> {
     info!(target: "announce::drb", ?drb_input, "beginning drb calculation");
@@ -148,6 +180,10 @@ pub async fn compute_drb_result(
             drb_input = loaded_drb_input;
         }
     }
+
+    // From here on the work is the hash chain; the progress stores below are
+    // fire-and-forget, so the flag stays raised until return.
+    let _hashing = HashingGuard::new(hashing);
 
     let mut hash: [u8; 32] = drb_input.value;
     let mut iteration = drb_input.iteration;
@@ -485,6 +521,7 @@ mod tests {
             drb_input,
             null_store_drb_progress_fn(),
             null_load_drb_progress_fn(),
+            None,
             cancel,
         )
         .await;

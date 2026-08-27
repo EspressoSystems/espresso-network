@@ -56,14 +56,17 @@ use hotshot_types::{
     PeerConfig,
     constants::TEST_UPGRADE_CONSTANTS,
     data::{EpochNumber, Leaf2},
-    drb::{DrbResult, INITIAL_DRB_RESULT},
+    drb::{DrbDifficultySelectorFn, DrbResult, INITIAL_DRB_RESULT},
     epoch_membership::EpochMembershipCoordinator,
     signature_key::{BLSPubKey, BuilderKey, SchnorrPubKey},
     traits::{
         election::Membership, node_implementation::NodeType, signature_key::StakeTableEntryType,
     },
     upgrade_config::UpgradeConstants,
+    utils::root_block_in_epoch,
 };
+use sha2::{Digest, Sha256};
+use vbs::version::Version;
 
 /// Blocks per epoch. Irrelevant to the wedge, but the coordinator needs one.
 const EPOCH_HEIGHT: u64 = 10;
@@ -99,6 +102,12 @@ enum LoadBehavior {
     /// one step later than [`Hang`](Self::Hang): after it has claimed entries
     /// it will never release on its own.
     HangEpochRoot,
+    /// Loads fail fast and epoch roots resolve, but the DRB result has to be
+    /// computed locally, with a difficulty calibrated to several watchdog
+    /// periods of real hashing — modelling mainnet's tens-of-minutes DRB
+    /// computation. A healthy-but-slow attempt like this must not be
+    /// abandoned.
+    SlowDrb,
 }
 
 /// A `Membership` that delegates everything to `StrictMembership` except the
@@ -114,6 +123,11 @@ struct WedgeMembership {
     /// Number of times `get_epoch_root` has been entered. One per catchup
     /// attempt that got past the epoch-discovery loop.
     root_calls: Arc<AtomicUsize>,
+    /// Template leaf returned by `get_epoch_root` under
+    /// [`SlowDrb`](LoadBehavior::SlowDrb), seeded by the test up front:
+    /// `Leaf2::genesis` pays a multi-second one-time global setup cost on
+    /// first use, which must not happen inside a watchdog window.
+    root_leaf: Arc<std::sync::OnceLock<Leaf2<WedgeTypes>>>,
 }
 
 impl WedgeMembership {
@@ -151,10 +165,28 @@ impl Membership<WedgeTypes> for WedgeMembership {
     ) -> Result<Leaf2<WedgeTypes>, Self::Error> {
         let calls = self.root_calls.fetch_add(1, Ordering::SeqCst) + 1;
         tracing::info!(%epoch, calls, "get_epoch_root entered");
-        if matches!(self.behavior, LoadBehavior::HangEpochRoot) {
-            std::future::pending::<()>().await;
+        match self.behavior {
+            LoadBehavior::HangEpochRoot => {
+                std::future::pending::<()>().await;
+                unreachable!("pending() never resolves")
+            },
+            LoadBehavior::SlowDrb => {
+                // A usable root: `StrictMembership::add_epoch_root` registers
+                // the stake table for `epoch_from_block_number(height) + 2`,
+                // so a block inside `epoch` (the root epoch this is fetched
+                // from) registers `epoch + 2` — the epoch being fetched.
+                let mut leaf = self
+                    .root_leaf
+                    .get()
+                    .cloned()
+                    .expect("SlowDrb requires the test to seed root_leaf");
+                leaf.block_header_mut().block_number = root_block_in_epoch(*epoch, EPOCH_HEIGHT);
+                Ok(leaf)
+            },
+            LoadBehavior::Hang | LoadBehavior::PanicOnce => {
+                Err(anyhow!("epoch root unavailable").into())
+            },
         }
-        Err(anyhow!("epoch root unavailable").into())
     }
 
     async fn get_epoch_drb(
@@ -185,7 +217,7 @@ impl Membership<WedgeTypes> for WedgeMembership {
             LoadBehavior::PanicOnce if calls == 1 => {
                 panic!("simulated catchup task death while loading epoch {epoch}")
             },
-            LoadBehavior::PanicOnce | LoadBehavior::HangEpochRoot => false,
+            LoadBehavior::PanicOnce | LoadBehavior::HangEpochRoot | LoadBehavior::SlowDrb => false,
         }
     }
 
@@ -246,6 +278,7 @@ fn setup(behavior: LoadBehavior) -> (WedgeMembership, EpochMembershipCoordinator
         behavior,
         load_calls: Arc::default(),
         root_calls: Arc::default(),
+        root_leaf: Arc::default(),
     };
     // Registers stake tables for FIRST_EPOCH and FIRST_EPOCH + 1.
     membership.set_first_epoch(EpochNumber::new(FIRST_EPOCH), INITIAL_DRB_RESULT);
@@ -406,5 +439,82 @@ async fn intermediate_epochs_recover_after_catchup_abandoned() {
         recovered,
         "the abandoned catchup's entry for intermediate epoch {intermediate} was never evicted: \
          stake_table_for_epoch answers \"Catchup already in progress\" forever"
+    );
+}
+
+/// The inverse guarantee: an attempt that is merely *slow* — computing a DRB
+/// locally, which on mainnet is 25e9 sequential hashes, i.e. tens of minutes
+/// by design — must NOT be abandoned. Abandoning it would spawn retries that
+/// re-fetch epoch roots from peers only to die on the "DRB calculation
+/// already in progress" guard, a storm of doomed catchups for as long as the
+/// real computation runs.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn slow_drb_computation_is_not_abandoned() {
+    let (membership, coordinator) = setup(LoadBehavior::SlowDrb);
+    // A tighter watchdog for this test: compile profiles skew the calibration
+    // probe below against the real hash loop by several ×, and the chain must
+    // outlast several windows whichever way the skew goes.
+    let watchdog = Duration::from_millis(200);
+    let coordinator = coordinator.with_catchup_timeout(watchdog);
+    // Built up front: the first `Leaf2::genesis` pays a one-time global setup
+    // cost of several seconds, which must not eat into a watchdog window.
+    let root_leaf = Leaf2::<WedgeTypes>::genesis(
+        &TestValidatedState::default(),
+        &TestInstanceState::default(),
+        Version { major: 0, minor: 1 },
+    )
+    .await;
+    membership
+        .root_leaf
+        .set(root_leaf)
+        .expect("root_leaf seeded once");
+    // The slow part must be the hash chain itself — the only step the
+    // watchdog is expected to wait out. Calibrate a difficulty targeting 8 s
+    // of hashing as measured by this probe; the real chain lands anywhere
+    // from ~1 s (probe unoptimized, chain optimized) to ~8 s (both
+    // optimized), which is several watchdog windows either way.
+    let probe_iters: u32 = 200_000;
+    let start = Instant::now();
+    let mut probe = [0u8; 32];
+    for _ in 0..probe_iters {
+        probe = Sha256::digest(probe).into();
+    }
+    std::hint::black_box(probe);
+    let per_iter = start.elapsed() / probe_iters;
+    let difficulty =
+        (Duration::from_secs(8).as_nanos() / per_iter.as_nanos().max(1)).max(1_000_000) as u64;
+    let selector: DrbDifficultySelectorFn = Arc::new(move |_| Box::pin(async move { difficulty }));
+    coordinator.set_drb_difficulty_selector(selector);
+    let target = EpochNumber::new(TARGET_EPOCH);
+
+    // Starts the one and only catchup attempt.
+    let started = Instant::now();
+    assert!(
+        coordinator.membership_for_epoch(Some(target)).is_err(),
+        "epoch {target} is not locally known, so this must not succeed"
+    );
+
+    // The attempt fetches the epoch roots for 3, 4 and 5, then sits in the
+    // DRB computation. It must be left alone until it resolves the epoch.
+    let resolved = wait_until(Duration::from_secs(20), || {
+        coordinator.membership_for_epoch(Some(target)).is_ok()
+    })
+    .await;
+    assert!(
+        resolved,
+        "catchup for {target} did not complete: either the slow DRB computation was abandoned or \
+         it never ran (root fetches = {})",
+        membership.root_fetches()
+    );
+    assert!(
+        started.elapsed() >= 2 * watchdog,
+        "the hash chain finished before the watchdog could fire, so this run proved nothing; \
+         raise the calibration target"
+    );
+    assert_eq!(
+        membership.root_fetches(),
+        3,
+        "the watchdog abandoned the attempt during its legitimate DRB computation: retries were \
+         spawned that re-fetched epoch roots only to die on the DRB-in-progress guard"
     );
 }

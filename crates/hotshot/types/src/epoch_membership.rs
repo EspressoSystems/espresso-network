@@ -502,7 +502,9 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                 );
 
                 progress.checkpoint(format_args!("computing drb result for epoch {epoch}"));
-                let result = self.compute_drb_result(epoch, root_leaf).await;
+                let result = self
+                    .compute_drb_result_impl(epoch, root_leaf, Some(&progress))
+                    .await;
 
                 log!(result);
 
@@ -702,6 +704,18 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         epoch: EpochNumber,
         root_leaf: Leaf2<TYPES>,
     ) -> Result<DrbResult> {
+        self.compute_drb_result_impl(epoch, root_leaf, None).await
+    }
+
+    /// Inner body of [`Self::compute_drb_result`]. `progress`, when given, is
+    /// flagged `in_drb_compute` for the duration of the hash chain, so the
+    /// catchup watchdog leaves a legitimately slow computation alone.
+    async fn compute_drb_result_impl(
+        &self,
+        epoch: EpochNumber,
+        root_leaf: Leaf2<TYPES>,
+        progress: Option<&CatchupProgress<TYPES>>,
+    ) -> Result<DrbResult> {
         let cancel_token = {
             let mut drb_calculation_map_lock = self.drb_calculation_map.lock();
 
@@ -754,10 +768,16 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         let store_drb_progress_fn = self.store_drb_progress_fn.clone();
         let load_drb_progress_fn = self.load_drb_progress_fn.clone();
 
+        // `compute_drb_result` raises the flag only while its hash chain is
+        // running — the purposefully long, hardware-dependent part
+        // (`drb_difficulty` sequential iterations, 25e9 on mainnet) that the
+        // catchup watchdog must wait out. Every storage await, including the
+        // progress load inside, stays on the normal watchdog budget.
         let drb = match compute_drb_result(
             drb_input,
             store_drb_progress_fn,
             load_drb_progress_fn,
+            progress.map(|p| Arc::clone(&p.in_drb_compute)),
             cancel_token,
         )
         .await
@@ -854,6 +874,10 @@ struct CatchupProgress<TYPES: NodeType> {
     /// Set by the watchdog. The attempt checks it at its loop boundaries and
     /// stops instead of racing the retry it was abandoned in favor of.
     abandoned: Arc<AtomicBool>,
+    /// Raised by `compute_drb_result` while its hash chain is running, which
+    /// legitimately outlasts the watchdog budget; the watchdog keeps waiting
+    /// for as long as it is set.
+    in_drb_compute: Arc<AtomicBool>,
 }
 
 impl<TYPES: NodeType> Clone for CatchupProgress<TYPES> {
@@ -863,6 +887,7 @@ impl<TYPES: NodeType> Clone for CatchupProgress<TYPES> {
             last: Arc::clone(&self.last),
             claimed: Arc::clone(&self.claimed),
             abandoned: Arc::clone(&self.abandoned),
+            in_drb_compute: Arc::clone(&self.in_drb_compute),
         }
     }
 }
@@ -874,6 +899,7 @@ impl<TYPES: NodeType> CatchupProgress<TYPES> {
             last: Arc::new(Mutex::new("spawned".to_string())),
             claimed: Arc::default(),
             abandoned: Arc::default(),
+            in_drb_compute: Arc::default(),
         }
     }
 
@@ -911,6 +937,10 @@ impl<TYPES: NodeType> CatchupProgress<TYPES> {
     fn is_abandoned(&self) -> bool {
         self.abandoned.load(Ordering::Acquire)
     }
+
+    fn in_drb_compute(&self) -> bool {
+        self.in_drb_compute.load(Ordering::Acquire)
+    }
 }
 
 fn spawn_catchup<T: NodeType>(
@@ -926,13 +956,23 @@ fn spawn_catchup<T: NodeType>(
             let progress = progress.clone();
             async move { coordinator.catchup(epoch, epoch_tx, progress).await }
         });
-        let (outcome, still_running) =
+        let (outcome, still_running) = loop {
             match tokio::time::timeout(coordinator.catchup_timeout, &mut inner).await {
                 // `catchup` ran to completion; it removed its own map entries.
                 Ok(Ok(())) => return,
-                Ok(Err(join_err)) => (format!("catchup task died: {join_err}"), false),
-                Err(_) => ("catchup timed out".to_string(), true),
-            };
+                Ok(Err(join_err)) => break (format!("catchup task died: {join_err}"), false),
+                // A local DRB computation is purposefully long so it never counts
+                // against the watchdog budget: keep waiting for as long as
+                // the attempt reports it is computing.
+                Err(_) if progress.in_drb_compute() => {
+                    tracing::info!(
+                        "catchup for epoch {epoch} is computing a DRB locally; extending its \
+                         watchdog budget"
+                    );
+                },
+                Err(_) => break ("catchup timed out".to_string(), true),
+            }
+        };
         // Abandon the attempt WITHOUT aborting it: cancellation could land in
         // the middle of a multi-step update (a torn membership write, a
         // leaked `drb_calculation_map` guard) or not land at all (abort
