@@ -1142,31 +1142,68 @@ impl<T: NodeType> Consensus<T> {
 
     /// Take in a proposal this node did not receive live together with its
     /// VID share: one fetched from a peer, or one parked in
-    /// `unpaired_proposals` that a certificate has since vouched for.
+    /// `unpaired_proposals` that a certificate has since vouched for. Its
+    /// parked ancestors come with it, oldest first, so each finds its parent
+    /// stored rather than fetching it.
     #[instrument(level = "debug", skip_all)]
     fn adopt_certified_proposal(
         &mut self,
         message: ProposalMessage<T, Validated>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) {
-        let view = message.proposal.data.view_number;
-        self.store_certified_proposal(message, outbox);
-        // The proposal itself may now be decidable (e.g. cert2 arrived first
-        // and triggered the fetch).
-        self.maybe_decide(view, outbox);
-        // Views extending it may be blocked on it.
-        let extending_views: Vec<ViewNumber> = self
-            .proposals
-            .range(view + 1..)
-            .filter(|(_, proposal)| proposal.justify_qc.view_number() == view)
-            .map(|(extending_view, _)| *extending_view)
-            .collect();
-        for extending_view in extending_views {
-            self.maybe_vote_1(extending_view, outbox);
-            self.maybe_vote_2_and_update_lock(extending_view, outbox);
-            self.maybe_decide(extending_view, outbox);
+        let chain = self.parked_ancestors(message);
+        if chain.len() > 1 {
+            debug!(ancestors = chain.len() - 1, "adopting parked ancestors");
         }
-        self.maybe_propose(view + 1, outbox);
+        for message in chain.into_iter().rev() {
+            let view = message.proposal.data.view_number;
+            self.store_certified_proposal(message, outbox);
+            // The proposal itself may now be decidable (e.g. cert2 arrived first
+            // and triggered the fetch).
+            self.maybe_decide(view, outbox);
+            // Views extending it may be blocked on it.
+            let extending_views: Vec<ViewNumber> = self
+                .proposals
+                .range(view + 1..)
+                .filter(|(_, proposal)| proposal.justify_qc.view_number() == view)
+                .map(|(extending_view, _)| *extending_view)
+                .collect();
+            for extending_view in extending_views {
+                self.maybe_vote_1(extending_view, outbox);
+                self.maybe_vote_2_and_update_lock(extending_view, outbox);
+                self.maybe_decide(extending_view, outbox);
+            }
+            self.maybe_propose(view + 1, outbox);
+        }
+    }
+
+    /// `message` followed by its parked ancestors, nearest first, up to the
+    /// first parent this node already holds or has nothing parked for.
+    ///
+    /// A loop, not recursion through `request_parent_proposal_if_missing`: the
+    /// chain is as long as the run of views parked without a share.
+    fn parked_ancestors(
+        &self,
+        message: ProposalMessage<T, Validated>,
+    ) -> Vec<ProposalMessage<T, Validated>> {
+        let mut chain = vec![message];
+        loop {
+            let proposal = &chain.last().expect("starts non-empty").proposal.data;
+            let view = proposal.view_number;
+            let parent_view = proposal.justify_qc.view_number();
+            let leaf_commit = proposal.justify_qc.data().leaf_commit;
+            if parent_view >= view
+                || parent_view <= self.last_decided_view
+                || self.proposals.contains_key(&parent_view)
+            {
+                break;
+            }
+            let Some(parent) = self.parked_proposal(parent_view, leaf_commit) else {
+                break;
+            };
+            chain.push(parent);
+        }
+        chain
     }
 
     fn store_certified_proposal(
@@ -1187,9 +1224,10 @@ impl<T: NodeType> Consensus<T> {
         }
         self.leaves.insert(view, proposal.clone().into());
         self.signed_proposals.insert(view, signed_proposal);
-        // Stored before the parent lookup, which can re-enter here by adopting a
-        // parked parent; the store is what bounds that recursion.
         self.proposals.insert(view, proposal.clone());
+        // Parked ancestors are stored ahead of this proposal
+        // (`adopt_certified_proposal`), so this only fetches a parent nothing
+        // parked can supply.
         self.request_parent_proposal_if_missing(&proposal, outbox);
         self.adopt_certified_drb(view);
 
@@ -1209,19 +1247,27 @@ impl<T: NodeType> Consensus<T> {
         leaf_commit: Commitment<Leaf2<T>>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> bool {
-        let range = (view, VidCommitment2::default())..(view + 1, VidCommitment2::default());
-        let Some(message) = self
-            .unpaired_proposals
-            .range(range)
-            .map(|(_, (_, message))| message)
-            .find(|message| proposal_commitment(&message.proposal.data) == leaf_commit)
-            .cloned()
-        else {
+        let Some(message) = self.parked_proposal(view, leaf_commit) else {
             return false;
         };
         debug!(%view, "adopting live proposal parked without a vid share");
         self.adopt_certified_proposal(message, outbox);
         true
+    }
+
+    /// The live proposal parked for `view` awaiting this node's VID share, if
+    /// it is the leaf `leaf_commit` names.
+    fn parked_proposal(
+        &self,
+        view: ViewNumber,
+        leaf_commit: Commitment<Leaf2<T>>,
+    ) -> Option<ProposalMessage<T, Validated>> {
+        let range = (view, VidCommitment2::default())..(view + 1, VidCommitment2::default());
+        self.unpaired_proposals
+            .range(range)
+            .map(|(_, (_, message))| message)
+            .find(|message| proposal_commitment(&message.proposal.data) == leaf_commit)
+            .cloned()
     }
 
     fn request_state(
@@ -1286,20 +1332,25 @@ impl<T: NodeType> Consensus<T> {
     ) {
         let parent_view = proposal.justify_qc.view_number();
         let leaf_commit = proposal.justify_qc.data().leaf_commit;
-        if parent_view > self.last_decided_view
-            && !self.proposals.contains_key(&parent_view)
-            && !self.adopt_unpaired_proposal(parent_view, leaf_commit, outbox)
-        {
-            warn!(
-                view = %proposal.view_number,
-                %parent_view,
-                "parent proposal missing; requesting fetch"
-            );
-            outbox.push_back(ConsensusOutput::RequestMissingProposal {
-                view: parent_view,
-                leaf_commit,
-            });
+        if parent_view <= self.last_decided_view || self.proposals.contains_key(&parent_view) {
+            return;
         }
+        // Only a parent behind the proposal is adopted; adopting for a forward
+        // QC could re-enter adoption without end.
+        if parent_view < proposal.view_number
+            && self.adopt_unpaired_proposal(parent_view, leaf_commit, outbox)
+        {
+            return;
+        }
+        warn!(
+            view = %proposal.view_number,
+            %parent_view,
+            "parent proposal missing; requesting fetch"
+        );
+        outbox.push_back(ConsensusOutput::RequestMissingProposal {
+            view: parent_view,
+            leaf_commit,
+        });
     }
 
     #[instrument(level = "debug", skip_all)]
