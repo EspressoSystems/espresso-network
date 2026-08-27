@@ -924,6 +924,13 @@ impl<T: NodeType> Consensus<T> {
         match scope {
             GcScope::Local(view) => {
                 let c = Commitment::default_commitment_no_preimage();
+<<<<<<< HEAD
+||||||| parent of 1a0ecc730f5 (fix(new-protocol): adopt parked proposals; validate fetched ones without a payload size (#4872))
+                let vc = VidCommitment2::default();
+                let floor = self.decide_floor();
+=======
+                let floor = self.decide_floor();
+>>>>>>> 1a0ecc730f5 (fix(new-protocol): adopt parked proposals; validate fetched ones without a payload size (#4872))
                 self.headers = self.headers.split_off(&(view, c));
                 self.proposed_views = self.proposed_views.split_off(&view);
                 self.states_verified = self.states_verified.split_off(&view);
