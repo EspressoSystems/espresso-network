@@ -954,16 +954,14 @@ impl<T: NodeType> Consensus<T> {
     ///
     /// The decide inputs (`proposals`, `certs`, `certs2`, deferred certs,
     /// `decided_views`) survive down to [`Self::decide_floor`] so a late
-    /// Cert2 can still decide a gap view.
+    /// Cert2 can still decide a gap view. Parked proposal halves survive as
+    /// long, so such a Cert2 can adopt one instead of fetching.
     pub fn gc(&mut self, scope: GcScope) {
         match scope {
             GcScope::Local(view) => {
                 let c = Commitment::default_commitment_no_preimage();
-                let vc = VidCommitment2::default();
                 let floor = self.decide_floor();
                 self.headers = self.headers.split_off(&(view, c));
-                self.unpaired_proposals = self.unpaired_proposals.split_off(&(view, vc));
-                self.unpaired_vid_shares = self.unpaired_vid_shares.split_off(&(view, vc));
                 self.proposed_views = self.proposed_views.split_off(&view);
                 self.states_verified = self.states_verified.split_off(&view);
                 self.timeout_certs = self.timeout_certs.split_off(&view);
@@ -979,6 +977,8 @@ impl<T: NodeType> Consensus<T> {
                 self.certs2 = self.certs2.split_off(&keep_from);
                 self.decided_views = self.decided_views.split_off(&keep_from);
                 self.proposals = self.proposals.split_off(&keep_from);
+                self.unpaired_proposals = self.unpaired_proposals.split_off(&(keep_from, vc));
+                self.unpaired_vid_shares = self.unpaired_vid_shares.split_off(&(keep_from, vc));
                 self.vote1_parent = self.vote1_parent.split_off(&keep_from);
                 self.leaves = self.leaves.split_off(&view);
                 self.signed_proposals = self.signed_proposals.split_off(&view);
@@ -1089,19 +1089,11 @@ impl<T: NodeType> Consensus<T> {
         vid_share: VidDisperseShare2<T>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> Protocol {
-        let view = proposal.view_number();
         outbox.push_back(ConsensusOutput::ProposalPaired {
             proposal: proposal.proposal.clone(),
             vid_share: vid_share.clone(),
         });
-        // Handle first: a parked older proposal may be this one's parent, which
-        // `request_parent_proposal_if_missing` adopts rather than fetches.
-        let result = self.handle_proposal_with_vid_share(sender, proposal, vid_share, outbox);
-        // Parked halves for this and older views can no longer pair.
-        let vc = VidCommitment2::default();
-        self.unpaired_proposals = self.unpaired_proposals.split_off(&(view + 1, vc));
-        self.unpaired_vid_shares = self.unpaired_vid_shares.split_off(&(view + 1, vc));
-        result
+        self.handle_proposal_with_vid_share(sender, proposal, vid_share, outbox)
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -1242,17 +1234,19 @@ impl<T: NodeType> Consensus<T> {
         let proposal = signed_proposal.data.clone();
         let view = proposal.view_number;
         if view <= self.last_decided_view {
-            debug!(%view, "fetched proposal at or below decided view; discarding");
+            debug!(%view, "certified proposal at or below decided view; discarding");
             return;
         }
         if self.proposals.contains_key(&view) {
-            debug!(%view, "fetched proposal already present; discarding");
+            debug!(%view, "certified proposal already present; discarding");
             return;
         }
         self.leaves.insert(view, proposal.clone().into());
         self.signed_proposals.insert(view, signed_proposal);
-        self.request_parent_proposal_if_missing(&proposal, outbox);
+        // Stored before the parent lookup, which can re-enter here by adopting a
+        // parked parent; the store is what bounds that recursion.
         self.proposals.insert(view, proposal.clone());
+        self.request_parent_proposal_if_missing(&proposal, outbox);
         self.adopt_certified_drb(view);
 
         let payload_size = self.payload_size_for(&proposal);
@@ -1262,6 +1256,9 @@ impl<T: NodeType> Consensus<T> {
 
     /// Adopt the live proposal parked for `view` awaiting this node's VID
     /// share, if it is the leaf `leaf_commit` names. Returns whether one was adopted.
+    ///
+    /// The proposal stays parked: a share arriving later still pairs with it and
+    /// runs the live path, the only one that stores the share for `maybe_vote_1`.
     fn adopt_unpaired_proposal(
         &mut self,
         view: ViewNumber,
