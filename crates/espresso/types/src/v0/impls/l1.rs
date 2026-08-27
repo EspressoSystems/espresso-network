@@ -335,6 +335,15 @@ impl SingleTransport {
 
 /// alloy returns a non-2xx response with a parseable JSON-RPC body as `Ok`, so the payload, not
 /// the `Result` arm, decides whether a provider is healthy.
+///
+/// This is a partial classification, deliberately. It covers only major error flavors the fleet
+/// dumps actually captured. Much remains open: handling the most common providers and RPC flavors,
+/// block ranges that adapt to what a provider will serve, separating a dead API key from a
+/// transient failure, etc.
+///
+/// Unless we're fixing urgent bux we should not add to this list until we have a satisfactory
+/// design for robust handling of the whole RPC spectrum, because every provider and RPC flavor has
+/// its own quirks.
 #[cfg(feature = "node")]
 #[derive(Debug)]
 enum ResponseOutcome {
