@@ -3,22 +3,25 @@ source: crates/espresso/types/src/v0/impls/stake_table_history_tests.rs
 expression: summary
 ---
 corpus: decaf
-protocol_version: "0.3"
-logs: 574
-decoded_events: 574
-stake_table_hash: STAKE_TABLE~6wSXC2JhPp1TfGUpMULIV-VR1cvRVJCrWV593lA-KO59
-active_validators_commit: STAKE_TABLE~TRb6lKLOkw6vnyz9Mb_Rn5cVRKA1MmYXOjr-WCrz7fmP
-all_validators: 149
-active_validators: 44
+protocol_version: "0.6"
+logs: 797
+decoded_events: 796
+stake_table_hash: STAKE_TABLE~a2DSV2KkM1N3uP4HbHclrfySAWgov6gmU_BYXs1XdToq
+active_validators_commit: STAKE_TABLE~t5ZEt1oga8ppRqr5KrLM28T_-ABsncHchMFqlyALKcBI
+all_validators: 151
+active_validators: 32
 event_variants:
   CommissionUpdate: 3
-  Delegate: 265
+  Delegate: 370
   Deregister: 1
-  DeregisterV2: 2
+  DeregisterV2: 5
+  P2pAddrUpdate: 40
   Register: 140
-  RegisterV2: 12
+  RegisterV2: 14
+  RegisterV3: 3
   Undelegate: 50
-  UndelegateV2: 101
+  UndelegateV2: 133
+  X25519KeyUpdate: 37
 ladder_stride: 32
 hash_ladder:
   - event: 31
@@ -106,8 +109,43 @@ hash_ladder:
     log_index: 843
     variant: UndelegateV2
     commit: STAKE_TABLE~x4qjFj4BSdFm7vH_kr4YKaY76Yf1_CHOAr9xkf4Z-xSW
-  - event: 573
-    block: 10873245
-    log_index: 931
+  - event: 575
+    block: 10946962
+    log_index: 814
+    variant: RegisterV2
+    commit: STAKE_TABLE~7khXt64cZDsml_ZCoGbU6w9w4GUYQMMdDySqZ7y0Qhts
+  - event: 607
+    block: 11088185
+    log_index: 205
     variant: Delegate
-    commit: STAKE_TABLE~6wSXC2JhPp1TfGUpMULIV-VR1cvRVJCrWV593lA-KO59
+    commit: STAKE_TABLE~c1M--ERDFaiYhFc7f9cdhcwsQjfscDNvLmAEcGgOQHbZ
+  - event: 639
+    block: 11166125
+    log_index: 612
+    variant: UndelegateV2
+    commit: STAKE_TABLE~qXXmYJh59JturAeRjmAtf9WfKTYbcTLEyYGrHykWrsj5
+  - event: 671
+    block: 11272562
+    log_index: 607
+    variant: P2pAddrUpdate
+    commit: STAKE_TABLE~CXqmzRrjjZ0jHskZBRLbX2uispO-CFf3EskVXtu5DLfl
+  - event: 703
+    block: 11294588
+    log_index: 323
+    variant: P2pAddrUpdate
+    commit: STAKE_TABLE~lUwvP-ia2kkl_c663E2b5Ed8jYdXxQlOkWVDqMYEOVnz
+  - event: 735
+    block: 11365707
+    log_index: 702
+    variant: X25519KeyUpdate
+    commit: STAKE_TABLE~ni3gWJDGYFd7bGg4PE2jOHPLG-tO7-YkoBRpl3YigA-f
+  - event: 767
+    block: 11414653
+    log_index: 221
+    variant: Delegate
+    commit: STAKE_TABLE~804BTvfyoz519V-arTurbq-7VRNLzIeBz6xk5c52yFs5
+  - event: 795
+    block: 11558965
+    log_index: 84
+    variant: Delegate
+    commit: STAKE_TABLE~a2DSV2KkM1N3uP4HbHclrfySAWgov6gmU_BYXs1XdToq

@@ -4,19 +4,21 @@ expression: summary
 ---
 corpus: mainnet
 protocol_version: "0.5"
-logs: 2737
-decoded_events: 2737
-stake_table_hash: STAKE_TABLE~BfffcamiX5aiODiUCHNTnh9ZHCHL8otb0R-x0G2pEHzt
-active_validators_commit: STAKE_TABLE~DLaGgL64ctrqjN5g1y_mvE54IghMBl_KYJfYyMInooKP
-all_validators: 97
-active_validators: 76
+logs: 3463
+decoded_events: 3463
+stake_table_hash: STAKE_TABLE~HS3Tb8TPdIDv5LwAy1gLPzjUQ7GcaZhfqsK10VJEgkMg
+active_validators_commit: STAKE_TABLE~vfQHhEDF0ij_4rjTczFd6iDsiRkLYu8DieBz3ECicVMC
+all_validators: 110
+active_validators: 90
 event_variants:
-  CommissionUpdate: 24
-  Delegate: 2011
-  DeregisterV2: 4
-  KeyUpdateV2: 1
-  RegisterV2: 101
-  UndelegateV2: 596
+  CommissionUpdate: 62
+  Delegate: 2300
+  DeregisterV2: 5
+  KeyUpdateV2: 3
+  P2pAddrUpdate: 81
+  RegisterV2: 115
+  UndelegateV2: 817
+  X25519KeyUpdate: 80
 ladder_stride: 32
 hash_ladder:
   - event: 31
@@ -444,8 +446,123 @@ hash_ladder:
     log_index: 632
     variant: RegisterV2
     commit: STAKE_TABLE~9im324_eMjYdmqJp4kEfYFqq0ylFzK_7mBybB0TFVSG5
-  - event: 2736
-    block: 25182395
-    log_index: 655
+  - event: 2751
+    block: 25217495
+    log_index: 269
+    variant: Delegate
+    commit: STAKE_TABLE~j0168exFa58yUPW-5WMHWYfglX83nczXtnuSY41m4XVW
+  - event: 2783
+    block: 25223112
+    log_index: 326
+    variant: Delegate
+    commit: STAKE_TABLE~Z9X_M2yWf7ex39TFwZ1gKON2NcniN16bcoZ1777cZgv2
+  - event: 2815
+    block: 25259050
+    log_index: 374
+    variant: Delegate
+    commit: STAKE_TABLE~qOLW0aXF1gwJh8Swmi_nCcNe9EZejI-UIe0pQjJShDiP
+  - event: 2847
+    block: 25313385
+    log_index: 425
+    variant: Delegate
+    commit: STAKE_TABLE~DQ3Nq-QBOLjVpqWV1q9e2tboUyLlRZFLLzX_GD18srLH
+  - event: 2879
+    block: 25341657
+    log_index: 71
     variant: UndelegateV2
-    commit: STAKE_TABLE~BfffcamiX5aiODiUCHNTnh9ZHCHL8otb0R-x0G2pEHzt
+    commit: STAKE_TABLE~Sak_RUfyp6DJ58BNE-g0MYSELVC-xPc_Y_eGxDENFUub
+  - event: 2911
+    block: 25408626
+    log_index: 96
+    variant: Delegate
+    commit: STAKE_TABLE~wL3zZf7M13tk6PpEfNb3l2tH3MMWWzExp_Y8t5l37teS
+  - event: 2943
+    block: 25449731
+    log_index: 715
+    variant: Delegate
+    commit: STAKE_TABLE~XEEJBEnNcJySfKLsp4SRJu57CYZCezeRecNc3_jKhvbX
+  - event: 2975
+    block: 25549816
+    log_index: 131
+    variant: UndelegateV2
+    commit: STAKE_TABLE~ETldL_mYfIgYjRLs4EB8Y-MZC8XVXC_2esfLxoZbCRF0
+  - event: 3007
+    block: 25623829
+    log_index: 512
+    variant: Delegate
+    commit: STAKE_TABLE~_1jRGWuCx8oKhqE0rj0B0OtmGOhJUBXANh-TSlj4chTB
+  - event: 3039
+    block: 25633535
+    log_index: 1571
+    variant: UndelegateV2
+    commit: STAKE_TABLE~zk8Hz7DmjdnmX1_n6ehNVbO5xqYBuD9TvNNd-_NJtusQ
+  - event: 3071
+    block: 25640259
+    log_index: 285
+    variant: Delegate
+    commit: STAKE_TABLE~wv9qTFFwVfn1fIll4I7Bc1f01KiPmVzDUcDsd_UMFIik
+  - event: 3103
+    block: 25676189
+    log_index: 767
+    variant: Delegate
+    commit: STAKE_TABLE~fpU_jlRP4ayNA7ieLcvbvKiLU3T2UiPj5UHn0D7M5cld
+  - event: 3135
+    block: 25676189
+    log_index: 829
+    variant: Delegate
+    commit: STAKE_TABLE~EGrCEqbsXniKwnMMMFJKFHShI1ytJlshghWqRsG-JiGL
+  - event: 3167
+    block: 25688254
+    log_index: 87
+    variant: UndelegateV2
+    commit: STAKE_TABLE~lBX0Hbm7Uw5CYmK5h6fFRl5zPHomwb9EUgnFkITmLnMs
+  - event: 3199
+    block: 25724699
+    log_index: 1097
+    variant: UndelegateV2
+    commit: STAKE_TABLE~6pOVR799jqCJ2mBR-b29gEMXuf5LsaU7PATgMOHJZcQC
+  - event: 3231
+    block: 25784562
+    log_index: 588
+    variant: Delegate
+    commit: STAKE_TABLE~hvMBLE-2fkq8HgVY1R4O_vnVzL9uMq9Fafoh2cvmo3QB
+  - event: 3263
+    block: 25804391
+    log_index: 103
+    variant: UndelegateV2
+    commit: STAKE_TABLE~X9xBSTHVIQRLkQn4pfMZu5y6r8rjii9b0RS5vHXTXAKB
+  - event: 3295
+    block: 25808198
+    log_index: 128
+    variant: CommissionUpdate
+    commit: STAKE_TABLE~BPiHaccHLycu78YUsvZnoAcE2YAeAuq1oW0tfiqhiw5h
+  - event: 3327
+    block: 25810748
+    log_index: 2138
+    variant: P2pAddrUpdate
+    commit: STAKE_TABLE~1f0RYsxjq_B1bVnQZVSVv2cpktq5j2iDI27itjjeEUOy
+  - event: 3359
+    block: 25812763
+    log_index: 481
+    variant: X25519KeyUpdate
+    commit: STAKE_TABLE~_nJPgqvwXI6uWgwf0cMPC8CirmI3TvMR_O_Bv0Vy_oKJ
+  - event: 3391
+    block: 25820348
+    log_index: 557
+    variant: P2pAddrUpdate
+    commit: STAKE_TABLE~esSpL9ncv3evyDzPt9p8RFY4VhxWtuXQqffWKWCVNHrZ
+  - event: 3423
+    block: 25831924
+    log_index: 1511
+    variant: P2pAddrUpdate
+    commit: STAKE_TABLE~RY2kVfPMMIOHXyrcDdwlePMw5-YU3OAOCWcTrzDsUV5t
+  - event: 3455
+    block: 25846745
+    log_index: 118
+    variant: X25519KeyUpdate
+    commit: STAKE_TABLE~ZpfkK9lo4oEDnluMEFcvjdLFtBRo_4sSW1s6SKtdaa47
+  - event: 3462
+    block: 25848800
+    log_index: 279
+    variant: UndelegateV2
+    commit: STAKE_TABLE~HS3Tb8TPdIDv5LwAy1gLPzjUQ7GcaZhfqsK10VJEgkMg

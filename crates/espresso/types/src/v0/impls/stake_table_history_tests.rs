@@ -12,16 +12,39 @@ use std::{
 
 use alloy::rpc::types::Log;
 use vbs::version::Version;
-use versions::{EPOCH_REWARD_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION};
+use versions::{NEW_PROTOCOL_VERSION, parse_version};
 
 use super::*;
 use crate::L1ClientOptions;
 
-/// 0.3 and 0.5 select identically; 0.6 additionally requires x25519/p2p info.
 const CORPORA: [&str; 3] = ["decaf", "mainnet", "synthetic"];
-const VERSIONS: [Version; 3] = [EPOCH_VERSION, EPOCH_REWARD_VERSION, NEW_PROTOCOL_VERSION];
 
 const LIVE_CORPORA: [&str; 2] = ["decaf", "mainnet"];
+
+/// The protocol version a corpus is summarized at.
+///
+/// Only [`select_active_validator_set`] reads the version, and only to decide whether x25519/p2p
+/// info is required. Pinning a real history at a version its network never ran states nothing
+/// about that network, so each live corpus uses `base_version` from its genesis file and a
+/// network upgrade moves the snapshot. `test_select_version_boundary` covers the version boundary
+/// itself.
+fn corpus_version(corpus: &str) -> Version {
+    match corpus {
+        // No network runs it; it exists to exercise the paths real history lacks.
+        "synthetic" => NEW_PROTOCOL_VERSION,
+        network => {
+            let path = data_dir().join("genesis").join(format!("{network}.toml"));
+            let raw = fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("failed to read genesis {}: {e}", path.display()));
+            let genesis: toml::Value = toml::from_str(&raw)
+                .unwrap_or_else(|e| panic!("failed to parse genesis {}: {e}", path.display()));
+            let version = genesis["base_version"]
+                .as_str()
+                .expect("base_version is a string");
+            parse_version(version).expect("base_version parses")
+        },
+    }
+}
 
 /// A single terminal hash says *that* something changed; the ladder narrows it to a window.
 ///
@@ -53,8 +76,20 @@ fn load_logs(corpus: &str) -> Vec<Log> {
         .join(format!("{corpus}_logs.json"));
     let raw = fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("failed to read fixture {}: {e}", path.display()));
-    serde_json::from_str(&raw)
-        .unwrap_or_else(|e| panic!("failed to parse fixture {}: {e}", path.display()))
+    let mut logs: Vec<Log> = serde_json::from_str(&raw)
+        .unwrap_or_else(|e| panic!("failed to parse fixture {}: {e}", path.display()));
+    drop_block_timestamps(&mut logs);
+    logs
+}
+
+/// `blockTimestamp` is optional in an `eth_getLogs` response and endpoints disagree on returning
+/// it, so a fixture carries whichever answer its RPC happened to give. Nothing between a log and
+/// a `StakeTableState` reads it. Dropping it on both load and fetch makes the fixture, and the
+/// prefix check in [`regenerate_history_fixtures`], independent of that.
+fn drop_block_timestamps(logs: &mut [Log]) {
+    for log in logs {
+        log.block_timestamp = None;
+    }
 }
 
 /// The exhaustive `match` forces a new `StakeTableEvent` variant to fail compilation here, then
@@ -109,6 +144,9 @@ struct Summary {
     corpus: String,
     protocol_version: String,
     logs: usize,
+    /// Below `logs` when a log decodes but fails validation. decaf carries one
+    /// `ConsensusKeysUpdatedV2` (block 11310213) whose signature does not authenticate, so this
+    /// pins the silent-drop path against a real event and not only a synthetic one.
     decoded_events: usize,
     stake_table_hash: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -117,7 +155,8 @@ struct Summary {
     all_validators: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     active_validators: Option<usize>,
-    /// Set at 0.6, where selection needs x25519/p2p info no real chain has registered yet.
+    /// Selection returning no eligible validator is a live network halting, so this being set on
+    /// a live corpus is a failure the snapshot records rather than hides.
     #[serde(skip_serializing_if = "Option::is_none")]
     selection_error: Option<String>,
     event_variants: BTreeMap<&'static str, usize>,
@@ -158,7 +197,8 @@ fn hash_ladder(events: &[(EventKey, StakeTableEvent)]) -> (usize, Vec<Checkpoint
     (stride, ladder)
 }
 
-fn summarize(corpus: &str, version: Version) -> Summary {
+fn summarize(corpus: &str) -> Summary {
+    let version = corpus_version(corpus);
     let logs = load_logs(corpus);
     let log_count = logs.len();
     let events = events_from_logs(logs).expect("fixture logs decode, validate, and sort");
@@ -216,18 +256,13 @@ fn stake_table_history_pin() {
     settings.set_prepend_module_to_snapshot(false);
 
     for corpus in CORPORA {
-        for version in VERSIONS {
-            let summary = summarize(corpus, version);
-            let name = format!(
-                "stake_table_history_{corpus}_v{}_{}",
-                version.major, version.minor
-            );
-            settings.bind(|| insta::assert_yaml_snapshot!(name, summary));
-        }
+        let summary = summarize(corpus);
+        let name = format!("stake_table_history_{corpus}");
+        settings.bind(|| insta::assert_yaml_snapshot!(name, summary));
     }
 }
 
-/// Real history has no V3/fast-finality events yet, which is why `synthetic` exists.
+/// Real history now exercises every variant but `KeyUpdate`, which is why `synthetic` exists.
 #[test]
 fn stake_table_event_variants_are_covered() {
     let mut seen = HashSet::new();
@@ -385,6 +420,7 @@ async fn regenerate_history_fixtures() {
             from = to + 1;
         }
 
+        drop_block_timestamps(&mut logs);
         logs.sort_by_key(|l| (l.block_number, l.log_index));
         let first = logs.first().and_then(|l| l.block_number);
         assert_eq!(
@@ -437,7 +473,8 @@ async fn regenerate_history_fixtures() {
 
 /// Regenerates `data/stake_table_history/synthetic_logs.json`.
 ///
-/// Real history has no `RegisterV3`, `X25519KeyUpdate`, `P2pAddrUpdate`, or `KeyUpdate`.
+/// Real history has no `KeyUpdate`: no validator on either chain rotated keys before
+/// `ConsensusKeysUpdatedV2` replaced the V1 event. decaf does carry the other V1 variants.
 ///
 /// ```text
 /// cargo test -p espresso-types --lib regenerate_synthetic_corpus -- --ignored
