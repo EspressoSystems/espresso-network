@@ -23,6 +23,7 @@ use staking_cli::{
     deploy::{self, TestSystem},
     fetch_metadata,
 };
+use test_server::serve_on_random_port;
 use url::Url;
 use warp::Filter as _;
 
@@ -398,12 +399,12 @@ impl ContentType {
 }
 
 struct MetadataServer {
-    port: u16,
+    base: Url,
 }
 
 impl MetadataServer {
     fn url(&self) -> String {
-        format!("http://127.0.0.1:{}/metadata", self.port)
+        self.base.join("metadata").unwrap().to_string()
     }
 }
 
@@ -446,7 +447,7 @@ impl MetadataServerBuilder {
             MetadataFormat::OpenMetrics => ContentType::Text,
         });
 
-        let port = match self.format {
+        let base = match self.format {
             MetadataFormat::Json => {
                 let metadata_json = serde_json::json!({
                     "pub_key": self.pub_key.to_string(),
@@ -462,7 +463,7 @@ impl MetadataServerBuilder {
                     )
                 });
 
-                deploy::serve_on_random_port(route).await
+                serve_on_random_port(route).await
             },
             MetadataFormat::OpenMetrics => {
                 let metrics_body = format!(
@@ -484,11 +485,11 @@ consensus_node_identity_general{{name="{}"}} 1
                     )
                 });
 
-                deploy::serve_on_random_port(route).await
+                serve_on_random_port(route).await
             },
         };
 
-        MetadataServer { port }
+        MetadataServer { base }
     }
 }
 
@@ -1797,6 +1798,7 @@ async fn test_cli_all_operations_manual_inspect(
             .arg(key.to_string())
             .arg("--p2p-addr")
             .arg("10.0.0.1:9090")
+            .arg("--skip-reachability-check")
             .assert()
             .success()
             .get_output()
@@ -1822,6 +1824,7 @@ async fn test_cli_all_operations_manual_inspect(
             .arg("update-p2p-addr")
             .arg("--p2p-addr")
             .arg("192.168.1.1:7070")
+            .arg("--skip-reachability-check")
             .assert()
             .success()
             .get_output()
@@ -2394,6 +2397,7 @@ async fn test_cli_export_calldata_all_operations_manual_inspect() -> Result<()> 
         .arg(system.x25519_public_key_str())
         .arg("--p2p-addr")
         .arg("127.0.0.1:8080")
+        .arg("--skip-reachability-check")
         .assert()
         .success()
         .get_output()
@@ -2778,7 +2782,7 @@ async fn test_cli_register_validator_metadata_with_wrong_content_type(
         .start()
         .await;
 
-    let metadata_uri = format!("http://127.0.0.1:{}/metadata", server.port);
+    let metadata_uri = server.url();
 
     // Should succeed despite wrong content-type (content-based detection)
     system
@@ -2818,7 +2822,7 @@ async fn test_cli_preview_metadata_with_wrong_content_type(
         .start()
         .await;
 
-    let metadata_uri = format!("http://127.0.0.1:{}/metadata", server.port);
+    let metadata_uri = server.url();
 
     base_cmd()
         .arg("preview-metadata")
@@ -2838,12 +2842,12 @@ async fn test_cli_preview_metadata_invalid_both_formats_shows_both_errors() -> R
     let route = warp::path("metadata")
         .map(|| warp::reply::with_header("<html>Not metadata</html>", "content-type", "text/html"));
 
-    let port = deploy::serve_on_random_port(route).await;
+    let base = serve_on_random_port(route).await;
 
     base_cmd()
         .arg("preview-metadata")
         .arg("--metadata-uri")
-        .arg(format!("http://127.0.0.1:{}/metadata", port))
+        .arg(base.join("metadata").unwrap().as_str())
         .assert()
         .failure()
         .stderr(str::contains("JSON"))
@@ -2859,8 +2863,8 @@ async fn test_cli_preview_metadata_valid_json_wrong_schema() -> Result<()> {
     let route = warp::path("metadata")
         .map(move || warp::reply::with_header(invalid_json, "content-type", "application/json"));
 
-    let port = deploy::serve_on_random_port(route).await;
-    let url = format!("http://127.0.0.1:{}/metadata", port);
+    let base = serve_on_random_port(route).await;
+    let url = base.join("metadata").unwrap().to_string();
 
     base_cmd()
         .arg("preview-metadata")
@@ -2884,8 +2888,8 @@ async fn test_cli_preview_metadata_invalid_both_formats_shows_url() -> Result<()
     let route = warp::path("metadata")
         .map(move || warp::reply::with_header(invalid_content, "content-type", "text/html"));
 
-    let port = deploy::serve_on_random_port(route).await;
-    let url = format!("http://127.0.0.1:{}/metadata", port);
+    let base = serve_on_random_port(route).await;
+    let url = base.join("metadata").unwrap().to_string();
 
     base_cmd()
         .arg("preview-metadata")
@@ -2956,6 +2960,7 @@ async fn test_cli_update_network_config() -> Result<()> {
         .arg(key.to_string())
         .arg("--p2p-addr")
         .arg("10.0.0.1:9090")
+        .arg("--skip-reachability-check")
         .assert()
         .success();
 
@@ -2989,8 +2994,26 @@ async fn test_cli_update_p2p_addr() -> Result<()> {
         .arg("update-p2p-addr")
         .arg("--p2p-addr")
         .arg("192.168.1.1:7070")
+        .arg("--skip-reachability-check")
         .assert()
         .success();
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_cli_update_p2p_addr_unreachable() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+    system.register_validator().await?;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("update-p2p-addr")
+        .arg("--p2p-addr")
+        .arg("192.168.1.1:7070")
+        .assert()
+        .failure()
+        .stderr(str::contains("not publicly routable"));
 
     Ok(())
 }

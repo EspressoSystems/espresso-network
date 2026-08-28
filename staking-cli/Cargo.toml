@@ -6,7 +6,7 @@ edition = { workspace = true }
 description = "A CLI to interact with the Espresso stake table contract"
 
 [features]
-testing = ["warp", "test-utils"]
+testing = ["warp", "test-server", "test-utils"]
 
 [dependencies]
 alloy = { workspace = true }
@@ -42,6 +42,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 tagged-base64 = { workspace = true }
+test-server = { workspace = true, optional = true }
 test-utils = { path = "../test-utils", optional = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
@@ -58,6 +59,7 @@ pretty_assertions = { workspace = true }
 staking-cli = { path = ".", features = ["testing"] }
 tempfile = { workspace = true }
 test-log = { workspace = true }
+test-server = { workspace = true }
 test-utils = { workspace = true }
 
 [lints]

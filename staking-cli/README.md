@@ -774,6 +774,10 @@ staking-cli update-p2p-addr --p2p-addr validator.example.com:9000
 All three commands accept the env vars `X25519_KEY` and `P2P_ADDR`, and support `--export-calldata` for multisig
 wallets.
 
+They reject a p2p address that other validators cannot reach: one that is not publicly routable, or a name that does
+not resolve to a publicly routable address. Pass `--skip-reachability-check` to register such an address anyway, for
+example when the name only resolves once the node is deployed.
+
 ### Exporting Node Signatures
 
 To avoid mixing Espresso and Ethereum keys on a single host we can pre-sign the validator address for registration and
