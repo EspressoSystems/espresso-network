@@ -443,7 +443,23 @@ Clean run, machine idle: **non-async entry point = 287 s wall / 460 cpu-s**, ver
 then espresso-types 28.8 s, contract-adapter 25.1 s). Scaled to the real job (748 s, bin 284 s) that is roughly 470 s,
 about -37 %.
 
-Also note the dep-cut row still built `hotshot-state-prover` (20.0 s): `cargo tree -i` shows it enters the release graph
+Storage-matrix experiments (patches that delete branches, to size the prize before refactoring):
+
+| variant | 32-core lib | 32-core bin | 4-core wall |
+|---|---|---|---|
+| baseline | 123 s | 90 s | 385 s |
+| fs query module removed from `serve` only | 143.4 s | 80.1 s | 371 s |
+| single combination (no fs persistence, no fs query module) | 111.9 s | 74.5 s | 354 s |
+
+Collapsing 2 persistence backends x 2 query modules down to 1 is worth about -14 % on lib+bin
+locally and -8 % of the 4-core job. Real, but a fifth of what the non-async entry point gives.
+
+Full dep-cut (all seven test-only deps removed, verified to still compile): **374 s wall / 503 cpu-s
+vs 385 s / 560**, and the graph shrinks from 1429 to **1388 units** - 41 fewer crates, with
+`hotshot-state-prover` and `staking-cli` gone from the profile. -3 % wall, -10 % CPU, plus a smaller
+dependency cache and less peak memory.
+
+Also note the earlier partial dep-cut row still built `hotshot-state-prover` (20.0 s): `cargo tree -i` shows it enters the release graph
 twice, from `espresso-node` _and_ from `staking-cli`, so both edges have to be cut.
 
 The first baseline row is not comparable: switching the profile back invalidated the third-party dependency artifacts,
@@ -659,6 +675,40 @@ Branch `ma/compile-times-dyn-api` (commit de15c2c4218). All **15** `router_*<S>(
   testing`, plus `cargo check -p espresso-api --tests` and `cargo clippy -p espresso-api
   --all-targets`.
 
+Measurement queued.
+
+## Fix 5, implemented: one persistence instantiation via enum dispatch
+
+Branch `ma/compile-times-dyn-persistence` (commit d5f45ad8b46).
+
+`Arc<dyn SequencerPersistence>` turned out to be **impossible without changing `espresso-types`'
+public API**. Blockers in `crates/espresso/types/src/v0/traits.rs`:
+
+- `:581` supertraits include `Sized` and `Clone`;
+- `:584` `fn into_catchup_provider(self, ..)` takes `self` by value;
+- `:651,:685,:790,:826` generic methods (`consumer: &(impl EventConsumer + 'static)`,
+  `leaf_chain: impl IntoIterator<Item = ..>`).
+
+So the prototype uses **enum dispatch** instead: a new `crates/espresso/node/src/persistence/any.rs`
+defines `AnyPersistence`, forwarding all 41 `SequencerPersistence`, 11 `MembershipPersistence` and 2
+`DhtPersistentStorage` methods (including the defaulted ones, so backend overrides still win; the
+`Sql` variant is boxed for `large_enum_variant`). Call sites:
+
+- `api/data_source.rs:53` `DataSourceOptions: PersistenceOptions<Persistence: Into<AnyPersistence>>`
+- `run.rs:157` `init_with_storage` returns `SequencerContext<Production, AnyPersistence>`;
+  `run.rs:218` `storage_opt.create().await?.into()`
+- `run.rs:245` a new `api_options<S>` isolates the only remaining `S`-generic work, and `run.rs:281`
+  a new non-generic `init_node_with_api` holds the single `serve` call - this outlining removes the
+  `F` closure axis without needing a boxed `FnOnce`
+- `run.rs:319` passes `Box::new(NullEventConsumer) as Box<dyn EventConsumer>` so the consumer axis
+  collapses too
+- `slow-tests/tests/restart_tests.rs:438` is the only out-of-crate signature change
+
+Still multiply instantiated by design: `fs::DataSource` vs `sql::DataSource` in `serve`'s query-module
+branches (`api/options.rs:180-189`), which are genuinely different query-service backends.
+
+Green: `cargo check -p espresso-node` for `--lib --release`, `--lib --features testing`, `--tests`,
+`--bins`, plus `-p slow-tests --tests` and `cargo clippy -p espresso-node --lib --no-deps`.
 Measurement queued.
 
 ## Open items
