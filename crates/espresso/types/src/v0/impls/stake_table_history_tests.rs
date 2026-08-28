@@ -1,8 +1,12 @@
-//! Pins stake table event processing against real and synthetic event histories.
+//! Pins stake table event processing against the histories decaf and mainnet actually emitted.
 //!
 //! `next_stake_table_hash` is consensus-validated, so a silent change between an L1 log and a
-//! `StakeTableState` forks the network. `decaf`/`mainnet` are the histories that matter in
-//! production; `synthetic` covers the variants they lack.
+//! `StakeTableState` forks the network.
+//!
+//! Every snapshot here is a fork signal: a diff means a node replaying that chain from genesis
+//! would now compute a different `stake_table_hash`, and nothing but a fixture refresh should
+//! produce one. What the pin does *not* constrain is recorded in [`REACHABILITY`], which is where
+//! a refactor should look first.
 
 use std::{
     collections::{BTreeMap, HashSet},
@@ -12,14 +16,13 @@ use std::{
 
 use alloy::rpc::types::Log;
 use vbs::version::Version;
-use versions::{NEW_PROTOCOL_VERSION, parse_version};
+use versions::parse_version;
 
 use super::*;
 use crate::L1ClientOptions;
 
-const CORPORA: [&str; 3] = ["decaf", "mainnet", "synthetic"];
-
-const LIVE_CORPORA: [&str; 2] = ["decaf", "mainnet"];
+/// The chains whose replay `next_stake_table_hash` depends on.
+const CORPORA: [&str; 2] = ["decaf", "mainnet"];
 
 /// The protocol version a corpus is summarized at.
 ///
@@ -28,22 +31,16 @@ const LIVE_CORPORA: [&str; 2] = ["decaf", "mainnet"];
 /// about that network, so each live corpus uses `base_version` from its genesis file and a
 /// network upgrade moves the snapshot. `test_select_version_boundary` covers the version boundary
 /// itself.
-fn corpus_version(corpus: &str) -> Version {
-    match corpus {
-        // No network runs it; it exists to exercise the paths real history lacks.
-        "synthetic" => NEW_PROTOCOL_VERSION,
-        network => {
-            let path = data_dir().join("genesis").join(format!("{network}.toml"));
-            let raw = fs::read_to_string(&path)
-                .unwrap_or_else(|e| panic!("failed to read genesis {}: {e}", path.display()));
-            let genesis: toml::Value = toml::from_str(&raw)
-                .unwrap_or_else(|e| panic!("failed to parse genesis {}: {e}", path.display()));
-            let version = genesis["base_version"]
-                .as_str()
-                .expect("base_version is a string");
-            parse_version(version).expect("base_version parses")
-        },
-    }
+fn corpus_version(network: &str) -> Version {
+    let path = data_dir().join("genesis").join(format!("{network}.toml"));
+    let raw = fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("failed to read genesis {}: {e}", path.display()));
+    let genesis: toml::Value = toml::from_str(&raw)
+        .unwrap_or_else(|e| panic!("failed to parse genesis {}: {e}", path.display()));
+    let version = genesis["base_version"]
+        .as_str()
+        .expect("base_version is a string");
+    parse_version(version).expect("base_version parses")
 }
 
 /// A single terminal hash says *that* something changed; the ladder narrows it to a window.
@@ -70,7 +67,7 @@ fn data_dir() -> PathBuf {
     PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("../../../data")
 }
 
-fn load_logs(corpus: &str) -> Vec<Log> {
+pub(super) fn load_logs(corpus: &str) -> Vec<Log> {
     let path = data_dir()
         .join("stake_table_history")
         .join(format!("{corpus}_logs.json"));
@@ -94,7 +91,7 @@ fn drop_block_timestamps(logs: &mut [Log]) {
 
 /// The exhaustive `match` forces a new `StakeTableEvent` variant to fail compilation here, then
 /// `stake_table_event_variants_are_covered` fails until a corpus exercises it.
-fn variant_name(event: &StakeTableEvent) -> &'static str {
+pub(super) fn variant_name(event: &StakeTableEvent) -> &'static str {
     match event {
         StakeTableEvent::Register(_) => "Register",
         StakeTableEvent::RegisterV2(_) => "RegisterV2",
@@ -112,21 +109,51 @@ fn variant_name(event: &StakeTableEvent) -> &'static str {
     }
 }
 
-/// Kept in sync with `variant_name` by `stake_table_event_variants_are_covered`.
-const ALL_VARIANT_NAMES: [&str; 13] = [
-    "Register",
-    "RegisterV2",
-    "RegisterV3",
-    "Deregister",
-    "DeregisterV2",
-    "Delegate",
-    "Undelegate",
-    "UndelegateV2",
-    "KeyUpdate",
-    "KeyUpdateV2",
-    "CommissionUpdate",
-    "X25519KeyUpdate",
-    "P2pAddrUpdate",
+/// Every name [`variant_name`] can return. Adding a `StakeTableEvent` variant breaks its
+/// exhaustive match, then this array's length, so the two cannot drift apart silently.
+fn all_variant_names() -> [&'static str; REACHABILITY.len()] {
+    REACHABILITY.map(|(name, _)| name)
+}
+
+/// What a change to a variant's processing can break.
+///
+/// `stake_table_history_pin` freezes the processing of every log decaf and mainnet have emitted:
+/// a node syncing from genesis replays them and must reach the same `stake_table_hash`. Which
+/// variants that actually constrains is not visible from the code, so it is recorded here and
+/// checked against the fixtures and the contract by [`event_reachability_matches_history`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Reachability {
+    /// In the corpora, and the V3 contract still emits it. The fixtures are a lower bound on the
+    /// shapes this code will see, so a refactor also has to hold for inputs no fixture contains.
+    Live,
+    /// In the corpora, but unreachable on the V3 contract: the V1/V2 entry point reverts or was
+    /// overridden to emit the V2 event. The fixtures therefore hold every log of this variant
+    /// that will ever exist, so a refactor that keeps the pin green cannot break it.
+    Historical,
+    /// Absent from both corpora and unreachable on the V3 contract. Nothing replays it and
+    /// nothing can emit it, so its processing may change or be deleted without forking a chain.
+    /// Nothing here pins it.
+    Dead,
+}
+
+/// Unreachability is the deprecated entry points: `registerValidator` and `updateConsensusKeys`
+/// revert (`StakeTableV2.sol:902`, `StakeTableV2.sol:914`), `registerValidatorV2` reverts
+/// (`StakeTableV3.sol:208`), and `undelegate`/`deregisterValidator` are overridden to emit the V2
+/// events (`StakeTableV2.sol:555`, `StakeTableV2.sol:591`).
+pub(super) const REACHABILITY: [(&str, Reachability); 13] = [
+    ("Register", Reachability::Historical),
+    ("RegisterV2", Reachability::Historical),
+    ("RegisterV3", Reachability::Live),
+    ("Deregister", Reachability::Historical),
+    ("DeregisterV2", Reachability::Live),
+    ("Delegate", Reachability::Live),
+    ("Undelegate", Reachability::Historical),
+    ("UndelegateV2", Reachability::Live),
+    ("KeyUpdate", Reachability::Dead),
+    ("KeyUpdateV2", Reachability::Live),
+    ("CommissionUpdate", Reachability::Live),
+    ("X25519KeyUpdate", Reachability::Live),
+    ("P2pAddrUpdate", Reachability::Live),
 ];
 
 /// One checkpoint in the hash ladder.
@@ -146,7 +173,7 @@ struct Summary {
     logs: usize,
     /// Below `logs` when a log decodes but fails validation. decaf carries one
     /// `ConsensusKeysUpdatedV2` (block 11310213) whose signature does not authenticate, so this
-    /// pins the silent-drop path against a real event and not only a synthetic one.
+    /// pins the silent-drop path against a real event.
     decoded_events: usize,
     stake_table_hash: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -230,7 +257,7 @@ fn summarize(corpus: &str) -> Summary {
         all_validators: selected.as_ref().ok().map(|_| all_validators.len()),
         active_validators: selected.as_ref().ok().map(|a| a.len()),
         selection_error: selected.as_ref().err().map(|e| e.to_string()),
-        event_variants: ALL_VARIANT_NAMES
+        event_variants: all_variant_names()
             .into_iter()
             .map(|name| {
                 (
@@ -262,33 +289,48 @@ fn stake_table_history_pin() {
     }
 }
 
-/// Real history now exercises every variant but `KeyUpdate`, which is why `synthetic` exists.
+/// Keeps [`REACHABILITY`] honest, so a refactor can trust it.
+///
+/// The observed half is derived from the live corpora rather than declared, so a `Dead` variant
+/// that turns up in real history, or a `Live`/`Historical` one that is missing, fails here
+/// instead of quietly telling someone a frozen path is free to change.
+///
+/// The unreachable half cannot be derived from logs (absence of a log is not proof the contract
+/// cannot emit it), so it rests on the deprecated overrides cited on [`REACHABILITY`]. A contract
+/// upgrade that re-enables one of those entry points has to move a variant back to `Live` by
+/// hand.
 #[test]
-fn stake_table_event_variants_are_covered() {
-    let mut seen = HashSet::new();
-    for corpus in CORPORA {
-        let events = events_from_logs(load_logs(corpus)).unwrap();
-        seen.extend(events.iter().map(|(_, e)| variant_name(e)));
-    }
+fn event_reachability_matches_history() {
+    let declared: HashSet<&str> = REACHABILITY.iter().map(|(name, _)| *name).collect();
 
-    let missing: Vec<_> = ALL_VARIANT_NAMES
+    let observed: HashSet<&'static str> = CORPORA
         .iter()
-        .filter(|n| !seen.contains(*n))
+        .flat_map(|corpus| events_from_logs(load_logs(corpus)).unwrap())
+        .map(|(_, event)| variant_name(&event))
         .collect();
-    assert!(
-        missing.is_empty(),
-        "no corpus in data/stake_table_history/ exercises these StakeTableEvent variants: \
-         {missing:?}. Extend the synthetic corpus (see `regenerate_synthetic_corpus`)."
-    );
 
-    let unknown: Vec<_> = seen
-        .iter()
-        .filter(|n| !ALL_VARIANT_NAMES.contains(n))
-        .collect();
+    let unknown: Vec<_> = observed.difference(&declared).collect();
     assert!(
         unknown.is_empty(),
-        "ALL_VARIANT_NAMES is stale: {unknown:?}"
+        "REACHABILITY does not classify {unknown:?}, which a live corpus emits"
     );
+
+    for (name, reachability) in REACHABILITY {
+        match reachability {
+            Reachability::Live | Reachability::Historical => assert!(
+                observed.contains(name),
+                "{name} is declared {reachability:?}, so decaf or mainnet has emitted it, but \
+                 neither corpus contains one. Either the fixtures are wrong or {name} is Dead and \
+                 its processing is free to change."
+            ),
+            Reachability::Dead => assert!(
+                !observed.contains(name),
+                "{name} is declared Dead, so nothing replays it and its processing is free to \
+                 change, but a live corpus now contains one. Reclassify it before anyone \
+                 refactors on that assumption."
+            ),
+        }
+    }
 }
 
 /// The fixtures cannot pin the sort: `eth_getLogs` already returns chain order, so a weaker key
@@ -334,11 +376,11 @@ fn events_from_logs_sorts_by_block_and_log_index() {
 fn stake_table_event_signatures_cover_all_variants() {
     assert_eq!(
         STAKE_TABLE_EVENT_SIGNATURES.len(),
-        ALL_VARIANT_NAMES.len(),
+        REACHABILITY.len(),
         "the eth_getLogs filter and the StakeTableEvent variants have diverged: {} signatures for \
          {} variants",
         STAKE_TABLE_EVENT_SIGNATURES.len(),
-        ALL_VARIANT_NAMES.len(),
+        REACHABILITY.len(),
     );
 
     let unique: HashSet<_> = STAKE_TABLE_EVENT_SIGNATURES.iter().collect();
@@ -370,7 +412,7 @@ async fn regenerate_history_fixtures() {
     use alloy::{eips::BlockNumberOrTag, providers::Provider, rpc::types::Filter};
 
     let mut manifests: BTreeMap<String, CorpusManifest> = BTreeMap::new();
-    for corpus in LIVE_CORPORA {
+    for corpus in CORPORA {
         let url = archive_rpc(corpus);
         let mut manifest = load_manifest(corpus);
         let previous = load_logs(corpus);
@@ -469,218 +511,6 @@ async fn regenerate_history_fixtures() {
     let mut json = serde_json::to_string_pretty(&manifests).unwrap();
     json.push('\n');
     fs::write(manifest_path(), json).unwrap();
-}
-
-/// Regenerates `data/stake_table_history/synthetic_logs.json`.
-///
-/// Real history has no `KeyUpdate`: no validator on either chain rotated keys before
-/// `ConsensusKeysUpdatedV2` replaced the V1 event. decaf does carry the other V1 variants.
-///
-/// ```text
-/// cargo test -p espresso-types --lib regenerate_synthetic_corpus -- --ignored
-/// ```
-///
-/// A fatal [`StakeTableError`] aborts the whole history, so this corpus covers only the
-/// silent-degradation paths and fatal ones stay in the unit tests.
-#[test]
-#[ignore = "regenerates a checked-in fixture"]
-fn regenerate_synthetic_corpus() {
-    use alloy::{
-        primitives::{FixedBytes, U256},
-        sol_types::SolEvent,
-    };
-    use rand::SeedableRng;
-
-    use super::testing::TestValidator;
-
-    // The identically named helpers in the sibling `tests` module are private to it.
-    fn zero_g2() -> hotshot_contract_adapter::sol_types::G2PointSol {
-        hotshot_contract_adapter::sol_types::G2PointSol {
-            x0: U256::ZERO,
-            x1: U256::ZERO,
-            y0: U256::ZERO,
-            y1: U256::ZERO,
-        }
-    }
-    fn zero_g1() -> hotshot_contract_adapter::sol_types::G1PointSol {
-        hotshot_contract_adapter::sol_types::G1PointSol {
-            x: U256::ZERO,
-            y: U256::ZERO,
-        }
-    }
-
-    // Fixed seed: the fixture must be byte-reproducible on any machine.
-    let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(0xE5B7_0000_5A1E_7AB1);
-    let contract = Address::repeat_byte(0x11);
-    let v: Vec<TestValidator> = (0..7)
-        .map(|_| TestValidator::random_with(&mut rng))
-        .collect();
-    let delegator: Vec<Address> = (0..6)
-        .map(|i| Address::repeat_byte(0xD0 + i as u8))
-        .collect();
-    let stake = |n: u64| U256::from(n) * U256::from(10u64).pow(U256::from(18));
-
-    // Registers unauthenticated, so it never enters the active set however much stake it holds.
-    let mut unparsable_bls = ValidatorRegistered::from(&v[4]);
-    unparsable_bls.blsVk = zero_g2();
-
-    // `authenticate` fails, but the parsed keys are kept.
-    let mut bad_sig = ValidatorRegisteredV2::from(&v[5]);
-    bad_sig.blsSig = zero_g1().into();
-
-    // Reuses v[0]'s Schnorr key. Tolerated: the V1 contract did not enforce uniqueness.
-    let mut dup_schnorr = ValidatorRegistered::from(&v[6]);
-    dup_schnorr.schnorrVk = v[0].schnorr_vk;
-
-    let events: Vec<alloy::primitives::LogData> = vec![
-        ValidatorRegistered::from(&v[0]).encode_log_data(),
-        Delegated {
-            delegator: delegator[0],
-            validator: v[0].account,
-            amount: stake(500),
-        }
-        .encode_log_data(),
-        ConsensusKeysUpdated::from(&v[0].randomize_keys_with(&mut rng)).encode_log_data(),
-        ValidatorRegistered::from(&v[1]).encode_log_data(),
-        Delegated {
-            delegator: delegator[1],
-            validator: v[1].account,
-            amount: stake(300),
-        }
-        .encode_log_data(),
-        Undelegated {
-            delegator: delegator[1],
-            validator: v[1].account,
-            amount: stake(100),
-        }
-        .encode_log_data(),
-        ValidatorRegisteredV2::from(&v[2]).encode_log_data(),
-        Delegated {
-            delegator: delegator[2],
-            validator: v[2].account,
-            amount: stake(700),
-        }
-        .encode_log_data(),
-        ConsensusKeysUpdatedV2::from(&v[2].randomize_keys_with(&mut rng)).encode_log_data(),
-        CommissionUpdated {
-            validator: v[2].account,
-            timestamp: U256::from(1_700_000_000u64),
-            oldCommission: v[2].commission,
-            newCommission: COMMISSION_BASIS_POINTS,
-        }
-        .encode_log_data(),
-        UndelegatedV2 {
-            delegator: delegator[2],
-            validator: v[2].account,
-            undelegationId: 1,
-            amount: stake(200),
-            unlocksAt: U256::from(1_700_086_400u64),
-        }
-        .encode_log_data(),
-        // The only validator eligible at 0.6.
-        ValidatorRegisteredV3::from(&v[3]).encode_log_data(),
-        Delegated {
-            delegator: delegator[3],
-            validator: v[3].account,
-            amount: stake(900),
-        }
-        .encode_log_data(),
-        X25519KeyUpdated {
-            validator: v[3].account,
-            x25519Key: FixedBytes([0x42u8; 32]),
-        }
-        .encode_log_data(),
-        P2pAddrUpdated {
-            validator: v[3].account,
-            p2pAddr: "validator-3.example.com:5000".to_string(),
-        }
-        .encode_log_data(),
-        // Both degrade to `None` without an error, silently dropping the validator at 0.6.
-        X25519KeyUpdated {
-            validator: v[0].account,
-            x25519Key: FixedBytes([0u8; 32]),
-        }
-        .encode_log_data(),
-        P2pAddrUpdated {
-            validator: v[0].account,
-            p2pAddr: "not a socket address".to_string(),
-        }
-        .encode_log_data(),
-        unparsable_bls.encode_log_data(),
-        Delegated {
-            delegator: delegator[4],
-            validator: v[4].account,
-            amount: stake(1_000),
-        }
-        .encode_log_data(),
-        bad_sig.encode_log_data(),
-        Delegated {
-            delegator: delegator[5],
-            validator: v[5].account,
-            amount: stake(1_100),
-        }
-        .encode_log_data(),
-        dup_schnorr.encode_log_data(),
-        ValidatorExit {
-            validator: v[1].account,
-        }
-        .encode_log_data(),
-        ValidatorExitV2 {
-            validator: v[2].account,
-            unlocksAt: U256::from(1_700_172_800u64),
-        }
-        .encode_log_data(),
-    ];
-
-    // One event per block; the real-history corpora already cover multiple logs per block.
-    let logs: Vec<Log> = events
-        .iter()
-        .enumerate()
-        .map(|(i, event)| Log {
-            inner: alloy::primitives::Log {
-                address: contract,
-                data: event.clone(),
-            },
-            block_hash: None,
-            block_number: Some(1_000 + i as u64),
-            block_timestamp: None,
-            transaction_hash: None,
-            transaction_index: None,
-            log_index: Some(i as u64),
-            removed: false,
-        })
-        .collect();
-
-    // Fail loudly rather than write a fixture the pin test cannot load.
-    let decoded = events_from_logs(logs.clone()).expect("synthetic logs round-trip through decode");
-    assert_eq!(
-        decoded.len(),
-        logs.len(),
-        "an event was dropped in decode; every synthetic event should survive validation"
-    );
-    ValidatorSet::from_l1_events(decoded.iter().map(|(_, e)| e.clone()), NEW_PROTOCOL_VERSION)
-        .expect("synthetic history applies without a fatal error");
-
-    let covered: HashSet<_> = decoded.iter().map(|(_, e)| variant_name(e)).collect();
-    let uncovered: Vec<_> = ALL_VARIANT_NAMES
-        .iter()
-        .filter(|n| !covered.contains(*n))
-        .collect();
-    assert!(
-        uncovered.is_empty(),
-        "the synthetic corpus is meant to cover every variant; missing {uncovered:?}"
-    );
-
-    let path = data_dir()
-        .join("stake_table_history")
-        .join("synthetic_logs.json");
-    let body = logs
-        .iter()
-        .map(|l| serde_json::to_string(l).unwrap())
-        .collect::<Vec<_>>()
-        .join(",\n");
-    fs::write(&path, format!("[\n{body}\n]\n")).unwrap();
-    println!("wrote {} logs to {}", logs.len(), path.display());
 }
 
 /// Needs log retention back to the fixture's first block, not historical state: the only calls
