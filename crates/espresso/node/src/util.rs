@@ -1,10 +1,29 @@
-use std::{future::Future, sync::Arc};
+use std::{future::Future, pin::Pin, sync::Arc};
 
 use anyhow::Result;
 use tokio::{
     sync::Semaphore,
-    task::{AbortHandle, JoinError, JoinSet},
+    task::{AbortHandle, JoinError, JoinHandle, JoinSet},
 };
+
+/// A spawnable future whose concrete type has been erased.
+pub type BoxedTask<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
+
+/// Erase the type of `task` so it can be spawned.
+///
+/// The tokio task machinery is monomorphized once per spawned future type, which costs roughly 150
+/// monomorphized items per call site. Boxing into a trait object first means tokio only ever sees
+/// [`BoxedTask<T>`].
+pub fn boxed<T: 'static>(task: impl Future<Output = T> + Send + 'static) -> BoxedTask<T> {
+    Box::pin(task)
+}
+
+/// Spawn `task` on the tokio runtime with its future type erased.
+///
+/// See [`boxed`] for why this matters.
+pub fn spawn<T: Send + 'static>(task: impl Future<Output = T> + Send + 'static) -> JoinHandle<T> {
+    tokio::spawn(boxed(task))
+}
 
 /// A join set that limits the number of concurrent tasks
 pub struct BoundedJoinSet<T> {
@@ -51,7 +70,7 @@ impl<T: 'static> BoundedJoinSet<T> {
         };
 
         // Spawn the task in the inner join set
-        self.inner.spawn(task)
+        self.inner.spawn(boxed(task))
     }
 
     /// Waits until one of the tasks in the set completes and returns its output.

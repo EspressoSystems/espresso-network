@@ -57,7 +57,7 @@ use crate::{
     catchup::{CatchupStorage, NullStateCatchup},
     persistence::{ChainConfigPersistence, sql::Options},
     state::compute_state_update,
-    util::BoundedJoinSet,
+    util::{BoundedJoinSet, spawn},
 };
 
 pub type DataSource = SqlDataSource<SeqTypes, Provider>;
@@ -265,7 +265,7 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                     .await
                     .context("opening transaction for state update")?;
 
-                tokio::spawn(async move {
+                spawn(async move {
                     tx.upsert(
                         "reward_merkle_tree_v2_proofs",
                         ["height", "account", "proof"],

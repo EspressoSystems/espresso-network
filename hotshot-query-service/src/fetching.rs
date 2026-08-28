@@ -34,7 +34,7 @@ use backoff::{ExponentialBackoff, backoff::Backoff};
 use derivative::Derivative;
 use derive_more::Into;
 use serde::{Deserialize, Serialize};
-use tokio::{spawn, time::sleep};
+use tokio::time::sleep;
 
 pub mod provider;
 pub mod request;
@@ -42,7 +42,7 @@ pub mod request;
 pub use provider::Provider;
 pub use request::Request;
 
-use crate::types::HeightIndexed;
+use crate::{task::spawn, types::HeightIndexed};
 
 /// A callback to process the result of a request.
 ///

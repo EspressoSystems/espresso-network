@@ -83,7 +83,6 @@ use hotshot_types::{
 use jf_merkle_tree_compat::{MerkleTreeScheme, prelude::MerkleProof};
 use tagged_base64::TaggedBase64;
 use tokio::{
-    spawn,
     sync::Mutex,
     time::{sleep, timeout},
 };
@@ -120,7 +119,7 @@ use crate::{
     },
     serializable_retry,
     status::{HasMetrics, StatusDataSource},
-    task::BackgroundTask,
+    task::{BackgroundTask, spawn},
     types::HeightIndexed,
 };
 
