@@ -294,8 +294,12 @@ impl<Ver: StaticVersionType> TrustedQueryServiceProvider<Ver> {
         }
     }
 
-    /// Ask the peer for every object it has in `ranges`, in one request.
-    async fn fetch_batch<T: DeserializeOwned>(
+    /// Ask the peer for the objects in `ranges`, in one request.
+    ///
+    /// A peer answers a batch with only what it holds, so the response is checked here the way the
+    /// range fetches check their bounds: an incomplete answer is an error, which sends the caller
+    /// to the per-range fallback rather than resolving a fetch that is still missing heights.
+    async fn fetch_batch<T: DeserializeOwned + HeightIndexed>(
         &self,
         route: &str,
         ranges: &[Range<u64>],
@@ -304,12 +308,26 @@ impl<Ver: StaticVersionType> TrustedQueryServiceProvider<Ver> {
             .iter()
             .map(|range| (range.start, range.end))
             .collect::<Vec<_>>();
-        self.client
-            .post::<Vec<T>>(route)
+        let objs: Vec<T> = self
+            .client
+            .post(route)
             .body_binary(&body)?
             .send()
             .await
-            .context("fetching batch")
+            .context("fetching batch")?;
+
+        let fetched = objs.iter().map(|obj| obj.height()).collect::<Vec<_>>();
+        ensure!(
+            ranges
+                .iter()
+                .flat_map(|range| range.clone())
+                .all(|height| fetched.contains(&height)),
+            "server returned {} of the objects in {} requested ranges",
+            objs.len(),
+            ranges.len()
+        );
+
+        Ok(objs)
     }
 
     pub async fn fetch_vid_common_range<Types: NodeType>(

@@ -133,7 +133,7 @@ mod transaction;
 mod vid;
 
 use self::{
-    batch::{Batch, BatchRequest},
+    batch::{Batch, BatchRequest, BlockBatchFetcher, LeafBatchFetcher, VidCommonBatchFetcher},
     block::{PayloadFetcher, PayloadRangeFetcher},
     cert2::Cert2Fetcher,
     leaf::{LeafFetcher, LeafRangeFetcher},
@@ -979,6 +979,9 @@ where
     vid_common_fetcher: Option<Arc<VidCommonFetcher<Types, S, P>>>,
     vid_common_range_fetcher: Option<Arc<VidCommonRangeFetcher<Types, S, P>>>,
     cert2_fetcher: Option<Arc<Cert2Fetcher<Types, S, P>>>,
+    leaf_batch_fetcher: Arc<LeafBatchFetcher<Types, S, P>>,
+    block_batch_fetcher: Option<Arc<BlockBatchFetcher<Types, S, P>>>,
+    vid_common_batch_fetcher: Option<Arc<VidCommonBatchFetcher<Types, S, P>>>,
     range_chunk_size: usize,
     sync_status_chunk_size: usize,
     // Duration to sleep after each active fetch,
@@ -1061,6 +1064,21 @@ where
                 backoff.clone(),
             ))
         });
+        let leaf_batch_fetcher = fetching::Fetcher::new(retry_semaphore.clone(), backoff.clone());
+        let (block_batch_fetcher, vid_common_batch_fetcher) = if builder.is_leaf_only() {
+            (None, None)
+        } else {
+            (
+                Some(Arc::new(fetching::Fetcher::new(
+                    retry_semaphore.clone(),
+                    backoff.clone(),
+                ))),
+                Some(Arc::new(fetching::Fetcher::new(
+                    retry_semaphore.clone(),
+                    backoff.clone(),
+                ))),
+            )
+        };
 
         let leaf_only = builder.leaf_only;
         let sync_status_metrics =
@@ -1077,6 +1095,9 @@ where
             vid_common_fetcher,
             vid_common_range_fetcher,
             cert2_fetcher,
+            leaf_batch_fetcher: Arc::new(leaf_batch_fetcher),
+            block_batch_fetcher,
+            vid_common_batch_fetcher,
             range_chunk_size: builder.range_chunk_size,
             sync_status_chunk_size: builder.sync_status_chunk_size,
             active_fetch_delay: builder.active_fetch_delay,
