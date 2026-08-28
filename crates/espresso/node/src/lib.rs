@@ -33,11 +33,10 @@ use espresso_types::{
     SeqTypes, ValidatedState,
     traits::{EventConsumer, MembershipPersistence},
     v0::traits::SequencerPersistence,
-    v0_1::{ChainId, DECAF_CHAIN_ID},
+    v0_1::{ChainId, DECAF_CHAIN_ID, MAINNET_CHAIN_ID},
     v0_3::Fetcher,
 };
 
-pub(crate) const MAINNET_CHAIN_ID: ChainId = ChainId(U256::ONE);
 pub(crate) const MAINNET_TELEMETRY_ENDPOINT: &str = "https://telemetry.main.net.espresso.network";
 pub(crate) const DECAF_TELEMETRY_ENDPOINT: &str =
     "https://telemetry.decaf.testnet.espresso.network";

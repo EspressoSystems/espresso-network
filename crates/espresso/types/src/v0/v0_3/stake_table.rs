@@ -418,7 +418,7 @@ pub struct Fetcher {
     pub(crate) chain_config: Arc<Mutex<ChainConfig>>,
     #[cfg_attr(not(feature = "node"), allow(dead_code))]
     pub(crate) update_task: Arc<StakeTableUpdateTask>,
-    pub initial_supply: Arc<RwLock<Option<U256>>>,
+    pub(crate) initial_supply: Arc<RwLock<Option<U256>>>,
 }
 
 #[derive(Debug, Default)]
