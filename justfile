@@ -178,6 +178,24 @@ list-slow *args:
 test-slow-shard filter *args:
     cargo nextest run --profile slow --locked -p slow-tests --verbose --no-tests=pass -E "{{filter}}" {{args}}
 
+# Refresh the per-test cost map that balances the CI unit-test shards.
+update-test-timings run_id="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Reads the JUnit artifacts of a Test run on main. Sub-2s tests are omitted and
+    # carry their mean as the fallback cost, keeping the file reviewable.
+    run="{{run_id}}"
+    if [ -z "$run" ]; then
+      run=$(gh run list --workflow=test.yml --branch=main --event=push \
+        --status=success --limit 1 --json databaseId -q '.[0].databaseId')
+    fi
+    dir=$(mktemp -d)
+    trap 'rm -rf "$dir"' EXIT
+    gh run download "$run" --dir "$dir" \
+      --pattern 'nextest-junit-postgres-*' --pattern 'nextest-junit-sqlite-*'
+    python3 scripts/nextest-ci timings-write --junit-dir "$dir" --min-seconds 2 \
+      --out .config/test-timings.json
+
 # Refresh the per-test cost map that balances the CI slow-test shards.
 update-slow-test-timings run_id="":
     #!/usr/bin/env bash

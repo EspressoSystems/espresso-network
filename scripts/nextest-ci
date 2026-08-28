@@ -542,15 +542,21 @@ def test_id(test: tuple[str, str]) -> str:
 
 
 def assign_shards(
-    tests: list[tuple[str, str]], costs: dict[str, float], count: int
+    tests: list[tuple[str, str]],
+    costs: dict[str, float],
+    count: int,
+    default: float | None = None,
 ) -> tuple[list[list[tuple[str, str]]], list[float]]:
     """Longest-processing-time bin packing: assign each test to the lightest shard.
 
-    Tests with no recorded cost get the mean of the known ones, so a batch of new
-    tests spreads out instead of landing on one shard.
+    Tests with no recorded cost get `default`, or the mean of the known ones, so a
+    batch of new tests spreads out instead of landing on one shard.
     """
     known = [costs[test_id(t)] for t in tests if test_id(t) in costs]
-    fallback = sum(known) / len(known) if known else 1.0
+    if default is not None:
+        fallback = default
+    else:
+        fallback = sum(known) / len(known) if known else 1.0
     cost = {test_id(t): costs.get(test_id(t), fallback) for t in tests}
 
     shards: list[list[tuple[str, str]]] = [[] for _ in range(count)]
@@ -697,17 +703,23 @@ def cmd_timings_write(args: argparse.Namespace) -> int:
     if not timings:
         log.error("no JUnit testcases parsed; refusing to write timings")
         return 1
-    args.out.write_text(
-        json.dumps(
-            {"tests": {k: round(v, 1) for k, v in sorted(timings.items())}}, indent=2
-        )
-        + "\n"
-    )
+    kept = {k: v for k, v in timings.items() if v >= args.min_seconds}
+    dropped = [v for k, v in timings.items() if k not in kept]
+    out: dict[str, Any] = {}
+    # Suites with thousands of sub-second tests would otherwise checkin one line
+    # each; omit them and carry their measured mean as the fallback cost.
+    if dropped:
+        out["default"] = round(sum(dropped) / len(dropped), 2)
+    out["tests"] = {k: round(v, 1) for k, v in sorted(kept.items())}
+    args.out.write_text(json.dumps(out, indent=2) + "\n")
     log.info(
-        "wrote %s: %d tests, %.1f min summed",
+        "wrote %s: %d of %d tests, %.1f min summed, %d omitted below %gs",
         args.out,
+        len(kept),
         len(timings),
         sum(timings.values()) / 60,
+        len(dropped),
+        args.min_seconds,
     )
     return 0
 
@@ -717,8 +729,10 @@ def cmd_shard(args: argparse.Namespace) -> int:
         log.error("--index %d out of range 1..%d", args.index, args.count)
         return 1
     tests = list_testcases(json.loads(args.list.read_text()))
-    costs = json.loads(args.costs.read_text())["tests"]
-    shards, totals = assign_shards(tests, costs, args.count)
+    timings = json.loads(args.costs.read_text())
+    shards, totals = assign_shards(
+        tests, timings["tests"], args.count, timings.get("default")
+    )
 
     known = sum(1 for t in tests if test_id(t) in costs)
     log.info(
@@ -866,6 +880,12 @@ def main() -> int:
     )
     timings.add_argument(
         "--out", required=True, type=Path, help="output path for the timings JSON"
+    )
+    timings.add_argument(
+        "--min-seconds",
+        type=float,
+        default=0.0,
+        help="omit tests faster than this, carrying their mean as the fallback cost",
     )
     timings.set_defaults(func=cmd_timings_write)
 
