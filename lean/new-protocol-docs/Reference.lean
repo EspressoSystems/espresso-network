@@ -1117,12 +1117,13 @@ assume it does.
 
 # What is proved
 
-The point of everything above. It is stated here rather than at the front because
-it is phrased with all of it: a committee, nodes obeying the safety clauses, and
-the three conditions on the block table.
+The point of everything above. `decideSafety` is stated here rather than where
+its own definitions are introduced, because it is phrased with all of them: a
+committee, nodes obeying the safety clauses, and the three conditions on the
+block table.
 
-Seven results, and this is the first of them. The rest are stated where the
-definitions they speak about are introduced.
+Every other result is stated where the definitions it speaks about are
+introduced. The table is the whole list, and says where each one is.
 
 :::rows +header
 *
@@ -1448,6 +1449,10 @@ end Spec
 
 {docstring NewProtocol.cert2_forms}
 
+{docstring NewProtocol.cert1_forms_of_owed}
+
+{docstring NewProtocol.cert2_forms_of_owed}
+
 {docstring NewProtocol.quorum_on_chain}
 
 ## From delivered to owed
@@ -1580,11 +1585,13 @@ Everything hinges on the statements. The proofs are checked by the Lean kernel,
 but no machine checks that a statement says what was intended. So the definitions
 are to be read and judged, and the premises challenged.
 
-The source is arranged for that. `Network`, `Safety` and `DecideStream` come in
-three parts each: `X/Defs.lean` holds the definitions the statements are phrased
-with, `X/Lemmas.lean` the kernel-checked scaffolding, and `X.lean` the results. An
-audit reads the first and the third, and everything spliced into this document
-comes from those. Nothing in `Lemmas` needs reading to judge what is claimed.
+The source is arranged for that. A results module comes in up to three parts:
+`X/Defs.lean` holds the definitions the statements are phrased with,
+`X/Lemmas.lean` the kernel-checked scaffolding, and `X.lean` the results. An audit
+reads the first and the third, and everything spliced into this document comes
+from those. Nothing in `Lemmas` needs reading to judge what is claimed, and that
+every result reaches this document is checked on every build rather than left to
+whoever added one.
 
 Nothing is assumed beyond what is collected above. There are no `axiom`s and no
 `sorry`s, so the axiom footprint of every theorem here is Lean's own — `propext`,

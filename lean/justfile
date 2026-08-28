@@ -21,11 +21,15 @@ diff:
 docs:
     cd new-protocol-docs && lake build && .lake/build/bin/reference --output _out --with-tex
 
+# Check that every result of the specification is spliced into the reference.
+coverage:
+    cd new-protocol-docs && lake exe coverage
+
 pdf: docs
     cd new-protocol-docs/_out/tex && latexmk -lualatex -interaction=nonstopmode main.tex
 
 serve-docs: docs
     cd new-protocol-docs/_out/html-multi && python3 -m http.server --bind 127.0.0.1 8000
 
-all: spec lint impl diff docs
+all: spec lint impl diff docs coverage
 
