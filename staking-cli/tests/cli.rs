@@ -1798,6 +1798,7 @@ async fn test_cli_all_operations_manual_inspect(
             .arg(key.to_string())
             .arg("--p2p-addr")
             .arg("10.0.0.1:9090")
+            .arg("--skip-reachability-check")
             .assert()
             .success()
             .get_output()
@@ -1823,6 +1824,7 @@ async fn test_cli_all_operations_manual_inspect(
             .arg("update-p2p-addr")
             .arg("--p2p-addr")
             .arg("192.168.1.1:7070")
+            .arg("--skip-reachability-check")
             .assert()
             .success()
             .get_output()
@@ -2395,6 +2397,7 @@ async fn test_cli_export_calldata_all_operations_manual_inspect() -> Result<()> 
         .arg(system.x25519_public_key_str())
         .arg("--p2p-addr")
         .arg("127.0.0.1:8080")
+        .arg("--skip-reachability-check")
         .assert()
         .success()
         .get_output()
@@ -2982,6 +2985,7 @@ async fn test_cli_update_network_config() -> Result<()> {
         .arg(key.to_string())
         .arg("--p2p-addr")
         .arg("10.0.0.1:9090")
+        .arg("--skip-reachability-check")
         .assert()
         .success();
 
@@ -3015,8 +3019,26 @@ async fn test_cli_update_p2p_addr() -> Result<()> {
         .arg("update-p2p-addr")
         .arg("--p2p-addr")
         .arg("192.168.1.1:7070")
+        .arg("--skip-reachability-check")
         .assert()
         .success();
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_cli_update_p2p_addr_unreachable() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+    system.register_validator().await?;
+
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("update-p2p-addr")
+        .arg("--p2p-addr")
+        .arg("192.168.1.1:7070")
+        .assert()
+        .failure()
+        .stderr(str::contains("not publicly routable"));
 
     Ok(())
 }
