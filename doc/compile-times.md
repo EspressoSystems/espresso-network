@@ -586,6 +586,81 @@ This is the cheapest large win found: ~280 s off the `Build espresso-node AMD` j
 `Build espresso-node-sqlite AMD`, for a 10-line change with no behavioural difference (the runtime is created and shut
 down exactly as before, one stack frame deeper).
 
+## Profile knobs on `espresso-node` (32-core local, lib / bin unit times)
+
+| variant | node lib | node bin |
+|---|---|---|
+| baseline (release, opt-level 3, codegen-units 16) | 123 s | 90 s |
+| `codegen-units = 64` | 119.7 s | 88.0 s |
+| `codegen-units = 256` | 118.4 s | 98.3 s |
+| `opt-level = 2` | 137.0 s | 97.2 s |
+| `opt-level = 1` | 171.4 s | **16.1 s** |
+| `lto = "off"` | 124.7 s | 89.6 s |
+| `panic = "abort"` (whole build) | 118.3 s | 85.2 s |
+| non-async entry point (fix 2) | 136.5 s | **1.2 s** |
+
+No profile knob helps the lib. The `opt-level = 1` row confirms the share-generics mechanism from
+the other side: at opt-level <= 1 rustc turns `-Cshare-generics` on, the bin reuses the lib's generic
+instances and drops to 16 s - at the cost of an unoptimized node and a slower lib. Fix 2 gets a
+better result (1.2 s) with no optimization change.
+
+## Fix 3, implemented: erase spawned-future types
+
+Branch `ma/compile-times-boxed-spawns` (commit 63ae02a). Rationale from the mono-item dump: 75 117 of
+281 946 items (26.6 %) are `tokio::runtime::task` plumbing over 474 distinct `Harness<F>` types, and
+each distinct spawned future type costs ~150 items. Origin of the async block in those items:
+
+```
+13 860  crates/espresso/node itself      5 060  hotshot_task
+12 760  hotshot_query_service            4 620  hotshot_new_protocol
+ 9 020  axum                             4 180  hotshot_task_impls
+ 8 800  request_response                 3 080  hotshot
+```
+
+Boxing alone does not help - `Pin<Box<Instrumented<{async block}>>>` is still one type per block. The
+change erases to a single trait object before `tokio::spawn` sees it, via three helpers
+(`crates/espresso/node/src/util.rs:17,24`, `request-response/src/util.rs:12`,
+`hotshot-query-service/src/task.rs:23`), each generic only over its argument:
+
+```rust
+fn spawn<T>(fut: impl Future<Output = T> + Send + 'static) -> JoinHandle<T> {
+    tokio::spawn(Box::pin(fut) as Pin<Box<dyn Future<Output = T> + Send>>)
+}
+```
+
+18 direct sites changed plus two funnels that cover ~20 more: `context.rs:825`
+(`spawn_with_log_level!`, which all `TaskList::spawn` callers go through, boxed *after*
+`.instrument(span)` so spans are preserved) and `hotshot-query-service/src/task.rs:95`
+(`Task::spawn`, behind `BackgroundTask::spawn` and the fetching machinery). `cargo check` green for
+`espresso-node --lib --release`, `request-response`, `hotshot-query-service`. Measurement queued
+(wall time plus a like-for-like mono-item count against the 281 946 baseline).
+
+## Fix 4, implemented: erase the API state generic in the routers
+
+Branch `ma/compile-times-dyn-api` (commit de15c2c4218). All **15** `router_*<S>(state: S)` builders in
+`crates/espresso/api/src/axum.rs` are now non-generic.
+
+- New `crates/espresso/api/src/dyn_api.rs` (1029 lines): one object-safe mirror trait per `v1` trait
+  (`DynRewardApi:52`, `DynAvailability:178`, `DynNodeApi`, `DynCatchupApi`, ... 14 in total), each
+  with a blanket forwarding impl over the typed trait, plus state aliases
+  (`dyn_api.rs:34-49`) that are all `Arc<dyn Dyn*Api>`.
+- Response bodies are erased with `type Erased = Box<dyn erased_serde::Serialize + Send + Sync>`
+  (`dyn_api.rs:27`), so the JSON and VBS bytes are unchanged; streams become
+  `BoxStream<'static, Erased>`.
+- `create_router_v1` (`axum.rs:3272`) keeps its generic bounds and wraps the state in an `Arc` once;
+  `serve_axum*` in `crates/espresso/api/src/lib.rs:89,172,219,252` do the same, so **no caller in
+  `crates/espresso/node` had to change**.
+- Three methods could not be erased because their associated types are *inputs*
+  (`v1::CatchupApi::FeeAccount`/`RewardAccountV1` at `v1/catchup.rs:8-10`, `v1::SubmitApi::Transaction`
+  at `v1/submit.rs:8`); they now take `(&HeaderMap, &[u8])` and decode behind the object
+  (`dyn_api.rs:711,783,833`) with the same 400/500 mapping. 11 associated types gained `+ 'static`.
+- New dependency `erased-serde 0.4`.
+- Green: `cargo check -p espresso-api`, `-p espresso-node --lib`, `-p espresso-node --lib --features
+  testing`, plus `cargo check -p espresso-api --tests` and `cargo clippy -p espresso-api
+  --all-targets`.
+
+Measurement queued.
+
 ## Open items
 
 - Local `-Ztime-passes` split (frontend vs LLVM vs link) for the node lib and the node bin.
