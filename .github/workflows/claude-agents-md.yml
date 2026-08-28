@@ -1,0 +1,119 @@
+name: Claude AGENTS.md
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 5 * * 0" # Sunday
+  pull_request:
+    types: [opened, ready_for_review, reopened]
+    paths:
+      - .github/workflows/claude-agents-md.yml
+      - .github/claude/maintain-agents-md.md
+
+concurrency:
+  # One run per base branch: runs share a bot branch and force-push it.
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  maintain:
+    # Fork PRs get no secrets and no push access.
+    if: |
+      github.event_name != 'pull_request' || (
+        github.event.pull_request.draft == false &&
+        github.event.pull_request.head.repo.full_name == github.repository
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # A named branch, not the PR merge ref: create-pull-request bases the PR
+          # on the checked-out branch.
+          ref: ${{ github.head_ref || github.ref_name }}
+          fetch-depth: 0
+          # Keep push credentials out of the audit step; create-pull-request
+          # pushes with its own token.
+          persist-credentials: false
+
+      - name: Fetch live network state
+        run: scripts/fetch-network-facts ./tmp/network
+
+      - name: Move the project instructions out of the load path
+        # claude -p auto-loads AGENTS.md (via the CLAUDE.md symlink) as standing
+        # instructions. The audit has to read them as data, not obey them.
+        run: |
+          set -euo pipefail
+          mkdir -p ./tmp/review
+          mv AGENTS.md CLAUDE.md ./tmp/review/
+
+      - name: Audit the agent docs
+        timeout-minutes: 30
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -euo pipefail
+          curl -fsSL https://claude.ai/install.sh | bash
+          export PATH="$HOME/.local/bin:$PATH"
+          # The agent cannot push (no credentials in this step, no GH_TOKEN) and its
+          # network facts are pre-fetched. The deny list documents that and keeps it
+          # from wasting turns on tools that would fail anyway.
+          claude -p "$(cat .github/claude/maintain-agents-md.md)" \
+            --model opus \
+            --dangerously-skip-permissions \
+            --disallowedTools "WebFetch,WebSearch,Bash(curl:*),Bash(wget:*),Bash(git commit:*),Bash(git push:*),Bash(gh:*)"
+
+      - name: Restore the project instructions
+        if: always()
+        run: |
+          set -euo pipefail
+          [ -e ./tmp/review/AGENTS.md ] || exit 0
+          if [ -e AGENTS.md ]; then
+            echo "::error::agent wrote a new AGENTS.md at the repo root; refusing to overwrite the edited copy"
+            exit 1
+          fi
+          mv ./tmp/review/AGENTS.md ./tmp/review/CLAUDE.md .
+
+      - name: Build PR body
+        id: body
+        run: |
+          set -euo pipefail
+          if [ -s ./tmp/agents-md-report.md ]; then
+            cat ./tmp/agents-md-report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          # Same pathspec as add-paths below, so the gate and the commit agree.
+          if [ ! -s ./tmp/agents-md-report.md ] || [ -z "$(git status --porcelain -- AGENTS.md doc)" ]; then
+            echo "no changes proposed" | tee -a "$GITHUB_STEP_SUMMARY"
+            # git clean, not just checkout: Claude may have added untracked files.
+            git checkout -- . && git clean -fd
+            exit 0
+          fi
+          {
+            echo "Automated AGENTS.md maintenance. To trigger the CI, close and re-open the PR."
+            echo
+            # GitHub rejects bodies over 65536 chars; the run summary has the full report.
+            head -c 60000 ./tmp/agents-md-report.md
+          } > ./tmp/pr-body.md
+          echo "propose=true" >> "$GITHUB_OUTPUT"
+
+      - name: Create Pull Request
+        if: steps.body.outputs.propose == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # One branch per base, so a PR run does not clobber the scheduled PR.
+          # Re-running force-pushes and updates the open PR in place.
+          branch: bot/agents-md/${{ github.head_ref || github.ref_name }}
+          delete-branch: true
+          add-paths: |
+            AGENTS.md
+            doc/**
+          title: "[Bot] Update AGENTS.md"
+          commit-message: "docs(agents): update AGENTS.md and referenced docs"
+          body-path: ./tmp/pr-body.md
+          labels: |
+            agent-generated
+            documentation

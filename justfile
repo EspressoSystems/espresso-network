@@ -192,6 +192,43 @@ regen-stake-table-fixtures:
     cargo test -p espresso-types --lib regenerate_synthetic_corpus -- --ignored --nocapture
     INSTA_FORCE_UPDATE=1 cargo test -p espresso-types --lib stake_table_history_pin
 
+# Record runs of the new-protocol tests and replay them against the Lean machine.
+#
+# The machine is proved to satisfy `lean/new-protocol-spec`, so a divergence is
+# either the implementation departing from the specification or the trace running
+# past what the specification covers. The `replay` binary separates the two; see
+# `lean/new-protocol-diff/NewProtocolDiff/Corpus.lean` and
+# `crates/hotshot/new-protocol/src/trace.rs`.
+test-lean-diff dir="":
+    #!/usr/bin/env bash
+    set -uo pipefail
+    (cd lean/new-protocol-diff && lake build) || exit 1
+    # Given a directory, record nothing and replay what is already there.
+    if [ -n "{{dir}}" ]; then
+      lean/new-protocol-diff/.lake/build/bin/replay "{{dir}}"
+      exit $?
+    fi
+    # A fixed path, cleared first, so runs overwrite rather than accumulate.
+    # Under `target` because it is build output: gitignored, and cleaned with it.
+    traces="$(pwd)/target/np-traces"
+    rm -rf "$traces"
+    echo "recording to $traces"
+    suite=0
+    NP_TRACE_DIR="$traces" cargo test -p hotshot-new-protocol --release --lib tests:: || suite=$?
+    if [ "$suite" -ne 0 ]; then
+      echo "note: the test suite failed; replaying the traces it did record" >&2
+    fi
+    replayed=0
+    lean/new-protocol-diff/.lake/build/bin/replay "$traces" || replayed=$?
+    # A corpus from a clean run is worth keeping: `just test-lean-diff $traces`
+    # replays it without paying for the suite again.
+    if [ "$suite" -ne 0 ]; then
+      rm -rf "$traces"
+    else
+      echo "traces kept in $traces"
+    fi
+    [ "$suite" -eq 0 ] && [ "$replayed" -eq 0 ]
+
 test-integration: (build "test")
 	INTEGRATION_TEST_NODE_VERSION=2 cargo nextest run -p tests --nocapture --profile integration test_native_demo_basic
 

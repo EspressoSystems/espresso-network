@@ -1,4 +1,6 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+
+use hotshot_types::data::ViewNumber;
 
 use crate::tests::common::runner::TestRunner;
 
@@ -60,6 +62,35 @@ async fn mutually_blocked_nodes_still_decide_over_cliquenet() {
         .target_decisions(30)
         .epoch_height(10)
         .blocked_pairs(BTreeSet::from([(1, 4), (1, 7), (4, 7)]))
+        .build()
+        .run()
+        .await
+        .unwrap();
+}
+
+/// A node that misses one view's VID share broadcasts recovers by fetching
+/// the payload, and the network certifies again.
+///
+/// Five of seven nodes are up, which is exactly the quorum threshold, so no
+/// view can certify without every one of them. Node 1 receives view 2's
+/// proposal, its own share fragments and every vote, and so takes full part
+/// in that view — but never the other voters' share broadcasts, so it cannot
+/// reconstruct the block. From then on it cannot vote on any proposal
+/// parented at view 2, which is every later proposal, and the run only
+/// completes if it recovers the payload from a peer.
+///
+/// The views around the deficit are tolerated rather than pinned: how many
+/// time out before the fetch lands depends on scheduling. Completing at all
+/// is the assertion — without the fetch this run never reaches its target.
+#[tokio::test(flavor = "multi_thread")]
+async fn share_starved_node_recovers_over_cliquenet() {
+    TestRunner::builder()
+        .num_nodes(7)
+        .down_nodes(BTreeSet::from([5, 6]))
+        .starved_of_shares(BTreeMap::from([(1, BTreeSet::from([ViewNumber::new(2)]))]))
+        .tolerated_failed_views((2..=8).map(ViewNumber::new).collect())
+        .target_decisions(12)
+        .view_timeout(std::time::Duration::from_secs(2))
         .build()
         .run()
         .await

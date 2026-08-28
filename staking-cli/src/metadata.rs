@@ -438,10 +438,10 @@ mod test {
 #[cfg(all(test, feature = "testing"))]
 mod validation_tests {
     use pretty_assertions::assert_matches;
+    use test_server::serve_on_random_port;
     use warp::Filter;
 
     use super::*;
-    use crate::deploy::serve_on_random_port;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_validate_metadata_correct_pub_key() {
@@ -461,8 +461,7 @@ mod validation_tests {
             warp::reply::with_header(json_body.clone(), "content-type", "application/json")
         });
 
-        let port = serve_on_random_port(route).await;
-        let uri = Url::parse(&format!("http://127.0.0.1:{}/", port)).unwrap();
+        let uri = serve_on_random_port(route).await;
         let result = validate_metadata_uri(&uri, &bls_vk).await;
         assert!(result.is_ok());
         let content = result.unwrap();
@@ -490,8 +489,7 @@ mod validation_tests {
             warp::reply::with_header(json_body.clone(), "content-type", "application/json")
         });
 
-        let port = serve_on_random_port(route).await;
-        let uri = Url::parse(&format!("http://127.0.0.1:{}/", port)).unwrap();
+        let uri = serve_on_random_port(route).await;
         let result = validate_metadata_uri(&uri, &bls_vk).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("pub_key mismatch"));
@@ -515,8 +513,7 @@ mod validation_tests {
         let route = warp::any()
             .map(move || warp::reply::with_header(json_body.clone(), "content-type", "text/plain"));
 
-        let port = serve_on_random_port(route).await;
-        let uri = Url::parse(&format!("http://127.0.0.1:{}/", port)).unwrap();
+        let uri = serve_on_random_port(route).await;
         let content = fetch_metadata(&uri).await.unwrap();
         assert_eq!(content.pub_key, bls_vk);
         assert_eq!(content.name, Some("Text Plain JSON".to_string()));
@@ -530,8 +527,8 @@ mod validation_tests {
         let route = warp::any()
             .map(move || warp::reply::with_header(invalid_content, "content-type", "text/plain"));
 
-        let port = serve_on_random_port(route).await;
-        let uri = Url::parse(&format!("http://127.0.0.1:{}/metadata", port)).unwrap();
+        let base = serve_on_random_port(route).await;
+        let uri = base.join("metadata").unwrap();
         let err = fetch_metadata(&uri).await.unwrap_err();
 
         assert_matches!(err, MetadataError::BothFormatsFailed { .. });
@@ -564,14 +561,14 @@ mod validation_tests {
             warp::reply::with_header(invalid_json, "content-type", "application/json")
         });
 
-        let port = serve_on_random_port(route).await;
+        let base = serve_on_random_port(route).await;
         let bls_vk = generate_bls_pub_key();
-        let uri = Url::parse(&format!("http://127.0.0.1:{}/test-path", port)).unwrap();
+        let uri = base.join("test-path").unwrap();
         let err = validate_metadata_uri(&uri, &bls_vk).await.unwrap_err();
 
         // Error should include URL context from validate_metadata_uri
         let err_msg = format!("{:#}", err);
-        assert!(err_msg.contains(&format!("from http://127.0.0.1:{}/test-path", port)));
+        assert!(err_msg.contains(&format!("from {uri}")));
         assert!(err_msg.contains("valid JSON but incorrect schema"));
     }
 
@@ -582,14 +579,14 @@ mod validation_tests {
         let route = warp::any()
             .map(move || warp::reply::with_header(invalid_content, "content-type", "text/html"));
 
-        let port = serve_on_random_port(route).await;
+        let base = serve_on_random_port(route).await;
         let bls_vk = generate_bls_pub_key();
-        let uri = Url::parse(&format!("http://127.0.0.1:{}/custom-endpoint", port)).unwrap();
+        let uri = base.join("custom-endpoint").unwrap();
         let err = validate_metadata_uri(&uri, &bls_vk).await.unwrap_err();
 
         // Error should include URL context from validate_metadata_uri
         let err_msg = format!("{:#}", err);
-        assert!(err_msg.contains(&format!("from http://127.0.0.1:{}/custom-endpoint", port)));
+        assert!(err_msg.contains(&format!("from {uri}")));
         assert!(err_msg.contains("failed to parse as JSON"));
         assert!(err_msg.contains("OpenMetrics"));
     }
@@ -612,8 +609,7 @@ mod validation_tests {
             warp::reply::with_header(json_body.clone(), "content-type", "application/json")
         });
 
-        let port = serve_on_random_port(route).await;
-        let uri = Url::parse(&format!("http://127.0.0.1:{}/", port)).unwrap();
+        let uri = serve_on_random_port(route).await;
         let content = fetch_metadata(&uri).await.unwrap();
         assert_eq!(content.pub_key, bls_vk);
         assert_eq!(content.name, Some("JSON Validator".to_string()));
@@ -641,8 +637,7 @@ consensus_node_identity_general{{name="OpenMetrics Validator",company_name="Test
             )
         });
 
-        let port = serve_on_random_port(route).await;
-        let uri = Url::parse(&format!("http://127.0.0.1:{}/", port)).unwrap();
+        let uri = serve_on_random_port(route).await;
         let content = fetch_metadata(&uri).await.unwrap();
         assert_eq!(content.pub_key, bls_vk);
         assert_eq!(content.name, Some("OpenMetrics Validator".to_string()));
@@ -698,8 +693,8 @@ consensus_node_identity_general{{name="OpenMetrics Validator",company_name="Test
         let route =
             warp::any().map(|| warp::reply::with_header("", "content-type", "application/json"));
 
-        let port = serve_on_random_port(route).await;
-        let uri = Url::parse(&format!("http://127.0.0.1:{}/metadata", port)).unwrap();
+        let base = serve_on_random_port(route).await;
+        let uri = base.join("metadata").unwrap();
         let err = fetch_metadata(&uri).await.unwrap_err();
 
         assert_matches!(err, MetadataError::EmptyBody);
@@ -714,8 +709,8 @@ consensus_node_identity_general{{name="OpenMetrics Validator",company_name="Test
             warp::reply::with_header(invalid_json, "content-type", "application/json")
         });
 
-        let port = serve_on_random_port(route).await;
-        let uri = Url::parse(&format!("http://127.0.0.1:{}/metadata", port)).unwrap();
+        let base = serve_on_random_port(route).await;
+        let uri = base.join("metadata").unwrap();
         let err = fetch_metadata(&uri).await.unwrap_err();
 
         assert_matches!(err, MetadataError::SchemaError(_));

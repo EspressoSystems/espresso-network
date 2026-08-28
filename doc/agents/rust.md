@@ -30,8 +30,11 @@ just demo-native                      # local network via process-compose
 ## Project conventions
 
 - Errors: `anyhow` for binaries, `thiserror` for libraries
-- HTTP API: axum routers in `crates/espresso/api/src/axum.rs`; per-version API traits in `crates/espresso/api/src/v1/`,
-  `v2/`, implemented on the node's state in `crates/espresso/node/src/api/state.rs`
+- HTTP API: axum routers in `crates/espresso/api/src/axum.rs`; v1 API traits in `crates/espresso/api/src/v1/`; v2 is
+  generated from `crates/espresso/api/proto/v2/`. Both are implemented on the node's state in
+  `crates/espresso/node/src/api/state.rs`
+- HTTP clients: `http-client` (reqwest). `surf-disco` is gone; `tide-disco` survives only in the builder,
+  events-service, dev-node and hotshot-testing crates
 
 ## Type-driven design
 
@@ -51,7 +54,9 @@ just demo-native                      # local network via process-compose
 
 - **SequencerContext** (`crates/espresso/node/src/context.rs`): wraps HotShot's `SystemContextHandle`.
 - **Node** (`crates/espresso/node/src/lib.rs`): generic over `N: ConnectedNetwork`, `P: SequencerPersistence`.
-- **ValidatedState** (`crates/espresso/node/src/state.rs`): three merkle trees (fee accounts, blocks, rewards).
+- **ValidatedState** (`crates/espresso/types/src/v0/impls/state.rs`): four merkle trees (block, fee, reward v1, reward
+  v2) plus chain config; `validate_and_apply_header()` is the state transition. Persisting the merklized state is
+  `crates/espresso/node/src/state.rs`.
 - **HotShot SystemContext** (`crates/hotshot/hotshot/src/lib.rs`): tasks via `ConsensusTaskRegistry`, broadcast channels
   with `HotShotEvent` variants. `EpochMembershipCoordinator` manages per-epoch stake tables.
 - **L1Client** (`crates/espresso/types/src/v0/impls/l1.rs`): tracks `head` and `finalized`; reads use
@@ -70,6 +75,8 @@ just demo-native                      # local network via process-compose
 - `hotshot-query-service`: query APIs for blocks/availability
 - `hotshot-state-prover`: ZK proof generation for light client updates
 - `hotshot-contract-adapter`: Rust <-> Solidity type bridge
+- `versions`: protocol version constants and the `Upgrade` type
+- `http-client`: reqwest-based HTTP/WebSocket client for the node APIs
 - `staking-cli`: stake table contract interaction
 - `cliquenet`: fully-connected mesh network (fast finality)
 
@@ -119,6 +126,9 @@ startup) instead. Before writing a migration that touches existing rows, read
 [`doc/agents/refinery-migrations.md`](refinery-migrations.md).
 
 ## Adding an API endpoint
+
+For v2, define the rpc in its proto instead and let the build generate the route and handlers; see
+[`API.md`](../../API.md). For v1:
 
 1. Add the method to the version's API trait (`crates/espresso/api/src/v1/<module>.rs`) and implement it on the node's
    state (`crates/espresso/node/src/api/state.rs`).

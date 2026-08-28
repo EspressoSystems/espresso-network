@@ -1,5 +1,5 @@
 use std::{
-    cmp::min,
+    cmp::{max, min},
     collections::{HashMap, HashSet},
     str::FromStr,
     time::{Duration, Instant},
@@ -1430,6 +1430,31 @@ impl Fetcher {
         })
     }
 
+    /// Break a block range into fixed-size chunks, highest first.
+    ///
+    /// Both bounds of every chunk are inclusive, as `eth_getLogs` treats them, so a chunk spans
+    /// `chunk_size` blocks rather than `chunk_size + 1`.
+    #[cfg_attr(not(feature = "node"), allow(dead_code))]
+    fn block_range_chunks_rev(
+        from_block: u64,
+        to_block: u64,
+        chunk_size: u64,
+    ) -> impl Iterator<Item = (u64, u64)> {
+        let chunk_size = chunk_size.max(1);
+        let mut end = to_block;
+        let mut exhausted = to_block < from_block;
+        std::iter::from_fn(move || {
+            if exhausted {
+                return None;
+            }
+            let chunk_end = end;
+            let chunk_start = max(from_block, chunk_end.saturating_sub(chunk_size - 1));
+            exhausted = chunk_start == from_block;
+            end = chunk_start.saturating_sub(1);
+            Some((chunk_start, chunk_end))
+        })
+    }
+
     /// Fetch all stake table events from L1
     #[cfg(feature = "node")]
     pub async fn fetch_events_from_contract(
@@ -1689,20 +1714,12 @@ impl Fetcher {
     ) -> Result<Log, FetchRewardError> {
         let max_events_range = self.l1_client.options().l1_events_max_block_range;
         const MAX_BLOCKS_SCANNED: u64 = 200_000;
-        let mut total_scanned = 0;
 
-        let mut from_block = stake_table_init_block.saturating_sub(max_events_range);
-        let mut to_block = stake_table_init_block;
+        let lowest_block = stake_table_init_block.saturating_sub(MAX_BLOCKS_SCANNED - 1);
+        let chunks =
+            Self::block_range_chunks_rev(lowest_block, stake_table_init_block, max_events_range);
 
-        loop {
-            if total_scanned >= MAX_BLOCKS_SCANNED {
-                tracing::error!(
-                    total_scanned,
-                    "Exceeded maximum scan range while searching for token Initialized event"
-                );
-                return Err(FetchRewardError::ExceededMaxScanRange(MAX_BLOCKS_SCANNED));
-            }
-
+        for (from_block, to_block) in chunks {
             let init_logs = token
                 .Initialized_filter()
                 .from_block(from_block)
@@ -1720,11 +1737,14 @@ impl Fetcher {
                 );
                 return Ok(init_log);
             }
-
-            total_scanned += max_events_range;
-            from_block = from_block.saturating_sub(max_events_range);
-            to_block = to_block.saturating_sub(max_events_range);
         }
+
+        tracing::error!(
+            lowest_block,
+            stake_table_init_block,
+            "Exceeded maximum scan range while searching for token Initialized event"
+        );
+        Err(FetchRewardError::ExceededMaxScanRange(MAX_BLOCKS_SCANNED))
     }
 
     pub async fn update_chain_config(&self, header: &Header) -> anyhow::Result<()> {
@@ -2233,6 +2253,50 @@ mod tests {
             x: U256::ZERO,
             y: U256::ZERO,
         }
+    }
+
+    /// `eth_getLogs` counts both endpoints, so a chunk of `chunk_size` must span `chunk_size`
+    /// blocks. The backward scan used to ask for `chunk_size + 1`, which providers rejected with
+    /// "Block range 10001 exceeds the maximum of 10000 blocks per logs request", so the fallback
+    /// scan for the token `Initialized` event could never succeed at the default range.
+    #[test_log::test]
+    fn test_block_range_chunks_never_exceed_chunk_size() {
+        const MAX_RANGE: u64 = 10_000;
+        const INIT_BLOCK: u64 = 1_000_000;
+        const LOWEST_BLOCK: u64 = INIT_BLOCK - 200_000 + 1;
+
+        let width = |(from, to): &(u64, u64)| to - from + 1;
+
+        let descending: Vec<_> =
+            Fetcher::block_range_chunks_rev(LOWEST_BLOCK, INIT_BLOCK, MAX_RANGE).collect();
+
+        assert_eq!(descending[0], (INIT_BLOCK - MAX_RANGE + 1, INIT_BLOCK));
+        assert_eq!(descending.last().unwrap().0, LOWEST_BLOCK);
+        for chunk in &descending {
+            assert_eq!(width(chunk), MAX_RANGE, "chunk {chunk:?} is missized");
+        }
+        for pair in descending.windows(2) {
+            assert_eq!(pair[0].0, pair[1].1 + 1, "gap or overlap at {pair:?}");
+        }
+
+        let ascending: Vec<_> =
+            Fetcher::block_range_chunks(LOWEST_BLOCK, INIT_BLOCK, MAX_RANGE).collect();
+        for chunk in &ascending {
+            assert!(
+                width(chunk) <= MAX_RANGE,
+                "chunk {chunk:?} exceeds {MAX_RANGE}"
+            );
+        }
+
+        // A range shorter than one chunk, and one bottoming out at genesis, must both terminate.
+        assert_eq!(
+            Fetcher::block_range_chunks_rev(0, 5, MAX_RANGE).collect::<Vec<_>>(),
+            vec![(0, 5)]
+        );
+        assert_eq!(
+            Fetcher::block_range_chunks_rev(0, MAX_RANGE, MAX_RANGE).collect::<Vec<_>>(),
+            vec![(1, MAX_RANGE), (0, 0)]
+        );
     }
 
     #[test_log::test]
