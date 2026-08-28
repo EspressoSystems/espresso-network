@@ -3,6 +3,7 @@ module
 import NewProtocolSpec.Safety
 import NewProtocolSpec.DecideStream
 import NewProtocolSpec.Deadlock
+import NewProtocolSpec.Round
 import NewProtocolSpec.Implements
 import NewProtocolSpec.Checks.Examples
 meta import Lean.Elab.Command
@@ -26,7 +27,10 @@ either, so what can be checked is checked here at build time:
   wearing the other hat;
 * the obligations can be owed at all, which is `NewProtocolSpec.Checks.Examples`:
   a guard no state satisfies would leave every result about it vacuous, and prose
-  cannot tell you which.
+  cannot tell you which;
+* the delivery bundles of `NewProtocolSpec.Round` have exactly the fields they
+  claim, for the same reason the windows do: each is a hypothesis, and one grows
+  by being weakened.
 
 These exist because that rot has happened here: two premises that became theorems
 and stayed listed as premises, and two clause counts that drifted after a clause
@@ -106,6 +110,18 @@ classical principle.
 
 /-- info: 'NewProtocol.propose_forced' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms propose_forced
+
+/-- info: 'NewProtocol.round_cert1' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms round_cert1
+
+/-- info: 'NewProtocol.round_cert2' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms round_cert2
+
+/-- info: 'NewProtocol.round_completes' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms round_completes
+
+/-- info: 'NewProtocol.round_decided' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms round_decided
 
 /-! ## What is stated where
 
@@ -227,6 +243,23 @@ run_meta (checkFields `NewProtocol.ProposeRoom
 run_meta (checkFields `NewProtocol.ProposeReady
   [`leads, `wellFormed, `justified, `parentHeld]
   "the field list in `NewProtocolSpec.Deadlock.Defs`")
+
+/-!
+And what a hop of a round may assume arrives. A field added here is a delivery the
+environment must make before the round is claimed to complete, which is how a
+result about delivery weakens without the trust surface changing.
+-/
+run_meta (checkFields `NewProtocol.Vote1Delivery
+  [`arrival, `validated, `order, `parentHeld, `valid, `writable, `fresh, `window]
+  "the field list in `NewProtocolSpec.Round.Defs`")
+
+run_meta (checkFields `NewProtocol.Vote2Delivery
+  [`certArrival, `payloadArrival, `order, `admitted, `writable, `fresh, `window]
+  "the field list in `NewProtocolSpec.Round.Defs`")
+
+run_meta (checkFields `NewProtocol.DecideDelivery
+  [`arrival, `cert1Held, `blockHeld, `writable, `fresh, `window]
+  "the field list in `NewProtocolSpec.Round.Defs`")
 
 /-!
 And that a `LiveNetwork` is a `Network` with fairness, rather than a second set of

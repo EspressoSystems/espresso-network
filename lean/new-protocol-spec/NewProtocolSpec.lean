@@ -14,6 +14,7 @@ public import NewProtocolSpec.Network
 public import NewProtocolSpec.Safety
 public import NewProtocolSpec.Progress
 public import NewProtocolSpec.Deadlock
+public import NewProtocolSpec.Round
 public import NewProtocolSpec.Implements
 public import NewProtocolSpec.Checks
 
@@ -47,6 +48,8 @@ for the result they are built for, and `Conforms` for what an implementation owe
   quorum's worth of votes turned into a certificate
 * `Deadlock` — that an action can always be made owed, by inputs the specification
   itself admits, and that delivering them makes the node act
+* `Round` — the hops of `Progress` and `Deadlock` composed: delivery to two
+  quorums commits a block, and no-fork places it
 * `Checks` — the claims this specification makes about itself, checked at build
   time, with `Checks/Examples.lean` exhibiting states that owe an action so that
   no obligation's guards are checked only in prose
@@ -54,16 +57,17 @@ for the result they are built for, and `Conforms` for what an implementation owe
 `Network`, `Safety`, `DecideStream` and `Progress` come in three parts each: `X/Defs.lean`
 holds the definitions the statements are phrased with, `X/Lemmas.lean` the
 kernel-checked scaffolding, and `X.lean` the results. An audit reads the first
-and the third. `Deadlock` has two parts and no scaffolding: its definitions are
-in `Deadlock/Defs.lean` and its results, proved in place, in `Deadlock.lean`.
+and the third. `Deadlock` and `Round` have two parts each and no scaffolding:
+their definitions are in `X/Defs.lean` and their results, proved in place, in
+`X.lean`.
 
 Everything from `Network` upwards talks about nodes that obey `SafetySpec` and
 nothing else. So a safety proof cannot reach for another clause: there is none in
 scope to reach for. `Run.weaken` says a node obeying all of `StepSpec` is one
 of these, so the results apply to it too.
 
-`Progress` and `Deadlock` are the other direction, and are the only places the
-obligations to act are used. Both are conditional throughout: a node acts if the
+`Progress`, `Deadlock` and `Round` are the other direction, and are the only
+places the obligations to act are used. Both are conditional throughout: a node acts if the
 environment delivers and nothing overtakes the view, and neither of those is
 something the specification models. What they establish is that the rules
 themselves leave no way to stall — which no reading of a clause list can settle,

@@ -161,10 +161,6 @@ theorem vote1_unstalled {cfg : Config} {leader : ViewNumber → Option PubKey} {
       ∨ ∃ vote : Vote1, (Output.send (.vote1 vote) ∈ o₁ ∨ Output.send (.vote1 vote) ∈ o₂)
           ∧ vote.view = p.viewNumber ∧ vote.data.blockHash = blockHash p
           ∧ vote.signer = node := by
-  have hbar₁ : s₁.barredView < p.viewNumber := by
-    rw [SafetySpec.barredViewUnchanged hs₁.toSafetySpec]; exact hadmissible.bar
-  have hbar₂ : s₂.barredView < p.viewNumber := by
-    rw [SafetySpec.barredViewUnchanged hs₂.toSafetySpec]; exact hbar₁
   obtain ⟨hadm₁, -, hvid₁⟩ :=
     StepSpec.proposalIngested hs₁ sender p vid rfl hadmissible.bar hadmissible.admitted
       hadmissible.proposals hadmissible.vidShares hadmissible.safe hadmissible.wellFormed
@@ -389,7 +385,7 @@ theorem vote1_forced {cfg : Config} {leader : ViewNumber → Option PubKey} {nod
     ∃ j, ∃ vote : Vote1, Output.send (.vote1 vote) ∈ (Run.event r j).outputs
       ∧ vote.view = p.viewNumber ∧ vote.data.blockHash = blockHash p
       ∧ vote.signer = node := by
-  obtain ⟨o₁, hs₁, hout₁⟩ := stepSpec_of_consumes hin₁
+  obtain ⟨o₁, hs₁, _⟩ := stepSpec_of_consumes hin₁
   obtain ⟨o₂, hs₂, hout₂⟩ := stepSpec_of_consumes hin₂
   obtain ⟨hadm₁, -, hvid₁⟩ :=
     StepSpec.proposalIngested hs₁ sender p vid rfl hadmissible.bar hadmissible.admitted
@@ -461,7 +457,7 @@ theorem vote2_forced {cfg : Config} {leader : ViewNumber → Option PubKey} {nod
     ∃ j, ∃ vote : Vote2, Output.send (.vote2 vote) ∈ (Run.event r j).outputs
       ∧ vote.view = p.viewNumber ∧ vote.data.blockHash = blockHash p
       ∧ vote.signer = node := by
-  obtain ⟨o₁, hs₁, hout₁⟩ := stepSpec_of_consumes hin₁
+  obtain ⟨o₁, hs₁, _⟩ := stepSpec_of_consumes hin₁
   obtain ⟨o₂, hs₂, hout₂⟩ := stepSpec_of_consumes hin₂
   by_cases hearly : ∃ j, n ≤ j ∧ j < n₂ + 1 ∧ ∃ vote : Vote2,
       Output.send (.vote2 vote) ∈ (Run.event r j).outputs ∧ vote.view = p.viewNumber

@@ -1492,6 +1492,57 @@ happens, not when.
 
 {docstring NewProtocol.propose_forced}
 
+# A round completes
+
+%%%
+tag := "round"
+%%%
+
+The results above are hops. This section composes them into the round they belong
+to: a quorum handed a proposal forms the {name NewProtocol.Cert1}`Cert1` over it,
+a quorum handed that certificate forms the {name NewProtocol.Cert2}`Cert2`, and a
+node handed *that* decides the view. Each hop's conclusion is the next hop's
+hypothesis as the same object, which is what makes this a composition rather than
+four statements about the same block.
+
+It is still conditional throughout, and in the same two ways. Nothing says a
+delivery happens, so every hop takes its arrivals as hypotheses. And nothing
+carries a node's state from one hop to the next, since the steps between two
+deliveries are unconstrained. So the admission clause of
+{name NewProtocol.Vote2Delivery}`Vote2Delivery` is a hypothesis where reading the
+round in order would suggest a consequence.
+
+The leader's proposal is not part of it.
+{name NewProtocol.propose_sent}`propose_sent` says a leader that owes a proposal
+sends one, but a proposal sent and a proposal arriving at a node are joined only
+by delivery. The round starts where the arrivals do.
+
+## What a delivery supplies
+
+One bundle per hop, each the hypotheses of the matching result collected into a
+structure so that a statement about a quorum can quantify over them. Nothing is
+added or weakened in the collecting.
+
+{docstring NewProtocol.Vote1Delivery}
+
+{docstring NewProtocol.Vote2Delivery}
+
+{docstring NewProtocol.DecideDelivery}
+
+## The hops, composed
+
+{docstring NewProtocol.vote1_cast_of_delivered}
+
+{docstring NewProtocol.vote2_cast_of_delivered}
+
+{docstring NewProtocol.round_cert1}
+
+{docstring NewProtocol.round_cert2}
+
+{docstring NewProtocol.round_completes}
+
+{docstring NewProtocol.round_decided}
+
 # What conformance means
 
 {docstring NewProtocol.Implements}
