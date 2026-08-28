@@ -28,10 +28,6 @@ either, so what can be checked is checked here at build time:
   a guard no state satisfies would leave every result about it vacuous, and prose
   cannot tell you which.
 
-That the obligations can be owed at all is checked too, in
-`NewProtocolSpec.Checks.Examples`: a guard no state satisfies would leave every result
-about it vacuous, and prose cannot tell you which.
-
 These exist because that rot has happened here: two premises that became theorems
 and stayed listed as premises, and two clause counts that drifted after a clause
 was removed.
@@ -110,7 +106,6 @@ classical principle.
 
 /-- info: 'NewProtocol.propose_forced' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms propose_forced
-
 
 /-! ## What is stated where
 
