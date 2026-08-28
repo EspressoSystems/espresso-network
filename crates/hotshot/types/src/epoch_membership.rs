@@ -350,7 +350,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             let err = anytrace::error!(
                 "We got a catchup request for epoch {epoch:?} but the first epoch is not set"
             );
-            self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err);
+            self.catchup_cleanup(&progress, epoch_tx.clone(), fetch_epochs, err);
             return;
         };
 
@@ -378,7 +378,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                         "We are trying to catchup to an epoch lower than the second epoch! This \
                          means the initial stake table is missing!"
                     );
-                    self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err);
+                    self.catchup_cleanup(&progress, epoch_tx.clone(), fetch_epochs, err);
                     return;
                 }
                 // Lock the catchup map
@@ -460,7 +460,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                 Ok(_) => {},
                 Err(err) => {
                     fetch_epochs.push((current_fetch_epoch, tx));
-                    self.catchup_cleanup(epoch, epoch_tx, fetch_epochs, err);
+                    self.catchup_cleanup(&progress, epoch_tx, fetch_epochs, err);
                     return;
                 },
             };
@@ -474,7 +474,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                     "snapshot for epoch {current_fetch_epoch} unavailable after fetch_stake_table"
                 );
                 fetch_epochs.push((current_fetch_epoch, tx));
-                self.catchup_cleanup(epoch, epoch_tx, fetch_epochs, err);
+                self.catchup_cleanup(&progress, epoch_tx, fetch_epochs, err);
                 return;
             };
             let mem = EpochMembership {
@@ -513,7 +513,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             Ok(root_leaf) => root_leaf,
             Err(err) => {
                 tracing::error!("Failed to fetch stake table for epoch {epoch:?}: {err:?}");
-                self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err);
+                self.catchup_cleanup(&progress, epoch_tx.clone(), fetch_epochs, err);
                 return;
             },
         };
@@ -544,7 +544,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                 log!(result);
 
                 if let Err(err) = result {
-                    self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err);
+                    self.catchup_cleanup(&progress, epoch_tx.clone(), fetch_epochs, err);
                     return;
                 }
             },
@@ -556,7 +556,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             let err = anytrace::error!(
                 "snapshot for epoch {epoch} unavailable after fetch_stake_table + DRB"
             );
-            self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err);
+            self.catchup_cleanup(&progress, epoch_tx.clone(), fetch_epochs, err);
             return;
         };
         let mem = EpochMembership {
@@ -636,28 +636,51 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     /// means every sender is gone, i.e. the task that claimed the entry died
     /// without cleaning up (e.g. it panicked while holding entries for
     /// intermediate epochs), so nothing else can ever complete or remove it.
+    ///
+    /// A no-op when the attempt was abandoned: the watchdog already evicted
+    /// its entries and failed its waiters, and the map entries for these
+    /// epochs may since have been claimed by a newer attempt, so they are no
+    /// longer ours to evict.
     fn catchup_cleanup(
         &self,
-        req_epoch: EpochNumber,
+        progress: &CatchupProgress<TYPES>,
         epoch_tx: Sender<Result<EpochMembership<TYPES>>>,
         mut cancel_epochs: Vec<EpochSender<TYPES>>,
         err: Error,
     ) {
         // Cleanup in case of error
-        cancel_epochs.push((req_epoch, epoch_tx));
-        self.cancel_catchups(cancel_epochs, err);
+        cancel_epochs.push((progress.epoch, epoch_tx));
+        self.cancel_catchups(Some(progress), cancel_epochs, err);
     }
 
     /// Evict `cancel_epochs` from the `catchup_map`, sweep any entry whose
     /// channel is closed, and broadcast the error to waiting tasks.
-    fn cancel_catchups(&self, cancel_epochs: Vec<EpochSender<TYPES>>, err: Error) {
-        tracing::error!(
-            "canceling catchup for epochs {:?}: {err:?}",
-            cancel_epochs.iter().map(|(e, _)| e).collect::<Vec<_>>()
-        );
-
+    ///
+    /// `attempt` is the calling attempt's own progress, or `None` when the
+    /// watchdog cancels somebody else's attempt. An abandoned attempt must
+    /// not cancel anything (see `catchup_cleanup`); the watchdog is exempt
+    /// because it is the one doing the abandoning.
+    fn cancel_catchups(
+        &self,
+        attempt: Option<&CatchupProgress<TYPES>>,
+        cancel_epochs: Vec<EpochSender<TYPES>>,
+        err: Error,
+    ) {
         {
             let mut map_lock = self.catchup_map.lock();
+            // `abandon` is set under the map lock, so a false reading here is
+            // exact: the watchdog cannot interleave its own cleanup before
+            // this eviction finishes under the same guard.
+            if let Some(progress) = attempt
+                && progress.is_abandoned()
+            {
+                drop(map_lock);
+                tracing::warn!(
+                    "catchup for epoch {} was abandoned; skipping cleanup: {err:?}",
+                    progress.epoch
+                );
+                return;
+            }
             for (epoch, _) in cancel_epochs.iter() {
                 // Remove the failed epochs from the catchup map
                 map_lock.remove(epoch);
@@ -670,6 +693,11 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                 true
             });
         }
+
+        tracing::error!(
+            "canceling catchup for epochs {:?}: {err:?}",
+            cancel_epochs.iter().map(|(e, _)| e).collect::<Vec<_>>()
+        );
 
         for (cancel_epoch, tx) in cancel_epochs {
             // Signal the other tasks about the failures
@@ -1028,16 +1056,18 @@ fn spawn_catchup<T: NodeType>(
         // with the attempt's claims: every insert+claim runs under this lock
         // behind an abandonment check, so each entry is either drained here
         // (and evicted below) or never inserted at all.
-        let claimed = {
+        let mut cancel_epochs = {
             let _map_lock = coordinator.catchup_map.lock();
             progress.abandon();
             progress.take_claimed()
         };
+        cancel_epochs.push((epoch, epoch_tx));
         let stuck_at = progress.last();
-        coordinator.catchup_cleanup(
-            epoch,
-            epoch_tx,
-            claimed,
+        // Straight to `cancel_catchups`: `catchup_cleanup`'s abandonment
+        // guard must not apply to the watchdog, which is the one abandoning.
+        coordinator.cancel_catchups(
+            None,
+            cancel_epochs,
             anytrace::error!(
                 "catchup for epoch {epoch} abandoned: {outcome}; last checkpoint: {stuck_at}"
             ),

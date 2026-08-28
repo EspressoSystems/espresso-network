@@ -120,6 +120,12 @@ enum LoadBehavior {
     /// resumed attempt then reaches the discovery loop's vacant branch while
     /// abandoned, where it must not insert a fresh `catchup_map` entry.
     HangOncePastWatch,
+    /// The first epoch-root fetch parks until the test fires
+    /// [`WedgeMembership::release_root`], then fails; later fetches park
+    /// forever. Lets the test hold an attempt parked past its abandonment and
+    /// then drive it into a failure path — i.e. into `catchup_cleanup` —
+    /// while a second attempt owns the `catchup_map` entries.
+    HangEpochRootUntilReleased,
 }
 
 /// A `Membership` that delegates everything to `StrictMembership` except the
@@ -140,6 +146,9 @@ struct WedgeMembership {
     /// `Leaf2::genesis` pays a multi-second one-time global setup cost on
     /// first use, which must not happen inside a watchdog window.
     root_leaf: Arc<std::sync::OnceLock<Leaf2<WedgeTypes>>>,
+    /// Unparks the first epoch-root fetch under
+    /// [`HangEpochRootUntilReleased`](LoadBehavior::HangEpochRootUntilReleased).
+    release_root: Arc<tokio::sync::Notify>,
 }
 
 impl WedgeMembership {
@@ -198,6 +207,14 @@ impl Membership<WedgeTypes> for WedgeMembership {
             LoadBehavior::Hang | LoadBehavior::PanicOnce | LoadBehavior::HangOncePastWatch => {
                 Err(anyhow!("epoch root unavailable").into())
             },
+            LoadBehavior::HangEpochRootUntilReleased if calls == 1 => {
+                self.release_root.notified().await;
+                Err(anyhow!("epoch root unavailable").into())
+            },
+            LoadBehavior::HangEpochRootUntilReleased => {
+                std::future::pending::<()>().await;
+                unreachable!("pending() never resolves")
+            },
         }
     }
 
@@ -236,7 +253,8 @@ impl Membership<WedgeTypes> for WedgeMembership {
             LoadBehavior::PanicOnce
             | LoadBehavior::HangEpochRoot
             | LoadBehavior::SlowDrb
-            | LoadBehavior::HangOncePastWatch => false,
+            | LoadBehavior::HangOncePastWatch
+            | LoadBehavior::HangEpochRootUntilReleased => false,
         }
     }
 
@@ -298,6 +316,7 @@ fn setup(behavior: LoadBehavior) -> (WedgeMembership, EpochMembershipCoordinator
         load_calls: Arc::default(),
         root_calls: Arc::default(),
         root_leaf: Arc::default(),
+        release_root: Arc::default(),
     };
     // Registers stake tables for FIRST_EPOCH and FIRST_EPOCH + 1.
     membership.set_first_epoch(EpochNumber::new(FIRST_EPOCH), INITIAL_DRB_RESULT);
@@ -498,6 +517,71 @@ async fn abandoned_attempt_claims_no_new_epochs() {
         "the abandoned attempt left an orphaned catchup_map entry for epoch {intermediate}: \
          {err:?}"
     );
+}
+
+/// An abandoned attempt that later resumes and *fails* must not run its
+/// cleanup. Here the first attempt parks in the epoch-root fetch until the
+/// test releases it, well after the watchdog abandoned it and a second
+/// attempt claimed the same epochs. When the released fetch then fails, the
+/// late attempt reaches `catchup_cleanup` — which must be a no-op: on unfixed
+/// code it evicts the second attempt's `catchup_map` entries (they share the
+/// keys) and fails its waiters, spawning a needless third attempt.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn late_failure_of_abandoned_attempt_does_not_evict_retry() {
+    let (membership, coordinator) = setup(LoadBehavior::HangEpochRootUntilReleased);
+    // A roomier watchdog than `setup`'s: the assertions below must all land
+    // inside the *second* attempt's watchdog budget, whose legitimate
+    // abandonment would also answer "Starting catchup".
+    let watchdog = Duration::from_secs(1);
+    let coordinator = coordinator.with_catchup_timeout(watchdog);
+    let target = EpochNumber::new(TARGET_EPOCH);
+
+    assert!(
+        coordinator.stake_table_for_epoch(Some(target)).is_err(),
+        "epoch {target} is not locally known, so this must not succeed"
+    );
+    // Attempt 1 claims the intermediate epochs and parks in the root fetch.
+    assert!(
+        wait_until(RECOVERY_BUDGET, || membership.root_fetches() >= 1).await,
+        "catchup task never reached get_epoch_root"
+    );
+
+    // Wait out attempt 1's abandonment. The first request answered with
+    // "Starting catchup" also spawns attempt 2, which re-claims the same
+    // epochs and parks in root fetch #2.
+    let retried = wait_until(RECOVERY_BUDGET, || {
+        matches!(
+            coordinator.stake_table_for_epoch(Some(target)),
+            Err(e) if format!("{e:?}").contains("Starting catchup")
+        )
+    })
+    .await;
+    assert!(retried, "attempt 1 was never abandoned");
+    assert!(
+        wait_until(RECOVERY_BUDGET, || membership.root_fetches() >= 2).await,
+        "the second attempt never reached get_epoch_root"
+    );
+
+    // Release attempt 1: its root fetch fails and it hits `catchup_cleanup`
+    // while abandoned.
+    membership.release_root.notify_one();
+
+    // Attempt 2 owns the map entries now, and the late failure must not have
+    // evicted them: every poll must keep answering "Catchup already in
+    // progress". Poll long enough for the unguarded cleanup to have certainly
+    // run, but well inside attempt 2's own watchdog budget.
+    let deadline = Instant::now() + Duration::from_millis(250);
+    while Instant::now() < deadline {
+        let Err(err) = coordinator.stake_table_for_epoch(Some(target)) else {
+            panic!("epoch {target} must still be unavailable")
+        };
+        assert!(
+            format!("{err:?}").contains("Catchup already in progress"),
+            "the abandoned attempt's late failure evicted the second attempt's catchup_map entry: \
+             {err:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
 }
 
 /// The inverse guarantee: an attempt that is merely *slow* — computing a DRB
