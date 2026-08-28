@@ -23,6 +23,8 @@ env:
   RUST_LOG: info,libp2p=off,node=error
   NEXTEST_PROFILE: slow
   CARGO_INCREMENTAL: "0"
+  # Must equal the length of the `partition` matrix below.
+  SLOW_TEST_SHARDS: "8"
 
 jobs:
   slow-tests:
@@ -64,11 +66,33 @@ jobs:
       - name: Build slow test
         run: just test-slow ${{ matrix.features }} --no-run
 
+      # Tests are serialized within a shard (threads-required = num-cpus), so a
+      # shard costs the sum of its tests. Pack by recorded cost instead of by
+      # name hash; see `just update-slow-test-timings`.
+      - name: Select tests for this shard
+        run: |
+          just list-slow ${{ matrix.features }} --message-format json > slow-test-list.json
+          python3 scripts/nextest-ci shard \
+            --list slow-test-list.json \
+            --costs .config/slow-test-timings.json \
+            --index ${{ matrix.partition }} \
+            --count ${{ env.SLOW_TEST_SHARDS }} \
+            --out slow-test-filter.txt
+
       - name: Run slow test
-        run: just test-slow ${{ matrix.features }} --no-fail-fast --partition hash:${{ matrix.partition }}/8
-        # Tests are serialized within a shard (threads-required = num-cpus) and
-        # hash partitioning is not cost-aware, so shard cost varies widely.
+        run: |
+          just test-slow-shard "$(cat slow-test-filter.txt)" \
+            ${{ matrix.features }} --no-fail-fast
         timeout-minutes: 60
+
+      - name: Upload nextest JUnit
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: slow-test-junit-${{ matrix.db }}-${{ matrix.partition }}
+          if-no-files-found: ignore
+          path: target/nextest/*/junit.xml
+          retention-days: 1
 
       - name: Show available disk space
         if: always()
@@ -104,6 +128,38 @@ jobs:
         run: just test-dev-node --no-fail-fast
         timeout-minutes: 60
 
+      - name: Upload nextest JUnit
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: slow-test-junit-dev-node
+          if-no-files-found: ignore
+          path: target/nextest/*/junit.xml
+          retention-days: 1
+
       - name: Show available disk space
         if: always()
         run: df -h
+
+  nextest-report:
+    needs: [slow-tests, espresso-dev-node-tests]
+    runs-on: ubuntu-latest
+    if: ${{ always() && !cancelled() }}
+    # Reporter only: failures here must not fail the workflow.
+    continue-on-error: true
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download JUnit artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: slow-test-junit-*
+          path: junit-artifacts
+
+      - name: Render summary
+        run: |
+          python3 scripts/nextest-ci report junit-artifacts --title "Slow Test" \
+            >> "$GITHUB_STEP_SUMMARY"

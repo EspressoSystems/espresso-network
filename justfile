@@ -169,6 +169,33 @@ test-slow *args:
     @echo 'Only slow tests are included. Use `test` for those deemed not slow. Or `test-all` for all tests.'
     cargo nextest run --profile slow --locked -p slow-tests --verbose {{args}}
 
+list-slow *args:
+    cargo nextest list --profile slow --locked -p slow-tests {{args}}
+
+# Run the slow tests matching a nextest filterset. `filter` is a single
+# argument so its `|`, `&` and `()` reach nextest instead of the shell.
+# `--no-tests=pass` keeps a shard green when it is handed an empty filterset.
+test-slow-shard filter *args:
+    cargo nextest run --profile slow --locked -p slow-tests --verbose --no-tests=pass -E "{{filter}}" {{args}}
+
+# Refresh the per-test cost map that balances the CI slow-test shards.
+update-slow-test-timings run_id="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Reads the JUnit artifacts of a Slow Test run on main. Rerun when the shard
+    # totals printed by `scripts/nextest-ci shard` drift apart, or after adding a
+    # slow test that dominates its shard.
+    run="{{run_id}}"
+    if [ -z "$run" ]; then
+      run=$(gh run list --workflow=slowtest.yaml --branch=main --event=push \
+        --status=success --limit 1 --json databaseId -q '.[0].databaseId')
+    fi
+    dir=$(mktemp -d)
+    trap 'rm -rf "$dir"' EXIT
+    gh run download "$run" --pattern 'slow-test-junit-*' --dir "$dir"
+    python3 scripts/nextest-ci timings-write --junit-dir "$dir" \
+      --out .config/slow-test-timings.json
+
 build-dev-node *args:
     cargo build -p espresso-dev-node {{args}}
 

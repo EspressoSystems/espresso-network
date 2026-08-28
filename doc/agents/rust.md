@@ -99,6 +99,10 @@ Test layers:
 - Integration (`cargo nextest run -p tests`): full system E2E in `tests/`
 - Slow (`just test-slow`): in `slow-tests/`
 
+CI shards the slow tests by recorded cost, not by name hash: `.config/slow-test-timings.json` holds a per-test duration
+and `scripts/nextest-ci shard` packs each shard from it. Run `just update-slow-test-timings` when the shard totals it
+prints have drifted apart, or after adding a slow test long enough to dominate its shard.
+
 When a `reference` test fails after a type change: if intentional, regenerate `/data/` reference files and commitment
 constants. If unintentional, revert.
 
