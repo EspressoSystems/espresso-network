@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["MAX_RATE_LIMIT_BACKOFF"],"enum":["ResponseOutcome"],"fn":["classify","fetch_finalized_block_from_rpc","is_rate_limit_body","rate_limit_backoff"]};
+window.SIDEBAR_ITEMS = {"constant":["MAX_CONSECUTIVE_RATE_LIMITS","MAX_RATE_LIMIT_BACKOFF"],"enum":["ResponseOutcome"],"fn":["error_payload","fetch_finalized_block_from_rpc","is_request_rejection","rate_limit_backoff"]};

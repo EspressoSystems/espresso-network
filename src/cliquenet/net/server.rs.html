@@ -772,7 +772,7 @@
 <a href=#772 id=772 data-nosnippet>772</a>        <span class="kw">let </span>NetAddr::Inet(ip, <span class="kw">_</span>) = <span class="kw-2">&amp;</span><span class="self">self</span>.addr <span class="kw">else </span>{
 <a href=#773 id=773 data-nosnippet>773</a>            <span class="kw">return </span><span class="bool-val">false</span>;
 <a href=#774 id=774 data-nosnippet>774</a>        };
-<a href=#775 id=775 data-nosnippet>775</a>        <span class="kw-2">*</span>ip != addr
+<a href=#775 id=775 data-nosnippet>775</a>        ip.to_canonical() != addr.to_canonical()
 <a href=#776 id=776 data-nosnippet>776</a>    }
 <a href=#777 id=777 data-nosnippet>777</a>}
 <a href=#778 id=778 data-nosnippet>778</a>
