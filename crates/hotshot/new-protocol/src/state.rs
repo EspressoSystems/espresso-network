@@ -40,7 +40,7 @@ pub struct StateRequest<T: NodeType> {
     pub block: BlockNumber,
     pub proposal: Proposal<T>,
     pub parent_commitment: Commitment<Leaf2<T>>,
-    pub payload_size: u32,
+    pub payload_size: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
