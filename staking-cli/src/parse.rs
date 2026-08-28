@@ -2,7 +2,6 @@ use std::{fmt::Display, str::FromStr as _};
 
 use derive_more::{Add, From};
 use hotshot_types::{
-    addr::NetAddr,
     light_client::StateSignKey,
     signature_key::{BLSPrivKey, BLSPubKey},
     x25519,
@@ -31,11 +30,6 @@ pub fn parse_x25519_key(s: &str) -> Result<x25519::PublicKey, String> {
 
 pub fn parse_x25519_priv_key(s: &str) -> Result<x25519::SecretKey, Tb64Error> {
     TaggedBase64::parse(s)?.try_into()
-}
-
-pub fn parse_net_addr(s: &str) -> Result<NetAddr, String> {
-    s.parse()
-        .map_err(|e| format!("Invalid network address (expected host:port): {e}"))
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Add)]
