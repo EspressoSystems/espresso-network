@@ -131,7 +131,7 @@ impl<T, C> Fetcher<T, C> {
             // we are the only ones to fetch this particular object.
             {
                 let mut in_progress = in_progress.lock().await;
-                match in_progress.entry(req) {
+                match in_progress.entry(req.clone()) {
                     Entry::Occupied(mut e) => {
                         // If the object is already being fetched, add our callback for the fetching
                         // task to execute upon completion.
@@ -153,7 +153,7 @@ impl<T, C> Fetcher<T, C> {
             let res = loop {
                 // Acquire a permit from the semaphore to rate limit the number of concurrent fetch requests
                 let permit = permit.acquire().await;
-                if let Some(res) = provider.fetch(req).await {
+                if let Some(res) = provider.fetch(req.clone()).await {
                     break Some(res);
                 }
 

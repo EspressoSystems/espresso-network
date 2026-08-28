@@ -105,6 +105,18 @@ pub trait HotShotAvailabilityApi {
         until: usize,
     ) -> anyhow::Result<Vec<Self::VidCommon>>;
 
+    /// Read the objects stored locally for a set of `(from, until)` half-open height ranges.
+    ///
+    /// Unlike the range endpoints, these serve peers catching up over a fragmented set of heights,
+    /// so they answer with whatever they have instead of failing on the first gap, and never fetch
+    /// on a miss. Absent heights are omitted; each object identifies its own height.
+    async fn get_leaf_batch(&self, ranges: Vec<(u64, u64)>) -> anyhow::Result<Vec<Self::Leaf>>;
+    async fn get_block_batch(&self, ranges: Vec<(u64, u64)>) -> anyhow::Result<Vec<Self::Block>>;
+    async fn get_vid_common_batch(
+        &self,
+        ranges: Vec<(u64, u64)>,
+    ) -> anyhow::Result<Vec<Self::VidCommon>>;
+
     async fn get_transaction_by_position(
         &self,
         height: u64,

@@ -12,7 +12,7 @@
 
 //! Requests for fetching resources.
 
-use std::{fmt::Debug, hash::Hash};
+use std::{fmt::Debug, hash::Hash, ops::Range};
 
 use derive_more::{From, Into};
 use hotshot_types::{
@@ -27,7 +27,7 @@ use crate::{
 };
 
 /// A request for a resource.
-pub trait Request<Types>: Copy + Debug + Eq + Hash + Send {
+pub trait Request<Types>: Clone + Debug + Eq + Hash + Send {
     /// The type of resource that will be returned as a successful response to this request.
     type Response: Clone + Send;
 }
@@ -110,4 +110,31 @@ pub struct Certificate2Request {
 
 impl<Types: NodeType> Request<Types> for Certificate2Request {
     type Response = Option<Certificate2<Types>>;
+}
+
+/// A request for whichever leaves a peer has in a set of height ranges.
+///
+/// Unlike the range requests, this asks about heights that need not be contiguous, and is answered
+/// with only the objects the peer holds, so it can carry a fragmented missing set in one request.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct LeafBatchRequest(pub Vec<Range<u64>>);
+
+impl<Types: NodeType> Request<Types> for LeafBatchRequest {
+    type Response = Vec<LeafQueryData<Types>>;
+}
+
+/// A request for whichever blocks a peer has in a set of height ranges.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct BlockBatchRequest(pub Vec<Range<u64>>);
+
+impl<Types: NodeType> Request<Types> for BlockBatchRequest {
+    type Response = Vec<BlockQueryData<Types>>;
+}
+
+/// A request for whichever VID common objects a peer has in a set of height ranges.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct VidCommonBatchRequest(pub Vec<Range<u64>>);
+
+impl<Types: NodeType> Request<Types> for VidCommonBatchRequest {
+    type Response = Vec<VidCommonQueryData<Types>>;
 }

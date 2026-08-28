@@ -12,7 +12,10 @@
 
 #![cfg(any(test, feature = "testing"))]
 
-use std::{ops::RangeBounds, sync::Arc};
+use std::{
+    ops::{Range, RangeBounds},
+    sync::Arc,
+};
 
 use async_lock::Mutex;
 use async_trait::async_trait;
@@ -379,6 +382,31 @@ where
     {
         self.maybe_fail_read(FailableAction::GetLeafRange).await?;
         self.inner.get_leaf_range(range).await
+    }
+
+    async fn get_leaf_batch(
+        &mut self,
+        ranges: &[Range<u64>],
+    ) -> QueryResult<Vec<LeafQueryData<Types>>> {
+        self.maybe_fail_read(FailableAction::GetLeafRange).await?;
+        self.inner.get_leaf_batch(ranges).await
+    }
+
+    async fn get_block_batch(
+        &mut self,
+        ranges: &[Range<u64>],
+    ) -> QueryResult<Vec<BlockQueryData<Types>>> {
+        self.maybe_fail_read(FailableAction::GetBlockRange).await?;
+        self.inner.get_block_batch(ranges).await
+    }
+
+    async fn get_vid_common_batch(
+        &mut self,
+        ranges: &[Range<u64>],
+    ) -> QueryResult<Vec<VidCommonQueryData<Types>>> {
+        self.maybe_fail_read(FailableAction::GetVidCommonRange)
+            .await?;
+        self.inner.get_vid_common_batch(ranges).await
     }
 
     async fn get_block_range<R>(

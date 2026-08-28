@@ -790,6 +790,35 @@ where
                 .map_err(classify_availability_error)
         };
 
+    // The batch endpoints take their height ranges in the body, decoded as VBS or JSON by
+    // Content-Type like the other POST endpoints.
+    let get_leaf_batch = |State(state): State<S>, headers: HeaderMap, body: Bytes| async move {
+        let ranges: Vec<(u64, u64)> = decode_body(&headers, &body)?;
+        let leaves = state
+            .get_leaf_batch(ranges)
+            .await
+            .map_err(classify_availability_error)?;
+        Ok::<_, ApiError>(encode_response(&headers, leaves))
+    };
+
+    let get_block_batch = |State(state): State<S>, headers: HeaderMap, body: Bytes| async move {
+        let ranges: Vec<(u64, u64)> = decode_body(&headers, &body)?;
+        let blocks = state
+            .get_block_batch(ranges)
+            .await
+            .map_err(classify_availability_error)?;
+        Ok::<_, ApiError>(encode_response(&headers, blocks))
+    };
+
+    let get_vid_common_batch = |State(state): State<S>, headers: HeaderMap, body: Bytes| async move {
+        let ranges: Vec<(u64, u64)> = decode_body(&headers, &body)?;
+        let common = state
+            .get_vid_common_batch(ranges)
+            .await
+            .map_err(classify_availability_error)?;
+        Ok::<_, ApiError>(encode_response(&headers, common))
+    };
+
     let get_transaction_by_position =
         |State(state): State<S>, Path((height, index)): Path<(u64, u64)>| async move {
             state
@@ -1186,6 +1215,40 @@ where
                     "Get VID common objects by block position, from the given `from` up to \
                      `until`.",
                 )
+            }),
+        )
+        .api_route(
+            routes::v1::LEAF_BATCH_ROUTE,
+            post_with(get_leaf_batch, |op| {
+                op.summary("Get leaves for a batch of height ranges")
+                    .description(
+                        "Get the leaves stored locally for the height ranges in the request body. \
+                         Serves peers catching up over a fragmented set of heights: heights that \
+                         are absent locally are omitted from the response rather than failing the \
+                         request, and are never fetched from other peers.",
+                    )
+            }),
+        )
+        .api_route(
+            routes::v1::BLOCK_BATCH_ROUTE,
+            post_with(get_block_batch, |op| {
+                op.summary("Get blocks for a batch of height ranges")
+                    .description(
+                        "Get the blocks stored locally for the height ranges in the request body. \
+                         Absent heights are omitted from the response and are never fetched from \
+                         other peers.",
+                    )
+            }),
+        )
+        .api_route(
+            routes::v1::VID_COMMON_BATCH_ROUTE,
+            post_with(get_vid_common_batch, |op| {
+                op.summary("Get VID common data for a batch of height ranges")
+                    .description(
+                        "Get the VID common objects stored locally for the height ranges in the \
+                         request body. Absent heights are omitted from the response and are never \
+                         fetched from other peers.",
+                    )
             }),
         )
         .api_route(
@@ -3959,6 +4022,24 @@ mod tests {
             &self,
             _from: usize,
             _until: usize,
+        ) -> anyhow::Result<Vec<Self::VidCommon>> {
+            unimplemented!()
+        }
+        async fn get_leaf_batch(
+            &self,
+            _ranges: Vec<(u64, u64)>,
+        ) -> anyhow::Result<Vec<Self::Leaf>> {
+            unimplemented!()
+        }
+        async fn get_block_batch(
+            &self,
+            _ranges: Vec<(u64, u64)>,
+        ) -> anyhow::Result<Vec<Self::Block>> {
+            unimplemented!()
+        }
+        async fn get_vid_common_batch(
+            &self,
+            _ranges: Vec<(u64, u64)>,
         ) -> anyhow::Result<Vec<Self::VidCommon>> {
             unimplemented!()
         }

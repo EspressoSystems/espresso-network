@@ -2,7 +2,7 @@
 //! data source this type wraps.
 
 use std::{
-    ops::{Bound, Deref},
+    ops::{Bound, Deref, Range},
     time::Duration,
 };
 
@@ -37,6 +37,7 @@ use hotshot_query_service::{
         QueryablePayload as _, TransactionQueryData, TransactionWithProofQueryData,
         VidCommonQueryData,
     },
+    data_source::{VersionedDataSource as _, storage::AvailabilityStorage as _},
     explorer::{
         BlockIdentifier, BlockRange, ExplorerDataSource as _, GetBlockSummariesRequest,
         GetTransactionSummariesRequest, TransactionIdentifier, TransactionRange,
@@ -80,6 +81,9 @@ use super::{
 ///
 /// Matches the `hotshot_query_service` availability API default.
 const FETCH_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// The most height ranges one batch request may carry.
+const MAX_BATCH_RANGES: usize = 100;
 
 /// Node API state implementation
 ///
@@ -812,6 +816,40 @@ fn enforce_range(from: usize, until: usize, limit: usize) -> anyhow::Result<()> 
     Ok(())
 }
 
+/// Check a batch request against the same per-request object limit the range endpoints enforce,
+/// and convert it for storage.
+///
+/// The ranges become one `WHERE` clause with two bound parameters each, so the count is capped as
+/// well as the total heights: a batch of many tiny ranges is cheap in objects but not in query
+/// parameters, and SQLite in particular has a low ceiling on those.
+fn validate_batch(ranges: Vec<(u64, u64)>, limit: usize) -> anyhow::Result<Vec<Range<u64>>> {
+    if ranges.len() > MAX_BATCH_RANGES {
+        return Err(range_exceeded(format!(
+            "batch of more than {MAX_BATCH_RANGES} ranges"
+        )));
+    }
+
+    let mut total = 0usize;
+    for (from, until) in &ranges {
+        if until <= from {
+            return Err(bad_request(format!(
+                "empty or inverted range {from}..{until}"
+            )));
+        }
+        total += (until - from) as usize;
+        if total > limit {
+            return Err(range_exceeded(format!(
+                "batch of more than {limit} heights"
+            )));
+        }
+    }
+
+    Ok(ranges
+        .into_iter()
+        .map(|(from, until)| from..until)
+        .collect())
+}
+
 // Range limits for list endpoints, read from `hotshot_query_service`'s `Options` (their only
 // remaining declaration) so a dependency bump that changes the defaults changes enforcement too.
 fn small_object_range_limit() -> usize {
@@ -826,7 +864,12 @@ fn large_object_range_limit() -> usize {
 impl<D> HotShotAvailabilityApi for NodeApiStateImpl<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
-    D::Target: AvailabilityDataSource<SeqTypes> + Send + Sync,
+    D::Target: AvailabilityDataSource<SeqTypes>
+        + hotshot_query_service::data_source::VersionedDataSource
+        + Send
+        + Sync,
+    for<'a> <D::Target as hotshot_query_service::data_source::VersionedDataSource>::ReadOnly<'a>:
+        hotshot_query_service::data_source::storage::AvailabilityStorage<SeqTypes>,
 {
     type Leaf = LeafQueryData<SeqTypes>;
     type Block = BlockQueryData<SeqTypes>;
@@ -1002,6 +1045,27 @@ where
             i += 1;
         }
         Ok(results)
+    }
+
+    async fn get_leaf_batch(&self, ranges: Vec<(u64, u64)>) -> anyhow::Result<Vec<Self::Leaf>> {
+        let ranges = validate_batch(ranges, small_object_range_limit())?;
+        let mut tx = self.data_source.read().await?;
+        Ok(tx.get_leaf_batch(&ranges).await?)
+    }
+
+    async fn get_block_batch(&self, ranges: Vec<(u64, u64)>) -> anyhow::Result<Vec<Self::Block>> {
+        let ranges = validate_batch(ranges, large_object_range_limit())?;
+        let mut tx = self.data_source.read().await?;
+        Ok(tx.get_block_batch(&ranges).await?)
+    }
+
+    async fn get_vid_common_batch(
+        &self,
+        ranges: Vec<(u64, u64)>,
+    ) -> anyhow::Result<Vec<Self::VidCommon>> {
+        let ranges = validate_batch(ranges, small_object_range_limit())?;
+        let mut tx = self.data_source.read().await?;
+        Ok(tx.get_vid_common_batch(&ranges).await?)
     }
 
     async fn get_transaction_by_position(
@@ -2700,6 +2764,40 @@ mod tests {
                 Some(AvailabilityError::RangeExceeded(_))
             ));
         }
+    }
+
+    #[test]
+    fn batch_within_limits_is_allowed() {
+        let ranges = validate_batch(vec![(0, 5), (10, 12)], 100).unwrap();
+        assert_eq!(ranges, [0..5, 10..12]);
+        validate_batch(vec![], 100).unwrap();
+    }
+
+    #[test]
+    fn oversized_or_empty_batch_ranges_are_rejected() {
+        // More heights than the object limit.
+        let err = validate_batch(vec![(0, 60), (100, 160)], 100).unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<AvailabilityError>(),
+            Some(AvailabilityError::RangeExceeded(_))
+        ));
+
+        // More ranges than the query can bind parameters for, even though each is one height.
+        let many = (0..MAX_BATCH_RANGES as u64 + 1)
+            .map(|i| (i * 2, i * 2 + 1))
+            .collect();
+        let err = validate_batch(many, 10_000).unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<AvailabilityError>(),
+            Some(AvailabilityError::RangeExceeded(_))
+        ));
+
+        // An empty range would otherwise reach the query builder as a contradictory bound.
+        let err = validate_batch(vec![(5, 5)], 100).unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<AvailabilityError>(),
+            Some(AvailabilityError::BadRequest(_))
+        ));
     }
 
     // Tripwire: the enforced and advertised limits come from `hotshot_query_service`'s

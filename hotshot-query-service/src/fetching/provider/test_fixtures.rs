@@ -18,14 +18,15 @@
 //! TaggedBase64 payload-hash params, the default fetch timeout, missing data as 404, and the
 //! crate-level [`Error`] envelope on the wire.
 
-use std::{marker::PhantomData, sync::Arc, time::Duration};
+use std::{fmt::Display, marker::PhantomData, ops::Range, sync::Arc, time::Duration};
 
 use axum::{
     Router,
+    body::Bytes,
     extract::{Path, State},
     http::{HeaderMap, StatusCode as HttpStatusCode, Uri},
     response::Response,
-    routing::get,
+    routing::{get, post},
 };
 use disco_types::status::StatusCode;
 use futures::{StreamExt, TryStreamExt};
@@ -44,6 +45,7 @@ use crate::{
     availability::{
         self, AvailabilityDataSource, BlockId, FetchBlockSnafu, FetchLeafSnafu, LeafId,
     },
+    data_source::{VersionedDataSource, storage::AvailabilityStorage},
     testing::mocks::MockTypes,
 };
 
@@ -128,6 +130,92 @@ where
         .try_collect::<Vec<_>>()
         .await
         .map_err(Error::from);
+    respond::<Ver, _>(&headers, result)
+}
+
+/// Decode a batch request body into the height ranges it asks for.
+fn batch_ranges<Ver: StaticVersionType + 'static>(
+    headers: &HeaderMap,
+    body: &[u8],
+) -> Result<Vec<Range<u64>>, Error> {
+    let ranges =
+        wire::decode_body::<Ver, Vec<(u64, u64)>>(headers, body).map_err(|err| Error::Custom {
+            message: format!("invalid batch request: {err}"),
+            status: StatusCode::BAD_REQUEST,
+        })?;
+    Ok(ranges
+        .into_iter()
+        .map(|(from, until)| from..until)
+        .collect())
+}
+
+fn storage_error(err: impl Display) -> Error {
+    Error::Custom {
+        message: format!("batch query failed: {err}"),
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+async fn get_leaf_batch<Ver, D>(
+    State(ds): State<Arc<D>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response
+where
+    Ver: StaticVersionType + 'static,
+    D: VersionedDataSource + Send + Sync + 'static,
+    for<'a> D::ReadOnly<'a>: AvailabilityStorage<MockTypes>,
+{
+    let result = match batch_ranges::<Ver>(&headers, &body) {
+        Ok(ranges) => match ds.read().await {
+            Ok(mut tx) => tx.get_leaf_batch(&ranges).await.map_err(storage_error),
+            Err(err) => Err(storage_error(err)),
+        },
+        Err(err) => Err(err),
+    };
+    respond::<Ver, _>(&headers, result)
+}
+
+async fn get_block_batch<Ver, D>(
+    State(ds): State<Arc<D>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response
+where
+    Ver: StaticVersionType + 'static,
+    D: VersionedDataSource + Send + Sync + 'static,
+    for<'a> D::ReadOnly<'a>: AvailabilityStorage<MockTypes>,
+{
+    let result = match batch_ranges::<Ver>(&headers, &body) {
+        Ok(ranges) => match ds.read().await {
+            Ok(mut tx) => tx.get_block_batch(&ranges).await.map_err(storage_error),
+            Err(err) => Err(storage_error(err)),
+        },
+        Err(err) => Err(err),
+    };
+    respond::<Ver, _>(&headers, result)
+}
+
+async fn get_vid_common_batch<Ver, D>(
+    State(ds): State<Arc<D>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response
+where
+    Ver: StaticVersionType + 'static,
+    D: VersionedDataSource + Send + Sync + 'static,
+    for<'a> D::ReadOnly<'a>: AvailabilityStorage<MockTypes>,
+{
+    let result = match batch_ranges::<Ver>(&headers, &body) {
+        Ok(ranges) => match ds.read().await {
+            Ok(mut tx) => tx
+                .get_vid_common_batch(&ranges)
+                .await
+                .map_err(storage_error),
+            Err(err) => Err(storage_error(err)),
+        },
+        Err(err) => Err(err),
+    };
     respond::<Ver, _>(&headers, result)
 }
 
@@ -293,11 +381,15 @@ async fn no_route<Ver: StaticVersionType + 'static>(headers: HeaderMap, uri: Uri
 fn availability_routes<Ver, D>(data_source: D) -> Router
 where
     Ver: StaticVersionType + 'static,
-    D: AvailabilityDataSource<MockTypes> + Send + Sync + 'static,
+    D: AvailabilityDataSource<MockTypes> + VersionedDataSource + Send + Sync + 'static,
+    for<'a> D::ReadOnly<'a>: AvailabilityStorage<MockTypes>,
 {
     Router::new()
         .route("/leaf/{height}", get(get_leaf::<Ver, D>))
+        .route("/leaf/batch", post(get_leaf_batch::<Ver, D>))
         .route("/leaf/{from}/{until}", get(get_leaf_range::<Ver, D>))
+        .route("/block/batch", post(get_block_batch::<Ver, D>))
+        .route("/vid/common/batch", post(get_vid_common_batch::<Ver, D>))
         .route(
             "/block/payload-hash/{hash}",
             get(get_block_by_payload_hash::<Ver, D>),
@@ -313,6 +405,20 @@ where
             "/vid/common/{from}/{until}",
             get(get_vid_common_range::<Ver, D>),
         )
+        .with_state(Arc::new(data_source))
+}
+
+/// Serve only the batch routes, for tests that must reach a peer through them and no other way.
+pub(crate) fn batch_routes<Ver, D>(data_source: D) -> Router
+where
+    Ver: StaticVersionType + 'static,
+    D: VersionedDataSource + Send + Sync + 'static,
+    for<'a> D::ReadOnly<'a>: AvailabilityStorage<MockTypes>,
+{
+    Router::new()
+        .route("/leaf/batch", post(get_leaf_batch::<Ver, D>))
+        .route("/block/batch", post(get_block_batch::<Ver, D>))
+        .route("/vid/common/batch", post(get_vid_common_batch::<Ver, D>))
         .with_state(Arc::new(data_source))
 }
 
@@ -342,7 +448,8 @@ pub(crate) async fn serve(router: Router) -> (u16, JoinHandle<()>) {
 pub(crate) async fn serve_availability<Ver, D>(_: Ver, data_source: D) -> (u16, JoinHandle<()>)
 where
     Ver: StaticVersionType + 'static,
-    D: AvailabilityDataSource<MockTypes> + Send + Sync + 'static,
+    D: AvailabilityDataSource<MockTypes> + VersionedDataSource + Send + Sync + 'static,
+    for<'a> D::ReadOnly<'a>: AvailabilityStorage<MockTypes>,
 {
     serve(app::<Ver>(availability_routes::<Ver, _>(data_source))).await
 }

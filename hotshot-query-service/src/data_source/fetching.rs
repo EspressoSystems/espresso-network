@@ -107,7 +107,7 @@ use crate::{
         PayloadMetadata, PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash,
         UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
     },
-    data_source::fetching::{leaf::RangeRequest, vid::VidCommonRangeFetcher},
+    data_source::fetching::vid::VidCommonRangeFetcher,
     explorer::{self, ExplorerDataSource},
     fetching::{self, NonEmptyRange, Provider, request},
     merklized_state::{
@@ -124,6 +124,7 @@ use crate::{
     types::HeightIndexed,
 };
 
+mod batch;
 mod block;
 mod cert2;
 mod header;
@@ -132,6 +133,7 @@ mod transaction;
 mod vid;
 
 use self::{
+    batch::{Batch, BatchRequest},
     block::{PayloadFetcher, PayloadRangeFetcher},
     cert2::Cert2Fetcher,
     leaf::{LeafFetcher, LeafRangeFetcher},
@@ -1113,9 +1115,9 @@ where
         // Note the "someone" who later fetches the object and adds it to storage may be an active
         // fetch triggered by this very requests, in cases where that is possible, but it need not
         // be.
-        let passive_fetch = T::passive_fetch(&self.notifiers, req).await;
+        let passive_fetch = T::passive_fetch(&self.notifiers, req.clone()).await;
 
-        match self.try_get(req).await {
+        match self.try_get(req.clone()).await {
             Ok(Some(obj)) => return Fetch::Ready(obj),
             Ok(None) => return passive(req, passive_fetch),
             Err(err) => {
@@ -1132,8 +1134,10 @@ where
         let fetcher = self.clone();
         let mut backoff = fetcher.backoff.clone();
         let span = tracing::warn_span!("get retry", ?req);
+        let retry_req = req.clone();
         spawn(
             async move {
+                let req = retry_req;
                 backoff.reset();
                 let mut delay = backoff.next_backoff().unwrap_or(Duration::from_secs(1));
                 loop {
@@ -1142,7 +1146,7 @@ where
                         // the database is down, we might have a lot of these tasks running, and if
                         // they all hit the DB at once, they are only going to make things worse.
                         let _guard = fetcher.retry_semaphore.acquire().await;
-                        fetcher.try_get(req).await
+                        fetcher.try_get(req.clone()).await
                     };
                     match res {
                         Ok(Some(obj)) => {
@@ -1197,7 +1201,7 @@ where
         T: Fetchable<Types>,
     {
         let mut tx = self.read().await.context("opening read transaction")?;
-        match T::load(&mut tx, req).await {
+        match T::load(&mut tx, req.clone()).await {
             Ok(t) => Ok(Some(t)),
             Err(QueryError::Missing | QueryError::NotFound) => {
                 // We successfully queried the database, but the object wasn't there. Try to
@@ -1531,12 +1535,35 @@ where
         let heights = Heights::load(tx)
             .await
             .context("failed to load heights; cannot definitively say object might exist")?;
-        if req.might_exist(heights) {
+        if req.clone().might_exist(heights) {
             T::active_fetch(tx, self.clone(), req).await?;
         } else {
             tracing::debug!("not fetching object {req:?} that cannot exist at {heights:?}");
         }
         Ok(())
+    }
+
+    /// Store objects fetched at scattered heights, one write per contiguous run.
+    async fn store_runs<T: HeightIndexed>(&self, objs: Vec<T>) -> Vec<NonEmptyRange<T>>
+    where
+        NonEmptyRange<T>: Storable<Types>,
+    {
+        let mut runs: Vec<Vec<T>> = vec![];
+        for obj in objs {
+            match runs.last_mut() {
+                Some(run) if run.last().unwrap().height() + 1 == obj.height() => run.push(obj),
+                _ => runs.push(vec![obj]),
+            }
+        }
+
+        let mut stored = vec![];
+        for run in runs {
+            if let Ok(range) = NonEmptyRange::new(run) {
+                self.store_and_notify(&range).await;
+                stored.push(range);
+            }
+        }
+        stored
     }
 
     /// Proactively search for and retrieve missing objects.
@@ -1570,61 +1597,49 @@ where
                 metrics.missing_blocks.set(sync_status.blocks.missing);
                 metrics.missing_vid.set(sync_status.vid_common.missing);
 
-                // Fetch missing blocks. This will also trigger a fetch for the corresponding
-                // missing leaves.
-                for range in sync_status.blocks.ranges {
-                    metrics.scanned_blocks.set(range.start);
-                    if range.status != SyncStatus::Missing {
-                        metrics.scanned_blocks.set(range.end);
-                        continue;
-                    }
+                // Fetch missing blocks, which also fetches the leaves they are stored against.
+                // Chunks are fetched in batches, so a fragmented missing set costs a round trip
+                // per batch rather than one per fragment.
+                let chunks = scan_chunks(&sync_status.blocks.ranges, chunk_size);
+                // A batch spans scattered heights, so the gauge counts heights accounted for
+                // rather than a scan position: credit the present and pruned ones up front so it
+                // still converges to the block height. Saturating because the fs backend can
+                // report missing ranges that overlap across sync-status chunks.
+                let height = sync_status.blocks.ranges.last().map(|r| r.end).unwrap_or(0);
+                let to_fetch: usize = chunks.iter().map(|chunk| chunk.len()).sum();
+                metrics.scanned_blocks.set(height.saturating_sub(to_fetch));
+                for batch in batches(&chunks, chunk_size) {
+                    let heights: u64 = batch.iter().map(|range| range.end - range.start).sum();
+                    tracing::info!(ranges = batch.len(), heights, "fetching missing blocks");
 
-                    tracing::info!(?range, "fetching missing block range");
-
-                    // Break the range into manageable, aligned chunks (which improves cacheability
-                    // for the upstream server).
-                    for chunk in range_chunks_aligned(range.start..range.end, chunk_size) {
-                        tracing::info!(?chunk, "fetching missing block chunk");
-
-                        // Fetching the payload metadata is enough to trigger an active fetch of the
-                        // corresponding leaf and the full block if they are missing.
-                        self.get::<NonEmptyRange<BlockQueryData<Types>>>(RangeRequest {
-                            start: chunk.start as u64,
-                            end: chunk.end as u64,
-                        })
+                    self.get::<Batch<BlockQueryData<Types>>>(BatchRequest(batch))
                         .await
                         .await;
 
-                        metrics
-                            .missing_blocks
-                            .update((chunk.start as i64) - (chunk.end as i64));
-                        metrics.scanned_blocks.set(chunk.end);
-                    }
+                    metrics.missing_blocks.update(-(heights as i64));
+                    metrics.scanned_blocks.update(heights as i64);
                 }
 
                 // Do the same for VID.
-                for range in sync_status.vid_common.ranges {
-                    metrics.scanned_vid.set(range.start);
-                    if range.status != SyncStatus::Missing {
-                        metrics.scanned_vid.set(range.end);
-                        continue;
-                    }
+                let chunks = scan_chunks(&sync_status.vid_common.ranges, chunk_size);
+                let height = sync_status
+                    .vid_common
+                    .ranges
+                    .last()
+                    .map(|r| r.end)
+                    .unwrap_or(0);
+                let to_fetch: usize = chunks.iter().map(|chunk| chunk.len()).sum();
+                metrics.scanned_vid.set(height.saturating_sub(to_fetch));
+                for batch in batches(&chunks, chunk_size) {
+                    let heights: u64 = batch.iter().map(|range| range.end - range.start).sum();
+                    tracing::info!(ranges = batch.len(), heights, "fetching missing VID");
 
-                    tracing::info!(?range, "fetching missing VID range");
-                    for chunk in range_chunks_aligned(range.start..range.end, chunk_size) {
-                        tracing::info!(?chunk, "fetching missing VID chunk");
-                        self.get::<NonEmptyRange<VidCommonQueryData<Types>>>(RangeRequest {
-                            start: chunk.start as u64,
-                            end: chunk.end as u64,
-                        })
+                    self.get::<Batch<VidCommonQueryData<Types>>>(BatchRequest(batch))
                         .await
                         .await;
 
-                        metrics
-                            .missing_vid
-                            .update((chunk.start as i64) - (chunk.end as i64));
-                        metrics.scanned_vid.set(chunk.end);
-                    }
+                    metrics.missing_vid.update(-(heights as i64));
+                    metrics.scanned_vid.update(heights as i64);
                 }
 
                 tracing::info!("completed proactive scan, will scan again in {interval:?}");
@@ -2207,6 +2222,9 @@ pub trait AvailabilityProvider<Types: NodeType>:
     + Provider<Types, request::VidCommonRequest>
     + Provider<Types, request::VidCommonRangeRequest>
     + Provider<Types, request::Certificate2Request>
+    + Provider<Types, request::LeafBatchRequest>
+    + Provider<Types, request::BlockBatchRequest>
+    + Provider<Types, request::VidCommonBatchRequest>
     + Sync
     + 'static
 {
@@ -2219,12 +2237,15 @@ impl<Types: NodeType, P> AvailabilityProvider<Types> for P where
         + Provider<Types, request::VidCommonRequest>
         + Provider<Types, request::VidCommonRangeRequest>
         + Provider<Types, request::Certificate2Request>
+        + Provider<Types, request::LeafBatchRequest>
+        + Provider<Types, request::BlockBatchRequest>
+        + Provider<Types, request::VidCommonBatchRequest>
         + Sync
         + 'static
 {
 }
 
-trait FetchRequest: Copy + Debug + Send + Sync + 'static {
+trait FetchRequest: Clone + Debug + Send + Sync + 'static {
     /// Indicate whether it is possible this object could exist.
     ///
     /// This can filter out requests quickly for objects that cannot possibly exist, such as
@@ -2431,6 +2452,38 @@ where
     first.into_iter().chain(range_chunks(start..end, alignment))
 }
 
+/// The fetches for one scanner pass: every missing run, broken into aligned chunks.
+fn scan_chunks(ranges: &[SyncStatusRange], chunk_size: usize) -> Vec<Range<usize>> {
+    ranges
+        .iter()
+        .filter(|range| range.status == SyncStatus::Missing)
+        .flat_map(|range| range_chunks_aligned(range.start..range.end, chunk_size))
+        .collect()
+}
+
+/// Group chunks into requests of one chunk's worth of objects.
+///
+/// A fragmented missing set is mostly short chunks, and this is what keeps them from costing a
+/// round trip each. A batch stops at the number of objects a single chunk would have fetched, which
+/// also bounds how many ranges it carries, since every range covers at least one height.
+fn batches(chunks: &[Range<usize>], chunk_size: usize) -> Vec<Vec<Range<u64>>> {
+    let mut batches: Vec<Vec<Range<u64>>> = vec![];
+    let mut heights = 0;
+    for chunk in chunks {
+        if batches.is_empty() || heights + chunk.len() > chunk_size {
+            batches.push(vec![]);
+            heights = 0;
+        }
+
+        batches
+            .last_mut()
+            .unwrap()
+            .push(chunk.start as u64..chunk.end as u64);
+        heights += chunk.len();
+    }
+    batches
+}
+
 /// Transform a range to explicit start (inclusive) and end (exclusive) bounds.
 fn range_to_bounds(range: impl RangeBounds<usize>) -> Range<usize> {
     let start = match range.start_bound() {
@@ -2511,9 +2564,12 @@ struct ScannerMetrics {
     running: Box<dyn Gauge>,
     /// The current number that is running.
     current_scan: Box<dyn Gauge>,
-    /// Number of blocks processed in the current scan.
+    /// Block heights accounted for (skipped or fetched) in the current scan.
+    ///
+    /// Chunks complete out of order, so this is a count converging to the block height, not a
+    /// scan position.
     scanned_blocks: Box<dyn Gauge>,
-    /// Number of VID entries processed in the current scan.
+    /// Like `scanned_blocks`, for VID entries.
     scanned_vid: Box<dyn Gauge>,
     /// The number of missing blocks discovered and not yet resolved in the current scan.
     missing_blocks: Box<dyn Gauge>,
@@ -2707,7 +2763,7 @@ mod test {
         data::vid_commitment, traits::block_contents::EncodeBytes, utils::BuilderCommitment,
     };
 
-    use super::*;
+    use super::{leaf::RangeRequest, *};
     use crate::{
         data_source::{
             sql::testing::TmpDb,
@@ -2777,6 +2833,79 @@ mod test {
             range_chunks_aligned(1.., 2).take(5).collect::<Vec<_>>(),
             [1..2, 2..4, 4..6, 6..8, 8..10]
         );
+    }
+
+    fn missing(r: Range<usize>) -> SyncStatusRange {
+        SyncStatusRange {
+            start: r.start,
+            end: r.end,
+            status: SyncStatus::Missing,
+        }
+    }
+
+    fn present(r: Range<usize>) -> SyncStatusRange {
+        SyncStatusRange {
+            start: r.start,
+            end: r.end,
+            status: SyncStatus::Present,
+        }
+    }
+
+    fn pruned(r: Range<usize>) -> SyncStatusRange {
+        SyncStatusRange {
+            start: r.start,
+            end: r.end,
+            status: SyncStatus::Pruned,
+        }
+    }
+
+    #[test]
+    fn test_scan_chunks() {
+        #![allow(clippy::single_range_in_vec_init)]
+
+        // Only missing ranges produce fetches.
+        assert!(scan_chunks(&[], 100).is_empty());
+        assert!(scan_chunks(&[present(0..10)], 100).is_empty());
+        assert!(scan_chunks(&[pruned(0..10), present(10..20)], 100).is_empty());
+        assert_eq!(
+            scan_chunks(&[pruned(0..10), missing(10..15)], 100),
+            [10..15]
+        );
+
+        // A run spanning multiple chunks is broken up aligned.
+        assert_eq!(
+            scan_chunks(&[present(0..3), missing(3..25), present(25..30)], 10),
+            [3..10, 10..20, 20..25]
+        );
+
+        // Fragmented runs each produce their own chunks.
+        assert_eq!(
+            scan_chunks(
+                &[
+                    missing(0..5),
+                    present(5..6),
+                    missing(6..10),
+                    pruned(10..12),
+                    missing(12..30),
+                ],
+                10
+            ),
+            [0..5, 6..10, 12..20, 20..30]
+        );
+    }
+
+    #[test]
+    fn test_batches() {
+        #![allow(clippy::single_range_in_vec_init)]
+
+        // Short chunks accumulate until they add up to one chunk's worth of objects; a chunk that
+        // fills a batch on its own gets one of its own.
+        assert_eq!(
+            batches(&[0..2, 5..7, 20..30, 40..49, 60..62], 10),
+            [vec![0..2, 5..7], vec![20..30], vec![40..49], vec![60..62]]
+        );
+
+        assert!(batches(&[], 10).is_empty());
     }
 
     #[test]

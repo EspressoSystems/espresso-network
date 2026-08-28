@@ -7,7 +7,8 @@ use hotshot_query_service::{
     fetching::{
         NonEmptyRange, Provider,
         request::{
-            BlockRangeRequest, Certificate2Request, LeafRangeRequest, LeafRequest, PayloadRequest,
+            BlockBatchRequest, BlockRangeRequest, Certificate2Request, LeafBatchRequest,
+            LeafRangeRequest, LeafRequest, PayloadRequest, VidCommonBatchRequest,
             VidCommonRangeRequest, VidCommonRequest,
         },
     },
@@ -169,5 +170,43 @@ where
                 None
             },
         }
+    }
+}
+
+// Batch responses would arrive without the per-object consensus verification the light client
+// exists to do, so it declines them and serves the scanner through the range fetches above.
+#[async_trait]
+impl<P, S> Provider<SeqTypes, LeafBatchRequest> for LightClient<P, S>
+where
+    P: Storage,
+    S: Client,
+{
+    async fn fetch(&self, _req: LeafBatchRequest) -> Option<Vec<LeafQueryData<SeqTypes>>> {
+        None
+    }
+}
+
+#[async_trait]
+impl<P, S> Provider<SeqTypes, BlockBatchRequest> for LightClient<P, S>
+where
+    P: Storage,
+    S: Client,
+{
+    async fn fetch(&self, _req: BlockBatchRequest) -> Option<Vec<BlockQueryData<SeqTypes>>> {
+        None
+    }
+}
+
+#[async_trait]
+impl<P, S> Provider<SeqTypes, VidCommonBatchRequest> for LightClient<P, S>
+where
+    P: Storage,
+    S: Client,
+{
+    async fn fetch(
+        &self,
+        _req: VidCommonBatchRequest,
+    ) -> Option<Vec<VidCommonQueryData<SeqTypes>>> {
+        None
     }
 }

@@ -102,6 +102,10 @@ pub mod v1 {
         "/v1/availability/vid/common/payload-hash/{payload_hash}";
     pub const VID_COMMON_RANGE_ROUTE: &str = "/v1/availability/vid/common/{from}/{until}";
 
+    pub const LEAF_BATCH_ROUTE: &str = "/v1/availability/leaf/batch";
+    pub const BLOCK_BATCH_ROUTE: &str = "/v1/availability/block/batch";
+    pub const VID_COMMON_BATCH_ROUTE: &str = "/v1/availability/vid/common/batch";
+
     pub const TRANSACTION_BY_POSITION_NOPROOF_ROUTE: &str =
         "/v1/availability/transaction/{height}/{index}/noproof";
     pub const TRANSACTION_BY_HASH_NOPROOF_ROUTE: &str =
@@ -476,6 +480,11 @@ pub mod v1 {
         payload_hash
     );
     path_fn!(vid_common_range, VID_COMMON_RANGE_ROUTE, from, until);
+
+    // Availability — batches of height ranges
+    path_fn!(leaf_batch, LEAF_BATCH_ROUTE);
+    path_fn!(block_batch, BLOCK_BATCH_ROUTE);
+    path_fn!(vid_common_batch, VID_COMMON_BATCH_ROUTE);
 
     // Availability — transactions
     path_fn!(

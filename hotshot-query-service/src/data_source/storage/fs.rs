@@ -19,7 +19,7 @@ use std::{
     },
     hash::Hash,
     iter,
-    ops::{Bound, Deref, RangeBounds},
+    ops::{Bound, Deref, Range, RangeBounds},
     path::Path,
 };
 
@@ -573,6 +573,49 @@ where
         R: RangeBounds<usize> + Send,
     {
         Ok(range_iter(self.inner.leaf_storage.iter(), range).collect())
+    }
+
+    // Ranges here are slices of an in-memory index, so reading them one at a time costs no more
+    // than reading them together.
+    async fn get_leaf_batch(
+        &mut self,
+        ranges: &[Range<u64>],
+    ) -> QueryResult<Vec<LeafQueryData<Types>>> {
+        let mut leaves = vec![];
+        for range in ranges {
+            let found = range_iter(
+                self.inner.leaf_storage.iter(),
+                range.start as usize..range.end as usize,
+            );
+            leaves.extend(found.flatten());
+        }
+        Ok(leaves)
+    }
+
+    async fn get_block_batch(
+        &mut self,
+        ranges: &[Range<u64>],
+    ) -> QueryResult<Vec<BlockQueryData<Types>>> {
+        let mut blocks = vec![];
+        for range in ranges {
+            for height in range.start as usize..range.end as usize {
+                blocks.extend(self.get_block(BlockId::Number(height)).await);
+            }
+        }
+        Ok(blocks)
+    }
+
+    async fn get_vid_common_batch(
+        &mut self,
+        ranges: &[Range<u64>],
+    ) -> QueryResult<Vec<VidCommonQueryData<Types>>> {
+        let mut common = vec![];
+        for range in ranges {
+            for height in range.start as usize..range.end as usize {
+                common.extend(self.get_vid_common(BlockId::Number(height)).await);
+            }
+        }
+        Ok(common)
     }
 
     async fn get_block_range<R>(
