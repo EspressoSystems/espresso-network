@@ -18,6 +18,7 @@ use espresso_types::{
     v0_3::{ChainConfig, RegisteredValidator},
 };
 
+pub mod any;
 pub mod fs;
 pub mod no_storage;
 mod persistence_metrics;

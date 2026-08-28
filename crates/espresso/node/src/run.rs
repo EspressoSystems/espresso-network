@@ -1,6 +1,6 @@
 use clap::Parser;
 use espresso_telemetry as telemetry;
-use espresso_types::traits::NullEventConsumer;
+use espresso_types::traits::{EventConsumer, NullEventConsumer};
 use futures::future::FutureExt;
 use hotshot_types::traits::metrics::NoMetrics;
 use url::Url;
@@ -10,8 +10,9 @@ use super::{
     api::{self, data_source::DataSourceOptions},
     context::SequencerContext,
     init_node, network,
-    options::{Modules, Options, PublicNodeConfig},
-    persistence,
+    options::{Identity, Modules, Options, PublicNodeConfig},
+    persistence::{self, any::AnyPersistence},
+    proposal_fetcher::ProposalFetcherConfig,
 };
 use crate::{default_telemetry_endpoint, keyset::KeySet};
 
@@ -169,7 +170,7 @@ pub async fn init_with_storage<S>(
     opt: Options,
     mut storage_opt: S,
     public_node_config: PublicNodeConfig,
-) -> anyhow::Result<SequencerContext<network::Production, S::Persistence>>
+) -> anyhow::Result<SequencerContext<network::Production, AnyPersistence>>
 where
     S: DataSourceOptions,
 {
@@ -229,43 +230,82 @@ where
 
     let proposal_fetcher_config = opt.proposal_fetcher_config;
 
-    let persistence = storage_opt.create().await?;
+    let persistence = storage_opt.create().await?.into();
+    let http_opt = api_options(modules, &storage_opt, public_node_config);
 
-    // Initialize HotShot. If the user requested the HTTP module, we must initialize the handle in
-    // a special way, in order to populate the API with consensus metrics. Otherwise, we initialize
-    // the handle directly, with no metrics.
-    let ctx = match modules.http {
+    init_node_with_api(
+        genesis,
+        network_params,
+        persistence,
+        l1_params,
+        http_opt,
+        opt.is_da,
+        opt.identity,
+        proposal_fetcher_config,
+    )
+    .await
+}
+
+/// Assemble the API options from the requested modules, or `None` if no HTTP module was requested.
+fn api_options<S>(
+    modules: Modules,
+    storage_opt: &S,
+    public_node_config: PublicNodeConfig,
+) -> Option<api::Options>
+where
+    S: DataSourceOptions,
+{
+    let mut http_opt = api::Options::from(modules.http?);
+    if let Some(query) = modules.query {
+        http_opt = storage_opt.enable_query_module(http_opt, query);
+    }
+    if let Some(submit) = modules.submit {
+        http_opt = http_opt.submit(submit);
+    }
+    if let Some(status) = modules.status {
+        http_opt = http_opt.status(status);
+    }
+
+    if let Some(catchup) = modules.catchup {
+        http_opt = http_opt.catchup(catchup);
+    }
+    if let Some(hotshot_events) = modules.hotshot_events {
+        http_opt = http_opt.hotshot_events(hotshot_events);
+    }
+    if let Some(explorer) = modules.explorer {
+        http_opt = http_opt.explorer(explorer);
+    }
+    if let Some(light_client) = modules.light_client {
+        http_opt = http_opt.light_client(light_client);
+    }
+    if let Some(config) = modules.config {
+        http_opt = http_opt
+            .config(config)
+            .public_node_config(public_node_config);
+    }
+    Some(http_opt)
+}
+
+/// Initialize HotShot. If the user requested the HTTP module, we must initialize the handle in a
+/// special way, in order to populate the API with consensus metrics. Otherwise, we initialize the
+/// handle directly, with no metrics.
+///
+/// This is deliberately free of type parameters: everything it reaches (consensus, the API, the
+/// query service) is generic over the persistence type, and would otherwise be compiled once per
+/// storage backend.
+#[allow(clippy::too_many_arguments)]
+async fn init_node_with_api(
+    genesis: Genesis,
+    network_params: NetworkParams,
+    persistence: AnyPersistence,
+    l1_params: L1Params,
+    http_opt: Option<api::Options>,
+    is_da: bool,
+    identity: Identity,
+    proposal_fetcher_config: ProposalFetcherConfig,
+) -> anyhow::Result<SequencerContext<network::Production, AnyPersistence>> {
+    match http_opt {
         Some(http_opt) => {
-            // Add optional API modules as requested.
-            let mut http_opt = api::Options::from(http_opt);
-            if let Some(query) = modules.query {
-                http_opt = storage_opt.enable_query_module(http_opt, query);
-            }
-            if let Some(submit) = modules.submit {
-                http_opt = http_opt.submit(submit);
-            }
-            if let Some(status) = modules.status {
-                http_opt = http_opt.status(status);
-            }
-
-            if let Some(catchup) = modules.catchup {
-                http_opt = http_opt.catchup(catchup);
-            }
-            if let Some(hotshot_events) = modules.hotshot_events {
-                http_opt = http_opt.hotshot_events(hotshot_events);
-            }
-            if let Some(explorer) = modules.explorer {
-                http_opt = http_opt.explorer(explorer);
-            }
-            if let Some(light_client) = modules.light_client {
-                http_opt = http_opt.light_client(light_client);
-            }
-            if let Some(config) = modules.config {
-                http_opt = http_opt
-                    .config(config)
-                    .public_node_config(public_node_config);
-            }
-
             http_opt
                 .serve(move |metrics, consumer, storage| {
                     async move {
@@ -277,15 +317,15 @@ where
                             l1_params,
                             storage,
                             consumer,
-                            opt.is_da,
-                            opt.identity,
+                            is_da,
+                            identity,
                             proposal_fetcher_config,
                         )
                         .await
                     }
                     .boxed()
                 })
-                .await?
+                .await
         },
         None => {
             init_node(
@@ -295,16 +335,14 @@ where
                 persistence,
                 l1_params,
                 None,
-                NullEventConsumer,
-                opt.is_da,
-                opt.identity,
+                Box::new(NullEventConsumer) as Box<dyn EventConsumer>,
+                is_da,
+                identity,
                 proposal_fetcher_config,
             )
-            .await?
+            .await
         },
-    };
-
-    Ok(ctx)
+    }
 }
 
 #[cfg(test)]

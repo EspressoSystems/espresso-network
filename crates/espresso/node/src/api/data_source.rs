@@ -46,11 +46,11 @@ use super::{
 use crate::{
     SeqTypes, U256,
     api::{ApiState, LightClientProvider},
-    persistence,
+    persistence::{self, any::AnyPersistence},
     state_cert::StateCertFetchError,
 };
 
-pub trait DataSourceOptions: PersistenceOptions {
+pub trait DataSourceOptions: PersistenceOptions<Persistence: Into<AnyPersistence>> {
     type DataSource: SequencerDataSource<Options = Self>;
 
     fn enable_query_module(&self, opt: Options, query: Query) -> Options;
