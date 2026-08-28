@@ -2058,6 +2058,41 @@ pub mod testing {
 
     // TODO: current tests are just sanity checks, we need more.
 
+    /// A G2 point off the curve, so `BLSPubKey::try_from` rejects it.
+    pub fn zero_g2() -> G2PointSol {
+        G2PointSol {
+            x0: U256::ZERO,
+            x1: U256::ZERO,
+            y0: U256::ZERO,
+            y1: U256::ZERO,
+        }
+    }
+
+    /// A G1 point off the curve, so a signature carrying it fails to authenticate.
+    pub fn zero_g1() -> G1PointSol {
+        G1PointSol {
+            x: U256::ZERO,
+            y: U256::ZERO,
+        }
+    }
+
+    /// An EdOnBN254 point off the curve, so `SchnorrPubKey::try_from` rejects it.
+    pub fn zero_ed_on_bn254() -> EdOnBN254PointSol {
+        EdOnBN254PointSol {
+            x: U256::ZERO,
+            y: U256::ZERO,
+        }
+    }
+
+    /// LE encoding of the curve25519 field prime 2^255 - 19: nonzero, but rejected by the Rust
+    /// parser as non-canonical.
+    pub fn noncanonical_x25519_key() -> [u8; 32] {
+        let mut key = [0xffu8; 32];
+        key[0] = 0xed;
+        key[31] = 0x7f;
+        key
+    }
+
     #[derive(Debug, Clone)]
     pub struct TestValidator {
         pub account: Address,
@@ -2283,7 +2318,7 @@ mod tests {
         rpc::types::Log,
     };
     use hotshot_contract_adapter::{
-        sol_types::{G1PointSol, G2PointSol},
+        sol_types::G2PointSol,
         stake_table::{StakeTableContractVersion, sign_address_bls},
     };
     use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
@@ -2295,22 +2330,6 @@ mod tests {
 
     use super::*;
     use crate::{L1ClientOptions, v0::impls::testing::*};
-
-    fn zero_g2() -> G2PointSol {
-        G2PointSol {
-            x0: U256::ZERO,
-            x1: U256::ZERO,
-            y0: U256::ZERO,
-            y1: U256::ZERO,
-        }
-    }
-
-    fn zero_g1() -> G1PointSol {
-        G1PointSol {
-            x: U256::ZERO,
-            y: U256::ZERO,
-        }
-    }
 
     /// `eth_getLogs` counts both endpoints, so a chunk of `chunk_size` must span `chunk_size`
     /// blocks. The backward scan used to ask for `chunk_size + 1`, which providers rejected with
@@ -4123,15 +4142,6 @@ mod tests {
         assert_eq!(state.used_x25519_keys().len(), 1);
 
         Ok(())
-    }
-
-    /// LE encoding of the curve25519 field prime 2^255 - 19: nonzero but
-    /// rejected by the Rust parser as non-canonical.
-    fn noncanonical_x25519_key() -> [u8; 32] {
-        let mut key = [0xffu8; 32];
-        key[0] = 0xed;
-        key[31] = 0x7f;
-        key
     }
 
     /// An invalid x25519 key must not halt event processing;

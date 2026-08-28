@@ -189,7 +189,6 @@ test-all:
 # Regenerate the checked-in stake table history fixtures from L1.
 regen-stake-table-fixtures:
     cargo test -p espresso-types --lib regenerate_history_fixtures -- --ignored --nocapture
-    cargo test -p espresso-types --lib regenerate_synthetic_corpus -- --ignored --nocapture
     INSTA_FORCE_UPDATE=1 cargo test -p espresso-types --lib stake_table_history_pin
 
 # Record runs of the new-protocol tests and replay them against the Lean machine.

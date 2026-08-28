@@ -1,14 +1,22 @@
 //! Invariants of the stake table state machine and its commitment.
 //!
 //! The fixture pins catch changes against known histories; these catch changes against histories
-//! nobody has recorded yet.
+//! nobody has recorded yet. "Yet" is the constraint: a case starts from decaf's or mainnet's
+//! current state and extends it with events the V3 contract can still emit, so a counterexample
+//! is a sequence that could happen next on a live chain rather than one that never can.
+//!
+//! Variants `REACHABILITY` classifies as Historical or Dead are therefore absent from the
+//! generator. Nothing is lost by that: the fixtures hold every Historical log that will ever
+//! exist and the pin replays them, the states those logs produce are in the seed, and Dead
+//! processing cannot fork anything. `every_generated_event_is_live` keeps it that way.
 
-use alloy::primitives::{Address, U256};
-use hotshot_contract_adapter::sol_types::{EdOnBN254PointSol, G2PointSol};
-use proptest::{collection::vec, prelude::*};
+use std::{collections::HashSet, sync::OnceLock};
+
+use alloy::primitives::{Address, FixedBytes, U256};
+use proptest::{collection::vec, prelude::*, strategy::ValueTree, test_runner::TestRunner};
 use rand::SeedableRng;
 
-use super::{testing::TestValidator, *};
+use super::{testing::*, *};
 
 /// Small pools keep collisions frequent: re-registration, over-undelegation, duplicate keys.
 const VALIDATORS: usize = 4;
@@ -28,154 +36,257 @@ fn delegator_pool() -> Vec<Address> {
         .collect()
 }
 
-/// Deliberately includes actions that will fail: `apply_event` must leave the state untouched.
-#[derive(Clone, Debug)]
-enum Action {
-    Register(usize),
-    RegisterV2(usize),
-    RegisterV3(usize),
-    RotateKeys(usize),
-    Delegate(usize, usize, u64),
-    Undelegate(usize, usize, u64),
-    Exit(usize),
-    UpdateCommission(usize, u16),
-    UpdateX25519(usize, u8),
-    UpdateP2p(usize, u16),
-    /// Registers `.0` with `.1`'s Schnorr key. Tolerated: the V1 contract did not enforce
-    /// Schnorr uniqueness.
-    RegisterDuplicateSchnorr(usize, usize),
-    /// Rotates `.0`'s keys to `.1`'s Schnorr key. Tolerated, same reason.
-    RotateToDuplicateSchnorr(usize, usize),
-    /// Rotates `.0` to an unparsable BLS key. Tolerated: the event is skipped.
-    RotateToInvalidBls(usize),
-    /// Rotates `.0` to an unparsable Schnorr key. Tolerated: the event is skipped.
-    RotateToInvalidSchnorr(usize),
-    /// Registers `.0` with `.1`'s BLS key. Fatal: the contract enforces BLS uniqueness, so on
-    /// replay this means a corrupt log.
-    RegisterDuplicateBls(usize, usize),
-    /// Rotates `.0`'s keys to `.1`'s BLS key. Fatal, same reason.
-    RotateToDuplicateBls(usize, usize),
+/// Which live history a case starts from.
+///
+/// Both, rather than one: decaf is the only corpus carrying validators registered through the V1
+/// contract, mainnet the larger V3 set.
+#[derive(Clone, Copy, Debug)]
+enum Seed {
+    Decaf,
+    Mainnet,
 }
 
-fn action_strategy() -> impl Strategy<Value = Action> {
-    let v = 0..VALIDATORS;
-    let d = 0..DELEGATORS;
+impl Seed {
+    fn corpus(self) -> &'static str {
+        match self {
+            Seed::Decaf => "decaf",
+            Seed::Mainnet => "mainnet",
+        }
+    }
+}
+
+fn seed_strategy() -> impl Strategy<Value = Seed> {
+    prop_oneof![Just(Seed::Decaf), Just(Seed::Mainnet)]
+}
+
+/// A live corpus replayed into a state, with its validator addresses as fuzz targets.
+///
+/// Replayed once per test binary and cloned per case: 796 and 3463 events are cheap once and
+/// ruinous ~200 times.
+fn seeded(seed: Seed) -> &'static (StakeTableState, Vec<Address>) {
+    static DECAF: OnceLock<(StakeTableState, Vec<Address>)> = OnceLock::new();
+    static MAINNET: OnceLock<(StakeTableState, Vec<Address>)> = OnceLock::new();
+
+    let cell = match seed {
+        Seed::Decaf => &DECAF,
+        Seed::Mainnet => &MAINNET,
+    };
+    cell.get_or_init(|| {
+        let logs = super::history_tests::load_logs(seed.corpus());
+        let events = events_from_logs(logs).expect("fixture logs decode, validate, and sort");
+        let mut state = StakeTableState::default();
+        for (_, event) in events {
+            state
+                .apply_event(event)
+                .expect("fixture history applies without a fatal error")
+                .ok();
+        }
+        let addresses = state.validators().keys().copied().collect();
+        (state, addresses)
+    })
+}
+
+fn seed_state(seed: Seed) -> StakeTableState {
+    seeded(seed).0.clone()
+}
+
+fn seed_validators(seed: Seed) -> &'static [Address] {
+    &seeded(seed).1
+}
+
+/// Whose validator an action acts on.
+///
+/// `Existing` is an index into [`seed_validators`], so a case can delegate to, rotate, or exit a
+/// validator a live chain actually registered. `Fresh` is the synthetic pool, so registration of
+/// a genuinely new account is still exercised.
+#[derive(Clone, Copy, Debug)]
+enum Target {
+    Existing(usize),
+    Fresh(usize),
+}
+
+fn target_strategy() -> impl Strategy<Value = Target> {
     prop_oneof![
-        v.clone().prop_map(Action::Register),
-        v.clone().prop_map(Action::RegisterV2),
-        v.clone().prop_map(Action::RegisterV3),
-        v.clone().prop_map(Action::RotateKeys),
-        (v.clone(), d.clone(), 0..3u64).prop_map(|(a, b, c)| Action::Delegate(a, b, c)),
-        (v.clone(), d, 0..3u64).prop_map(|(a, b, c)| Action::Undelegate(a, b, c)),
-        v.clone().prop_map(Action::Exit),
-        (v.clone(), 0..=COMMISSION_BASIS_POINTS).prop_map(|(a, b)| Action::UpdateCommission(a, b)),
-        (v.clone(), any::<u8>()).prop_map(|(a, b)| Action::UpdateX25519(a, b)),
-        (v.clone(), any::<u16>()).prop_map(|(a, b)| Action::UpdateP2p(a, b)),
-        // Without these the generated sequences never reach `Ok(Err(..))`.
-        (v.clone(), v.clone()).prop_map(|(a, b)| Action::RegisterDuplicateSchnorr(a, b)),
-        (v.clone(), v.clone()).prop_map(|(a, b)| Action::RotateToDuplicateSchnorr(a, b)),
-        v.clone().prop_map(Action::RotateToInvalidBls),
-        v.clone().prop_map(Action::RotateToInvalidSchnorr),
-        (v.clone(), v.clone()).prop_map(|(a, b)| Action::RegisterDuplicateBls(a, b)),
-        (v.clone(), v).prop_map(|(a, b)| Action::RotateToDuplicateBls(a, b)),
+        any::<u16>().prop_map(|i| Target::Existing(i as usize)),
+        (0..VALIDATORS).prop_map(Target::Fresh),
     ]
 }
 
-/// A BLS point that is not on the curve, so `BLSPubKey::try_from` rejects it.
-fn unparsable_bls() -> G2PointSol {
-    G2PointSol {
-        x0: U256::ZERO,
-        x1: U256::ZERO,
-        y0: U256::ZERO,
-        y1: U256::ZERO,
+/// The validator an action acts on, with keys we can sign for.
+///
+/// For an `Existing` target this mints *fresh* keys for a real address rather than recovering the
+/// validator's own. That authenticates because `authenticate_bls_sig` and
+/// `authenticate_schnorr_sig` are proofs of possession of the **new** keys over the account
+/// address (`contracts/rust/adapter/src/stake_table.rs:150`); nothing in the replay path involves
+/// the key being replaced.
+fn validator_for(target: Target, pool: &[TestValidator], seed: Seed) -> TestValidator {
+    match target {
+        Target::Fresh(i) => pool[i % pool.len()].clone(),
+        Target::Existing(i) => {
+            let addresses = seed_validators(seed);
+            let account = addresses[i % addresses.len()];
+            let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(i as u64);
+            TestValidator::random_update_keys_with(&mut rng, account, 500)
+        },
     }
 }
 
-/// A Schnorr point that is not on the curve, so `SchnorrPubKey::try_from` rejects it.
-fn unparsable_schnorr() -> EdOnBN254PointSol {
-    EdOnBN254PointSol {
-        x: U256::ZERO,
-        y: U256::ZERO,
-    }
+/// Deliberately includes actions that will fail: `apply_event` must leave the state untouched.
+///
+/// Every variant is [`Reachability::Live`], enforced by `every_action_is_live`. Historical and
+/// Dead variants are left out on purpose: their processing is frozen exactly by
+/// `stake_table_history_pin`, or free to change, so fuzzing them only produces false flags.
+#[derive(Clone, Debug)]
+enum Action {
+    Register(Target),
+    RotateKeys(Target),
+    Delegate(Target, usize, u64),
+    Undelegate(Target, usize, u64),
+    Exit(Target),
+    UpdateCommission(Target, u16),
+    UpdateX25519(Target, u8),
+    UpdateP2p(Target, u16),
+    /// Registers with an unparsable BLS key. Tolerated: the validator is marked unauthenticated.
+    RegisterInvalidBls(Target),
+    /// Rotates to an unparsable BLS key. Tolerated: the event is skipped.
+    RotateToInvalidBls(Target),
+    /// Rotates to an unparsable Schnorr key. Tolerated, same reason.
+    RotateToInvalidSchnorr(Target),
+    /// Zero x25519 key. Tolerated: degrades to `None`, dropping the validator at 0.6.
+    UpdateX25519Zero(Target),
+    /// Non-canonical x25519 key. Tolerated, same reason.
+    UpdateX25519Noncanonical(Target),
+    /// Unparsable p2p address. Tolerated, same reason.
+    UpdateP2pUnparsable(Target),
+    /// Registers `.0` with `.1`'s x25519 key. Tolerated: the key is dropped.
+    RegisterDuplicateX25519(Target, Target),
+    /// Registers `.0` with `.1`'s BLS key. Fatal: the contract enforces BLS uniqueness, so on
+    /// replay this means a corrupt log. Kept despite being unreachable on V3, because the arm
+    /// guards replay against a bad log source rather than against a live chain.
+    RegisterDuplicateBls(Target, Target),
+    /// Rotates `.0`'s keys to `.1`'s BLS key. Fatal, same reason.
+    RotateToDuplicateBls(Target, Target),
 }
 
-fn to_event(action: &Action, pool: &[TestValidator], delegators: &[Address]) -> StakeTableEvent {
+fn action_strategy() -> impl Strategy<Value = Action> {
+    let t = target_strategy;
+    let d = 0..DELEGATORS;
+    prop_oneof![
+        t().prop_map(Action::Register),
+        t().prop_map(Action::RotateKeys),
+        (t(), d.clone(), 0..3u64).prop_map(|(a, b, c)| Action::Delegate(a, b, c)),
+        (t(), d, 0..3u64).prop_map(|(a, b, c)| Action::Undelegate(a, b, c)),
+        t().prop_map(Action::Exit),
+        (t(), 0..=COMMISSION_BASIS_POINTS).prop_map(|(a, b)| Action::UpdateCommission(a, b)),
+        (t(), any::<u8>()).prop_map(|(a, b)| Action::UpdateX25519(a, b)),
+        (t(), any::<u16>()).prop_map(|(a, b)| Action::UpdateP2p(a, b)),
+        // Without these the generated sequences never reach `Ok(Err(..))` or `Err(..)`.
+        t().prop_map(Action::RegisterInvalidBls),
+        t().prop_map(Action::RotateToInvalidBls),
+        t().prop_map(Action::RotateToInvalidSchnorr),
+        t().prop_map(Action::UpdateX25519Zero),
+        t().prop_map(Action::UpdateX25519Noncanonical),
+        t().prop_map(Action::UpdateP2pUnparsable),
+        (t(), t()).prop_map(|(a, b)| Action::RegisterDuplicateX25519(a, b)),
+        (t(), t()).prop_map(|(a, b)| Action::RegisterDuplicateBls(a, b)),
+        (t(), t()).prop_map(|(a, b)| Action::RotateToDuplicateBls(a, b)),
+    ]
+}
+
+fn to_event(
+    action: &Action,
+    pool: &[TestValidator],
+    delegators: &[Address],
+    seed: Seed,
+) -> StakeTableEvent {
     // Distinct nonzero, so an undelegation can be under, equal to, or over what was staked.
     let amount = |n: u64| U256::from(n + 1) * U256::from(10u64).pow(U256::from(18));
+    let val = |t: Target| validator_for(t, pool, seed);
+
     match *action {
-        Action::Register(i) => StakeTableEvent::Register((&pool[i]).into()),
-        Action::RegisterV2(i) => StakeTableEvent::RegisterV2((&pool[i]).into()),
-        Action::RegisterV3(i) => StakeTableEvent::RegisterV3((&pool[i]).into()),
-        Action::RotateKeys(i) => {
-            // Re-signed for the same account, so the rotation authenticates.
-            let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(i as u64);
-            StakeTableEvent::KeyUpdateV2((&pool[i].randomize_keys_with(&mut rng)).into())
+        Action::Register(t) => StakeTableEvent::RegisterV3((&val(t)).into()),
+        Action::RotateKeys(t) => {
+            let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(7);
+            let rotated = val(t).randomize_keys_with(&mut rng);
+            StakeTableEvent::KeyUpdateV2((&rotated).into())
         },
-        Action::Delegate(i, j, amt) => StakeTableEvent::Delegate(Delegated {
-            delegator: delegators[j],
-            validator: pool[i].account,
+        Action::Delegate(t, j, amt) => StakeTableEvent::Delegate(Delegated {
+            delegator: delegators[j % delegators.len()],
+            validator: val(t).account,
             amount: amount(amt),
         }),
-        Action::Undelegate(i, j, amt) => StakeTableEvent::Undelegate(Undelegated {
-            delegator: delegators[j],
-            validator: pool[i].account,
+        Action::Undelegate(t, j, amt) => StakeTableEvent::UndelegateV2(UndelegatedV2 {
+            delegator: delegators[j % delegators.len()],
+            validator: val(t).account,
+            undelegationId: amt,
             amount: amount(amt),
+            unlocksAt: U256::from(1_700_086_400u64),
         }),
-        Action::Exit(i) => StakeTableEvent::Deregister(ValidatorExit {
-            validator: pool[i].account,
+        Action::Exit(t) => StakeTableEvent::DeregisterV2(ValidatorExitV2 {
+            validator: val(t).account,
+            unlocksAt: U256::from(1_700_172_800u64),
         }),
-        Action::UpdateCommission(i, c) => StakeTableEvent::CommissionUpdate(CommissionUpdated {
-            validator: pool[i].account,
+        Action::UpdateCommission(t, c) => StakeTableEvent::CommissionUpdate(CommissionUpdated {
+            validator: val(t).account,
             timestamp: U256::from(1_700_000_000u64),
-            oldCommission: pool[i].commission,
+            oldCommission: 0,
             newCommission: c,
         }),
-        Action::UpdateX25519(i, b) => StakeTableEvent::X25519KeyUpdate(X25519KeyUpdated {
-            validator: pool[i].account,
-            x25519Key: alloy::primitives::FixedBytes([b; 32]),
+        Action::UpdateX25519(t, b) => StakeTableEvent::X25519KeyUpdate(X25519KeyUpdated {
+            validator: val(t).account,
+            x25519Key: FixedBytes([b | 1; 32]),
         }),
-        Action::UpdateP2p(i, port) => StakeTableEvent::P2pAddrUpdate(P2pAddrUpdated {
-            validator: pool[i].account,
+        Action::UpdateP2p(t, port) => StakeTableEvent::P2pAddrUpdate(P2pAddrUpdated {
+            validator: val(t).account,
             p2pAddr: format!("127.0.0.1:{port}"),
         }),
-        Action::RegisterDuplicateSchnorr(i, j) => {
-            let mut event = ValidatorRegistered::from(&pool[i]);
-            event.schnorrVk = pool[j].schnorr_vk;
-            StakeTableEvent::Register(event)
+        Action::RegisterInvalidBls(t) => {
+            let mut event = ValidatorRegisteredV3::from(&val(t));
+            event.blsVK = zero_g2();
+            StakeTableEvent::RegisterV3(event)
         },
-        Action::RotateToDuplicateSchnorr(i, j) => {
-            let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64((i * VALIDATORS + j) as u64);
-            let rotated = pool[i].randomize_keys_with(&mut rng);
-            let mut event = ConsensusKeysUpdated::from(&rotated);
-            event.schnorrVK = pool[j].schnorr_vk;
-            StakeTableEvent::KeyUpdate(event)
+        Action::RotateToInvalidBls(t) => {
+            let mut event = ConsensusKeysUpdatedV2::from(&val(t));
+            event.blsVK = zero_g2();
+            StakeTableEvent::KeyUpdateV2(event)
         },
-        Action::RotateToInvalidBls(i) => {
-            let mut event = ConsensusKeysUpdated::from(&pool[i]);
-            event.blsVK = unparsable_bls();
-            StakeTableEvent::KeyUpdate(event)
+        Action::RotateToInvalidSchnorr(t) => {
+            let mut event = ConsensusKeysUpdatedV2::from(&val(t));
+            event.schnorrVK = zero_ed_on_bn254();
+            StakeTableEvent::KeyUpdateV2(event)
         },
-        Action::RotateToInvalidSchnorr(i) => {
-            let mut event = ConsensusKeysUpdated::from(&pool[i]);
-            event.schnorrVK = unparsable_schnorr();
-            StakeTableEvent::KeyUpdate(event)
+        Action::UpdateX25519Zero(t) => StakeTableEvent::X25519KeyUpdate(X25519KeyUpdated {
+            validator: val(t).account,
+            x25519Key: FixedBytes([0u8; 32]),
+        }),
+        Action::UpdateX25519Noncanonical(t) => StakeTableEvent::X25519KeyUpdate(X25519KeyUpdated {
+            validator: val(t).account,
+            x25519Key: FixedBytes(noncanonical_x25519_key()),
+        }),
+        Action::UpdateP2pUnparsable(t) => StakeTableEvent::P2pAddrUpdate(P2pAddrUpdated {
+            validator: val(t).account,
+            p2pAddr: "not a socket address".to_string(),
+        }),
+        Action::RegisterDuplicateX25519(t, u) => {
+            let mut event = ValidatorRegisteredV3::from(&val(t));
+            event.x25519Key = FixedBytes(val(u).x25519_key);
+            StakeTableEvent::RegisterV3(event)
         },
-        Action::RegisterDuplicateBls(i, j) => {
-            let mut event = ValidatorRegistered::from(&pool[i]);
-            event.blsVk = pool[j].bls_vk;
-            StakeTableEvent::Register(event)
+        Action::RegisterDuplicateBls(t, u) => {
+            let mut event = ValidatorRegisteredV3::from(&val(t));
+            event.blsVK = val(u).bls_vk;
+            StakeTableEvent::RegisterV3(event)
         },
-        Action::RotateToDuplicateBls(i, j) => {
-            let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64((i * VALIDATORS + j) as u64);
-            let rotated = pool[i].randomize_keys_with(&mut rng);
-            let mut event = ConsensusKeysUpdated::from(&rotated);
-            event.blsVK = pool[j].bls_vk;
-            StakeTableEvent::KeyUpdate(event)
+        Action::RotateToDuplicateBls(t, u) => {
+            let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(11);
+            let rotated = val(t).randomize_keys_with(&mut rng);
+            let mut event = ConsensusKeysUpdatedV2::from(&rotated);
+            event.blsVK = val(u).bls_vk;
+            StakeTableEvent::KeyUpdateV2(event)
         },
     }
 }
 
-/// None of these events interact, so the resulting commitment must not depend on `order`.
 fn register_and_fund(
     pool: &[TestValidator],
     delegators: &[Address],
@@ -191,12 +302,11 @@ fn register_and_fund(
             amount: U256::from(stakes[i]) * U256::from(10u64).pow(U256::from(18)),
         }));
     }
-    apply_all(&events)
+    apply_all(StakeTableState::default(), &events)
 }
 
 /// Apply a sequence, stopping at the first fatal error (as `validators_from_l1_events` does).
-fn apply_all(events: &[StakeTableEvent]) -> StakeTableState {
-    let mut state = StakeTableState::default();
+fn apply_all(mut state: StakeTableState, events: &[StakeTableEvent]) -> StakeTableState {
     for event in events {
         if state.apply_event(event.clone()).is_err() {
             break;
@@ -214,14 +324,15 @@ proptest! {
     #[test]
     fn apply_event_never_mutates_on_error(
         seed in any::<u64>(),
+        corpus in seed_strategy(),
         actions in vec(action_strategy(), 1..40),
     ) {
         let pool = validator_pool(seed);
         let delegators = delegator_pool();
-        let mut state = StakeTableState::default();
+        let mut state = seed_state(corpus);
 
         for action in &actions {
-            let event = to_event(action, &pool, &delegators);
+            let event = to_event(action, &pool, &delegators, corpus);
             let before = state.clone();
             match state.apply_event(event.clone()) {
                 Ok(Ok(())) => {},
@@ -246,13 +357,20 @@ proptest! {
     #[test]
     fn replay_is_deterministic(
         seed in any::<u64>(),
+        corpus in seed_strategy(),
         actions in vec(action_strategy(), 1..40),
     ) {
         let pool = validator_pool(seed);
         let delegators = delegator_pool();
-        let events: Vec<_> = actions.iter().map(|a| to_event(a, &pool, &delegators)).collect();
+        let events: Vec<_> = actions
+            .iter()
+            .map(|a| to_event(a, &pool, &delegators, corpus))
+            .collect();
 
-        prop_assert_eq!(apply_all(&events).commit(), apply_all(&events).commit());
+        prop_assert_eq!(
+            apply_all(seed_state(corpus), &events).commit(),
+            apply_all(seed_state(corpus), &events).commit()
+        );
     }
 
     /// `validators` is an insertion-ordered `IndexMap` and `delegators` a `HashMap`, so `commit`
@@ -309,14 +427,18 @@ proptest! {
     #[test]
     fn state_rlp_round_trips(
         seed in any::<u64>(),
+        corpus in seed_strategy(),
         actions in vec(action_strategy(), 1..24),
     ) {
         use alloy_rlp::{Decodable, Encodable};
 
         let pool = validator_pool(seed);
         let delegators = delegator_pool();
-        let events: Vec<_> = actions.iter().map(|a| to_event(a, &pool, &delegators)).collect();
-        let state = apply_all(&events);
+        let events: Vec<_> = actions
+            .iter()
+            .map(|a| to_event(a, &pool, &delegators, corpus))
+            .collect();
+        let state = apply_all(seed_state(corpus), &events);
 
         let mut encoded = vec![];
         state.encode(&mut encoded);
@@ -326,4 +448,122 @@ proptest! {
         prop_assert_eq!(state.commit(), decoded.commit());
         prop_assert_eq!(state, decoded);
     }
+}
+
+/// The pruning that made this generator V3-only has to stay done.
+///
+/// Reintroducing a `Historical` or `Dead` variant would put the fuzz back to constraining code
+/// that cannot fork a live chain, which is the failure this file was rewritten to remove.
+#[test]
+fn every_generated_event_is_live() {
+    use super::history_tests::{REACHABILITY, Reachability, variant_name};
+
+    let live: HashSet<&str> = REACHABILITY
+        .iter()
+        .filter(|(_, r)| matches!(r, Reachability::Live))
+        .map(|(name, _)| *name)
+        .collect();
+
+    let pool = validator_pool(0);
+    let delegators = delegator_pool();
+    let mut runner = TestRunner::deterministic();
+
+    for _ in 0..500 {
+        let action = action_strategy().new_tree(&mut runner).unwrap().current();
+        let name = variant_name(&to_event(&action, &pool, &delegators, Seed::Decaf));
+        assert!(
+            live.contains(name),
+            "{action:?} generates {name}, which REACHABILITY does not classify as Live. Only \
+             variants the V3 contract can still emit belong in this generator."
+        );
+    }
+}
+
+/// Without this, pruning the V1-based error actions could leave
+/// `apply_event_never_mutates_on_error` never reaching an error at all, and it would still pass.
+#[test]
+fn error_arms_are_reachable() {
+    let pool = validator_pool(0);
+    let delegators = delegator_pool();
+    let t = Target::Fresh(0);
+    let u = Target::Fresh(1);
+
+    let actions = [
+        Action::Register(t),
+        Action::Delegate(t, 0, 1),
+        Action::RotateToInvalidBls(t),
+        Action::RotateToInvalidSchnorr(t),
+        Action::UpdateX25519Zero(t),
+        Action::UpdateX25519Noncanonical(t),
+        Action::UpdateP2pUnparsable(t),
+        Action::Register(u),
+        Action::RegisterDuplicateBls(u, t),
+    ];
+
+    let (mut tolerated, mut fatal) = (0, 0);
+    let mut state = StakeTableState::default();
+    for action in &actions {
+        match state.apply_event(to_event(action, &pool, &delegators, Seed::Decaf)) {
+            Ok(Ok(())) => {},
+            Ok(Err(_)) => tolerated += 1,
+            Err(_) => fatal += 1,
+        }
+    }
+
+    assert!(tolerated > 0, "no Ok(Err(..)) arm reached");
+    assert!(fatal > 0, "no Err(..) arm reached");
+}
+
+/// The seed is the point: fuzzing an empty state explores one no chain has been in since its
+/// first registration.
+#[test]
+fn seeds_are_real_chain_state() {
+    for corpus in [Seed::Decaf, Seed::Mainnet] {
+        let (state, addresses) = seeded(corpus);
+        assert!(
+            !addresses.is_empty(),
+            "{} seeded to an empty validator set",
+            corpus.corpus()
+        );
+        assert_eq!(
+            addresses.len(),
+            state.validators().len(),
+            "{} targets and state disagree",
+            corpus.corpus()
+        );
+        assert!(
+            addresses.iter().all(|a| state.validators().contains_key(a)),
+            "{} offers a target it did not register",
+            corpus.corpus()
+        );
+    }
+}
+
+/// The claim the seeding rests on: a key rotation for a validator whose key we do not hold still
+/// authenticates, because the signature proves possession of the *new* keys over the account
+/// address and never involves the key being replaced.
+///
+/// If this breaks, `Target::Existing` silently degrades to generating events that are dropped in
+/// validation, and the fuzz stops touching real validators without failing.
+#[test]
+fn existing_validator_can_be_rekeyed() {
+    let corpus = Seed::Decaf;
+    let mut state = seed_state(corpus);
+    let account = *seed_validators(corpus)
+        .iter()
+        .find(|a| state.validators()[*a].stake_table_key.is_some())
+        .expect("decaf registered an authenticated validator");
+    let before = state.validators()[&account].stake_table_key;
+
+    let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(0);
+    let rotated = TestValidator::random_update_keys_with(&mut rng, account, 500);
+    let event = StakeTableEvent::KeyUpdateV2((&rotated).into());
+
+    state
+        .apply_event(event)
+        .expect("rotation is not fatal")
+        .expect("minted keys authenticate for an address we do not hold the key for");
+
+    let after = state.validators()[&account].stake_table_key;
+    assert_ne!(before, after, "rotation left the key unchanged");
 }
