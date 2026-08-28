@@ -365,6 +365,10 @@ pub(crate) enum Commands {
         /// p2p address in host:port format. Required for V3 stake tables.
         #[clap(long, value_parser = p2p_addr::parse_p2p_addr, env = "P2P_ADDR")]
         p2p_addr: Option<NetAddr>,
+
+        /// Do not check if the address is reachable.
+        #[clap(long)]
+        skip_reachability_check: bool,
     },
     /// Update a validators Espresso consensus signing keys.
     UpdateConsensusKeys {
@@ -402,6 +406,10 @@ pub(crate) enum Commands {
         /// The p2p address in host:port format
         #[clap(long, value_parser = p2p_addr::parse_p2p_addr, env = "P2P_ADDR")]
         p2p_addr: NetAddr,
+
+        /// Do not check if the address is reachable.
+        #[clap(long)]
+        skip_reachability_check: bool,
     },
     /// Set x25519 encryption key for a validator.
     UpdateX25519Key {
@@ -414,6 +422,10 @@ pub(crate) enum Commands {
         /// The p2p address in host:port format
         #[clap(long, value_parser = p2p_addr::parse_p2p_addr, env = "P2P_ADDR")]
         p2p_addr: NetAddr,
+
+        /// Do not check if the address is reachable.
+        #[clap(long)]
+        skip_reachability_check: bool,
     },
     /// Approve stake table contract to move tokens
     Approve {
