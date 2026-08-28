@@ -221,6 +221,13 @@ test-dev-node *args:
     @echo 'Running espresso-dev-node integration tests'
     cargo nextest run --profile slow --locked -p espresso-dev-node --verbose {{args}}
 
+list-dev-node *args:
+    cargo nextest list --profile slow --locked -p espresso-dev-node {{args}}
+
+# Run the espresso-dev-node tests matching a nextest filterset. See `test-slow-shard`.
+test-dev-node-shard filter *args:
+    cargo nextest run --profile slow --locked -p espresso-dev-node --verbose --no-tests=pass -E "{{filter}}" {{args}}
+
 test-all:
     @echo 'features: "embedded-db"'
     just nextest --features embedded-db --profile all

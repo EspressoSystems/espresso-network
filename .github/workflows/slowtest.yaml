@@ -25,6 +25,8 @@ env:
   CARGO_INCREMENTAL: "0"
   # Must equal the length of the `partition` matrix below.
   SLOW_TEST_SHARDS: "8"
+  # Must equal the length of the `partition` matrix in espresso-dev-node-tests.
+  DEV_NODE_SHARDS: "5"
 
 jobs:
   slow-tests:
@@ -99,7 +101,12 @@ jobs:
         run: df -h
 
   espresso-dev-node-tests:
+    name: espresso-dev-node-tests-${{ matrix.partition }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/free-disk-space
@@ -119,20 +126,34 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: espresso-dev-node-tests
-          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
+          # All shards share a key, so only one of them saves it.
+          save-if: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-')) && matrix.partition == 1 }}
 
       - name: Build slow test
         run: just test-dev-node --no-run
 
+      # Each test runs a whole dev node. Four of the five used to run concurrently on
+      # one runner and spent much of their time in view timeouts; give each its own.
+      - name: Select tests for this shard
+        run: |
+          just list-dev-node --message-format json > dev-node-list.json
+          python3 scripts/nextest-ci shard \
+            --list dev-node-list.json \
+            --costs .config/slow-test-timings.json \
+            --index ${{ matrix.partition }} \
+            --count ${{ env.DEV_NODE_SHARDS }} \
+            --out dev-node-filter.txt
+
       - name: Run slow test
-        run: just test-dev-node --no-fail-fast
+        run: |
+          just test-dev-node-shard "$(cat dev-node-filter.txt)" --no-fail-fast
         timeout-minutes: 60
 
       - name: Upload nextest JUnit
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: slow-test-junit-dev-node
+          name: slow-test-junit-dev-node-${{ matrix.partition }}
           if-no-files-found: ignore
           path: target/nextest/*/junit.xml
           retention-days: 1
