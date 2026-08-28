@@ -59,7 +59,6 @@ use humantime::format_duration;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use num_traits::{FromPrimitive, Zero};
-use thiserror::Error;
 #[cfg(feature = "node")]
 use tokio::spawn;
 #[cfg(feature = "node")]
