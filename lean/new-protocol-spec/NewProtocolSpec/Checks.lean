@@ -2,6 +2,7 @@ module
 
 import NewProtocolSpec.Safety
 import NewProtocolSpec.DecideStream
+import NewProtocolSpec.Invariants
 import NewProtocolSpec.Deadlock
 import NewProtocolSpec.Round
 import NewProtocolSpec.Implements
@@ -61,6 +62,13 @@ namespace Checks
 appear here if any proof were incomplete. Two of the results below use fewer:
 turning a quorum's votes into a certificate is bookkeeping, and reaches for no
 classical principle.
+
+The list names results one at a time, which is what records each footprint, and
+it is not the guard. It cannot be: a result added without a line beside it would
+simply not be checked, and several were — `cert2_unique` and `timeoutCert_reached`
+sat unlisted and unreached by anything listed, so a `sorry` in either would have
+built green. `checkAxioms` below is the guard, made over every declaration the
+specification has rather than over a list someone has to remember to extend.
 -/
 
 /-- info: 'NewProtocol.decideSafety' depends on axioms: [propext, Classical.choice, Quot.sound] -/
@@ -99,6 +107,12 @@ classical principle.
 /-- info: 'NewProtocol.vote2_unstalled' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms vote2_unstalled
 
+/-- info: 'NewProtocol.decide_unstalled' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms decide_unstalled
+
+/-- info: 'NewProtocol.propose_unstalled' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms propose_unstalled
+
 /-- info: 'NewProtocol.vote1_forced' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms vote1_forced
 
@@ -122,6 +136,30 @@ classical principle.
 
 /-- info: 'NewProtocol.round_decided' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms round_decided
+
+/--
+Nothing the specification declares rests on an axiom beyond Lean's own.
+
+The same claim as every line above, made once over everything rather than over
+the results someone thought to name — so a `sorry` fails the build wherever it
+is, in a result, in a working lemma, or in an auxiliary declaration no one reads.
+Auxiliary declarations are included deliberately: a proof term can carry a
+`sorry` in a `match` it elaborated to, and that is not a place a hand list ever
+reaches.
+-/
+meta def checkAxioms : MetaM Unit := do
+  let env ← getEnv
+  let allowed : List Name := [`propext, `Classical.choice, `Quot.sound]
+  let mut bad : Array (Name × Name) := #[]
+  for (name, idx) in env.const2ModIdx.toList do
+    let some m := env.allImportedModuleNames[idx.toNat]? | continue
+    unless m == `NewProtocolSpec || (`NewProtocolSpec).isPrefixOf m do continue
+    for a in ← Lean.collectAxioms name do
+      unless allowed.contains a do bad := bad.push (name, a)
+  unless bad.isEmpty do
+    throwError m!"the specification rests on axioms beyond Lean's own:\n{bad.toList}"
+
+run_meta checkAxioms
 
 /-! ## What is stated where
 

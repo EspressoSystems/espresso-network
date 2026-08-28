@@ -22,9 +22,6 @@ skip the file. It does six things:
   window is still open and so the only one the block a vote signed can be read
   off;
 * reads a vote of a `LiveNetwork` as one the `Network` underneath it records.
-
-`admitted_held` sits here too, and is the one statement in the file worth
-reading on its own: what a node has admitted above the decide floor, it holds.
 -/
 
 @[expose] public section
@@ -227,40 +224,6 @@ theorem retainsDecide_of_step {cfg : Config} {node : PubKey}
     (hs : StepSpec cfg leader node s input output s')
     (hfloor : s.aboveDecideFloor cfg v) : RetainsDecide s s' v :=
   (StepSpec.contentRetained hs v hfloor).decide
-
-/--
-What a node has admitted above the decide floor, it holds.
-
-`Vote2Justification` reads `NodeState.admitted`, while casting the vote2 it
-justifies moves the lock, and `SafetySpec.lockJustified` reads
-`NodeState.proposals`. Nothing in either says the two agree, so it is proved
-here: admission writes the proposal into both (`SafetySpec.admissionJustified`),
-and above the floor neither kind of step may drop it
-(`StepSpec.contentRetained`, `GcSpec.keepsDecideAboveFloor`). Below the floor the
-two may part, and nothing needs them not to.
-
-Stated over `StepSpec` rather than `SafetySpec`: retention is not a safety
-clause, and a node held to the safety clauses alone may drop what it admitted.
--/
-theorem admitted_held {cfg : Config} {leader : ViewNumber → Option PubKey} {node : PubKey}
-    {s : NodeState}
-    (hr : Reachable cfg (StepSpec cfg leader node) (NodeState.initial cfg) s) :
-    ∀ v p, s.admitted v = some p → s.aboveDecideFloor cfg v → s.proposals v = some p := by
-  induction hr with
-  | refl => intro v p hp; simp [NodeState.initial] at hp
-  | step _ ht ih =>
-    intro v p hp hfl
-    cases ht with
-    | step hs =>
-      rcases SafetySpec.admissionJustified hs.toSafetySpec v p hp with
-        hold | ⟨-, -, -, -, -, -, -, -, -, hheld⟩
-      · have hfl' := SafetySpec.floorMono hs.toSafetySpec hfl
-        exact ((StepSpec.contentRetained hs v hfl').decide).proposals p (ih v p hold hfl')
-      · exact hheld
-    | collect hg =>
-      have hold := (GcSpec.shrinks hg).admitted v p hp
-      have hfl' := GcSpec.floorStable hg v hfl
-      exact (GcSpec.keepsDecideAboveFloor hg v hfl').proposals p (ih v p hold hfl')
 
 /-! ## Holdings carried along a run
 

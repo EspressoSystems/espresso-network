@@ -1121,7 +1121,7 @@ The point of everything above. It is stated here rather than at the front becaus
 it is phrased with all of it: a committee, nodes obeying the safety clauses, and
 the three conditions on the block table.
 
-Six results, and this is the first of them. The rest are stated where the
+Seven results, and this is the first of them. The rest are stated where the
 definitions they speak about are introduced.
 
 :::rows +header
@@ -1137,6 +1137,10 @@ definitions they speak about are introduced.
   * {name NewProtocol.decideInv_reachable}`decideInv_reachable`
   * a decide is never taken back
   * {ref "decide-stream"}[What the application is promised]
+*
+  * {name NewProtocol.admitted_held}`admitted_held`
+  * what a node admitted above the floor, it holds
+  * {ref "invariants"}[What a node's state satisfies]
 *
   * {name NewProtocol.cert1_unique}`cert1_unique`
   * at most one `Cert1` per view
@@ -1195,6 +1199,25 @@ agreement between nodes, which is what the previous section settles.
 {docstring NewProtocol.DecideInv}
 
 {docstring NewProtocol.decideInv_reachable}
+
+# What a node's state satisfies
+
+%%%
+tag := "invariants"
+%%%
+
+The other invariant of a reachable state, and the same kind of claim: not an
+obligation but a consequence of the clauses already collected, so an
+implementation satisfies it whether it meant to or not. What it is for is the one
+place two rules read different fields for the same purpose.
+{name NewProtocol.Vote2Enabled}`Vote2Enabled` reads
+{name NewProtocol.NodeState.admitted}`NodeState.admitted`, and casting the vote2
+it licenses moves the lock, which
+{name NewProtocol.SafetySpec.lockJustified}`SafetySpec.lockJustified` judges
+against {name NewProtocol.NodeState.proposals}`NodeState.proposals`. Nothing in
+either says the two agree.
+
+{docstring NewProtocol.admitted_held}
 
 # What progress is worth
 

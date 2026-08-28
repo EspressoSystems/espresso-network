@@ -9,6 +9,7 @@ public import NewProtocolSpec.Gc
 public import NewProtocolSpec.Run
 public import NewProtocolSpec.Liveness
 public import NewProtocolSpec.DecideStream
+public import NewProtocolSpec.Invariants
 public import NewProtocolSpec.Assumptions
 public import NewProtocolSpec.Network
 public import NewProtocolSpec.Safety
@@ -40,6 +41,8 @@ for the result they are built for, and `Conforms` for what an implementation owe
 * `Implements` — what it means to conform: safety *and* progress
 * `DecideStream` — what the decide stream guarantees to the application, and
   what it deliberately does not
+* `Invariants` — what a node's own state satisfies at every reachable state,
+  where two rules read different fields for the same purpose
 * `Assumptions` — the premises taken rather than proved, in one place
 * `Network` — the committee, certificates as the votes behind them, and what
   those certificates guarantee
@@ -59,7 +62,7 @@ holds the definitions the statements are phrased with, `X/Lemmas.lean` the
 kernel-checked scaffolding, and `X.lean` the results. An audit reads the first
 and the third. `Deadlock` and `Round` have two parts each and no scaffolding:
 their definitions are in `X/Defs.lean` and their results, proved in place, in
-`X.lean`.
+`X.lean`. `Invariants` is one file, proved in place.
 
 Everything from `Network` upwards talks about nodes that obey `SafetySpec` and
 nothing else. So a safety proof cannot reach for another clause: there is none in

@@ -276,9 +276,7 @@ What the node must not do is commit a view one of its own vote1s skipped over;
 The block is read from `NodeState.admitted`, while casting the vote2 moves the
 lock, and `SafetySpec.lockJustified` reads `NodeState.proposals`. The two agree
 where it matters: `admitted_held` says what is admitted above the decide floor is
-held, so a vote2 that is owed is also one the node may cast. It is stated of a
-node started from `NodeState.initial`, which is what `Network.start` gives; a bare
-`Run` does not say where it began.
+held, so a vote2 that is owed is also one the node may cast.
 -/
 def Vote2Enabled (s : NodeState) (p : Proposal) : Prop :=
   Vote2Justification s p ∧ ¬ Vote1SkippedView s p.viewNumber
