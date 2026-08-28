@@ -794,16 +794,22 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             self.drb_cancel_map.lock().insert(epoch, token.clone());
             token
         };
+        // The single owner of the bookkeeping inserted above: cleared on drop,
+        // so every exit — return, cancellation, or a panic below — releases
+        // it. A leaked entry would make every future local computation of
+        // this epoch's DRB fail with "already in progress".
+        let _drb_state = DrbStateGuard {
+            coordinator: self.clone(),
+            epoch,
+        };
 
         let Ok(drb_seed_input_vec) = bincode::serialize(&root_leaf.justify_qc().signatures) else {
-            self.clear_drb_state(epoch);
             return Err(anytrace::error!(
                 "Failed to serialize the QC signature for leaf {root_leaf:?}"
             ));
         };
 
         let Some(drb_difficulty_selector) = self.drb_difficulty_selector.read().clone() else {
-            self.clear_drb_state(epoch);
             return Err(anytrace::error!(
                 "The DRB difficulty selector is missing from the epoch membership coordinator. \
                  This node will not be able to spawn any DRB calculation tasks from catchup."
@@ -847,7 +853,6 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         {
             Some(drb) => drb,
             None => {
-                self.clear_drb_state(epoch);
                 return self.get_epoch_drb(epoch).await.map_err(|e| {
                     anytrace::error!(
                         "DRB calculation for epoch {epoch} was cancelled but no externally \
@@ -856,8 +861,6 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                 });
             },
         };
-
-        self.clear_drb_state(epoch);
 
         tracing::info!("Writing drb result from catchup to storage for epoch {epoch}: {drb:?}");
         if let Err(e) = (self.store_drb_result_fn)(epoch, drb).await {
@@ -902,7 +905,9 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     }
 
     /// Remove per-epoch DRB bookkeeping after a computation finishes or is
-    /// cancelled. Safe to call multiple times.
+    /// cancelled. Safe to call multiple times. Only called from
+    /// [`DrbStateGuard`]'s `Drop`, so the state is cleared exactly once per
+    /// computation, when `compute_drb_result_impl`'s scope ends.
     fn clear_drb_state(&self, epoch: EpochNumber) {
         self.drb_calculation_map.lock().remove(&epoch);
         self.drb_cancel_map.lock().remove(&epoch);
@@ -914,6 +919,22 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         for token in tokens {
             token.cancel();
         }
+    }
+}
+
+/// Owns the per-epoch DRB bookkeeping (`drb_calculation_map`,
+/// `drb_cancel_map`) for one computation and clears it when dropped, so
+/// `compute_drb_result_impl` releases it however it exits — normal return,
+/// cancellation of its future, or a panic, which used to unwind past the
+/// manual cleanup and leave the epoch stuck "already in progress" forever.
+struct DrbStateGuard<TYPES: NodeType> {
+    coordinator: EpochMembershipCoordinator<TYPES>,
+    epoch: EpochNumber,
+}
+
+impl<TYPES: NodeType> Drop for DrbStateGuard<TYPES> {
+    fn drop(&mut self) {
+        self.coordinator.clear_drb_state(self.epoch);
     }
 }
 

@@ -126,6 +126,13 @@ enum LoadBehavior {
     /// then drive it into a failure path — i.e. into `catchup_cleanup` —
     /// while a second attempt owns the `catchup_map` entries.
     HangEpochRootUntilReleased,
+    /// Loads fail fast and epoch roots resolve (as in
+    /// [`SlowDrb`](Self::SlowDrb)), but the attempt dies inside the local DRB
+    /// computation — the test installs a difficulty selector that panics on
+    /// its first call, which is awaited after the computation has claimed its
+    /// `drb_calculation_map` entry. That entry must be released, or no retry
+    /// can ever compute this epoch's DRB.
+    PanicInDrb,
 }
 
 /// A `Membership` that delegates everything to `StrictMembership` except the
@@ -191,7 +198,7 @@ impl Membership<WedgeTypes> for WedgeMembership {
                 std::future::pending::<()>().await;
                 unreachable!("pending() never resolves")
             },
-            LoadBehavior::SlowDrb => {
+            LoadBehavior::SlowDrb | LoadBehavior::PanicInDrb => {
                 // A usable root: `StrictMembership::add_epoch_root` registers
                 // the stake table for `epoch_from_block_number(height) + 2`,
                 // so a block inside `epoch` (the root epoch this is fetched
@@ -200,7 +207,7 @@ impl Membership<WedgeTypes> for WedgeMembership {
                     .root_leaf
                     .get()
                     .cloned()
-                    .expect("SlowDrb requires the test to seed root_leaf");
+                    .expect("this behavior requires the test to seed root_leaf");
                 leaf.block_header_mut().block_number = root_block_in_epoch(*epoch, EPOCH_HEIGHT);
                 Ok(leaf)
             },
@@ -253,6 +260,7 @@ impl Membership<WedgeTypes> for WedgeMembership {
             LoadBehavior::PanicOnce
             | LoadBehavior::HangEpochRoot
             | LoadBehavior::SlowDrb
+            | LoadBehavior::PanicInDrb
             | LoadBehavior::HangOncePastWatch
             | LoadBehavior::HangEpochRootUntilReleased => false,
         }
@@ -658,5 +666,68 @@ async fn slow_drb_computation_is_not_abandoned() {
         3,
         "the watchdog abandoned the attempt during its legitimate DRB computation: retries were \
          spawned that re-fetched epoch roots only to die on the DRB-in-progress guard"
+    );
+}
+
+/// An attempt that dies *inside* the local DRB computation must release the
+/// `drb_calculation_map` entry it claimed. That entry is what stops a retry
+/// from starting a second concurrent hash chain, so if the dead attempt keeps
+/// it, every retry fails with "DRB calculation already in progress" and the
+/// epoch can never obtain a DRB locally again.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn drb_state_is_released_when_attempt_dies_computing() {
+    let (membership, coordinator) = setup(LoadBehavior::PanicInDrb);
+    // Built up front: the first `Leaf2::genesis` pays a one-time global setup
+    // cost of several seconds, which must not eat into a watchdog window.
+    let root_leaf = Leaf2::<WedgeTypes>::genesis(
+        &TestValidatedState::default(),
+        &TestInstanceState::default(),
+        Version { major: 0, minor: 1 },
+    )
+    .await;
+    membership
+        .root_leaf
+        .set(root_leaf)
+        .expect("root_leaf seeded once");
+    // The difficulty selector is awaited between the computation's claim of
+    // its `drb_calculation_map` entry and the hash chain, so a panic in it is
+    // a death inside exactly the window where the entry could leak. Panic on
+    // the first attempt; compute a trivial chain on retries.
+    let selector_calls = Arc::new(AtomicUsize::new(0));
+    let selector: DrbDifficultySelectorFn = {
+        let selector_calls = Arc::clone(&selector_calls);
+        Arc::new(move |_| {
+            let calls = selector_calls.fetch_add(1, Ordering::SeqCst) + 1;
+            Box::pin(async move {
+                if calls == 1 {
+                    panic!("simulated catchup task death while computing the DRB");
+                }
+                10
+            })
+        })
+    };
+    coordinator.set_drb_difficulty_selector(selector);
+    let target = EpochNumber::new(TARGET_EPOCH);
+
+    // Starts the first attempt, which dies inside the DRB phase.
+    assert!(
+        coordinator.membership_for_epoch(Some(target)).is_err(),
+        "epoch {target} is not locally known, so this must not succeed"
+    );
+
+    // A retry must be able to compute the DRB itself. On unfixed code the
+    // dead attempt never released its drb_calculation_map entry, so every
+    // retry dies on the DRB-in-progress guard and the epoch never resolves.
+    let resolved = wait_until(RECOVERY_BUDGET, || {
+        coordinator.membership_for_epoch(Some(target)).is_ok()
+    })
+    .await;
+    assert!(
+        resolved,
+        "no retry could compute the DRB for {target} within {RECOVERY_BUDGET:?}: the attempt that \
+         died mid-computation leaked its drb_calculation_map entry (selector calls = {}, root \
+         fetches = {})",
+        selector_calls.load(Ordering::SeqCst),
+        membership.root_fetches()
     );
 }
