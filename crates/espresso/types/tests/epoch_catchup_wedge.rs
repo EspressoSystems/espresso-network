@@ -125,6 +125,14 @@ impl MembershipPersistence for StalledStakeStore {
         Ok(None)
     }
 
+    async fn store_epoch_root(
+        &self,
+        _epoch: EpochNumber,
+        _block_header: Header,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     async fn store_stake(
         &self,
         _epoch: EpochNumber,
@@ -231,6 +239,13 @@ impl MembershipPersistence for StoreHandle {
     }
     async fn load_epoch_root(&self, epoch: EpochNumber) -> anyhow::Result<Option<Header>> {
         self.0.load_epoch_root(epoch).await
+    }
+    async fn store_epoch_root(
+        &self,
+        epoch: EpochNumber,
+        block_header: Header,
+    ) -> anyhow::Result<()> {
+        self.0.store_epoch_root(epoch, block_header).await
     }
     async fn store_stake(
         &self,

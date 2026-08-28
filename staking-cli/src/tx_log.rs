@@ -12,7 +12,7 @@ use std::{
 use alloy::{
     consensus::TxEnvelope,
     eips::eip2718::Encodable2718,
-    network::{EthereumWallet, TransactionBuilder as _},
+    network::{EthereumWallet, NetworkTransactionBuilder as _, TransactionBuilder as _},
     primitives::{Address, Bytes, TxHash, U256},
     providers::Provider,
     rpc::types::{TransactionReceipt, TransactionRequest},
