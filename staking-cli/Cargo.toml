@@ -6,7 +6,7 @@ edition = { workspace = true }
 description = "A CLI to interact with the Espresso stake table contract"
 
 [features]
-testing = ["warp", "test-server", "test-utils"]
+testing = ["hotshot-state-prover", "warp", "test-server", "test-utils"]
 
 [dependencies]
 alloy = { workspace = true }
@@ -26,7 +26,7 @@ espresso-types = { workspace = true, features = ["node"] }
 espresso-utils = { workspace = true, features = ["full"] }
 futures-util = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
-hotshot-state-prover = { workspace = true }
+hotshot-state-prover = { workspace = true, optional = true }
 hotshot-types = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
 jf-signature = { workspace = true }
