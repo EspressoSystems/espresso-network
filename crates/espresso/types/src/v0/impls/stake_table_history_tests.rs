@@ -63,7 +63,7 @@ fn connect_archive_l1(url: &str) -> L1Client {
     .expect("unable to construct l1 client")
 }
 
-fn data_dir() -> PathBuf {
+pub(super) fn data_dir() -> PathBuf {
     PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("../../../data")
 }
 

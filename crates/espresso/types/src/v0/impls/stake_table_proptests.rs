@@ -10,7 +10,10 @@
 //! exist and the pin replays them, the states those logs produce are in the seed, and Dead
 //! processing cannot fork anything. `every_generated_event_is_live` keeps it that way.
 
-use std::{collections::HashSet, sync::OnceLock};
+use std::{
+    collections::{BTreeMap, HashSet},
+    sync::OnceLock,
+};
 
 use alloy::primitives::{Address, FixedBytes, U256};
 use proptest::{collection::vec, prelude::*, strategy::ValueTree, test_runner::TestRunner};
@@ -566,4 +569,109 @@ fn existing_validator_can_be_rekeyed() {
 
     let after = state.validators()[&account].stake_table_key;
     assert_ne!(before, after, "rotation left the key unchanged");
+}
+
+/// Names every [`ExpectedStakeTableError`], the errors `apply_event` tolerates by rejecting the
+/// event and continuing. Adding one fails to compile here until it is named, so the pin below
+/// cannot silently stop reporting a degradation path.
+fn tolerated_variant_name(err: &ExpectedStakeTableError) -> &'static str {
+    match err {
+        ExpectedStakeTableError::SchnorrKeyAlreadyUsed(_) => "SchnorrKeyAlreadyUsed",
+        ExpectedStakeTableError::InvalidBlsKey => "InvalidBlsKey",
+        ExpectedStakeTableError::InvalidSchnorrKey => "InvalidSchnorrKey",
+    }
+}
+
+/// Names every [`StakeTableError`]. These halt replay rather than degrading silently, so one
+/// reaching a live chain is a stuck node rather than a fork.
+fn fatal_variant_name(err: &StakeTableError) -> &'static str {
+    match err {
+        StakeTableError::AlreadyRegistered(_) => "AlreadyRegistered",
+        StakeTableError::ValidatorNotFound(_) => "ValidatorNotFound",
+        StakeTableError::DelegatorNotFound(_) => "DelegatorNotFound",
+        StakeTableError::BlsKeyAlreadyUsed(_) => "BlsKeyAlreadyUsed",
+        StakeTableError::InsufficientStake => "InsufficientStake",
+        StakeTableError::AuthenticationFailed(_) => "AuthenticationFailed",
+        StakeTableError::NoValidValidators => "NoValidValidators",
+        StakeTableError::MissingMaximumStake => "MissingMaximumStake",
+        StakeTableError::MinimumStakeOverflow => "MinimumStakeOverflow",
+        StakeTableError::ZeroDelegatorStake(_) => "ZeroDelegatorStake",
+        StakeTableError::HashError(_) => "HashError",
+        StakeTableError::ValidatorAlreadyExited(_) => "ValidatorAlreadyExited",
+        StakeTableError::InvalidCommission(..) => "InvalidCommission",
+        StakeTableError::SchnorrKeyAlreadyUsed(_) => "SchnorrKeyAlreadyUsed",
+        StakeTableError::X25519KeyAlreadyUsed(_) => "X25519KeyAlreadyUsed",
+        StakeTableError::InvalidX25519Key(_) => "InvalidX25519Key",
+        StakeTableError::StakeTableEventDecodeError(_) => "StakeTableEventDecodeError",
+        StakeTableError::EventSortingError(_) => "EventSortingError",
+    }
+}
+
+/// How many actions the pinned run generates. Large enough to reach the error arms repeatedly,
+/// small enough that the run stays under a second.
+const PINNED_RUN_ACTIONS: usize = 400;
+
+#[derive(serde::Serialize)]
+struct ArmSummary {
+    seed: String,
+    actions: usize,
+    applied: usize,
+    tolerated: BTreeMap<&'static str, usize>,
+    fatal: BTreeMap<&'static str, usize>,
+    terminal_commit: String,
+}
+
+/// Pins what the fixtures structurally cannot reach.
+///
+/// decaf and mainnet apply all 4259 of their events cleanly, so `stake_table_history_pin` pins
+/// zero error handling. A change to a tolerated branch therefore keeps both it and the invariant
+/// properties green, and forks the chain the day such an event lands. This replays a fixed
+/// generated run on top of each seed state and pins which arms it reaches and where it ends up.
+///
+/// The run is data, not a fixture: it regenerates from `TestRunner::deterministic()` rather than
+/// being checked in. Editing [`action_strategy`] moves these numbers, which is expected and shows
+/// up in the same diff; moving them *without* touching the generator means processing changed.
+///
+/// A fatal error is recorded and its event skipped rather than halting, so one corrupt-log case
+/// cannot truncate the run. `apply_event_never_mutates_on_error` is what guarantees skipping is
+/// well defined.
+#[test]
+fn reachable_error_arms_are_pinned() {
+    let mut settings = insta::Settings::clone_current();
+    settings.set_snapshot_path(super::history_tests::data_dir().join("insta_snapshots"));
+    settings.set_prepend_module_to_snapshot(false);
+
+    let summaries: Vec<ArmSummary> = [Seed::Decaf, Seed::Mainnet]
+        .into_iter()
+        .map(|corpus| {
+            let pool = validator_pool(0);
+            let delegators = delegator_pool();
+            let mut runner = TestRunner::deterministic();
+            let mut state = seed_state(corpus);
+            let (mut applied, mut tolerated, mut fatal) = (0, BTreeMap::new(), BTreeMap::new());
+
+            for _ in 0..PINNED_RUN_ACTIONS {
+                let action = action_strategy().new_tree(&mut runner).unwrap().current();
+                let event = to_event(&action, &pool, &delegators, corpus);
+                match state.apply_event(event) {
+                    Ok(Ok(())) => applied += 1,
+                    Ok(Err(err)) => {
+                        *tolerated.entry(tolerated_variant_name(&err)).or_insert(0) += 1
+                    },
+                    Err(err) => *fatal.entry(fatal_variant_name(&err)).or_insert(0) += 1,
+                }
+            }
+
+            ArmSummary {
+                seed: corpus.corpus().into(),
+                actions: PINNED_RUN_ACTIONS,
+                applied,
+                tolerated,
+                fatal,
+                terminal_commit: state.commit().to_string(),
+            }
+        })
+        .collect();
+
+    settings.bind(|| insta::assert_yaml_snapshot!("stake_table_reachable_arms", summaries));
 }

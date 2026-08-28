@@ -1,0 +1,36 @@
+---
+source: crates/espresso/types/src/v0/impls/stake_table_proptests.rs
+expression: summaries
+---
+- seed: decaf
+  actions: 400
+  applied: 119
+  tolerated:
+    InvalidBlsKey: 18
+    InvalidSchnorrKey: 29
+  fatal:
+    AlreadyRegistered: 54
+    AuthenticationFailed: 27
+    BlsKeyAlreadyUsed: 12
+    DelegatorNotFound: 1
+    InsufficientStake: 4
+    ValidatorAlreadyExited: 27
+    ValidatorNotFound: 108
+    X25519KeyAlreadyUsed: 1
+  terminal_commit: STAKE_TABLE~SHVMSNdcGfozL4Wb92_rg8uM2eLCdT6YPXxjBkrS9j_X
+- seed: mainnet
+  actions: 400
+  applied: 120
+  tolerated:
+    InvalidBlsKey: 18
+    InvalidSchnorrKey: 29
+  fatal:
+    AlreadyRegistered: 49
+    AuthenticationFailed: 27
+    BlsKeyAlreadyUsed: 11
+    DelegatorNotFound: 3
+    InsufficientStake: 1
+    ValidatorAlreadyExited: 32
+    ValidatorNotFound: 109
+    X25519KeyAlreadyUsed: 1
+  terminal_commit: STAKE_TABLE~z7MCnY-ptsXD9QmTmIL7jhHM1ZQoZcFrSgj1wNy4okRP

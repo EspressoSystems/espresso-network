@@ -190,6 +190,8 @@ test-all:
 regen-stake-table-fixtures:
     cargo test -p espresso-types --lib regenerate_history_fixtures -- --ignored --nocapture
     INSTA_FORCE_UPDATE=1 cargo test -p espresso-types --lib stake_table_history_pin
+    # Seeded from the corpora, so a refresh moves it too.
+    INSTA_FORCE_UPDATE=1 cargo test -p espresso-types --lib reachable_error_arms_are_pinned
 
 # Record runs of the new-protocol tests and replay them against the Lean machine.
 #
