@@ -341,7 +341,7 @@ impl SingleTransport {
 /// block ranges that adapt to what a provider will serve, separating a dead API key from a
 /// transient failure, etc.
 ///
-/// Unless we're fixing urgent bux we should not add to this list until we have a satisfactory
+/// Unless we're fixing urgent bugs we should not add to this list until we have a satisfactory
 /// design for robust handling of the whole RPC spectrum, because every provider and RPC flavor has
 /// its own quirks.
 #[cfg(feature = "node")]
@@ -1988,7 +1988,6 @@ mod test {
     //     Ok(())
     // }
 
-    /// A helper function to get the index of the current provider in the failover list.
     /// Requests already in flight when the backoff window opened are not new evidence about the
     /// provider: without this, two concurrent callers fail over on a single burst.
     #[test]
@@ -2027,6 +2026,7 @@ mod test {
         assert_eq!(status.consecutive_rate_limits, 0);
     }
 
+    /// A helper function to get the index of the current provider in the failover list.
     fn get_failover_index(provider: &L1Client) -> usize {
         let transport = &provider.transport;
         provider.transport.current_transport.read().generation % transport.urls.len()
