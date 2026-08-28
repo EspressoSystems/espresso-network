@@ -214,6 +214,7 @@ dotenvy = "0.15"
 dyn-clone = "1.0.17"
 ed25519-compact = "2.2.0"
 either = "1"
+erased-serde = "0.4"
 es-version = { git = "https://github.com/EspressoSystems/es-version.git", branch = "main" }
 escargot = "0.5.10"
 espresso-api = { path = "crates/espresso/api" }

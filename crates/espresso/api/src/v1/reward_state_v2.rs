@@ -15,28 +15,28 @@ use crate::v1::merklized_state::Snapshot;
 #[async_trait]
 pub trait RewardApi {
     /// Type for reward claim input data (must be serializable to JSON)
-    type RewardClaimInput: Serialize + Send + Sync;
+    type RewardClaimInput: Serialize + Send + Sync + 'static;
 
     /// Type for reward balance queries (must be serializable to JSON)
-    type RewardBalance: Serialize + Send + Sync;
+    type RewardBalance: Serialize + Send + Sync + 'static;
 
     /// Type for reward account proof queries (must be serializable to JSON)
-    type RewardAccountQueryData: Serialize + Send + Sync;
+    type RewardAccountQueryData: Serialize + Send + Sync + 'static;
 
     /// Type for paginated reward amounts (must be serializable to JSON)
-    type RewardAmounts: Serialize + Send + Sync;
+    type RewardAmounts: Serialize + Send + Sync + 'static;
 
     /// Type for raw merkle tree snapshots (must be serializable to JSON)
-    type RewardMerkleTreeData: Serialize + Send + Sync;
+    type RewardMerkleTreeData: Serialize + Send + Sync + 'static;
 
     /// Type for reward account proof queries against the V1 (RewardMerkleTreeV1) tree
-    type RewardAccountQueryDataV1: Serialize + Send + Sync;
+    type RewardAccountQueryDataV1: Serialize + Send + Sync + 'static;
 
     /// Type for a raw Merkle path into the reward-state (RewardMerkleTreeV1) tree
-    type RewardStatePathV1: Serialize + Send + Sync;
+    type RewardStatePathV1: Serialize + Send + Sync + 'static;
 
     /// Type for a raw Merkle path into the reward-state-v2 (RewardMerkleTreeV2) tree
-    type RewardStatePathV2: Serialize + Send + Sync;
+    type RewardStatePathV2: Serialize + Send + Sync + 'static;
 
     /// Get the height of the last persisted reward-state-v1 merklized state snapshot
     async fn get_reward_state_height(&self) -> anyhow::Result<u64>;
