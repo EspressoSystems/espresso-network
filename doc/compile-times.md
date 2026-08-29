@@ -876,6 +876,44 @@ lines of LLVM IR for 55 lines of source. Keep binary crates free of `.await` on 
 expose a blocking entry point from the library instead. The same rule explains why the `test`
 profile (opt-level 1, share-generics on) never showed this cost.
 
+## Fix 7: gate the checked-in `sol!` bindings (partial win, follow-ups needed)
+
+Branch `ma/compile-times-adapter-features` (commit 1092bb0c10a). `contracts/rust/adapter/src/` is
+302 640 lines, 300 690 of them generated bindings compiled unconditionally, with a **91.9 MB rmeta**
+that every dependent decodes.
+
+Three default-off features were added (`contracts/rust/adapter/Cargo.toml:17`): `mocks` (3 mock
+binding modules + 17 `sol_types` impls), `jellyfish` (`src/jellyfish.rs`, the `eval-domain` bin and
+the jf-*/ark-*/num-* deps only it needs), and `unused-bindings` (5 modules that were dead code:
+`i_plonk_verifier`, `i_reward_claim`, `light_client_arbitrum{,_v2,_v3}`, 53 302 lines, referenced by
+nobody). Six arkworks `From` impls that `stake_table.rs` and `espresso-types` need moved out of
+`jellyfish.rs` into a new ungated `src/points.rs`. `justfile:355` re-applies the gates after
+`forge bind --overwrite`, verified byte-identical.
+
+Default build now compiles 194 265 of 300 690 binding lines (64.6 %); the adapter's dev `.rmeta`
+drops from 46.91 MB (all features) to 31.99 MB (default).
+
+Measured on the stack: 202 s -> **199 s**, adapter unit 25.3 s -> 21.3 s (-16 %). Small, because on
+the node's release path `mocks` and `jellyfish` are **still enabled transitively**:
+`contracts/rust/deployer/src/lib.rs:475,638,807` deploy `LightClient*Mock` from non-test code behind
+a runtime `mock: bool`, and `hotshot-state-prover/src/v{1,2,3}/mock_ledger.rs:13` is an
+unconditional `pub mod` using `jellyfish::open_key`. Follow-ups to collect the rest:
+
+- gate the deployer's mock-deploy branches behind its own default-off feature;
+- gate `mock_ledger` behind a `testing` feature in `hotshot-state-prover` (its outside users are
+  `diff-test`, `deployment-info`, `staking-cli/src/deploy.rs`);
+- note that both are defeated for `espresso-node` while `src/bin/deploy.rs --use-mock` lives in that
+  package, because features resolve per package, not per target - that binary needs to move out.
+
+## Running total
+
+| stack | wall (4 cores) | vs baseline |
+|---|---|---|
+| baseline | 391 s | - |
+| fixes 1-5 | 220 s | -44 % |
+| + test-support gating (fix 6) | 202 s | -48 % |
+| + adapter feature gating (fix 7) | **199 s** | **-49 %** |
+
 ## Open items
 
 - Local `-Ztime-passes` split (frontend vs LLVM vs link) for the node lib and the node bin.
