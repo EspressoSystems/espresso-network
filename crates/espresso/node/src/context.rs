@@ -43,6 +43,7 @@ use hotshot_types::{
 use parking_lot::Mutex;
 use request_response::RequestResponseConfig;
 use tokio::{
+    spawn,
     sync::{mpsc::channel, watch},
     task::JoinHandle,
 };
@@ -64,7 +65,6 @@ use crate::{
     },
     startup_catchup::bootstrap_epoch_window,
     state_signature::{self, StateSigner},
-    util::spawn,
 };
 pub(crate) type ConsensusNode<N, P> = Node<N, P>;
 pub type Consensus<N, P> = hotshot::types::SystemContextHandle<SeqTypes, ConsensusNode<N, P>>;

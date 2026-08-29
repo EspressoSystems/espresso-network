@@ -12,22 +12,15 @@
 
 //! Async task utilities.
 
-use std::{fmt::Display, pin::Pin, sync::Arc};
+use std::{fmt::Display, sync::Arc};
 
 use derivative::Derivative;
 use futures::future::Future;
-use tokio::task::{JoinError, JoinHandle};
+use tokio::{
+    spawn,
+    task::{JoinError, JoinHandle},
+};
 use tracing::{Instrument, info_span};
-
-/// Spawn `future` on the tokio runtime with its future type erased.
-///
-/// The tokio task machinery is monomorphized once per spawned future type, which costs roughly 150
-/// monomorphized items per call site. Boxing into a trait object first means tokio only ever sees
-/// one future type per output type.
-pub fn spawn<T: Send + 'static>(future: impl Future<Output = T> + Send + 'static) -> JoinHandle<T> {
-    let future: Pin<Box<dyn Future<Output = T> + Send>> = Box::pin(future);
-    tokio::spawn(future)
-}
 
 /// A background task which is cancelled on [`Drop`]
 ///

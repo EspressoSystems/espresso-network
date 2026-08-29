@@ -59,7 +59,6 @@ use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION};
 use crate::{
     api::{BlocksFrontier, RewardMerkleTreeDataSource, RewardMerkleTreeV2Data},
     consensus_handle::ConsensusHandle,
-    util::spawn,
 };
 
 // This newtype is probably not worth having. It's only used to be able to log
@@ -1114,7 +1113,7 @@ impl ParallelStateCatchup {
         let mut futures = FuturesUnordered::new();
         for provider in providers {
             let closure = closure.clone();
-            futures.push(AbortOnDropHandle::new(spawn(closure(provider))));
+            futures.push(AbortOnDropHandle::new(tokio::spawn(closure(provider))));
         }
 
         let mut logs = vec!["No providers returned a successful result.\n".to_string()];
