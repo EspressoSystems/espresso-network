@@ -914,6 +914,33 @@ unconditional `pub mod` using `jellyfish::open_key`. Follow-ups to collect the r
 | + test-support gating (fix 6) | 202 s | -48 % |
 | + adapter feature gating (fix 7) | **199 s** | **-49 %** |
 
+## State of the merged stack
+
+`cargo check` is green on `ma/compile-times-all` for all of: `espresso-node` (`--lib --release`,
+`--lib --features testing`, `--tests`, `--bins`), `espresso-node-sqlite`, `espresso-dev-node`,
+`slow-tests`, `tests`, `builder`, `light-client-query-service`, `node-metrics`, `staking-cli`
+(the last eight with `--all-targets`). No test run was attempted; CI has to do that.
+
+Codegen volume of the node lib, `cargo llvm-lines --release --lib`:
+
+| crate contributing IR | baseline | stacked |
+|---|---|---|
+| **total** | **13.76 M** | **9.38 M (-32 %)** |
+| tokio | 1.87 M | 0.63 M |
+| alloc | 1.57 M | 1.40 M |
+| core | 1.45 M | 1.05 M |
+| hotshot-task-impls | 1.05 M | 0.68 M |
+| espresso-node | 0.96 M | 0.75 M |
+| hotshot-query-service | 0.90 M | 0.81 M |
+| espresso-api | 0.50 M | out of the top 12 |
+| aide | 0.36 M | out of the top 12 |
+| axum | 0.36 M | out of the top 12 |
+
+Each change did what it was supposed to: `aide`/`axum`/`espresso-api` disappear (routers built once),
+`hotshot-task-impls` halves (one persistence instantiation), `tokio` drops by two thirds (erased
+spawn types). What is left is generic container code (`alloc`, `core`), the query-service data
+sources, and the node's own code - which is where the next round should look.
+
 ## Open items
 
 - Local `-Ztime-passes` split (frontend vs LLVM vs link) for the node lib and the node bin.
