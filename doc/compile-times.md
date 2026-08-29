@@ -912,7 +912,8 @@ unconditional `pub mod` using `jellyfish::open_key`. Follow-ups to collect the r
 | baseline | 391 s | - |
 | fixes 1-5 | 220 s | -44 % |
 | + test-support gating (fix 6) | 202 s | -48 % |
-| + adapter feature gating (fix 7) | **199 s** | **-49 %** |
+| + adapter feature gating (fix 7) | 199 s | -49 % |
+| + adapter follow-ups and the deploy-binary move (fix 8) | **195 s** | **-50 %** |
 
 ## State of the merged stack
 
@@ -966,6 +967,28 @@ binary to its own package collects the rest of the win. `--use-mock` is used by
 `jellyfish` genuinely cannot be gated away: non-test prover service code needs the adapter's
 `From<jf_plonk::Proof> for PlonkProofSol` (`hotshot-state-prover/src/v{1,2,3}/service.rs:123,131,134`).
 
+## Fix 9: move the `deploy` binary out of the node package
+
+Branch `ma/compile-times-move-deploy-bin` (commit f590e6d191e). New package
+`crates/espresso/deploy` (`espresso-deploy`, `[[bin]] name = "deploy"` - the binary name is
+unchanged because CI and the compose files invoke it); `crates/espresso/node/src/bin/deploy.rs`
+moved there by `git mv`, content unchanged, and the file turned out to be self-contained (it does
+not depend on `espresso-node` at all). Added to workspace `members` and `default-members`.
+
+With that, `cargo tree -p espresso-node -e features,no-dev -i hotshot-contract-adapter` lists only
+`default` - **no `mocks`, no `jellyfish`, no `unused-bindings`** - so ~106 k of the 300 k generated
+binding lines are no longer compiled for the node. (`jellyfish` fell away as a side effect of fix 5
+removing `hotshot-state-prover` from the node's graph.) The adapter unit drops 25.3 s -> 17.8 s.
+
+External references checked and still resolving: `scripts/ci-build-binary` (enumerates bins via
+`cargo metadata`), `.github/workflows/verify-proposals.yml:42` (`--bin deploy`, no `-p`),
+`docker/deploy.Dockerfile`, `docker-compose.yaml:48,111`, `process-compose.yaml:60,98`,
+`contracts/rust/deployer/scripts/*.sh`, `scripts/test-deploy-with-ledger:52`. Only
+`doc/stake-table-fast-finality.md:492,502,529` needed the `-p` flag renamed.
+
+Final stack: **195 s vs 391 s baseline, -50 %**, with the node lib at 136.3 s and the next units
+espresso-types 26.8 s, contract-adapter 17.8 s, hotshot-types 17.1 s.
+
 ## Open items
 
 - Verify the stack in real CI. Every number here is from a local 4-core emulation of the
@@ -973,9 +996,9 @@ binary to its own package collects the rest of the win. `--use-mock` is used by
 - `espresso-dev-node` still pays 43 s for its wrapper bin because
   `crates/espresso/dev-node/src/main.rs:255` blocks on its own `async_main`, which awaits
   `espresso-node` futures. It needs the same treatment as fix 1.
-- Adapter follow-ups (see fix 7): gate the deployer's mock-deploy branches, gate
-  `hotshot-state-prover`'s `mock_ledger`, and move `espresso-node/src/bin/deploy.rs --use-mock` out
-  of the node package, since cargo resolves features per package, not per target.
+- The adapter follow-ups are done (fixes 8 and 9); what remains there is that `jellyfish` is
+  genuinely needed by non-test prover service code, so it cannot be gated away for crates that do
+  depend on the prover.
 - Next codegen targets inside the node lib, from the stacked `llvm-lines`: `hotshot-query-service`
   data sources (0.81 M IR lines), the node's own code (0.75 M), `hotshot-task-impls` (0.68 M), and
   the `alloc`/`core` container instantiations (2.45 M combined).
