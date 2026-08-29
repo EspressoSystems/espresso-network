@@ -29,6 +29,7 @@ pub mod v3;
 pub mod utils;
 
 mod http;
+#[cfg(any(test, feature = "testing"))]
 mod test_utils;
 
 /// Configuration/Parameters used for hotshot state prover

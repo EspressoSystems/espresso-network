@@ -4775,6 +4775,7 @@ dependencies = [
  "derive_builder",
  "derive_more 2.1.1",
  "dotenvy",
+ "espresso-contract-deployer",
  "espresso-safe-tx-builder",
  "espresso-types",
  "espresso-utils",

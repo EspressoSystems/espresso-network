@@ -5,6 +5,10 @@ version = { workspace = true }
 authors = { workspace = true }
 edition = { workspace = true }
 
+[features]
+# Deployment of the `LightClient*Mock` contracts, for test networks and dev tooling.
+mocks = ["hotshot-contract-adapter/mocks"]
+
 [dependencies]
 alloy = { workspace = true }
 anyhow = { workspace = true }
@@ -15,7 +19,7 @@ derive_more = { workspace = true }
 dotenvy = { workspace = true }
 espresso-safe-tx-builder = { workspace = true }
 espresso-types = { workspace = true, features = ["node"] }
-hotshot-contract-adapter = { workspace = true, features = ["mocks"] }
+hotshot-contract-adapter = { workspace = true }
 hotshot-types = { workspace = true }
 http-client = { workspace = true }
 serde = { workspace = true }
@@ -27,6 +31,7 @@ url = { workspace = true }
 vbs = { workspace = true }
 
 [dev-dependencies]
+espresso-contract-deployer = { path = ".", features = ["mocks"] }
 espresso-types = { workspace = true, features = ["testing"] }
 espresso-utils = { workspace = true, features = ["full"] }
 rand = { workspace = true }

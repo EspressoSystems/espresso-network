@@ -20,7 +20,7 @@ ark-std = { workspace = true }
 clap = { workspace = true }
 espresso-types = { workspace = true, features = ["node"] }
 hotshot-contract-adapter = { workspace = true, features = ["jellyfish", "mocks"] }
-hotshot-state-prover = { workspace = true }
+hotshot-state-prover = { workspace = true, features = ["testing"] }
 hotshot-types = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
 jf-pcs = { workspace = true }
