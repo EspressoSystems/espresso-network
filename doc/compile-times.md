@@ -810,6 +810,27 @@ testing`, locally:
 So the same changes pay off twice: once in `build.yml` (release binaries) and again in `test.yml`
 and `slowtest.yaml`, which rebuild the same crate in the test profile in several jobs.
 
+## Two more CI job shapes
+
+`Build test binaries` (`test.yml:142`, `cargo build --profile test --bins`), 32-core local:
+
+| | wall |
+|---|---|
+| baseline | 170 s |
+| stacked | **110 s (-35 %)** |
+
+`espresso-dev-node` release build (its CI bin unit is 206 s):
+
+| | wall | node lib | dev-node bin |
+|---|---|---|---|
+| baseline | 188 s | 124.9 s | 62.2 s |
+| stacked | 138 s | 94.0 s | 43.2 s |
+
+The dev-node bin only drops from 62 s to 43 s, because `crates/espresso/dev-node/src/main.rs:255`
+blocks on its **own** `async_main`, which awaits futures defined in `espresso-node`; those poll shims
+are still instantiated in the dev-node crate. Fixing it the same way needs a non-async entry point
+for whatever dev-node awaits, or moving `async_main` behind a blocking call in a library.
+
 ## Open items
 
 - Local `-Ztime-passes` split (frontend vs LLVM vs link) for the node lib and the node bin.
