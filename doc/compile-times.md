@@ -796,6 +796,20 @@ Applied to the real `Build espresso-node AMD` job (748 s), the same proportion p
 420 s, and the wrapper-bin part of the win repeats in `Build espresso-node-sqlite AMD` (258 s bin
 unit) and `Build espresso-dev-node AMD` (206 s bin unit, needs its own entry point).
 
+## The stack also cuts the test profile by 37 %
+
+`test.yml` is the most expensive workflow (501-526 runner-min per PR) and its biggest unit is the
+`espresso-node` lib built with tests (418-431 s in CI). Same crate, `--profile test --features
+testing`, locally:
+
+| | node lib (test profile) |
+|---|---|
+| baseline | 150.6 s |
+| all five changes stacked | **94.2 s (-37 %)** |
+
+So the same changes pay off twice: once in `build.yml` (release binaries) and again in `test.yml`
+and `slowtest.yaml`, which rebuild the same crate in the test profile in several jobs.
+
 ## Open items
 
 - Local `-Ztime-passes` split (frontend vs LLVM vs link) for the node lib and the node bin.
