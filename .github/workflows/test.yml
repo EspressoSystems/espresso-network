@@ -22,8 +22,6 @@ env:
   RUST_LOG: info,libp2p=off,node=error
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
-  # Must equal the length of the `partition` matrix in test-postgres/test-sqlite.
-  UNIT_TEST_SHARDS: "10"
   # Save the process compose logs
   NATIVE_DEMO_LOGS: /tmp/native-demo.log
   PC_LOG_FILE: /tmp/pc-logs.log
@@ -309,23 +307,11 @@ jobs:
         with:
           name: nextest-archive-postgres
 
-      # Hash partitioning spread these shards from 8.9 to 21.8 min of wall clock.
-      # Pack by recorded cost instead; see `just update-test-timings`.
-      - name: Select tests for this shard
-        run: |
-          cargo nextest list --archive-file nextest-archive-postgres.tar.zst \
-            --workspace-remap $PWD --message-format json > test-list.json
-          python3 scripts/nextest-ci shard \
-            --list test-list.json \
-            --costs .config/test-timings.json \
-            --index ${{ matrix.partition }} \
-            --count ${{ env.UNIT_TEST_SHARDS }} \
-            --out test-filter.txt
-
       - name: Test
         run: |
-          cargo nextest run --archive-file nextest-archive-postgres.tar.zst --verbose --no-fail-fast \
-          --workspace-remap $PWD --no-tests=pass -E "$(cat test-filter.txt)"
+          cargo nextest run --archive-file nextest-archive-postgres.tar.zst  --verbose --no-fail-fast \
+          --workspace-remap $PWD \
+          --partition hash:${{ matrix.partition }}/10
         timeout-minutes: 30
 
       - name: Upload nextest JUnit
@@ -354,21 +340,11 @@ jobs:
         with:
           name: nextest-archive-sqlite
 
-      - name: Select tests for this shard
-        run: |
-          cargo nextest list --archive-file nextest-archive-sqlite.tar.zst \
-            --workspace-remap $PWD --message-format json > test-list.json
-          python3 scripts/nextest-ci shard \
-            --list test-list.json \
-            --costs .config/test-timings.json \
-            --index ${{ matrix.partition }} \
-            --count ${{ env.UNIT_TEST_SHARDS }} \
-            --out test-filter.txt
-
       - name: Test
         run: |
-          cargo nextest run --archive-file nextest-archive-sqlite.tar.zst --verbose --no-fail-fast \
-          --workspace-remap $PWD --no-tests=pass -E "$(cat test-filter.txt)"
+          cargo nextest run --archive-file nextest-archive-sqlite.tar.zst  --verbose --no-fail-fast \
+          --workspace-remap $PWD \
+          --partition hash:${{ matrix.partition }}/10
         timeout-minutes: 30
 
       - name: Upload nextest JUnit

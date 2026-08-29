@@ -69,22 +69,13 @@ jobs:
         run: just test-slow ${{ matrix.features }} --no-run
 
       # Tests are serialized within a shard (threads-required = num-cpus), so a
-      # shard costs the sum of its tests. Pack by recorded cost instead of by
-      # name hash; see `just update-slow-test-timings`.
-      - name: Select tests for this shard
-        run: |
-          just list-slow ${{ matrix.features }} --message-format json > slow-test-list.json
-          python3 scripts/nextest-ci shard \
-            --list slow-test-list.json \
-            --costs .config/slow-test-timings.json \
-            --index ${{ matrix.partition }} \
-            --count ${{ env.SLOW_TEST_SHARDS }} \
-            --out slow-test-filter.txt
-
+      # shard costs the sum of its tests. `count` deals the sorted test list
+      # round-robin, which splits up the families of near-identical tests that
+      # `hash` used to pile onto one shard.
       - name: Run slow test
         run: |
-          just test-slow-shard "$(cat slow-test-filter.txt)" \
-            ${{ matrix.features }} --no-fail-fast
+          just test-slow ${{ matrix.features }} --no-fail-fast \
+            --partition count:${{ matrix.partition }}/${{ env.SLOW_TEST_SHARDS }}
         timeout-minutes: 60
 
       - name: Upload nextest JUnit
@@ -132,21 +123,13 @@ jobs:
       - name: Build slow test
         run: just test-dev-node --no-run
 
-      # Each test runs a whole dev node. Four of the five used to run concurrently on
-      # one runner and spent much of their time in view timeouts; give each its own.
-      - name: Select tests for this shard
-        run: |
-          just list-dev-node --message-format json > dev-node-list.json
-          python3 scripts/nextest-ci shard \
-            --list dev-node-list.json \
-            --costs .config/slow-test-timings.json \
-            --index ${{ matrix.partition }} \
-            --count ${{ env.DEV_NODE_SHARDS }} \
-            --out dev-node-filter.txt
-
+      # Each test runs a whole dev node. Four of the five used to run concurrently
+      # on one runner and spent much of their time in view timeouts; one shard per
+      # test gives each its own.
       - name: Run slow test
         run: |
-          just test-dev-node-shard "$(cat dev-node-filter.txt)" --no-fail-fast
+          just test-dev-node --no-fail-fast \
+            --partition count:${{ matrix.partition }}/${{ env.DEV_NODE_SHARDS }}
         timeout-minutes: 60
 
       - name: Upload nextest JUnit

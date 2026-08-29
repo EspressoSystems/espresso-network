@@ -30,19 +30,6 @@ Examples:
         --artifact-name test-stats-test \
         --out main-test-stats.json
 
-    # Export per-test durations to use as the slow-test shard cost map.
-    scripts/nextest-ci timings-write \
-        --junit-dir junit-artifacts \
-        --out .config/slow-test-timings.json
-
-    # Render the nextest filterset for one cost-balanced shard.
-    just list-slow --message-format json > list.json
-    scripts/nextest-ci shard \
-        --list list.json \
-        --costs .config/slow-test-timings.json \
-        --index 1 --count 8 \
-        --out shard-filter.txt
-
     # Render the flaky/failing issue body to stdout (dry-run, no network).
     scripts/nextest-ci flaky-issue \
         --stats hotshot:main-hotshot-stats.json \
@@ -59,7 +46,6 @@ import argparse
 import json
 import logging
 import os
-import re
 import subprocess
 import sys
 import tempfile
@@ -509,82 +495,6 @@ def upsert_flaky_issue(repo: str, title: str, label: str, body: str) -> None:
         os.unlink(body_path)
 
 
-# Cost-aware sharding (timings-write, shard)
-
-
-def parse_junit_dir_timings(junit_dir: Path) -> dict[str, float]:
-    # A test id can appear in more than one shard XML if partitioning changed
-    # mid-run; keep the longest observation so a shard is never under-budgeted.
-    timings: dict[str, float] = {}
-    xml_files = sorted(junit_dir.rglob("*.xml")) if junit_dir.exists() else []
-    for path in xml_files:
-        for c in parse_file(path):
-            if c.status == "skipped":
-                continue
-            timings[c.test_id] = max(timings.get(c.test_id, 0.0), c.time)
-    return timings
-
-
-def list_testcases(list_json: dict) -> list[tuple[str, str]]:
-    """Extract (binary_id, test_name) pairs from `cargo nextest list --message-format json`."""
-    tests: list[tuple[str, str]] = []
-    for binary_id, suite in list_json["rust-suites"].items():
-        for name, case in suite["testcases"].items():
-            if case["ignored"]:
-                continue
-            tests.append((binary_id, name))
-    return sorted(tests)
-
-
-def test_id(test: tuple[str, str]) -> str:
-    # Matches the JUnit `classname::name` id that timings are keyed by.
-    return f"{test[0]}::{test[1]}"
-
-
-def assign_shards(
-    tests: list[tuple[str, str]],
-    costs: dict[str, float],
-    count: int,
-    default: float | None = None,
-) -> tuple[list[list[tuple[str, str]]], list[float]]:
-    """Longest-processing-time bin packing: assign each test to the lightest shard.
-
-    Tests with no recorded cost get `default`, or the mean of the known ones, so a
-    batch of new tests spreads out instead of landing on one shard.
-    """
-    known = [costs[test_id(t)] for t in tests if test_id(t) in costs]
-    if default is not None:
-        fallback = default
-    else:
-        fallback = sum(known) / len(known) if known else 1.0
-    cost = {test_id(t): costs.get(test_id(t), fallback) for t in tests}
-
-    shards: list[list[tuple[str, str]]] = [[] for _ in range(count)]
-    totals = [0.0] * count
-    for t in sorted(tests, key=lambda t: (-cost[test_id(t)], test_id(t))):
-        i = min(range(count), key=lambda i: (totals[i], i))
-        shards[i].append(t)
-        totals[i] += cost[test_id(t)]
-    return shards, totals
-
-
-# Quotes are not string delimiters in a nextest filterset, so names go in bare
-# and anything needing an escape is rejected rather than silently mismatched.
-FILTERSET_SAFE = re.compile(r"^[A-Za-z0-9_.:$-]+$")
-
-
-def render_filterset(tests: list[tuple[str, str]]) -> str:
-    """Render a nextest filterset selecting exactly `tests`."""
-    for part in (p for t in tests for p in t):
-        if not FILTERSET_SAFE.match(part):
-            raise RuntimeError(f"cannot express {part!r} in a filterset")
-    if not tests:
-        return "none()"
-    return " | ".join(
-        f"(binary_id(={binary_id}) & test(={name}))" for binary_id, name in tests
-    )
-
-
 # Subcommand implementations
 
 
@@ -696,59 +606,6 @@ def cmd_stats_fetch(args: argparse.Namespace) -> int:
         log.warning("fetch failed, continuing with empty history: %s", e, exc_info=True)
         write_empty_runs(args.out)
         return 0
-
-
-def cmd_timings_write(args: argparse.Namespace) -> int:
-    timings = parse_junit_dir_timings(args.junit_dir)
-    if not timings:
-        log.error("no JUnit testcases parsed; refusing to write timings")
-        return 1
-    kept = {k: v for k, v in timings.items() if v >= args.min_seconds}
-    dropped = [v for k, v in timings.items() if k not in kept]
-    out: dict[str, Any] = {}
-    # Suites with thousands of sub-second tests would otherwise checkin one line
-    # each; omit them and carry their measured mean as the fallback cost.
-    if dropped:
-        out["default"] = round(sum(dropped) / len(dropped), 2)
-    out["tests"] = {k: round(v, 1) for k, v in sorted(kept.items())}
-    args.out.write_text(json.dumps(out, indent=2) + "\n")
-    log.info(
-        "wrote %s: %d of %d tests, %.1f min summed, %d omitted below %gs",
-        args.out,
-        len(kept),
-        len(timings),
-        sum(timings.values()) / 60,
-        len(dropped),
-        args.min_seconds,
-    )
-    return 0
-
-
-def cmd_shard(args: argparse.Namespace) -> int:
-    if not 1 <= args.index <= args.count:
-        log.error("--index %d out of range 1..%d", args.index, args.count)
-        return 1
-    tests = list_testcases(json.loads(args.list.read_text()))
-    timings = json.loads(args.costs.read_text())
-    shards, totals = assign_shards(
-        tests, timings["tests"], args.count, timings.get("default")
-    )
-
-    known = sum(1 for t in tests if test_id(t) in costs)
-    log.info(
-        "%d tests (%d with a recorded cost) over %d shards",
-        len(tests),
-        known,
-        args.count,
-    )
-    for i, (shard, total) in enumerate(zip(shards, totals), start=1):
-        mine = " <-- this shard" if i == args.index else ""
-        log.info("shard %2d: %2d tests, %5.1f min%s", i, len(shard), total / 60, mine)
-    for binary_id, name in shards[args.index - 1]:
-        log.info("  %s::%s", binary_id, name)
-
-    args.out.write_text(render_filterset(shards[args.index - 1]))
-    return 0
 
 
 def _parse_stats_arg(spec: str) -> tuple[str, Path]:
@@ -868,45 +725,6 @@ def main() -> int:
         help="parallel gh requests when fetching per-run artifacts (default: 8)",
     )
     fetch.set_defaults(func=cmd_stats_fetch)
-
-    timings = sub.add_parser(
-        "timings-write", help="export per-test durations from a JUnit directory"
-    )
-    timings.add_argument(
-        "--junit-dir",
-        required=True,
-        type=Path,
-        help="directory containing per-shard JUnit XMLs",
-    )
-    timings.add_argument(
-        "--out", required=True, type=Path, help="output path for the timings JSON"
-    )
-    timings.add_argument(
-        "--min-seconds",
-        type=float,
-        default=0.0,
-        help="omit tests faster than this, carrying their mean as the fallback cost",
-    )
-    timings.set_defaults(func=cmd_timings_write)
-
-    shard = sub.add_parser(
-        "shard", help="render a nextest filterset for one cost-balanced shard"
-    )
-    shard.add_argument(
-        "--list",
-        required=True,
-        type=Path,
-        help="`cargo nextest list --message-format json` output",
-    )
-    shard.add_argument(
-        "--costs", required=True, type=Path, help="timings JSON from timings-write"
-    )
-    shard.add_argument("--index", required=True, type=int, help="1-based shard index")
-    shard.add_argument("--count", required=True, type=int, help="total shard count")
-    shard.add_argument(
-        "--out", required=True, type=Path, help="output path for the filterset"
-    )
-    shard.set_defaults(func=cmd_shard)
 
     issue = sub.add_parser(
         "flaky-issue",
