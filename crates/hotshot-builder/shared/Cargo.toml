@@ -4,6 +4,9 @@ version = { workspace = true }
 edition = { workspace = true }
 license = "MIT"
 
+[features]
+testing = ["dep:hotshot-example-types", "dep:hotshot-testing"]
+
 [dependencies]
 anyhow = { workspace = true }
 async-broadcast = { workspace = true }
@@ -19,9 +22,9 @@ hex = { workspace = true }
 hotshot = { workspace = true }
 hotshot-builder-api = { workspace = true }
 hotshot-events-service = { workspace = true }
-hotshot-example-types = { workspace = true }
+hotshot-example-types = { workspace = true, optional = true }
 hotshot-task-impls = { workspace = true }
-hotshot-testing = { workspace = true }
+hotshot-testing = { workspace = true, optional = true }
 hotshot-types = { workspace = true }
 http-client = { workspace = true }
 jf-advz = { workspace = true }
@@ -40,6 +43,8 @@ vbs = { workspace = true }
 vec1 = { workspace = true }
 
 [dev-dependencies]
+# Enable our own `testing` feature when building tests.
+hotshot-builder-shared = { path = ".", features = ["testing"] }
 test-utils = { workspace = true }
 tide-disco = { workspace = true }
 tracing-test = { workspace = true }

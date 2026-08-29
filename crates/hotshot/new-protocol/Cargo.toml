@@ -10,7 +10,7 @@ version = { workspace = true }
 example-upgrade = []
 rewind = []
 stats = []
-testing = []
+testing = ["dep:hotshot-example-types"]
 trace = []
 
 [dependencies]
@@ -25,8 +25,7 @@ committable = { workspace = true }
 futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
-hotshot-example-types = { workspace = true }
-hotshot-testing = { workspace = true }
+hotshot-example-types = { workspace = true, optional = true }
 hotshot-types = { workspace = true }
 hotshot-utils = { workspace = true }
 parking_lot = { workspace = true }
@@ -47,6 +46,8 @@ versions = { workspace = true }
 
 [dev-dependencies]
 bitvec = { workspace = true }
+hotshot-example-types = { workspace = true }
+hotshot-testing = { workspace = true }
 quickcheck = { workspace = true }
 vbs = { workspace = true }
 # Enables `vid/testing` for tests only: constructs non-codeword dispersals to

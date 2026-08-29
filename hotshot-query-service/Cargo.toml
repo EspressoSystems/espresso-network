@@ -42,6 +42,8 @@ sql-data-source = ["include_dir", "refinery", "refinery-core", "sqlx", "log", "r
 
 testing = [
     "espresso-macros",
+    "hotshot-example-types",
+    "hotshot-testing",
     "hotshot-query-service-types/testing",
     "rand",
     "tempfile",
@@ -74,10 +76,10 @@ espresso-macros = { workspace = true, optional = true }
 futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-events-service = { workspace = true }
-hotshot-example-types = { workspace = true }
+hotshot-example-types = { workspace = true, optional = true }
 hotshot-new-protocol = { workspace = true }
 hotshot-query-service-types = { workspace = true, features = ["sqlx", "web"] }
-hotshot-testing = { workspace = true }
+hotshot-testing = { workspace = true, optional = true }
 hotshot-types = { workspace = true }
 http-client = { workspace = true }
 
@@ -125,6 +127,7 @@ backtrace-on-stack-overflow = { version = "0.3", optional = true }
 axum = { workspace = true }
 disco-types = { workspace = true }
 generic-array = "0.14"
+hotshot-example-types = { workspace = true }
 # Enable our own `testing` feature when building tests.
 hotshot-query-service = { path = ".", features = ["testing"] }
 http-wire = { workspace = true, features = ["server"] }

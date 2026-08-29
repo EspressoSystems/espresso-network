@@ -3,6 +3,7 @@ use std::{collections::BTreeMap, marker::PhantomData, sync::Arc, time::Duration}
 use async_trait::async_trait;
 use committable::Commitment;
 use hotshot::{traits::BlockPayload, types::SignatureKey};
+#[cfg(any(test, feature = "testing"))]
 use hotshot_example_types::storage_types::TestStorage;
 use hotshot_types::{
     data::{
@@ -410,6 +411,7 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
     }
 }
 
+#[cfg(any(test, feature = "testing"))]
 #[async_trait]
 impl<T: NodeType> NewProtocolStorage<T> for TestStorage<T> {
     async fn append_cert2(&self, _view: ViewNumber, _cert: Certificate2<T>) -> anyhow::Result<()> {
