@@ -352,6 +352,11 @@ gen-bindings:
     # HACK: add serde support for fixed byte arrays in the generated bindings
     sed -i '/pub proof: \[alloy::sol_types::private::FixedBytes<32>; 160usize\],/i \        #[serde(with = "serde_arrays")]' contracts/rust/adapter/src/bindings/*.rs
 
+    # `forge bind` rewrites mod.rs, dropping the feature gates declared in
+    # contracts/rust/adapter/Cargo.toml. Put them back.
+    sed -i -E 's%^pub mod (light_client(_v[23])?_mock);%#[cfg(feature = "mocks")]\npub mod \1;%' contracts/rust/adapter/src/bindings/mod.rs
+    sed -i -E 's%^pub mod (i_plonk_verifier|i_reward_claim|light_client_arbitrum(_v[23])?);%#[cfg(feature = "unused-bindings")]\npub mod \1;%' contracts/rust/adapter/src/bindings/mod.rs
+
     just export-contract-abis
     just gen-go-bindings
 

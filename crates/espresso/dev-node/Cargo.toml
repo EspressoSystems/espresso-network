@@ -19,7 +19,7 @@ espresso-node = { path = "../node", features = ["testing", "embedded-db"] }
 espresso-types = { workspace = true, features = ["node"] }
 espresso-utils = { workspace = true, features = ["full"] }
 futures = { workspace = true }
-hotshot-contract-adapter = { workspace = true }
+hotshot-contract-adapter = { workspace = true, features = ["mocks"] }
 hotshot-state-prover = { workspace = true }
 hotshot-types = { workspace = true }
 http-wire = { workspace = true, features = ["server"] }

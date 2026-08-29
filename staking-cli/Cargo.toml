@@ -6,7 +6,15 @@ edition = { workspace = true }
 description = "A CLI to interact with the Espresso stake table contract"
 
 [features]
-testing = ["hotshot-state-prover", "warp", "test-server", "test-utils"]
+testing = [
+    "hotshot-state-prover",
+    "hotshot-state-prover/testing",
+    "warp",
+    "test-server",
+    "test-utils",
+    "espresso-contract-deployer/mocks",
+    "hotshot-contract-adapter/mocks",
+]
 
 [dependencies]
 alloy = { workspace = true }

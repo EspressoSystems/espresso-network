@@ -36,11 +36,8 @@ pub use crate::bindings::{
             StakeTableState as StakeTableStateSol,
         },
     },
-    light_client_mock::{self, LightClientMock},
     light_client_v2::{self, LightClientV2},
-    light_client_v2_mock::{self, LightClientV2Mock},
     light_client_v3::{self, LightClientV3},
-    light_client_v3_mock::{self, LightClientV3Mock},
     ops_timelock::OpsTimelock,
     ownable_upgradeable::OwnableUpgradeable,
     plonk_verifier::PlonkVerifier,
@@ -54,6 +51,12 @@ pub use crate::bindings::{
         self, BN254::G2Point as G2PointSol, EdOnBN254::EdOnBN254Point as EdOnBN254PointSol,
         StakeTableV3,
     },
+};
+#[cfg(feature = "mocks")]
+pub use crate::bindings::{
+    light_client_mock::{self, LightClientMock},
+    light_client_v2_mock::{self, LightClientV2Mock},
+    light_client_v3_mock::{self, LightClientV3Mock},
 };
 
 // For types that we need to interact with some functions but their bindings are not generated
@@ -90,29 +93,34 @@ impl From<LightClient::genesisStateReturn> for LightClientStateSol {
     }
 }
 
+#[cfg(feature = "mocks")]
 impl From<light_client_mock::LightClient::LightClientState> for LightClientStateSol {
     fn from(v: light_client_mock::LightClient::LightClientState) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }
+#[cfg(feature = "mocks")]
 impl From<light_client_mock::LightClientMock::finalizedStateReturn> for LightClientStateSol {
     fn from(v: light_client_mock::LightClientMock::finalizedStateReturn) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }
 
+#[cfg(feature = "mocks")]
 impl From<LightClientStateSol> for light_client_mock::LightClient::LightClientState {
     fn from(v: LightClientStateSol) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }
 
+#[cfg(feature = "mocks")]
 impl From<PlonkProofSol> for light_client_mock::IPlonkVerifier::PlonkProof {
     fn from(v: PlonkProofSol) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }
 
+#[cfg(feature = "mocks")]
 impl From<light_client_mock::LightClientMock::genesisStateReturn> for LightClientStateSol {
     fn from(v: light_client_mock::LightClientMock::genesisStateReturn) -> Self {
         unsafe { std::mem::transmute(v) }
@@ -131,11 +139,13 @@ impl From<LightClientV2::votingStakeTableStateReturn> for StakeTableStateSol {
     }
 }
 
+#[cfg(feature = "mocks")]
 impl From<light_client_v2_mock::LightClient::LightClientState> for LightClientStateSol {
     fn from(v: light_client_v2_mock::LightClient::LightClientState) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }
+#[cfg(feature = "mocks")]
 impl From<LightClientStateSol> for light_client_v2_mock::LightClient::LightClientState {
     fn from(v: LightClientStateSol) -> Self {
         unsafe { std::mem::transmute(v) }
@@ -152,18 +162,21 @@ impl From<StakeTableStateSol> for light_client_v2::LightClient::StakeTableState 
         unsafe { std::mem::transmute(v) }
     }
 }
+#[cfg(feature = "mocks")]
 impl From<StakeTableStateSol> for light_client_v2_mock::LightClient::StakeTableState {
     fn from(v: StakeTableStateSol) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }
 
+#[cfg(feature = "mocks")]
 impl From<LightClientV2Mock::genesisStateReturn> for LightClientStateSol {
     fn from(v: LightClientV2Mock::genesisStateReturn) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }
 
+#[cfg(feature = "mocks")]
 impl From<LightClientV2Mock::finalizedStateReturn> for LightClientStateSol {
     fn from(v: LightClientV2Mock::finalizedStateReturn) -> Self {
         unsafe { std::mem::transmute(v) }
@@ -176,6 +189,7 @@ impl From<PlonkProofSol> for light_client_v2::IPlonkVerifier::PlonkProof {
     }
 }
 
+#[cfg(feature = "mocks")]
 impl From<LightClientV2Mock::votingStakeTableStateReturn> for StakeTableStateSol {
     fn from(v: LightClientV2Mock::votingStakeTableStateReturn) -> Self {
         unsafe { std::mem::transmute(v) }
@@ -279,36 +293,42 @@ impl From<PlonkProofSol> for light_client_v3::IPlonkVerifier::PlonkProof {
 }
 
 // Transmute conversion functions for LightClientV3Mock
+#[cfg(feature = "mocks")]
 impl From<light_client_v3_mock::LightClient::LightClientState> for LightClientStateSol {
     fn from(v: light_client_v3_mock::LightClient::LightClientState) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }
 
+#[cfg(feature = "mocks")]
 impl From<LightClientStateSol> for light_client_v3_mock::LightClient::LightClientState {
     fn from(v: LightClientStateSol) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }
 
+#[cfg(feature = "mocks")]
 impl From<StakeTableStateSol> for light_client_v3_mock::LightClient::StakeTableState {
     fn from(v: StakeTableStateSol) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }
 
+#[cfg(feature = "mocks")]
 impl From<LightClientV3Mock::genesisStateReturn> for LightClientStateSol {
     fn from(v: LightClientV3Mock::genesisStateReturn) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }
 
+#[cfg(feature = "mocks")]
 impl From<LightClientV3Mock::finalizedStateReturn> for LightClientStateSol {
     fn from(v: LightClientV3Mock::finalizedStateReturn) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }
 
+#[cfg(feature = "mocks")]
 impl From<LightClientV3Mock::votingStakeTableStateReturn> for StakeTableStateSol {
     fn from(v: LightClientV3Mock::votingStakeTableStateReturn) -> Self {
         unsafe { std::mem::transmute(v) }

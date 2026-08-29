@@ -15,7 +15,7 @@ derive_more = { workspace = true }
 dotenvy = { workspace = true }
 espresso-safe-tx-builder = { workspace = true }
 espresso-types = { workspace = true, features = ["node"] }
-hotshot-contract-adapter = { workspace = true }
+hotshot-contract-adapter = { workspace = true, features = ["mocks"] }
 hotshot-types = { workspace = true }
 http-client = { workspace = true }
 serde = { workspace = true }
