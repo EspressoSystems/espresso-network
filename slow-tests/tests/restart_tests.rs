@@ -40,13 +40,12 @@ use espresso_node::{
         cdn::{TestingDef, WrappedSignatureKey},
     },
     options::{Modules, Options, PublicNodeConfig},
-    persistence::any::AnyPersistence,
     run::init_with_storage,
     testing::{staking_priv_keys, wait_for_decide_on_handle},
 };
 use espresso_types::{
     FeeAccount, L1Client, Leaf2, PrivKey, PubKey, SeqTypes, Transaction,
-    eth_signature_key::EthKeyPair, v0_3::ChainConfig,
+    eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig,
 };
 use futures::{
     future::{BoxFuture, FutureExt, join_all, try_join_all},
@@ -435,7 +434,9 @@ impl NodeParams {
 #[derive(Debug)]
 struct TestNode<S: TestableSequencerDataSource> {
     storage: S::Storage,
-    context: Option<SequencerContext<network::Production, AnyPersistence>>,
+    context: Option<
+        SequencerContext<network::Production, <S::Options as PersistenceOptions>::Persistence>,
+    >,
     modules: Modules,
     opt: Options,
     num_nodes: usize,
