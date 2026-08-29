@@ -90,7 +90,7 @@ use network::libp2p::split_off_peer_id;
 use options::Identity;
 pub use options::Options;
 use proposal_fetcher::ProposalFetcherConfig;
-pub use run::main;
+pub use run::{main, main_blocking};
 use serde::{Deserialize, Serialize};
 use tokio::select;
 use tracing::info;
