@@ -66,21 +66,21 @@ use crate::{
     state_signature::{self, StateSigner},
     util::spawn,
 };
-pub(crate) type ConsensusNode<N, P> = Node<N, P>;
-pub type Consensus<N, P> = hotshot::types::SystemContextHandle<SeqTypes, ConsensusNode<N, P>>;
+pub(crate) type ConsensusNode<N> = Node<N>;
+pub type Consensus<N> = hotshot::types::SystemContextHandle<SeqTypes, ConsensusNode<N>>;
 
 /// The sequencer context contains a consensus handle and other sequencer specific information.
 #[derive(Derivative, Clone)]
 #[derivative(Debug(bound = ""))]
-pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> {
+pub struct SequencerContext<N: ConnectedNetwork<PubKey>> {
     /// The consensus adapter that dispatches between old HotShot and new coordinator.
     #[derivative(Debug = "ignore")]
-    consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
+    consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N>>>,
 
     /// The request-response protocol
     #[derivative(Debug = "ignore")]
     #[allow(dead_code)]
-    pub request_response_protocol: RequestResponseProtocol<ConsensusNode<N, P>, N, P>,
+    pub request_response_protocol: RequestResponseProtocol<ConsensusNode<N>, N>,
 
     /// Context for generating state signatures.
     state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
@@ -105,10 +105,9 @@ pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence
     validator_config: ValidatorConfig<SeqTypes>,
 }
 
-impl<N, P> SequencerContext<N, P>
+impl<N> SequencerContext<N>
 where
     N: ConnectedNetwork<PubKey>,
-    P: SequencerPersistence,
 {
     #[tracing::instrument(skip_all, fields(node_id = initializer.instance_state().node_id))]
     #[allow(clippy::too_many_arguments)]
@@ -121,7 +120,7 @@ where
         anchor_view: Option<ViewNumber>,
         storage: Option<RequestResponseStorage>,
         state_catchup: ParallelStateCatchup,
-        persistence: Arc<P>,
+        persistence: Arc<dyn SequencerPersistence>,
         network: Arc<N>,
         coordinator_network: F,
         state_relay_server: Option<Url>,
@@ -340,11 +339,11 @@ where
     /// Constructor
     #[allow(clippy::too_many_arguments)]
     fn new(
-        consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
-        persistence: Arc<P>,
+        consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N>>>,
+        persistence: Arc<dyn SequencerPersistence>,
         state_signer: StateSigner<SequencerApiVersion>,
         external_event_handler: ExternalEventHandler,
-        request_response_protocol: RequestResponseProtocol<ConsensusNode<N, P>, N, P>,
+        request_response_protocol: RequestResponseProtocol<ConsensusNode<N>, N>,
         event_streamer: Arc<RwLock<EventsStreamer<SeqTypes>>>,
         node_state: NodeState,
         network_config: NetworkConfig<SeqTypes>,
@@ -448,7 +447,7 @@ where
     }
 
     /// Return a reference to the consensus adapter.
-    pub fn consensus_handle(&self) -> Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>> {
+    pub fn consensus_handle(&self) -> Arc<ConsensusHandle<SeqTypes, ConsensusNode<N>>> {
         self.consensus_handle.clone()
     }
 
@@ -557,7 +556,7 @@ where
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> Drop for SequencerContext<N, P> {
+impl<N: ConnectedNetwork<PubKey>> Drop for SequencerContext<N> {
     fn drop(&mut self) {
         if !self.detached {
             // Spawn a task to shut down the context
@@ -622,11 +621,11 @@ const LEGACY_SHUTDOWN_DECIDE_COUNT: u64 = 100;
 
 #[tracing::instrument(skip_all, fields(node_id))]
 #[allow(clippy::too_many_arguments)]
-async fn handle_events<N, P, C>(
-    consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
+async fn handle_events<N, C>(
+    consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N>>>,
     node_id: u64,
     mut events: impl Stream<Item = CoordinatorEvent<SeqTypes>> + Unpin,
-    persistence: Arc<P>,
+    persistence: Arc<dyn SequencerPersistence>,
     state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
     external_event_handler: ExternalEventHandler,
     events_streamer: Option<Arc<RwLock<EventsStreamer<SeqTypes>>>>,
@@ -634,7 +633,6 @@ async fn handle_events<N, P, C>(
     decide_tx: watch::Sender<DecideSignal>,
 ) where
     N: ConnectedNetwork<PubKey>,
-    P: SequencerPersistence,
     C: PersistenceEventConsumer + 'static,
 {
     let mut new_protocol_decides: u64 = 0;
@@ -725,14 +723,13 @@ const PROCESS_RETRY_INTERVAL: Duration = Duration::from_secs(30);
 /// Decoupled from [`handle_events`] so slow ingestion/GC can't stall (or drop) consensus events;
 /// cursor-driven, so it can lag without losing data.
 #[tracing::instrument(skip_all)]
-async fn process_decided_events_task<P, C>(
-    persistence: Arc<P>,
+async fn process_decided_events_task<C>(
+    persistence: Arc<dyn SequencerPersistence>,
     consumer: Arc<C>,
     mut decide_rx: watch::Receiver<DecideSignal>,
     anchor_view: Option<ViewNumber>,
     metrics: DecideProcessorMetrics,
 ) where
-    P: SequencerPersistence,
     C: PersistenceEventConsumer + 'static,
 {
     // Highest view confirmed processed, for the backlog gauge. Floored at the anchor view; the

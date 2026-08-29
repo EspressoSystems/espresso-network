@@ -30,10 +30,7 @@ use espresso_node::{
     network,
     testing::{TestConfig, TestConfigBuilder, wait_for_epochs},
 };
-use espresso_types::{
-    AuthenticatedValidatorMap, Header, PubKey, SeqTypes, ValidatedState,
-    v0::traits::SequencerPersistence,
-};
+use espresso_types::{AuthenticatedValidatorMap, Header, PubKey, SeqTypes, ValidatedState};
 use futures::{
     future::join_all,
     stream::{Stream, StreamExt},
@@ -362,8 +359,8 @@ async fn wait_for_version_on_events(
 
 /// Blocks until the legacy consensus proposes an upgrade, asserting it
 /// targets `version`.
-async fn wait_for_upgrade_proposal<P: SequencerPersistence>(
-    node: &SequencerContext<network::Memory, P>,
+async fn wait_for_upgrade_proposal(
+    node: &SequencerContext<network::Memory>,
     version: Version,
     deadline: Duration,
 ) {

@@ -8,7 +8,7 @@ use espresso_types::{
     Certificate2, FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey,
     Transaction,
     config::PublicNetworkConfig,
-    v0::traits::{PersistenceOptions, SequencerPersistence},
+    v0::traits::PersistenceOptions,
     v0_3::{
         AuthenticatedValidator, ChainConfig, RegisteredValidator, RewardAccountProofV1,
         RewardAccountQueryDataV1, RewardAccountV1, RewardAmount, RewardMerkleTreeV1,
@@ -95,21 +95,20 @@ pub trait SequencerDataSource:
 pub type Provider = AnyProvider<SeqTypes>;
 
 /// Create a provider for fetching missing data from a list of peer query services.
-pub(super) async fn provider<N, P>(
+pub(super) async fn provider<N>(
     peers: impl IntoIterator<Item = Url>,
-    state: &ApiState<N, P>,
+    state: &ApiState<N>,
     opt: LightClientOptions,
     db_opt: LightClientSqliteOptions,
 ) -> anyhow::Result<Provider>
 where
     N: ConnectedNetwork<PubKey>,
-    P: SequencerPersistence,
 {
     Ok(Provider::default()
         .with_provider(LightClientProvider::new(peers, state.clone(), opt, db_opt).await?))
 }
 
-pub(crate) trait SubmitDataSource<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> {
+pub(crate) trait SubmitDataSource<N: ConnectedNetwork<PubKey>> {
     fn submit(&self, tx: Transaction) -> impl Send + Future<Output = anyhow::Result<()>>;
 }
 

@@ -271,7 +271,7 @@ mod tests {
     };
 
     #[async_trait]
-    pub trait TestablePersistence: SequencerPersistence + MembershipPersistence {
+    pub trait TestablePersistence: SequencerPersistence + MembershipPersistence + Clone {
         type Storage: Sync;
 
         async fn tmp_storage() -> Self::Storage;
@@ -915,7 +915,10 @@ mod tests {
         storage
             .append_decided_leaves(
                 ViewNumber::new(2),
-                leaf_chain.iter().map(|(leaf, qc)| (leaf, (*qc).clone())),
+                &leaf_chain
+                    .iter()
+                    .map(|(leaf, qc)| (leaf, (*qc).clone()))
+                    .collect::<Vec<_>>(),
                 None,
                 &consumer,
             )
@@ -977,7 +980,7 @@ mod tests {
         storage
             .append_decided_leaves(
                 ViewNumber::new(3),
-                vec![(&leaf_info(leaves[3].clone()), qcs[3].clone())],
+                &[(&leaf_info(leaves[3].clone()), qcs[3].clone())],
                 None,
                 &consumer,
             )
@@ -1525,9 +1528,10 @@ mod tests {
         storage
             .append_decided_leaves(
                 ViewNumber::new(1),
-                leaf_chain
+                &leaf_chain
                     .iter()
-                    .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change(qc.clone()))),
+                    .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change(qc.clone())))
+                    .collect::<Vec<_>>(),
                 None,
                 &FailConsumer,
             )
@@ -1579,9 +1583,10 @@ mod tests {
         storage
             .append_decided_leaves(
                 ViewNumber::new(3),
-                leaf_chain
+                &leaf_chain
                     .iter()
-                    .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change(qc.clone()))),
+                    .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change(qc.clone())))
+                    .collect::<Vec<_>>(),
                 None,
                 &consumer,
             )
@@ -1755,9 +1760,10 @@ mod tests {
             storage
                 .persist_decided_leaves(
                     ViewNumber::new(view),
-                    leaf_chain
+                    &leaf_chain
                         .iter()
-                        .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change(qc.clone()))),
+                        .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change(qc.clone())))
+                        .collect::<Vec<_>>(),
                     None,
                     &consumer,
                 )
@@ -1931,9 +1937,10 @@ mod tests {
         storage
             .append_decided_leaves(
                 decided_view,
-                leaf_chain
+                &leaf_chain
                     .iter()
-                    .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change(qc.clone()))),
+                    .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change(qc.clone())))
+                    .collect::<Vec<_>>(),
                 None,
                 consumer,
             )
@@ -2173,7 +2180,7 @@ mod tests {
 
         // Decide a newer view, view 1.
         storage
-            .append_decided_leaves(ViewNumber::new(1), [], None, &NullEventConsumer)
+            .append_decided_leaves(ViewNumber::new(1), &[], None, &NullEventConsumer)
             .await
             .unwrap();
 
@@ -2212,7 +2219,7 @@ mod tests {
 
         // Decide an even newer view, triggering GC of the old data.
         storage
-            .append_decided_leaves(ViewNumber::new(2), [], None, &NullEventConsumer)
+            .append_decided_leaves(ViewNumber::new(2), &[], None, &NullEventConsumer)
             .await
             .unwrap();
         assert!(
@@ -2932,7 +2939,7 @@ mod tests {
         storage
             .append_decided_leaves(
                 ViewNumber::new(0),
-                [(
+                &[(
                     &leaf_info(leaf0.clone()),
                     CertificatePair::non_epoch_change(qc0),
                 )],
@@ -2949,7 +2956,7 @@ mod tests {
         storage
             .append_decided_leaves(
                 ViewNumber::new(2),
-                [(
+                &[(
                     &leaf_info(leaf2.clone()),
                     CertificatePair::non_epoch_change(qc2),
                 )],

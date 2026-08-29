@@ -47,11 +47,7 @@ pub enum Storage {
 }
 
 #[derive(Clone)]
-pub struct DataSource<
-    I: NodeImplementation<SeqTypes>,
-    N: ConnectedNetwork<PubKey>,
-    P: SequencerPersistence,
-> {
+pub struct DataSource<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>> {
     /// The consensus adapter handle
     pub consensus_handle: Arc<ConsensusHandle<SeqTypes, I>>,
     /// The node's state
@@ -59,15 +55,15 @@ pub struct DataSource<
     /// The storage
     pub storage: Option<Storage>,
     /// sequencer persistence
-    pub persistence: Arc<P>,
+    pub persistence: Arc<dyn SequencerPersistence>,
     /// Phantom data
     pub phantom: PhantomData<N>,
 }
 
 /// Implement the trait that allows the [`RequestResponseProtocol`] to calculate/derive a response for a specific request
 #[async_trait]
-impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerPersistence>
-    DataSourceTrait<Request> for DataSource<I, N, P>
+impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>> DataSourceTrait<Request>
+    for DataSource<I, N>
 where
     I::Storage: NewProtocolStorage<SeqTypes>,
 {

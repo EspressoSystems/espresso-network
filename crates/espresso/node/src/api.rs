@@ -23,7 +23,7 @@ use espresso_types::{
     config::PublicNetworkConfig,
     retain_accounts,
     traits::EventsPersistenceRead,
-    v0::traits::{SequencerPersistence, StateCatchup},
+    v0::traits::StateCatchup,
     v0_3::{
         ChainConfig, RegisteredValidator, RewardAccountQueryDataV1, RewardAccountV1, RewardAmount,
         RewardMerkleTreeV1, StakeTableEvent,
@@ -109,20 +109,20 @@ type BoxLazy<T> = Pin<Arc<Lazy<T, BoxFuture<'static, T>>>>;
 
 #[derive(Derivative)]
 #[derivative(Clone(bound = ""), Debug(bound = ""))]
-struct ApiState<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> {
+struct ApiState<N: ConnectedNetwork<PubKey>> {
     // The consensus state is initialized lazily so we can start the API (and healthcheck endpoints)
     // before consensus has started. Any endpoint that uses consensus state will wait for
     // initialization to finish, but endpoints that do not require a consensus handle can proceed
     // without waiting.
     #[derivative(Debug = "ignore")]
-    sequencer_context: BoxLazy<SequencerContext<N, P>>,
+    sequencer_context: BoxLazy<SequencerContext<N>>,
 
     // we cache `token_supply` for up to an hour, to avoid repeatedly querying the contract for information that rarely changes
     token_supply: Cache<(), U256>,
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> ApiState<N, P> {
-    fn new(context_init: impl Future<Output = SequencerContext<N, P>> + Send + 'static) -> Self {
+impl<N: ConnectedNetwork<PubKey>> ApiState<N> {
+    fn new(context_init: impl Future<Output = SequencerContext<N>> + Send + 'static) -> Self {
         Self {
             sequencer_context: Arc::pin(Lazy::from_future(context_init.boxed())),
             token_supply: Cache::builder()
@@ -150,7 +150,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> ApiState<N, P> {
             .event_streamer()
     }
 
-    async fn consensus_handle(&self) -> Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>> {
+    async fn consensus_handle(&self) -> Arc<ConsensusHandle<SeqTypes, ConsensusNode<N>>> {
         self.sequencer_context
             .as_ref()
             .get()
@@ -169,12 +169,10 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> ApiState<N, P> {
     }
 }
 
-type StorageState<N, P, D> = ExtensibleDataSource<D, ApiState<N, P>>;
+type StorageState<N, D> = ExtensibleDataSource<D, ApiState<N>>;
 
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> EventsSource<SeqTypes>
-    for ApiState<N, P>
-{
+impl<N: ConnectedNetwork<PubKey>> EventsSource<SeqTypes> for ApiState<N> {
     type EventStream = BoxStream<'static, Arc<Event<SeqTypes>>>;
     type LegacyEventStream = BoxStream<'static, Arc<LegacyEvent<SeqTypes>>>;
 
@@ -212,9 +210,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> EventsSource<SeqTypes
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, D: Send + Sync, P: SequencerPersistence> TokenDataSource<SeqTypes>
-    for StorageState<N, P, D>
-{
+impl<N: ConnectedNetwork<PubKey>, D: Send + Sync> TokenDataSource<SeqTypes> for StorageState<N, D> {
     async fn get_initial_supply_l1(&self) -> anyhow::Result<U256> {
         self.as_ref().get_initial_supply_l1().await
     }
@@ -228,17 +224,13 @@ impl<N: ConnectedNetwork<PubKey>, D: Send + Sync, P: SequencerPersistence> Token
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, D: Send + Sync, P: SequencerPersistence> SubmitDataSource<N, P>
-    for StorageState<N, P, D>
-{
+impl<N: ConnectedNetwork<PubKey>, D: Send + Sync> SubmitDataSource<N> for StorageState<N, D> {
     async fn submit(&self, tx: Transaction) -> anyhow::Result<()> {
         self.as_ref().submit(tx).await
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> StakeTableDataSource<SeqTypes>
-    for StorageState<N, P, D>
-{
+impl<N: ConnectedNetwork<PubKey>, D: Sync> StakeTableDataSource<SeqTypes> for StorageState<N, D> {
     /// Get the stake table for a given epoch
     async fn get_stake_table(
         &self,
@@ -318,9 +310,7 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> StakeTableDa
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> TokenDataSource<SeqTypes>
-    for ApiState<N, P>
-{
+impl<N: ConnectedNetwork<PubKey>> TokenDataSource<SeqTypes> for ApiState<N> {
     async fn get_initial_supply_l1(&self) -> anyhow::Result<U256> {
         let node_state = self.sequencer_context.as_ref().get().await.node_state();
         let fetcher = node_state.coordinator.membership().fetcher().clone();
@@ -361,9 +351,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> TokenDataSource<SeqTy
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<SeqTypes>
-    for ApiState<N, P>
-{
+impl<N: ConnectedNetwork<PubKey>> StakeTableDataSource<SeqTypes> for ApiState<N> {
     /// Get the stake table for a given epoch
     async fn get_stake_table(
         &self,
@@ -530,8 +518,8 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence>
-    RequestResponseDataSource<SeqTypes> for StorageState<N, P, D>
+impl<N: ConnectedNetwork<PubKey>, D: Sync> RequestResponseDataSource<SeqTypes>
+    for StorageState<N, D>
 {
     async fn request_vid_shares(
         &self,
@@ -546,8 +534,8 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence>
 }
 
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence>
-    StateCertFetchingDataSource<SeqTypes> for StorageState<N, P, D>
+impl<N: ConnectedNetwork<PubKey>, D: Sync> StateCertFetchingDataSource<SeqTypes>
+    for StorageState<N, D>
 {
     async fn request_state_cert(
         &self,
@@ -558,9 +546,7 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence>
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> RequestResponseDataSource<SeqTypes>
-    for ApiState<N, P>
-{
+impl<N: ConnectedNetwork<PubKey>> RequestResponseDataSource<SeqTypes> for ApiState<N> {
     async fn request_vid_shares(
         &self,
         block_number: u64,
@@ -664,9 +650,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> RequestResponseDataSo
 }
 
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateCertFetchingDataSource<SeqTypes>
-    for ApiState<N, P>
-{
+impl<N: ConnectedNetwork<PubKey>> StateCertFetchingDataSource<SeqTypes> for ApiState<N> {
     async fn request_state_cert(
         &self,
         epoch: u64,
@@ -752,9 +736,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateCertFetchingData
 
 // Thin wrapper implementations that delegate to persistence
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> StateCertDataSource
-    for StorageState<N, P, D>
-{
+impl<N: ConnectedNetwork<PubKey>, D: Sync> StateCertDataSource for StorageState<N, D> {
     async fn get_state_cert_by_epoch(
         &self,
         epoch: u64,
@@ -772,7 +754,7 @@ impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> StateCertDat
 }
 
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateCertDataSource for ApiState<N, P> {
+impl<N: ConnectedNetwork<PubKey>> StateCertDataSource for ApiState<N> {
     async fn get_state_cert_by_epoch(
         &self,
         epoch: u64,
@@ -791,9 +773,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateCertDataSource f
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SubmitDataSource<N, P>
-    for ApiState<N, P>
-{
+impl<N: ConnectedNetwork<PubKey>> SubmitDataSource<N> for ApiState<N> {
     async fn submit(&self, tx: Transaction) -> anyhow::Result<()> {
         let handle = self.consensus_handle().await;
 
@@ -826,10 +806,9 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SubmitDataSource<N, P
     }
 }
 
-impl<N, P, D> NodeStateDataSource for StorageState<N, P, D>
+impl<N, D> NodeStateDataSource for StorageState<N, D>
 where
     N: ConnectedNetwork<PubKey>,
-    P: SequencerPersistence,
     D: Sync,
 {
     async fn node_state(&self) -> NodeState {
@@ -837,11 +816,10 @@ where
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + Send + Sync>
-    data_source::DatabaseMetadataSource for StorageState<N, P, D>
+impl<N: ConnectedNetwork<PubKey>, D: CatchupStorage + Send + Sync>
+    data_source::DatabaseMetadataSource for StorageState<N, D>
 where
     N: ConnectedNetwork<PubKey>,
-    P: SequencerPersistence,
     D: data_source::DatabaseMetadataSource + Send + Sync,
 {
     async fn get_table_sizes(&self) -> anyhow::Result<Vec<data_source::TableSize>> {
@@ -853,11 +831,10 @@ where
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + Send + Sync>
-    data_source::PruningDataSource for StorageState<N, P, D>
+impl<N: ConnectedNetwork<PubKey>, D: CatchupStorage + Send + Sync> data_source::PruningDataSource
+    for StorageState<N, D>
 where
     N: ConnectedNetwork<PubKey>,
-    P: SequencerPersistence,
     D: data_source::PruningDataSource + Send + Sync,
 {
     async fn get_oldest_block(
@@ -875,8 +852,8 @@ where
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + Send + Sync>
-    CatchupDataSource for StorageState<N, P, D>
+impl<N: ConnectedNetwork<PubKey>, D: CatchupStorage + Send + Sync> CatchupDataSource
+    for StorageState<N, D>
 {
     #[tracing::instrument(skip(self, instance))]
     async fn get_accounts(
@@ -1071,17 +1048,16 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + S
     }
 }
 
-impl<N, P> NodeStateDataSource for ApiState<N, P>
+impl<N> NodeStateDataSource for ApiState<N>
 where
     N: ConnectedNetwork<PubKey>,
-    P: SequencerPersistence,
 {
     async fn node_state(&self) -> NodeState {
         self.sequencer_context.as_ref().get().await.node_state()
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> CatchupDataSource for ApiState<N, P> {
+impl<N: ConnectedNetwork<PubKey>> CatchupDataSource for ApiState<N> {
     #[tracing::instrument(skip(self, _instance))]
     async fn get_accounts(
         &self,
@@ -1250,31 +1226,25 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> CatchupDataSource for
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> HotShotConfigDataSource
-    for StorageState<N, P, D>
-{
+impl<N: ConnectedNetwork<PubKey>, D: Sync> HotShotConfigDataSource for StorageState<N, D> {
     async fn get_config(&self) -> PublicNetworkConfig {
         self.as_ref().network_config().await.into()
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> HotShotConfigDataSource
-    for ApiState<N, P>
-{
+impl<N: ConnectedNetwork<PubKey>> HotShotConfigDataSource for ApiState<N> {
     async fn get_config(&self) -> PublicNetworkConfig {
         self.network_config().await.into()
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> NodeKeysDataSource
-    for StorageState<N, P, D>
-{
+impl<N: ConnectedNetwork<PubKey>, D: Sync> NodeKeysDataSource for StorageState<N, D> {
     async fn node_public_keys(&self) -> NodePublicKeys {
         self.as_ref().node_public_keys().await
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> NodeKeysDataSource for ApiState<N, P> {
+impl<N: ConnectedNetwork<PubKey>> NodeKeysDataSource for ApiState<N> {
     async fn node_public_keys(&self) -> NodePublicKeys {
         let ctx = self.sequencer_context.as_ref().get().await.get_ref();
         let config = ctx.validator_config();
@@ -1295,18 +1265,14 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> NodeKeysDataSource fo
 }
 
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, D: Sync, P: SequencerPersistence> StateSignatureDataSource<N>
-    for StorageState<N, P, D>
-{
+impl<N: ConnectedNetwork<PubKey>, D: Sync> StateSignatureDataSource<N> for StorageState<N, D> {
     async fn get_state_signature(&self, height: u64) -> Option<LCV3StateSignatureRequestBody> {
         self.as_ref().get_state_signature(height).await
     }
 }
 
 #[async_trait]
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateSignatureDataSource<N>
-    for ApiState<N, P>
-{
+impl<N: ConnectedNetwork<PubKey>> StateSignatureDataSource<N> for ApiState<N> {
     async fn get_state_signature(&self, height: u64) -> Option<LCV3StateSignatureRequestBody> {
         self.state_signer()
             .await
@@ -1834,15 +1800,14 @@ struct LightClientProvider {
 }
 
 impl LightClientProvider {
-    pub async fn new<N, P>(
+    pub async fn new<N>(
         peers: impl IntoIterator<Item = Url>,
-        state: ApiState<N, P>,
+        state: ApiState<N>,
         opt: LightClientOptions,
         db_opt: LightClientSqliteOptions,
     ) -> anyhow::Result<Self>
     where
         N: ConnectedNetwork<PubKey>,
-        P: SequencerPersistence,
     {
         let db = db_opt
             .connect()
@@ -1913,7 +1878,7 @@ pub mod test_helpers {
     };
     use espresso_types::{
         MOCK_SEQUENCER_VERSIONS, NamespaceId, ValidatedState,
-        v0::traits::{NullEventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
+        v0::traits::{NullEventConsumer, PersistenceOptions, StateCatchup},
     };
     use futures::{
         future::{FutureExt, join_all},
@@ -1952,14 +1917,16 @@ pub mod test_helpers {
     pub const STAKE_TABLE_CAPACITY_FOR_TEST: usize = 10;
 
     pub struct TestNetwork<P: PersistenceOptions, const NUM_NODES: usize> {
-        pub server: SequencerContext<network::Memory, P::Persistence>,
-        pub peers: Vec<SequencerContext<network::Memory, P::Persistence>>,
+        pub server: SequencerContext<network::Memory>,
+        pub peers: Vec<SequencerContext<network::Memory>>,
         pub cfg: TestConfig<{ NUM_NODES }>,
         // todo (abdul): remove this when fs storage is removed
         pub temp_dir: Option<TempDir>,
         pub contracts: Option<Contracts>,
         /// Deferred node indices not yet started (see [`Self::start_deferred_node`]).
         deferred: Vec<usize>,
+        /// The storage backend is erased once the nodes are running; `P` only selects it.
+        _persistence: std::marker::PhantomData<fn() -> P>,
     }
 
     pub struct TestNetworkConfig<const NUM_NODES: usize, P, C>
@@ -2383,6 +2350,7 @@ pub mod test_helpers {
                 temp_dir,
                 contracts: cfg.contracts,
                 deferred,
+                _persistence: std::marker::PhantomData,
             }
         }
 
@@ -2396,7 +2364,7 @@ pub mod test_helpers {
             persistence: P,
             catchup: C,
             upgrade: versions::Upgrade,
-        ) -> &SequencerContext<network::Memory, P::Persistence> {
+        ) -> &SequencerContext<network::Memory> {
             assert_eq!(
                 self.deferred.first(),
                 Some(&i),
@@ -2423,7 +2391,7 @@ pub mod test_helpers {
             persistence: P,
             catchup: C,
             upgrade: versions::Upgrade,
-        ) -> &SequencerContext<network::Memory, P::Persistence> {
+        ) -> &SequencerContext<network::Memory> {
             assert_ne!(i, 0, "node 0 runs the API server and cannot be restarted");
             assert!(
                 !self.deferred.contains(&i),
@@ -2459,7 +2427,7 @@ pub mod test_helpers {
             persistence: P,
             catchup: C,
             upgrade: versions::Upgrade,
-        ) -> SequencerContext<network::Memory, P::Persistence> {
+        ) -> SequencerContext<network::Memory> {
             let ctx = self
                 .cfg
                 .init_node(
@@ -2488,7 +2456,7 @@ pub mod test_helpers {
         }
 
         /// The context of the node at index `i` (node 0 is the API server).
-        pub fn node(&self, i: usize) -> &SequencerContext<network::Memory, P::Persistence> {
+        pub fn node(&self, i: usize) -> &SequencerContext<network::Memory> {
             if i == 0 {
                 &self.server
             } else {
@@ -2652,8 +2620,8 @@ pub mod test_helpers {
     /// Inclusion is not asserted on legacy versions because the test-only
     /// legacy builder stops producing non-empty blocks after roughly a
     /// hundred views, independent of any stake table activity.
-    pub async fn assert_node_live<P: SequencerPersistence>(
-        node: &SequencerContext<network::Memory, P>,
+    pub async fn assert_node_live(
+        node: &SequencerContext<network::Memory>,
         epoch_height: u64,
         epochs_ahead: u64,
     ) {
@@ -2708,10 +2676,7 @@ pub mod test_helpers {
 
     /// Asserts every node has decided at least `min_height`, and that nodes
     /// which have decided the same height agree on the leaf.
-    pub async fn assert_nodes_agree<P: SequencerPersistence>(
-        nodes: &[&SequencerContext<network::Memory, P>],
-        min_height: u64,
-    ) {
+    pub async fn assert_nodes_agree(nodes: &[&SequencerContext<network::Memory>], min_height: u64) {
         let leaves = join_all(nodes.iter().map(|node| node.decided_leaf())).await;
         let mut by_height: std::collections::BTreeMap<u64, Commitment<Leaf2>> = Default::default();
         for (i, leaf) in leaves.iter().enumerate() {
@@ -2966,7 +2931,7 @@ mod api_tests {
     use espresso_types::{
         Header, Leaf2, MOCK_SEQUENCER_VERSIONS, NamespaceId, NamespaceProofQueryData,
         ValidatedState,
-        traits::{EventConsumer, PersistenceOptions},
+        traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
     };
     use futures::{future, stream::StreamExt};
     use hotshot_example_types::node_types::TEST_VERSIONS;
@@ -2996,7 +2961,6 @@ mod api_tests {
     use super::{update::ApiEventConsumer, *};
     use crate::{
         network,
-        persistence::no_storage::NoStorage,
         testing::{TestConfigBuilder, wait_for_decide_on_handle},
     };
 
@@ -3211,13 +3175,12 @@ mod api_tests {
 
         let storage = D::create_storage().await;
         let persistence = D::persistence_options(&storage).create().await.unwrap();
-        let data_source: Arc<StorageState<network::Memory, NoStorage, _>> =
-            Arc::new(StorageState::new(
-                D::create(D::persistence_options(&storage), Default::default(), false)
-                    .await
-                    .unwrap(),
-                ApiState::new(future::pending()),
-            ));
+        let data_source: Arc<StorageState<network::Memory, _>> = Arc::new(StorageState::new(
+            D::create(D::persistence_options(&storage), Default::default(), false)
+                .await
+                .unwrap(),
+            ApiState::new(future::pending()),
+        ));
 
         // Create two non-consecutive leaf chains.
         let mut chain1 = vec![];
@@ -3338,7 +3301,10 @@ mod api_tests {
         persistence
             .append_decided_leaves(
                 ViewNumber::new(1),
-                leaf_chain.iter().map(|(leaf, qc)| (leaf, qc.clone())),
+                &leaf_chain
+                    .iter()
+                    .map(|(leaf, qc)| (leaf, qc.clone()))
+                    .collect::<Vec<_>>(),
                 None,
                 &FailConsumer,
             )
@@ -3356,7 +3322,10 @@ mod api_tests {
         persistence
             .append_decided_leaves(
                 ViewNumber::new(4),
-                leaf_chain.iter().map(|(leaf, qc)| (leaf, qc.clone())),
+                &leaf_chain
+                    .iter()
+                    .map(|(leaf, qc)| (leaf, qc.clone()))
+                    .collect::<Vec<_>>(),
                 None,
                 &consumer,
             )
@@ -3439,13 +3408,12 @@ mod api_tests {
 
         let storage = D::create_storage().await;
         let persistence = D::persistence_options(&storage).create().await.unwrap();
-        let data_source: Arc<StorageState<network::Memory, NoStorage, _>> =
-            Arc::new(StorageState::new(
-                D::create(D::persistence_options(&storage), Default::default(), false)
-                    .await
-                    .unwrap(),
-                ApiState::new(future::pending()),
-            ));
+        let data_source: Arc<StorageState<network::Memory, _>> = Arc::new(StorageState::new(
+            D::create(D::persistence_options(&storage), Default::default(), false)
+                .await
+                .unwrap(),
+            ApiState::new(future::pending()),
+        ));
         let consumer = ApiEventConsumer::from(data_source.clone());
 
         let mut qc = QuorumCertificate2::genesis(
@@ -3468,7 +3436,7 @@ mod api_tests {
         persistence
             .append_decided_leaves(
                 leaf.view_number(),
-                [(
+                &[(
                     &leaf_info(leaf.clone()),
                     CertificatePair::non_epoch_change(qc.clone()),
                 )],
@@ -3509,7 +3477,7 @@ mod api_tests {
         persistence
             .append_decided_leaves(
                 leaf.view_number(),
-                [(
+                &[(
                     &leaf_info(leaf.clone()),
                     CertificatePair::non_epoch_change(qc),
                 )],
@@ -10445,13 +10413,12 @@ mod test {
     /// Check the light client stake table endpoint: replaying `first_epoch + 2`
     /// reproduces the validator set loaded from storage, and an earlier epoch
     /// is a `BAD_REQUEST`.
-    async fn check_light_client_stake_table<N, P>(
+    async fn check_light_client_stake_table<N>(
         client: &Client<ClientErr, StaticVersion<0, 1>>,
-        server: &SequencerContext<N, P>,
+        server: &SequencerContext<N>,
         first_epoch: EpochNumber,
     ) where
         N: ConnectedNetwork<PubKey>,
-        P: SequencerPersistence,
     {
         let events: Vec<StakeTableEvent> = client
             .get(&format!("light-client/stake-table/{}", first_epoch + 2))

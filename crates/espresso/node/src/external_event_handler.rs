@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use either::Either;
-use espresso_types::{PubKey, SeqTypes, v0::traits::SequencerPersistence};
+use espresso_types::{PubKey, SeqTypes};
 use hotshot::types::Message;
 use hotshot_new_protocol::client::ClientApi;
 use hotshot_types::{
@@ -45,17 +45,16 @@ pub enum OutboundMessage {
 
 impl ExternalEventHandler {
     /// Creates a new `ExternalEventHandler` with the given network
-    pub async fn new<N, P>(
+    pub async fn new<N>(
         tasks: &mut TaskList,
         request_response_sender: Sender<Bytes>,
         outbound_message_receiver: Receiver<OutboundMessage>,
-        consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
+        consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N>>>,
         network: Arc<N>,
         public_key: PubKey,
     ) -> Result<Self>
     where
         N: ConnectedNetwork<PubKey>,
-        P: SequencerPersistence,
     {
         // Spawn the outbound message handling loop
         tasks.spawn(
@@ -98,14 +97,13 @@ impl ExternalEventHandler {
     }
 
     /// The main loop for sending outbound messages.
-    async fn outbound_message_loop<N, P>(
+    async fn outbound_message_loop<N>(
         mut receiver: Receiver<OutboundMessage>,
-        consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
+        consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N>>>,
         network: Arc<N>,
         public_key: PubKey,
     ) where
         N: ConnectedNetwork<PubKey>,
-        P: SequencerPersistence,
     {
         let mut network = Either::Left(network);
 

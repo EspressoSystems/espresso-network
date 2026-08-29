@@ -451,7 +451,7 @@ impl Inner {
         &mut self,
         view: ViewNumber,
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
-        consumer: &impl EventConsumer,
+        consumer: &dyn EventConsumer,
     ) -> anyhow::Result<Vec<RangeInclusive<ViewNumber>>> {
         // Generate a decide event for each leaf, to be processed by the event consumer. We make a
         // separate event for each leaf because it is possible we have non-consecutive leaves in our
@@ -759,9 +759,9 @@ impl SequencerPersistence for Persistence {
     async fn persist_decided_leaves(
         &self,
         _view: ViewNumber,
-        leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
+        leaf_chain: &[(&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)],
         _deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
-        _consumer: &(impl EventConsumer + 'static),
+        _consumer: &dyn EventConsumer,
     ) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
         let path = inner.decided_leaf2_path();
@@ -823,7 +823,7 @@ impl SequencerPersistence for Persistence {
         &self,
         view: ViewNumber,
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
-        consumer: &(impl EventConsumer + 'static),
+        consumer: &dyn EventConsumer,
     ) -> anyhow::Result<Option<ViewNumber>> {
         // Started before the lock acquisition: this pass holds the exclusive write lock, so the
         // metric must include the wait to reflect how long appends can block behind it.
@@ -1589,7 +1589,7 @@ impl SequencerPersistence for Persistence {
         Ok(())
     }
 
-    fn enable_metrics(&mut self, _metrics: &dyn Metrics) {
+    fn enable_metrics(&self, _metrics: &dyn Metrics) {
         // todo!()
     }
 }

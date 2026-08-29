@@ -1,6 +1,9 @@
+use std::sync::Arc;
+
+use async_lock::Mutex;
 use clap::Parser;
 use espresso_telemetry as telemetry;
-use espresso_types::traits::NullEventConsumer;
+use espresso_types::traits::{MembershipPersistence, NullEventConsumer, SequencerPersistence};
 use futures::future::FutureExt;
 use hotshot_types::traits::metrics::NoMetrics;
 use url::Url;
@@ -169,7 +172,7 @@ pub async fn init_with_storage<S>(
     opt: Options,
     mut storage_opt: S,
     public_node_config: PublicNodeConfig,
-) -> anyhow::Result<SequencerContext<network::Production, S::Persistence>>
+) -> anyhow::Result<SequencerContext<network::Production>>
 where
     S: DataSourceOptions,
 {
@@ -229,7 +232,10 @@ where
 
     let proposal_fetcher_config = opt.proposal_fetcher_config;
 
-    let persistence = storage_opt.create().await?;
+    let backend = storage_opt.create().await?;
+    let membership_persistence: Arc<Mutex<dyn MembershipPersistence>> =
+        Arc::new(Mutex::new(backend.clone()));
+    let persistence: Arc<dyn SequencerPersistence> = Arc::new(backend);
 
     // Initialize HotShot. If the user requested the HTTP module, we must initialize the handle in
     // a special way, in order to populate the API with consensus metrics. Otherwise, we initialize
@@ -274,6 +280,7 @@ where
                             network_params,
                             metrics,
                             persistence,
+                            membership_persistence,
                             l1_params,
                             storage,
                             consumer,
@@ -293,9 +300,10 @@ where
                 network_params,
                 Box::new(NoMetrics),
                 persistence,
+                membership_persistence,
                 l1_params,
                 None,
-                NullEventConsumer,
+                Box::new(NullEventConsumer),
                 opt.is_da,
                 opt.identity,
                 proposal_fetcher_config,

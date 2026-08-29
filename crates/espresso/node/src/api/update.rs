@@ -6,7 +6,7 @@ use anyhow::bail;
 use async_trait::async_trait;
 use derivative::Derivative;
 use derive_more::From;
-use espresso_types::{PubKey, v0::traits::SequencerPersistence};
+use espresso_types::PubKey;
 use hotshot_query_service::data_source::UpdateDataSource;
 use hotshot_types::{new_protocol::CoordinatorEvent, traits::network::ConnectedNetwork};
 
@@ -15,19 +15,17 @@ use crate::{EventConsumer, SeqTypes};
 
 #[derive(Derivative, From)]
 #[derivative(Clone(bound = ""), Debug(bound = "D: Debug"))]
-pub(crate) struct ApiEventConsumer<N, P, D>
+pub(crate) struct ApiEventConsumer<N, D>
 where
     N: ConnectedNetwork<PubKey>,
-    P: SequencerPersistence,
 {
-    inner: Arc<StorageState<N, P, D>>,
+    inner: Arc<StorageState<N, D>>,
 }
 
 #[async_trait]
-impl<N, P, D> EventConsumer for ApiEventConsumer<N, P, D>
+impl<N, D> EventConsumer for ApiEventConsumer<N, D>
 where
     N: ConnectedNetwork<PubKey>,
-    P: SequencerPersistence,
     D: SequencerDataSource + Debug + Send + Sync + 'static,
 {
     async fn handle_event(&self, event: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()> {

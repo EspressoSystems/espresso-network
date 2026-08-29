@@ -19,7 +19,7 @@ pub mod state_cert;
 pub mod state_signature;
 pub mod util;
 
-use std::{fmt::Debug, marker::PhantomData, sync::Arc, time::Duration};
+use std::{fmt::Debug, future::Future, marker::PhantomData, sync::Arc, time::Duration};
 
 use alloy::primitives::U256;
 use anyhow::Context;
@@ -36,6 +36,7 @@ use espresso_types::{
     v0_1::{ChainId, DECAF_CHAIN_ID, MAINNET_CHAIN_ID},
     v0_3::Fetcher,
 };
+use futures::future::BoxFuture;
 
 pub(crate) const MAINNET_TELEMETRY_ENDPOINT: &str = "https://telemetry.main.net.espresso.network";
 pub(crate) const DECAF_TELEMETRY_ENDPOINT: &str =
@@ -65,7 +66,6 @@ use hotshot::{
     },
     types::SignatureKey,
 };
-use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
 use hotshot_new_protocol::network::Cliquenet;
 use hotshot_orchestrator::client::{OrchestratorClient, get_complete_config};
 use hotshot_types::{
@@ -79,7 +79,6 @@ use hotshot_types::{
         metrics::{Metrics, NoMetrics},
         network::ConnectedNetwork,
         node_implementation::{NodeImplementation, NodeType},
-        storage::Storage,
     },
     utils::BuilderCommitment,
     x25519,
@@ -109,11 +108,11 @@ use crate::request_response::data_source::Storage as RequestResponseStorage;
     Eq(bound = ""),
     Hash(bound = "")
 )]
-pub struct Node<N: ConnectedNetwork<PubKey>, P: SequencerPersistence>(PhantomData<fn(&N, &P)>);
+pub struct Node<N: ConnectedNetwork<PubKey>>(PhantomData<fn(&N)>);
 
 // Using derivative to derive Clone triggers the clippy lint
 // https://rust-lang.github.io/rust-clippy/master/index.html#/incorrect_clone_impl_on_copy_type
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> Clone for Node<N, P> {
+impl<N: ConnectedNetwork<PubKey>> Clone for Node<N> {
     fn clone(&self) -> Self {
         *self
     }
@@ -121,11 +120,9 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> Clone for Node<N, P> 
 
 pub type SequencerApiVersion = StaticVersion<0, 1>;
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> NodeImplementation<SeqTypes>
-    for Node<N, P>
-{
+impl<N: ConnectedNetwork<PubKey>> NodeImplementation<SeqTypes> for Node<N> {
     type Network = N;
-    type Storage = Arc<P>;
+    type Storage = Arc<dyn SequencerPersistence>;
 }
 
 #[derive(Clone, Debug)]
@@ -236,22 +233,30 @@ pub struct L1Params {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn init_node<P>(
+pub async fn init_node(
     genesis: Genesis,
     network_params: NetworkParams,
     metrics: Box<dyn Metrics>,
-    mut persistence: P,
+    persistence: Arc<dyn SequencerPersistence>,
+    // The stake table fetcher takes its own serialized handle to the same backend. Wrapping the
+    // erased `persistence` here instead would make the guard's `Send` proof higher-ranked, which
+    // rustc cannot discharge for this function's future.
+    membership_persistence: Arc<Mutex<dyn MembershipPersistence>>,
     l1_params: L1Params,
     storage: Option<RequestResponseStorage>,
-    event_consumer: impl EventConsumer + 'static,
+    event_consumer: Box<dyn EventConsumer>,
     is_da: bool,
     identity: Identity,
     proposal_fetcher_config: ProposalFetcherConfig,
-) -> anyhow::Result<SequencerContext<network::Production, P>>
-where
-    P: SequencerPersistence + MembershipPersistence + DhtPersistentStorage,
-    Arc<P>: Storage<SeqTypes>,
-{
+) -> anyhow::Result<SequencerContext<network::Production>> {
+    /// Erase a sub-future to a boxed `Send` future.
+    ///
+    /// Discharges the `Send` proof here instead of letting it propagate into `init_node`'s own
+    /// opaque future, where the nested `async_trait` chains below the membership layer defeat
+    /// rustc's auto-trait leakage.
+    fn boxed<'a, T: Send + 'a>(f: impl Future<Output = T> + Send + 'a) -> BoxFuture<'a, T> {
+        Box::pin(f)
+    }
     // Expose genesis version fields via the status API.
     metrics
         .text_family(
@@ -466,7 +471,7 @@ where
     // Print the libp2p public key
     info!("Starting Libp2p with PeerID: {libp2p_public_key}");
 
-    let loaded_network_config_from_persistence = persistence.load_config().await?;
+    let loaded_network_config_from_persistence = boxed(persistence.load_config()).await?;
     let (mut network_config, wait_for_orchestrator, persist_config) = match (
         loaded_network_config_from_persistence,
         network_params.config_peers,
@@ -581,7 +586,7 @@ where
     // epoch_height, drb_difficulty, etc. those come from genesis and are applied above.
     // Saving before these updates would persist zeros for those values
     if persist_config {
-        persistence.save_config(&network_config).await?;
+        boxed(persistence.save_config(&network_config)).await?;
     }
 
     // If the `Libp2p` bootstrap nodes were supplied via the command line, override those
@@ -729,17 +734,17 @@ where
 
     let fetcher = Fetcher::new(
         Arc::new(state_catchup_providers.clone()),
-        Arc::new(Mutex::new(persistence.clone())),
+        membership_persistence,
         l1_client.clone(),
         genesis.chain_config,
     );
 
     info!("Spawning update loop");
 
-    fetcher.spawn_update_loop().await;
+    boxed(fetcher.spawn_update_loop()).await;
     info!("Update loop spawned. Fetching block reward");
 
-    let block_reward = fetcher.fetch_fixed_block_reward().await.ok();
+    let block_reward = boxed(fetcher.fetch_fixed_block_reward()).await.ok();
     info!("Block reward fetched: {:?}", block_reward);
     // Create the HotShot membership
     let mut membership = EpochCommittees::new_stake(
@@ -750,19 +755,18 @@ where
         epoch_height,
     );
     info!("Membership created. Reloading stake");
-    membership.reload_stake(RECENT_STAKE_TABLES_LIMIT).await;
+    boxed(membership.reload_stake(RECENT_STAKE_TABLES_LIMIT)).await;
     info!("Stake reloaded");
 
-    check_cliquenet_info_registered(
+    boxed(check_cliquenet_info_registered(
         &membership,
         &validator_config.public_key,
         genesis.base_version,
         genesis.chain_config.stake_table_contract,
         &l1_client,
-    )
+    ))
     .await;
 
-    let persistence = Arc::new(persistence);
     let coordinator = EpochMembershipCoordinator::new(
         membership,
         network_config.config.epoch_height,
@@ -798,16 +802,15 @@ where
     // Load saved consensus state from storage. It is loaded once here, both to
     // seed consensus in `SequencerContext::init` below and to tell whether the
     // network has already cut over to the new protocol.
-    let (initializer, anchor_view) = persistence
-        .load_consensus_state(instance_state, version_upgrade)
-        .await?;
+    let (initializer, anchor_view) =
+        boxed(persistence.load_consensus_state(instance_state, version_upgrade)).await?;
 
     let combined_network = {
         info!("Initializing Libp2p network");
         // Mainnet keeps today's libp2p protocol strings byte-identical.
         let chain_id = genesis.chain_config.chain_id;
         let network_discriminator = (chain_id != MAINNET_CHAIN_ID).then_some(chain_id.0);
-        let p2p_network = Libp2pNetwork::from_config(
+        let p2p_network = boxed(Libp2pNetwork::from_config(
             network_config.clone(),
             persistence.clone(),
             gossip_config,
@@ -821,7 +824,7 @@ where
             hotshot::traits::implementations::Libp2pMetricsValue::new(&*metrics),
             network_discriminator,
             network_params.libp2p_dht_put_quorum,
-        )
+        ))
         .await
         .with_context(|| {
             format!(
@@ -867,7 +870,7 @@ where
 
     let network = Arc::new(combined_network);
 
-    let mut ctx = SequencerContext::init(
+    let mut ctx = boxed(SequencerContext::init(
         network_config,
         version_upgrade,
         validator_config,
@@ -885,7 +888,7 @@ where
         event_consumer,
         proposal_fetcher_config,
         network_params.bootstrap_epoch_catchup_timeout,
-    )
+    ))
     .await?;
 
     if wait_for_orchestrator {
@@ -1058,10 +1061,7 @@ pub mod testing {
     use versions::EPOCH_VERSION;
 
     use super::*;
-    use crate::{
-        catchup::ParallelStateCatchup,
-        persistence::no_storage::{self, NoStorage},
-    };
+    use crate::{catchup::ParallelStateCatchup, persistence::no_storage};
 
     const STAKE_TABLE_CAPACITY_FOR_TEST: usize = 10;
     const BUILDER_CHANNEL_CAPACITY_FOR_TEST: usize = 128;
@@ -1707,7 +1707,7 @@ pub mod testing {
         pub async fn init_nodes(
             &self,
             upgrade: versions::Upgrade,
-        ) -> Vec<SequencerContext<network::Memory, NoStorage>> {
+        ) -> Vec<SequencerContext<network::Memory>> {
             join_all((0..self.num_nodes()).map(|i| async move {
                 self.init_node(
                     i,
@@ -1743,7 +1743,7 @@ pub mod testing {
             event_consumer: impl EventConsumer + 'static,
             upgrade: versions::Upgrade,
             upgrades: BTreeMap<Version, Upgrade>,
-        ) -> SequencerContext<network::Memory, P::Persistence> {
+        ) -> SequencerContext<network::Memory> {
             let config = self.config.clone();
             let my_peer_config = &config.known_nodes_with_stake[i];
             let is_da = config.known_da_nodes.contains(my_peer_config);
@@ -1788,7 +1788,10 @@ pub mod testing {
             tracing::info!(%builder_account, "prefunding builder account");
             state.prefund_account(builder_account, U256::MAX.into());
 
-            let persistence = persistence_opt.create().await.unwrap();
+            let backend = persistence_opt.create().await.unwrap();
+            let membership_persistence: Arc<Mutex<dyn MembershipPersistence>> =
+                Arc::new(Mutex::new(backend.clone()));
+            let persistence: Arc<dyn SequencerPersistence> = Arc::new(backend);
 
             let chain_config = state.chain_config.resolve().unwrap_or_default();
 
@@ -1825,7 +1828,7 @@ pub mod testing {
 
             let fetcher = Fetcher::new(
                 Arc::new(catchup_providers.clone()),
-                Arc::new(Mutex::new(persistence.clone())),
+                membership_persistence,
                 l1_client.clone(),
                 chain_config,
             );
@@ -1841,13 +1844,10 @@ pub mod testing {
             );
             membership.reload_stake(50).await;
 
-            let membership = Arc::new(membership);
-            let persistence = Arc::new(persistence);
-
             let coordinator = EpochMembershipCoordinator::new(
-                membership,
+                Arc::new(membership),
                 config.epoch_height,
-                &persistence.clone(),
+                &persistence,
             );
 
             let node_state = NodeState::new(

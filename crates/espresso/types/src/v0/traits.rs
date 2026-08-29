@@ -490,7 +490,7 @@ impl<T: StateCatchup + ?Sized> StateCatchup for Arc<T> {
 #[cfg(feature = "node")]
 #[async_trait]
 pub trait PersistenceOptions: Clone + Send + Sync + Debug + 'static {
-    type Persistence: SequencerPersistence + MembershipPersistence;
+    type Persistence: SequencerPersistence + MembershipPersistence + Clone;
 
     fn set_view_retention(&mut self, view_retention: u64);
     async fn create(&mut self) -> anyhow::Result<Self::Persistence>;
@@ -578,11 +578,11 @@ pub trait MembershipPersistence: Send + Sync + 'static {
 #[cfg(feature = "node")]
 #[async_trait]
 pub trait SequencerPersistence:
-    Sized + Send + Sync + Clone + 'static + DhtPersistentStorage + MembershipPersistence
+    Send + Sync + 'static + DhtPersistentStorage + MembershipPersistence
 {
     /// Use this storage as a state catchup backend, if supported.
     fn into_catchup_provider(
-        self,
+        self: Arc<Self>,
         _backoff: BackoffParams,
     ) -> anyhow::Result<Arc<dyn StateCatchup>> {
         bail!("state catchup is not implemented for this persistence type");
@@ -847,7 +847,7 @@ pub trait SequencerPersistence:
     async fn persist_event(
         &self,
         event: &CoordinatorEvent<SeqTypes>,
-        consumer: &(impl EventConsumer + 'static),
+        consumer: &dyn EventConsumer,
     ) -> Option<(ViewNumber, Option<Arc<CertificatePair<SeqTypes>>>)> {
         match event {
             CoordinatorEvent::LegacyEvent(hotshot_event) => {
@@ -863,16 +863,19 @@ pub trait SequencerPersistence:
                 let LeafInfo { leaf, .. } = leaf_chain.first()?;
                 let decided_view = leaf.view_number();
 
-                let chain = leaf_chain.iter().zip(
-                    std::iter::once((**committing_qc).clone()).chain(
-                        leaf_chain
-                            .iter()
-                            .map(|leaf| CertificatePair::for_parent(&leaf.leaf)),
-                    ),
-                );
+                let chain = leaf_chain
+                    .iter()
+                    .zip(
+                        std::iter::once((**committing_qc).clone()).chain(
+                            leaf_chain
+                                .iter()
+                                .map(|leaf| CertificatePair::for_parent(&leaf.leaf)),
+                        ),
+                    )
+                    .collect::<Vec<_>>();
 
                 if let Err(err) = self
-                    .persist_decided_leaves(decided_view, chain, deciding_qc.clone(), consumer)
+                    .persist_decided_leaves(decided_view, &chain, deciding_qc.clone(), consumer)
                     .await
                 {
                     tracing::error!(
@@ -894,14 +897,10 @@ pub trait SequencerPersistence:
                     .chain(leaf_infos.iter().map(|info| info.leaf.justify_qc()))
                     .take(leaf_infos.len())
                     .map(CertificatePair::non_epoch_change);
+                let chain = leaf_infos.iter().zip(certifying_qcs).collect::<Vec<_>>();
 
                 if let Err(err) = self
-                    .persist_decided_leaves(
-                        decided_view,
-                        leaf_infos.iter().zip(certifying_qcs),
-                        None,
-                        consumer,
-                    )
+                    .persist_decided_leaves(decided_view, &chain, None, consumer)
                     .await
                 {
                     tracing::error!(
@@ -948,9 +947,9 @@ pub trait SequencerPersistence:
     async fn append_decided_leaves(
         &self,
         decided_view: ViewNumber,
-        leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
+        leaf_chain: &[(&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)],
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
-        consumer: &(impl EventConsumer + 'static),
+        consumer: &dyn EventConsumer,
     ) -> anyhow::Result<()> {
         self.persist_decided_leaves(decided_view, leaf_chain, deciding_qc.clone(), consumer)
             .await?;
@@ -971,9 +970,9 @@ pub trait SequencerPersistence:
     async fn persist_decided_leaves(
         &self,
         decided_view: ViewNumber,
-        leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
+        leaf_chain: &[(&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)],
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
-        consumer: &(impl EventConsumer + 'static),
+        consumer: &dyn EventConsumer,
     ) -> anyhow::Result<()>;
 
     /// Generate decide events for `consumer` from persisted leaves, then GC processed data.
@@ -990,7 +989,7 @@ pub trait SequencerPersistence:
         &self,
         decided_view: ViewNumber,
         _deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
-        _consumer: &(impl EventConsumer + 'static),
+        _consumer: &dyn EventConsumer,
     ) -> anyhow::Result<Option<ViewNumber>> {
         Ok(Some(decided_view))
     }
@@ -1111,7 +1110,7 @@ pub trait SequencerPersistence:
         state_cert: LightClientStateUpdateCertificateV2<SeqTypes>,
     ) -> anyhow::Result<()>;
 
-    fn enable_metrics(&mut self, metrics: &dyn Metrics);
+    fn enable_metrics(&self, metrics: &dyn Metrics);
 }
 
 #[async_trait]
@@ -1141,7 +1140,7 @@ impl EventConsumer for NullEventConsumer {
 
 #[cfg(feature = "node")]
 #[async_trait]
-impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
+impl<P: SequencerPersistence + ?Sized> Storage<SeqTypes> for Arc<P> {
     async fn append_vid(
         &self,
         proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
@@ -1267,7 +1266,7 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
 
 #[cfg(feature = "node")]
 #[async_trait]
-impl<P: SequencerPersistence> NewProtocolStorage<SeqTypes> for Arc<P> {
+impl<P: SequencerPersistence + ?Sized> NewProtocolStorage<SeqTypes> for Arc<P> {
     async fn append_cert2(
         &self,
         view: ViewNumber,
