@@ -941,6 +941,31 @@ Each change did what it was supposed to: `aide`/`axum`/`espresso-api` disappear 
 spawn types). What is left is generic container code (`alloc`, `core`), the query-service data
 sources, and the node's own code - which is where the next round should look.
 
+## Fix 8: adapter follow-ups, and the one blocker that caps them
+
+Branch `ma/compile-times-adapter-followups` (commit 2031ac55ff2, on top of fix 7).
+
+- `espresso-contract-deployer` gained a default-off `mocks` feature
+  (`contracts/rust/deployer/Cargo.toml:8`); the mock deploys moved to a new
+  `contracts/rust/deployer/src/mock.rs` and, without the feature, the three entry points return a
+  clear error, so the runtime `mock: bool` API still compiles. A `link_library` helper
+  (`lib.rs:115`) also removed five duplicated placeholder-linking blocks.
+- `hotshot-state-prover` gained a default-off `testing` feature (`Cargo.toml:13`) gating the three
+  `mock_ledger` modules and `test_utils`.
+
+Remaining blocker, precisely: **one binary drags the mock bindings into the node library**.
+`crates/espresso/node/src/bin/deploy.rs:236` exposes `--use-mock`, which needs the deployer's `mocks`
+feature; cargo resolves features per *package*, so the `espresso-node` library compiled in every
+release build gets `hotshot-contract-adapter/mocks` too. Dropping `features = ["mocks"]` at
+`crates/espresso/node/Cargo.toml:61` leaves the node with only `default` + `jellyfish`, and every
+other mock use in the node is already behind `cfg(any(test, feature = "testing"))` - so moving that
+binary to its own package collects the rest of the win. `--use-mock` is used by
+`docker-compose.yaml:48,111`, `process-compose.yaml:60,98` and
+`contracts/rust/deployer/scripts/testnet-governance-deploy.sh:162`.
+
+`jellyfish` genuinely cannot be gated away: non-test prover service code needs the adapter's
+`From<jf_plonk::Proof> for PlonkProofSol` (`hotshot-state-prover/src/v{1,2,3}/service.rs:123,131,134`).
+
 ## Open items
 
 - Verify the stack in real CI. Every number here is from a local 4-core emulation of the
