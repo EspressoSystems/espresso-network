@@ -1011,9 +1011,14 @@ espresso-types 26.8 s, contract-adapter 17.8 s, hotshot-types 17.1 s.
 
 - Verify the stack in real CI. Every number here is from a local 4-core emulation of the
   `Build espresso-node AMD` job shape; the runner is ~1.8x slower per core.
-- `espresso-dev-node` still pays 43 s for its wrapper bin because
-  `crates/espresso/dev-node/src/main.rs:255` blocks on its own `async_main`, which awaits
-  `espresso-node` futures. It needs the same treatment as fix 1.
+- `espresso-dev-node`'s 43 s bin unit is **not** fixable the way fix 1 fixed the others, and the
+  attempt was dropped after inspection: `async_main` lives in the binary itself
+  (`crates/espresso/dev-node/src/main.rs:260`, a 33 KB file) and the dev-node *library* is trivial
+  (0.2 s in the timing profile). Moving `async_main` into the library would relocate the codegen,
+  not remove it - unlike `espresso-node`, where the library already contained everything and the
+  binary's copy was pure duplication. Reducing that unit means reducing what dev-node instantiates
+  from `espresso-node`'s `testing` surface (`api::test_helpers`, `api::data_source::testing`,
+  `testing::TestConfigBuilder`).
 - The adapter follow-ups are done (fixes 8 and 9); what remains there is that `jellyfish` is
   genuinely needed by non-test prover service code, so it cannot be gated away for crates that do
   depend on the prover.
