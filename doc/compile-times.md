@@ -943,9 +943,22 @@ sources, and the node's own code - which is where the next round should look.
 
 ## Open items
 
-- Local `-Ztime-passes` split (frontend vs LLVM vs link) for the node lib and the node bin.
-- `cargo llvm-lines` for the node lib and bin: which generic instantiations dominate codegen.
-- Measure `-Zshare-generics=y` in release.
-- Measure codegen-units variations for the node lib.
-- Measure removing test-only deps from `espresso-node` normal deps.
-- Measure moving the 13 bins out of the `espresso-node` crate.
+- Verify the stack in real CI. Every number here is from a local 4-core emulation of the
+  `Build espresso-node AMD` job shape; the runner is ~1.8x slower per core.
+- `espresso-dev-node` still pays 43 s for its wrapper bin because
+  `crates/espresso/dev-node/src/main.rs:255` blocks on its own `async_main`, which awaits
+  `espresso-node` futures. It needs the same treatment as fix 1.
+- Adapter follow-ups (see fix 7): gate the deployer's mock-deploy branches, gate
+  `hotshot-state-prover`'s `mock_ledger`, and move `espresso-node/src/bin/deploy.rs --use-mock` out
+  of the node package, since cargo resolves features per package, not per target.
+- Next codegen targets inside the node lib, from the stacked `llvm-lines`: `hotshot-query-service`
+  data sources (0.81 M IR lines), the node's own code (0.75 M), `hotshot-task-impls` (0.68 M), and
+  the `alloc`/`core` container instantiations (2.45 M combined).
+- `test-utils` is still a normal dependency of `crates/hotshot/new-protocol` (`Cargo.toml:37`)
+  though only used under `cfg(test)`.
+- Test-profile codegen attribution was never obtained: `RUSTC_BOOTSTRAP=1` breaks `rustix` in this
+  tree, and `cargo llvm-lines --profile test` filled the disk. The wall-clock A/B was measured
+  instead (-37 %).
+- `slow-tests` has `espresso-node = { features = ["testing"] }` in `[dependencies]` while being a
+  default member, so a plain `cargo build` still unifies `testing` into release builds of the node
+  lib. Moving it to `[dev-dependencies]` is untested here.
