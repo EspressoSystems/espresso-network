@@ -773,6 +773,29 @@ Erasing spawned future types removes a seventh of all monomorphized items but on
 the wall clock: the tokio task shims are numerous and individually cheap. Keep it as a cheap
 mechanical change, not as a headline fix.
 
+## Everything stacked: -44 %
+
+All four branches merged cleanly (no conflicts) plus the non-async entry point, measured on the same
+4-core harness:
+
+| variant | wall | vs baseline | cpu-s | units |
+|---|---|---|---|---|
+| baseline | 391 s | - | 560 | 1429 |
+| dep-cut | 376 s | -4 % | 503 | 1388 |
+| boxed spawns | 371 s | -5 % | 534 | 1429 |
+| dyn persistence (`AnyPersistence`) | 322 s | -18 % | 495 | 1429 |
+| dyn API routers | 311 s | -20 % | 500 | 1435 |
+| non-async entry point | 285 s | -27 % | 464 | 1429 |
+| **all five stacked** | **220 s** | **-44 %** | **366** | 1394 |
+
+In the stacked build the node lib is 141.6 s and the next units are contract-adapter 25.0 s,
+espresso-types 24.3 s, hotshot-types 17.2 s, hotshot-testing 16.6 s - the profile is no longer
+dominated by one crate.
+
+Applied to the real `Build espresso-node AMD` job (748 s), the same proportion predicts roughly
+420 s, and the wrapper-bin part of the win repeats in `Build espresso-node-sqlite AMD` (258 s bin
+unit) and `Build espresso-dev-node AMD` (206 s bin unit, needs its own entry point).
+
 ## Open items
 
 - Local `-Ztime-passes` split (frontend vs LLVM vs link) for the node lib and the node bin.
