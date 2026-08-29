@@ -1,6 +1,6 @@
 # Espresso node compile times: measurements and where to cut
 
-Status: in progress (2026-08-28). Owner: compile-time investigation, branch `ma/compilation-times`. All numbers are
+Status: measured (2026-08-28/29). Raw run log: `doc/compile-times-raw-runs.txt`. Owner: compile-time investigation, branch `ma/compilation-times`. All numbers are
 measured, source is named for each. Do not trust unlabeled estimates in this file; there should be none.
 
 ## TL;DR
@@ -19,6 +19,24 @@ measured, source is named for each. Do not trust unlabeled estimates in this fil
   `embedded-db`, `embedded-db+testing`).
 - The release job `other` builds the node lib with the `testing` feature (368 s, the single most expensive unit in CI)
   because feature unification pulls test-only code into a release build.
+
+## Branches produced by this investigation
+
+| branch | commit | what |
+|---|---|---|
+| `ma/compile-times-nonasync-main` | 70b602b336a | fix 1, blocking entry point in the library |
+| `ma/compile-times-dyn-api` | de15c2c4218 | fix 2, erase the API state generic in the routers |
+| `ma/compile-times-dyn-persistence` | d5f45ad8b46 | fix 3, one persistence instantiation |
+| `ma/compile-times-boxed-spawns` | 63ae02a | fix 4, erase spawned future types |
+| `ma/compile-times-depcut` | 63737de9757 | fix 5, test-only deps optional |
+| `ma/compile-times-no-testing-dep` | 03ab8c01cb3 | fix 6, test support out of the release graph |
+| `ma/compile-times-adapter-features` | 1092bb0c10a | fix 7, gate generated bindings |
+| `ma/compile-times-adapter-followups` | 2031ac55ff2 | fix 8, gate mock deployment and mock ledgers |
+| `ma/compile-times-move-deploy-bin` | f590e6d191e | fix 9, `deploy` binary in its own package |
+| `ma/compile-times-all` | fc587eaf4c6 | all of the above merged, `cargo check` green |
+
+None are pushed. Each was checked with `cargo check` in the configurations listed in its section; no
+tests were run anywhere in this investigation.
 
 ## Method
 
