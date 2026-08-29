@@ -842,7 +842,14 @@ All numbers are the 4-core CI-shaped harness (baseline 391 s) unless stated.
 | 3 | one persistence instantiation (enum dispatch) | `ma/compile-times-dyn-persistence` | **-18 %** | new `persistence/any.rs`, 54 forwarded methods |
 | 4 | erase spawned future types | `ma/compile-times-boxed-spawns` | -5 % wall, -14 % mono items | 3 helpers, 18 sites |
 | 5 | test-only deps out of the release graph | `ma/compile-times-depcut` (+ `ma/compile-times-no-testing-dep`) | -4 %, 41 fewer crates | Cargo.toml only |
-| | **all stacked** | `ma/compile-times-all` | **-44 %** (391 -> 220 s) | |
+| 6 | keep `hotshot-testing`/`hotshot-example-types` out of the release graph | `ma/compile-times-no-testing-dep` | included below | Cargo.toml + 2 `cfg`s |
+| | **all stacked** | `ma/compile-times-all` | **-48 %** (391 -> 202 s) | |
+
+Change #6 exists because #5 was not enough: `hotshot-testing` still compiled in release builds via
+`crates/hotshot/new-protocol`, which declared it as a *normal* dependency although all four uses are
+`#[cfg(test)]`. After gating that edge (plus `hotshot-query-service` and `hotshot-builder-shared`),
+`cargo tree -p espresso-node -e normal -i hotshot-testing` prints nothing, and the edge reappears
+with `--features testing`, so the test wiring is intact. Stacked wall time drops 220 s -> 202 s.
 
 Secondary effects of the same stack: the test-profile `espresso-node` lib unit drops 37 %
 (150.6 -> 94.2 s locally; 418-431 s in CI), `cargo build --profile test --bins` drops 35 %
