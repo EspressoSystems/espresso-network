@@ -9,37 +9,70 @@ on:
         required: true
         type: choice
         options:
-          - decaf.rc
+          - decaf.canary
           - decaf
-          - mainnet.rc
+          - mainnet.canary
           - mainnet
       release-tag:
-        description: Source git tag (e.g. 20260408 or 20260408.rc1)
+        description: Source git tag (e.g. 0.4.0.5)
         required: true
         type: string
-      skip-progression:
-        description: Skip progression check (for hotfixes)
+      tracker-issue:
+        description: Issue number of the tracker that dispatched this promotion (for status comments). Leave empty when running manually.
         required: false
-        type: boolean
-        default: false
+        type: string
+        default: ""
+
+permissions:
+  # Re-tagging via `docker buildx imagetools create` pushes a manifest, which
+  # requires write access to the package. `issues: write` lets the dispatched
+  # run post its own URL back to the tracker (no polling needed in the
+  # dispatcher since the REST dispatches endpoint doesn't return a run id).
+  contents: read
+  packages: write
+  issues: write
 
 env:
   REGISTRY: ghcr.io/espressosystems/espresso-network
   REFERENCE_SERVICE: espresso-node
 
 jobs:
-  check-progression:
+  verify:
     runs-on: ubuntu-latest
     steps:
-      - name: Validate release-tag format
+      - name: Link this run on the tracker
+        if: inputs.tracker-issue != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE: ${{ inputs.tracker-issue }}
+          TAG: ${{ inputs.release-tag }}
+          STAGE: ${{ inputs.floating-tag }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue comment "$ISSUE" --body \
+            "Promotion of \`$TAG\` → \`$STAGE\` started: $RUN_URL"
+
+      - name: Validate inputs
         env:
           TAG: ${{ inputs.release-tag }}
+          STAGE: ${{ inputs.floating-tag }}
         run: |
           set -euo pipefail
-          if ! echo "$TAG" | grep -qE '^20[0-9]{2}[01][0-9][0-3][0-9](\..+|-.*)?$'; then
-            echo "::error::release-tag must match YYYYMMDD, YYYYMMDD.qualifier, or YYYYMMDD-description"
+          if ! echo "$TAG" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::release-tag must match MAJOR.MINOR.PHASE.PATCH (e.g. 0.4.0.5)"
             exit 1
           fi
+          # type: choice is only enforced in the web UI; re-validate here so
+          # `gh workflow run -f floating-tag=foo` can't reach the promote job
+          # with an unconfigured (= unprotected) environment.
+          case "$STAGE" in
+            decaf.canary|decaf|mainnet.canary|mainnet) ;;
+            *)
+              echo "::error::floating-tag must be one of decaf.canary, decaf, mainnet.canary, mainnet (got '$STAGE')"
+              exit 1
+              ;;
+          esac
 
       - name: Login to Github Container Repo
         uses: Wandalen/wretry.action@v3.8.0
@@ -66,48 +99,14 @@ jobs:
           set -euo pipefail
           docker buildx imagetools inspect "$REGISTRY/$REFERENCE_SERVICE:$TAG"
 
-      - name: Check promotion progression
-        if: ${{ !inputs.skip-progression }}
-        env:
-          RELEASE_GIT_TAG: ${{ inputs.release-tag }}
-          FLOATING_DOCKER_TAG: ${{ inputs.floating-tag }}
-        run: |
-          set -euo pipefail
-
-          # The index digest isn't in --raw output, so we compare the amd64 manifest digest instead.
-          get_digest() {
-            docker buildx imagetools inspect --raw "$REGISTRY/$REFERENCE_SERVICE:$1" 2>/dev/null \
-              | jq -r '.manifests[] | select(.platform.architecture=="amd64" and .platform.os=="linux") | .digest'
-          }
-
-          check_prerequisite() {
-            local prerequisite_tag="$1"
-            local required_digest
-            required_digest=$(get_digest "$prerequisite_tag")
-            if [ -z "$required_digest" ]; then
-              echo "::error::Could not resolve digest for $prerequisite_tag -- does the tag exist?"
-              exit 1
-            fi
-            local release_digest
-            release_digest=$(get_digest "$RELEASE_GIT_TAG")
-            if [ "$release_digest" != "$required_digest" ]; then
-              echo "::error::Release must be promoted to $prerequisite_tag before $FLOATING_DOCKER_TAG"
-              exit 1
-            fi
-          }
-
-          case "$FLOATING_DOCKER_TAG" in
-            decaf.rc)  ;;
-            decaf)     check_prerequisite "decaf.rc" ;;
-            mainnet.rc) check_prerequisite "decaf" ;;
-            mainnet)   check_prerequisite "mainnet.rc" ;;
-          esac
 
   promote:
-    needs: check-progression
+    needs: verify
     runs-on: ubuntu-latest
-    # TODO: re-enable after testing
-    # environment: release
+    # Reviewer count per stage is configured in repo Settings → Environments
+    # (decaf.canary / decaf / mainnet.canary / mainnet). "Prevent self-review" must be
+    # enabled on each so the requester cannot approve their own promotion.
+    environment: ${{ inputs.floating-tag }}
     strategy:
       fail-fast: false
       matrix:

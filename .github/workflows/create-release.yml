@@ -1,54 +1,40 @@
-# STATUS: draft, in testing
+# Manual fallback for creating X.Y.Z.N tags + GitHub Releases.
+#
+# Normal flow is `/tag` on the release tracker issue (see tag-release.yml).
+# This workflow exists for emergencies where you need to tag a specific
+# commit / ref without going through the tracker — e.g. retrofitting a tag,
+# or tagging from a branch the tracker doesn't know about.
+
 name: Create Release
 
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag name (e.g. 20260408, 20260408.rc1, 20260408-testing)"
+        description: "Tag name (must match MAJOR.MINOR.PHASE.PATCH, e.g. 0.4.0.5)"
         required: true
         type: string
       ref:
-        description: "Branch or commit to tag (e.g. release-vid-upgrade, main, abc1234)"
+        description: "Branch or commit to tag (e.g. release-0.4.0, main, abc1234)"
         required: true
         type: string
 
 jobs:
-  validate:
+  create:
     runs-on: ubuntu-latest
-    outputs:
-      prerelease: ${{ steps.classify.outputs.prerelease }}
+    permissions:
+      contents: write
     steps:
       - name: Validate tag format
         env:
           TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          if ! echo "$TAG" | grep -qE '^20[0-9]{2}[01][0-9][0-3][0-9](\..+|-.*)?$'; then
-            echo "::error::Tag must match YYYYMMDD, YYYYMMDD.qualifier, or YYYYMMDD-description"
+          if ! echo "$TAG" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Tag must match MAJOR.MINOR.PHASE.PATCH (e.g. 0.4.0.5)"
             exit 1
           fi
 
-      - name: Classify release type
-        id: classify
-        env:
-          TAG: ${{ inputs.tag }}
-        run: |
-          set -euo pipefail
-          if echo "$TAG" | grep -qE '^20[0-9]{2}[01][0-9][0-3][0-9]$'; then
-            echo "prerelease=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "prerelease=true" >> "$GITHUB_OUTPUT"
-          fi
-
-  create:
-    needs: validate
-    runs-on: ubuntu-latest
-    # TODO: re-enable after testing
-    # environment: release
-    permissions:
-      contents: write
-    steps:
       - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.ref }}
@@ -62,11 +48,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}
           SHA: ${{ steps.resolve.outputs.sha }}
-          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
         run: |
           set -euo pipefail
-          args=(--target "$SHA" --generate-notes)
-          if [ "$PRERELEASE" = "true" ]; then
-            args+=(--prerelease)
-          fi
-          gh release create "$TAG" "${args[@]}"
+          gh release create "$TAG" --target "$SHA" --generate-notes

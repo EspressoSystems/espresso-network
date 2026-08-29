@@ -1,0 +1,488 @@
+# Keep the release tracker issue body in sync, and handle /promote commands.
+#
+# The body is a pure projection. All authoritative state lives outside the
+# body in sources that are append-only or immutable:
+#   - which release this tracker belongs to → the issue title ("Release X.Y.Z")
+#   - cut-from commit → the `X.Y.Z.0` tag (created at branch setup)
+#   - "this commit was considered" ticks → /skip /done /unmark issue comments
+#   - everything below `<!-- HUMAN NOTES BELOW -->` is preserved verbatim
+# Everything else (tag log, promotion state, candidate lists, experimental
+# branches) is recomputed from git / GHCR / the GitHub API each refresh.
+
+name: Update Release Tracker
+
+on:
+  push:
+    branches: [main, "release-*"]
+    tags: ["[0-9]+.[0-9]+.[0-9]+.[0-9]+"]
+  pull_request_target:
+    types: [closed]
+    branches: [main, "release-*"]
+  issue_comment:
+    types: [created]
+  workflow_run:
+    workflows: ["Promote Docker Tag"]
+    types: [completed]
+  # Lets tag-release.yml dispatch a refresh after pushing a tag: GITHUB_TOKEN
+  # pushes don't fire push/tag events on other workflows.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  actions: write
+  pull-requests: read
+  packages: read
+
+env:
+  REGISTRY: ghcr.io/espressosystems/espresso-network
+  REF_SERVICE: espresso-node
+
+jobs:
+  refresh:
+    # Non-comment events always refresh. Comment events refresh only when the
+    # comment is a tick-state command — /promote and /tag have dedicated jobs
+    # which fan out via workflow_dispatch.
+    if: |
+      github.event_name != 'issue_comment' ||
+      (github.event.issue.pull_request == null &&
+       contains(github.event.issue.labels.*.name, 'release-tracker') &&
+       (startsWith(github.event.comment.body, '/skip ') ||
+        startsWith(github.event.comment.body, '/done ') ||
+        startsWith(github.event.comment.body, '/unmark ')))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with: { fetch-depth: 0, fetch-tags: true }
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Refresh every open tracker
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          # Exact prior tip of the pushed ref. Empty for non-push events; the
+          # all-zero SHA on first push of a brand-new branch. Used as the
+          # baseline for per-push notification comments.
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+
+          # ===== leaf helpers =====
+
+          # Parse a PR number from a commit subject. Handles both common merge
+          # styles: squash-merge ("Title (#N)") and merge-commit ("Merge pull
+          # request #N from owner/branch"). Empty for direct-push subjects.
+          pr_num_in() {
+            if   [[ "$1" =~ \#([0-9]+)\)$ ]];                          then printf '%s' "${BASH_REMATCH[1]}"
+            elif [[ "$1" =~ ^Merge\ pull\ request\ \#([0-9]+)\  ]];    then printf '%s' "${BASH_REMATCH[1]}"
+            fi
+          }
+
+          # Recognise a commit that is itself a backport: korthout's squash
+          # title `[Backport release-X.Y.Z] ...` or the corresponding
+          # merge-commit subject `Merge pull request #N from .../backport-...`.
+          is_backport_commit() {
+            [[ "$1" == "[Backport "* ]] && return 0
+            [[ "$1" =~ ^Merge\ pull\ request\ \#[0-9]+\ from\ [^[:space:]]+/backport- ]] && return 0
+            return 1
+          }
+
+          # Render a commit subject as fully literal text. `<code>` disables
+          # markdown processing of its contents (no auto-link of `#N`, no
+          # `[x](y)` link parsing, no emphasis). HTML-escape `&`, `<`, `>`
+          # so they don't get interpreted as tags.
+          # Note: bash treats `&` in patsub replacement as the matched text
+          # (same as sed), so we must write `\&` to insert a literal ampersand.
+          literal() {
+            local s="${1//&/\&amp;}"
+            s="${s//</\&lt;}"
+            s="${s//>/\&gt;}"
+            printf '<code>%s</code>' "$s"
+          }
+
+          commit_url() {
+            printf 'https://github.com/%s/commit/%s' "$GH_REPO" "$1"
+          }
+
+          docker_amd64_digest() {
+            docker buildx imagetools inspect --raw "$REGISTRY/$REF_SERVICE:$1" 2>/dev/null \
+              | jq -r '.manifests[]? | select(.platform.architecture=="amd64" and .platform.os=="linux") | .digest' \
+              2>/dev/null || true
+          }
+
+          # Echoes SHAs on $head whose patch already exists on $other. Used to
+          # auto-tick clean backports/forward-ports — patch-id matching is
+          # robust against squash-merge SHA changes.
+          patches_already_on() {
+            git cherry "$1" "$2" 2>/dev/null | awk '/^- / {print $2}' || true
+          }
+
+          # Echoes "<num>\t<state>\t<url>" of the backport PR for source PR $1
+          # targeting release-$2, or nothing if none exists.
+          backport_pr_for() {
+            gh pr list --head "backport-${1}-to-release-${2}" --state all --limit 1 \
+              --json number,state,url \
+              -q '.[0] | select(.) | "\(.number)\t\(.state)\t\(.url)"' 2>/dev/null || true
+          }
+
+          # Resolve the cut-from commit: the `X.Y.Z.0` tag if present (written
+          # by setup-release-branch.yml), else the merge-base with main as a
+          # backwards-compat fallback. Empty if neither.
+          resolve_anchor() {
+            local version="$1" sha
+            sha=$(git rev-parse --verify "refs/tags/$version.0^{commit}" 2>/dev/null) || true
+            [ -n "$sha" ] || sha=$(git merge-base "origin/release-$version" origin/main 2>/dev/null) || true
+            printf '%s' "$sha"
+          }
+
+          # Walk the tracker's comments and emit "<full-sha>\t<state>" lines
+          # for any commit that's been marked. State is "done" (ticked, port
+          # confirmed manually) or "skip" (struck through, not for this
+          # release). `/unmark` clears whichever state was in effect.
+          # Comments are walked oldest-first so the latest command wins.
+          sha_marks_from_comments() {
+            gh issue view "$1" --json comments --jq '
+              [.comments[].body
+                | capture("^/(?<cmd>skip|done|unmark)\\s+(?<sha>[0-9a-f]{4,40})") // empty]
+              | reduce .[] as $c ({};
+                  if $c.cmd == "unmark" then del(.[$c.sha]) else .[$c.sha] = $c.cmd end)
+              | to_entries[]
+              | "\(.key)\t\(.value)"
+            ' 2>/dev/null \
+              | while IFS=$'\t' read -r ref state; do
+                  [ -n "$ref" ] || continue
+                  local full
+                  full=$(git rev-parse --verify "$ref^{commit}" 2>/dev/null) || continue
+                  printf '%s\t%s\n' "$full" "$state"
+                done
+          }
+
+          # ===== section renderers (stdout = section body, no trailing \n) =====
+
+          render_tag_log() {
+            local version="$1" rows
+            # Annotated tags carry their commit SHA at %(*objectname);
+            # lightweight tags don't, and %(objectname) is the commit directly.
+            rows=$(git tag --list "${version}.*" --sort=-creatordate --format="\
+          | \`%(refname:short)\` \
+          | %(creatordate:short) \
+          | [\`%(if)%(*objectname)%(then)%(*objectname:short)%(else)%(objectname:short)%(end)\`](https://github.com/$GH_REPO/commit/%(if)%(*objectname)%(then)%(*objectname)%(else)%(objectname)%(end)) |")
+            if [ -z "$rows" ]; then
+              printf '_No tags yet._'
+            else
+              printf '| Tag | Date | Commit |\n|---|---|---|\n%s' "$rows"
+            fi
+          }
+
+          render_promotion_state() {
+            local version="$1" tag digest
+            declare -A tag_for_digest=()
+            for tag in $(git tag --list "${version}.*" --sort=-creatordate); do
+              digest=$(docker_amd64_digest "$tag")
+              [ -n "$digest" ] && [ -z "${tag_for_digest[$digest]:-}" ] && tag_for_digest[$digest]="$tag"
+            done
+            printf '| Stage | Tag |\n|---|---|'
+            local stage
+            for stage in decaf.canary decaf mainnet.canary mainnet; do
+              digest=$(docker_amd64_digest "$stage")
+              if [ -z "$digest" ]; then
+                printf '\n| `%s` | _none_ |' "$stage"
+              elif [ -n "${tag_for_digest[$digest]:-}" ]; then
+                printf '\n| `%s` | `%s` |' "$stage" "${tag_for_digest[$digest]}"
+              else
+                printf '\n| `%s` | _(unrelated tag)_ |' "$stage"
+              fi
+            done
+          }
+
+          render_experimental_branches() {
+            local version="$1" rows='' sha refname name
+            # Experimental branches are `release-X.Y.Z--<topic>` (double-dash
+            # separator). Git refuses ref overlap so `release-X.Y.Z/<topic>`
+            # can't coexist with the canonical `release-X.Y.Z` branch. We use
+            # `ls-remote` with a glob — we only need the name + tip SHA,
+            # never the branch contents, so there's no need to fetch them.
+            while IFS=$'\t' read -r sha refname; do
+              [ -z "$sha" ] && continue
+              name="${refname#refs/heads/}"
+              rows+="| [\`$name\`](https://github.com/$GH_REPO/tree/$name) | \`${sha:0:8}\` |"$'\n'
+            done < <(git ls-remote --heads origin "release-$version--*" 2>/dev/null | LC_ALL=C sort -k2)
+            if [ -z "$rows" ]; then
+              printf '_None._'
+            else
+              printf '| Branch | Last commit |\n|---|---|\n%s' "${rows%$'\n'}"
+            fi
+          }
+
+          # Render one checklist row. Stdout = the row, no trailing newline (caller adds it).
+          render_row() {
+            local kind="$1" sha="$2" version="$3" done_set="$4" skipped_set="$5" landed="$6"
+            local short subj pr_num mark='' extra=''
+
+            short=$(git rev-parse --short=8 "$sha" 2>/dev/null) || return 0
+            subj=$(git log -1 --format='%s' "$sha" 2>/dev/null) || return 0
+            pr_num=$(pr_num_in "$subj")
+
+            # Backport-PR status only shown in the "Commits on main" section.
+            if [ "$kind" = BACKPORT ] && [ -n "$pr_num" ]; then
+              local bp bp_num bp_state bp_url
+              bp=$(backport_pr_for "$pr_num" "$version")
+              if [ -n "$bp" ]; then
+                IFS=$'\t' read -r bp_num bp_state bp_url <<<"$bp"
+                extra=" · backport: [#$bp_num]($bp_url) (${bp_state,,})"
+                [ "$bp_state" = MERGED ] && mark=x
+              fi
+            fi
+
+            # Tick when ported: patch already on the other branch, or marked
+            # manually via /done.
+            if [ -z "$mark" ] && grep -qxF "$sha" <<<"$landed"; then mark=x; fi
+            if [ -z "$mark" ] && grep -qxF "$sha" <<<"$done_set"; then mark=x; fi
+            : "${mark:= }"
+
+            # /skip strikes the subject through (we're deliberately ignoring
+            # this commit) without ticking the box.
+            local subject_html
+            subject_html=$(literal "$subj")
+            if grep -qxF "$sha" <<<"$skipped_set"; then
+              subject_html="<del>$subject_html</del>"
+            fi
+
+            printf -- '- [%s] [`%s`](%s) %s%s' \
+              "$mark" "$short" "$(commit_url "$sha")" "$subject_html" "$extra"
+          }
+
+          render_checklist() {
+            local kind="$1" anchor="$2" head="$3" version="$4" done_set="$5" skipped_set="$6" landed="$7"
+
+            if [ -z "$anchor" ]; then
+              printf '_No anchor for `release-%s` — branch creation never tagged it._' "$version"
+              return
+            fi
+            if ! git merge-base --is-ancestor "$anchor" "$head" 2>/dev/null; then
+              printf '_Anchor `%s` is no longer reachable from `%s` (branch rewritten?)._' \
+                "${anchor:0:8}" "${head:0:8}"
+              return
+            fi
+
+            local out='' sha
+            while IFS= read -r sha; do
+              [ -z "$sha" ] && continue
+              out+=$(render_row "$kind" "$sha" "$version" "$done_set" "$skipped_set" "$landed")$'\n'
+            done < <(git log "$anchor..$head" --no-merges --reverse --pretty=%H)
+            [ -n "$out" ] || out=$'_None yet._\n'
+            printf '%s' "$out"
+          }
+
+          # Post a per-push notification comment listing the new commits, with
+          # a copy-paste backport command per PR-bearing commit at the bottom
+          # (one fenced block each so GitHub gives a copy button). For main
+          # pushes the target is `release-X.Y.Z`; for release-branch pushes
+          # it's `main` (forward-port). Commits whose subject starts with
+          # `[Backport ` are the backport-PR squashes themselves, so we don't
+          # suggest backporting them again.
+          post_push_comment() {
+            local issue="$1" expected_ref="$2" label="$3" new="$4" version="$5"
+            [ "${GITHUB_EVENT_NAME:-}" = push ] || return 0
+            [ "${GITHUB_REF:-}" = "$expected_ref" ] || return 0
+            local zero=0000000000000000000000000000000000000000
+            [ -n "${PUSH_BEFORE:-}" ] && [ "$PUSH_BEFORE" != "$zero" ] || return 0
+            git merge-base --is-ancestor "$PUSH_BEFORE" "$new" 2>/dev/null || return 0
+
+            local backport_target=''
+            if   [ "$expected_ref" = refs/heads/main ];               then backport_target="release-$version"
+            elif [ "$expected_ref" = "refs/heads/release-$version" ]; then backport_target=main
+            fi
+
+            local rows='' count=0 sha short subj pr
+            local backport_cmds=()
+            while IFS=$'\t' read -r sha short subj; do
+              [ -z "$sha" ] && continue
+              rows+="- [\`$short\`]($(commit_url "$sha")) $(literal "$subj")"$'\n'
+              if [ -n "$backport_target" ] && ! is_backport_commit "$subj"; then
+                pr=$(pr_num_in "$subj")
+                [ -n "$pr" ] && backport_cmds+=("gh workflow run backport.yml -f pr_number=$pr -f target_branch=$backport_target")
+              fi
+              count=$((count + 1))
+            done < <(git log "$PUSH_BEFORE..$new" --no-merges --reverse --pretty='%H%x09%h%x09%s')
+            [ "$count" -gt 0 ] || return 0
+
+            local file="$RUNNER_TEMP/push-comment.md"
+            {
+              printf '@%s pushed %d commit(s) to `%s`:\n\n%s' \
+                "${GITHUB_ACTOR:-someone}" "$count" "$label" "$rows"
+              if [ "${#backport_cmds[@]}" -gt 0 ]; then
+                printf '\nTo backport:\n\n'
+                local cmd
+                for cmd in "${backport_cmds[@]}"; do
+                  printf '```\n%s\n```\n\n' "$cmd"
+                done
+              fi
+            } > "$file"
+            gh issue comment "$issue" --body-file "$file" || true
+          }
+
+          # ===== per-tracker orchestration =====
+
+          refresh_tracker() {
+            local issue="$1"
+            echo "::group::refresh issue #$issue"
+
+            local title body version
+            title=$(gh issue view "$issue" --json title -q .title)
+            body=$(gh issue view "$issue" --json body -q .body)
+            # Title is "Release X.Y.Z" by setup-release-branch.yml convention.
+            if [[ "$title" =~ ^Release[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+              version="${BASH_REMATCH[1]}"
+            else
+              echo "::error::tracker #$issue title '$title' isn't 'Release X.Y.Z'"
+              echo "::endgroup::"
+              return 1
+            fi
+
+            git fetch --quiet --tags origin main "release-$version"
+
+            local head_main head_branch anchor
+            head_main=$(git rev-parse origin/main)
+            head_branch=$(git rev-parse "origin/release-$version")
+            anchor=$(resolve_anchor "$version")
+            echo "version=$version anchor=${anchor:-<none>} head_main=$head_main head_branch=$head_branch"
+
+            post_push_comment "$issue" refs/heads/main                main                "$head_main"   "$version"
+            post_push_comment "$issue" "refs/heads/release-$version"  "release-$version"  "$head_branch" "$version"
+
+            local sha_marks done_shas skipped_shas landed_on_branch landed_on_main
+            sha_marks=$(sha_marks_from_comments "$issue")
+            done_shas=$(awk -F'\t' '$2 == "done" {print $1}' <<<"$sha_marks")
+            skipped_shas=$(awk -F'\t' '$2 == "skip" {print $1}' <<<"$sha_marks")
+            landed_on_branch=$(patches_already_on "$head_branch" "$head_main")
+            landed_on_main=$(patches_already_on "$head_main" "$head_branch")
+
+            local backport_list forward_list tag_log promo_state exp_table notes
+            backport_list=$(render_checklist BACKPORT "$anchor" "$head_main"   "$version" "$done_shas" "$skipped_shas" "$landed_on_branch")
+            forward_list=$(render_checklist  FORWARD  "$anchor" "$head_branch" "$version" "$done_shas" "$skipped_shas" "$landed_on_main")
+            tag_log=$(render_tag_log "$version")
+            promo_state=$(render_promotion_state "$version")
+            exp_table=$(render_experimental_branches "$version")
+            notes=$(awk '/<!-- HUMAN NOTES BELOW -->/{p=1;next} p' <<<"$body")
+
+            local anchor_short='' anchor_date=''
+            if [ -n "$anchor" ]; then
+              anchor_short=$(git rev-parse --short=8 "$anchor")
+              anchor_date=$(TZ=UTC git log -1 --format='%cd' --date='format:%Y-%m-%d %H:%M UTC' "$anchor")
+            fi
+
+            local tmp; tmp=$(mktemp)
+            {
+              printf 'Tracker for [`release-%s`](https://github.com/%s/tree/release-%s). ' "$version" "$GH_REPO" "$version"
+              printf 'Comment `/tag` (or `/tag <X.Y.Z.N>`) to cut a tag, `/promote <stage>` (or `/promote <tag> <stage>`) to promote, `/done <sha>` to mark a commit as ported (ticked), `/skip <sha>` to mark it as deliberately ignored (struck through), `/unmark <sha>` to undo either. See [RELEASES.md](https://github.com/%s/blob/main/RELEASES.md).\n\n' "$GH_REPO"
+              if [ -n "$anchor" ]; then
+                printf '**Cut from** [`%s`](%s) on %s\n\n' \
+                  "$anchor_short" "$(commit_url "$anchor")" "$anchor_date"
+              fi
+              printf '## Tag log\n\n%s\n\n' "$tag_log"
+              printf '## Promotion state\n\n%s\n\n' "$promo_state"
+              printf '## Commits on `main`\n\n%s\n' "$backport_list"
+              printf '## Commits on `release-%s`\n\n%s\n' "$version" "$forward_list"
+              printf '## Experimental branches\n\n%s\n\n' "$exp_table"
+              printf '<!-- HUMAN NOTES BELOW -->\n'
+              [ -n "$notes" ] && printf '%s\n' "$notes"
+            } > "$tmp"
+            gh issue edit "$issue" --body-file "$tmp"
+            rm -f "$tmp"
+            echo "::endgroup::"
+          }
+
+          # ===== main =====
+
+          mapfile -t issues < <(gh issue list --label release-tracker --state open --json number -q '.[].number')
+          if [ "${#issues[@]}" -eq 0 ]; then
+            echo "no open release-tracker issues; nothing to do"
+            exit 0
+          fi
+          rc=0
+          for issue in "${issues[@]}"; do
+            refresh_tracker "$issue" || { echo "::error::refresh failed for #$issue"; rc=1; }
+          done
+          exit "$rc"
+
+  promote:
+    if: |
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request == null &&
+      contains(github.event.issue.labels.*.name, 'release-tracker') &&
+      startsWith(github.event.comment.body, '/promote')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Gate on author association
+        env:
+          ASSOC: ${{ github.event.comment.author_association }}
+        run: |
+          case "$ASSOC" in
+            OWNER|MEMBER|COLLABORATOR) ;;
+            *) echo "::error::commenter ($ASSOC) lacks write access"; exit 1 ;;
+          esac
+
+      - uses: actions/checkout@v6
+        with: { fetch-depth: 0, fetch-tags: true }
+
+      - name: Dispatch /promote
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number }}
+          TITLE: ${{ github.event.issue.title }}
+          BODY: ${{ github.event.comment.body }}
+          ACTOR: ${{ github.event.comment.user.login }}
+        run: |
+          set -euo pipefail
+
+          # Accepts `/promote <stage>` (latest tag) or `/promote <tag> <stage>`
+          # (specific tag). Tag goes first so the stage is always the last
+          # word and the language reads naturally.
+          read -r _ arg1 arg2 _rest <<<"$BODY"
+          if [ -n "${arg2:-}" ]; then
+            explicit_tag="$arg1"; stage="$arg2"
+          else
+            explicit_tag=""; stage="${arg1:-}"
+          fi
+
+          case "$stage" in
+            decaf.canary|decaf|mainnet.canary|mainnet) ;;
+            *)
+              gh issue comment "$ISSUE" --body "@$ACTOR \`/promote\` syntax: \`/promote <stage>\` or \`/promote <tag> <stage>\`. Stages: decaf.canary, decaf, mainnet.canary, mainnet. Got stage \`${stage:-(empty)}\`."
+              exit 1
+              ;;
+          esac
+
+          if [ -n "$explicit_tag" ]; then
+            tag="$explicit_tag"
+          else
+            if [[ "$TITLE" =~ ^Release[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+              version="${BASH_REMATCH[1]}"
+            else
+              gh issue comment "$ISSUE" --body "@$ACTOR tracker title '$TITLE' isn't 'Release X.Y.Z'; can't pick the latest tag automatically. Try \`/promote <tag> $stage\`."
+              exit 1
+            fi
+            tag=$(git tag --list "${version}.*" --sort=-creatordate | head -1)
+            if [ -z "$tag" ]; then
+              gh issue comment "$ISSUE" --body "@$ACTOR no tags on \`release-$version\` yet — run \`/tag\` before promoting."
+              exit 0
+            fi
+          fi
+
+          # promote-docker-tag.yml posts its own run URL back to this tracker
+          # via its tracker-issue input (it knows its own ${{ github.run_id }};
+          # the dispatcher doesn't, since the REST dispatches endpoint returns
+          # 204 with no body).
+          gh workflow run promote-docker-tag.yml \
+            -f floating-tag="$stage" \
+            -f release-tag="$tag" \
+            -f tracker-issue="$ISSUE"
+          gh issue comment "$ISSUE" --body \
+            "@$ACTOR dispatched promotion of \`$tag\` → \`$stage\`. Awaiting workflow start…"

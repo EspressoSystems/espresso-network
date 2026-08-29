@@ -17,6 +17,7 @@ import argparse
 import dataclasses
 import logging
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -86,7 +87,14 @@ NODE_5_PG_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.node-5-pg.yaml
 LC_GATING_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.lc-gating.yaml"
 
 
-YYYYMMDD_TAG_PATTERN = "20[0-9][0-9][0-1][0-9][0-3][0-9]"
+RELEASE_TAG_GLOB = "[0-9]*.[0-9]*.[0-9]*.[0-9]*"
+RELEASE_TAG_RE = re.compile(r"^\d+\.\d+\.\d+\.\d+$")
+
+# Legacy date-stamped tags, used as a fallback when no X.Y.Z.N tags exist
+# yet (i.e. before the first release cut under the new scheme). YYYYMMDD
+# sorts the same chronologically as it does lexically, so lex sort suffices.
+LEGACY_TAG_GLOB = "20[0-9][0-9][0-1][0-9][0-3][0-9]*"
+LEGACY_TAG_RE = re.compile(r"^20\d{2}[01]\d[0-3]\d(?:[.-].*)?$")
 
 # ---------------------------------------------------------------------------
 # Action types
@@ -202,24 +210,37 @@ SCENARIOS: dict[str, list[Action]] = {
 }
 
 
-def yyyymmdd_tags() -> list[str]:
+def _matching_tags(glob: str, regex: re.Pattern[str]) -> list[str]:
     out = subprocess.check_output(
-        ["git", "tag", "-l", YYYYMMDD_TAG_PATTERN], cwd=REPO_ROOT, text=True
+        ["git", "tag", "-l", glob], cwd=REPO_ROOT, text=True
     )
-    return sorted(out.strip().splitlines())
+    return [t for t in out.strip().splitlines() if regex.match(t)]
+
+
+def release_tags() -> list[str]:
+    """Return release tags sorted oldest-first.
+
+    Prefers X.Y.Z.N tags (sorted numerically). Falls back to legacy
+    YYYYMMDD-style tags (sorted lexically, which is also chronological)
+    when no new-format tags exist yet.
+    """
+    new = _matching_tags(RELEASE_TAG_GLOB, RELEASE_TAG_RE)
+    if new:
+        return sorted(new, key=lambda t: tuple(int(p) for p in t.split(".")))
+    return sorted(_matching_tags(LEGACY_TAG_GLOB, LEGACY_TAG_RE))
 
 
 def default_base_tag() -> str:
-    """Pick the YYYYMMDD tag to upgrade from.
+    """Pick the release tag to upgrade from.
 
-    On a tagged release build (HEAD points at a YYYYMMDD tag), use the
+    On a tagged release build (HEAD points at a known release tag) use the
     previous tag so we test the new release against the prior one. Otherwise
-    use the latest YYYYMMDD tag.
+    use the latest.
     """
-    tags = yyyymmdd_tags()
+    tags = release_tags()
     if not tags:
         raise RuntimeError(
-            f"No tags matching {YYYYMMDD_TAG_PATTERN}; run with --tags fetched."
+            "No release tags found (X.Y.Z.N or legacy YYYYMMDD); run with --tags fetched."
         )
     head_tag = subprocess.run(
         ["git", "describe", "--tags", "--exact-match"],
@@ -232,7 +253,7 @@ def default_base_tag() -> str:
         idx = tags.index(head_tag)
         if idx == 0:
             raise RuntimeError(
-                f"HEAD is at {head_tag}, the oldest YYYYMMDD tag; no previous to upgrade from."
+                f"HEAD is at {head_tag}, the oldest release tag; no previous to upgrade from."
             )
         return tags[idx - 1]
     return tags[-1]
