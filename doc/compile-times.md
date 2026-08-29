@@ -831,6 +831,44 @@ blocks on its **own** `async_main`, which awaits futures defined in `espresso-no
 are still instantiated in the dev-node crate. Fixing it the same way needs a non-async entry point
 for whatever dev-node awaits, or moving `async_main` behind a blocking call in a library.
 
+## Recommendations, in the order worth doing them
+
+All numbers are the 4-core CI-shaped harness (baseline 391 s) unless stated.
+
+| # | change | branch | effect | review cost |
+|---|---|---|---|---|
+| 1 | drive the tokio runtime inside the library | `ma/compile-times-nonasync-main` | **-27 %** | 4 files, +18/-11 |
+| 2 | erase the API state generic in the routers | `ma/compile-times-dyn-api` | **-20 %** (lib -24 %) | new 1029-line `dyn_api.rs`, `erased-serde` dep |
+| 3 | one persistence instantiation (enum dispatch) | `ma/compile-times-dyn-persistence` | **-18 %** | new `persistence/any.rs`, 54 forwarded methods |
+| 4 | erase spawned future types | `ma/compile-times-boxed-spawns` | -5 % wall, -14 % mono items | 3 helpers, 18 sites |
+| 5 | test-only deps out of the release graph | `ma/compile-times-depcut` (+ `ma/compile-times-no-testing-dep`) | -4 %, 41 fewer crates | Cargo.toml only |
+| | **all stacked** | `ma/compile-times-all` | **-44 %** (391 -> 220 s) | |
+
+Secondary effects of the same stack: the test-profile `espresso-node` lib unit drops 37 %
+(150.6 -> 94.2 s locally; 418-431 s in CI), `cargo build --profile test --bins` drops 35 %
+(170 -> 110 s), monomorphized items drop 36 % (281 946 -> 179 697).
+
+Do #1 first: it is the smallest diff, has no runtime cost, and is the largest single win. #2 and #3
+are real refactors and should be reviewed as such, but they are the only changes that shrink the lib
+unit itself, which is what remains once #1 removes the wrapper bins.
+
+### Measured and not worth doing
+
+`codegen-units` 64 or 256, `opt-level = 2`, `lto = "off"`, `panic = "abort"` (-4 %, changes
+unwinding), `-Zthreads=8/16` (-15 %, unstable), deleting a single storage call site (no change).
+`opt-level = 1` does collapse the wrapper bins (share-generics turns on) but costs an unoptimized
+node and a slower lib - recommendation #1 achieves more, for free.
+
+### How not to regress it
+
+The mechanism is worth stating for future reviews: at `opt-level = 3` rustc turns
+`-Cshare-generics` off, so **any crate that polls a future defined in another crate instantiates the
+`poll` shim of every future that future transitively awaits**. A thin `main.rs` that does
+`rt.block_on(lib::main())` therefore re-codegens the entire async call graph of the library - 20.2 M
+lines of LLVM IR for 55 lines of source. Keep binary crates free of `.await` on library futures:
+expose a blocking entry point from the library instead. The same rule explains why the `test`
+profile (opt-level 1, share-generics on) never showed this cost.
+
 ## Open items
 
 - Local `-Ztime-passes` split (frontend vs LLVM vs link) for the node lib and the node bin.
