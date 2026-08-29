@@ -729,7 +729,7 @@ where
 
     let fetcher = Fetcher::new(
         Arc::new(state_catchup_providers.clone()),
-        Arc::new(Mutex::new(persistence.clone())),
+        Arc::new(persistence.clone()),
         l1_client.clone(),
         genesis.chain_config,
     );
@@ -1825,7 +1825,7 @@ pub mod testing {
 
             let fetcher = Fetcher::new(
                 Arc::new(catchup_providers.clone()),
-                Arc::new(Mutex::new(persistence.clone())),
+                Arc::new(persistence.clone()),
                 l1_client.clone(),
                 chain_config,
             );

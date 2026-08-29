@@ -1200,7 +1200,7 @@ impl Fetcher {
     #[cfg(feature = "node")]
     pub fn new(
         peers: Arc<dyn StateCatchup>,
-        persistence: Arc<AsyncMutex<dyn MembershipPersistence>>,
+        persistence: Arc<dyn MembershipPersistence>,
         l1_client: L1Client,
         chain_config: ChainConfig,
     ) -> Self {
@@ -1308,10 +1308,8 @@ impl Fetcher {
         contract: Address,
         to_block: u64,
     ) -> anyhow::Result<Vec<(EventKey, StakeTableEvent)>> {
-        let (read_l1_offset, persistence_events) = {
-            let persistence_lock = self.persistence.lock().await;
-            persistence_lock.load_events(0, to_block).await?
-        };
+        let (read_l1_offset, persistence_events) =
+            self.persistence.load_events(0, to_block).await?;
 
         tracing::info!("loaded events from storage to_block={to_block:?}");
 
@@ -1350,13 +1348,10 @@ impl Fetcher {
             "storing {} new events in storage to_block={to_block:?}",
             contract_events.len()
         );
-        {
-            let persistence_lock = self.persistence.lock().await;
-            persistence_lock
-                .store_events(to_block, contract_events.clone())
-                .await
-                .inspect_err(|e| tracing::error!("failed to store events. err={e}"))?;
-        }
+        self.persistence
+            .store_events(to_block, contract_events.clone())
+            .await
+            .inspect_err(|e| tracing::error!("failed to store events. err={e}"))?;
 
         let mut events = match from_block {
             Some(_) => persistence_events
@@ -1843,11 +1838,15 @@ impl Fetcher {
     /// Retrieve and verify `ChainConfig`
     // TODO move to appropriate object (Header?)
     pub(crate) async fn get_chain_config(&self, header: &Header) -> anyhow::Result<ChainConfig> {
-        let chain_config = self.chain_config.lock().await;
         let peers = self.peers.clone();
         let header_cf = header.chain_config();
-        if chain_config.commit() == header_cf.commit() {
-            return Ok(*chain_config);
+        // Released before the peer fetch: holding it across that fetch blocks every
+        // other reader of `chain_config`.
+        {
+            let chain_config = self.chain_config.lock().await;
+            if chain_config.commit() == header_cf.commit() {
+                return Ok(*chain_config);
+            }
         }
 
         let cf = match header_cf.resolve() {
@@ -1873,12 +1872,7 @@ impl Fetcher {
         let peers = Arc::new(mock::MockStateCatchup::default());
         let persistence = NoStorage;
 
-        Self::new(
-            peers,
-            Arc::new(AsyncMutex::new(persistence)),
-            l1,
-            chain_config,
-        )
+        Self::new(peers, Arc::new(persistence), l1, chain_config)
     }
 }
 

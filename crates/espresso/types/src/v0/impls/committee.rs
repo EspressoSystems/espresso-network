@@ -533,14 +533,7 @@ impl EpochCommittees {
         }
 
         // Load the `limit` latest stored stake tables
-        let loaded_stake = match self
-            .fetcher
-            .persistence
-            .lock()
-            .await
-            .load_latest_stake(limit)
-            .await
-        {
+        let loaded_stake = match self.fetcher.persistence.load_latest_stake(limit).await {
             Ok(Some(loaded)) => loaded,
             Ok(None) => {
                 warn!("No stake table history found in persistence!");
@@ -715,7 +708,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         if self.inner.read().snapshots.contains_key(&epoch) {
             return true;
         }
-        let persistence = self.fetcher.persistence.lock().await;
+        let persistence = &self.fetcher.persistence;
         let stake_table = persistence.load_stake(epoch).await;
         let (validators, block_reward, stake_table_hash) = match stake_table {
             Ok(Some(stake)) => stake,
@@ -739,7 +732,6 @@ impl Membership<SeqTypes> for EpochCommittees {
                 None
             },
         };
-        drop(persistence);
         info!(
             %epoch,
             has_drb = drb.is_some(),
@@ -957,7 +949,7 @@ impl Membership<SeqTypes> for EpochCommittees {
             inner.prune_epochs(epoch);
         }
 
-        let persistence_lock = self.fetcher.persistence.lock().await;
+        let persistence = &self.fetcher.persistence;
 
         let decided_hash = block_header.next_stake_table_hash();
 
@@ -969,7 +961,7 @@ impl Membership<SeqTypes> for EpochCommittees {
         // if there is a mismatch
         if let Some(previous_committee) = previous_committee {
             if decided_hash.is_none() || decided_hash == previous_committee.stake_table_hash {
-                if let Err(e) = persistence_lock
+                if let Err(e) = persistence
                     .store_stake(
                         previous_epoch,
                         previous_committee.validators.clone(),
@@ -986,7 +978,7 @@ impl Membership<SeqTypes> for EpochCommittees {
                 }
 
                 if let Some(previous_validators) = previous_validators
-                    && let Err(e) = persistence_lock
+                    && let Err(e) = persistence
                         .store_all_validators(previous_epoch, previous_validators)
                         .await
                 {
@@ -1713,7 +1705,7 @@ mod tests {
         };
         let fetcher = Fetcher::new(
             Arc::new(crate::mock::MockStateCatchup::default()),
-            Arc::new(AsyncMutex::new(store)),
+            Arc::new(store),
             crate::L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
                 .expect("Failed to create L1 client"),
             crate::ChainConfig::default(),
