@@ -711,6 +711,26 @@ Green: `cargo check -p espresso-node` for `--lib --release`, `--lib --features t
 `--bins`, plus `-p slow-tests --tests` and `cargo clippy -p espresso-node --lib --no-deps`.
 Measurement queued.
 
+## Clean serialized A/B (4 pinned cores, idle machine, warm deps, cold workspace crates)
+
+Every row measured back-to-back with nothing else running. This is the table to trust.
+
+| variant | wall | vs baseline | cpu-s | node lib | node bin |
+|---|---|---|---|---|---|
+| baseline | 391 s | - | 560 | ~160 s | ~146 s |
+| **non-async entry point** | **285 s** | **-27 %** | 464 | 206.9 s | gone (<2 s) |
+| **non-async + dep-cut** | **275 s** | **-30 %** | - | - | gone |
+| single (persistence, query-module) combination | 353 s | -10 % | 525 | 145.5 s | 128.4 s |
+| dep-cut (7 test-only deps) | 378 s | -3 % | 503 | 158.0 s | 144.8 s |
+
+Reproducibility: the baseline measured 385 s and 391 s in two separate clean runs (+-1.5 %); the
+non-async entry point measured 287 s and 285 s.
+
+The two cheap changes together take the CI-shaped job from 391 s to 275 s. Scaled to the real
+`Build espresso-node AMD` job (748 s, of which the bin unit is 284 s), the expected result is
+roughly 450-480 s, and the same wrapper-bin saving applies again to `Build espresso-node-sqlite AMD`
+(258 s bin unit) and, with its own treatment, `Build espresso-dev-node AMD` (206 s bin unit).
+
 ## Open items
 
 - Local `-Ztime-passes` split (frontend vs LLVM vs link) for the node lib and the node bin.
