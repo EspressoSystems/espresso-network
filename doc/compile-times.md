@@ -731,6 +731,36 @@ The two cheap changes together take the CI-shaped job from 391 s to 275 s. Scale
 roughly 450-480 s, and the same wrapper-bin saving applies again to `Build espresso-node-sqlite AMD`
 (258 s bin unit) and, with its own treatment, `Build espresso-dev-node AMD` (206 s bin unit).
 
+## Branch measurements (same 4-core harness, baseline 391 s)
+
+| variant | wall | vs baseline | node lib | node bin |
+|---|---|---|---|---|
+| baseline | 391 s | - | ~160 s | ~146 s |
+| `ma/compile-times-depcut` | 376 s | -4 % | 158 s | 145 s |
+| **`ma/compile-times-dyn-api`** | **311 s** | **-20 %** | **121.6 s** | 106.0 s |
+| depcut + non-async entry point | 273 s | -30 % | - | gone |
+| **dyn-api + non-async entry point** | **248 s** | **-37 %** | 161 s | gone |
+
+The implemented branches reproduce the synthetic patches exactly (depcut branch 376 s vs patch
+378 s; depcut+non-async 273 s vs 275 s), so the numbers are not artefacts of the patching method.
+
+`ma/compile-times-dyn-api` is the only change so far that shrinks the **lib** unit itself
+(160 -> 121.6 s, -24 %), because the router/handler/aide machinery is codegened once instead of once
+per state type. (In the dyn-api + non-async row the lib measured 161 s; single-unit 4-core times
+vary about +-15 % run to run, so treat the lib figures as ranges, not points.)
+
+### The `espresso-node-sqlite` wrapper collapses too
+
+`cargo build --release -p espresso-node-sqlite` on 32 cores:
+
+| | wall | node lib (embedded-db) | sqlite bin |
+|---|---|---|---|
+| baseline | 155 s | 96.0 s | 57.5 s |
+| non-async entry point | 124 s | 111.0 s | gone (not in profile) |
+
+In CI that bin unit is 258 s, and the identical 8-line `main.rs` means it is fixed by the same
+`main_blocking` call.
+
 ## Open items
 
 - Local `-Ztime-passes` split (frontend vs LLVM vs link) for the node lib and the node bin.
