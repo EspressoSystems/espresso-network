@@ -74,7 +74,7 @@ pub fn migrate_legacy_env_vars() -> Vec<(&'static str, &'static str)> {
         // ── crates/espresso/node/src/api/options.rs ──
         // Peer URLs for fetching missing query service data
         ("ESPRESSO_NODE_API_PEERS", "ESPRESSO_SEQUENCER_API_PEERS"),
-        // ── crates/espresso/node/src/bin/deploy.rs ──
+        // ── crates/espresso/deploy/src/main.rs ──
         // Number of blocks per epoch for HotShot consensus
         (
             "ESPRESSO_NETWORK_BLOCKS_PER_EPOCH",

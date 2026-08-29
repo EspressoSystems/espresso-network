@@ -4813,6 +4813,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "espresso-deploy"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "clap 4.6.1",
+ "espresso-contract-deployer",
+ "espresso-types",
+ "espresso-utils",
+ "hotshot-types",
+ "http-client 0.1.0",
+ "tokio",
+ "tracing",
+ "url",
+ "vbs",
+]
+
+[[package]]
 name = "espresso-dev-node"
 version = "0.1.0"
 dependencies = [

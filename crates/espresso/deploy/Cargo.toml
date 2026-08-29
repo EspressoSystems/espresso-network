@@ -1,0 +1,27 @@
+[package]
+name = "espresso-deploy"
+description = "CLI to deploy and upgrade the Espresso Network L1 contracts"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+
+[[bin]]
+name = "deploy"
+path = "src/main.rs"
+
+[dependencies]
+alloy = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+espresso-contract-deployer = { workspace = true, features = ["mocks"] }
+espresso-types = { workspace = true }
+espresso-utils = { workspace = true, features = ["full"] }
+hotshot-types = { workspace = true }
+http-client = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+vbs = { workspace = true }
+
+[lints]
+workspace = true
