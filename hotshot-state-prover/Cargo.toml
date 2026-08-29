@@ -56,8 +56,8 @@ url = { workspace = true }
 vbs = { workspace = true }
 
 [dev-dependencies]
-hotshot-contract-adapter = { workspace = true, features = ["jellyfish", "mocks"] }
 espresso-utils = { workspace = true, features = ["full", "testing"] }
+hotshot-contract-adapter = { workspace = true, features = ["jellyfish", "mocks"] }
 rstest = { workspace = true }
 test-log = { workspace = true }
 tower = { workspace = true, features = ["util"] }
