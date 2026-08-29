@@ -89,6 +89,23 @@ func (c *MultipleNodesClient) FetchExplorerTransactionByHash(ctx context.Context
 	return res, nil
 }
 
+func (c *MultipleNodesClient) FetchBlockSummaries(ctx context.Context, from *uint64, limit uint64) (types.BlockSummaryResponse, error) {
+	var res types.BlockSummaryResponse
+	var format string
+	var args []any
+	if from == nil {
+		format = "explorer/blocks/latest/%d"
+		args = []any{limit}
+	} else {
+		format = "explorer/blocks/%d/%d"
+		args = []any{*from, limit}
+	}
+	if err := c.getWithMajority(ctx, &res, format, args...); err != nil {
+		return types.BlockSummaryResponse{}, err
+	}
+	return res, nil
+}
+
 func (c *MultipleNodesClient) FetchHeadersByRange(ctx context.Context, from uint64, until uint64) ([]types.HeaderImpl, error) {
 	var res []types.HeaderImpl
 	if err := c.getWithMajority(ctx, &res, "availability/header/%d/%d", from, until); err != nil {

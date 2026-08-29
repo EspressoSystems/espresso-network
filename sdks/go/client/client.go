@@ -149,6 +149,20 @@ func (c *Client) FetchExplorerTransactionByHash(ctx context.Context, hash *types
 	return res, nil
 }
 
+func (c *Client) FetchBlockSummaries(ctx context.Context, from *uint64, limit uint64) (types.BlockSummaryResponse, error) {
+	var res types.BlockSummaryResponse
+	var err error
+	if from == nil {
+		err = c.get(ctx, &res, "explorer/blocks/latest/%d", limit)
+	} else {
+		err = c.get(ctx, &res, "explorer/blocks/%d/%d", *from, limit)
+	}
+	if err != nil {
+		return types.BlockSummaryResponse{}, err
+	}
+	return res, nil
+}
+
 func (c *Client) FetchTransactionByHash(ctx context.Context, hash *types.TaggedBase64) (types.TransactionQueryData, error) {
 	if hash == nil {
 		return types.TransactionQueryData{}, fmt.Errorf("hash is nil")
