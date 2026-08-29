@@ -1,0 +1,178 @@
+baseline-cold-release rc=0 wall=354s args=build --locked --release -p espresso-node --bin espresso-node --timings
+[20:00:11] === matrix start; rustc rustc 1.97.1 (8bab26f4f 2026-07-14)
+[20:03:47] A1-touch-lib-bin rc=0 wall=216s :: cargo build --locked --release -p espresso-node --bin espresso-node --timings
+[20:07:20] A2-touch-lib-bin rc=0 wall=213s :: cargo build --locked --release -p espresso-node --bin espresso-node --timings
+[20:09:23] A3-lib-only rc=0 wall=123s :: cargo build --locked --release -p espresso-node --lib --timings
+[20:10:53] A4-bin-only-libfresh rc=0 wall=90s
+[20:12:25] A5-check-lib rc=0 wall=92s :: cargo check --locked --release -p espresso-node --lib
+[20:16:14] B1-time-passes-lib rc=0 wall=229s :: cargo rustc --locked --release -p espresso-node --lib -- -Ztime-passes
+[20:19:53] C1-time-passes-bin rc=0 wall=93s
+[20:22:08] D1-selfprofile-lib rc=0 wall=135s :: cargo rustc --locked --release -p espresso-node --lib -- -Zself-profile=/home/lulu/.claude-work/jobs/93d18945/tmp/runs/selfprof-lib
+[20:22:10] E1-mono-items-lib rc=101 wall=2s :: cargo rustc --locked --release -p espresso-node --lib -- -Zprint-mono-items=lazy
+[20:24:17] E2-mono-items-bin rc=101 wall=1s
+[20:28:04] F1-llvmir-lib rc=0 wall=227s :: cargo rustc --locked --release -p espresso-node --lib -- --emit=llvm-ir -Cno-prepopulate-passes -Ccodegen-units=1
+[20:33:00] F2-llvmir-bin rc=0 wall=168s
+[20:34:44] G1-threads8-lib rc=0 wall=104s :: cargo rustc --locked --release -p espresso-node --lib -- -Zthreads=8
+[20:36:25] G2-threads16-lib rc=0 wall=101s :: cargo rustc --locked --release -p espresso-node --lib -- -Zthreads=16
+[20:36:25] === matrix part 1 done
+[20:36:46] === matrix2 start
+[20:38:27] A6-check-lib-warm rc=0 wall=101s
+[20:43:30] I1-single-storage-sql-only rc=0 wall=303s
+[20:47:00] H1-cgu64 rc=0 wall=210s
+[20:47:00] H2-cgu256 rc=101 wall=0s
+[20:47:00] H3-optlevel2 rc=101 wall=0s
+[20:47:00] H4-optlevel1 rc=101 wall=0s
+[20:47:00] H0-baseline-again rc=101 wall=0s
+[20:47:00] J1-check-after-depcut rc=101 wall=0s (rc!=0 means some dep is still used somewhere)
+[20:47:00] K1-share-generics-fullbuild rc=101 wall=0s
+[20:47:00] K2-share-generics-touch-libbin rc=101 wall=0s
+[20:47:00] K3-restore-baseline-fullbuild wall=0s
+[20:47:00] K4-panic-abort-fullbuild rc=101 wall=0s
+[20:47:00] === matrix2 done
+[20:47:24] === matrix3 start
+[20:48:31] M0-check-lib-isolated rc=0 wall=33s
+[20:52:24] M1-mono-items-lib rc=0 wall=233s lines=542
+[20:56:12] M2-mono-items-bin rc=0 wall=98s lines=4
+[20:58:21] M4-timepasses-lib rc=0 wall=129s
+[21:04:11] M3-lto-off-fullbuild rc=0 wall=350s
+[21:08:11] M3b-lto-off-touch-libbin rc=0 wall=240s
+[21:08:11] === matrix3 done
+[21:17:43] cisim-baseline rc=0 wall=548s extra=''
+[21:17:43] === cisim baseline done
+[21:17:45] === matrix4 start
+[21:24:20] N1-llvmlines-lib rc=0 wall=395s
+[21:29:41] N2-llvmlines-bin rc=0 wall=321s
+[21:41:07] cisim-lto-off rc=0 wall=393s extra=''
+[21:42:22] cisim-share-generics rc=101 wall=13s extra=''
+[21:49:09] cisim-depcut rc=0 wall=385s extra=''
+[21:57:52] cisim-single-storage rc=0 wall=489s extra=''
+[22:08:23] cisim-baseline-2 rc=0 wall=384s extra=''
+[22:08:23] === matrix4 done
+[22:08:37] === matrix6 start
+[22:10:55] Q1-nonasync-entrypoint rc=0 wall=138s
+[22:16:04] cisim-nonasync-entrypoint rc=0 wall=287s extra=''
+[22:19:26] === night.sh start
+[22:19:41] === matrix6 done
+[22:19:41] === matrix2b start
+[22:23:19] B-cgu256 rc=0 wall=218s
+[22:27:17] B-optlevel2 rc=0 wall=238s
+[22:30:26] B-optlevel1 rc=0 wall=189s
+[22:34:22] B-baseline-again rc=0 wall=236s
+[22:34:22] B-depcut-check rc=101 wall=0s (rc=0 means the deps are removable as-is)
+[22:39:21] B-panic-abort-fullbuild rc=0 wall=299s
+[22:43:13] B-panic-abort-touch-libbin rc=0 wall=232s
+[22:43:20] B-share-generics-warmup wall=7s
+[22:43:44] B-share-generics-touch rc=101 wall=24s
+[22:47:23] B-restore-baseline wall=219s
+[22:47:23] === matrix2b done
+[22:47:32] === matrix5 start
+[22:51:16] P6-no-fs-query-module rc=0 wall=224s
+[22:57:50] cisim-no-fs-query-module rc=0 wall=371s extra=''
+[23:00:58] P7-single-combination rc=0 wall=188s
+[23:07:14] cisim-single-combination rc=0 wall=354s extra=''
+[23:10:47] === matrix5 done
+[23:10:56] === matrix7 start
+[23:12:21] matrix7-check-after-full-depcut rc=0 wall=85s (rc=0 => release build needs none of them)
+[23:23:38] cisim-full-depcut rc=0 wall=373s extra=''
+[23:28:19] === matrix7 done
+[23:28:41] === matrix8 start
+[23:29:19] R1-mono-items-test-lib rc=101 wall=38s items=0
+[23:29:33] R2-timepasses-test-lib rc=101 wall=14s
+[23:29:33] === matrix8 done
+[23:29:44] === matrix9 start (serialized clean A/B)
+[23:49:58] === matrix9 start (serialized clean A/B)
+[00:01:30] cisim-final-baseline rc=0 wall=391s extra=''
+[00:08:57] cisim-final-nonasync rc=0 wall=285s extra=''
+[00:20:12] cisim-final-depcut rc=0 wall=378s extra=''
+[00:30:39] cisim-final-single_combination rc=0 wall=353s extra=''
+[00:38:53] cisim-final-nonasync_depcut rc=0 wall=275s extra=''
+[00:43:32] === matrix9 done
+[00:55:06] cisim-night-depcut-branch rc=0 wall=376s extra=''
+[01:02:21] cisim-night-depcut-plus-nonasync rc=0 wall=273s extra=''
+[01:02:21] night: dyn-api branch found
+[01:11:30] cisim-night-dyn-api rc=0 wall=311s extra=''
+[01:17:50] cisim-night-dyn-api-plus-nonasync rc=0 wall=248s extra=''
+[01:19:53] night-sqlite-nonasync rc=0 wall=123s
+[01:22:28] night-sqlite-baseline rc=0 wall=155s
+[01:22:28] === night.sh done
+[01:22:39] === night2 start
+[01:22:39] night2 boxed-spawns prep FAILED rc=101
+[01:22:39] S1-mono-items-boxed-spawns items=0
+[01:22:39] night2: stacked variant = nonasync+depcut+spawns
+[01:23:07] === night2 start
+[01:27:07] night2 boxed-spawns prep FAILED rc=101
+[01:27:07] S1-mono-items-boxed-spawns items=0
+[01:27:07] night2: stacked variant = nonasync+depcut+spawns
+[01:28:20] === night2 start
+[01:41:02] cisim-n2-boxed-spawns rc=0 wall=371s extra=''
+[01:44:48] S1-mono-items-boxed-spawns items=242286
+[01:44:48] night2: stacked variant = nonasync+depcut+spawns
+[01:53:27] cisim-n2-stacked rc=0 wall=265s extra=''
+[01:53:27] === night2 done
+[01:53:31] === night3 start
+[01:53:57] === night3 start
+[02:03:16] cisim-n3-dyn-persistence rc=0 wall=322s extra=''
+[02:03:16] night3: merged = ma/compile-times-depcut ma/compile-times-boxed-spawns ma/compile-times-dyn-api ma/compile-times-dyn-persistence
+[02:09:53] cisim-n3-stacked-all rc=0 wall=220s extra=''
+[02:13:02] T1-mono-items-stacked items=179697 (baseline 281946)
+[02:13:02] === night3 done
+[02:13:23] === matrix10 start
+[02:29:08] U1-llvmlines-test-lib rc=101 wall=945s total=
+test-profile lib IR lines total=0 SeqTypes=0 TestTypes=0
+[02:29:10] === matrix10 done
+[02:30:31] === matrix11 start (test profile)
+[02:36:06] matrix11 baseline prep rc=0
+[02:42:57] cisim-n3-dyn-persistence rc=0 wall=388s extra=''
+[02:42:57] night3: merged = ma/compile-times-depcut ma/compile-times-boxed-spawns ma/compile-times-dyn-api ma/compile-times-dyn-persistence
+[02:43:24] === matrix11 start (test profile)
+[02:46:31] matrix11 baseline prep rc=0
+[02:51:02] V1-testprofile-baseline rc=0 wall=151s
+[02:53:37] matrix11 stacked prep rc=0
+[02:55:12] V2-testprofile-stacked rc=0 wall=95s
+[02:55:12] === matrix11 done
+[02:55:44] === matrix12 start
+[03:00:10] matrix12 baseline test-bins prep rc=0
+[03:03:00] W-baseline-testbins rc=0 wall=170s
+[03:06:33] matrix12 baseline dev-node prep rc=0
+[03:09:41] X-baseline-devnode rc=0 wall=188s
+[03:11:49] matrix12 stacked test-bins prep rc=0
+[03:13:39] W-stacked-testbins rc=0 wall=110s
+[03:16:19] matrix12 stacked dev-node prep rc=0
+[03:18:37] X-stacked-devnode rc=0 wall=138s
+[03:18:37] === matrix12 done
+[03:19:42] === matrix13 start
+[03:48:42] matrix13: merged no-testing-dep into the stack
+[03:54:16] cisim-n13-stacked-plus-no-testing rc=0 wall=202s extra=''
+[03:54:16] === matrix13 done
+[03:54:57] === matrix14 start
+[04:20:58] matrix14: merge conflict, skipped
+[04:20:58] === matrix14 done
+[04:21:25] === matrix15 start
+[04:21:25] matrix15 features on the node path: 1
+[04:27:20] cisim-n15-stacked-plus-adapter rc=0 wall=199s extra=''
+[04:27:20] === matrix15 done
+[04:31:21] === matrix16 start
+[04:32:42] Y-stack-check espresso-node --lib --release rc=0
+[04:34:28] Y-stack-check espresso-node --lib --features testing rc=0
+[04:35:06] Y-stack-check espresso-node --tests rc=0
+[04:36:21] Y-stack-check espresso-node --bins rc=0
+[04:37:01] Y-stack-check espresso-node-sqlite rc=0
+[04:38:17] Y-stack-check espresso-dev-node rc=0
+[04:38:19] Y-stack-check slow-tests rc=0
+[04:39:01] Y-stack-check tests rc=0
+[04:39:03] Y-stack-check builder rc=0
+[04:39:05] Y-stack-check light-client-query-service rc=0
+[04:39:54] Y-stack-check node-metrics rc=0
+[04:40:38] Y-stack-check staking-cli rc=0
+[04:45:09] Z1-llvmlines-stacked rc=0 total=9380022
+[04:45:10] === matrix16 done
+[05:25:23] === matrix17 start
+[05:25:24] matrix17: conflict on ma/compile-times-adapter-followups
+[05:25:24] matrix17: conflict on ma/compile-times-move-deploy-bin
+[05:25:25] matrix17 adapter features on the node path: feature "alloy-rlp" feature "clap" feature "client" feature "default" feature "doc-images" feature "docs" feature "file-system-data-source" feature "full" feature "log" feature "metrics-data-source" feature "mocks" feature "node" feature "rand" feature "refinery" feature "refinery-core" feature "rlp" feature "sql-data-source" feature "sqlite-options" feature "sqlx" feature "tokio" 
+[05:34:09] === matrix17 start
+[05:34:09] matrix17: merged ma/compile-times-adapter-followups
+[05:34:09] matrix17: merged ma/compile-times-move-deploy-bin
+[05:34:10] matrix17 adapter features on the node path: feature "alloy-rlp" feature "clap" feature "client" feature "default" feature "doc-images" feature "docs" feature "file-system-data-source" feature "full" feature "log" feature "metrics-data-source" feature "node" feature "rand" feature "refinery" feature "refinery-core" feature "rlp" feature "sql-data-source" feature "sqlite-options" feature "sqlx" feature "tokio" 
+[05:40:04] cisim-n17-final-stack rc=0 wall=195s extra=''
+[05:40:04] === matrix17 done
