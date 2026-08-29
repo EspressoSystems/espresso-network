@@ -15,6 +15,21 @@ use super::{
 };
 use crate::{default_telemetry_endpoint, keyset::KeySet};
 
+/// Blocking entry point for the binaries.
+///
+/// The runtime is created and driven here, inside the library, so that no binary crate polls a
+/// future defined in this crate. Polling one from a wrapper `main.rs` instantiates the `poll` shim
+/// of every future it transitively awaits in the *binary* crate, which re-monomorphizes the whole
+/// node: it costs ~280 s per wrapper binary in CI at `opt-level = 3`, where `-Cshare-generics` is
+/// off. See `doc/compile-times.md`.
+pub fn main_blocking(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
+    let rt = tokio::runtime::Runtime::new()?;
+    let result = rt.block_on(main(migrated_envs));
+    // Bound teardown so a stuck blocking-pool task cannot hang exit indefinitely.
+    rt.shutdown_timeout(std::time::Duration::from_secs(5));
+    result
+}
+
 pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     espresso_types::assert_node_feature();
     let opt = Options::parse();
