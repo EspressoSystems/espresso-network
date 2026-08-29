@@ -1007,6 +1007,21 @@ External references checked and still resolving: `scripts/ci-build-binary` (enum
 Final stack: **195 s vs 391 s baseline, -50 %**, with the node lib at 136.3 s and the next units
 espresso-types 26.8 s, contract-adapter 17.8 s, hotshot-types 17.1 s.
 
+## `espresso-types` and `hotshot-types`: mostly arkworks field arithmetic
+
+`cargo llvm-lines --release --lib` on the two crates that sit on everyone's critical path:
+
+| crate | IR lines | biggest families |
+|---|---|---|
+| espresso-types | 617 k | `ark_bn254::FqConfig as MontgomeryBackend` 34.4 k over 16 copies; `FrConfig` 33.8 k over 8; `Debug::fmt` 15.1 k over 328; `jf_merkle_tree_compat::UniversalMerkleTree` 9.8 k over 69 |
+| hotshot-types | 345 k | `ark_bn254::FqConfig` 34.5 k over 17; `FrConfig` 33.8 k over 9; `ark_ed_on_bn254::FrConfig` 33.0 k over 4; `ark_ff::Fp<MontBackend>` 8.1 k over 169; `jf_advz::AdvzInternal` 7.2 k; rayon join plumbing 6.1 k + 5.1 k |
+
+So ~11 % of espresso-types and ~29 % of hotshot-types is arkworks `MontBackend` field code,
+instantiated separately in each crate that touches those fields (share-generics is off at
+opt-level 3). There is no cheap lever here: the instantiations come from the field types themselves,
+not from the way this repo writes code. At 26.8 s and 17.1 s these units are also an order of
+magnitude smaller than the node lib, so this is recorded as a dead end rather than a target.
+
 ## Open items
 
 - Verify the stack in real CI. Every number here is from a local 4-core emulation of the
