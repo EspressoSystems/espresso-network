@@ -761,6 +761,18 @@ vary about +-15 % run to run, so treat the lib figures as ranges, not points.)
 In CI that bin unit is 258 s, and the identical 8-line `main.rs` means it is fixed by the same
 `main_blocking` call.
 
+### Boxed spawns and stacked results
+
+| variant | wall | vs baseline | cpu-s | mono items |
+|---|---|---|---|---|
+| baseline | 391 s | - | 560 | 281 946 |
+| `ma/compile-times-boxed-spawns` | 371 s | -5 % | 534 | **242 286 (-14 %)** |
+| non-async + depcut + boxed-spawns | 265 s | **-32 %** | 396 | - |
+
+Erasing spawned future types removes a seventh of all monomorphized items but only a twentieth of
+the wall clock: the tokio task shims are numerous and individually cheap. Keep it as a cheap
+mechanical change, not as a headline fix.
+
 ## Open items
 
 - Local `-Ztime-passes` split (frontend vs LLVM vs link) for the node lib and the node bin.
