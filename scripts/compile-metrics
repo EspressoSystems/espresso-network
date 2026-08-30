@@ -73,9 +73,7 @@ TOP_MOVERS = 10
 TOP_BINARIES = 10
 TOP_UNITS = 10
 TOP_FEATURE_ROWS = 25
-BASES_SHOWN = 3
 NAME_KEPT_CHARS = 200
-NAME_SHOWN_CHARS = 70
 MOVER_MIN_PCT = 0.5
 JOB_METRICS = ("peak memory", "largest process", "workspace cpu-s", "critical path s")
 RSS_SAMPLE_S = 2.0
@@ -778,30 +776,27 @@ def fmt_bytes(count: float) -> str:
 
 
 def instantiation_table(binaries: list[tuple[str, dict[str, Any]]]) -> list[str]:
-    """Where a binary's symbols come from: what is instantiated most, and the widest type.
+    """How much of a binary is monomorphization, and over how few generics it is spread.
+
+    The names are deliberately not here. A top-N by count is dominated by std across every run:
+    on this workspace the leaders were `catch_unwind::do_call` at 6820 and `MapFuture` at 2536,
+    while the instantiation that actually mattered ranked fourth. The comparison table is what
+    surfaces a base whose count moved, and the raw artifact holds every base for digging.
 
     Empty for a run written before these fields existed, and for a binary with no generic symbol.
     """
-    rows = []
-    for name, sizes in binaries:
-        bases = top_n(sizes.get("instantiations", {}), BASES_SHOWN)
-        longest = sizes.get("max_name", "")
-        if not bases and not longest:
-            continue
-        rows.append(
-            f"| {name} "
-            f"| {sizes.get('instantiated_symbols', 0):,} "
-            f"| {sizes.get('generic_bases', 0):,} | "
-            + ", ".join(f"`{base}` {count:,}" for base, count in bases)
-            + f" | `{elide(longest, NAME_SHOWN_CHARS)}` "
-            f"{sizes.get('max_name_len', 0):,} B |"
-        )
+    rows = [
+        f"| {name} | {sizes.get('instantiated_symbols', 0):,} "
+        f"| {sizes.get('generic_bases', 0):,} |"
+        for name, sizes in binaries
+        if sizes.get("instantiated_symbols")
+    ]
     if not rows:
         return []
     return [
         "",
-        "| binary | instantiated symbols | distinct bases | most instantiated | longest symbol |",
-        "|---|---:|---:|---|---|",
+        "| binary | instantiated symbols | distinct bases |",
+        "|---|---:|---:|",
     ] + rows
 
 
