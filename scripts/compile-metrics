@@ -42,6 +42,9 @@ log = logging.getLogger("compile-metrics")
 
 UNIT_DATA_RE = re.compile(r"^const UNIT_DATA = (\[.*?^\]);$", re.MULTILINE | re.DOTALL)
 DURATION_RE = re.compile(r"^DURATION = ([0-9.]+);$", re.MULTILINE)
+# `nm --print-size` writes "<address> <size> <type> <name>", but drops the size column for
+# symbols that have none. A demangled name contains spaces, so the columns cannot be counted.
+SYMBOL_RE = re.compile(r"^[0-9a-fA-F]{2,} ([0-9a-fA-F]{2,}) \S (.+)$")
 
 # Thresholds, from the run-to-run spread measured in doc/compile-times.md.
 WORKSPACE_CPU_PCT = 10.0
@@ -181,9 +184,14 @@ def text_section_bytes(path: Path) -> int:
     raise RuntimeError(f"no .text section in {path}")
 
 
-def symbol_count(path: Path) -> int:
-    out = subprocess.run(["nm", str(path)], check=True, capture_output=True, text=True)
-    return len(out.stdout.splitlines())
+def nm_symbols(path: Path) -> str:
+    """One `nm` pass per binary: the line count is the symbol count, sized lines carry the bytes."""
+    return subprocess.run(
+        ["nm", "--demangle", "--print-size", str(path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
 
 
 def symbol_crate(name: str) -> str:
@@ -192,35 +200,29 @@ def symbol_crate(name: str) -> str:
     for separator in (" as ", "::", "<", "("):
         head, _, _ = name.partition(separator)
         name = head
-    return name.strip() or "?"
+    return name.strip("<>&*()[] ") or "?"
 
 
-def crate_bytes(path: Path) -> dict[str, int]:
-    """Bytes of defined symbols per crate. Attributes growth instead of only detecting it."""
-    out = subprocess.run(
-        ["nm", "--demangle", "--print-size", "--defined-only", str(path)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+def crate_bytes(symbols: str) -> dict[str, int]:
+    """Bytes of sized symbols per crate. Attributes growth instead of only detecting it."""
     totals: dict[str, int] = {}
-    for line in out.stdout.splitlines():
-        fields = line.split(maxsplit=3)
-        if len(fields) < 4:
+    for line in symbols.splitlines():
+        symbol = SYMBOL_RE.match(line)
+        if symbol is None:
             continue
-        _address, size, _kind, name = fields
-        crate = symbol_crate(name)
-        totals[crate] = totals.get(crate, 0) + int(size, 16)
+        crate = symbol_crate(symbol.group(2))
+        totals[crate] = totals.get(crate, 0) + int(symbol.group(1), 16)
     top = sorted(totals.items(), key=lambda item: -item[1])[:TOP_CRATES]
     return dict(sorted(top))
 
 
 def measure_binary(path: Path) -> dict[str, Any]:
+    symbols = nm_symbols(path)
     return {
         "bytes": path.stat().st_size,
         "text_bytes": text_section_bytes(path),
-        "symbols": symbol_count(path),
-        "crate_bytes": crate_bytes(path),
+        "symbols": len(symbols.splitlines()),
+        "crate_bytes": crate_bytes(symbols),
     }
 
 
