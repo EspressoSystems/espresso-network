@@ -41,9 +41,17 @@ jobs:
             --artifact-name test-stats-hotshot \
             --out main-hotshot-stats.json
 
+      - name: Fetch main slow test stats
+        run: |
+          python3 scripts/nextest-ci stats-fetch \
+            --workflow slowtest.yaml \
+            --artifact-name test-stats-slow \
+            --out main-slow-stats.json
+
       - name: Update flaky test issue
         run: |
           python3 scripts/nextest-ci flaky-issue \
             --update \
             --stats "hotshot:main-hotshot-stats.json" \
-            --stats "espresso:main-test-stats.json"
+            --stats "espresso:main-test-stats.json" \
+            --stats "slow:main-slow-stats.json"
