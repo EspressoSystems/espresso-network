@@ -1,0 +1,60 @@
+name: Compile metrics report
+description: Compare this run's compile metrics against this workflow's main baseline
+inputs:
+  workflow:
+    description: Workflow file whose main-branch runs hold the baseline artifact
+    required: true
+  baseline-artifact:
+    description: Baseline artifact this workflow publishes on main; doubles as the PR comment header
+    required: true
+  title:
+    description: Heading for the summary and the comment, so three reports stay distinguishable
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Download compile metrics
+      uses: actions/download-artifact@v8
+      with:
+        pattern: compile-metrics-*
+        path: metrics-artifacts
+
+    - name: Merge compile metrics
+      shell: bash
+      run: |
+        python3 scripts/compile-metrics merge metrics-artifacts \
+          --sha "${{ github.sha }}" \
+          --run-id "${{ github.run_id }}" \
+          --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+          --out compile-metrics.json
+
+    - name: Fetch main compile metrics
+      continue-on-error: true
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        python3 scripts/nextest-ci stats-fetch \
+          --workflow "${{ inputs.workflow }}" \
+          --artifact-name "${{ inputs.baseline-artifact }}" \
+          --max-runs 5 \
+          --out main-compile-metrics.json
+
+    - name: Render summary
+      shell: bash
+      run: |
+        args=(compile-metrics.json --pr-comment-out pr-comment.md
+              --title "${{ inputs.title }}")
+        if [ -s main-compile-metrics.json ]; then
+          args+=(--main-stats main-compile-metrics.json)
+        fi
+        python3 scripts/compile-metrics report "${args[@]}" >> "$GITHUB_STEP_SUMMARY"
+
+    # One header per workflow, or the three reporters overwrite each other's comment.
+    - name: Post/update PR comment
+      continue-on-error: true
+      uses: marocchino/sticky-pull-request-comment@v2
+      with:
+        header: ${{ inputs.baseline-artifact }}
+        path: pr-comment.md
+        delete: ${{ hashFiles('pr-comment.md') == '' }}

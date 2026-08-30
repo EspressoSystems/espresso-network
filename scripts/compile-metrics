@@ -978,9 +978,12 @@ def fmt_features(names: list[str]) -> str:
 
 
 def render(
-    main: dict[str, Any] | None, current: dict[str, Any], changes: list[Change]
+    main: dict[str, Any] | None,
+    current: dict[str, Any],
+    changes: list[Change],
+    title: str,
 ) -> str:
-    lines = ["## Compile metrics", "", "### This run", ""]
+    lines = [f"## {title}", "", "### This run", ""]
     lines += state_tables(current)
     lines += ["", "### Against main", ""]
     if main is None:
@@ -1010,7 +1013,7 @@ def cmd_report(args: argparse.Namespace) -> int:
         else None
     )
     changes = compare(main, current) if main else []
-    summary = render(main, current, changes)
+    summary = render(main, current, changes, args.title)
     print(summary)
     if args.pr_comment_out:
         # The step summary always carries the full table. A PR comment notifies everyone watching
@@ -1082,6 +1085,12 @@ def main(argv: list[str]) -> int:
         "--main-stats",
         type=Path,
         help="aggregated main runs from `nextest-ci stats-fetch`",
+    )
+    report.add_argument(
+        "--title",
+        default="Compile metrics",
+        help="heading for the summary and the comment; distinguishes one workflow's report "
+        "from another's when several post to the same pull request",
     )
     report.add_argument(
         "--pr-comment-out",

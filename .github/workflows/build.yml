@@ -189,79 +189,12 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Download compile metrics
-        uses: actions/download-artifact@v8
+      - uses: ./.github/actions/compile-metrics-report
         with:
-          pattern: compile-metrics-*
-          path: metrics-artifacts
+          workflow: build.yml
+          baseline-artifact: compile-metrics-build
+          title: "Compile metrics: release builds"
 
-      - name: Download compile metrics from the test workflows
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          # Artifacts are per run, so siblings are found by commit. This job starts when build-amd
-          # finishes, several minutes before the test-profile builds do, so it has to wait or it
-          # reports almost none of them. Waiting for the runs themselves is wrong: they upload
-          # during their build steps and then run tests for up to an hour. Wait for the artifact
-          # count to stop growing instead.
-          for workflow in test.yml slowtest.yaml; do
-            run_id=$(gh run list --workflow "$workflow" --commit "$HEAD_SHA" --limit 1 \
-              --json databaseId --jq '.[0].databaseId // empty')
-            [ -n "$run_id" ] || continue
-            previous=-1
-            for _ in $(seq 50); do
-              count=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts" \
-                --jq '[.artifacts[] | select(.name | startswith("compile-metrics-"))] | length' \
-                2>/dev/null || echo 0)
-              status=$(gh run view "$run_id" --json status --jq .status 2>/dev/null || echo unknown)
-              if [ "$count" -gt 0 ] && [ "$count" = "$previous" ]; then break; fi
-              if [ "$status" = "completed" ]; then break; fi
-              previous=$count
-              sleep 30
-            done
-            echo "$workflow: $count metrics artifacts after waiting"
-            gh run download "$run_id" --pattern 'compile-metrics-*' --dir metrics-artifacts || true
-          done
-
-      - name: Merge compile metrics
-        run: |
-          python3 scripts/compile-metrics merge metrics-artifacts \
-            --sha "${{ github.sha }}" \
-            --run-id "${{ github.run_id }}" \
-            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            --out compile-metrics.json
-
-      - name: Fetch main compile metrics
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          python3 scripts/nextest-ci stats-fetch \
-            --workflow build.yml \
-            --artifact-name compile-metrics-build \
-            --max-runs 5 \
-            --out main-compile-metrics.json
-
-      - name: Render summary
-        run: |
-          args=(compile-metrics.json --pr-comment-out pr-comment.md)
-          if [ -s main-compile-metrics.json ]; then
-            args+=(--main-stats main-compile-metrics.json)
-          fi
-          python3 scripts/compile-metrics report "${args[@]}" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Post/update PR comment
-        continue-on-error: true
-        uses: marocchino/sticky-pull-request-comment@v2
-        with:
-          header: compile-metrics
-          path: pr-comment.md
-          delete: ${{ hashFiles('pr-comment.md') == '' }}
-
-  # Same race as the reporter, and here it costs later PRs their comparison rows for whichever
-  # sibling jobs did not finish in time. Numbers are never wrong, only absent.
   publish-compile-metrics:
     needs: build-amd
     # always() so one failed build job on main does not freeze the baseline artifact.
@@ -280,36 +213,6 @@ jobs:
         with:
           pattern: compile-metrics-*
           path: metrics-artifacts
-
-      - name: Download compile metrics from the test workflows
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          # Artifacts are per run, so siblings are found by commit. This job starts when build-amd
-          # finishes, several minutes before the test-profile builds do, so it has to wait or it
-          # reports almost none of them. Waiting for the runs themselves is wrong: they upload
-          # during their build steps and then run tests for up to an hour. Wait for the artifact
-          # count to stop growing instead.
-          for workflow in test.yml slowtest.yaml; do
-            run_id=$(gh run list --workflow "$workflow" --commit "$HEAD_SHA" --limit 1 \
-              --json databaseId --jq '.[0].databaseId // empty')
-            [ -n "$run_id" ] || continue
-            previous=-1
-            for _ in $(seq 50); do
-              count=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts" \
-                --jq '[.artifacts[] | select(.name | startswith("compile-metrics-"))] | length' \
-                2>/dev/null || echo 0)
-              status=$(gh run view "$run_id" --json status --jq .status 2>/dev/null || echo unknown)
-              if [ "$count" -gt 0 ] && [ "$count" = "$previous" ]; then break; fi
-              if [ "$status" = "completed" ]; then break; fi
-              previous=$count
-              sleep 30
-            done
-            echo "$workflow: $count metrics artifacts after waiting"
-            gh run download "$run_id" --pattern 'compile-metrics-*' --dir metrics-artifacts || true
-          done
 
       - name: Merge compile metrics
         run: |
