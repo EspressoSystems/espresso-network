@@ -7,13 +7,17 @@ times depend on the state of the dependency cache, which differs between any two
 Cargo.lock differs.
 
 Unit durations are wall time under whatever parallelism the job had, so a single unit is noisy on
-jobs that build many crates at once. The per-job sum is the signal; the per-unit table is a pointer.
+jobs that build many crates at once. The per-job sum and the critical path are the signals; the
+per-unit table is a pointer.
 
 Examples:
+    # Wrap the build to record its peak memory.
+    scripts/compile-metrics sample-rss --out peak-rss.json -- scripts/ci-build-binary espresso-node
+
     # In a build job, after `cargo build --timings`.
     scripts/compile-metrics collect target/cargo-timings/cargo-timing.html \
-        --job amd-espresso-node --out compile-metrics-amd-espresso-node.json \
-        target/release/*
+        --job amd-espresso-node --binaries-dir target/release --peak-rss peak-rss.json \
+        --out compile-metrics-amd-espresso-node.json
 
     # Merge the per-job artifacts of one run.
     scripts/compile-metrics merge metrics-artifacts --sha "$SHA" --run-id "$RUN_ID" \
@@ -29,6 +33,7 @@ import logging
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -40,10 +45,15 @@ DURATION_RE = re.compile(r"^DURATION = ([0-9.]+);$", re.MULTILINE)
 
 # Thresholds, from the run-to-run spread measured in doc/compile-times.md.
 WORKSPACE_CPU_PCT = 10.0
+CRITICAL_PATH_PCT = 10.0
 UNIT_CPU_PCT = 15.0
 UNIT_MIN_S = 20.0
+PEAK_RSS_PCT = 10.0
 BINARY_PCT = 5.0
+CRATE_BYTES_MIN = 256 * 1024
+TOP_CRATES = 25
 TOP_MOVERS = 10
+RSS_SAMPLE_S = 2.0
 
 
 @dataclass(frozen=True)
@@ -100,6 +110,56 @@ def workspace_cpu(units: list[dict], members: set[str]) -> dict[str, float]:
     return dict(sorted(cpu.items()))
 
 
+def critical_path(units: list[dict]) -> list[tuple[str, float]]:
+    """Longest chain through the unit graph, as [(unit, duration)] from root to leaf.
+
+    Cargo splits successors into units unblocked when this one finishes and units unblocked when it
+    emits rmeta; the rmeta timestamp is not in the report, so both edges are weighted with the full
+    duration. That makes this an upper bound on the true path, but a stable one: unlike a cpu sum or
+    a single unit's time, it does not move with how many other crates happened to compile alongside.
+    """
+    by_index = {unit["i"]: unit for unit in units}
+    edges = {
+        unit["i"]: [
+            successor
+            for successor in unit["unblocked_units"] + unit["unblocked_rmeta_units"]
+            if successor in by_index
+        ]
+        for unit in units
+    }
+    order = topological_order(edges)
+    best: dict[int, tuple[float, list[int]]] = {}
+    for index in reversed(order):
+        duration = by_index[index]["duration"]
+        tail = max(
+            (best[successor] for successor in edges[index] if successor in best),
+            key=lambda result: result[0],
+            default=(0.0, []),
+        )
+        best[index] = (duration + tail[0], [index] + tail[1])
+    _, path = max(best.values(), key=lambda result: result[0], default=(0.0, []))
+    return [(unit_key(by_index[i]), by_index[i]["duration"]) for i in path]
+
+
+def topological_order(edges: dict[int, list[int]]) -> list[int]:
+    indegree = {node: 0 for node in edges}
+    for successors in edges.values():
+        for successor in successors:
+            indegree[successor] += 1
+    queue = [node for node, count in indegree.items() if count == 0]
+    order = []
+    while queue:
+        node = queue.pop()
+        order.append(node)
+        for successor in edges[node]:
+            indegree[successor] -= 1
+            if indegree[successor] == 0:
+                queue.append(successor)
+    if len(order) != len(edges):
+        raise RuntimeError("the cargo unit graph is not acyclic")
+    return order
+
+
 def workspace_members() -> set[str]:
     out = subprocess.run(
         ["cargo", "metadata", "--no-deps", "--format-version", "1"],
@@ -126,38 +186,161 @@ def symbol_count(path: Path) -> int:
     return len(out.stdout.splitlines())
 
 
-def measure_binary(path: Path) -> dict[str, int]:
+def symbol_crate(name: str) -> str:
+    """Crate a demangled symbol belongs to: the leading path segment of the defining type."""
+    name = name.lstrip("<&*").lstrip()
+    for separator in (" as ", "::", "<", "("):
+        head, _, _ = name.partition(separator)
+        name = head
+    return name.strip() or "?"
+
+
+def crate_bytes(path: Path) -> dict[str, int]:
+    """Bytes of defined symbols per crate. Attributes growth instead of only detecting it."""
+    out = subprocess.run(
+        ["nm", "--demangle", "--print-size", "--defined-only", str(path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    totals: dict[str, int] = {}
+    for line in out.stdout.splitlines():
+        fields = line.split(maxsplit=3)
+        if len(fields) < 4:
+            continue
+        _address, size, _kind, name = fields
+        crate = symbol_crate(name)
+        totals[crate] = totals.get(crate, 0) + int(size, 16)
+    top = sorted(totals.items(), key=lambda item: -item[1])[:TOP_CRATES]
+    return dict(sorted(top))
+
+
+def measure_binary(path: Path) -> dict[str, Any]:
     return {
         "bytes": path.stat().st_size,
         "text_bytes": text_section_bytes(path),
         "symbols": symbol_count(path),
+        "crate_bytes": crate_bytes(path),
     }
 
 
-def executables(paths: list[Path]) -> list[Path]:
-    return sorted(p for p in paths if p.is_file() and p.stat().st_mode & 0o111)
+def executables(directory: Path) -> list[Path]:
+    return sorted(
+        path
+        for path in directory.iterdir()
+        if path.is_file() and path.stat().st_mode & 0o111
+    )
 
 
 def cmd_collect(args: argparse.Namespace) -> int:
     wall, units = parse_timing(args.timing.read_text())
     cpu = workspace_cpu(units, workspace_members())
-    binaries = {p.name: measure_binary(p) for p in executables(args.binaries)}
+    path = critical_path(units)
+    binaries = (
+        {path.name: measure_binary(path) for path in executables(args.binaries_dir)}
+        if args.binaries_dir
+        else {}
+    )
+    rss = json.loads(args.peak_rss.read_text()) if args.peak_rss else {}
     metrics = {
         "job": args.job,
         "wall_s": wall,
         "workspace_cpu_s": round(sum(cpu.values()), 1),
+        "critical_path_s": round(sum(duration for _, duration in path), 1),
+        "critical_path": [{"unit": unit, "s": duration} for unit, duration in path],
+        "peak_rss_kb": rss.get("peak_rss_kb", 0),
+        "peak_rss_by": rss.get("peak_rss_by", ""),
         "units": cpu,
         "binaries": binaries,
     }
     args.out.write_text(json.dumps(metrics, indent=2) + "\n")
     log.info(
-        "%s: %.1f workspace cpu-s over %d units, %d binaries",
+        "%s: %.1f workspace cpu-s over %d units, %.1f s critical path, %d binaries",
         args.job,
         metrics["workspace_cpu_s"],
         len(cpu),
+        metrics["critical_path_s"],
         len(binaries),
     )
     return 0
+
+
+# sample-rss
+
+
+def process_peak_rss(pid: str) -> tuple[int, str] | None:
+    """(VmHWM in kB, label) for one pid, or None if it is gone or unreadable."""
+    try:
+        status = Path(f"/proc/{pid}/status").read_text()
+        command = Path(f"/proc/{pid}/cmdline").read_text().split("\0")
+    except OSError:
+        return None
+    for line in status.splitlines():
+        if line.startswith("VmHWM:"):
+            label = Path(command[0]).name if command and command[0] else pid
+            if "--crate-name" in command:
+                label = f"{label} {command[command.index('--crate-name') + 1]}"
+            return int(line.split()[1]), label
+    return None
+
+
+def parent_pids() -> dict[int, int]:
+    parents = {}
+    for entry in Path("/proc").iterdir():
+        if entry.name.isdigit():
+            try:
+                stat = (entry / "stat").read_text()
+            except OSError:
+                continue
+            # comm sits in parens and may contain spaces, so ppid is the field after the last ')'.
+            parents[int(entry.name)] = int(stat.rpartition(")")[2].split()[1])
+    return parents
+
+
+def process_tree(root: int) -> set[int]:
+    parents = parent_pids()
+    tree = {root}
+    for pid in parents:
+        chain, current = [], pid
+        while current > 1 and current not in tree and current in parents:
+            chain.append(current)
+            current = parents[current]
+        if current in tree:
+            tree.update(chain)
+    return tree
+
+
+def scan_peak_rss(root: int, peak: tuple[int, str]) -> tuple[int, str]:
+    for pid in process_tree(root):
+        sample = process_peak_rss(str(pid))
+        if sample is not None and sample[0] > peak[0]:
+            peak = sample
+    return peak
+
+
+def cmd_sample_rss(args: argparse.Namespace) -> int:
+    """Run a build and record the largest VmHWM any process reached while it ran.
+
+    Sampling /proc is the only route that works here: /usr/bin/time is absent on NixOS, and
+    getrusage(RUSAGE_CHILDREN) from a wrapper did not capture rustc's peak through cargo. VmHWM is
+    a high-water mark, so a 2 s interval cannot miss the peak of a rustc that runs for minutes.
+    """
+    command = args.command[1:] if args.command[:1] == ["--"] else args.command
+    if not command:
+        raise RuntimeError("usage: compile-metrics sample-rss --out FILE -- COMMAND...")
+    child = subprocess.Popen(command)
+    peak = (0, "")
+    while child.poll() is None:
+        try:
+            peak = scan_peak_rss(child.pid, peak)
+        except OSError as error:  # sampling must never break the build
+            log.warning("peak rss sampling failed: %s", error)
+        time.sleep(RSS_SAMPLE_S)
+    args.out.write_text(
+        json.dumps({"peak_rss_kb": peak[0], "peak_rss_by": peak[1]}) + "\n"
+    )
+    log.info("peak rss %.1f GB in %s", peak[0] / 1024**2, peak[1] or "nothing sampled")
+    return child.returncode
 
 
 # merge
@@ -205,6 +388,14 @@ def compare(main: dict[str, Any], current: dict[str, Any]) -> list[Change]:
                 WORKSPACE_CPU_PCT,
             )
         )
+        for key, label, threshold in (
+            ("critical_path_s", "critical path s", CRITICAL_PATH_PCT),
+            ("peak_rss_kb", "peak rss kB", PEAK_RSS_PCT),
+        ):
+            if before.get(key) and now.get(key):
+                changes.append(
+                    Change(job, job, label, before[key], now[key], threshold)
+                )
         for unit, cpu in now["units"].items():
             was = before["units"].get(unit)
             if was is not None and was >= UNIT_MIN_S:
@@ -224,6 +415,19 @@ def compare(main: dict[str, Any], current: dict[str, Any]) -> list[Change]:
                         BINARY_PCT,
                     )
                 )
+            for crate, crate_size in sizes.get("crate_bytes", {}).items():
+                was_crate = was_sizes.get("crate_bytes", {}).get(crate)
+                if was_crate is not None and was_crate >= CRATE_BYTES_MIN:
+                    changes.append(
+                        Change(
+                            job,
+                            f"{binary}: {crate}",
+                            "bytes",
+                            was_crate,
+                            crate_size,
+                            BINARY_PCT,
+                        )
+                    )
     return changes
 
 
@@ -264,8 +468,9 @@ def top_movers(changes: list[Change]) -> list[Change]:
 
 def render(main: dict[str, Any], current: dict[str, Any], changes: list[Change]) -> str:
     regressions = [c for c in changes if c.regressed]
-    totals = [c for c in changes if c.metric == "workspace cpu-s"]
-    movers = top_movers([c for c in changes if c.metric != "workspace cpu-s"])
+    job_metrics = ("workspace cpu-s", "critical path s", "peak rss kB")
+    totals = [c for c in changes if c.metric in job_metrics]
+    movers = top_movers([c for c in changes if c.metric not in job_metrics])
 
     baseline = (
         f"[{main['sha'][:8]}]({main['run_url']})"
@@ -279,8 +484,8 @@ def render(main: dict[str, Any], current: dict[str, Any], changes: list[Change])
     if regressions:
         lines.append(
             f"**{len(regressions)} over threshold** "
-            f"(workspace cpu +{WORKSPACE_CPU_PCT:g}%, unit +{UNIT_CPU_PCT:g}%, "
-            f"binary +{BINARY_PCT:g}%)."
+            f"(workspace cpu +{WORKSPACE_CPU_PCT:g}%, critical path +{CRITICAL_PATH_PCT:g}%, "
+            f"peak rss +{PEAK_RSS_PCT:g}%, unit +{UNIT_CPU_PCT:g}%, binary +{BINARY_PCT:g}%)."
         )
     else:
         lines.append("No metric over threshold.")
@@ -322,11 +527,23 @@ def main(argv: list[str]) -> int:
     collect = sub.add_parser("collect", help="metrics for one build job")
     collect.add_argument("timing", type=Path, help="cargo-timing.html from --timings")
     collect.add_argument(
-        "binaries", type=Path, nargs="*", help="built binaries to measure"
+        "--binaries-dir",
+        type=Path,
+        help="directory whose executables are measured, e.g. target/release",
     )
     collect.add_argument("--job", required=True, help="label for this job")
     collect.add_argument("--out", required=True, type=Path)
+    collect.add_argument(
+        "--peak-rss", type=Path, help="JSON written by the sample-rss subcommand"
+    )
     collect.set_defaults(func=cmd_collect)
+
+    sample = sub.add_parser(
+        "sample-rss", help="run a build and record the largest VmHWM reached"
+    )
+    sample.add_argument("--out", required=True, type=Path)
+    sample.add_argument("command", nargs=argparse.REMAINDER, help="-- COMMAND...")
+    sample.set_defaults(func=cmd_sample_rss)
 
     merge = sub.add_parser("merge", help="merge the per-job metrics of one run")
     merge.add_argument(

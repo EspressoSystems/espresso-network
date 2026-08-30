@@ -72,7 +72,8 @@ jobs:
 
       - name: Build ${{ matrix.binary }}
         run: |
-          scripts/ci-build-binary ${{ matrix.binary }}
+          python3 scripts/compile-metrics sample-rss --out peak-rss.json -- \
+            scripts/ci-build-binary ${{ matrix.binary }}
 
       - name: Upload cargo timings
         uses: actions/upload-artifact@v7
@@ -90,8 +91,9 @@ jobs:
         run: |
           python3 scripts/compile-metrics collect target/cargo-timings/cargo-timing.html \
             --job amd-${{ matrix.binary }} \
-            --out compile-metrics-amd-${{ matrix.binary }}.json \
-            target/release/*
+            --binaries-dir target/release \
+            --peak-rss peak-rss.json \
+            --out compile-metrics-amd-${{ matrix.binary }}.json
 
       - name: Upload compile metrics
         continue-on-error: true
