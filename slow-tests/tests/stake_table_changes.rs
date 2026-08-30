@@ -74,12 +74,7 @@ const FIRST_CONTRACT_EPOCH: u64 = 3;
 /// reach a stake table snapshot before failing.
 const MAX_ACTIVATION_EPOCHS: u64 = 10;
 
-/// These tests submit no transactions, so every view waits out `builder_timeout`
-/// before the leader proposes an empty block: it is the seconds per block, and
-/// these tests are bound by the number of epochs they wait for. Set here rather
-/// than on `TestConfigBuilder` because that default is also what the
-/// `espresso-dev-node` binary runs on.
-const BUILDER_TIMEOUT: Duration = Duration::from_millis(250);
+use slow_tests::BUILDER_TIMEOUT;
 
 type SqlPersistence = <SqlDataSource as SequencerDataSource>::Options;
 
@@ -1086,6 +1081,9 @@ async fn full_swap_across_new_protocol_upgrade(trigger: SwapTrigger) -> anyhow::
     let network_config = TestConfigBuilder::<NUM_NODES>::default()
         .epoch_height(EPOCH_HEIGHT)
         .epoch_start_block(0)
+        // Longer than `BUILDER_TIMEOUT`: the 0.6 cutover has to complete inside
+        // the `wait_for_version` deadline below, and this network reaches it
+        // with less margin than the others.
         .builder_timeout(Duration::from_millis(500))
         .set_upgrades_with(
             NEW_PROTOCOL_VERSION,
@@ -1238,6 +1236,9 @@ async fn test_new_protocol_upgrade_ineligible_validator_drops() -> anyhow::Resul
     let network_config = TestConfigBuilder::<NUM_NODES>::default()
         .epoch_height(EPOCH_HEIGHT)
         .epoch_start_block(0)
+        // Longer than `BUILDER_TIMEOUT`: the 0.6 cutover has to complete inside
+        // the `wait_for_version` deadline below, and this network reaches it
+        // with less margin than the others.
         .builder_timeout(Duration::from_millis(500))
         .set_upgrades_with(NEW_PROTOCOL_VERSION, StakeTableContractVersion::V2, &all)
         .await

@@ -436,9 +436,6 @@ jobs:
       - name: Make binaries executable
         run: chmod -c +x target/debug/*
 
-      - name: Configure PATH
-        run: PATH="$PWD/target/debug:$PATH"
-
       - name: Test Integration
         env:
           NEXTEST_PROFILE: integration

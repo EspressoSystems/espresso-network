@@ -16,16 +16,10 @@ use espresso_types::ValidatedState;
 use futures::{StreamExt, future::join_all};
 use hotshot_types::{event::EventType, traits::metrics::NoMetrics, utils::epoch_from_block_number};
 use jf_merkle_tree_compat::MerkleTreeScheme;
+use slow_tests::BUILDER_TIMEOUT;
 use test_utils::reserve_tcp_port;
 use tokio::time::sleep;
 use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, Upgrade};
-
-// This test submits no transactions, so every view waits out `builder_timeout`
-// before the leader proposes an empty block: it is the seconds per block, and
-// the test runs to a fixed height of 1200. Set here rather than on
-// `TestConfigBuilder` because that default is also what the `espresso-dev-node`
-// binary runs on.
-const BUILDER_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// Regression guard: restarting ALL nodes after the reward tree is non-empty causes
 /// ValidatedState::from_header to build a sparse tree. At the next epoch boundary the full

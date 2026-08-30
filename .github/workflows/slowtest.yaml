@@ -23,10 +23,9 @@ env:
   RUST_LOG: info,libp2p=off,node=error
   NEXTEST_PROFILE: slow
   CARGO_INCREMENTAL: "0"
-  # Must equal the length of the `partition` matrix below.
+  # Checked against the matrix by the guard step below, because a stale value
+  # here silently drops a shard's worth of tests.
   SLOW_TEST_SHARDS: "8"
-  # Must equal the length of the `partition` matrix in espresso-dev-node-tests.
-  DEV_NODE_SHARDS: "5"
 
 jobs:
   slow-tests:
@@ -65,6 +64,16 @@ jobs:
           # All 8 shards share a key, so only one of them saves it.
           save-if: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-')) && matrix.partition == 1 }}
 
+      # `strategy.job-total` counts both db legs, so it cannot be the denominator
+      # directly. Fail loudly when the two drift apart.
+      - name: Check the shard count matches the matrix
+        run: |
+          expected=$(( ${{ strategy.job-total }} / 2 ))
+          if [ "$expected" != "${{ env.SLOW_TEST_SHARDS }}" ]; then
+            echo "SLOW_TEST_SHARDS is ${{ env.SLOW_TEST_SHARDS }} but the matrix has $expected partitions per db leg"
+            exit 1
+          fi
+
       - name: Build slow test
         run: just test-slow ${{ matrix.features }} --no-run
 
@@ -76,9 +85,11 @@ jobs:
       # deals the sorted list round-robin and pins the same one every run.
       - name: Run slow test
         run: |
-          just test-slow ${{ matrix.features }} --no-fail-fast \
+          just test-slow ${{ matrix.features }} --no-fail-fast --no-tests=pass \
             --partition hash:${{ matrix.partition }}/${{ env.SLOW_TEST_SHARDS }}
-        timeout-minutes: 60
+        # Long enough that nextest's own `terminate-after` reports a hung test
+        # rather than the job timeout killing the run with nothing to show.
+        timeout-minutes: 90
 
       - name: Upload nextest JUnit
         if: always()
@@ -128,12 +139,14 @@ jobs:
       # Each test runs a whole dev node. Four of the five used to run concurrently
       # on one runner and spent much of their time in view timeouts; one shard per
       # test gives each its own. `count` rather than `hash` because dealing five
-      # tests round-robin over five shards is exactly one apiece.
+      # tests round-robin over five shards is exactly one apiece, and
+      # `--no-tests=pass` so removing a test leaves the spare shard green
+      # instead of failing it with `no tests to run`.
       - name: Run slow test
         run: |
-          just test-dev-node --no-fail-fast \
-            --partition count:${{ matrix.partition }}/${{ env.DEV_NODE_SHARDS }}
-        timeout-minutes: 60
+          just test-dev-node --no-fail-fast --no-tests=pass \
+            --partition count:${{ matrix.partition }}/${{ strategy.job-total }}
+        timeout-minutes: 90
 
       - name: Upload nextest JUnit
         if: always()
