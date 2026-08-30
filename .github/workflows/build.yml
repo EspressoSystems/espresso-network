@@ -202,12 +202,26 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           # Artifacts are per run, so siblings are found by commit. This job starts when build-amd
-          # finishes, which is several minutes before the test-profile builds do, so most of their
-          # jobs are absent here. TODO: wait for the sibling runs before merging.
+          # finishes, several minutes before the test-profile builds do, so it has to wait or it
+          # reports almost none of them. Waiting for the runs themselves is wrong: they upload
+          # during their build steps and then run tests for up to an hour. Wait for the artifact
+          # count to stop growing instead.
           for workflow in test.yml slowtest.yaml; do
             run_id=$(gh run list --workflow "$workflow" --commit "$HEAD_SHA" --limit 1 \
               --json databaseId --jq '.[0].databaseId // empty')
             [ -n "$run_id" ] || continue
+            previous=-1
+            for _ in $(seq 50); do
+              count=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts" \
+                --jq '[.artifacts[] | select(.name | startswith("compile-metrics-"))] | length' \
+                2>/dev/null || echo 0)
+              status=$(gh run view "$run_id" --json status --jq .status 2>/dev/null || echo unknown)
+              if [ "$count" -gt 0 ] && [ "$count" = "$previous" ]; then break; fi
+              if [ "$status" = "completed" ]; then break; fi
+              previous=$count
+              sleep 30
+            done
+            echo "$workflow: $count metrics artifacts after waiting"
             gh run download "$run_id" --pattern 'compile-metrics-*' --dir metrics-artifacts || true
           done
 
@@ -274,12 +288,26 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           # Artifacts are per run, so siblings are found by commit. This job starts when build-amd
-          # finishes, which is several minutes before the test-profile builds do, so most of their
-          # jobs are absent here. TODO: wait for the sibling runs before merging.
+          # finishes, several minutes before the test-profile builds do, so it has to wait or it
+          # reports almost none of them. Waiting for the runs themselves is wrong: they upload
+          # during their build steps and then run tests for up to an hour. Wait for the artifact
+          # count to stop growing instead.
           for workflow in test.yml slowtest.yaml; do
             run_id=$(gh run list --workflow "$workflow" --commit "$HEAD_SHA" --limit 1 \
               --json databaseId --jq '.[0].databaseId // empty')
             [ -n "$run_id" ] || continue
+            previous=-1
+            for _ in $(seq 50); do
+              count=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts" \
+                --jq '[.artifacts[] | select(.name | startswith("compile-metrics-"))] | length' \
+                2>/dev/null || echo 0)
+              status=$(gh run view "$run_id" --json status --jq .status 2>/dev/null || echo unknown)
+              if [ "$count" -gt 0 ] && [ "$count" = "$previous" ]; then break; fi
+              if [ "$status" = "completed" ]; then break; fi
+              previous=$count
+              sleep 30
+            done
+            echo "$workflow: $count metrics artifacts after waiting"
             gh run download "$run_id" --pattern 'compile-metrics-*' --dir metrics-artifacts || true
           done
 
