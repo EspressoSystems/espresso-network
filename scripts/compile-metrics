@@ -523,25 +523,19 @@ def state_tables(current: dict[str, Any]) -> list[str]:
     """What this run costs, standing alone: no baseline needed to read it."""
     jobs = current["jobs"]
     lines = [
-        "| job | peak memory | of runner | largest process | workspace cpu-s "
-        "| critical path s | binaries |",
-        "|---|---:|---:|---|---:|---:|---:|",
+        "| job | peak memory | largest process | workspace cpu-s | critical path s |",
+        "|---|---:|---|---:|---:|",
     ]
     for job, metrics in sorted(jobs.items()):
-        total = metrics.get("mem_total_kb", 0)
         used = metrics.get("peak_used_kb", 0)
-        share = (
-            f"{used / total * 100:.0f} % of {fmt_bytes(total * 1024)}" if total else "-"
-        )
         largest = (
             f"{metrics.get('peak_rss_by') or '-'} {fmt_bytes(metrics.get('peak_rss_kb', 0) * 1024)}"
             if metrics.get("peak_rss_kb")
             else "-"
         )
         lines.append(
-            f"| {job} | {fmt_bytes(used * 1024) if used else '-'} | {share} | {largest} "
-            f"| {metrics['workspace_cpu_s'] or '-'} | {metrics['critical_path_s'] or '-'} "
-            f"| {len(metrics['binaries'])} |"
+            f"| {job} | {fmt_bytes(used * 1024) if used else '-'} | {largest} "
+            f"| {metrics['workspace_cpu_s'] or '-'} | {metrics['critical_path_s'] or '-'} |"
         )
 
     binaries = sorted(
