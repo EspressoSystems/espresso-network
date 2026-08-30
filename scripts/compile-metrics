@@ -47,7 +47,9 @@ DURATION_RE = re.compile(r"^DURATION = ([0-9.]+);$", re.MULTILINE)
 # symbols that have none. A demangled name contains spaces, so the columns cannot be counted.
 SYMBOL_RE = re.compile(r"^[0-9a-fA-F]{2,} ([0-9a-fA-F]{2,}) \S (.+)$")
 
-# Thresholds, from the run-to-run spread measured in doc/compile-times.md.
+# Thresholds. Chosen from a measured run-to-run spread of about +-15 % on job wall time and
+# +-20 % on a single compilation unit, so a unit needs a wider band than a per-job total, and
+# the deterministic binary metrics get the tightest one. Retune once main baselines exist.
 WORKSPACE_CPU_PCT = 10.0
 CRITICAL_PATH_PCT = 10.0
 UNIT_CPU_PCT = 15.0
