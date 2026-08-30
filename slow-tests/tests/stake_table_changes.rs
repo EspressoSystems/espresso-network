@@ -1085,7 +1085,6 @@ async fn full_swap_across_new_protocol_upgrade(trigger: SwapTrigger) -> anyhow::
 
     let network_config = TestConfigBuilder::<NUM_NODES>::default()
         .epoch_height(EPOCH_HEIGHT)
-        .builder_timeout(BUILDER_TIMEOUT)
         .epoch_start_block(0)
         .builder_timeout(Duration::from_millis(500))
         .set_upgrades_with(
@@ -1238,7 +1237,6 @@ async fn test_new_protocol_upgrade_ineligible_validator_drops() -> anyhow::Resul
     // chain, and equal stakes so the eligible fraction is exactly 4/5.
     let network_config = TestConfigBuilder::<NUM_NODES>::default()
         .epoch_height(EPOCH_HEIGHT)
-        .builder_timeout(BUILDER_TIMEOUT)
         .epoch_start_block(0)
         .builder_timeout(Duration::from_millis(500))
         .set_upgrades_with(NEW_PROTOCOL_VERSION, StakeTableContractVersion::V2, &all)
