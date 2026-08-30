@@ -56,6 +56,10 @@ BINARY_PCT = 5.0
 CRATE_BYTES_MIN = 256 * 1024
 TOP_CRATES = 25
 TOP_MOVERS = 10
+TOP_BINARIES = 10
+TOP_UNITS = 10
+MOVER_MIN_PCT = 0.5
+JOB_METRICS = ("workspace cpu-s", "critical path s", "peak rss")
 RSS_SAMPLE_S = 2.0
 
 
@@ -392,7 +396,7 @@ def compare(main: dict[str, Any], current: dict[str, Any]) -> list[Change]:
         )
         for key, label, threshold in (
             ("critical_path_s", "critical path s", CRITICAL_PATH_PCT),
-            ("peak_rss_kb", "peak rss kB", PEAK_RSS_PCT),
+            ("peak_rss_kb", "peak rss", PEAK_RSS_PCT),
         ):
             if before.get(key) and now.get(key):
                 changes.append(
@@ -437,6 +441,14 @@ def fmt_value(value: float) -> str:
     return f"{value:,.0f}" if value == int(value) else f"{value:,.1f}"
 
 
+def fmt_metric(metric: str, value: float) -> str:
+    if metric == "peak rss":
+        return fmt_bytes(value * 1024)
+    if metric in ("bytes", "text_bytes"):
+        return fmt_bytes(value)
+    return fmt_value(value)
+
+
 def table(rows: list[Change], columns: list[str]) -> list[str]:
     if not rows:
         return []
@@ -450,8 +462,8 @@ def table(rows: list[Change], columns: list[str]) -> list[str]:
         lines.append(
             "| "
             + " | ".join(cells)
-            + f" | {change.metric} | {fmt_value(change.main)} | "
-            f"{fmt_value(change.current)} | {change.delta_pct:+.1f}%{mark} |"
+            + f" | {change.metric} | {fmt_metric(change.metric, change.main)} | "
+            f"{fmt_metric(change.metric, change.current)} | {change.delta_pct:+.1f}%{mark} |"
         )
     return lines
 
@@ -468,33 +480,124 @@ def top_movers(changes: list[Change]) -> list[Change]:
     )
 
 
-def render(main: dict[str, Any], current: dict[str, Any], changes: list[Change]) -> str:
-    regressions = [c for c in changes if c.regressed]
-    job_metrics = ("workspace cpu-s", "critical path s", "peak rss kB")
-    totals = [c for c in changes if c.metric in job_metrics]
-    movers = top_movers([c for c in changes if c.metric not in job_metrics])
+def fmt_bytes(count: float) -> str:
+    for unit, scale in (("GB", 1024**3), ("MB", 1024**2), ("kB", 1024)):
+        if count >= scale:
+            return f"{count / scale:.1f} {unit}"
+    return f"{count:.0f} B"
 
-    baseline = (
-        f"[{main['sha'][:8]}]({main['run_url']})"
-        if main.get("run_url")
-        else main["sha"][:8]
-    )
-    lines = [f"## Compile metrics vs main {baseline}", ""]
-    if not changes:
-        lines.append("No job in this run has a counterpart in the baseline run.")
-        return "\n".join(lines) + "\n"
-    if regressions:
+
+def state_tables(current: dict[str, Any]) -> list[str]:
+    """What this run costs, standing alone: no baseline needed to read it."""
+    jobs = current["jobs"]
+    lines = [
+        "| job | workspace cpu-s | critical path s | peak rss | binaries |",
+        "|---|---:|---:|---:|---:|",
+    ]
+    for job, metrics in sorted(jobs.items()):
         lines.append(
-            f"**{len(regressions)} over threshold** "
-            f"(workspace cpu +{WORKSPACE_CPU_PCT:g}%, critical path +{CRITICAL_PATH_PCT:g}%, "
-            f"peak rss +{PEAK_RSS_PCT:g}%, unit +{UNIT_CPU_PCT:g}%, binary +{BINARY_PCT:g}%)."
+            f"| {job} | {metrics['workspace_cpu_s']:,.1f} "
+            f"| {metrics['critical_path_s']:,.1f} "
+            f"| {fmt_bytes(metrics.get('peak_rss_kb', 0) * 1024)} "
+            f"| {len(metrics['binaries'])} |"
         )
+
+    binaries = sorted(
+        (
+            (sizes["bytes"], name, job, sizes)
+            for job, metrics in jobs.items()
+            for name, sizes in metrics["binaries"].items()
+        ),
+        reverse=True,
+    )[:TOP_BINARIES]
+    if binaries:
+        lines += [
+            "",
+            "| binary | size | `.text` | symbols | largest crate |",
+            "|---|---:|---:|---:|---|",
+        ]
+        for _, name, _job, sizes in binaries:
+            crates = sizes.get("crate_bytes", {})
+            largest = max(crates.items(), key=lambda item: item[1], default=("-", 0))
+            lines.append(
+                f"| {name} | {fmt_bytes(sizes['bytes'])} | {fmt_bytes(sizes['text_bytes'])} "
+                f"| {sizes['symbols']:,} | {largest[0]} {fmt_bytes(largest[1])} |"
+            )
+
+    units = sorted(
+        (
+            (cpu, unit, job)
+            for job, metrics in jobs.items()
+            for unit, cpu in metrics["units"].items()
+        ),
+        reverse=True,
+    )[:TOP_UNITS]
+    if units:
+        lines += ["", "| slowest unit | job | cpu-s |", "|---|---|---:|"]
+        lines += [f"| {unit} | {job} | {cpu:,.1f} |" for cpu, unit, job in units]
+    return lines
+
+
+def fmt_cell(change: Change) -> str:
+    mark = " :warning:" if change.regressed else ""
+    return (
+        f"{fmt_metric(change.metric, change.main)} -> "
+        f"{fmt_metric(change.metric, change.current)} ({change.delta_pct:+.1f}%){mark}"
+    )
+
+
+def comparison_tables(changes: list[Change]) -> list[str]:
+    if not changes:
+        return ["No job in this run has a counterpart in the baseline run."]
+    regressions = [c for c in changes if c.regressed]
+    lines = [
+        f"**{len(regressions)} over threshold** "
+        f"(workspace cpu +{WORKSPACE_CPU_PCT:g}%, critical path +{CRITICAL_PATH_PCT:g}%, "
+        f"peak rss +{PEAK_RSS_PCT:g}%, unit +{UNIT_CPU_PCT:g}%, binary +{BINARY_PCT:g}%)."
+        if regressions
+        else "No metric over threshold.",
+        "",
+        "| job | " + " | ".join(JOB_METRICS) + " |",
+        "|---" * (len(JOB_METRICS) + 1) + "|",
+    ]
+    by_job: dict[str, dict[str, Change]] = {}
+    for change in changes:
+        if change.metric in JOB_METRICS:
+            by_job.setdefault(change.scope, {})[change.metric] = change
+    for job, metrics in sorted(by_job.items()):
+        cells = [fmt_cell(metrics[m]) if m in metrics else "-" for m in JOB_METRICS]
+        lines.append(f"| {job} | " + " | ".join(cells) + " |")
+
+    movers = top_movers(
+        [
+            c
+            for c in changes
+            if c.metric not in JOB_METRICS and abs(c.delta_pct) >= MOVER_MIN_PCT
+        ]
+    )
+    lines.append("")
+    lines += table(movers, ["job", "unit or binary"]) or [
+        f"No unit or binary moved by more than {MOVER_MIN_PCT:g} %."
+    ]
+    return lines
+
+
+def render(
+    main: dict[str, Any] | None, current: dict[str, Any], changes: list[Change]
+) -> str:
+    lines = ["## Compile metrics", "", "### This run", ""]
+    lines += state_tables(current)
+    lines += ["", "### Against main", ""]
+    if main is None:
+        lines.append("No main-branch baseline available yet.")
     else:
-        lines.append("No metric over threshold.")
-    lines.append("")
-    lines += table(totals, ["job"])
-    lines.append("")
-    lines += table(movers, ["job", "unit or binary"])
+        baseline = (
+            f"[{main['sha'][:8]}]({main['run_url']})"
+            if main.get("run_url")
+            else main["sha"][:8]
+        )
+        lines += [f"Baseline: main {baseline}.", ""]
+        lines += comparison_tables(changes)
     lines.append("")
     return "\n".join(lines)
 
@@ -510,10 +613,8 @@ def cmd_report(args: argparse.Namespace) -> int:
         if args.main_stats
         else None
     )
-    if main is None:
-        summary = "## Compile metrics\n\nNo main-branch baseline available yet.\n"
-    else:
-        summary = render(main, current, compare(main, current))
+    changes = compare(main, current) if main else []
+    summary = render(main, current, changes)
     print(summary)
     if args.pr_comment_out:
         args.pr_comment_out.write_text(summary)
