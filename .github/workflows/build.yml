@@ -201,8 +201,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          # Best effort: a sibling workflow that has not reached its build step yet simply has no
-          # artifact, and its jobs are missing from this report rather than blocking it.
+          # Artifacts are scoped to their own run, so the sibling workflows are found by commit.
+          # Best effort by design: this job starts as soon as build-amd finishes, so a sibling that
+          # has not reached its build step yet has no artifact, and its jobs are missing from this
+          # report rather than blocking it. They appear on the next push.
+          #
+          # TODO: make it deterministic with a workflow_run-triggered reporter that fires after all
+          # three workflows complete. Deferred because workflow_run only triggers from the default
+          # branch, so it cannot be exercised from a PR at all, and it would have to recover the PR
+          # number from the event to post a comment. Not worth merging blind while the metrics
+          # themselves are still settling.
           for workflow in test.yml slowtest.yaml; do
             run_id=$(gh run list --workflow "$workflow" --commit "$HEAD_SHA" --limit 1 \
               --json databaseId --jq '.[0].databaseId // empty')
@@ -245,6 +253,10 @@ jobs:
           path: pr-comment.md
           delete: ${{ hashFiles('pr-comment.md') == '' }}
 
+  # Note: this job has the same sibling-workflow race as the reporter above, and on main it matters
+  # differently. If test.yml or slowtest.yaml has not finished when build.yml has, their jobs are
+  # missing from the published baseline, so a later PR gets no comparison rows for them until a main
+  # run happens to win the race. The metrics themselves are never wrong, only absent.
   publish-compile-metrics:
     needs: build-amd
     # always() so one failed build job on main does not freeze the baseline artifact.
@@ -270,8 +282,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          # Best effort: a sibling workflow that has not reached its build step yet simply has no
-          # artifact, and its jobs are missing from this report rather than blocking it.
+          # Artifacts are scoped to their own run, so the sibling workflows are found by commit.
+          # Best effort by design: this job starts as soon as build-amd finishes, so a sibling that
+          # has not reached its build step yet has no artifact, and its jobs are missing from this
+          # report rather than blocking it. They appear on the next push.
+          #
+          # TODO: make it deterministic with a workflow_run-triggered reporter that fires after all
+          # three workflows complete. Deferred because workflow_run only triggers from the default
+          # branch, so it cannot be exercised from a PR at all, and it would have to recover the PR
+          # number from the event to post a comment. Not worth merging blind while the metrics
+          # themselves are still settling.
           for workflow in test.yml slowtest.yaml; do
             run_id=$(gh run list --workflow "$workflow" --commit "$HEAD_SHA" --limit 1 \
               --json databaseId --jq '.[0].databaseId // empty')
