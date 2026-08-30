@@ -322,6 +322,12 @@ def measure_binary(path: Path) -> dict[str, Any]:
         raise RuntimeError(f"nm exited {nm.returncode} on {path}")
     return measured | {
         "symbols": symbols,
+        # The report keeps the top N so the artifact the comparison reads stays small. The full
+        # tallies go to --raw-out, for questions nobody has asked yet.
+        "_full": {
+            "crate_bytes": dict(sorted(totals.items())),
+            "instantiations": dict(sorted(counts.items())),
+        },
         "crate_bytes": dict(sorted(top_n(totals, TOP_CRATES))),
         "instantiations": dict(sorted(top_n(counts, TOP_BASES))),
         "instantiated_symbols": instantiations,
@@ -473,7 +479,14 @@ def cmd_collect(args: argparse.Namespace) -> int:
         "binaries": binaries,
         "features": features,
     }
+    full = {name: sizes.pop("_full", {}) for name, sizes in binaries.items()}
     args.out.write_text(json.dumps(metrics, indent=2) + "\n")
+    if args.raw_out:
+        # Everything the report caps away, kept so a later question can be answered without a
+        # rebuild. Deliberately not named compile-metrics-*.json: merge globs that.
+        args.raw_out.write_text(
+            json.dumps({"job": args.job, "binaries": full}, indent=2) + "\n"
+        )
     log.info(
         "%s: %.1f workspace cpu-s over %d units, %.1f s critical path, %d binaries, "
         "%d packages with features",
@@ -777,8 +790,8 @@ def instantiation_table(binaries: list[tuple[str, dict[str, Any]]]) -> list[str]
             continue
         rows.append(
             f"| {name} "
-            f"| {sizes.get('instantiated_symbols', 0):,} of "
-            f"{sizes.get('generic_bases', 0):,} | "
+            f"| {sizes.get('instantiated_symbols', 0):,} "
+            f"| {sizes.get('generic_bases', 0):,} | "
             + ", ".join(f"`{base}` {count:,}" for base, count in bases)
             + f" | `{elide(longest, NAME_SHOWN_CHARS)}` "
             f"{sizes.get('max_name_len', 0):,} B |"
@@ -787,8 +800,8 @@ def instantiation_table(binaries: list[tuple[str, dict[str, Any]]]) -> list[str]
         return []
     return [
         "",
-        "| binary | instantiations | most instantiated | longest symbol |",
-        "|---|---:|---|---|",
+        "| binary | instantiated symbols | distinct bases | most instantiated | longest symbol |",
+        "|---|---:|---:|---|---|",
     ] + rows
 
 
@@ -1044,6 +1057,11 @@ def main(argv: list[str]) -> int:
     collect.add_argument("--out", required=True, type=Path)
     collect.add_argument(
         "--peak-rss", type=Path, help="JSON written by the sample-rss subcommand"
+    )
+    collect.add_argument(
+        "--raw-out",
+        type=Path,
+        help="write the uncapped per-crate and per-base tallies here, for later analysis",
     )
     collect.set_defaults(func=cmd_collect)
 

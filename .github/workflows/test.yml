@@ -76,7 +76,7 @@ jobs:
         with:
           name: cargo-timings-test-postgres
           path: target/cargo-timings/cargo-timing.html
-          retention-days: 1
+          retention-days: ${{ github.ref == 'refs/heads/main' && 90 || 14 }}
 
       - name: Cargo timing summary
         run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
@@ -130,7 +130,7 @@ jobs:
         with:
           name: cargo-timings-test-sqlite
           path: target/cargo-timings/cargo-timing.html
-          retention-days: 1
+          retention-days: ${{ github.ref == 'refs/heads/main' && 90 || 14 }}
 
       - name: Cargo timing summary
         run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
@@ -170,7 +170,7 @@ jobs:
         with:
           name: cargo-timings-test-bins
           path: target/cargo-timings/cargo-timing.html
-          retention-days: 1
+          retention-days: ${{ github.ref == 'refs/heads/main' && 90 || 14 }}
 
       - name: Cargo timing summary
         run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"

@@ -32,6 +32,7 @@ runs:
         if [ -n "${{ inputs.binaries-dir }}" ]; then
           args+=(--binaries-dir "${{ inputs.binaries-dir }}")
         fi
+        args+=(--raw-out "raw-metrics-${{ inputs.job }}.json")
         python3 scripts/compile-metrics collect "${args[@]}"
 
     - name: Upload compile metrics
@@ -41,4 +42,16 @@ runs:
         name: compile-metrics-${{ inputs.job }}
         path: compile-metrics-${{ inputs.job }}.json
         if-no-files-found: warn
-        retention-days: 1
+        # Long enough on main to mine a trend, short enough on PRs to not hoard storage.
+        retention-days: ${{ github.ref == 'refs/heads/main' && 90 || 14 }}
+
+    # Separate artifact on purpose: the report job downloads compile-metrics-* and would otherwise
+    # pull tallies it never reads. This one is for answering questions later, by hand.
+    - name: Upload raw compile metrics
+      continue-on-error: true
+      uses: actions/upload-artifact@v7
+      with:
+        name: raw-metrics-${{ inputs.job }}
+        path: raw-metrics-${{ inputs.job }}.json
+        if-no-files-found: warn
+        retention-days: ${{ github.ref == 'refs/heads/main' && 90 || 14 }}
