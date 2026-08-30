@@ -74,6 +74,13 @@ const FIRST_CONTRACT_EPOCH: u64 = 3;
 /// reach a stake table snapshot before failing.
 const MAX_ACTIVATION_EPOCHS: u64 = 10;
 
+/// These tests submit no transactions, so every view waits out `builder_timeout`
+/// before the leader proposes an empty block: it is the seconds per block, and
+/// these tests are bound by the number of epochs they wait for. Set here rather
+/// than on `TestConfigBuilder` because that default is also what the
+/// `espresso-dev-node` binary runs on.
+const BUILDER_TIMEOUT: Duration = Duration::from_millis(250);
+
 type SqlPersistence = <SqlDataSource as SequencerDataSource>::Options;
 
 /// State-peers catchup pointed at node 0's query API.
@@ -418,6 +425,7 @@ async fn full_set_replacement(version: Upgrade, epoch_height: u64) -> anyhow::Re
 
     let network_config = TestConfigBuilder::<NUM_NODES>::default()
         .epoch_height(epoch_height)
+        .builder_timeout(BUILDER_TIMEOUT)
         .epoch_start_block(0)
         .build();
 
@@ -531,6 +539,7 @@ async fn test_stake_table_grow_and_shrink(#[case] version: Upgrade) -> anyhow::R
 
     let network_config = TestConfigBuilder::<NUM_NODES>::default()
         .epoch_height(EPOCH_HEIGHT)
+        .builder_timeout(BUILDER_TIMEOUT)
         .epoch_start_block(0)
         .build();
 
@@ -621,6 +630,7 @@ async fn test_stake_table_delegation_reshuffle(#[case] version: Upgrade) -> anyh
 
     let network_config = TestConfigBuilder::<NUM_NODES>::default()
         .epoch_height(EPOCH_HEIGHT)
+        .builder_timeout(BUILDER_TIMEOUT)
         .epoch_start_block(0)
         .build();
 
@@ -796,6 +806,7 @@ async fn test_stake_table_full_swap_across_epoch_reward_upgrade(
 
     let network_config = TestConfigBuilder::<NUM_NODES>::default()
         .epoch_height(EPOCH_HEIGHT)
+        .builder_timeout(BUILDER_TIMEOUT)
         .epoch_start_block(0)
         .set_upgrades_with(
             EPOCH_REWARD_VERSION,
@@ -971,6 +982,7 @@ async fn test_stake_table_single_removal_across_epoch_reward_upgrade() -> anyhow
 
     let network_config = TestConfigBuilder::<NUM_NODES>::default()
         .epoch_height(EPOCH_HEIGHT)
+        .builder_timeout(BUILDER_TIMEOUT)
         .epoch_start_block(0)
         .set_upgrades_with(
             EPOCH_REWARD_VERSION,
@@ -1073,6 +1085,7 @@ async fn full_swap_across_new_protocol_upgrade(trigger: SwapTrigger) -> anyhow::
 
     let network_config = TestConfigBuilder::<NUM_NODES>::default()
         .epoch_height(EPOCH_HEIGHT)
+        .builder_timeout(BUILDER_TIMEOUT)
         .epoch_start_block(0)
         .builder_timeout(Duration::from_millis(500))
         .set_upgrades_with(
@@ -1225,6 +1238,7 @@ async fn test_new_protocol_upgrade_ineligible_validator_drops() -> anyhow::Resul
     // chain, and equal stakes so the eligible fraction is exactly 4/5.
     let network_config = TestConfigBuilder::<NUM_NODES>::default()
         .epoch_height(EPOCH_HEIGHT)
+        .builder_timeout(BUILDER_TIMEOUT)
         .epoch_start_block(0)
         .builder_timeout(Duration::from_millis(500))
         .set_upgrades_with(NEW_PROTOCOL_VERSION, StakeTableContractVersion::V2, &all)
@@ -1361,6 +1375,7 @@ async fn fresh_node_joins(version: Upgrade, epoch_height: u64) -> anyhow::Result
 
     let network_config = TestConfigBuilder::<NUM_NODES>::default()
         .epoch_height(epoch_height)
+        .builder_timeout(BUILDER_TIMEOUT)
         .epoch_start_block(0)
         .build();
 
@@ -1468,6 +1483,7 @@ async fn rotate_validator(rotation: Rotation) -> anyhow::Result<()> {
 
     let network_config = TestConfigBuilder::<NUM_NODES>::default()
         .epoch_height(EPOCH_HEIGHT)
+        .builder_timeout(BUILDER_TIMEOUT)
         .epoch_start_block(0)
         .build();
 

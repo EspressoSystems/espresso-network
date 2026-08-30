@@ -10500,6 +10500,10 @@ mod test {
         let test_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
             .epoch_start_block(321)
+            // No transactions are submitted, so every view waits out
+            // `builder_timeout` before proposing an empty block. This test needs
+            // ~885 of them, which is all of its 15 min at the 1s default.
+            .builder_timeout(Duration::from_millis(250))
             .set_upgrades(upgrade.target)
             .await
             .build();

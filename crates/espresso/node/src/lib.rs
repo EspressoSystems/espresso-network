@@ -1523,13 +1523,7 @@ pub mod testing {
                 builder_urls: vec1::vec1![
                     Url::parse(&format!("http://127.0.0.1:{builder_port}")).unwrap()
                 ],
-                // On an idle chain the leader waits this out before proposing an empty
-                // block, so it sets the seconds per block for every test that waits on
-                // a block height. The in-process builder answers in microseconds once it
-                // has transactions, so the budget only ever burns on an empty queue;
-                // `start_orchestrator` in slow-tests/tests/restart_tests.rs uses 100ms
-                // for the same reason.
-                builder_timeout: Duration::from_millis(250),
+                builder_timeout: Duration::from_secs(1),
                 start_threshold: (
                     known_nodes_with_stake.clone().len() as u64,
                     known_nodes_with_stake.clone().len() as u64,

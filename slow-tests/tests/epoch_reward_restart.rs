@@ -20,6 +20,13 @@ use test_utils::reserve_tcp_port;
 use tokio::time::sleep;
 use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, Upgrade};
 
+// This test submits no transactions, so every view waits out `builder_timeout`
+// before the leader proposes an empty block: it is the seconds per block, and
+// the test runs to a fixed height of 1200. Set here rather than on
+// `TestConfigBuilder` because that default is also what the `espresso-dev-node`
+// binary runs on.
+const BUILDER_TIMEOUT: Duration = Duration::from_millis(250);
+
 /// Regression guard: restarting ALL nodes after the reward tree is non-empty causes
 /// ValidatedState::from_header to build a sparse tree. At the next epoch boundary the full
 /// tree is needed to compute the previous epoch's rewards; no peer can serve it, and the chain
@@ -45,6 +52,7 @@ async fn slow_test_epoch_reward_restart() {
     // V4 base already has epochs, so epoch_start_block = 0.
     let test_config = TestConfigBuilder::default()
         .epoch_height(EPOCH_HEIGHT)
+        .builder_timeout(BUILDER_TIMEOUT)
         .epoch_start_block(0)
         .set_upgrades(upgrade.target)
         .await
