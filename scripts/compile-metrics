@@ -10,6 +10,10 @@ Unit durations are wall time under whatever parallelism the job had, so a single
 jobs that build many crates at once. The per-job sum and the critical path are the signals; the
 per-unit table is a pointer.
 
+`collect` also records the feature set cargo resolved for every package. Feature unification is
+per package across the whole build, so a feature enabled on one leaf crate is compiled into every
+build that reaches it; the diff against main is the only visible sign of it.
+
 Examples:
     # Wrap the build to record its peak memory.
     scripts/compile-metrics sample-rss --out peak-rss.json -- scripts/ci-build-binary espresso-node
@@ -46,6 +50,11 @@ DURATION_RE = re.compile(r"^DURATION = ([0-9.]+);$", re.MULTILINE)
 # `nm --print-size` writes "<address> <size> <type> <name>", but drops the size column for
 # symbols that have none. A demangled name contains spaces, so the columns cannot be counted.
 SYMBOL_RE = re.compile(r"^[0-9a-fA-F]{2,} ([0-9a-fA-F]{2,}) \S (.+)$")
+# A generic argument list with nothing nested left inside it, and the 64-bit disambiguator
+# rustc's legacy mangling appends to every symbol.
+GENERIC_ARGS_RE = re.compile(r"<[^<>]*(?<!-)>")
+LEGACY_HASH_RE = re.compile(r"::h[0-9a-f]{16}$")
+EMPTY_PATH_RE = re.compile(r"::(::)+")
 
 # Thresholds. Chosen from a measured run-to-run spread of about +-15 % on job wall time and
 # +-20 % on a single compilation unit, so a unit needs a wider band than a per-job total, and
@@ -57,16 +66,23 @@ UNIT_MIN_S = 20.0
 PEAK_RSS_PCT = 10.0
 BINARY_PCT = 5.0
 CRATE_BYTES_MIN = 256 * 1024
+INSTANTIATIONS_MIN = 50
 TOP_CRATES = 25
+TOP_BASES = 25
 TOP_MOVERS = 10
 TOP_BINARIES = 10
 TOP_UNITS = 10
+TOP_FEATURE_ROWS = 25
+BASES_SHOWN = 3
+NAME_KEPT_CHARS = 200
+NAME_SHOWN_CHARS = 70
 MOVER_MIN_PCT = 0.5
 JOB_METRICS = ("peak memory", "largest process", "workspace cpu-s", "critical path s")
 RSS_SAMPLE_S = 2.0
 NO_TIMINGS = "no `--timings`"
 NOT_SAMPLED = "not sampled"
 NOT_COMPARED = "not in both runs"
+NO_FEATURE_RECORD = "no feature record in both runs"
 
 
 @dataclass(frozen=True)
@@ -85,6 +101,20 @@ class Change:
     @property
     def regressed(self) -> bool:
         return self.delta_pct > self.threshold_pct
+
+
+@dataclass
+class FeatureDiff:
+    """`changed` is package -> (features gained, features lost); the rest are whole packages.
+
+    A feature change is reported but is never a regression: it is not a measurement, and a
+    Cargo.lock update moves dozens of them at once. It says where to look when a number moved.
+    """
+
+    changed: dict[str, tuple[list[str], list[str]]]
+    added: list[str]
+    removed: list[str]
+    compared: bool
 
 
 # collect
@@ -173,14 +203,62 @@ def topological_order(edges: dict[int, list[int]]) -> list[int]:
     return order
 
 
-def workspace_members() -> set[str]:
-    out = subprocess.run(
-        ["cargo", "metadata", "--no-deps", "--format-version", "1"],
-        check=True,
-        capture_output=True,
-        text=True,
+def read_metadata() -> dict[str, Any]:
+    """`cargo metadata` with dependencies, or an empty dict.
+
+    One call feeds both the workspace-unit filter and the feature record; `--no-deps` is cheaper
+    but leaves `resolve` null. It compiles nothing and takes 0.58 s on this workspace, against
+    0.03 s for `--no-deps`. A failure here costs the unit table and the feature record,
+    never the job's memory numbers.
+    """
+    try:
+        out = subprocess.run(
+            ["cargo", "metadata", "--format-version", "1"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return json.loads(out.stdout)
+    except Exception as error:  # noqa: BLE001
+        log.warning("no cargo metadata: %s", error)
+        return {}
+
+
+def workspace_members(metadata: dict[str, Any]) -> set[str]:
+    ids = set(metadata.get("workspace_members", []))
+    return {
+        package["name"]
+        for package in metadata.get("packages", [])
+        if package["id"] in ids
+    }
+
+
+def resolved_features(metadata: dict[str, Any]) -> dict[str, str]:
+    """Every package cargo resolved a feature for, as `"name version": "feat feat"`.
+
+    Cargo unifies features per package across the whole build, so enabling one on a leaf crate
+    pulls it into everything that depends on it, and the diff against main is what makes that
+    visible. `cargo metadata` resolves the whole workspace whatever the job built, so the jobs of
+    one run normally record the same map; each job records its own anyway, so a job whose
+    checkout or cargo config differs shows up instead of being averaged away.
+
+    Space-joined rather than a list because `json.dumps(indent=2)` puts every list element on its
+    own line: 44 kB per job instead of 64 kB, and this rides in an artifact kept for 90 days.
+    Packages with no feature enabled are dropped, so a package that gains its first feature reads
+    as an added package.
+    """
+    names = {
+        package["id"]: f"{package['name']} {package['version']}"
+        for package in metadata.get("packages", [])
+    }
+    nodes = (metadata.get("resolve") or {}).get("nodes", [])
+    return dict(
+        sorted(
+            (names[node["id"]], " ".join(sorted(node["features"])))
+            for node in nodes
+            if node["features"] and node["id"] in names
+        )
     )
-    return {package["name"] for package in json.loads(out.stdout)["packages"]}
 
 
 def text_section_bytes(path: Path) -> int:
@@ -197,13 +275,27 @@ def text_section_bytes(path: Path) -> int:
 def measure_binary(path: Path) -> dict[str, Any]:
     """One `nm` pass per binary, read as a stream.
 
-    The line count is the symbol count and sized lines carry the bytes, so both come out of the
-    same pass. It is streamed because `nm` on a 130 MB release binary emits hundreds of MB, and
-    this runs in a job that has just peaked at 11 GB.
+    The line count is the symbol count and sized lines carry the bytes, the instantiation counts
+    and the name lengths, so all of it comes out of the same pass. It is streamed because `nm` on
+    a 130 MB release binary emits hundreds of MB, and this runs in a job that has just peaked at
+    11 GB.
+
+    `instantiated_symbols` over `generic_bases` is the average multiplicity, and the top of
+    `instantiations` is which base to go after: that is what turns "symbols +8 %" into "this
+    function is instantiated 340 times".
+
+    `name_bytes` and `max_name_len` are the v0-mangling signal: v0 encodes the full generic
+    arguments, so a deep combinator chain or a nested `impl Future` produces a name in the
+    kilobytes, and `max_name` names the type to go after. They cover the sized symbols, which is
+    every function; the unsized lines are undefined and absolute symbols with short names.
     """
     measured = {"bytes": path.stat().st_size, "text_bytes": text_section_bytes(path)}
     symbols = 0
+    instantiations = 0
+    name_bytes = 0
+    longest = ""
     totals: dict[str, int] = {}
+    counts: dict[str, int] = {}
     with subprocess.Popen(
         ["nm", "--demangle", "--print-size", str(path)],
         stdout=subprocess.PIPE,
@@ -214,13 +306,38 @@ def measure_binary(path: Path) -> dict[str, Any]:
         for line in nm.stdout or ():
             symbols += 1
             symbol = SYMBOL_RE.match(line)
-            if symbol is not None:
-                crate = symbol_crate(symbol.group(2))
-                totals[crate] = totals.get(crate, 0) + int(symbol.group(1), 16)
+            if symbol is None:
+                continue
+            name = symbol.group(2)
+            crate = symbol_crate(name)
+            totals[crate] = totals.get(crate, 0) + int(symbol.group(1), 16)
+            name_bytes += len(name)
+            if len(name) > len(longest):
+                longest = name
+            base = generic_base(name)
+            if base is not None:
+                instantiations += 1
+                counts[base] = counts.get(base, 0) + 1
     if nm.returncode != 0:
         raise RuntimeError(f"nm exited {nm.returncode} on {path}")
-    top = sorted(totals.items(), key=lambda item: -item[1])[:TOP_CRATES]
-    return measured | {"symbols": symbols, "crate_bytes": dict(sorted(top))}
+    return measured | {
+        "symbols": symbols,
+        "crate_bytes": dict(sorted(top_n(totals, TOP_CRATES))),
+        "instantiations": dict(sorted(top_n(counts, TOP_BASES))),
+        "instantiated_symbols": instantiations,
+        "generic_bases": len(counts),
+        "name_bytes": name_bytes,
+        "max_name_len": len(longest),
+        "max_name": elide(longest, NAME_KEPT_CHARS),
+    }
+
+
+def top_n(values: dict[str, int], count: int) -> list[tuple[str, int]]:
+    return sorted(values.items(), key=lambda item: -item[1])[:count]
+
+
+def elide(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 def symbol_crate(name: str) -> str:
@@ -230,6 +347,60 @@ def symbol_crate(name: str) -> str:
         head, _, _ = name.partition(separator)
         name = head
     return name.strip("<>&*()[] ") or "?"
+
+
+def generic_base(name: str) -> str | None:
+    """The path a demangled symbol is an instantiation of, or None if it is not one.
+
+    Both mangling schemes reduce to one path per generic function, so grouping by it counts
+    instantiations. v0, which rustc 1.97 defaults to here, writes the generic arguments out
+    (`core::ptr::drop_in_place::<T>`), so they are stripped. The impl qualifier a name opens with
+    is kept, with its own arguments stripped, because dropping `<alloc::vec::Vec<u8> as Drop>` or
+    `<alloc::raw_vec::RawVec<u8>>` would merge every `drop` or every `grow_one` in the binary into
+    one base. Legacy erases the arguments already and appends `::h<16 hex>`, so the hash is
+    stripped instead.
+
+    A name with neither, a C symbol or a non-generic function, is not an instantiation and returns
+    None: including those would put one base per symbol in the table and grow it by the size of
+    the binary.
+    """
+    base = LEGACY_HASH_RE.sub("", name)
+    qualifier, rest = split_qualifier(base)
+    stripped = strip_generic_args(qualifier) + strip_generic_args(rest)
+    if stripped == name:
+        return None
+    return EMPTY_PATH_RE.sub("::", stripped).removesuffix("::")
+
+
+def split_qualifier(name: str) -> tuple[str, str]:
+    """`<Vec<u8> as Drop>::drop` -> (`<Vec<u8> as Drop>`, `::drop`), else ("", name).
+
+    Only a leading group is an impl qualifier. Everywhere else `<...>` is an argument list, and
+    `foo::<u8>` follows `::` exactly as `<Vec<u8> as Drop>::drop` does, so position is what
+    separates the two.
+    """
+    if not name.startswith("<"):
+        return "", name
+    depth = 0
+    for index, char in enumerate(name):
+        depth += (char == "<") - (char == ">" and name[index - 1] != "-")
+        if depth == 0:
+            return name[: index + 1], name[index + 1 :]
+    return "", name
+
+
+def strip_generic_args(name: str) -> str:
+    """Drop every argument list, innermost first, keeping any `<T as Trait>` inside."""
+    if name.startswith("<") and name.endswith(">"):
+        return f"<{strip_generic_args(name[1:-1])}>"
+    while "<" in name:
+        stripped = GENERIC_ARGS_RE.sub(
+            lambda group: group[0] if " as " in group[0] else "", name
+        )
+        if stripped == name:
+            return name
+        name = stripped
+    return name
 
 
 def executables(directory: Path) -> list[Path]:
@@ -250,19 +421,20 @@ def read_json(path: Path) -> dict:
 
 
 def timing_metrics(
-    timing: Path | None,
+    timing: Path | None, members: set[str]
 ) -> tuple[float, dict[str, float], list[tuple[str, float]]]:
     """(wall, cpu per unit, critical path), all empty when there is no readable timing report.
 
     A job that builds without `--timings` has none, and so does a job whose report cargo did not
-    finish writing. The memory numbers are worth keeping in both cases, so nothing here raises.
-    `wall` is what tells the report which case a zero belongs to.
+    finish writing or whose `cargo metadata` failed, leaving no member list to filter units by.
+    The memory numbers are worth keeping in every case, so nothing here raises. `wall` is what
+    tells the report which case a zero belongs to.
     """
-    if timing is None:
+    if timing is None or not members:
         return 0.0, {}, []
     try:
         wall, units = parse_timing(timing.read_text())
-        return wall, workspace_cpu(units, workspace_members()), critical_path(units)
+        return wall, workspace_cpu(units, members), critical_path(units)
     except Exception as error:  # noqa: BLE001
         log.warning("no usable timing report at %s: %s", timing, error)
         return 0.0, {}, []
@@ -282,9 +454,11 @@ def measured_binaries(directory: Path | None) -> dict[str, dict[str, Any]]:
 
 
 def cmd_collect(args: argparse.Namespace) -> int:
-    wall, cpu, path = timing_metrics(args.timing)
+    metadata = read_metadata()
+    wall, cpu, path = timing_metrics(args.timing, workspace_members(metadata))
     binaries = measured_binaries(args.binaries_dir)
     rss = read_json(args.peak_rss) if args.peak_rss else {}
+    features = resolved_features(metadata)
     metrics = {
         "job": args.job,
         "wall_s": wall,
@@ -297,15 +471,18 @@ def cmd_collect(args: argparse.Namespace) -> int:
         "peak_rss_by": rss.get("peak_rss_by", ""),
         "units": cpu,
         "binaries": binaries,
+        "features": features,
     }
     args.out.write_text(json.dumps(metrics, indent=2) + "\n")
     log.info(
-        "%s: %.1f workspace cpu-s over %d units, %.1f s critical path, %d binaries",
+        "%s: %.1f workspace cpu-s over %d units, %.1f s critical path, %d binaries, "
+        "%d packages with features",
         args.job,
         metrics["workspace_cpu_s"],
         len(cpu),
         metrics["critical_path_s"],
         len(binaries),
+        len(features),
     )
     return 0
 
@@ -518,6 +695,22 @@ def compare(main: dict[str, Any], current: dict[str, Any]) -> list[Change]:
                             BINARY_PCT,
                         )
                     )
+            # Only the top TOP_BASES bases are recorded, so a base that was outside the baseline's
+            # top list has nothing to compare against and produces no row; the binary's symbol
+            # count still moves. The minimum count keeps a base going 2 -> 3 out of the table.
+            for base, count in sizes.get("instantiations", {}).items():
+                was_count = was_sizes.get("instantiations", {}).get(base)
+                if was_count is not None and was_count >= INSTANTIATIONS_MIN:
+                    changes.append(
+                        Change(
+                            job,
+                            f"{binary}: {base}",
+                            "instantiations",
+                            was_count,
+                            count,
+                            BINARY_PCT,
+                        )
+                    )
     return changes
 
 
@@ -571,6 +764,34 @@ def fmt_bytes(count: float) -> str:
     return f"{count:.0f} B"
 
 
+def instantiation_table(binaries: list[tuple[str, dict[str, Any]]]) -> list[str]:
+    """Where a binary's symbols come from: what is instantiated most, and the widest type.
+
+    Empty for a run written before these fields existed, and for a binary with no generic symbol.
+    """
+    rows = []
+    for name, sizes in binaries:
+        bases = top_n(sizes.get("instantiations", {}), BASES_SHOWN)
+        longest = sizes.get("max_name", "")
+        if not bases and not longest:
+            continue
+        rows.append(
+            f"| {name} "
+            f"| {sizes.get('instantiated_symbols', 0):,} of "
+            f"{sizes.get('generic_bases', 0):,} | "
+            + ", ".join(f"`{base}` {count:,}" for base, count in bases)
+            + f" | `{elide(longest, NAME_SHOWN_CHARS)}` "
+            f"{sizes.get('max_name_len', 0):,} B |"
+        )
+    if not rows:
+        return []
+    return [
+        "",
+        "| binary | instantiations | most instantiated | longest symbol |",
+        "|---|---:|---|---|",
+    ] + rows
+
+
 def state_tables(current: dict[str, Any]) -> list[str]:
     """What this run costs, standing alone: no baseline needed to read it."""
     jobs = current["jobs"]
@@ -618,6 +839,7 @@ def state_tables(current: dict[str, Any]) -> list[str]:
                 f"| {sizes['symbols']:,} "
                 f"| {f'{largest[0]} {fmt_bytes(largest[1])}' if largest else 'no sized symbols'} |"
             )
+        lines += instantiation_table([(name, sizes) for _, name, sizes in binaries])
 
     units = sorted(
         (
@@ -681,6 +903,72 @@ def comparison_tables(changes: list[Change]) -> list[str]:
     return lines
 
 
+def feature_changes(main: dict[str, Any], current: dict[str, Any]) -> FeatureDiff:
+    """What the resolved feature sets do against main, unioned over the jobs in both runs.
+
+    The jobs of one run normally hold the same map, so the union keeps the table to one row per
+    package while still catching a job that differs. A run whose baseline predates the feature
+    record compares nothing, which is why `compared` is separate from an empty diff.
+    """
+    diff = FeatureDiff({}, [], [], False)
+    gained: dict[str, set[str]] = {}
+    lost: dict[str, set[str]] = {}
+    added: set[str] = set()
+    removed: set[str] = set()
+    for job, now in current["jobs"].items():
+        was = main.get("jobs", {}).get(job, {}).get("features") or {}
+        has = now.get("features") or {}
+        if not was or not has:
+            continue
+        diff.compared = True
+        added |= set(has) - set(was)
+        removed |= set(was) - set(has)
+        for package in set(was) & set(has):
+            before, after = set(was[package].split()), set(has[package].split())
+            gained.setdefault(package, set()).update(after - before)
+            lost.setdefault(package, set()).update(before - after)
+    diff.changed = {
+        package: (sorted(gained[package]), sorted(lost[package]))
+        for package in sorted(gained, key=lambda p: (-len(gained[p]), p))
+        if gained[package] or lost[package]
+    }
+    diff.added, diff.removed = sorted(added), sorted(removed)
+    return diff
+
+
+def feature_tables(main: dict[str, Any], current: dict[str, Any]) -> list[str]:
+    diff = feature_changes(main, current)
+    lines = ["", "### Features against main", ""]
+    if not diff.compared:
+        return lines + [f"{NO_FEATURE_RECORD}."]
+    if not (diff.changed or diff.added or diff.removed):
+        return lines + ["No package resolved a different feature set."]
+    if diff.changed:
+        lines += ["| package | gained | lost |", "|---|---|---|"]
+        for package, (plus, minus) in list(diff.changed.items())[:TOP_FEATURE_ROWS]:
+            lines.append(
+                f"| {package} | {fmt_features(plus)} | {fmt_features(minus)} |"
+            )
+        if len(diff.changed) > TOP_FEATURE_ROWS:
+            lines.append(f"| and {len(diff.changed) - TOP_FEATURE_ROWS} more | | |")
+        lines.append("")
+    for label, packages in (("Only here", diff.added), ("Only on main", diff.removed)):
+        if packages:
+            lines.append(
+                f"{label}: {fmt_features(packages[:TOP_FEATURE_ROWS])}"
+                + (
+                    f" and {len(packages) - TOP_FEATURE_ROWS} more."
+                    if len(packages) > TOP_FEATURE_ROWS
+                    else "."
+                )
+            )
+    return lines
+
+
+def fmt_features(names: list[str]) -> str:
+    return ", ".join(f"`{name}`" for name in names)
+
+
 def render(
     main: dict[str, Any] | None, current: dict[str, Any], changes: list[Change]
 ) -> str:
@@ -697,6 +985,7 @@ def render(
         )
         lines += [f"Baseline: main {baseline}.", ""]
         lines += comparison_tables(changes)
+        lines += feature_tables(main, current)
     lines.append("")
     return "\n".join(lines)
 
