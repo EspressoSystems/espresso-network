@@ -84,6 +84,24 @@ jobs:
       - name: Cargo timing summary
         run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Collect compile metrics
+        # Metrics only: a missing binutils or an unreadable binary must not fail the build.
+        continue-on-error: true
+        run: |
+          python3 scripts/compile-metrics collect target/cargo-timings/cargo-timing.html \
+            --job amd-${{ matrix.binary }} \
+            --out compile-metrics-amd-${{ matrix.binary }}.json \
+            target/release/*
+
+      - name: Upload compile metrics
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: compile-metrics-amd-${{ matrix.binary }}
+          path: compile-metrics-amd-${{ matrix.binary }}.json
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Move binaries to upload directory
         shell: bash
         run: |
@@ -166,6 +184,95 @@ jobs:
           retention-days: 1
           path: |
             upload/${{ matrix.binary == 'other' && '*' || matrix.binary }}
+
+  compile-metrics-report:
+    name: Compile metrics
+    needs: build-amd
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    # Reporter only: failures here must not fail the workflow.
+    continue-on-error: true
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download compile metrics
+        uses: actions/download-artifact@v8
+        with:
+          pattern: compile-metrics-amd-*
+          path: metrics-artifacts
+
+      - name: Merge compile metrics
+        run: |
+          python3 scripts/compile-metrics merge metrics-artifacts \
+            --sha "${{ github.sha }}" \
+            --run-id "${{ github.run_id }}" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --out compile-metrics.json
+
+      - name: Fetch main compile metrics
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/nextest-ci stats-fetch \
+            --workflow build.yml \
+            --artifact-name compile-metrics-build \
+            --max-runs 5 \
+            --out main-compile-metrics.json
+
+      - name: Render summary
+        run: |
+          args=(compile-metrics.json --pr-comment-out pr-comment.md)
+          if [ -s main-compile-metrics.json ]; then
+            args+=(--main-stats main-compile-metrics.json)
+          fi
+          python3 scripts/compile-metrics report "${args[@]}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post/update PR comment
+        continue-on-error: true
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: compile-metrics
+          path: pr-comment.md
+          delete: ${{ hashFiles('pr-comment.md') == '' }}
+
+  publish-compile-metrics:
+    needs: build-amd
+    # always() so one failed build job on main does not freeze the baseline artifact.
+    if: ${{ always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    # Reporter only: failures here must not fail the workflow.
+    continue-on-error: true
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download compile metrics
+        uses: actions/download-artifact@v8
+        with:
+          pattern: compile-metrics-amd-*
+          path: metrics-artifacts
+
+      - name: Merge compile metrics
+        run: |
+          python3 scripts/compile-metrics merge metrics-artifacts \
+            --sha "${{ github.sha }}" \
+            --run-id "${{ github.run_id }}" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --out compile-metrics.json
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: compile-metrics-build
+          path: compile-metrics.json
+          if-no-files-found: error
+          retention-days: 90
 
   build-dockers-amd:
     needs: build-amd

@@ -1,0 +1,361 @@
+#!/usr/bin/env python3
+r"""Compile-cost metrics for CI: collect per-job numbers, merge them, compare against main.
+
+`collect` reads the `cargo build --timings` HTML a build job already produces plus the binaries it
+produced, so tracking costs no extra compilation. Only workspace units are kept: third-party unit
+times depend on the state of the dependency cache, which differs between any two runs whose
+Cargo.lock differs.
+
+Unit durations are wall time under whatever parallelism the job had, so a single unit is noisy on
+jobs that build many crates at once. The per-job sum is the signal; the per-unit table is a pointer.
+
+Examples:
+    # In a build job, after `cargo build --timings`.
+    scripts/compile-metrics collect target/cargo-timings/cargo-timing.html \
+        --job amd-espresso-node --out compile-metrics-amd-espresso-node.json \
+        target/release/*
+
+    # Merge the per-job artifacts of one run.
+    scripts/compile-metrics merge metrics-artifacts --sha "$SHA" --run-id "$RUN_ID" \
+        --out compile-metrics.json
+
+    # Compare a run against the newest main run, from `nextest-ci stats-fetch` output.
+    scripts/compile-metrics report compile-metrics.json --main-stats main-compile-metrics.json
+"""
+
+import argparse
+import json
+import logging
+import re
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+log = logging.getLogger("compile-metrics")
+
+UNIT_DATA_RE = re.compile(r"^const UNIT_DATA = (\[.*?^\]);$", re.MULTILINE | re.DOTALL)
+DURATION_RE = re.compile(r"^DURATION = ([0-9.]+);$", re.MULTILINE)
+
+# Thresholds, from the run-to-run spread measured in doc/compile-times.md.
+WORKSPACE_CPU_PCT = 10.0
+UNIT_CPU_PCT = 15.0
+UNIT_MIN_S = 20.0
+BINARY_PCT = 5.0
+TOP_MOVERS = 10
+
+
+@dataclass(frozen=True)
+class Change:
+    scope: str
+    name: str
+    metric: str
+    main: float
+    current: float
+    threshold_pct: float
+
+    @property
+    def delta_pct(self) -> float:
+        return (self.current - self.main) / self.main * 100 if self.main else 0.0
+
+    @property
+    def regressed(self) -> bool:
+        return self.delta_pct > self.threshold_pct
+
+
+# collect
+
+
+def parse_timing(html: str) -> tuple[float, list[dict]]:
+    units = UNIT_DATA_RE.search(html)
+    if units is None:
+        raise RuntimeError("no UNIT_DATA array in the timing HTML")
+    duration = DURATION_RE.search(html)
+    if duration is None:
+        raise RuntimeError("no DURATION line in the timing HTML")
+    return float(duration.group(1)), json.loads(units.group(1))
+
+
+def unit_key(unit: dict) -> str:
+    """`espresso-node lib`, `espresso-node build-script`, `staking-cli bin`.
+
+    Cargo leaves `target` empty for a lib unit, and otherwise writes ` [<name> ]"<kind>"` or
+    ` build-script[ (run)]`.
+    """
+    target = unit["target"].strip().replace('"', "")
+    if not target:
+        return f"{unit['name']} lib"
+    return (
+        target if target.startswith(f"{unit['name']} ") else f"{unit['name']} {target}"
+    )
+
+
+def workspace_cpu(units: list[dict], members: set[str]) -> dict[str, float]:
+    cpu: dict[str, float] = {}
+    for unit in units:
+        if unit["name"] in members:
+            key = unit_key(unit)
+            cpu[key] = round(cpu.get(key, 0.0) + unit["duration"], 1)
+    return dict(sorted(cpu.items()))
+
+
+def workspace_members() -> set[str]:
+    out = subprocess.run(
+        ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return {package["name"] for package in json.loads(out.stdout)["packages"]}
+
+
+def text_section_bytes(path: Path) -> int:
+    out = subprocess.run(
+        ["size", "-A", str(path)], check=True, capture_output=True, text=True
+    )
+    for line in out.stdout.splitlines():
+        fields = line.split()
+        if len(fields) >= 2 and fields[0] == ".text":
+            return int(fields[1])
+    raise RuntimeError(f"no .text section in {path}")
+
+
+def symbol_count(path: Path) -> int:
+    out = subprocess.run(["nm", str(path)], check=True, capture_output=True, text=True)
+    return len(out.stdout.splitlines())
+
+
+def measure_binary(path: Path) -> dict[str, int]:
+    return {
+        "bytes": path.stat().st_size,
+        "text_bytes": text_section_bytes(path),
+        "symbols": symbol_count(path),
+    }
+
+
+def executables(paths: list[Path]) -> list[Path]:
+    return sorted(p for p in paths if p.is_file() and p.stat().st_mode & 0o111)
+
+
+def cmd_collect(args: argparse.Namespace) -> int:
+    wall, units = parse_timing(args.timing.read_text())
+    cpu = workspace_cpu(units, workspace_members())
+    binaries = {p.name: measure_binary(p) for p in executables(args.binaries)}
+    metrics = {
+        "job": args.job,
+        "wall_s": wall,
+        "workspace_cpu_s": round(sum(cpu.values()), 1),
+        "units": cpu,
+        "binaries": binaries,
+    }
+    args.out.write_text(json.dumps(metrics, indent=2) + "\n")
+    log.info(
+        "%s: %.1f workspace cpu-s over %d units, %d binaries",
+        args.job,
+        metrics["workspace_cpu_s"],
+        len(cpu),
+        len(binaries),
+    )
+    return 0
+
+
+# merge
+
+
+def merge_jobs(paths: list[Path]) -> dict[str, Any]:
+    jobs = {}
+    for path in paths:
+        metrics = json.loads(path.read_text())
+        jobs[metrics["job"]] = metrics
+    return jobs
+
+
+def cmd_merge(args: argparse.Namespace) -> int:
+    paths = sorted(args.dir.rglob("compile-metrics-*.json"))
+    if not paths:
+        raise RuntimeError(f"no compile-metrics-*.json under {args.dir}")
+    merged = {
+        "sha": args.sha,
+        "run_id": args.run_id,
+        "run_url": args.run_url,
+        "jobs": merge_jobs(paths),
+    }
+    args.out.write_text(json.dumps(merged, indent=2) + "\n")
+    log.info("wrote %s with %d job(s)", args.out, len(merged["jobs"]))
+    return 0
+
+
+# report
+
+
+def compare(main: dict[str, Any], current: dict[str, Any]) -> list[Change]:
+    changes = []
+    for job, now in current["jobs"].items():
+        before = main["jobs"].get(job)
+        if before is None:
+            continue
+        changes.append(
+            Change(
+                job,
+                job,
+                "workspace cpu-s",
+                before["workspace_cpu_s"],
+                now["workspace_cpu_s"],
+                WORKSPACE_CPU_PCT,
+            )
+        )
+        for unit, cpu in now["units"].items():
+            was = before["units"].get(unit)
+            if was is not None and was >= UNIT_MIN_S:
+                changes.append(Change(job, unit, "cpu-s", was, cpu, UNIT_CPU_PCT))
+        for binary, sizes in now["binaries"].items():
+            was_sizes = before["binaries"].get(binary)
+            if was_sizes is None:
+                continue
+            for metric in ("bytes", "text_bytes", "symbols"):
+                changes.append(
+                    Change(
+                        job,
+                        binary,
+                        metric,
+                        was_sizes[metric],
+                        sizes[metric],
+                        BINARY_PCT,
+                    )
+                )
+    return changes
+
+
+def fmt_value(value: float) -> str:
+    return f"{value:,.0f}" if value == int(value) else f"{value:,.1f}"
+
+
+def table(rows: list[Change], columns: list[str]) -> list[str]:
+    if not rows:
+        return []
+    lines = [
+        "| " + " | ".join(columns) + " | metric | main | this run | change |",
+        "|---" * len(columns) + "|---|---:|---:|---:|",
+    ]
+    for change in rows:
+        cells = [change.scope] if len(columns) == 1 else [change.scope, change.name]
+        mark = " :warning:" if change.regressed else ""
+        lines.append(
+            "| "
+            + " | ".join(cells)
+            + f" | {change.metric} | {fmt_value(change.main)} | "
+            f"{fmt_value(change.current)} | {change.delta_pct:+.1f}%{mark} |"
+        )
+    return lines
+
+
+def top_movers(changes: list[Change]) -> list[Change]:
+    """Every regression, then the largest remaining moves in either direction."""
+    regressed = [c for c in changes if c.regressed]
+    rest = sorted(
+        (c for c in changes if not c.regressed), key=lambda c: -abs(c.delta_pct)
+    )
+    return sorted(
+        regressed + rest[: max(0, TOP_MOVERS - len(regressed))],
+        key=lambda c: -c.delta_pct,
+    )
+
+
+def render(main: dict[str, Any], current: dict[str, Any], changes: list[Change]) -> str:
+    regressions = [c for c in changes if c.regressed]
+    totals = [c for c in changes if c.metric == "workspace cpu-s"]
+    movers = top_movers([c for c in changes if c.metric != "workspace cpu-s"])
+
+    baseline = (
+        f"[{main['sha'][:8]}]({main['run_url']})"
+        if main.get("run_url")
+        else main["sha"][:8]
+    )
+    lines = [f"## Compile metrics vs main {baseline}", ""]
+    if not changes:
+        lines.append("No job in this run has a counterpart in the baseline run.")
+        return "\n".join(lines) + "\n"
+    if regressions:
+        lines.append(
+            f"**{len(regressions)} over threshold** "
+            f"(workspace cpu +{WORKSPACE_CPU_PCT:g}%, unit +{UNIT_CPU_PCT:g}%, "
+            f"binary +{BINARY_PCT:g}%)."
+        )
+    else:
+        lines.append("No metric over threshold.")
+    lines.append("")
+    lines += table(totals, ["job"])
+    lines.append("")
+    lines += table(movers, ["job", "unit or binary"])
+    lines.append("")
+    return "\n".join(lines)
+
+
+def newest_main_run(stats: dict[str, Any]) -> dict[str, Any] | None:
+    return next(iter(stats.get("runs", [])), None)
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    current = json.loads(args.metrics.read_text())
+    main = (
+        newest_main_run(json.loads(args.main_stats.read_text()))
+        if args.main_stats
+        else None
+    )
+    if main is None:
+        print("## Compile metrics\n\nNo main-branch baseline available yet.\n")
+        return 0
+    changes = compare(main, current)
+    summary = render(main, current, changes)
+    print(summary)
+    if args.pr_comment_out:
+        regressed = [c for c in changes if c.regressed]
+        args.pr_comment_out.write_text(summary if regressed else "")
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    collect = sub.add_parser("collect", help="metrics for one build job")
+    collect.add_argument("timing", type=Path, help="cargo-timing.html from --timings")
+    collect.add_argument(
+        "binaries", type=Path, nargs="*", help="built binaries to measure"
+    )
+    collect.add_argument("--job", required=True, help="label for this job")
+    collect.add_argument("--out", required=True, type=Path)
+    collect.set_defaults(func=cmd_collect)
+
+    merge = sub.add_parser("merge", help="merge the per-job metrics of one run")
+    merge.add_argument(
+        "dir", type=Path, help="directory of downloaded per-job artifacts"
+    )
+    merge.add_argument("--sha", required=True)
+    merge.add_argument("--run-id", required=True)
+    merge.add_argument("--run-url", required=True)
+    merge.add_argument("--out", required=True, type=Path)
+    merge.set_defaults(func=cmd_merge)
+
+    report = sub.add_parser("report", help="compare a run against the newest main run")
+    report.add_argument("metrics", type=Path, help="merged metrics of this run")
+    report.add_argument(
+        "--main-stats",
+        type=Path,
+        help="aggregated main runs from `nextest-ci stats-fetch`",
+    )
+    report.add_argument(
+        "--pr-comment-out",
+        type=Path,
+        help="write the comment body here, empty if nothing regressed",
+    )
+    report.set_defaults(func=cmd_report)
+
+    args = parser.parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

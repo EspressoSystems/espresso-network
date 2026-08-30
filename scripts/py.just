@@ -1,4 +1,4 @@
-scripts := "nextest-ci"
+scripts := "nextest-ci compile-metrics"
 
 fmt *args:
     ruff format {{scripts}} {{args}}
