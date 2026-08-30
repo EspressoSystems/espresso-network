@@ -53,7 +53,14 @@ jobs:
         run: free -h
 
       - name: Build and archive tests
-        run: just nextest-archive nextest-archive-postgres.tar.zst --timings
+        run: |
+          python3 scripts/compile-metrics sample-rss --out peak-rss.json -- \
+            just nextest-archive nextest-archive-postgres.tar.zst --timings
+
+      - uses: ./.github/actions/compile-metrics
+        with:
+          job: test-archive-postgres
+          timing: target/cargo-timings/cargo-timing.html
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v7
@@ -99,7 +106,14 @@ jobs:
         run: free -h
 
       - name: Build and archive tests
-        run: just nextest-archive nextest-archive-sqlite.tar.zst --features "embedded-db,testing" --timings
+        run: |
+          python3 scripts/compile-metrics sample-rss --out peak-rss.json -- \
+            just nextest-archive nextest-archive-sqlite.tar.zst --features "embedded-db,testing" --timings
+
+      - uses: ./.github/actions/compile-metrics
+        with:
+          job: test-archive-sqlite
+          timing: target/cargo-timings/cargo-timing.html
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v7
@@ -139,8 +153,14 @@ jobs:
 
       - name: Build all binaries (postgres)
         run: |
-          cargo build --locked --profile test --bins --timings
+          python3 scripts/compile-metrics sample-rss --out peak-rss.json -- \
+            cargo build --locked --profile test --bins --timings
         timeout-minutes: 60
+
+      - uses: ./.github/actions/compile-metrics
+        with:
+          job: test-bins
+          timing: target/cargo-timings/cargo-timing.html
 
       - name: Upload cargo timings
         uses: actions/upload-artifact@v7
@@ -201,8 +221,13 @@ jobs:
 
       - name: Build espresso-node-sqlite binary
         run: |
-          cargo build --locked --profile test -p espresso-node-sqlite
+          python3 scripts/compile-metrics sample-rss --out peak-rss.json -- \
+            cargo build --locked --profile test -p espresso-node-sqlite
         timeout-minutes: 30
+
+      - uses: ./.github/actions/compile-metrics
+        with:
+          job: test-bin-sqlite
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v7
@@ -236,8 +261,13 @@ jobs:
 
       - name: Build espresso-dev-node binary
         run: |
-          cargo build --locked --profile test -p espresso-dev-node
+          python3 scripts/compile-metrics sample-rss --out peak-rss.json -- \
+            cargo build --locked --profile test -p espresso-dev-node
         timeout-minutes: 30
+
+      - uses: ./.github/actions/compile-metrics
+        with:
+          job: test-bin-dev-node
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v7

@@ -85,24 +85,11 @@ jobs:
       - name: Cargo timing summary
         run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Collect compile metrics
-        # Metrics only: a missing binutils or an unreadable binary must not fail the build.
-        continue-on-error: true
-        run: |
-          python3 scripts/compile-metrics collect target/cargo-timings/cargo-timing.html \
-            --job amd-${{ matrix.binary }} \
-            --binaries-dir target/release \
-            --peak-rss peak-rss.json \
-            --out compile-metrics-amd-${{ matrix.binary }}.json
-
-      - name: Upload compile metrics
-        continue-on-error: true
-        uses: actions/upload-artifact@v7
+      - uses: ./.github/actions/compile-metrics
         with:
-          name: compile-metrics-amd-${{ matrix.binary }}
-          path: compile-metrics-amd-${{ matrix.binary }}.json
-          if-no-files-found: error
-          retention-days: 1
+          job: amd-${{ matrix.binary }}
+          timing: target/cargo-timings/cargo-timing.html
+          binaries-dir: target/release
 
       - name: Move binaries to upload directory
         shell: bash
@@ -204,8 +191,23 @@ jobs:
       - name: Download compile metrics
         uses: actions/download-artifact@v8
         with:
-          pattern: compile-metrics-amd-*
+          pattern: compile-metrics-*
           path: metrics-artifacts
+
+      - name: Download compile metrics from the test workflows
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          # Best effort: a sibling workflow that has not reached its build step yet simply has no
+          # artifact, and its jobs are missing from this report rather than blocking it.
+          for workflow in test.yml slowtest.yaml; do
+            run_id=$(gh run list --workflow "$workflow" --commit "$HEAD_SHA" --limit 1 \
+              --json databaseId --jq '.[0].databaseId // empty')
+            [ -n "$run_id" ] || continue
+            gh run download "$run_id" --pattern 'compile-metrics-*' --dir metrics-artifacts || true
+          done
 
       - name: Merge compile metrics
         run: |
@@ -258,8 +260,23 @@ jobs:
       - name: Download compile metrics
         uses: actions/download-artifact@v8
         with:
-          pattern: compile-metrics-amd-*
+          pattern: compile-metrics-*
           path: metrics-artifacts
+
+      - name: Download compile metrics from the test workflows
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          # Best effort: a sibling workflow that has not reached its build step yet simply has no
+          # artifact, and its jobs are missing from this report rather than blocking it.
+          for workflow in test.yml slowtest.yaml; do
+            run_id=$(gh run list --workflow "$workflow" --commit "$HEAD_SHA" --limit 1 \
+              --json databaseId --jq '.[0].databaseId // empty')
+            [ -n "$run_id" ] || continue
+            gh run download "$run_id" --pattern 'compile-metrics-*' --dir metrics-artifacts || true
+          done
 
       - name: Merge compile metrics
         run: |

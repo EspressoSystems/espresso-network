@@ -1,0 +1,43 @@
+name: Compile metrics
+description: Record what a build cost and upload it as an artifact for the compile metrics report
+inputs:
+  job:
+    description: Label for this job in the report; must be unique across the workflow
+    required: true
+  peak-rss:
+    description: JSON written by `compile-metrics sample-rss` around the build step
+    default: peak-rss.json
+  timing:
+    description: cargo-timing.html, for builds run with --timings
+    default: ""
+  binaries-dir:
+    description: Directory whose executables are measured, e.g. target/release
+    default: ""
+runs:
+  using: composite
+  steps:
+    # Reporting only: a missing binutils or an unreadable binary must not fail the build.
+    - name: Collect compile metrics
+      continue-on-error: true
+      shell: bash
+      run: |
+        args=(--job "${{ inputs.job }}" --out "compile-metrics-${{ inputs.job }}.json")
+        if [ -n "${{ inputs.peak-rss }}" ] && [ -s "${{ inputs.peak-rss }}" ]; then
+          args+=(--peak-rss "${{ inputs.peak-rss }}")
+        fi
+        if [ -n "${{ inputs.timing }}" ]; then
+          args+=(--timing "${{ inputs.timing }}")
+        fi
+        if [ -n "${{ inputs.binaries-dir }}" ]; then
+          args+=(--binaries-dir "${{ inputs.binaries-dir }}")
+        fi
+        python3 scripts/compile-metrics collect "${args[@]}"
+
+    - name: Upload compile metrics
+      continue-on-error: true
+      uses: actions/upload-artifact@v7
+      with:
+        name: compile-metrics-${{ inputs.job }}
+        path: compile-metrics-${{ inputs.job }}.json
+        if-no-files-found: error
+        retention-days: 1

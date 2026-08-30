@@ -14,9 +14,10 @@ Examples:
     # Wrap the build to record its peak memory.
     scripts/compile-metrics sample-rss --out peak-rss.json -- scripts/ci-build-binary espresso-node
 
-    # In a build job, after `cargo build --timings`.
-    scripts/compile-metrics collect target/cargo-timings/cargo-timing.html \
-        --job amd-espresso-node --binaries-dir target/release --peak-rss peak-rss.json \
+    # In a build job, after the build. --timing and --binaries-dir are optional, so a job that
+    # compiles without --timings still reports what it cost in memory.
+    scripts/compile-metrics collect --job amd-espresso-node --peak-rss peak-rss.json \
+        --timing target/cargo-timings/cargo-timing.html --binaries-dir target/release \
         --out compile-metrics-amd-espresso-node.json
 
     # Merge the per-job artifacts of one run.
@@ -59,7 +60,7 @@ TOP_MOVERS = 10
 TOP_BINARIES = 10
 TOP_UNITS = 10
 MOVER_MIN_PCT = 0.5
-JOB_METRICS = ("workspace cpu-s", "critical path s", "peak rss")
+JOB_METRICS = ("peak memory", "largest process", "workspace cpu-s", "critical path s")
 RSS_SAMPLE_S = 2.0
 
 
@@ -239,9 +240,9 @@ def executables(directory: Path) -> list[Path]:
 
 
 def cmd_collect(args: argparse.Namespace) -> int:
-    wall, units = parse_timing(args.timing.read_text())
-    cpu = workspace_cpu(units, workspace_members())
-    path = critical_path(units)
+    wall, units = parse_timing(args.timing.read_text()) if args.timing else (0.0, [])
+    cpu = workspace_cpu(units, workspace_members()) if units else {}
+    path = critical_path(units) if units else []
     binaries = (
         {path.name: measure_binary(path) for path in executables(args.binaries_dir)}
         if args.binaries_dir
@@ -254,6 +255,8 @@ def cmd_collect(args: argparse.Namespace) -> int:
         "workspace_cpu_s": round(sum(cpu.values()), 1),
         "critical_path_s": round(sum(duration for _, duration in path), 1),
         "critical_path": [{"unit": unit, "s": duration} for unit, duration in path],
+        "peak_used_kb": rss.get("peak_used_kb", 0),
+        "mem_total_kb": rss.get("mem_total_kb", 0),
         "peak_rss_kb": rss.get("peak_rss_kb", 0),
         "peak_rss_by": rss.get("peak_rss_by", ""),
         "units": cpu,
@@ -316,6 +319,15 @@ def process_tree(root: int) -> set[int]:
     return tree
 
 
+def meminfo() -> dict[str, int]:
+    values = {}
+    for line in Path("/proc/meminfo").read_text().splitlines():
+        field, _, rest = line.partition(":")
+        if field in ("MemTotal", "MemAvailable"):
+            values[field] = int(rest.split()[0])
+    return values
+
+
 def scan_peak_rss(root: int, peak: tuple[int, str]) -> tuple[int, str]:
     for pid in process_tree(root):
         sample = process_peak_rss(str(pid))
@@ -325,27 +337,55 @@ def scan_peak_rss(root: int, peak: tuple[int, str]) -> tuple[int, str]:
 
 
 def cmd_sample_rss(args: argparse.Namespace) -> int:
-    """Run a build and record the largest VmHWM any process reached while it ran.
+    """Run a build and record how much memory it needed.
+
+    Two numbers, because they answer different questions. `peak_used_kb` is machine-wide
+    (MemTotal - the lowest MemAvailable seen); it is what decides whether a 16 GB runner survives,
+    since every rustc, linker and test service on the box counts. `peak_rss_kb` is the largest
+    single process, which says which crate to go after.
 
     Sampling /proc is the only route that works here: /usr/bin/time is absent on NixOS, and
     getrusage(RUSAGE_CHILDREN) from a wrapper did not capture rustc's peak through cargo. VmHWM is
-    a high-water mark, so a 2 s interval cannot miss the peak of a rustc that runs for minutes.
+    a high-water mark, so a 2 s interval cannot miss the peak of a rustc that runs for minutes; it
+    can miss a spike that both starts and ends inside one interval.
     """
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     if not command:
         raise RuntimeError("usage: compile-metrics sample-rss --out FILE -- COMMAND...")
     child = subprocess.Popen(command)
     peak = (0, "")
+    total = 0
+    least_available = None
     while child.poll() is None:
         try:
             peak = scan_peak_rss(child.pid, peak)
+            memory = meminfo()
+            total = memory.get("MemTotal", total)
+            available = memory.get("MemAvailable")
+            if available is not None:
+                least_available = min(available, least_available or available)
         except OSError as error:  # sampling must never break the build
-            log.warning("peak rss sampling failed: %s", error)
+            log.warning("memory sampling failed: %s", error)
         time.sleep(RSS_SAMPLE_S)
+    used = total - least_available if least_available is not None else 0
     args.out.write_text(
-        json.dumps({"peak_rss_kb": peak[0], "peak_rss_by": peak[1]}) + "\n"
+        json.dumps(
+            {
+                "peak_used_kb": used,
+                "mem_total_kb": total,
+                "peak_rss_kb": peak[0],
+                "peak_rss_by": peak[1],
+            }
+        )
+        + "\n"
     )
-    log.info("peak rss %.1f GB in %s", peak[0] / 1024**2, peak[1] or "nothing sampled")
+    log.info(
+        "peak memory %s of %s, largest process %s at %s",
+        fmt_bytes(used * 1024),
+        fmt_bytes(total * 1024),
+        peak[1] or "none sampled",
+        fmt_bytes(peak[0] * 1024),
+    )
     return child.returncode
 
 
@@ -384,19 +424,11 @@ def compare(main: dict[str, Any], current: dict[str, Any]) -> list[Change]:
         before = main["jobs"].get(job)
         if before is None:
             continue
-        changes.append(
-            Change(
-                job,
-                job,
-                "workspace cpu-s",
-                before["workspace_cpu_s"],
-                now["workspace_cpu_s"],
-                WORKSPACE_CPU_PCT,
-            )
-        )
         for key, label, threshold in (
+            ("peak_used_kb", "peak memory", PEAK_RSS_PCT),
+            ("workspace_cpu_s", "workspace cpu-s", WORKSPACE_CPU_PCT),
             ("critical_path_s", "critical path s", CRITICAL_PATH_PCT),
-            ("peak_rss_kb", "peak rss", PEAK_RSS_PCT),
+            ("peak_rss_kb", "largest process", PEAK_RSS_PCT),
         ):
             if before.get(key) and now.get(key):
                 changes.append(
@@ -442,7 +474,7 @@ def fmt_value(value: float) -> str:
 
 
 def fmt_metric(metric: str, value: float) -> str:
-    if metric == "peak rss":
+    if metric in ("peak memory", "largest process"):
         return fmt_bytes(value * 1024)
     if metric in ("bytes", "text_bytes"):
         return fmt_bytes(value)
@@ -491,14 +523,24 @@ def state_tables(current: dict[str, Any]) -> list[str]:
     """What this run costs, standing alone: no baseline needed to read it."""
     jobs = current["jobs"]
     lines = [
-        "| job | workspace cpu-s | critical path s | peak rss | binaries |",
-        "|---|---:|---:|---:|---:|",
+        "| job | peak memory | of runner | largest process | workspace cpu-s "
+        "| critical path s | binaries |",
+        "|---|---:|---:|---|---:|---:|---:|",
     ]
     for job, metrics in sorted(jobs.items()):
+        total = metrics.get("mem_total_kb", 0)
+        used = metrics.get("peak_used_kb", 0)
+        share = (
+            f"{used / total * 100:.0f} % of {fmt_bytes(total * 1024)}" if total else "-"
+        )
+        largest = (
+            f"{metrics.get('peak_rss_by') or '-'} {fmt_bytes(metrics.get('peak_rss_kb', 0) * 1024)}"
+            if metrics.get("peak_rss_kb")
+            else "-"
+        )
         lines.append(
-            f"| {job} | {metrics['workspace_cpu_s']:,.1f} "
-            f"| {metrics['critical_path_s']:,.1f} "
-            f"| {fmt_bytes(metrics.get('peak_rss_kb', 0) * 1024)} "
+            f"| {job} | {fmt_bytes(used * 1024) if used else '-'} | {share} | {largest} "
+            f"| {metrics['workspace_cpu_s'] or '-'} | {metrics['critical_path_s'] or '-'} "
             f"| {len(metrics['binaries'])} |"
         )
 
@@ -626,7 +668,9 @@ def main(argv: list[str]) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     collect = sub.add_parser("collect", help="metrics for one build job")
-    collect.add_argument("timing", type=Path, help="cargo-timing.html from --timings")
+    collect.add_argument(
+        "--timing", type=Path, help="cargo-timing.html, for jobs built with --timings"
+    )
     collect.add_argument(
         "--binaries-dir",
         type=Path,

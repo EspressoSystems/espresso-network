@@ -62,7 +62,15 @@ jobs:
           save-if: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-')) && matrix.partition == 1 }}
 
       - name: Build slow test
-        run: just test-slow ${{ matrix.features }} --no-run
+        run: |
+          python3 scripts/compile-metrics sample-rss --out peak-rss.json -- \
+            just test-slow ${{ matrix.features }} --no-run
+
+      # All 8 shards compile the same thing, so one of them reports for the set.
+      - uses: ./.github/actions/compile-metrics
+        if: matrix.partition == 1
+        with:
+          job: slow-tests-${{ matrix.db }}
 
       - name: Run slow test
         run: just test-slow ${{ matrix.features }} --no-fail-fast --partition hash:${{ matrix.partition }}/8
@@ -98,7 +106,13 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
 
       - name: Build slow test
-        run: just test-dev-node --no-run
+        run: |
+          python3 scripts/compile-metrics sample-rss --out peak-rss.json -- \
+            just test-dev-node --no-run
+
+      - uses: ./.github/actions/compile-metrics
+        with:
+          job: dev-node-tests
 
       - name: Run slow test
         run: just test-dev-node --no-fail-fast
