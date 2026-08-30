@@ -86,6 +86,7 @@ jobs:
         run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
 
       - uses: ./.github/actions/compile-metrics
+        continue-on-error: true
         with:
           job: amd-${{ matrix.binary }}
           timing: target/cargo-timings/cargo-timing.html

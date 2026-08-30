@@ -62,6 +62,9 @@ TOP_UNITS = 10
 MOVER_MIN_PCT = 0.5
 JOB_METRICS = ("peak memory", "largest process", "workspace cpu-s", "critical path s")
 RSS_SAMPLE_S = 2.0
+NO_TIMINGS = "no `--timings`"
+NOT_SAMPLED = "not sampled"
+NOT_COMPARED = "not in both runs"
 
 
 @dataclass(frozen=True)
@@ -189,14 +192,33 @@ def text_section_bytes(path: Path) -> int:
     raise RuntimeError(f"no .text section in {path}")
 
 
-def nm_symbols(path: Path) -> str:
-    """One `nm` pass per binary: the line count is the symbol count, sized lines carry the bytes."""
-    return subprocess.run(
+def measure_binary(path: Path) -> dict[str, Any]:
+    """One `nm` pass per binary, read as a stream.
+
+    The line count is the symbol count and sized lines carry the bytes, so both come out of the
+    same pass. It is streamed because `nm` on a 130 MB release binary emits hundreds of MB, and
+    this runs in a job that has just peaked at 11 GB.
+    """
+    measured = {"bytes": path.stat().st_size, "text_bytes": text_section_bytes(path)}
+    symbols = 0
+    totals: dict[str, int] = {}
+    with subprocess.Popen(
         ["nm", "--demangle", "--print-size", str(path)],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        encoding="utf-8",
+        errors="replace",
+    ) as nm:
+        for line in nm.stdout or ():
+            symbols += 1
+            symbol = SYMBOL_RE.match(line)
+            if symbol is not None:
+                crate = symbol_crate(symbol.group(2))
+                totals[crate] = totals.get(crate, 0) + int(symbol.group(1), 16)
+    if nm.returncode != 0:
+        raise RuntimeError(f"nm exited {nm.returncode} on {path}")
+    top = sorted(totals.items(), key=lambda item: -item[1])[:TOP_CRATES]
+    return measured | {"symbols": symbols, "crate_bytes": dict(sorted(top))}
 
 
 def symbol_crate(name: str) -> str:
@@ -208,29 +230,6 @@ def symbol_crate(name: str) -> str:
     return name.strip("<>&*()[] ") or "?"
 
 
-def crate_bytes(symbols: str) -> dict[str, int]:
-    """Bytes of sized symbols per crate. Attributes growth instead of only detecting it."""
-    totals: dict[str, int] = {}
-    for line in symbols.splitlines():
-        symbol = SYMBOL_RE.match(line)
-        if symbol is None:
-            continue
-        crate = symbol_crate(symbol.group(2))
-        totals[crate] = totals.get(crate, 0) + int(symbol.group(1), 16)
-    top = sorted(totals.items(), key=lambda item: -item[1])[:TOP_CRATES]
-    return dict(sorted(top))
-
-
-def measure_binary(path: Path) -> dict[str, Any]:
-    symbols = nm_symbols(path)
-    return {
-        "bytes": path.stat().st_size,
-        "text_bytes": text_section_bytes(path),
-        "symbols": len(symbols.splitlines()),
-        "crate_bytes": crate_bytes(symbols),
-    }
-
-
 def executables(directory: Path) -> list[Path]:
     return sorted(
         path
@@ -239,16 +238,51 @@ def executables(directory: Path) -> list[Path]:
     )
 
 
+def read_json(path: Path) -> dict:
+    """A missing or truncated file costs the metrics it holds and nothing else."""
+    try:
+        return json.loads(path.read_text())
+    except Exception as error:  # noqa: BLE001
+        log.warning("ignoring %s: %s", path, error)
+        return {}
+
+
+def timing_metrics(
+    timing: Path | None,
+) -> tuple[float, dict[str, float], list[tuple[str, float]]]:
+    """(wall, cpu per unit, critical path), all empty when there is no readable timing report.
+
+    A job that builds without `--timings` has none, and so does a job whose report cargo did not
+    finish writing. The memory numbers are worth keeping in both cases, so nothing here raises.
+    `wall` is what tells the report which case a zero belongs to.
+    """
+    if timing is None:
+        return 0.0, {}, []
+    try:
+        wall, units = parse_timing(timing.read_text())
+        return wall, workspace_cpu(units, workspace_members()), critical_path(units)
+    except Exception as error:  # noqa: BLE001
+        log.warning("no usable timing report at %s: %s", timing, error)
+        return 0.0, {}, []
+
+
+def measured_binaries(directory: Path | None) -> dict[str, dict[str, Any]]:
+    """One unreadable file must not cost the whole job its metrics, memory included."""
+    if directory is None or not directory.is_dir():
+        return {}
+    measured = {}
+    for path in executables(directory):
+        try:
+            measured[path.name] = measure_binary(path)
+        except Exception as error:  # noqa: BLE001
+            log.warning("skipping %s: %s", path, error)
+    return measured
+
+
 def cmd_collect(args: argparse.Namespace) -> int:
-    wall, units = parse_timing(args.timing.read_text()) if args.timing else (0.0, [])
-    cpu = workspace_cpu(units, workspace_members()) if units else {}
-    path = critical_path(units) if units else []
-    binaries = (
-        {path.name: measure_binary(path) for path in executables(args.binaries_dir)}
-        if args.binaries_dir
-        else {}
-    )
-    rss = json.loads(args.peak_rss.read_text()) if args.peak_rss else {}
+    wall, cpu, path = timing_metrics(args.timing)
+    binaries = measured_binaries(args.binaries_dir)
+    rss = read_json(args.peak_rss) if args.peak_rss else {}
     metrics = {
         "job": args.job,
         "wall_s": wall,
@@ -280,8 +314,8 @@ def cmd_collect(args: argparse.Namespace) -> int:
 def process_peak_rss(pid: str) -> tuple[int, str] | None:
     """(VmHWM in kB, label) for one pid, or None if it is gone or unreadable."""
     try:
-        status = Path(f"/proc/{pid}/status").read_text()
-        command = Path(f"/proc/{pid}/cmdline").read_text().split("\0")
+        status = Path(f"/proc/{pid}/status").read_text(errors="replace")
+        command = Path(f"/proc/{pid}/cmdline").read_text(errors="replace").split("\0")
     except OSError:
         return None
     for line in status.splitlines():
@@ -298,7 +332,7 @@ def parent_pids() -> dict[int, int]:
     for entry in Path("/proc").iterdir():
         if entry.name.isdigit():
             try:
-                stat = (entry / "stat").read_text()
+                stat = (entry / "stat").read_text(errors="replace")
             except OSError:
                 continue
             # comm sits in parens and may contain spaces, so ppid is the field after the last ')'.
@@ -348,11 +382,13 @@ def cmd_sample_rss(args: argparse.Namespace) -> int:
     getrusage(RUSAGE_CHILDREN) from a wrapper did not capture rustc's peak through cargo. VmHWM is
     a high-water mark, so a 2 s interval cannot miss the peak of a rustc that runs for minutes; it
     can miss a spike that both starts and ends inside one interval.
+
+    This wraps five real build steps, so its own exit status is the build's: sampling failures are
+    logged and dropped, and a signal death is reported the way a shell reports it.
     """
-    command = args.command[1:] if args.command[:1] == ["--"] else args.command
-    if not command:
+    if not args.build_command:
         raise RuntimeError("usage: compile-metrics sample-rss --out FILE -- COMMAND...")
-    child = subprocess.Popen(command)
+    child = subprocess.Popen(args.build_command)
     peak = (0, "")
     total = 0
     least_available = None
@@ -364,28 +400,35 @@ def cmd_sample_rss(args: argparse.Namespace) -> int:
             available = memory.get("MemAvailable")
             if available is not None:
                 least_available = min(available, least_available or available)
-        except OSError as error:  # sampling must never break the build
+        # Anything raised here, including a decode error on another process's argv, would
+        # orphan the build and fail the step.
+        except Exception as error:  # noqa: BLE001
             log.warning("memory sampling failed: %s", error)
         time.sleep(RSS_SAMPLE_S)
     used = total - least_available if least_available is not None else 0
-    args.out.write_text(
-        json.dumps(
-            {
-                "peak_used_kb": used,
-                "mem_total_kb": total,
-                "peak_rss_kb": peak[0],
-                "peak_rss_by": peak[1],
-            }
+    try:
+        args.out.write_text(
+            json.dumps(
+                {
+                    "peak_used_kb": used,
+                    "mem_total_kb": total,
+                    "peak_rss_kb": peak[0],
+                    "peak_rss_by": peak[1],
+                }
+            )
+            + "\n"
         )
-        + "\n"
-    )
-    log.info(
-        "peak memory %s of %s, largest process %s at %s",
-        fmt_bytes(used * 1024),
-        fmt_bytes(total * 1024),
-        peak[1] or "none sampled",
-        fmt_bytes(peak[0] * 1024),
-    )
+        log.info(
+            "peak memory %s of %s, largest process %s at %s",
+            fmt_bytes(used * 1024),
+            fmt_bytes(total * 1024),
+            peak[1] or "none sampled",
+            fmt_bytes(peak[0] * 1024),
+        )
+    except Exception as error:  # noqa: BLE001
+        log.warning("could not write %s: %s", args.out, error)
+    if child.returncode < 0:
+        return 128 - child.returncode  # killed by signal N, as a shell reports it
     return child.returncode
 
 
@@ -395,7 +438,12 @@ def cmd_sample_rss(args: argparse.Namespace) -> int:
 def merge_jobs(paths: list[Path]) -> dict[str, Any]:
     jobs = {}
     for path in paths:
-        metrics = json.loads(path.read_text())
+        metrics = read_json(path)
+        if not metrics:
+            continue  # read_json has already said why
+        if "job" not in metrics:
+            log.warning("ignoring %s: no job field", path)
+            continue
         jobs[metrics["job"]] = metrics
     return jobs
 
@@ -421,7 +469,7 @@ def cmd_merge(args: argparse.Namespace) -> int:
 def compare(main: dict[str, Any], current: dict[str, Any]) -> list[Change]:
     changes = []
     for job, now in current["jobs"].items():
-        before = main["jobs"].get(job)
+        before = main.get("jobs", {}).get(job)
         if before is None:
             continue
         for key, label, threshold in (
@@ -434,15 +482,17 @@ def compare(main: dict[str, Any], current: dict[str, Any]) -> list[Change]:
                 changes.append(
                     Change(job, job, label, before[key], now[key], threshold)
                 )
-        for unit, cpu in now["units"].items():
-            was = before["units"].get(unit)
+        for unit, cpu in now.get("units", {}).items():
+            was = before.get("units", {}).get(unit)
             if was is not None and was >= UNIT_MIN_S:
                 changes.append(Change(job, unit, "cpu-s", was, cpu, UNIT_CPU_PCT))
-        for binary, sizes in now["binaries"].items():
-            was_sizes = before["binaries"].get(binary)
+        for binary, sizes in now.get("binaries", {}).items():
+            was_sizes = before.get("binaries", {}).get(binary)
             if was_sizes is None:
                 continue
             for metric in ("bytes", "text_bytes", "symbols"):
+                if metric not in was_sizes or metric not in sizes:
+                    continue
                 changes.append(
                     Change(
                         job,
@@ -528,23 +578,29 @@ def state_tables(current: dict[str, Any]) -> list[str]:
     ]
     for job, metrics in sorted(jobs.items()):
         used = metrics.get("peak_used_kb", 0)
+        rss = metrics.get("peak_rss_kb", 0)
         largest = (
-            f"{metrics.get('peak_rss_by') or '-'} {fmt_bytes(metrics.get('peak_rss_kb', 0) * 1024)}"
-            if metrics.get("peak_rss_kb")
-            else "-"
+            f"{metrics.get('peak_rss_by') or '?'} {fmt_bytes(rss * 1024)}"
+            if rss
+            else NOT_SAMPLED
         )
+        # wall_s is 0 exactly when the job produced no timing report, which is the only reason
+        # the two cpu columns can be empty. A measured 0.0 is printed as 0.0.
+        timed = bool(metrics.get("wall_s"))
+        cpu = fmt_value(metrics.get("workspace_cpu_s", 0.0)) if timed else NO_TIMINGS
+        path = fmt_value(metrics.get("critical_path_s", 0.0)) if timed else NO_TIMINGS
         lines.append(
-            f"| {job} | {fmt_bytes(used * 1024) if used else '-'} | {largest} "
-            f"| {metrics['workspace_cpu_s'] or '-'} | {metrics['critical_path_s'] or '-'} |"
+            f"| {job} | {fmt_bytes(used * 1024) if used else NOT_SAMPLED} | {largest} "
+            f"| {cpu} | {path} |"
         )
 
     binaries = sorted(
         (
-            (sizes["bytes"], name, job, sizes)
-            for job, metrics in jobs.items()
-            for name, sizes in metrics["binaries"].items()
+            (sizes["bytes"], name, sizes)
+            for _job, metrics in jobs.items()
+            for name, sizes in metrics.get("binaries", {}).items()
         ),
-        reverse=True,
+        key=lambda entry: -entry[0],
     )[:TOP_BINARIES]
     if binaries:
         lines += [
@@ -552,19 +608,20 @@ def state_tables(current: dict[str, Any]) -> list[str]:
             "| binary | size | `.text` | symbols | largest crate |",
             "|---|---:|---:|---:|---|",
         ]
-        for _, name, _job, sizes in binaries:
+        for _, name, sizes in binaries:
             crates = sizes.get("crate_bytes", {})
-            largest = max(crates.items(), key=lambda item: item[1], default=("-", 0))
+            largest = max(crates.items(), key=lambda item: item[1], default=None)
             lines.append(
                 f"| {name} | {fmt_bytes(sizes['bytes'])} | {fmt_bytes(sizes['text_bytes'])} "
-                f"| {sizes['symbols']:,} | {largest[0]} {fmt_bytes(largest[1])} |"
+                f"| {sizes['symbols']:,} "
+                f"| {f'{largest[0]} {fmt_bytes(largest[1])}' if largest else 'no sized symbols'} |"
             )
 
     units = sorted(
         (
             (cpu, unit, job)
             for job, metrics in jobs.items()
-            for unit, cpu in metrics["units"].items()
+            for unit, cpu in metrics.get("units", {}).items()
         ),
         reverse=True,
     )[:TOP_UNITS]
@@ -601,8 +658,12 @@ def comparison_tables(changes: list[Change]) -> list[str]:
         if change.metric in JOB_METRICS:
             by_job.setdefault(change.scope, {})[change.metric] = change
     for job, metrics in sorted(by_job.items()):
-        cells = [fmt_cell(metrics[m]) if m in metrics else "-" for m in JOB_METRICS]
+        cells = [
+            fmt_cell(metrics[m]) if m in metrics else NOT_COMPARED for m in JOB_METRICS
+        ]
         lines.append(f"| {job} | " + " | ".join(cells) + " |")
+    if any(len(metrics) < len(JOB_METRICS) for metrics in by_job.values()):
+        lines += ["", f"{NOT_COMPARED}: missing from this run or from the baseline."]
 
     movers = top_movers(
         [
@@ -628,9 +689,9 @@ def render(
         lines.append("No main-branch baseline available yet.")
     else:
         baseline = (
-            f"[{main['sha'][:8]}]({main['run_url']})"
+            f"[{main.get('sha', '')[:8]}]({main['run_url']})"
             if main.get("run_url")
-            else main["sha"][:8]
+            else main.get("sha", "unknown")[:8]
         )
         lines += [f"Baseline: main {baseline}.", ""]
         lines += comparison_tables(changes)
@@ -657,9 +718,23 @@ def cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def split_command(argv: list[str]) -> tuple[list[str], list[str]]:
+    """Split `... -- COMMAND...` before argparse sees it.
+
+    argparse's own handling of `--` and of REMAINDER has changed between 3.12 patch releases, and
+    a misparse here would break a build step. Splitting first makes the parse identical on every
+    interpreter.
+    """
+    if "--" not in argv:
+        return argv, []
+    index = argv.index("--")
+    return argv[:index], argv[index + 1 :]
+
+
 def main(argv: list[str]) -> int:
+    argv, build_command = split_command(argv)
     parser = argparse.ArgumentParser(description=__doc__)
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="subcommand", required=True)
 
     collect = sub.add_parser("collect", help="metrics for one build job")
     collect.add_argument(
@@ -681,7 +756,6 @@ def main(argv: list[str]) -> int:
         "sample-rss", help="run a build and record the largest VmHWM reached"
     )
     sample.add_argument("--out", required=True, type=Path)
-    sample.add_argument("command", nargs=argparse.REMAINDER, help="-- COMMAND...")
     sample.set_defaults(func=cmd_sample_rss)
 
     merge = sub.add_parser("merge", help="merge the per-job metrics of one run")
@@ -709,6 +783,7 @@ def main(argv: list[str]) -> int:
     report.set_defaults(func=cmd_report)
 
     args = parser.parse_args(argv)
+    args.build_command = build_command
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     return args.func(args)
 

@@ -58,6 +58,7 @@ jobs:
             just nextest-archive nextest-archive-postgres.tar.zst --timings
 
       - uses: ./.github/actions/compile-metrics
+        continue-on-error: true
         with:
           job: test-archive-postgres
           timing: target/cargo-timings/cargo-timing.html
@@ -111,6 +112,7 @@ jobs:
             just nextest-archive nextest-archive-sqlite.tar.zst --features "embedded-db,testing" --timings
 
       - uses: ./.github/actions/compile-metrics
+        continue-on-error: true
         with:
           job: test-archive-sqlite
           timing: target/cargo-timings/cargo-timing.html
@@ -158,6 +160,7 @@ jobs:
         timeout-minutes: 60
 
       - uses: ./.github/actions/compile-metrics
+        continue-on-error: true
         with:
           job: test-bins
           timing: target/cargo-timings/cargo-timing.html
@@ -222,12 +225,14 @@ jobs:
       - name: Build espresso-node-sqlite binary
         run: |
           python3 scripts/compile-metrics sample-rss --out peak-rss.json -- \
-            cargo build --locked --profile test -p espresso-node-sqlite
+            cargo build --locked --profile test -p espresso-node-sqlite --timings
         timeout-minutes: 30
 
       - uses: ./.github/actions/compile-metrics
+        continue-on-error: true
         with:
           job: test-bin-sqlite
+          timing: target/cargo-timings/cargo-timing.html
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v7
@@ -262,12 +267,14 @@ jobs:
       - name: Build espresso-dev-node binary
         run: |
           python3 scripts/compile-metrics sample-rss --out peak-rss.json -- \
-            cargo build --locked --profile test -p espresso-dev-node
+            cargo build --locked --profile test -p espresso-dev-node --timings
         timeout-minutes: 30
 
       - uses: ./.github/actions/compile-metrics
+        continue-on-error: true
         with:
           job: test-bin-dev-node
+          timing: target/cargo-timings/cargo-timing.html
 
       - name: Upload archive to workflow
         uses: actions/upload-artifact@v7
