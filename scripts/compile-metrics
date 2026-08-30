@@ -509,14 +509,12 @@ def cmd_report(args: argparse.Namespace) -> int:
         else None
     )
     if main is None:
-        print("## Compile metrics\n\nNo main-branch baseline available yet.\n")
-        return 0
-    changes = compare(main, current)
-    summary = render(main, current, changes)
+        summary = "## Compile metrics\n\nNo main-branch baseline available yet.\n"
+    else:
+        summary = render(main, current, compare(main, current))
     print(summary)
     if args.pr_comment_out:
-        regressed = [c for c in changes if c.regressed]
-        args.pr_comment_out.write_text(summary if regressed else "")
+        args.pr_comment_out.write_text(summary)
     return 0
 
 
@@ -565,7 +563,7 @@ def main(argv: list[str]) -> int:
     report.add_argument(
         "--pr-comment-out",
         type=Path,
-        help="write the comment body here, empty if nothing regressed",
+        help="write the comment body here; posted on every run while the numbers are new",
     )
     report.set_defaults(func=cmd_report)
 
