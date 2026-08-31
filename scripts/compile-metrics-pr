@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# Render the compile-metrics report for a pull request, locally.
+#
+# usage:
+#
+#   ./compile-metrics-pr [pr-number]
+#
+# With no argument, uses the pull request for the current branch. Each of the three workflows that
+# collects metrics reports separately, against its own main-branch baseline, exactly as it does in
+# CI. Needs `gh` authenticated, and the run's artifacts still inside their retention window: 14 days
+# on a pull request, 90 on main.
+set -euo pipefail
+
+pr="${1:-}"
+if [[ -z "$pr" ]]; then
+    pr=$(gh pr view --json number --jq .number)
+fi
+
+sha=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
+echo "PR #$pr at ${sha:0:8}" >&2
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+# workflow file, baseline artifact, report title
+workflows=(
+    "build.yml|compile-metrics-build|Compile metrics: release builds"
+    "test.yml|compile-metrics-test|Compile metrics: test binaries"
+    "slowtest.yaml|compile-metrics-slowtest|Compile metrics: slow tests"
+)
+
+for entry in "${workflows[@]}"; do
+    IFS='|' read -r workflow baseline title <<<"$entry"
+
+    run_id=$(gh run list --workflow "$workflow" --commit "$sha" --limit 1 \
+        --json databaseId --jq '.[0].databaseId // empty')
+    if [[ -z "$run_id" ]]; then
+        echo "$workflow: no run for this commit, skipping" >&2
+        continue
+    fi
+
+    dir="$work/$workflow"
+    mkdir -p "$dir/artifacts"
+    if ! gh run download "$run_id" --pattern 'compile-metrics-*' --dir "$dir/artifacts" \
+        >/dev/null 2>&1; then
+        echo "$workflow: run $run_id has no metrics artifacts, skipping" >&2
+        continue
+    fi
+
+    python3 "$(dirname "$0")/compile-metrics" merge "$dir/artifacts" \
+        --sha "$sha" --run-id "$run_id" \
+        --run-url "https://github.com/EspressoSystems/espresso-network/actions/runs/$run_id" \
+        --out "$dir/metrics.json" >/dev/null
+
+    # Absent baseline is normal until the workflow has run on main once; the report says so.
+    python3 "$(dirname "$0")/nextest-ci" stats-fetch \
+        --workflow "$workflow" --artifact-name "$baseline" --max-runs 5 \
+        --out "$dir/main.json" >/dev/null 2>&1 || true
+
+    args=("$dir/metrics.json" --title "$title")
+    [[ -s "$dir/main.json" ]] && args+=(--main-stats "$dir/main.json")
+    python3 "$(dirname "$0")/compile-metrics" report "${args[@]}"
+    echo
+done
