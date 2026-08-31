@@ -141,6 +141,13 @@ enum LoadBehavior {
     /// compute the DRB either; the epoch must resolve from the in-memory
     /// result anyway.
     HangDrbStore,
+    /// Loads fail fast and epoch roots resolve, but the peer DRB fetch parks
+    /// until the test fires [`WedgeMembership::release_drb`], then fails.
+    /// Holds an attempt at the last checkpoint before the local DRB
+    /// computation until well past its abandonment, so the test can verify
+    /// the resumed attempt does not enter the hash chain as an unsupervised
+    /// zombie.
+    HangDrbFetchUntilReleased,
 }
 
 /// A `Membership` that delegates everything to `StrictMembership` except the
@@ -164,6 +171,12 @@ struct WedgeMembership {
     /// Unparks the first epoch-root fetch under
     /// [`HangEpochRootUntilReleased`](LoadBehavior::HangEpochRootUntilReleased).
     release_root: Arc<tokio::sync::Notify>,
+    /// Number of times `get_epoch_drb` has been entered. One per catchup
+    /// attempt that got past the epoch-root fetches.
+    drb_calls: Arc<AtomicUsize>,
+    /// Unparks the peer DRB fetch under
+    /// [`HangDrbFetchUntilReleased`](LoadBehavior::HangDrbFetchUntilReleased).
+    release_drb: Arc<tokio::sync::Notify>,
 }
 
 impl WedgeMembership {
@@ -173,6 +186,10 @@ impl WedgeMembership {
 
     fn root_fetches(&self) -> usize {
         self.root_calls.load(Ordering::SeqCst)
+    }
+
+    fn drb_fetches(&self) -> usize {
+        self.drb_calls.load(Ordering::SeqCst)
     }
 }
 
@@ -206,7 +223,10 @@ impl Membership<WedgeTypes> for WedgeMembership {
                 std::future::pending::<()>().await;
                 unreachable!("pending() never resolves")
             },
-            LoadBehavior::SlowDrb | LoadBehavior::PanicInDrb | LoadBehavior::HangDrbStore => {
+            LoadBehavior::SlowDrb
+            | LoadBehavior::PanicInDrb
+            | LoadBehavior::HangDrbStore
+            | LoadBehavior::HangDrbFetchUntilReleased => {
                 // A usable root: `StrictMembership::add_epoch_root` registers
                 // the stake table for `epoch_from_block_number(height) + 2`,
                 // so a block inside `epoch` (the root epoch this is fetched
@@ -235,9 +255,14 @@ impl Membership<WedgeTypes> for WedgeMembership {
 
     async fn get_epoch_drb(
         &self,
-        _e: EpochNumber,
+        epoch: EpochNumber,
         _coordinator: &EpochMembershipCoordinator<WedgeTypes>,
     ) -> Result<DrbResult, Self::Error> {
+        let calls = self.drb_calls.fetch_add(1, Ordering::SeqCst) + 1;
+        tracing::info!(%epoch, calls, "get_epoch_drb entered");
+        if matches!(self.behavior, LoadBehavior::HangDrbFetchUntilReleased) {
+            self.release_drb.notified().await;
+        }
         Err(anyhow!("drb unavailable").into())
     }
 
@@ -270,6 +295,7 @@ impl Membership<WedgeTypes> for WedgeMembership {
             | LoadBehavior::SlowDrb
             | LoadBehavior::PanicInDrb
             | LoadBehavior::HangDrbStore
+            | LoadBehavior::HangDrbFetchUntilReleased
             | LoadBehavior::HangOncePastWatch
             | LoadBehavior::HangEpochRootUntilReleased => false,
         }
@@ -334,6 +360,8 @@ fn setup(behavior: LoadBehavior) -> (WedgeMembership, EpochMembershipCoordinator
         root_calls: Arc::default(),
         root_leaf: Arc::default(),
         release_root: Arc::default(),
+        drb_calls: Arc::default(),
+        release_drb: Arc::default(),
     };
     // Registers stake tables for FIRST_EPOCH and FIRST_EPOCH + 1.
     membership.set_first_epoch(EpochNumber::new(FIRST_EPOCH), INITIAL_DRB_RESULT);
@@ -844,5 +872,73 @@ async fn aborted_drb_computation_fires_its_cancel_token() {
         "dropping the DRB computation's future did not fire its cancel token within \
          {RECOVERY_BUDGET:?}: an orphaned hash batch on the blocking pool would grind on, \
          uncancellable, because the cleanup already removed the token from the coordinator's maps"
+    );
+}
+
+/// An attempt abandoned during its peer DRB fetch must not resume into the
+/// local DRB computation: the hash chain is exempt from the watchdog budget
+/// by design, so a resumed-but-abandoned attempt would compute for tens of
+/// minutes as an unsupervised zombie while every retry bounces off the
+/// DRB-in-progress guard. The guard at the computation's entrance cannot
+/// close the race — abandonment can also land mid-computation — but an
+/// attempt that is already abandoned when it gets there must stop.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn abandoned_attempt_does_not_enter_drb_computation() {
+    let (membership, coordinator) = setup(LoadBehavior::HangDrbFetchUntilReleased);
+    let root_leaf = Leaf2::<WedgeTypes>::genesis(
+        &TestValidatedState::default(),
+        &TestInstanceState::default(),
+        Version { major: 0, minor: 1 },
+    )
+    .await;
+    membership
+        .root_leaf
+        .set(root_leaf)
+        .expect("root_leaf seeded once");
+    // Counts entries into the local computation: the difficulty selector is
+    // awaited right after the computation claims its DRB maps.
+    let selector_calls = Arc::new(AtomicUsize::new(0));
+    let selector: DrbDifficultySelectorFn = {
+        let selector_calls = Arc::clone(&selector_calls);
+        Arc::new(move |_| {
+            selector_calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { 10 })
+        })
+    };
+    coordinator.set_drb_difficulty_selector(selector);
+    let target = EpochNumber::new(TARGET_EPOCH);
+
+    // Starts the only attempt; it fetches the epoch roots, then parks in the
+    // peer DRB fetch. No retries are ever requested, so the selector counter
+    // can only be moved by this attempt.
+    assert!(
+        coordinator.membership_for_epoch(Some(target)).is_err(),
+        "epoch {target} is not locally known, so this must not succeed"
+    );
+    assert!(
+        wait_until(RECOVERY_BUDGET, || membership.drb_fetches() >= 1).await,
+        "catchup never reached the peer DRB fetch"
+    );
+
+    // Block until the watchdog abandons the parked attempt: abandonment
+    // broadcasts an error on the epoch's channel, which is exactly what
+    // `wait_for_catchup` listens to — and it never spawns attempts, so it
+    // cannot mask the zombie with a legitimate retry's computation.
+    let _ = coordinator.wait_for_catchup(target).await;
+
+    // Unpark the abandoned attempt: its DRB fetch fails, leaving it at the
+    // entrance of the local computation.
+    membership.release_drb.notify_one();
+
+    // The resumed attempt must stop instead of computing.
+    let entered = wait_until(Duration::from_millis(500), || {
+        selector_calls.load(Ordering::SeqCst) >= 1
+    })
+    .await;
+    assert!(
+        !entered,
+        "an abandoned catchup attempt entered the local DRB computation: it would hash \
+         unsupervised (the chain is exempt from the watchdog budget) while every retry dies on \
+         the DRB-in-progress guard"
     );
 }

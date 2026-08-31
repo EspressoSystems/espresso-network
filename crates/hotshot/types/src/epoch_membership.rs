@@ -543,6 +543,19 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                     err
                 );
 
+                // The watchdog may have abandoned this attempt during the
+                // peer fetches above, and the hash chain below is exempt from
+                // its budget by design — entering it now would compute
+                // unsupervised while the retry that replaced this attempt
+                // bounces off the DRB-in-progress guard. Stop and let the
+                // retry own the computation. The check cannot close the race
+                // (abandonment can land mid-computation) but it narrows the
+                // entry window from the peer-fetch duration to an instant.
+                if progress.is_abandoned() {
+                    tracing::warn!("catchup for epoch {epoch} was abandoned; stopping");
+                    return;
+                }
+
                 progress.checkpoint(format_args!("computing drb result for epoch {epoch}"));
                 let result = self
                     .compute_drb_result_impl(epoch, root_leaf, Some(&progress))
