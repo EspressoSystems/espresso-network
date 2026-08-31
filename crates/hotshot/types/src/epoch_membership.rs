@@ -919,12 +919,37 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     }
 
     /// Remove per-epoch DRB bookkeeping after a computation finishes or is
-    /// cancelled. Safe to call multiple times. Only called from
-    /// [`DrbStateGuard`]'s `Drop`, so the state is cleared exactly once per
-    /// computation, when `compute_drb_result_impl`'s scope ends.
+    /// cancelled, and fire the removed cancel token: when the computing
+    /// future was dropped mid-chain (e.g. its task aborted), a hash batch is
+    /// still grinding on the blocking pool with a clone of that token, and
+    /// firing it is the only way left to stop the orphan — the maps it would
+    /// be reachable through are cleared right here.
+    ///
+    /// Both entries are removed under the `drb_calculation_map` lock, the
+    /// same lock the insert pair in `compute_drb_result_impl` holds across
+    /// both inserts, so the maps never mix entries from two computations of
+    /// one epoch. The removed token is therefore provably this computation's
+    /// own — inserts are gated on the very `drb_calculation_map` entry this
+    /// call removes, and `supply_drb` / `cancel_all_drb` only ever remove —
+    /// so firing it can never cancel a successor's computation. Only called
+    /// from [`DrbStateGuard`]'s `Drop`, once per computation.
     fn clear_drb_state(&self, epoch: EpochNumber) {
-        self.drb_calculation_map.lock().remove(&epoch);
-        self.drb_cancel_map.lock().remove(&epoch);
+        let token = {
+            let mut calculation_lock = self.drb_calculation_map.lock();
+            let token = self.drb_cancel_map.lock().remove(&epoch);
+            calculation_lock.remove(&epoch);
+            token
+        };
+        if let Some(token) = token {
+            token.cancel();
+        }
+    }
+
+    /// The cancel token of the in-flight DRB computation for `epoch`, if one
+    /// is running. Test observability: lets a test assert that dropping a
+    /// computation's future fires its token.
+    pub fn drb_cancel_token(&self, epoch: EpochNumber) -> Option<CancellationToken> {
+        self.drb_cancel_map.lock().get(&epoch).cloned()
     }
 
     /// Cancel all in-flight DRB calculations (e.g. on shutdown).
@@ -941,6 +966,10 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
 /// `compute_drb_result_impl` releases it however it exits — normal return,
 /// cancellation of its future, or a panic, which used to unwind past the
 /// manual cleanup and leave the epoch stuck "already in progress" forever.
+/// Dropping also fires the computation's cancel token, so a future dropped
+/// mid-chain (e.g. task abort) stops the hash batch it left running on the
+/// blocking pool instead of letting it grind on to the next checkpoint,
+/// unreachable by `supply_drb` or `cancel_all_drb`.
 struct DrbStateGuard<TYPES: NodeType> {
     coordinator: EpochMembershipCoordinator<TYPES>,
     epoch: EpochNumber,

@@ -791,3 +791,58 @@ async fn stalled_drb_result_write_does_not_block_epoch_resolution() {
         membership.root_fetches()
     );
 }
+
+/// A DRB computation whose future is dropped mid-flight — new-protocol's
+/// `EpochManager::gc` aborts in-flight DRB tasks — must fire its cancel token
+/// as it cleans up: a hash batch left running on the blocking pool holds a
+/// clone of that token and checks it between chunks, and the cleanup removes
+/// the token from the coordinator's maps, so an unfired token means the
+/// orphaned batch grinds through up to a full checkpoint interval of hashing
+/// that `supply_drb` and `cancel_all_drb` can no longer stop.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn aborted_drb_computation_fires_its_cancel_token() {
+    // The membership behavior is irrelevant here: the computation is driven
+    // directly, not through catchup.
+    let (_membership, coordinator) = setup(LoadBehavior::SlowDrb);
+    let root_leaf = Leaf2::<WedgeTypes>::genesis(
+        &TestValidatedState::default(),
+        &TestInstanceState::default(),
+        Version { major: 0, minor: 1 },
+    )
+    .await;
+    // The difficulty selector is awaited after the computation has claimed
+    // its maps and cancel token; parking there gives a deterministic
+    // in-flight point to abort at, with no hashing involved.
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let selector: DrbDifficultySelectorFn = {
+        let entered = Arc::clone(&entered);
+        Arc::new(move |_| {
+            let entered = Arc::clone(&entered);
+            Box::pin(async move {
+                entered.notify_one();
+                std::future::pending::<u64>().await
+            })
+        })
+    };
+    coordinator.set_drb_difficulty_selector(selector);
+    let epoch = EpochNumber::new(TARGET_EPOCH);
+
+    let computation = tokio::spawn({
+        let coordinator = coordinator.clone();
+        async move { coordinator.compute_drb_result(epoch, root_leaf).await }
+    });
+    entered.notified().await;
+    let token = coordinator
+        .drb_cancel_token(epoch)
+        .expect("the computation claims its cancel token before awaiting the selector");
+
+    computation.abort();
+
+    let fired = wait_until(RECOVERY_BUDGET, || token.is_cancelled()).await;
+    assert!(
+        fired,
+        "dropping the DRB computation's future did not fire its cancel token within \
+         {RECOVERY_BUDGET:?}: an orphaned hash batch on the blocking pool would grind on, \
+         uncancellable, because the cleanup already removed the token from the coordinator's maps"
+    );
+}
