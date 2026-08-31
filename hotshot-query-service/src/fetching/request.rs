@@ -130,7 +130,21 @@ impl<Types: NodeType> Request<Types> for LeafBatchRequest {
 pub struct BlockBatchRequest(pub Vec<Range<u64>>);
 
 impl<Types: NodeType> Request<Types> for BlockBatchRequest {
-    type Response = Vec<BlockQueryData<Types>>;
+    type Response = BlockBatchResponse<Types>;
+}
+
+/// The answer to a [`BlockBatchRequest`]: the blocks, plus any VID common the provider proved
+/// while producing them.
+///
+/// A provider that verifies blocks through payload proofs holds the VID common for every block it
+/// returns, so handing it back here spares the caller fetching the same payloads again for VID.
+/// `vid_common` is a by-product, not part of the request's contract: a provider that obtains
+/// blocks some other way leaves it empty, and the caller fetches VID separately for whatever this
+/// did not cover.
+#[derive(Clone, Debug)]
+pub struct BlockBatchResponse<Types: NodeType> {
+    pub blocks: Vec<BlockQueryData<Types>>,
+    pub vid_common: Vec<VidCommonQueryData<Types>>,
 }
 
 /// A request for whichever VID common objects a peer has in a set of height ranges.

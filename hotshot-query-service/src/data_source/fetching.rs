@@ -1579,6 +1579,8 @@ where
 
         let mut stored = vec![];
         for run in runs {
+            // The grouping above cannot produce an invalid run, and skipping one would be safe
+            // anyway: an unstored height stays missing and the next scan fetches it again.
             if let Ok(range) = NonEmptyRange::new(run) {
                 self.store_and_notify(&range).await;
                 stored.push(range);

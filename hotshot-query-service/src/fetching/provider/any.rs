@@ -24,8 +24,8 @@ use crate::{
     fetching::{
         NonEmptyRange,
         request::{
-            BlockBatchRequest, BlockRangeRequest, Certificate2Request, LeafBatchRequest,
-            LeafRangeRequest, LeafRequest, PayloadRequest, VidCommonBatchRequest,
+            BlockBatchRequest, BlockBatchResponse, BlockRangeRequest, Certificate2Request,
+            LeafBatchRequest, LeafRangeRequest, LeafRequest, PayloadRequest, VidCommonBatchRequest,
             VidCommonRangeRequest, VidCommonRequest,
         },
     },
@@ -207,7 +207,7 @@ impl<Types> Provider<Types, BlockBatchRequest> for AnyProvider<Types>
 where
     Types: NodeType,
 {
-    async fn fetch(&self, req: BlockBatchRequest) -> Option<Vec<BlockQueryData<Types>>> {
+    async fn fetch(&self, req: BlockBatchRequest) -> Option<BlockBatchResponse<Types>> {
         any_fetch(&self.block_batch_providers, req).await
     }
 }
@@ -305,6 +305,15 @@ where
         P: Provider<Types, Certificate2Request> + Debug + 'static,
     {
         self.cert2_providers.push(Arc::new(provider));
+        self
+    }
+
+    /// Add a sub-provider which fetches batches of blocks.
+    pub fn with_block_batch_provider<P>(mut self, provider: P) -> Self
+    where
+        P: Provider<Types, BlockBatchRequest> + Debug + 'static,
+    {
+        self.block_batch_providers.push(Arc::new(provider));
         self
     }
 }

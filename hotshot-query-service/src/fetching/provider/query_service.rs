@@ -27,8 +27,8 @@ use crate::{
     fetching::{
         NonEmptyRange,
         request::{
-            BlockBatchRequest, BlockRangeRequest, Certificate2Request, LeafBatchRequest,
-            LeafRangeRequest, LeafRequest, PayloadRequest, VidCommonBatchRequest,
+            BlockBatchRequest, BlockBatchResponse, BlockRangeRequest, Certificate2Request,
+            LeafBatchRequest, LeafRangeRequest, LeafRequest, PayloadRequest, VidCommonBatchRequest,
             VidCommonRangeRequest, VidCommonRequest,
         },
     },
@@ -412,9 +412,9 @@ impl<Types, Ver: StaticVersionType> Provider<Types, BlockBatchRequest>
 where
     Types: NodeType,
 {
-    async fn fetch(&self, req: BlockBatchRequest) -> Option<Vec<BlockQueryData<Types>>> {
+    async fn fetch(&self, req: BlockBatchRequest) -> Option<BlockBatchResponse<Types>> {
         let route = "availability/block/batch";
-        match self.fetch_batch(route, &req.0).await {
+        let blocks = match self.fetch_batch(route, &req.0).await {
             Ok(blocks) => Some(blocks),
             Err(err) => {
                 let ranges = req.0.iter().map(|range| {
@@ -425,7 +425,11 @@ where
                 });
                 self.handle_result(route, fall_back(err, ranges).await)
             },
-        }
+        }?;
+        Some(BlockBatchResponse {
+            blocks,
+            vid_common: vec![],
+        })
     }
 }
 
@@ -2136,6 +2140,118 @@ mod test {
         })
         .await
         .expect("scanner did not backfill over the batch endpoints");
+    }
+
+    /// Serves block batches the way the light client does: VID common rides along with the
+    /// blocks, and no request type serves VID on its own.
+    #[derive(Clone, Debug)]
+    struct VidPiggybackProvider(TrustedQueryServiceProvider<MockBase>);
+
+    #[async_trait]
+    impl ProviderTrait<MockTypes, BlockBatchRequest> for VidPiggybackProvider {
+        async fn fetch(&self, req: BlockBatchRequest) -> Option<BlockBatchResponse<MockTypes>> {
+            let blocks = ProviderTrait::<MockTypes, BlockBatchRequest>::fetch(&self.0, req.clone())
+                .await?
+                .blocks;
+            let vid_common = ProviderTrait::<MockTypes, VidCommonBatchRequest>::fetch(
+                &self.0,
+                VidCommonBatchRequest(req.0),
+            )
+            .await?;
+            Some(BlockBatchResponse { blocks, vid_common })
+        }
+    }
+
+    /// The VID common riding along in a block batch must be stored, and stored before the blocks
+    /// resolve the batch: the only VID source here is the block batches, so catchup completes
+    /// only if the piggybacked VID reaches storage by the time the VID scan looks for it.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_block_batch_backfills_vid() {
+        let server_db = TmpDb::init().await;
+        let server = data_source(&server_db, &NoFetching).await;
+
+        let mut leaves = Vec::new();
+        for n in 0..=20 {
+            leaves.push(v6_leaf(n).await);
+        }
+        let disperse = advz_scheme(2).disperse([]).unwrap();
+        {
+            let mut tx = server.write().await.unwrap();
+            for l in &leaves {
+                tx.insert_leaf(l).await.unwrap();
+                let block =
+                    BlockQueryData::<MockTypes>::new(l.header().clone(), MockPayload::genesis());
+                tx.insert_block(&block).await.unwrap();
+                let common = VidCommonQueryData::<MockTypes>::new(
+                    l.header().clone(),
+                    VidCommon::V0(disperse.common.clone()),
+                );
+                tx.insert_vid(&common, None).await.unwrap();
+            }
+            tx.commit().await.unwrap();
+        }
+        let (port, _server_task) = serve_availability(server).await;
+
+        let provider = AnyProvider::<MockTypes>::default()
+            .with_block_batch_provider(VidPiggybackProvider(trusted_provider(port)));
+
+        let client_db = TmpDb::init().await;
+        let client = client_db
+            .config()
+            .builder::<MockTypes, _>(provider)
+            .await
+            .unwrap()
+            .with_proactive_interval(Duration::from_secs(1))
+            .with_sync_status_ttl(Duration::from_secs(1))
+            .with_max_retry_interval(Duration::from_secs(1))
+            .with_proactive_range_chunk_size(10)
+            .build()
+            .await
+            .unwrap();
+
+        // Every leaf is present, so no leaf provider is needed; blocks and VID are missing at the
+        // even heights, the fragmented shape the batches exist for.
+        {
+            let mut tx = client.write().await.unwrap();
+            for (n, l) in leaves.iter().enumerate() {
+                tx.insert_leaf(l).await.unwrap();
+                if n % 2 == 1 || n == 20 {
+                    let block = BlockQueryData::<MockTypes>::new(
+                        l.header().clone(),
+                        MockPayload::genesis(),
+                    );
+                    tx.insert_block(&block).await.unwrap();
+                    let common = VidCommonQueryData::<MockTypes>::new(
+                        l.header().clone(),
+                        VidCommon::V0(disperse.common.clone()),
+                    );
+                    tx.insert_vid(&common, None).await.unwrap();
+                }
+            }
+            tx.commit().await.unwrap();
+        }
+
+        timeout(Duration::from_secs(60), async {
+            loop {
+                let status = client.sync_status().await.unwrap();
+                if status.blocks.ranges.last().map(|r| r.end).unwrap_or(0) > 20
+                    && status.is_fully_synced()
+                {
+                    break;
+                }
+                sleep(Duration::from_millis(500)).await;
+            }
+        })
+        .await
+        .expect("VID was not backfilled from block batches");
+
+        // Read a backfilled VID common straight from storage, so the read cannot itself fetch.
+        let mut tx = client.read().await.unwrap();
+        let common = tx
+            .get_vid_common(BlockId::<MockTypes>::Number(4))
+            .await
+            .unwrap();
+        assert_eq!(common.height(), 4);
     }
 
     // A cert2 provider that cannot supply the cert2 must not short-circuit the backfill: the fetch

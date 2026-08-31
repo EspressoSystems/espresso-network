@@ -43,7 +43,7 @@ use crate::{
     },
     fetching::{
         self, Callback, NonEmptyRange,
-        request::{BlockBatchRequest, LeafBatchRequest, VidCommonBatchRequest},
+        request::{BlockBatchRequest, BlockBatchResponse, LeafBatchRequest, VidCommonBatchRequest},
     },
     types::HeightIndexed,
 };
@@ -120,7 +120,7 @@ impl<Types: NodeType, S, P> PartialOrd for StoreBatch<Types, S, P> {
     }
 }
 
-impl<Types, S, P> Callback<Vec<BlockQueryData<Types>>> for StoreBatch<Types, S, P>
+impl<Types, S, P> Callback<BlockBatchResponse<Types>> for StoreBatch<Types, S, P>
 where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
@@ -130,8 +130,12 @@ where
     for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
     P: AvailabilityProvider<Types>,
 {
-    async fn run(self, blocks: Vec<BlockQueryData<Types>>) {
-        self.fetcher.store_runs(blocks).await;
+    async fn run(self, batch: BlockBatchResponse<Types>) {
+        // VID goes in first: block notifications are what resolve the block batch, and the VID
+        // scan that follows checks storage. Blocks first would let that scan run while these VID
+        // writes are still in flight, and refetch what is already in hand.
+        self.fetcher.store_runs(batch.vid_common).await;
+        self.fetcher.store_runs(batch.blocks).await;
     }
 }
 
@@ -418,15 +422,10 @@ where
             AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
         P: AvailabilityProvider<Types>,
     {
-        // One range is just a range fetch, and that endpoint is a cacheable GET.
-        if let [range] = req.0.as_slice() {
-            let range = RangeRequest {
-                start: range.start,
-                end: range.end,
-            };
-            return <NonEmptyRange<BlockQueryData<Types>>>::active_fetch(tx, fetcher, range).await;
-        }
-
+        // No single-range shortcut here, unlike leaves and VID: the plain range fetch has no VID
+        // common to piggyback, so rerouting through it would leave the VID scan re-downloading
+        // every payload a second time. A contiguous missing region arrives as single-range
+        // batches, so that is the common catchup case, not the rare one.
         match <Batch<LeafQueryData<Types>>>::load(tx, req.clone()).await {
             Ok(_) => fetch_block_batch(fetcher, req),
             Err(QueryError::Missing | QueryError::NotFound) => fetch_leaf_batch_and_then(
