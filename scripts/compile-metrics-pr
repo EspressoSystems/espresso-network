@@ -22,6 +22,18 @@ echo "PR #$pr at ${sha:0:8}" >&2
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
+# Markdown with unpadded cells is unreadable in a terminal. prettier aligns them, and $work is
+# outside the repo so the repo's .prettierignore and its 120-column prose wrapping do not apply.
+render() {
+    local file="$work/report.md"
+    cat >"$file"
+    if command -v prettier >/dev/null 2>&1; then
+        prettier --parser markdown --print-width 200 --prose-wrap preserve "$file" || cat "$file"
+    else
+        cat "$file"
+    fi
+}
+
 # workflow file, baseline artifact, report title
 workflows=(
     "build.yml|compile-metrics-build|Compile metrics: release builds"
@@ -59,6 +71,6 @@ for entry in "${workflows[@]}"; do
 
     args=("$dir/metrics.json" --title "$title")
     [[ -s "$dir/main.json" ]] && args+=(--main-stats "$dir/main.json")
-    python3 "$(dirname "$0")/compile-metrics" report "${args[@]}"
+    python3 "$(dirname "$0")/compile-metrics" report "${args[@]}" | render
     echo
 done
