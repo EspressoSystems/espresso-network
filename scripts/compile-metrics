@@ -151,48 +151,74 @@ def workspace_cpu(units: list[dict], members: set[str]) -> dict[str, float]:
     return dict(sorted(cpu.items()))
 
 
-def critical_path(units: list[dict]) -> list[tuple[str, float]]:
-    """Longest chain through the unit graph, as [(unit, duration)] from root to leaf.
+def frontend_end(unit: dict) -> float:
+    """When the unit emitted rmeta, or its whole duration if cargo reported no sections.
 
-    Cargo splits successors into units unblocked when this one finishes and units unblocked when it
-    emits rmeta; the rmeta timestamp is not in the report, so both edges are weighted with the full
-    duration. That makes this an upper bound on the true path, but a stable one: unlike a cpu sum or
-    a single unit's time, it does not move with how many other crates happened to compile alongside.
+    A pipelined unit has a `frontend` section ending at the rmeta it unblocks its dependents with.
+    One that is not pipelined has `sections: null`, and only finishing unblocks anything.
+    """
+    for name, span in unit.get("sections") or []:
+        if name == "frontend":
+            return span["end"]
+    return unit["duration"]
+
+
+def unit_edges(unit: dict, known: set[int]) -> list[tuple[int, float]]:
+    """Successors of one unit, each paired with how long it waits on this one.
+
+    Cargo splits them into units unblocked when this one finishes and units unblocked when its
+    frontend emits rmeta, and only the first waits out codegen.
+    """
+    waits = (
+        (unit["unblocked_units"], unit["duration"]),
+        (unit["unblocked_rmeta_units"], frontend_end(unit)),
+    )
+    return [
+        (successor, wait)
+        for successors, wait in waits
+        for successor in successors
+        if successor in known
+    ]
+
+
+def critical_path(units: list[dict]) -> list[tuple[str, float]]:
+    """Longest chain through the unit graph, as [(unit, seconds waited on it)] root to leaf.
+
+    The seconds sum to the path's length: every unit but the last contributes what its successor
+    waits on, which is the frontend alone when the successor only needs rmeta. Unlike a cpu sum or
+    a single unit's time, this does not move with how many other crates compiled alongside.
     """
     by_index = {unit["i"]: unit for unit in units}
-    edges = {
-        unit["i"]: [
-            successor
-            for successor in unit["unblocked_units"] + unit["unblocked_rmeta_units"]
-            if successor in by_index
-        ]
-        for unit in units
-    }
-    order = topological_order(edges)
-    best: dict[int, tuple[float, list[int]]] = {}
-    for index in reversed(order):
-        duration = by_index[index]["duration"]
-        tail = max(
-            (best[successor] for successor in edges[index] if successor in best),
+    known = set(by_index)
+    edges = {unit["i"]: unit_edges(unit, known) for unit in units}
+    best: dict[int, tuple[float, list[tuple[int, float]]]] = {}
+    for index in reversed(topological_order(edges)):
+        # The unit's own duration is a candidate too: a codegen tail nothing waits on still has to
+        # finish before the build does.
+        best[index] = max(
+            [
+                (wait + best[successor][0], [(index, wait)] + best[successor][1])
+                for successor, wait in edges[index]
+                if successor in best
+            ]
+            + [(by_index[index]["duration"], [(index, by_index[index]["duration"])])],
             key=lambda result: result[0],
-            default=(0.0, []),
         )
-        best[index] = (duration + tail[0], [index] + tail[1])
     _, path = max(best.values(), key=lambda result: result[0], default=(0.0, []))
-    return [(unit_key(by_index[i]), by_index[i]["duration"]) for i in path]
+    return [(unit_key(by_index[index]), seconds) for index, seconds in path]
 
 
-def topological_order(edges: dict[int, list[int]]) -> list[int]:
+def topological_order(edges: dict[int, list[tuple[int, float]]]) -> list[int]:
     indegree = {node: 0 for node in edges}
     for successors in edges.values():
-        for successor in successors:
+        for successor, _ in successors:
             indegree[successor] += 1
     queue = [node for node, count in indegree.items() if count == 0]
     order = []
     while queue:
         node = queue.pop()
         order.append(node)
-        for successor in edges[node]:
+        for successor, _ in edges[node]:
             indegree[successor] -= 1
             if indegree[successor] == 0:
                 queue.append(successor)
