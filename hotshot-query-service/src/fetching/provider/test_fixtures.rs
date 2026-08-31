@@ -378,7 +378,7 @@ async fn no_route<Ver: StaticVersionType + 'static>(headers: HeaderMap, uri: Uri
 }
 
 /// The availability routes the fetch provider client requests.
-fn availability_routes<Ver, D>(data_source: D) -> Router
+fn availability_routes<Ver, D>(data_source: Arc<D>) -> Router
 where
     Ver: StaticVersionType + 'static,
     D: AvailabilityDataSource<MockTypes> + VersionedDataSource + Send + Sync + 'static,
@@ -386,10 +386,7 @@ where
 {
     Router::new()
         .route("/leaf/{height}", get(get_leaf::<Ver, D>))
-        .route("/leaf/batch", post(get_leaf_batch::<Ver, D>))
         .route("/leaf/{from}/{until}", get(get_leaf_range::<Ver, D>))
-        .route("/block/batch", post(get_block_batch::<Ver, D>))
-        .route("/vid/common/batch", post(get_vid_common_batch::<Ver, D>))
         .route(
             "/block/payload-hash/{hash}",
             get(get_block_by_payload_hash::<Ver, D>),
@@ -405,11 +402,11 @@ where
             "/vid/common/{from}/{until}",
             get(get_vid_common_range::<Ver, D>),
         )
-        .with_state(Arc::new(data_source))
+        .with_state(data_source)
 }
 
-/// Serve only the batch routes, for tests that must reach a peer through them and no other way.
-pub(crate) fn batch_routes<Ver, D>(data_source: D) -> Router
+/// Just the batch routes, for tests that must reach a peer through them and no other way.
+pub(crate) fn batch_routes<Ver, D>(data_source: Arc<D>) -> Router
 where
     Ver: StaticVersionType + 'static,
     D: VersionedDataSource + Send + Sync + 'static,
@@ -419,7 +416,7 @@ where
         .route("/leaf/batch", post(get_leaf_batch::<Ver, D>))
         .route("/block/batch", post(get_block_batch::<Ver, D>))
         .route("/vid/common/batch", post(get_vid_common_batch::<Ver, D>))
-        .with_state(Arc::new(data_source))
+        .with_state(data_source)
 }
 
 /// Mounts `api` under `/availability` (the module prefix the old tide app registered) with the
@@ -451,5 +448,24 @@ where
     D: AvailabilityDataSource<MockTypes> + VersionedDataSource + Send + Sync + 'static,
     for<'a> D::ReadOnly<'a>: AvailabilityStorage<MockTypes>,
 {
-    serve(app::<Ver>(availability_routes::<Ver, _>(data_source))).await
+    let data_source = Arc::new(data_source);
+    let api = availability_routes::<Ver, _>(data_source.clone())
+        .merge(batch_routes::<Ver, _>(data_source));
+    serve(app::<Ver>(api)).await
+}
+
+/// Serve a peer that predates the batch routes, to exercise the fallback to per-range fetches.
+pub(crate) async fn serve_availability_without_batch<Ver, D>(
+    _: Ver,
+    data_source: D,
+) -> (u16, JoinHandle<()>)
+where
+    Ver: StaticVersionType + 'static,
+    D: AvailabilityDataSource<MockTypes> + VersionedDataSource + Send + Sync + 'static,
+    for<'a> D::ReadOnly<'a>: AvailabilityStorage<MockTypes>,
+{
+    serve(app::<Ver>(availability_routes::<Ver, _>(Arc::new(
+        data_source,
+    ))))
+    .await
 }

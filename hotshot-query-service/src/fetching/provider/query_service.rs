@@ -316,6 +316,9 @@ impl<Ver: StaticVersionType> TrustedQueryServiceProvider<Ver> {
             .await
             .context("fetching batch")?;
 
+        // Check the response the way the range fetches check their bounds. It must cover every
+        // height asked for, or the caller falls back to the per-range endpoints, and it must
+        // contain nothing else, so a peer cannot use a batch to write objects we never requested.
         let fetched = objs.iter().map(|obj| obj.height()).collect::<Vec<_>>();
         ensure!(
             ranges
@@ -325,6 +328,12 @@ impl<Ver: StaticVersionType> TrustedQueryServiceProvider<Ver> {
             "server returned {} of the objects in {} requested ranges",
             objs.len(),
             ranges.len()
+        );
+        ensure!(
+            fetched
+                .iter()
+                .all(|height| ranges.iter().any(|range| range.contains(height))),
+            "server returned objects outside the requested ranges"
         );
 
         Ok(objs)
@@ -1959,6 +1968,85 @@ mod test {
         assert_eq!(block.height(), 7);
     }
 
+    /// A peer that predates the batch endpoints must still be usable: the batch fetch falls back
+    /// to the per-range endpoints, so catchup completes anyway.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_scanner_falls_back_without_batch_endpoints() {
+        let server_db = TmpDb::init().await;
+        let server = data_source(&server_db, &NoFetching).await;
+
+        let mut leaves = Vec::new();
+        for n in 0..=20 {
+            leaves.push(v6_leaf(n).await);
+        }
+        let disperse = advz_scheme(2).disperse([]).unwrap();
+        {
+            let mut tx = server.write().await.unwrap();
+            for l in &leaves {
+                tx.insert_leaf(l).await.unwrap();
+                let block =
+                    BlockQueryData::<MockTypes>::new(l.header().clone(), MockPayload::genesis());
+                tx.insert_block(&block).await.unwrap();
+                let common = VidCommonQueryData::<MockTypes>::new(
+                    l.header().clone(),
+                    VidCommon::V0(disperse.common.clone()),
+                );
+                tx.insert_vid(&common, None).await.unwrap();
+            }
+            tx.commit().await.unwrap();
+        }
+
+        // No batch routes, so every batch request 404s or 405s and has to fall back.
+        let (port, _server_task) =
+            test_fixtures::serve_availability_without_batch(MockBase::instance(), server).await;
+
+        let client_db = TmpDb::init().await;
+        let provider = Provider::new(trusted_provider(port));
+        let client = client_db
+            .config()
+            .builder::<MockTypes, _>(provider)
+            .await
+            .unwrap()
+            .with_proactive_interval(Duration::from_secs(1))
+            .with_sync_status_ttl(Duration::from_secs(1))
+            .with_max_retry_interval(Duration::from_secs(1))
+            .with_proactive_range_chunk_size(10)
+            .build()
+            .await
+            .unwrap();
+
+        {
+            let mut tx = client.write().await.unwrap();
+            for n in (1..=19usize).step_by(2).chain([20]) {
+                let l = &leaves[n];
+                tx.insert_leaf(l).await.unwrap();
+                let block =
+                    BlockQueryData::<MockTypes>::new(l.header().clone(), MockPayload::genesis());
+                tx.insert_block(&block).await.unwrap();
+                let common = VidCommonQueryData::<MockTypes>::new(
+                    l.header().clone(),
+                    VidCommon::V0(disperse.common.clone()),
+                );
+                tx.insert_vid(&common, None).await.unwrap();
+            }
+            tx.commit().await.unwrap();
+        }
+
+        timeout(Duration::from_secs(60), async {
+            loop {
+                let status = client.sync_status().await.unwrap();
+                if status.blocks.ranges.last().map(|r| r.end).unwrap_or(0) > 20
+                    && status.is_fully_synced()
+                {
+                    break;
+                }
+                sleep(Duration::from_millis(500)).await;
+            }
+        })
+        .await
+        .expect("scanner did not fall back to per-range fetches");
+    }
+
     /// The scanner must be able to backfill a fragmented range through the batch endpoints alone.
     ///
     /// The server here serves no per-height or per-range route, so every object the client ends up
@@ -1990,7 +2078,7 @@ mod test {
         }
 
         let (port, _server_task) = test_fixtures::serve(test_fixtures::app::<MockBase>(
-            test_fixtures::batch_routes::<MockBase, _>(server),
+            test_fixtures::batch_routes::<MockBase, _>(std::sync::Arc::new(server)),
         ))
         .await;
 

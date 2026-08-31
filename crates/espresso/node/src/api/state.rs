@@ -82,9 +82,6 @@ use super::{
 /// Matches the `hotshot_query_service` availability API default.
 const FETCH_TIMEOUT: Duration = Duration::from_millis(500);
 
-/// The most height ranges one batch request may carry.
-const MAX_BATCH_RANGES: usize = 100;
-
 /// Node API state implementation
 ///
 /// This struct implements the v1 API traits (internal types) and the v2 tonic service traits
@@ -819,16 +816,9 @@ fn enforce_range(from: usize, until: usize, limit: usize) -> anyhow::Result<()> 
 /// Check a batch request against the same per-request object limit the range endpoints enforce,
 /// and convert it for storage.
 ///
-/// The ranges become one `WHERE` clause with two bound parameters each, so the count is capped as
-/// well as the total heights: a batch of many tiny ranges is cheap in objects but not in query
-/// parameters, and SQLite in particular has a low ceiling on those.
+/// Bounding the total heights also bounds how many ranges a batch may carry, since every range
+/// covers at least one height.
 fn validate_batch(ranges: Vec<(u64, u64)>, limit: usize) -> anyhow::Result<Vec<Range<u64>>> {
-    if ranges.len() > MAX_BATCH_RANGES {
-        return Err(range_exceeded(format!(
-            "batch of more than {MAX_BATCH_RANGES} ranges"
-        )));
-    }
-
     let mut total = 0usize;
     for (from, until) in &ranges {
         if until <= from {
@@ -836,7 +826,15 @@ fn validate_batch(ranges: Vec<(u64, u64)>, limit: usize) -> anyhow::Result<Vec<R
                 "empty or inverted range {from}..{until}"
             )));
         }
-        total += (until - from) as usize;
+        // Heights are bound into the query as i64, so anything past that range cannot be queried
+        // and would only be a way to overflow the accounting below.
+        if *until > i64::MAX as u64 {
+            return Err(bad_request(format!("height {until} out of range")));
+        }
+
+        total = total
+            .checked_add((until - from) as usize)
+            .ok_or_else(|| range_exceeded(format!("batch of more than {limit} heights")))?;
         if total > limit {
             return Err(range_exceeded(format!(
                 "batch of more than {limit} heights"
@@ -2782,11 +2780,9 @@ mod tests {
             Some(AvailabilityError::RangeExceeded(_))
         ));
 
-        // More ranges than the query can bind parameters for, even though each is one height.
-        let many = (0..MAX_BATCH_RANGES as u64 + 1)
-            .map(|i| (i * 2, i * 2 + 1))
-            .collect();
-        let err = validate_batch(many, 10_000).unwrap_err();
+        // Many single-height ranges are bounded by the object limit like anything else.
+        let many = (0..101u64).map(|i| (i * 2, i * 2 + 1)).collect();
+        let err = validate_batch(many, 100).unwrap_err();
         assert!(matches!(
             err.downcast_ref::<AvailabilityError>(),
             Some(AvailabilityError::RangeExceeded(_))
@@ -2797,6 +2793,13 @@ mod tests {
         assert!(matches!(
             err.downcast_ref::<AvailabilityError>(),
             Some(AvailabilityError::BadRequest(_))
+        ));
+
+        // A range wide enough to overflow the running total must not wrap past the limit.
+        let err = validate_batch(vec![(0, 100), (0, u64::MAX)], 100).unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<AvailabilityError>(),
+            Some(AvailabilityError::BadRequest(_) | AvailabilityError::RangeExceeded(_))
         ));
     }
 

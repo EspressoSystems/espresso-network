@@ -104,8 +104,8 @@ use crate::{
     availability::{
         AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction,
         Certificate2, Fetch, FetchStream, HeaderQueryData, LeafId, LeafQueryData, NamespaceId,
-        PayloadMetadata, PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash,
-        UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
+        Options, PayloadMetadata, PayloadQueryData, QueryableHeader, QueryablePayload,
+        TransactionHash, UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
     },
     data_source::fetching::vid::VidCommonRangeFetcher,
     explorer::{self, ExplorerDataSource},
@@ -2487,7 +2487,11 @@ fn scan_chunks(ranges: &[SyncStatusRange], chunk_size: usize) -> Vec<Range<usize
 /// A fragmented missing set is mostly short chunks, and this is what keeps them from costing a
 /// round trip each. A batch stops at the number of objects a single chunk would have fetched, which
 /// also bounds how many ranges it carries, since every range covers at least one height.
+///
+/// The budget is capped at what a peer will serve in one request, so that configuring a larger
+/// chunk size does not silently make every batch too big to answer.
 fn batches(chunks: &[Range<usize>], chunk_size: usize) -> Vec<Vec<Range<u64>>> {
+    let chunk_size = chunk_size.min(Options::default().large_object_range_limit);
     let mut batches: Vec<Vec<Range<u64>>> = vec![];
     let mut heights = 0;
     for chunk in chunks {
