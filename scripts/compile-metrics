@@ -71,7 +71,7 @@ TOP_CRATES = 25
 TOP_BASES = 25
 TOP_MOVERS = 10
 TOP_BINARIES = 10
-TOP_UNITS = 10
+TOP_UNITS = 20
 TOP_FEATURE_ROWS = 25
 MOVER_MIN_PCT = 0.5
 # A Cargo.lock bump moves hundreds of rows at once, and a comment that long is unreadable and
@@ -139,6 +139,7 @@ class Timing:
 
     wall_s: float = 0.0
     units: dict[str, float] = field(default_factory=dict)
+    slowest: list[dict] = field(default_factory=list)
     critical_path_s: float = 0.0
     critical_path: list[tuple[str, float]] = field(default_factory=list)
     error: str = ""
@@ -178,6 +179,19 @@ def workspace_cpu(units: list[dict], members: set[str]) -> dict[str, float]:
             key = unit_key(unit)
             cpu[key] = round(cpu.get(key, 0.0) + unit["duration"], 1)
     return dict(sorted(cpu.items()))
+
+
+def slowest_units(units: list[dict], count: int) -> list[dict]:
+    """The slowest units of the build, third-party included.
+
+    Only workspace units are compared against main, because a third-party unit's time depends on
+    what the dependency cache already held. A dependency that costs minutes is still worth seeing,
+    so the state table gets all of them.
+    """
+    ranked = sorted(units, key=lambda unit: -unit["duration"])[:count]
+    return [
+        {"unit": unit_key(unit), "s": round(unit["duration"], 1)} for unit in ranked
+    ]
 
 
 def frontend_end(unit: dict) -> float:
@@ -470,7 +484,13 @@ def timing_metrics(timing: Path | None, members: set[str]) -> Timing:
         wall, units = parse_timing(timing.read_text())
         path = critical_path(units)
         seconds = round(sum(seconds for _, seconds in path), 1)
-        return Timing(wall, workspace_cpu(units, members), seconds, path)
+        return Timing(
+            wall,
+            workspace_cpu(units, members),
+            slowest_units(units, TOP_UNITS),
+            seconds,
+            path,
+        )
     except Exception as error:  # noqa: BLE001
         log.warning("unusable timing report at %s: %s", timing, error)
         return Timing(error=str(error))
@@ -506,6 +526,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
         "peak_rss_kb": rss.get("peak_rss_kb", 0),
         "peak_rss_by": rss.get("peak_rss_by", ""),
         "units": timing.units,
+        "slowest": timing.slowest,
         "binaries": binaries,
         "features": features,
     }
@@ -875,9 +896,9 @@ def state_tables(current: dict[str, Any]) -> list[str]:
 
     units = sorted(
         (
-            (cpu, unit, job)
+            (entry["s"], entry["unit"], job)
             for job, metrics in jobs.items()
-            for unit, cpu in metrics.get("units", {}).items()
+            for entry in metrics.get("slowest", [])
         ),
         reverse=True,
     )[:TOP_UNITS]
