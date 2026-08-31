@@ -25,7 +25,7 @@ Examples:
         --out compile-metrics-amd-espresso-node.json
 
     # Merge the per-job artifacts of one run.
-    scripts/compile-metrics merge metrics-artifacts --sha "$SHA" --run-id "$RUN_ID" \
+    scripts/compile-metrics merge metrics-artifacts --sha "$SHA" --run-url "$RUN_URL" \
         --out compile-metrics.json
 
     # Compare a run against the newest main run, from `nextest-ci stats-fetch` output.
@@ -73,18 +73,26 @@ TOP_MOVERS = 10
 TOP_BINARIES = 10
 TOP_UNITS = 10
 TOP_FEATURE_ROWS = 25
-NAME_KEPT_CHARS = 200
 MOVER_MIN_PCT = 0.5
 # A Cargo.lock bump moves hundreds of rows at once, and a comment that long is unreadable and
 # runs into GitHub's 65 kB limit on a comment body.
 MOVER_ROWS = 40
-JOB_METRICS = ("peak memory", "largest process", "workspace cpu-s", "critical path s")
 RSS_SAMPLE_S = 2.0
 NO_TIMINGS = "no `--timings`"
 TIMING_FAILED = "timing report unreadable"
 NOT_SAMPLED = "not sampled"
 NOT_COMPARED = "not in both runs"
 NO_FEATURE_RECORD = "no feature record in both runs"
+
+# Per-job metrics, as (field, column, regression threshold in %). The report compares these
+# against main and gives each its own column; everything else lands in the movers table.
+JOB_METRICS = (
+    ("peak_used_kb", "peak memory", PEAK_RSS_PCT),
+    ("peak_rss_kb", "largest process", PEAK_RSS_PCT),
+    ("workspace_cpu_s", "workspace cpu-s", WORKSPACE_CPU_PCT),
+    ("critical_path_s", "critical path s", CRITICAL_PATH_PCT),
+)
+JOB_COLUMNS = [column for _, column, _ in JOB_METRICS]
 
 
 @dataclass(frozen=True)
@@ -105,7 +113,7 @@ class Change:
         return self.delta_pct > self.threshold_pct
 
 
-@dataclass
+@dataclass(frozen=True)
 class FeatureDiff:
     """`changed` is package -> (features gained, features lost); the rest are whole packages.
 
@@ -251,10 +259,9 @@ def topological_order(edges: dict[int, list[tuple[int, float]]]) -> list[int]:
 def read_metadata() -> dict[str, Any]:
     """`cargo metadata` with dependencies, or an empty dict.
 
-    One call feeds both the workspace-unit filter and the feature record; `--no-deps` is cheaper
-    but leaves `resolve` null. It compiles nothing and takes 0.58 s on this workspace, against
-    0.03 s for `--no-deps`. A failure here costs the unit table and the feature record,
-    never the job's memory numbers.
+    One call feeds both the workspace-unit filter and the feature record; `--no-deps` is an order
+    of magnitude cheaper but leaves `resolve` null. Either way it compiles nothing. A failure here
+    costs the unit table and the feature record, never the job's memory numbers.
     """
     try:
         out = subprocess.run(
@@ -288,9 +295,8 @@ def resolved_features(metadata: dict[str, Any]) -> dict[str, str]:
     checkout or cargo config differs shows up instead of being averaged away.
 
     Space-joined rather than a list because `json.dumps(indent=2)` puts every list element on its
-    own line: 44 kB per job instead of 64 kB, and this rides in an artifact kept for 90 days.
-    Packages with no feature enabled are dropped, so a package that gains its first feature reads
-    as an added package.
+    own line, which costs about 40 % more in an artifact kept for 90 days. Packages with no
+    feature enabled are dropped, so a package that gains its first feature reads as an added one.
     """
     names = {
         package["id"]: f"{package['name']} {package['version']}"
@@ -318,27 +324,18 @@ def text_section_bytes(path: Path) -> int:
 
 
 def measure_binary(path: Path) -> dict[str, Any]:
-    """One `nm` pass per binary, read as a stream.
+    """One `nm` pass per binary, read as a stream so a large binary's output is never held whole.
 
-    The line count is the symbol count and sized lines carry the bytes, the instantiation counts
-    and the name lengths, so all of it comes out of the same pass. It is streamed because `nm` on
-    a 130 MB release binary emits hundreds of MB, and this runs in a job that has just peaked at
-    11 GB.
+    The line count is the symbol count and sized lines carry the bytes and the instantiation
+    counts, so all of it comes out of the same pass.
 
     `instantiated_symbols` over `generic_bases` is the average multiplicity, and the top of
     `instantiations` is which base to go after: that is what turns "symbols +8 %" into "this
     function is instantiated 340 times".
-
-    `name_bytes` and `max_name_len` are the v0-mangling signal: v0 encodes the full generic
-    arguments, so a deep combinator chain or a nested `impl Future` produces a name in the
-    kilobytes, and `max_name` names the type to go after. They cover the sized symbols, which is
-    every function; the unsized lines are undefined and absolute symbols with short names.
     """
     measured = {"bytes": path.stat().st_size, "text_bytes": text_section_bytes(path)}
     symbols = 0
     instantiations = 0
-    name_bytes = 0
-    longest = ""
     totals: dict[str, int] = {}
     counts: dict[str, int] = {}
     with subprocess.Popen(
@@ -356,9 +353,6 @@ def measure_binary(path: Path) -> dict[str, Any]:
             name = symbol.group(2)
             crate = symbol_crate(name)
             totals[crate] = totals.get(crate, 0) + int(symbol.group(1), 16)
-            name_bytes += len(name)
-            if len(name) > len(longest):
-                longest = name
             base = generic_base(name)
             if base is not None:
                 instantiations += 1
@@ -377,18 +371,11 @@ def measure_binary(path: Path) -> dict[str, Any]:
         "instantiations": dict(sorted(top_n(counts, TOP_BASES))),
         "instantiated_symbols": instantiations,
         "generic_bases": len(counts),
-        "name_bytes": name_bytes,
-        "max_name_len": len(longest),
-        "max_name": elide(longest, NAME_KEPT_CHARS),
     }
 
 
 def top_n(values: dict[str, int], count: int) -> list[tuple[str, int]]:
     return sorted(values.items(), key=lambda item: -item[1])[:count]
-
-
-def elide(text: str, limit: int) -> str:
-    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 def symbol_crate(name: str) -> str:
@@ -513,7 +500,6 @@ def cmd_collect(args: argparse.Namespace) -> int:
         "wall_s": timing.wall_s,
         "workspace_cpu_s": round(sum(timing.units.values()), 1),
         "critical_path_s": timing.critical_path_s,
-        "critical_path": [{"unit": unit, "s": s} for unit, s in timing.critical_path],
         "timing_error": timing.error,
         "peak_used_kb": rss.get("peak_used_kb", 0),
         "mem_total_kb": rss.get("mem_total_kb", 0),
@@ -523,14 +509,15 @@ def cmd_collect(args: argparse.Namespace) -> int:
         "binaries": binaries,
         "features": features,
     }
-    full = {name: sizes.pop("_full", {}) for name, sizes in binaries.items()}
+    # Popping keeps the full tallies out of the artifact the comparison reads.
+    full = {name: sizes.pop("_full") for name, sizes in binaries.items()}
     args.out.write_text(json.dumps(metrics, indent=2) + "\n")
     if args.raw_out:
         # Everything the report caps away, kept so a later question can be answered without a
         # rebuild. Deliberately not named compile-metrics-*.json: merge globs that.
-        args.raw_out.write_text(
-            json.dumps({"job": args.job, "binaries": full}, indent=2) + "\n"
-        )
+        path = [{"unit": unit, "s": s} for unit, s in timing.critical_path]
+        raw = {"job": args.job, "critical_path": path, "binaries": full}
+        args.raw_out.write_text(json.dumps(raw, indent=2) + "\n")
     log.info(
         "%s: %.1f workspace cpu-s over %d units, %.1f s critical path, %d binaries, "
         "%d packages with features",
@@ -614,13 +601,13 @@ def cmd_sample_rss(args: argparse.Namespace) -> int:
     since every rustc, linker and test service on the box counts. `peak_rss_kb` is the largest
     single process, which says which crate to go after.
 
-    Sampling /proc is the only route that works here: /usr/bin/time is absent on NixOS, and
-    getrusage(RUSAGE_CHILDREN) from a wrapper did not capture rustc's peak through cargo. VmHWM is
-    a high-water mark, so a 2 s interval cannot miss the peak of a rustc that runs for minutes; it
-    can miss a spike that both starts and ends inside one interval.
+    Sampling /proc is what gives per-process attribution, which is the half that says which crate
+    to go after; getrusage(RUSAGE_CHILDREN) would only give the machine-wide figure. VmHWM is a
+    high-water mark, so the interval only has to catch a process while it is alive: what is missed
+    is a process whose peak and exit both fall inside one interval.
 
-    This wraps five real build steps, so its own exit status is the build's: sampling failures are
-    logged and dropped, and a signal death is reported the way a shell reports it.
+    This wraps every metered build step, so its own exit status is the build's: sampling failures
+    are logged and dropped, and a signal death is reported the way a shell reports it.
     """
     if not args.build_command:
         raise RuntimeError("usage: compile-metrics sample-rss --out FILE -- COMMAND...")
@@ -688,12 +675,7 @@ def cmd_merge(args: argparse.Namespace) -> int:
     paths = sorted(args.dir.rglob("compile-metrics-*.json"))
     if not paths:
         raise RuntimeError(f"no compile-metrics-*.json under {args.dir}")
-    merged = {
-        "sha": args.sha,
-        "run_id": args.run_id,
-        "run_url": args.run_url,
-        "jobs": merge_jobs(paths),
-    }
+    merged = {"sha": args.sha, "run_url": args.run_url, "jobs": merge_jobs(paths)}
     args.out.write_text(json.dumps(merged, indent=2) + "\n")
     log.info("wrote %s with %d job(s)", args.out, len(merged["jobs"]))
     return 0
@@ -708,12 +690,7 @@ def compare(main: dict[str, Any], current: dict[str, Any]) -> list[Change]:
         before = main.get("jobs", {}).get(job)
         if before is None:
             continue
-        for key, label, threshold in (
-            ("peak_used_kb", "peak memory", PEAK_RSS_PCT),
-            ("workspace_cpu_s", "workspace cpu-s", WORKSPACE_CPU_PCT),
-            ("critical_path_s", "critical path s", CRITICAL_PATH_PCT),
-            ("peak_rss_kb", "largest process", PEAK_RSS_PCT),
-        ):
+        for key, label, threshold in JOB_METRICS:
             if before.get(key) and now.get(key):
                 changes.append(
                     Change(job, job, label, before[key], now[key], threshold)
@@ -783,21 +760,19 @@ def fmt_metric(metric: str, value: float) -> str:
     return fmt_value(value)
 
 
-def table(rows: list[Change], columns: list[str]) -> list[str]:
+def mover_table(rows: list[Change]) -> list[str]:
     if not rows:
         return []
     lines = [
-        "| " + " | ".join(columns) + " | metric | main | this run | change |",
-        "|---" * len(columns) + "|---|---:|---:|---:|",
+        "| job | unit or binary | metric | main | this run | change |",
+        "|---|---|---|---:|---:|---:|",
     ]
     for change in rows:
-        cells = [change.scope] if len(columns) == 1 else [change.scope, change.name]
         mark = " :warning:" if change.regressed else ""
         lines.append(
-            "| "
-            + " | ".join(cells)
-            + f" | {change.metric} | {fmt_metric(change.metric, change.main)} | "
-            f"{fmt_metric(change.metric, change.current)} | {change.delta_pct:+.1f}%{mark} |"
+            f"| {change.scope} | {change.name} | {change.metric} "
+            f"| {fmt_metric(change.metric, change.main)} "
+            f"| {fmt_metric(change.metric, change.current)} | {change.delta_pct:+.1f}%{mark} |"
         )
     return lines
 
@@ -856,6 +831,9 @@ def state_tables(current: dict[str, Any]) -> list[str]:
     ]
     for job, metrics in sorted(jobs.items()):
         used = metrics.get("peak_used_kb", 0)
+        total = metrics.get("mem_total_kb", 0)
+        # The denominator is the point: it says how close the job came to filling the runner.
+        memory = f"{fmt_bytes(used * 1024)} of {fmt_bytes(total * 1024)}"
         rss = metrics.get("peak_rss_kb", 0)
         largest = (
             f"{metrics.get('peak_rss_by') or '?'} {fmt_bytes(rss * 1024)}"
@@ -870,7 +848,7 @@ def state_tables(current: dict[str, Any]) -> list[str]:
         else:
             cpu = path = TIMING_FAILED if metrics.get("timing_error") else NO_TIMINGS
         lines.append(
-            f"| {job} | {fmt_bytes(used * 1024) if used else NOT_SAMPLED} | {largest} "
+            f"| {job} | {memory if used and total else NOT_SAMPLED} | {largest} "
             f"| {cpu} | {path} |"
         )
 
@@ -931,30 +909,30 @@ def comparison_tables(changes: list[Change]) -> list[str]:
         if regressions
         else "No metric over threshold.",
         "",
-        "| job | " + " | ".join(JOB_METRICS) + " |",
-        "|---" * (len(JOB_METRICS) + 1) + "|",
+        "| job | " + " | ".join(JOB_COLUMNS) + " |",
+        "|---" * (len(JOB_COLUMNS) + 1) + "|",
     ]
     by_job: dict[str, dict[str, Change]] = {}
     for change in changes:
-        if change.metric in JOB_METRICS:
+        if change.metric in JOB_COLUMNS:
             by_job.setdefault(change.scope, {})[change.metric] = change
     for job, metrics in sorted(by_job.items()):
         cells = [
-            fmt_cell(metrics[m]) if m in metrics else NOT_COMPARED for m in JOB_METRICS
+            fmt_cell(metrics[m]) if m in metrics else NOT_COMPARED for m in JOB_COLUMNS
         ]
         lines.append(f"| {job} | " + " | ".join(cells) + " |")
-    if any(len(metrics) < len(JOB_METRICS) for metrics in by_job.values()):
+    if any(len(metrics) < len(JOB_COLUMNS) for metrics in by_job.values()):
         lines += ["", f"{NOT_COMPARED}: missing from this run or from the baseline."]
 
     movers, dropped = top_movers(
         [
             c
             for c in changes
-            if c.metric not in JOB_METRICS and abs(c.delta_pct) >= MOVER_MIN_PCT
+            if c.metric not in JOB_COLUMNS and abs(c.delta_pct) >= MOVER_MIN_PCT
         ]
     )
     lines.append("")
-    lines += table(movers, ["job", "unit or binary"]) or [
+    lines += mover_table(movers) or [
         f"No unit or binary moved by more than {MOVER_MIN_PCT:g} %."
     ]
     if dropped:
@@ -969,30 +947,29 @@ def feature_changes(main: dict[str, Any], current: dict[str, Any]) -> FeatureDif
     package while still catching a job that differs. A run whose baseline predates the feature
     record compares nothing, which is why `compared` is separate from an empty diff.
     """
-    diff = FeatureDiff({}, [], [], False)
     gained: dict[str, set[str]] = {}
     lost: dict[str, set[str]] = {}
     added: set[str] = set()
     removed: set[str] = set()
+    compared = False
     for job, now in current["jobs"].items():
         was = main.get("jobs", {}).get(job, {}).get("features") or {}
         has = now.get("features") or {}
         if not was or not has:
             continue
-        diff.compared = True
+        compared = True
         added |= set(has) - set(was)
         removed |= set(was) - set(has)
         for package in set(was) & set(has):
             before, after = set(was[package].split()), set(has[package].split())
             gained.setdefault(package, set()).update(after - before)
             lost.setdefault(package, set()).update(before - after)
-    diff.changed = {
+    changed = {
         package: (sorted(gained[package]), sorted(lost[package]))
         for package in sorted(gained, key=lambda p: (-len(gained[p]), p))
         if gained[package] or lost[package]
     }
-    diff.added, diff.removed = sorted(added), sorted(removed)
-    return diff
+    return FeatureDiff(changed, sorted(added), sorted(removed), compared)
 
 
 def feature_tables(main: dict[str, Any], current: dict[str, Any]) -> list[str]:
@@ -1124,7 +1101,6 @@ def main(argv: list[str]) -> int:
         "dir", type=Path, help="directory of downloaded per-job artifacts"
     )
     merge.add_argument("--sha", required=True)
-    merge.add_argument("--run-id", required=True)
     merge.add_argument("--run-url", required=True)
     merge.add_argument("--out", required=True, type=Path)
     merge.set_defaults(func=cmd_merge)

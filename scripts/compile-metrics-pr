@@ -58,8 +58,7 @@ for entry in "${workflows[@]}"; do
         continue
     fi
 
-    python3 "$(dirname "$0")/compile-metrics" merge "$dir/artifacts" \
-        --sha "$sha" --run-id "$run_id" \
+    python3 "$(dirname "$0")/compile-metrics" merge "$dir/artifacts" --sha "$sha" \
         --run-url "https://github.com/EspressoSystems/espresso-network/actions/runs/$run_id" \
         --out "$dir/metrics.json" >/dev/null
 

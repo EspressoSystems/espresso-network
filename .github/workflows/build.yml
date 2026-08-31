@@ -218,7 +218,6 @@ jobs:
         run: |
           python3 scripts/compile-metrics merge metrics-artifacts \
             --sha "${{ github.sha }}" \
-            --run-id "${{ github.run_id }}" \
             --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             --out compile-metrics.json
 
