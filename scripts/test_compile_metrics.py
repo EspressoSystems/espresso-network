@@ -6,6 +6,7 @@ Everything here is a pure function over literals, so no build, no artifact and n
 """
 
 import importlib.util
+import math
 import unittest
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
@@ -142,6 +143,90 @@ class CriticalPath(unittest.TestCase):
 
     def test_empty(self):
         self.assertEqual(cm.critical_path([]), [])
+
+
+def job(units=None, binaries=None):
+    return {"units": units or {}, "binaries": binaries or {}}
+
+
+def compare(main_units, current_units):
+    return cm.compare(
+        {"jobs": {"j": job(main_units)}}, {"jobs": {"j": job(current_units)}}
+    )
+
+
+class CompareUnits(unittest.TestCase):
+    """A unit that stops being built is the whole point of a compile-time change."""
+
+    def test_unit_gone_from_this_run(self):
+        (change,) = compare({"dropped lib": 40.0}, {})
+        self.assertEqual((change.main, change.current), (40.0, 0.0))
+        self.assertEqual(change.delta_pct, -100.0)
+
+    def test_unit_new_in_this_run(self):
+        (change,) = compare({}, {"added lib": 40.0})
+        self.assertEqual((change.main, change.current), (0.0, 40.0))
+        self.assertTrue(change.regressed)
+
+    def test_short_unit_stays_out_either_way(self):
+        self.assertEqual(compare({"tiny lib": 1.0}, {}), [])
+        self.assertEqual(compare({}, {"tiny lib": 1.0}), [])
+
+    def test_unit_in_both_is_compared(self):
+        (change,) = compare({"kept lib": 40.0}, {"kept lib": 60.0})
+        self.assertEqual((change.main, change.current), (40.0, 60.0))
+
+
+class DeltaPct(unittest.TestCase):
+    def test_growth_from_nothing_is_unbounded(self):
+        self.assertEqual(
+            cm.Change("j", "n", "cpu-s", 0.0, 5.0, 15.0).delta_pct, math.inf
+        )
+
+    def test_nothing_to_nothing_is_flat(self):
+        self.assertEqual(cm.Change("j", "n", "cpu-s", 0.0, 0.0, 15.0).delta_pct, 0.0)
+
+
+class Collapse(unittest.TestCase):
+    """Four vtable slots of one `dyn Error` impl always move together."""
+
+    def test_identical_deltas_merge(self):
+        rows = [
+            cm.Change("j", f"bin: base{i}", "instantiations", 50, 93, 5.0)
+            for i in range(4)
+        ]
+        (merged,) = cm.collapse(rows)
+        self.assertEqual(merged.count, 4)
+        self.assertEqual(merged.change.name, "bin: base0")
+
+    def test_different_values_stay_apart(self):
+        rows = [
+            cm.Change("j", "bin: a", "instantiations", 50, 93, 5.0),
+            cm.Change("j", "bin: b", "instantiations", 50, 94, 5.0),
+        ]
+        self.assertEqual(len(cm.collapse(rows)), 2)
+
+    def test_different_jobs_stay_apart(self):
+        rows = [
+            cm.Change("j1", "bin: a", "instantiations", 50, 93, 5.0),
+            cm.Change("j2", "bin: a", "instantiations", 50, 93, 5.0),
+        ]
+        self.assertEqual(len(cm.collapse(rows)), 2)
+
+
+class Mark(unittest.TestCase):
+    def test_regression_is_red(self):
+        self.assertEqual(
+            cm.mark(cm.Change("j", "n", "cpu-s", 10.0, 20.0, 15.0)), cm.RED
+        )
+
+    def test_improvement_is_green(self):
+        self.assertEqual(
+            cm.mark(cm.Change("j", "n", "cpu-s", 20.0, 10.0, 15.0)), cm.GREEN
+        )
+
+    def test_within_the_band_is_unmarked(self):
+        self.assertEqual(cm.mark(cm.Change("j", "n", "cpu-s", 10.0, 10.1, 15.0)), "")
 
 
 class FmtName(unittest.TestCase):
