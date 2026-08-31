@@ -39,7 +39,7 @@ import re
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -78,6 +78,7 @@ MOVER_MIN_PCT = 0.5
 JOB_METRICS = ("peak memory", "largest process", "workspace cpu-s", "critical path s")
 RSS_SAMPLE_S = 2.0
 NO_TIMINGS = "no `--timings`"
+TIMING_FAILED = "timing report unreadable"
 NOT_SAMPLED = "not sampled"
 NOT_COMPARED = "not in both runs"
 NO_FEATURE_RECORD = "no feature record in both runs"
@@ -113,6 +114,23 @@ class FeatureDiff:
     added: list[str]
     removed: list[str]
     compared: bool
+
+
+@dataclass(frozen=True)
+class Timing:
+    """What one job's `cargo --timings` report says, or why there is nothing to say.
+
+    Empty when the job built without `--timings`, and carries `error` when a report was there but
+    could not be read. The two are worth telling apart: cargo's unit schema has changed names
+    across releases, so a toolchain bump would otherwise take the timing half of this tool to
+    zero while the report claimed the build had never been asked for timings.
+    """
+
+    wall_s: float = 0.0
+    units: dict[str, float] = field(default_factory=dict)
+    critical_path_s: float = 0.0
+    critical_path: list[tuple[str, float]] = field(default_factory=list)
+    error: str = ""
 
 
 # collect
@@ -450,24 +468,22 @@ def read_json(path: Path) -> dict:
         return {}
 
 
-def timing_metrics(
-    timing: Path | None, members: set[str]
-) -> tuple[float, dict[str, float], list[tuple[str, float]]]:
-    """(wall, cpu per unit, critical path), all empty when there is no readable timing report.
-
-    A job that builds without `--timings` has none, and so does a job whose report cargo did not
-    finish writing or whose `cargo metadata` failed, leaving no member list to filter units by.
-    The memory numbers are worth keeping in every case, so nothing here raises. `wall` is what
-    tells the report which case a zero belongs to.
-    """
-    if timing is None or not members:
-        return 0.0, {}, []
+def timing_metrics(timing: Path | None, members: set[str]) -> Timing:
+    """What the job's timing report says. Memory matters either way, so this never raises."""
+    if timing is None:
+        return Timing()
+    if not members:
+        return Timing(
+            error="no cargo metadata, so workspace units cannot be told apart"
+        )
     try:
         wall, units = parse_timing(timing.read_text())
-        return wall, workspace_cpu(units, members), critical_path(units)
+        path = critical_path(units)
+        seconds = round(sum(seconds for _, seconds in path), 1)
+        return Timing(wall, workspace_cpu(units, members), seconds, path)
     except Exception as error:  # noqa: BLE001
-        log.warning("no usable timing report at %s: %s", timing, error)
-        return 0.0, {}, []
+        log.warning("unusable timing report at %s: %s", timing, error)
+        return Timing(error=str(error))
 
 
 def measured_binaries(directory: Path | None) -> dict[str, dict[str, Any]]:
@@ -485,21 +501,22 @@ def measured_binaries(directory: Path | None) -> dict[str, dict[str, Any]]:
 
 def cmd_collect(args: argparse.Namespace) -> int:
     metadata = read_metadata()
-    wall, cpu, path = timing_metrics(args.timing, workspace_members(metadata))
+    timing = timing_metrics(args.timing, workspace_members(metadata))
     binaries = measured_binaries(args.binaries_dir)
     rss = read_json(args.peak_rss) if args.peak_rss else {}
     features = resolved_features(metadata)
     metrics = {
         "job": args.job,
-        "wall_s": wall,
-        "workspace_cpu_s": round(sum(cpu.values()), 1),
-        "critical_path_s": round(sum(duration for _, duration in path), 1),
-        "critical_path": [{"unit": unit, "s": duration} for unit, duration in path],
+        "wall_s": timing.wall_s,
+        "workspace_cpu_s": round(sum(timing.units.values()), 1),
+        "critical_path_s": timing.critical_path_s,
+        "critical_path": [{"unit": unit, "s": s} for unit, s in timing.critical_path],
+        "timing_error": timing.error,
         "peak_used_kb": rss.get("peak_used_kb", 0),
         "mem_total_kb": rss.get("mem_total_kb", 0),
         "peak_rss_kb": rss.get("peak_rss_kb", 0),
         "peak_rss_by": rss.get("peak_rss_by", ""),
-        "units": cpu,
+        "units": timing.units,
         "binaries": binaries,
         "features": features,
     }
@@ -516,8 +533,8 @@ def cmd_collect(args: argparse.Namespace) -> int:
         "%d packages with features",
         args.job,
         metrics["workspace_cpu_s"],
-        len(cpu),
-        metrics["critical_path_s"],
+        len(timing.units),
+        timing.critical_path_s,
         len(binaries),
         len(features),
     )
@@ -841,11 +858,13 @@ def state_tables(current: dict[str, Any]) -> list[str]:
             if rss
             else NOT_SAMPLED
         )
-        # wall_s is 0 exactly when the job produced no timing report, which is the only reason
-        # the two cpu columns can be empty. A measured 0.0 is printed as 0.0.
-        timed = bool(metrics.get("wall_s"))
-        cpu = fmt_value(metrics.get("workspace_cpu_s", 0.0)) if timed else NO_TIMINGS
-        path = fmt_value(metrics.get("critical_path_s", 0.0)) if timed else NO_TIMINGS
+        # wall_s is 0 exactly when there is no usable timing report; timing_error separates a
+        # build that was never asked for one from a report that could not be read.
+        if metrics.get("wall_s"):
+            cpu = fmt_value(metrics.get("workspace_cpu_s", 0.0))
+            path = fmt_value(metrics.get("critical_path_s", 0.0))
+        else:
+            cpu = path = TIMING_FAILED if metrics.get("timing_error") else NO_TIMINGS
         lines.append(
             f"| {job} | {fmt_bytes(used * 1024) if used else NOT_SAMPLED} | {largest} "
             f"| {cpu} | {path} |"
