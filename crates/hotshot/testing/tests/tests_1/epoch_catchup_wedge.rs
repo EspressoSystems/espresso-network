@@ -659,15 +659,24 @@ async fn slow_drb_computation_is_not_abandoned() {
     // watchdog is expected to wait out. Calibrate a difficulty targeting 8 s
     // of hashing as measured by this probe; the real chain lands anywhere
     // from ~1 s (probe unoptimized, chain optimized) to ~8 s (both
-    // optimized), which is several watchdog windows either way.
+    // optimized), which is several watchdog windows either way. The probe is
+    // the fastest of three runs: a transient CI load spike can only slow a
+    // run, which would deflate the difficulty and let the chain finish
+    // inside the watchdog window (tripping the elapsed check below), while
+    // sustained load slows probe and chain alike and cancels out.
     let probe_iters: u32 = 200_000;
-    let start = Instant::now();
     let mut probe = [0u8; 32];
-    for _ in 0..probe_iters {
-        probe = Sha256::digest(probe).into();
-    }
+    let per_iter = (0..3)
+        .map(|_| {
+            let start = Instant::now();
+            for _ in 0..probe_iters {
+                probe = Sha256::digest(probe).into();
+            }
+            start.elapsed() / probe_iters
+        })
+        .min()
+        .expect("three probe runs");
     std::hint::black_box(probe);
-    let per_iter = start.elapsed() / probe_iters;
     let difficulty =
         (Duration::from_secs(8).as_nanos() / per_iter.as_nanos().max(1)).max(1_000_000) as u64;
     let selector: DrbDifficultySelectorFn = Arc::new(move |_| Box::pin(async move { difficulty }));
