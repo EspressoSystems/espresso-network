@@ -60,6 +60,11 @@ pub const RECENT_STAKE_TABLES_LIMIT: u64 = 20;
 /// letting the caller fall back to peer catchup. Bounds the damage of a
 /// stalled persistence query, which would otherwise pin both process-wide
 /// locks and block every epoch's catchup (observed on mainnet 2026-08-14).
+///
+/// Sized against hotshot's `DEFAULT_CATCHUP_TIMEOUT` (300 s): catchup's
+/// discovery walk calls `load_stake_table` once per missing epoch, so under
+/// a stalled store each epoch can burn this budget before the watchdog
+/// abandons the attempt. Keep the two in ratio when changing either.
 const DEFAULT_STORAGE_READ_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Type to describe DA and Stake memberships.

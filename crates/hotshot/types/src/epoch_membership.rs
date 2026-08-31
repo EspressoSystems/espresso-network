@@ -112,6 +112,11 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
 
     /// Override the watchdog budget for a single catchup attempt. Mostly for
     /// tests, which need abandonment to happen within a test-sized budget.
+    ///
+    /// The abandoned task itself may outlive the budget: a local DRB
+    /// computation extends it for as long as the hash chain runs, and after
+    /// abandoning, the watchdog watches the parked task for one more period
+    /// so its fate shows up in the logs.
     pub fn with_catchup_timeout(mut self, timeout: Duration) -> Self {
         self.catchup_timeout = timeout;
         self
@@ -1011,8 +1016,15 @@ impl<TYPES: NodeType> Drop for DrbStateGuard<TYPES> {
 /// Default upper bound on a single catchup attempt. Past this the attempt is
 /// abandoned — flagged to stop at its next checkpoint, never aborted — and its
 /// `catchup_map` entries are evicted so a later request can retry. Generous,
-/// because a legitimate attempt may walk many epochs and compute a DRB, and a
-/// premature abandonment costs duplicate work.
+/// because a legitimate attempt may walk many epochs and a premature
+/// abandonment costs duplicate work; a local DRB computation does not count
+/// against the budget at all (see `CatchupProgress::in_drb_compute`).
+///
+/// Sized against the per-epoch storage bound: under a stalled store, each
+/// epoch the discovery walk probes can burn a full storage budget (espresso's
+/// `DEFAULT_STORAGE_READ_TIMEOUT`, 60 s per lock and read phase) before
+/// reporting "not persisted", so this budget covers a walk of only a few
+/// such epochs per attempt. Keep the two in ratio when changing either.
 const DEFAULT_CATCHUP_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// State shared between a catchup attempt and its watchdog in `spawn_catchup`.
